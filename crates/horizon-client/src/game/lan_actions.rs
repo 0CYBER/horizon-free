@@ -699,6 +699,7 @@ impl Game<'_> {
             {
                 self.guest_suggestions(host, conn, &payload);
             }
+            S::PlaceRecipe(p) => self.lan_place_recipe(host, conn, &p),
             S::ClientCommand(c) if c.action == 0 => self.guest_respawn(host, conn),
             // ServerStatsCounter.sendStats.
             S::ClientCommand(c) if c.action == 1 => {

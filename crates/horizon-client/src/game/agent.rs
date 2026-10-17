@@ -637,6 +637,15 @@ impl Game<'_> {
             v["craft_size"] = json!(self.craft_size);
             v["station"] = json!(self.station.as_ref().map(|s| format!("{:?}", s.kind)));
             v["container"] = json!(self.container);
+            // The recipe book's buttons (GUI pixels): the book button, then
+            // the recipe buttons of the page, page arrows, filter and tabs.
+            let book = self.recipe_book_targets();
+            if !book.is_empty() {
+                v["recipe_book"] = json!({
+                    "targets": book.iter().map(|t| t.rect).collect::<Vec<_>>(),
+                    "known": self.recipe_book_known(),
+                });
+            }
             v["slot_ids"] = json!(
                 "0-8 hotbar, 9-35 inventory, 100+ crafting grid (row-major), 200 crafting result, 300+ container, 500-503 armor, 504 offhand, 600+ station"
             );

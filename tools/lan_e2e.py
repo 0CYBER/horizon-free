@@ -27,7 +27,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
              through a portal while the host stays, then the host goes to the End while the guest is in
              the Nether, and both come back.
 - commands:  the guest's chat completes commands and their arguments over the server's command
-             tree (Tab), and runs what it completed.
+             tree (Tab), and runs what it completed;
+- recipes:   the guest's recipe book lists the planks recipe the logs unlock, and clicking it
+             places a log in the inventory's crafting grid (the server places it).
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -59,7 +61,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'commands', 'trials', 'effects', 'portals']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'commands', 'recipes', 'trials', 'effects', 'portals']
 
 
 class Game:
@@ -639,6 +641,42 @@ def check_commands(host, guest, out):
     return {'literal': literal, 'argument': argument, 'mode': mode}
 
 
+def centre(rect):
+    x, y, w, h = rect
+    return x + w / 2, y + h / 2
+
+
+def grid_items(game):
+    slots = game('screen').get('slots') or []
+    return {s['slot']: s.get('item') for s in slots if 100 <= s['slot'] < 109 and s.get('item')}
+
+
+def check_recipes(host, guest, out):
+    guest('command', command='clear @s')
+    guest('command', command='give @s minecraft:oak_log 4')
+    guest.wait(40)
+    guest.raw('key', 'e', 'tap')
+    guest.wait(5)
+    try:
+        book = guest('screen').get('recipe_book')
+        assert book, 'the guest\'s inventory has no recipe book'
+        if len(book['targets']) == 1:
+            guest.raw('click-at', *centre(book['targets'][0]))
+            guest.wait(5)
+            book = guest('screen').get('recipe_book')
+        known = book['known']
+        assert known > 0, f'the guest\'s book is empty: {book}'
+        guest.raw('click-at', *centre(book['targets'][1]))
+        guest.wait(10)
+        grid = grid_items(guest)
+        guest.shot(out, 'recipes')
+    finally:
+        guest.raw('key', 'esc', 'tap')
+        guest.wait(5)
+    assert any('oak_log' in str(item) for item in grid.values()), f'nothing placed in the grid: {grid}'
+    return {'known': known, 'grid': grid}
+
+
 def png_rows(path):
     """The rows of an 8-bit RGB or RGBA PNG, unfiltered, as bytes of 4 (or 3) per pixel."""
     data = Path(path).read_bytes()
@@ -790,6 +828,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'chest': check_chest, 'crafting': check_crafting, 'sign': check_sign, 'damage': check_damage,
              'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
              'containers': check_containers, 'feedback': check_feedback, 'commands': check_commands,
+             'recipes': check_recipes,
              'trials': check_trials,
              'walls': check_walls, 'effects': check_effects, 'portals': check_portals}
 

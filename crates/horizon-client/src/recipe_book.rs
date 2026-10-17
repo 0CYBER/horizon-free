@@ -756,6 +756,15 @@ impl RecipeIndex {
             r.first_display..r.first_display + r.displays as i32
         })
     }
+    /// The recipe a display id belongs to (`RecipeManager.getRecipeFromDisplay`).
+    pub fn recipe_of_display(&self, display: i32) -> Option<&str> {
+        self.recipes
+            .iter()
+            .find(|(_, r)| {
+                (r.first_display..r.first_display + r.displays as i32).contains(&display)
+            })
+            .map(|(id, _)| id.as_str())
+    }
     pub fn first_display(&self, id: &str) -> Option<i32> {
         self.recipes
             .get(id)
