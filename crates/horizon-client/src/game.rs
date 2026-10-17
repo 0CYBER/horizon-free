@@ -967,8 +967,9 @@ struct Game<'a> {
     /// `ClientAvatarState`: walked distance and view bob.
     avatar: horizon_client::camera::AvatarBob,
     flash: u32,
-    /// Sleeping in a bed: (bed head position, ticks asleep).
-    sleeping: Option<([i32; 3], u32)>,
+    /// The head of the bed while sleeping; the visual timer also survives waking.
+    sleeping: Option<[i32; 3]>,
+    sleep_timer: u32,
     dim: Dim,
     world_root: PathBuf,
     /// A player carried through a portal, re-placed once the destination loads.
@@ -3182,7 +3183,7 @@ impl Game<'_> {
         if !self.streaming.is_lit(cx, cz) {
             return Ok(());
         }
-        let playing = self.screen == Screen::Playing;
+        let playing = self.screen == Screen::Playing && self.sleeping.is_none();
         let held = |k| playing && self.keys.contains(&k);
         let keys = Keys {
             forward: held(KeyCode::KeyW),
@@ -3276,7 +3277,12 @@ impl Game<'_> {
         let feet = [player.position.x, player.position.y, player.position.z];
         let player_velocity = [player.velocity.x, player.velocity.y, player.velocity.z];
         self.previous_eye = self.eye;
-        self.eye += (camera_eye.unwrap_or(player.dimensions.eye_height) - self.eye) * 0.5;
+        let eye_height = if self.sleeping.is_some() {
+            0.2
+        } else {
+            player.dimensions.eye_height
+        };
+        self.eye += (camera_eye.unwrap_or(eye_height) - self.eye) * 0.5;
         let crouching = player.pose == horizon_client::pose::Pose::Crouching;
         self.tick_avatar(before, riding);
         self.record_combat(&events);
@@ -3539,7 +3545,11 @@ impl Game<'_> {
             });
             horizon_client::spans::time("tick_particles", || self.tick_particles());
         }
-        if self.right && self.use_delay == 0 && self.screen == Screen::Playing {
+        if self.right
+            && self.use_delay == 0
+            && self.screen == Screen::Playing
+            && self.sleeping.is_none()
+        {
             self.use_with_hand()?;
             self.use_delay = 4;
         }
@@ -3922,15 +3932,7 @@ impl Game<'_> {
             self.draw_boss_bars(&mut batch);
             self.draw_extras(&mut batch);
         }
-        // Hud.extractSleepOverlay, under the sidebar, titles and chat.
-        if let Some((_, ticks)) = self.sleeping {
-            let draws = hud_overlays::sleep_overlay(wi, hi, ticks as i32);
-            hud_layout::paint(&mut batch, &self.atlas, &draws);
-        }
         if show_hud {
-            self.draw_titles(&mut batch);
-            self.draw_scoreboard(&mut batch);
-            self.draw_subtitles(&mut batch);
             // The mount's hearts (and the jump bar that replaces the experience bar).
             let (vehicle_hearts, jump_bar) = if spectator {
                 (0, false)
@@ -4001,6 +4003,14 @@ impl Game<'_> {
             if !spectator {
                 self.draw_selected_name(&mut batch, !self.creative);
             }
+        }
+        // Hud.extractSleepOverlay: over all health/food bars, under titles and chat.
+        let draws = hud_overlays::sleep_overlay(wi, hi, self.sleep_timer as i32);
+        hud_layout::paint(&mut batch, &self.atlas, &draws);
+        if show_hud {
+            self.draw_titles(&mut batch);
+            self.draw_scoreboard(&mut batch);
+            self.draw_subtitles(&mut batch);
         }
         let atlas = &self.atlas;
         if show_hud
@@ -6368,6 +6378,8 @@ impl Game<'_> {
         self.clear_entities();
         self.travelling = None;
         self.player = None;
+        self.sleeping = None;
+        self.sleep_timer = 0;
         self.spawn = None;
         self.respawn_travel = None;
         self.respawn_config =
@@ -6725,6 +6737,8 @@ impl Game<'_> {
         self.streaming.paused = true;
         self.world = World::new(self.res.facts.air, 0);
         self.player = None;
+        self.sleeping = None;
+        self.sleep_timer = 0;
         self.clear_entities();
         self.screen = Screen::Playing;
         if let Some(r) = self.renderer.as_mut() {
@@ -7554,6 +7568,7 @@ impl Game<'_> {
         // GameRenderer.renderItemInHand: F1 hides the hand with the HUD.
         if self.spectator()
             || self.ui.hide_gui
+            || self.sleeping.is_some()
             || !self.camera_type.first_person()
             || self
                 .player
@@ -8029,13 +8044,23 @@ impl Game<'_> {
             return;
         }
         self.message = Some(("Respawn point set".into(), Instant::now()));
-        self.sleeping = Some((head, 0));
+        self.stop_mining();
+        self.left = false;
+        self.right = false;
+        self.using = None;
+        self.sleeping = Some(head);
+        self.sleep_timer = 0;
         self.stats.custom("sleep_in_bed", 1);
         self.trigger_player("minecraft:slept_in_bed");
         self.stats.reset("custom", "minecraft:time_since_rest");
     }
+    fn wake_up(&mut self) {
+        self.sleeping = None;
+        self.sleep_timer = 100;
+    }
     fn tick_sleep(&mut self) {
-        let Some((head, ticks)) = self.sleeping else {
+        self.sleep_timer = tick_sleep_timer(self.sleep_timer, self.sleeping.is_some());
+        let Some(head) = self.sleeping else {
             return;
         };
         if self.keys.contains(&KeyCode::ShiftLeft)
@@ -8044,7 +8069,7 @@ impl Game<'_> {
                 .as_ref()
                 .is_none_or(|p| p.health.dead_or_dying())
         {
-            self.sleeping = None;
+            self.wake_up();
             return;
         }
         if let Some(p) = self.player.as_mut() {
@@ -8055,18 +8080,15 @@ impl Game<'_> {
             );
             p.velocity = Vec3::ZERO;
         }
-        let ticks = ticks + 1;
         // ServerLevel: once everyone has slept 100 ticks, skip to morning and clear weather.
-        if ticks >= 100 {
+        if self.sleep_timer >= 100 {
             let t = self.world.day_time;
             self.world.day_time = t + 24000 - t.rem_euclid(24000);
             self.world.weather.raining = false;
             self.world.weather.thundering = false;
             self.world.weather.rain_time = 0;
             self.world.weather.thunder_time = 0;
-            self.sleeping = None;
-        } else {
-            self.sleeping = Some((head, ticks));
+            self.wake_up();
         }
     }
     fn creative_origin(batch: &HudBatch) -> (f32, f32) {
@@ -8874,6 +8896,18 @@ impl Game<'_> {
     }
     /// A key press while a world is open (keyboard or control socket).
     fn key_pressed(&mut self, key: KeyCode) -> Result<()> {
+        if self.sleeping.is_some()
+            && self.screen == Screen::Playing
+            && !matches!(
+                key,
+                KeyCode::F1 | KeyCode::F2 | KeyCode::F11 | KeyCode::KeyT | KeyCode::Slash
+            )
+        {
+            if matches!(key, KeyCode::Escape | KeyCode::ShiftLeft) {
+                self.wake_up();
+            }
+            return Ok(());
+        }
         if self.sort_key_press(key) {
             return Ok(());
         }
@@ -9004,6 +9038,9 @@ impl Game<'_> {
     }
     /// A mouse button while playing (window or control socket).
     fn play_mouse(&mut self, button: MouseButton, pressed: bool) -> Result<()> {
+        if self.sleeping.is_some() {
+            return Ok(());
+        }
         if self.remote.is_some() {
             return self.remote_mouse(button, pressed);
         }
@@ -9333,6 +9370,7 @@ impl ApplicationHandler for Game<'_> {
                         title.scroll_worlds(d, self.cursor, (batch.width, batch.height));
                     }
                     if self.screen == Screen::Playing
+                        && self.sleeping.is_none()
                         && self.player.is_some()
                         && !self.extras_scroll(d)
                         && let Some((wheel, _)) =
@@ -10124,6 +10162,7 @@ impl<'a> Game<'a> {
             avatar: Default::default(),
             flash: 0,
             sleeping: None,
+            sleep_timer: 0,
             dim: Dim::Overworld,
             world_root: PathBuf::new(),
             travelling: None,
@@ -10522,6 +10561,17 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
+// Player.tick: cap the sleeping fade at 100, then fade out over 10 waking ticks.
+fn tick_sleep_timer(timer: u32, sleeping: bool) -> u32 {
+    if sleeping {
+        (timer + 1).min(100)
+    } else if (1..109).contains(&timer) {
+        timer + 1
+    } else {
+        0
+    }
+}
+
 fn reset_world_progress(adv: &mut advancements::AdvState, stats: &mut stats::Stats) {
     *adv = Default::default();
     *stats = Default::default();
@@ -10555,6 +10605,35 @@ mod tests {
     use super::*;
     use horizon_client::container_screen::{Button, Clicks, Release, Target};
     use horizon_client::keymapping::{KeyAction, SPRINT, ToggleKeys};
+
+    #[test]
+    fn sleep_fade_lasts_ten_ticks_after_waking() {
+        let alpha = |timer| match hud_overlays::sleep_overlay(320, 240, timer).first() {
+            Some(hud_layout::GuiDraw::Fill { color, .. }) => color >> 24,
+            None => 0,
+            _ => panic!("sleep overlay must be a full-screen fill"),
+        };
+        assert_eq!(tick_sleep_timer(0, false), 0);
+        let mut timer = 0;
+        for _ in 0..50 {
+            timer = tick_sleep_timer(timer, true);
+        }
+        assert_eq!(alpha(timer as i32), 110);
+        for _ in 0..100 {
+            timer = tick_sleep_timer(timer, true);
+        }
+        assert_eq!(timer, 100);
+        assert_eq!(alpha(timer as i32), 220);
+        for _ in 0..5 {
+            timer = tick_sleep_timer(timer, false);
+        }
+        assert_eq!(alpha(timer as i32), 110);
+        for _ in 0..5 {
+            timer = tick_sleep_timer(timer, false);
+        }
+        assert_eq!(timer, 0);
+        assert!(hud_overlays::sleep_overlay(320, 240, timer as i32).is_empty());
+    }
 
     /// An integrated server thread shares the loaded resources with the client.
     #[test]
