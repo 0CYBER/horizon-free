@@ -92,13 +92,13 @@ impl Game<'_> {
         }
     }
     /// `ServerLevel.isAllowedToEnterPortal`.
-    fn may_enter(&self, target: Dim) -> bool {
+    pub(super) fn may_enter(&self, target: Dim) -> bool {
         target != Dim::Nether || self.ui.rules.bool("allow_entering_nether_using_portals")
     }
     /// The plan of an entity of `width` by `height` at `at` going through the
     /// portal at `entry` (`getDimensionTransitionFromExit` and the scaled,
     /// clamped exit of `getPortalDestination`).
-    fn portal_plan(
+    pub(super) fn portal_plan(
         &self,
         entry: BlockPos,
         at: Vec3,
@@ -195,7 +195,7 @@ impl Game<'_> {
     }
     /// The exit portal of `plan` in the loaded dimension: the closest one
     /// within reach, else one built by `PortalForcer.createPortal`.
-    fn nether_exit_portal(&mut self, plan: &Plan) -> Option<FoundRectangle> {
+    pub(super) fn nether_exit_portal(&mut self, plan: &Plan) -> Option<FoundRectangle> {
         let to_nether = plan.dim == Dim::Nether;
         let radius = if to_nether { 16 } else { 128 };
         let border = self.border_bounds();
@@ -231,7 +231,7 @@ impl Game<'_> {
     }
     /// `NetherPortalBlock.createDimensionTransition`: the arrival position
     /// and the yaw turned by.
-    fn arrival(&self, plan: &Plan, exit: FoundRectangle) -> (Vec3, f32) {
+    pub(super) fn arrival(&self, plan: &Plan, exit: FoundRectangle) -> (Vec3, f32) {
         let b = &self.res.behaviours;
         let corner = exit.min_corner;
         let exit_x_axis = b
@@ -312,8 +312,16 @@ impl Game<'_> {
         self.portals.travel = Some(plan);
         self.end_portal_travel = false;
         self.enter_dimension(plan.dim)?;
-        // The destination is all on disk now: load around the portal its
-        // points of interest lead to, or the approximate exit.
+        let centre = self.arrival_centre(&plan);
+        if let Some((_, target)) = self.travelling.as_mut() {
+            *target = centre;
+        }
+        Ok(())
+    }
+    /// Where to wait for the destination of `plan` to load, once its level
+    /// is open: the portal its points of interest lead to, or the
+    /// approximate exit.
+    pub(super) fn arrival_centre(&self, plan: &Plan) -> Vec3 {
         let to_nether = plan.dim == Dim::Nether;
         let portals = self.portal_blocks(plan.approximate, if to_nether { 16 } else { 128 });
         let (min_section, max_section) = if to_nether { (0, 15) } else { (-4, 19) };
@@ -327,14 +335,11 @@ impl Game<'_> {
             max_section,
         );
         let centre = found.unwrap_or(plan.approximate);
-        if let Some((_, target)) = self.travelling.as_mut() {
-            *target = Vec3::new(
-                f64::from(centre.x) + 0.5,
-                f64::from(centre.y),
-                f64::from(centre.z) + 0.5,
-            );
-        }
-        Ok(())
+        Vec3::new(
+            f64::from(centre.x) + 0.5,
+            f64::from(centre.y),
+            f64::from(centre.z) + 0.5,
+        )
     }
     /// The player's arrival once the destination has loaded around the
     /// approximate exit: the waiting entities first, then the exit portal

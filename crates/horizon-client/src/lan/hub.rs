@@ -186,9 +186,12 @@ impl Hub {
             .id("minecraft:chat_type", "minecraft:chat")
             .unwrap_or(0);
         let dimension_type = sync
-            .id("minecraft:dimension_type", "minecraft:overworld")
+            .id("minecraft:dimension_type", &config.dimension)
             .unwrap_or(0);
         let clock_ids = (0..sync.dynamic.len("minecraft:world_clock") as i32).collect();
+        let mut encoder = encoder;
+        let d = horizon_protocol::registry::DimensionType::vanilla(&config.dimension);
+        encoder.set_dimension(d.min_y, d.height, d.has_skylight);
         Self {
             lan,
             config,
@@ -737,11 +740,12 @@ impl Hub {
         }));
     }
 
-    /// ClientboundSetDefaultSpawnPositionPacket for the level's respawn data.
+    /// ClientboundSetDefaultSpawnPositionPacket for the level's respawn data
+    /// (the world spawn, in the Overworld wherever the player is).
     fn default_spawn(&self, spawn: [f64; 3]) -> C {
         C::SetDefaultSpawnPosition(play::SetDefaultSpawnPosition {
             pos: play::GlobalPos {
-                dimension: self.config.dimension.clone(),
+                dimension: "minecraft:overworld".into(),
                 pos: [
                     spawn[0].floor() as i32,
                     spawn[1].floor() as i32,
@@ -1830,6 +1834,81 @@ impl Hub {
         g.center_sent = Some((cx, cz));
         // ServerPlayer.initInventoryMenu.
         self.send_inventory(i);
+    }
+
+    /// The level the players are in: the server holds one at a time, and the
+    /// hub's packets name it.
+    pub fn set_dimension(&mut self, dimension: &str) {
+        self.config.dimension = dimension.to_owned();
+        self.dimension_type = self
+            .sync
+            .id("minecraft:dimension_type", dimension)
+            .unwrap_or(0);
+        let d = horizon_protocol::registry::DimensionType::vanilla(dimension);
+        self.encoder
+            .set_dimension(d.min_y, d.height, d.has_skylight);
+    }
+
+    /// ServerPlayer.teleport(TeleportTransition) into the level the hub now
+    /// names (`set_dimension`): ClientboundRespawnPacket keeping all data,
+    /// then vanilla's packet order. Nothing tracked in the old level is
+    /// removed one by one: the client drops its whole level.
+    pub fn change_level(&mut self, i: usize, at: [f64; 3], yaw: f32, ctx: &TickCtx) {
+        let mode = self.guests[i].game_mode;
+        let info = self.spawn_info(mode);
+        self.close_container_for(i);
+        let g = &mut self.guests[i];
+        g.tracker.clear();
+        g.sent_chunks.clear();
+        g.chunk_queue.clear();
+        g.center = None;
+        g.yaw = yaw;
+        g.position = at;
+        g.previous_position = at;
+        g.send(&C::Respawn(play::Respawn {
+            spawn: info,
+            // ClientboundRespawnPacket.KEEP_ALL_DATA.
+            keep: 3,
+        }));
+        g.send(&C::ChangeDifficulty(play::ChangeDifficulty {
+            difficulty: ctx.difficulty,
+            locked: ctx.difficulty_locked,
+        }));
+        self.send_permission_level(i);
+        self.teleport(i, None);
+        let g = &mut self.guests[i];
+        g.send(&C::PlayerAbilities(play::PlayerAbilities {
+            flags: g.ability_flags(),
+            flying_speed: 0.05,
+            walking_speed: 0.1,
+        }));
+        self.send_level_info(i, ctx);
+        // PlayerList.sendAllPlayerInfo: the inventory and the held slot.
+        self.send_inventory(i);
+        let g = &mut self.guests[i];
+        g.send(&C::SetHeldSlot(play::SetHeldSlot {
+            slot: g.selected as i32,
+        }));
+        self.send_active_effects(i);
+        let g = &mut self.guests[i];
+        // ServerPlayer.sendPostEffects.
+        g.send(&raw(ids::POST_EFFECTS, vec![0]));
+        // TeleportTransition.PLAY_PORTAL_SOUND.
+        g.send(&C::LevelEvent(play::LevelEvent {
+            kind: 1032,
+            pos: [0, 0, 0],
+            data: 0,
+            global: false,
+        }));
+        // lastSentExp, lastSentHealth and lastSentFood.
+        g.sent_health = None;
+        g.sent_xp = None;
+        let (cx, cz) = g.chunk();
+        g.send(&C::SetChunkCacheCenter(play::SetChunkCacheCenter {
+            x: cx,
+            z: cz,
+        }));
+        g.center_sent = Some((cx, cz));
     }
 }
 

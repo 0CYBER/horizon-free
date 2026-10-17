@@ -851,6 +851,7 @@ impl Game<'_> {
         }
         self.lan_flush_effects(&mut host);
         self.tick_guests(&mut host);
+        self.tick_server_travel(&mut host);
         self.lan_swings(&mut host);
         self.lan_update_streaming(&host);
         self.lan_update_models(&mut host);

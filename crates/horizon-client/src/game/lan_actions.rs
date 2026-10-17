@@ -846,6 +846,7 @@ impl Game<'_> {
         if !host.hub.guests[i].dead {
             return;
         }
+        self.respawn_level(host);
         let g = &mut host.hub.guests[i];
         g.dead = false;
         g.health = 20.0;
@@ -891,7 +892,7 @@ impl Game<'_> {
             let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn) else {
                 continue;
             };
-            if host.hub.guests[gi].dead {
+            if host.hub.guests[gi].dead || self.on_server_trip(conn) {
                 continue;
             }
             let play = host.play.entry(conn).or_default();

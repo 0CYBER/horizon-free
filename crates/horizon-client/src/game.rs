@@ -112,6 +112,7 @@ mod scoreboard;
 mod screens;
 mod sculk;
 mod sculk_fixture;
+mod server_travel;
 mod shader_packs;
 mod shield;
 mod sign_edit;
@@ -972,6 +973,8 @@ struct Game<'a> {
     world_root: PathBuf,
     /// A player carried through a portal, re-placed once the destination loads.
     travelling: Option<(PlayerMotion, Vec3)>,
+    /// A server's lone player on its way to another level.
+    server_trip: Option<server_travel::Trip>,
     /// Nether portals: the player's, items' and mobs' (game/nether_portal.rs).
     portals: nether_portal::Portals,
     /// The pending travel goes through an End portal (EndPortalBlock destinations).
@@ -6434,6 +6437,17 @@ impl Game<'_> {
         let Some(player) = self.player.take() else {
             return Ok(());
         };
+        let from = self.dim;
+        let destination = self.switch_level(target, player.position)?;
+        self.trigger_dimension(from, target);
+        self.travelling = Some((player, destination));
+        self.end_travel = (target == Dim::End || from == Dim::End) && self.end_portal_travel;
+        Ok(())
+    }
+    /// The level swap under a dimension change: save the departing level,
+    /// open `target`'s, and return where a player leaving from `from` goes
+    /// (scaled coordinates, or the End portal's fixed destination).
+    pub(super) fn switch_level(&mut self, target: Dim, from: Vec3) -> Result<Vec3> {
         // Save the departing dimension's changed chunks.
         self.streaming.save(&mut self.world, true);
         let keys: Vec<_> = self.world.modified.drain().collect();
@@ -6449,11 +6463,10 @@ impl Game<'_> {
             _ => 1.0,
         };
         let destination = self.end_destination(target).unwrap_or(Vec3::new(
-            player.position.x * scale,
-            player.position.y,
-            player.position.z * scale,
+            from.x * scale,
+            from.y,
+            from.z * scale,
         ));
-        let from_end = self.dim == Dim::End;
         let (streaming, save) =
             self.make_streaming(&self.world_root.clone(), target, self.level.seed)?;
         let mut world = World::new(self.res.facts.air, self.level.seed);
@@ -6461,12 +6474,14 @@ impl Game<'_> {
         world.game_time = self.world.game_time;
         world.day_time = self.world.day_time;
         world.weather = self.world.weather;
+        // An open hub keeps hearing the new level's block changes.
+        world.block_log = self.world.block_log.as_ref().map(|_| Vec::new());
+        // The sculk tables' watched blocks are built once per game.
+        world.watched = std::mem::take(&mut self.world.watched);
         self.streaming = streaming;
         self.world = world;
         self.save = save;
-        let from = self.dim;
         self.dim = target;
-        self.trigger_dimension(from, target);
         self.level.dimension = target.id().to_owned();
         self.block_ticks = Ticks::new(self.level.seed as i32);
         self.tick_chunks.clear();
@@ -6479,13 +6494,11 @@ impl Game<'_> {
         self.pickups.clear();
         self.orbs.clear();
         self.mining = None;
-        self.travelling = Some((player, destination));
-        self.end_travel = (target == Dim::End || from_end) && self.end_portal_travel;
         if let Some(r) = self.renderer.as_mut() {
             r.clear_sections();
         }
         self.apply_settings();
-        Ok(())
+        Ok(destination)
     }
     /// PortalShape: an obsidian frame around 2..=21 by 3..=21 empty blocks.
     fn portal_shape(&self, start: [i32; 3], x_axis: bool) -> Option<([i32; 3], i32, i32)> {
@@ -10045,6 +10058,7 @@ impl<'a> Game<'a> {
             dim: Dim::Overworld,
             world_root: PathBuf::new(),
             travelling: None,
+            server_trip: None,
             portals: Default::default(),
             end_travel: false,
             respawn_config: None,
