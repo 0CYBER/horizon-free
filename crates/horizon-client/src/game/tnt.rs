@@ -216,7 +216,7 @@ impl Game<'_> {
         // Face sprites from the block model: up, down, north, south, west, east.
         let Ok(models) = self
             .pack
-            .assets
+            .render
             .model_catalog
             .collect(state, BlockPos::new(0, 0, 0))
         else {
@@ -467,9 +467,10 @@ mod tests {
             return;
         }
         let assets = horizon_client::assets::Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let facts = horizon_client::blocks::BlockFacts::load(&root, assets.registry).unwrap();
         let collision = horizon_client::collisions::load(&root, assets.registry).unwrap();
-        let mut world = horizon_client::world::World::test_scene(&assets, 3).unwrap();
+        let mut world = horizon_client::world::World::test_scene(&assets, &render, 3).unwrap();
         let stone = assets.registry.default_state("minecraft:stone").unwrap();
         let water = assets.registry.default_state("minecraft:water").unwrap();
         let mut state = assets.registry.state(water).unwrap().clone();

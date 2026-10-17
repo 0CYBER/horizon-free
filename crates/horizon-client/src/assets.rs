@@ -49,11 +49,20 @@ impl TerrainBlockStates for Properties {
         self.0[id.0 as usize]
     }
 }
+/// The block registry and the facts read from `facts.json` and the block tags:
+/// everything world generation and collisions need, with none of the block
+/// models or baked sprites.
 pub struct Assets {
     /// Leaked once per process: shared by world generation threads.
     pub registry: &'static BlockRegistry,
     pub properties: Properties,
     pub material_states: [BlockStateId; 6],
+    /// Block names in `#minecraft:blocks_fluid_flow` (fluid flow vectors).
+    pub blocks_fluid_flow: BTreeSet<String>,
+}
+/// The block models and their baked sprites, read from the pack at `root` over
+/// an existing block registry: everything the mesher and renderer need.
+pub struct RenderAssets {
     pub sprite_size: u32,
     pub sprite_minimum_size: u32,
     pub pixels: Vec<u8>,
@@ -68,8 +77,6 @@ pub struct Assets {
     pub translucent_layers: Vec<bool>,
     /// Each layer's `MipmapGenerator` settings.
     pub sprite_mips: Vec<crate::mipmap::Settings>,
-    /// Block names in `#minecraft:blocks_fluid_flow` (fluid flow vectors).
-    pub blocks_fluid_flow: BTreeSet<String>,
 }
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
@@ -193,33 +200,23 @@ impl Assets {
         // past vanilla's 16-bit global palette.
         crate::chunk::set_block_states(registry.len());
         let registry: &'static BlockRegistry = Box::leak(Box::new(registry));
-        Self::with_models(
-            root,
+        Ok(Self {
             registry,
             properties,
             material_states,
             blocks_fluid_flow,
-        )
+        })
     }
-    /// The same blocks with the models and sprites of another resource root
+    /// The models and sprites of another resource root over these blocks
     /// (resource packs changed): the registry and block facts come from the
     /// game data, which resource packs do not touch.
-    pub fn reload(&self, root: &Path) -> Result<Self> {
-        Self::with_models(
-            root,
-            self.registry,
-            self.properties.clone(),
-            self.material_states,
-            self.blocks_fluid_flow.clone(),
-        )
+    pub fn reload(&self, root: &Path) -> Result<RenderAssets> {
+        RenderAssets::load(root, self)
     }
-    fn with_models(
-        root: &Path,
-        registry: &'static BlockRegistry,
-        properties: Properties,
-        material_states: [BlockStateId; 6],
-        blocks_fluid_flow: BTreeSet<String>,
-    ) -> Result<Self> {
+}
+impl RenderAssets {
+    pub fn load(root: &Path, assets: &Assets) -> Result<Self> {
+        let registry = assets.registry;
         let mut sprites = crate::sprites::Sprites::default();
         for name in MATERIALS {
             sprites.insert(root, &format!("minecraft:block/{name}"))?;
@@ -243,9 +240,6 @@ impl Assets {
         }
         sprites.finish();
         Ok(Self {
-            registry,
-            properties,
-            material_states,
             sprite_size: sprites.size,
             sprite_minimum_size: sprites.minimum_size,
             texture_layers: u32::try_from(sprites.count())?,
@@ -258,7 +252,6 @@ impl Assets {
             sprite_layers: sprites.layers,
             translucent_layers: sprites.translucent,
             sprite_mips: sprites.mips,
-            blocks_fluid_flow,
         })
     }
 }

@@ -55,13 +55,15 @@ fn columns_loaded_past_the_render_distance_mesh_when_they_come_in_range() {
         return;
     };
     let assets = Arc::new(Assets::load(&root).unwrap());
+    let render = Arc::new(assets.reload(&root).unwrap());
     let facts = BlockFacts::load(&root, assets.registry).unwrap();
     let visibility = models::load_visibility(&root, assets.registry).unwrap();
     let context = Arc::new(WorkerContext {
-        tables: Arc::new(MeshTables::new(&assets, &facts, visibility).unwrap()),
+        tables: Arc::new(MeshTables::new(&assets, &render, &facts, visibility).unwrap()),
         light: Arc::new(LightTables::load(&root, assets.registry, &facts).unwrap()),
         biomes: Arc::new(Biomes::load(&root).unwrap()),
         assets,
+        render: render.clone(),
     });
     let mut streaming = Streaming::new(Arc::new(Saved), context, 3);
     streaming.radius = 4;
@@ -135,13 +137,15 @@ fn relit_columns_keep_every_mesh_current() {
         return;
     };
     let assets = Arc::new(Assets::load(&root).unwrap());
+    let render = Arc::new(assets.reload(&root).unwrap());
     let facts = BlockFacts::load(&root, assets.registry).unwrap();
     let visibility = models::load_visibility(&root, assets.registry).unwrap();
     let context = Arc::new(WorkerContext {
-        tables: Arc::new(MeshTables::new(&assets, &facts, visibility).unwrap()),
+        tables: Arc::new(MeshTables::new(&assets, &render, &facts, visibility).unwrap()),
         light: Arc::new(LightTables::load(&root, assets.registry, &facts).unwrap()),
         biomes: Arc::new(Biomes::load(&root).unwrap()),
         assets: assets.clone(),
+        render: render.clone(),
     });
     let state = |name: &str| assets.registry.default_state(name).unwrap().0;
     let (stone, glowstone, torch) = (
@@ -210,6 +214,7 @@ fn relit_columns_keep_every_mesh_current() {
             cutout_leaves: true,
             cull_leaves: false,
             assets: &context.assets,
+            render: &context.render,
             tables: &context.tables,
             biomes: &context.biomes,
             visibility: context.tables.visibility.clone(),

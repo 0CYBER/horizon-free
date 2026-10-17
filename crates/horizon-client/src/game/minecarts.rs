@@ -1148,7 +1148,7 @@ impl Game<'_> {
         diffuse: bool,
         out: &mut Vec<Vertex>,
     ) {
-        let Ok(models) = self.pack.assets.model_catalog.collect_seeded(state, seed) else {
+        let Ok(models) = self.pack.render.model_catalog.collect_seeded(state, seed) else {
             return;
         };
         for (_, model) in &models {

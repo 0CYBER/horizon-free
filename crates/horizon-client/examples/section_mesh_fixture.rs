@@ -3,7 +3,7 @@
 //! the oracle's canonical form (vanilla ARGB colours and packed light coords).
 #![forbid(unsafe_code)]
 use horizon_client::{
-    assets::Assets,
+    assets::{Assets, RenderAssets},
     biome::{BiomeInfo, Biomes, GrassModifier},
     blocks::BlockFacts,
     chunk::{Chunk, Light, MIN_Y, index},
@@ -48,6 +48,7 @@ fn chunk_index(x: i32, z: i32) -> Result<usize> {
 fn scene(
     row: &Value,
     assets: &Assets,
+    render: &RenderAssets,
     tables: &MeshTables,
     biomes: &mut Biomes,
     pristine: &[BiomeInfo],
@@ -127,6 +128,7 @@ fn scene(
     let mut mesher = Mesher {
         nether_shading: row["nether"].as_bool().unwrap_or(false),
         assets,
+        render,
         tables,
         biomes: &*biomes,
         visibility: tables.visibility.clone(),
@@ -184,11 +186,12 @@ fn main() -> Result<()> {
     }
     let root = PathBuf::from(&args[0]);
     let assets = Assets::load(&root)?;
+    let render = assets.reload(&root)?;
     let facts = BlockFacts::load(&root, assets.registry)?;
     let mut biomes = Biomes::load(&root)?;
     let visibility = models::load_visibility(&root, assets.registry)?;
-    let tables = MeshTables::new(&assets, &facts, visibility)?;
-    let names: BTreeMap<u32, &str> = assets
+    let tables = MeshTables::new(&assets, &render, &facts, visibility)?;
+    let names: BTreeMap<u32, &str> = render
         .sprite_layers
         .iter()
         .map(|(name, layer)| (*layer, name.as_str()))
@@ -222,6 +225,7 @@ fn main() -> Result<()> {
         let result = scene(
             &row,
             &assets,
+            &render,
             &tables,
             &mut biomes,
             &pristine,

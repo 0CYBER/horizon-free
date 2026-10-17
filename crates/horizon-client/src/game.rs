@@ -145,7 +145,7 @@ mod wither;
 mod zombie_villagers;
 use horizon_client::{
     Result,
-    assets::Assets,
+    assets::{Assets, RenderAssets},
     audio::Audio,
     biome::Biomes,
     blocks::{BlockFacts, Fluid},
@@ -717,6 +717,7 @@ impl UiResources {
 #[derive(Clone)]
 pub struct PackResources {
     assets: Arc<Assets>,
+    render: Arc<RenderAssets>,
     context: Arc<WorkerContext>,
     layer_names: Arc<HashMap<u32, String>>,
     /// Item definitions, baked item models and special renderers.
@@ -728,23 +729,25 @@ pub struct PackResources {
     forcefield: Arc<(u32, u32, Vec<u8>)>,
 }
 impl PackResources {
-    /// Everything a pack overlay at `root` provides, over `assets` loaded from it.
+    /// Everything a pack overlay at `root` provides, over `assets` and `render`
+    /// loaded from it.
     fn load(
         root: &std::path::Path,
         assets: Arc<Assets>,
+        render: Arc<RenderAssets>,
         facts: &BlockFacts,
         biomes: Arc<Biomes>,
         light: Arc<LightTables>,
     ) -> Result<Self> {
         let visibility = models::load_visibility(root, assets.registry)?;
-        let tables = Arc::new(MeshTables::new(&assets, facts, visibility)?);
+        let tables = Arc::new(MeshTables::new(&assets, &render, facts, visibility)?);
         let item_renderer = horizon_client::item_render::ItemRenderer::load_with_library(
             root,
-            assets.model_library.clone(),
+            render.model_library.clone(),
         )?;
         Ok(Self {
             layer_names: Arc::new(
-                assets
+                render
                     .sprite_layers
                     .iter()
                     .map(|(name, layer)| (*layer, name.trim_start_matches("minecraft:").to_owned()))
@@ -752,11 +755,13 @@ impl PackResources {
             ),
             context: Arc::new(WorkerContext {
                 assets: assets.clone(),
+                render: render.clone(),
                 tables,
                 biomes,
                 light,
             }),
             assets,
+            render,
             item_renderer: Arc::new(item_renderer),
             names: Arc::new(Names::load(root)),
             clouds: Arc::new(load_clouds(root)),
@@ -1466,7 +1471,7 @@ impl Game<'_> {
     fn particle_sprite(&self, state: BlockStateId) -> Option<(String, u32)> {
         let models = self
             .pack
-            .assets
+            .render
             .model_catalog
             .collect(state, horizon_core::position::BlockPos::new(0, 0, 0))
             .ok()?;
@@ -5795,7 +5800,7 @@ impl Game<'_> {
                     == horizon_client::blocks::RenderShape::Model
                     && let Ok(models) = self
                         .pack
-                        .assets
+                        .render
                         .model_catalog
                         .collect(state, BlockPos::new(m.pos[0], m.pos[1], m.pos[2]))
                 {
@@ -8582,7 +8587,7 @@ impl Game<'_> {
                     let f = self.res.facts.get(state);
                     outline_after_terrain = self
                         .pack
-                        .assets
+                        .render
                         .model_catalog
                         .collect(state, BlockPos::new(h.pos[0], h.pos[1], h.pos[2]))
                         .is_ok_and(|models| {
@@ -10388,15 +10393,20 @@ fn load_resources(
     on_stage: &(dyn Fn(u32) + Sync),
 ) -> Result<Loaded> {
     let mut pack_error = None;
-    let assets = match Assets::load(&root) {
-        Ok(assets) => assets,
+    let (assets, render) = match Assets::load(&root).and_then(|assets| {
+        let render = assets.reload(&root)?;
+        Ok((assets, render))
+    }) {
+        Ok(bundle) => bundle,
         // Minecraft.rollbackResourcePacks: the packs break loading, start
         // with the game's own resources.
         Err(e) if root != vanilla_root => {
             log::warn!("Horizon: resource packs failed to load ({e}); using the default resources");
             pack_error = Some(e.to_string());
             root = vanilla_root.to_path_buf();
-            Assets::load(vanilla_root)?
+            let assets = Assets::load(vanilla_root)?;
+            let render = assets.reload(vanilla_root)?;
+            (assets, render)
         }
         Err(e) => {
             return Err(format!(
@@ -10406,6 +10416,7 @@ fn load_resources(
         }
     };
     let assets = Arc::new(assets);
+    let render = Arc::new(render);
     log::info!("load assets: {:.2}s", started.elapsed().as_secs_f32());
     on_stage(0);
     let behaviour_json: serde_json::Value = serde_json::from_reader(std::io::BufReader::new(
@@ -10427,7 +10438,7 @@ fn load_resources(
     log::info!("load biomes+env: {:.2}s", started.elapsed().as_secs_f32());
     on_stage(3);
     let light = Arc::new(LightTables::load(&root, assets.registry, &facts)?);
-    let pack = PackResources::load(&root, assets.clone(), &facts, biomes.clone(), light)?;
+    let pack = PackResources::load(&root, assets.clone(), render, &facts, biomes.clone(), light)?;
     log::info!("load pack tables: {:.2}s", started.elapsed().as_secs_f32());
     on_stage(4);
     let gui = UiResources::load(&root)?;
@@ -10520,7 +10531,7 @@ fn build_renderer(
     gui: &UiResources,
     previous: Option<&Renderer>,
 ) -> Result<Renderer> {
-    let assets = &pack.assets;
+    let assets = &pack.render;
     let atlas = &gui.atlas;
     let mut renderer = pollster::block_on(Renderer::new(
         window,

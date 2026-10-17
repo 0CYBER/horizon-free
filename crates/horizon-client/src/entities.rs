@@ -597,9 +597,10 @@ mod fire_environment_tests {
             return;
         }
         let assets = crate::assets::Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let facts = BlockFacts::load(&root, assets.registry).unwrap();
         let items = crate::items::Items::load(&root, assets.registry, &facts).unwrap();
-        let mut world = World::test_scene(&assets, 3).unwrap();
+        let mut world = World::test_scene(&assets, &render, 3).unwrap();
         let at = Vec3::new(20.5, 4.0, 20.5);
         world
             .set(

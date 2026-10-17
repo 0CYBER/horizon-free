@@ -7,7 +7,7 @@ mod facing;
 mod fluid;
 mod lighting;
 use crate::{
-    assets::Assets,
+    assets::{Assets, RenderAssets},
     biome::Biomes,
     blocks::{BlockFacts, RenderShape},
     chunk::{Chunk, MIN_Y},
@@ -258,18 +258,19 @@ fn redstone_color(power: u8) -> u32 {
 impl MeshTables {
     pub fn new(
         assets: &Assets,
+        render: &RenderAssets,
         facts: &BlockFacts,
         visibility: FaceVisibility,
     ) -> crate::Result<Self> {
         // Terrain vertices keep the sprite layer below `OPAQUE_LAYER`.
-        let layers = assets.sprite_layers.values().max().map_or(0, |l| l + 1);
+        let layers = render.sprite_layers.values().max().map_or(0, |l| l + 1);
         if layers > u32::from(OPAQUE_LAYER) {
             return Err(
                 format!("{layers} block sprites, terrain vertices index {OPAQUE_LAYER}").into(),
             );
         }
         let layer = |name: &str| -> crate::Result<u16> {
-            assets
+            render
                 .sprite_layers
                 .get(name)
                 .map(|&l| l as u16)
@@ -594,6 +595,7 @@ pub struct Mesher<'a> {
     /// CardinalLighting.NETHER: brighter up/down faces.
     pub nether_shading: bool,
     pub assets: &'a Assets,
+    pub render: &'a RenderAssets,
     pub tables: &'a MeshTables,
     pub biomes: &'a Biomes,
     pub visibility: FaceVisibility,
@@ -663,7 +665,7 @@ impl Mesher<'_> {
                         continue;
                     }
                     let world = BlockPos::new(center.x * 16 + x, base_y + y, center.z * 16 + z);
-                    let Ok(models) = self.assets.model_catalog.collect(BlockStateId(id), world)
+                    let Ok(models) = self.render.model_catalog.collect(BlockStateId(id), world)
                     else {
                         continue;
                     };
