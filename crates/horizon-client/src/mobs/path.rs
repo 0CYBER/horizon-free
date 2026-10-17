@@ -4,8 +4,8 @@
 //! `AmphibiousNodeEvaluator`), ported rule for rule.
 use super::{MobWorld, data};
 use crate::blocks::Fluid;
+use crate::fast_hash::FxHashMap;
 use horizon_core::geometry::{Aabb, Vec3};
-use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PathType {
@@ -301,10 +301,13 @@ pub struct Finder<'a, 'w> {
     mob: &'a PathMob,
     eval: Evaluator,
     nodes: Vec<Node>,
-    index: HashMap<(i32, i32, i32), u32>,
+    index: FxHashMap<(i32, i32, i32), u32>,
     heap: Vec<u32>,
-    types: HashMap<(i32, i32, i32), PathType>,
-    collisions: HashMap<[u64; 6], bool>,
+    types: FxHashMap<(i32, i32, i32), PathType>,
+    /// `path_type` of each position asked during this query: it reads up to
+    /// 26 blocks, and overlapping mob boxes ask for the same positions.
+    statics: std::cell::RefCell<FxHashMap<(i32, i32, i32), PathType>>,
+    collisions: FxHashMap<[u64; 6], bool>,
     entity_width: i32,
     entity_height: i32,
     entity_depth: i32,
@@ -319,10 +322,11 @@ impl<'a, 'w> Finder<'a, 'w> {
             mob,
             eval,
             nodes: Vec::new(),
-            index: HashMap::new(),
+            index: FxHashMap::default(),
             heap: Vec::new(),
-            types: HashMap::new(),
-            collisions: HashMap::new(),
+            types: FxHashMap::default(),
+            statics: Default::default(),
+            collisions: FxHashMap::default(),
             entity_width: (mob.width + 1.0).floor() as i32,
             entity_height: (mob.height + 1.0).floor() as i32,
             entity_depth: (mob.width + 1.0).floor() as i32,
@@ -385,7 +389,17 @@ impl<'a, 'w> Finder<'a, 'w> {
     }
     // --- path types -----------------------------------------------------
     /// WalkNodeEvaluator.getPathTypeStatic (+ the fly/amphibious overrides).
+    /// The world doesn't change during a query, so each position's type is
+    /// worked out once.
     fn path_type(&self, x: i32, y: i32, z: i32) -> PathType {
+        if let Some(t) = self.statics.borrow().get(&(x, y, z)) {
+            return *t;
+        }
+        let t = self.compute_path_type(x, y, z);
+        self.statics.borrow_mut().insert((x, y, z), t);
+        t
+    }
+    fn compute_path_type(&self, x: i32, y: i32, z: i32) -> PathType {
         match self.eval {
             Evaluator::Fly => self.fly_path_type(x, y, z),
             Evaluator::Amphibious { .. } => {
@@ -991,7 +1005,7 @@ impl<'a, 'w> Finder<'a, 'w> {
         let malus =
             |s: &Self, n: Option<u32>| n.is_some_and(|n| s.nodes[n as usize].cost_malus >= 0.0);
         // Direction.values(): down, up, north, south, west, east.
-        let mut by_dir: HashMap<(i32, i32, i32), Option<u32>> = HashMap::new();
+        let mut by_dir: FxHashMap<(i32, i32, i32), Option<u32>> = FxHashMap::default();
         for (dx, dy, dz) in [
             (0, -1, 0),
             (0, 1, 0),
