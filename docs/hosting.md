@@ -10,20 +10,18 @@ plan are in [docs/server.md](https://github.com/ludovic111/horizon/blob/main/doc
 - **Online mode checks accounts** (release v2026.10.17.07 and newer). With `online_mode = true`, the
   default, players who sign in with the official Minecraft launcher join with their own accounts, as on a
   vanilla server.
-- **Players you add before they have joined get offline UUIDs**, so in online mode the whitelist refuses
-  them. This affects `init --player`, `horizon-server whitelist add` and the console's `whitelist add`, `op`
-  and `ban`. [#589](https://github.com/ludovic111/horizon/pull/589) fixes it (in review), along with `init`'s
-  note that the server runs offline, which is out of date. Until then, turn the whitelist off and let each
-  friend join once. While they are online, run `horizon-server cmd "whitelist add NAME"`. Then turn the
-  whitelist back on.
+- **Names you add are accounts** (release v2026.10.17.14 and newer). `init --player`, `horizon-server
+  whitelist add` and `op`, and the console's `whitelist add`, `op` and `ban` look a name up the way vanilla
+  does: players already seen (kept in `usercache.json`), then Mojang's profile service. In online mode a name
+  with no account is refused. So you can whitelist friends before they first join.
 - **Horizon's own client can't sign in to a Microsoft account yet.** That needs an Azure app registration and
   Mojang's approval, which the project doesn't have
   ([docs/microsoft-account.md](https://github.com/ludovic111/horizon/blob/main/docs/microsoft-account.md)).
   Until then Horizon players can join offline servers only (`online_mode = false`). An offline server never
   checks accounts: anyone who reaches it can join under any name. Keep it on your LAN or a tailnet
   (Tailscale, ZeroTier), or share it only with friends you trust.
-- **No secure chat.** Chat isn't signed. Vanilla clients show chat from the server as not secure.
-- **No locator bar** for vanilla clients yet (in review: [#692](https://github.com/ludovic111/horizon/pull/692)).
+- **No secure chat.** Chat isn't signed, and `enforce-secure-profile` has no effect. Vanilla clients show
+  chat from the server as not secure.
 - **Nether and End:** the world follows a player through portals when they are alone on the server
   (v2026.10.17.09 and newer). With several players online, portals don't move remote players yet.
 - **Vanilla's movement checks and chunk pacing** ("moved too quickly", sending chunks as fast as a client
@@ -105,8 +103,9 @@ script:
 horizon-server init --eula --world survival --seed 12345 --port 25565 --whitelist --player Alex --op Alex --yes
 ```
 
-`--no-whitelist` turns the whitelist off. The players you add get offline UUIDs for now. That suits an
-offline server, but an online one refuses them (see "Before you start").
+`--no-whitelist` turns the whitelist off, and `--offline` turns online mode off (see "Before you start").
+The players you add are looked up as Minecraft accounts in online mode, and get offline UUIDs on an offline
+server, as vanilla does.
 
 Start the server in the foreground, with the console on your terminal (Ctrl-C stops it cleanly):
 
@@ -282,7 +281,8 @@ docker run -d --name horizon -p 25565:25565 --stop-timeout 180 \
 - `HORIZON_EULA=true` accepts the [Minecraft EULA](https://aka.ms/MinecraftEULA) for this server. Without it
   the container stops and says why.
 - The first start writes `/data/server.toml` from `HORIZON_EULA`, `HORIZON_WORLD`, `HORIZON_SEED`,
-  `HORIZON_PORT`, `HORIZON_WHITELIST`, `HORIZON_PLAYERS` and `HORIZON_OP`. Later starts use the file.
+  `HORIZON_PORT`, `HORIZON_WHITELIST`, `HORIZON_PLAYERS`, `HORIZON_OP` and `HORIZON_ONLINE`. Later starts use
+  the file.
 - The mounted folder must come from release v2026.10.17.07 or newer (see step 2).
 - Manage it with `docker exec horizon horizon-server status` (and `cmd`, `backup`, `logs`, ...).
   `docker stop` saves and stops cleanly; `--stop-timeout 180` gives it the time.
