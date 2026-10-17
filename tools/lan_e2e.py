@@ -20,6 +20,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - containers: the guest's ender chest holds the guest's items, not the host's, and a double chest
              opens as 9x6 with the right half first;
 - feedback:  the guest's command feedback names the guest and shows the numbers.
+- eat:       holding right click with bread, the guest's own screen plays the eating (the item in use
+             counts up) and the server eats one loaf and feeds the guest.
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -39,6 +41,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import zlib
 from pathlib import Path
@@ -48,7 +51,7 @@ from agent_control_e2e import Cli, Failed, game_env  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'trials']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'trials', 'eat']
 
 
 class Game:
@@ -622,11 +625,44 @@ def check_trials(host, guest, out):
     return {'spawner': trial, 'vault': active, 'rewarded': uuid(rewarded), 'host': uuid(host_uuid)}
 
 
+def check_eat(host, guest, out):
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    # Hungry: the eating needs food below 20 (Player.canEat).
+    guest('command', command='effect give @s minecraft:hunger 3 255')
+    guest.wait(70)
+    guest('command', command='effect clear @s')
+    guest('command', command='give @s minecraft:bread 3')
+    guest.wait(5)
+    guest.raw('select', 'minecraft:bread')
+    hungry = guest('state')['player']['food']
+    # use-item --hold returns once released: watch the guest's screen meanwhile.
+    hold = threading.Thread(target=guest.raw, args=('use-item', '--hold', 2.2))
+    hold.start()
+    using = []
+    for _ in range(4):
+        time.sleep(0.2)
+        using.append(guest('state').get('using'))
+    guest.shot(out, 'eat')
+    hold.join()
+    guest.wait(10)
+    fed = guest('state')['player']['food']
+    left = guest('inventory')['counts'].get('minecraft:bread', 0)
+    detail = {'hungry': hungry, 'fed': fed, 'bread': left, 'using': using, 'after': guest('state').get('using')}
+    assert hungry < 20, f'the guest is not hungry: {detail}'
+    ticks = [u['ticks'] for u in using if u]
+    assert len(ticks) >= 3 and ticks == sorted(ticks) and ticks[-1] > ticks[0], f'no eating on the guest\'s screen: {detail}'
+    assert left == 2 and fed > hungry, f'the server did not eat one loaf: {detail}'
+    assert detail['after'] is None, f'still eating after the release: {detail}'
+    return detail
+
+
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
              'chest': check_chest, 'crafting': check_crafting, 'damage': check_damage,
              'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
              'containers': check_containers, 'feedback': check_feedback, 'trials': check_trials,
-             'walls': check_walls}
+             'walls': check_walls,
+             'eat': check_eat}
 
 
 def run(ctl, out, resources, checks):

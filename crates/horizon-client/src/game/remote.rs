@@ -2220,10 +2220,12 @@ impl Game<'_> {
         self.tick_player_model();
         if !dead {
             self.remote_mining();
-            if self.right && self.use_delay == 0 && playing {
+            // Minecraft.handleKeybinds: no new use while an item is in use.
+            if self.right && self.use_delay == 0 && playing && self.using.is_none() {
                 self.remote_use();
                 self.use_delay = 4;
             }
+            self.remote_tick_using();
         }
         self.remote_send_state(input);
         self.send(S::ClientTickEnd(Empty));
@@ -2602,8 +2604,16 @@ impl Game<'_> {
                 location: [0.0, 1.0, 0.0],
                 secondary: sneaking,
             }));
-            self.swing_arm();
-            return;
+            // Player.interactOn: another player passes, and the held item is
+            // used instead (Minecraft.startUseItem).
+            let player = self
+                .remote
+                .as_ref()
+                .is_some_and(|r| r.level_players.contains_key(&id));
+            if !player {
+                self.swing_arm();
+                return;
+            }
         }
         if let Some(hit) = self.pick() {
             let seq = self.next_sequence();
@@ -2636,7 +2646,7 @@ impl Game<'_> {
                 return;
             }
         }
-        if self.held().is_some() {
+        if let Some(held) = self.held().cloned() {
             let seq = self.next_sequence();
             self.send(S::UseItem(play::UseItem {
                 hand: 0,
@@ -2644,6 +2654,44 @@ impl Game<'_> {
                 yaw: self.yaw,
                 pitch: self.pitch,
             }));
+            // MultiPlayerGameMode.useItem runs the use here too: food starts
+            // being eaten (Consumable.startConsuming).
+            if let Some(info) = self.res.items.get(&held.item).cloned() {
+                self.start_eating(&info);
+            }
+        }
+    }
+    /// `LivingEntity.updatingUsingItem` for food on a server client: the
+    /// eating animation and its crumbs. The server eats it and sends the
+    /// stack, the hunger and the sounds.
+    fn remote_tick_using(&mut self) {
+        let Some((slot, ticks)) = self.using else {
+            return;
+        };
+        let stack = self.stack_in(slot).cloned();
+        let food = stack
+            .as_ref()
+            .and_then(|s| self.res.items.get(&s.item))
+            .is_some_and(|i| i.consumable && i.food.is_some());
+        let (Some(stack), true) = (stack, food) else {
+            self.using = None;
+            return;
+        };
+        if !self.right || slot != self.selected || self.screen != Screen::Playing {
+            self.using = None;
+            return;
+        }
+        // Consumable.shouldEmitParticlesAndSounds, as in tick_used_item.
+        let duration = 32;
+        let remaining = duration - ticks.min(duration);
+        if duration - remaining > (duration as f32 * 0.21875) as u32 && remaining % 4 == 0 {
+            self.eat_particles(&stack, 5);
+        }
+        if ticks + 1 >= duration {
+            self.using = None;
+            self.eat_particles(&stack, 16);
+        } else {
+            self.using = Some((slot, ticks + 1));
         }
     }
     /// Left click: attack the targeted entity (MultiPlayerGameMode.attack).
