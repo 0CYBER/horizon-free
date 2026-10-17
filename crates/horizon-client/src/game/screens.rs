@@ -288,6 +288,8 @@ impl Game<'_> {
         if hit == Some(0) && self.remote.is_none() {
             let keep = self.ui.rules.bool("keep_inventory") || self.spectator();
             self.experience.respawn(keep);
+            // Autosaves keep a login position; death must resolve the respawn point instead.
+            self.level.position = None;
         }
         match hit {
             Some(0) if self.remote.is_some() => {

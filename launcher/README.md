@@ -25,6 +25,16 @@ The opening, then Play ([clip](docs/opening.webm)):
   preparation reuses checksum-verified game jars and libraries from the current
   or another installed Horizon version, so the original Minecraft install is
   only required when no valid imported copy exists.
+- **Modpacks**: import a Java modpack (a Modrinth `.mrpack`, a CurseForge zip, or a Prism,
+  MultiMC or CurseForge instance folder) and see its coverage report: per mod, ported, partial,
+  not yet or not needed, with the reason ([docs/modpacks.md](../docs/modpacks.md)). **Port**
+  gets the jars of what this computer can port today (content mods with data and assets only)
+  the player's own way: copied from a folder they have, or downloaded from the pack's own links
+  or the same file on Modrinth's CDN, hash checked; files only CurseForge has need its API key, so
+  they come from your installed instance. It carries them over for the selected version, and
+  **Play** starts the game as the pack's own profile (`ports/<pack>/home/` in the game's home:
+  its own saves and options) with those mods. Nothing is uploaded or shared: mod jars and ports
+  stay on this computer.
 - **Patch notes**: each release's notes, newest first, with a link to GitHub Sponsors. Quiet "Discord" and "Website" links sit in the footer.
 
 Data lives in the platform's data directory (`~/.local/share/horizon-launcher` on Linux,
@@ -83,6 +93,11 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher account sign-out <name>
     horizon-launcher account select <name>          play as this account
     horizon-launcher account offline                play without an account
+    horizon-launcher modpack [list]                 the imported packs and their coverage
+    horizon-launcher modpack import <pack>          a .mrpack, CurseForge zip or instance folder
+    horizon-launcher modpack port <pack> [--from <dir>] [--version <tag>]   get the jars and carry them over
+    horizon-launcher modpack play <pack> [--version <tag>]                 play it as its own profile
+    horizon-launcher modpack remove <pack>
     horizon-launcher benchmark [--repeats N]        measure the launcher (see Performance log)
     horizon-launcher data [status]                  what data collection is allowed, the install ID, what waits
     horizon-launcher data allow|deny <kinds|all>    performance, crashes, bugs, benchmarks
@@ -92,7 +107,7 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher data benchmark <report.json>   upload a benchmark report, printed first
 
 `--json` prints JSON where there is something to report (`versions`, `install`, `notes`,
-`next`, `links`, `menu-style`, `update --check`, `logs`, `account`, `benchmark`, `data`). Errors go to stderr with exit code 1. `server` runs in the terminal,
+`next`, `links`, `menu-style`, `update --check`, `logs`, `account`, `benchmark`, `data`, `modpack`). Errors go to stderr with exit code 1. `server` runs in the terminal,
 so lines you type reach its console. `HORIZON_LAUNCHER_HOME` replaces the data folder (for
 scripts and tests).
 
@@ -192,6 +207,7 @@ bundled so the type is the same on every platform.
 ## Screenshots
 
 ![Server](docs/server.png)
+![Modpacks](docs/modpacks.png)
 ![Versions](docs/versions.png)
 ![Patch notes](docs/patch-notes.png)
 ![Settings](docs/settings.png)

@@ -204,6 +204,14 @@ fn save_icon(file: &Path, address: &str, icon: Option<String>) {
     }
 }
 
+/// `ClientPacketListener.handleServerData`: a valid icon the joined server
+/// sends replaces the one its list entries keep.
+pub fn save_server_icon(saves: &Path, address: &str, png: &[u8]) {
+    if icon_pixels(png).is_some() {
+        save_icon(&servers_file(saves), address, Some(crate::lan::base64(png)));
+    }
+}
+
 /// The address of list row `index`: the saved servers, then the LAN games.
 fn entry_address(servers: &[ServerEntry], lan: &Scanner, index: usize) -> Option<String> {
     match servers.get(index) {

@@ -20,6 +20,7 @@ pub mod menu;
 pub mod playerdata;
 mod recipes;
 pub mod tracking;
+pub mod waypoints;
 
 pub use conn::{Holding, PlayerSender};
 use horizon_protocol::packets::play;
@@ -58,6 +59,8 @@ pub struct Joined {
     pub conn: u32,
     pub uuid: u128,
     pub name: String,
+    /// The profile's properties (skin textures, in online mode).
+    pub properties: Vec<horizon_protocol::packets::login::Property>,
     pub info: ClientInformation,
     pub brand: String,
     pub sender: PlayerSender,
@@ -80,6 +83,27 @@ pub enum Out {
 /// (bans, whitelist) for a profile connecting from an address, if refused.
 pub type LoginGate =
     Arc<dyn Fn(SocketAddr, u128, &str) -> Option<horizon_world::nbt::Tag> + Send + Sync>;
+
+/// online-mode=true: the key pair the server made at startup
+/// (MinecraftServer.initializeKeyPair) and how players are verified.
+pub struct OnlineMode {
+    pub key: horizon_protocol::rsa::RsaPrivateKey,
+    /// The public key as X.509 (PublicKey.getEncoded), sent in the hello.
+    pub public_der: Vec<u8>,
+    /// prevent-proxy-connections: the session service also checks the address.
+    pub prevent_proxy: bool,
+}
+
+/// The dedicated server's log for the login phase: (thread, level, line)
+/// written as vanilla's Log4j would, and the language that turns a
+/// disconnect reason into its text (Component.getString).
+#[derive(Clone)]
+pub struct NetLog {
+    pub write: Arc<dyn Fn(&str, &str, &str) + Send + Sync>,
+    pub lang: Arc<horizon_protocol::text::Language>,
+    /// log-ips: addresses in the log, or "<ip address withheld>".
+    pub log_ips: bool,
+}
 
 /// How the server side of the network behaves: an integrated server's LAN
 /// uses the defaults, a dedicated server takes them from server.properties.
@@ -109,6 +133,9 @@ pub struct NetConfig {
     /// Ops bypass a full server (ServerOpList.canBypassPlayerLimit).
     pub bypasses_limit: Option<Arc<dyn Fn(u128) -> bool + Send + Sync>>,
     pub gate: Option<LoginGate>,
+    /// Online mode: players are authenticated (none on a LAN world).
+    pub online: Option<Arc<OnlineMode>>,
+    pub log: Option<NetLog>,
 }
 impl NetConfig {
     /// IntegratedServer.publishServer.
@@ -128,6 +155,8 @@ impl NetConfig {
             listen: true,
             bypasses_limit: None,
             gate: None,
+            online: None,
+            log: None,
         }
     }
 }

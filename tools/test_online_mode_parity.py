@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Horizon's client joins vanilla's online-mode server, with no real account.
+"""Horizon's client joins vanilla's online-mode server and Horizon's, with no real account.
 
 A small mock of the Minecraft services (dev only: the discovery document and
 the session service's join and hasJoined endpoints) stands in for Mojang's.
@@ -20,7 +20,16 @@ in the world with its chunks, chats, runs /list, leaves).
 Also checked, with vanilla's messages:
 - a token the session service rejects ("Failed to log in: Invalid session");
 - a join the session service forgets (the server: "Failed to verify username!");
-- no account at all (the client refuses before joining).
+- no account at all (the client refuses before joining);
+- a verified player the whitelist refuses;
+- `whitelist add` in online mode: a player who joined before is known by name
+  and let in; another name is looked up through the services' profile lookup,
+  and one with no account is refused ("That player does not exist").
+
+Horizon's dedicated server then runs the same steps in online mode
+(`HORIZON_API_DISCOVERY` points it at the mock too): it must give the client
+the same answers and log the same lines about the player as vanilla's
+("UUID of player ...", "Disconnecting ...", "... lost connection: ...").
 
 Chat is unsigned here: the mock serves no Mojang public keys, so the server
 can't validate profile keys and doesn't enforce secure chat.
@@ -31,9 +40,11 @@ import os
 from pathlib import Path
 import platform
 import shutil
+import re
 import subprocess
 import sys
 import threading
+import time
 import urllib.parse
 
 try:
@@ -92,6 +103,14 @@ class Services:
                 query = dict(urllib.parse.parse_qsl(url.query))
                 if url.path == '/minecraft/client':
                     return self.reply(200, services.discovery())
+                if url.path.startswith('/users/profiles/minecraft/'):
+                    # profiles/getByName: the account with that name, ignoring case.
+                    name = urllib.parse.unquote(url.path.rsplit('/', 1)[1])
+                    with services.lock:
+                        services.log.append(('lookup', name))
+                    if name.lower() == PLAYER.lower():
+                        return self.reply(200, {'id': PLAYER_UUID, 'name': PLAYER})
+                    return self.reply(404, {'error': 'NOT_FOUND', 'errorMessage': f'Couldn\'t find any profile with name {name}'})
                 if url.path == '/session/minecraft/hasJoined':
                     with services.lock:
                         ok = services.joined.get(query.get('username')) == query.get('serverId')
@@ -99,11 +118,15 @@ class Services:
                     if ok:
                         return self.reply(200, {'id': PLAYER_UUID, 'name': query['username'], 'properties': []})
                     return self.reply(204)
+                with services.lock:
+                    services.log.append(('unknown', url.path))
                 self.reply(404, {'error': 'NotFound', 'path': url.path})
 
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))) or b'{}')
                 if self.path != '/session/minecraft/join':
+                    with services.lock:
+                        services.log.append(('unknown', self.path))
                     return self.reply(404, {'error': 'NotFound'})
                 token, profile, server_id = body.get('accessToken'), body.get('selectedProfile'), body.get('serverId')
                 accepted = token in (GOOD, FORGET) and profile == PLAYER_UUID
@@ -127,7 +150,8 @@ class Services:
             'session': endpoints(join='/session/minecraft/join', verify='/session/minecraft/hasJoined',
                                  getProfileById='/session/minecraft/profile/{profileId}'),
             'player': {'endpoints': {}},
-            'profiles': {'endpoints': {'getTexture': {'validUris': [self.url + '/texture/{textureId}']}}},
+            'profiles': {'endpoints': {'getTexture': {'validUris': [self.url + '/texture/{textureId}']},
+                                       'getByName': {'uri': self.url + '/users/profiles/minecraft/{name}'}}},
             'telemetry': {'endpoints': {}},
         }}
 
@@ -167,43 +191,53 @@ def run_client(binary, build, port, label, token, discovery):
     got['session file left'] = (directory / 'session.json').exists()
     return got
 
+# The server's lines about the player, as both servers print them.
+PLAYER_LINE = re.compile(r'^\[\d\d:\d\d:\d\d\] \[([^\]]+)\]: (.*(?:Tester|Username|Disconnecting|verify username).*)$')
 
-def main():
-    lock, jars, libraries = base.verify_artifacts()
-    build = lab.LOCAL / NAME
-    build.mkdir(parents=True, exist_ok=True)
-    report = build / 'report.json'
-    report.unlink(missing_ok=True)
-    oh.run_logged(['cargo', 'build', '--release', '-p', 'horizon-client', '--bin', 'horizon-client'], build,
-                  'compile-rust')
-    metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],
-                                                  cwd=lab.ROOT, text=True))
-    binary = Path(metadata['target_directory']) / 'release' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
-    dependencies = os.pathsep.join(map(str, [jars['server'], *libraries]))
 
-    services = Services()
-    discovery = services.url + '/minecraft/client'
+def player_lines(lines):
+    out = []
+    for line in lines:
+        if m := PLAYER_LINE.match(line):
+            text = re.sub(r'/127\.0\.0\.1:\d+', '/127.0.0.1:_', m.group(2))
+            text = re.sub(r'entity id \d+ at \(.*\)', 'entity id _ at _', text)
+            out.append(f'[{m.group(1)}] {text}')
+    return out
+
+
+def wait_after(server, mark, pattern, timeout=30):
+    """A line matching `pattern` among those the server printed after `mark`."""
+    regex = re.compile(pattern)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if any(regex.search(l) for l in server.lines[mark:]):
+            return
+        time.sleep(0.2)
+    raise AssertionError(f'no {pattern!r} after line {mark} of {server.log_path.name}')
+
+
+def run_side(label, command, binary, build, services, discovery):
+    """The six logins against one server; its checks and its log about the player."""
     port = free_port()
-    directory = build / 'server'
+    directory = build / label
     shutil.rmtree(directory, ignore_errors=True)
     directory.mkdir()
     props = dict(PROPERTIES, **{'server-port': str(port)})
     (directory / 'server.properties').write_text(''.join(f'{k}={v}\n' for k, v in props.items()))
     (directory / 'eula.txt').write_text('eula=true\n')
-    command = ['java', '-Xmx2g', '-Duser.timezone=UTC', f'-Dminecraft.api.discovery.host={discovery}',
-               '-cp', dependencies, 'net.minecraft.server.Main', 'nogui']
-    server = Server(command, directory, 'vanilla-online')
+    os.environ.update(HORIZON_NO_AUDIO='1', HORIZON_API_DISCOVERY=discovery)
+    server = Server(command, directory, f'{label}-online')
     checks = []
 
-    def check(label, actual, expected):
-        checks.append(f'{label}: ' + ('ok' if actual == expected else f'expected {expected!r}, got {actual!r}'))
+    def check(name, actual, expected):
+        checks.append(f'{name}: ' + ('ok' if actual == expected else f'expected {expected!r}, got {actual!r}'))
 
     try:
         server.wait_for(r'Done \(', timeout=600)
         services.take_log()
 
         # 1. Signed in: the full encrypted handshake, then play.
-        got = run_client(binary, build, port, 'signed-in', GOOD, discovery)
+        got = run_client(binary, build, port, f'{label}-signed-in', GOOD, discovery)
         server.wait_for(r'Tester left the game', timeout=30)
         log = services.take_log()
         joins = [e for e in log if e[0] == 'join']
@@ -227,27 +261,89 @@ def main():
 
         # 2. A token the session service rejects: vanilla's message, no key sent.
         mark = len(server.lines)
-        got = run_client(binary, build, port, 'rejected', BAD, discovery)
+        got = run_client(binary, build, port, f'{label}-rejected', BAD, discovery)
         check('rejected token: client message', got['error'],
               'disconnected: Failed to log in: Invalid session (Try restarting your game and the launcher)')
         check('rejected token: no verification', [e[0] for e in services.take_log()], ['join'])
 
         # 3. The session service forgets the join: the server refuses the player.
-        got = run_client(binary, build, port, 'forgotten', FORGET, discovery)
+        got = run_client(binary, build, port, f'{label}-forgotten', FORGET, discovery)
         server.wait_for(r'Failed to verify username', timeout=30)
         check('forgotten join: client message', got['error'], 'disconnected: Failed to verify username!')
         check('forgotten join: server verified and refused',
               [(e[0], e[3]) for e in services.take_log()], [('join', True), ('verify', False)])
 
         # 4. No account: refused by the client before anything is sent to the services.
-        got = run_client(binary, build, port, 'no-account', None, discovery)
+        got = run_client(binary, build, port, f'{label}-no-account', None, discovery)
         check('no account: client message', got['error'] or '', 'disconnected: This server is in online mode. '
               'Sign in with your Microsoft account in the Horizon launcher to join it.')
         check('no account: no service calls', services.take_log(), [])
         check('no player joined after the first', 'joined the game' in '\n'.join(server.lines[mark:]), False)
+
+        # 5. Verified, but not on the whitelist.
+        server.console('whitelist on')
+        server.wait_for(r'Whitelist is now turned on', timeout=30)
+        got = run_client(binary, build, port, f'{label}-not-whitelisted', GOOD, discovery)
+        server.wait_for(r'Disconnecting Tester', timeout=30)
+        check('not whitelisted: client message', got['error'], 'disconnected: You are not white-listed on this server!')
+        check('not whitelisted: verified first', [(e[0], e[3]) for e in services.take_log()],
+              [('join', True), ('verify', True)])
+
+        # 6. Whitelisted by name: the server knows the player from their first join (its name cache), so it
+        #    asks the services nothing, and lets them in.
+        mark = len(server.lines)
+        server.console('whitelist add tester')
+        wait_after(server, mark, r'Added Tester to the whitelist')
+        check('whitelist add: known player, no lookup', services.take_log(), [])
+        got = run_client(binary, build, port, f'{label}-whitelisted', GOOD, discovery)
+        wait_after(server, mark, r'Tester left the game')
+        check('whitelisted: connected throughout', got['error'], None)
+        services.take_log()
+        # A name nobody joined with: the server looks the account up, and there is none.
+        mark = len(server.lines)
+        server.console('whitelist add Nobody')
+        wait_after(server, mark, r'That player does not exist')
+        check('whitelist add: lookup failure logged',
+              any("Couldn't find profile with name: nobody" in l for l in server.lines[mark:]), True)
+        check('whitelist add: no such account', services.take_log(), [('lookup', 'nobody')])
+        time.sleep(1)
     finally:
         server.stop()
+    return checks, player_lines(server.lines)
+
+
+def main():
+    lock, jars, libraries = base.verify_artifacts()
+    build = lab.LOCAL / NAME
+    build.mkdir(parents=True, exist_ok=True)
+    report = build / 'report.json'
+    report.unlink(missing_ok=True)
+    oh.run_logged(['cargo', 'build', '--release', '-p', 'horizon-client', '--bin', 'horizon-client'], build,
+                  'compile-rust')
+    metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],
+                                                  cwd=lab.ROOT, text=True))
+    binary = Path(metadata['target_directory']) / 'release' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
+    dependencies = os.pathsep.join(map(str, [jars['server'], *libraries]))
+
+    services = Services()
+    discovery = services.url + '/minecraft/client'
+    vanilla = ['java', '-Xmx2g', '-Duser.timezone=UTC', f'-Dminecraft.api.discovery.host={discovery}',
+               '-cp', dependencies, 'net.minecraft.server.Main', 'nogui']
+    horizon = [binary, '--resources', lab.LOCAL / 'horizon-client/26.3', '--dedicated', '--nogui']
+    checks, transcripts = [], {}
+    try:
+        for label, command in [('vanilla', vanilla), ('horizon', horizon)]:
+            side_checks, transcripts[label] = run_side(label, command, binary, build, services, discovery)
+            checks += [f'{label}: {c}' for c in side_checks]
+    finally:
         services.stop()
+    for label in transcripts:
+        (build / f'{label}.txt').write_text('\n'.join(transcripts[label]) + '\n', encoding='utf-8')
+    if 'horizon' in transcripts:
+        import difflib
+        diff = [l for l in difflib.unified_diff(transcripts['vanilla'], transcripts['horizon'], 'vanilla', 'horizon',
+                                                n=0, lineterm='') if l[:1] in '+-' and l[:3] not in ('+++', '---')]
+        checks.append('server log about the player: ' + ('ok' if not diff else 'differs:\n  ' + '\n  '.join(diff)))
 
     for line in checks:
         print(line)
@@ -257,8 +353,9 @@ def main():
     lab.write_json(report, dict(
         schema=1, minecraft=lock['minecraft']['version'], platform=platform.platform(),
         java=subprocess.check_output(['java', '--version'], text=True).splitlines()[0], checks=len(checks),
-        scope='Online-mode login against vanilla\'s dedicated server and a mock session service: server hash, '
-              'RSA key packet, AES/CFB8, session join and verify, play; rejected token, forgotten join, no account.'))
+        scope='Online-mode login against vanilla\'s dedicated server and Horizon\'s, with a mock session service: '
+              'server hash, RSA key packet, AES/CFB8, session join and verify, play; rejected token, forgotten '
+              'join, no account, whitelist, whitelist add by account name; the servers\' log lines about the player.'))
     print(f'online mode: {len(checks)} checks ok')
 
 

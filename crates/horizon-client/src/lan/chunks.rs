@@ -90,7 +90,78 @@ pub struct ChunkEncoder {
     pub block_ids: Vec<i32>,
     /// The save's tables, for the heightmaps.
     pub tables: Option<Arc<crate::save::SaveTables>>,
+    /// Sections already looked at, by address (see `Encoded`).
+    cache: std::sync::Mutex<HashMap<usize, Encoded>>,
+    /// Each column's heightmaps, with the sections they were made from.
+    heights: std::sync::Mutex<HashMap<(i32, i32), Heights>>,
+    /// The level's sections among a column's: all of them in the Overworld,
+    /// y 0 to 255 in the Nether and the End (`DimensionType` min_y and height).
+    sections: std::ops::Range<usize>,
+    /// Whether the level has sky light (`DimensionType.hasSkyLight`).
+    sky: bool,
 }
+
+/// A column's client heightmaps, valid while it holds the same sections.
+struct Heights {
+    sections: Vec<std::sync::Weak<Section>>,
+    maps: Vec<(i32, Vec<i64>)>,
+}
+
+/// What a resident section gives the wire, kept while the section is
+/// unchanged. Resident sections are immutable behind `Arc` (edits go through
+/// `Arc::make_mut`, which moves an edited section to a new address while a
+/// `Weak` points at the old one), and the `Weak` keeps the old address from
+/// being reused: the same address is the same, unchanged section.
+struct Encoded {
+    section: std::sync::Weak<Section>,
+    non_air: bool,
+    /// LevelChunkSection.write, and whether it holds block entity blocks.
+    wire: Option<(Arc<[u8]>, bool)>,
+    /// The section's light as the wire's two DataLayers, when not uniform.
+    light: Option<Arc<Layers>>,
+}
+
+/// One section's light as DataLayers (two blocks per byte, the even one in
+/// the low nibble), and whether each holds any light.
+struct Layers {
+    sky: Vec<u8>,
+    block: Vec<u8>,
+    sky_any: bool,
+    block_any: bool,
+}
+impl Layers {
+    fn of(light: &Light) -> Self {
+        let (mut sky, mut block) = (vec![0u8; 2048], vec![0u8; 2048]);
+        let (sky_any, block_any) = match light {
+            Light::Uniform(v) => {
+                let (sk, bl) = (v >> 4, v & 15);
+                sky.fill(sk | sk << 4);
+                block.fill(bl | bl << 4);
+                (sk != 0, bl != 0)
+            }
+            Light::Full(a) => {
+                for ((pair, sky), block) in
+                    a.as_chunks::<2>().0.iter().zip(&mut sky).zip(&mut block)
+                {
+                    let [even, odd] = *pair;
+                    *sky = even >> 4 | (odd & 0xF0);
+                    *block = (even & 15) | odd << 4;
+                }
+                let all = a.iter().fold(0u8, |acc, &v| acc | v);
+                (all & 0xF0 != 0, all & 15 != 0)
+            }
+        };
+        Self {
+            sky,
+            block,
+            sky_any,
+            block_any,
+        }
+    }
+}
+
+/// Sections kept before the ones no longer resident are dropped.
+const CACHE_SWEEP: usize = 1 << 15;
 impl ChunkEncoder {
     /// `biome_names`: the internal biome list in order; `biome_registry`:
     /// the synchronized biome entries in network order.
@@ -143,7 +214,105 @@ impl ChunkEncoder {
             biome_bits: ceil_log2(biome_registry.len()),
             block_ids,
             tables: None,
+            cache: Default::default(),
+            heights: Default::default(),
+            sections: 0..SECTIONS,
+            sky: true,
         }
+    }
+
+    /// The client heightmaps (Heightmap.prime over the column), from the
+    /// cache while the column's sections are unchanged.
+    fn heightmaps(&self, chunk: &Chunk, tables: &crate::save::SaveTables) -> Vec<(i32, Vec<i64>)> {
+        let same = |h: &Heights| {
+            h.sections.len() == chunk.sections.len()
+                && h.sections
+                    .iter()
+                    .zip(&chunk.sections)
+                    .all(|(w, s)| std::ptr::eq(w.as_ptr(), Arc::as_ptr(s)))
+        };
+        let mut heights = self.heights.lock().unwrap();
+        if let Some(h) = heights.get(&(chunk.x, chunk.z))
+            && same(h)
+        {
+            return h.maps.clone();
+        }
+        if heights.len() >= CACHE_SWEEP / 4 {
+            heights.retain(|_, h| h.sections.iter().all(|w| w.strong_count() > 0));
+            if heights.len() >= CACHE_SWEEP / 8 {
+                heights.clear();
+            }
+        }
+        let min_y = MIN_Y + 16 * self.sections.start as i32;
+        let height = 16 * self.sections.len() as i32;
+        let maps = crate::save::client_heightmaps_in(chunk, tables, min_y, height);
+        heights.insert(
+            (chunk.x, chunk.z),
+            Heights {
+                sections: chunk.sections.iter().map(Arc::downgrade).collect(),
+                maps: maps.clone(),
+            },
+        );
+        maps
+    }
+
+    /// The cached entry for a section, made with `non_air` when missing.
+    fn cached<T>(&self, section: &Arc<Section>, read: impl FnOnce(&mut Encoded) -> T) -> T {
+        let mut cache = self.cache.lock().unwrap();
+        if cache.len() >= CACHE_SWEEP {
+            cache.retain(|_, e| e.section.strong_count() > 0);
+            if cache.len() >= CACHE_SWEEP / 2 {
+                cache.clear();
+            }
+        }
+        let entry = cache
+            .entry(Arc::as_ptr(section) as usize)
+            .or_insert_with(|| Encoded {
+                section: Arc::downgrade(section),
+                non_air: self.non_air(section),
+                wire: None,
+                light: None,
+            });
+        read(entry)
+    }
+
+    /// LevelChunkSection.hasOnlyAir, negated.
+    fn non_air(&self, section: &Section) -> bool {
+        let non_air = |v: u32| self.flags.get(v as usize).copied().unwrap_or(0) & NON_AIR != 0;
+        // The palette first: most sections are all air, or one block.
+        if !section.blocks.maybe_has(non_air) {
+            false
+        } else if let Some(v) = section.blocks.uniform() {
+            non_air(v)
+        } else {
+            // Stops at the first block, usually near the bottom.
+            (0..BLOCKS).any(|i| non_air(section.blocks.get(i)))
+        }
+    }
+
+    /// A section on the wire, from the cache or encoded now.
+    fn section_wire(&self, section: &Arc<Section>) -> (Arc<[u8]>, bool) {
+        if let Some(wire) = self.cached(section, |e| e.wire.clone()) {
+            return wire;
+        }
+        let (encoded, entities) = self.section(section);
+        let mut w = horizon_protocol::buf::Writer::new();
+        encoded.write(&mut w);
+        let wire: (Arc<[u8]>, bool) = (w.data.into(), entities);
+        self.cached(section, |e| e.wire = Some(wire.clone()));
+        wire
+    }
+    /// Encode for a level of `min_y` and `height` (multiples of 16 within
+    /// the column), with or without sky light.
+    pub fn set_dimension(&mut self, min_y: i32, height: i32, sky: bool) {
+        let lo = usize::try_from((min_y - MIN_Y) >> 4)
+            .unwrap_or(0)
+            .min(SECTIONS);
+        let n = usize::try_from(height >> 4).unwrap_or(SECTIONS);
+        self.sections = lo..(lo + n).min(SECTIONS);
+        self.sky = sky;
+        // The heightmaps depend on the level's height.
+        self.heights.get_mut().unwrap().clear();
     }
     pub fn entity_type(&self, state: u32) -> Option<i32> {
         self.entity_types
@@ -170,11 +339,17 @@ impl ChunkEncoder {
             }
             f & ENTITY != 0
         };
-        let mut unpacked = [0u32; BLOCKS];
-        section.unpack(&mut unpacked);
-        for &v in &unpacked {
-            entities |= count(v, 1);
-            values.push(v as i32);
+        // One block everywhere (all air, mostly): what from_values would give.
+        let uniform = section.blocks.uniform();
+        if let Some(v) = uniform {
+            entities = count(v, BLOCKS as i16);
+        } else {
+            let mut unpacked = [0u32; BLOCKS];
+            section.unpack(&mut unpacked);
+            for &v in &unpacked {
+                entities |= count(v, 1);
+                values.push(v as i32);
+            }
         }
         let biome_values: Vec<i32> = (0..BIOMES)
             .map(|j| {
@@ -189,11 +364,18 @@ impl ChunkEncoder {
             horizon_protocol::chunk::Section {
                 non_empty,
                 fluids,
-                states: Paletted::from_values(
-                    &values,
-                    Strategy::Blocks,
-                    crate::chunk::block_strategy().global_bits,
-                ),
+                states: match uniform {
+                    Some(v) => Paletted {
+                        bits: 0,
+                        palette: vec![v as i32],
+                        data: Vec::new(),
+                    },
+                    None => Paletted::from_values(
+                        &values,
+                        Strategy::Blocks,
+                        crate::chunk::block_strategy().global_bits,
+                    ),
+                },
                 biomes: Paletted::from_values(&biome_values, Strategy::Biomes, self.biome_bits),
             },
             entities,
@@ -204,13 +386,8 @@ impl ChunkEncoder {
     /// The non-air sections of a column as bits (LevelChunkSection.hasOnlyAir).
     fn occupied(&self, chunk: &Chunk) -> u64 {
         let mut bits = 0u64;
-        for (i, s) in chunk.sections.iter().enumerate() {
-            let mut unpacked = [0u32; BLOCKS];
-            s.unpack(&mut unpacked);
-            let any = unpacked
-                .iter()
-                .any(|&v| self.flags.get(v as usize).copied().unwrap_or(0) & NON_AIR != 0);
-            if any {
+        for (i, s) in chunk.sections[self.sections.clone()].iter().enumerate() {
+            if self.cached(s, |e| e.non_air) {
                 bits |= 1 << i;
             }
         }
@@ -228,8 +405,8 @@ impl ChunkEncoder {
                 }
             }
         }
-        let mut packet = self.encode(chunk, &world.block_entities);
-        packet.light = light_data(chunk, around);
+        let mut packet = self.encode_blocks(chunk, &world.block_entities);
+        packet.light = self.light_data(chunk, around);
         packet
     }
 
@@ -238,10 +415,27 @@ impl ChunkEncoder {
         chunk: &Chunk,
         block_entities: &HashMap<(i32, i32, i32), BlockEntity>,
     ) -> LevelChunkWithLight {
-        let mut sections = Vec::with_capacity(SECTIONS);
+        let mut packet = self.encode_blocks(chunk, block_entities);
+        packet.light = self.light_data(chunk, u64::MAX);
+        packet
+    }
+
+    /// The packet without its light.
+    fn encode_blocks(
+        &self,
+        chunk: &Chunk,
+        block_entities: &HashMap<(i32, i32, i32), BlockEntity>,
+    ) -> LevelChunkWithLight {
+        let mut buffer = Vec::new();
         let mut entity_infos = Vec::new();
-        for (i, s) in chunk.sections.iter().enumerate() {
-            let (encoded, has_entities) = self.section(s);
+        for (i, s) in chunk
+            .sections
+            .iter()
+            .enumerate()
+            .skip(self.sections.start)
+            .take(self.sections.len())
+        {
+            let (encoded, has_entities) = self.section_wire(s);
             if has_entities {
                 for y in 0..16 {
                     for z in 0..16 {
@@ -265,7 +459,7 @@ impl ChunkEncoder {
                     }
                 }
             }
-            sections.push(encoded);
+            buffer.extend_from_slice(&encoded);
         }
         // A loaded chunk's block entities enter its maps in the save's order
         // (ChunkAccess.pendingBlockEntities, then LevelChunk.blockEntities):
@@ -297,13 +491,45 @@ impl ChunkEncoder {
                 heightmaps: self
                     .tables
                     .as_ref()
-                    .map(|t| crate::save::client_heightmaps(chunk, t))
+                    .map(|t| self.heightmaps(chunk, t))
                     .unwrap_or_default(),
-                buffer: ChunkData::from_sections(&sections),
+                buffer,
                 block_entities: entity_infos,
             },
-            light: light_data(chunk, u64::MAX),
+            light: LightData {
+                sky_mask: Vec::new(),
+                block_mask: Vec::new(),
+                empty_sky_mask: Vec::new(),
+                empty_block_mask: Vec::new(),
+                sky: Vec::new(),
+                block: Vec::new(),
+            },
         }
+    }
+
+    /// ClientboundLightUpdatePacketData: the light layers of the sections
+    /// that exist around the column (`around`: the non-air sections of it
+    /// and its neighbours, as bits). A resident section's layers come from
+    /// the cache while it is unchanged (uniform light is quicker to fill than
+    /// to keep).
+    fn light_data(&self, chunk: &Chunk, around: u64) -> LightData {
+        let mut data = light_data_with(&chunk.sections[self.sections.clone()], around, |s| {
+            if matches!(s.light, Light::Uniform(_)) {
+                return Arc::new(Layers::of(&s.light));
+            }
+            self.cached(s, |e| e.light.clone()).unwrap_or_else(|| {
+                let layers = Arc::new(Layers::of(&s.light));
+                self.cached(s, |e| e.light = Some(layers.clone()));
+                layers
+            })
+        });
+        if !self.sky {
+            // No sky light storage at all.
+            data.sky_mask.clear();
+            data.empty_sky_mask.clear();
+            data.sky.clear();
+        }
+        data
     }
 }
 
@@ -377,7 +603,18 @@ pub fn entity_tag(entity: &BlockEntity) -> Option<Tag> {
 /// non-air section of this column or a neighbouring one (`around`, bit i for
 /// section i; LayerLightSectionStorage.updateSectionStatus). An existing
 /// layer is sent, or marked empty when all dark; the others are left out.
-fn light_data(chunk: &Chunk, around: u64) -> LightData {
+#[cfg(test)]
+fn light_data(sections: &[Arc<Section>], around: u64) -> LightData {
+    light_data_with(sections, around, |s| Arc::new(Layers::of(&s.light)))
+}
+
+/// The light layers, `section` giving a resident section's.
+fn light_data_with(
+    sections: &[Arc<Section>],
+    around: u64,
+    section: impl Fn(&Arc<Section>) -> Arc<Layers>,
+) -> LightData {
+    let n = sections.len();
     let mut data = LightData {
         sky_mask: Vec::new(),
         block_mask: Vec::new(),
@@ -387,55 +624,27 @@ fn light_data(chunk: &Chunk, around: u64) -> LightData {
         block: Vec::new(),
     };
     // Light section b holds chunk section b - 1.
-    let exists = |b: usize| {
-        (b.saturating_sub(2)..=b.min(SECTIONS - 1)).any(|s| s + 2 >= b && around >> s & 1 != 0)
-    };
-    let full_sky = Light::Uniform(0xF0);
-    for b in 0..SECTIONS + 2 {
+    let exists =
+        |b: usize| (b.saturating_sub(2)..=b.min(n - 1)).any(|s| s + 2 >= b && around >> s & 1 != 0);
+    for b in 0..n + 2 {
         if !exists(b) {
             continue;
         }
-        let light = match b {
+        let layers = match b {
             // Below the world nothing is lit; above it the sky is full.
-            0 => &Light::Uniform(0),
-            _ if b == SECTIONS + 1 => &full_sky,
-            _ => &chunk.sections[b - 1].light,
+            0 => Arc::new(Layers::of(&Light::Uniform(0))),
+            _ if b == n + 1 => Arc::new(Layers::of(&Light::Uniform(0xF0))),
+            _ => section(&sections[b - 1]),
         };
-        let (mut sky, mut block) = (vec![0u8; 2048], vec![0u8; 2048]);
-        let (mut sky_any, mut block_any) = (false, false);
-        match light {
-            Light::Uniform(v) => {
-                let (sk, bl) = (v >> 4, v & 15);
-                sky_any = sk != 0;
-                block_any = bl != 0;
-                let (sb, bb) = (sk | sk << 4, bl | bl << 4);
-                sky.fill(sb);
-                block.fill(bb);
-            }
-            Light::Full(a) => {
-                for (j, &v) in a.iter().enumerate() {
-                    let (sk, bl) = (v >> 4, v & 15);
-                    sky_any |= sk != 0;
-                    block_any |= bl != 0;
-                    if j & 1 == 0 {
-                        sky[j >> 1] |= sk;
-                        block[j >> 1] |= bl;
-                    } else {
-                        sky[j >> 1] |= sk << 4;
-                        block[j >> 1] |= bl << 4;
-                    }
-                }
-            }
-        }
-        if sky_any {
+        if layers.sky_any {
             set_bit(&mut data.sky_mask, b);
-            data.sky.push(sky);
+            data.sky.push(layers.sky.clone());
         } else {
             set_bit(&mut data.empty_sky_mask, b);
         }
-        if block_any {
+        if layers.block_any {
             set_bit(&mut data.block_mask, b);
-            data.block.push(block);
+            data.block.push(layers.block.clone());
         } else {
             set_bit(&mut data.empty_block_mask, b);
         }
@@ -464,16 +673,119 @@ mod tests {
         assert_eq!(block_entity_type("minecraft:stone"), None);
     }
 
+    fn encoder() -> ChunkEncoder {
+        let states = ["minecraft:air", "minecraft:stone", "minecraft:water"]
+            .map(|n| (Arc::<str>::from(n), n.ends_with("water")));
+        ChunkEncoder::new(states, &Builtin::default(), &[], &[])
+    }
+
+    /// The bytes on the wire for a section, encoded afresh.
+    fn fresh(encoder: &ChunkEncoder, section: &Section) -> Vec<u8> {
+        let mut w = horizon_protocol::buf::Writer::new();
+        encoder.section(section).0.write(&mut w);
+        w.data
+    }
+
+    #[test]
+    fn cached_sections_follow_edits() {
+        let encoder = encoder();
+        let mut chunk = Chunk::empty(0, 0);
+        chunk.set(1, MIN_Y + 2, 3, 1);
+        let before = encoder.encode(&chunk, &HashMap::new());
+        assert_eq!(encoder.occupied(&chunk), 1);
+        assert_eq!(
+            &*encoder.section_wire(&chunk.sections[0]).0,
+            fresh(&encoder, &chunk.sections[0])
+        );
+        // An edit moves the section: the cache sees a new one.
+        chunk.set(4, MIN_Y + 20, 4, 2);
+        chunk.set(1, MIN_Y + 2, 3, 0);
+        assert_eq!(encoder.occupied(&chunk), 2);
+        let after = encoder.encode(&chunk, &HashMap::new());
+        assert_ne!(before.chunk.buffer, after.chunk.buffer);
+        let mut expected = Vec::new();
+        for s in &chunk.sections {
+            expected.extend(fresh(&encoder, s));
+        }
+        assert_eq!(after.chunk.buffer, expected);
+    }
+
+    #[test]
+    fn light_layers_pack_two_blocks_per_byte() {
+        let mut chunk = Chunk::empty(0, 0);
+        let mut light = Box::new([0u8; 4096]);
+        for (i, v) in light.iter_mut().enumerate() {
+            *v = (i * 37 % 251) as u8;
+        }
+        Arc::make_mut(&mut chunk.sections[3]).light = Light::Full(light.clone());
+        let data = light_data(&chunk.sections, u64::MAX);
+        // Layer 4 holds section 3. Below the world (layer 0) there is no sky
+        // light, so the sky layers listed start at layer 1; section 3 has the
+        // only block light.
+        let (sky, block) = (&data.sky[3], &data.block[0]);
+        for j in 0..4096 {
+            let (s, b) = if j & 1 == 0 {
+                (sky[j >> 1] & 15, block[j >> 1] & 15)
+            } else {
+                (sky[j >> 1] >> 4, block[j >> 1] >> 4)
+            };
+            assert_eq!((s, b), (light[j] >> 4, light[j] & 15), "block {j}");
+        }
+    }
+
+    #[test]
+    fn cached_light_follows_edits() {
+        let encoder = encoder();
+        let mut chunk = Chunk::empty(0, 0);
+        let mut light = Box::new([0x5Au8; 4096]);
+        Arc::make_mut(&mut chunk.sections[2]).light = Light::Full(light.clone());
+        let first = encoder.encode(&chunk, &HashMap::new()).light;
+        assert_eq!(first, light_data(&chunk.sections, u64::MAX));
+        // Relighting moves the section, so the cached layers aren't reused.
+        light[7] = 0xF3;
+        Arc::make_mut(&mut chunk.sections[2]).light = Light::Full(light);
+        let second = encoder.encode(&chunk, &HashMap::new()).light;
+        assert_ne!(first, second);
+        assert_eq!(second, light_data(&chunk.sections, u64::MAX));
+    }
+
     #[test]
     fn light_masks_cover_the_world_plus_borders() {
         let chunk = Chunk::empty(0, 0);
         // A column with nothing around it has no light layers at all.
-        assert!(light_data(&chunk, 0).sky.is_empty());
-        let data = light_data(&chunk, u64::MAX);
+        assert!(light_data(&chunk.sections, 0).sky.is_empty());
+        let data = light_data(&chunk.sections, u64::MAX);
         // Default sections are full sky light and no block light.
         assert_eq!(data.sky.len(), SECTIONS + 1);
         assert_eq!(data.block.len(), 0);
         assert_eq!(data.sky[0][0], 0xFF);
         assert!(horizon_protocol::buf::bit(&data.empty_block_mask, 5));
+    }
+
+    #[test]
+    fn a_nether_column_sends_its_sixteen_sections_without_sky_light() {
+        let chunk = Chunk::empty(0, 0);
+        let mut encoder = ChunkEncoder::new(
+            [("minecraft:air".into(), false)],
+            &Builtin::default(),
+            &[],
+            &[],
+        );
+        let overworld = encoder.encode(&chunk, &HashMap::new());
+        encoder.set_dimension(0, 256, false);
+        let nether = encoder.encode(&chunk, &HashMap::new());
+        // An all-air section is the same bytes wherever it is.
+        let per_section = overworld.chunk.buffer.len() / SECTIONS;
+        assert_eq!(nether.chunk.buffer.len(), per_section * 16);
+        assert!(nether.light.sky.is_empty() && nether.light.sky_mask.is_empty());
+        // Block light layers: one below and one above the sixteen sections.
+        assert!(horizon_protocol::buf::bit(
+            &nether.light.empty_block_mask,
+            17
+        ));
+        assert!(!horizon_protocol::buf::bit(
+            &nether.light.empty_block_mask,
+            18
+        ));
     }
 }
