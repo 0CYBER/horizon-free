@@ -49,8 +49,13 @@ fn tags_merge_without_repeats() {
 }
 
 fn prepared() -> Option<PathBuf> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
-    root.join("gameplay-facts.json").exists().then_some(root)
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    [
+        manifest.join("../../.local/horizon-client/26.3"),
+        manifest.join("../../../../.local/horizon-client/26.3"),
+    ]
+    .into_iter()
+    .find(|root| root.join("gameplay-facts.json").exists())
 }
 
 /// A content mod folder: a full block, a door and an item-less glass from
@@ -146,6 +151,46 @@ fn content_root_loads_with_every_table() {
 
     let old_facts = BlockFacts::load(&base, old).unwrap();
     let facts = BlockFacts::load(&root, new).unwrap();
+    let shared_json: serde_json::Value = serde_json::from_reader(std::io::BufReader::new(
+        fs::File::open(root.join("block-behaviours.json")).unwrap(),
+    ))
+    .unwrap();
+    let (shared_facts, shared_behaviours) =
+        BlockFacts::load_with_behaviours(&root, new, &shared_json).unwrap();
+    let independent_behaviours = horizon_world::level::Behaviours::load(new, &root).unwrap();
+    let (deferred_facts, gameplay) =
+        BlockFacts::load_with_projection(&root, new, &shared_json).unwrap();
+    let deferred_behaviours =
+        horizon_world::level::Behaviours::load_with_gameplay(new, &root, &shared_json, &gameplay)
+            .unwrap();
+    assert_eq!(shared_facts.states.len(), facts.states.len());
+    for state in [ruby, ruby_door, BlockStateId(n + 65)] {
+        assert_eq!(shared_facts.get(state).hardness, facts.get(state).hardness);
+        assert_eq!(
+            deferred_facts.get(state).hardness,
+            facts.get(state).hardness
+        );
+        assert_eq!(deferred_facts.get(state).classes, facts.get(state).classes);
+        assert_eq!(
+            deferred_behaviours.facts(state).flags,
+            independent_behaviours.facts(state).flags
+        );
+        assert_eq!(
+            deferred_behaviours.data(state).sounds.place,
+            independent_behaviours.data(state).sounds.place
+        );
+        assert_eq!(shared_facts.get(state).emission, facts.get(state).emission);
+        assert_eq!(shared_facts.get(state).classes, facts.get(state).classes);
+        assert_eq!(
+            shared_behaviours.facts(state).flags,
+            independent_behaviours.facts(state).flags,
+        );
+        assert_eq!(
+            shared_behaviours.data(state).sounds.place,
+            independent_behaviours.data(state).sounds.place,
+        );
+    }
+
     let (a, b) = (old_facts.get(iron), facts.get(ruby));
     assert_eq!((b.hardness, b.emission, b.friction), (4.0, 3, 0.8));
     assert_eq!(b.explosion_resistance, a.explosion_resistance);
@@ -256,3 +301,184 @@ fn no_content_keeps_the_base_root() {
 }
 
 use horizon_world::registry::BlockStateId;
+
+#[test]
+fn shared_behaviour_document_matches_independent_loaders() {
+    let Some(root) = prepared() else { return };
+    let assets = Assets::load(&root).expect("assets");
+    let doc: serde_json::Value = serde_json::from_reader(std::io::BufReader::new(
+        std::fs::File::open(root.join("block-behaviours.json")).unwrap(),
+    ))
+    .unwrap();
+    let original = BlockFacts::load(&root, assets.registry).unwrap();
+    let (shared, b) = BlockFacts::load_with_behaviours(&root, assets.registry, &doc).unwrap();
+    let (deferred_facts, projection) =
+        BlockFacts::load_with_projection(&root, assets.registry, &doc).unwrap();
+    let deferred = horizon_world::level::Behaviours::load_with_gameplay(
+        assets.registry,
+        &root,
+        &doc,
+        &projection,
+    )
+    .unwrap();
+    assert_eq!(deferred_facts.states.len(), shared.states.len());
+    assert_eq!(original.states.len(), shared.states.len());
+    for (a, b) in original.states.iter().zip(&shared.states) {
+        assert_eq!(a.classes, b.classes);
+        assert_eq!(a.legacy_solid, b.legacy_solid);
+        assert_eq!(a.sturdy_full, b.sturdy_full);
+        assert_eq!(a.emission, b.emission);
+        assert_eq!(a.dampening, b.dampening);
+        assert_eq!(a.hardness, b.hardness);
+        assert_eq!(a.sounds.volume, b.sounds.volume);
+        assert_eq!(a.sounds.pitch, b.sounds.pitch);
+    }
+    let a = horizon_world::level::Behaviours::load(assets.registry, &root).unwrap();
+    for id in 0..assets.registry.len() {
+        let state = horizon_world::registry::BlockStateId(id as u32);
+        let (a_state, b_state) = (a.facts(state), b.facts(state));
+        let deferred_state = deferred.facts(state);
+        assert_eq!(b_state.flags, deferred_state.flags);
+        assert_eq!(b_state.emission, deferred_state.emission);
+        assert_eq!(b_state.dampening, deferred_state.dampening);
+        assert_eq!(b_state.hardness, deferred_state.hardness);
+        assert_eq!(b_state.push, deferred_state.push);
+        assert_eq!(a_state.flags, b_state.flags);
+        assert_eq!(a_state.sturdy, b_state.sturdy);
+        assert_eq!(a_state.weak, b_state.weak);
+        assert_eq!(a_state.strong, b_state.strong);
+        assert_eq!(a_state.fluid, b_state.fluid);
+        assert_eq!(a_state.emission, b_state.emission);
+        assert_eq!(a_state.dampening, b_state.dampening);
+        assert_eq!(a_state.hardness, b_state.hardness);
+        assert_eq!(a_state.push, b_state.push);
+        assert_eq!(a_state.instrument, b_state.instrument);
+        assert_eq!(a_state.shape, b_state.shape);
+        let (a_sound, b_sound) = (&a.data(state).sounds, &b.data(state).sounds);
+        assert_eq!(a_sound.volume, b_sound.volume);
+        assert_eq!(a_sound.pitch, b_sound.pitch);
+        assert_eq!(a_sound.place, b_sound.place);
+        assert_eq!(a_sound.break_, b_sound.break_);
+        assert_eq!(a_sound.fall, b_sound.fall);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn independent_reloads_read_changed_behaviour_json_and_report_invalid_files() {
+    let Some(base) = prepared() else { return };
+    let scratch = std::env::temp_dir().join(format!("horizon-json-reloads-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    fs::create_dir_all(&scratch).unwrap();
+    // Keep the remaining resource tree intact without copying a huge prepared client.
+    for entry in fs::read_dir(&base).unwrap() {
+        let entry = entry.unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(entry.path(), scratch.join(entry.file_name())).unwrap();
+    }
+    let assets = Assets::load(&base).unwrap();
+    let registry = assets.registry;
+    let original = fs::read(base.join("block-behaviours.json")).unwrap();
+    fs::remove_file(scratch.join("block-behaviours.json")).unwrap();
+    fs::write(scratch.join("block-behaviours.json"), &original).unwrap();
+    // Independent facts and behaviours can load first, followed by paired data.
+    let independent_first = BlockFacts::load(&scratch, registry).unwrap();
+    let independent_world_first =
+        horizon_world::level::Behaviours::load(registry, &scratch).unwrap();
+    let (facts, paired_world) = BlockFacts::load_pair(&scratch, registry).unwrap();
+    assert_eq!(facts.states.len(), registry.len());
+    for state in [0, 1, registry.len() - 1] {
+        let state = horizon_world::registry::BlockStateId(state as u32);
+        assert_eq!(
+            facts.get(state).classes,
+            independent_first.get(state).classes
+        );
+        assert_eq!(
+            facts.get(state).sounds.place,
+            independent_first.get(state).sounds.place
+        );
+        assert_eq!(
+            paired_world.facts(state).flags,
+            independent_world_first.facts(state).flags
+        );
+    }
+
+    // Override one exported state bit at the same path and verify that a later
+    // independent and paired read sees it while the original resource root does not.
+    let mut changed: serde_json::Value = serde_json::from_slice(&original).unwrap();
+    let original_bits = changed["states"][0][1].as_u64().unwrap();
+    changed["states"][0][1] = (original_bits ^ 1).into();
+    fs::write(
+        scratch.join("block-behaviours.json"),
+        serde_json::to_vec(&changed).unwrap(),
+    )
+    .unwrap();
+    let changed_pair = BlockFacts::load_pair(&scratch, registry).unwrap();
+    let changed_independent = BlockFacts::load(&scratch, registry).unwrap();
+    let base_facts = BlockFacts::load(&base, registry).unwrap();
+    let state = horizon_world::registry::BlockStateId(0);
+    assert_ne!(
+        changed_pair.0.get(state).legacy_solid,
+        base_facts.get(state).legacy_solid
+    );
+    assert_eq!(
+        changed_pair.0.get(state).legacy_solid,
+        changed_independent.get(state).legacy_solid
+    );
+    // The world loader sees the same overridden legacy solidity flag.
+    let changed_world = horizon_world::level::Behaviours::load(registry, &scratch).unwrap();
+    assert_eq!(
+        changed_world.facts(state).flags & 1 != 0,
+        changed_pair.0.get(state).legacy_solid
+    );
+
+    fs::write(scratch.join("block-behaviours.json"), b"{").unwrap();
+    let paired_error = BlockFacts::load_pair(&scratch, registry)
+        .err()
+        .unwrap()
+        .to_string();
+    let independent_error = BlockFacts::load(&scratch, registry)
+        .err()
+        .unwrap()
+        .to_string();
+    assert_eq!(paired_error, independent_error);
+    assert!(horizon_world::level::Behaviours::load(registry, &scratch).is_err());
+
+    fs::write(scratch.join("block-behaviours.json"), b"{}").unwrap();
+    assert!(BlockFacts::load_pair(&scratch, registry).is_err());
+    assert!(BlockFacts::load(&scratch, registry).is_err());
+    assert!(horizon_world::level::Behaviours::load(registry, &scratch).is_err());
+
+    fs::write(scratch.join("block-behaviours.json"), original).unwrap();
+    assert_eq!(
+        BlockFacts::load_pair(&scratch, registry)
+            .unwrap()
+            .0
+            .states
+            .len(),
+        registry.len()
+    );
+    fs::remove_file(scratch.join("gameplay-facts.json")).unwrap();
+    fs::write(scratch.join("gameplay-facts.json"), b"{\"states\":[]}").unwrap();
+    assert!(BlockFacts::load_pair(&scratch, registry).is_err());
+    assert!(BlockFacts::load(&scratch, registry).is_err());
+    assert!(horizon_world::level::Behaviours::load(registry, &scratch).is_err());
+    fs::write(scratch.join("gameplay-facts.json"), b"{").unwrap();
+    assert!(BlockFacts::load_pair(&scratch, registry).is_err());
+    assert!(BlockFacts::load(&scratch, registry).is_err());
+    assert!(horizon_world::level::Behaviours::load(registry, &scratch).is_err());
+    fs::write(
+        scratch.join("gameplay-facts.json"),
+        fs::read(base.join("gameplay-facts.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        BlockFacts::load_pair(&scratch, registry)
+            .unwrap()
+            .0
+            .states
+            .len(),
+        registry.len()
+    );
+    fs::remove_dir_all(&scratch).unwrap();
+}

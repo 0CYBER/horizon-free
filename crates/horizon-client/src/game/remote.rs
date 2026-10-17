@@ -248,6 +248,7 @@ impl Game<'_> {
             progress: 0.0,
             total: 0,
         };
+        self.ui.registries.permission = 0;
         self.screen = Screen::Playing;
         self.title = None;
         self.dim = Dim::Overworld;
@@ -878,6 +879,7 @@ impl Game<'_> {
                 self.debug_charts.ping.log(delay);
             }
             C::Login(p) => {
+                self.level.hardcore = p.hardcore;
                 if let Some(r) = self.remote.as_mut() {
                     r.online_mode = p.online_mode;
                     r.entity_id = p.player_id;
@@ -1195,13 +1197,12 @@ impl Game<'_> {
                 }
             }
             C::EntityEvent(p) => {
-                // EntityEvent.PERMISSION_LEVEL_ALL..OWNERS (24..=28) for this
-                // player: LocalPlayer.setPermissionLevel, which the commands
-                // the chat offers and checks follow.
+                // LocalPlayer.setPermissions also refreshes an open World Options screen.
                 if (24..=28).contains(&p.event)
                     && self.remote.as_ref().is_some_and(|r| r.entity_id == p.id)
                 {
                     self.ui.registries.permission = (p.event - 24) as u8;
+                    self.remote_world_options_permission(p.event >= 26);
                 }
                 if p.event == 1
                     && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
@@ -1225,6 +1226,12 @@ impl Game<'_> {
                     self.potions.effects.list.retain(|e| e.id != id);
                 }
             }
+            C::ChangeDifficulty(p) => {
+                self.ui.difficulty = p.difficulty.clamp(0, 3) as u8;
+                self.level.difficulty_locked = p.locked;
+                self.remote_world_options_difficulty(self.ui.difficulty, p.locked);
+            }
+            C::GameRuleValues(p) => self.remote_world_options_rules(p.entries),
             C::SetHealth(p) => {
                 if let Some(r) = self.remote.as_mut() {
                     r.health = (p.health, p.food, p.saturation);
@@ -1921,6 +1928,7 @@ impl Game<'_> {
             if let Some(r) = self.remote.as_mut() {
                 r.loaded_sent = true;
             }
+            self.capture_loaded_world();
         }
         let stick = self.pad_move();
         let Some(player) = self.player.as_mut() else {

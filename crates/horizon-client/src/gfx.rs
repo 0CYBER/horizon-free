@@ -64,6 +64,7 @@ mod pack_stages;
 pub mod panorama;
 mod resident;
 mod timing;
+pub mod translucency;
 pub(crate) mod upload;
 mod world_post;
 
@@ -98,6 +99,8 @@ struct SectionGpu {
     translucent: u32,
     /// The solid quads by facing: back-facing groups are skipped.
     faces: crate::mesher::FaceGroups,
+    sort: translucency::SortState,
+    sorted_indices: Option<(u32, u64)>,
 }
 /// Line segments the hit outline can hold.
 const MAX_OUTLINE_EDGES: u64 = 256;
@@ -133,6 +136,8 @@ pub struct Frame<'a> {
     pub dark_disc: bool,
     /// The hit block outline as line segments (from, to) in world space.
     pub outline: Vec<[f64; 6]>,
+    /// `BlockOutlineRenderState.isTranslucent`: draw after translucent terrain.
+    pub outline_after_terrain: bool,
     /// `lines` with a colour and pixel width (`gizmos::camera_relative`):
     /// the fishing line and debug gizmos, depth tested, then gizmos drawn
     /// over everything.
@@ -318,6 +323,9 @@ pub struct Renderer {
     depth: wgpu::TextureView,
     sections: resident::Resident<SectionGpu>,
     arena: arena::Arena,
+    sorted_indices: arena::Arena,
+    translucent_sorter: translucency::Sorter,
+    translucency_cursor: usize,
     /// `DrawIndexedIndirectArgs` for this frame's solid then translucent draws.
     indirect: wgpu::Buffer,
     indirect_capacity: u64,
@@ -329,8 +337,8 @@ pub struct Renderer {
     /// `DrawIndexedIndirectArgs` words: index count, instance count, first
     /// index, base vertex, first instance.
     draws: Vec<[u32; 5]>,
-    /// The arena page of each of `draws`.
-    draw_pages: Vec<u32>,
+    /// Vertex arena page and optional sorted index arena page of each draw.
+    draw_pages: Vec<(u32, Option<u32>)>,
     /// Block-entity blocks per meshed section (world position, state id).
     block_entities: HashMap<SectionKey, Vec<([i32; 3], u32)>>,
     /// VisGraph face connectivity per meshed section (cave culling).
@@ -836,7 +844,7 @@ impl Renderer {
             &terrain_buffers,
             tri,
             Some(wgpu::Face::Back),
-            false,
+            true,
             true,
             Some(alpha_blend),
         );
@@ -869,7 +877,7 @@ impl Renderer {
             &line_buffers,
             wgpu::PrimitiveTopology::TriangleStrip,
             None,
-            false,
+            true,
             true,
             Some(alpha_blend),
         );
@@ -1633,6 +1641,7 @@ impl Renderer {
             std::mem::size_of::<TerrainVertex>() as u64,
             1 << 20,
         );
+        let sorted_indices = arena::Arena::indices(&device, 1 << 16);
         let indirect = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Section draws"),
             size: 1024 * 20,
@@ -1726,6 +1735,9 @@ impl Renderer {
             depth,
             sections: resident::Resident::default(),
             arena,
+            sorted_indices,
+            translucent_sorter: translucency::Sorter::default(),
+            translucency_cursor: 0,
             indirect,
             indirect_capacity: 1024,
             multi_draw,
@@ -1910,6 +1922,10 @@ impl Renderer {
         }
         let vertices = (mesh.solid.len() + mesh.translucent.len()) as u64;
         let (page, start) = self.arena.alloc(&self.device, &self.queue, vertices);
+        let sorted_indices = (translucent > 0).then(|| {
+            self.sorted_indices
+                .alloc(&self.device, &self.queue, u64::from(translucent) * 6)
+        });
         let stride = std::mem::size_of::<TerrainVertex>() as u64;
         for (offset, part) in [(0, &mesh.solid), (mesh.solid.len(), &mesh.translucent)] {
             if !part.is_empty() {
@@ -1930,6 +1946,15 @@ impl Renderer {
                 solid,
                 translucent,
                 faces: mesh.faces,
+                sort: translucency::SortState::new(
+                    mesh.translucent
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|q| translucency::quad_center(q[0].pos, q[2].pos))
+                        .collect(),
+                ),
+                sorted_indices,
             },
         );
     }
@@ -1940,17 +1965,19 @@ impl Renderer {
     fn draw_sections(&self, pass: &mut wgpu::RenderPass<'_>, first: u32, count: u32) {
         let (mut i, end) = (first as usize, (first + count) as usize);
         while i < end {
-            let page = self.draw_pages[i];
+            let (page, index_page) = self.draw_pages[i];
             let run = self.draw_pages[i..end]
                 .iter()
-                .take_while(|&&p| p == page)
+                .take_while(|&&p| p == (page, index_page))
                 .count();
             pass.set_vertex_buffer(0, self.arena.buffer(page).slice(..));
+            let indices = index_page.map_or(&self.indices, |p| self.sorted_indices.buffer(p));
+            pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
             if self.multi_draw {
                 pass.multi_draw_indexed_indirect(&self.indirect, i as u64 * 20, run as u32);
             } else {
                 for d in &self.draws[i..i + run] {
-                    pass.draw_indexed(0..d[0], d[3] as i32, d[4]..d[4] + 1);
+                    pass.draw_indexed(d[2]..d[2] + d[0], d[3] as i32, d[4]..d[4] + 1);
                 }
             }
             i += run;
@@ -1958,6 +1985,10 @@ impl Renderer {
     }
     fn release_section(&mut self, key: SectionKey) {
         if let Some(s) = self.sections.remove(key) {
+            if let Some((page, start)) = s.sorted_indices {
+                self.sorted_indices
+                    .release(page, start, u64::from(s.translucent) * 6);
+            }
             self.arena
                 .release(s.page, s.start, u64::from(s.solid + s.translucent) * 4);
         }
@@ -1970,6 +2001,8 @@ impl Renderer {
         self.block_entities.clear();
         self.sections.clear();
         self.arena.clear();
+        self.sorted_indices.clear();
+        self.translucency_cursor = 0;
         self.occlusion.clear();
     }
     pub fn remove(&mut self, key: SectionKey) {
@@ -2391,19 +2424,51 @@ impl Renderer {
             s.faces.ranges(eye - Vec3::from(v.origin), |first, quads| {
                 let first = s.start + u64::from(first) * 4;
                 self.draws.push([quads * 6, 1, 0, first as u32, i as u32]);
-                self.draw_pages.push(s.page);
+                self.draw_pages.push((s.page, None));
             });
         }
         let solid_draws = self.draws.len() as u32;
+        // LevelRenderer: nearby sections each frame, plus a rotating eighth
+        // (at least 15) of the visible list. Cached views avoid needless sorts.
+        let count = visible.len();
+        let budget = (count / 8).max(15).min(count);
+        self.translucency_cursor %= count.max(1);
         for (i, v) in visible.iter().enumerate().rev() {
-            let s = self.sections.get(v.slot);
-            if s.translucent > 0 {
+            let s = self.sections.get_mut(v.slot);
+            if let Some((index_page, index_start)) = s.sorted_indices {
+                let nearby = (v.key.0 - camera_section.0).abs() <= 2
+                    && (v.key.1 - camera_section.1).abs() <= 2
+                    && (v.key.2 - camera_section.2).abs() <= 2;
+                let scheduled = (i + count - self.translucency_cursor) % count < budget;
+                let origin = [
+                    v.key.0 * 16,
+                    crate::chunk::MIN_Y + v.key.1 * 16,
+                    v.key.2 * 16,
+                ];
+                if (!s.sort.is_sorted() || nearby || scheduled)
+                    && let Some(indices) =
+                        s.sort
+                            .update(camera.to_array(), origin, &mut self.translucent_sorter)
+                {
+                    self.uploads.buffer(
+                        &mut encoder,
+                        self.sorted_indices.buffer(index_page),
+                        index_start * 4,
+                        bytemuck::cast_slice(indices),
+                    );
+                }
                 let first = s.start + u64::from(s.solid) * 4;
-                self.draws
-                    .push([s.translucent * 6, 1, 0, first as u32, i as u32]);
-                self.draw_pages.push(s.page);
+                self.draws.push([
+                    s.translucent * 6,
+                    1,
+                    index_start as u32,
+                    first as u32,
+                    i as u32,
+                ]);
+                self.draw_pages.push((s.page, Some(index_page)));
             }
         }
+        self.translucency_cursor += budget;
         let translucent_draws = self.draws.len() as u32 - solid_draws;
         if self.multi_draw && !self.draws.is_empty() {
             if self.draws.len() as u64 > self.indirect_capacity {
@@ -2665,7 +2730,7 @@ impl Renderer {
                 pass.draw_indexed(0..additive_quads * 6, (world_quads * 4) as i32, 0..1);
                 pass.set_bind_group(0, &self.group, &[]);
             }
-            if outline_edges > 0 {
+            if outline_edges > 0 && !frame.outline_after_terrain {
                 pass.set_pipeline(&self.lines);
                 pass.set_vertex_buffer(0, self.outline.slice(..));
                 pass.draw(0..4, 0..outline_edges as u32);
@@ -2684,6 +2749,14 @@ impl Renderer {
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
             pass.set_vertex_buffer(1, self.instances.slice(..));
             self.draw_sections(&mut pass, solid_draws, translucent_draws);
+            // LevelRenderer.executeClassicTransparency: translucent targets'
+            // outlines follow terrain, so its blending cannot wash them out.
+            if outline_edges > 0 && frame.outline_after_terrain {
+                pass.set_pipeline(&self.lines);
+                pass.set_vertex_buffer(0, self.outline.slice(..));
+                pass.draw(0..4, 0..outline_edges as u32);
+            }
+            pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
             // LevelRenderer: the world border after translucent terrain and weather.
             if let Some(b) = frame.border.as_ref().filter(|_| !frame.title) {
                 pass.set_pipeline(&self.border_pipeline);

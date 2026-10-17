@@ -3107,6 +3107,7 @@ impl Game<'_> {
         self.eye = 1.62;
         self.previous_eye = 1.62;
         self.clock.reset();
+        self.capture_loaded_world();
         Ok(())
     }
     fn tick(&mut self) -> Result<()> {
@@ -3422,11 +3423,8 @@ impl Game<'_> {
         }
         if player.health.dead_or_dying() && self.screen != Screen::Dead {
             // Inventory.dropAll: every stack thrown in a random direction.
-            let at = [
-                player.position.x,
-                player.position.y + 1.32,
-                player.position.z,
-            ];
+            let feet = [player.position.x, player.position.y, player.position.z];
+            let at = [feet[0], feet[1] + 1.32, feet[2]];
             let killer = self.combat_killer_kind();
             self.death_message();
             // ServerPlayer.die: deaths, and the time-since counters restart.
@@ -3442,6 +3440,10 @@ impl Game<'_> {
             }
             self.stats.reset("custom", "minecraft:time_since_death");
             self.stats.reset("custom", "minecraft:time_since_rest");
+            let reward = self
+                .experience
+                .death_reward(self.ui.rules.bool("keep_inventory") || self.spectator());
+            self.spawn_orbs(feet, reward);
             if !self.creative && !self.ui.rules.bool("keep_inventory") {
                 // Inventory.dropAll: slots 0..36, armor feet to head (36..39), off hand (40).
                 let mut stacks: Vec<ItemStack> =
@@ -3664,6 +3666,10 @@ impl Game<'_> {
             ) || self.book.is_some())
     }
     fn capture(&mut self, capture: bool) {
+        // MouseHandler.grabMouse never captures an inactive window.
+        if capture && !self.focused {
+            return;
+        }
         if !capture {
             self.stop_mining();
         }
@@ -3681,6 +3687,16 @@ impl Game<'_> {
             self.captured = false;
         }
         window.set_cursor_visible(!self.captured);
+    }
+    /// LevelLoadingScreen.onClose -> Gui.setScreen(null) -> grabMouse.
+    fn capture_loaded_world(&mut self) {
+        // Loading may finish after focus was lost or another screen opened.
+        if self.title.is_none()
+            && self.screen == Screen::Playing
+            && !self.remote.as_ref().is_some_and(|r| r.chat_input.is_some())
+        {
+            self.capture(true);
+        }
     }
     fn draw_item(&mut self, batch: &mut HudBatch, stack: &ItemStack, x: f32, y: f32) {
         // `GuiGraphics.renderItem`: the resolved item model (tints, foil and
@@ -5604,7 +5620,7 @@ impl Game<'_> {
                     .block(mining.pos[0], mining.pos[1], mining.pos[2]);
                 self.res
                     .block_entity_render
-                    .render_banner_breaking(&scene, mining.pos, state.0, &mut out);
+                    .render_breaking(&scene, mining.pos, state.0, &mut out);
             }
         }
         // Experience orbs (ExperienceOrbRenderer): pulsing billboards from a 4x4 icon sheet.
@@ -8473,12 +8489,23 @@ impl Game<'_> {
         let debug_lines = horizon_client::gizmos::camera_relative(&lines, at, view);
         let debug_lines_on_top = horizon_client::gizmos::camera_relative(&on_top, at, view);
         let debug_crosshair = horizon_client::gizmos::camera_relative(&crosshair.on_top, at, view);
-        // LevelRenderer.renderHitOutline: the outline shape's edges.
+        // LevelExtractor.extractBlockOutline: model translucency controls draw order.
+        let mut outline_after_terrain = false;
         let outline = if self.screen == Screen::Playing && !self.spectator() {
             self.pick()
                 .map(|h| {
                     let state = self.world.block(h.pos[0], h.pos[1], h.pos[2]);
                     let f = self.res.facts.get(state);
+                    outline_after_terrain = self
+                        .pack
+                        .assets
+                        .model_catalog
+                        .collect(state, BlockPos::new(h.pos[0], h.pos[1], h.pos[2]))
+                        .is_ok_and(|models| {
+                            models
+                                .iter()
+                                .any(|(_, model)| model.faces.iter().any(|f| f.translucent))
+                        });
                     let o = if f.outline_offset {
                         self.pack
                             .context
@@ -8628,6 +8655,7 @@ impl Game<'_> {
             }),
             dark_disc: self.dark_disc(camera),
             outline,
+            outline_after_terrain,
             debug_lines: &debug_lines,
             debug_lines_on_top: &debug_lines_on_top,
             debug_crosshair: &debug_crosshair,
@@ -10233,7 +10261,11 @@ pub fn run() -> Result<()> {
     let root = options.resources.clone();
     let assets = Arc::new(assets);
     log::info!("load assets: {:.2}s", started.elapsed().as_secs_f32());
-    let facts = BlockFacts::load(&root, assets.registry)?;
+    let behaviour_json: serde_json::Value = serde_json::from_reader(std::io::BufReader::new(
+        std::fs::File::open(root.join("block-behaviours.json"))?,
+    ))?;
+    let (facts, gameplay_projection) =
+        BlockFacts::load_with_projection(&root, assets.registry, &behaviour_json)?;
     let mob_data = horizon_client::mobs::MobData::load(&root, &facts);
     horizon_client::mobs::trial_spawner::load_registry(&root);
     log::info!("load facts: {:.2}s", started.elapsed().as_secs_f32());
@@ -10300,7 +10332,12 @@ pub fn run() -> Result<()> {
         ambient: horizon_client::ambience::AmbientTables::load(&root),
         nether_environment: Environment::load_dimension(&root, "the_nether", false)?,
         end_environment: Environment::load_dimension(&root, "the_end", false)?,
-        behaviours: Behaviours::load(registry_owner.registry, &root)?,
+        behaviours: Behaviours::load_with_gameplay(
+            registry_owner.registry,
+            &root,
+            &behaviour_json,
+            &gameplay_projection,
+        )?,
         mob_types: MobTypes::load(&root)?
             .types
             .into_iter()
@@ -10312,6 +10349,10 @@ pub fn run() -> Result<()> {
         player_arm: horizon_client::mobs::load_model(&root, "minecraft:player#main")
             .and_then(|m| m.children.into_iter().find(|c| c.name == "right_arm")),
     });
+    // Both inputs are needed only while constructing the behaviour tables.
+    // Release their owned JSON/Arc buffers before entering the long-lived game loop.
+    drop(gameplay_projection);
+    drop(behaviour_json);
     let mut settings = Settings::load(&std::env::current_dir()?.join("options.txt"));
     horizon_client::ui_theme::load_preferences(&std::env::current_dir()?);
     // Scripted and frame-limited runs (the parity harnesses) see vanilla's
