@@ -1573,6 +1573,7 @@ dependencies = [
  "horizon-protocol",
  "horizon-world",
  "log",
+ "ureq",
 ]
 
 [[package]]
