@@ -38,7 +38,7 @@ done
 cargo build --offline --release -p horizon-client --example shared_json_startup_profile
 cp "$CARGO_TARGET_DIR/release/examples/shared_json_startup_profile" "$BENCH_ROOT/bin/current"
 
-python3 tools/profile_client_startup.py \
+python3 tools/profile_shared_json.py \
   --resources /absolute/path/to/.local/horizon-client/26.3 \
   --baseline-binary "$BENCH_ROOT/bin/baseline" \
   --a01-binary "$BENCH_ROOT/bin/a01" \
@@ -66,7 +66,7 @@ python3 tools/profile_gameplay_decode.py \
   --resources /absolute/path/to/.local/horizon-client/26.3 \
   --repeats 10 --output "$BENCH_ROOT/decode.json"
 
-python3 tools/profile_client_startup.py \
+python3 tools/profile_shared_json.py \
   --resources /absolute/path/to/.local/horizon-client/26.3 \
   --variant released="$BENCH_ROOT/bin/current"@deferred \
   --variant retained="$BENCH_ROOT/bin/current"@deferred-held \

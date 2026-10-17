@@ -11,7 +11,7 @@ import json
 import os
 import statistics
 from pathlib import Path
-from profile_client_startup import percentile, run
+from profile_shared_json import percentile, run
 
 
 def main():
