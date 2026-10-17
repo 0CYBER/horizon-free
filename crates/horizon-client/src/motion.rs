@@ -281,6 +281,17 @@ fn attribute_error(error: impl std::fmt::Debug) -> io::Error {
     io::Error::other(format!("movement attribute: {error:?}"))
 }
 impl PlayerMotion {
+    /// `Player.isSweepAttack`, using the resident player's known horizontal velocity.
+    pub fn is_sweep_attack(&self, strength: f32, critical: bool, sword: bool) -> bool {
+        let movement = self.velocity;
+        let limit = f64::from(self.speed) * 2.5;
+        strength > 0.9
+            && !critical
+            && !self.sprinting
+            && self.ground.on_ground
+            && movement.x * movement.x + movement.z * movement.z < limit * limit
+            && sword
+    }
     pub fn load_environment_once(
         &mut self,
         pending: &mut bool,
@@ -1985,6 +1996,40 @@ impl LivingMotionWorld for MotionWorld<'_, '_, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sword_sweep_requires_charge_ground_and_slow_horizontal_movement() {
+        let root = std::env::var_os("HORIZON_TEST_RESOURCES")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3")
+            });
+        if !root.join("movement-properties.nbt").exists() {
+            eprintln!("skipped sword sweep regression: prepared resources unavailable");
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut p = PlayerMotion::new(&resources, Vec3::ZERO).unwrap();
+        p.ground.on_ground = true;
+        p.speed = 0.1;
+        assert!(p.is_sweep_attack(1.0, false, true));
+        assert!(!p.is_sweep_attack(0.9, false, true));
+        assert!(!p.is_sweep_attack(1.0, true, true));
+        assert!(!p.is_sweep_attack(1.0, false, false));
+        p.sprinting = true;
+        assert!(!p.is_sweep_attack(1.0, false, true));
+        p.sprinting = false;
+        p.ground.on_ground = false;
+        assert!(!p.is_sweep_attack(1.0, false, true));
+        p.ground.on_ground = true;
+        p.velocity = Vec3::new(0.2, 10.0, 0.0);
+        assert!(p.is_sweep_attack(1.0, false, true));
+        p.velocity.z = 0.2;
+        assert!(!p.is_sweep_attack(1.0, false, true));
+        p.velocity = Vec3::new(f64::from(p.speed) * 2.5, 0.0, 0.0);
+        assert!(!p.is_sweep_attack(1.0, false, true));
+    }
 
     #[test]
     fn player_stands_walks_sneaks_and_jumps_on_ghast() {

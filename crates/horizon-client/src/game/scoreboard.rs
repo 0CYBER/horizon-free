@@ -303,20 +303,33 @@ impl Game<'_> {
 
     // ---- criteria ----------------------------------------------------------
 
+    /// `ServerStatsCounter.setValue`'s scoreboard side: the objectives of
+    /// each changed statistic's criteria follow it for the player `name`.
+    pub(super) fn stat_criteria_changed(
+        &mut self,
+        name: &str,
+        events: Vec<(String, String, Option<i32>)>,
+    ) {
+        let board = &mut self.score.board;
+        if board.objectives.is_empty() {
+            return;
+        }
+        for (ty, key, amount) in events {
+            let criteria = sb::stat_criteria(&ty, &key);
+            if board.has_objectives_for(&criteria) {
+                board.for_all_objectives(&criteria, name, |v| {
+                    amount.map_or(0, |n| v.wrapping_add(n))
+                });
+            }
+        }
+    }
     /// `ServerPlayer.doTick` score updates and the statistic criteria.
     pub(super) fn tick_scoreboard(&mut self) {
         self.load_scoreboard();
         let events = std::mem::take(&mut self.stats.events);
+        self.stat_criteria_changed(PLAYER_NAME, events);
         let board = &mut self.score.board;
         if !board.objectives.is_empty() {
-            for (ty, key, amount) in events {
-                let criteria = sb::stat_criteria(&ty, &key);
-                if board.has_objectives_for(&criteria) {
-                    board.for_all_objectives(&criteria, PLAYER_NAME, |v| {
-                        amount.map_or(0, |n| v.wrapping_add(n))
-                    });
-                }
-            }
             let display = self.player_display_comp();
             if let Some(p) = self.player.as_mut() {
                 let health_and_absorption = p.health.health() + p.health.absorption();
@@ -735,6 +748,7 @@ mod tab_list_tests {
                 conn: uuid as u32,
                 uuid,
                 name: name.into(),
+                properties: Vec::new(),
                 info: ClientInformation::new(8),
                 brand: "test".into(),
                 sender: PlayerSender::new(tx, Arc::default()),

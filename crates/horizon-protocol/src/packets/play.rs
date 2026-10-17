@@ -577,6 +577,14 @@ packet!(
 );
 packet!(Text { text: Tag => Nbt });
 packet!(SetChunkCacheCenter { x: i32 => VarInt, z: i32 => VarInt });
+packet!(
+    /// ClientboundTickingStatePacket: the tick rate and whether the level is frozen.
+    TickingState { rate: f32 => Float, frozen: bool => Bool }
+);
+packet!(
+    /// ClientboundTickingStepPacket: the ticks a frozen level runs (`/tick step`).
+    TickingStep { steps: i32 => VarInt }
+);
 packet!(Distance { distance: i32 => VarInt });
 packet!(SetCursorItem { item: Option<Stack> => Slot });
 packet!(SetDefaultSpawnPosition { pos: GlobalPos => GlobalPos, yaw: f32 => Float, pitch: f32 => Float });
@@ -977,10 +985,200 @@ impl Codec<Commands> for Commands {
     }
 }
 
+/// `DisplayInfo` of an advancement as sent.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AdvancementDisplay {
+    pub title: Tag,
+    pub description: Tag,
+    pub icon: crate::item::Stack,
+    /// `AdvancementType` ordinal: task, challenge, goal.
+    pub frame: i32,
+    pub show_toast: bool,
+    pub hidden: bool,
+    pub background: Option<String>,
+}
+/// `ClientboundUpdateAdvancementsPacket.PositionedAdvancement`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Advancement {
+    pub id: String,
+    pub parent: Option<String>,
+    pub display: Option<AdvancementDisplay>,
+    pub requirements: Vec<Vec<String>>,
+    pub telemetry: bool,
+    pub x: f32,
+    pub y: f32,
+}
+/// `ClientboundUpdateAdvancementsPacket`: whether it replaces what the
+/// client has, the advancements added and removed, the progress of each
+/// changed one (criterion, when obtained in epoch milliseconds), and whether
+/// to show toasts.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UpdateAdvancements {
+    pub reset: bool,
+    pub added: Vec<Advancement>,
+    pub removed: Vec<String>,
+    pub progress: Vec<(String, Vec<(String, Option<i64>)>)>,
+    pub show: bool,
+}
+impl Codec<UpdateAdvancements> for UpdateAdvancements {
+    fn read(r: &mut Reader) -> Result<Self> {
+        let reset = r.bool()?;
+        let n = r.count(r.remaining())?;
+        let mut added = Vec::with_capacity(n.min(1024));
+        for _ in 0..n {
+            let id = r.string(32767)?;
+            let parent = if r.bool()? {
+                Some(r.string(32767)?)
+            } else {
+                None
+            };
+            let display = if r.bool()? {
+                let title = r.nbt()?;
+                let description = r.nbt()?;
+                let icon = crate::item::Template::read(r)?;
+                let frame = r.varint()?;
+                let flags = r.i32()?;
+                let background = if flags & 1 != 0 {
+                    Some(r.string(32767)?)
+                } else {
+                    None
+                };
+                Some(AdvancementDisplay {
+                    title,
+                    description,
+                    icon,
+                    frame,
+                    show_toast: flags & 2 != 0,
+                    hidden: flags & 4 != 0,
+                    background,
+                })
+            } else {
+                None
+            };
+            let groups = r.count(r.remaining())?;
+            let mut requirements = Vec::with_capacity(groups.min(256));
+            for _ in 0..groups {
+                let k = r.count(r.remaining())?;
+                requirements.push((0..k).map(|_| r.string(32767)).collect::<Result<_>>()?);
+            }
+            let telemetry = r.bool()?;
+            let (x, y) = (r.f32()?, r.f32()?);
+            added.push(Advancement {
+                id,
+                parent,
+                display,
+                requirements,
+                telemetry,
+                x,
+                y,
+            });
+        }
+        let n = r.count(r.remaining())?;
+        let removed = (0..n).map(|_| r.string(32767)).collect::<Result<_>>()?;
+        let n = r.count(r.remaining())?;
+        let mut progress = Vec::with_capacity(n.min(1024));
+        for _ in 0..n {
+            let id = r.string(32767)?;
+            let k = r.count(r.remaining())?;
+            let mut criteria = Vec::with_capacity(k.min(256));
+            for _ in 0..k {
+                let name = r.string(32767)?;
+                let at = if r.bool()? { Some(r.i64()?) } else { None };
+                criteria.push((name, at));
+            }
+            progress.push((id, criteria));
+        }
+        let show = r.bool()?;
+        Ok(Self {
+            reset,
+            added,
+            removed,
+            progress,
+            show,
+        })
+    }
+    fn write(v: &Self, w: &mut Writer) {
+        w.bool(v.reset);
+        w.varint(v.added.len() as i32);
+        for a in &v.added {
+            w.string(&a.id);
+            w.bool(a.parent.is_some());
+            if let Some(p) = &a.parent {
+                w.string(p);
+            }
+            w.bool(a.display.is_some());
+            if let Some(d) = &a.display {
+                w.nbt(&d.title);
+                w.nbt(&d.description);
+                crate::item::Template::write(&d.icon, w);
+                w.varint(d.frame);
+                w.i32(
+                    i32::from(d.background.is_some())
+                        | i32::from(d.show_toast) << 1
+                        | i32::from(d.hidden) << 2,
+                );
+                if let Some(b) = &d.background {
+                    w.string(b);
+                }
+            }
+            w.varint(a.requirements.len() as i32);
+            for g in &a.requirements {
+                w.varint(g.len() as i32);
+                for c in g {
+                    w.string(c);
+                }
+            }
+            w.bool(a.telemetry);
+            w.f32(a.x);
+            w.f32(a.y);
+        }
+        w.varint(v.removed.len() as i32);
+        for id in &v.removed {
+            w.string(id);
+        }
+        w.varint(v.progress.len() as i32);
+        for (id, criteria) in &v.progress {
+            w.string(id);
+            w.varint(criteria.len() as i32);
+            for (name, at) in criteria {
+                w.string(name);
+                w.bool(at.is_some());
+                if let Some(at) = at {
+                    w.i64(*at);
+                }
+            }
+        }
+        w.bool(v.show);
+    }
+}
+packet!(
+    /// ClientboundAwardStatsPacket: (stat type, value, count) by network id.
+    AwardStats { stats: Vec<(i32, i32, i32)> => StatList }
+);
+/// `Object2IntMap<Stat<?>>`: each stat's type and value ids, then its count.
+pub struct StatList;
+impl Codec<Vec<(i32, i32, i32)>> for StatList {
+    fn read(r: &mut Reader) -> Result<Vec<(i32, i32, i32)>> {
+        let n = r.count(r.remaining())?;
+        (0..n)
+            .map(|_| Ok((r.varint()?, r.varint()?, r.varint()?)))
+            .collect()
+    }
+    fn write(v: &Vec<(i32, i32, i32)>, w: &mut Writer) {
+        w.varint(v.len() as i32);
+        for &(a, b, c) in v {
+            w.varint(a);
+            w.varint(b);
+            w.varint(c);
+        }
+    }
+}
+
 packet_enum!(Clientbound, crate::ids::play::clientbound {
     BundleDelimiter(Empty) = BUNDLE_DELIMITER,
     AddEntity(AddEntity) = ADD_ENTITY,
     Animate(Animate) = ANIMATE,
+    AwardStats(AwardStats) = AWARD_STATS,
     BlockChangedAck(BlockChangedAck) = BLOCK_CHANGED_ACK,
     BlockDestruction(BlockDestruction) = BLOCK_DESTRUCTION,
     BlockEntityData(BlockEntityData) = BLOCK_ENTITY_DATA,
@@ -1066,13 +1264,130 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     TabList(TabList) = TAB_LIST,
     TakeItemEntity(TakeItemEntity) = TAKE_ITEM_ENTITY,
     TeleportEntity(TeleportEntity) = TELEPORT_ENTITY,
+    TickingState(TickingState) = TICKING_STATE,
+    TickingStep(TickingStep) = TICKING_STEP,
+    UpdateAdvancements(UpdateAdvancements) = UPDATE_ADVANCEMENTS,
     UpdateMobEffect(UpdateMobEffect) = UPDATE_MOB_EFFECT,
     UpdateTags(UpdateTags) = UPDATE_TAGS,
+    TrackedWaypoint(TrackedWaypoint) = WAYPOINT,
 });
 packet!(
     /// ClientboundClearTitlesPacket: whether to also reset the timings.
     Bool1 { value: bool => Bool }
 );
+
+/// ClientboundTrackedWaypointPacket.Operation, by ordinal.
+pub mod waypoint_operation {
+    pub const TRACK: i32 = 0;
+    pub const UNTRACK: i32 = 1;
+    pub const UPDATE: i32 = 2;
+}
+
+/// TrackedWaypoint's identifier: `Either<UUID, String>`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum WaypointId {
+    Uuid(u128),
+    Name(String),
+}
+
+/// What a TrackedWaypoint points at (its `Type` and contents).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum WaypointTarget {
+    /// `TrackedWaypoint.empty`: an untracked waypoint.
+    Empty,
+    /// A block position (`Vec3iWaypoint`).
+    Block([i32; 3]),
+    /// A chunk (`ChunkWaypoint`).
+    Chunk([i32; 2]),
+    /// An angle in radians (`AzimuthWaypoint`).
+    Azimuth(f32),
+}
+
+/// ClientboundTrackedWaypointPacket: the locator bar's waypoints.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TrackedWaypoint {
+    /// `waypoint_operation`.
+    pub operation: i32,
+    pub id: WaypointId,
+    /// Waypoint.Icon: the style (a `waypoint_style_asset` key) and an RGB colour.
+    pub style: String,
+    pub color: Option<i32>,
+    pub target: WaypointTarget,
+}
+
+impl Codec<TrackedWaypoint> for TrackedWaypoint {
+    fn read(r: &mut Reader) -> Result<TrackedWaypoint> {
+        let operation = r.varint()?;
+        if !(0..=2).contains(&operation) {
+            return Err(Error::new(format!("waypoint operation {operation}")));
+        }
+        let id = if r.bool()? {
+            WaypointId::Uuid(r.uuid()?)
+        } else {
+            WaypointId::Name(r.string(32767)?)
+        };
+        let style = Ident::read(r)?;
+        // ByteBufCodecs.RGB_COLOR: three bytes, read back as an opaque ARGB colour.
+        let color = if r.bool()? {
+            let [red, green, blue] = [r.u8()?, r.u8()?, r.u8()?].map(i32::from);
+            Some(-16_777_216 | red << 16 | green << 8 | blue)
+        } else {
+            None
+        };
+        let target = match r.varint()? {
+            0 => WaypointTarget::Empty,
+            1 => WaypointTarget::Block([r.varint()?, r.varint()?, r.varint()?]),
+            2 => WaypointTarget::Chunk([r.varint()?, r.varint()?]),
+            3 => WaypointTarget::Azimuth(r.f32()?),
+            other => return Err(Error::new(format!("waypoint type {other}"))),
+        };
+        Ok(TrackedWaypoint {
+            operation,
+            id,
+            style,
+            color,
+            target,
+        })
+    }
+    fn write(v: &TrackedWaypoint, w: &mut Writer) {
+        w.varint(v.operation);
+        match &v.id {
+            WaypointId::Uuid(uuid) => {
+                w.bool(true);
+                w.uuid(*uuid);
+            }
+            WaypointId::Name(name) => {
+                w.bool(false);
+                w.string(name);
+            }
+        }
+        w.string(&v.style);
+        w.bool(v.color.is_some());
+        if let Some(color) = v.color {
+            for shift in [16, 8, 0] {
+                w.u8((color >> shift) as u8);
+            }
+        }
+        match v.target {
+            WaypointTarget::Empty => w.varint(0),
+            WaypointTarget::Block([x, y, z]) => {
+                w.varint(1);
+                w.varint(x);
+                w.varint(y);
+                w.varint(z);
+            }
+            WaypointTarget::Chunk([x, z]) => {
+                w.varint(2);
+                w.varint(x);
+                w.varint(z);
+            }
+            WaypointTarget::Azimuth(angle) => {
+                w.varint(3);
+                w.f32(angle);
+            }
+        }
+    }
+}
 
 // ---- serverbound -------------------------------------------------------
 
@@ -1285,6 +1600,42 @@ mod tests {
             }),
             portal_cooldown: 0,
             sea_level: 63,
+        }
+    }
+
+    #[test]
+    fn tracked_waypoint_bytes() {
+        // TRACK, a UUID, the default style, red (#FF5555), a block position.
+        let track = Clientbound::TrackedWaypoint(TrackedWaypoint {
+            operation: waypoint_operation::TRACK,
+            id: WaypointId::Uuid(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10),
+            style: "minecraft:default".into(),
+            color: Some(0xFFFF_5555_u32 as i32),
+            target: WaypointTarget::Block([1, -2, 300]),
+        });
+        let mut expected = vec![141, 1, 0, 1];
+        expected.extend(1..=16u8);
+        expected.push(17);
+        expected.extend(b"minecraft:default");
+        expected.extend([
+            1, 0xFF, 0x55, 0x55, 1, 1, 0xFE, 0xFF, 0xFF, 0xFF, 0x0F, 0xAC, 0x02,
+        ]);
+        assert_eq!(track.encode(), expected);
+        assert_eq!(Clientbound::decode(141, &expected[2..]).unwrap(), track);
+        for target in [
+            WaypointTarget::Empty,
+            WaypointTarget::Chunk([-3, 4]),
+            WaypointTarget::Azimuth(-1.25),
+        ] {
+            let packet = Clientbound::TrackedWaypoint(TrackedWaypoint {
+                operation: waypoint_operation::UPDATE,
+                id: WaypointId::Name("spawn".into()),
+                style: "minecraft:bowtie".into(),
+                color: None,
+                target,
+            });
+            let bytes = packet.encode();
+            assert_eq!(Clientbound::decode(141, &bytes[2..]).unwrap(), packet);
         }
     }
 
@@ -1572,6 +1923,40 @@ mod tests {
                 pitch: 0.0,
                 relatives: 0,
                 on_ground: true,
+            }),
+            Clientbound::TickingState(TickingState {
+                rate: 40.0,
+                frozen: true,
+            }),
+            Clientbound::TickingStep(TickingStep { steps: 7 }),
+            Clientbound::AwardStats(AwardStats {
+                stats: vec![(8, 3, 120), (0, 1, 2)],
+            }),
+            Clientbound::UpdateAdvancements(UpdateAdvancements {
+                reset: true,
+                added: vec![Advancement {
+                    id: "minecraft:story/root".into(),
+                    parent: None,
+                    display: Some(AdvancementDisplay {
+                        title: literal("Minecraft"),
+                        description: literal("The heart and story of the game"),
+                        icon: crate::item::Stack::new(42, 1),
+                        frame: 0,
+                        show_toast: false,
+                        hidden: false,
+                        background: Some("minecraft:block/stone".into()),
+                    }),
+                    requirements: vec![vec!["crafting_table".into()]],
+                    telemetry: false,
+                    x: 0.0,
+                    y: 1.5,
+                }],
+                removed: vec!["minecraft:story/gone".into()],
+                progress: vec![(
+                    "minecraft:story/root".into(),
+                    vec![("crafting_table".into(), Some(1_792_216_800_000))],
+                )],
+                show: true,
             }),
         ];
         for p in packets {

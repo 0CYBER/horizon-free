@@ -19,6 +19,7 @@ pub(super) struct Strike {
     scale: f32,
     crit: bool,
     from: [f64; 3],
+    sweep: Option<[f64; 3]>,
 }
 
 impl Game<'_> {
@@ -73,6 +74,7 @@ impl Game<'_> {
         let p = self.player.as_ref()?;
         let from = [p.position.x, p.position.y, p.position.z];
         let (amount, scale, crit) = self.melee_damage("minecraft:player");
+        let sweep = self.sweep_attack_position(scale, crit);
         self.attack_ticks = 0;
         if let Some(p) = self.player.as_mut()
             && !self.creative
@@ -85,6 +87,7 @@ impl Game<'_> {
             scale,
             crit,
             from,
+            sweep,
         })
     }
 
@@ -105,6 +108,10 @@ impl Game<'_> {
             (true, false, true) => "minecraft:entity.player.attack.strong",
             (true, false, false) => "minecraft:entity.player.attack.weak",
         };
-        self.audio.play(sound, Some(s.from), 1.0, 1.0);
+        if let Some(at) = s.sweep.filter(|_| hurt) {
+            self.sweep_attack(at, Some(s.from));
+        } else {
+            self.audio.play(sound, Some(s.from), 1.0, 1.0);
+        }
     }
 }

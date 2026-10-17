@@ -46,6 +46,8 @@ pub struct Guest {
     pub left_reason: String,
     pub uuid: u128,
     pub name: String,
+    /// The profile's properties, for the player list (skins).
+    pub properties: Vec<horizon_protocol::packets::login::Property>,
     pub entity_id: i32,
     pub sender: PlayerSender,
     pub latency: Arc<AtomicI32>,
@@ -136,6 +138,19 @@ pub struct Guest {
     pub drag: Option<(u8, Vec<usize>)>,
     /// The compound this player was loaded from, for fields Horizon does not model.
     pub saved: Option<horizon_world::nbt::Tag>,
+    /// `ServerPlayer.recipeBook`.
+    pub recipe_book: crate::recipe_book::Settings,
+    /// `PlayerAdvancements`: the criteria obtained, whether they came from
+    /// the player's file, the advancements the client was last told it may
+    /// see (empty before the first packet), and those whose progress
+    /// changed since (`progressChanged`).
+    pub advancements: crate::advancements::Progress,
+    pub advancements_loaded: bool,
+    pub advancements_visible: Vec<bool>,
+    pub advancements_changed: std::collections::BTreeSet<usize>,
+    /// Recipes unlocked since the client was last told
+    /// (`ServerRecipeBook.addRecipes` sends them).
+    pub recipes_unlocked: Vec<String>,
 }
 
 impl Guest {
@@ -150,6 +165,7 @@ impl Guest {
             left_reason: String::new(),
             uuid: j.uuid,
             name: j.name,
+            properties: j.properties,
             entity_id,
             sender: j.sender,
             latency: j.latency,
@@ -214,6 +230,12 @@ impl Guest {
             next_window: 0,
             drag: None,
             saved: None,
+            recipe_book: Default::default(),
+            advancements: Default::default(),
+            advancements_loaded: false,
+            advancements_visible: Vec::new(),
+            advancements_changed: Default::default(),
+            recipes_unlocked: Vec::new(),
         }
     }
     pub fn send(&self, packet: &play::Clientbound) {

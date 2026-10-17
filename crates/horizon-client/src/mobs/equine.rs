@@ -83,19 +83,33 @@ pub fn register(m: &mut Mob) {
         return super::llama::register(m);
     }
     let tempt = m.kind.tempt.clone();
-    let rears = can_rear(m.species());
+    let species = m.species();
+    let rears = can_rear(species);
+    let stand_interval = m.kind.ambient_interval;
     let g = &mut m.ai.goals;
-    g.add(0, Float);
-    g.add(1, MountPanic(Panic::new(1.2)));
     g.add(1, RunAroundLikeCrazy);
     g.add(2, Breed::new(1.0));
-    g.add(3, Tempt::new(1.25, tempt, false));
     g.add(4, FollowParent::new(1.0));
     g.add(6, Stroll::avoiding_water(0.7));
     g.add(7, LookAtPlayer::new(6.0));
     g.add(8, RandomLookAround::default());
     if rears {
-        g.add(9, RandomStand { next: -80 });
+        // resetStandInterval: -getAmbientStandInterval (400 for every horse).
+        g.add(
+            9,
+            RandomStand {
+                next: -stand_interval,
+            },
+        );
+    }
+    // addBehaviourGoals, after the rest: none for the skeleton horse (it
+    // sinks), no mount panic for the zombie horse.
+    if species != Species::SkeletonHorse {
+        g.add(0, Float);
+        if species != Species::ZombieHorse {
+            g.add(1, MountPanic(Panic::new(1.2)));
+        }
+        g.add(3, Tempt::new(1.25, tempt, false));
     }
 }
 /// `generateMaxHealth`, `generateSpeed`, `generateJumpStrength` and the coat.
@@ -285,7 +299,7 @@ impl Goal for RandomStand {
     fn can_use(&mut self, m: &mut Mob, _: &mut Cx) -> bool {
         self.next += 1;
         if self.next > 0 && m.random.next_int_bound(1000).unwrap_or(1000) < self.next {
-            self.next = -80;
+            self.next = -m.kind.ambient_interval;
             return m.random.next_int_bound(10).unwrap_or(1) == 0;
         }
         false

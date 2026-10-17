@@ -186,9 +186,12 @@ impl Hub {
             .id("minecraft:chat_type", "minecraft:chat")
             .unwrap_or(0);
         let dimension_type = sync
-            .id("minecraft:dimension_type", "minecraft:overworld")
+            .id("minecraft:dimension_type", &config.dimension)
             .unwrap_or(0);
         let clock_ids = (0..sync.dynamic.len("minecraft:world_clock") as i32).collect();
+        let mut encoder = encoder;
+        let d = horizon_protocol::registry::DimensionType::vanilla(&config.dimension);
+        encoder.set_dimension(d.min_y, d.height, d.has_skylight);
         Self {
             lan,
             config,
@@ -397,7 +400,12 @@ impl Hub {
         play::PlayerInfo {
             uuid,
             name: Some(name.to_owned()),
-            properties: Vec::new(),
+            properties: self
+                .guests
+                .iter()
+                .find(|g| g.uuid == uuid)
+                .map(|g| g.properties.clone())
+                .unwrap_or_default(),
             chat_session: None,
             game_mode: Some(mode),
             listed: Some(true),
@@ -509,12 +517,18 @@ impl Hub {
         g.send(&raw(ids::UPDATE_RECIPES, self.sync.recipes.clone()));
         // PlayerList.sendPlayerPermissionLevel, then the recipe book.
         self.send_permission_level(i);
+        // ServerRecipeBook.sendInitialRecipeBook: each book's open and
+        // filtering flags, then every known recipe.
         let g = &self.guests[i];
+        let book = &g.recipe_book;
+        let settings = (0..4)
+            .flat_map(|b| [u8::from(book.open[b]), u8::from(book.filtering[b])])
+            .collect();
+        g.send(&raw(ids::RECIPE_BOOK_SETTINGS, settings));
         g.send(&raw(
-            ids::RECIPE_BOOK_SETTINGS,
-            vec![0; 8], // four books, each closed and unfiltered
+            ids::RECIPE_BOOK_ADD,
+            self.sync.advancements.initial_recipe_book(book, &self.sync),
         ));
-        g.send(&raw(ids::RECIPE_BOOK_ADD, vec![0, 1])); // no entries, replace
         // The others hear of the newcomer before it joins the list.
         self.broadcast_except(
             conn,
@@ -731,11 +745,12 @@ impl Hub {
         }));
     }
 
-    /// ClientboundSetDefaultSpawnPositionPacket for the level's respawn data.
+    /// ClientboundSetDefaultSpawnPositionPacket for the level's respawn data
+    /// (the world spawn, in the Overworld wherever the player is).
     fn default_spawn(&self, spawn: [f64; 3]) -> C {
         C::SetDefaultSpawnPosition(play::SetDefaultSpawnPosition {
             pos: play::GlobalPos {
-                dimension: self.config.dimension.clone(),
+                dimension: "minecraft:overworld".into(),
                 pos: [
                     spawn[0].floor() as i32,
                     spawn[1].floor() as i32,
@@ -921,7 +936,9 @@ impl Hub {
             .iter()
             .map(|g| (g.uuid, g.latency.load(Ordering::Relaxed)))
             .collect();
-        if self.ticks.is_multiple_of(100) && !latencies.is_empty() {
+        // PlayerList.tick: UPDATE_LATENCY once `++sendAllPlayerInfoIn > 600`,
+        // so on the 601st tick, then every 601.
+        if self.ticks.is_multiple_of(601) && !latencies.is_empty() {
             let entries = latencies
                 .iter()
                 .map(|(uuid, latency)| play::PlayerInfo {
@@ -1408,15 +1425,29 @@ impl Hub {
                 id: g.entity_id,
                 values: vec![(9, serializer::FLOAT, Value::Float(g.health))],
             }));
-            // ServerPlayer.tick's CriteriaTriggers.TICK, then flushDirty.
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_millis() as i64);
-            let first = self.sync.advancements.first_tick(&self.sync, now);
-            if let Some(add) = first.recipe_book_add {
-                g.send(&raw(ids::RECIPE_BOOK_ADD, add));
+            // ServerPlayer.tick's CriteriaTriggers.TICK, then flushDirty. A
+            // player who has been here has had the tick's criteria already.
+            if !g.advancements_loaded {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_millis() as i64);
+                let sync = self.sync.clone();
+                let g = &mut self.guests[i];
+                let first = sync.advancements.first_tick(
+                    &sync,
+                    now,
+                    &mut g.advancements,
+                    &mut g.recipe_book,
+                );
+                if let Some(add) = first.recipe_book_add {
+                    g.send(&raw(ids::RECIPE_BOOK_ADD, add));
+                }
+                g.send(&raw(ids::UPDATE_ADVANCEMENTS, first.update_advancements));
+                g.advancements_visible = sync.advancements.visibility(&g.advancements);
+                g.advancements_changed.clear();
+            } else {
+                self.flush_advancements(i, true);
             }
-            g.send(&raw(ids::UPDATE_ADVANCEMENTS, first.update_advancements));
         }
         let health = {
             let g = &self.guests[i];
@@ -1465,6 +1496,65 @@ impl Hub {
             }));
             g.menu_sent[slot] = now;
         }
+    }
+
+    /// `PlayerAdvancements.flushDirty` and the recipes the player unlocked
+    /// since (`ServerRecipeBook.addRecipes`), once the player's first tick
+    /// has sent their advancements.
+    pub fn flush_progress(&mut self, conn: u32) {
+        if let Some(i) = self.guests.iter().position(|g| g.conn == conn)
+            && self.guests[i].sent_health.is_some()
+        {
+            self.flush_advancements(i, true);
+        }
+    }
+    fn flush_advancements(&mut self, i: usize, show: bool) {
+        let sync = self.sync.clone();
+        let g = &mut self.guests[i];
+        let unlocked = std::mem::take(&mut g.recipes_unlocked);
+        if let Some(add) = sync.advancements.recipes_added(&unlocked, &sync) {
+            g.send(&raw(ids::RECIPE_BOOK_ADD, add));
+        }
+        let changed = std::mem::take(&mut g.advancements_changed);
+        if let Some(update) = sync.advancements.update(
+            &sync,
+            &g.advancements,
+            &mut g.advancements_visible,
+            &changed,
+            show,
+        ) {
+            g.send(&raw(ids::UPDATE_ADVANCEMENTS, update));
+        }
+    }
+
+    /// ClientboundAwardStatsPacket (`ServerStatsCounter.sendStats`): each
+    /// statistic as its type and value by network id (`Stat.STREAM_CODEC`),
+    /// then its count. Statistics the registries don't know are left out.
+    pub fn send_stats(&self, conn: u32, stats: &[(String, String, i32)]) {
+        let known: Vec<(i32, i32, i32)> = stats
+            .iter()
+            .filter_map(|(ty, key, count)| {
+                let values = match ty.as_str() {
+                    "minecraft:mined" => "minecraft:block",
+                    "minecraft:killed" | "minecraft:killed_by" => "minecraft:entity_type",
+                    "minecraft:custom" => "minecraft:custom_stat",
+                    _ => "minecraft:item",
+                };
+                Some((
+                    self.sync.id("minecraft:stat_type", ty)?,
+                    self.sync.id(values, key)?,
+                    *count,
+                ))
+            })
+            .collect();
+        let mut w = horizon_protocol::buf::Writer::new();
+        w.varint(known.len() as i32);
+        for (ty, value, count) in known {
+            w.varint(ty);
+            w.varint(value);
+            w.varint(count);
+        }
+        self.send_to(conn, &raw(ids::AWARD_STATS, w.data));
     }
 
     // ---- incoming ------------------------------------------------------
@@ -1751,6 +1841,81 @@ impl Hub {
         g.center_sent = Some((cx, cz));
         // ServerPlayer.initInventoryMenu.
         self.send_inventory(i);
+    }
+
+    /// The level the players are in: the server holds one at a time, and the
+    /// hub's packets name it.
+    pub fn set_dimension(&mut self, dimension: &str) {
+        self.config.dimension = dimension.to_owned();
+        self.dimension_type = self
+            .sync
+            .id("minecraft:dimension_type", dimension)
+            .unwrap_or(0);
+        let d = horizon_protocol::registry::DimensionType::vanilla(dimension);
+        self.encoder
+            .set_dimension(d.min_y, d.height, d.has_skylight);
+    }
+
+    /// ServerPlayer.teleport(TeleportTransition) into the level the hub now
+    /// names (`set_dimension`): ClientboundRespawnPacket keeping all data,
+    /// then vanilla's packet order. Nothing tracked in the old level is
+    /// removed one by one: the client drops its whole level.
+    pub fn change_level(&mut self, i: usize, at: [f64; 3], yaw: f32, ctx: &TickCtx) {
+        let mode = self.guests[i].game_mode;
+        let info = self.spawn_info(mode);
+        self.close_container_for(i);
+        let g = &mut self.guests[i];
+        g.tracker.clear();
+        g.sent_chunks.clear();
+        g.chunk_queue.clear();
+        g.center = None;
+        g.yaw = yaw;
+        g.position = at;
+        g.previous_position = at;
+        g.send(&C::Respawn(play::Respawn {
+            spawn: info,
+            // ClientboundRespawnPacket.KEEP_ALL_DATA.
+            keep: 3,
+        }));
+        g.send(&C::ChangeDifficulty(play::ChangeDifficulty {
+            difficulty: ctx.difficulty,
+            locked: ctx.difficulty_locked,
+        }));
+        self.send_permission_level(i);
+        self.teleport(i, None);
+        let g = &mut self.guests[i];
+        g.send(&C::PlayerAbilities(play::PlayerAbilities {
+            flags: g.ability_flags(),
+            flying_speed: 0.05,
+            walking_speed: 0.1,
+        }));
+        self.send_level_info(i, ctx);
+        // PlayerList.sendAllPlayerInfo: the inventory and the held slot.
+        self.send_inventory(i);
+        let g = &mut self.guests[i];
+        g.send(&C::SetHeldSlot(play::SetHeldSlot {
+            slot: g.selected as i32,
+        }));
+        self.send_active_effects(i);
+        let g = &mut self.guests[i];
+        // ServerPlayer.sendPostEffects.
+        g.send(&raw(ids::POST_EFFECTS, vec![0]));
+        // TeleportTransition.PLAY_PORTAL_SOUND.
+        g.send(&C::LevelEvent(play::LevelEvent {
+            kind: 1032,
+            pos: [0, 0, 0],
+            data: 0,
+            global: false,
+        }));
+        // lastSentExp, lastSentHealth and lastSentFood.
+        g.sent_health = None;
+        g.sent_xp = None;
+        let (cx, cz) = g.chunk();
+        g.send(&C::SetChunkCacheCenter(play::SetChunkCacheCenter {
+            x: cx,
+            z: cz,
+        }));
+        g.center_sent = Some((cx, cz));
     }
 }
 

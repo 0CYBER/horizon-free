@@ -484,6 +484,13 @@ impl Behaviours {
     ) -> io::Result<Self> {
         data::load_with_behaviour_json(registry, resources_dir, behaviour)
     }
+
+    /// Keep a snapshot of the resolved tables in `dir` (a game folder's
+    /// `.horizon-cache`), so later launches of the same build restore it instead
+    /// of resolving the resources again. Without it, [`Self::load`] never caches.
+    pub fn set_cache_dir(dir: std::path::PathBuf) {
+        data::set_cache_dir(dir);
+    }
     pub fn facts(&self, state: BlockStateId) -> &StateFacts {
         &self.facts[state.0 as usize]
     }

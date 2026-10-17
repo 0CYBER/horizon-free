@@ -44,6 +44,7 @@ struct Mixer {
     channels: HashMap<ChannelId, Channel>,
     listener: [f64; 3],
     listener_yaw: f32,
+    limiter_peak: f32,
 }
 /// A sound the player could have heard (`SoundEventListener.onPlaySound`):
 /// what the subtitle overlay needs.
@@ -397,8 +398,17 @@ fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
             c.position += step;
         }
     }
-    for s in data.iter_mut() {
-        *s = s.clamp(-1.0, 1.0);
+    // Limit the whole buffer together, preserving waveform and stereo balance
+    // instead of flattening each overloaded sample; release over 50 ms.
+    let peak = data.iter().fold(1.0f32, |peak, s| peak.max(s.abs()));
+    mixer.limiter_peak = mixer.limiter_peak.max(peak);
+    let release = (-1.0 / (0.05 * rate as f32)).exp();
+    for frame in data.chunks_mut(channels) {
+        let gain = mixer.limiter_peak.recip();
+        for s in frame {
+            *s *= gain;
+        }
+        mixer.limiter_peak = (mixer.limiter_peak * release).max(peak);
     }
 }
 /// Why the game should not open an output, if it should not:
@@ -860,6 +870,46 @@ mod tests {
         assert_eq!(distance_gain(Some(16.0), 8.0), 0.5);
         assert_eq!(distance_gain(Some(16.0), 16.0), 0.0);
         assert_eq!(distance_gain(Some(16.0), 40.0), 0.0);
+    }
+
+    #[test]
+    fn overlapping_voices_are_limited_without_flattening_or_changing_stereo_balance() {
+        let mut m = Mixer::default();
+        let wave = vec![0.25, 0.5, 0.75, 1.0, -1.0, -0.75, -0.5, -0.25, 0.0];
+        for id in 1..=4 {
+            m.channels
+                .insert(id, channel(wave.clone(), None, [-1.0, 0.0, 0.0], false));
+        }
+        let mut data = [0.0; 16];
+        mix(&mut m, &mut data, 2, 48_000);
+        for (frame, sample) in data.as_chunks::<2>().0.iter().zip(wave) {
+            assert!((frame[0] - sample * 0.4).abs() < 1e-6, "{frame:?}");
+            assert!((frame[1] - sample).abs() < 1e-6, "{frame:?}");
+        }
+        assert!(data.iter().all(|s| s.abs() <= 1.0));
+    }
+
+    #[test]
+    fn limiter_leaves_quiet_audio_alone_and_recovers_across_callbacks() {
+        let mut m = Mixer::default();
+        m.channels
+            .insert(1, channel(vec![0.25; 2], None, [0.0; 3], true));
+        let mut data = [0.0; 16];
+        mix(&mut m, &mut data, 2, 48_000);
+        assert_eq!(data, [0.25; 16]);
+
+        for id in 2..=5 {
+            m.channels
+                .insert(id, channel(vec![1.0; 2], None, [0.0; 3], true));
+        }
+        mix(&mut m, &mut data, 2, 48_000);
+        assert!(data.iter().all(|s| s.abs() <= 1.0));
+        m.channels.retain(|&id, _| id == 1);
+        let mut recovery = vec![0.0; 2 * 48_000];
+        mix(&mut m, &mut recovery, 2, 48_000);
+        assert!(recovery[0] > 0.0 && recovery[0] < 0.1);
+        assert!(recovery.windows(2).all(|w| w[1] >= w[0]));
+        assert_eq!(*recovery.last().unwrap(), 0.25);
     }
 
     #[test]
