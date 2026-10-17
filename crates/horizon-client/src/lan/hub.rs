@@ -784,6 +784,15 @@ impl Hub {
             }
         }
         self.broadcast_block_changes(ctx.world);
+        // ServerGamePacketListenerImpl.tick: the actions handled since the last tick are
+        // acknowledged after the block changes they made were sent, so a client's predicted
+        // blocks settle on the server's states.
+        for g in &self.guests {
+            let sequence = g.ack_up_to.replace(-1);
+            if sequence >= 0 {
+                g.send(&C::BlockChangedAck(play::BlockChangedAck { sequence }));
+            }
+        }
         self.sync_containers(ctx.world);
         self.track_entities(ctx);
         for i in 0..self.guests.len() {
@@ -1478,11 +1487,13 @@ impl Hub {
     }
 
     /// Acknowledge a block interaction (ClientboundBlockChangedAckPacket).
+    /// ServerGamePacketListenerImpl.ackBlockChangesUpTo: sent with the next tick's block
+    /// changes (`tick`).
     pub fn ack(&self, conn: u32, sequence: i32) {
         if sequence >= 0
             && let Some(g) = self.guest(conn)
         {
-            g.send(&C::BlockChangedAck(play::BlockChangedAck { sequence }));
+            g.ack_up_to.set(g.ack_up_to.get().max(sequence));
         }
     }
 

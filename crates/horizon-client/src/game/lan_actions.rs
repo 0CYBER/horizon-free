@@ -36,6 +36,11 @@ pub(super) struct GuestPlay {
     swing: horizon_client::first_person::SwingState,
     /// The block being dug and the face the client aimed at.
     digging: Option<([i32; 3], [i32; 3])>,
+    /// The server tick the digging started (ServerPlayerGameMode.destroyProgressStart).
+    dig_start: u64,
+    /// A block the client stopped digging before the server's time was up: it breaks once
+    /// its progress since `dig_start` is complete (ServerPlayerGameMode.hasDelayedDestroy).
+    delayed: Option<([i32; 3], u64)>,
     last_progress: i32,
     /// Hand movements the client announced and the host animated.
     swung: bool,
@@ -350,35 +355,41 @@ impl Game<'_> {
                     let face = direction(i32::from(a.direction));
                     let play = host.play.entry(conn).or_default();
                     play.digging = Some((a.pos, face));
+                    play.dig_start = host.hub.ticks;
                     play.last_progress = -1;
+                    // The pause between two blocks is the client's (MultiPlayerGameMode's
+                    // destroyDelay); the server digs from the START it receives.
+                    play.destroy_delay = 0;
                 }
                 1 => {}
-                2 | 3 => {
+                3 => {
+                    host.hub.ack(conn, a.sequence);
+                    self.guest_stop_digging(host, conn, a.pos);
+                }
+                2 => {
                     host.hub.ack(conn, a.sequence);
                     let play = host.play.entry(conn).or_default();
                     play.digging = None;
                     play.mining = None;
-                    if a.action == 2 {
-                        let state = self.world.block(a.pos[0], a.pos[1], a.pos[2]).0 as i32;
-                        host.hub.send_to(
-                            conn,
-                            &C::BlockUpdate(play::BlockUpdate { pos: a.pos, state }),
-                        );
-                        host.hub.broadcast_near(
-                            [
-                                f64::from(a.pos[0]),
-                                f64::from(a.pos[1]),
-                                f64::from(a.pos[2]),
-                            ],
-                            64.0,
-                            &C::BlockDestruction(play::BlockDestruction {
-                                id: host.hub.guests[gi].entity_id,
-                                pos: a.pos,
-                                progress: 255,
-                            }),
-                            Some(conn),
-                        );
-                    }
+                    let state = self.world.block(a.pos[0], a.pos[1], a.pos[2]).0 as i32;
+                    host.hub.send_to(
+                        conn,
+                        &C::BlockUpdate(play::BlockUpdate { pos: a.pos, state }),
+                    );
+                    host.hub.broadcast_near(
+                        [
+                            f64::from(a.pos[0]),
+                            f64::from(a.pos[1]),
+                            f64::from(a.pos[2]),
+                        ],
+                        64.0,
+                        &C::BlockDestruction(play::BlockDestruction {
+                            id: host.hub.guests[gi].entity_id,
+                            pos: a.pos,
+                            progress: 255,
+                        }),
+                        Some(conn),
+                    );
                 }
                 4 | 5 => {
                     if !spectator {
@@ -806,6 +817,7 @@ impl Game<'_> {
                     }
                 });
             }
+            self.guest_delayed_destroy(host, conn);
             self.guest_server_tick(host, conn);
             self.guest_dig_feedback(host, conn);
             self.guest_pickups(host, gi);
@@ -917,6 +929,81 @@ impl Game<'_> {
                 f.full_collision && f.solid_render
             })
         })
+    }
+
+    /// ServerPlayerGameMode.handleBlockBreakAction, STOP_DESTROY_BLOCK: the client finished
+    /// digging `pos` (and predicted the break). The server breaks it if its own count of the
+    /// digging since START is at least 70 % done; otherwise it keeps digging alone and breaks
+    /// it when done (`guest_delayed_destroy`), so the client's broken block is never left
+    /// standing on the server.
+    fn guest_stop_digging(&mut self, host: &mut LanHost, conn: u32, pos: [i32; 3]) {
+        let ticks = host.hub.ticks;
+        let play = host.play.entry(conn).or_default();
+        let dug = play.digging.take().is_some_and(|(p, _)| p == pos);
+        play.mining = None;
+        let start = play.dig_start;
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        if !dug || self.res.facts.is_air(state) {
+            return;
+        }
+        let progress = self
+            .as_guest(host, conn, |g| g.destroy_progress(pos))
+            .map_or(0.0, |p| p * (ticks - start + 1) as f32);
+        if progress >= 0.7 {
+            self.guest_destroy(host, conn, pos);
+        } else {
+            let play = host.play.entry(conn).or_default();
+            if play.delayed.is_none() {
+                play.delayed = Some((pos, start));
+            }
+        }
+    }
+
+    /// ServerPlayerGameMode.tick's delayed destroy: the block breaks once its progress since
+    /// the digging started is complete, unless something else removed it first.
+    fn guest_delayed_destroy(&mut self, host: &mut LanHost, conn: u32) {
+        let Some((pos, start)) = host.play.get(&conn).and_then(|p| p.delayed) else {
+            return;
+        };
+        let ticks = host.hub.ticks;
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        let progress = if self.res.facts.is_air(state) {
+            None
+        } else {
+            self.as_guest(host, conn, |g| g.destroy_progress(pos))
+                .map(|p| p * (ticks - start + 1) as f32)
+        };
+        match progress {
+            Some(p) if p < 1.0 => {}
+            done => {
+                if let Some(play) = host.play.get_mut(&conn) {
+                    play.delayed = None;
+                }
+                if done.is_some() {
+                    self.guest_destroy(host, conn, pos);
+                }
+            }
+        }
+    }
+
+    /// ServerPlayerGameMode.destroyBlock for a guest, its crack cleared for the others
+    /// (`destroyBlockProgress(id, pos, -1)`).
+    fn guest_destroy(&mut self, host: &mut LanHost, conn: u32, pos: [i32; 3]) {
+        self.as_guest(host, conn, |g| {
+            let _ = g.break_block(pos);
+        });
+        if let Some(g) = host.hub.guest(conn) {
+            host.hub.broadcast_near(
+                [f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])],
+                64.0,
+                &C::BlockDestruction(play::BlockDestruction {
+                    id: g.entity_id,
+                    pos,
+                    progress: 255,
+                }),
+                Some(conn),
+            );
+        }
     }
 
     /// The crack animation other players see.
