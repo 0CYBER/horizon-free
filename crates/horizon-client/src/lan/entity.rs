@@ -58,7 +58,7 @@ struct Sent {
 
 #[derive(Default)]
 pub struct Tracker {
-    sent: std::collections::HashMap<i32, Sent>,
+    sent: crate::fast_hash::FxHashMap<i32, Sent>,
 }
 
 /// VecDeltaCodec.encode.
