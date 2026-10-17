@@ -267,15 +267,31 @@ inspected:
 └── coverage.json, coverage.md
 ```
 
-**Status.** `import`, `inventory`, `carry` and `report` run today:
+**Status.** `import`, `inventory`, `fetch`, `carry` and `report` run today, and `port` runs
+them all for what a player's machine can port (content mods of the data tier), as the
+launcher's "Import modpack" does:
 
 ```
 cargo run -p horizon-port-pack -- import ~/Downloads/pack.mrpack ~/.horizon/ports/pack
 cargo run -p horizon-port-pack -- inventory ~/.horizon/ports/pack     # --offline reuses modrinth.json
+cargo run -p horizon-port-pack -- fetch ~/.horizon/ports/pack         # the portable mods' jars, or name them
+#   --from <folder>: copy the player's own jars (an installed instance, a downloads folder)
 cargo run -p horizon-port-pack -- carry ~/.horizon/ports/pack         # content mods with a jar, or name them
 #   --resources <prepared root>: only templates Horizon's tables have
 cargo run -p horizon-port-pack -- report ~/.horizon/ports/pack        # coverage.json and coverage.md
+cargo run -p horizon-port-pack -- port ~/Downloads/pack.zip ~/.horizon/ports/pack [--from <folder>] [--resources <root>]
 ```
+
+`fetch` gets each jar the player's way, never from us: copied from a folder they have (matched
+by SHA-1, or through a CurseForge app instance's `minecraftinstance.json`), else downloaded from
+the link the pack itself gives (a `.mrpack`'s, on the format's hosts only) or, for a CurseForge
+pack, the same file on Modrinth's public CDN, found by its SHA-1. A jar is kept only when its
+hash matches. A file only CurseForge has is listed as needing a CurseForge API key (Ludovic's
+decision; open question below), with the player's installed instance as the way round it.
+`<work>/fetch.json` says what happened to each file. On All the Mods 10 8.3's CurseForge zip
+(2026-10-17): of the 54 data-tier content mods, 42 come from Modrinth's CDN (84 MB) and 12 need
+the key or the instance; `port` then carries the 42 over (0 ported, 42 partial: the harness is a
+dev step).
 
 `inventory` reads metadata only: Modrinth answers by file hash, and the jars only if the user's
 instance has them (an imported instance folder, or jars put in `<work>/jars/`). Without jars,
@@ -310,7 +326,7 @@ block's name breaking ties (`_pane`, `_gate`, `_trapdoor`).
 | Format | Read | Jars come from |
 |---|---|---|
 | Modrinth `.mrpack` | `modrinth.index.json`: `dependencies` (minecraft, neoforge / fabric-loader / forge / quilt-loader), `files[]` with path, sha1/sha512, `env` (client/server), download URLs; `overrides/`, `client-overrides/`, `server-overrides/` | downloaded from the listed Modrinth URLs, hash-checked |
-| CurseForge zip | `manifest.json`: `minecraft.version`, `modLoaders[]`, `files[]` (`projectID`, `fileID`, `required`), `overrides` | the user's installed instance (CurseForge app `minecraftinstance.json` + `mods/`). CurseForge's API needs a key, so we take what the user already downloaded |
+| CurseForge zip | `manifest.json`: `minecraft.version`, `modLoaders[]`, `files[]` (`projectID`, `fileID`, `required`), `overrides`. When the overrides hold Crash Assistant's `config/crash_assistant/modlist.json` (All the Mods 10 does), its jar names, mod ids and SHA-1s replace the bare ids | the user's installed instance (CurseForge app `minecraftinstance.json` + `mods/`), or the same file on Modrinth by SHA-1. CurseForge's API needs a key, so we take what the user already downloaded |
 | Prism / MultiMC instance | `mmc-pack.json` components (`net.minecraft`, `net.neoforged`, `net.fabricmc.fabric-loader`), `instance.cfg`, `.minecraft/mods/*.jar`, packwiz `.pw.toml` files if present | the instance folder |
 | packwiz | `pack.toml`, `index.toml`, `mods/*.pw.toml` | as listed |
 | Crash Assistant `modlist.json` | jar name → mod id, name, version, Modrinth SHA-1; the loader entry (NeoForge `21.1.x` is Minecraft 1.21.1). Packs such as ATM10 publish it in their repository | metadata only; jars put in `<work>/jars/` |

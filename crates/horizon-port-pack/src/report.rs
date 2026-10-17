@@ -83,7 +83,7 @@ pub fn license_kind(license: &str) -> &'static str {
 /// What still blocks a mod of this tier that has not been carried over.
 fn not_yet(tier: &str) -> &'static str {
     match tier {
-        "data" => "data tier: carry-over only, no agent; its jar is not in the work folder",
+        "data" => "data tier: carry-over only, no agent; its jar is not here yet (fetch gets it)",
         "logic" => {
             "needs mod API 0.3: behaviour callbacks (use, place, break, ticks) and server events"
         }
