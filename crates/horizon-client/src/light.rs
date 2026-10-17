@@ -44,11 +44,19 @@ pub struct LightTables {
     /// `faceShapeOccludes(a, b)` for every pair of distinct face shapes.
     occludes: Vec<bool>,
     faces: usize,
+    /// Number of distinct `(shaped, faces)` configurations.
+    types: usize,
+    /// Per state: `emission << 16 | type << 4 | dampening`. The low 16 bits are
+    /// what `light_chunk` stores per cell, so a cell costs 2 bytes and the
+    /// flood fill never reads the (large) `cells` table.
+    info: Vec<u32>,
+    /// `blocked(type_a, type_b, direction)` as a bit per direction.
+    block_masks: Vec<u8>,
 }
 impl LightTables {
     /// Dampening and emission only: every occlusion face is empty.
     pub fn new(facts: &BlockFacts) -> Self {
-        Self {
+        let mut tables = Self {
             cells: facts
                 .states
                 .iter()
@@ -61,7 +69,58 @@ impl LightTables {
                 .collect(),
             occludes: vec![false, true, true, true],
             faces: 2,
+            types: 1,
+            info: Vec::new(),
+            block_masks: Vec::new(),
+        };
+        tables.rebuild_cache();
+        tables
+    }
+    /// Build the packed per-cell info and the per-configuration blocking masks
+    /// used by `light_chunk`'s flood fill.
+    fn rebuild_cache(&mut self) {
+        let empty: (bool, [u16; 6]) = (false, [EMPTY; 6]);
+        let mut by_config: HashMap<(bool, [u16; 6]), u16> = HashMap::new();
+        by_config.insert(empty, 0);
+        let mut configs: Vec<(bool, [u16; 6])> = vec![empty];
+        let mut info = vec![0u32; self.cells.len()];
+        for (id, cell) in self.cells.iter().enumerate() {
+            let ty = *by_config
+                .entry((cell.shaped, cell.faces))
+                .or_insert_with(|| {
+                    configs.push((cell.shaped, cell.faces));
+                    (configs.len() - 1) as u16
+                });
+            let packed = u32::from(ty) << 4 | u32::from(cell.dampening.min(15));
+            info[id] = u32::from(cell.emission.min(15)) << 16 | packed;
         }
+        let types = configs.len();
+        debug_assert!(
+            types <= 4096,
+            "light tables: {types} cell configurations exceed the 12-bit type field"
+        );
+        let mut block_masks = vec![0u8; types * types];
+        for a in 0..types {
+            for b in 0..types {
+                let (shaped_a, faces_a) = configs[a];
+                let (shaped_b, faces_b) = configs[b];
+                // `blocked`: an unshaped pair covers no face; otherwise the two
+                // face shapes are compared through the `occludes` table.
+                if !shaped_a && !shaped_b {
+                    continue;
+                }
+                let mut mask = 0u8;
+                for d in 0..6 {
+                    if self.occludes[faces_a[d] as usize * self.faces + faces_b[d ^ 1] as usize] {
+                        mask |= 1 << d;
+                    }
+                }
+                block_masks[a * types + b] = mask;
+            }
+        }
+        self.types = types;
+        self.info = info;
+        self.block_masks = block_masks;
     }
     /// Full tables with the vanilla occlusion shapes from `occlusion.nbt`.
     pub fn load(root: &Path, registry: &BlockRegistry, facts: &BlockFacts) -> crate::Result<Self> {
@@ -147,7 +206,22 @@ impl LightTables {
         }
         tables.occludes = occludes;
         tables.faces = n;
+        tables.rebuild_cache();
         Ok(tables)
+    }
+    /// Assembled tables (tests and benchmarks): derives the packed light cache.
+    #[allow(dead_code)]
+    fn from_parts(cells: Vec<Cell>, occludes: Vec<bool>, faces: usize) -> Self {
+        let mut tables = Self {
+            cells,
+            occludes,
+            faces,
+            types: 0,
+            info: Vec::new(),
+            block_masks: Vec::new(),
+        };
+        tables.rebuild_cache();
+        tables
     }
     /// `LightEngine.shapeOccludes(from, to, direction)`.
     #[inline]
@@ -160,10 +234,20 @@ impl LightTables {
         let fb = b.faces[direction ^ 1] as usize;
         self.occludes[fa * self.faces + fb]
     }
+    /// `blocked` for two packed cells (`type << 4 | dampening`).
+    #[inline]
+    fn packed_blocked(&self, a: u16, b: u16, direction: usize) -> bool {
+        self.block_masks[(a >> 4) as usize * self.types + (b >> 4) as usize] & (1 << direction) != 0
+    }
     /// `ChunkSkyLightSources.isEdgeOccluded(top, bottom)`.
     #[inline]
     fn edge_occluded(&self, top: usize, bottom: usize) -> bool {
         self.cells[bottom].dampening != 0 || self.blocked(top, bottom, Direction::Down as usize)
+    }
+    /// `edge_occluded` for two packed cells.
+    #[inline]
+    fn packed_edge_occluded(&self, top: u16, bottom: u16) -> bool {
+        bottom & 0xF != 0 || self.packed_blocked(top, bottom, Direction::Down as usize)
     }
     pub fn emission(&self, state: u32) -> u8 {
         self.cells[state as usize].emission
@@ -211,7 +295,9 @@ pub fn light_chunk(
     // up to 14 blocks into it (sky light there is always 15).
     let h = ((top_section + 1) * 16).min(HEIGHT as usize);
     let at = |x: usize, y: usize, z: usize| (y * W + z) * W + x;
-    let mut states = vec![0u32; W * W * h];
+    // Packed cells (`type << 4 | dampening`), not state ids: the flood fill
+    // then never touches the large `LightTables::cells` table.
+    let mut states = vec![0u16; W * W * h];
     let mut sky = vec![0u8; W * W * h];
     let mut block = vec![0u8; W * W * h];
     let mut queue = VecDeque::new();
@@ -228,10 +314,11 @@ pub fn light_chunk(
                 for (i, &id) in ids.iter().enumerate() {
                     let (lx, lz, ly) = (i & 15, (i >> 4) & 15, i >> 8);
                     let p = at(dx * 16 + lx, si * 16 + ly, dz * 16 + lz);
-                    states[p] = id;
-                    let emission = tables.cells[id as usize].emission;
+                    let info = tables.info[id as usize];
+                    states[p] = info as u16;
+                    let emission = info >> 16;
                     if emission > 0 {
-                        block[p] = emission;
+                        block[p] = emission as u8;
                         queue.push_back(p as u32);
                     }
                 }
@@ -239,20 +326,25 @@ pub fn light_chunk(
         }
     }
     // Columns of missing neighbour chunks neither hold nor pass light.
-    let present = |x: usize, z: usize| region[z / 16][x / 16].is_some();
+    let mut present = vec![false; W * W];
+    for z in 0..W {
+        for x in 0..W {
+            present[z * W + x] = region[z / 16][x / 16].is_some();
+        }
+    }
     let mut lowest = vec![h as i32; W * W];
     for z in 0..W {
         for x in 0..W {
-            if !present(x, z) || !sky_light {
+            if !present[z * W + x] || !sky_light {
                 continue;
             }
             // The top layer (above the occupied range) is always open sky.
             let mut y = h as i32 - 1;
             sky[at(x, y as usize, z)] = 15;
             while y > 0
-                && !tables.edge_occluded(
-                    states[at(x, y as usize, z)] as usize,
-                    states[at(x, y as usize - 1, z)] as usize,
+                && !tables.packed_edge_occluded(
+                    states[at(x, y as usize, z)],
+                    states[at(x, y as usize - 1, z)],
                 )
             {
                 y -= 1;
@@ -263,7 +355,7 @@ pub fn light_chunk(
     }
     for z in 0..W {
         for x in 0..W {
-            if !present(x, z) || !sky_light {
+            if !present[z * W + x] || !sky_light {
                 continue;
             }
             let own = lowest[z * W + x];
@@ -274,7 +366,7 @@ pub fn light_chunk(
                 (x, z.wrapping_sub(1)),
                 (x, z + 1),
             ] {
-                if nx < W && nz < W && present(nx, nz) {
+                if nx < W && nz < W && present[nz * W + nx] {
                     deepest = deepest.max(lowest[nz * W + nx]);
                 }
             }
@@ -298,24 +390,40 @@ pub fn light_chunk(
             let x = p % W;
             let z = (p / W) % W;
             let y = p / (W * W);
-            let from = states[p] as usize;
-            for (d, (ox, oy, oz)) in OFFSETS.iter().enumerate() {
-                let (nx, ny, nz) = (x as i32 + ox, y as i32 + oy, z as i32 + oz);
-                if nx < 0 || nz < 0 || ny < 0 || nx >= W as i32 || nz >= W as i32 || ny >= h as i32
-                {
-                    continue;
-                }
-                let (nx, ny, nz) = (nx as usize, ny as usize, nz as usize);
-                if !present(nx, nz) {
-                    continue;
-                }
-                let q = at(nx, ny, nz);
-                let to = states[q] as usize;
-                let next = level.saturating_sub(tables.cells[to].dampening.max(1));
-                if next > light[q] && !tables.blocked(from, to, d) {
-                    light[q] = next;
-                    queue.push_back(q as u32);
-                }
+            let from = states[p];
+            let col = z * W + x;
+            // Neighbours by linear offset; `present` only depends on the
+            // column, and the axis bounds rule out wrapping.
+            macro_rules! neighbour {
+                ($d:expr, $q:expr, $ncol:expr) => {{
+                    if present[$ncol] {
+                        let q = $q;
+                        let to = states[q];
+                        let next = level.saturating_sub((to & 0xF).max(1) as u8);
+                        if next > light[q] && !tables.packed_blocked(from, to, $d) {
+                            light[q] = next;
+                            queue.push_back(q as u32);
+                        }
+                    }
+                }};
+            }
+            if y > 0 {
+                neighbour!(0, p - W * W, col);
+            }
+            if y + 1 < h {
+                neighbour!(1, p + W * W, col);
+            }
+            if z > 0 {
+                neighbour!(2, p - W, col - W);
+            }
+            if z + 1 < W {
+                neighbour!(3, p + W, col + W);
+            }
+            if x > 0 {
+                neighbour!(4, p - 1, col - 1);
+            }
+            if x + 1 < W {
+                neighbour!(5, p + 1, col + 1);
             }
         }
     };
@@ -624,17 +732,17 @@ mod tests {
             shaped: faces.iter().any(|f| *f != EMPTY),
             faces,
         };
-        LightTables {
-            cells: vec![
+        LightTables::from_parts(
+            vec![
                 cell(0, 0, [EMPTY; 6]),
                 cell(15, 0, [FULL; 6]),
                 cell(0, 14, [EMPTY; 6]),
                 cell(0, 0, [FULL, EMPTY, 2, 2, 2, 2]),
             ],
             // empty, full, half: only pairs with a full face cover the square.
-            occludes: vec![false, true, false, true, true, true, false, true, false],
-            faces: 3,
-        }
+            vec![false, true, false, true, true, true, false, true, false],
+            3,
+        )
     }
     fn world(edit: impl Fn(&mut Chunk)) -> HashMap<(i32, i32), Arc<Chunk>> {
         let mut chunks = HashMap::new();
