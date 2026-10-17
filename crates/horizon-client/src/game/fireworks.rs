@@ -18,19 +18,21 @@ use horizon_core::{
 };
 
 pub(super) struct Rocket {
-    position: Vec3,
+    /// The entity id a server tracks it by (0 until it is tracked).
+    pub id: u32,
+    pub(super) position: Vec3,
     previous: Vec3,
-    velocity: Vec3,
+    pub(super) velocity: Vec3,
     life: i32,
     lifetime: i32,
     explosions: Vec<FireworkExplosion>,
     /// Boosting the player (attachedToEntity).
-    attached: bool,
+    pub(super) attached: bool,
     /// `DATA_SHOT_AT_ANGLE` (dispensers): constant velocity, exploding on
     /// the first block it hits.
-    angled: bool,
+    pub(super) angled: bool,
     /// `DATA_ID_FIREWORKS_ITEM`: the stack it was launched from.
-    item: ItemStack,
+    pub(super) item: ItemStack,
 }
 impl Rocket {
     /// Position and motion (the dispenser parity fixture).
@@ -56,6 +58,7 @@ impl Game<'_> {
             + r.next_int_bound(6).unwrap_or(0)
             + r.next_int_bound(7).unwrap_or(0);
         Rocket {
+            id: 0,
             position: at,
             previous: at,
             velocity,

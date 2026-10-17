@@ -1378,6 +1378,7 @@ impl Hub {
             data: 0,
             meta,
             equipment,
+            precise: false,
         }
     }
 

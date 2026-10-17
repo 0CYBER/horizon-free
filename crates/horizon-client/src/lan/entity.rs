@@ -35,6 +35,30 @@ pub struct EntityState {
     /// EquipmentSlot ordinals (0 main hand, 1 off hand, 2 feet, 3 legs,
     /// 4 chest, 5 head, 6 body, 7 saddle) and their stacks.
     pub equipment: Vec<(u8, Option<Stack>)>,
+    /// `Entity.getRequiresPrecisePosition` (primed TNT and falling blocks
+    /// touching a block): moves are sent as full position syncs.
+    pub precise: bool,
+}
+
+/// `AbstractArrow`: every update sends its position and rotation.
+fn is_arrow(kind: &str) -> bool {
+    matches!(
+        kind,
+        "minecraft:arrow" | "minecraft:spectral_arrow" | "minecraft:trident"
+    )
+}
+
+/// `AbstractHurtingProjectile.accelerationPower` (0.1, none for wind
+/// charges), sent with each velocity update.
+fn acceleration_power(kind: &str) -> Option<f64> {
+    match kind {
+        "minecraft:fireball"
+        | "minecraft:small_fireball"
+        | "minecraft:dragon_fireball"
+        | "minecraft:wither_skull" => Some(0.1),
+        "minecraft:wind_charge" | "minecraft:breeze_wind_charge" => Some(0.0),
+        _ => None,
+    }
 }
 
 /// What a client was last told about one entity (ServerEntity's fields).
@@ -207,7 +231,9 @@ impl Tracker {
         if due || dirty {
             let rotation = (pack_degrees(e.pitch), pack_degrees(e.yaw));
             let turned = |a: i8, b: i8| (i32::from(a) - i32::from(b)).abs() >= 1;
-            let rotate = turned(rotation.1, s.rotation.1) || turned(rotation.0, s.rotation.0);
+            let arrow = is_arrow(&e.kind);
+            let rotate =
+                arrow || turned(rotation.1, s.rotation.1) || turned(rotation.0, s.rotation.0);
             if riding.vehicle.contains_key(&e.id) {
                 // A passenger: its rotation alone (its vehicle places it).
                 if rotate {
@@ -231,7 +257,7 @@ impl Tracker {
             }
             s.teleport_delay += 1;
             let d: f64 = (0..3).map(|k| (e.position[k] - s.base[k]).powi(2)).sum();
-            let send_position = d >= 7.629_394_5e-6 || s.tick.is_multiple_of(60);
+            let send_position = arrow || d >= 7.629_394_5e-6 || s.tick.is_multiple_of(60);
             let sync = EntityPositionSync {
                 id: e.id,
                 path: PositionPath::Linear(e.position),
@@ -240,7 +266,10 @@ impl Tracker {
                 on_ground: e.on_ground,
             };
             // ServerEntity.createMovePacket.
-            let packet = if s.teleport_delay > 400 || s.was_riding || s.was_on_ground != e.on_ground
+            let packet = if e.precise
+                || s.teleport_delay > 400
+                || s.was_riding
+                || s.was_on_ground != e.on_ground
             {
                 s.was_on_ground = e.on_ground;
                 s.teleport_delay = 0;
@@ -282,10 +311,23 @@ impl Tracker {
                 let still = e.velocity.iter().all(|v| *v == 0.0);
                 if diff > 1.0e-7 || diff > 0.0 && still {
                     s.velocity = e.velocity;
-                    out.push(play::Clientbound::SetEntityMotion(SetEntityMotion {
+                    let motion = play::Clientbound::SetEntityMotion(SetEntityMotion {
                         id: e.id,
                         velocity: e.velocity,
-                    }));
+                    });
+                    match acceleration_power(&e.kind) {
+                        // A bundle: the motion and the projectile's power.
+                        Some(power) => out.extend([
+                            play::Clientbound::BundleDelimiter(horizon_protocol::packets::Empty),
+                            motion,
+                            play::Clientbound::ProjectilePower(play::ProjectilePower {
+                                id: e.id,
+                                power,
+                            }),
+                            play::Clientbound::BundleDelimiter(horizon_protocol::packets::Empty),
+                        ]),
+                        None => out.push(motion),
+                    }
                 }
             }
             if let Some(packet) = packet {
@@ -386,6 +428,7 @@ mod tests {
             data: 0,
             meta: Vec::new(),
             equipment: Vec::new(),
+            precise: false,
         }
     }
 

@@ -567,6 +567,10 @@ packet!(PlayerPosition {
     pitch: f32 => Float,
     relatives: i32 => Int,
 });
+packet!(
+    /// ClientboundProjectilePowerPacket: an AbstractHurtingProjectile's accelerationPower.
+    ProjectilePower { id: i32 => VarInt, power: f64 => Double }
+);
 packet!(PlayerRotation { yaw: f32 => Float, relative_yaw: bool => Bool, pitch: f32 => Float, relative_pitch: bool => Bool });
 packet!(RemoveEntities { ids: Vec<i32> => List<VarInt> });
 packet!(Respawn { spawn: SpawnInfo => SpawnInfo, keep: i8 => Byte });
@@ -1431,6 +1435,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     SetHeldSlot(SetHeldSlot) = SET_HELD_SLOT,
     SetObjective(SetObjective) = SET_OBJECTIVE,
     SetPassengers(SetPassengers) = SET_PASSENGERS,
+    ProjectilePower(ProjectilePower) = PROJECTILE_POWER,
     SetPlayerInventory(SetPlayerInventory) = SET_PLAYER_INVENTORY,
     SetPlayerTeam(SetPlayerTeam) = SET_PLAYER_TEAM,
     SetScore(SetScore) = SET_SCORE,
@@ -2061,6 +2066,7 @@ mod tests {
                 vehicle: 2,
                 passengers: vec![3, 300],
             }),
+            Clientbound::ProjectilePower(ProjectilePower { id: 4, power: 0.1 }),
             Clientbound::SetEquipment(SetEquipment {
                 id: 2,
                 slots: vec![(0, None), (5, Some(Stack::new(1, 1)))],

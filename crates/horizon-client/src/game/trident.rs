@@ -15,17 +15,19 @@ use horizon_core::{
 };
 
 pub(super) struct ThrownTrident {
-    stack: ItemStack,
-    position: Vec3,
+    /// The entity id a server tracks it by (0 until it is tracked).
+    pub id: u32,
+    pub(super) stack: ItemStack,
+    pub(super) position: Vec3,
     previous: Vec3,
-    velocity: Vec3,
-    yaw: f32,
-    pitch: f32,
-    in_ground: bool,
+    pub(super) velocity: Vec3,
+    pub(super) yaw: f32,
+    pub(super) pitch: f32,
+    pub(super) in_ground: bool,
     in_ground_time: u32,
     dealt_damage: bool,
-    loyalty: u32,
-    no_physics: bool,
+    pub(super) loyalty: u32,
+    pub(super) no_physics: bool,
     returning: u32,
     creative_only: bool,
 }
@@ -163,6 +165,7 @@ impl Game<'_> {
             on_ground,
         );
         self.tridents.push(ThrownTrident {
+            id: 0,
             loyalty: thrown.enchantment_level("minecraft:loyalty"),
             stack: thrown,
             position: start,

@@ -718,7 +718,7 @@ impl Game<'_> {
     }
 
     /// The entities guests track: mobs, items and the rest (game/lan_entities.rs).
-    fn lan_entities(&self, hub: &mut Hub) -> Vec<EntityState> {
+    fn lan_entities(&self, host_entity: Option<i32>, hub: &mut Hub) -> Vec<EntityState> {
         let mut out = Vec::with_capacity(self.mobs.len() + self.dropped.len() + self.orbs.len());
         for m in self.mobs.iter().filter(|m| !m.removed) {
             let kind = m.kind.id.as_str();
@@ -738,6 +738,7 @@ impl Game<'_> {
                 data: 0,
                 meta,
                 equipment,
+                precise: false,
             });
         }
         for d in &self.dropped {
@@ -755,6 +756,7 @@ impl Game<'_> {
                 data: 0,
                 meta: vec![(8, serializer::ITEM_STACK, Value::Item(stack))],
                 equipment: Vec::new(),
+                precise: false,
             });
         }
         for o in &self.orbs {
@@ -772,9 +774,10 @@ impl Game<'_> {
                 // ExperienceOrb.DATA_VALUE.
                 meta: vec![(8, serializer::INT, Value::Int(o.value as i32))],
                 equipment: Vec::new(),
+                precise: false,
             });
         }
-        self.lan_object_states(hub, &mut out);
+        self.lan_object_states(host_entity, hub, &mut out);
         out
     }
 
@@ -790,8 +793,10 @@ impl Game<'_> {
         if state.is_some() || host.hub.config.dedicated {
             let has_guests = !host.hub.guests.is_empty();
             let entities = if has_guests {
-                self.lan_riding(state.as_ref().map(|s| s.entity_id), &mut host.hub.riding);
-                self.lan_entities(&mut host.hub)
+                let host_entity = state.as_ref().map(|s| s.entity_id);
+                self.lan_assign_ids();
+                self.lan_riding(host_entity, &mut host.hub.riding);
+                self.lan_entities(host_entity, &mut host.hub)
             } else {
                 Vec::new()
             };
@@ -974,7 +979,8 @@ impl Game<'_> {
                 log::error!("could not open {}: {e}", level.id());
                 return;
             }
-            theirs = self.lan_entities(&mut host.hub);
+            // A dedicated server has no host player.
+            theirs = self.lan_entities(None, &mut host.hub);
             &theirs[..]
         } else {
             entities
