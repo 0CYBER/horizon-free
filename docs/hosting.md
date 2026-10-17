@@ -1,0 +1,306 @@
+# Host a server
+
+`horizon-server` hosts a Minecraft Java Edition 26.3 server with Horizon's own game as the engine: one native
+program, no Java, one settings file, a command line, and a web panel. Vanilla 26.3 clients and Horizon clients
+can join it. This page covers what works on `main` today and says plainly what doesn't yet. The design and the
+plan are in [docs/server.md](docs/server.md).
+
+## Before you start
+
+- **It runs in offline mode only.** Today the server never checks Minecraft accounts: even with
+  `online_mode = true` it runs offline and says so when it starts. Anyone who can reach it can join under any
+  name, including a name on your whitelist. Run it on your LAN, on a tailnet (Tailscale, ZeroTier), or for
+  friends you trust. Don't open it to the internet.
+- **Online mode is coming in two parts.** Checking accounts with Mojang's session servers is in review ([#587](https://github.com/ludovic111/horizon/pull/587),
+  and [#589](https://github.com/ludovic111/horizon/pull/589) for adding players to the whitelist and ops by account). With it, players who sign in with the
+  official Minecraft launcher can join with their own accounts. Horizon's own client can't sign in to a
+  Microsoft account yet: that needs an Azure app registration and Mojang's approval, which the project doesn't
+  have yet ([docs/microsoft-account.md](docs/microsoft-account.md)). Until then Horizon players can join
+  offline servers only.
+- **No secure chat.** Chat isn't signed. Vanilla clients show chat from the server as not secure.
+- **No locator bar** for vanilla clients yet (coming).
+- **Remote players stay in the Overworld.** Nether and End portals don't move remote players yet (in review:
+  [#668](https://github.com/ludovic111/horizon/pull/668), for a server with one player).
+- **Vanilla's movement checks and chunk pacing** ("moved too quickly", sending chunks as fast as a client
+  acknowledges them) are in review ([#586](https://github.com/ludovic111/horizon/pull/586)).
+- **No Docker image is published.** You build it yourself from the repository (below). Publishing an image
+  needs the project owner.
+- Nothing of Mojang's is downloaded or shipped. The server reads the game files you prepare from your own copy
+  of Minecraft 26.3.
+
+## 1. Install
+
+Linux (x86-64) and macOS (Apple Silicon):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ludovic111/horizon/main/packaging/server/install.sh | sh
+```
+
+Windows (x64), in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/ludovic111/horizon/main/packaging/server/install.ps1 | iex
+```
+
+The script downloads the latest Horizon release for your computer from GitHub, checks it against the SHA-256
+GitHub publishes, and never asks for sudo or administrator rights. It installs:
+
+- the release in `~/.local/share/horizon/releases/<version>` (Windows: `%LOCALAPPDATA%\Horizon`), with
+  `current` pointing at the one in use;
+- `horizon-server` and `horizon-prepare` in `~/.local/bin` (Windows: added to your PATH);
+- a `game-files` folder for the files you prepare, kept across updates.
+
+Options: `--version vX.Y.Z`, `--dir FOLDER`, `--bin FOLDER` (Windows: `-Version`, `-Dir`). Other systems,
+such as Linux on ARM, build from source: `cargo build --release -p horizon-client --bin horizon-client -p
+horizon-server` and keep both programs in one folder.
+
+The Horizon launcher also installs releases. Every release folder holds `horizon-server`, so you can run it
+from there too.
+
+## 2. Prepare the game files
+
+Horizon reads Minecraft's data from your own copy of the game. You need Minecraft Java Edition 26.3, played
+once from the official launcher on this computer, Java 25 (a JDK), and the 26.3 `server.jar`: it's the
+`downloads.server.url` in your launcher's `versions/26.3/26.3.json`. Then:
+
+```sh
+horizon-prepare --prepare --server-jar /path/to/server.jar
+```
+
+Add `--minecraft-dir PATH` if your launcher keeps the game elsewhere. The prepared files go to
+`game-files`, which updates keep.
+
+**On a headless machine** (a VPS, a home server), prepare on your own computer instead, with the launcher or
+`horizon-prepare`, and copy the prepared `26.3` folder to the server: into
+`~/.local/share/horizon/game-files/horizon-client/26.3`, or into `resources/` in the server folder, or anywhere
+`[engine] resources` in `server.toml` names. A folder copied this way needs a release newer than
+v2026.10.17.05: older ones don't keep `registries.json` and `commands.json` with the prepared files, and the
+server then stops with "registries.json not found next to the resources". Prepare again with a newer release.
+
+## 3. First run
+
+```sh
+mkdir my-server && cd my-server
+horizon-server init
+```
+
+`init` asks five things and writes `server.toml`:
+
+1. whether you agree to the [Minecraft EULA](https://aka.ms/MinecraftEULA): only a yes writes `eula=true`;
+2. the world's name and an optional seed (an existing world or vanilla server folder is kept and its
+   `server.properties` imported);
+3. the port, 25565 by default;
+4. whether to use a whitelist (yes by default, as in vanilla) and who to add;
+5. whether to make the first player an operator.
+
+It then tells you where it found the game and its files. Every question has a flag, so it also runs from a
+script:
+
+```sh
+horizon-server init --eula --world survival --seed 12345 --port 25565 --whitelist --player Alex --op Alex --yes
+```
+
+`--no-whitelist` turns the whitelist off. Since the server runs offline, the players you add get offline UUIDs,
+as a vanilla server in offline mode gives them.
+
+Start the server in the foreground, with the console on your terminal (Ctrl-C stops it cleanly):
+
+```sh
+horizon-server run
+```
+
+or in the background:
+
+```sh
+horizon-server start
+horizon-server status
+```
+
+```text
+Running, up 29 s
+TPS 20.0, MSPT 1.0 ms average, 3.1 ms P95
+0 of 20 players, 377 chunks loaded
+RAM 1.42 GB, CPU 2 % of a core
+```
+
+Players join at your computer's address and the port (`192.168.1.20:25565`, or a tailnet name). Every
+command takes `--dir FOLDER` to work on a server folder from elsewhere.
+
+## 4. Settings: `server.toml`
+
+You edit one file. The server writes vanilla's `server.properties` from it before every start, so the game
+reads exactly what a vanilla server reads, and a vanilla server folder works as it is.
+
+```toml
+[server]
+motd = "A Minecraft Server"
+port = 25565
+bind = ""                    # listen on every address, or only on this one (server-ip)
+max_players = 20
+online_mode = true           # not supported yet: the server runs offline and says so
+whitelist = true
+enforce_whitelist = false
+view_distance = 10
+simulation_distance = 10
+
+[world]
+name = "world"
+seed = ""                    # empty: a random seed on the first start
+game_mode = "survival"
+difficulty = "easy"
+hardcore = false
+
+# Any other server.properties key, spelled as vanilla spells it:
+[properties]
+# spawn-protection = 16
+
+[engine]
+path = ""                    # the game program; empty: the one beside horizon-server
+resources = ""               # the prepared game files; empty: resources/ here, else the usual places
+restart_on_crash = true
+
+[backups]
+every = "6h"                 # 30m, 6h, 1d...; "0" turns automatic backups off
+keep = 12                    # automatic backups kept; backups made by hand are never deleted
+
+[panel]
+bind = "127.0.0.1:8130"      # this computer only, or a tailnet address (100.x); "" turns it off
+allow_public = false
+```
+
+The defaults are vanilla 26.3's. Unknown keys and values vanilla would refuse are errors, so a typo stops the
+start instead of being ignored. When the game changes a setting itself (`/whitelist on`), the change is copied
+back into `server.toml` when it stops, and your comments are kept. Changes to the file apply at the next
+restart: there is no live reload yet.
+
+Already have a vanilla server? Run `horizon-server init` in its folder, or `horizon-server import
+server.properties` to write `server.toml` from it. The world, `ops.json`, `whitelist.json` and the ban lists
+keep vanilla's names and formats, so going back to vanilla works too.
+
+## 5. Commands
+
+```text
+horizon-server init                      first run
+horizon-server run                       in the foreground, with the console; Ctrl-C stops it
+horizon-server start | stop | restart    in the background (its output goes to logs/supervisor.log)
+horizon-server status [--json]           up or not, TPS, MSPT, players, chunks, RAM, CPU
+horizon-server cmd COMMAND...            one console command, and what it answers
+horizon-server logs [-f] [-n N]          the log; -f follows it
+horizon-server op|deop NAME
+horizon-server whitelist on|off|list
+horizon-server whitelist add|remove NAME
+horizon-server backup [NAME]             back up now
+horizon-server backups                   list the backups
+horizon-server restore BACKUP [--yes]
+horizon-server service install|uninstall|print [--system]
+horizon-server panel                     a one-time login link for the web panel
+horizon-server import FILE               server.toml from a vanilla server.properties
+```
+
+While the server runs, `op`, `whitelist` and `cmd` go to the game's console, so they act exactly as vanilla's
+console commands do. While it's stopped, they edit vanilla's files directly. Any console command works through
+`cmd`: `horizon-server cmd ban Griefer`, `horizon-server cmd say Restarting in 5 minutes`.
+
+The server restarts the game by itself if it crashes: after 5 s, then waiting longer each time, up to 5
+minutes. It keeps the crash report and gives up after 5 crashes in 10 minutes, and `status` says why.
+
+Coming: `update` and `rollback`, `console` (attach to a server running in the background), `ban` and
+`pardon` as their own commands, and `mcp` (an MCP server so an AI assistant can run the server).
+
+## 6. Web panel
+
+The panel runs inside `horizon-server` while the server runs. It shows live TPS, MSPT, RAM and CPU graphs for
+the last 10 minutes, the players with their ping (and a kick button), the console with a command line, and the
+backups (back up now, restore with a confirmation), with Restart and Stop.
+
+```sh
+horizon-server panel
+```
+
+prints a login link that works once, for 10 minutes. The panel listens on `127.0.0.1:8130`, this computer
+only. To reach it from your other devices:
+
+- put your tailnet address in `[panel] bind` (for example `bind = "100.101.102.103:8130"`), or
+- forward the port over SSH: `ssh -L 8130:127.0.0.1:8130 your-server`, then open the link on your computer.
+
+Any other address, such as `0.0.0.0` or a public IP, is refused unless you set `allow_public = true`, and
+even then the panel warns at every start. It has no passwords to leak: whoever can read the server folder can
+make a login link, and no one else can. Never put it on the open internet.
+
+## 7. Backups
+
+```sh
+horizon-server backup before-the-update
+horizon-server backups
+horizon-server restore before-the-update
+```
+
+A backup zips the world, vanilla's files and `server.toml` into `backups/`. A running server saves first and
+stays up: players don't notice. Automatic backups run on the `[backups] every` schedule while the server runs,
+and the oldest automatic ones beyond `keep` are deleted. Backups you make by hand are never deleted.
+
+`restore` takes a backup's file name, a unique start of it, or the name you gave it. It moves the current
+world aside to `backups/replaced-<time>/` (never deleted), puts the backup in place, and restarts the server if
+it was running. The panel does the same with one click.
+
+## 8. Start it with the computer
+
+```sh
+horizon-server service install
+```
+
+- **Linux:** a systemd user unit (`--system` for a system unit, with sudo). To keep a user unit running while
+  you're logged out: `loginctl enable-linger $USER`.
+- **macOS:** a launchd agent in `~/Library/LaunchAgents`.
+- **Windows:** a task that starts at logon (a real Windows service comes later).
+
+The service runs `horizon-server run` through the installed `current` release, so an update applies at the
+next restart. `service print` shows what it would install, `service uninstall` removes it and leaves the server
+folder alone.
+
+## 9. Docker (build it yourself)
+
+No image is published: build one from the repository. The image holds none of Minecraft's files; you mount the
+folder you prepared (step 2) read-only.
+
+```sh
+git clone https://github.com/ludovic111/horizon && cd horizon
+docker build -f packaging/server/Dockerfile -t horizon-server .
+
+docker run -d --name horizon -p 25565:25565 --stop-timeout 180 \
+  -v horizon-data:/data \
+  -v /path/to/26.3:/opt/horizon/.local/horizon-client/26.3:ro \
+  -e HORIZON_EULA=true -e HORIZON_WHITELIST=true -e HORIZON_PLAYERS=Alex,Steve -e HORIZON_OP=Alex \
+  horizon-server
+```
+
+- `HORIZON_EULA=true` accepts the [Minecraft EULA](https://aka.ms/MinecraftEULA) for this server. Without it
+  the container stops and says why.
+- The first start writes `/data/server.toml` from `HORIZON_EULA`, `HORIZON_WORLD`, `HORIZON_SEED`,
+  `HORIZON_PORT`, `HORIZON_WHITELIST`, `HORIZON_PLAYERS` and `HORIZON_OP`. Later starts use the file.
+- The mounted folder must come from a release newer than v2026.10.17.05 (see step 2).
+- Manage it with `docker exec horizon horizon-server status` (and `cmd`, `backup`, `logs`, ...).
+  `docker stop` saves and stops cleanly; `--stop-timeout 180` gives it the time.
+- The panel stays on 127.0.0.1 inside the container.
+- The image still carries ALSA and udev libraries because the game links them, even though a server never plays
+  a sound. A smaller engine without them is planned.
+
+## 10. How fast is it
+
+The measurements, with bots against vanilla 26.3, are in [docs/server.md](docs/server.md) (section 9). So
+far: an existing world starts in about half vanilla's time (5.8 s against 10.7 s), and with one player
+Horizon's tick is about three times shorter. Idle with nobody online it uses more memory than vanilla (1.4 GB
+against 0.95 GB), because the engine still loads what only a window needs. With 10 to 50 players, vanilla's tick
+was as short or shorter in the first run. Both are being worked on.
+
+## When something goes wrong
+
+- **"no prepared game files"**: `init` and `run` list the folders they looked in. Prepare (step 2), or set
+  `[engine] resources`.
+- **"registries.json not found next to the resources"**: the prepared folder is from an older release. Prepare
+  again with a newer one.
+- **Nobody can join**: the whitelist is on by default (`horizon-server whitelist add NAME`), and the port must be
+  open in your firewall. On a tailnet, use the server's tailnet address.
+- **It keeps restarting**: `horizon-server status` shows the last crash and `horizon-server logs -n 200` the log
+  before it. Crash reports are in `crash-reports/`.
+- Report problems at <https://github.com/ludovic111/horizon/issues>, with the end of the log.
