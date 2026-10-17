@@ -79,11 +79,11 @@ impl Hub {
     }
 
     /// ClientboundBlockEventPacket (`PlayerList.broadcast` within 64 blocks).
-    pub fn block_event(&self, pos: [i32; 3], b0: i32, b1: i32, state: u16) {
+    pub fn block_event(&self, pos: [i32; 3], b0: i32, b1: i32, state: u32) {
         let block = self
             .encoder
             .block_ids
-            .get(usize::from(state))
+            .get(state as usize)
             .copied()
             .unwrap_or(0);
         let at = [f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])];

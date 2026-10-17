@@ -434,17 +434,17 @@ fn pi(x: i32, y: i32, z: i32) -> usize {
 }
 /// Blocks and light of one section plus a `B`-block border.
 struct Padded {
-    blocks: Vec<u16>,
+    blocks: Vec<u32>,
     light: Vec<u8>,
 }
 impl Padded {
     fn new(region: &[[Option<&Chunk>; 3]; 3], sy: i32) -> Self {
-        let mut blocks = vec![0u16; P * P * P];
+        let mut blocks = vec![0u32; P * P * P];
         let mut light = vec![0u8; P * P * P];
         let base_y = MIN_Y + sy * 16;
         // The section itself is unpacked in one pass; the border cells of the
         // neighbouring sections are read one by one.
-        let mut own = Box::new([0u16; 4096]);
+        let mut own = Box::new([0u32; 4096]);
         let center = region[1][1].map(|c| &c.sections[sy as usize]);
         if let Some(section) = center {
             section.unpack(&mut own);
@@ -643,10 +643,8 @@ impl Mesher<'_> {
                     }
                     let state = &info[id as usize];
                     if state.block_entity {
-                        out.block_entities.push((
-                            [center.x * 16 + x, base_y + y, center.z * 16 + z],
-                            u32::from(id),
-                        ));
+                        out.block_entities
+                            .push(([center.x * 16 + x, base_y + y, center.z * 16 + z], id));
                     }
                     if state.solid
                         && Direction::ALL.iter().all(|d| {
@@ -665,10 +663,7 @@ impl Mesher<'_> {
                         continue;
                     }
                     let world = BlockPos::new(center.x * 16 + x, base_y + y, center.z * 16 + z);
-                    let Ok(models) = self
-                        .assets
-                        .model_catalog
-                        .collect(BlockStateId(id.into()), world)
+                    let Ok(models) = self.assets.model_catalog.collect(BlockStateId(id), world)
                     else {
                         continue;
                     };
@@ -700,8 +695,8 @@ impl Mesher<'_> {
                             && self
                                 .visibility
                                 .should_render_face(
-                                    BlockStateId(id.into()),
-                                    BlockStateId(neighbor.into()),
+                                    BlockStateId(id),
+                                    BlockStateId(neighbor),
                                     d,
                                     true,
                                 )

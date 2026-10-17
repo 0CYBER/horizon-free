@@ -323,7 +323,7 @@ impl<'a> Plan<'a> {
             }
             let list: Vec<String> = by_mod.iter().map(|(m, n)| format!("{m} {n}")).collect();
             return Err(format!(
-                "{next} block states, more than the {MAX_STATES} chunks can hold ({} in the game; \
+                "{next} block states, more than the {MAX_STATES} a world can hold ({} in the game; \
                  the mods: {})",
                 names.len(),
                 list.join(", ")
@@ -644,9 +644,11 @@ const NBT_TABLES: [&str; 6] = [
 /// In a root built here: the content mods' ids, the namespaces loaders
 /// read besides `minecraft`.
 const MARKER: &str = "horizon-mod-content.json";
-/// Block states a world can hold: chunk sections store a state in 16 bits
-/// (crate::chunk). Mods past it are refused, not wrapped onto other blocks.
-pub const MAX_STATES: u32 = 1 << 16;
+/// Block states a world can hold. Chunk sections widen their global palette
+/// past vanilla's 16 bits to fit the registry (crate::chunk::set_block_states);
+/// this caps it at 20 bits, about 29 times vanilla's 35,723 states. Mods past
+/// it are refused, not wrapped onto other blocks.
+pub const MAX_STATES: u32 = 1 << 20;
 
 /// The content mods' namespaces in a root built by [`build`]; none in any
 /// other root, so vanilla's loaders read exactly what they did.

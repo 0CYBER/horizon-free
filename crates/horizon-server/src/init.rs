@@ -6,7 +6,7 @@ use crate::{config, config::Config, engine};
 use horizon_server_files::{
     eula,
     java_properties::now_millis,
-    user_lists::{NameAndId, OpEntry, OpList, WhiteEntry, WhiteList},
+    user_lists::{OpEntry, OpList, WhiteEntry, WhiteList},
 };
 use std::{
     io::{BufRead, IsTerminal, Write},
@@ -23,6 +23,8 @@ pub struct Answers {
     pub whitelist: Option<bool>,
     pub players: Vec<String>,
     pub op: Option<String>,
+    /// online-mode (true unless set): players' Minecraft accounts are checked.
+    pub online: Option<bool>,
     /// Take the default for every question not answered by a flag.
     pub yes: bool,
 }
@@ -30,7 +32,7 @@ pub struct Answers {
 impl Answers {
     /// The answers in the environment, for containers: `HORIZON_EULA=true`, `HORIZON_WORLD`,
     /// `HORIZON_SEED`, `HORIZON_PORT`, `HORIZON_WHITELIST=true|false`, `HORIZON_PLAYERS` (names separated by
-    /// commas) and `HORIZON_OP`. Flags given on the command line win.
+    /// commas), `HORIZON_OP` and `HORIZON_ONLINE=true|false`. Flags given on the command line win.
     pub fn from_env() -> Result<Self, String> {
         let var = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
         let flag = |name: &str| var(name).map(|v| v.eq_ignore_ascii_case("true"));
@@ -54,6 +56,7 @@ impl Answers {
                 })
                 .unwrap_or_default(),
             op: var("HORIZON_OP"),
+            online: flag("HORIZON_ONLINE"),
             yes: false,
         })
     }
@@ -172,6 +175,9 @@ pub fn run(dir: &Path, answers: Answers) -> Result<(), String> {
     }
 
     // 4. Who may join.
+    if let Some(online) = answers.online {
+        cfg.server.online_mode = online;
+    }
     cfg.server.whitelist = answers.whitelist.unwrap_or_else(|| {
         prompt.yes(
             "Only let in players you list (whitelist)?",
@@ -193,7 +199,7 @@ pub fn run(dir: &Path, answers: Answers) -> Result<(), String> {
             .yes(&format!("Make {first} an operator?"), true)
             .then(|| first.clone())
     });
-    add_players(dir, &players, op.as_deref())?;
+    add_players(dir, &players, op.as_deref(), cfg.server.online_mode)?;
 
     // 5. The game and its files.
     match engine::program(&cfg, dir) {
@@ -213,24 +219,29 @@ pub fn run(dir: &Path, answers: Answers) -> Result<(), String> {
         toml_path.display(),
         dir.display()
     );
-    if cfg.server.online_mode {
+    if !cfg.server.online_mode {
         println!(
-            "Note: Horizon's server doesn't check Mojang accounts yet (online mode), so it runs offline: \
-             keep the whitelist on, or play on a LAN or a tailnet."
+            "Note: online mode is off, so anyone can join under any name: keep the whitelist on, or play on a \
+             LAN or a tailnet."
         );
     }
     Ok(())
 }
 
-/// Adds players to the whitelist (and one as an operator) in vanilla's files, with offline UUIDs as the
-/// server runs offline.
-fn add_players(dir: &Path, players: &[String], op: Option<&str>) -> Result<(), String> {
+/// Adds players to the whitelist (and one as an operator) in vanilla's files, with the profiles the server
+/// will see: offline ones, or in online mode their accounts.
+fn add_players(
+    dir: &Path,
+    players: &[String],
+    op: Option<&str>,
+    online: bool,
+) -> Result<(), String> {
     if !players.is_empty() {
         let mut white = WhiteList::new(dir.join("whitelist.json"));
         let _ = white.load();
         for name in players {
             white.add(WhiteEntry {
-                user: NameAndId::offline(name),
+                user: crate::lists::account(name, online)?,
             });
         }
         println!("Whitelisted: {}", players.join(", "));
@@ -239,7 +250,7 @@ fn add_players(dir: &Path, players: &[String], op: Option<&str>) -> Result<(), S
         let mut ops = OpList::new(dir.join("ops.json"));
         let _ = ops.load();
         ops.add(OpEntry {
-            user: NameAndId::offline(name),
+            user: crate::lists::account(name, online)?,
             level: 4,
             bypasses_player_limit: false,
         });
@@ -264,6 +275,8 @@ mod tests {
             whitelist: Some(true),
             players: vec!["Alex".into(), "Steve".into()],
             op: Some("Alex".into()),
+            // Offline: no account lookups in a test.
+            online: Some(false),
             yes: true,
         };
         run(&dir, answers).unwrap();
@@ -277,6 +290,7 @@ mod tests {
             ("survival", "12345", 25599)
         );
         assert!(eula::agreed(&dir.join("eula.txt")).unwrap());
+        assert!(!cfg.server.online_mode);
         let white = std::fs::read_to_string(dir.join("whitelist.json")).unwrap();
         assert!(
             white.contains("\"Alex\"") && white.contains("\"Steve\""),

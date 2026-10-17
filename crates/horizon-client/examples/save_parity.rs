@@ -257,9 +257,9 @@ fn main() -> horizon_client::Result<()> {
     );
     Ok(())
 }
-fn tables_air(assets: &Assets) -> u16 {
+fn tables_air(assets: &Assets) -> u32 {
     assets
         .registry
         .default_state("minecraft:air")
-        .map_or(0, |s| s.0 as u16)
+        .map_or(0, |s| s.0)
 }

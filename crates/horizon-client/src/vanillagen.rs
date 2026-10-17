@@ -119,7 +119,7 @@ impl VanillaTerrain {
             chunk.terrain.min_y().max(MIN_Y),
             (chunk.terrain.min_y() + chunk.terrain.height()).min(MIN_Y + HEIGHT),
         );
-        let mut values = Box::new([0u16; 4096]);
+        let mut values = Box::new([0u32; 4096]);
         for si in 0..SECTIONS as i32 {
             let base = MIN_Y + si * 16;
             if base + 16 <= lo || base >= hi {
@@ -130,7 +130,7 @@ impl VanillaTerrain {
             for y in base.max(lo)..(base + 16).min(hi) {
                 for z in 0..16 {
                     for x in 0..16 {
-                        let id = chunk.block(bx + x, y, bz + z).0 as u16;
+                        let id = chunk.block(bx + x, y, bz + z).0;
                         values[((y & 15) << 8 | z << 4 | x) as usize] = id;
                         any |= id != 0;
                     }
@@ -264,6 +264,19 @@ impl ChunkGenerator for VanillaTerrain {
     type Worker = GeneratorWorker;
     fn worker(&self) -> GeneratorWorker {
         self.generator.worker()
+    }
+    /// The structure starts a saved chunk references, as vanilla reads them
+    /// with the chunk: built here, on the loading worker, into the
+    /// generator's cache, rather than on the game thread the first time
+    /// spawning or a mob asks which structures hold a position (a village
+    /// start took 70 to 110 ms there, one tick each, after a world loaded).
+    fn prepare_loaded(&self, worker: &mut GeneratorWorker, chunk: &Chunk) {
+        let mut starts: Vec<(i32, i32)> = chunk.structure_refs.iter().map(|(_, at)| *at).collect();
+        starts.sort_unstable();
+        starts.dedup();
+        for (x, z) in starts {
+            worker.structure_starts(ChunkPos::new(x, z));
+        }
     }
     fn proto(&self, worker: &mut GeneratorWorker, x: i32, z: i32) -> Proto {
         match worker.generate_proto(ChunkPos::new(x, z)) {

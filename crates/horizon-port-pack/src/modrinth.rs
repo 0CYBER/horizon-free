@@ -1,13 +1,13 @@
 //! Modrinth metadata for the pack's files: the version of each file by
-//! SHA-1, and its project (categories, licence, sides). Only metadata: no
-//! jar is downloaded. Answers are cached in `<work>/modrinth.json`, so a
+//! SHA-1, and its project (categories, licence, sides). Only metadata (the
+//! jars are `fetch`'s). Answers are cached in `<work>/modrinth.json`, so a
 //! rerun works offline.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::BTreeMap, path::Path};
 
 const API: &str = "https://api.modrinth.com/v2";
-const AGENT: &str = "ludovic111/horizon horizon-port-pack/0.1 (docs/modpacks.md)";
+pub(crate) const AGENT: &str = "ludovic111/horizon horizon-port-pack/0.1 (docs/modpacks.md)";
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Cache {

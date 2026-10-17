@@ -229,8 +229,9 @@ impl StructureState {
         if cache.len() >= START_CACHE_LIMIT {
             cache.clear();
         }
-        cache.insert((chunk.x, chunk.z), starts.clone());
-        starts
+        // Another thread may have built the same starts meanwhile: everyone
+        // keeps the first, so placement state on its pieces is shared.
+        cache.entry((chunk.x, chunk.z)).or_insert(starts).clone()
     }
     /// ChunkGenerator.findNearestMapStructure: the nearest start of one of
     /// `names` from block `from` (rings: every ring chunk; random spreads:

@@ -9,6 +9,11 @@
 //!   horizon-bots --server 127.0.0.1:25565 --bots 25 --behaviour mixed --seconds 360 --report bots.json
 //!
 //! It prints one JSON line a second (bots online, chunks received) and writes a summary with `--report`.
+//! A bot moves only while it holds the chunk it stands in: vanilla's client stops ticking its player in a chunk
+//! it hasn't received, so a player can't outrun the server's chunk sending, on any server.
+//! Each bot also keeps the chunks it holds, as a client's chunk cache does, so the report tells chunks that
+//! entered the view apart from chunks sent again while the bot still held them (`resent`), and counts the
+//! times the server pulled a bot back (`pulled_back`: a teleport after the first, as for "moved too quickly").
 
 use horizon_protocol::{
     PROTOCOL_VERSION,
@@ -25,6 +30,7 @@ use horizon_protocol::{
 };
 use serde_json::json;
 use std::{
+    collections::HashSet,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -43,8 +49,9 @@ horizon-bots: load-test bots for a Minecraft Java Edition 26.3 server (offline m
   --seconds N            how long to run after the first bot joins; default 60
   --view-distance N      what the bots ask for; default 10
   --seed N               default 12345
+  --explore-speed B      blocks a second an explore bot flies; default 22 (as fast as chunks come)
   --name PREFIX          bot names: PREFIX0, PREFIX1...; default Bot
-  --report FILE          a JSON summary at the end
+  --report FILE          a JSON summary at the end (- prints it after the per-second lines)
 ";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -73,6 +80,7 @@ struct Options {
     seconds: u64,
     view_distance: i8,
     seed: u64,
+    explore_speed: f64,
     name: String,
     report: Option<String>,
 }
@@ -87,6 +95,7 @@ fn options() -> Result<Options, String> {
         seconds: 60,
         view_distance: 10,
         seed: 12345,
+        explore_speed: 22.0,
         name: "Bot".into(),
         report: None,
     };
@@ -110,6 +119,9 @@ fn options() -> Result<Options, String> {
             "--seconds" => o.seconds = value.parse().map_err(|_| number("seconds"))?,
             "--view-distance" => o.view_distance = value.parse().map_err(|_| number("2 to 32"))?,
             "--seed" => o.seed = value.parse().map_err(|_| number("a number"))?,
+            "--explore-speed" => {
+                o.explore_speed = value.parse().map_err(|_| number("blocks a second"))?;
+            }
             "--name" => o.name = value,
             "--report" => o.report = Some(value),
             _ => return Err(format!("unknown option {arg}; --help lists them")),
@@ -129,6 +141,17 @@ fn options() -> Result<Options, String> {
 struct Bot {
     online: AtomicBool,
     chunks: AtomicU64,
+    /// Chunks received while the bot already held them (no ForgetLevelChunk in between).
+    resent: AtomicU64,
+    /// Different chunks received over the run.
+    unique: AtomicU64,
+    forgotten: AtomicU64,
+    /// Teleports after the spawn one: the server refused a move.
+    pulled_back: AtomicU64,
+    /// Ticks the bot couldn't move because it didn't hold its chunk yet.
+    waited: AtomicU64,
+    /// The chunks the bot holds (ClientChunkCache).
+    held: Mutex<HashSet<(i32, i32)>>,
     /// Where the server last put the bot (a teleport), to start from.
     teleport: Mutex<Option<[f64; 3]>>,
     error: Mutex<Option<String>>,
@@ -268,6 +291,36 @@ fn join(o: &Options, name: &str) -> Result<Connection, String> {
     }
 }
 
+/// ChunkBatchSizeCalculator: the chunks per tick a vanilla client asks for, from how long its batches take
+/// to arrive.
+struct BatchSize {
+    nanos_per_chunk: f64,
+    old_samples_weight: u32,
+    started: Instant,
+}
+
+impl BatchSize {
+    fn new() -> Self {
+        Self {
+            nanos_per_chunk: 2_000_000.0,
+            old_samples_weight: 1,
+            started: Instant::now(),
+        }
+    }
+    fn finished(&mut self, size: i32) {
+        if size > 0 {
+            let per_chunk = self.started.elapsed().as_nanos() as f64 / f64::from(size);
+            let clamped = per_chunk.clamp(self.nanos_per_chunk / 3.0, self.nanos_per_chunk * 3.0);
+            let weight = f64::from(self.old_samples_weight);
+            self.nanos_per_chunk = (self.nanos_per_chunk * weight + clamped) / (weight + 1.0);
+            self.old_samples_weight = (self.old_samples_weight + 1).min(49);
+        }
+    }
+    fn desired_chunks_per_tick(&self) -> f32 {
+        (7_000_000.0 / self.nanos_per_chunk) as f32
+    }
+}
+
 /// Reads the play state: answers what a client must answer, counts chunks, records teleports.
 fn read(
     mut reader: horizon_protocol::connection::ConnReader,
@@ -277,6 +330,9 @@ fn read(
     use ids::play::clientbound as cb;
     use ids::play::serverbound as sb;
     let send = |body: Vec<u8>| writer.lock().unwrap().send(&body);
+    let mut seen = HashSet::new();
+    let mut batch = BatchSize::new();
+    let mut teleports = 0u64;
     loop {
         let (id, body) = match reader.recv() {
             Ok(packet) => packet,
@@ -299,14 +355,38 @@ fn read(
             },
             cb::LEVEL_CHUNK_WITH_LIGHT => {
                 bot.chunks.fetch_add(1, Ordering::Relaxed);
+                if let (Ok(x), Ok(z)) = (r.i32(), r.i32()) {
+                    if !bot.held.lock().unwrap().insert((x, z)) {
+                        bot.resent.fetch_add(1, Ordering::Relaxed);
+                    }
+                    if seen.insert((x, z)) {
+                        bot.unique.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
                 Ok(())
             }
-            cb::CHUNK_BATCH_FINISHED => send(
-                play::Serverbound::ChunkBatchReceived(play::ChunkBatchReceived {
-                    chunks_per_tick: 25.0,
-                })
-                .encode(),
-            ),
+            cb::FORGET_LEVEL_CHUNK => {
+                if let Ok(play::Clientbound::ForgetLevelChunk(p)) =
+                    play::Clientbound::decode(id, &body)
+                    && bot.held.lock().unwrap().remove(&(p.pos[0], p.pos[1]))
+                {
+                    bot.forgotten.fetch_add(1, Ordering::Relaxed);
+                }
+                Ok(())
+            }
+            cb::CHUNK_BATCH_START => {
+                batch.started = Instant::now();
+                Ok(())
+            }
+            cb::CHUNK_BATCH_FINISHED => {
+                batch.finished(r.varint().unwrap_or(0));
+                send(
+                    play::Serverbound::ChunkBatchReceived(play::ChunkBatchReceived {
+                        chunks_per_tick: batch.desired_chunks_per_tick(),
+                    })
+                    .encode(),
+                )
+            }
             cb::PLAYER_POSITION => match play::Clientbound::decode(id, &body) {
                 Ok(play::Clientbound::PlayerPosition(p)) => {
                     let mut at = bot.teleport.lock().unwrap();
@@ -320,6 +400,10 @@ fn read(
                         }
                     });
                     *at = Some(pos);
+                    teleports += 1;
+                    if teleports > 1 {
+                        bot.pulled_back.fetch_add(1, Ordering::Relaxed);
+                    }
                     send(
                         play::Serverbound::AcceptTeleportation(play::AcceptTeleportation {
                             id: p.teleport,
@@ -416,7 +500,10 @@ fn run_bot(
         if let Some(at) = bot.teleport.lock().unwrap().take() {
             pos = at;
         }
-        if pos[1] < cruise {
+        let here = ((pos[0].floor() as i32) >> 4, (pos[2].floor() as i32) >> 4);
+        if !bot.held.lock().unwrap().contains(&here) {
+            bot.waited.fetch_add(1, Ordering::Relaxed);
+        } else if pos[1] < cruise {
             pos[1] = (pos[1] + 0.5).min(cruise);
         } else {
             match behaviour {
@@ -440,9 +527,11 @@ fn run_bot(
                     }
                 }
                 Behaviour::Explore => {
-                    // Flying fast in creative: about 22 blocks a second, which keeps new chunks coming.
-                    pos[0] += heading.cos() * 1.1;
-                    pos[2] += heading.sin() * 1.1;
+                    // Flying in creative, by default about 22 blocks a second, which keeps new
+                    // chunks coming as fast as the server sends them.
+                    let step = o.explore_speed / 20.0;
+                    pos[0] += heading.cos() * step;
+                    pos[2] += heading.sin() * step;
                 }
             }
         }
@@ -520,6 +609,9 @@ fn main() {
             .filter(|b| b.online.load(Ordering::SeqCst))
             .count();
         let chunks: u64 = bots.iter().map(|b| b.chunks.load(Ordering::Relaxed)).sum();
+        let total = |f: fn(&Bot) -> &AtomicU64| -> u64 {
+            bots.iter().map(|b| f(b).load(Ordering::Relaxed)).sum()
+        };
         let failed = bots
             .iter()
             .filter(|b| b.error.lock().unwrap().is_some())
@@ -536,6 +628,11 @@ fn main() {
                 "failed": failed,
                 "chunks": chunks,
                 "chunks_per_second": chunks - previous_chunks,
+                "unique": total(|b| &b.unique),
+                "forgotten": total(|b| &b.forgotten),
+                "resent": total(|b| &b.resent),
+                "pulled_back": total(|b| &b.pulled_back),
+                "waited_ticks": total(|b| &b.waited),
             })
         );
         previous_chunks = chunks;
@@ -554,19 +651,30 @@ fn main() {
         "bots": o.bots,
         "behaviour": o.behaviour,
         "seed": o.seed,
+        "explore_speed": o.explore_speed,
         "view_distance": o.view_distance,
         "seconds": o.seconds,
         "joined": bots.iter().filter(|b| b.joined_after_ms.load(Ordering::SeqCst) > 0).count(),
         "chunks": bots.iter().map(|b| b.chunks.load(Ordering::Relaxed)).sum::<u64>(),
+        "resent": bots.iter().map(|b| b.resent.load(Ordering::Relaxed)).sum::<u64>(),
+        "pulled_back": bots.iter().map(|b| b.pulled_back.load(Ordering::Relaxed)).sum::<u64>(),
+        "waited_ticks": bots.iter().map(|b| b.waited.load(Ordering::Relaxed)).sum::<u64>(),
         "per_bot": bots.iter().enumerate().map(|(i, b)| json!({
             "name": format!("{}{i}", o.name),
             "behaviour": behaviour_of(&o.behaviour, i).name(),
             "joined_after_ms": b.joined_after_ms.load(Ordering::SeqCst),
             "chunks": b.chunks.load(Ordering::Relaxed),
+            "unique_chunks": b.unique.load(Ordering::Relaxed),
+            "resent": b.resent.load(Ordering::Relaxed),
+            "forgotten": b.forgotten.load(Ordering::Relaxed),
+            "pulled_back": b.pulled_back.load(Ordering::Relaxed),
+            "waited_ticks": b.waited.load(Ordering::Relaxed),
             "error": *b.error.lock().unwrap(),
         })).collect::<Vec<_>>(),
     });
-    if let Some(path) = &o.report {
+    if o.report.as_deref() == Some("-") {
+        println!("{summary:#}");
+    } else if let Some(path) = &o.report {
         if let Err(e) = std::fs::write(path, format!("{summary:#}\n")) {
             eprintln!("horizon-bots: {path}: {e}");
         }

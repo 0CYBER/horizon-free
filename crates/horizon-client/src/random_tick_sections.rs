@@ -134,7 +134,7 @@ mod tests {
         let mut chunk = Chunk::empty(0, 0);
         for i in [0, 9, SECTIONS - 1] {
             Arc::make_mut(&mut chunk.sections[i]).blocks =
-                Section::from_blocks(&std::array::from_fn(|j| (j % 300) as u16));
+                Section::from_blocks(&std::array::from_fn(|j| (j % 300) as u32));
         }
         let chunk = Arc::new(chunk);
         let mut cache = RandomTickSections::default();
@@ -176,12 +176,9 @@ mod tick_parity {
         }
         fn set_raw(&mut self, pos: BlockPos, state: BlockStateId) -> Option<BlockStateId> {
             let chunk = self.chunks.get_mut(&(pos.x >> 4, pos.z >> 4))?;
-            Some(BlockStateId(u32::from(Arc::make_mut(chunk).set(
-                pos.x,
-                pos.y,
-                pos.z,
-                state.0 as u16,
-            ))))
+            Some(BlockStateId(
+                Arc::make_mut(chunk).set(pos.x, pos.y, pos.z, state.0),
+            ))
         }
         fn is_loaded(&self, pos: BlockPos) -> bool {
             self.chunks.contains_key(&(pos.x >> 4, pos.z >> 4))
@@ -233,7 +230,7 @@ mod tick_parity {
             // Every sampled block can run real behaviour and change to dirt.
             for i in [4, 7] {
                 Arc::make_mut(&mut c.sections[i]).blocks =
-                    crate::chunk::Section::from_blocks(&[grass.0 as u16; 4096]);
+                    crate::chunk::Section::from_blocks(&[grass.0; 4096]);
             }
             Arc::new(c)
         };

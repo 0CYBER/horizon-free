@@ -385,7 +385,7 @@ fn sprite_split() -> u32 {
         .unwrap_or(SPRITE_SPLIT)
 }
 /// Sprite arrays terrain.wgsl binds (`sprites`, `sprites_1`...).
-const SPRITE_ARRAYS: u32 = 4;
+const SPRITE_ARRAYS: u32 = 8;
 /// The views of terrain.wgsl's sprite arrays, the unused ones a 1-layer
 /// stand-in.
 fn sprite_views(
@@ -441,6 +441,10 @@ fn terrain_group(
             view(5, &sprites[1]),
             view(6, &sprites[2]),
             view(7, &sprites[3]),
+            view(8, &sprites[4]),
+            view(9, &sprites[5]),
+            view(10, &sprites[6]),
+            view(11, &sprites[7]),
         ],
     })
 }
@@ -615,8 +619,12 @@ impl Renderer {
                 adapter
                     .request_device(&wgpu::DeviceDescriptor {
                         label: Some("Horizon device"),
+                        // Mappable primary buffers: section pages that no
+                        // longer fit in video memory go to system memory.
                         required_features: timing::GpuTimer::features(&adapter)
-                            | (adapter.features() & wgpu::Features::INDIRECT_FIRST_INSTANCE),
+                            | (adapter.features()
+                                & (wgpu::Features::INDIRECT_FIRST_INSTANCE
+                                    | wgpu::Features::MAPPABLE_PRIMARY_BUFFERS)),
                         required_limits: limits.clone(),
                         ..Default::default()
                     })
@@ -739,6 +747,10 @@ impl Renderer {
                 entry(5, vf, sprite_array),
                 entry(6, vf, sprite_array),
                 entry(7, vf, sprite_array),
+                entry(8, vf, sprite_array),
+                entry(9, vf, sprite_array),
+                entry(10, vf, sprite_array),
+                entry(11, vf, sprite_array),
             ],
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1921,11 +1933,22 @@ impl Renderer {
             self.indices = Self::quad_indices(&self.device, self.index_quads);
         }
         let vertices = (mesh.solid.len() + mesh.translucent.len()) as u64;
-        let (page, start) = self.arena.alloc(&self.device, &self.queue, vertices);
-        let sorted_indices = (translucent > 0).then(|| {
-            self.sorted_indices
-                .alloc(&self.device, &self.queue, u64::from(translucent) * 6)
-        });
+        // With video and system memory both full, the section is not drawn.
+        let Some((page, start)) = self.arena.alloc(&self.device, &self.queue, vertices) else {
+            return;
+        };
+        let sorted_indices = if translucent > 0 {
+            let indices =
+                self.sorted_indices
+                    .alloc(&self.device, &self.queue, u64::from(translucent) * 6);
+            if indices.is_none() {
+                self.arena.release(page, start, vertices);
+                return;
+            }
+            indices
+        } else {
+            None
+        };
         let stride = std::mem::size_of::<TerrainVertex>() as u64;
         for (offset, part) in [(0, &mesh.solid), (mesh.solid.len(), &mesh.translucent)] {
             if !part.is_empty() {
@@ -2181,6 +2204,8 @@ impl Renderer {
         );
     }
     pub fn render(&mut self, frame: &Frame) -> Result<bool> {
+        self.arena.trim();
+        self.sorted_indices.trim();
         if self.suspended {
             return Ok(false);
         }
@@ -3490,12 +3515,38 @@ fn mix_frames(current: &mut [u8], next: &[u8], millis: u32) {
     let t = millis as f32 / 1000.0;
     for (c, n) in current.iter_mut().zip(next) {
         let (a, b) = (f32::from(*c) / 255.0, f32::from(*n) / 255.0);
-        *c = ((a * (1.0 - t) + b * t) * 255.0).round() as u8;
+        *c = round_unorm8((a * (1.0 - t) + b * t) * 255.0);
     }
+}
+/// `x.round() as u8` for `x >= 0`, without the `roundf` library call that
+/// x86-64 makes for every `f32::round` (it has no rounding instruction before
+/// SSE4.1): the fraction `x - trunc(x)` is exact below 2^23, so rounding half
+/// away from zero is adding one when it is at least a half.
+#[inline]
+fn round_unorm8(x: f32) -> u8 {
+    let whole = x as u8;
+    whole.saturating_add(u8::from(x - f32::from(whole) >= 0.5))
 }
 #[cfg(test)]
 mod sprite_upload_tests {
     use super::*;
+    #[test]
+    fn blended_frames_round_like_f32_round() {
+        for millis in (0..1000).step_by(7).chain([999]) {
+            let t = millis as f32 / 1000.0;
+            for a in 0..=255u8 {
+                for b in 0..=255u8 {
+                    let x = (f32::from(a) / 255.0 * (1.0 - t) + f32::from(b) / 255.0 * t) * 255.0;
+                    assert_eq!(round_unorm8(x), x.round() as u8, "{a} {b} {millis}");
+                }
+            }
+        }
+        for x in [
+            0.0, 0.49999997, 0.5, 1.5, 2.5, 254.49998, 254.5, 255.0, 255.00002, 300.0,
+        ] {
+            assert_eq!(round_unorm8(x), x.round() as u8, "{x}");
+        }
+    }
     #[test]
     fn real_rail_mips_do_not_change_with_larger_array_layers() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

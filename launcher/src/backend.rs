@@ -792,7 +792,7 @@ pub fn preparer(
         match sources::resolve(minecraft, &pins, &known, &linked, &fetch, log)? {
             sources::Resolved::Folder(dir) => dir,
             sources::Resolved::NotFound(checked) => {
-                let not_found = sources::not_found(&version, &checked);
+                let not_found = sources::not_found(&version, &checked, minecraft);
                 download_for_owner(&pins, &own, &fetch, log).map_err(|e| not_found + &e)?;
                 own
             }
@@ -1089,6 +1089,74 @@ pub fn set_menu_style(style: MenuStyle) -> Result<(), String> {
     fs::write(file, text).map_err(|e| e.to_string())
 }
 
+/// Splits the player's extra game arguments (Settings' one line) into words, the way a shell
+/// would: spaces separate them, single or double quotes group a word with spaces in it, and a
+/// backslash escapes the next character (outside quotes, or inside double quotes).
+pub fn split_args(line: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut started = false;
+    let mut quote: Option<char> = None;
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        match quote {
+            Some(q) => {
+                if c == q {
+                    quote = None;
+                } else if c == '\\' && q == '"' {
+                    // Inside double quotes only `"` and `\` are escaped, as a shell does.
+                    match chars.next() {
+                        Some(n @ ('"' | '\\')) => word.push(n),
+                        Some(n) => {
+                            word.push('\\');
+                            word.push(n);
+                        }
+                        None => word.push('\\'),
+                    }
+                } else {
+                    word.push(c);
+                }
+            }
+            None => match c {
+                '\'' | '"' => {
+                    quote = Some(c);
+                    started = true;
+                }
+                '\\' => {
+                    if let Some(n) = chars.next() {
+                        word.push(n);
+                        started = true;
+                    }
+                }
+                c if c.is_whitespace() => {
+                    if started {
+                        words.push(std::mem::take(&mut word));
+                        started = false;
+                    }
+                }
+                _ => {
+                    word.push(c);
+                    started = true;
+                }
+            },
+        }
+    }
+    if started {
+        words.push(word);
+    }
+    words
+}
+
+/// The extra game arguments the player set in Settings, split into words.
+pub fn game_args() -> Vec<String> {
+    split_args(&Settings::load().game_args)
+}
+
+/// Appends the player's extra game arguments, so they add to the launcher's own or override them.
+pub fn append_game_args(cmd: &mut Command) {
+    cmd.args(game_args());
+}
+
 pub fn client_command(tag: &str) -> Command {
     let home = game_home();
     let _ = fs::create_dir_all(&home);
@@ -1195,6 +1263,7 @@ pub fn client(tag: &str) -> Result<Command, String> {
     if let Err(e) = crate::account::attach_session(&mut cmd, &game_home()) {
         eprintln!("Playing offline: {e}");
     }
+    append_game_args(&mut cmd);
     Ok(cmd)
 }
 
@@ -1709,6 +1778,10 @@ pub enum Msg {
     /// The selected account's session file for the game about to start (none = offline), or
     /// why it could not be renewed.
     Session(Result<Option<PathBuf>, String>),
+    /// A modpack step's line (`modpacks`).
+    PackLine(String),
+    /// A modpack step ended: the pack as it now is.
+    PackDone(Result<Box<crate::modpacks::Imported>, String>),
 }
 
 /// A running process; its output arrives as `Msg::Line`, its end as `Msg::Exit`.
@@ -1792,6 +1865,10 @@ pub struct Settings {
     /// means yes; removing the entry stores `false`, so it doesn't come back on the next start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub desktop_entry: Option<bool>,
+    /// Extra arguments for the game's command line, as one line (see [`split_args`]). Empty by
+    /// default. Appended after the launcher's own arguments, so they can add to or override them.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub game_args: String,
 }
 
 impl Settings {
@@ -1840,6 +1917,46 @@ mod tests {
         assert!(props.is_some_and(|v| v
             .to_string_lossy()
             .contains("application.name = \"Horizon\"")));
+    }
+
+    #[test]
+    fn extra_game_arguments_split_like_a_shell() {
+        assert!(split_args("").is_empty());
+        assert!(split_args("   ").is_empty());
+        assert_eq!(split_args("--server-thread"), ["--server-thread"]);
+        assert_eq!(
+            split_args("--render-distance 32 --server-thread"),
+            ["--render-distance", "32", "--server-thread"]
+        );
+        // Quotes keep a word with spaces together; either kind works.
+        assert_eq!(
+            split_args("--name 'Two Words' --world \"My World\""),
+            ["--name", "Two Words", "--world", "My World"]
+        );
+        // An empty quoted word is still a word.
+        assert_eq!(split_args("--name \"\""), ["--name", ""]);
+        // A backslash escapes a space outside quotes, and " and \ inside double quotes.
+        assert_eq!(split_args("--name My\\ World"), ["--name", "My World"]);
+        assert_eq!(split_args("a\\tb c"), ["atb", "c"]);
+        assert_eq!(split_args("\"a\\\"b\" 'c\\d'"), ["a\"b", "c\\d"]);
+    }
+
+    #[test]
+    fn the_game_arguments_setting_round_trips_and_reaches_the_command() {
+        let settings = Settings::parse(r#"{"game_args":"--server-thread"}"#);
+        assert_eq!(settings.game_args, "--server-thread");
+        // Unset in an older settings.json: no arguments, and nothing is written for them.
+        let old = Settings::parse(r#"{"installed":true}"#);
+        assert_eq!(old.game_args, "");
+        assert!(!serde_json::to_string(&old).unwrap().contains("game_args"));
+
+        let mut cmd = Command::new("true");
+        cmd.args(split_args("--server-thread --render-distance 40"));
+        let args: Vec<_> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args, ["--server-thread", "--render-distance", "40"]);
     }
 
     #[test]

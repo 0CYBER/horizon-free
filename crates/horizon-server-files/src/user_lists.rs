@@ -39,7 +39,7 @@ impl NameAndId {
             name: name.to_owned(),
         }
     }
-    fn from_json(o: &Json) -> Option<Self> {
+    pub(crate) fn from_json(o: &Json) -> Option<Self> {
         let uuid = o.get("uuid")?.as_string()?;
         let name = o.get("name")?.as_string()?;
         Some(Self {
@@ -47,7 +47,7 @@ impl NameAndId {
             name,
         })
     }
-    fn append_to(&self, o: &mut Json) {
+    pub(crate) fn append_to(&self, o: &mut Json) {
         o.add("uuid", Json::String(uuid_string(self.id)));
         o.add("name", Json::String(self.name.clone()));
     }

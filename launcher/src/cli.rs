@@ -77,6 +77,33 @@ enum DataCmd {
 }
 
 #[derive(Subcommand)]
+enum ModpackCmd {
+    /// The imported packs and their coverage (the default)
+    List,
+    /// Import a .mrpack, a CurseForge zip or an instance folder, and write its coverage report
+    Import { path: PathBuf },
+    /// Get the jars of what this computer can port and carry them over
+    Port {
+        /// The pack's folder name, as list shows it
+        pack: String,
+        /// A folder with your own jars (an installed instance, a downloads folder)
+        #[arg(long)]
+        from: Option<PathBuf>,
+        /// The installed version the ports are for (default: the selected one)
+        #[arg(long)]
+        version: Option<String>,
+    },
+    /// Play a ported pack as its own profile
+    Play {
+        pack: String,
+        #[arg(long)]
+        version: Option<String>,
+    },
+    /// Remove an imported pack: its jars, ports and the profile's saves
+    Remove { pack: String },
+}
+
+#[derive(Subcommand)]
 enum Cmd {
     /// List Horizon releases, or the installed versions
     Versions {
@@ -105,6 +132,10 @@ enum Cmd {
         /// Join a friend's world with its invite code
         #[arg(long)]
         join: Option<String>,
+        /// An extra argument for the game, passed through as-is (repeatable), for example
+        /// --server-thread
+        #[arg(long = "arg", value_name = "ARG", allow_hyphen_values = true)]
+        arg: Vec<String>,
     },
     /// Run a dedicated server here; type commands into its console
     Server {
@@ -131,6 +162,13 @@ enum Cmd {
         /// Omit to show the current style
         #[arg(value_parser = ["horizon", "classic"])]
         style: Option<String>,
+    },
+    /// Show or set the extra arguments the game starts with (for example --server-thread);
+    /// quotes group a word with spaces in it
+    GameArgs {
+        /// Omit to show the current arguments
+        #[arg(allow_hyphen_values = true)]
+        args: Option<String>,
     },
     /// Print the end of the game's log (logs/latest.log in the game folder), or its newest crash
     /// report
@@ -160,6 +198,12 @@ enum Cmd {
     Data {
         #[command(subcommand)]
         action: Option<DataCmd>,
+    },
+    /// Modpacks: import a Java pack, see its coverage report, port what this computer can and
+    /// play it as its own profile (docs/modpacks.md)
+    Modpack {
+        #[command(subcommand)]
+        action: Option<ModpackCmd>,
     },
     /// Serve the Model Context Protocol on stdin and stdout, for AI agents
     Mcp,
@@ -311,11 +355,12 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             }
             println!("{tag} is prepared.");
         }
-        Cmd::Play { version, join } => {
+        Cmd::Play { version, join, arg } => {
             let mut cmd = backend::client(&backend::resolve_version(version.as_deref())?)?;
             if let Some(code) = join {
                 backend::join_friend(&mut cmd, &code)?;
             }
+            cmd.args(arg);
             attached(cmd)?
         }
         Cmd::Server {
@@ -378,6 +423,24 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 println!("Menu style: {style}");
             }
         }
+        Cmd::GameArgs { args } => {
+            let mut settings = backend::Settings::load();
+            if let Some(line) = args {
+                settings.game_args = line;
+                settings.save();
+            }
+            let line = settings.game_args;
+            if as_json {
+                json(serde_json::json!({
+                    "game_args": line,
+                    "parsed": backend::split_args(&line),
+                }));
+            } else if line.is_empty() {
+                println!("No extra game arguments.");
+            } else {
+                println!("Game arguments: {line}");
+            }
+        }
         Cmd::Logs { lines, crash } => {
             let (path, text) = backend::read_logs(lines, crash)?;
             if as_json {
@@ -400,6 +463,7 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 println!("Horizon is in the applications menu.");
             }
         }
+        Cmd::Modpack { action } => modpack(action.unwrap_or(ModpackCmd::List), as_json)?,
         Cmd::Mcp => unreachable!(),
     }
     Ok(())
@@ -590,4 +654,116 @@ fn data(action: DataCmd, as_json: bool) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn modpack(action: ModpackCmd, as_json: bool) -> Result<(), String> {
+    use horizon_launcher::modpacks::{self, Imported};
+    use horizon_port_pack::report::Status;
+    let log = &|line: String| eprintln!("{line}");
+    let work = |pack: &str| {
+        let work = modpacks::ports_dir().join(pack);
+        modpacks::load(&work).map(|_| work)
+    };
+    let show = |p: &Imported| {
+        let counts: Vec<String> = Status::ALL
+            .iter()
+            .map(|s| format!("{} {}", p.count(*s), s.label()))
+            .collect();
+        if as_json {
+            json(serde_json::json!({
+                "pack": p.slug, "name": p.title(), "summary": p.summary(),
+                "counts": Status::ALL.iter().map(|s| (s.label(), p.count(*s))).collect::<std::collections::BTreeMap<_, _>>(),
+                "portable": p.portable, "ported_mods": p.mods.len(), "jars": p.jars(),
+                "report": p.work.join("coverage.md"),
+            }));
+        } else {
+            println!(
+                "{}  ({})\n  {}\n  {}",
+                p.title(),
+                p.slug,
+                p.summary(),
+                counts.join(", ")
+            );
+            println!("  {} portable, {} carried over", p.portable, p.mods.len());
+            if let Some(jars) = p.jars() {
+                println!("  {jars}");
+            }
+            println!("  {}", p.work.join("coverage.md").display());
+        }
+    };
+    match action {
+        ModpackCmd::List => {
+            let packs = modpacks::list();
+            if packs.is_empty() && !as_json {
+                println!("No modpack imported yet: horizon-launcher modpack import <pack>");
+            }
+            packs.iter().for_each(show);
+        }
+        ModpackCmd::Import { path } => show(&modpacks::import(&path, log)?),
+        ModpackCmd::Port {
+            pack,
+            from,
+            version,
+        } => {
+            let tag = backend::resolve_version(version.as_deref()).ok();
+            let resources = tag
+                .filter(|t| backend::is_prepared(t))
+                .map(|t| backend::resources(&t));
+            show(&modpacks::port(
+                &work(&pack)?,
+                resources.as_deref(),
+                from.as_deref(),
+                log,
+            )?)
+        }
+        ModpackCmd::Play { pack, version } => {
+            let mut cmd = backend::client(&backend::resolve_version(version.as_deref())?)?;
+            modpacks::apply_profile(&mut cmd, &work(&pack)?)?;
+            attached(cmd)?
+        }
+        ModpackCmd::Remove { pack } => modpacks::remove(&work(&pack)?)?,
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn play_takes_extra_arguments_that_start_with_hyphens() {
+        let cli = Cli::try_parse_from([
+            "horizon-launcher",
+            "play",
+            "--arg",
+            "--server-thread",
+            "--arg",
+            "40",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Cmd::Play { arg, .. }) => assert_eq!(arg, ["--server-thread", "40"]),
+            _ => panic!("expected play"),
+        }
+    }
+
+    #[test]
+    fn game_args_takes_one_line_that_starts_with_hyphens() {
+        let cli = Cli::try_parse_from([
+            "horizon-launcher",
+            "game-args",
+            "--server-thread --render-distance 40",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Cmd::GameArgs { args }) => {
+                assert_eq!(
+                    args.as_deref(),
+                    Some("--server-thread --render-distance 40")
+                );
+            }
+            _ => panic!("expected game-args"),
+        }
+    }
 }

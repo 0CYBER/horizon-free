@@ -107,7 +107,7 @@ fn columns_loaded_past_the_render_distance_mesh_when_they_come_in_range() {
 /// A one-block cave under the sky: a stone floor at y 62 with a glowstone,
 /// and a roof at y 64 with holes, so that every light change in the cave is
 /// sampled by a face.
-fn roofed(x: i32, z: i32, stone: u16, glowstone: u16) -> Chunk {
+fn roofed(x: i32, z: i32, stone: u32, glowstone: u32) -> Chunk {
     let mut chunk = Chunk::empty(x, z);
     for lz in 0..16 {
         for lx in 0..16 {
@@ -143,7 +143,7 @@ fn relit_columns_keep_every_mesh_current() {
         biomes: Arc::new(Biomes::load(&root).unwrap()),
         assets: assets.clone(),
     });
-    let state = |name: &str| assets.registry.default_state(name).unwrap().0 as u16;
+    let state = |name: &str| assets.registry.default_state(name).unwrap().0;
     let (stone, glowstone, torch) = (
         state("minecraft:stone"),
         state("minecraft:glowstone"),
@@ -185,9 +185,7 @@ fn relit_columns_keep_every_mesh_current() {
             let (bx, bz) = (16 + lx, lz);
             world.set(bx, 64, bz, BlockStateId(0)).unwrap();
             if i % 3 == 0 {
-                world
-                    .set(bx, 63, bz, BlockStateId(u32::from(torch)))
-                    .unwrap();
+                world.set(bx, 63, bz, BlockStateId(torch)).unwrap();
             }
         }
     }
