@@ -22,6 +22,7 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - containers: the guest's ender chest holds the guest's items, not the host's, and a double chest
              opens as 9x6 with the right half first;
 - feedback:  the guest's command feedback names the guest and shows the numbers;
+- effects:   a beacon's power reaches every player in range, the host and the guest;
 - portals:   (--server-thread) the server holds a level per dimension: the guest goes to the Nether
              through a portal while the host stays, then the host goes to the End while the guest is in
              the Nether, and both come back.
@@ -56,7 +57,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'trials', 'portals']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'trials', 'effects', 'portals']
 
 
 class Game:
@@ -292,6 +293,28 @@ def check_sign(host, guest, out):
     assert placed and 'sign' in placed, f'the guest placed {placed}'
     host_unaffected(host, "the guest's sign")
     return placed
+
+
+def effect_ids(game):
+    return [e.get('id', '').removeprefix('minecraft:') for e in game('state')['player'].get('effects', [])]
+
+
+def check_effects(host, guest, out):
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    bx, by, bz = x - 3, y, z - 3
+    host('command', command=f'fill {bx - 1} {by - 1} {bz - 1} {bx + 1} {by - 1} {bz + 1} minecraft:iron_block')
+    host('command', command=f'setblock {bx} {by} {bz} minecraft:beacon{{primary_effect:"minecraft:speed"}}')
+    # BeaconBlockEntity.tick applies its powers every 80 ticks, once the beam has reached the sky.
+    seen = {}
+    for _ in range(15):
+        host.wait(20)
+        seen = {'host': effect_ids(host), 'guest': effect_ids(guest)}
+        if all('speed' in v for v in seen.values()):
+            break
+    host.shot(out, 'effects')
+    guest.shot(out, 'effects')
+    assert 'speed' in seen['host'] and 'speed' in seen['guest'], f'beacon effects: {seen}'
+    return seen
 
 
 def wait_dimension(game, dimension, ticks):
@@ -727,7 +750,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'chest': check_chest, 'crafting': check_crafting, 'sign': check_sign, 'damage': check_damage,
              'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
              'containers': check_containers, 'feedback': check_feedback, 'trials': check_trials,
-             'walls': check_walls, 'portals': check_portals}
+             'walls': check_walls, 'effects': check_effects, 'portals': check_portals}
 
 
 def run(ctl, out, resources, checks):

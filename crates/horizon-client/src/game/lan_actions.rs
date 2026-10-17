@@ -291,6 +291,32 @@ impl Game<'_> {
         Some(result)
     }
 
+    /// `ServerLevel.players()` in turn: the host's own player, then each
+    /// guest in the level in place with their state swapped in (`as_guest`).
+    /// What reaches the players around a point (a beacon's powers, a splash
+    /// potion, a warden's darkness, an elder guardian's curse) lands on each
+    /// of them, not only on the host. A server has no player of its own.
+    /// Inside a guest's action (the hub taken) only that player is in place.
+    pub(super) fn for_each_player(&mut self, mut f: impl FnMut(&mut Self)) {
+        if self.player.is_some() {
+            f(self);
+        }
+        let Some(mut host) = self.lan.take() else {
+            return;
+        };
+        let conns: Vec<u32> = host
+            .hub
+            .guests
+            .iter()
+            .filter(|g| host.hub.here(g) && g.loaded && !g.dead)
+            .map(|g| g.conn)
+            .collect();
+        for conn in conns {
+            self.as_guest(&mut host, conn, &mut f);
+        }
+        self.lan = Some(host);
+    }
+
     /// The game mode fields without `set_mode`'s side effects on the host.
     fn set_mode_raw(&mut self, id: i32) {
         use horizon_client::command::args::GameMode;
