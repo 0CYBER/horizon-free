@@ -3507,12 +3507,38 @@ fn mix_frames(current: &mut [u8], next: &[u8], millis: u32) {
     let t = millis as f32 / 1000.0;
     for (c, n) in current.iter_mut().zip(next) {
         let (a, b) = (f32::from(*c) / 255.0, f32::from(*n) / 255.0);
-        *c = ((a * (1.0 - t) + b * t) * 255.0).round() as u8;
+        *c = round_unorm8((a * (1.0 - t) + b * t) * 255.0);
     }
+}
+/// `x.round() as u8` for `x >= 0`, without the `roundf` library call that
+/// x86-64 makes for every `f32::round` (it has no rounding instruction before
+/// SSE4.1): the fraction `x - trunc(x)` is exact below 2^23, so rounding half
+/// away from zero is adding one when it is at least a half.
+#[inline]
+fn round_unorm8(x: f32) -> u8 {
+    let whole = x as u8;
+    whole.saturating_add(u8::from(x - f32::from(whole) >= 0.5))
 }
 #[cfg(test)]
 mod sprite_upload_tests {
     use super::*;
+    #[test]
+    fn blended_frames_round_like_f32_round() {
+        for millis in (0..1000).step_by(7).chain([999]) {
+            let t = millis as f32 / 1000.0;
+            for a in 0..=255u8 {
+                for b in 0..=255u8 {
+                    let x = (f32::from(a) / 255.0 * (1.0 - t) + f32::from(b) / 255.0 * t) * 255.0;
+                    assert_eq!(round_unorm8(x), x.round() as u8, "{a} {b} {millis}");
+                }
+            }
+        }
+        for x in [
+            0.0, 0.49999997, 0.5, 1.5, 2.5, 254.49998, 254.5, 255.0, 255.00002, 300.0,
+        ] {
+            assert_eq!(round_unorm8(x), x.round() as u8, "{x}");
+        }
+    }
     #[test]
     fn real_rail_mips_do_not_change_with_larger_array_layers() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
