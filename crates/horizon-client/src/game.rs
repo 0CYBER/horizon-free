@@ -10331,18 +10331,27 @@ struct Loaded {
     pack_error: Option<String>,
     resources: Resources,
     pack: PackResources,
-    gui: UiResources,
+    /// The menu bundle, for the synchronous launch; the loading screen receives
+    /// it earlier through its own channel.
+    gui: Option<UiResources>,
+}
+
+/// What the background loader publishes: the menu bundle as soon as it is
+/// ready, then the world bundle.
+enum LoaderMsg {
+    Ui(UiResources),
+    Done(std::result::Result<Loaded, String>),
 }
 
 /// The loader's checkpoints, in order; the loading screen reports them.
 const STAGES: u32 = 9;
 const STAGE_LINES: [&str; 9] = [
+    "Loading menu",
     "Loading assets",
     "Loading block facts",
     "Loading items",
     "Loading biomes",
     "Loading pack tables",
-    "Loading atlas",
     "Loading collision",
     "Loading resources",
     "Starting audio",
@@ -10390,8 +10399,31 @@ fn load_resources(
     vanilla_root: &std::path::Path,
     settings: &Settings,
     started: Instant,
+    menu: bool,
     on_stage: &(dyn Fn(u32) + Sync),
+    publish: &mut dyn FnMut(UiResources),
 ) -> Result<Loaded> {
+    let requested_root = root.clone();
+    let threads = settings.horizon.worker_threads();
+    // Stage A: the menu bundle (atlas and panorama). With a loading screen it is
+    // published at once so the title backdrop can appear while the world bundle
+    // loads; the synchronous launch instead carries it in `Loaded`.
+    let mut loaded_gui = None;
+    let mut ui_ready = false;
+    if let Ok(ui) = UiResources::load(&root) {
+        if menu {
+            horizon_client::telemetry::mark_ui_ready();
+            log::info!(
+                "Horizon: UI bundle ready after {} ms",
+                started.elapsed().as_millis()
+            );
+            publish(ui);
+        } else {
+            loaded_gui = Some(ui);
+        }
+        ui_ready = true;
+    }
+    on_stage(0);
     let mut pack_error = None;
     let (assets, render) = match Assets::load(&root).and_then(|assets| {
         let render = assets.reload(&root)?;
@@ -10417,38 +10449,72 @@ fn load_resources(
     };
     let assets = Arc::new(assets);
     let render = Arc::new(render);
+    // The menu bundle must come from the same root as the world bundle.
+    if !ui_ready || root != requested_root {
+        let ui = UiResources::load(&root)?;
+        if menu {
+            horizon_client::telemetry::mark_ui_ready();
+            log::info!(
+                "Horizon: UI bundle ready after {} ms",
+                started.elapsed().as_millis()
+            );
+            publish(ui);
+        } else {
+            loaded_gui = Some(ui);
+        }
+    }
     log::info!("load assets: {:.2}s", started.elapsed().as_secs_f32());
-    on_stage(0);
+    on_stage(1);
     let behaviour_json: serde_json::Value = serde_json::from_reader(std::io::BufReader::new(
         std::fs::File::open(root.join("block-behaviours.json"))?,
     ))?;
+    // The block facts, the biomes and the environment are independent reads:
+    // run them together, within the worker budget the settings allow.
+    let registry = assets.registry;
+    let load_facts = || {
+        BlockFacts::load_with_projection(&root, registry, &behaviour_json)
+            .map_err(|e| e.to_string())
+    };
+    let load_biomes = || Biomes::load(&root).map_err(|e| e.to_string());
+    let load_environment = || Environment::load(&root).map_err(|e| e.to_string());
+    let (facts, biomes, environment) = if threads > 1 {
+        std::thread::scope(|scope| {
+            let facts = scope.spawn(load_facts);
+            let biomes = scope.spawn(load_biomes);
+            let environment = scope.spawn(load_environment);
+            (
+                facts.join().unwrap(),
+                biomes.join().unwrap(),
+                environment.join().unwrap(),
+            )
+        })
+    } else {
+        (load_facts(), load_biomes(), load_environment())
+    };
     let (facts, gameplay_projection) =
-        BlockFacts::load_with_projection(&root, assets.registry, &behaviour_json)?;
+        facts.map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    let biomes = Arc::new(biomes.map_err(|e| -> Box<dyn std::error::Error> { e.into() })?);
+    let environment = environment.map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     let mob_data = horizon_client::mobs::MobData::load(&root, &facts);
     horizon_client::mobs::trial_spawner::load_registry(&root);
     log::info!("load facts: {:.2}s", started.elapsed().as_secs_f32());
-    on_stage(1);
+    on_stage(2);
     let items = Items::load(&root, assets.registry, &facts)?;
     log::info!("load items: {:.2}s", started.elapsed().as_secs_f32());
-    on_stage(2);
+    on_stage(3);
     let recipes = Recipes::load(&root, &items)?;
     let transformers = horizon_client::block_transform::Transformers::load(&root, assets.registry)?;
-    let biomes = Arc::new(Biomes::load(&root)?);
-    let environment = Environment::load(&root)?;
     log::info!("load biomes+env: {:.2}s", started.elapsed().as_secs_f32());
-    on_stage(3);
+    on_stage(4);
     let light = Arc::new(LightTables::load(&root, assets.registry, &facts)?);
     let pack = PackResources::load(&root, assets.clone(), render, &facts, biomes.clone(), light)?;
     log::info!("load pack tables: {:.2}s", started.elapsed().as_secs_f32());
-    on_stage(4);
-    let gui = UiResources::load(&root)?;
+    on_stage(5);
     horizon_client::ui::load_metadata(&root);
     horizon_client::lang::set(horizon_client::lang::Language::load(
         &[&root],
         &settings.language,
     ));
-    log::info!("load atlas: {:.2}s", started.elapsed().as_secs_f32());
-    on_stage(5);
     let registry_owner = assets.clone();
     let collision = collisions::load(&root, registry_owner.registry)?;
     let motion = MotionResources::load(&root, &registry_owner)?;
@@ -10457,7 +10523,12 @@ fn load_resources(
         started.elapsed().as_secs_f32()
     );
     on_stage(6);
-    let threads = settings.horizon.worker_threads();
+    if menu {
+        log::info!(
+            "Horizon: world bundle ready after {} ms",
+            started.elapsed().as_millis()
+        );
+    }
     log::info!(
         "Horizon: resources loaded in {:.1}s; {} block states, {} items, {} biomes; {} worker threads",
         started.elapsed().as_secs_f32(),
@@ -10518,7 +10589,7 @@ fn load_resources(
         pack_error,
         resources,
         pack,
-        gui,
+        gui: loaded_gui,
     })
 }
 
@@ -10556,18 +10627,22 @@ fn build_renderer(
 }
 
 /// The loading screen's renderer: the real HUD atlas and font over one opaque
-/// white block-sprite layer, an empty border texture and an empty panorama.
+/// white block-sprite layer, an empty border texture and the title panorama
+/// once the menu bundle is ready.
 fn loading_renderer(
     window: Arc<Window>,
     offscreen: bool,
-    atlas: Option<&HudAtlas>,
+    gui: Option<&UiResources>,
+    previous: Option<&Renderer>,
 ) -> Result<Renderer> {
     static FORCEFIELD: [u8; 4] = [0; 4];
     static EMPTY_HUD: [u8; 4] = [0, 0, 0, 255];
-    let panorama = horizon_client::gfx::panorama::Faces {
+    let empty_panorama = horizon_client::gfx::panorama::Faces {
         size: 1,
         pixels: [0u8; 4].repeat(6),
     };
+    let panorama = gui.map_or(&empty_panorama, |gui| gui.panorama.as_ref());
+    let atlas = gui.map(|gui| &gui.atlas);
     let (pixels, width, height) = match atlas {
         Some(atlas) => (atlas.pixels.as_slice(), atlas.width, atlas.height),
         None => (EMPTY_HUD.as_slice(), 1, 1),
@@ -10583,8 +10658,8 @@ fn loading_renderer(
         &[],
         (pixels, width, height),
         (&FORCEFIELD[..], 1),
-        &panorama,
-        None,
+        panorama,
+        previous,
     ))?;
     if let Some(atlas) = atlas {
         renderer.hud.fire_animations = atlas
@@ -10804,7 +10879,7 @@ fn run_event_loop(mut game: Game<'_>) -> Result<()> {
 struct Loading {
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
-    atlas: Option<HudAtlas>,
+    gui: Option<UiResources>,
     settings: Settings,
     fullscreen: horizon_client::window::FullscreenState,
     options: Option<Options>,
@@ -10812,7 +10887,7 @@ struct Loading {
     pack_error: Option<String>,
     started: Instant,
     progress: Progress,
-    receiver: Receiver<std::result::Result<Loaded, String>>,
+    receiver: Receiver<LoaderMsg>,
     loaded: Option<std::result::Result<Loaded, String>>,
     handle: Option<JoinHandle<()>>,
     shown: bool,
@@ -10847,7 +10922,7 @@ impl Loading {
             }
         };
         let offscreen = self.options.as_ref().is_some_and(|o| o.offscreen);
-        match loading_renderer(window.clone(), offscreen, self.atlas.as_ref()) {
+        match loading_renderer(window.clone(), offscreen, self.gui.as_ref(), None) {
             Ok(r) => self.renderer = Some(r),
             Err(e) => {
                 self.error = Some(e);
@@ -10877,19 +10952,53 @@ impl Loading {
             _ => {}
         }
     }
+    /// The menu bundle arrived: rebuild the loading screen with the real atlas
+    /// and title panorama.
+    fn set_ui(&mut self, gui: UiResources) {
+        log::info!(
+            "Horizon: loading the title artwork after {} ms",
+            self.started.elapsed().as_millis()
+        );
+        self.gui = Some(gui);
+        let Some(window) = self.window.clone() else {
+            return;
+        };
+        let offscreen = self.options.as_ref().is_some_and(|o| o.offscreen);
+        if let Some(renderer) = &mut self.renderer {
+            renderer.release_surface();
+        }
+        match loading_renderer(window, offscreen, self.gui.as_ref(), self.renderer.as_ref()) {
+            Ok(r) => {
+                self.settings
+                    .clamp_gui_scale([r.config.width as i32, r.config.height as i32]);
+                horizon_client::hud::GUI_SCALE.store(self.settings.gui_scale, Ordering::Relaxed);
+                self.renderer = Some(r);
+            }
+            Err(e) => self.error = Some(e),
+        }
+    }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if self.loaded.is_none() {
-            match self.receiver.try_recv() {
-                Ok(result) => self.loaded = Some(result),
-                Err(TryRecvError::Disconnected) => {
-                    if let Some(handle) = self.handle.take() {
-                        let _ = handle.join();
+            loop {
+                match self.receiver.try_recv() {
+                    Ok(LoaderMsg::Ui(gui)) => self.set_ui(gui),
+                    Ok(LoaderMsg::Done(result)) => {
+                        self.loaded = Some(result);
+                        break;
                     }
-                    self.error = Some("resource loader stopped before finishing".into());
-                    event_loop.exit();
-                    return;
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        if self.loaded.is_none() {
+                            if let Some(handle) = self.handle.take() {
+                                let _ = handle.join();
+                            }
+                            self.error = Some("resource loader stopped before finishing".into());
+                            event_loop.exit();
+                            return;
+                        }
+                        break;
+                    }
                 }
-                Err(TryRecvError::Empty) => {}
             }
         }
         if let Some(w) = &self.window {
@@ -10907,10 +11016,10 @@ impl Loading {
         };
         let size = [renderer.config.width, renderer.config.height];
         let mut batch = HudBatch::new(size);
-        if let Some(atlas) = &self.atlas {
+        if let Some(gui) = &self.gui {
             horizon_client::level_loading::draw_progress(
                 &mut batch,
-                atlas,
+                &gui.atlas,
                 self.progress.line(),
                 self.progress.fraction(),
             );
@@ -10930,6 +11039,7 @@ impl Loading {
     fn finish(&mut self, loaded: Loaded) -> Result<Option<Game<'static>>> {
         let mut options = self.options.take().ok_or("loading already finished")?;
         options.resources = loaded.root.clone();
+        let gui = self.gui.take().ok_or("missing menu bundle")?;
         self.progress.set(STAGES - 1);
         // Audio is created on the main thread, after the join.
         let audio = if options.dedicated.is_some() {
@@ -10946,7 +11056,7 @@ impl Loading {
             window.clone(),
             options.offscreen,
             &loaded.pack,
-            &loaded.gui,
+            &gui,
             self.renderer.as_ref(),
         )?;
         let pack_error = loaded.pack_error.or_else(|| self.pack_error.take());
@@ -10956,7 +11066,7 @@ impl Loading {
         let Some(mut game) = start_game(
             res,
             loaded.pack,
-            loaded.gui,
+            gui,
             options,
             pack_error,
             audio,
@@ -11066,18 +11176,25 @@ fn run_loading(
         std::thread::Builder::new()
             .name("resource-loader".into())
             .spawn(move || {
-                let result = load_resources(root, &vanilla_root, &settings, started, &|stage| {
-                    progress.set(stage)
-                })
+                let result = load_resources(
+                    root,
+                    &vanilla_root,
+                    &settings,
+                    started,
+                    true,
+                    &|stage| progress.set(stage),
+                    &mut |gui| {
+                        let _ = sender.send(LoaderMsg::Ui(gui));
+                    },
+                )
                 .map_err(|e| e.to_string());
-                let _ = sender.send(result);
+                let _ = sender.send(LoaderMsg::Done(result));
             })?
     };
-    let atlas = HudAtlas::build(&options.resources).ok();
     let loading = Loading {
         window: None,
         renderer: None,
-        atlas,
+        gui: None,
         settings,
         fullscreen: horizon_client::window::FullscreenState::new(false),
         options: Some(options),
@@ -11145,8 +11262,11 @@ pub fn run() -> Result<()> {
         &vanilla_root,
         &early_settings,
         started,
+        false,
         &|_| {},
+        &mut |_| {},
     )?;
+    let gui = loaded.gui.ok_or("missing menu bundle")?;
     options.resources = loaded.root.clone();
     let audio = if options.dedicated.is_some() {
         Audio::silent(&options.resources)
@@ -11157,7 +11277,7 @@ pub fn run() -> Result<()> {
     let game = start_game(
         &resources,
         loaded.pack,
-        loaded.gui,
+        gui,
         options,
         loaded.pack_error.or(pack_error),
         audio,

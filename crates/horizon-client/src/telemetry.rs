@@ -3,6 +3,7 @@
 //! summary, in the outbox. It never sends anything itself: the launcher does, at its next start.
 //! Without the player's yes for that kind nothing is kept, and crash-reports/ stays local.
 use std::path::Path;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
@@ -18,12 +19,23 @@ const MIN_SECONDS: f32 = 60.0;
 const CRASH_DETAILS: [&str; 3] = ["Horizon Version", "Graphics Adapter", "Render Settings"];
 
 static STARTED: OnceLock<Instant> = OnceLock::new();
+/// When the menu bundle became ready, so the time to the title screen measures
+/// the menu and not the world bundle loaded behind it.
+static UI_READY_MS: AtomicU32 = AtomicU32::new(u32::MAX);
 /// The GPU's name, driver and backend, once the renderer has its adapter.
 static GPU: Mutex<Option<(String, String, String)>> = Mutex::new(None);
 
 /// When the game started, for the time to the title screen. Call first thing in `main`.
 pub fn mark_start() {
     STARTED.get_or_init(Instant::now);
+}
+
+/// The menu bundle is ready: the title backdrop can draw. The first writer wins.
+pub fn mark_ui_ready() {
+    if let Some(started) = STARTED.get() {
+        let ms = started.elapsed().as_millis() as u32;
+        let _ = UI_READY_MS.compare_exchange(u32::MAX, ms, Ordering::Relaxed, Ordering::Relaxed);
+    }
 }
 
 pub fn set_gpu(name: &str, driver: String, backend: String) {
@@ -138,7 +150,12 @@ impl Session {
     pub fn title_shown(&mut self) {
         if !self.title_measured {
             self.title_measured = true;
-            self.to_title_ms = STARTED.get().map(|s| s.elapsed().as_millis() as u32);
+            let ui_ms = UI_READY_MS.load(Ordering::Relaxed);
+            self.to_title_ms = if ui_ms != u32::MAX {
+                Some(ui_ms)
+            } else {
+                STARTED.get().map(|s| s.elapsed().as_millis() as u32)
+            };
         }
     }
 
