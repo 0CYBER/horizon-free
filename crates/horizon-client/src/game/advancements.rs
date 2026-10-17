@@ -88,6 +88,9 @@ pub(super) struct AdvState {
     pub(super) changed: BTreeSet<usize>,
     pub(super) unlocked: Vec<String>,
     pub(super) announced: Vec<Text>,
+    /// The tree being read on another thread since the world opened
+    /// (`prefetch_advancement_tree`), taken by the first `advancement_tree`.
+    pub(super) pending_tree: Option<std::thread::JoinHandle<Tree>>,
 }
 /// The game's world for predicates.
 struct View<'a, 'g>(&'a Game<'g>);
@@ -221,9 +224,26 @@ impl Game<'_> {
     /// The advancement tree, loaded once.
     pub(super) fn advancement_tree(&mut self) -> Arc<Tree> {
         if self.adv.tree.list.is_empty() {
-            self.adv.tree = Arc::new(Tree::load(&self.options.resources.join("data")));
+            let tree = match self.adv.pending_tree.take().map(|h| h.join()) {
+                Some(Ok(tree)) => tree,
+                _ => Tree::load(&self.options.resources.join("data")),
+            };
+            self.adv.tree = Arc::new(tree);
         }
         self.adv.tree.clone()
+    }
+    /// Start reading the advancement files on another thread while the world
+    /// loads. The first tick's first criterion trigger used to read and parse
+    /// all of them on the game thread (about 60 ms).
+    pub(super) fn prefetch_advancement_tree(&mut self) {
+        if !self.adv.tree.list.is_empty() || self.adv.pending_tree.is_some() {
+            return;
+        }
+        let data = self.options.resources.join("data");
+        self.adv.pending_tree = std::thread::Builder::new()
+            .name("horizon-advancements".into())
+            .spawn(move || Tree::load(&data))
+            .ok();
     }
     pub(super) fn load_advancements(&mut self) {
         if self.adv.loaded || self.remote.is_some() || self.no_player_here() {
