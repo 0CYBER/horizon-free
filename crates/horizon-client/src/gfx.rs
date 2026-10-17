@@ -2217,7 +2217,7 @@ impl Renderer {
         visible.clear();
         self.sections.visible(
             camera,
-            frame.distance,
+            (frame.distance / 16.0) as i32,
             &view,
             |k| !culling || reachable.contains(k),
             &mut visible,
