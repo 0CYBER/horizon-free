@@ -326,10 +326,8 @@ impl Lod {
         }
         while let Ok(done) = self.results.try_recv() {
             self.pending.remove(&done.key);
-            if self.plan.nodes.contains(&done.key) {
-                if done.samples.len() == CELLS * CELLS {
-                    self.ready.insert(done.key, done.samples);
-                }
+            if self.plan.nodes.contains(&done.key) && done.samples.len() == CELLS * CELLS {
+                self.ready.insert(done.key, done.samples);
             }
         }
         if self.covered != covered {
@@ -397,6 +395,8 @@ impl Lod {
             "minecraft:lava" => Some(("block/lava_still", false, -1)),
             _ => None,
         };
+        let light =
+            240 | (u16::from(self.context.tables.facts(state).map_or(0, |f| f.emission)) << 12);
         let style = if let Some((sprite, translucent, tint)) = fluid {
             Style {
                 layer: self
@@ -414,14 +414,7 @@ impl Lod {
                     .unwrap_or(0) as u16,
                 tint,
                 translucent,
-                light: 240
-                    | (self
-                        .context
-                        .tables
-                        .facts(state)
-                        .map_or(0, |f| u16::from(f.emission))
-                        * 16
-                        << 8),
+                light,
             }
         } else {
             let models = self
@@ -443,14 +436,7 @@ impl Lod {
                     -1
                 },
                 translucent: face.is_some_and(|f| f.translucent),
-                light: 240
-                    | (self
-                        .context
-                        .tables
-                        .facts(state)
-                        .map_or(0, |f| u16::from(f.emission))
-                        * 16
-                        << 8),
+                light,
             }
         };
         self.styles.insert(state, style);

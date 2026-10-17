@@ -10694,6 +10694,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         bob: glam::Mat4::IDENTITY,
         sky: horizon_client::environment::Sky::default(),
         distance: 12.0,
+        detail_distance: 12.0,
         depth_far: 1000.0,
         underwater: false,
         cave_culling: false,
