@@ -271,9 +271,14 @@ impl Graphics {
         if self.workers > 0 {
             return self.workers as usize;
         }
+        // The pool never takes every core. The render thread and the
+        // integrated server thread (single player runs on its own server
+        // thread by default) each need one, and a pool that fills every core
+        // starves them: the frame rate collapses to single digits while the
+        // workers saturate the CPU and its memory bandwidth.
         let auto = std::thread::available_parallelism()
             .map_or(2, |n| n.get())
-            .saturating_sub(1)
+            .saturating_sub(2)
             .max(1);
         if self.battery { auto.div_ceil(2) } else { auto }
     }
@@ -355,6 +360,17 @@ mod tests {
             Graphics::parse("workers:abc\nsky:maybe\ncullLeaves:maybe\nentityCulling:maybe\n"),
             Graphics::default()
         );
+    }
+
+    #[test]
+    fn automatic_workers_leave_cores_for_the_render_and_server_threads() {
+        let g = Graphics::default();
+        assert_eq!(g.workers, 0);
+        let cores = std::thread::available_parallelism().map_or(2, |n| n.get());
+        assert_eq!(g.worker_threads(), cores.saturating_sub(2).max(1));
+        // A manual count is the player's own choice, kept as asked.
+        let manual = Graphics { workers: 3, ..g };
+        assert_eq!(manual.worker_threads(), 3);
     }
 
     #[test]
