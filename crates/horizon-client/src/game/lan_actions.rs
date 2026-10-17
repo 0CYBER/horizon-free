@@ -140,13 +140,20 @@ impl Game<'_> {
                 total: g.xp_total,
             },
         );
-        let sneak = self.keys.contains(&KeyCode::ShiftLeft);
+        // The host's held keys stay theirs: the guest holds only sneak, and a
+        // screen the guest opens (`keys.clear()`) leaves the host walking.
+        let host_keys = std::mem::take(&mut self.keys);
         if g.sneaking {
             self.keys.insert(KeyCode::ShiftLeft);
-        } else {
-            self.keys.remove(&KeyCode::ShiftLeft);
         }
+        // The window's screens are the host's: a sign, book, command block or
+        // mount menu the guest's action opens is not drawn over the host's
+        // world (#687). The guest's client opens its own.
         let screen = std::mem::replace(&mut self.screen, Screen::Playing);
+        let host_sign = self.sign_edit.take();
+        let host_book = self.book.take();
+        let host_command_block = self.command_block_screen.take();
+        let host_mount_menu = std::mem::take(&mut self.mount_menu);
         // The host's crafting grid stays theirs; a crafting table the guest
         // opens shows as the 3x3 size.
         let craft_size = std::mem::replace(&mut self.craft_size, 2);
@@ -205,11 +212,11 @@ impl Game<'_> {
         play.swing = std::mem::replace(&mut self.swing, swing);
         self.container = container;
         self.screen = screen;
-        if sneak {
-            self.keys.insert(KeyCode::ShiftLeft);
-        } else {
-            self.keys.remove(&KeyCode::ShiftLeft);
-        }
+        self.sign_edit = host_sign;
+        self.book = host_book;
+        self.command_block_screen = host_command_block;
+        self.mount_menu = host_mount_menu;
+        self.keys = host_keys;
         let g = &mut host.hub.guests[i];
         std::mem::swap(&mut self.ender_items, &mut g.ender_items);
         std::mem::swap(&mut self.adv.progress, &mut g.advancements);

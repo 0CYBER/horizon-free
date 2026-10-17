@@ -10,8 +10,10 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - armour:    each side draws the other player in that player's own armour;
 - nametags:  each side draws the other player's name above them;
 - chest:     a chest the guest opens opens on the guest's screen, its lid opens on both sides and
-             closes on both when the guest closes it;
-- crafting:  the guest crafts planks in the inventory's 2x2 grid and opens a crafting table;
+             closes on both when the guest closes it; the host keeps playing with its mouse look (#687);
+- crafting:  the guest crafts planks in the inventory's 2x2 grid and opens a crafting table, which
+             leaves the host's screen and mouse look alone;
+- sign:      a sign the guest places doesn't open a sign editor on the host;
 - damage:    a guest in survival takes fall damage;
 - mobs:      with the host in creative, a zombie and a skeleton go for the guest and hurt them;
 - hazards:   a guest in survival gets hungry sprint-jumping and is hurt by lava, a block at the eyes,
@@ -48,7 +50,7 @@ from agent_control_e2e import Cli, Failed, game_env  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'trials']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'trials']
 
 
 class Game:
@@ -180,6 +182,19 @@ def check_nametags(host, guest, out):
     return {'host': h, 'guest': g}
 
 
+def grab(game):
+    """Mouse look on, as a player's grabbed pointer: an agent's mouse-move stands in for it."""
+    game.raw('mouse-move', 1, 0)
+    game.raw('mouse-move', -1, 0)
+
+
+def host_unaffected(host, what):
+    """What a guest opens is the guest's: the host keeps its world on screen and its mouse look (#687)."""
+    state = host('state')
+    assert state.get('screen') == 'playing', f'{what} opened the {state.get("screen")} screen on the host'
+    assert state.get('pointer_grabbed'), f"{what} released the host's pointer"
+
+
 def lid(game, pos):
     return game.raw('block', *pos).get('lid', 0.0)
 
@@ -189,9 +204,11 @@ def check_chest(host, guest, out):
     chest = (x, y, z + 2)
     guest('command', command=f'setblock {chest[0]} {chest[1]} {chest[2]} minecraft:chest')
     guest.wait(10)
+    grab(host)
     guest.raw('interact', *chest)
     screen = guest.raw('wait-for', 'screen', 'container', '--timeout', 10)
     guest.wait(20)
+    host_unaffected(host, "the guest's chest")
     opened = {'guest': lid(guest, chest), 'host': lid(host, chest)}
     host.raw('look-at', chest[0] + 0.5, chest[1] + 0.5, chest[2] + 0.5)
     host.wait(2)
@@ -231,8 +248,10 @@ def check_crafting(host, guest, out):
     table = (x, y, z - 2)
     guest('command', command=f'setblock {table[0]} {table[1]} {table[2]} minecraft:crafting_table')
     guest.wait(10)
+    grab(host)
     guest.raw('interact', *table)
     guest.raw('wait-for', 'screen', 'inventory', '--timeout', 10)
+    host_unaffected(host, "the guest's crafting table")
     size = guest('screen').get('craft_size')
     assert size == 3, f'the crafting table opened a {size}x{size} grid'
     # Two planks one above the other in the 3x3 grid: four sticks.
@@ -250,6 +269,23 @@ def check_crafting(host, guest, out):
     counts = guest('inventory')['counts']
     assert counts.get('minecraft:stick') == 4 and counts.get('minecraft:oak_planks') == 2, f'after the table: {counts}'
     return {'planks': planks, 'table': counts}
+
+
+def check_sign(host, guest, out):
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    spot = (x + 2, y, z)
+    guest('command', command=f'setblock {spot[0]} {spot[1] - 1} {spot[2]} minecraft:stone')
+    guest('command', command=f'setblock {spot[0]} {spot[1]} {spot[2]} minecraft:air')
+    guest('command', command='give @s minecraft:oak_sign 1')
+    guest.wait(10)
+    grab(host)
+    guest.raw('place', *spot, '--item', 'minecraft:oak_sign')
+    guest.wait(20)
+    placed = host.raw('block', *spot).get('block')
+    host.shot(out, 'sign')
+    assert placed and 'sign' in placed, f'the guest placed {placed}'
+    host_unaffected(host, "the guest's sign")
+    return placed
 
 
 def check_damage(host, guest, out):
@@ -623,7 +659,7 @@ def check_trials(host, guest, out):
 
 
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
-             'chest': check_chest, 'crafting': check_crafting, 'damage': check_damage,
+             'chest': check_chest, 'crafting': check_crafting, 'sign': check_sign, 'damage': check_damage,
              'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
              'containers': check_containers, 'feedback': check_feedback, 'trials': check_trials,
              'walls': check_walls}

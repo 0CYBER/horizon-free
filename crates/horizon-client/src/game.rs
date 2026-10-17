@@ -3666,6 +3666,11 @@ impl Game<'_> {
             ) || self.book.is_some())
     }
     fn capture(&mut self, capture: bool) {
+        // A guest's action (`as_guest`) opens and closes screens on the
+        // guest's own client: the window's pointer stays the host's (#687).
+        if self.lan_acting.is_some() {
+            return;
+        }
         // MouseHandler.grabMouse never captures an inactive window.
         if capture && !self.focused {
             return;
