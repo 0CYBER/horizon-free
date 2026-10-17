@@ -1073,6 +1073,13 @@ impl Game<'_> {
             for g in &h.hub.guests {
                 horizon_client::lan::playerdata::save(g, &self.world_root);
             }
+        }
+        if let Some(h) = self.lan.as_ref() {
+            for g in &h.hub.guests {
+                self.save_guest_records(h, g);
+            }
+        }
+        if let Some(h) = self.lan.as_mut() {
             let conns: Vec<u32> = h.hub.guests.iter().map(|g| g.conn).collect();
             for conn in conns {
                 h.hub.kick(

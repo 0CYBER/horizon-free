@@ -3,8 +3,12 @@
 //! killed by, saved to `players/stats/<uuid>.json`, plus the phantom
 //! spawner that reads the time since rest (`PhantomSpawner`).
 use super::{Dim, Game};
+use horizon_core::geometry::Vec3;
 use horizon_core::random::RandomSource;
-use std::collections::BTreeMap;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::{Path, PathBuf},
+};
 
 /// `stats[type][key]`, with `type` and `key` namespaced ids.
 #[derive(Default)]
@@ -16,6 +20,8 @@ pub(super) struct Stats {
     /// Statistic changes (type, key, amount; `None` = reset) for the
     /// scoreboard criteria to follow.
     pub(super) events: Vec<(String, String, Option<i32>)>,
+    /// Changed since the client was last sent them (`StatsCounter`'s dirty set).
+    pub(super) dirty: BTreeSet<(String, String)>,
 }
 impl Stats {
     pub(super) fn add(&mut self, ty: &str, key: &str, n: i32) {
@@ -28,6 +34,8 @@ impl Stats {
         *v = v.saturating_add(n);
         self.events
             .push((format!("minecraft:{ty}"), key.to_owned(), Some(n)));
+        self.dirty
+            .insert((format!("minecraft:{ty}"), key.to_owned()));
     }
     pub(super) fn get(&self, ty: &str, key: &str) -> i32 {
         self.values
@@ -40,52 +48,51 @@ impl Stats {
         if let Some(m) = self.values.get_mut(&format!("minecraft:{ty}")) {
             m.insert(key.to_owned(), 0);
         }
+        self.dirty
+            .insert((format!("minecraft:{ty}"), key.to_owned()));
         self.events
             .push((format!("minecraft:{ty}"), key.to_owned(), None));
     }
     pub(super) fn custom(&mut self, key: &str, n: i32) {
         self.add("custom", &format!("minecraft:{key}"), n);
     }
-}
-impl Game<'_> {
-    fn stats_path(&self) -> Option<std::path::PathBuf> {
-        let uuid = self.level.player_uuid?;
-        let hex: String = uuid.iter().map(|v| format!("{:08x}", *v as u32)).collect();
-        let text = format!(
-            "{}-{}-{}-{}-{}",
-            &hex[0..8],
-            &hex[8..12],
-            &hex[12..16],
-            &hex[16..20],
-            &hex[20..32]
-        );
-        Some(
-            self.world_root
-                .join("players/stats")
-                .join(format!("{text}.json")),
-        )
+    /// `ServerStatsCounter.markAllDirty`: everything goes out on the next request.
+    pub(super) fn mark_all_dirty(&mut self) {
+        self.dirty = self
+            .values
+            .iter()
+            .flat_map(|(ty, m)| m.keys().map(|k| (ty.clone(), k.clone())))
+            .collect();
     }
-    /// `ServerStatsCounter.parseLocal`.
-    pub(super) fn load_stats(&mut self) {
-        if self.stats.loaded || self.remote.is_some() {
-            return;
-        }
-        self.stats.loaded = true;
-        let Some(path) = self.stats_path() else {
-            return;
+    /// `ServerStatsCounter.sendStats`' entries: the dirty statistics and
+    /// their values, the set cleared.
+    pub(super) fn take_dirty(&mut self) -> Vec<(String, String, i32)> {
+        std::mem::take(&mut self.dirty)
+            .into_iter()
+            .map(|(ty, key)| {
+                let v = self.values.get(&ty).and_then(|m| m.get(&key)).copied();
+                (ty, key, v.unwrap_or(0))
+            })
+            .collect()
+    }
+    /// `ServerStatsCounter.parseLocal`: the counters of a stats file.
+    pub(super) fn read(path: &Path) -> Self {
+        let mut stats = Self {
+            loaded: true,
+            ..Self::default()
         };
-        let Ok(text) = std::fs::read_to_string(path) else {
-            return;
+        let Some(json) = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        else {
+            return stats;
         };
-        let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
-            return;
-        };
-        if let Some(stats) = json.get("stats").and_then(|s| s.as_object()) {
-            for (ty, entries) in stats {
+        if let Some(all) = json.get("stats").and_then(|s| s.as_object()) {
+            for (ty, entries) in all {
                 let Some(entries) = entries.as_object() else {
                     continue;
                 };
-                let map = self.stats.values.entry(ty.clone()).or_default();
+                let map = stats.values.entry(ty.clone()).or_default();
                 for (key, v) in entries {
                     if let Some(n) = v.as_i64() {
                         map.insert(key.clone(), n as i32);
@@ -93,17 +100,11 @@ impl Game<'_> {
                 }
             }
         }
+        stats
     }
     /// `ServerStatsCounter.save`.
-    pub(super) fn save_stats(&self) {
-        if !self.stats.loaded || self.remote.is_some() {
-            return;
-        }
-        let Some(path) = self.stats_path() else {
-            return;
-        };
+    pub(super) fn write(&self, path: &Path) {
         let stats: serde_json::Map<String, serde_json::Value> = self
-            .stats
             .values
             .iter()
             .filter(|(_, m)| !m.is_empty())
@@ -124,9 +125,55 @@ impl Game<'_> {
             let _ = std::fs::write(path, text);
         }
     }
+}
+/// `players/<dir>/<uuid>.json` of a world (advancements, stats).
+pub(super) fn player_json(world: &Path, dir: &str, uuid: [i32; 4]) -> PathBuf {
+    let hex: String = uuid.iter().map(|v| format!("{:08x}", *v as u32)).collect();
+    let text = format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    );
+    world.join("players").join(dir).join(format!("{text}.json"))
+}
+impl Game<'_> {
+    fn stats_path(&self) -> Option<PathBuf> {
+        Some(player_json(
+            &self.world_root,
+            "stats",
+            self.level.player_uuid?,
+        ))
+    }
+    /// `ServerStatsCounter.parseLocal`.
+    pub(super) fn load_stats(&mut self) {
+        if self.stats.loaded || self.remote.is_some() || self.no_player_here() {
+            return;
+        }
+        self.stats.loaded = true;
+        if let Some(path) = self.stats_path() {
+            self.stats.values = Stats::read(&path).values;
+        }
+    }
+    /// `ServerStatsCounter.save`.
+    pub(super) fn save_stats(&self) {
+        if !self.stats.loaded || self.remote.is_some() || self.no_player_here() {
+            return;
+        }
+        if let Some(path) = self.stats_path() {
+            self.stats.write(&path);
+        }
+    }
     /// The per-tick counters (`Player.tick`/`ServerPlayer.tick` awardStat).
     pub(super) fn tick_stats(&mut self) {
         self.load_stats();
+        self.count_tick_stats(self.sleeping.is_some());
+        self.tick_movement_stats();
+    }
+    /// `Player.tick`'s counters for the player in `self.player`.
+    pub(super) fn count_tick_stats(&mut self, sleeping: bool) {
         let Some(p) = self.player.as_ref() else {
             return;
         };
@@ -137,21 +184,26 @@ impl Game<'_> {
         s.custom("total_world_time", 1);
         if alive {
             s.custom("time_since_death", 1);
-            if self.sleeping.is_none() {
+            if !sleeping {
                 s.custom("time_since_rest", 1);
             }
         }
         if crouching {
             s.custom("sneak_time", 1);
         }
-        self.tick_movement_stats();
     }
-    /// `Player.checkMovementStatistics` / `checkRidingStatistics`.
     fn tick_movement_stats(&mut self) {
         let Some(p) = self.player.as_ref() else {
             return;
         };
         let d = p.position.subtract(self.previous_position);
+        self.movement_stats(d);
+    }
+    /// `Player.checkMovementStatistics` / `checkRidingStatistics` for one move.
+    pub(super) fn movement_stats(&mut self, d: Vec3) {
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
         let horizontal = ((d.x * d.x + d.z * d.z).sqrt() * 100.0).round() as i32;
         let total = ((d.x * d.x + d.y * d.y + d.z * d.z).sqrt() * 100.0).round() as i32;
         // Teleports are not travel.
