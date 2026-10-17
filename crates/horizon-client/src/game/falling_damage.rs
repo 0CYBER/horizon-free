@@ -43,11 +43,11 @@ impl Game<'_> {
             if anvil
                 && impact.wear_chance > 0.0
                 && self.world.random.next_float() < impact.wear_chance
-                && let Some(mut state) = self.res.assets.registry.state(block.state).cloned()
+                && let Some(mut state) = self.pack.assets.registry.state(block.state).cloned()
             {
                 if falling_block::wear_anvil(&mut state) {
                     block.state = self
-                        .res
+                        .pack
                         .assets
                         .registry
                         .resolve(&state)

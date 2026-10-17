@@ -1,0 +1,153 @@
+//! `op`, `deop` and `whitelist`. While the server runs, the game owns the lists: the command goes to its
+//! console. While it is stopped, they edit vanilla's files with the code the game reads them with
+//! (horizon-server-files) and answer with vanilla's console messages.
+
+use crate::{config, supervisor};
+use horizon_server_files::user_lists::{NameAndId, OpEntry, OpList, WhiteEntry, WhiteList};
+use std::path::Path;
+
+pub fn run(dir: &Path, command: &str, args: &[String]) -> Result<(), String> {
+    let config = config::Config::load(dir)?;
+    // Holding the folder's lock keeps the server from starting halfway through.
+    let Ok(_lock) = supervisor::lock(dir) else {
+        let mut words = vec![command.to_owned()];
+        words.extend_from_slice(args);
+        return crate::cli::command(dir, &words);
+    };
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let ops_path = dir.join("ops.json");
+    let white_path = dir.join("whitelist.json");
+    let message = match (command, args.as_slice()) {
+        ("op", [name]) => {
+            let mut ops = load(OpList::new(ops_path))?;
+            let user = NameAndId::offline(name);
+            if ops.contains(&user) {
+                "Nothing changed. The player already is an operator".to_owned()
+            } else {
+                ops.add(OpEntry {
+                    user,
+                    level: 4,
+                    bypasses_player_limit: false,
+                });
+                format!("Made {name} a server operator")
+            }
+        }
+        ("deop", [name]) => {
+            let mut ops = load(OpList::new(ops_path))?;
+            if ops.remove(&NameAndId::offline(name)) {
+                format!("Made {name} no longer a server operator")
+            } else {
+                "Nothing changed. The player is not an operator".to_owned()
+            }
+        }
+        ("whitelist", ["add", name]) => {
+            let mut white = load(WhiteList::new(white_path))?;
+            let user = NameAndId::offline(name);
+            if white.contains(&user) {
+                "Player is already whitelisted".to_owned()
+            } else {
+                white.add(WhiteEntry { user });
+                format!("Added {name} to the whitelist")
+            }
+        }
+        ("whitelist", ["remove", name]) => {
+            let mut white = load(WhiteList::new(white_path))?;
+            if white.remove(&NameAndId::offline(name)) {
+                format!("Removed {name} from the whitelist")
+            } else {
+                "Player is not whitelisted".to_owned()
+            }
+        }
+        ("whitelist", [state @ ("on" | "off")]) => {
+            let on = *state == "on";
+            match (on, config.server.whitelist) {
+                (true, true) => "Whitelist is already turned on".to_owned(),
+                (false, false) => "Whitelist is already turned off".to_owned(),
+                _ => {
+                    config::update(dir, "server", "whitelist", toml::Value::Boolean(on))?;
+                    format!("Whitelist is now turned {state}")
+                }
+            }
+        }
+        ("whitelist", ["list"]) => {
+            let white = load(WhiteList::new(white_path))?;
+            let names: Vec<String> = white
+                .entries()
+                .iter()
+                .map(|e| e.user.name.clone())
+                .collect();
+            let state = if config.server.whitelist { "on" } else { "off" };
+            if names.is_empty() {
+                format!("There are no whitelisted players (the whitelist is {state})")
+            } else {
+                format!(
+                    "There are {} whitelisted player(s): {} (the whitelist is {state})",
+                    names.len(),
+                    names.join(", ")
+                )
+            }
+        }
+        _ => {
+            return Err(
+                "use: op NAME, deop NAME, whitelist on|off|list, whitelist add|remove NAME".into(),
+            );
+        }
+    };
+    println!("{message}");
+    Ok(())
+}
+
+/// A list from its file; a missing file is an empty list, a broken one an error (vanilla would replace it).
+fn load<E: horizon_server_files::user_lists::Entry>(
+    mut list: horizon_server_files::user_lists::UserList<E>,
+) -> Result<horizon_server_files::user_lists::UserList<E>, String> {
+    if list.file.exists() {
+        list.load()
+            .map_err(|e| format!("{}: {e}", list.file.display()))?;
+    }
+    Ok(list)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn edits_the_lists_while_stopped() {
+        let dir = std::env::temp_dir().join(format!("horizon-server-lists-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(config::FILE), config::TEMPLATE).unwrap();
+        let s = |v: &[&str]| v.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
+        run(&dir, "op", &s(&["Alex"])).unwrap();
+        run(&dir, "whitelist", &s(&["add", "Steve"])).unwrap();
+        run(&dir, "whitelist", &s(&["off"])).unwrap();
+        assert!(
+            std::fs::read_to_string(dir.join("ops.json"))
+                .unwrap()
+                .contains("Alex")
+        );
+        assert!(
+            std::fs::read_to_string(dir.join("whitelist.json"))
+                .unwrap()
+                .contains("Steve")
+        );
+        assert!(!config::Config::load(&dir).unwrap().server.whitelist);
+        run(&dir, "deop", &s(&["Alex"])).unwrap();
+        assert!(
+            !std::fs::read_to_string(dir.join("ops.json"))
+                .unwrap()
+                .contains("Alex")
+        );
+        // A running server owns the lists: without its API, nothing changes.
+        let lock = supervisor::lock(&dir).unwrap();
+        assert!(run(&dir, "op", &s(&["Alex"])).is_err());
+        drop(lock);
+        assert!(
+            !std::fs::read_to_string(dir.join("ops.json"))
+                .unwrap()
+                .contains("Alex")
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}

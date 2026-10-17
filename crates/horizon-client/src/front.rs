@@ -318,6 +318,7 @@ impl Title {
         x: f32,
         y: f32,
     ) -> Action {
+        self.remember_direct_address();
         if self.skip_opening() {
             return Action::None;
         }
@@ -472,7 +473,7 @@ impl Title {
                     _ => None,
                 };
                 if let Some(id) = id {
-                    match screen.click(Some(id), 0.0, 0.0, (0.0, 0.0), &saves) {
+                    match self.multiplayer_click(Some(id), 0.0, 0.0, (0.0, 0.0)) {
                         Outcome::Back => self.mode = Mode::Main,
                         Outcome::Connect(address) => return Action::Connect { address },
                         Outcome::None => {}
@@ -1430,6 +1431,28 @@ mod tests {
             Mode::Select { worlds, selected } => selected.map(|i| worlds[i].folder.clone()),
             _ => panic!("not on the world list"),
         }
+    }
+
+    #[test]
+    fn horizon_direct_connection_remembers_the_address_after_leaving() {
+        let atlas =
+            HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets")).unwrap();
+        let saves =
+            std::env::temp_dir().join(format!("horizon-front-direct-{}", std::process::id()));
+        let mut title = Title::new(saves.clone(), &saves);
+        title.last_server = "localhost:25566".into();
+        title.mode = Mode::Multiplayer(Screen::list(&saves));
+        press(&mut title, &atlas, DIRECT);
+        assert_eq!(title.focused_field().unwrap().1, "localhost:25566");
+        *title.focused_field().unwrap().1 = "example.org:25567".into();
+        press(&mut title, &atlas, BACK);
+        press(&mut title, &atlas, DIRECT);
+        assert_eq!(title.focused_field().unwrap().1, "example.org:25567");
+        *title.focused_field().unwrap().1 = "localhost:25568".into();
+        press(&mut title, &atlas, NAV);
+        press(&mut title, &atlas, NAV + 2);
+        press(&mut title, &atlas, DIRECT);
+        assert_eq!(title.focused_field().unwrap().1, "localhost:25568");
     }
 
     #[test]

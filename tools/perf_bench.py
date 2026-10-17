@@ -13,6 +13,11 @@ for every game. RSS is sampled from outside the process for every game too.
     python3 tools/perf_bench.py --game vanilla-mods --label mods-m4
     python3 tools/perf_bench.py --table horizon-m4 vanilla-m4 mods-m4
 
+A ported mod pack against the same mods on their own loader (docs/modpacks.md, "Measured"):
+
+    python3 tools/perf_bench.py --game horizon --port-work WORK --label pack-horizon
+    python3 tools/perf_bench.py --game neoforge --mod-jars JARS --deps DEPS --label pack-neoforge
+
 Games:
   horizon       target/release/horizon-client, driven over its control socket
   vanilla       your own 26.3 client.jar + Fabric Loader + a dev-only driver
@@ -20,6 +25,13 @@ Games:
                 is redistributed
   vanilla-mods  the same + Sodium, Lithium, FerriteCore and ImmediatelyFast
                 (pinned in packs/mods.lock.json)
+  neoforge      Minecraft 1.21.1 on NeoForge (dev-only, tools/neoforge_oracle.py
+                installs it under .local/neoforge-oracle) + a driver mod
+                (mods/horizon/src/neoforge-bench) + the jars of --mod-jars and
+                --deps, the user's own; 26.3 options it does not know are ignored
+
+--port-work loads the mods a horizon-port-pack work folder carried over into
+Horizon as dev mods.
 
 Results: benchmarks/perf/<label>-rd<N>.json, one benchmark report per render
 distance (docs/benchmark-report.md), over --repeats games. Games run with no
@@ -105,6 +117,8 @@ OPTIONS = {
 LAUNCHER_JVM = ["-XX:+UnlockExperimentalVMOptions", "-XX:+UseG1GC", "-XX:G1NewSizePercent=20",
                 "-XX:G1ReservePercent=20", "-XX:MaxGCPauseMillis=50", "-XX:G1HeapRegionSize=32M"]
 PERF_MODS = ["sodium", "lithium", "ferrite-core", "immediatelyfast"]
+# Minecraft 1.21.1's data version, for the NeoForge client's options.txt (it ignores 26.3's newer keys).
+NEOFORGE_DATA_VERSION = "3955"
 
 
 # The benchmark report format, version 1 (docs/benchmark-report.md). crates/horizon-bench is the
@@ -211,9 +225,10 @@ def nvidia_memory_mb(pid):
     return None
 
 
-def write_options(game_dir, distance):
+def write_options(game_dir, distance, version=None):
     game_dir.mkdir(parents=True, exist_ok=True)
-    text = "".join(f"{k}:{v.format(distance=distance)}\n" for k, v in OPTIONS.items())
+    options = dict(OPTIONS, version=version) if version else OPTIONS
+    text = "".join(f"{k}:{v.format(distance=distance)}\n" for k, v in options.items())
     (game_dir / "options.txt").write_text(text)
     return text
 
@@ -324,6 +339,8 @@ def run_horizon(args, distance):
                "--control-socket", str(sock), "--no-pause", "--weather", "clear", "--time", "6000"]
     if args.offscreen:
         command.append("--offscreen")
+    for carry in dev_mods(args):
+        command += ["--dev-mod", str(carry)]
     env = dict(os.environ, HORIZON_NO_AUDIO="1")
     log = (WORK / f"horizon-rd{distance}.log").open("w")
     started = time.time()
@@ -374,6 +391,13 @@ def run_horizon(args, distance):
         sock.unlink(missing_ok=True)
     result["memory"] = sampler.summary(windows)
     return result
+
+
+def dev_mods(args):
+    """The carried-over mods of a horizon-port-pack work folder (docs/modpacks.md), loaded as dev mods."""
+    if not args.port_work:
+        return []
+    return sorted(p for p in (Path(args.port_work) / "mods").glob("*/carry") if (p / "horizon-mod.toml").exists())
 
 
 # Vanilla -------------------------------------------------------------------
@@ -491,6 +515,11 @@ def run_vanilla(args, distance):
         libs = [p for p in (os.environ.get("NIX_LD_LIBRARY_PATH", ""), "/run/opengl-driver/lib") if p]
         env["LD_LIBRARY_PATH"] = ":".join(libs + [env.get("LD_LIBRARY_PATH", "")]).strip(":")
     log = (WORK / f"{args.game}-rd{distance}.log").open("w")
+    return driven(args, distance, command, game_dir, env, log, events, options, loaded_mods)
+
+
+def driven(args, distance, command, game_dir, env, log, events, options, loaded_mods):
+    """Runs a Java client whose driver mod writes `events`, and reads its results."""
     started = time.time()
     proc = subprocess.Popen(command, cwd=game_dir, env=env, stdout=log, stderr=subprocess.STDOUT)
     sampler = Sampler(proc.pid)
@@ -508,7 +537,7 @@ def run_vanilla(args, distance):
     lines = [json.loads(l) for l in events.read_text().splitlines()] if events.exists() else []
     by = lambda name: [e for e in lines if e["event"] == name]
     if not by("done") or by("timeout"):
-        raise RuntimeError(f"vanilla run failed: {lines[-1:] if lines else 'no events'}; see {log.name}")
+        raise RuntimeError(f"{args.game} run failed: {lines[-1:] if lines else 'no events'}; see {log.name}")
     title, world = by("title")[0], by("world")[0]
     result = {
         "options_txt": options, "mods": loaded_mods, "heap": args.heap,
@@ -530,6 +559,55 @@ def run_vanilla(args, distance):
         print_scene(args.game, distance, name, scene)
     result["memory"] = sampler.summary(windows)
     return result
+
+
+# NeoForge ------------------------------------------------------------------
+
+def run_neoforge(args, distance):
+    """A NeoForge 1.21.1 client (dev-only, tools/neoforge_oracle.py) with the driver mod and --mod-jars:
+    the mods a ported pack replaces, on the loader the pack runs on."""
+    import neoforge_oracle
+    home = neoforge_oracle.client()[0]
+    mod = neoforge_oracle.build_bench(home)
+    game_dir = WORK / args.game
+    shutil.rmtree(game_dir, ignore_errors=True)
+    options = write_options(game_dir, distance, version=NEOFORGE_DATA_VERSION)
+    mods = game_dir / "mods"
+    mods.mkdir()
+    shutil.copy(mod, mods)
+    loaded_mods = ["horizon-bench"]
+    for folder in filter(None, (args.mod_jars, args.deps)):
+        for jar in sorted(Path(folder).glob("*.jar")):
+            shutil.copy(jar, mods)
+            loaded_mods.append(jar.name)
+    natives = WORK / "natives-neoforge"
+    script = WORK / "script.json"
+    script.write_text(json.dumps({
+        "world": WORLD, "seed": SEED, "settle": args.settle, "seconds": args.seconds, "timeout": args.timeout,
+        "scenes": [{"name": n, "from": a, "to": b, "pitch": p} for n, a, b, p in scene_list(args)],
+    }))
+    events = WORK / f"{args.game}-rd{distance}.events.jsonl"
+    events.unlink(missing_ok=True)
+    assets = WORK / "assets"
+    (assets / "indexes").mkdir(parents=True, exist_ok=True)
+    java = Path(os.environ["JAVA_HOME"]) / "bin/java" if os.environ.get("JAVA_HOME") else "java"
+    _, command = neoforge_oracle.client_command(
+        java, args.heap, game_dir, natives, assets,
+        jvm=[*LAUNCHER_JVM, f"-Dhorizon.bench.script={script}", f"-Dhorizon.bench.out={events}"],
+        game=["--width", str(args.width), "--height", str(args.height)])
+    natives.mkdir(parents=True, exist_ok=True)
+    extract_natives(neoforge_oracle.client()[3], natives)
+    env = dict(os.environ, ALSOFT_DRIVERS="null")
+    for attempt in (1, 2):
+        log = (WORK / f"{args.game}-rd{distance}.log").open("w")
+        try:
+            return driven(args, distance, command, game_dir, env, log, events, options, loaded_mods)
+        except RuntimeError:
+            # FML sometimes reads config/fml.toml while creating it on a first start, and crashes before
+            # the title screen; a crash once the driver started is a real failure.
+            if attempt == 2 or events.exists():
+                raise
+            shutil.rmtree(game_dir / "crash-reports", ignore_errors=True)
 
 
 def stop(proc):
@@ -654,7 +732,7 @@ def table(labels):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--game", choices=["horizon", "vanilla", "vanilla-mods"], default="horizon")
+    p.add_argument("--game", choices=["horizon", "vanilla", "vanilla-mods", "neoforge"], default="horizon")
     p.add_argument("--label", help="result name (default <game>-<host>)")
     p.add_argument("--distances", default="8,16,32")
     p.add_argument("--scenes", help="comma-separated subset of " + ",".join(s[0] for s in SCENES))
@@ -669,6 +747,9 @@ def main():
     p.add_argument("--resources", default=str(ROOT / ".local/horizon-client/26.3"))
     p.add_argument("--build", default=str(ROOT / "target/release"))
     p.add_argument("--repeats", type=int, default=3, help="games per render distance; the report gives means and 95%% CIs")
+    p.add_argument("--port-work", help="horizon: also load the mods carried over in this horizon-port-pack work folder")
+    p.add_argument("--mod-jars", help="neoforge: the mod jars to load (the user's own; never committed)")
+    p.add_argument("--deps", help="neoforge: their required libraries")
     p.add_argument("--table", nargs="+", metavar="LABEL", help="print markdown tables of saved runs, and exit")
     args = p.parse_args()
     if args.table:
@@ -676,7 +757,7 @@ def main():
         return
     args.label = args.label or f"{args.game}-{platform.node().split('.')[0]}"
     WORK.mkdir(parents=True, exist_ok=True)
-    run = run_horizon if args.game == "horizon" else run_vanilla
+    run = {"horizon": run_horizon, "neoforge": run_neoforge}.get(args.game, run_vanilla)
     for d in [int(x) for x in args.distances.split(",")]:
         runs = []
         for _ in range(args.repeats):
@@ -696,7 +777,13 @@ def app(args):
                                 capture_output=True, text=True).stdout.strip() or None
         manifest = (ROOT / "crates/horizon-client/Cargo.toml").read_text()
         version = next(l.split('"')[1] for l in manifest.splitlines() if l.startswith("version"))
-        return {"name": "horizon-client", "version": version, "commit": commit}
+        mods = [{"name": p.parent.name, "version": "carried"} for p in dev_mods(args)]
+        return {"name": "horizon-client", "version": version, "commit": commit, **({"mods": mods} if mods else {})}
+    if args.game == "neoforge":
+        import neoforge_oracle
+        jars = [j.name for f in filter(None, (args.mod_jars, args.deps)) for j in sorted(Path(f).glob("*.jar"))]
+        return {"name": "minecraft", "version": "1.21.1",
+                "mods": [{"name": "neoforge", "version": neoforge_oracle.NEOFORGE}] + [{"name": j} for j in jars]}
     lock = json.loads((ROOT / "packs/mods.lock.json").read_text())
     mods = [{"name": "fabric-loader", "version": lock["fabric_loader"]}]
     if args.game == "vanilla-mods":

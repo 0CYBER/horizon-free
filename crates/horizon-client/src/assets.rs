@@ -245,7 +245,7 @@ impl Assets {
             material_states,
             sprite_size: sprites.size,
             sprite_minimum_size: sprites.minimum_size,
-            texture_layers: u32::try_from(sprites.layers.len())?,
+            texture_layers: u32::try_from(sprites.count())?,
             pixels: sprites.pixels,
             model_catalog: models.catalog,
             model_library,

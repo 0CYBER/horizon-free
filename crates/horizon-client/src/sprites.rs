@@ -82,6 +82,10 @@ pub struct Sprites {
     /// Each layer's frames at the texture's own resolution (square), and the
     /// frame shown first.
     native: Vec<(u32, Arc<Vec<Vec<u8>>>, usize)>,
+    /// Still textures by their pixels and mip settings: mods copy vanilla's
+    /// textures under their own names, and one layer serves them all (the
+    /// GPU's array may hold as few as 2048).
+    still: std::collections::HashMap<(Vec<u8>, u32, [u32; 2], [bool; 4]), u32>,
 }
 /// Edge length of vanilla's block textures: the smallest array layer.
 pub const SPRITE_SIZE: u32 = 16;
@@ -104,6 +108,10 @@ fn resample(frame: &[u8], from: u32, to: u32) -> Vec<u8> {
     out
 }
 impl Sprites {
+    /// How many array layers the textures take.
+    pub fn count(&self) -> usize {
+        self.native.len()
+    }
     /// Lay every layer out at one size: the largest texture's (resource packs
     /// may ship 32x, 64x... textures, like vanilla's stitched atlas), rounded
     /// up to a power of two and limited to [`MAX_ARRAY_BYTES`]. Smaller
@@ -152,7 +160,7 @@ impl Sprites {
                         }
                     })
                     .collect();
-                let layer = u32::try_from(self.layers.len())?;
+                let layer = u32::try_from(self.native.len())?;
                 self.opaque.push(true);
                 self.translucent.push(false);
                 self.mips.push(crate::mipmap::Settings::default());
@@ -209,7 +217,7 @@ impl Sprites {
             };
             pixels.extend(rgba);
         }
-        let layer = u32::try_from(self.layers.len())?;
+        let layer = u32::try_from(self.native.len())?;
         let columns = info.width / width;
         let count = columns * (info.height / height);
         // Layers are square; a frame of another shape is nearest-resampled to
@@ -230,6 +238,46 @@ impl Sprites {
             }
             frames.push(frame);
         }
+        let settings = crate::mipmap::Settings {
+            native_size: side,
+            strategy: texture_section(metadata.as_ref())
+                .as_ref()
+                .and_then(|t| t["mipmap_strategy"].as_str())
+                .and_then(crate::mipmap::Strategy::parse)
+                .unwrap_or_default(),
+            alpha_cutoff_bias: texture_section(metadata.as_ref())
+                .as_ref()
+                .and_then(|t| t["alpha_cutoff_bias"].as_f64())
+                .unwrap_or(0.0) as f32,
+            has_transparent: pixels.as_chunks::<4>().0.iter().any(|p| p[3] == 0),
+            item: name
+                .split_once(':')
+                .is_some_and(|(_, p)| p.starts_with("item/")),
+        };
+        let opaque = pixels.as_chunks::<4>().0.iter().all(|p| p[3] == 255);
+        let translucent = pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|p| p[3] != 0 && p[3] != 255);
+        let still = (animation.is_none() && frames.len() == 1).then(|| {
+            (
+                frames[0].clone(),
+                side,
+                [
+                    settings.strategy as u32,
+                    settings.alpha_cutoff_bias.to_bits(),
+                ],
+                [settings.has_transparent, settings.item, opaque, translucent],
+            )
+        });
+        if let Some(&same) = still.as_ref().and_then(|k| self.still.get(k)) {
+            self.layers.insert(name.to_owned(), same);
+            return Ok(same);
+        }
+        if let Some(key) = still {
+            self.still.insert(key, layer);
+        }
         let frames = Arc::new(frames);
         let mut initial = 0;
         if let Some(clip) = animation
@@ -245,41 +293,23 @@ impl Sprites {
                 clip: Arc::new(clip),
             });
         }
-        // SpriteContents: TextureMetadataSection's mipmap strategy and alpha
-        // cutoff bias, and the whole image's NativeImage.computeTransparency.
-        let texture = metadata
-            .as_ref()
-            .and_then(|v| v.get("texture"))
-            .and_then(|v| serde_json::from_str::<serde_json::Value>(v.get()).ok());
-        self.mips.push(crate::mipmap::Settings {
-            native_size: side,
-            strategy: texture
-                .as_ref()
-                .and_then(|t| t["mipmap_strategy"].as_str())
-                .and_then(crate::mipmap::Strategy::parse)
-                .unwrap_or_default(),
-            alpha_cutoff_bias: texture
-                .as_ref()
-                .and_then(|t| t["alpha_cutoff_bias"].as_f64())
-                .unwrap_or(0.0) as f32,
-            has_transparent: pixels.as_chunks::<4>().0.iter().any(|p| p[3] == 0),
-            item: name
-                .split_once(':')
-                .is_some_and(|(_, p)| p.starts_with("item/")),
-        });
-        self.opaque
-            .push(pixels.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
-        self.translucent.push(
-            pixels
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .any(|p| p[3] != 0 && p[3] != 255),
-        );
+        self.mips.push(settings);
+        self.opaque.push(opaque);
+        self.translucent.push(translucent);
         self.layers.insert(name.to_owned(), layer);
         self.native.push((side, frames, initial));
         Ok(layer)
     }
+}
+
+/// SpriteContents: the `.mcmeta` `texture` section (TextureMetadataSection's
+/// mipmap strategy and alpha cutoff bias).
+fn texture_section(
+    metadata: Option<&BTreeMap<String, Box<serde_json::value::RawValue>>>,
+) -> Option<serde_json::Value> {
+    metadata
+        .and_then(|v| v.get("texture"))
+        .and_then(|v| serde_json::from_str(v.get()).ok())
 }
 
 #[cfg(test)]
@@ -304,6 +334,46 @@ pub(crate) fn test_clip(size: u32, layer: u32, metadata: &str) -> SpriteAnimatio
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn identical_still_textures_share_a_layer() {
+        let root =
+            std::env::temp_dir().join(format!("horizon-sprite-share-{}", std::process::id()));
+        let directory = root.join("assets/a/textures/block");
+        fs::create_dir_all(&directory).unwrap();
+        let write = |name: &str, red: u8| {
+            let mut encoder =
+                png::Encoder::new(File::create(directory.join(name)).unwrap(), 16, 16);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let pixels: Vec<u8> = (0..256).flat_map(|i| [red, i as u8, 0, 255]).collect();
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&pixels)
+                .unwrap();
+        };
+        write("one.png", 10);
+        write("copy.png", 10);
+        write("other.png", 20);
+        let mut sprites = Sprites::default();
+        let one = sprites.insert(&root, "a:block/one").unwrap();
+        let copy = sprites.insert(&root, "a:block/copy").unwrap();
+        let other = sprites.insert(&root, "a:block/other").unwrap();
+        // The same pixels as an item sprite mip differently: a layer of its own.
+        fs::create_dir_all(root.join("assets/a/textures/item")).unwrap();
+        fs::copy(
+            directory.join("one.png"),
+            root.join("assets/a/textures/item/one.png"),
+        )
+        .unwrap();
+        let item = sprites.insert(&root, "a:item/one").unwrap();
+        fs::remove_dir_all(&root).unwrap();
+        assert_eq!((one, copy, other, item), (0, 0, 1, 2));
+        assert_eq!((sprites.count(), sprites.layers.len()), (3, 4));
+        assert_eq!((sprites.opaque.len(), sprites.mips.len()), (3, 3));
+        sprites.finish();
+        assert_eq!(sprites.pixels.len(), 3 * 16 * 16 * 4);
+    }
     #[test]
     fn a_32px_only_atlas_does_not_add_an_extra_mipmap() {
         let mut sprites = Sprites {

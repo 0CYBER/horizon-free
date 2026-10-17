@@ -3,7 +3,7 @@
 //! the render distance rejects all of its sections with one test, and the
 //! sections that remain are reached by index rather than by hashing keys.
 use super::{Frustum, SectionKey};
-use crate::fast_hash::FxHashMap;
+use crate::{fast_hash::FxHashMap, streaming::in_view_distance};
 use glam::{DVec3, Vec3};
 
 /// One chunk column's resident sections.
@@ -149,26 +149,28 @@ fn origin(key: SectionKey, camera: DVec3) -> DVec3 {
     ) - camera
 }
 
-/// Whether the section at `key` is drawn: within `distance` blocks of the
-/// camera horizontally (plus a section and a half), and partly inside the
-/// frustum. `None` when it is not, else its squared centre distance and origin.
-fn in_view(
-    key: SectionKey,
-    camera: DVec3,
-    distance: f32,
-    frustum: &Frustum,
-) -> Option<(f64, Vec3)> {
-    let origin = origin(key, camera);
-    let center = origin + DVec3::splat(8.0);
-    let horizontal = (center.x * center.x + center.z * center.z).sqrt();
-    if horizontal > f64::from(distance) + 24.0 {
+/// The camera's chunk column.
+fn camera_column(camera: DVec3) -> (i32, i32) {
+    (
+        (camera.x.floor() as i32) >> 4,
+        (camera.z.floor() as i32) >> 4,
+    )
+}
+
+/// Whether the section at `key` is drawn: its column within the render
+/// distance of the camera's (`SectionOcclusionGraph.isInViewDistance`), and
+/// partly inside the frustum. `None` when it is not, else its squared centre
+/// distance and origin.
+fn in_view(key: SectionKey, camera: DVec3, radius: i32, frustum: &Frustum) -> Option<(f64, Vec3)> {
+    if !in_view_distance(camera_column(camera), radius, key.0, key.2) {
         return None;
     }
+    let origin = origin(key, camera);
     let min = origin.as_vec3();
     if !frustum.intersects(min, min + Vec3::splat(16.0)) {
         return None;
     }
-    Some((center.length_squared(), min))
+    Some(((origin + DVec3::splat(8.0)).length_squared(), min))
 }
 
 impl<T> Resident<T> {
@@ -178,22 +180,22 @@ impl<T> Resident<T> {
     /// Columns are tested first, with the same distance test (it depends
     /// only on x and z) and a box spanning their sections: every section box
     /// lies inside it and the frustum test rounds monotonically, so a column
-    /// the frustum rejects holds no section it would accept.
+    /// the frustum rejects holds no section it would accept. `radius` is the
+    /// render distance in chunks.
     pub fn visible(
         &self,
         camera: DVec3,
-        distance: f32,
+        radius: i32,
         frustum: &Frustum,
         reachable: impl Fn(SectionKey) -> bool,
         out: &mut Vec<Visible>,
     ) {
+        let from = camera_column(camera);
         for column in &self.columns {
-            let low = origin((column.x, column.low, column.z), camera);
-            let center = low + DVec3::splat(8.0);
-            if (center.x * center.x + center.z * center.z).sqrt() > f64::from(distance) + 24.0 {
+            if !in_view_distance(from, radius, column.x, column.z) {
                 continue;
             }
-            let min = low.as_vec3();
+            let min = origin((column.x, column.low, column.z), camera).as_vec3();
             let top = origin((column.x, column.high, column.z), camera).as_vec3();
             if !frustum.intersects(min, top + Vec3::splat(16.0)) {
                 continue;
@@ -203,7 +205,7 @@ impl<T> Resident<T> {
                 if !reachable(key) {
                     continue;
                 }
-                if let Some((d, o)) = in_view(key, camera, distance, frustum) {
+                if let Some((d, o)) = in_view(key, camera, radius, frustum) {
                     out.push(Visible {
                         distance: d.to_bits(),
                         key,
@@ -243,20 +245,20 @@ mod tests {
             (DVec3::new(8.0, 64.0, 8.0), 45.0, 89.0),
         ];
         for (camera, yaw, pitch) in cameras {
-            for distance in [32.0, 96.0, 160.0] {
+            for radius in [2, 6, 10] {
                 let projection = super::super::world_projection(70.0, 16.0 / 9.0, 512.0);
                 let view = crate::camera::view_matrix(yaw, pitch);
                 let frustum = Frustum {
                     planes: super::super::frustum(projection * view),
                 };
                 let mut fast = Vec::new();
-                r.visible(camera, distance, &frustum, reachable, &mut fast);
+                r.visible(camera, radius, &frustum, reachable, &mut fast);
                 let mut slow: Vec<(SectionKey, f64, [f32; 3])> = r
                     .items
                     .iter()
                     .filter(|(k, _)| reachable(*k))
                     .filter_map(|(k, _)| {
-                        in_view(*k, camera, distance, &frustum).map(|(d, o)| (*k, d, o.to_array()))
+                        in_view(*k, camera, radius, &frustum).map(|(d, o)| (*k, d, o.to_array()))
                     })
                     .collect();
                 slow.sort_unstable_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
@@ -268,7 +270,7 @@ mod tests {
                     })
                     .collect();
                 assert!(!slow.is_empty());
-                assert_eq!(fast, slow, "{camera} {yaw} {pitch} {distance}");
+                assert_eq!(fast, slow, "{camera} {yaw} {pitch} {radius}");
             }
         }
     }
@@ -356,7 +358,7 @@ mod tests {
             let t = Instant::now();
             keys.clear();
             keys.extend(map.keys().filter_map(|&k| {
-                in_view(k, camera, 512.0, &frustum).map(|(d, o)| (k, d, o.to_array()))
+                in_view(k, camera, 32, &frustum).map(|(d, o)| (k, d, o.to_array()))
             }));
             keys.sort_unstable_by(|a, b| a.1.total_cmp(&b.1));
             for (k, _, _) in &keys {
@@ -365,7 +367,7 @@ mod tests {
             old = old.min(t.elapsed());
             let t = Instant::now();
             list.clear();
-            r.visible(camera, 512.0, &frustum, |_| true, &mut list);
+            r.visible(camera, 32, &frustum, |_| true, &mut list);
             for v in &list {
                 sum += i64::from(r.get(v.slot)[1] + r.get(v.slot)[0]);
             }

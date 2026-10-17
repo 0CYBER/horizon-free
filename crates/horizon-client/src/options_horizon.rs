@@ -587,9 +587,16 @@ impl OptionsUi {
             }
             return events;
         }
-        // A click anywhere stops waiting for an extra's key.
+        // Rebinding consumes the click before sidebar or widget actions.
         if matches!(self.selected_key, Some(extras::ZOOM_KEY | extras::SORT_KEY)) {
-            self.selected_key = None;
+            return self.bind_mouse(
+                s,
+                if right {
+                    winit::event::MouseButton::Right
+                } else {
+                    winit::event::MouseButton::Left
+                },
+            );
         }
         match self.horizon_target(s, atlas, x, y) {
             Some(Target::Nav(i)) => {

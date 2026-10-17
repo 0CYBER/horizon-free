@@ -1087,6 +1087,8 @@ struct Game<'a> {
     lan: Option<lan::LanHost>,
     /// Single player's server thread, which `remote` is connected to.
     integrated: Option<integrated::Integrated>,
+    /// This game is that server thread's (game/integrated.rs).
+    serving: Option<integrated::Serving>,
     /// The open world is shared behind an invite code (game/friends.rs).
     friends: Option<friends::Sharing>,
     world_options: Option<lan_screen::WorldOptions>,
@@ -1447,9 +1449,13 @@ impl Game<'_> {
             .iter()
             .flat_map(|(_, m)| m.faces.iter())
             .find(|f| f.quad.facing == horizon_assets::model::Direction::Up)
-            .or_else(|| models.iter().flat_map(|(_, m)| m.faces.iter()).next())?;
-        let name = self.pack.layer_names.get(&face.layer)?.clone();
-        let tint = if face.quad.tint_index >= 0 {
+            .or_else(|| models.iter().flat_map(|(_, m)| m.faces.iter()).next());
+        // Entity-rendered blocks may have a particle texture without any faces.
+        let layer = face
+            .map(|face| face.layer)
+            .or_else(|| models.iter().find_map(|(_, model)| model.particle))?;
+        let name = self.pack.layer_names.get(&layer)?.clone();
+        let tint = if face.is_some_and(|face| face.quad.tint_index >= 0) {
             let n = &self.res.facts.get(state).name;
             if n.contains("leaves") || n.contains("vine") {
                 0x48B518
@@ -1774,6 +1780,12 @@ impl Game<'_> {
                 state,
                 level_flags::UPDATE_ALL,
             );
+        });
+        self.process_level_events()
+    }
+    fn attack_block(&mut self, pos: [i32; 3]) -> Result<()> {
+        self.with_level(|b, level, ticks| {
+            b.attack_block(level, ticks, BlockPos::new(pos[0], pos[1], pos[2]));
         });
         self.process_level_events()
     }
@@ -2885,6 +2897,7 @@ impl Game<'_> {
             return Ok(());
         }
         if self.mining.as_ref().is_none_or(|m| m.pos != hit.pos) {
+            self.attack_block(hit.pos)?;
             self.mining = Some(Mining {
                 pos: hit.pos,
                 progress: 0.0,
@@ -3634,8 +3647,8 @@ impl Game<'_> {
     }
     /// `Minecraft.pause`: a single-player game with a pausing screen open.
     fn pauses_game(&self) -> bool {
-        (self.remote.is_none() || self.integrated.is_some())
-            && self.lan.is_none()
+        self.has_singleplayer_server()
+            && !self.is_published()
             && self.title.is_none()
             && (matches!(
                 self.screen,
@@ -3648,6 +3661,9 @@ impl Game<'_> {
             ) || self.book.is_some())
     }
     fn capture(&mut self, capture: bool) {
+        if !capture {
+            self.stop_mining();
+        }
         // The real pointer takes over from an agent's.
         self.agent_pointer = false;
         let Some(window) = &self.window else { return };
@@ -4333,14 +4349,7 @@ impl Game<'_> {
                     } else {
                         ("Crafting", 97.0)
                     };
-                    batch.text(
-                        atlas,
-                        title,
-                        ox + tx,
-                        oy + if self.craft_size == 3 { 6.0 } else { 8.0 },
-                        grey,
-                        false,
-                    );
+                    batch.text(atlas, title, ox + tx, oy + 6.0, grey, false);
                     if self.craft_size == 3 {
                         batch.text(atlas, "Inventory", ox + 8.0, oy + 72.0, grey, false);
                     }
@@ -5576,6 +5585,20 @@ impl Game<'_> {
                     .block_entity_render
                     .render(&scene, visible, &mut out);
             }
+            if let Some(mining) = &self.mining
+                && mining.progress > 0.0
+                && self.atlas.sprites.contains_key(&format!(
+                    "block/destroy_stage_{}",
+                    ((mining.progress * 10.0) as u32).min(9)
+                ))
+            {
+                let state = self
+                    .world
+                    .block(mining.pos[0], mining.pos[1], mining.pos[2]);
+                self.res
+                    .block_entity_render
+                    .render_banner_breaking(&scene, mining.pos, state.0, &mut out);
+            }
         }
         // Experience orbs (ExperienceOrbRenderer): pulsing billboards from a 4x4 icon sheet.
         if let Some(r) = self
@@ -6637,6 +6660,9 @@ impl Game<'_> {
             std::env::current_dir()?.join("saves"),
             &self.options.resources,
         ));
+        if let Some(title) = &mut self.title {
+            title.last_server = self.settings.file.string("lastServer");
+        }
         self.capture(false);
         Ok(())
     }
@@ -8304,21 +8330,7 @@ impl Game<'_> {
             self.ender_items = items.clone();
         }
         level.ender_items = self.ender_items.clone();
-        level.active_effects = self
-            .potions
-            .effects
-            .list
-            .iter()
-            .map(|e| {
-                (
-                    format!("minecraft:{}", e.id),
-                    e.duration,
-                    e.amplifier,
-                    e.ambient,
-                    e.visible,
-                )
-            })
-            .collect();
+        level.active_effects = self.potions.effects.saved();
     }
     fn save_game(&mut self) -> Result<()> {
         self.save_game_with(true)
@@ -9304,6 +9316,7 @@ impl ApplicationHandler for Game<'_> {
                             clicked
                         }
                     });
+                    self.save_title_options();
                     if sound {
                         self.audio.play_button_click();
                     }
@@ -9356,6 +9369,21 @@ impl ApplicationHandler for Game<'_> {
                 }
                 WindowEvent::MouseInput { state, button, .. } => {
                     let pressed = state == ElementState::Pressed;
+                    if matches!(self.screen, Screen::Inventory | Screen::Creative)
+                        && let Some(key) = self
+                            .settings
+                            .keys
+                            .container_mouse_key(button, self.creative)
+                    {
+                        if pressed && self.carried.is_none() {
+                            self.inventory_hotkey(key);
+                        }
+                        // Neither edge of a bound button is an ordinary slot click.
+                        return Ok(());
+                    }
+                    if pressed && self.sort_mouse_press(button) {
+                        return Ok(());
+                    }
                     match self.screen {
                         Screen::Playing => {
                             if pressed && !self.captured {
@@ -9542,6 +9570,7 @@ impl ApplicationHandler for Game<'_> {
                                 if let Some(t) = self.title.as_mut() {
                                     t.escape();
                                 }
+                                self.save_title_options();
                             }
                             _ => self.title_edit(event.text.as_deref(), false),
                         }
@@ -10078,6 +10107,7 @@ impl<'a> Game<'a> {
             remote: None,
             lan: None,
             integrated: None,
+            serving: None,
             world_options: None,
             options_to_world_options: false,
             command_block_screen: None,
@@ -10325,10 +10355,11 @@ pub fn run() -> Result<()> {
             game.open_world(&folder, None, Some(seed), creative, None)?;
         }
         None => {
-            let title = Title::new(
+            let mut title = Title::new(
                 std::env::current_dir()?.join("saves"),
                 &game.options.resources,
             );
+            title.last_server = game.settings.file.string("lastServer");
             // The launcher's opening, once per session and only in Horizon's style.
             if horizon_client::ui_theme::horizon() && game.options.frames.is_none() {
                 title

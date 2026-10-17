@@ -29,6 +29,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod status;
+
 /// Double.toString for the magnitudes positions have (no exponent form
 /// between 1e-3 and 1e7).
 pub(super) fn java_double(v: f64) -> String {
@@ -64,6 +66,11 @@ pub(super) fn log(level: &str, message: &str) {
         _ => ::log::Level::Info,
     };
     horizon_client::logging::write_only(file_level, message);
+    CAPTURE.with_borrow_mut(|lines| {
+        if let Some(lines) = lines {
+            lines.push(message.to_owned());
+        }
+    });
     let secs = now_millis().div_euclid(1000).rem_euclid(86_400);
     println!(
         "[{:02}:{:02}:{:02}] [Server thread/{level}]: {message}",
@@ -71,6 +78,18 @@ pub(super) fn log(level: &str, message: &str) {
         secs / 60 % 60,
         secs % 60
     );
+}
+
+thread_local! {
+    /// The lines logged while a control request runs a console command.
+    static CAPTURE: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `f` and returns the lines it logged.
+fn capture_log(f: impl FnOnce()) -> Vec<String> {
+    CAPTURE.set(Some(Vec::new()));
+    f();
+    CAPTURE.take().unwrap_or_default()
 }
 
 /// Main.main up to the server start: arguments, server.properties (stored
@@ -289,6 +308,9 @@ struct ServerState {
     stop: bool,
     autosave: bool,
     empty_ticks: i32,
+    /// When the last passes of the loop ended, for the tick rate horizon-server shows.
+    ticks: std::collections::VecDeque<Instant>,
+    paused: bool,
 }
 
 impl Game<'_> {
@@ -441,6 +463,7 @@ impl Game<'_> {
             seed: self.level.seed,
             max_players: props.max_players.max(0) as usize,
             dedicated: true,
+            integrated: false,
         };
         let settings = LanSettings {
             port,
@@ -470,14 +493,18 @@ impl Game<'_> {
             stop: false,
             autosave: true,
             empty_ticks: 0,
+            ticks: Default::default(),
+            paused: false,
         };
         let pause_after = props.pause_when_empty_seconds * 20;
         let idle_timeout = props.player_idle_timeout;
         let mut next = Instant::now();
         while !state.stop {
+            let tick_start = Instant::now();
             while let Ok(line) = state.console.try_recv() {
                 self.console_command(&mut state, &line);
             }
+            self.poll_server_control(&mut state);
             let players = self.lan.as_ref().map_or(0, |h| h.hub.guests.len());
             if pause_after > 0 {
                 if players == 0 {
@@ -487,6 +514,7 @@ impl Game<'_> {
                 }
             }
             let paused = pause_after > 0 && state.empty_ticks >= pause_after;
+            state.paused = paused;
             if paused && state.empty_ticks == pause_after {
                 log(
                     "INFO",
@@ -512,6 +540,9 @@ impl Game<'_> {
             if idle_timeout > 0 {
                 self.kick_idle(idle_timeout);
             }
+            // MinecraftServer.tickServer records each tick's time, for /tick query (and the status).
+            self.clock.record(tick_start.elapsed());
+            state.ticked(Instant::now());
             let rate = self.clock.rate().max(1.0);
             next += Duration::from_secs_f64(1.0 / f64::from(rate));
             let now = Instant::now();
