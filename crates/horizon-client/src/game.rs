@@ -1783,6 +1783,12 @@ impl Game<'_> {
         });
         self.process_level_events()
     }
+    fn attack_block(&mut self, pos: [i32; 3]) -> Result<()> {
+        self.with_level(|b, level, ticks| {
+            b.attack_block(level, ticks, BlockPos::new(pos[0], pos[1], pos[2]));
+        });
+        self.process_level_events()
+    }
     /// Track which chunks are ticking (Ticks needs chunk load/unload).
     fn sync_tick_chunks(&mut self) {
         if !self.tick_chunks.synchronize(&self.world.chunks) {
@@ -2891,6 +2897,7 @@ impl Game<'_> {
             return Ok(());
         }
         if self.mining.as_ref().is_none_or(|m| m.pos != hit.pos) {
+            self.attack_block(hit.pos)?;
             self.mining = Some(Mining {
                 pos: hit.pos,
                 progress: 0.0,

@@ -513,6 +513,22 @@ impl Behaviours {
         sim.game_event_state(pos, "minecraft:block_change", next);
     }
 
+    /// The state change of `RedStoneOreBlock.attack` when mining begins.
+    pub fn attack_block<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        ticks: &mut Ticks,
+        pos: BlockPos,
+    ) {
+        let mut sim = self.sim(level, ticks);
+        let state = sim.state(pos);
+        if self.data(state).chain.contains(&Class::RedStoneOre)
+            && !self.table.bool(state, self.props.lit)
+        {
+            sim.set_block_and_update(pos, self.table.set_bool(state, self.props.lit, true));
+        }
+    }
+
     /// `BlockState.useWithoutItem` for a right-click on `pos` (hit face and
     /// absolute hit location as in `BlockHitResult`).
     pub fn use_without_item<L: LevelAccess + ?Sized>(
