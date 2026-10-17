@@ -341,9 +341,7 @@ fn status_and_join() {
                 C::PlayerInfoUpdate(u) => {
                     info |= u.entries.iter().any(|e| e.name.as_deref() == Some("Host"));
                 }
-                C::Unknown(id, _) if id == horizon_protocol::ids::play::clientbound::COMMANDS => {
-                    commands = true
-                }
+                C::Commands(_) => commands = true,
                 C::LevelChunkWithLight(l) => {
                     chunks += 1;
                     let sections = l.chunk.sections(24, 16, 7).map_err(|e| e.to_string())?;
