@@ -75,6 +75,9 @@ packet!(BlockDestruction { id: i32 => VarInt, pos: [i32; 3] => Pos, progress: u8
 packet!(BlockEntityData { pos: [i32; 3] => Pos, kind: i32 => VarInt, tag: Tag => Nbt });
 packet!(BlockUpdate { pos: [i32; 3] => Pos, state: i32 => VarInt });
 packet!(ChangeDifficulty { difficulty: i32 => VarInt, locked: bool => Bool });
+// ResourceKey<GameRule<?>> is an identifier, followed by its string value.
+packet!(GameRuleEntry { name: String => Ident, value: String => Str });
+packet!(GameRuleValues { entries: Vec<GameRuleEntry> => List<GameRuleEntry> });
 packet!(ChunkBatchFinished { size: i32 => VarInt });
 packet!(ContainerClose { container: i32 => VarInt });
 packet!(ContainerSetContent {
@@ -1007,6 +1010,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     EntityPositionSync(EntityPositionSync) = ENTITY_POSITION_SYNC,
     ForgetLevelChunk(ForgetLevelChunk) = FORGET_LEVEL_CHUNK,
     GameEvent(GameEvent) = GAME_EVENT,
+    GameRuleValues(GameRuleValues) = GAME_RULE_VALUES,
     HurtAnimation(HurtAnimation) = HURT_ANIMATION,
     KeepAlive(KeepAlive) = KEEP_ALIVE,
     InitializeBorder(InitializeBorder) = INITIALIZE_BORDER,
@@ -1107,6 +1111,9 @@ packet!(Chat {
     last_seen: LastSeenUpdate => LastSeenUpdate,
 });
 packet!(ChatCommand { command: String => Str });
+packet!(ChangeDifficultyRequest { difficulty: i32 => VarInt });
+packet!(LockDifficulty { locked: bool => Bool });
+packet!(SetGameRule { entries: Vec<GameRuleEntry> => List<GameRuleEntry> });
 packet!(ChunkBatchReceived { chunks_per_tick: f32 => Float });
 packet!(
     /// ServerboundClientCommandPacket.Action: 0 respawn, 1 request stats, 2 request game rules.
@@ -1190,6 +1197,9 @@ impl Codec<[f32; 3]> for Cursor {
 }
 
 packet_enum!(Serverbound, crate::ids::play::serverbound {
+    ChangeDifficulty(ChangeDifficultyRequest) = CHANGE_DIFFICULTY,
+    LockDifficulty(LockDifficulty) = LOCK_DIFFICULTY,
+    SetGameRule(SetGameRule) = SET_GAME_RULE,
     AcceptTeleportation(AcceptTeleportation) = ACCEPT_TELEPORTATION,
     Attack(Attack) = ATTACK,
     ChangeGameMode(ChangeGameMode) = CHANGE_GAME_MODE,
@@ -1229,6 +1239,46 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
 mod tests {
     use super::*;
     use crate::{chunk::BlockEntityInfo, packets::round_trip, text::literal};
+
+    #[test]
+    fn world_options_packets_match_vanilla_stream_codecs() {
+        // mcsrc.dev 26.3: difficulty is a VarInt, locking is a Boolean,
+        // rule entries are ResourceKey identifiers followed by UTF-8 values.
+        let difficulty = Serverbound::ChangeDifficulty(ChangeDifficultyRequest { difficulty: 3 });
+        assert_eq!(&difficulty.encode()[1..], &[3]);
+        round_trip(difficulty, Serverbound::encode, Serverbound::decode);
+        let lock = Serverbound::LockDifficulty(LockDifficulty { locked: true });
+        assert_eq!(&lock.encode()[1..], &[1]);
+        round_trip(lock, Serverbound::encode, Serverbound::decode);
+        let payload = b"\x01\x18minecraft:keep_inventory\x04true";
+        let entry = GameRuleEntry {
+            name: "minecraft:keep_inventory".into(),
+            value: "true".into(),
+        };
+        let set = Serverbound::SetGameRule(SetGameRule {
+            entries: vec![entry.clone()],
+        });
+        assert_eq!(&set.encode()[1..], payload);
+        assert_eq!(
+            Serverbound::decode(crate::ids::play::serverbound::SET_GAME_RULE, payload).unwrap(),
+            set
+        );
+        let values = Clientbound::GameRuleValues(GameRuleValues {
+            entries: vec![entry],
+        });
+        assert_eq!(&values.encode()[1..], payload);
+        assert_eq!(
+            Clientbound::decode(crate::ids::play::clientbound::GAME_RULE_VALUES, payload).unwrap(),
+            values
+        );
+        assert!(
+            Serverbound::decode(
+                crate::ids::play::serverbound::SET_GAME_RULE,
+                &payload[..payload.len() - 1]
+            )
+            .is_err()
+        );
+    }
 
     fn spawn() -> SpawnInfo {
         SpawnInfo {

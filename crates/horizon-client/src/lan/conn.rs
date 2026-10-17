@@ -21,9 +21,10 @@ use horizon_protocol::{
     text::translatable,
 };
 use std::{
+    cell::Cell,
     net::TcpStream,
     sync::{
-        Arc,
+        Arc, Mutex, PoisonError,
         atomic::{AtomicI32, AtomicI64, AtomicUsize, Ordering},
         mpsc::{Receiver, RecvTimeoutError, Sender, channel},
     },
@@ -122,16 +123,64 @@ pub fn valid_name(name: &str) -> bool {
     (1..=16).contains(&name.len()) && name.chars().all(|c| c as u32 > 32 && (c as u32) < 127)
 }
 
+thread_local! {
+    static HOLDING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// While one is alive, the packets this thread sends to each player are held
+/// and handed to the player's writer thread together by
+/// [`PlayerSender::flush`]: one wake-up per player per tick rather than one
+/// per packet. The bytes and their order don't change.
+pub struct Holding(bool);
+impl Holding {
+    pub fn start() -> Self {
+        Self(HOLDING.replace(true))
+    }
+}
+impl Drop for Holding {
+    fn drop(&mut self) {
+        HOLDING.set(self.0);
+    }
+}
+
 /// The sending half given to the game thread.
 #[derive(Clone)]
 pub struct PlayerSender {
     pub tx: Sender<Out>,
     pub pending: Arc<AtomicUsize>,
+    held: Arc<Mutex<Vec<Vec<u8>>>>,
 }
 impl PlayerSender {
+    pub fn new(tx: Sender<Out>, pending: Arc<AtomicUsize>) -> Self {
+        Self {
+            tx,
+            pending,
+            held: Arc::default(),
+        }
+    }
+    fn held(&self) -> std::sync::MutexGuard<'_, Vec<Vec<u8>>> {
+        self.held.lock().unwrap_or_else(PoisonError::into_inner)
+    }
     pub fn send(&self, body: Vec<u8>) {
         self.pending.fetch_add(body.len(), Ordering::Relaxed);
-        let _ = self.tx.send(Out::Packet(body));
+        if HOLDING.get() {
+            self.held().push(body);
+        } else {
+            self.flush();
+            let _ = self.tx.send(Out::Packet(body));
+        }
+    }
+    /// Hand the held packets to the writer thread.
+    pub fn flush(&self) {
+        let held = std::mem::take(&mut *self.held());
+        if !held.is_empty() {
+            let _ = self.tx.send(Out::Packets(held));
+        }
+    }
+    /// Send a play disconnect with this reason after what was sent before.
+    pub fn disconnect(&self, reason: horizon_world::nbt::Tag) {
+        self.flush();
+        let _ = self.tx.send(Out::Disconnect(reason));
     }
 }
 
@@ -466,10 +515,7 @@ fn play(c: Connection, shared: &Arc<Shared>, parts: Parts, address: std::net::So
     let pending = Arc::new(AtomicUsize::new(0));
     let latency = Arc::new(AtomicI32::new(0));
     let alive = Arc::new(AtomicI64::new(-1));
-    let sender = PlayerSender {
-        tx: tx.clone(),
-        pending: pending.clone(),
-    };
+    let sender = PlayerSender::new(tx.clone(), pending.clone());
     let writer_thread = {
         let (alive, latency, pending) = (alive.clone(), latency.clone(), pending.clone());
         std::thread::Builder::new()
@@ -544,13 +590,18 @@ fn write_loop(
     let mut sent_at: Option<(i64, Instant)> = None;
     let mut next = Instant::now() + KEEP_ALIVE_EVERY;
     loop {
+        let mut write = |body: Vec<u8>| {
+            pending.fetch_sub(body.len(), Ordering::Relaxed);
+            writer.send(&body).is_ok() && pending.load(Ordering::Relaxed) <= MAX_PENDING
+        };
         match rx.recv_timeout(Duration::from_millis(200)) {
             Ok(Out::Packet(body)) => {
-                pending.fetch_sub(body.len(), Ordering::Relaxed);
-                if writer.send(&body).is_err() {
+                if !write(body) {
                     break;
                 }
-                if pending.load(Ordering::Relaxed) > MAX_PENDING {
+            }
+            Ok(Out::Packets(bodies)) => {
+                if !bodies.into_iter().all(&mut write) {
                     break;
                 }
             }
@@ -593,4 +644,43 @@ fn write_loop(
         }
     }
     writer.shutdown();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bodies(rx: &Receiver<Out>) -> Vec<Vec<Vec<u8>>> {
+        rx.try_iter()
+            .map(|out| match out {
+                Out::Packet(body) => vec![body],
+                Out::Packets(bodies) => bodies,
+                Out::Disconnect(_) => vec![b"disconnect".to_vec()],
+                Out::Close => vec![b"close".to_vec()],
+            })
+            .collect()
+    }
+
+    #[test]
+    fn held_packets_go_together_and_in_order() {
+        let (tx, rx) = channel();
+        let sender = PlayerSender::new(tx, Arc::default());
+        sender.send(vec![1]);
+        assert_eq!(bodies(&rx), [vec![vec![1]]]);
+        let holding = Holding::start();
+        sender.send(vec![2]);
+        sender.send(vec![3]);
+        assert!(bodies(&rx).is_empty());
+        drop(holding);
+        // A packet sent after the tick still follows the held ones.
+        sender.send(vec![4]);
+        assert_eq!(bodies(&rx), [vec![vec![2], vec![3]], vec![vec![4]]]);
+        let holding = Holding::start();
+        sender.send(vec![5]);
+        sender.disconnect(horizon_world::nbt::Tag::Byte(0));
+        drop(holding);
+        sender.flush();
+        assert_eq!(bodies(&rx), [vec![vec![5]], vec![b"disconnect".to_vec()]]);
+        assert_eq!(sender.pending.load(Ordering::Relaxed), 5);
+    }
 }
