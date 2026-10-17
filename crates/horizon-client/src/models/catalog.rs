@@ -254,13 +254,19 @@ impl StateModels {
         state: BlockStateId,
         position: BlockPos,
     ) -> Result<Vec<(&Variant, &BakedModel)>> {
+        // Blocks use their position seed; contained/displayed blocks can supply one.
+        self.collect_seeded(state, position_seed(position))
+    }
+    pub fn collect_seeded(
+        &self,
+        state: BlockStateId,
+        seed: i64,
+    ) -> Result<Vec<(&Variant, &BakedModel)>> {
         let (choice, selected) = self
             .states
             .get(&state)
             .ok_or("unbound gallery block state")?;
-        // These inspection blocks use Block's default position seed. Blocks with
-        // specialized model seeds (e.g. two-block structures) need their callbacks.
-        let mut random = LegacyRandom::new(position_seed(position));
+        let mut random = LegacyRandom::new(seed);
         let mut variants = Vec::new();
         self.choices[*choice].collect(selected, &mut random, &mut variants)?;
         variants

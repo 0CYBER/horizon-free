@@ -642,6 +642,19 @@ impl Game<'_> {
             adv::conditions(&c["player"], &pctx, w) && adv::item(&c["item"], &it, w)
         });
     }
+    pub(super) fn trigger_item_entity(
+        &mut self,
+        name: &str,
+        stack: &ItemStack,
+        target: &EntityView,
+    ) {
+        if self.lan_acting.is_some() {
+            return;
+        }
+        let me = self.player_entity();
+        let it = item_view(stack);
+        self.trigger(name, |c, w| adv::item_entity(c, &me, target, &it, w));
+    }
     /// `EnterBlockTrigger`: the block, its state properties and the player.
     pub(super) fn trigger_enter_block(&mut self, state: horizon_world::registry::BlockStateId) {
         let Some(definition) = self.pack.assets.registry.state(state).cloned() else {

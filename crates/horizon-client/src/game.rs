@@ -1529,6 +1529,7 @@ impl Game<'_> {
         self.dropped.push(ItemEntity {
             health: 5,
             fire_ticks: 0,
+            thrower: None,
             id: self.next_entity,
             stack,
             position: p,
@@ -1611,6 +1612,10 @@ impl Game<'_> {
             yaw.cos() * pitch.cos() * 0.3 + spread.sin() * strength,
         ];
         self.spawn_item(thrown, [eye[0], eye[1] - 0.3, eye[2]], v, 40);
+        if self.lan_acting.is_none() {
+            let uuid = self.level.ensure_player_uuid();
+            self.dropped.last_mut().unwrap().thrower = Some(uuid);
+        }
     }
     fn tick_items(&mut self) {
         let mut items = std::mem::take(&mut self.dropped);
@@ -5716,9 +5721,10 @@ impl Game<'_> {
             let start = out.len();
             self.block_model_vertices(
                 f.state,
-                f.start_pos,
+                horizon_core::random::position_seed(f.start_pos),
                 glam::Mat4::from_translation(o),
                 packed,
+                false,
                 &mut out,
             );
             let tint = horizon_client::mobs::render::abgr(tint);

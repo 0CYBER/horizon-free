@@ -16,6 +16,7 @@ pub struct ItemEntity {
     pub fire_ticks: i32,
     pub id: u32,
     pub stack: ItemStack,
+    pub thrower: Option<[i32; 4]>,
     pub position: Vec3,
     pub previous: Vec3,
     pub velocity: Vec3,
@@ -610,6 +611,7 @@ mod fire_environment_tests {
             .unwrap();
         let make = |id: &str| ItemEntity {
             id: 1,
+            thrower: None,
             stack: ItemStack {
                 item: std::sync::Arc::from(id),
                 count: 1,
