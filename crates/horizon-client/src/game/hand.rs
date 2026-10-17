@@ -30,6 +30,18 @@ fn attack_range_contains(range: &serde_json::Value, distance: f64, creative: boo
 }
 
 impl Game<'_> {
+    /// Opening a screen stops breaking before the next game tick (which may pause).
+    pub(super) fn stop_mining(&mut self) {
+        let mut destroying = std::mem::take(&mut self.clicks.destroying);
+        destroying.stop(&mut GameHands {
+            game: self,
+            error: None,
+        });
+        self.clicks.destroying = destroying;
+        self.attack_clicks = 0;
+        self.stop_remote_mining();
+        self.mining = None;
+    }
     /// `LivingEntity.swing` with `getModifiedSwingDuration`.
     pub(super) fn swing_hand(&mut self, hand: Hand, animation: SwingAnimation) {
         let effects = &self.potions.effects;

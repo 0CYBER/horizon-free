@@ -17,6 +17,17 @@ pub(super) const CONTROL_HELP: &[&str] = &[
 ];
 
 impl Game<'_> {
+    pub(super) fn save_title_options(&mut self) {
+        if let Some(title) = &self.title
+            && title.last_server != self.settings.file.string("lastServer")
+        {
+            self.settings.file.set(
+                "lastServer",
+                horizon_client::options_file::V::Str(title.last_server.clone()),
+            );
+            self.settings.save(&Self::options_path());
+        }
+    }
     /// `options-get` and `options-set`; None for other commands.
     pub(super) fn options_control(&mut self, words: &[&str], line: &str) -> Result<Option<Value>> {
         match words[0] {

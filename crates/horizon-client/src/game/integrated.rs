@@ -31,7 +31,7 @@ use std::{
     path::Path,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU16, Ordering},
+        atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering},
         mpsc::{Receiver, Sender, channel, sync_channel},
     },
     thread::JoinHandle,
@@ -47,6 +47,7 @@ struct Flags {
     /// `IntegratedServer.getPort`: the port it is open to the LAN on, 0
     /// while it is not.
     published: AtomicU16,
+    smoothed_tick_ms: AtomicU32,
 }
 
 /// Work the window hands its server thread (`MinecraftServer.execute`).
@@ -61,6 +62,9 @@ pub(super) struct Integrated {
     pub world_name: String,
 }
 impl Integrated {
+    pub fn smoothed_tick_ms(&self) -> f32 {
+        f32::from_bits(self.flags.smoothed_tick_ms.load(Ordering::Relaxed))
+    }
     /// `IntegratedServer.tickServer` skips the world while the game is paused.
     pub fn set_paused(&self, paused: bool) {
         self.flags.paused.store(paused, Ordering::Relaxed);
@@ -322,7 +326,13 @@ impl Game<'_> {
                 // Only the connections run.
                 self.tick_lan();
             } else {
+                let started = Instant::now();
                 self.tick()?;
+                self.debug_charts.log_tick(started, started.elapsed());
+                flags.smoothed_tick_ms.store(
+                    self.debug_charts.smoothed_tick_ms.to_bits(),
+                    Ordering::Relaxed,
+                );
             }
             self.apply_publish();
             let rate = self.clock.rate().max(1.0);

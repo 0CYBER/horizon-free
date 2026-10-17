@@ -1,0 +1,128 @@
+/* The Horizon server panel. Colours and spacing are horizon-theme's tokens (website/src/tokens.css). */
+:root {
+  --page: #fafafc;
+  --plate-soft: #f3f3f8;
+  --plate: #ebecf4;
+  --surface: #ffffff;
+  --rule: #e2e3ea;
+  --ink: #16181f;
+  --ink-soft: #3b3e49;
+  --muted: #646875;
+  --accent: #5b3fd6;
+  --on-accent: #ffffff;
+  --danger: #b4372a;
+  --success: #1d7a48;
+  --font: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --mono: "Geist Mono", ui-monospace, monospace;
+  --radius: 8px;
+  --radius-plate: 12px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #0d0e13;
+    --plate-soft: #181a22;
+    --plate: #20222c;
+    --surface: #16181f;
+    --rule: #24262f;
+    --ink: #ecedf3;
+    --ink-soft: #c5c7d1;
+    --muted: #8b8f9c;
+    --accent: #9a86ff;
+    --on-accent: #0d0e13;
+    --danger: #f07a68;
+    --success: #45c27a;
+    color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font: 14px/1.5 var(--font);
+}
+header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--surface);
+}
+.title { display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline; }
+h1 { font-size: 18px; font-weight: 500; margin: 0; letter-spacing: -0.01em; }
+h2 { font-size: 13px; font-weight: 500; margin: 0 0 8px; color: var(--ink-soft); }
+main { padding: 24px; max-width: 1200px; margin: 0 auto; display: grid; gap: 24px; }
+section { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius-plate); padding: 16px; }
+.muted { color: var(--muted); }
+.pill {
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--plate);
+  color: var(--ink-soft);
+}
+.pill.running { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
+.pill.stopping, .pill.restarting, .pill.starting { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.pill.down { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); }
+
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+figure { margin: 0; }
+figcaption { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; }
+figcaption b { color: var(--ink); font-weight: 500; font-variant-numeric: tabular-nums; }
+canvas { width: 100%; height: 96px; display: block; }
+
+.columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th { text-align: left; font-weight: 400; font-size: 12px; color: var(--muted); padding: 4px 0; }
+td { padding: 6px 0; border-top: 1px solid var(--rule); }
+td:last-child { text-align: right; white-space: nowrap; }
+td button { margin-left: 4px; }
+
+button, input {
+  font: inherit;
+  height: 32px;
+  border-radius: var(--radius);
+  border: 1px solid var(--rule);
+  background: var(--plate-soft);
+  color: var(--ink);
+  padding: 0 12px;
+}
+button { cursor: pointer; }
+button:hover { background: var(--plate); }
+button:disabled { opacity: 0.5; cursor: default; }
+button[type="submit"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+button.danger { color: var(--danger); }
+input { background: var(--surface); flex: 1; min-width: 0; }
+input:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.row { display: flex; gap: 8px; margin: 8px 0; }
+
+pre {
+  font: 12px/1.5 var(--mono);
+  background: var(--plate-soft);
+  border-radius: var(--radius);
+  padding: 12px;
+  margin: 0;
+  height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.message { max-width: 560px; }
+code { font-family: var(--mono); font-size: 13px; }
+#toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--ink);
+  color: var(--page);
+  padding: 8px 16px;
+  border-radius: var(--radius);
+  max-width: 90vw;
+}
