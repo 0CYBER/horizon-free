@@ -1200,21 +1200,20 @@ impl Hub {
             if !chunk.lit {
                 continue;
             }
-            packets.push(C::LevelChunkWithLight(
-                self.encoder.encode_in(chunk, ctx.world),
-            ));
+            packets.push(self.encoder.body_in(chunk, ctx.world));
             taken.push(idx);
         }
         if packets.is_empty() {
             return;
         }
-        g.batch_quota -= packets.len() as f32;
+        let size = packets.len();
+        g.batch_quota -= size as f32;
         g.send(&C::ChunkBatchStart(horizon_protocol::packets::Empty));
-        for p in &packets {
-            g.send(p);
+        for body in packets {
+            g.sender.send(body);
         }
         g.send(&C::ChunkBatchFinished(play::ChunkBatchFinished {
-            size: packets.len() as i32,
+            size: size as i32,
         }));
         g.unacknowledged += 1;
         for idx in taken.into_iter().rev() {
@@ -1228,8 +1227,7 @@ impl Hub {
         let Some(chunk) = world.chunks.get(&(x, z)) else {
             return;
         };
-        let packet = C::LevelChunkWithLight(self.encoder.encode_in(chunk, world));
-        let body = packet.encode();
+        let body = self.encoder.body_in(chunk, world);
         for g in self
             .guests
             .iter()
