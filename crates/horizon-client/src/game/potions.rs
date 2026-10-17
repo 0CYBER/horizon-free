@@ -249,7 +249,7 @@ impl Game<'_> {
         }
         true
     }
-    fn apply_effect_action(&mut self, action: EffectAction) {
+    pub(super) fn apply_effect_action(&mut self, action: EffectAction) {
         let creative = self.creative;
         let rules = self.world.health_rules;
         let Some(p) = self.player.as_mut() else {
