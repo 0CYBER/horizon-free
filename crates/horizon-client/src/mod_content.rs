@@ -314,6 +314,22 @@ impl<'a> Plan<'a> {
                 });
             }
         }
+        if next > MAX_STATES {
+            let mut by_mod: BTreeMap<&str, u32> = BTreeMap::new();
+            for b in &blocks {
+                *by_mod
+                    .entry(&b.decl.id[..b.decl.id.find(':').unwrap_or(0)])
+                    .or_default() += b.rename.states.len() as u32;
+            }
+            let list: Vec<String> = by_mod.iter().map(|(m, n)| format!("{m} {n}")).collect();
+            return Err(format!(
+                "{next} block states, more than the {MAX_STATES} chunks can hold ({} in the game; \
+                 the mods: {})",
+                names.len(),
+                list.join(", ")
+            )
+            .into());
+        }
         // Block items copy the template block's item.
         let gameplay = read_json(&base.join("gameplay-facts.json"))?;
         let rows = match gameplay.get("states") {
@@ -628,6 +644,9 @@ const NBT_TABLES: [&str; 6] = [
 /// In a root built here: the content mods' ids, the namespaces loaders
 /// read besides `minecraft`.
 const MARKER: &str = "horizon-mod-content.json";
+/// Block states a world can hold: chunk sections store a state in 16 bits
+/// (crate::chunk). Mods past it are refused, not wrapped onto other blocks.
+pub const MAX_STATES: u32 = 1 << 16;
 
 /// The content mods' namespaces in a root built by [`build`]; none in any
 /// other root, so vanilla's loaders read exactly what they did.

@@ -17,7 +17,8 @@ and what the game's loaders make of it. For every block and item the mod registe
 - recipes: each recipe's result, count and ingredients;
 - items: present, and their stack size.
 
-Writes WORK/mods/<id>/harness/result.json per mod and prints a table. Jars, facts and results stay
+Each mod is probed on its own, against vanilla. Writes WORK/mods/<id>/harness/{horizon,result}.json
+per mod and prints a table. Jars, facts and results stay
 in WORK, outside the repository.
 """
 import argparse
@@ -185,18 +186,23 @@ def main():
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],
                                                   cwd=ROOT, text=True))
     probe = Path(metadata['target_directory']) / 'release/examples/mod_port_probe'
-    out = work / 'horizon.json'
-    subprocess.run([str(probe), args.resources, str(work), str(out), *args.mods], check=True)
     oracle = json.loads(facts.read_text())
-    horizon = json.loads(out.read_text())
-    upgrades = sound_upgrades(oracle, horizon)
     old_items = set(oracle.get('vanilla_items', []))
     mods = args.mods or sorted(p.name for p in (work / 'mods').iterdir() if (p / 'carry').is_dir())
-    print(f'{"mod":<16} {"result":<7} ' + ' '.join(f'{c:>12}' for c in CHECKS))
+    rows = []
     for mod in mods:
+        # One mod at a time: each against vanilla, as a player adding it would load it (and a pack's
+        # sum may pass the block states a world holds, which the probe would refuse).
+        out = work / 'mods' / mod / 'harness' / 'horizon.json'
+        out.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run([str(probe), args.resources, str(work), str(out), mod], check=True)
+        horizon = json.loads(out.read_text())
         carry_report = work / 'mods' / mod / 'carry-report.json'
         carry = json.loads(carry_report.read_text()) if carry_report.exists() else {}
-        result = compare_mod(mod, oracle, horizon, carry, upgrades, old_items)
+        rows.append(compare_mod(mod, oracle, horizon, carry, sound_upgrades(oracle, horizon), old_items))
+    print(f'{"mod":<16} {"result":<7} ' + ' '.join(f'{c:>12}' for c in CHECKS))
+    for result in rows:
+        mod = result['mod']
         (work / 'mods' / mod / 'harness').mkdir(parents=True, exist_ok=True)
         (work / 'mods' / mod / 'harness' / 'result.json').write_text(json.dumps(result, indent=1))
         cols = []
