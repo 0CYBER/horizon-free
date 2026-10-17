@@ -352,12 +352,16 @@ impl Game<'_> {
                 .map_or_else(String::new, |o| o.kind.clone()),
         }
     }
+    /// The name of the player the game acts for: a guest's own while their
+    /// command or action runs (`Player.getName`).
+    pub(super) fn acting_player_name(&self) -> &str {
+        self.lan_acting_name.as_deref().unwrap_or(PLAYER_NAME)
+    }
     /// Entity.getDisplayName.
     pub(super) fn target_name(&self, t: Target) -> Text {
         match t {
             Target::Player => {
-                // A guest's commands name the guest.
-                let name = self.lan_acting_name.as_deref().unwrap_or(PLAYER_NAME);
+                let name = self.acting_player_name();
                 match self.score.board.players_team(name) {
                     // PlayerTeam.formatNameForTeam.
                     Some(team) => team.formatted_name(Text::literal(name)),
@@ -798,7 +802,7 @@ impl Game<'_> {
                 }
                 self.feedback(Text::translate(
                     "commands.gamemode.success.other",
-                    &[Text::literal(PLAYER_NAME), mode_name],
+                    &[Text::literal(self.acting_player_name()), mode_name],
                 ));
             }
         }
@@ -953,7 +957,7 @@ impl Game<'_> {
                 &[
                     Text::literal(count.to_string()),
                     name,
-                    Text::literal(PLAYER_NAME),
+                    Text::literal(self.acting_player_name()),
                 ],
             )
         } else {
@@ -1825,7 +1829,7 @@ impl Game<'_> {
             ),
             _ => None,
         };
-        let player = Text::literal(PLAYER_NAME);
+        let player = Text::literal(self.acting_player_name());
         let players = targets.len();
         if let (Some(i), Some(Arg::Str(criterion))) = (index, ctx.get("criterion")) {
             let a = &tree.list[i];
@@ -1935,7 +1939,10 @@ impl Game<'_> {
             };
             self.system_message(Text::translate(
                 &format!("commands.experience.query.{unit}"),
-                &[Text::literal(PLAYER_NAME), Text::literal(value.to_string())],
+                &[
+                    Text::literal(self.acting_player_name()),
+                    Text::literal(value.to_string()),
+                ],
             ));
             return Ok(value);
         }
@@ -1972,7 +1979,7 @@ impl Game<'_> {
             &key,
             &[
                 Text::literal(amount.to_string()),
-                Text::literal(PLAYER_NAME),
+                Text::literal(self.acting_player_name()),
             ],
         ));
         Ok(targets.len() as i32)
@@ -2279,7 +2286,7 @@ impl Game<'_> {
             return Err(if targets.len() == 1 {
                 CommandError::new(Text::translate(
                     "clear.failed.single",
-                    &[Text::literal(PLAYER_NAME)],
+                    &[Text::literal(self.acting_player_name())],
                 ))
             } else {
                 err("clear.failed.multiple", &[&targets.len()])
@@ -2290,7 +2297,7 @@ impl Game<'_> {
             &format!("commands.clear.{kind}.single"),
             &[
                 Text::literal(removed.to_string()),
-                Text::literal(PLAYER_NAME),
+                Text::literal(self.acting_player_name()),
             ],
         ));
         Ok(removed)
@@ -2544,7 +2551,7 @@ impl Game<'_> {
         let name = match self.command_source.map(|s| s.entity) {
             Some(Some(t)) => self.target_name(t),
             Some(None) => Text::literal("Server"),
-            None => Text::literal(PLAYER_NAME),
+            None => Text::literal(self.acting_player_name()),
         };
         let line = match id {
             "say" => Text::translate("chat.type.announcement", &[name, message]),
@@ -2554,14 +2561,14 @@ impl Game<'_> {
                 // Whispering to yourself: the incoming and outgoing lines.
                 let out = Text::translate(
                     "commands.message.display.outgoing",
-                    &[Text::literal(PLAYER_NAME), message.clone()],
+                    &[Text::literal(self.acting_player_name()), message.clone()],
                 )
                 .with_color(text::GRAY)
                 .italic();
                 self.system_message(out);
                 Text::translate(
                     "commands.message.display.incoming",
-                    &[Text::literal(PLAYER_NAME), message],
+                    &[Text::literal(self.acting_player_name()), message],
                 )
                 .with_color(text::GRAY)
                 .italic()
