@@ -13,7 +13,9 @@ use horizon_client::{
     server::{
         eula,
         java_properties::now_millis,
+        profiles,
         properties::{GAME_MODES, ServerProperties, SystemEntropy},
+        user_cache::UserCache,
         user_lists::{
             BanEntry, BanList, IpBanList, NameAndId, OpEntry, OpList, WhiteEntry, WhiteList,
             format_date,
@@ -57,20 +59,17 @@ struct Setup {
     started: Instant,
 }
 static SETUP: OnceLock<Mutex<Option<Setup>>> = OnceLock::new();
+/// usercache.json (Services.nameToIdCache): used by the server thread only.
+static USER_CACHE: Mutex<Option<UserCache>> = Mutex::new(None);
 
-/// CachedUserNameToIdResolver, kept in memory only (vanilla also saves it to
-/// usercache.json): players who joined, and accounts found by name, by name
-/// in lower case.
-static USER_CACHE: OnceLock<Mutex<std::collections::HashMap<String, NameAndId>>> = OnceLock::new();
-
-/// PlayerList.placeNewPlayer adds the player to the name cache.
-pub(super) fn remember(name: &str, uuid: u128) {
-    let user = NameAndId {
-        id: uuid,
-        name: name.to_owned(),
-    };
-    let cache = USER_CACHE.get_or_init(Default::default);
-    cache.lock().unwrap().insert(name.to_lowercase(), user);
+/// PlayerList.placeNewPlayer: a player who joined is cached (and the file saved).
+pub(super) fn player_joined(id: u128, name: &str) {
+    if let Some(cache) = USER_CACHE.lock().unwrap().as_mut() {
+        cache.add(NameAndId {
+            id,
+            name: name.to_owned(),
+        });
+    }
 }
 
 /// Log4j's console pattern: `[HH:mm:ss] [thread/LEVEL]: message`.
@@ -331,8 +330,6 @@ struct ServerState {
     /// When the last passes of the loop ended, for the tick rate horizon-server shows.
     ticks: std::collections::VecDeque<Instant>,
     paused: bool,
-    /// online-mode: names given to commands are looked up as accounts.
-    online: bool,
 }
 
 impl Game<'_> {
@@ -365,6 +362,14 @@ impl Game<'_> {
                     line.clear();
                 }
             })?;
+        // Main: Services.create loads the universe's usercache.json.
+        let (mut cache, warnings) = UserCache::load(universe.join("usercache.json"));
+        for warning in warnings {
+            log_from("main", "WARN", &warning);
+        }
+        // DedicatedServer.initServer: names nobody has resolve offline only without authentication.
+        cache.resolve_offline_users = !props.online_mode;
+        *USER_CACHE.lock().unwrap() = Some(cache);
         log("INFO", "Starting minecraft server version 26.3");
         log("INFO", "Loading properties");
         let game_mode = props.game_mode;
@@ -530,7 +535,6 @@ impl Game<'_> {
             empty_ticks: 0,
             ticks: Default::default(),
             paused: false,
-            online: props.online_mode,
         };
         let pause_after = props.pause_when_empty_seconds * 20;
         let idle_timeout = props.player_idle_timeout;
@@ -672,33 +676,23 @@ impl Game<'_> {
         })
     }
 
-    /// GameProfileArgument: a player on the server, else one seen since the
-    /// start, else the name resolved as the server's mode says (an online
-    /// server asks the services, an offline one makes the offline profile).
-    /// None, told to the console: no such account.
-    fn resolve(&self, name: &str, online: bool) -> Option<NameAndId> {
-        let user = self.online_player(name).or_else(|| {
-            let key = name.to_lowercase();
-            let cache = USER_CACHE.get_or_init(Default::default);
-            if let Some(user) = cache.lock().unwrap().get(&key) {
-                return Some(user.clone());
-            }
-            let user = horizon_server_files::profiles::resolve(name, online);
-            let Some(user) = user else {
-                if online {
-                    log("WARN", &format!("Couldn't find profile with name: {key}"));
+    /// GameProfileArgument for a name: the user cache, else the profile
+    /// service, else (offline) the offline player. None, told to the console:
+    /// no such player.
+    fn resolve(&self, name: &str) -> Option<NameAndId> {
+        let found = USER_CACHE.lock().unwrap().as_mut().and_then(|cache| {
+            cache.get_by_name(name, |lower| {
+                let found = profiles::find_by_name(&profiles::discovery_url(), lower);
+                if found.is_none() {
+                    log("WARN", &format!("Couldn't find profile with name: {lower}"));
                 }
-                return None;
-            };
-            if online {
-                cache.lock().unwrap().insert(key, user.clone());
-            }
-            Some(user)
+                found
+            })
         });
-        if user.is_none() {
+        if found.is_none() {
             self.console_reply(Text::translate("argument.player.unknown", &[]));
         }
-        user
+        found
     }
 
     /// MinecraftServer.sendSystemMessage: what the console is told.
@@ -781,7 +775,7 @@ impl Game<'_> {
                 ));
             }
             "op" | "deop" if !rest.is_empty() => {
-                let Some(user) = self.resolve(rest[0], state.online) else {
+                let Some(user) = self.resolve(rest[0]) else {
                     return;
                 };
                 let level = 4;
@@ -813,7 +807,7 @@ impl Game<'_> {
             }
             "whitelist" => self.console_whitelist(state, &rest),
             "ban" if !rest.is_empty() => {
-                let Some(user) = self.resolve(rest[0], state.online) else {
+                let Some(user) = self.resolve(rest[0]) else {
                     return;
                 };
                 let reason = (rest.len() > 1).then(|| rest[1..].join(" "));
@@ -905,7 +899,7 @@ impl Game<'_> {
                 }
             }
             "pardon" if !rest.is_empty() => {
-                let Some(user) = self.resolve(rest[0], state.online) else {
+                let Some(user) = self.resolve(rest[0]) else {
                     return;
                 };
                 let removed = state.lists.lock().unwrap().bans.remove(&user);
@@ -1056,7 +1050,7 @@ impl Game<'_> {
                 self.console_reply(Text::translate("commands.whitelist.reloaded", &[]));
             }
             ["add", name] | ["remove", name] => {
-                let Some(user) = self.resolve(name, state.online) else {
+                let Some(user) = self.resolve(name) else {
                     return;
                 };
                 let mut l = state.lists.lock().unwrap();
