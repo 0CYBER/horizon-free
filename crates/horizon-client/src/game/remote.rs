@@ -14,6 +14,7 @@ use horizon_client::{
     entities::{Experience, ItemEntity},
     hud::{HudBatch, rgba},
     items::ItemStack,
+    menu::Input,
     mobs::{Mob, MobType},
     motion::{MotionWorld, PlayerMotion},
     net::{Event, Session},
@@ -2880,17 +2881,108 @@ impl Game<'_> {
         let Some(internal) = self.slot_at(&batch, self.cursor.0, self.cursor.1) else {
             return;
         };
-        let input = if self.has_shift_down() { 1 } else { 0 };
-        self.remote_slot_click(internal, i8::from(right), input);
+        let input = if self.has_shift_down() {
+            Input::QuickMove
+        } else {
+            Input::Pickup
+        };
+        self.remote_menu_ops(&[(Some(internal), i32::from(right), input)]);
+    }
+    /// The server's open menu: its window id and menu type (0, "inventory"
+    /// when none is open).
+    fn remote_menu(&self) -> (i32, String) {
+        match self.remote.as_ref().and_then(|r| r.menu.clone()) {
+            Some((id, name)) => (id, name),
+            None => (0, "inventory".to_owned()),
+        }
+    }
+    /// `MultiPlayerGameMode.handleContainerInput` for each click of `ops` on
+    /// the server's open menu (a quick craft drag is several): the verified
+    /// menu engine predicts them on this client's copy, then each goes out as
+    /// a `ContainerClick` with the slots it changed and the carried stack
+    /// after it; the server corrects anything it sees differently. A menu the
+    /// engine doesn't model sends the clicks unpredicted. False when a click's
+    /// slot isn't one of the menu's.
+    pub(super) fn remote_menu_ops(&mut self, ops: &[(Option<usize>, i32, Input)]) -> bool {
+        let (container, menu) = self.remote_menu();
+        let mut clicks = Vec::with_capacity(ops.len());
+        for &(slot, button, input) in ops {
+            let slot = match slot {
+                None => -999,
+                Some(internal) => {
+                    match (0..64).find(|&s| Self::menu_slot(&menu, s) == Some(internal)) {
+                        Some(s) => s as i16,
+                        None => return false,
+                    }
+                }
+            };
+            clicks.push((slot, button, input));
+        }
+        // Unpredicted: nothing changed, the carried stack as it is.
+        let mut sent: Vec<Predicted> = clicks
+            .iter()
+            .map(|&(slot, button, input)| (slot, button, input, Vec::new(), self.carried.clone()))
+            .collect();
+        // The engine's slot indices are the menu's own, as on the network.
+        self.menu_session(|m, env, _| {
+            let mut predicted = Vec::with_capacity(clicks.len());
+            for &(slot, button, input) in &clicks {
+                let before = menu_items(m);
+                if m.click(env, i32::from(slot), button, input).is_err() {
+                    // The server throws on it too: nothing is predicted.
+                    return Some(false);
+                }
+                let changed = changed_slots(&before, m);
+                predicted.push((slot, button, input, changed, m.carried.clone()));
+            }
+            sent = predicted;
+            Some(true)
+        });
+        self.send_clicks(container, sent);
+        true
+    }
+    /// A Shift double click on a server (`AbstractContainerScreen.mouseReleased`):
+    /// a predicted QUICK_MOVE for every slot the engine moves, each sent.
+    pub(super) fn remote_quick_move_all(&mut self, slot: usize, moved: &ItemStack) {
+        let (container, _) = self.remote_menu();
+        let mut sent: Vec<Predicted> = Vec::new();
+        self.menu_session(|m, env, to_menu| {
+            let clicked = to_menu(slot)?;
+            let mut before = menu_items(m);
+            let mut each = |m: &horizon_client::menu::Menu, t: usize| {
+                let changed = changed_slots(&before, m);
+                sent.push((t as i16, 0, Input::QuickMove, changed, m.carried.clone()));
+                before = menu_items(m);
+            };
+            Some(
+                m.quick_move_all_each(env, clicked, moved, &mut each)
+                    .is_ok(),
+            )
+        });
+        self.send_clicks(container, sent);
+    }
+    fn send_clicks(&mut self, container: i32, clicks: Vec<Predicted>) {
+        let state = self.remote.as_ref().map_or(0, |r| r.state_id);
+        let hashed = |g: &Self, s: &Option<ItemStack>| g.to_network(s).map(|s| Hashed::of(&s));
+        for (slot, button, input, changed, carried) in clicks {
+            let changed = changed.iter().map(|(i, s)| (*i, hashed(self, s))).collect();
+            let carried = hashed(self, &carried);
+            self.send(S::ContainerClick(play::ContainerClick {
+                container,
+                state,
+                slot,
+                button: button as i8,
+                input: input_ordinal(input),
+                changed,
+                carried,
+            }));
+        }
     }
     /// A `ContainerClick` on game slot `internal` of the server's open menu
     /// (`input` is the ContainerInput ordinal). False when the menu has no
     /// such slot.
     pub(super) fn remote_slot_click(&mut self, internal: usize, button: i8, input: i32) -> bool {
-        let (container, menu) = match self.remote.as_ref().and_then(|r| r.menu.clone()) {
-            Some((id, name)) => (id, name),
-            None => (0, "inventory".to_owned()),
-        };
+        let (container, menu) = self.remote_menu();
         let slot = (0..64).find(|&s| Self::menu_slot(&menu, s) == Some(internal));
         let Some(slot) = slot else { return false };
         let carried = self.to_network(&self.carried).map(|s| Hashed::of(&s));
@@ -3285,6 +3377,44 @@ impl Game<'_> {
             "decode_errors": r.decode_errors,
             "chat": r.chat.iter().rev().take(10).rev().map(|(t, _)| t.clone()).collect::<Vec<_>>(),
         }))
+    }
+}
+
+/// A click sent to a server: its slot, button and input, the slots it
+/// changed and the carried stack after it.
+type Predicted = (
+    i16,
+    i32,
+    Input,
+    Vec<(i16, Option<ItemStack>)>,
+    Option<ItemStack>,
+);
+
+fn menu_items(m: &horizon_client::menu::Menu) -> Vec<Option<ItemStack>> {
+    (0..m.slot_count()).map(|i| m.slot(i).cloned()).collect()
+}
+
+/// The slots whose stack is no longer `before`'s (`ItemStack.matches`).
+fn changed_slots(
+    before: &[Option<ItemStack>],
+    m: &horizon_client::menu::Menu,
+) -> Vec<(i16, Option<ItemStack>)> {
+    (0..m.slot_count())
+        .filter(|&i| m.slot(i) != before.get(i).and_then(Option::as_ref))
+        .map(|i| (i as i16, m.slot(i).cloned()))
+        .collect()
+}
+
+/// ServerboundContainerClickPacket's `ContainerInput` ordinal.
+pub(super) fn input_ordinal(input: Input) -> i32 {
+    match input {
+        Input::Pickup => 0,
+        Input::QuickMove => 1,
+        Input::Swap => 2,
+        Input::Clone => 3,
+        Input::Throw => 4,
+        Input::QuickCraft => 5,
+        Input::PickupAll => 6,
     }
 }
 

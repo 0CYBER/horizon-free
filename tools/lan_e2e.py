@@ -20,6 +20,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - containers: the guest's ender chest holds the guest's items, not the host's, and a double chest
              opens as 9x6 with the right half first;
 - feedback:  the guest's command feedback names the guest and shows the numbers.
+- clicks:    with real mouse presses (not click-slot, which skips the screen's press and drag
+             handling), the guest puts a stack into a chest and a furnace, drags planks across
+             its crafting grid and gathers a stack with a double click; the server has each.
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -48,7 +51,7 @@ from agent_control_e2e import Cli, Failed, game_env  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'trials']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'trials', 'clicks']
 
 
 class Game:
@@ -456,6 +459,91 @@ def check_containers(host, guest, out):
     return {'ender': ender, 'double': double, 'taken': taken}
 
 
+def slot_point(game, slot):
+    """The GUI point in the middle of slot `slot` of the open screen (`ui`'s slot-N)."""
+    for w in game.raw('ui')['widgets']:
+        if w.get('id') == f'slot-{slot}':
+            x, y, width, height = w['bounds']
+            return x + width / 2, y + height / 2
+    raise Failed(f'no slot {slot} on the screen')
+
+
+def mouse(game, *slots, right=False):
+    """Press over the first slot, move over the others and release: one click, or a drag."""
+    points = [f'{v:.1f}' for s in slots for v in slot_point(game, s)]
+    game.raw('drag-at', *(['right'] if right else []), *points)
+    game.wait(4)
+
+
+def hotbar_slot(game, item):
+    return next(s['slot'] for s in game('inventory')['hotbar'] if s and s.get('item') == item)
+
+
+def check_clicks(host, guest, out):
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    guest('command', command='give @s minecraft:cobblestone 10')
+    guest('command', command='give @s minecraft:coal 3')
+    guest('command', command='give @s minecraft:raw_iron 2')
+    guest('command', command='give @s minecraft:oak_planks 2')
+    guest.wait(10)
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    chest, furnace = (x, y, z + 2), (x, y, z - 2)
+    guest('command', command=f'setblock {chest[0]} {chest[1]} {chest[2]} minecraft:chest')
+    guest('command', command=f'setblock {furnace[0]} {furnace[1]} {furnace[2]} minecraft:furnace')
+    guest.wait(10)
+    # Pick the cobblestone up and put it down in the chest's first slot.
+    guest.raw('interact', *chest)
+    guest.raw('wait-for', 'screen', 'container', '--timeout', 10)
+    guest.wait(10)
+    mouse(guest, hotbar_slot(guest, 'minecraft:cobblestone'))
+    mouse(guest, 300)
+    guest.wait(10)
+    guest.shot(out, 'clicks-chest')
+    guest.raw('key', 'esc', 'tap')
+    guest.wait(10)
+    in_chest, _ = open_container(guest, chest, out, 'clicks-chest-after')
+    # Coal into the fuel slot, raw iron into the input.
+    guest.raw('interact', *furnace)
+    guest.raw('wait-for', 'screen', 'container', '--timeout', 10)
+    guest.wait(10)
+    mouse(guest, hotbar_slot(guest, 'minecraft:coal'))
+    mouse(guest, 301)
+    mouse(guest, hotbar_slot(guest, 'minecraft:raw_iron'))
+    mouse(guest, 300)
+    guest.wait(10)
+    guest.shot(out, 'clicks-furnace')
+    guest.raw('key', 'esc', 'tap')
+    guest.wait(10)
+    # Opening the furnace again resends the whole menu: the server's own view.
+    in_furnace, _ = open_container(guest, furnace, out, 'clicks-furnace-after')
+    # Two planks dragged over the 2x2 grid's left column: one each, four sticks.
+    guest.raw('key', 'e', 'tap')
+    guest.raw('wait-for', 'screen', 'inventory')
+    guest.wait(5)
+    mouse(guest, hotbar_slot(guest, 'minecraft:oak_planks'))
+    mouse(guest, 100, 102)
+    guest.wait(10)
+    grid = {s['slot']: (s.get('item'), s.get('count')) for s in guest('screen').get('slots', [])
+            if s.get('slot') in (100, 102, 200) and s.get('item')}
+    guest.shot(out, 'clicks-drag')
+    guest.raw('click-slot', 200, 'shift')
+    guest.wait(10)
+    guest.raw('key', 'esc', 'tap')
+    guest.wait(10)
+    # The chest's menu brings the whole inventory as the server has it.
+    open_container(guest, chest, out, 'clicks-inventory')
+    counts = guest('inventory')['counts']
+    for at in (chest, furnace):
+        guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:air')
+    assert in_chest == {0: 'minecraft:cobblestone'}, f'the chest holds {in_chest} after the guest put cobblestone in'
+    assert in_furnace == {0: 'minecraft:raw_iron', 1: 'minecraft:coal'}, f'the furnace holds {in_furnace}'
+    assert grid.get(100) == ('minecraft:oak_planks', 1) and grid.get(102) == ('minecraft:oak_planks', 1), \
+        f'the drag left the grid as {grid}'
+    assert counts.get('minecraft:stick') == 4 and 'minecraft:cobblestone' not in counts, f'inventory after: {counts}'
+    return {'chest': in_chest, 'furnace': in_furnace, 'grid': grid, 'inventory': counts}
+
+
 def check_feedback(host, guest, out):
     x, y, z = (round(v, 1) for v in pos_of(guest))
     guest('command', command='item replace entity @s weapon.mainhand with minecraft:stick')
@@ -626,7 +714,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'chest': check_chest, 'crafting': check_crafting, 'damage': check_damage,
              'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
              'containers': check_containers, 'feedback': check_feedback, 'trials': check_trials,
-             'walls': check_walls}
+             'walls': check_walls, 'clicks': check_clicks}
 
 
 def run(ctl, out, resources, checks):
