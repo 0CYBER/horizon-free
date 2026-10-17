@@ -203,6 +203,9 @@ impl Game<'_> {
         self.lan_acting_uuid = Some(g.uuid);
 
         let result = f(self);
+        for packet in std::mem::take(&mut self.guest_packets) {
+            host.hub.send_to(conn, &packet);
+        }
         self.lan_acting = None;
         self.lan_acting_name = None;
         self.lan_acting_uuid = None;

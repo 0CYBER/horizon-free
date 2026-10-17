@@ -74,7 +74,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'push', 'eat', 'xp', 'effects', 'portals']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'titles', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'push', 'eat', 'xp', 'effects', 'portals']
 
 
 class Game:
@@ -775,6 +775,22 @@ def check_recipes(host, guest, out):
     return {'known': known, 'grid': grid}
 
 
+def check_titles(host, guest, out):
+    # TitleCommand sends the guest its title packets; its HUD shows and clears them.
+    for command in ('title @s times 10 400 10', 'title @s subtitle "Under"', 'title @s title "Over"',
+                    'title @s actionbar "Bar"'):
+        guest('command', command=command)
+    guest.wait(5)
+    shown = {k: guest.raw('messages', 1)[k] for k in ('title', 'subtitle', 'actionbar')}
+    guest.shot(out, 'titles')
+    guest('command', command='title @s clear')
+    guest.wait(5)
+    cleared = {k: guest.raw('messages', 1)[k] for k in ('title', 'subtitle')}
+    assert shown == {'title': 'Over', 'subtitle': 'Under', 'actionbar': 'Bar'}, f'titles shown: {shown}'
+    assert cleared == {'title': None, 'subtitle': None}, f'titles cleared: {cleared}'
+    return {'shown': shown, 'cleared': cleared}
+
+
 def png_rows(path):
     """The rows of an 8-bit RGB or RGBA PNG, unfiltered, as bytes of 4 (or 3) per pixel."""
     data = Path(path).read_bytes()
@@ -1047,7 +1063,8 @@ def check_xp(host, guest, out):
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
              'chest': check_chest, 'crafting': check_crafting, 'sign': check_sign, 'damage': check_damage,
              'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
-             'containers': check_containers, 'feedback': check_feedback, 'commands': check_commands,
+             'containers': check_containers, 'feedback': check_feedback, 'titles': check_titles,
+             'commands': check_commands,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,
              'effects': check_effects, 'portals': check_portals, 'clicks': check_clicks,
              'sleep': check_sleep, 'push': check_push, 'eat': check_eat,
