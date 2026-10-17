@@ -388,7 +388,10 @@ fn relinking_follows_the_launcher_the_files_now_come_from() {
     s.write("ModrinthApp/meta/versions/26.3/26.3.jar", CLIENT);
     resolve_with(&modrinth, &[], &linked, &mojang).unwrap();
     let jar = linked.join("versions/26.3/26.3.jar");
-    assert!(same_file(&jar, &modrinth.join("meta/versions/26.3/26.3.jar")));
+    assert!(same_file(
+        &jar,
+        &modrinth.join("meta/versions/26.3/26.3.jar")
+    ));
     assert!(!same_file(&jar, &prism.join(prism_jar)));
     // The Modrinth App folder has no libraries or assets: the old links are gone, and the
     // folders they pointed at are untouched.
