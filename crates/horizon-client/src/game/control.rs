@@ -20,6 +20,7 @@ const HELP: &[&str] = &[
     "hotbar 1-9                     select a hotbar slot",
     "give ITEM [COUNT]              add items to the inventory",
     "render-distance N              chunks, 2..64",
+    "lod-distance N                 far surface chunks, 0 disables, up to1024",
     "time TICKS                     set the time of day",
     "summon KIND [X Y Z] [baby]     spawn a mob (in front of the player without a position)",
     "mobs [RADIUS]                  list mobs near the player with their AI state",
@@ -368,6 +369,15 @@ impl Game<'_> {
                 self.apply_settings();
                 ok()
             }
+            "lod-distance" => {
+                let n: u32 = arg(1)?.parse()?;
+                if n > 1024 {
+                    return Err("LOD distance must be 0..1024".into());
+                }
+                self.settings.horizon.lod_distance = n;
+                self.apply_settings();
+                ok()
+            }
             "time" => {
                 self.world.day_time = arg(1)?.parse()?;
                 ok()
@@ -699,6 +709,15 @@ impl Game<'_> {
             .map(|k| format!("{k:?}"))
             .collect();
         physical_keys.sort();
+        let lod = json!({
+            "distance": self.settings.horizon.lod_distance,
+            "terrain_distance": self.terrain_distance(),
+            "source": if self.lod.is_none() { "none" } else if self.integrated.is_some() { "integrated" } else { "local" },
+            "source_attempted": self.lod_source_attempted,
+            "active_tiles": self.lod.as_ref().map_or(0, |lod| lod.stats().0),
+            "cached_tiles": self.lod.as_ref().map_or(0, |lod| lod.stats().1),
+            "pending_observations": self.lod_observe.len(),
+        });
         let mut status = json!({
             "screen": self.screen_name(),
             "debug": {
@@ -757,6 +776,7 @@ impl Game<'_> {
                 .eye_position()
                 .map(|e| self.shown_name_tags(glam::DVec3::from_array(e))),
         });
+        status["lod"] = lod;
         status["physical_keys"] = json!(physical_keys);
         status
     }

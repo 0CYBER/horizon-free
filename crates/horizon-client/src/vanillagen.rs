@@ -35,6 +35,7 @@ pub struct VanillaTerrain {
     tick_blocks: Vec<u32>,
     /// Block index -> default state id: `tick_blocks` the other way.
     tick_states: Vec<u32>,
+    lod_supported: bool,
 }
 /// A proto chunk, or the position of one whose generation failed.
 enum VanillaProto {
@@ -106,6 +107,7 @@ impl VanillaTerrain {
             query: std::sync::Mutex::new(None),
             tick_blocks,
             tick_states,
+            lod_supported: dimension != "minecraft:the_nether",
         })
     }
     /// A proto chunk's blocks, biomes, scheduled ticks and post-processing
@@ -264,6 +266,27 @@ impl ChunkGenerator for VanillaTerrain {
     type Worker = GeneratorWorker;
     fn worker(&self) -> GeneratorWorker {
         self.generator.worker()
+    }
+    fn lod_surface(
+        &self,
+        worker: &mut GeneratorWorker,
+        x: i32,
+        z: i32,
+    ) -> Option<crate::lod::Surface> {
+        if !self.lod_supported {
+            return None;
+        }
+        let surface = worker.surface_sample(x, z)?;
+        Some(crate::lod::Surface {
+            height: surface.height,
+            state: surface.state,
+            water: surface.water,
+            biome: self
+                .biome_map
+                .get(surface.biome.0 as usize)
+                .copied()
+                .unwrap_or(0),
+        })
     }
     /// The structure starts a saved chunk references, as vanilla reads them
     /// with the chunk: built here, on the loading worker, into the

@@ -4,7 +4,7 @@
 
 In the Horizon menu style, the Options screen's **Video** section holds the graphics settings, with a Simple / Advanced switch at the top (remembered between sessions):
 
-- **Simple**: a preset (Performance, Balanced, Quality, Ultra or Custom), render distance, FOV, max framerate, VSync and GUI scale.
+- **Simple**: a preset (Performance, Balanced, Quality, Ultra or Custom), render distance, LOD distance, FOV, max framerate, VSync and GUI scale.
 - **Advanced**: every setting, grouped under Rendering, Quality, Display, Preferences, Performance and Overlay.
 
 In the Classic style, Video Settings starts with two buttons opening the same settings as vanilla-looking screens.
@@ -17,7 +17,7 @@ Every row has a one-line description and its cost in frame time (none, low, medi
 | Group | Setting | Stored in |
 | --- | --- | --- |
 | Rendering | render distance, simulation distance, entity distance | `options.txt` (vanilla keys) |
-| | cave culling, chunk updates per frame | `horizon-graphics.txt` |
+| | LOD distance, cave culling, chunk updates per frame | `horizon-graphics.txt` |
 | Quality | smooth lighting, mipmap levels, biome blend, clouds, cloud distance, weather radius, particles, entity shadows, cutout leaves | `options.txt` |
 | | sky, fog, weather, animated textures | `horizon-graphics.txt` |
 | Display | FOV, max framerate, VSync, fullscreen, GUI scale | `options.txt` |
@@ -31,7 +31,17 @@ Every row has a one-line description and its cost in frame time (none, low, medi
 
 Which settings each level shows, their descriptions and costs are in `crates/horizon-client/src/graphics_ui.rs` (`rows`); the Horizon shell draws them in `options_horizon.rs` with `ui_theme::described_row`, and the Classic screens use `graphics_style.rs`.
 
-Not implemented: distant-terrain LOD, anisotropic filtering (wgpu needs linear magnification for it, which blurs close blocks), MSAA (FXAA instead) and exclusive fullscreen (fullscreen is borderless).
+## Distant terrain
+
+**LOD Distance** is off by default. Enable it in Simple or Advanced graphics settings and choose 64, 128, 256, 512 or 1024 chunks. With LODs enabled, **Full Detail Distance** controls the nearby normal chunks; LOD Distance controls the outer view. Keep the nearby range modest, for example 12 chunks with a 256-chunk LOD distance. Increasing the distant range does not increase simulation distance.
+
+Distant terrain uses progressively coarser surface meshes, streamed in bounded background work instead of loading full chunks out to the distant range. It is available in local Overworld and End worlds; surface LODs are disabled in the Nether. Far samples approximate undecorated terrain: distant caves, decorations, structures and player builds are not guaranteed to match the nearby world. Procedural distant terrain requires a local world's generator; remote servers do not supply their world-generation seed.
+
+LOD terrain enters the existing world colour and depth passes, so supported shader-pack postprocessing can see it. This does not add Iris material passes or shadow maps: Java packs still have the [existing fullscreen-pass limitations](shader-packs.md). Shader appearance and transitions need testing with the selected pack.
+
+The setting is stored as `lodDistance` in `horizon-graphics.txt`; `0` disables it. Existing `renderDistance` in `options.txt` keeps its normal meaning for full chunks.
+
+Not implemented: anisotropic filtering (wgpu needs linear magnification for it, which blurs close blocks), MSAA (FXAA instead) and exclusive fullscreen (fullscreen is borderless).
 
 ## Benchmark
 

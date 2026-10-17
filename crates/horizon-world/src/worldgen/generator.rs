@@ -24,8 +24,8 @@ use super::{
     decode_noise,
     density::DensityRegistry,
     material_condition::{
-        MaterialConditionRegistry, MaterialRule, MaterialRuleError, MaterialRuleLibrary,
-        MaterialSurfaceQueries,
+        MaterialConditionRegistry, MaterialConditions, MaterialDensitySources, MaterialRule,
+        MaterialRuleError, MaterialRuleLibrary, MaterialSurfaceQueries,
     },
     material_extensions::{ExtensionBlocks, ExtensionNoises, MaterialExtensions},
     material_stage::{SurfaceInputs, TopMaterialInputs, build_surface},
@@ -1412,6 +1412,7 @@ trait SeededPipeline: Send + Sync {
     ) -> Result<DecorateStats, GeneratorError>;
     fn data(&self) -> &Arc<GeneratorData>;
     fn sea_level(&self) -> i32;
+    fn surface_sample(&self, worker: &mut WorkerState, x: i32, z: i32) -> Option<SurfaceSample>;
     fn structure_starts(
         &self,
         worker: &mut WorkerState,
@@ -1593,6 +1594,69 @@ where
             }
         }
         None
+    }
+    fn surface_sample(&self, worker: &mut WorkerState, x: i32, z: i32) -> Option<SurfaceSample> {
+        let mut top = None;
+        let mut water = None;
+        let mut below = 0;
+        self.noise_column(x, z, &mut |y, state| {
+            let properties = self.data.states.get(state);
+            if properties.is_air() || properties.has_fluid() {
+                if top.is_some() {
+                    return true;
+                }
+                if properties.has_fluid() {
+                    water.get_or_insert((y + 1, state));
+                } else {
+                    // Match the material traversal's water reset across air gaps.
+                    water = None;
+                }
+            } else {
+                top.get_or_insert((y + 1, state));
+                below += 1;
+            }
+            false
+        });
+        let (height, state) = top?;
+        let y = height - 1;
+        let position = BlockPos::new(x, y, z);
+        let mut resolver = self.source.resolver(
+            &self.climate,
+            self.router.get(RouterField::Erosion).as_ref(),
+        );
+        // Use a fresh bounded context: far samples must not grow the chunk/structure caches.
+        let mut biome_context = SamplerContext::default();
+        let biome = resolver
+            .sample(&mut biome_context, self.zoom.quart_at_block(position))
+            .ok()?;
+        let biome = self.data.biome_id(biome)?;
+        let volume = DensityVolume::new([1; 3], [x, y, z], [1; 3]).ok()?;
+        let queries = SurfaceQueries {
+            pipeline: self,
+            temperatures: &mut worker.temperatures,
+            biome: Biomes::Resolver(&mut resolver, &mut biome_context),
+            possible: None,
+        };
+        let sources = MaterialDensitySources::new(
+            queries,
+            volume,
+            self.preliminary.clone(),
+            SamplerContext::default(),
+        )
+        .ok()?;
+        let mut material =
+            MaterialConditions::<R, _>::new(self.generation(), self.root.clone(), sources);
+        let rule = material.add_rule(self.rule.clone()).ok()?;
+        // shortcut: distant surfaces omit slope rules and column extensions; nearby chunks provide full terrain.
+        material.update_xz(x, z, 0, 0);
+        material.update_y(1, below, water.map_or(i32::MIN, |(height, _)| height), y);
+        let state = material.try_apply(rule, position).ok()?.unwrap_or(state);
+        Some(SurfaceSample {
+            height,
+            state,
+            water,
+            biome,
+        })
     }
     fn noise_biomes(&self, worker: &mut WorkerState, quarts: &[[i32; 3]]) -> Vec<Option<String>> {
         let mut resolver = self.source.resolver(
@@ -1864,6 +1928,15 @@ impl OverworldGenerator {
     }
 }
 
+/// A surface-only noise column for far terrain. Heights are exclusive top faces.
+#[derive(Clone, Copy, Debug)]
+pub struct SurfaceSample {
+    pub height: i32,
+    pub state: BlockStateId,
+    pub water: Option<(i32, BlockStateId)>,
+    pub biome: BiomeId,
+}
+
 /// Per-thread generation state.
 pub struct GeneratorWorker {
     pipeline: Arc<dyn SeededPipeline>,
@@ -1876,6 +1949,10 @@ impl GeneratorWorker {
         let result = self.pipeline.generate(&mut self.state, pos);
         self.state.timings.chunks += 1;
         result
+    }
+    /// Noise/aquifer surface and its material rule, without chunks, structures or features.
+    pub fn surface_sample(&mut self, x: i32, z: i32) -> Option<SurfaceSample> {
+        self.pipeline.surface_sample(&mut self.state, x, z)
     }
     /// `/locate structure`: the nearest start of one of `names`.
     pub fn locate(
@@ -1934,6 +2011,44 @@ impl GeneratorWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn far_surface_matches_undecorated_land_and_keeps_end_void() {
+        let root = std::env::var_os("HORIZON_TEST_RESOURCES")
+            .or_else(|| std::env::var_os("HORIZON_RESOURCES"))
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3")
+            });
+        if !root.join("worldgen/world_presets.json").exists() {
+            eprintln!("skipping: no worldgen bundle at {}", root.display());
+            return;
+        }
+        let registry: &'static BlockRegistry = Box::leak(Box::new(
+            crate::level::data::load_registry(&root).expect("registry"),
+        ));
+        let data = GeneratorData::load(&root.join("worldgen"), registry).expect("worldgen data");
+        let generator =
+            OverworldGenerator::without_structures(data.clone(), 1234).expect("generator");
+        let mut worker = generator.worker();
+        let sample = worker.surface_sample(0, 0).expect("land");
+        let chunk = worker.generate_proto(ChunkPos::new(0, 0)).expect("terrain");
+        assert_eq!(
+            sample.water.map_or(sample.height, |(height, _)| height),
+            chunk.surface_height(0, 0)
+        );
+        assert_eq!(sample.state, chunk.block(0, sample.height - 1, 0));
+        assert!(
+            sample.water.is_some(),
+            "fixture includes underwater terrain"
+        );
+        let end =
+            OverworldGenerator::for_dimension(data, 1234, "minecraft:normal", "minecraft:the_end")
+                .expect("End generator");
+        let mut worker = end.worker();
+        assert!(worker.surface_sample(0, 0).is_some());
+        assert!(worker.surface_sample(256, 0).is_none());
+    }
 
     /// Generators of one seed and dimension share their ring positions;
     /// another seed or generator gets its own, and old entries go.

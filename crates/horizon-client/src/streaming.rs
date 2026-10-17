@@ -32,6 +32,25 @@ pub type Proto = Box<dyn std::any::Any + Send>;
 pub trait ChunkGenerator: Send + Sync + 'static {
     type Worker: Send + 'static;
     fn worker(&self) -> Self::Worker;
+    fn lod_sampler(self: Arc<Self>) -> Box<dyn LodSampler>
+    where
+        Self: Sized,
+    {
+        let worker = self.worker();
+        Box::new(GeneratorSampler {
+            generator: self,
+            worker,
+        })
+    }
+    /// An undecorated far-terrain column, without allocating gameplay chunks.
+    fn lod_surface(
+        &self,
+        _worker: &mut Self::Worker,
+        _x: i32,
+        _z: i32,
+    ) -> Option<crate::lod::Surface> {
+        None
+    }
     /// A previously saved final chunk, bypassing generation.
     fn load(&self, _x: i32, _z: i32) -> Option<Chunk> {
         None
@@ -63,8 +82,29 @@ pub trait ChunkGenerator: Send + Sync + 'static {
     /// neighbours' decoration is done, so it can't be generated again.
     fn save_finished(&self, _chunk: Chunk) {}
 }
+/// Independent, thread-owned far-terrain sampling state.
+pub trait LodSampler: Send {
+    fn sample(&mut self, x: i32, z: i32) -> Option<crate::lod::Surface>;
+}
+pub trait LodSource: Send + Sync {
+    fn sampler(self: Arc<Self>) -> Box<dyn LodSampler>;
+}
+struct GeneratorSampler<G: ChunkGenerator> {
+    generator: Arc<G>,
+    worker: G::Worker,
+}
+impl<G: ChunkGenerator> LodSampler for GeneratorSampler<G> {
+    fn sample(&mut self, x: i32, z: i32) -> Option<crate::lod::Surface> {
+        self.generator.lod_surface(&mut self.worker, x, z)
+    }
+}
+impl<G: ChunkGenerator> LodSource for G {
+    fn sampler(self: Arc<Self>) -> Box<dyn LodSampler> {
+        ChunkGenerator::lod_sampler(self)
+    }
+}
 /// The generator's saving, for the streamer (which doesn't know its type).
-trait Saves: Send + Sync {
+trait Saves: LodSource {
     fn save_protos(&self, protos: &[&Proto]);
     fn save_finished(&self, chunk: Chunk);
 }
@@ -485,6 +525,10 @@ impl Streaming {
             extra: Vec::new(),
             mesh: true,
         }
+    }
+    /// Shares generation resources, but gives distant work its own worker state.
+    pub fn lod_source(&self) -> Arc<dyn LodSource> {
+        self.saves.clone()
     }
     /// Resource packs reloaded (`LevelRenderer.allChanged`): mesh with the new
     /// models and sprites, and rebuild every loaded section. Meshes in flight

@@ -85,7 +85,7 @@ impl Game<'_> {
                     (water & 255) as f32 / 255.0,
                 ],
                 biome,
-                render_distance_chunks: self.streaming.radius,
+                render_distance_chunks: self.terrain_distance(),
                 cloud_range_chunks: self.settings.cloud_range,
                 camera_y: camera.y,
                 // level.getMinY(): the Nether and the End start at y 0.

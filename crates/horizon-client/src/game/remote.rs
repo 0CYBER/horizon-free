@@ -258,6 +258,7 @@ impl Game<'_> {
         self.screen = Screen::Playing;
         self.title = None;
         self.dim = Dim::Overworld;
+        self.clear_lod();
         if let Some(r) = self.renderer.as_mut() {
             r.clear_sections();
         }
@@ -362,6 +363,7 @@ impl Game<'_> {
         self.border = Default::default();
         self.screen = Screen::Playing;
         self.container = None;
+        self.clear_lod();
         if let Some(r) = self.renderer.as_mut() {
             r.clear_sections();
         }
@@ -595,6 +597,7 @@ impl Game<'_> {
                 // A new ClientLevel: a new chunk storage, centred on 0, 0.
                 r.chunk_center = (0, 0);
             }
+            self.clear_lod();
             if let Some(renderer) = self.renderer.as_mut() {
                 renderer.clear_sections();
             }
