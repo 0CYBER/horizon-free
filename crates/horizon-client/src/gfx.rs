@@ -58,6 +58,7 @@ pub fn outline_vertices(edges: &[[f64; 6]], camera: glam::DVec3) -> Vec<[f32; 6]
 }
 
 mod arena;
+mod flat;
 mod java_stages;
 mod occlusion;
 mod pack_stages;
@@ -101,6 +102,8 @@ struct SectionGpu {
     faces: crate::mesher::FaceGroups,
     sort: translucency::SortState,
     sorted_indices: Option<(u32, u64)>,
+    /// Its id for flat draws (`flat::Flat::add`), when they are on.
+    flat_id: Option<u32>,
 }
 /// Line segments the hit outline can hold.
 const MAX_OUTLINE_EDGES: u64 = 256;
@@ -251,6 +254,10 @@ pub struct Renderer {
     pub config: wgpu::SurfaceConfiguration,
     solid: wgpu::RenderPipeline,
     translucent: wgpu::RenderPipeline,
+    /// Flat section draws (`flat`), where multi-draw is emulated.
+    flat: Option<flat::Flat>,
+    /// `flat` draws this frame's sections (off: the per-section draws).
+    flat_on: bool,
     sky: wgpu::RenderPipeline,
     dark_disc: wgpu::RenderPipeline,
     lines: wgpu::RenderPipeline,
@@ -781,18 +788,19 @@ impl Renderer {
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &debug_line_attributes,
         })];
-        let pipeline = |label: &str,
-                        vertex: &str,
-                        fragment: &str,
-                        buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
-                        topology: wgpu::PrimitiveTopology,
-                        cull: Option<wgpu::Face>,
-                        depth_write: bool,
-                        depth_test: bool,
-                        blend: Option<wgpu::BlendState>| {
+        let pipeline_in = |layout: &wgpu::PipelineLayout,
+                           label: &str,
+                           vertex: &str,
+                           fragment: &str,
+                           buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
+                           topology: wgpu::PrimitiveTopology,
+                           cull: Option<wgpu::Face>,
+                           depth_write: bool,
+                           depth_test: bool,
+                           blend: Option<wgpu::BlendState>| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
-                layout: Some(&layout),
+                layout: Some(layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
                     entry_point: Some(vertex),
@@ -832,6 +840,28 @@ impl Renderer {
                 multiview_mask: None,
                 cache: None,
             })
+        };
+        let pipeline = |label: &str,
+                        vertex: &str,
+                        fragment: &str,
+                        buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
+                        topology: wgpu::PrimitiveTopology,
+                        cull: Option<wgpu::Face>,
+                        depth_write: bool,
+                        depth_test: bool,
+                        blend: Option<wgpu::BlendState>| {
+            pipeline_in(
+                &layout,
+                label,
+                vertex,
+                fragment,
+                buffers,
+                topology,
+                cull,
+                depth_write,
+                depth_test,
+                blend,
+            )
         };
         let tri = wgpu::PrimitiveTopology::TriangleList;
         let solid = pipeline(
@@ -1649,7 +1679,34 @@ impl Renderer {
             std::mem::size_of::<TerrainVertex>() as u64,
             1 << 20,
         );
-        let sorted_indices = arena::Arena::indices(&device, 1 << 16);
+        // Sections as one index list per frame where multi-draw is emulated.
+        let flat = flat::wanted(&adapter, &device).then(|| {
+            let buffers = [Some(wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<TerrainVertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &TERRAIN_ATTRIBUTES,
+            })];
+            flat::Flat::new(
+                &device,
+                &bindings,
+                arena.page_vertices(),
+                |layout, label, fragment, blend| {
+                    pipeline_in(
+                        layout,
+                        label,
+                        "vs_terrain_flat",
+                        fragment,
+                        &buffers,
+                        tri,
+                        Some(wgpu::Face::Back),
+                        true,
+                        true,
+                        blend,
+                    )
+                },
+            )
+        });
+        let sorted_indices = arena::Arena::indices(&device, 1 << 16, flat.is_some());
         let indirect = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Section draws"),
             size: 1024 * 20,
@@ -1684,6 +1741,8 @@ impl Renderer {
             config,
             solid,
             translucent,
+            flat_on: flat.is_some(),
+            flat,
             sky,
             dark_disc,
             lines,
@@ -1906,6 +1965,18 @@ impl Renderer {
         }
         self.depth = Self::depth(&self.device, &self.config);
     }
+    /// Whether sections are drawn as one index list per frame (`flat`).
+    pub fn flat_draws(&self) -> bool {
+        self.flat_on
+    }
+    /// Switches between flat and per-section draws, for A/B checks.
+    pub fn set_flat_draws(&mut self, on: bool) -> Result<()> {
+        if on && self.flat.is_none() {
+            return Err("flat section draws are off on this device".into());
+        }
+        self.flat_on = on;
+        Ok(())
+    }
     pub fn section_count(&self) -> usize {
         self.sections.len()
     }
@@ -1947,6 +2018,10 @@ impl Renderer {
         } else {
             None
         };
+        let flat_id = self
+            .flat
+            .as_mut()
+            .map(|f| f.add(&self.device, &self.queue, page, start, vertices));
         let stride = std::mem::size_of::<TerrainVertex>() as u64;
         for (offset, part) in [(0, &mesh.solid), (mesh.solid.len(), &mesh.translucent)] {
             if !part.is_empty() {
@@ -1976,6 +2051,7 @@ impl Renderer {
                         .collect(),
                 ),
                 sorted_indices,
+                flat_id,
             },
         );
     }
@@ -2006,6 +2082,9 @@ impl Renderer {
     }
     fn release_section(&mut self, key: SectionKey) {
         if let Some(s) = self.sections.remove(key) {
+            if let (Some(flat), Some(id)) = (&mut self.flat, s.flat_id) {
+                flat.remove(id);
+            }
             if let Some((page, start)) = s.sorted_indices {
                 self.sorted_indices
                     .release(page, start, u64::from(s.translucent) * 6);
@@ -2022,6 +2101,9 @@ impl Renderer {
         self.block_entities.clear();
         self.sections.clear();
         self.arena.clear();
+        if let Some(flat) = &mut self.flat {
+            flat.clear();
+        }
         self.sorted_indices.clear();
         self.translucency_cursor = 0;
         self.occlusion.clear();
@@ -2204,6 +2286,9 @@ impl Renderer {
     pub fn render(&mut self, frame: &Frame) -> Result<bool> {
         self.arena.trim();
         self.sorted_indices.trim();
+        if let Some(flat) = &mut self.flat {
+            flat.trim(|page| self.arena.has_page(page));
+        }
         if self.suspended {
             return Ok(false);
         }
@@ -2510,7 +2595,32 @@ impl Renderer {
         } else {
             self.draws.len()
         };
-        if self.multi_draw && !self.draws.is_empty() {
+        let flat_frame = match &mut self.flat {
+            Some(flat)
+                if self.flat_on && !self.draws.is_empty() && self.draws.len() >= flat.min_draws =>
+            {
+                let sections = &self.sections;
+                let sorted = &self.sorted_indices;
+                crate::spans::time("flatten", || {
+                    flat.prepare(
+                        &self.device,
+                        &mut encoder,
+                        &mut self.uploads,
+                        &self.draws,
+                        &self.draw_pages,
+                        solid_draws as usize,
+                        visible
+                            .iter()
+                            .filter_map(|v| sections.get(v.slot).flat_id.map(|id| (id, v.origin))),
+                        |page| sorted.buffer(page).clone(),
+                    )
+                })
+            }
+            _ => false,
+        };
+        if flat_frame {
+            self.section_draw_calls = self.flat.as_ref().map_or(0, |f| f.calls.len());
+        } else if self.multi_draw && !self.draws.is_empty() {
             if self.draws.len() as u64 > self.indirect_capacity {
                 self.indirect_capacity = (self.draws.len() as u64).next_power_of_two();
                 self.indirect = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -2745,10 +2855,22 @@ impl Renderer {
                     pass.draw(0..3, 0..1);
                 }
             }
-            pass.set_pipeline(&self.solid);
-            pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
-            pass.set_vertex_buffer(1, self.instances.slice(..));
-            self.draw_sections(&mut pass, 0, solid_draws);
+            match self.flat.as_ref().filter(|_| flat_frame) {
+                Some(flat) => {
+                    pass.set_pipeline(&flat.solid);
+                    flat.draw(&mut pass, &flat.calls[..flat.solid_calls], |p| {
+                        self.arena.buffer(p)
+                    });
+                    pass.set_bind_group(0, &self.group, &[]);
+                    pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                }
+                None => {
+                    pass.set_pipeline(&self.solid);
+                    pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.set_vertex_buffer(1, self.instances.slice(..));
+                    self.draw_sections(&mut pass, 0, solid_draws);
+                }
+            }
             if entity_quads > 0 {
                 pass.set_pipeline(&self.entity_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
@@ -2785,10 +2907,22 @@ impl Renderer {
                 pass.set_vertex_buffer(0, self.debug_line_buffer.slice(..));
                 pass.draw(0..4, debug_depth..debug_depth + debug_top);
             }
-            pass.set_pipeline(&self.translucent);
-            pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
-            pass.set_vertex_buffer(1, self.instances.slice(..));
-            self.draw_sections(&mut pass, solid_draws, translucent_draws);
+            match self.flat.as_ref().filter(|_| flat_frame) {
+                Some(flat) => {
+                    pass.set_pipeline(&flat.translucent);
+                    flat.draw(&mut pass, &flat.calls[flat.solid_calls..], |p| {
+                        self.arena.buffer(p)
+                    });
+                    pass.set_bind_group(0, &self.group, &[]);
+                    pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                }
+                None => {
+                    pass.set_pipeline(&self.translucent);
+                    pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.set_vertex_buffer(1, self.instances.slice(..));
+                    self.draw_sections(&mut pass, solid_draws, translucent_draws);
+                }
+            }
             // LevelRenderer.executeClassicTransparency: translucent targets'
             // outlines follow terrain, so its blending cannot wash them out.
             if outline_edges > 0 && frame.outline_after_terrain {
