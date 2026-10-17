@@ -4,7 +4,7 @@
 use super::{Mob, Part, keyframes::AnimationState, living::wrap};
 use horizon_core::geometry::trig::Mth;
 use std::collections::HashMap;
-use std::f32::consts::PI;
+use std::f32::consts::{FRAC_PI_6, PI};
 
 /// The setupAnim implementation a model uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -361,8 +361,7 @@ fn pose_arm(p: &mut Poses, pose: ArmPose, right: bool, h: &Hum) {
             p.xrot(arm, x);
             p.yrot(
                 arm,
-                if right { -0.523_598_8 } else { 0.523_598_8 }
-                    + hy.clamp(-0.523_598_8, 0.523_598_8),
+                if right { -FRAC_PI_6 } else { FRAC_PI_6 } + hy.clamp(-FRAC_PI_6, FRAC_PI_6),
             );
         }
         ArmPose::Bow => {
@@ -813,8 +812,8 @@ mod flight_pose_tests {
         for right in [false, true] {
             for (pitch, yaw, expected_pitch, expected_yaw) in [
                 (0.0, 0.0, -0.742_477_9, 0.0),
-                (2.0, 2.0, -0.306_145_58, 0.523_598_8),
-                (-2.0, -2.0, -2.138_741_3, -0.523_598_8),
+                (2.0, 2.0, -0.306_145_58, FRAC_PI_6),
+                (-2.0, -2.0, -2.138_741_3, -FRAC_PI_6),
             ] {
                 let mut p = Poses {
                     map: ["head", "right_arm", "left_arm"]
@@ -837,7 +836,7 @@ mod flight_pose_tests {
                 );
                 let pose = *p.get(arm);
                 assert!((pose[3] - expected_pitch).abs() < 1e-6);
-                let side = if right { -0.523_598_8 } else { 0.523_598_8 };
+                let side = if right { -FRAC_PI_6 } else { FRAC_PI_6 };
                 assert!((pose[4] - (side + expected_yaw)).abs() < 1e-6);
                 assert_eq!(p.get(if right { "left_arm" } else { "right_arm" })[3], 0.0);
             }
