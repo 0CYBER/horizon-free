@@ -11,6 +11,7 @@ pub const HELP: &[&str] = &[
     "fill X1 Y1 Z1 X2 Y2 Z2 STATE   fill a box with a block state without updates",
     "particle NAME X Y Z [DX DY DZ] [COUNT]  spawn particles (vanilla /particle spread)",
     "signedit X Y Z [front|back]    open the sign editor for the sign at X Y Z",
+    "section-draws [flat|indirect]  how terrain sections are drawn (A/B checks); replies the mode",
 ];
 
 impl Game<'_> {

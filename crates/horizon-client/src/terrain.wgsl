@@ -76,7 +76,24 @@ fn sample_lightmap(sky: f32, block: f32) -> vec4<f32> {
     @location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
     @location(2) layer: u32, @location(3) color: vec4<f32>, @location(4) light: vec2<u32>,
     @location(5) origin: vec4<f32>) -> TerrainOut {
-    let pos = position + origin.xyz;
+    return terrain_vertex(position, uv, layer, color, light, origin.xyz);
+}
+// Flat section draws (gfx/flat.rs): one draw per arena page over the frame's
+// index list. A section's vertices fill whole 256-vertex blocks of its page:
+// the block gives its resident slot, the slot its camera-relative origin.
+@group(1) @binding(0) var<storage, read> block_slots: array<u32>;
+@group(1) @binding(1) var<storage, read> slot_origins: array<vec4<f32>>;
+@vertex fn vs_terrain_flat(
+    @builtin(vertex_index) vertex: u32,
+    @location(0) position: vec3<f32>, @location(1) uv: vec2<f32>,
+    @location(2) layer: u32, @location(3) color: vec4<f32>, @location(4) light: vec2<u32>
+) -> TerrainOut {
+    let origin = slot_origins[block_slots[vertex >> 8u]];
+    return terrain_vertex(position, uv, layer, color, light, origin.xyz);
+}
+fn terrain_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f32>,
+    light: vec2<u32>, origin: vec3<f32>) -> TerrainOut {
+    let pos = position + origin;
     var out: TerrainOut;
     out.clip = globals.view_proj * vec4(pos, 1.0);
     out.uv = uv;

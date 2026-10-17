@@ -173,6 +173,16 @@ impl Game<'_> {
                 .chain(super::pad::HELP)
                 .collect::<Vec<_>>() }))),
             "setblock" | "fill" | "particle" | "signedit" => self.render_command(&words),
+            "section-draws" => {
+                let r = self.renderer.as_mut().ok_or("no renderer")?;
+                match words.get(1).copied() {
+                    None => {}
+                    Some("flat") => r.set_flat_draws(true)?,
+                    Some("indirect") => r.set_flat_draws(false)?,
+                    Some(other) => return Err(format!("unknown section draw mode {other}").into()),
+                }
+                Ok(Some(json!({ "ok": true, "flat": r.flat_draws() })))
+            }
             "sculk" => Ok(Some(self.sculk_command(&words)?)),
             "status" => Ok(Some(self.control_status())),
             "pad" => Ok(Some(self.pad_command(&words)?)),
