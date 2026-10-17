@@ -9369,6 +9369,9 @@ impl ApplicationHandler for Game<'_> {
                 }
                 WindowEvent::MouseInput { state, button, .. } => {
                     let pressed = state == ElementState::Pressed;
+                    if pressed && self.sort_mouse_press(button) {
+                        return Ok(());
+                    }
                     match self.screen {
                         Screen::Playing => {
                             if pressed && !self.captured {
