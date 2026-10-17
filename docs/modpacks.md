@@ -586,6 +586,43 @@ the display's 144 Hz at 8 chunks; Horizon's title time includes building the con
 a first start (about 5 s, cached afterwards); and the pack runs 1.21.1 against Horizon's 26.3.
 A quiet rerun with more games is the next measurement.
 
+**Where the RAM goes (2026-10-17).** RSS overstates it on macOS. `ps` counts pages the allocator
+freed and marked reusable, and the content tables free a lot at load. `perf_bench.py` now also
+samples the physical footprint (`footprint`, what the OS charges the process). The machine was
+shared and very busy (load average 90-138 on 14 threads). RD 8, the same six mods, one or two
+games per row:
+
+| game | RSS steady MB | footprint steady MB |
+|---|---:|---:|
+| Horizon | 1,598-1,636 | 1,277-1,295 |
+| Horizon + 6 mods | 2,996-3,052 | 1,736-1,869 |
+
+So the six mods cost about 0.5 GB of footprint, not 1.1-1.4 GB. ATM10's 42 mods (193,762
+states) take the game to 7.7 GB RSS but 3.9 GB footprint. The rest is startup garbage the
+allocator keeps.
+
+`crates/horizon-client/examples/resource_memory.rs` breaks it down per loader: the live heap
+(a counting allocator), each step's peak, RSS and the footprint. Live heap after every loader,
+vanilla against ATM10's 42 mods:
+
+| loader | vanilla MB | ATM10 42 mods MB |
+|---|---:|---:|
+| block registry | 24 | 125 |
+| assets (registry, models, sprites: 153 MB of pixels for 9,790 layers) | 94 | 657 |
+| block facts and behaviours | +29 | +75 |
+| items, recipes | +14 | +82 |
+| light, mesh, collision, motion | +24 | +53 |
+| worldgen | +79 | +182 |
+| **live** / **footprint** | **240 / 551** | **1,049 / 2,724** |
+
+The block registry kept a second copy of every state as the key of its id map; it now
+indexes ids by a hash checked against the states: -22 MB live for vanilla, -124 MB for
+ATM10's, -30 MB and -140 MB of footprint. The startup peaks are what is left. Each step parses
+its per-state tables whole: as JSON trees, or as NBT trees of 300-600 MB each for ATM10
+(`block-properties.nbt`, the collision, support, occlusion and movement tables). The peak
+reaches 3.9 GB during worldgen loading, and the footprint stays near the peak. Typed, streaming
+readers for those tables are the next cut.
+
 ## The working version for 2026-10-23
 
 In scope (each is a PR or a small stack):
