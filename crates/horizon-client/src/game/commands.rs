@@ -1,5 +1,6 @@
 //! Command execution (the `execute` side of each vanilla command class):
 //! entity selectors resolved against the game, vanilla feedback and errors.
+mod admin;
 pub(super) mod compute;
 mod data;
 mod effects;
@@ -160,8 +161,38 @@ impl Game<'_> {
             return;
         }
         if self.ui.rules.bool("send_command_feedback") {
-            self.system_message(message);
+            self.system_message(message.clone());
         }
+        self.broadcast_to_admins(message);
+    }
+    /// CommandSourceStack.broadcastToAdmins, for a guest's command on a
+    /// dedicated server (`sendSuccess` with `broadcast`): `[name: message]`,
+    /// gray and italic, for the other operators when `send_command_feedback`
+    /// and the console when `log_admin_commands`. Queued while the guest acts;
+    /// `send_admin_feedback` sends it.
+    fn broadcast_to_admins(&mut self, message: Text) {
+        if self.lan_acting.is_none()
+            || self.options.dedicated.is_none()
+            || message
+                .translation_key()
+                .is_some_and(|k| admin::QUIET.contains(&k))
+        {
+            return;
+        }
+        let ops = self.ui.rules.bool("send_command_feedback");
+        let console = self.ui.rules.bool("log_admin_commands");
+        if !ops && !console {
+            return;
+        }
+        // getDisplayName: the entity the command runs as (`execute as`).
+        let who = self
+            .command_source
+            .and_then(|s| s.entity)
+            .unwrap_or(Target::Player);
+        let line = Text::translate("chat.type.admin", &[self.target_name(who), message])
+            .with_color(text::GRAY)
+            .italic();
+        self.admin_feedback.push((line, ops, console));
     }
     fn source_position(&self) -> [f64; 3] {
         if let Some(s) = &self.command_source {
