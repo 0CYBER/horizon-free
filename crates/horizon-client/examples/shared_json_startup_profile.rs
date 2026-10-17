@@ -9,9 +9,11 @@ use std::{path::Path, time::Instant};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let root = args.next().ok_or("expected resource directory")?;
-    let mode = args.next().ok_or("expected baseline, pr607 or shared")?;
+    let mode = args
+        .next()
+        .ok_or("expected baseline, pr607, shared or deferred")?;
     if !["baseline", "pr607", "shared", "deferred"].contains(&mode.as_str()) {
-        return Err("expected baseline, pr607 or shared".into());
+        return Err("expected baseline, pr607, shared or deferred".into());
     }
     let root = Path::new(&root);
     let total = Instant::now();

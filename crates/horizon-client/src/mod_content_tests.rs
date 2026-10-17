@@ -349,6 +349,35 @@ fn independent_reloads_read_changed_behaviour_json_and_report_invalid_files() {
     );
     assert!(horizon_world::level::Behaviours::load(registry, &scratch).is_ok());
 
+    // Override one exported state bit at the same path and verify that a later
+    // independent and paired read sees it while the original resource root does not.
+    let mut changed: serde_json::Value = serde_json::from_slice(&original).unwrap();
+    let original_bits = changed["states"][0][1].as_u64().unwrap();
+    changed["states"][0][1] = (original_bits ^ 1).into();
+    fs::write(
+        scratch.join("block-behaviours.json"),
+        serde_json::to_vec(&changed).unwrap(),
+    )
+    .unwrap();
+    let changed_pair = BlockFacts::load_pair(&scratch, registry).unwrap();
+    let changed_independent = BlockFacts::load(&scratch, registry).unwrap();
+    let base_facts = BlockFacts::load(&base, registry).unwrap();
+    let state = horizon_world::registry::BlockStateId(0);
+    assert_ne!(
+        changed_pair.0.get(state).legacy_solid,
+        base_facts.get(state).legacy_solid
+    );
+    assert_eq!(
+        changed_pair.0.get(state).legacy_solid,
+        changed_independent.get(state).legacy_solid
+    );
+    // The world loader sees the same overridden legacy solidity flag.
+    let changed_world = horizon_world::level::Behaviours::load(registry, &scratch).unwrap();
+    assert_eq!(
+        changed_world.facts(state).flags & 1 != 0,
+        changed_pair.0.get(state).legacy_solid
+    );
+
     fs::write(scratch.join("block-behaviours.json"), b"{").unwrap();
     assert!(BlockFacts::load_pair(&scratch, registry).is_err());
     assert!(BlockFacts::load(&scratch, registry).is_err());

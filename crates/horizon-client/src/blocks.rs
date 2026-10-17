@@ -117,16 +117,24 @@ pub struct GameplayProjection {
     emission: u64,
     dampening: u64,
     hardness: f64,
-    push: Box<str>,
+    push: Arc<str>,
     volume: f64,
     pitch: f64,
-    place: Box<str>,
-    break_sound: Box<str>,
-    fall: Box<str>,
+    place: Arc<str>,
+    break_sound: Arc<str>,
+    fall: Arc<str>,
 }
 
 impl GameplayProjection {
-    fn from_entry(entry: &decode::Entry<'_>) -> Self {
+    fn from_entry(entry: &decode::Entry<'_>, strings: &mut HashMap<String, Arc<str>>) -> Self {
+        fn intern(strings: &mut HashMap<String, Arc<str>>, value: &str) -> Arc<str> {
+            if let Some(existing) = strings.get(value) {
+                return Arc::clone(existing);
+            }
+            let value_arc: Arc<str> = Arc::from(value);
+            strings.insert(value.to_owned(), Arc::clone(&value_arc));
+            value_arc
+        }
         const FLAGS: [&str; 11] = [
             "replaceable",
             "random_ticks",
@@ -147,12 +155,12 @@ impl GameplayProjection {
             emission: entry.unsigned("emission"),
             dampening: entry.unsigned("dampening"),
             hardness: entry.number("hardness"),
-            push: entry.text("push").into(),
+            push: intern(strings, entry.text("push")),
             volume: entry.sound_number("volume"),
             pitch: entry.sound_number("pitch"),
-            place: entry.sound_id("place").into(),
-            break_sound: entry.sound_id("break").into(),
-            fall: entry.sound_id("fall").into(),
+            place: intern(strings, entry.sound_id("place")),
+            break_sound: intern(strings, entry.sound_id("break")),
+            fall: intern(strings, entry.sound_id("fall")),
         }
     }
 }
@@ -239,7 +247,11 @@ impl BlockFacts {
         behaviours: &Value,
     ) -> Result<(Self, Vec<GameplayProjection>)> {
         Self::load_with_callback(root, registry, behaviours, |entries| {
-            Ok(entries.iter().map(GameplayProjection::from_entry).collect())
+            let mut strings = HashMap::new();
+            Ok(entries
+                .iter()
+                .map(|entry| GameplayProjection::from_entry(entry, &mut strings))
+                .collect())
         })
     }
 

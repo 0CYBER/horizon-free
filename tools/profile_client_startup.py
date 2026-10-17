@@ -40,6 +40,8 @@ def main():
     parser.add_argument("--binary", type=Path, default=Path("target/release/examples/shared_json_startup_profile"))
     parser.add_argument("--resources", type=Path, default=Path(".local/horizon-client/26.3"))
     parser.add_argument("--repeats", type=int, default=5)
+    parser.add_argument("--reference-binary", type=Path,
+                        help="Release binary built from cf837118; compare its deferred mode against current")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.repeats < 1:
@@ -47,14 +49,31 @@ def main():
     binary, resources = args.binary.resolve(), args.resources.resolve()
     if not binary.is_file() or not resources.is_dir():
         parser.error("binary or resources missing; build the example and prepare resources first")
-    samples = {"baseline": [], "pr607": [], "shared": [], "deferred": []}
+    if args.reference_binary:
+        reference = args.reference_binary.resolve()
+        if not reference.is_file():
+            parser.error("reference binary missing")
+        modes = ["baseline", "pr607", "cf837118", "current"]
+        commands = {
+            "baseline": (binary, "baseline"),
+            "pr607": (binary, "pr607"),
+            "cf837118": (reference, "deferred"),
+            "current": (binary, "deferred"),
+        }
+    else:
+        modes = ["baseline", "pr607", "shared", "deferred"]
+        commands = {mode: (binary, mode) for mode in modes}
+    samples = {mode: [] for mode in modes}
     for i in range(args.repeats):
-        for mode in (("baseline", "pr607", "shared", "deferred") if i % 2 == 0 else ("deferred", "shared", "pr607", "baseline")):
-            samples[mode].append(run(binary, resources, mode))
+        for mode in (modes if i % 2 == 0 else list(reversed(modes))):
+            executable, binary_mode = commands[mode]
+            samples[mode].append(run(executable, resources, binary_mode))
     result = {
         "scope": "Assets + block facts + behaviours loader only; excludes full startup",
         "resources": str(resources),
         "repeats": args.repeats,
+        "comparison": "historical cf837118 release binary" if args.reference_binary else "same binary loading modes",
+        "reference_binary": str(args.reference_binary) if args.reference_binary else None,
         "metrics": {mode: {key: {"median": round(statistics.median(row[key] for row in rows), 3),
                                   "samples": [round(row[key], 3) for row in rows]}
                            for key in rows[0]} for mode, rows in samples.items()},
