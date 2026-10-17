@@ -6,8 +6,11 @@
 //!   `<work>/modrinth.json`), the jars in the instance or `<work>/jars/`,
 //!   classes, tiers and dependency layers in `<work>/inventory.json` and
 //!   `inventory.csv`.
-//! - `carry <work> [<mod id>...]`: the content mods' data and assets into
-//!   `<work>/mods/<id>/carry/`, a folder mod for local use.
+//! - `carry <work> [--resources <prepared>] [<mod id>...]`: the content
+//!   mods' data and assets into `<work>/mods/<id>/carry/`, a folder mod for
+//!   local use. With the NeoForge oracle's `<work>/oracle/facts.json`
+//!   (`tools/neoforge_oracle.py`), blocks and items come from its facts;
+//!   `--resources` limits templates to the blocks Horizon's tables have.
 //!
 //! The work folder belongs to the user: jars and carried-over files stay
 //! there and are never uploaded or committed.
@@ -17,10 +20,11 @@ mod import;
 mod inventory;
 mod jar;
 mod modrinth;
+mod oracle;
 
 use std::{fs, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: horizon-port-pack import <pack> <work> | inventory <work> [--offline] | carry <work> [<mod id>...]";
+const USAGE: &str = "usage: horizon-port-pack import <pack> <work> | inventory <work> [--offline] | carry <work> [--resources <prepared>] [<mod id>...]";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -32,7 +36,19 @@ fn main() -> ExitCode {
         Some("inventory") => {
             path(1).and_then(|w| inventory(w, args.iter().any(|a| a == "--offline")))
         }
-        Some("carry") => path(1).and_then(|w| carry(w, &args[2..])),
+        Some("carry") => path(1).and_then(|w| {
+            let mut rest = args[2..].to_vec();
+            let resources = match rest.iter().position(|a| a == "--resources") {
+                Some(i) if i + 1 < rest.len() => {
+                    let r = rest.remove(i + 1);
+                    rest.remove(i);
+                    Some(std::path::PathBuf::from(r))
+                }
+                Some(_) => return Err(USAGE.to_owned()),
+                None => None,
+            };
+            carry(w, resources.as_deref(), &rest)
+        }),
         _ => Err(USAGE.to_owned()),
     };
     match result {
@@ -107,8 +123,31 @@ fn inventory(work: &Path, offline: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn carry(work: &Path, only: &[String]) -> Result<(), String> {
+/// The vanilla blocks a prepared resource root has (`facts.json`'s defaults).
+fn vanilla_blocks(resources: &Path) -> Result<std::collections::BTreeSet<String>, String> {
+    let facts: serde_json::Value = read_json(&resources.join("facts.json"))?;
+    let defaults = facts["defaults"]
+        .as_object()
+        .ok_or("facts.json: no defaults")?;
+    Ok(defaults.keys().cloned().collect())
+}
+
+fn carry(work: &Path, resources: Option<&Path>, only: &[String]) -> Result<(), String> {
     let records: Vec<inventory::Record> = read_json(&work.join("inventory.json"))?;
+    let facts_path = work.join("oracle/facts.json");
+    let facts = if facts_path.exists() {
+        let f = oracle::Facts::read(&facts_path)?;
+        println!(
+            "oracle facts: {} blocks, {} items",
+            f.blocks.len(),
+            f.items.len()
+        );
+        Some(f)
+    } else {
+        None
+    };
+    let vanilla = resources.map(vanilla_blocks).transpose()?;
+    let allowed = |b: &str| vanilla.as_ref().is_none_or(|v| v.contains(b));
     let mut done = 0;
     for r in &records {
         let chosen = if only.is_empty() {
@@ -125,19 +164,29 @@ fn carry(work: &Path, only: &[String]) -> Result<(), String> {
         if !chosen {
             continue;
         }
-        match carry::carry(jar, info, &work.join("mods").join(&r.key)) {
+        match carry::carry(
+            jar,
+            info,
+            &work.join("mods").join(&r.key),
+            facts.as_ref(),
+            &allowed,
+        ) {
             Ok(report) => {
                 done += 1;
                 println!(
-                    "{}: {} files, {} recipes upgraded ({} kept), {} item definitions added, {} blocks ({} without a template), {} items, {} outside",
+                    "{}: {} files, {} recipes upgraded ({} kept), {} loot tables upgraded, {} item definitions added, {} blocks ({} left out, {} with differences), {} items ({} left out), {} convention tags, {} outside",
                     r.key,
                     report.copied,
                     report.recipes_upgraded,
                     report.recipes_kept.len(),
+                    report.loot_tables_upgraded,
                     report.item_definitions_added,
                     report.blocks.len(),
                     report.blocks_unknown.len(),
+                    report.differences.len(),
                     report.items,
+                    report.items_unknown.len(),
+                    report.convention_tags,
                     report.outside.len()
                 );
             }
