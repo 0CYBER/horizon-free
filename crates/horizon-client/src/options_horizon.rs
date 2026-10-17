@@ -36,6 +36,8 @@ pub enum HRow {
     Extra(extras::Item),
     /// Installed mod `i` (`settings.mods.installed`) and its switch.
     Mod(usize),
+    /// Opens the directory where Horizon mods are installed.
+    OpenModFolder,
 }
 /// A sidebar section: name, description, rows.
 pub struct Section {
@@ -192,12 +194,15 @@ pub const SECTIONS: &[Section] = &[
         name: "Mods",
         blurb: "Mods made for Horizon, from the horizon-mods folder. Each runs in a sandbox and stays off until you turn it on; check what it may do first.",
         rows: |s| {
+            let mut rows = vec![HRow::OpenModFolder];
             if s.mods.installed.is_empty() {
-                return vec![HRow::Header(
+                rows.push(HRow::Header(
                     "No mods: put .hmod files in the horizon-mods folder",
-                )];
+                ));
+            } else {
+                rows.extend((0..s.mods.installed.len()).map(HRow::Mod));
             }
-            (0..s.mods.installed.len()).map(HRow::Mod).collect()
+            rows
         },
     },
 ];
@@ -449,6 +454,18 @@ impl OptionsUi {
                         .unwrap_or(&installed.description);
                     ui.described_row(x, y, &installed.title, "", 0.0, cost, text, cw - 60.0);
                     ui.switch(ROW + i as u64, control_x, y + ROW_H / 2.0, s.mods.is_on(m));
+                }
+                HRow::OpenModFolder => {
+                    ui.row(x, y, "Mod folder", "", 0.0);
+                    let label = "Open Folder";
+                    let bw = ui.button_width(label, false).max(96.0);
+                    ui.button(
+                        ROW + i as u64,
+                        [control_x - bw, y + 12.0, bw, CONTROL],
+                        label,
+                        Button::Secondary,
+                        true,
+                    );
                 }
                 HRow::Extra(item) => {
                     let cy = y + ROW_H / 2.0;
@@ -730,6 +747,10 @@ impl OptionsUi {
                         s.mods.toggle(*m);
                         events.push(Event::Changed);
                     }
+                    Some(HRow::OpenModFolder) if !right => {
+                        events.push(Event::ButtonClick);
+                        events.push(Event::OpenModFolder);
+                    }
                     _ => {}
                 }
             }
@@ -907,5 +928,54 @@ mod tests {
         let (x, drag_y) = gui_pointer(&atlas, framebuffer, (bar.x + 2.0, dp_y + 10.0));
         ui.click_horizon(&mut settings, &atlas, x, drag_y, framebuffer, true, false);
         assert_eq!(ui.hscroll, 0.0);
+    }
+
+    #[test]
+    fn mods_section_opens_folder_from_its_button() {
+        let atlas = atlas();
+        let framebuffer = [2560, 1440];
+        let mut options = section_ui("Mods");
+        let mut settings = Settings::default();
+        let mut batch = horizon_batch(framebuffer);
+        let mut ui = Ui::dry(&atlas, &mut batch, (0.0, 0.0));
+        options.horizon_layout(&settings, &mut ui, 1.0);
+        let rect = ui
+            .hits
+            .iter()
+            .find(|hit| hit.id == ROW)
+            .expect("Mods section has an Open Folder button")
+            .rect;
+        let scale = ui.density / ui.batch.scale;
+        let cursor = (
+            (rect[0] + rect[2]) * 0.5 * scale,
+            (rect[1] + rect[3]) * 0.5 * scale,
+        );
+        drop(ui);
+
+        assert_eq!(
+            options.click_horizon(
+                &mut settings,
+                &atlas,
+                cursor.0,
+                cursor.1,
+                framebuffer,
+                false,
+                false
+            ),
+            vec![Event::ButtonClick, Event::OpenModFolder]
+        );
+        assert!(
+            options
+                .click_horizon(
+                    &mut settings,
+                    &atlas,
+                    cursor.0,
+                    cursor.1,
+                    framebuffer,
+                    false,
+                    true
+                )
+                .is_empty()
+        );
     }
 }
