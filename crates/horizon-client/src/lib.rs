@@ -133,6 +133,7 @@ pub mod patrol;
 pub mod perf_overlay;
 pub mod pick_item;
 pub mod poi_sections;
+pub mod portal_sections;
 pub mod pose;
 pub mod post;
 pub mod projectiles;
