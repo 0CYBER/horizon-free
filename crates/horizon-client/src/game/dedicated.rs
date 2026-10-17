@@ -341,12 +341,12 @@ impl Game<'_> {
         }
         let settings = if flat {
             let biomes = &self.res.biomes;
-            let (settings, error) = horizon_client::flatgen::settings_from_json(
+            let (settings, errors) = horizon_client::flatgen::settings_from_json(
                 &props.generator_settings,
                 |b| self.pack.assets.registry.default_state(b).is_some(),
-                |b| biomes.get(biomes.id(b)).name.clone(),
+                |b| biomes.get(biomes.id(b)).name == b,
             );
-            if let Some(e) = error {
+            for e in errors {
                 log_from("Worker-Main-1", "ERROR", &e);
             }
             settings

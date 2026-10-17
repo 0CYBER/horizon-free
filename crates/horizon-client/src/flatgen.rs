@@ -50,16 +50,15 @@ const Y_SIZE: i64 = 4064;
 /// FlatLevelGeneratorSettings.CODEC reading a dedicated server's
 /// `generator-settings` (DedicatedServerProperties.WorldDimensionData for
 /// the `minecraft:flat` preset): the settings as `world_gen_settings` stores
-/// them, and the error vanilla logs (`resultOrPartial`). No settings means
-/// the preset's own layers; a layer that doesn't parse is left out, as the
-/// codec's partial result leaves it.
-/// `is_block` says whether a block id is registered; `biome` resolves a biome
-/// id the way the lenient codec does (Plains when it isn't known).
+/// them, and the errors vanilla logs, in order (the constructor's, then
+/// `resultOrPartial`'s). No settings means the preset's own layers; a layer
+/// that doesn't parse is left out, as the codec's partial result leaves it.
+/// `is_block` says whether a block id is registered, `is_biome` a biome id.
 pub fn settings_from_json(
     json: &crate::server::json::Json,
     is_block: impl Fn(&str) -> bool,
-    biome: impl Fn(&str) -> String,
-) -> (Option<Tag>, Option<String>) {
+    is_biome: impl Fn(&str) -> bool,
+) -> (Option<Tag>, Vec<String>) {
     use crate::server::json::Json;
     let id = |s: &str| {
         if s.contains(':') {
@@ -73,7 +72,7 @@ pub fn settings_from_json(
             None => format!("No key layers in MapLike[{}]", json.compact()),
             Some(v) => format!("Not a list: {}", v.compact()),
         };
-        return (None, Some(error));
+        return (None, vec![error]);
     };
     let mut errors = Vec::new();
     let mut layers = Vec::new();
@@ -100,22 +99,29 @@ pub fn settings_from_json(
             (_, None) => errors.push(format!("No key block in MapLike[{}]", layer.compact())),
         }
     }
+    // The constructor: Biome.CODEC is lenient, and a biome that is missing
+    // or unknown is Plains.
+    let biome = json
+        .get("biome")
+        .and_then(Json::as_string)
+        .map(|b| id(&b))
+        .filter(|b| is_biome(b));
+    let mut logged = Vec::new();
+    if biome.is_none() {
+        logged.push("Unknown biome, defaulting to plains".to_owned());
+    }
+    let biome = biome.unwrap_or_else(|| "minecraft:plains".to_owned());
     // validateHeight.
     if total > Y_SIZE {
         errors.push(format!("Sum of layer heights is > {Y_SIZE}"));
-        return (None, Some(errors.join("; ")));
+        logged.push(errors.join("; "));
+        return (None, logged);
     }
     let flag = |key: &str| match json.get(key) {
         Some(Json::Bool(b)) => *b,
         Some(Json::Number(n)) => n.parse::<f64>().is_ok_and(|v| v != 0.0),
         _ => false,
     };
-    let biome = biome(
-        &json
-            .get("biome")
-            .and_then(Json::as_string)
-            .map_or_else(|| "minecraft:plains".to_owned(), |b| id(&b)),
-    );
     let mut settings = Vec::new();
     // RegistryCodecs.holderSet, lenient too: a tag or a list of ids.
     match json.get("structure_overrides") {
@@ -140,8 +146,10 @@ pub fn settings_from_json(
         ("features", Tag::Byte(i8::from(flag("features")))),
         ("biome", Tag::String(biome.as_str().into())),
     ]);
-    let error = (!errors.is_empty()).then(|| errors.join("; "));
-    (Some(Tag::compound(settings)), error)
+    if !errors.is_empty() {
+        logged.push(errors.join("; "));
+    }
+    (Some(Tag::compound(settings)), logged)
 }
 impl ChunkGenerator for FlatTerrain {
     type Worker = ();
@@ -178,21 +186,15 @@ impl ChunkGenerator for FlatTerrain {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::save::{number, text};
     use crate::server::json::{self, Json};
 
-    fn read(text: &str) -> (Option<Tag>, Option<String>) {
+    fn read(text: &str) -> (Option<Tag>, Vec<String>) {
         let json: Json = json::parse(text, false).unwrap();
         settings_from_json(
             &json,
             |b| ["minecraft:stone", "minecraft:bedrock"].contains(&b),
-            |b| {
-                if b == "minecraft:desert" {
-                    b
-                } else {
-                    "minecraft:plains"
-                }
-                .to_owned()
-            },
+            |b| ["minecraft:plains", "minecraft:desert"].contains(&b),
         )
     }
 
@@ -201,46 +203,50 @@ mod tests {
         // server.properties' default: the preset's own layers, and the codec's error.
         assert_eq!(
             read("{}"),
-            (None, Some("No key layers in MapLike[{}]".into()))
+            (None, vec!["No key layers in MapLike[{}]".into()])
         );
-        let (settings, error) = read(
+        let (settings, errors) = read(
             r#"{"layers":[{"block":"bedrock","height":1},{"block":"minecraft:stone","height":3}],"biome":"desert","features":true}"#,
         );
-        assert_eq!(error, None);
+        assert!(errors.is_empty());
         let settings = settings.unwrap();
         let Some(Tag::List(layers)) = settings.get("layers") else {
             panic!("{settings:?}")
         };
         assert_eq!(layers.len(), 2);
         assert_eq!(
-            crate::save::text(layers[0].get("block")).as_deref(),
+            text(layers[0].get("block")).as_deref(),
             Some("minecraft:bedrock")
         );
-        assert_eq!(crate::save::number(layers[1].get("height")), Some(3));
+        assert_eq!(number(layers[1].get("height")), Some(3));
         assert_eq!(
-            crate::save::text(settings.get("biome")).as_deref(),
+            text(settings.get("biome")).as_deref(),
             Some("minecraft:desert")
         );
-        assert_eq!(crate::save::number(settings.get("features")), Some(1));
-        assert_eq!(crate::save::number(settings.get("lakes")), Some(0));
-        // A layer that doesn't parse is left out; an unknown biome is Plains.
-        let (settings, error) = read(
+        assert_eq!(number(settings.get("features")), Some(1));
+        assert_eq!(number(settings.get("lakes")), Some(0));
+        // A layer that doesn't parse is left out; an unknown biome is Plains, and logged first.
+        let (settings, errors) = read(
             r#"{"layers":[{"block":"nope","height":2},{"block":"stone","height":2}],"biome":"x"}"#,
         );
-        assert!(error.unwrap().contains("minecraft:nope"));
+        assert_eq!(errors.len(), 2);
+        assert_eq!(errors[0], "Unknown biome, defaulting to plains");
+        assert!(errors[1].contains("minecraft:nope"));
         let settings = settings.unwrap();
         let Some(Tag::List(layers)) = settings.get("layers") else {
-            panic!()
+            panic!("{settings:?}")
         };
         assert_eq!(layers.len(), 1);
         assert_eq!(
-            crate::save::text(settings.get("biome")).as_deref(),
+            text(settings.get("biome")).as_deref(),
             Some("minecraft:plains")
         );
         // validateHeight.
         assert_eq!(
-            read(r#"{"layers":[{"block":"stone","height":4000},{"block":"stone","height":100}]}"#),
-            (None, Some("Sum of layer heights is > 4064".into()))
+            read(
+                r#"{"layers":[{"block":"stone","height":4000},{"block":"stone","height":100}],"biome":"plains"}"#
+            ),
+            (None, vec!["Sum of layer heights is > 4064".into()])
         );
     }
 }
