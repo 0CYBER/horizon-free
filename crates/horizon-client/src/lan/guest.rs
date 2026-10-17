@@ -73,15 +73,31 @@ pub struct Guest {
     /// the client accepts it (ServerGamePacketListenerImpl.awaitingPositionFromClient).
     pub awaiting_teleport: Option<(i32, [f64; 3])>,
     pub teleport_counter: i32,
+    /// The hub tick the pending teleport was (re)sent on (awaitingTeleportTime).
+    pub teleport_tick: u64,
+    /// Where the player was when this tick's packets began (firstGoodX/Y/Z),
+    /// for the moved-too-quickly check.
+    pub first_good: [f64; 3],
+    /// Position moves received in all and by the start of this tick
+    /// (receivedMovePacketCount, knownMovePacketCount).
+    pub received_moves: i32,
+    pub known_moves: i32,
+    /// A position move arrived since the client's last ClientTickEnd
+    /// (receivedPositionThisTick): a second one is a protocol error.
+    pub position_this_tick: bool,
     /// The client finished loading terrain (ServerboundPlayerLoadedPacket).
     pub loaded: bool,
     // Chunks.
     pub center: Option<(i32, i32)>,
     pub sent_chunks: crate::fast_hash::FxHashSet<(i32, i32)>,
     pub chunk_queue: Vec<(i32, i32)>,
+    /// PlayerChunkSender: batches sent but not yet acknowledged, how many
+    /// may be (1 until the client's first acknowledgement, then 10), the
+    /// rate the client asks for and the chunks the next batch may hold.
     pub unacknowledged: u32,
+    pub max_unacknowledged: u32,
     pub chunks_per_tick: f32,
-    pub chunk_credit: f32,
+    pub batch_quota: f32,
     // Entities.
     pub tracker: Tracker,
     // Player state the gameplay code reads and writes.
@@ -187,13 +203,19 @@ impl Guest {
             sleeping: false,
             awaiting_teleport: None,
             teleport_counter: 0,
+            teleport_tick: 0,
+            first_good: position,
+            received_moves: 0,
+            known_moves: 0,
+            position_this_tick: false,
             loaded: false,
             center: None,
             sent_chunks: Default::default(),
             chunk_queue: Vec::new(),
             unacknowledged: 0,
+            max_unacknowledged: 1,
             chunks_per_tick: 9.0,
-            chunk_credit: 0.0,
+            batch_quota: 0.0,
             tracker: Tracker::default(),
             motion: None,
             inventory: vec![None; 36],
