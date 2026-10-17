@@ -754,6 +754,8 @@ impl Game<'_> {
         let Some(mut host) = self.lan.take() else {
             return;
         };
+        // What the tick sends a guest goes to its connection at the end.
+        let holding = lan::Holding::start();
         let state = self.lan_host_state(&host);
         // A dedicated server runs the hub without a host player.
         if state.is_some() || host.hub.config.dedicated {
@@ -854,6 +856,10 @@ impl Game<'_> {
         self.lan_swings(&mut host);
         self.lan_update_streaming(&host);
         self.lan_update_models(&mut host);
+        drop(holding);
+        for g in &host.hub.guests {
+            g.sender.flush();
+        }
         self.lan = Some(host);
     }
 

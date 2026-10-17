@@ -89,9 +89,9 @@ fn typed_fields_keep_defaults_duplicates_and_wrong_type_behavior() -> crate::Res
     assert_eq!(entries[1].id, None);
     let e = &entries[2];
     assert_eq!(e.id, Some(2));
-    assert_eq!(e.emission, 4.5);
-    assert_eq!(e.dampening, 0.0);
-    assert_eq!(e.hardness.to_bits(), (-0.0f64).to_bits());
+    assert_eq!(e.emission.as_f64(), Some(4.5));
+    assert_eq!(e.dampening.as_f64().unwrap_or(0.0), 0.0);
+    assert_eq!(e.hardness.as_f64().unwrap().to_bits(), (-0.0f64).to_bits());
     assert!(e.skylight_down && e.outline_offset.unwrap_or(e.offset));
     assert_eq!(e.item, None);
     assert_eq!(e.render_shape, None);

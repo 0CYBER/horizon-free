@@ -21,7 +21,7 @@ pub mod playerdata;
 mod recipes;
 pub mod tracking;
 
-pub use conn::PlayerSender;
+pub use conn::{Holding, PlayerSender};
 use horizon_protocol::packets::play;
 use horizon_protocol::{
     GAME_VERSION, PROTOCOL_VERSION, crypto::uuid_string, packets::configuration::ClientInformation,
@@ -69,6 +69,8 @@ pub struct Joined {
 pub enum Out {
     /// A packet body: VarInt id and payload.
     Packet(Vec<u8>),
+    /// Packet bodies held during a tick, in order.
+    Packets(Vec<Vec<u8>>),
     /// Send a play disconnect with this component, then close.
     Disconnect(horizon_world::nbt::Tag),
     Close,
