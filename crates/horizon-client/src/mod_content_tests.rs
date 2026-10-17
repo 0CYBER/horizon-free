@@ -341,13 +341,27 @@ fn independent_reloads_read_changed_behaviour_json_and_report_invalid_files() {
     let original = fs::read(base.join("block-behaviours.json")).unwrap();
     fs::remove_file(scratch.join("block-behaviours.json")).unwrap();
     fs::write(scratch.join("block-behaviours.json"), &original).unwrap();
-    let (facts, _) = BlockFacts::load_pair(&scratch, registry).unwrap();
+    // Independent facts and behaviours can load first, followed by paired data.
+    let independent_first = BlockFacts::load(&scratch, registry).unwrap();
+    let independent_world_first =
+        horizon_world::level::Behaviours::load(registry, &scratch).unwrap();
+    let (facts, paired_world) = BlockFacts::load_pair(&scratch, registry).unwrap();
     assert_eq!(facts.states.len(), registry.len());
-    assert_eq!(
-        BlockFacts::load(&scratch, registry).unwrap().states.len(),
-        registry.len()
-    );
-    assert!(horizon_world::level::Behaviours::load(registry, &scratch).is_ok());
+    for state in [0, 1, registry.len() - 1] {
+        let state = horizon_world::registry::BlockStateId(state as u32);
+        assert_eq!(
+            facts.get(state).classes,
+            independent_first.get(state).classes
+        );
+        assert_eq!(
+            facts.get(state).sounds.place,
+            independent_first.get(state).sounds.place
+        );
+        assert_eq!(
+            paired_world.facts(state).flags,
+            independent_world_first.facts(state).flags
+        );
+    }
 
     // Override one exported state bit at the same path and verify that a later
     // independent and paired read sees it while the original resource root does not.
@@ -379,8 +393,15 @@ fn independent_reloads_read_changed_behaviour_json_and_report_invalid_files() {
     );
 
     fs::write(scratch.join("block-behaviours.json"), b"{").unwrap();
-    assert!(BlockFacts::load_pair(&scratch, registry).is_err());
-    assert!(BlockFacts::load(&scratch, registry).is_err());
+    let paired_error = BlockFacts::load_pair(&scratch, registry)
+        .err()
+        .unwrap()
+        .to_string();
+    let independent_error = BlockFacts::load(&scratch, registry)
+        .err()
+        .unwrap()
+        .to_string();
+    assert_eq!(paired_error, independent_error);
     assert!(horizon_world::level::Behaviours::load(registry, &scratch).is_err());
 
     fs::write(scratch.join("block-behaviours.json"), b"{}").unwrap();

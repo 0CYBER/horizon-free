@@ -10257,6 +10257,10 @@ pub fn run() -> Result<()> {
         player_arm: horizon_client::mobs::load_model(&root, "minecraft:player#main")
             .and_then(|m| m.children.into_iter().find(|c| c.name == "right_arm")),
     });
+    // Both inputs are needed only while constructing the behaviour tables.
+    // Release their owned JSON/Arc buffers before entering the long-lived game loop.
+    drop(gameplay_projection);
+    drop(behaviour_json);
     let mut settings = Settings::load(&std::env::current_dir()?.join("options.txt"));
     horizon_client::ui_theme::load_preferences(&std::env::current_dir()?);
     // Scripted and frame-limited runs (the parity harnesses) see vanilla's
