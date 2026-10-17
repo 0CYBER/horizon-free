@@ -8439,12 +8439,23 @@ impl Game<'_> {
         let debug_lines = horizon_client::gizmos::camera_relative(&lines, at, view);
         let debug_lines_on_top = horizon_client::gizmos::camera_relative(&on_top, at, view);
         let debug_crosshair = horizon_client::gizmos::camera_relative(&crosshair.on_top, at, view);
-        // LevelRenderer.renderHitOutline: the outline shape's edges.
+        // LevelExtractor.extractBlockOutline: model translucency controls draw order.
+        let mut outline_after_terrain = false;
         let outline = if self.screen == Screen::Playing && !self.spectator() {
             self.pick()
                 .map(|h| {
                     let state = self.world.block(h.pos[0], h.pos[1], h.pos[2]);
                     let f = self.res.facts.get(state);
+                    outline_after_terrain = self
+                        .pack
+                        .assets
+                        .model_catalog
+                        .collect(state, BlockPos::new(h.pos[0], h.pos[1], h.pos[2]))
+                        .is_ok_and(|models| {
+                            models
+                                .iter()
+                                .any(|(_, model)| model.faces.iter().any(|f| f.translucent))
+                        });
                     let o = if f.outline_offset {
                         self.pack
                             .context
@@ -8594,6 +8605,7 @@ impl Game<'_> {
             }),
             dark_disc: self.dark_disc(camera),
             outline,
+            outline_after_terrain,
             debug_lines: &debug_lines,
             debug_lines_on_top: &debug_lines_on_top,
             debug_crosshair: &debug_crosshair,
