@@ -373,11 +373,60 @@ impl KeyBinds {
         }
         Some(Err(button))
     }
+    /// `AbstractContainerScreen.checkHotbarMouseClicked`: off hand, then hotbar.
+    pub fn container_mouse_key(&self, button: MouseButton, creative: bool) -> Option<KeyCode> {
+        let name = mouse_name(button);
+        if matches!(button, MouseButton::Left | MouseButton::Right)
+            || (creative && self.get("key.pickItem") == name)
+        {
+            return None;
+        }
+        std::iter::once("key.swapOffhand")
+            .chain(
+                MAPPINGS
+                    .iter()
+                    .map(|m| m.0)
+                    .filter(|n| n.starts_with("key.hotbar.")),
+            )
+            .find(|mapping| self.get(mapping) == name)
+            .and_then(|mapping| key_code(Self::default_of(mapping)))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn container_mouse_hotkeys_follow_slot_bindings_and_pick_item_priority() {
+        for button in [MouseButton::Back, MouseButton::Forward, MouseButton::Middle] {
+            for (mapping, default, _) in MAPPINGS.iter().filter(|m| m.0.starts_with("key.hotbar."))
+            {
+                let mut keys = KeyBinds::default();
+                keys.set(mapping, &mouse_name(button));
+                assert_eq!(keys.container_mouse_key(button, false), key_code(default));
+                assert_eq!(
+                    keys.container_mouse_key(button, true),
+                    if button == MouseButton::Middle {
+                        None
+                    } else {
+                        key_code(default)
+                    }
+                );
+            }
+        }
+        let mut keys = KeyBinds::default();
+        keys.set("key.hotbar.1", "key.mouse.4");
+        keys.set("key.swapOffhand", "key.mouse.4");
+        assert_eq!(
+            keys.container_mouse_key(MouseButton::Back, false),
+            Some(KeyCode::KeyF)
+        );
+        keys.set("key.hotbar.2", "key.mouse.left");
+        assert_eq!(keys.container_mouse_key(MouseButton::Left, false), None);
+        assert_eq!(keys.container_mouse_key(MouseButton::Right, false), None);
+        assert_eq!(keys.container_mouse_key(MouseButton::Forward, false), None);
+    }
+
     #[test]
     fn rebinding_translates_to_defaults() {
         let mut k = KeyBinds::default();
