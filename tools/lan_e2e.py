@@ -40,6 +40,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              pushes it, as in vanilla), not ever faster across the ground.
 - eat:       holding right click with bread, the guest's own screen plays the eating (the item in use
              counts up) and the server eats one loaf and feeds the guest.
+- xp:        experience orbs 4 blocks away fly to the guest, show on the guest's screen and give the
+             guest their points (not the host).
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -72,7 +74,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'push', 'eat', 'effects', 'portals']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'push', 'eat', 'xp', 'effects', 'portals']
 
 
 class Game:
@@ -964,6 +966,7 @@ def check_sleep(host, guest, out):
     assert 13000 < night < 23000, f'one of two players asleep ended the night: {detail}'
     assert up is None, f'Escape did not get the guest up: {detail}'
     assert after['guest'] is None and after['host'] is None and after['time'] < 1000, f'no morning: {detail}'
+    return detail
 def check_push(host, guest, out):
     guest('command', command='gamemode survival')
     x, y, z = (int(v // 1) + 0.5 for v in pos_of(guest))
@@ -981,7 +984,9 @@ def check_push(host, guest, out):
     detail = {'from': [round(x, 3), round(z, 3)], 'to': [round(nx, 3), round(nz, 3)], 'moved': round(moved, 3)}
     assert nx < x, f'the cow did not push the guest west: {detail}'
     assert moved < 1.5, f'the cow pushed the guest too far: {detail}'
+    return detail
 def check_eat(host, guest, out):
+    guest('command', command='gamemode survival')
     guest('command', command='clear @s')
     # Hungry: the eating needs food below 20 (Player.canEat).
     guest('command', command='effect give @s minecraft:hunger 3 255')
@@ -1000,6 +1005,7 @@ def check_eat(host, guest, out):
         using.append(guest('state').get('using'))
     guest.shot(out, 'eat')
     hold.join()
+    guest.wait(10)
     fed = guest('state')['player']['food']
     left = guest('inventory')['counts'].get('minecraft:bread', 0)
     detail = {'hungry': hungry, 'fed': fed, 'bread': left, 'using': using, 'after': guest('state').get('using')}
@@ -1011,13 +1017,41 @@ def check_eat(host, guest, out):
     return detail
 
 
+def check_xp(host, guest, out):
+    for g in (host, guest):
+        g('command', command='gamemode survival')
+        g('command', command='xp set @s 0 levels')
+        g('command', command='xp set @s 0 points')
+    guest.wait(10)
+    x, y, z = pos_of(guest)
+    # Three orbs of 7 points 4 blocks east of the guest (out of reach, within the 8 blocks orbs
+    # follow from): they fly to the guest.
+    for _ in range(3):
+        guest('command', command=f'summon minecraft:experience_orb {x + 4:.2f} {y + 0.5:.2f} {z:.2f} {{Value:7s}}')
+    guest.wait(2)
+    seen = remote(guest).get('entities', {}).get('minecraft:experience_orb', 0)
+    guest.shot(out, 'xp-orbs')
+    guest.wait(60)
+    xp = guest('state')['player']['xp']
+    host_xp = host('state')['player']['xp']
+    left = remote(guest).get('entities', {}).get('minecraft:experience_orb', 0)
+    detail = {'seen': seen, 'guest': xp, 'host': host_xp, 'left': left}
+    # ExperienceOrb.scanForMerges: orbs of one value side by side can merge into one.
+    assert 1 <= seen <= 3, f'the guest saw {seen} orbs: {detail}'
+    assert xp['total'] == 21 and xp['level'] == 2, f'the guest\'s experience after three 7-point orbs: {detail}'
+    assert host_xp['total'] == 0, f'the host took the orbs: {detail}'
+    assert left == 0, f'orbs left on the guest\'s screen: {detail}'
+    return {'seen': seen, 'guest': xp, 'host': host_xp}
+
+
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
              'chest': check_chest, 'crafting': check_crafting, 'sign': check_sign, 'damage': check_damage,
              'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
              'containers': check_containers, 'feedback': check_feedback, 'commands': check_commands,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,
              'effects': check_effects, 'portals': check_portals, 'clicks': check_clicks,
-             'sleep': check_sleep, 'push': check_push, 'eat': check_eat}
+             'sleep': check_sleep, 'push': check_push, 'eat': check_eat,
+             'xp': check_xp}
 
 
 def run(ctl, out, resources, checks):

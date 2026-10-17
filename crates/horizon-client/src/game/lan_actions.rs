@@ -18,7 +18,7 @@ use horizon_client::{
     },
     motion::{MotionEvent, MotionWorld, PlayerMotion},
 };
-use horizon_core::geometry::Vec3;
+use horizon_core::{geometry::Vec3, random::RandomSource};
 use horizon_protocol::{
     packets::play::{self, Clientbound as C, Serverbound as S},
     text::literal,
@@ -56,6 +56,8 @@ pub(super) struct GuestPlay {
     last_inventory: u64,
     /// `Entity.portalProcess` and `portalCooldown` (game/server_travel.rs).
     pub(super) portal: horizon_client::nether_portal::PortalState,
+    /// `Player.takeXpDelay`: ticks until the next orb can be taken.
+    xp_delay: u32,
 }
 
 struct ItemRules<'a>(&'a horizon_client::items::Items);
@@ -1131,6 +1133,7 @@ impl Game<'_> {
             host.hub.flush_progress(conn);
             self.guest_dig_feedback(host, conn);
             self.guest_pickups(host, gi);
+            self.guest_orbs(host, gi);
             let g = &mut host.hub.guests[gi];
             if g.health <= 0.0 && !g.dead {
                 g.dead = true;
@@ -1486,6 +1489,79 @@ impl Game<'_> {
             host.hub
                 .sound("minecraft:entity.item.pickup", position, 0.2, 1.4, 7, None);
         }
+    }
+
+    /// `Player.tick`'s takeXpDelay and `Player.aiStep`'s touch of the
+    /// experience orbs in the guest's box grown by 1, 0.5, 1: one of them at
+    /// random, at most every 2 ticks (`ExperienceOrb.playerTouch`), repairs
+    /// with Mending and gives the rest as points. Everyone near hears it.
+    fn guest_orbs(&mut self, host: &mut LanHost, gi: usize) {
+        let g = &host.hub.guests[gi];
+        // Player's standing and crouching boxes: 1.8 and 1.5 high.
+        let height = if g.sneaking { 1.5 } else { 1.8 };
+        let (conn, id, at) = (g.conn, g.entity_id, g.position);
+        let unable = g.spectator() || g.dead || g.health <= 0.0;
+        let play = host.play.entry(conn).or_default();
+        if play.xp_delay > 0 {
+            play.xp_delay -= 1;
+        }
+        if unable || play.xp_delay > 0 {
+            return;
+        }
+        let (min, max) = (
+            [at[0] - 1.3, at[1] - 0.5, at[2] - 1.3],
+            [at[0] + 1.3, at[1] + height + 0.5, at[2] + 1.3],
+        );
+        let touching: Vec<usize> = self
+            .orbs
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| {
+                o.position.x + 0.25 > min[0]
+                    && o.position.x - 0.25 < max[0]
+                    && o.position.y + 0.5 > min[1]
+                    && o.position.y < max[1]
+                    && o.position.z + 0.25 > min[2]
+                    && o.position.z - 0.25 < max[2]
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if touching.is_empty() {
+            return;
+        }
+        // Util.getRandom(orbs, random).
+        let pick = self
+            .world
+            .random
+            .next_int_bound(touching.len() as i32)
+            .unwrap_or(0) as usize;
+        let orb = self.orbs.remove(touching[pick]);
+        play.xp_delay = 2;
+        host.hub.take_item(orb.id as i32, id, 1, at);
+        // ClientPacketListener.handleTakeItemEntity's sound, at the orb.
+        let pitch = (self.world.random.next_float() - self.world.random.next_float()) * 0.35 + 0.9;
+        let p = orb.position;
+        self.audio.play(
+            "minecraft:entity.experience_orb.pickup",
+            Some([p.x, p.y, p.z]),
+            0.1,
+            pitch,
+        );
+        let value = orb.value;
+        if let Some(target) = super::pickups::guest_target(host, id as u32) {
+            use super::pickups::{Collector, Taken};
+            self.add_pickup_toward(
+                Taken::Orb(Box::new(orb)),
+                Collector::Guest(id as u32),
+                target,
+            );
+        }
+        self.as_guest(host, conn, |game| {
+            let rest = game.mending(value);
+            if rest > 0 {
+                game.give_orb_points(rest);
+            }
+        });
     }
 
     /// The host's own `ItemPickupParticle` toward the guest's model.

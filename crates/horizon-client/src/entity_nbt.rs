@@ -943,6 +943,7 @@ pub fn orbs_from_nbt(tag: &Tag) -> Vec<ExperienceOrb> {
     };
     let count = number(tag.get("Count")).unwrap_or(1).clamp(1, 64) as usize;
     let orb = ExperienceOrb {
+        id: 0,
         position,
         previous: position,
         velocity: motion(tag),
@@ -1587,6 +1588,7 @@ mod tests {
     #[test]
     fn orbs_expand_their_count() {
         let o = ExperienceOrb {
+            id: 0,
             position: Vec3::new(1.0, 2.0, 3.0),
             previous: Vec3::ZERO,
             velocity: Vec3::ZERO,

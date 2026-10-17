@@ -176,7 +176,13 @@ impl Game<'_> {
                             self.dropped.push(e);
                         }
                     }
-                    "minecraft:experience_orb" => self.orbs.extend(entity_nbt::orbs_from_nbt(&tag)),
+                    "minecraft:experience_orb" => {
+                        for mut orb in entity_nbt::orbs_from_nbt(&tag) {
+                            self.next_entity += 1;
+                            orb.id = self.next_entity;
+                            self.orbs.push(orb);
+                        }
+                    }
                     "minecraft:arrow" => {
                         if let Some((mut p, in_block)) = entity_nbt::arrow_from_nbt(
                             &tag,

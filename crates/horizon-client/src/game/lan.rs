@@ -715,7 +715,7 @@ impl Game<'_> {
 
     /// Mobs and items as the entities guests track.
     fn lan_entities(&self, hub: &mut Hub) -> Vec<EntityState> {
-        let mut out = Vec::with_capacity(self.mobs.len() + self.dropped.len());
+        let mut out = Vec::with_capacity(self.mobs.len() + self.dropped.len() + self.orbs.len());
         for m in self.mobs.iter().filter(|m| !m.removed) {
             let kind = m.kind.id.as_str();
             let meta = mob_meta(m, hub);
@@ -750,6 +750,23 @@ impl Game<'_> {
                 velocity: [d.velocity.x, d.velocity.y, d.velocity.z],
                 data: 0,
                 meta: vec![(8, serializer::ITEM_STACK, Value::Item(stack))],
+                equipment: Vec::new(),
+            });
+        }
+        for o in &self.orbs {
+            out.push(EntityState {
+                id: o.id as i32,
+                uuid: entity_uuid(o.id),
+                kind: "minecraft:experience_orb".to_owned(),
+                position: [o.position.x, o.position.y, o.position.z],
+                yaw: 0.0,
+                pitch: 0.0,
+                head_yaw: 0.0,
+                on_ground: o.on_ground,
+                velocity: [o.velocity.x, o.velocity.y, o.velocity.z],
+                data: 0,
+                // ExperienceOrb.DATA_VALUE.
+                meta: vec![(8, serializer::INT, Value::Int(o.value as i32))],
                 equipment: Vec::new(),
             });
         }

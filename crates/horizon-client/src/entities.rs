@@ -179,6 +179,8 @@ impl ItemEntity {
 /// ExperienceOrb: gravity 0.03, homing towards the player within 8 blocks.
 #[derive(Clone, Debug)]
 pub struct ExperienceOrb {
+    /// The entity id servers track it by.
+    pub id: u32,
     pub position: Vec3,
     pub previous: Vec3,
     pub velocity: Vec3,

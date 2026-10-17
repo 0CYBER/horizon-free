@@ -1453,7 +1453,9 @@ impl Game<'_> {
                     return Err(err("commands.summon.failed", &[]));
                 }
                 "experience_orb" => {
+                    self.next_entity += 1;
                     self.orbs.push(horizon_client::entities::ExperienceOrb {
+                        id: self.next_entity,
                         position: Vec3::new(pos[0], pos[1], pos[2]),
                         previous: Vec3::new(pos[0], pos[1], pos[2]),
                         velocity: Vec3::new(0.0, 0.0, 0.0),
