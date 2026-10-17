@@ -34,6 +34,8 @@ pub struct BakedFace {
 }
 pub struct BakedModel {
     pub ambient_occlusion: bool,
+    /// The model's particle slot also exists for models without block faces.
+    pub particle: Option<u32>,
     pub faces: Vec<BakedFace>,
     pub cube: Option<[super::cube::CubeStyle; 6]>,
 }
@@ -190,6 +192,10 @@ impl StateModels {
         let mut baked = BTreeMap::new();
         for (name, turns, lock) in variants {
             let model = library.resolve(&name)?;
+            let particle = model
+                .material("particle")?
+                .map(|material| sprites.insert(root, &material.sprite))
+                .transpose()?;
             let faces: Vec<BakedFace> =
                 bake_block_model(&model, BlockModelTransform::new(turns, lock))?
                     .into_iter()
@@ -209,6 +215,7 @@ impl StateModels {
                 (name, turns, lock),
                 BakedModel {
                     ambient_occlusion: model.ambient_occlusion,
+                    particle,
                     faces,
                     cube,
                 },

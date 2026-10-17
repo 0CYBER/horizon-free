@@ -409,7 +409,10 @@ impl HandWorld for GameHands<'_, '_> {
     fn within_border(&mut self, _: [i32; 3]) -> bool {
         true
     }
-    fn attack_block(&mut self, _: [i32; 3]) {}
+    fn attack_block(&mut self, pos: [i32; 3]) {
+        let result = self.game.attack_block(pos);
+        self.keep(result);
+    }
     fn destroy_progress(&mut self, pos: [i32; 3]) -> f32 {
         self.game.destroy_progress(pos)
     }

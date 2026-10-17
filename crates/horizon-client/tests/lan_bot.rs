@@ -241,6 +241,7 @@ fn server(resources: &Path) -> Server {
             view_distance: 3,
             simulation_distance: 3,
             dedicated: false,
+            integrated: false,
             dimension: "minecraft:overworld".into(),
             seed: 1234,
             max_players: 8,

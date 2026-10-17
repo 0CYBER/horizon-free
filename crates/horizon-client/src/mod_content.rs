@@ -314,6 +314,22 @@ impl<'a> Plan<'a> {
                 });
             }
         }
+        if next > MAX_STATES {
+            let mut by_mod: BTreeMap<&str, u32> = BTreeMap::new();
+            for b in &blocks {
+                *by_mod
+                    .entry(&b.decl.id[..b.decl.id.find(':').unwrap_or(0)])
+                    .or_default() += b.rename.states.len() as u32;
+            }
+            let list: Vec<String> = by_mod.iter().map(|(m, n)| format!("{m} {n}")).collect();
+            return Err(format!(
+                "{next} block states, more than the {MAX_STATES} chunks can hold ({} in the game; \
+                 the mods: {})",
+                names.len(),
+                list.join(", ")
+            )
+            .into());
+        }
         // Block items copy the template block's item.
         let gameplay = read_json(&base.join("gameplay-facts.json"))?;
         let rows = match gameplay.get("states") {
@@ -628,6 +644,9 @@ const NBT_TABLES: [&str; 6] = [
 /// In a root built here: the content mods' ids, the namespaces loaders
 /// read besides `minecraft`.
 const MARKER: &str = "horizon-mod-content.json";
+/// Block states a world can hold: chunk sections store a state in 16 bits
+/// (crate::chunk). Mods past it are refused, not wrapped onto other blocks.
+pub const MAX_STATES: u32 = 1 << 16;
 
 /// The content mods' namespaces in a root built by [`build`]; none in any
 /// other root, so vanilla's loaders read exactly what they did.
@@ -636,6 +655,19 @@ pub fn namespaces(root: &Path) -> Vec<String> {
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default()
+}
+
+/// The namespaces whose tags loaders read in `root`: `minecraft`, and in a
+/// root built by [`build`] the convention tags (`c`, shared between mods as
+/// on NeoForge and Fabric) and the content mods' own.
+pub fn tag_namespaces(root: &Path) -> Vec<String> {
+    let mods = namespaces(root);
+    let mut out = vec!["minecraft".to_owned()];
+    if !mods.is_empty() {
+        out.push("c".to_owned());
+        out.extend(mods);
+    }
+    out
 }
 
 /// Bundles of block tag files (tag id → the tag file's text).
@@ -735,8 +767,67 @@ fn merge_tag(text: Option<&str>, more: &[J], what: &str) -> Result<String> {
     Ok(serde_json::to_string_pretty(&doc)?)
 }
 
+/// The block and item ids and tags a content root has, for tag entries.
+struct Known {
+    blocks: std::collections::BTreeSet<String>,
+    items: std::collections::BTreeSet<String>,
+    /// `data/<ns>/tags/<kind>/<path>.json` files the mods add.
+    tag_files: std::collections::BTreeSet<String>,
+}
+impl Known {
+    fn new(base: &Path, plan: &Plan, tags: &BTreeMap<String, Vec<J>>) -> Result<Self> {
+        let mut blocks: std::collections::BTreeSet<String> =
+            plan.defaults.keys().cloned().collect();
+        blocks.extend(plan.blocks.iter().map(|b| b.decl.id.clone()));
+        let mut items = std::collections::BTreeSet::new();
+        if let J::Obj(o) = read_json(&base.join("items.json"))? {
+            items.extend(o.into_iter().map(|(k, _)| k));
+        }
+        items.extend(plan.items.iter().map(|i| i.rename.to.clone()));
+        Ok(Known {
+            blocks,
+            items,
+            tag_files: tags.keys().cloned().collect(),
+        })
+    }
+    /// Whether tag `file` keeps entry `v`: a known id or an existing tag,
+    /// for block and item tags (other registries are kept as they are).
+    fn keeps(&self, file: &str, v: &J) -> bool {
+        let id = match v {
+            J::Str(s) => s.as_str(),
+            J::Obj(_) => match v.get("id") {
+                Some(J::Str(s)) => s.as_str(),
+                _ => return true,
+            },
+            _ => return true,
+        };
+        let Some(kind) = file
+            .strip_prefix("data/")
+            .and_then(|r| r.split_once("/tags/"))
+            .and_then(|(_, rest)| Some(rest.split_once('/')?.0))
+        else {
+            return true;
+        };
+        let ids = match kind {
+            "block" => &self.blocks,
+            "item" => &self.items,
+            _ => return true,
+        };
+        match id.strip_prefix('#') {
+            Some(tag) => {
+                let (tns, path) = tag.split_once(':').unwrap_or(("minecraft", tag));
+                let rel = format!("data/{tns}/tags/{kind}/{path}.json");
+                self.tag_files.contains(&rel) || tns == "minecraft"
+            }
+            None => ids.contains(id),
+        }
+    }
+}
+
 /// Builds the content root for `mods` over `base` in `out`.
 pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<()> {
+    // The overlay links to the base: a relative base would leave them dangling.
+    let base = &std::path::absolute(base)?;
     let plan = Plan::new(base, mods)?;
     let overlay = Overlay::new(base, out)?;
     for name in JSON_TABLES {
@@ -754,11 +845,11 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<()> {
         if !path.exists() {
             continue;
         }
-        let (mut named, _) = nbt::read_named(&fs::read(&path)?, Limits::default())
+        let (mut named, _) = nbt::read_named(&fs::read(&path)?, Limits::tables())
             .map_err(|e| format!("{name}: {e}"))?;
         plan.nbt(&mut named.tag);
         let bytes =
-            nbt::write_named(&named, Limits::default()).map_err(|e| format!("{name}: {e}"))?;
+            nbt::write_named(&named, Limits::tables()).map_err(|e| format!("{name}: {e}"))?;
         overlay.write(name, &bytes)?;
     }
     // Mod files, and every tag addition gathered per tag file.
@@ -787,6 +878,13 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<()> {
                 overlay.write(file, &bytes)?;
             }
         }
+    }
+    // A tag naming an id nobody registers fails as a whole in vanilla, and
+    // carried-over mods name blocks left out or other mods' ids: such
+    // entries are dropped instead, so the rest of the tag holds.
+    let known = Known::new(base, &plan, &tags)?;
+    for (file, values) in &mut tags {
+        values.retain(|v| known.keeps(file, v));
     }
     let mut bundles: Vec<(&str, J)> = Vec::new();
     for name in TAG_BUNDLES {

@@ -68,6 +68,7 @@ struct Lerp {
 
 pub(super) struct Remote {
     pub session: Session,
+    pub brand: String,
     builtin: Arc<Builtin>,
     lang: Arc<Language>,
     registries: Arc<Dynamic>,
@@ -251,6 +252,7 @@ impl Game<'_> {
         self.apply_settings();
         self.remote = Some(Remote {
             session,
+            brand: "unknown".into(),
             builtin: Arc::new(builtin),
             lang,
             registries: Arc::new(Dynamic::default()),
@@ -380,6 +382,31 @@ impl Game<'_> {
                 .unwrap_or("minecraft:air"),
         )
     }
+    /// A mob effect's network id as the effect (`brewing::EFFECTS` id).
+    fn remote_effect_id(&self, effect: i32) -> Option<&'static str> {
+        let r = self.remote.as_ref()?;
+        let name = r.builtin.get("minecraft:mob_effect")?.name(effect)?;
+        horizon_client::brewing::effect(name).map(|d| d.id)
+    }
+    /// ClientPacketListener.handleUpdateMobEffect for the player itself
+    /// (`LivingEntity.forceAddEffect`): the effect replaces any of its kind.
+    /// Other entities' effects are not shown.
+    fn remote_effect(&mut self, p: &play::UpdateMobEffect) {
+        if !self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) {
+            return;
+        }
+        let Some(id) = self.remote_effect_id(p.effect) else {
+            return;
+        };
+        let mut e = horizon_client::effects::EffectInstance::new(id, p.duration, p.amplifier);
+        e.ambient = p.flags & 1 != 0;
+        e.visible = p.flags & 2 != 0;
+        let list = &mut self.potions.effects.list;
+        match list.iter_mut().find(|x| x.id == id) {
+            Some(existing) => *existing = e,
+            None => list.push(e),
+        }
+    }
     fn item_id(&self, name: &str) -> i32 {
         let r = self.remote.as_ref().expect("remote");
         r.builtin
@@ -415,7 +442,7 @@ impl Game<'_> {
         }
         Some(stack)
     }
-    fn chat_line(&mut self, text: String) {
+    pub(super) fn chat_line(&mut self, text: String) {
         log::info!("[chat] {text}");
         if let Some(r) = self.remote.as_mut() {
             r.chat.push((text, Instant::now()));
@@ -454,6 +481,11 @@ impl Game<'_> {
                         r.joined = true;
                         r.profile = uuid;
                         r.status = format!("Joined as {name}; loading terrain...");
+                    }
+                }
+                Event::Brand(brand) => {
+                    if let Some(remote) = &mut self.remote {
+                        remote.brand = brand;
                     }
                 }
                 Event::Reconfigured(registries) => self.set_registries(registries),
@@ -820,6 +852,8 @@ impl Game<'_> {
                 ));
             }
             C::Respawn(p) => {
+                // A new player, without effects: the server sends them again.
+                self.potions.effects.clear();
                 self.enter_remote_dimension(&p.spawn, true);
                 self.screen = Screen::Playing;
                 if let Some(r) = self.remote.as_mut() {
@@ -1120,6 +1154,14 @@ impl Game<'_> {
                 }
             }
             C::EntityEvent(p) => {
+                // EntityEvent.PERMISSION_LEVEL_ALL..OWNERS (24..=28) for this
+                // player: LocalPlayer.setPermissionLevel, which the commands
+                // the chat offers and checks follow.
+                if (24..=28).contains(&p.event)
+                    && self.remote.as_ref().is_some_and(|r| r.entity_id == p.id)
+                {
+                    self.ui.registries.permission = (p.event - 24) as u8;
+                }
                 if p.event == 1
                     && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
                     && m.species() == horizon_client::mobs::Species::Rabbit
@@ -1134,6 +1176,14 @@ impl Game<'_> {
                 }
             }
             C::Animate(p) if p.action == 0 => {}
+            C::UpdateMobEffect(p) => self.remote_effect(&p),
+            C::RemoveMobEffect(p) => {
+                if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id)
+                    && let Some(id) = self.remote_effect_id(p.effect)
+                {
+                    self.potions.effects.list.retain(|e| e.id != id);
+                }
+            }
             C::SetHealth(p) => {
                 if let Some(r) = self.remote.as_mut() {
                     r.health = (p.health, p.food, p.saturation);
@@ -1803,6 +1853,7 @@ impl Game<'_> {
         self.tick_block_entity_anims();
         self.tick_hand();
         self.tick_particles();
+        self.tick_client_effects();
         let ghast_collisions = self.happy_ghast_player_collisions();
         let Some(player) = self.player.as_mut() else {
             return Ok(());

@@ -237,6 +237,11 @@ How the game loads them, without touching vanilla's path:
 - Loaders that read only `data/minecraft/` (recipes, loot, tags) read every namespace, as
   vanilla does. With no mods there is only `minecraft`, so nothing changes.
 - The overlay is cached like the resource-pack overlay and rebuilt when a mod file changes.
+- **Limits.** Chunk sections store a block state in 16 bits: vanilla 26.3 has 35,723 states,
+  so mods may add 29,813. Past that the content root is refused with the states per mod
+  (Macaw's Doors, Fences, Paths and Trapdoors alone add 36,154: not all four fit). Block
+  sprites fill texture arrays of 2048 layers, four at most (8,192; vanilla takes 1,250,
+  identical textures share a layer). Wider state ids are the next step for big packs.
 - Not in 0.2: multiplayer registry sync (single player and the integrated server first), worlds
   opened without a mod they used (vanilla turns unknown blocks into air; we will ask first),
   vanilla ids redefined by a mod (refused).
@@ -262,12 +267,14 @@ inspected:
 └── coverage.json, coverage.md
 ```
 
-**Status.** `import`, `inventory` and `carry` run today:
+**Status.** `import`, `inventory`, `carry` and `report` run today:
 
 ```
 cargo run -p horizon-port-pack -- import ~/Downloads/pack.mrpack ~/.horizon/ports/pack
 cargo run -p horizon-port-pack -- inventory ~/.horizon/ports/pack     # --offline reuses modrinth.json
 cargo run -p horizon-port-pack -- carry ~/.horizon/ports/pack         # content mods with a jar, or name them
+#   --resources <prepared root>: only templates Horizon's tables have
+cargo run -p horizon-port-pack -- report ~/.horizon/ports/pack        # coverage.json and coverage.md
 ```
 
 `inventory` reads metadata only: Modrinth answers by file hash, and the jars only if the user's
@@ -277,14 +284,26 @@ classes come from the reviewed table, Modrinth categories and sides; with jars, 
 only): content 54, library 33, client-ui 26, performance 25, other 14, unknown 2, server-only 1;
 40 rows matched the reviewed ATM10 table; three dependency layers (93 / 57 / 5).
 
-`carry` copies a jar's `assets/<id>/`, `data/<id>/` and `data/minecraft/tags/` into
-`mods/<id>/carry/`, a folder content mod (API 0.2) the game loads with `--dev-mod`, and keeps
-what a content mod may not hold (other namespaces such as `c` tags, vanilla data) in `outside/`.
-No class file is copied. It upgrades vanilla-type recipes from 1.21.1 ingredients to 26.3's,
-adds the `items/` definitions 1.21.4 introduced, and declares each block from a vanilla template
-guessed from its blockstate properties (stone for none, a door for `facing, half, hinge, open,
-powered`, ...); blocks with an unknown property set, custom recipe types and NeoForge
-conditions are listed in `carry-report.json` for the oracle step.
+`carry` copies a jar's `assets/<id>/`, `data/<id>/`, `data/minecraft/tags/` and `data/c/tags/`
+into `mods/<id>/carry/`, a folder content mod (API 0.2) the game loads with `--dev-mod`, and
+keeps what a content mod may not hold (other namespaces, vanilla data) in `outside/`. No class
+file is copied. It upgrades from 1.21.1 to 26.3: vanilla-type recipes (ingredients), loot tables
+(`conditions` lists become one `condition`, `functions` become `modifier`, kinds move to `type`,
+tool matches on silk touch or shears become `minecraft:tool/can_silk_touch` and
+`minecraft:tool/can_shear`), and the `items/` definitions 1.21.4 introduced.
+
+Blocks and items come from the NeoForge oracle when `<work>/oracle/facts.json` exists (step 6):
+every block the mod registers gets the vanilla template of the same vanilla class and states
+whose shapes, sounds, set type and wood type match best, with the mod's own hardness, blast
+resistance, light, tool need, friction, map colour and sounds as overrides. `--resources
+<prepared>` limits templates to blocks Horizon's tables have. `carry-report.json` lists, per
+block, what the template does not reproduce (other shapes, sounds no vanilla block has, a class
+of its own), and the blocks left out: those whose vanilla class has no vanilla block with the
+same states (Macaw's garage doors, multi-part gates). Recipes get the convention tags they use
+(`c:dyes/red`), filled from the oracle with vanilla's and the mod's own members. Without the
+oracle, templates are guessed from the blockstate's properties: the template whose properties
+include them with the fewest left over (models often ignore `powered` or `waterlogged`), the
+block's name breaking ties (`_pane`, `_gate`, `_trapdoor`).
 
 ### 1. Import
 
@@ -294,6 +313,7 @@ conditions are listed in `carry-report.json` for the oracle step.
 | CurseForge zip | `manifest.json`: `minecraft.version`, `modLoaders[]`, `files[]` (`projectID`, `fileID`, `required`), `overrides` | the user's installed instance (CurseForge app `minecraftinstance.json` + `mods/`). CurseForge's API needs a key, so we take what the user already downloaded |
 | Prism / MultiMC instance | `mmc-pack.json` components (`net.minecraft`, `net.neoforged`, `net.fabricmc.fabric-loader`), `instance.cfg`, `.minecraft/mods/*.jar`, packwiz `.pw.toml` files if present | the instance folder |
 | packwiz | `pack.toml`, `index.toml`, `mods/*.pw.toml` | as listed |
+| Crash Assistant `modlist.json` | jar name → mod id, name, version, Modrinth SHA-1; the loader entry (NeoForge `21.1.x` is Minecraft 1.21.1). Packs such as ATM10 publish it in their repository | metadata only; jars put in `<work>/jars/` |
 
 `pack.json` holds the Minecraft version, the loader and its version, each file with its hashes
 and side, and the overrides (configs, KubeJS scripts, datapacks).
@@ -386,8 +406,51 @@ A **harness per mod**, generated from the tier:
 | deep | entity scenarios (spawn, tick N, positions and states, drops), and render captures where the look is the point, compared as images with a tolerance |
 
 The comparison skips vanilla 1.21.1-versus-26.3 differences: it normalises ids and components
-through the step-4 upgrader and compares only the mod's own ids and effects. The harness format
-is `tools/parity.py`'s, so the same runner, local or CI, runs vanilla and mod harnesses.
+through the step-4 upgrader and compares only the mod's own ids and effects.
+
+**Status: the data-tier harness runs.**
+
+```
+python3 tools/neoforge_oracle.py export --jars <mods> --deps <their libraries> --out <work>/oracle/facts.json
+cargo run -p horizon-port-pack -- carry <work> --resources .local/horizon-client/26.3
+python3 tools/mod_port_harness.py --work <work>      # or --jars/--deps to export first
+```
+
+- `tools/neoforge_oracle.py` installs a NeoForge server (21.1.259, ATM10's) under
+  `.local/neoforge-oracle/`, builds the exporter mod in `mods/horizon/src/neoforge-oracle/` (our code, dev
+  only), starts the server headless with the jars and writes, for every block of the mods'
+  namespaces and every vanilla block: the class chain, states, per-state hardness, light, tool
+  need, map colour, sounds, outline and collision shapes; drops for hand, diamond tools, shears
+  and silk touch; placement on a floor and a wall; BlockSetType and WoodType. Then items (class,
+  stack size, rarity, food), recipes (type, result, count, resolved ingredients) and tags. One run
+  with the seven mods below takes about 30 s.
+- `crates/horizon-client/examples/mod_port_probe.rs` builds the content root from the carried
+  mods and dumps what Horizon's loaders make of the same blocks, drops, recipes and tags.
+- `tools/mod_port_harness.py` compares them per mod (blocks, properties, sounds, shapes, drops,
+  placement against the template's in the oracle, vanilla tags, recipes, items) and writes
+  `<work>/mods/<id>/harness/result.json`. It maps 1.21.1 sound events to 26.3's through the
+  vanilla blocks both versions have (`block.metal.*` became `block.iron.*`) and ignores vanilla
+  items 1.21.1 did not have (pale oak in `#minecraft:logs`).
+
+The oracle needs the mods' jars, so it is not a `tools/parity.py` harness: it runs where the
+user's jars are, and its facts and results stay in the work folder. The first real mods
+(ATM10's own jars from Modrinth, all MIT; checks passed / compared):
+
+| mod | blocks | properties | sounds | shapes | drops | placement | tags | recipes | items |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Macaw's Trapdoors 1.1.5 | 179/179 | 11456/11456 | 11456/11456 | 11456/11456 | 10024/10024 | 358/358 | 534/534 | 191/191 | 191/191 |
+| Macaw's Doors 1.1.5 | 239/245 | 15296/15296 | 15296/15296 | 12352/15296 | 13384/13384 | 478/478 | 941/941 | 257/257 | 251/257 |
+| Macaw's Fences and Walls 1.2.1 | 150/180 | 4800/4800 | 4800/4800 | 4032/4800 | 33600/33600 | 300/300 | 432/432 | 222/222 | 150/180 |
+| Macaw's Paths and Pavings 1.1.1 | 234/315 | 4602/4602 | 4602/4602 | 4472/4602 | 6734/6734 | 468/468 | 416/416 | 315/315 | 234/315 |
+| Glassential-renewed 3.4.7 | 105/114 | 5177/5177 | 5177/5177 | 4727/5177 | 6447/6447 | 210/210 | 105/105 | 143/143 | 106/115 |
+| Factory Blocks 1.4.0 | 42/49 | 42/42 | 0/42 | 42/42 | 294/294 | 84/84 | 42/42 | 1/1 | 42/49 |
+| Cloud Glass 1.1.0 | 16/16 | 16/16 | 16/16 | 0/16 | 112/112 | 32/32 | – | 31/31 | 16/16 |
+
+What fails is what API 0.2 cannot express yet: shapes of their own (Japanese doors, hedges,
+paths a sixteenth high, glass without collision), sound events of the mod's own
+(`factory_blocks:metal_sound`), and blocks whose vanilla class has no vanilla block with the
+same states (garage doors, double gates, engraved and facing paths, fans). Every drop, recipe
+and tag of the declared blocks matches.
 
 ### 7. Coverage report
 
@@ -402,16 +465,46 @@ is `tools/parity.py`'s, so the same runner, local or CI, runs vanilla and mod ha
 
 Plus the licence summary (how many ports could be published) and, for a pack, "playable?":
 whether every required content mod is ported or partial with its blocks and items present.
-For ATM10 today: 125 of 495 are not needed. The other 370 are not yet ported; 68 of them are
-data tier, so they need registries and carry-over but no agent.
+
+`horizon-port-pack report <work>` writes the per-mod rows and the class, tier and licence totals from the inventory, each mod's `carry-report.json`
+and its harness result. A data-tier mod is **ported** when its harness is green and nothing was
+left out (blocks with a class of their own are counted and named, since facts cannot show
+their extra code); **partial** with the failing checks, the blocks left out and what the
+templates miss; **not yet** with the API tier it waits for, or the dependency; **not needed**
+for libraries, performance mods, pack tooling and what Horizon has built in. Unclassified mods
+(the 20 CurseForge-only rows the reviewed table only guesses) count as not yet.
+
+**ATM10, measured** (`import` of ATM10's `modlist.json` from its repository on 2026-10-16, 496
+files; `inventory`; `carry` and the harness on the eight mods we downloaded; `report`):
+
+| class | ported | partial | not yet | not needed | all |
+|---|---:|---:|---:|---:|---:|
+| content | 1 | 7 | 268 | 0 | 276 |
+| library | 0 | 0 | 0 | 77 | 77 |
+| integration | 0 | 0 | 40 | 3 | 43 |
+| client-ui | 0 | 0 | 27 | 2 | 29 |
+| other | 0 | 0 | 1 | 23 | 24 |
+| unknown | 0 | 0 | 20 | 0 | 20 |
+| performance | 0 | 0 | 0 | 16 | 16 |
+| server-only | 0 | 0 | 11 | 0 | 11 |
+| **all** | **1** | **7** | **367** | **121** | **496** |
+
+By tier, the 367 not yet: data 57 (carry-over and the harness, no agent: their jars were not
+downloaded), logic 66 (API 0.3), machines 97 (0.4), deep 92 (0.5), client 35, unclassified 20.
+Ported: Macaw's Trapdoors. Partial: Macaw's Doors, Fences and Walls, Paths and Pavings,
+Glassential, Factory Blocks, Cloud Glass (see the harness table) and MVS, whose 784 worldgen
+files are carried but not yet read by the game. Of the 8, 7 are MIT and one LGPL; nothing is
+published.
 
 ## Measuring "10x"
 
 `tools/perf_bench.py` already measures Horizon against vanilla and vanilla with performance
-mods on the same machine, world and camera path ([benchmark.md](benchmark.md)). It gains
-`--game pack --pack <file or instance>`: the pack on its own loader (NeoForge 21.1.259 for
-ATM10), launched with the pack's recommended JVM arguments, driven by the same dev-only bench
-mod, ported to that loader.
+mods on the same machine, world and camera path ([benchmark.md](benchmark.md)). With
+`--game neoforge --mod-jars <dir> --deps <dir>` it runs the mods on their own loader (NeoForge
+21.1.259 for ATM10, installed under `.local/neoforge-oracle`, `-Xmx2G` like the launcher),
+driven by the same steps through a dev-only NeoForge port of the bench mod
+(`mods/horizon/src/neoforge-bench`). `--game horizon --port-work <work>` loads a work folder's
+carried-over mods into Horizon. A whole pack (`--pack`, its recommended JVM arguments) is next.
 
 | Metric | How | Horizon side |
 |---|---|---|
@@ -433,6 +526,37 @@ Two comparisons, both published:
 confidence interval. Other ratios are reported as they come out. Caveat (in every report):
 the pack runs Minecraft 1.21.1 and Horizon runs 26.3, so the vanilla parts differ by a few
 versions.
+
+### Measured: six ported mods against the same mods on NeoForge
+
+Cloud Glass, Factory Blocks, Glassential, Macaw's Fences, Paths and Trapdoors (Doors left out:
+with Trapdoors it passes the block states chunks hold, see Limits), carried over and loaded as
+dev mods in Horizon, against their jars plus Architectury and Fusion on NeoForge 21.1.259.
+Mac mini M4 Pro, 1280x720, seed 1234, the four flight scenes, 2 games per row, 2026-10-17.
+Means; FPS is the mean of the four scenes. "Title" is start to title screen, "world" start to
+a fresh world drawn around the spawn, "scene load" a teleport to every chunk drawn.
+
+| RD | game | title s | world s | scene load s | FPS | RSS steady / peak MB | load avg |
+|---|---|---:|---:|---:|---:|---:|---:|
+| 8 | Horizon + 6 mods | 9.8 | 16.2 | 4.0 | 122 | 2,644 / 2,771 | 32 |
+| 8 | NeoForge + 6 mods | 19.5 | 50.0 | 30.2 | 72 | 2,325 / 2,592 | 56 |
+| 8 | Horizon | 5.0 | 11.0 | 4.0 | 124 | 1,559 / 1,629 | 51 |
+| 8 | NeoForge | 12.8 | 36.1 | 21.9 | 104 | 2,334 / 2,558 | 30 |
+| 16 | Horizon + 6 mods | 10.8 | 27.0 | 11.3 | 90 | 2,925 / 3,032 | 40 |
+| 16 | NeoForge + 6 mods | 26.4 | 82.5 | 64.3 | 25 | 3,016 / 3,519 | 45 |
+| 16 | Horizon | 3.5 | 10.0 | 7.4 | 119 | 1,732 / 1,871 | 56 |
+| 16 | NeoForge | 16.9 | 73.7 | 43.2 | 36 | 2,748 / 3,425 | 48 |
+
+Same content, Horizon against NeoForge: the world is ready 3.1x sooner at 8 chunks and 3.1x at
+16, the title screen 2.0x and 2.4x sooner, and the flights run 1.7x and 3.6x the frames. RAM is
+not lower: Horizon's steady RSS grows 1.1 GB with the mods (61,816 block states against
+vanilla's 35,723; the per-state tables are the next thing to measure), while the JVM stays
+inside its 2 GB heap. Caveats, so none of this is a "10x" claim yet: other sessions and CI
+runners kept the machine's load average between 30 and 56 on 14 threads, so the confidence
+intervals are as wide as the means (`perf_bench.py --table`); Horizon's frames are paced near
+the display's 144 Hz at 8 chunks; Horizon's title time includes building the content overlay on
+a first start (about 5 s, cached afterwards); and the pack runs 1.21.1 against Horizon's 26.3.
+A quiet rerun with more games is the next measurement.
 
 ## The working version for 2026-10-23
 
@@ -459,7 +583,11 @@ In scope (each is a PR or a small stack):
 6. **Measured:** load time, RAM and FPS of that pack on NeoForge 1.21.1 against Horizon, with
    the full ATM10 on NeoForge as the reference row.
 
-Out of scope for that date, and next in order: worldgen carry-over (the 30 or so structure and biome mods),
+Out of scope for that date, and next in order: worldgen carry-over (the 30 or so structure and biome mods;
+the first one looked at, Moog's Voyager Structures, declares all 130 structures and 116 structure
+sets with MoogsStructureLib's own `generic_jigsaw_structure` and `advanced_random_spread` types and
+NeoForge's `c:` biome tags, so its carry needs a mapping to vanilla's jigsaw and random spread
+types plus the oracle's biome tags, not only bundle merging),
 behaviour callbacks and server events (0.3), block entities, menus, capabilities and net
 (0.4), the first agent-ported logic-tier mod as the pilot of step 5, then machines. Porting all
 of ATM10 is a campaign. Each step publishes its coverage number; we make no claim beyond what

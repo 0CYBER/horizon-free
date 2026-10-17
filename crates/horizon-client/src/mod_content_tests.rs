@@ -56,7 +56,7 @@ fn prepared() -> Option<PathBuf> {
 /// A content mod folder: a full block, a door and an item-less glass from
 /// templates, an item, a vanilla tag addition and a language file.
 fn ruby_mod(dir: &Path) -> ContentMod {
-    let files: [(&str, &str); 7] = [
+    let files: [(&str, &str); 8] = [
         (
             "horizon-mod.toml",
             "id = \"ruby\"\nname = \"Ruby\"\nversion = \"0.1.0\"\napi = \"0.2\"\nside = \"both\"\ncapabilities = [\"registries\"]\n",
@@ -78,9 +78,15 @@ fn ruby_mod(dir: &Path) -> ContentMod {
             "data/ruby/horizon/item/ruby.json",
             r#"{"template": "minecraft:diamond", "max_stack_size": 16, "rarity": "rare"}"#,
         ),
+        // Carried-over tags name blocks left out and other mods' ids too.
         (
             "data/minecraft/tags/block/mineable/pickaxe.json",
-            r#"{"values": ["ruby:ruby_block"]}"#,
+            r##"{"values": ["ruby:ruby_block", "ruby:left_out", "othermod:thing",
+                {"id": "othermod:optional", "required": false}, "#c:storage_blocks/ruby"]}"##,
+        ),
+        (
+            "data/c/tags/item/gems/ruby.json",
+            r#"{"values": ["ruby:ruby", "othermod:ruby"]}"#,
         ),
         (
             "assets/ruby/lang/en_us.json",
@@ -110,7 +116,10 @@ fn content_root_loads_with_every_table() {
     let scratch = std::env::temp_dir().join(format!("horizon-mod-content-{}", std::process::id()));
     let _ = fs::remove_dir_all(&scratch);
     let m = ruby_mod(&scratch.join("ruby"));
-    let root = resource_root(&base, std::slice::from_ref(&m), &scratch.join("cache")).unwrap();
+    // The base as a relative path (cargo runs tests in the crate's folder):
+    // the overlay's links still resolve.
+    let relative = Path::new("../../.local/horizon-client/26.3");
+    let root = resource_root(relative, std::slice::from_ref(&m), &scratch.join("cache")).unwrap();
     assert_ne!(root, base);
 
     let vanilla = Assets::load(&base).unwrap();
@@ -169,7 +178,12 @@ fn content_root_loads_with_every_table() {
     let gem = &items.items["ruby:ruby"];
     assert_eq!(gem.max_stack, 16);
     assert!(!items.items.contains_key("ruby:ruby_glass"));
-    assert!(items.block_tags["minecraft:mineable/pickaxe"].contains("ruby:ruby_block"));
+    let pickaxe = &items.block_tags["minecraft:mineable/pickaxe"];
+    assert!(pickaxe.contains("ruby:ruby_block"));
+    assert!(!pickaxe.contains("ruby:left_out") && !pickaxe.contains("othermod:thing"));
+    assert!(pickaxe.contains("minecraft:stone"));
+    // Convention tags load, with the ids nobody registers dropped.
+    assert_eq!(items.item_tag_order["c:gems/ruby"], ["ruby:ruby"]);
 
     crate::collisions::load(&root, new).unwrap();
     crate::models::load_visibility(&root, new).unwrap();
@@ -203,6 +217,32 @@ fn refuses_unknown_templates_and_vanilla_ids() {
     m.content.blocks[0].template = "minecraft:not_a_block".into();
     let e = build(&base, std::slice::from_ref(&m), &scratch.join("out")).unwrap_err();
     assert!(e.to_string().contains("is not a block"), "{e}");
+    fs::remove_dir_all(&scratch).unwrap();
+}
+
+#[test]
+fn refuses_more_states_than_chunks_hold() {
+    let Some(base) = prepared() else {
+        return;
+    };
+    let scratch = std::env::temp_dir().join(format!("horizon-mod-states-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    let mut m = ruby_mod(&scratch.join("ruby"));
+    // Redstone wire has 1296 states: 40 copies pass any game's 65536.
+    let mut wire = m.content.blocks[0].clone();
+    wire.template = "minecraft:redstone_wire".into();
+    for i in 0..40 {
+        let mut b = wire.clone();
+        b.id = format!("ruby:wire_{i}");
+        m.content.blocks.push(b);
+    }
+    let e = build(&base, std::slice::from_ref(&m), &scratch.join("out")).unwrap_err();
+    assert!(
+        e.to_string()
+            .contains("more than the 65536 chunks can hold"),
+        "{e}"
+    );
+    assert!(e.to_string().contains("the mods: ruby "), "{e}");
     fs::remove_dir_all(&scratch).unwrap();
 }
 

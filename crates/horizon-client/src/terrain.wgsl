@@ -27,6 +27,29 @@ struct Globals {
 @group(0) @binding(2) var sprite_sampler: sampler;
 @group(0) @binding(3) var lightmap: texture_2d<f32>;
 @group(0) @binding(4) var lightmap_sampler: sampler;
+// Layers past the first array's SPRITE_SPLIT (2048, gfx.rs): mods' sprites.
+@group(0) @binding(5) var sprites_1: texture_2d_array<f32>;
+@group(0) @binding(6) var sprites_2: texture_2d_array<f32>;
+@group(0) @binding(7) var sprites_3: texture_2d_array<f32>;
+// How many sprite arrays hold layers (a pipeline constant): 1 for vanilla,
+// which then samples exactly as before.
+override SPRITE_ARRAYS: u32 = 1u;
+override SPRITE_SPLIT: u32 = 2048u;
+fn sprite(uv: vec2<f32>, layer: u32) -> vec4<f32> {
+    if SPRITE_ARRAYS == 1u {
+        return textureSample(sprites, sprite_sampler, uv, i32(layer));
+    }
+    // The array is chosen per fragment: sample with the derivatives taken here.
+    let dx = dpdx(uv);
+    let dy = dpdy(uv);
+    let l = i32(layer % SPRITE_SPLIT);
+    switch layer / SPRITE_SPLIT {
+        case 0u: { return textureSampleGrad(sprites, sprite_sampler, uv, l, dx, dy); }
+        case 1u: { return textureSampleGrad(sprites_1, sprite_sampler, uv, l, dx, dy); }
+        case 2u: { return textureSampleGrad(sprites_2, sprite_sampler, uv, l, dx, dy); }
+        default: { return textureSampleGrad(sprites_3, sprite_sampler, uv, l, dx, dy); }
+    }
+}
 
 struct TerrainOut {
     @builtin(position) clip: vec4<f32>,
@@ -67,12 +90,12 @@ fn apply_fog(color: vec4<f32>, spherical: f32, cylindrical: f32) -> vec4<f32> {
 }
 @fragment fn fs_solid(in: TerrainOut) -> @location(0) vec4<f32> {
     // Bit 15 of the layer marks opaque leaves (forceOpaque): no alpha cutout.
-    let color = textureSample(sprites, sprite_sampler, in.uv, i32(in.layer & 0x7fffu)) * in.color;
+    let color = sprite(in.uv, in.layer & 0x7fffu) * in.color;
     if color.a < 0.5 && (in.layer & 0x8000u) == 0u { discard; }
     return apply_fog(vec4(color.rgb, 1.0), in.spherical, in.cylindrical);
 }
 @fragment fn fs_translucent(in: TerrainOut) -> @location(0) vec4<f32> {
-    let color = textureSample(sprites, sprite_sampler, in.uv, i32(in.layer & 0x7fffu)) * in.color;
+    let color = sprite(in.uv, in.layer & 0x7fffu) * in.color;
     if color.a < 0.01 { discard; }
     return apply_fog(color, in.spherical, in.cylindrical);
 }
