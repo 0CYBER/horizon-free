@@ -2,21 +2,36 @@
 //!
 //! The source resources remain authoritative. Failed reads, unsupported
 //! versions, corrupt payloads and write failures always use the normal loader.
+//! The snapshot lives in the game's own cache folder ([`set_dir`]), never in the
+//! resource folder: that one is shared by worktrees and copied between installed
+//! versions by the launcher. Its key includes the running executable, so a build
+//! that resolves the tables differently never reads another build's snapshot.
 use super::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     io::Write,
     path::PathBuf,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::UNIX_EPOCH,
 };
 
 const MAGIC: &[u8; 8] = b"HZBEHAV\0";
 const VERSION: u32 = 2;
-const FILE_NAME: &str = ".horizon-behaviours-v2.bin";
+const FILE_NAME: &str = "behaviours-v2.bin";
 const MAX_FILE_BYTES: usize = 128 * 1024 * 1024;
 const MAX_DECODED_BYTES: usize = 256 * 1024 * 1024;
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+static DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Keep snapshots in `dir` (the client passes `<game folder>/.horizon-cache`).
+/// Without it (tests, tools, servers), `Behaviours::load` always uses the source loader.
+pub(in crate::level) fn set_dir(dir: PathBuf) {
+    let _ = DIR.set(dir);
+}
 
 #[derive(Serialize, Deserialize)]
 struct Snapshot {
@@ -123,6 +138,17 @@ struct Item {
 fn fingerprint(registry: &BlockRegistry, root: &Path) -> io::Result<[u8; 32]> {
     let mut hasher = Sha256::new();
     hasher.update(b"horizon resolved behaviours 2");
+    // The build that resolved the tables: the version constant alone misses
+    // loader changes that keep the snapshot layout.
+    let exe = std::env::current_exe()?;
+    let built = fs::metadata(&exe)?;
+    hash_str(&mut hasher, &exe.to_string_lossy());
+    hasher.update(built.len().to_le_bytes());
+    let modified = built
+        .modified()?
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| invalid(e.to_string()))?;
+    hasher.update(modified.as_nanos().to_le_bytes());
     for relative in [
         "facts.json",
         "block-behaviours.json",
@@ -635,8 +661,12 @@ impl Snapshot {
 }
 
 pub(super) fn load(registry: &BlockRegistry, root: &Path) -> Option<Behaviours> {
+    load_from(DIR.get()?, registry, root)
+}
+
+fn load_from(dir: &Path, registry: &BlockRegistry, root: &Path) -> Option<Behaviours> {
+    let bytes = fs::read(dir.join(FILE_NAME)).ok()?;
     let fingerprint = fingerprint(registry, root).ok()?;
-    let bytes = fs::read(root.join(FILE_NAME)).ok()?;
     // Validate bounds before decoding untrusted cache contents.
     if bytes.len() < 8 + 4 + 32 + 32 || bytes.len() > MAX_FILE_BYTES {
         return None;
@@ -661,10 +691,17 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> Option<Behaviours> 
 }
 
 pub(super) fn store(registry: &BlockRegistry, root: &Path, behaviours: &Behaviours) {
-    let _ = write(registry, root, behaviours);
+    if let Some(dir) = DIR.get() {
+        let _ = write(dir, registry, root, behaviours);
+    }
 }
 
-fn write(registry: &BlockRegistry, root: &Path, behaviours: &Behaviours) -> io::Result<()> {
+fn write(
+    dir: &Path,
+    registry: &BlockRegistry,
+    root: &Path,
+    behaviours: &Behaviours,
+) -> io::Result<()> {
     let fingerprint = fingerprint(registry, root)?;
     let snapshot = Snapshot::capture(behaviours);
     let serialized = postcard::to_allocvec(&snapshot).map_err(|e| invalid(e.to_string()))?;
@@ -678,8 +715,9 @@ fn write(registry: &BlockRegistry, root: &Path, behaviours: &Behaviours) -> io::
     bytes.extend_from_slice(&fingerprint);
     bytes.extend_from_slice(&Sha256::digest(&body));
     bytes.extend_from_slice(&body);
-    let path = root.join(FILE_NAME);
-    let tmp = root.join(format!(
+    fs::create_dir_all(dir)?;
+    let path = dir.join(FILE_NAME);
+    let tmp = dir.join(format!(
         "{FILE_NAME}.tmp-{}-{}",
         std::process::id(),
         NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
@@ -773,11 +811,25 @@ mod tests {
         let Some(root) = fixture() else {
             return;
         };
+        // The game's cache folder, apart from the resources.
+        let dir = root.0.join("game/.horizon-cache");
         let registry = super::super::load_registry(&root.0).unwrap();
-        assert!(load(&registry, &root.0).is_none());
-        let initial = super::super::load(&registry, &root.0).unwrap();
-        assert!(root.0.join(FILE_NAME).is_file());
-        let hit = load(&registry, &root.0).expect("cache hit");
+        // What `data::load` does once `set_dir` gave it a folder.
+        let load_or_build = || {
+            load_from(&dir, &registry, &root.0).unwrap_or_else(|| {
+                let built = super::super::load_uncached(&registry, &root.0).unwrap();
+                write(&dir, &registry, &root.0, &built).unwrap();
+                built
+            })
+        };
+        assert!(load_from(&dir, &registry, &root.0).is_none());
+        let initial = load_or_build();
+        assert!(dir.join(FILE_NAME).is_file());
+        assert!(
+            !root.0.join(FILE_NAME).exists(),
+            "the resource folder stays untouched"
+        );
+        let hit = load_from(&dir, &registry, &root.0).expect("cache hit");
         assert_eq!(initial.table.state_count(), hit.table.state_count());
         let tags = root.0.join("block-tags.json");
         fs::OpenOptions::new()
@@ -787,23 +839,29 @@ mod tests {
             .write_all(b"\n")
             .unwrap();
         assert!(
-            load(&registry, &root.0).is_none(),
+            load_from(&dir, &registry, &root.0).is_none(),
             "changed resource must invalidate"
         );
-        super::super::load(&registry, &root.0).expect("source fallback");
+        load_or_build();
         assert!(
-            load(&registry, &root.0).is_some(),
+            load_from(&dir, &registry, &root.0).is_some(),
             "fallback should replace cache"
         );
-        let cache_file = root.0.join(FILE_NAME);
+        let cache_file = dir.join(FILE_NAME);
         let mut bytes = fs::read(&cache_file).unwrap();
         bytes[80] ^= 0x80;
         fs::write(&cache_file, bytes).unwrap();
         assert!(
-            load(&registry, &root.0).is_none(),
+            load_from(&dir, &registry, &root.0).is_none(),
             "checksum failure must invalidate"
         );
-        super::super::load(&registry, &root.0).expect("corrupt cache fallback");
-        assert!(load(&registry, &root.0).is_some());
+        load_or_build();
+        assert!(load_from(&dir, &registry, &root.0).is_some());
+        // A snapshot written under another key (another build of the game,
+        // other resources) is never trusted.
+        let mut other = fs::read(&cache_file).unwrap();
+        other[12] ^= 1;
+        fs::write(&cache_file, other).unwrap();
+        assert!(load_from(&dir, &registry, &root.0).is_none());
     }
 }

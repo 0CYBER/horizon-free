@@ -23,6 +23,7 @@ use std::{
 };
 #[path = "data/cache.rs"]
 mod cache;
+pub(super) use cache::set_dir as set_cache_dir;
 
 /// Per-state flags read from vanilla accessors over an empty level.
 pub mod state_flags {

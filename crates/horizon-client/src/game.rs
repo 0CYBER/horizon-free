@@ -10144,6 +10144,9 @@ pub fn run() -> Result<()> {
     horizon_client::spans::enable(options.spikes.is_some());
     let vanilla_root = options.resources.clone();
     let early_settings = Settings::load(&std::env::current_dir()?.join("options.txt"));
+    // Snapshots of derived tables live in the game folder, never beside the
+    // shared resources.
+    Behaviours::set_cache_dir(std::env::current_dir()?.join(".horizon-cache"));
     options.resources = packs::startup_root(&vanilla_root, &early_settings.resource_packs);
     options.resources = mods::content_root(
         &options.resources,
