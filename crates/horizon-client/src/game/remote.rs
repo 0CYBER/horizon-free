@@ -61,8 +61,11 @@ struct Tracked {
 }
 /// Smooth an entity toward a new position over three ticks (InterpolationHandler).
 #[derive(Clone, Copy)]
+/// `LinearInterpolationHandler`'s target: a position and rotation (yRot,
+/// xRot) reached in `steps` ticks.
 struct Lerp {
     target: [f64; 3],
+    rotation: Option<(f32, f32)>,
     steps: u32,
 }
 
@@ -102,6 +105,8 @@ pub(super) struct Remote {
     use_target: Option<[i32; 3]>,
     entities: HashMap<i32, Tracked>,
     lerps: HashMap<i32, Lerp>,
+    /// `LivingEntity.lerpHeadTo`: the head yaw and the ticks left to reach it.
+    head_lerps: HashMap<i32, (f32, u32)>,
     /// Item entities waiting for their item data.
     pending_items: HashMap<i32, [f64; 3]>,
     health: (f32, i32, f32),
@@ -288,6 +293,7 @@ impl Game<'_> {
             use_target: None,
             entities: HashMap::new(),
             lerps: HashMap::new(),
+            head_lerps: HashMap::new(),
             pending_items: HashMap::new(),
             health: (20.0, 20, 5.0),
             game_mode: 0,
@@ -587,6 +593,7 @@ impl Game<'_> {
             if let Some(r) = self.remote.as_mut() {
                 r.entities.clear();
                 r.lerps.clear();
+                r.head_lerps.clear();
                 r.pending_items.clear();
                 // A new ClientLevel: a new chunk storage, centred on 0, 0.
                 r.chunk_center = (0, 0);
@@ -868,7 +875,10 @@ impl Game<'_> {
             }
         }
     }
-    fn spawn_entity(&mut self, id: i32, kind: &str, position: [f64; 3], yaw: f32, head: f32) {
+    /// `recreateFromPacket`: yRot and xRot from the packet, the body and head
+    /// both at its head yaw (LivingEntity).
+    fn spawn_entity(&mut self, id: i32, kind: &str, position: [f64; 3], rotation: [f32; 3]) {
+        let [yaw, pitch, head] = rotation;
         let at = Vec3::new(position[0], position[1], position[2]);
         let mob_type = if kind == "minecraft:player" {
             self.remote.as_ref().and_then(|r| r.player_type.clone())
@@ -877,8 +887,8 @@ impl Game<'_> {
         };
         if let Some(t) = mob_type {
             let mut mob = Mob::new(id as u32, t, at, head);
-            mob.body_yaw = yaw;
-            mob.previous_body_yaw = yaw;
+            (mob.yaw, mob.previous_yaw) = (yaw, yaw);
+            (mob.head_pitch, mob.previous_head_pitch) = (pitch, pitch);
             mob.persistent = true;
             self.mobs.retain(|m| m.id != id as u32);
             self.mobs.push(mob);
@@ -903,14 +913,21 @@ impl Game<'_> {
         rotation: Option<(f32, f32)>,
         on_ground: bool,
     ) {
+        let mob = self.mobs.iter_mut().find(|m| m.id == id as u32);
         if let Some(r) = self.remote.as_mut() {
             if let Some(t) = r.entities.get_mut(&id) {
                 t.position = position;
             }
+            // AbstractInterpolationHandler.interpolateTo: without a rotation,
+            // the one it was heading for (or has).
+            let rotation = rotation
+                .or_else(|| r.lerps.get(&id).and_then(|l| l.rotation))
+                .or_else(|| mob.as_ref().map(|m| (m.yaw, m.head_pitch)));
             r.lerps.insert(
                 id,
                 Lerp {
                     target: position,
+                    rotation,
                     steps: 3,
                 },
             );
@@ -918,12 +935,8 @@ impl Game<'_> {
                 *p = position;
             }
         }
-        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id as u32) {
+        if let Some(m) = mob {
             m.on_ground = on_ground;
-            if let Some((yaw, pitch)) = rotation {
-                m.body_yaw = yaw;
-                m.head_pitch = pitch;
-            }
         }
     }
     fn remove_entity(&mut self, id: i32) {
@@ -932,6 +945,7 @@ impl Game<'_> {
         if let Some(r) = self.remote.as_mut() {
             r.entities.remove(&id);
             r.lerps.remove(&id);
+            r.head_lerps.remove(&id);
             r.pending_items.remove(&id);
         }
     }
@@ -1181,8 +1195,8 @@ impl Game<'_> {
                             .map(str::to_owned)
                     })
                     .unwrap_or_default();
-                let yaw = horizon_protocol::buf::unpack_degrees(p.yaw);
-                let head = horizon_protocol::buf::unpack_degrees(p.head_yaw);
+                let rotation =
+                    [p.yaw, p.pitch, p.head_yaw].map(horizon_protocol::buf::unpack_degrees);
                 if let Some(r) = self.remote.as_mut() {
                     if kind == "minecraft:player" {
                         r.level_players.insert(p.id, p.uuid);
@@ -1190,7 +1204,7 @@ impl Game<'_> {
                         r.level_players.remove(&p.id);
                     }
                 }
-                self.spawn_entity(p.id, &kind, p.position, yaw, head);
+                self.spawn_entity(p.id, &kind, p.position, rotation);
             }
             C::RemoveEntities(p) => {
                 for id in p.ids {
@@ -1241,9 +1255,11 @@ impl Game<'_> {
                 ];
                 self.move_entity(p.id, position, Some((p.yaw, p.pitch)), p.on_ground);
             }
+            // ClientPacketListener.handleRotateMob: lerpHeadTo(yHeadRot, 3).
             C::RotateHead(p) => {
-                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
-                    m.yaw = horizon_protocol::buf::unpack_degrees(p.head_yaw);
+                if let Some(r) = self.remote.as_mut() {
+                    let yaw = horizon_protocol::buf::unpack_degrees(p.head_yaw);
+                    r.head_lerps.insert(p.id, (yaw, 3));
                 }
             }
             C::SetEntityData(p) => {
@@ -2236,14 +2252,18 @@ impl Game<'_> {
             return;
         };
         let mut lerps = std::mem::take(&mut r.lerps);
+        let head_lerps = &mut r.head_lerps;
         let players = &r.level_players;
         for m in &mut self.mobs {
-            if !running && !players.contains_key(&(m.id as i32)) {
+            let player = players.contains_key(&(m.id as i32));
+            if !running && !player {
                 continue;
             }
             m.previous = m.position;
             m.previous_yaw = m.yaw;
             m.previous_body_yaw = m.body_yaw;
+            m.previous_head_yaw = m.head_yaw;
+            m.previous_head_pitch = m.head_pitch;
             m.previous_limb_speed = m.limb_speed;
             m.age += 1;
             if m.species() == horizon_client::mobs::Species::Rabbit {
@@ -2258,6 +2278,7 @@ impl Game<'_> {
             if !m.alive() {
                 m.death_time += 1;
             }
+            // Entity.commonTick: LinearInterpolationHandler.interpolate.
             if let Some(l) = lerps.get_mut(&(m.id as i32))
                 && l.steps > 0
             {
@@ -2267,7 +2288,26 @@ impl Game<'_> {
                     m.position.y + (l.target[1] - m.position.y) / n,
                     m.position.z + (l.target[2] - m.position.z) / n,
                 );
+                if let Some((yaw, pitch)) = l.rotation {
+                    let alpha = 1.0 / l.steps as f32;
+                    m.yaw += wrap_degrees(yaw - m.yaw) * alpha;
+                    m.head_pitch += (pitch - m.head_pitch) * alpha;
+                }
                 l.steps -= 1;
+            }
+            // LivingEntity.aiStep: the head's own interpolation.
+            if let Some((yaw, steps)) = head_lerps.get_mut(&(m.id as i32))
+                && *steps > 0
+            {
+                m.head_yaw += wrap_degrees(*yaw - m.head_yaw) / *steps as f32;
+                *steps -= 1;
+            }
+            // LivingEntity.tick's tickHeadTurn: a mob's BodyRotationControl,
+            // a player's body following its walk and look.
+            if player {
+                remote_player_head_turn(m);
+            } else if m.alive() {
+                m.body_rotation_tick();
             }
             // WalkAnimationState.update from the horizontal distance moved.
             let (dx, dz) = (m.position.x - m.previous.x, m.position.z - m.previous.z);
@@ -2294,6 +2334,7 @@ impl Game<'_> {
             }
         }
         lerps.retain(|_, l| l.steps > 0);
+        head_lerps.retain(|_, (_, steps)| *steps > 0);
         if let Some(r) = self.remote.as_mut() {
             for (id, l) in lerps {
                 r.lerps.entry(id).or_insert(l);
@@ -3285,6 +3326,43 @@ impl Game<'_> {
             "decode_errors": r.decode_errors,
             "chat": r.chat.iter().rev().take(10).rev().map(|(t, _)| t.clone()).collect::<Vec<_>>(),
         }))
+    }
+}
+
+/// `Mth.wrapDegrees`.
+fn wrap_degrees(a: f32) -> f32 {
+    let a = a % 360.0;
+    if a >= 180.0 {
+        a - 360.0
+    } else if a < -180.0 {
+        a + 360.0
+    } else {
+        a
+    }
+}
+
+/// `LivingEntity.tick`'s body target and `tickHeadTurn` for another player:
+/// the body turns toward where it walks (backwards when walking back), or to
+/// the look while the arm swings, and stays within 50 degrees of the look.
+fn remote_player_head_turn(m: &mut Mob) {
+    let (dx, dz) = (m.position.x - m.previous.x, m.position.z - m.previous.z);
+    let mut target = m.body_yaw;
+    if (dx * dx + dz * dz) as f32 > 0.002_500_000_2 {
+        let walk = (dz.atan2(dx) as f32).to_degrees() - 90.0;
+        let facing = (wrap_degrees(m.yaw) - walk).abs();
+        target = if 95.0 < facing && facing < 265.0 {
+            walk - 180.0
+        } else {
+            walk
+        };
+    }
+    if m.anim.attack_anim > 0.0 {
+        target = m.yaw;
+    }
+    m.body_yaw += wrap_degrees(target - m.body_yaw) * 0.3;
+    let head = wrap_degrees(m.yaw - m.body_yaw);
+    if head.abs() > 50.0 {
+        m.body_yaw += head - head.signum() * 50.0;
     }
 }
 
