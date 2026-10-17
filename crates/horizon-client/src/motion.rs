@@ -2166,8 +2166,13 @@ mod tests {
 
     #[test]
     fn player_fire_damage_queues_hurt_sound_only_for_fresh_hits() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
+        let root = std::env::var_os("HORIZON_TEST_RESOURCES")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3")
+            });
         if !root.join("movement-properties.nbt").exists() {
+            eprintln!("skipped damage regression: prepared resources unavailable");
             return;
         }
         let assets = Assets::load(&root).unwrap();
@@ -2195,6 +2200,8 @@ mod tests {
                     .count(),
                 1
             );
+            assert_eq!(player.health.hurt_animation_time, 10);
+            player.health.advance_clock();
             player.events.clear();
             assert!(
                 !player
@@ -2207,9 +2214,14 @@ mod tests {
                     .iter()
                     .any(|e| matches!(e, MotionEvent::HurtSound(_)))
             );
+            assert_eq!(
+                player.health.hurt_animation_time, 9,
+                "cooldown hit must not restart animation"
+            );
             for _ in 0..20 {
                 player.health.advance_clock();
             }
+            assert_eq!(player.health.hurt_animation_time, 0);
             player.invulnerable = true;
             player.events.clear();
             assert!(
@@ -2271,15 +2283,61 @@ mod tests {
                 Default::default(),
                 source,
                 4.0,
-                Some(shield),
+                Some(shield.clone()),
             )
             .unwrap();
         assert!(!outcome.hurt && outcome.sound && outcome.blocked == 4.0);
+        assert_eq!(
+            player.health.hurt.hurt_time, 10,
+            "preserve server damage bookkeeping"
+        );
+        assert_eq!(
+            player.health.hurt_animation_time, 0,
+            "a fully blocked arrow must not animate hurt"
+        );
         assert!(
             !player
                 .events
                 .iter()
                 .any(|e| matches!(e, MotionEvent::HurtSound(_)))
+        );
+        // An unblocked hit after the shield block must still animate normally.
+        for _ in 0..20 {
+            player.health.advance_clock();
+        }
+        assert!(
+            player
+                .hurt(&resources.health, Default::default(), source, 4.0)
+                .unwrap()
+        );
+        assert_eq!(player.health.hurt_animation_time, 10);
+        player.health.advance_clock();
+        assert!(
+            !player
+                .hurt_blocking(
+                    &resources.health,
+                    Default::default(),
+                    source,
+                    4.0,
+                    Some(shield)
+                )
+                .unwrap()
+                .hurt
+        );
+        assert_eq!(
+            player.health.hurt_animation_time, 9,
+            "blocking must not erase or restart an existing animation"
+        );
+        let mut starving = PlayerMotion::new(&resources, Vec3::ZERO).unwrap();
+        starving.health.food.food = 0;
+        starving.health.food.timer = 79;
+        starving
+            .food_tick(&resources.health, Default::default())
+            .unwrap();
+        assert_eq!(starving.health.health(), 19.0);
+        assert_eq!(
+            starving.health.hurt_animation_time, 10,
+            "starvation must still animate hurt"
         );
     }
 
