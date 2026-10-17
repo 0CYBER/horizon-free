@@ -65,7 +65,7 @@ pub(super) struct Parked {
     lectern_pulses: Vec<((i32, i32, i32), i32)>,
     lid_openers: HashMap<(i32, i32, i32), i32>,
     lan_events: Vec<(i32, [i32; 3], i32, Option<u32>)>,
-    lan_block_events: Vec<([i32; 3], i32, i32, u16)>,
+    lan_block_events: Vec<([i32; 3], i32, i32, u32)>,
     lan_entity_events: Vec<(i32, i8, [f64; 3])>,
     /// Only the per-level parts of these are used (`swap_level`).
     anims: BlockEntityAnims,
