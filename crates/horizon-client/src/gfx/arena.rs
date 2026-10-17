@@ -49,9 +49,10 @@ struct Page {
 /// Terrain vertices in pages of at most `page_limit` vertices (devices cap
 /// buffer sizes): a section's vertices sit in one page.
 pub struct Arena {
-    pages: Vec<Page>,
+    pages: Vec<Option<Page>>,
     stride: u64,
     page_limit: u64,
+    initial_capacity: u64,
     usage: wgpu::BufferUsages,
 }
 
@@ -73,13 +74,10 @@ impl Arena {
         let page_limit = (bytes / stride) / GRAIN * GRAIN;
         let capacity = capacity.next_multiple_of(GRAIN).min(page_limit);
         Self {
-            pages: vec![Page {
-                buffer: Self::create(device, stride, capacity, usage),
-                capacity,
-                free: FreeList::new(capacity),
-            }],
+            pages: Vec::new(),
             stride,
             page_limit,
+            initial_capacity: capacity,
             usage,
         }
     }
@@ -102,10 +100,13 @@ impl Arena {
     }
     /// Bytes of every page's buffer.
     pub fn bytes(&self) -> u64 {
-        self.pages.iter().map(|p| p.capacity).sum::<u64>() * self.stride
+        self.pages.iter().flatten().map(|p| p.capacity).sum::<u64>() * self.stride
     }
     pub fn buffer(&self, page: u32) -> &wgpu::Buffer {
-        &self.pages[page as usize].buffer
+        &self.pages[page as usize]
+            .as_ref()
+            .expect("live arena page")
+            .buffer
     }
     /// A range of `vertices`: (page, first vertex). Grows the newest page
     /// (copying its contents on the GPU) or starts a new one when nothing
@@ -118,39 +119,62 @@ impl Arena {
     ) -> (u32, u64) {
         let len = Self::span(vertices).min(self.page_limit);
         for (i, page) in self.pages.iter_mut().enumerate() {
-            if let Some(start) = page.free.take(len) {
+            if let Some(page) = page
+                && let Some(start) = page.free.take(len)
+            {
                 return (i as u32, start);
             }
         }
-        let last = self.pages.len() - 1;
-        let current = self.pages[last].capacity;
-        if current < self.page_limit {
+        let last = self.pages.len().saturating_sub(1);
+        if let Some(page) = self.pages.last().and_then(Option::as_ref)
+            && page.capacity < self.page_limit
+        {
+            let current = page.capacity;
             let grown = (current * 2).max(current + len).min(self.page_limit);
             if grown - current >= len || grown == self.page_limit {
                 self.grow(device, queue, last, grown);
-                if let Some(start) = self.pages[last].free.take(len) {
+                if let Some(start) = self.pages[last].as_mut().unwrap().free.take(len) {
                     return (last as u32, start);
                 }
             }
         }
-        let capacity = (1 << 20u64).max(len).min(self.page_limit);
+        let capacity = if self.pages.is_empty() {
+            self.initial_capacity
+        } else {
+            1 << 20
+        }
+        .max(len)
+        .min(self.page_limit);
         let mut free = FreeList::new(capacity);
         let start = free.take(len).expect("a new page fits one section");
-        self.pages.push(Page {
+        let page = Page {
             buffer: Self::create(device, self.stride, capacity, self.usage),
             capacity,
             free,
-        });
-        ((self.pages.len() - 1) as u32, start)
+        };
+        let index = self
+            .pages
+            .iter()
+            .position(Option::is_none)
+            .unwrap_or_else(|| {
+                self.pages.push(None);
+                self.pages.len() - 1
+            });
+        self.pages[index] = Some(page);
+        (index as u32, start)
     }
     pub fn release(&mut self, page: u32, start: u64, vertices: u64) {
         let len = Self::span(vertices).min(self.page_limit);
-        self.pages[page as usize].free.give(start, len);
+        self.pages[page as usize]
+            .as_mut()
+            .expect("live arena page")
+            .free
+            .give(start, len);
     }
     fn grow(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, page: usize, capacity: u64) {
         let capacity = capacity.next_multiple_of(GRAIN).min(self.page_limit);
         let buffer = Self::create(device, self.stride, capacity, self.usage);
-        let old = &mut self.pages[page];
+        let old = self.pages[page].as_mut().expect("live arena page");
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Grow section arena"),
         });
@@ -162,16 +186,97 @@ impl Arena {
         old.capacity = capacity;
         old.free.give(previous, capacity - previous);
     }
-    pub fn clear(&mut self) {
+    /// Reclaim after an upload batch, so replacing a section can reuse its range.
+    pub fn trim(&mut self) {
         for page in &mut self.pages {
-            page.free = FreeList::new(page.capacity);
+            if let Some(p) = page
+                && p.free.0.len() == 1
+                && p.free.0.get(&0) == Some(&p.capacity)
+            {
+                *page = None;
+            }
         }
+        // Keep live page indices stable; later allocations reuse interior holes.
+        while self.pages.last().is_some_and(Option::is_none) {
+            self.pages.pop();
+        }
+    }
+    pub fn clear(&mut self) {
+        self.pages.clear();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
+        eprintln!("arena GPU regression: {}", adapter.get_info().name);
+        pollster::block_on(adapter.request_device(&Default::default())).ok()
+    }
+
+    #[test]
+    fn empty_pages_are_reclaimed_without_moving_live_ranges() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let mut arena = Arena::new(&device, 4, GRAIN);
+        arena.page_limit = 2 * GRAIN;
+        assert_eq!(arena.bytes(), 0);
+        let (first, a) = arena.alloc(&device, &queue, GRAIN);
+        let (_, b) = arena.alloc(&device, &queue, GRAIN);
+        let (live, c) = arena.alloc(&device, &queue, 2 * GRAIN);
+        let buffer = arena.buffer(live).clone();
+        let data = [1u8, 2, 3, 4];
+        queue.write_buffer(&buffer, c * 4, &data);
+        assert_eq!(arena.bytes(), 4 * GRAIN * 4);
+        arena.release(first, a, GRAIN);
+        arena.trim();
+        assert_eq!(arena.bytes(), 4 * GRAIN * 4);
+        arena.release(first, b, GRAIN);
+        arena.trim();
+        assert_eq!(arena.bytes(), 2 * GRAIN * 4);
+        assert_eq!(arena.buffer(live), &buffer);
+        let (reused, d) = arena.alloc(&device, &queue, GRAIN);
+        assert_eq!(reused, first);
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        wgpu::util::DownloadBuffer::read_buffer(
+            &device,
+            &queue,
+            &arena.buffer(live).slice(c * 4..c * 4 + 4),
+            move |result| tx.send(result.unwrap().to_vec()).unwrap(),
+        );
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        assert_eq!(rx.recv().unwrap(), data);
+        arena.release(reused, d, GRAIN);
+        arena.release(live, c, 2 * GRAIN);
+        arena.trim();
+        assert_eq!(arena.bytes(), 0);
+        assert!(arena.pages.is_empty());
+    }
+
+    #[test]
+    fn clearing_an_arena_releases_buffers_and_can_allocate_again() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        for mut arena in [
+            Arena::new(&device, 28, GRAIN),
+            Arena::indices(&device, GRAIN),
+        ] {
+            arena.alloc(&device, &queue, GRAIN);
+            assert_eq!(arena.bytes(), arena.stride * GRAIN);
+            arena.clear();
+            assert_eq!(arena.bytes(), 0);
+            assert_eq!(arena.alloc(&device, &queue, GRAIN), (0, 0));
+            assert_eq!(arena.bytes(), arena.stride * GRAIN);
+        }
+    }
 
     #[test]
     fn free_ranges_coalesce() {
