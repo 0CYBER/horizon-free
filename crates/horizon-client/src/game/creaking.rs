@@ -362,3 +362,11 @@ pub(super) struct CreakingState {
     /// Which block states are creaking hearts, by state id.
     hearts: Vec<bool>,
 }
+
+impl CreakingState {
+    /// Exchange the chunks scanned for creaking hearts with another level's
+    /// (game/levels.rs).
+    pub(super) fn swap_level(&mut self, other: &mut Self) {
+        std::mem::swap(&mut self.scanned, &mut other.scanned);
+    }
+}

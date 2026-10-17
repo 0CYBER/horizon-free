@@ -80,6 +80,15 @@ pub(super) struct SculkState {
     ticks: u32,
     pub tracker_loaded: bool,
 }
+
+impl SculkState {
+    /// Exchange the level-held parts (its sculk block entities and the
+    /// chunks scanned for them) with another level's (game/levels.rs).
+    pub(super) fn swap_level(&mut self, other: &mut Self) {
+        std::mem::swap(&mut self.index, &mut other.index);
+        std::mem::swap(&mut self.known, &mut other.known);
+    }
+}
 /// An insertion-ordered set of block positions (`Level.blockEntityTickers`
 /// keeps the order block entities were added in).
 #[derive(Default)]

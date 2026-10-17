@@ -52,7 +52,7 @@ pub(super) struct LanHost {
     /// Blocks broken this tick (their sound is a level event for the guests).
     pub broken: Vec<[f64; 3]>,
     /// Hurt and death state of the mobs guests see.
-    mob_state: HashMap<u32, (i32, bool)>,
+    mob_state: HashMap<super::Dim, HashMap<u32, (i32, bool)>>,
     /// The guest each mob sees as its player, when not the host (game/lan_mobs.rs).
     pub mob_players: HashMap<u32, u32>,
     /// An integrated server's owner (game/integrated.rs).
@@ -783,7 +783,19 @@ impl Game<'_> {
                     tick_rate: self.clock.rate(),
                     tick_frozen: self.clock.frozen(),
                 };
-                host.hub.tick(&mut ctx)
+                // A server with several levels runs a pass for each
+                // (`tick_server`): the network is read once, before the first.
+                let pass = self.level_pass;
+                let mut events = if pass.first {
+                    host.hub.poll(&mut ctx)
+                } else {
+                    Vec::new()
+                };
+                events.extend(host.hub.tick_level(&mut ctx));
+                if pass.last {
+                    host.hub.end_tick();
+                }
+                events
             };
             if let Some(state) = &state
                 && host.host_mode != state.game_mode
@@ -823,7 +835,15 @@ impl Game<'_> {
                         if let Some(pos) = guest.menu.as_ref().and_then(|m| m.pos)
                             && !guest.spectator()
                         {
-                            self.container_openers_changed(pos, false);
+                            // In the level they were in.
+                            let back = self.dim;
+                            let theirs = super::Dim::from_id(&guest.dimension);
+                            if self.enter_level(Some(&mut host), theirs).is_ok() {
+                                self.container_openers_changed(pos, false);
+                            }
+                            if let Err(e) = self.enter_level(Some(&mut host), back) {
+                                log::error!("could not reopen {}: {e}", back.id());
+                            }
                         }
                         self.lan_crafting_left(&mut host, &mut guest);
                         self.save_guest(&host, &guest);
@@ -875,6 +895,7 @@ impl Game<'_> {
         let default_mode = host.hub.config.default_game_mode;
         let force = host.hub.config.force_game_mode;
         let root = self.world_root.clone();
+        let in_place = host.hub.config.dimension.clone();
         let owner = host.owner.as_mut();
         let Some(g) = host.hub.guest_mut(conn) else {
             return;
@@ -897,8 +918,28 @@ impl Game<'_> {
             g.previous_position = spawn;
             g.health = 20.0;
             g.food = 20;
+            g.dimension = super::Dim::Overworld.id().to_owned();
+        }
+        // A server places each player in their own level
+        // (`PlayerList.placeNewPlayer`); the in-frame game has one.
+        let back = self.dim;
+        let level = super::Dim::from_id(&g.dimension);
+        let elsewhere = self.options.dedicated.is_some() && level != back;
+        if !elsewhere {
+            g.dimension = in_place;
         }
         self.load_guest_records(host, conn);
+        let theirs;
+        let entities = if elsewhere {
+            if let Err(e) = self.enter_level(Some(host), level) {
+                log::error!("could not open {}: {e}", level.id());
+                return;
+            }
+            theirs = self.lan_entities(&mut host.hub);
+            &theirs[..]
+        } else {
+            entities
+        };
         let mut ctx = TickCtx {
             world: &mut self.world,
             host: state,
@@ -912,6 +953,9 @@ impl Game<'_> {
             tick_frozen: self.clock.frozen(),
         };
         host.hub.place_new_player(conn, &mut ctx);
+        if elsewhere && let Err(e) = self.enter_level(Some(host), back) {
+            log::error!("could not reopen {}: {e}", back.id());
+        }
     }
 
     /// Level events the game queued, for the guests (`process_level_events`).
@@ -966,7 +1010,11 @@ impl Game<'_> {
         let mut seen = HashMap::new();
         for m in &self.mobs {
             let dead = !m.alive();
-            let old = host.mob_state.get(&m.id).copied();
+            let old = host
+                .mob_state
+                .get(&self.dim)
+                .and_then(|s| s.get(&m.id))
+                .copied();
             let at = [m.position.x, m.position.y, m.position.z];
             if m.hurt_time > old.map_or(0, |o| o.0) && !dead {
                 host.hub.entity_event(m.id as i32, 2, at);
@@ -976,7 +1024,7 @@ impl Game<'_> {
             }
             seen.insert(m.id, (m.hurt_time, dead));
         }
-        host.mob_state = seen;
+        host.mob_state.insert(self.dim, seen);
     }
 
     /// Keep the chunks around every guest loaded.
@@ -985,7 +1033,7 @@ impl Game<'_> {
             .hub
             .guests
             .iter()
-            .filter(|g| g.placed)
+            .filter(|g| host.hub.here(g))
             // The tracked square's corners and their lit neighbours lie
             // within (view distance + 2) * √2 of the player's chunk.
             .map(|g| (g.chunk(), (g.view_distance + 2) * 3 / 2 + 1))

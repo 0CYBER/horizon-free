@@ -54,6 +54,8 @@ pub(super) struct GuestPlay {
     /// `ServerPlayer.getStats` and the inventory `inventory_changed` last saw.
     pub(super) stats: super::stats::Stats,
     last_inventory: u64,
+    /// `Entity.portalProcess` and `portalCooldown` (game/server_travel.rs).
+    pub(super) portal: horizon_client::nether_portal::PortalState,
 }
 
 struct ItemRules<'a>(&'a horizon_client::items::Items);
@@ -917,7 +919,18 @@ impl Game<'_> {
         if !host.hub.guests[i].dead {
             return;
         }
-        self.respawn_level(host);
+        // PlayerList.respawn: a server's player comes back in the Overworld,
+        // where the world spawn is (respawn anchors and beds aside).
+        let back = self.dim;
+        let away = self.options.dedicated.is_some()
+            && host.hub.guests[i].dimension != super::Dim::Overworld.id();
+        if away {
+            self.server_trips.retain(|t| !t.is(conn));
+            if let Err(e) = self.enter_level(Some(host), super::Dim::Overworld) {
+                log::error!("could not open the Overworld: {e}");
+                return;
+            }
+        }
         let g = &mut host.hub.guests[i];
         g.dead = false;
         g.health = 20.0;
@@ -953,6 +966,9 @@ impl Game<'_> {
             tick_frozen: self.clock.frozen(),
         };
         host.hub.respawn(i, spawn, &ctx);
+        if away && let Err(e) = self.enter_level(Some(host), back) {
+            log::error!("could not reopen {}: {e}", back.id());
+        }
     }
 
     /// Per tick, for every guest: dig, use items, pick up drops, die.
@@ -963,7 +979,7 @@ impl Game<'_> {
             .hub
             .guests
             .iter()
-            .filter(|g| g.placed && g.loaded)
+            .filter(|g| host.hub.here(g) && g.loaded)
             .map(|g| g.conn)
             .collect();
         for conn in conns {
@@ -1355,6 +1371,9 @@ impl Game<'_> {
             let Some(g) = host.hub.guests.iter().find(|g| g.conn == conn) else {
                 continue;
             };
+            if !host.hub.here(g) {
+                continue;
+            }
             let (id, at) = (g.entity_id, g.position);
             let play = host.play.get_mut(&conn).expect("play");
             let swinging = play.swing.swinging() && play.swing.ticks == 0;

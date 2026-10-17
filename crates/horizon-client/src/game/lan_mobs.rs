@@ -138,7 +138,7 @@ impl Game<'_> {
         host.hub
             .guests
             .iter()
-            .filter(|g| g.placed && g.loaded && !g.dead && !g.spectator())
+            .filter(|g| host.hub.here(g) && g.loaded && !g.dead && !g.spectator())
             .map(|g| (Who::Mob(g.entity_id as u32), guest_bounds(g)))
             .collect()
     }
@@ -209,9 +209,12 @@ pub(super) struct Present {
 impl Game<'_> {
     /// Every guest in the world (`ServerLevel.getPlayers` past the host).
     pub(super) fn lan_present(&self) -> Vec<Present> {
-        let guests = self.lan.iter().flat_map(|h| &h.hub.guests);
+        let guests = self
+            .lan
+            .iter()
+            .flat_map(|h| h.hub.guests.iter().filter(|g| h.hub.here(g)));
         guests
-            .filter(|g| g.placed && g.loaded)
+            .filter(|g| g.loaded)
             .map(|g| {
                 let [x, y, z] = g.position;
                 Present {
