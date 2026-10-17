@@ -744,7 +744,7 @@ pub(super) fn load_with_gameplay<G: GameplayStateSource>(
     // Collision shapes.
     let collision_tag = nbt::read_named(
         &fs::read(root.join("cached-collision.nbt"))?,
-        Limits::default(),
+        Limits::tables(),
     )
     .map_err(|e| invalid(e.to_string()))?
     .0

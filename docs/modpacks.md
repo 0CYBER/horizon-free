@@ -237,11 +237,19 @@ How the game loads them, without touching vanilla's path:
 - Loaders that read only `data/minecraft/` (recipes, loot, tags) read every namespace, as
   vanilla does. With no mods there is only `minecraft`, so nothing changes.
 - The overlay is cached like the resource-pack overlay and rebuilt when a mod file changes.
-- **Limits.** Chunk sections store a block state in 16 bits: vanilla 26.3 has 35,723 states,
-  so mods may add 29,813. Past that the content root is refused with the states per mod
-  (Macaw's Doors, Fences, Paths and Trapdoors alone add 36,154: not all four fit). Block
-  sprites fill texture arrays of 2048 layers, four at most (8,192; vanilla takes 1,250,
-  identical textures share a layer). Wider state ids are the next step for big packs.
+- **Limits.** Chunk sections size their global palette to the registry: 16 bits for vanilla's
+  35,723 states (the same chunks, saves and packets as before), one more bit each time content
+  mods double it, up to 2^20 states (1,048,576). Past that the content root is refused with the
+  states per mod. ATM10's 42 carried mods take the registry to 193,762 states (18 bits). On the
+  network the width is the registry's: unchanged for vanilla clients as long as no content mod
+  is on, wider only between Horizons that share the same mods; a Horizon with content mods still
+  reads a vanilla server's 16-bit chunks. Block sprites fill texture arrays of 2048 layers, eight
+  at most (16,384; vanilla takes 1,250, identical textures share a layer; ATM10's 42 take 9,790).
+- **Broken mod files load as vanilla loads them.** A blockstate definition that does not bind
+  (a multipart value the block does not have), a block model that is missing or does not parse,
+  and a recipe that does not parse are logged and skipped: the block gets no model or the
+  missing model, the recipe is absent, everything else loads. Vanilla's own files never hit
+  these paths.
 - Not in 0.2: multiplayer registry sync (single player and the integrated server first), worlds
   opened without a mod they used (vanilla turns unknown blocks into air; we will ask first),
   vanilla ids redefined by a mod (refused).

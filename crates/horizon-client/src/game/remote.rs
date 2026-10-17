@@ -644,6 +644,13 @@ impl Game<'_> {
             if strategy.global_bits != ours.global_bits {
                 let mut values = [0u32; 4096];
                 blocks.unpack(&mut values);
+                // Ids past our registry (a host with mods we lack) read as air.
+                let limit = 1u64 << ours.global_bits;
+                for v in &mut values {
+                    if u64::from(*v) >= limit {
+                        *v = 0;
+                    }
+                }
                 blocks = PalettedContainer::from_values(ours, &values);
             }
             let mut section = Section {
