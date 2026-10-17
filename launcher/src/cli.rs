@@ -132,6 +132,10 @@ enum Cmd {
         /// Join a friend's world with its invite code
         #[arg(long)]
         join: Option<String>,
+        /// An extra argument for the game, passed through as-is (repeatable), for example
+        /// --server-thread
+        #[arg(long = "arg", value_name = "ARG", allow_hyphen_values = true)]
+        arg: Vec<String>,
     },
     /// Run a dedicated server here; type commands into its console
     Server {
@@ -158,6 +162,13 @@ enum Cmd {
         /// Omit to show the current style
         #[arg(value_parser = ["horizon", "classic"])]
         style: Option<String>,
+    },
+    /// Show or set the extra arguments the game starts with (for example --server-thread);
+    /// quotes group a word with spaces in it
+    GameArgs {
+        /// Omit to show the current arguments
+        #[arg(allow_hyphen_values = true)]
+        args: Option<String>,
     },
     /// Print the end of the game's log (logs/latest.log in the game folder), or its newest crash
     /// report
@@ -344,11 +355,12 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             }
             println!("{tag} is prepared.");
         }
-        Cmd::Play { version, join } => {
+        Cmd::Play { version, join, arg } => {
             let mut cmd = backend::client(&backend::resolve_version(version.as_deref())?)?;
             if let Some(code) = join {
                 backend::join_friend(&mut cmd, &code)?;
             }
+            cmd.args(arg);
             attached(cmd)?
         }
         Cmd::Server {
@@ -409,6 +421,24 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 json(serde_json::json!({ "menu_style": style }));
             } else {
                 println!("Menu style: {style}");
+            }
+        }
+        Cmd::GameArgs { args } => {
+            let mut settings = backend::Settings::load();
+            if let Some(line) = args {
+                settings.game_args = line;
+                settings.save();
+            }
+            let line = settings.game_args;
+            if as_json {
+                json(serde_json::json!({
+                    "game_args": line,
+                    "parsed": backend::split_args(&line),
+                }));
+            } else if line.is_empty() {
+                println!("No extra game arguments.");
+            } else {
+                println!("Game arguments: {line}");
             }
         }
         Cmd::Logs { lines, crash } => {
@@ -694,4 +724,46 @@ fn modpack(action: ModpackCmd, as_json: bool) -> Result<(), String> {
         ModpackCmd::Remove { pack } => modpacks::remove(&work(&pack)?)?,
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn play_takes_extra_arguments_that_start_with_hyphens() {
+        let cli = Cli::try_parse_from([
+            "horizon-launcher",
+            "play",
+            "--arg",
+            "--server-thread",
+            "--arg",
+            "40",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Cmd::Play { arg, .. }) => assert_eq!(arg, ["--server-thread", "40"]),
+            _ => panic!("expected play"),
+        }
+    }
+
+    #[test]
+    fn game_args_takes_one_line_that_starts_with_hyphens() {
+        let cli = Cli::try_parse_from([
+            "horizon-launcher",
+            "game-args",
+            "--server-thread --render-distance 40",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Cmd::GameArgs { args }) => {
+                assert_eq!(
+                    args.as_deref(),
+                    Some("--server-thread --render-distance 40")
+                );
+            }
+            _ => panic!("expected game-args"),
+        }
+    }
 }
