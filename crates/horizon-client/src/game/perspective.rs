@@ -201,7 +201,7 @@ impl Game<'_> {
             )
         };
         let p = self.player.as_ref()?;
-        let sleeping = self.sleeping.map(|(head, _)| {
+        let sleeping = self.sleeping.map(|head| {
             let state = self.world.block(head[0], head[1], head[2]);
             let props = self
                 .pack
