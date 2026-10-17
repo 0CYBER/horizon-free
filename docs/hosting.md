@@ -3,24 +3,29 @@
 `horizon-server` hosts a Minecraft Java Edition 26.3 server with Horizon's own game as the engine: one native
 program, no Java, one settings file, a command line, and a web panel. Vanilla 26.3 clients and Horizon clients
 can join it. This page covers what works on `main` today and says plainly what doesn't yet. The design and the
-plan are in [docs/server.md](docs/server.md).
+plan are in [docs/server.md](https://github.com/ludovic111/horizon/blob/main/docs/server.md).
 
 ## Before you start
 
-- **It runs in offline mode only.** Today the server never checks Minecraft accounts: even with
-  `online_mode = true` it runs offline and says so when it starts. Anyone who can reach it can join under any
-  name, including a name on your whitelist. Run it on your LAN, on a tailnet (Tailscale, ZeroTier), or for
-  friends you trust. Don't open it to the internet.
-- **Online mode is coming in two parts.** Checking accounts with Mojang's session servers is in review ([#587](https://github.com/ludovic111/horizon/pull/587),
-  and [#589](https://github.com/ludovic111/horizon/pull/589) for adding players to the whitelist and ops by account). With it, players who sign in with the
-  official Minecraft launcher can join with their own accounts. Horizon's own client can't sign in to a
-  Microsoft account yet: that needs an Azure app registration and Mojang's approval, which the project doesn't
-  have yet ([docs/microsoft-account.md](docs/microsoft-account.md)). Until then Horizon players can join
-  offline servers only.
+- **Online mode checks accounts** (release v2026.10.17.07 and newer). With `online_mode = true`, the
+  default, players who sign in with the official Minecraft launcher join with their own accounts, as on a
+  vanilla server.
+- **Players you add before they have joined get offline UUIDs**, so in online mode the whitelist refuses
+  them. This affects `init --player`, `horizon-server whitelist add` and the console's `whitelist add`, `op`
+  and `ban`. [#589](https://github.com/ludovic111/horizon/pull/589) fixes it (in review), along with `init`'s
+  note that the server runs offline, which is out of date. Until then, turn the whitelist off and let each
+  friend join once. While they are online, run `horizon-server cmd "whitelist add NAME"`. Then turn the
+  whitelist back on.
+- **Horizon's own client can't sign in to a Microsoft account yet.** That needs an Azure app registration and
+  Mojang's approval, which the project doesn't have
+  ([docs/microsoft-account.md](https://github.com/ludovic111/horizon/blob/main/docs/microsoft-account.md)).
+  Until then Horizon players can join offline servers only (`online_mode = false`). An offline server never
+  checks accounts: anyone who reaches it can join under any name. Keep it on your LAN or a tailnet
+  (Tailscale, ZeroTier), or share it only with friends you trust.
 - **No secure chat.** Chat isn't signed. Vanilla clients show chat from the server as not secure.
 - **No locator bar** for vanilla clients yet (coming).
-- **Remote players stay in the Overworld.** Nether and End portals don't move remote players yet (in review:
-  [#668](https://github.com/ludovic111/horizon/pull/668), for a server with one player).
+- **Nether and End:** the world follows a player through portals when they are alone on the server
+  (v2026.10.17.09 and newer). With several players online, portals don't move remote players yet.
 - **Vanilla's movement checks and chunk pacing** ("moved too quickly", sending chunks as fast as a client
   acknowledges them) are in review ([#586](https://github.com/ludovic111/horizon/pull/586)).
 - **No Docker image is published.** You build it yourself from the repository (below). Publishing an image
@@ -73,8 +78,8 @@ Add `--minecraft-dir PATH` if your launcher keeps the game elsewhere. The prepar
 **On a headless machine** (a VPS, a home server), prepare on your own computer instead, with the launcher or
 `horizon-prepare`, and copy the prepared `26.3` folder to the server: into
 `~/.local/share/horizon/game-files/horizon-client/26.3`, or into `resources/` in the server folder, or anywhere
-`[engine] resources` in `server.toml` names. A folder copied this way needs a release newer than
-v2026.10.17.05: older ones don't keep `registries.json` and `commands.json` with the prepared files, and the
+`[engine] resources` in `server.toml` names. A folder copied this way needs release v2026.10.17.07 or
+newer: older ones don't keep `registries.json` and `commands.json` with the prepared files, and the
 server then stops with "registries.json not found next to the resources". Prepare again with a newer release.
 
 ## 3. First run
@@ -100,8 +105,8 @@ script:
 horizon-server init --eula --world survival --seed 12345 --port 25565 --whitelist --player Alex --op Alex --yes
 ```
 
-`--no-whitelist` turns the whitelist off. Since the server runs offline, the players you add get offline UUIDs,
-as a vanilla server in offline mode gives them.
+`--no-whitelist` turns the whitelist off. The players you add get offline UUIDs for now. That suits an
+offline server, but an online one refuses them (see "Before you start").
 
 Start the server in the foreground, with the console on your terminal (Ctrl-C stops it cleanly):
 
@@ -137,7 +142,7 @@ motd = "A Minecraft Server"
 port = 25565
 bind = ""                    # listen on every address, or only on this one (server-ip)
 max_players = 20
-online_mode = true           # not supported yet: the server runs offline and says so
+online_mode = true           # check accounts with Mojang (see "Before you start")
 whitelist = true
 enforce_whitelist = false
 view_distance = 10
@@ -278,7 +283,7 @@ docker run -d --name horizon -p 25565:25565 --stop-timeout 180 \
   the container stops and says why.
 - The first start writes `/data/server.toml` from `HORIZON_EULA`, `HORIZON_WORLD`, `HORIZON_SEED`,
   `HORIZON_PORT`, `HORIZON_WHITELIST`, `HORIZON_PLAYERS` and `HORIZON_OP`. Later starts use the file.
-- The mounted folder must come from a release newer than v2026.10.17.05 (see step 2).
+- The mounted folder must come from release v2026.10.17.07 or newer (see step 2).
 - Manage it with `docker exec horizon horizon-server status` (and `cmd`, `backup`, `logs`, ...).
   `docker stop` saves and stops cleanly; `--stop-timeout 180` gives it the time.
 - The panel stays on 127.0.0.1 inside the container.
@@ -287,11 +292,18 @@ docker run -d --name horizon -p 25565:25565 --stop-timeout 180 \
 
 ## 10. How fast is it
 
-The measurements, with bots against vanilla 26.3, are in [docs/server.md](docs/server.md) (section 9). So
-far: an existing world starts in about half vanilla's time (5.8 s against 10.7 s), and with one player
-Horizon's tick is about three times shorter. Idle with nobody online it uses more memory than vanilla (1.4 GB
-against 0.95 GB), because the engine still loads what only a window needs. With 10 to 50 players, vanilla's tick
-was as short or shorter in the first run. Both are being worked on.
+The latest bot benchmark against vanilla 26.3 (2026-10-17) is in
+[benchmarks/server-2026-10-17](https://github.com/ludovic111/horizon/blob/main/benchmarks/server-2026-10-17/README.md),
+and the earlier measurements are in [docs/server.md](https://github.com/ludovic111/horizon/blob/main/docs/server.md).
+In short:
+
+- An existing world starts in about half vanilla's time (5.8 s against 10.7 s).
+- With 1 to 10 players, Horizon's tick takes about half as long as vanilla's, and it uses less than half the
+  memory (1.6 GB against 3.5 GB).
+- Idle with nobody online it uses more memory than vanilla (1.4 GB against 0.95 GB). The engine still loads
+  what only a window needs.
+- **With 25 or more players moving around, it can't keep up yet.** Encoding chunks for each player fills the
+  tick. It is the next server cost to fix. Until then, plan for about ten players at a time.
 
 ## When something goes wrong
 
