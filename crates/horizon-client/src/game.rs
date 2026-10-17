@@ -11277,12 +11277,6 @@ impl Loading {
         let mut options = self.options.take().ok_or("loading already finished")?;
         options.resources = loaded.root.clone();
         let gui = self.gui.take().ok_or("missing menu bundle")?;
-        // Audio is created on the main thread, after the core is ready.
-        let audio = if options.dedicated.is_some() {
-            Audio::silent(&options.resources)
-        } else {
-            Audio::new(&options.resources)
-        };
         let window = self.window.clone().ok_or("window closed")?;
         // Keep the loader's device and swap in the real textures in one step.
         if let Some(renderer) = &mut self.renderer {
@@ -11299,6 +11293,12 @@ impl Loading {
             "Horizon: world renderer ready after {} ms",
             self.started.elapsed().as_millis()
         );
+        // Audio is created on the main thread, after the core is ready.
+        let audio = if options.dedicated.is_some() {
+            Audio::silent(&options.resources)
+        } else {
+            Audio::new(&options.resources)
+        };
         let pack_error = loaded.pack_error.or_else(|| self.pack_error.take());
         // The game borrows its shared resources for the process's lifetime,
         // like the single copy an integrated server would share.

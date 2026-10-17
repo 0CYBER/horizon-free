@@ -21,9 +21,9 @@ const CRASH_DETAILS: [&str; 3] = ["Horizon Version", "Graphics Adapter", "Render
 static STARTED: OnceLock<Instant> = OnceLock::new();
 /// When the menu bundle became ready, so the time to the title screen measures
 /// the menu and not the world bundle loaded behind it.
+static UI_READY_MS: AtomicU32 = AtomicU32::new(u32::MAX);
 static CORE_READY_MS: AtomicU32 = AtomicU32::new(u32::MAX);
 static REST_READY_MS: AtomicU32 = AtomicU32::new(u32::MAX);
-static UI_READY_MS: AtomicU32 = AtomicU32::new(u32::MAX);
 /// The GPU's name, driver and backend, once the renderer has its adapter.
 static GPU: Mutex<Option<(String, String, String)>> = Mutex::new(None);
 
