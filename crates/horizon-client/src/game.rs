@@ -68,6 +68,7 @@ mod lan_mobs;
 mod lan_pvp;
 mod lan_screen;
 mod lan_trading;
+mod lan_waypoints;
 mod leads;
 mod level_particles;
 mod lightning;

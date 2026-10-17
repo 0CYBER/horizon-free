@@ -57,6 +57,10 @@ pub(super) struct LanHost {
     pub mob_players: HashMap<u32, u32>,
     /// An integrated server's owner (game/integrated.rs).
     pub owner: Option<Owner>,
+    /// The players' locator bars (game/lan_waypoints.rs), and the guests who
+    /// are dead, whose respawn replaces their waypoint.
+    pub waypoints: lan::waypoints::Waypoints,
+    pub waypoint_dead: std::collections::HashSet<u128>,
 }
 
 /// The player who owns an integrated server's world: a guest whose state is
@@ -502,6 +506,8 @@ impl Game<'_> {
             mob_state: HashMap::new(),
             mob_players: HashMap::new(),
             owner: None,
+            waypoints: Default::default(),
+            waypoint_dead: Default::default(),
         });
         self.audio.capture = Some(Vec::new());
         Ok(())
@@ -858,6 +864,7 @@ impl Game<'_> {
         self.lan_swings(&mut host);
         self.lan_update_streaming(&host);
         self.lan_update_models(&mut host);
+        self.lan_update_waypoints(&mut host, state.as_ref());
         drop(holding);
         for g in &host.hub.guests {
             g.sender.flush();
