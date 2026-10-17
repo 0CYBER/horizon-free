@@ -3091,6 +3091,7 @@ impl Game<'_> {
         self.eye = 1.62;
         self.previous_eye = 1.62;
         self.clock.reset();
+        self.capture_loaded_world();
         Ok(())
     }
     fn tick(&mut self) -> Result<()> {
@@ -3648,6 +3649,10 @@ impl Game<'_> {
             ) || self.book.is_some())
     }
     fn capture(&mut self, capture: bool) {
+        // MouseHandler.grabMouse never captures an inactive window.
+        if capture && !self.focused {
+            return;
+        }
         // The real pointer takes over from an agent's.
         self.agent_pointer = false;
         let Some(window) = &self.window else { return };
@@ -3662,6 +3667,16 @@ impl Game<'_> {
             self.captured = false;
         }
         window.set_cursor_visible(!self.captured);
+    }
+    /// LevelLoadingScreen.onClose -> Gui.setScreen(null) -> grabMouse.
+    fn capture_loaded_world(&mut self) {
+        // Loading may finish after focus was lost or another screen opened.
+        if self.title.is_none()
+            && self.screen == Screen::Playing
+            && !self.remote.as_ref().is_some_and(|r| r.chat_input.is_some())
+        {
+            self.capture(true);
+        }
     }
     fn draw_item(&mut self, batch: &mut HudBatch, stack: &ItemStack, x: f32, y: f32) {
         // `GuiGraphics.renderItem`: the resolved item model (tints, foil and

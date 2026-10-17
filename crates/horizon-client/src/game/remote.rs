@@ -1820,6 +1820,7 @@ impl Game<'_> {
             if let Some(r) = self.remote.as_mut() {
                 r.loaded_sent = true;
             }
+            self.capture_loaded_world();
         }
         let stick = self.pad_move();
         let Some(player) = self.player.as_mut() else {
