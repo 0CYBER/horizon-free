@@ -8,7 +8,7 @@ use horizon_protocol::{
     packets::{configuration::ClientInformation, play},
 };
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::VecDeque,
     sync::{Arc, atomic::AtomicI32},
 };
 
@@ -77,7 +77,7 @@ pub struct Guest {
     pub loaded: bool,
     // Chunks.
     pub center: Option<(i32, i32)>,
-    pub sent_chunks: HashSet<(i32, i32)>,
+    pub sent_chunks: crate::fast_hash::FxHashSet<(i32, i32)>,
     pub chunk_queue: Vec<(i32, i32)>,
     pub unacknowledged: u32,
     pub chunks_per_tick: f32,
@@ -189,7 +189,7 @@ impl Guest {
             teleport_counter: 0,
             loaded: false,
             center: None,
-            sent_chunks: HashSet::new(),
+            sent_chunks: Default::default(),
             chunk_queue: Vec::new(),
             unacknowledged: 0,
             chunks_per_tick: 9.0,
