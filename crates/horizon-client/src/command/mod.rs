@@ -8,6 +8,7 @@ pub mod block;
 pub mod codec;
 pub mod component;
 pub mod item;
+pub mod network;
 pub mod packrat;
 pub mod selector;
 pub mod snbt;

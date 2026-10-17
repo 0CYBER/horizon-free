@@ -225,6 +225,86 @@ impl Game<'_> {
         true
     }
 
+    /// ServerGamePacketListenerImpl.handlePlaceRecipe: the guest's recipe
+    /// book places a known recipe in their inventory grid or crafting table
+    /// (`ServerPlaceRecipe`), and answers with a ghost recipe when the items
+    /// are missing.
+    pub(super) fn lan_place_recipe(
+        &mut self,
+        host: &mut LanHost,
+        conn: u32,
+        p: &horizon_protocol::packets::recipes::PlaceRecipe,
+    ) {
+        use horizon_client::menu::place::PostPlace;
+        let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn) else {
+            return;
+        };
+        let g = &host.hub.guests[gi];
+        if g.spectator() {
+            return;
+        }
+        let Some(id) = self
+            .res
+            .stations
+            .recipe_index
+            .recipe_of_display(p.recipe)
+            .map(str::to_owned)
+        else {
+            return;
+        };
+        // An unknown or impossible recipe is refused outright.
+        if !g.recipe_book.knows(&id)
+            || self
+                .res
+                .recipes
+                .placement(&id)
+                .is_none_or(|placement| placement.impossible())
+        {
+            return;
+        }
+        let creative = g.creative();
+        let placed = if p.container == 0 {
+            let crafting = host.play.entry(conn).or_default();
+            let mut menu = crafting
+                .crafting
+                .inventory
+                .take()
+                .unwrap_or_else(|| Box::new(Menu::new(Kind::Inventory)));
+            let grid = host.hub.guests[gi].craft_grid.clone();
+            let placed = self.guest_menu_op(host, gi, &mut menu, |menu, env| {
+                for (k, s) in grid.into_iter().enumerate() {
+                    menu.set_slot(env, 1 + k, s);
+                }
+                menu.place_recipe(env, &id, p.use_max, creative, None)
+            });
+            let g = &mut host.hub.guests[gi];
+            for k in 0..4 {
+                g.craft_grid[k] = menu.slot(1 + k).cloned();
+            }
+            g.craft_result = menu.slot(0).cloned();
+            host.play.entry(conn).or_default().crafting.inventory = Some(menu);
+            host.hub.send_inventory(gi);
+            placed
+        } else {
+            let Some((window, state, mut menu)) = host
+                .play
+                .get_mut(&conn)
+                .and_then(|play| play.crafting.table.take_if(|(w, _, _)| *w == p.container))
+            else {
+                return;
+            };
+            let placed = self.guest_menu_op(host, gi, &mut menu, |menu, env| {
+                menu.place_recipe(env, &id, p.use_max, creative, None)
+            });
+            host.play.entry(conn).or_default().crafting.table = Some((window, state, menu));
+            self.lan_send_table_content(host, conn);
+            placed
+        };
+        if placed == PostPlace::Ghost {
+            host.hub.send_ghost_recipe(conn, p.container, &id);
+        }
+    }
+
     /// The guest opened a crafting table (`CraftingTableBlock.getMenuProvider`).
     pub(super) fn lan_open_crafting(&mut self, host: &mut LanHost, conn: u32) {
         self.lan_crafting_closed(host, conn, None);

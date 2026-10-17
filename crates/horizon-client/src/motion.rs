@@ -292,19 +292,25 @@ impl PlayerMotion {
             && movement.x * movement.x + movement.z * movement.z < limit * limit
             && sword
     }
-    pub fn load_environment_once(
+    /// Restore login state once; a later respawn starts with fresh health and food.
+    pub fn load_saved_state_once(
         &mut self,
         pending: &mut bool,
-        extra: Option<&horizon_world::nbt::Tag>,
-    ) {
+        level: &crate::save::Level,
+    ) -> Result<()> {
         if std::mem::take(pending) {
+            let extra = level.player_extra.as_ref();
             self.fire_ticks = extra
                 .and_then(|t| crate::save::number(t.get("Fire")))
                 .unwrap_or(-20) as i32;
             self.air = extra
                 .and_then(|t| crate::save::number(t.get("Air")))
                 .unwrap_or(300) as i32;
+            self.set_health(level.health, false)?;
+            self.health.food.food = level.food;
+            self.health.food.saturation = level.saturation;
         }
+        Ok(())
     }
     pub fn set_remaining_fire_ticks(&mut self, ticks: i32) {
         self.fire_ticks = if self.invulnerable {
@@ -2166,8 +2172,13 @@ mod tests {
 
     #[test]
     fn player_fire_damage_queues_hurt_sound_only_for_fresh_hits() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
+        let root = std::env::var_os("HORIZON_TEST_RESOURCES")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3")
+            });
         if !root.join("movement-properties.nbt").exists() {
+            eprintln!("skipped damage regression: prepared resources unavailable");
             return;
         }
         let assets = Assets::load(&root).unwrap();
@@ -2195,6 +2206,8 @@ mod tests {
                     .count(),
                 1
             );
+            assert_eq!(player.health.hurt_animation_time, 10);
+            player.health.advance_clock();
             player.events.clear();
             assert!(
                 !player
@@ -2207,9 +2220,14 @@ mod tests {
                     .iter()
                     .any(|e| matches!(e, MotionEvent::HurtSound(_)))
             );
+            assert_eq!(
+                player.health.hurt_animation_time, 9,
+                "cooldown hit must not restart animation"
+            );
             for _ in 0..20 {
                 player.health.advance_clock();
             }
+            assert_eq!(player.health.hurt_animation_time, 0);
             player.invulnerable = true;
             player.events.clear();
             assert!(
@@ -2271,15 +2289,61 @@ mod tests {
                 Default::default(),
                 source,
                 4.0,
-                Some(shield),
+                Some(shield.clone()),
             )
             .unwrap();
         assert!(!outcome.hurt && outcome.sound && outcome.blocked == 4.0);
+        assert_eq!(
+            player.health.hurt.hurt_time, 10,
+            "preserve server damage bookkeeping"
+        );
+        assert_eq!(
+            player.health.hurt_animation_time, 0,
+            "a fully blocked arrow must not animate hurt"
+        );
         assert!(
             !player
                 .events
                 .iter()
                 .any(|e| matches!(e, MotionEvent::HurtSound(_)))
+        );
+        // An unblocked hit after the shield block must still animate normally.
+        for _ in 0..20 {
+            player.health.advance_clock();
+        }
+        assert!(
+            player
+                .hurt(&resources.health, Default::default(), source, 4.0)
+                .unwrap()
+        );
+        assert_eq!(player.health.hurt_animation_time, 10);
+        player.health.advance_clock();
+        assert!(
+            !player
+                .hurt_blocking(
+                    &resources.health,
+                    Default::default(),
+                    source,
+                    4.0,
+                    Some(shield)
+                )
+                .unwrap()
+                .hurt
+        );
+        assert_eq!(
+            player.health.hurt_animation_time, 9,
+            "blocking must not erase or restart an existing animation"
+        );
+        let mut starving = PlayerMotion::new(&resources, Vec3::ZERO).unwrap();
+        starving.health.food.food = 0;
+        starving.health.food.timer = 79;
+        starving
+            .food_tick(&resources.health, Default::default())
+            .unwrap();
+        assert_eq!(starving.health.health(), 19.0);
+        assert_eq!(
+            starving.health.hurt_animation_time, 10,
+            "starvation must still animate hurt"
         );
     }
 
@@ -2329,8 +2393,13 @@ mod tests {
 
     #[test]
     fn resident_water_and_lava_are_not_treated_as_air() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
+        let root = std::env::var_os("HORIZON_TEST_RESOURCES")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3")
+            });
         if !root.join("movement-properties.nbt").exists() {
+            eprintln!("skipping resident water/lava test: prepared resources unavailable");
             return;
         }
         let assets = Assets::load(&root).unwrap();
@@ -2536,12 +2605,41 @@ mod tests {
             ("Fire", horizon_world::nbt::Tag::Short(160)),
             ("Air", horizon_world::nbt::Tag::Short(8)),
         ]);
+        let mut level = crate::save::Level {
+            health: 13.0,
+            food: 11,
+            saturation: 2.25,
+            player_extra: Some(extra),
+            ..Default::default()
+        };
         let mut pending = true;
-        w.player.load_environment_once(&mut pending, Some(&extra));
+        w.player
+            .load_saved_state_once(&mut pending, &level)
+            .unwrap();
         assert_eq!((w.player.fire_ticks, w.player.air), (160, 8));
+        assert_eq!(
+            (
+                w.player.health.health(),
+                w.player.health.food.food,
+                w.player.health.food.saturation
+            ),
+            (13.0, 11, 2.25)
+        );
         let mut respawn = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
-        respawn.load_environment_once(&mut pending, Some(&extra));
+        respawn.load_saved_state_once(&mut pending, &level).unwrap();
         assert_eq!((respawn.fire_ticks, respawn.air), (-20, 300));
+        assert_eq!(
+            (respawn.health.health(), respawn.health.food.food),
+            (20.0, 20)
+        );
+        // Reopening another world restores its state, including a saved death.
+        pending = true;
+        level.health = 0.0;
+        w.player
+            .load_saved_state_once(&mut pending, &level)
+            .unwrap();
+        assert!(w.player.health.dead_or_dying());
+        assert!(!pending);
         w.player.fluids.was_touching_water = false;
         assert!(
             w.player.moving_slowly(),

@@ -115,6 +115,27 @@ pub fn draw(
     }
 }
 
+/// The startup loading screen: the stage's line and a progress bar, centred
+/// like `LevelLoadingScreen`'s text and bar.
+pub fn draw_progress(batch: &mut HudBatch, atlas: &HudAtlas, line: &str, progress: f32) {
+    let (x_center, y_center) = ((batch.width as i32) / 2, (batch.height as i32) / 2);
+    let text_top = y_center - 50;
+    let text = Text::literal(line);
+    let tw = atlas.font.width_text(&text) as i32;
+    batch.text_styled(
+        atlas,
+        &text,
+        (x_center - tw / 2) as f32,
+        text_top as f32,
+        u32::MAX,
+        true,
+    );
+    let (left, top) = ((x_center - 100) as f32, (text_top + 9 + 3) as f32);
+    batch.fill(atlas, left, top, 200.0, 2.0, opaque(0));
+    let done = (progress.clamp(0.0, 1.0) * 200.0).round();
+    batch.fill(atlas, left, top, done, 2.0, opaque(0x00FF00));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

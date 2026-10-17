@@ -469,6 +469,9 @@ impl Game<'_> {
             "time": { "day_time": self.world.day_time, "day": self.world.day_time.div_euclid(24000), "time_of_day": self.world.day_time.rem_euclid(24000) },
             "weather": { "raining": self.world.weather.raining, "thundering": self.world.weather.thundering },
             "paused": self.pause,
+            // Mouse movement turns the camera (`apply_mouse_look`): the real
+            // pointer is grabbed, or an agent's `mouse-move` stands in for it.
+            "pointer_grabbed": self.captured || self.agent_pointer,
             "player": player,
             "selected": self.selected + 1,
             "held": self.held().map(|s| self.stack_value(s)),
@@ -613,6 +616,9 @@ impl Game<'_> {
             "screen": self.screen_label(),
             "buttons": buttons,
         });
+        if let Some(chat) = &self.ui.chat_screen {
+            v["chat_input"] = json!(chat.input.value);
+        }
         if self.title.is_some() {
             v["menu"] = self.title_value();
         }
@@ -631,6 +637,15 @@ impl Game<'_> {
             v["craft_size"] = json!(self.craft_size);
             v["station"] = json!(self.station.as_ref().map(|s| format!("{:?}", s.kind)));
             v["container"] = json!(self.container);
+            // The recipe book's buttons (GUI pixels): the book button, then
+            // the recipe buttons of the page, page arrows, filter and tabs.
+            let book = self.recipe_book_targets();
+            if !book.is_empty() {
+                v["recipe_book"] = json!({
+                    "targets": book.iter().map(|t| t.rect).collect::<Vec<_>>(),
+                    "known": self.recipe_book_known(),
+                });
+            }
             v["slot_ids"] = json!(
                 "0-8 hotbar, 9-35 inventory, 100+ crafting grid (row-major), 200 crafting result, 300+ container, 500-503 armor, 504 offhand, 600+ station"
             );

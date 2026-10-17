@@ -54,6 +54,8 @@ pub(super) struct GuestPlay {
     /// `ServerPlayer.getStats` and the inventory `inventory_changed` last saw.
     pub(super) stats: super::stats::Stats,
     last_inventory: u64,
+    /// `Entity.portalProcess` and `portalCooldown` (game/server_travel.rs).
+    pub(super) portal: horizon_client::nether_portal::PortalState,
 }
 
 struct ItemRules<'a>(&'a horizon_client::items::Items);
@@ -140,13 +142,20 @@ impl Game<'_> {
                 total: g.xp_total,
             },
         );
-        let sneak = self.keys.contains(&KeyCode::ShiftLeft);
+        // The host's held keys stay theirs: the guest holds only sneak, and a
+        // screen the guest opens (`keys.clear()`) leaves the host walking.
+        let host_keys = std::mem::take(&mut self.keys);
         if g.sneaking {
             self.keys.insert(KeyCode::ShiftLeft);
-        } else {
-            self.keys.remove(&KeyCode::ShiftLeft);
         }
+        // The window's screens are the host's: a sign, book, command block or
+        // mount menu the guest's action opens is not drawn over the host's
+        // world (#687). The guest's client opens its own.
         let screen = std::mem::replace(&mut self.screen, Screen::Playing);
+        let host_sign = self.sign_edit.take();
+        let host_book = self.book.take();
+        let host_command_block = self.command_block_screen.take();
+        let host_mount_menu = std::mem::take(&mut self.mount_menu);
         // The host's crafting grid stays theirs; a crafting table the guest
         // opens shows as the 3x3 size.
         let craft_size = std::mem::replace(&mut self.craft_size, 2);
@@ -205,11 +214,11 @@ impl Game<'_> {
         play.swing = std::mem::replace(&mut self.swing, swing);
         self.container = container;
         self.screen = screen;
-        if sneak {
-            self.keys.insert(KeyCode::ShiftLeft);
-        } else {
-            self.keys.remove(&KeyCode::ShiftLeft);
-        }
+        self.sign_edit = host_sign;
+        self.book = host_book;
+        self.command_block_screen = host_command_block;
+        self.mount_menu = host_mount_menu;
+        self.keys = host_keys;
         let g = &mut host.hub.guests[i];
         std::mem::swap(&mut self.ender_items, &mut g.ender_items);
         std::mem::swap(&mut self.adv.progress, &mut g.advancements);
@@ -280,6 +289,32 @@ impl Game<'_> {
             self.lan_open_crafting(host, conn);
         }
         Some(result)
+    }
+
+    /// `ServerLevel.players()` in turn: the host's own player, then each
+    /// guest in the level in place with their state swapped in (`as_guest`).
+    /// What reaches the players around a point (a beacon's powers, a splash
+    /// potion, a warden's darkness, an elder guardian's curse) lands on each
+    /// of them, not only on the host. A server has no player of its own.
+    /// Inside a guest's action (the hub taken) only that player is in place.
+    pub(super) fn for_each_player(&mut self, mut f: impl FnMut(&mut Self)) {
+        if self.player.is_some() {
+            f(self);
+        }
+        let Some(mut host) = self.lan.take() else {
+            return;
+        };
+        let conns: Vec<u32> = host
+            .hub
+            .guests
+            .iter()
+            .filter(|g| host.hub.here(g) && g.loaded && !g.dead)
+            .map(|g| g.conn)
+            .collect();
+        for conn in conns {
+            self.as_guest(&mut host, conn, &mut f);
+        }
+        self.lan = Some(host);
     }
 
     /// The game mode fields without `set_mode`'s side effects on the host.
@@ -664,6 +699,7 @@ impl Game<'_> {
             {
                 self.guest_suggestions(host, conn, &payload);
             }
+            S::PlaceRecipe(p) => self.lan_place_recipe(host, conn, &p),
             S::ClientCommand(c) if c.action == 0 => self.guest_respawn(host, conn),
             // ServerStatsCounter.sendStats.
             S::ClientCommand(c) if c.action == 1 => {
@@ -937,7 +973,18 @@ impl Game<'_> {
         if !host.hub.guests[i].dead {
             return;
         }
-        self.respawn_level(host);
+        // PlayerList.respawn: a server's player comes back in the Overworld,
+        // where the world spawn is (respawn anchors and beds aside).
+        let back = self.dim;
+        let away = self.options.dedicated.is_some()
+            && host.hub.guests[i].dimension != super::Dim::Overworld.id();
+        if away {
+            self.server_trips.retain(|t| !t.is(conn));
+            if let Err(e) = self.enter_level(Some(host), super::Dim::Overworld) {
+                log::error!("could not open the Overworld: {e}");
+                return;
+            }
+        }
         let g = &mut host.hub.guests[i];
         g.dead = false;
         g.health = 20.0;
@@ -974,6 +1021,9 @@ impl Game<'_> {
             collision: Some(self.collision),
         };
         host.hub.respawn(i, spawn, &ctx);
+        if away && let Err(e) = self.enter_level(Some(host), back) {
+            log::error!("could not reopen {}: {e}", back.id());
+        }
     }
 
     /// Per tick, for every guest: dig, use items, pick up drops, die.
@@ -984,7 +1034,7 @@ impl Game<'_> {
             .hub
             .guests
             .iter()
-            .filter(|g| g.placed && g.loaded)
+            .filter(|g| host.hub.here(g) && g.loaded)
             .map(|g| g.conn)
             .collect();
         for conn in conns {
@@ -1376,6 +1426,9 @@ impl Game<'_> {
             let Some(g) = host.hub.guests.iter().find(|g| g.conn == conn) else {
                 continue;
             };
+            if !host.hub.here(g) {
+                continue;
+            }
             let (id, at) = (g.entity_id, g.position);
             let play = host.play.get_mut(&conn).expect("play");
             let swinging = play.swing.swinging() && play.swing.ticks == 0;

@@ -53,7 +53,9 @@ impl Preset {
 /// How the swapchain presents frames.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum PresentMode {
-    /// Follow vanilla's VSync option (Mailbox or Fifo on, Immediate off).
+    /// Vanilla's choice: Fifo with VSync on, else the first of Immediate,
+    /// Mailbox and Fifo the surface supports. The other modes apply only
+    /// with VSync off: VSync on always presents with Fifo.
     #[default]
     Auto,
     Fifo,
@@ -276,9 +278,14 @@ impl Graphics {
         if self.workers > 0 {
             return self.workers as usize;
         }
+        // The pool never takes every core. The render thread and the
+        // integrated server thread (single player runs on its own server
+        // thread by default) each need one, and a pool that fills every core
+        // starves them: the frame rate collapses to single digits while the
+        // workers saturate the CPU and its memory bandwidth.
         let auto = std::thread::available_parallelism()
             .map_or(2, |n| n.get())
-            .saturating_sub(1)
+            .saturating_sub(2)
             .max(1);
         if self.battery { auto.div_ceil(2) } else { auto }
     }
@@ -374,6 +381,17 @@ mod tests {
         assert_eq!(Graphics::parse("lodDistance:10000\n").lod_distance, 1024);
         assert_eq!(Graphics::parse("lodDistance:-1\n").lod_distance, 0);
         assert_eq!(Graphics::parse("lodDistance:invalid\n").lod_distance, 0);
+    }
+
+    #[test]
+    fn automatic_workers_leave_cores_for_the_render_and_server_threads() {
+        let g = Graphics::default();
+        assert_eq!(g.workers, 0);
+        let cores = std::thread::available_parallelism().map_or(2, |n| n.get());
+        assert_eq!(g.worker_threads(), cores.saturating_sub(2).max(1));
+        // A manual count is the player's own choice, kept as asked.
+        let manual = Graphics { workers: 3, ..g };
+        assert_eq!(manual.worker_threads(), 3);
     }
 
     #[test]

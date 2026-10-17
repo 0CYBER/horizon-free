@@ -4,7 +4,7 @@
 use super::{Mob, Part, keyframes::AnimationState, living::wrap};
 use horizon_core::geometry::trig::Mth;
 use std::collections::HashMap;
-use std::f32::consts::PI;
+use std::f32::consts::{FRAC_PI_6, PI};
 
 /// The setupAnim implementation a model uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -232,6 +232,7 @@ fn bob(p: &mut Poses, n: &str, age: f32, scale: f32) {
 pub enum ArmPose {
     Empty,
     Item,
+    Block,
     Bow,
     CrossbowHold,
     CrossbowCharge,
@@ -354,6 +355,14 @@ fn pose_arm(p: &mut Poses, pose: ArmPose, right: bool, h: &Hum) {
             let x = p.get(arm)[3];
             p.xrot(arm, x * 0.5 - PI / 10.0);
             p.yrot(arm, 0.0);
+        }
+        ArmPose::Block => {
+            let x = p.get(arm)[3] * 0.5 - 0.942_477_9 + hx.clamp(-1.396_263_4, 0.436_332_32);
+            p.xrot(arm, x);
+            p.yrot(
+                arm,
+                if right { -FRAC_PI_6 } else { FRAC_PI_6 } + hy.clamp(-FRAC_PI_6, FRAC_PI_6),
+            );
         }
         ArmPose::Bow => {
             p.yrot("right_arm", -0.1 + hy - if right { 0.0 } else { 0.4 });
@@ -661,11 +670,13 @@ pub fn setup(
             } else {
                 ArmPose::Empty
             };
+            let using_main = m.extra.using_item > 0 && !m.extra.using_off_hand;
             let pose = if player {
                 match m.extra.main_hand.as_deref() {
-                    Some("minecraft:bow") if m.extra.using_item > 0 => ArmPose::Bow,
-                    Some("minecraft:trident") if m.extra.using_item > 0 => ArmPose::ThrowTrident,
-                    Some("minecraft:crossbow") if m.extra.using_item > 0 && !m.extra.charged => {
+                    Some(_) if using_main && m.extra.blocking => ArmPose::Block,
+                    Some("minecraft:bow") if using_main => ArmPose::Bow,
+                    Some("minecraft:trident") if using_main => ArmPose::ThrowTrident,
+                    Some("minecraft:crossbow") if using_main && !m.extra.charged => {
                         ArmPose::CrossbowCharge
                     }
                     Some("minecraft:crossbow") if m.extra.charged && s.swing == 0.0 => {
@@ -678,7 +689,11 @@ pub fn setup(
                 right
             };
             let off = if player && m.extra.off_hand.is_some() && !pose.affects_offhand() {
-                ArmPose::Item
+                if m.extra.using_item > 0 && m.extra.using_off_hand && m.extra.blocking {
+                    ArmPose::Block
+                } else {
+                    ArmPose::Item
+                }
             } else {
                 ArmPose::Empty
             };
@@ -791,6 +806,42 @@ pub fn setup(
 #[cfg(test)]
 mod flight_pose_tests {
     use super::*;
+
+    #[test]
+    fn blocking_arm_follows_the_head_with_limits_in_both_hands() {
+        for right in [false, true] {
+            for (pitch, yaw, expected_pitch, expected_yaw) in [
+                (0.0, 0.0, -0.742_477_9, 0.0),
+                (2.0, 2.0, -0.306_145_58, FRAC_PI_6),
+                (-2.0, -2.0, -2.138_741_3, -FRAC_PI_6),
+            ] {
+                let mut p = Poses {
+                    map: ["head", "right_arm", "left_arm"]
+                        .into_iter()
+                        .map(|n| (n.to_string(), [0.0; 9]))
+                        .collect(),
+                    dummy: [0.0; 9],
+                    skipped: Default::default(),
+                    hidden: Default::default(),
+                };
+                let arm = if right { "right_arm" } else { "left_arm" };
+                p.xrot("head", pitch);
+                p.yrot("head", yaw);
+                p.xrot(arm, 0.4);
+                pose_arm(
+                    &mut p,
+                    ArmPose::Block,
+                    right,
+                    &Hum::new(ArmPose::Empty, ArmPose::Empty),
+                );
+                let pose = *p.get(arm);
+                assert!((pose[3] - expected_pitch).abs() < 1e-6);
+                let side = if right { -FRAC_PI_6 } else { FRAC_PI_6 };
+                assert!((pose[4] - (side + expected_yaw)).abs() < 1e-6);
+                assert_eq!(p.get(if right { "left_arm" } else { "right_arm" })[3], 0.0);
+            }
+        }
+    }
     #[test]
     fn flight_slows_limbs_and_sets_the_head_pose() {
         let state = State {

@@ -90,6 +90,10 @@ pub(super) struct Minecart {
 }
 const WIDTH: f64 = 0.98;
 const HEIGHT: f64 = 0.7;
+/// AbstractMinecart.getDefaultDisplayOffset, in sixteenths of a block.
+fn display_offset(kind: CartKind) -> f64 {
+    if kind == CartKind::Hopper { 1.0 } else { 6.0 }
+}
 /// The minecart's passenger attachment minus Player.DEFAULT_VEHICLE_ATTACHMENT.
 const SEAT: f64 = 0.1875 - 0.6;
 /// The placeholder container key under which an open cart's items live.
@@ -1230,17 +1234,21 @@ impl Game<'_> {
     /// front and back points, pitched on slopes, with the display block.
     pub(super) fn cart_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
         let a = alpha as f32;
+        let Some(uv) = self
+            .atlas
+            .sprites
+            .get("entity/minecart/minecart")
+            .map(|r| [r.u0, r.v0, r.u1, r.v1])
+        else {
+            return;
+        };
+        // Entity.shouldRenderAtSqrDistance: 64 times the bounding box's mean
+        // edge, scaled by the entity distance option.
+        let range =
+            (WIDTH + HEIGHT + WIDTH) / 3.0 * 64.0 * f64::from(self.settings.entity_distance);
         for c in &self.carts {
             let entity_start = out.len();
             let Some(model) = self.cart_models.models.get(&c.kind) else {
-                continue;
-            };
-            let Some(uv) = self
-                .atlas
-                .sprites
-                .get("entity/minecart/minecart")
-                .map(|r| [r.u0, r.v0, r.u1, r.v1])
-            else {
                 continue;
             };
             let (x, y, z) = (
@@ -1248,6 +1256,30 @@ impl Game<'_> {
                 c.previous.y + (c.position.y - c.previous.y) * alpha,
                 c.previous.z + (c.position.z - c.previous.z) * alpha,
             );
+            // LevelExtractor.isEntityVisible: the cart the player rides always draws.
+            if self.riding != Some(c.id) {
+                let d = glam::DVec3::new(c.position.x, c.position.y, c.position.z) - camera;
+                if d.length_squared() >= range * range {
+                    continue;
+                }
+                // EntityRenderer.shouldRender: the interpolated box grown by 0.5;
+                // AbstractMinecartRenderer.getBoundingBoxForCulling stretches it
+                // up by the display block's offset.
+                if let Some(view) = &self.view_frustum {
+                    let top = HEIGHT
+                        + if c.kind == CartKind::Rideable {
+                            0.0
+                        } else {
+                            display_offset(c.kind) * 0.75 / 16.0
+                        };
+                    let p = glam::DVec3::new(x, y, z) - camera;
+                    let lo = p - glam::DVec3::new(WIDTH / 2.0 + 0.5, 0.5, WIDTH / 2.0 + 0.5);
+                    let hi = p + glam::DVec3::new(WIDTH / 2.0 + 0.5, top + 0.5, WIDTH / 2.0 + 0.5);
+                    if !view.intersects(lo.as_vec3(), hi.as_vec3()) {
+                        continue;
+                    }
+                }
+            }
             let mut yaw =
                 c.previous_yaw + ((c.yaw - c.previous_yaw + 180.0).rem_euclid(360.0) - 180.0) * a;
             let mut pitch = 0.0f32;

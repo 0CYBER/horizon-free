@@ -128,6 +128,20 @@ pub fn vsync_present_mode(supported: &[PresentMode], vsync: bool) -> Option<Pres
     preferred.iter().copied().find(|m| supported.contains(m))
 }
 
+/// The present mode for the VSync option and Horizon's present-mode setting
+/// (`None` for Auto). VSync on always means Fifo, in a window and in
+/// fullscreen alike, as in vanilla; the setting chooses only while VSync is
+/// off, when the surface supports it, and otherwise vanilla's choice applies.
+pub fn chosen_present_mode(
+    supported: &[PresentMode],
+    vsync: bool,
+    setting: Option<PresentMode>,
+) -> Option<PresentMode> {
+    setting
+        .filter(|m| !vsync && supported.contains(m))
+        .or_else(|| vsync_present_mode(supported, vsync))
+}
+
 /// `FramerateLimiter.limitDisplayFPS` with an injectable clock so the sleep
 /// and spin decisions are testable.
 #[derive(Clone, Debug)]
@@ -413,6 +427,25 @@ mod tests {
         assert_eq!(
             vsync_present_mode(&[PresentMode::Fifo], false),
             Some(PresentMode::Fifo)
+        );
+    }
+    #[test]
+    fn vsync_on_waits_for_the_display_whatever_the_present_mode() {
+        use PresentMode::*;
+        let all = [Mailbox, Fifo, Immediate];
+        for setting in [None, Some(Fifo), Some(Mailbox), Some(Immediate)] {
+            assert_eq!(chosen_present_mode(&all, true, setting), Some(Fifo));
+        }
+        assert_eq!(chosen_present_mode(&all, false, None), Some(Immediate));
+        assert_eq!(
+            chosen_present_mode(&all, false, Some(Mailbox)),
+            Some(Mailbox)
+        );
+        assert_eq!(chosen_present_mode(&all, false, Some(Fifo)), Some(Fifo));
+        // Metal has no Mailbox: vanilla's choice instead.
+        assert_eq!(
+            chosen_present_mode(&[Fifo, Immediate], false, Some(Mailbox)),
+            Some(Immediate)
         );
     }
 }

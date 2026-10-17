@@ -147,6 +147,9 @@ pub struct Guest {
     pub dead: bool,
     /// The join packets were sent (PlayerList.placeNewPlayer ran).
     pub placed: bool,
+    /// The level the player is in (`ServerPlayer.level().dimension()`): the
+    /// hub's level passes only reach the players in theirs.
+    pub dimension: String,
     /// The open block container, if any.
     pub menu: Option<super::menu::Menu>,
     pub next_window: i32,
@@ -248,6 +251,7 @@ impl Guest {
             moves_from_ground: false,
             dead: false,
             placed: false,
+            dimension: "minecraft:overworld".into(),
             menu: None,
             next_window: 0,
             drag: None,

@@ -111,7 +111,8 @@ pub(super) struct Remote {
     health: (f32, i32, f32),
     game_mode: i32,
     pub chat: Vec<(String, Instant)>,
-    pub chat_input: Option<String>,
+    /// The server's command tree (ClientboundCommandsPacket).
+    pub commands: Option<horizon_client::command::Dispatcher>,
     action_bar: Option<(String, Instant)>,
     players: HashMap<u128, String>,
     /// `ClientPacketListener.playerInfoMap` as player-list entries, and
@@ -297,7 +298,7 @@ impl Game<'_> {
             health: (20.0, 20, 5.0),
             game_mode: 0,
             chat: Vec::new(),
-            chat_input: None,
+            commands: None,
             action_bar: None,
             players: HashMap::new(),
             tab_players: HashMap::new(),
@@ -476,6 +477,20 @@ impl Game<'_> {
         }
     }
 
+    /// The names in the server's player list, sorted.
+    pub(super) fn remote_online_names(&self) -> Option<Vec<String>> {
+        let r = self.remote.as_ref()?;
+        let mut names: Vec<String> = r.players.values().cloned().collect();
+        names.sort();
+        Some(names)
+    }
+    /// The open menu's window id (0: the inventory).
+    pub(super) fn remote_menu_id(&self) -> i32 {
+        self.remote
+            .as_ref()
+            .and_then(|r| r.menu.as_ref())
+            .map_or(0, |m| m.0)
+    }
     /// The server's last `n` chat lines, newest first.
     pub(super) fn remote_chat(&self, n: usize) -> Option<Vec<String>> {
         let r = self.remote.as_ref()?;
@@ -1466,6 +1481,21 @@ impl Game<'_> {
                 }
             }
             C::GameEvent(p) => match p.event {
+                // GUARDIAN_ELDER_EFFECT: the apparition, and the curse sound
+                // unless the elder guardian is silent.
+                10 => {
+                    self.creatures.elder_apparition = super::mob_blocks::APPARITION_TICKS;
+                    if p.param == 1.0
+                        && let Some(at) = self.player.as_ref().map(|m| m.position)
+                    {
+                        self.audio.play(
+                            "minecraft:entity.elder_guardian.curse",
+                            Some([at.x, at.y, at.z]),
+                            1.0,
+                            1.0,
+                        );
+                    }
+                }
                 1 => {
                     self.world.weather.raining = true;
                     self.world.weather.rain_level = (0.0, 0.0);
@@ -1544,12 +1574,25 @@ impl Game<'_> {
                 }
             }
             C::OpenScreen(p) => self.remote_open_screen(p),
+            C::RecipeBookAdd(p) => self.remote_recipe_book_add(p),
+            C::RecipeBookRemove(p) => self.remote_recipe_book_remove(p),
+            C::RecipeBookSettings(p) => self.remote_recipe_book_settings(p),
+            C::PlaceGhostRecipe(p) => self.remote_ghost_recipe(p),
             C::MerchantOffers(p) => self.remote_merchant_offers(p),
             C::ContainerClose(_) => {
                 if self.screen == Screen::Inventory {
                     self.remote_close_local();
                     self.screen = Screen::Playing;
                     self.capture(true);
+                }
+            }
+            C::Commands(p) => {
+                let tree = horizon_client::command::network::from_packet(
+                    &p,
+                    horizon_client::command::vanilla::dispatcher(),
+                );
+                if let Some(r) = self.remote.as_mut() {
+                    r.commands = Some(tree);
                 }
             }
             C::SystemChat(p) => {
@@ -2175,8 +2218,7 @@ impl Game<'_> {
         let Some(player) = self.player.as_mut() else {
             return Ok(());
         };
-        let chatting = self.remote.as_ref().is_some_and(|r| r.chat_input.is_some());
-        let playing = self.screen == Screen::Playing && !chatting;
+        let playing = self.screen == Screen::Playing;
         let held = |k| playing && self.keys.contains(&k);
         let keys = Keys {
             forward: held(KeyCode::KeyW),
@@ -2446,8 +2488,7 @@ impl Game<'_> {
         if r.destroy_delay > 0 {
             r.destroy_delay -= 1;
         }
-        let chatting = r.chat_input.is_some();
-        if !self.left || self.screen != Screen::Playing || chatting {
+        if !self.left || self.screen != Screen::Playing {
             self.stop_remote_mining();
             self.mining = None;
             return;
@@ -2676,7 +2717,7 @@ impl Game<'_> {
     }
     /// Left click: attack the targeted entity (MultiPlayerGameMode.attack).
     pub(super) fn remote_mouse(&mut self, button: MouseButton, pressed: bool) -> Result<()> {
-        if self.remote.as_ref().is_some_and(|r| r.chat_input.is_some()) {
+        if self.screen == Screen::Chat {
             return Ok(());
         }
         match button {
@@ -2735,14 +2776,8 @@ impl Game<'_> {
         }
         match key {
             KeyCode::KeyT | KeyCode::Slash | KeyCode::Enter => {
-                let text = if key == KeyCode::Slash { "/" } else { "" };
-                if let Some(r) = self.remote.as_mut() {
-                    r.chat_input = Some(text.to_owned());
-                }
-                self.keys.clear();
-                self.left = false;
-                self.right = false;
-                self.capture(false);
+                // ChatScreen, over the server's command tree.
+                self.open_chat(if key == KeyCode::Slash { "/" } else { "" });
                 Ok(true)
             }
             KeyCode::KeyQ => {
@@ -2777,84 +2812,6 @@ impl Game<'_> {
                 Ok(true)
             }
             _ => Ok(false),
-        }
-    }
-    pub(super) fn remote_chat_open(&self) -> bool {
-        self.remote.as_ref().is_some_and(|r| r.chat_input.is_some())
-    }
-    /// ChatScreen: typing, Enter to send, Escape to cancel.
-    pub(super) fn remote_chat_key(&mut self, event: &winit::event::KeyEvent) {
-        use winit::keyboard::Key;
-        if event.state != winit::event::ElementState::Pressed {
-            return;
-        }
-        let shortcut = self.edit_shortcut(event);
-        let Some(r) = self.remote.as_mut() else {
-            return;
-        };
-        let Some(input) = r.chat_input.as_mut() else {
-            return;
-        };
-        // ChatScreen's input: an EditBox of 256.
-        const INPUT: horizon_client::clipboard::FieldId = ("remote.chat", 0);
-        if let Some(shortcut) = shortcut {
-            Self::append_shortcut(
-                &mut self.text_selection,
-                &mut self.clipboard,
-                INPUT,
-                input,
-                shortcut,
-                256,
-            );
-            return;
-        }
-        // Logical keys: the text, not the scancode, decides (layouts, virtual keyboards).
-        let named = match &event.logical_key {
-            Key::Named(n) => Some(*n),
-            _ => None,
-        };
-        self.remote_chat_input(named, event.text.as_deref());
-    }
-    /// A named key or typed text in the chat input (the keyboard, or a
-    /// controller's on-screen keyboard).
-    pub(super) fn remote_chat_input(
-        &mut self,
-        named: Option<winit::keyboard::NamedKey>,
-        text: Option<&str>,
-    ) {
-        use winit::keyboard::NamedKey;
-        const INPUT: horizon_client::clipboard::FieldId = ("remote.chat", 0);
-        let Some(r) = self.remote.as_mut() else {
-            return;
-        };
-        let Some(input) = r.chat_input.as_mut() else {
-            return;
-        };
-        match named {
-            Some(NamedKey::Escape) => {
-                r.chat_input = None;
-                self.capture(true);
-            }
-            Some(NamedKey::Backspace) => {
-                if !self.text_selection.take(INPUT, input) {
-                    input.pop();
-                }
-            }
-            Some(NamedKey::Enter) => {
-                let message = r.chat_input.take().unwrap_or_default();
-                self.send_chat(&message);
-                self.capture(true);
-            }
-            _ => {
-                if let Some(text) = text {
-                    self.text_selection.take(INPUT, input);
-                    for c in text.chars().filter(|c| !c.is_control()) {
-                        if input.chars().count() < 256 {
-                            input.push(c);
-                        }
-                    }
-                }
-            }
         }
     }
     /// ClientPacketListener.sendChat / sendCommand (unsigned).
@@ -3199,11 +3156,11 @@ impl Game<'_> {
         let Some(r) = &self.remote else { return };
         let atlas = &self.atlas;
         let (w, h) = (batch.width, batch.height);
-        let open = r.chat_input.is_some();
+        let open = self.screen == Screen::Chat;
         let now = Instant::now();
         let mut y = h - 48.0;
         // Container screens cover the chat (vanilla draws them over the HUD).
-        let shown = if matches!(self.screen, Screen::Playing | Screen::Dead) {
+        let shown = if matches!(self.screen, Screen::Playing | Screen::Dead | Screen::Chat) {
             if open { 20 } else { 10 }
         } else {
             0
@@ -3230,16 +3187,6 @@ impl Game<'_> {
             );
             batch.text(atlas, text, 4.0, y, rgba(255, 255, 255, a), true);
             y -= 9.0;
-        }
-        if let Some(input) = &r.chat_input {
-            batch.fill(atlas, 2.0, h - 14.0, w - 4.0, 12.0, rgba(0, 0, 0, 128));
-            let blink = (self.started.elapsed().as_millis() / 300).is_multiple_of(2);
-            let shown = if blink {
-                format!("{input}_")
-            } else {
-                input.clone()
-            };
-            batch.text(atlas, &shown, 4.0, h - 12.0, rgba(224, 224, 224, 255), true);
         }
         if let Some((text, at)) = &r.action_bar
             && now.duration_since(*at) < Duration::from_secs(3)

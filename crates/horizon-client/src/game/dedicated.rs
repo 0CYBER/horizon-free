@@ -642,18 +642,12 @@ impl Game<'_> {
                 );
                 self.save_game()?;
             }
-            self.update_dedicated_streaming();
-            self.update_world();
-            if paused {
-                // MinecraftServer.tickServer: only the connections run.
-                self.tick_lan();
-            } else {
-                if !state.autosave {
-                    // `save-off`: the periodic save inside the tick is skipped.
-                    self.ticks = self.ticks.max(1);
-                }
-                self.tick()?;
+            if !paused && !state.autosave {
+                // `save-off`: the periodic save inside the tick is skipped.
+                self.ticks = self.ticks.max(1);
             }
+            // MinecraftServer.tickServer: while paused only the connections run.
+            self.tick_server(paused)?;
             if idle_timeout > 0 {
                 self.kick_idle(idle_timeout);
             }
@@ -694,7 +688,13 @@ impl Game<'_> {
         let center = self
             .lan
             .as_ref()
-            .and_then(|h| h.hub.guests.iter().find(|g| g.placed).map(|g| g.chunk()))
+            .and_then(|h| {
+                h.hub
+                    .guests
+                    .iter()
+                    .find(|g| h.hub.here(g))
+                    .map(|g| g.chunk())
+            })
             .or_else(|| {
                 self.spawn
                     .map(|s| ((s.x.floor() as i32) >> 4, (s.z.floor() as i32) >> 4))

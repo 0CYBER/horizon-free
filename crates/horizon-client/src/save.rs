@@ -3444,6 +3444,17 @@ mod tests {
             third.ender_items[3].as_ref().map(|s| (&*s.item, s.count)),
             Some(("minecraft:diamond", 2))
         );
+        // A dead player's empty inventory replaces the previously loaded items.
+        let mut dead = third;
+        dead.health = 0.0;
+        dead.inventory.clear();
+        dead.inventory_components.clear();
+        dead.write(&dir).unwrap();
+        let dead = Level::read(&dir).unwrap();
+        assert_eq!(dead.health, 0.0);
+        assert!(dead.inventory.is_empty());
+        assert!(dead.inventory_components.is_empty());
+        assert!(dead.player_extra.unwrap().get("equipment").is_none());
         assert!(dir.join("data/minecraft/world_gen_settings.dat").exists());
         let _ = fs::remove_dir_all(&dir);
     }
