@@ -535,15 +535,16 @@ impl ArmorStand {
             Vec3::new(p.x + w, p.y + h, p.z + w),
         )
     }
-    /// LivingEntity.travel with gravity 0.08 and 0.98 drag, falling until it
-    /// lands (armor stands have no other movement).
+    /// LivingEntity.travelInAir (armor stands have no other movement): move
+    /// by the velocity (a landing stops the fall,
+    /// `Block.updateEntityMovementAfterFallOn`), then gravity 0.08 and the
+    /// 0.98 drag, so a stand at rest on the ground keeps -0.0784 as vanilla's.
     pub fn tick(&mut self, scene: &mut crate::collisions::SceneCollisions) {
         if self.marker {
             return;
         }
-        let mut v = self.velocity;
-        v.y -= 0.08;
-        let wanted = v;
+        let wanted = self.velocity;
+        let mut y = wanted.y;
         if let Ok(moved) = scene.resolve(self.bounds(), wanted, 0.0, self.on_ground) {
             self.position = Vec3::new(
                 self.position.x + moved.x,
@@ -551,9 +552,11 @@ impl ArmorStand {
                 self.position.z + moved.z,
             );
             self.on_ground = wanted.y < 0.0 && moved.y > wanted.y;
-            v = Vec3::new(0.0, if moved.y != wanted.y { 0.0 } else { v.y * 0.98 }, 0.0);
+            if moved.y != wanted.y {
+                y = 0.0;
+            }
         }
-        self.velocity = v;
+        self.velocity = Vec3::new(0.0, (y - 0.08) * f64::from(0.98f32), 0.0);
     }
 }
 
