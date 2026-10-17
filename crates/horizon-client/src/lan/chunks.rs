@@ -90,6 +90,11 @@ pub struct ChunkEncoder {
     pub block_ids: Vec<i32>,
     /// The save's tables, for the heightmaps.
     pub tables: Option<Arc<crate::save::SaveTables>>,
+    /// The level's sections among a column's: all of them in the Overworld,
+    /// y 0 to 255 in the Nether and the End (`DimensionType` min_y and height).
+    sections: std::ops::Range<usize>,
+    /// Whether the level has sky light (`DimensionType.hasSkyLight`).
+    sky: bool,
 }
 impl ChunkEncoder {
     /// `biome_names`: the internal biome list in order; `biome_registry`:
@@ -143,7 +148,19 @@ impl ChunkEncoder {
             biome_bits: ceil_log2(biome_registry.len()),
             block_ids,
             tables: None,
+            sections: 0..SECTIONS,
+            sky: true,
         }
+    }
+    /// Encode for a level of `min_y` and `height` (multiples of 16 within
+    /// the column), with or without sky light.
+    pub fn set_dimension(&mut self, min_y: i32, height: i32, sky: bool) {
+        let lo = usize::try_from((min_y - MIN_Y) >> 4)
+            .unwrap_or(0)
+            .min(SECTIONS);
+        let n = usize::try_from(height >> 4).unwrap_or(SECTIONS);
+        self.sections = lo..(lo + n).min(SECTIONS);
+        self.sky = sky;
     }
     pub fn entity_type(&self, state: u16) -> Option<i32> {
         self.entity_types
@@ -200,7 +217,7 @@ impl ChunkEncoder {
     /// The non-air sections of a column as bits (LevelChunkSection.hasOnlyAir).
     fn occupied(&self, chunk: &Chunk) -> u64 {
         let mut bits = 0u64;
-        for (i, s) in chunk.sections.iter().enumerate() {
+        for (i, s) in chunk.sections[self.sections.clone()].iter().enumerate() {
             let mut unpacked = [0u16; BLOCKS];
             s.unpack(&mut unpacked);
             let any = unpacked
@@ -225,7 +242,7 @@ impl ChunkEncoder {
             }
         }
         let mut packet = self.encode(chunk, &world.block_entities);
-        packet.light = light_data(chunk, around);
+        packet.light = self.light(chunk, around);
         packet
     }
 
@@ -234,9 +251,15 @@ impl ChunkEncoder {
         chunk: &Chunk,
         block_entities: &HashMap<(i32, i32, i32), BlockEntity>,
     ) -> LevelChunkWithLight {
-        let mut sections = Vec::with_capacity(SECTIONS);
+        let mut sections = Vec::with_capacity(self.sections.len());
         let mut entity_infos = Vec::new();
-        for (i, s) in chunk.sections.iter().enumerate() {
+        for (i, s) in chunk
+            .sections
+            .iter()
+            .enumerate()
+            .skip(self.sections.start)
+            .take(self.sections.len())
+        {
             let (encoded, has_entities) = self.section(s);
             if has_entities {
                 for y in 0..16 {
@@ -293,13 +316,29 @@ impl ChunkEncoder {
                 heightmaps: self
                     .tables
                     .as_ref()
-                    .map(|t| crate::save::client_heightmaps(chunk, t))
+                    .map(|t| {
+                        let min_y = MIN_Y + 16 * self.sections.start as i32;
+                        let height = 16 * self.sections.len() as i32;
+                        crate::save::client_heightmaps_in(chunk, t, min_y, height)
+                    })
                     .unwrap_or_default(),
                 buffer: ChunkData::from_sections(&sections),
                 block_entities: entity_infos,
             },
-            light: light_data(chunk, u64::MAX),
+            light: self.light(chunk, u64::MAX),
         }
+    }
+
+    /// The light layers of the level's sections.
+    fn light(&self, chunk: &Chunk, around: u64) -> LightData {
+        let mut data = light_data(&chunk.sections[self.sections.clone()], around);
+        if !self.sky {
+            // No sky light storage at all.
+            data.sky_mask.clear();
+            data.empty_sky_mask.clear();
+            data.sky.clear();
+        }
+        data
     }
 }
 
@@ -373,7 +412,8 @@ pub fn entity_tag(entity: &BlockEntity) -> Option<Tag> {
 /// non-air section of this column or a neighbouring one (`around`, bit i for
 /// section i; LayerLightSectionStorage.updateSectionStatus). An existing
 /// layer is sent, or marked empty when all dark; the others are left out.
-fn light_data(chunk: &Chunk, around: u64) -> LightData {
+fn light_data(sections: &[Arc<Section>], around: u64) -> LightData {
+    let n = sections.len();
     let mut data = LightData {
         sky_mask: Vec::new(),
         block_mask: Vec::new(),
@@ -383,19 +423,18 @@ fn light_data(chunk: &Chunk, around: u64) -> LightData {
         block: Vec::new(),
     };
     // Light section b holds chunk section b - 1.
-    let exists = |b: usize| {
-        (b.saturating_sub(2)..=b.min(SECTIONS - 1)).any(|s| s + 2 >= b && around >> s & 1 != 0)
-    };
+    let exists =
+        |b: usize| (b.saturating_sub(2)..=b.min(n - 1)).any(|s| s + 2 >= b && around >> s & 1 != 0);
     let full_sky = Light::Uniform(0xF0);
-    for b in 0..SECTIONS + 2 {
+    for b in 0..n + 2 {
         if !exists(b) {
             continue;
         }
         let light = match b {
             // Below the world nothing is lit; above it the sky is full.
             0 => &Light::Uniform(0),
-            _ if b == SECTIONS + 1 => &full_sky,
-            _ => &chunk.sections[b - 1].light,
+            _ if b == n + 1 => &full_sky,
+            _ => &sections[b - 1].light,
         };
         let (mut sky, mut block) = (vec![0u8; 2048], vec![0u8; 2048]);
         let (mut sky_any, mut block_any) = (false, false);
@@ -464,12 +503,39 @@ mod tests {
     fn light_masks_cover_the_world_plus_borders() {
         let chunk = Chunk::empty(0, 0);
         // A column with nothing around it has no light layers at all.
-        assert!(light_data(&chunk, 0).sky.is_empty());
-        let data = light_data(&chunk, u64::MAX);
+        assert!(light_data(&chunk.sections, 0).sky.is_empty());
+        let data = light_data(&chunk.sections, u64::MAX);
         // Default sections are full sky light and no block light.
         assert_eq!(data.sky.len(), SECTIONS + 1);
         assert_eq!(data.block.len(), 0);
         assert_eq!(data.sky[0][0], 0xFF);
         assert!(horizon_protocol::buf::bit(&data.empty_block_mask, 5));
+    }
+
+    #[test]
+    fn a_nether_column_sends_its_sixteen_sections_without_sky_light() {
+        let chunk = Chunk::empty(0, 0);
+        let mut encoder = ChunkEncoder::new(
+            [("minecraft:air".into(), false)],
+            &Builtin::default(),
+            &[],
+            &[],
+        );
+        let overworld = encoder.encode(&chunk, &HashMap::new());
+        encoder.set_dimension(0, 256, false);
+        let nether = encoder.encode(&chunk, &HashMap::new());
+        // An all-air section is the same bytes wherever it is.
+        let per_section = overworld.chunk.buffer.len() / SECTIONS;
+        assert_eq!(nether.chunk.buffer.len(), per_section * 16);
+        assert!(nether.light.sky.is_empty() && nether.light.sky_mask.is_empty());
+        // Block light layers: one below and one above the sixteen sections.
+        assert!(horizon_protocol::buf::bit(
+            &nether.light.empty_block_mask,
+            17
+        ));
+        assert!(!horizon_protocol::buf::bit(
+            &nether.light.empty_block_mask,
+            18
+        ));
     }
 }

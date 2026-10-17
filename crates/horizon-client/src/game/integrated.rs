@@ -8,11 +8,9 @@
 //!
 //! Opt-in for now (`--server-thread` or `HORIZON_SERVER_THREAD=1`): the
 //! player joins as a network player, and the server side of a network player
-//! does not do everything single player does yet. Worlds whose player is
-//! outside the Overworld open the usual way, since network players stay in
-//! the Overworld so far.
+//! does not do everything single player does yet.
 use super::{
-    Dim, Game, Options, PackResources, Resources,
+    Game, Options, PackResources, Resources,
     lan::{LanSettings, Owner},
 };
 use horizon_client::{
@@ -20,7 +18,6 @@ use horizon_client::{
     audio::Audio,
     hud::HudAtlas,
     lan::{Lan, MAX_PLAYERS, NetConfig, hub::HubConfig},
-    save::Level,
     settings::Settings,
     title::WorldOptions,
 };
@@ -137,12 +134,9 @@ struct Launch {
     player: String,
 }
 
-/// Whether this world opens on a server thread: asked for, and its player
-/// (if any yet) in the Overworld.
-pub(super) fn wanted(options: &Options, world: &Path) -> bool {
-    options.server_thread
-        && options.dedicated.is_none()
-        && Level::read(world).is_none_or(|l| Dim::from_id(&l.dimension) == Dim::Overworld)
+/// Whether this world opens on a server thread: asked for.
+pub(super) fn wanted(options: &Options, _world: &Path) -> bool {
+    options.server_thread && options.dedicated.is_none()
 }
 
 impl Game<'_> {

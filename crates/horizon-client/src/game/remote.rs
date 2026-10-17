@@ -561,11 +561,7 @@ impl Game<'_> {
         r.loaded_sent = false;
         r.predictions.clear();
         self.set_mode_id(spawn.game_type);
-        self.dim = if spawn.dimension == "minecraft:the_nether" {
-            Dim::Nether
-        } else {
-            Dim::Overworld
-        };
+        self.dim = Dim::from_id(&spawn.dimension);
         if !same {
             let mut streaming = Streaming::new(
                 Arc::new(NoTerrain),
@@ -1399,8 +1395,15 @@ impl Game<'_> {
                     .map(|r| r.lang.clone())
                     .unwrap_or_default();
                 let message = plain(&p.message, &lang);
+                let me = self.remote.as_ref().is_some_and(|r| r.entity_id == p.id);
                 if let Some(r) = self.remote.as_mut() {
                     r.death_message = Some(message);
+                }
+                // ClientPacketListener.handlePlayerCombatKill: the death
+                // screen, whatever health was last sent.
+                if me && self.screen != Screen::Dead && self.player.is_some() {
+                    self.screen = Screen::Dead;
+                    self.capture(false);
                 }
             }
             C::SetExperience(p) => {
