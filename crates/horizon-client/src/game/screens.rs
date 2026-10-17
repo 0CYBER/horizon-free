@@ -8,7 +8,8 @@ use horizon_client::{
 };
 
 /// PauseScreen buttons: (x, y, width, label key, action id, active).
-fn pause_buttons(w: f32, h: f32) -> Vec<(f32, f32, f32, &'static str, u8, bool)> {
+/// https://mcsrc.dev/2/26.3/net/minecraft/client/gui/screens/PauseScreen
+fn pause_buttons(w: f32, h: f32, remote: bool) -> Vec<(f32, f32, f32, &'static str, u8, bool)> {
     // GridLayout of two 98px columns (padding 4), aligned at (0.5, 0.25).
     let (grid_w, grid_h) = (212.0, 166.0);
     let x0 = ((w - grid_w) * 0.5).floor();
@@ -26,9 +27,21 @@ fn pause_buttons(w: f32, h: f32) -> Vec<(f32, f32, f32, &'static str, u8, bool)>
             9,
             true,
         ),
-        (x0 + 4.0, y0 + 146.0, 204.0, "menu.returnToMenu", 2, true),
+        (
+            x0 + 4.0,
+            y0 + 146.0,
+            204.0,
+            if remote {
+                "menu.disconnect"
+            } else {
+                "menu.returnToMenu"
+            },
+            2,
+            true,
+        ),
     ]
 }
+
 /// The icon row: report bugs, feedback, friends, player reporting.
 fn pause_icons(w: f32, h: f32) -> [(f32, f32, &'static str); 4] {
     let x0 = ((w - 212.0) * 0.5).floor() + 60.0;
@@ -52,6 +65,10 @@ fn death_buttons(w: f32, h: f32) -> [(f32, f32, &'static str, u8); 2] {
     ]
 }
 impl Game<'_> {
+    /// Singleplayer also has a connection, backed by the integrated server.
+    pub(super) fn external_server(&self) -> bool {
+        self.remote.is_some() && self.integrated.is_none()
+    }
     /// Whether the pause menu is drawn in Horizon's style (over a blurred world).
     pub(super) fn horizon_pause(&self) -> bool {
         self.screen == Screen::Paused
@@ -63,7 +80,7 @@ impl Game<'_> {
         if let Some(server) = &self.integrated {
             return (server.world_name.clone(), "Save and quit");
         }
-        if self.remote.is_some() {
+        if self.external_server() {
             ("Multiplayer".to_owned(), "Disconnect")
         } else {
             (self.level.name.clone(), "Save and quit")
@@ -76,7 +93,14 @@ impl Game<'_> {
             self.tick_friends();
             let friends = self.friends_view();
             let mut ui = horizon_client::ui_theme::Ui::new(&self.atlas, batch, self.cursor);
-            horizon_client::front::pause::draw(&mut ui, &world, quit, opened, &friends);
+            horizon_client::front::pause::draw(
+                &mut ui,
+                &world,
+                quit,
+                opened,
+                &friends,
+                self.external_server(),
+            );
             ui.finish();
             return;
         }
@@ -93,7 +117,7 @@ impl Game<'_> {
             u32::MAX,
             true,
         );
-        for (x, y, bw, key, _, active) in pause_buttons(w, h) {
+        for (x, y, bw, key, _, active) in pause_buttons(w, h, self.external_server()) {
             let hover = active && ui::hovered(self.cursor, x, y, bw, 20.0);
             ui::button(
                 batch,
@@ -139,9 +163,10 @@ impl Game<'_> {
                 &world,
                 quit,
                 &self.friends_view(),
+                self.external_server(),
             )
         } else {
-            pause_buttons(w, h)
+            pause_buttons(w, h, self.external_server())
                 .into_iter()
                 .find(|b| b.5 && ui::hovered(self.cursor, b.0, b.1, b.2, 20.0))
                 .map(|b| b.4)
@@ -293,5 +318,21 @@ impl Game<'_> {
             self.audio.play_button_click();
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pause_buttons;
+
+    #[test]
+    fn pause_menu_uses_disconnect_for_servers_and_keeps_world_options() {
+        for (remote, label) in [(false, "menu.returnToMenu"), (true, "menu.disconnect")] {
+            let buttons = pause_buttons(427.0, 240.0, remote);
+            let quit = buttons.iter().find(|b| b.4 == 2).unwrap();
+            assert_eq!(quit.3, label);
+            assert!(quit.5);
+            assert!(buttons.iter().any(|b| b.4 == 9 && b.5));
+        }
     }
 }
