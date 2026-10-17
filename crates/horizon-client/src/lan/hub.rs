@@ -936,7 +936,9 @@ impl Hub {
             .iter()
             .map(|g| (g.uuid, g.latency.load(Ordering::Relaxed)))
             .collect();
-        if self.ticks.is_multiple_of(100) && !latencies.is_empty() {
+        // PlayerList.tick: UPDATE_LATENCY once `++sendAllPlayerInfoIn > 600`,
+        // so on the 601st tick, then every 601.
+        if self.ticks.is_multiple_of(601) && !latencies.is_empty() {
             let entries = latencies
                 .iter()
                 .map(|(uuid, latency)| play::PlayerInfo {
