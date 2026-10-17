@@ -46,6 +46,8 @@ struct Flags {
 pub(super) struct Integrated {
     flags: Arc<Flags>,
     thread: Option<JoinHandle<()>>,
+    /// The world's name (`level.dat`'s `LevelName`), for the pause menu.
+    pub world_name: String,
 }
 impl Integrated {
     pub fn smoothed_tick_ms(&self) -> f32 {
@@ -72,6 +74,10 @@ impl Drop for Integrated {
     }
 }
 
+/// What the server thread hands the window once the world is open: its end
+/// of the connection and the world's name, or why it failed.
+type Ready = std::result::Result<(Pipe, String), String>;
+
 /// The world to open and the player who owns it.
 struct Launch {
     folder: String,
@@ -92,6 +98,11 @@ pub(super) fn wanted(options: &Options, world: &Path) -> bool {
 }
 
 impl Game<'_> {
+    /// `Minecraft.hasSingleplayerServer`: a world of this window's own, run
+    /// in the frame or on its server thread.
+    pub(super) fn has_singleplayer_server(&self) -> bool {
+        self.remote.is_none() || self.integrated.is_some()
+    }
     /// `Minecraft.doWorldLoad`: start the server thread on the world, wait
     /// until it can be joined, then join it through memory.
     pub(super) fn open_integrated(
@@ -149,12 +160,16 @@ impl Game<'_> {
                     let _ = ready_tx.send(Err(e.to_string()));
                 }
             })?;
-        let handle = Integrated {
+        let mut handle = Integrated {
             flags,
             thread: Some(thread),
+            world_name: String::new(),
         };
         let pipe = match ready.recv() {
-            Ok(Ok(pipe)) => pipe,
+            Ok(Ok((pipe, world_name))) => {
+                handle.world_name = world_name;
+                pipe
+            }
             Ok(Err(e)) => return Err(e.into()),
             Err(_) => return Err("the integrated server stopped".into()),
         };
@@ -169,7 +184,7 @@ impl Game<'_> {
         &mut self,
         launch: Launch,
         flags: &Flags,
-        ready: &Sender<std::result::Result<Pipe, String>>,
+        ready: &Sender<Ready>,
     ) -> Result<()> {
         self.open_world(
             &launch.folder,
@@ -227,7 +242,7 @@ impl Game<'_> {
             });
             host.hub.lan.connect_local()?
         };
-        let _ = ready.send(Ok(pipe));
+        let _ = ready.send(Ok((pipe, self.level.name.clone())));
         self.settle_spawn()?;
         let mut next = Instant::now();
         while !flags.stop.load(Ordering::Relaxed) {
@@ -290,7 +305,7 @@ fn serve(
     settings: Settings,
     launch: Launch,
     flags: &Flags,
-    ready: &Sender<std::result::Result<Pipe, String>>,
+    ready: &Sender<Ready>,
 ) -> Result<()> {
     // It draws nothing: only the font, which books and chat measure with.
     let atlas = HudAtlas::fonts(&options.resources)?;
