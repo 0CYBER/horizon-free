@@ -1,6 +1,6 @@
 # Horizon extras
 
-Optional conveniences built into the client: zoom, a minimap, an FPS counter, a
+Optional conveniences built into the client: fullbright, zoom, a minimap, an FPS counter, a
 keystroke overlay, auto-reconnect, Mouse Tweaks-style inventory controls and
 inventory sorting. **Every one is off by default**: a fresh
 install looks and behaves exactly like vanilla 26.3, and turning an extra off
@@ -35,6 +35,11 @@ Horizon category in Controls, and adding one would put a non-vanilla mapping int
 `options.txt`.
 
 ## The extras
+
+### Fullbright (`fullbright`, default off)
+- Displays blocks and entities with a fully bright lightmap, including in dark caves.
+- Turning it off restores the normal lightmap using the current brightness,
+  time of day and effects. The brightness slider keeps its normal range.
 
 ### Zoom (`zoom`, default off)
 - Hold the zoom key (default **Z**, unused by every vanilla 26.3 key mapping; C

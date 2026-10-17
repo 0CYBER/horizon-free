@@ -227,6 +227,10 @@ impl Connection {
             },
         })
     }
+    /// `Connection.isMemoryConnection`: through a [`Pipe`] rather than a socket.
+    pub fn is_memory(&self) -> bool {
+        matches!(self.reader.stream, Stream::Memory(_))
+    }
     /// ClientboundLoginCompressionPacket: negative thresholds disable compression.
     pub fn set_compression(&mut self, threshold: i32) {
         let t = usize::try_from(threshold).ok();
@@ -355,6 +359,8 @@ mod tests {
         big.extend(std::iter::repeat_n(3u8, 1000));
         c.send(&big).unwrap();
         assert_eq!(c.recv().unwrap(), (9, vec![1, 2]));
+        assert_eq!(c.reader.counters.sent.load(Ordering::Relaxed), 1);
+        assert_eq!(c.reader.counters.received.load(Ordering::Relaxed), 1);
         server.join().unwrap();
         assert!(c.recv().is_err());
     }

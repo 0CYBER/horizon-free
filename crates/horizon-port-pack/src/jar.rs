@@ -50,6 +50,12 @@ pub fn read(path: &Path) -> Result<JarInfo, String> {
     } else {
         JarInfo::default()
     };
+    // `version = "${file.jarVersion}"` is filled in from the manifest at load.
+    if info.version.starts_with("${") {
+        info.version = text(&mut zip, "META-INF/MANIFEST.MF")
+            .and_then(|m| manifest_value(&m, "Implementation-Version"))
+            .unwrap_or_default();
+    }
     let names: Vec<String> = zip.file_names().map(str::to_owned).collect();
     info.census = census(&names);
     if info.mod_id.is_empty() {
@@ -59,6 +65,16 @@ pub fn read(path: &Path) -> Result<JarInfo, String> {
             .unwrap_or_default();
     }
     Ok(info)
+}
+
+/// A main-section attribute of `META-INF/MANIFEST.MF`.
+fn manifest_value(manifest: &str, key: &str) -> Option<String> {
+    manifest
+        .lines()
+        .take_while(|l| !l.trim().is_empty())
+        .find_map(|l| l.strip_prefix(key)?.strip_prefix(':'))
+        .map(|v| v.trim().to_owned())
+        .filter(|v| !v.is_empty())
 }
 
 /// `[[mods]]` (the first one is the jar's mod), the top-level `license`, and

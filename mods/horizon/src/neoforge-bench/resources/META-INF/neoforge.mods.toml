@@ -1,0 +1,11 @@
+# Dev-only: the benchmark driver for a NeoForge client (tools/perf_bench.py --game neoforge).
+# Built and run by tools/perf_bench.py; never shipped.
+modLoader = "javafml"
+loaderVersion = "[4,)"
+license = "MIT"
+
+[[mods]]
+modId = "horizon_bench"
+version = "1"
+displayName = "Horizon benchmark driver (dev only)"
+description = "Flies the client along tools/perf_bench.py's paths and records frame times."

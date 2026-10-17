@@ -1,8 +1,9 @@
-//! The lines of an item's tooltip as `ItemStack.getTooltipLines` writes them
-//! without a player and without advanced tooltips, for stacks as recipes
-//! produce them. The recipe book's search tree matches them, so recipes of
-//! tools and armour answer to "attack speed" or "when on head".
-use crate::items::{ItemInfo, ItemStack};
+//! Item tooltip formatting: equipment modifiers with a player's base values,
+//! and lines without player context for the recipe book's search tree.
+use crate::{
+    hud::rgba,
+    items::{ItemInfo, ItemStack},
+};
 
 /// `EquipmentSlotGroup` in declaration order, the order tooltips list them in.
 const SLOT_GROUPS: [&str; 11] = [
@@ -25,6 +26,7 @@ fn modifier_line(
     attribute: &str,
     amount: f64,
     operation: usize,
+    total: bool,
 ) -> Option<String> {
     let text = |key: &str| translate(key).unwrap_or_else(|| key.to_owned());
     let scale = match operation {
@@ -32,7 +34,9 @@ fn modifier_line(
         0 => 1.0,
         _ => 100.0,
     };
-    let (kind, shown) = if amount > 0.0 {
+    let (kind, shown) = if total {
+        ("equals", amount * scale)
+    } else if amount > 0.0 {
         ("plus", amount * scale)
     } else if amount < 0.0 {
         ("take", -amount * scale)
@@ -47,22 +51,27 @@ fn modifier_line(
     )
 }
 
-/// `ItemStack.addAttributeTooltips` for the item's own modifiers: per slot
-/// group an empty line, the group's heading and a line per modifier.
-fn attribute_lines(info: &ItemInfo, translate: &dyn Fn(&str) -> Option<String>) -> Vec<String> {
+/// `ItemStack.addAttributeTooltips`: slot groups, colors and optional player
+/// attack damage/speed bases. Recipe search has no player context.
+pub fn attribute_lines(
+    modifiers: &[(String, String, f64, String, String)],
+    player_base: Option<[f64; 2]>,
+    translate: &dyn Fn(&str) -> Option<String>,
+) -> Vec<(String, u32)> {
     let mut lines = Vec::new();
     for group in SLOT_GROUPS {
         let mut first = true;
-        for (attribute, _, amount, operation, slot) in &info.modifiers {
+        for (attribute, modifier, amount, operation, slot) in modifiers {
             if slot != group {
                 continue;
             }
             if std::mem::take(&mut first) {
-                lines.push(String::new());
-                lines.push(
+                lines.push((String::new(), u32::MAX));
+                lines.push((
                     translate(&format!("item.modifiers.{group}"))
                         .unwrap_or_else(|| format!("item.modifiers.{group}")),
-                );
+                    rgba(170, 170, 170, 255),
+                ));
             }
             let id = match operation.as_str() {
                 "add_multiplied_base" => 1,
@@ -70,7 +79,27 @@ fn attribute_lines(info: &ItemInfo, translate: &dyn Fn(&str) -> Option<String>) 
                 _ => 0,
             };
             let path = attribute.strip_prefix("minecraft:").unwrap_or(attribute);
-            lines.extend(modifier_line(translate, path, *amount, id));
+            let base = player_base.and_then(|[damage, speed]| match modifier.as_str() {
+                "minecraft:base_attack_damage" => Some(damage),
+                "minecraft:base_attack_speed" => Some(speed),
+                _ => None,
+            });
+            if let Some(line) = modifier_line(
+                translate,
+                path,
+                amount + base.unwrap_or(0.0),
+                id,
+                base.is_some(),
+            ) {
+                let (line, color) = if base.is_some() {
+                    (format!(" {line}"), rgba(0, 170, 0, 255))
+                } else if *amount > 0.0 {
+                    (line, rgba(85, 85, 255, 255))
+                } else {
+                    (line, rgba(255, 85, 85, 255))
+                };
+                lines.push((line, color));
+            }
         }
     }
     lines
@@ -102,6 +131,10 @@ pub fn name_line(stack: &ItemStack, translate: &dyn Fn(&str) -> Option<String>) 
     if let Some(name) = stack.custom_name() {
         return name.to_owned();
     }
+    if stack.data().is_some_and(|d| d.ominous_banner) {
+        return translate("block.minecraft.ominous_banner")
+            .unwrap_or_else(|| "Ominous Banner".to_owned());
+    }
     let key = if is_potion_item(&stack.item) {
         Some(crate::brewing::potion_name_key(&stack.item, stack.potion()))
     } else if let Some(pattern) = path.strip_suffix("_armor_trim_smithing_template") {
@@ -118,6 +151,24 @@ pub fn name_line(stack: &ItemStack, translate: &dyn Fn(&str) -> Option<String>) 
         .or_else(|| translate(&format!("item.minecraft.{path}")))
         .or_else(|| translate(&format!("block.minecraft.{path}")))
         .unwrap_or_else(|| path.replace('_', " "))
+}
+
+/// ItemStack.getRarity: the ominous banner override, then the enchantment upgrade.
+pub fn rarity<'a>(stack: &ItemStack, default: &'a str) -> &'a str {
+    let rarity = if stack.data().is_some_and(|d| d.ominous_banner) {
+        "uncommon"
+    } else {
+        default
+    };
+    if stack.enchantments().is_empty() {
+        rarity
+    } else {
+        match rarity {
+            "common" | "uncommon" => "rare",
+            "rare" => "epic",
+            r => r,
+        }
+    }
 }
 
 /// The lines of `stack` below its name that its components give, in
@@ -211,6 +262,7 @@ pub fn detail_lines(
                     attribute,
                     amount * (*amplifier + 1) as f64,
                     operation,
+                    false,
                 )
             })
             .collect();
@@ -242,7 +294,11 @@ pub fn detail_lines(
         lines.push(text("item.dyed"));
     }
     if let Some(info) = info {
-        lines.extend(attribute_lines(info, translate));
+        lines.extend(
+            attribute_lines(&info.modifiers, None, translate)
+                .into_iter()
+                .map(|(line, _)| line),
+        );
     }
     lines
 }
@@ -293,6 +349,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ominous_banner_name_and_rarity_use_the_stack() {
+        let translate = |key: &str| match key {
+            "block.minecraft.ominous_banner" => Some("Ominous Banner".to_owned()),
+            "block.minecraft.white_banner" => Some("White Banner".to_owned()),
+            _ => None,
+        };
+        let mut banner = crate::mobs::raider::ominous_banner();
+        assert_eq!(name_line(&banner, &translate), "Ominous Banner");
+        assert_eq!(name_line(&banner, &|_| None), "Ominous Banner");
+        assert_eq!(rarity(&banner, "common"), "uncommon");
+        banner.data_mut().custom_name = Some("Captain's Standard".into());
+        assert_eq!(name_line(&banner, &translate), "Captain's Standard");
+        banner.enchant("minecraft:unbreaking", 1);
+        assert_eq!(rarity(&banner, "common"), "rare");
+        let plain = ItemStack::new("minecraft:white_banner", 1);
+        assert_eq!(name_line(&plain, &translate), "White Banner");
+        assert_eq!(rarity(&plain, "common"), "common");
+    }
+
+    #[test]
     fn container_lines_list_five_stacks_then_how_many_more() {
         let mut chest = ItemStack::new("minecraft:chest", 1);
         for slot in [9u8, 1, 2, 3, 4, 5, 6] {
@@ -336,6 +412,115 @@ mod tests {
     }
 
     #[test]
+    fn equipment_attributes_use_player_totals_and_slot_group_colors() {
+        let modifiers = [
+            ("attack_damage", "base_attack_damage", 6.0, "mainhand"),
+            ("attack_speed", "base_attack_speed", -2.4, "mainhand"),
+            ("armor", "armor", 3.0, "head"),
+        ]
+        .map(|(attribute, id, amount, slot)| {
+            (
+                format!("minecraft:{attribute}"),
+                format!("minecraft:{id}"),
+                amount,
+                "add_value".to_owned(),
+                slot.to_owned(),
+            )
+        });
+        let root = std::env::temp_dir().join(format!(
+            "horizon-tooltip-language-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        let dir = root.join("assets/minecraft/lang");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("en_us.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "item.modifiers.mainhand": "When in Main Hand:",
+                "item.modifiers.head": "When on Head:",
+                "attribute.modifier.equals.0": "%s %s",
+                "attribute.modifier.plus.0": "+%s %s",
+                "attribute.modifier.take.0": "-%s %s",
+                "attribute.name.attack_damage": "Attack Damage",
+                "attribute.name.attack_speed": "Attack Speed",
+                "attribute.name.armor": "Armor",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let enchantments = crate::enchant::Enchantments::load(&root);
+        std::fs::remove_dir_all(&root).unwrap();
+        let lang = |key: &str| enchantments.translate(key).map(str::to_owned);
+        let green = rgba(0, 170, 0, 255);
+        let gray = rgba(170, 170, 170, 255);
+        let blue = rgba(85, 85, 255, 255);
+        let red = rgba(255, 85, 85, 255);
+        assert_eq!(
+            attribute_lines(&modifiers, Some([1.0, 4.0]), &lang),
+            [
+                (String::new(), u32::MAX),
+                ("When in Main Hand:".into(), gray),
+                (" 7 Attack Damage".into(), green),
+                (" 1.6 Attack Speed".into(), green),
+                (String::new(), u32::MAX),
+                ("When on Head:".into(), gray),
+                ("+3 Armor".into(), blue),
+            ]
+        );
+        let recipe = attribute_lines(&modifiers, None, &lang);
+        assert_eq!(recipe[2], ("+6 Attack Damage".into(), blue));
+        assert_eq!(recipe[3], ("-2.4 Attack Speed".into(), red));
+        let custom_base = attribute_lines(&modifiers, Some([2.0, 6.0]), &lang);
+        assert_eq!(custom_base[2].0, " 8 Attack Damage");
+        assert_eq!(custom_base[3].0, " 3.6 Attack Speed");
+        assert_eq!(
+            modifier_line(&lang, "attack_damage", 0.0, 0, true).as_deref(),
+            Some("0 Attack Damage")
+        );
+    }
+
+    #[test]
+    #[ignore = "requires prepared items/language in HORIZON_TEST_RESOURCES"]
+    fn equipment_attributes_with_prepared_items_and_language() {
+        let root = std::path::PathBuf::from(
+            std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),
+        );
+        let items = crate::items::Items::catalog(&root).unwrap();
+        let enchantments = crate::enchant::Enchantments::load(&root);
+        let translate = |key: &str| enchantments.translate(key).map(str::to_owned);
+        for (item, expected) in [
+            (
+                "minecraft:diamond_sword",
+                [
+                    "",
+                    "When in Main Hand:",
+                    " 7 Attack Damage",
+                    " 1.6 Attack Speed",
+                ],
+            ),
+            (
+                "minecraft:diamond_helmet",
+                ["", "When on Head:", "+3 Armor", "+2 Armor Toughness"],
+            ),
+        ] {
+            let info = items.get(item).unwrap();
+            let lines = attribute_lines(&info.modifiers, Some([1.0, 4.0]), &translate);
+            assert_eq!(
+                lines
+                    .iter()
+                    .map(|(text, _)| text.as_str())
+                    .collect::<Vec<_>>(),
+                expected,
+                "{item}"
+            );
+        }
+    }
+
+    #[test]
     fn modifier_lines_follow_the_sign_and_operation() {
         let lang = |k: &str| {
             Some(
@@ -349,13 +534,13 @@ mod tests {
             )
         };
         assert_eq!(
-            modifier_line(&lang, "movement_speed", 0.2, 2).as_deref(),
+            modifier_line(&lang, "movement_speed", 0.2, 2, false).as_deref(),
             Some("+20% Speed")
         );
         assert_eq!(
-            modifier_line(&lang, "movement_speed", -0.6, 2).as_deref(),
+            modifier_line(&lang, "movement_speed", -0.6, 2, false).as_deref(),
             Some("-60% Speed")
         );
-        assert_eq!(modifier_line(&lang, "movement_speed", 0.0, 2), None);
+        assert_eq!(modifier_line(&lang, "movement_speed", 0.0, 2, false), None);
     }
 }

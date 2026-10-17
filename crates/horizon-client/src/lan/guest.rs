@@ -18,6 +18,16 @@ pub const CREATIVE: i32 = 1;
 pub const ADVENTURE: i32 = 2;
 pub const SPECTATOR: i32 = 3;
 
+/// An effect as last sent in ClientboundUpdateMobEffectPacket.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SentEffect {
+    pub id: &'static str,
+    pub amplifier: i32,
+    pub flags: i8,
+    pub duration: i32,
+    pub tick_count: i32,
+}
+
 pub struct Guest {
     pub conn: u32,
     /// The client's address (IP bans, `list`).
@@ -94,11 +104,21 @@ pub struct Guest {
     pub xp_level: i32,
     pub xp_progress: f32,
     pub xp_total: i32,
+    /// Active status effects (`LivingEntity.activeEffects`).
+    pub effects: crate::effects::PlayerEffects,
+    /// What the client was told of each effect: id, amplifier, flags, and
+    /// the duration and `effects.tick_count` at the time, so a duration that
+    /// only counted down is not sent again (`ServerPlayer.onEffectUpdated`).
+    pub sent_effects: Vec<SentEffect>,
     /// What the client believes the inventory menu holds (for change detection).
     pub menu_sent: Vec<Option<ItemStack>>,
     pub menu_state: i32,
     pub sent_health: Option<(f32, i32, f32)>,
     pub sent_xp: Option<(f32, i32, i32)>,
+    /// Where the player last died (Player.lastDeathLocation), sent with the respawn.
+    pub last_death: Option<[i32; 3]>,
+    /// The last action sequence to acknowledge at the next tick (-1: none).
+    pub ack_up_to: std::cell::Cell<i32>,
     pub sent_selected: usize,
     pub inbox: VecDeque<play::Serverbound>,
     pub joined_tick: u64,
@@ -177,10 +197,14 @@ impl Guest {
             xp_level: 0,
             xp_progress: 0.0,
             xp_total: 0,
+            effects: Default::default(),
+            sent_effects: Vec::new(),
             menu_sent: vec![None; 46],
             menu_state: 0,
             sent_health: None,
             sent_xp: None,
+            last_death: None,
+            ack_up_to: std::cell::Cell::new(-1),
             sent_selected: 0,
             inbox: VecDeque::new(),
             joined_tick: 0,

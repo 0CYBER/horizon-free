@@ -103,14 +103,12 @@ impl BlockBehavior {
             return Ok(None);
         }
         let read = |name: &str| -> Result<Tag, GeneratorError> {
-            let limits = Limits {
-                max_bytes: 1 << 28,
-                ..Limits::default()
-            };
-            Ok(nbt::read_named(&fs::read(dir.join(name))?, limits)
-                .map_err(|e| resource(format!("{name}: {e:?}")))?
-                .0
-                .tag)
+            Ok(
+                nbt::read_named(&fs::read(dir.join(name))?, Limits::tables())
+                    .map_err(|e| resource(format!("{name}: {e:?}")))?
+                    .0
+                    .tag,
+            )
         };
         let json = |name: &str| -> Result<Value, GeneratorError> {
             Ok(serde_json::from_str(&fs::read_to_string(dir.join(name))?)?)

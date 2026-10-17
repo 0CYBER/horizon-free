@@ -28,7 +28,7 @@ use std::{fs, io, path::Path, sync::Arc};
 pub fn load<'r>(root: &Path, registry: &'r BlockRegistry) -> Result<BlockCollisionRegistry<'r>> {
     let data = nbt::read_named(
         &fs::read(root.join("cached-collision.nbt"))?,
-        Limits::default(),
+        Limits::tables(),
     )?
     .0
     .tag;

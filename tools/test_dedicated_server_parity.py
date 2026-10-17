@@ -10,8 +10,13 @@ read is an error), pings each server, joins it in offline mode through
 login, configuration and play, accepts the spawn teleport, receives the
 chunks around the spawn (their bytes are compared: the world is loaded from
 the same files), chats, runs /list and commands that fail (`/random value
-7..7`, `/random value x`, `/trigger nope`) and leaves. The console then
-runs `list` and `say` and `stop`. Compared, all of them exactly:
+7..7`, `/random value x`, `/trigger nope`), trades, is made an operator by
+the console, runs /kill, respawns (as vanilla's LevelLoadTracker waits: until the "level
+chunks load start" event and the chunk under the player), sets a furnace
+beside itself, gives itself raw iron and coal, opens the furnace, shift-clicks
+the ore and the coal in and the ingot out, and leaves. The
+console then runs `list` and `say` and `stop`. Compared, all of them
+exactly:
 
 - the status response (MOTD, players, version, favicon) and the ping;
 - the legacy (pre-1.7, 0xFE) ping reply;
@@ -22,6 +27,12 @@ runs `list` and `say` and `stop`. Compared, all of them exactly:
   advancements, which vanilla keeps in hash maps, sorted); the command tree
   node by node; the chunks sent and their bytes; the replies to the chat
   message, /list and the failing commands, as text components;
+- after /kill, the packets from the death screen to the respawned
+  inventory (PlayerList.respawn; chat, chunk data, light and keep-alives
+  left out, runs of a packet counted), then that the level loads where the
+  player respawned (guests' death messages aren't Horizon's yet: left out);
+- the furnace menu: its type and title, its contents, the slots each
+  shift-click changes and its lit and cooking totals;
 - the console lines about the player, the chat, `list`, `say` and `stop`;
 - the files the servers leave: server.properties (but the date line),
   eula.txt, ops.json, whitelist.json, banned-players.json, banned-ips.json.
@@ -197,12 +208,18 @@ CONSOLE_LINE = re.compile(r'^\[\d\d:\d\d:\d\d\] \[([^\]]+)\]: (.*)$')
 KEPT = re.compile(r'Tester|\[Server\]|\[Not Secure\]|There are|Stopping|Saving|ThreadedAnvilChunkStorage|All dimensions|Unknown or incomplete')
 
 
+# Guests' death messages, the op's command feedback broadcast to the console and guests'
+# advancement announcements aren't Horizon's yet (the client's own transcript leaves the
+# death message out as well).
+NOT_YET = re.compile(r'Tester was killed|Killed Tester|System chat: \[Tester: |Tester has made the advancement')
+
+
 def console_lines(lines):
     """The console lines the comparison covers, timestamps and ports aside."""
     out = []
     for line in lines:
         m = CONSOLE_LINE.match(line)
-        if not m or not KEPT.search(m.group(2)):
+        if not m or not KEPT.search(m.group(2)) or NOT_YET.search(m.group(2)):
             continue
         text = re.sub(r'/127\.0\.0\.1:\d+', '/127.0.0.1:_', m.group(2))
         text = re.sub(r'entity id \d+', 'entity id _', text)
@@ -246,7 +263,27 @@ def run_side(label, command, directory, client):
                        '{profession:"minecraft:librarian",level:2,type:"minecraft:plains"}}')
         port = int(PROPERTIES_PORTS[label])
         legacy = legacy_ping(port)
-        client(port, directory.parent / f'{label}-client.txt')
+        # The client asks to be made an operator once it has traded, runs /kill and respawns.
+        failure = []
+
+        def join():
+            try:
+                client(port, directory.parent / f'{label}-client.txt')
+            except BaseException as error:  # noqa: BLE001 - reported on the main thread
+                failure.append(error)
+
+        joined = threading.Thread(target=join)
+        joined.start()
+        deadline = time.time() + 300
+        while joined.is_alive() and not any('<Tester> ready to respawn' in l for l in server.lines):
+            if time.time() > deadline:
+                break
+            time.sleep(0.2)
+        if joined.is_alive():
+            server.console(f'op {PLAYER}')
+        joined.join()
+        if failure:
+            raise failure[0]
         time.sleep(1)
         server.console('list')
         server.console('say console says hi')
