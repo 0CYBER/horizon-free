@@ -389,7 +389,7 @@ impl Game<'_> {
             .as_ref()
             .map_or([1280, 720], |r| [r.config.width, r.config.height]);
         let b = HudBatch::new(size);
-        let m = Measure(&self.atlas.font);
+        let m = Measure(&self.gui.atlas.font);
         let c = Commands {
             dispatcher: self.mods.dispatcher(),
             registries: &self.ui.registries,
@@ -434,7 +434,7 @@ impl Game<'_> {
         let focused = self.screen == Screen::Chat;
         let heard = self.mods.mods.is_running().then(|| text.plain());
         self.ui.chat.add(
-            &self.atlas,
+            &self.gui.atlas,
             text,
             Some(SYSTEM_INDICATOR),
             self.ticks,
@@ -447,7 +447,7 @@ impl Game<'_> {
     /// Keys while the chat screen is open.
     pub(super) fn chat_key(&mut self, event: &KeyEvent) {
         if let Some(shortcut) = self.edit_shortcut(event) {
-            let m = Measure(&self.atlas.font);
+            let m = Measure(&self.gui.atlas.font);
             let c = Commands {
                 dispatcher: self.mods.dispatcher(),
                 registries: &self.ui.registries,
@@ -493,7 +493,7 @@ impl Game<'_> {
         let Some(mut screen) = self.ui.chat_screen.take() else {
             return;
         };
-        let m = Measure(&self.atlas.font);
+        let m = Measure(&self.gui.atlas.font);
         let c = Commands {
             dispatcher: self.mods.dispatcher(),
             registries: &self.ui.registries,
@@ -519,7 +519,7 @@ impl Game<'_> {
     }
     /// Text typed into the chat box (control socket `chat`).
     pub(super) fn chat_type(&mut self, text: &str) {
-        let m = Measure(&self.atlas.font);
+        let m = Measure(&self.gui.atlas.font);
         let c = Commands {
             dispatcher: self.mods.dispatcher(),
             registries: &self.ui.registries,
@@ -542,7 +542,7 @@ impl Game<'_> {
             let heard = self.mods.mods.is_running().then(|| line.plain());
             self.ui
                 .chat
-                .add(&self.atlas, line, None, self.ticks, focused);
+                .add(&self.gui.atlas, line, None, self.ticks, focused);
             if let Some(line) = heard {
                 self.mods_chat(&line);
             }
@@ -570,7 +570,7 @@ impl Game<'_> {
         let height = self.renderer.as_ref().map_or(720.0, |r| {
             HudBatch::new([r.config.width, r.config.height]).height
         });
-        let m = Measure(&self.atlas.font);
+        let m = Measure(&self.gui.atlas.font);
         let c = Commands {
             dispatcher: self.mods.dispatcher(),
             registries: &self.ui.registries,
@@ -583,7 +583,7 @@ impl Game<'_> {
             return;
         }
         match self.ui.chat.click_at(
-            &self.atlas.font,
+            &self.gui.atlas.font,
             height as i32,
             cursor.0 as f64,
             cursor.1 as f64,
@@ -609,13 +609,15 @@ impl Game<'_> {
         if self.ui.hide_gui && !focused {
             return;
         }
-        self.ui.chat.draw(batch, &self.atlas, self.ticks, focused);
+        self.ui
+            .chat
+            .draw(batch, &self.gui.atlas, self.ticks, focused);
     }
     pub(super) fn draw_chat_screen(&mut self, batch: &mut HudBatch) {
         let Some(mut screen) = self.ui.chat_screen.take() else {
             return;
         };
-        let m = Measure(&self.atlas.font);
+        let m = Measure(&self.gui.atlas.font);
         let c = Commands {
             dispatcher: self.mods.dispatcher(),
             registries: &self.ui.registries,
@@ -633,7 +635,7 @@ impl Game<'_> {
             .chat_opened
             .map_or(0, |t| t.elapsed().as_millis() as u64);
         let draws = screen.draw(&m, mouse, blink, background);
-        horizon_client::screen_draw::paint(batch, &self.atlas, &draws);
+        horizon_client::screen_draw::paint(batch, &self.gui.atlas, &draws);
         self.ui.chat_screen = Some(screen);
     }
     /// Advance the overworld clock (ServerClockManager.tick) when
@@ -825,11 +827,11 @@ impl Game<'_> {
         let focused = self.screen == Screen::Chat;
         self.ui
             .chat
-            .add(&self.atlas, message, None, self.ticks, focused);
+            .add(&self.gui.atlas, message, None, self.ticks, focused);
     }
     #[allow(dead_code)]
     fn chat_debug_fill(&self, batch: &mut HudBatch) {
-        batch.fill(&self.atlas, 0.0, 0.0, 1.0, 1.0, rgba(0, 0, 0, 0));
+        batch.fill(&self.gui.atlas, 0.0, 0.0, 1.0, 1.0, rgba(0, 0, 0, 0));
     }
 }
 /// `yyyy-MM-dd_HH.mm.ss[_n].png` (Util.getFilenameFormattedDateTime, local time

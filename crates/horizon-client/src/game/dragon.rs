@@ -1866,9 +1866,9 @@ impl Game<'_> {
             batch.width as i32,
             batch.height as i32,
             &bars,
-            &self.atlas.font,
+            &self.gui.atlas.font,
         );
-        hud_layout::paint(batch, &self.atlas, &draws);
+        hud_layout::paint(batch, &self.gui.atlas, &draws);
     }
     /// The dragon fight's boss bar shows (`EnderDragonFight.dragonEvent`,
     /// with `setCreateWorldFog`).
@@ -1906,7 +1906,13 @@ impl Game<'_> {
             return;
         };
         let a = alpha as f32;
-        let sprite = |n: &str| self.atlas.sprites.get(n).map(|r| [r.u0, r.v0, r.u1, r.v1]);
+        let sprite = |n: &str| {
+            self.gui
+                .atlas
+                .sprites
+                .get(n)
+                .map(|r| [r.u0, r.v0, r.u1, r.v1])
+        };
         let (Some(skin), Some(eyes)) = (
             sprite("entity/enderdragon/dragon"),
             sprite("entity/enderdragon/dragon_eyes"),
@@ -2072,7 +2078,7 @@ impl Game<'_> {
     }
     /// `submitRays`: the death rays from a fixed seed, fading in white to magenta.
     fn dragon_rays(&self, base: glam::Mat4, t: f32, out: &mut Vec<Vertex>) {
-        let white = self.atlas.font.white();
+        let white = self.gui.atlas.font.white();
         let uv = [white.u0, white.v0];
         let over = if t > 0.8 {
             ((t - 0.8) / 0.2).min(1.0)
@@ -2128,6 +2134,7 @@ impl Game<'_> {
         out: &mut Vec<Vertex>,
     ) {
         let Some(s) = self
+            .gui
             .atlas
             .sprites
             .get("entity/end_crystal/end_crystal_beam")
@@ -2189,6 +2196,7 @@ impl Game<'_> {
         out: &mut Vec<Vertex>,
     ) {
         let Some(s) = self
+            .gui
             .atlas
             .sprites
             .get("entity/enderdragon/dragon_fireball")

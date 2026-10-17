@@ -421,7 +421,7 @@ impl Game<'_> {
             m.position.z.floor() as i32,
         );
         let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         horizon_client::mobs::render::render_with(
             m,
@@ -475,7 +475,7 @@ impl Game<'_> {
         m.position.y += 0.125 * f64::from(u8::from(m.extra.crouching));
         m.previous = m.position;
         let camera = glam::DVec3::new(m.position.x, m.position.y, m.position.z);
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         let mut verts = Vec::new();
         horizon_client::mobs::render::render_with(
@@ -546,9 +546,10 @@ impl Game<'_> {
         let Some((texture, _)) = assets.equipment.get(asset).and_then(|k| k.get("wings")) else {
             return;
         };
-        let (Some(model), Some(rect)) =
-            (assets.player.get("elytra"), self.atlas.sprites.get(texture))
-        else {
+        let (Some(model), Some(rect)) = (
+            assets.player.get("elytra"),
+            self.gui.atlas.sprites.get(texture),
+        ) else {
             return;
         };
         let base = horizon_client::mobs::render::base_transform(m, partial, camera)

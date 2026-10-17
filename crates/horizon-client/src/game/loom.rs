@@ -199,7 +199,7 @@ impl Game<'_> {
             .collect();
         horizon_client::item_render::gui::draw_banner_result(
             &self.pack.item_renderer,
-            &self.atlas.sprites,
+            &self.gui.atlas.sprites,
             batch,
             x,
             y,
@@ -217,7 +217,7 @@ impl Game<'_> {
         draws: &[ScreenDraw],
         background: bool,
     ) -> Option<Vec<(String, u32)>> {
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let mut tooltip = None;
         let mut sheet: Option<String> = None;
         for d in draws {

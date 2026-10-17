@@ -197,10 +197,10 @@ impl Game<'_> {
         if !self.extras.minimap.compose(view) {
             return;
         }
-        let Some(rect) = self.atlas.sprites.get(MINIMAP_SPRITE).copied() else {
+        let Some(rect) = self.gui.atlas.sprites.get(MINIMAP_SPRITE).copied() else {
             return;
         };
-        let (w, h) = (self.atlas.width as f32, self.atlas.height as f32);
+        let (w, h) = (self.gui.atlas.width as f32, self.gui.atlas.height as f32);
         self.map_patches.push(horizon_client::font::Patch {
             x: (rect.u0 * w).round() as u32,
             y: (rect.v0 * h).round() as u32,
@@ -246,7 +246,7 @@ impl Game<'_> {
         let (map_corner, map_size) = (e.minimap_corner, f32::from(e.minimap_size));
         let visible = |corner| !(self.debug && corner == Corner::TopLeft);
         let mut corners = Corners::new(batch.width, batch.height, self.effect_rows_height());
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         if let Some(view) = self.minimap_view()
             && visible(map_corner)
             && !self.extras.minimap.image.is_empty()
@@ -290,7 +290,7 @@ impl Game<'_> {
                 use_: self.extras.mouse[1],
                 cps,
             };
-            extras_hud::draw_keystrokes(batch, &self.atlas, &mut corners, keys_corner, &k);
+            extras_hud::draw_keystrokes(batch, &self.gui.atlas, &mut corners, keys_corner, &k);
         }
         if mod_panels {
             self.draw_mod_panels(batch, &mut corners);

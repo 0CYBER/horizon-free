@@ -123,6 +123,10 @@ impl Game<'_> {
         let mut atlas = HudAtlas::build(root)?;
         atlas.font.uniform = self.settings.force_unicode;
         atlas.font.japanese = self.settings.japanese_glyphs;
+        let gui = super::UiResources {
+            atlas,
+            panorama: std::sync::Arc::new(horizon_client::gfx::panorama::Faces::load(root)),
+        };
         let pack = super::PackResources::load(
             root,
             assets,
@@ -137,7 +141,7 @@ impl Game<'_> {
         let renderer = match self
             .window
             .clone()
-            .map(|window| self.renderer_for(window, &pack, &atlas))
+            .map(|window| self.renderer_for(window, &pack, &gui))
             .transpose()
         {
             Ok(renderer) => renderer,
@@ -157,7 +161,7 @@ impl Game<'_> {
         self.options.resources = root.to_path_buf();
         let context = pack.context.clone();
         self.pack = pack;
-        self.atlas = atlas;
+        self.gui = gui;
         horizon_client::ui_theme::reset_atlas();
         // Villager hats come from the pack's texture metadata (shared data, swapped in place).
         *self
@@ -178,7 +182,7 @@ impl Game<'_> {
             self.renderer = Some(renderer);
             self.apply_ui_settings();
         }
-        self.ui.chat.rescale(&self.atlas);
+        self.ui.chat.rescale(&self.gui.atlas);
         Ok(())
     }
 }

@@ -124,7 +124,7 @@ impl Game<'_> {
                 continue;
             };
             let (Some(r), Some(part)) = (
-                self.atlas.sprites.get(texture.as_str()),
+                self.gui.atlas.sprites.get(texture.as_str()),
                 assets.player.get(layer),
             ) else {
                 continue;
@@ -403,7 +403,7 @@ impl Game<'_> {
         out: &mut Vec<Vertex>,
     ) {
         let assets = &self.armor_stand_assets;
-        let sprites = &self.atlas.sprites;
+        let sprites = &self.gui.atlas.sprites;
         let uv_of = |name: &str| sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         let Some(wood) = uv_of("entity/armorstand/armorstand") else {
             return;
@@ -673,7 +673,7 @@ impl Game<'_> {
                 &serde_json::Value::Null,
                 false,
                 pose,
-                &self.atlas.sprites,
+                &self.gui.atlas.sprites,
                 &self.item_host(),
                 &mut sink,
             );

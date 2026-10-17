@@ -142,7 +142,7 @@ impl Game<'_> {
     /// tinted 0x282828. The atlas does not wrap, so each face is 16×16 quads.
     pub(super) fn end_sky_geometry(&self) -> Vec<Vertex> {
         let mut out = Vec::with_capacity(6 * 256 * 4);
-        let Some(r) = self.atlas.sprites.get("environment/end_sky").copied() else {
+        let Some(r) = self.gui.atlas.sprites.get("environment/end_sky").copied() else {
             return out;
         };
         use std::f32::consts::FRAC_PI_2;
@@ -184,6 +184,7 @@ impl Game<'_> {
         let intensity = self.end.flash.intensity(self.clock.fraction() as f32);
         if intensity > 1e-5
             && let Some(r) = self
+                .gui
                 .atlas
                 .sprites
                 .get("environment/celestial/end_flash")
@@ -920,7 +921,8 @@ impl Game<'_> {
     fn end_crystal_geometry(&self, camera: glam::DVec3, out: &mut Vec<Vertex>) {
         let (Some(model), Some(r)) = (
             self.crystal_model.as_ref(),
-            self.atlas
+            self.gui
+                .atlas
                 .sprites
                 .get("entity/end_crystal/end_crystal")
                 .copied(),
@@ -1073,7 +1075,7 @@ impl Game<'_> {
 
     /// ThrownItemRenderer: the ender eye item facing the camera.
     fn eye_geometry(&self, camera: glam::DVec3, out: &mut Vec<Vertex>) {
-        let Some(r) = self.atlas.sprites.get("item/ender_eye").copied() else {
+        let Some(r) = self.gui.atlas.sprites.get("item/ender_eye").copied() else {
             return;
         };
         let alpha = self.clock.fraction();

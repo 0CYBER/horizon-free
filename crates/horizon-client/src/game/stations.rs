@@ -1249,7 +1249,7 @@ impl Game<'_> {
     }
     /// Text in the Standard Galactic alphabet (`minecraft:alt`), cut to `max` pixels.
     fn galactic(&self, batch: &mut HudBatch, text: &str, x: f32, y: f32, max: f32, color: u32) {
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let Some(sheet) = atlas.sprites.get("font/ascii_sga").copied() else {
             batch.text(atlas, text, x, y, color, false);
             return;
@@ -1325,7 +1325,7 @@ impl Game<'_> {
         let local = (self.cursor.0 - ox, self.cursor.1 - oy);
         let mut tooltip: Option<Vec<(String, u32)>> = None;
         {
-            let atlas = &self.atlas;
+            let atlas = &self.gui.atlas;
             batch.fill(
                 atlas,
                 0.0,
@@ -1342,7 +1342,7 @@ impl Game<'_> {
             };
             let (fuel, total_fuel, brew, total_brew) =
                 (b.fuel, b.total_fuel, b.brew_time, b.total_brew_time);
-            let atlas = &self.atlas;
+            let atlas = &self.gui.atlas;
             Self::part(
                 batch,
                 atlas,
@@ -1417,7 +1417,7 @@ impl Game<'_> {
                 if self.slot_mut(i).is_none() {
                     let (sx, sy) = self.station_slot_position(i).unwrap_or_default();
                     batch.sprite(
-                        &self.atlas,
+                        &self.gui.atlas,
                         &format!("gui/sprites/container/slot/{icon}"),
                         ox + sx,
                         oy + sy,
@@ -1427,7 +1427,7 @@ impl Game<'_> {
         } else if let Some(kind) = self.station.as_ref().map(|s| s.kind) {
             let title = self.translate(kind.title_key(), "");
             {
-                let atlas = &self.atlas;
+                let atlas = &self.gui.atlas;
                 Self::part(
                     batch,
                     atlas,
@@ -1446,7 +1446,7 @@ impl Game<'_> {
             if kind == Kind::Loom {
                 tooltip = self.draw_loom(batch, ox, oy, local);
             }
-            let atlas = &self.atlas;
+            let atlas = &self.gui.atlas;
             let s = self.station.as_ref().expect("open station");
             let has_input = s.inputs.iter().any(Option::is_some);
             match kind {
@@ -1552,7 +1552,7 @@ impl Game<'_> {
                             );
                             -8323296
                         };
-                        let atlas = &self.atlas;
+                        let atlas = &self.gui.atlas;
                         let cw = HudBatch::text_width(atlas, &cost_text);
                         batch.text(
                             atlas,
@@ -1679,7 +1679,7 @@ impl Game<'_> {
                             )
                         };
                         if let Some(line) = line {
-                            let atlas = &self.atlas;
+                            let atlas = &self.gui.atlas;
                             let tw = HudBatch::text_width(atlas, &line);
                             let tx = 176.0 - 8.0 - tw - 2.0;
                             batch.fill(
@@ -1788,7 +1788,7 @@ impl Game<'_> {
                                 "recipe"
                             };
                             batch.sprite_scaled(
-                                &self.atlas,
+                                &self.gui.atlas,
                                 &format!("gui/sprites/container/stonecutter/{sprite}"),
                                 ox + x,
                                 oy + y - 1.0,
@@ -1816,7 +1816,7 @@ impl Game<'_> {
         if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
             let (sx, sy) = self.slot_position(slot);
             batch.fill(
-                &self.atlas,
+                &self.gui.atlas,
                 ox + sx,
                 oy + sy,
                 16.0,
@@ -2065,7 +2065,7 @@ impl Game<'_> {
         if lines.is_empty() {
             return;
         }
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let w = lines
             .iter()
             .map(|(t, _)| HudBatch::text_width(atlas, t))

@@ -1937,10 +1937,11 @@ impl Game<'_> {
             self.skin_slots.len()
         } else {
             let (old, slot) = self.skin_slots.remove(0);
-            self.atlas.sprites.remove(&old);
+            self.gui.atlas.sprites.remove(&old);
             slot
         };
         let Some(rect) = self
+            .gui
             .atlas
             .sprites
             .get(&format!("horizon/skin{slot}"))
@@ -1948,7 +1949,7 @@ impl Game<'_> {
         else {
             return;
         };
-        let (w, h) = (self.atlas.width as f32, self.atlas.height as f32);
+        let (w, h) = (self.gui.atlas.width as f32, self.gui.atlas.height as f32);
         self.map_patches.push(horizon_client::font::Patch {
             x: (rect.u0 * w).round() as u32,
             y: (rect.v0 * h).round() as u32,
@@ -1956,7 +1957,7 @@ impl Game<'_> {
             height: 64,
             rgba,
         });
-        self.atlas.sprites.insert(location.clone(), rect);
+        self.gui.atlas.sprites.insert(location.clone(), rect);
         self.skin_slots.push((location, slot));
     }
     /// Whether a downloaded skin is in the atlas, marking it recently shown.
@@ -3169,7 +3170,7 @@ impl Game<'_> {
         if self.player.is_some() {
             return false;
         }
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let (w, h) = (batch.width, batch.height);
         batch.fill(atlas, 0.0, 0.0, w, h, rgba(20, 20, 20, 255));
         let shown = horizon_client::net::shown_address(&r.session.address);
@@ -3194,7 +3195,7 @@ impl Game<'_> {
     /// Chat (ChatComponent), the chat input line and the action bar.
     pub(super) fn remote_hud(&self, batch: &mut HudBatch) {
         let Some(r) = &self.remote else { return };
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let (w, h) = (batch.width, batch.height);
         let open = r.chat_input.is_some();
         let now = Instant::now();

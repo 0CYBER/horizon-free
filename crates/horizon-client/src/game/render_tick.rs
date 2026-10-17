@@ -211,7 +211,7 @@ impl Game<'_> {
         let gui_overlays =
             hud_overlays::camera_overlays(size[0] as i32, size[1] as i32, &overlays, &mut scope);
         self.screen_fx.build(&ScreenInputs {
-            sprites: &self.atlas.sprites,
+            sprites: &self.gui.atlas.sprites,
             aspect: size[0] as f32 / size[1].max(1) as f32,
             partial,
             block_overlay,

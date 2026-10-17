@@ -478,6 +478,7 @@ impl Game<'_> {
         });
         let Some(model) = model else { return };
         let Some(r) = self
+            .gui
             .atlas
             .sprites
             .get("entity/projectiles/wind_charge")

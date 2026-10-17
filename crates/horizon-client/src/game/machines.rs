@@ -837,7 +837,7 @@ impl Game<'_> {
         let Some(screen) = self.machine_screen() else {
             return false;
         };
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let key_is_cart = self
             .container
             .is_some_and(|k| k.1 == super::minecarts::CART_KEY_Y);

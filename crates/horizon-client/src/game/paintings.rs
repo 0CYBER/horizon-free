@@ -249,7 +249,7 @@ impl Game<'_> {
     /// PaintingRenderer: the variant on the front, the back texture behind and
     /// on the edges.
     pub(super) fn painting_geometry(&self, camera: glam::DVec3, out: &mut Vec<Vertex>) {
-        let sprites = &self.atlas.sprites;
+        let sprites = &self.gui.atlas.sprites;
         let Some(back) = sprites.get("painting/back").copied() else {
             return;
         };

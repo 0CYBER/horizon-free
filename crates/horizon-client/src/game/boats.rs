@@ -712,6 +712,7 @@ impl Game<'_> {
             };
             let folder = if b.chest { "chest_boat" } else { "boat" };
             let Some(uv) = self
+                .gui
                 .atlas
                 .sprites
                 .get(&format!("entity/{folder}/{}", b.wood))

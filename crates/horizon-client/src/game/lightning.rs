@@ -348,7 +348,7 @@ impl Game<'_> {
     /// `LightningBoltRenderer`: 4 layers of a trunk and two branches, 8
     /// segments of 16 blocks, from the bolt's seed.
     pub(super) fn bolt_geometry(&self, camera: glam::DVec3, out: &mut Vec<Vertex>) {
-        let white = self.atlas.font.white();
+        let white = self.gui.atlas.font.white();
         let uv = [white.u0, white.v0];
         // ARGB 0.45, 0.45, 0.5 at 0.3 alpha, packed RGBA.
         let color = (76u32 << 24) | (127 << 16) | (114 << 8) | 114;

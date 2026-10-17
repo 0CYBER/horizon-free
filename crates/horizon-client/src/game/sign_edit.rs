@@ -88,7 +88,7 @@ impl Game<'_> {
                     return;
                 };
                 let line = edit.line;
-                let atlas = &self.atlas;
+                let atlas = &self.gui.atlas;
                 let width = |s: &str| HudBatch::text_width(atlas, s);
                 let Some(key) = self.sign_edit.as_ref().map(|e| e.pos) else {
                     return;
@@ -130,7 +130,7 @@ impl Game<'_> {
         } else {
             &mut sign.back
         };
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         self.text_selection.apply(
             sign_line_id(front, line),
             &mut text.lines[line],
@@ -163,7 +163,7 @@ impl Game<'_> {
         let Some(BlockEntity::Sign(sign)) = self.world.block_entities.get(&edit.pos) else {
             return;
         };
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let (w, h) = (batch.width, batch.height);
         batch.fill(atlas, 0.0, 0.0, w, h, rgba(16, 16, 16, 160));
         let title = if sign.hanging {

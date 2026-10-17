@@ -238,7 +238,7 @@ impl Game<'_> {
                     .pack
                     .layer_names
                     .get(&face.layer)
-                    .and_then(|name| self.atlas.sprites.get(name).copied());
+                    .and_then(|name| self.gui.atlas.sprites.get(name).copied());
             }
         }
         for t in &self.tnts {

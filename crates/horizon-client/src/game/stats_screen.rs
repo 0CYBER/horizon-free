@@ -222,7 +222,7 @@ impl Game<'_> {
     }
     pub(super) fn draw_stats(&mut self, batch: &mut HudBatch) {
         let (w, h) = (batch.width, batch.height);
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
         let (top, bottom) = (TAB_H, h - FOOTER);
         ui::separators(batch, atlas, top, bottom, true);
@@ -333,13 +333,13 @@ impl Game<'_> {
                     }
                     let stack = ItemStack::new(item, 1);
                     batch.sprite(
-                        &self.atlas,
+                        &self.gui.atlas,
                         "gui/sprites/container/slot",
                         left + 1.0,
                         y + 1.0,
                     );
                     self.draw_item(batch, &stack, left + 2.0, y + 2.0);
-                    let atlas = &self.atlas;
+                    let atlas = &self.gui.atlas;
                     let color = if (i + 1) % 2 == 0 {
                         u32::MAX
                     } else {
@@ -400,7 +400,7 @@ impl Game<'_> {
                 }
             }
         }
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         ui::scrollbar(
             batch,
             atlas,
@@ -413,7 +413,7 @@ impl Game<'_> {
         self.draw_stats_footer(batch, w, h);
     }
     fn draw_stats_footer(&self, batch: &mut HudBatch, w: f32, h: f32) {
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let (bx, by) = ((w / 2.0 - 100.0).floor(), h - FOOTER + 6.0);
         let hover = ui::hovered(self.cursor, bx, by, 200.0, 20.0);
         ui::button(

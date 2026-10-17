@@ -789,6 +789,7 @@ impl Game<'_> {
         }
         let slot = self.maps.slots.last()?.1;
         let rect = self
+            .gui
             .atlas
             .sprites
             .get(&format!("horizon/map{slot}"))
@@ -797,7 +798,7 @@ impl Game<'_> {
         if m.texture_dirty {
             m.texture_dirty = false;
             let rgba: Vec<u8> = m.colors.iter().flat_map(|&c| packed_rgba(c)).collect();
-            let (w, h) = (self.atlas.width as f32, self.atlas.height as f32);
+            let (w, h) = (self.gui.atlas.width as f32, self.gui.atlas.height as f32);
             self.map_patches.push(horizon_client::font::Patch {
                 x: (rect.u0 * w).round() as u32,
                 y: (rect.v0 * h).round() as u32,
@@ -855,7 +856,7 @@ impl Game<'_> {
             .map(|m| m.decorations.clone())
             .unwrap_or_default();
         for (i, d) in decorations.iter().enumerate() {
-            let Some(s) = self.atlas.sprites.get(d.sprite).copied() else {
+            let Some(s) = self.gui.atlas.sprites.get(d.sprite).copied() else {
                 continue;
             };
             let dm = glam::Mat4::from_translation(glam::Vec3::new(
@@ -931,7 +932,7 @@ impl Game<'_> {
         } else {
             "map/map_background"
         };
-        if let Some(r) = self.atlas.sprites.get(background).copied() {
+        if let Some(r) = self.gui.atlas.sprites.get(background).copied() {
             for (c, uv) in [
                 ([-7.0, 135.0, 0.0], [r.u0, r.v1]),
                 ([135.0, 135.0, 0.0], [r.u1, r.v1]),

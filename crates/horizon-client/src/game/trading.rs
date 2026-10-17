@@ -548,7 +548,7 @@ impl Game<'_> {
         );
         let offers = m.session.offers.clone();
         let costs: Vec<ItemStack> = offers.iter().map(|o| o.cost_a(&self.res.items)).collect();
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         batch.fill(
             atlas,
             0.0,
@@ -687,7 +687,7 @@ impl Game<'_> {
             } else {
                 "gui/sprites/widget/button"
             };
-            batch.sprite_scaled(&self.atlas, sprite, bx, by, 88.0, 20.0, u32::MAX);
+            batch.sprite_scaled(&self.gui.atlas, sprite, bx, by, 88.0, 20.0, u32::MAX);
             let y = oy + 16.0 + 1.0 + 20.0 * row as f32 + 2.0;
             let base = offer.base_cost_a.stack.clone();
             let cost_a = costs[index].clone();
@@ -705,7 +705,7 @@ impl Game<'_> {
                     x,
                     y,
                 );
-                let atlas = &self.atlas;
+                let atlas = &self.gui.atlas;
                 let t = base.count.to_string();
                 batch.text(
                     atlas,
@@ -740,7 +740,7 @@ impl Game<'_> {
                 "trade_arrow"
             };
             batch.sprite(
-                &self.atlas,
+                &self.gui.atlas,
                 &format!("gui/sprites/container/villager/{arrow}"),
                 ox + SHIFT + 60.0,
                 y + 3.0,
@@ -770,7 +770,7 @@ impl Game<'_> {
         if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
             let (sx, sy) = self.slot_position(slot);
             batch.fill(
-                &self.atlas,
+                &self.gui.atlas,
                 ox + sx,
                 oy + sy,
                 16.0,

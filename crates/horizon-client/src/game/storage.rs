@@ -211,7 +211,7 @@ impl Game<'_> {
         oy: f32,
     ) {
         use horizon_client::hud::rgba;
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let grey = rgba(64, 64, 64, 255);
         if self
             .container_block()

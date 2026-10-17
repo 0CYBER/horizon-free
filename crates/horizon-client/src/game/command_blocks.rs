@@ -458,7 +458,7 @@ impl Game<'_> {
             self.close_command_block();
             return;
         }
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let (w, h) = (batch.width, batch.height);
         let mid = (w / 2.0).floor();
         ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);

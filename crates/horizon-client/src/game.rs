@@ -693,6 +693,23 @@ pub struct Resources {
     /// Enchantments, workstation recipes and brewing (game/stations.rs).
     stations: horizon_client::stations::StationData,
 }
+/// Everything the title and menus draw: the GUI atlas with its font and the
+/// title panorama. Kept apart from the world bundle so the title can appear
+/// before the block sprites, models and gameplay tables are ready.
+pub struct UiResources {
+    /// The GUI, font, particle, map and skin atlas.
+    pub atlas: HudAtlas,
+    /// The title screen's panorama faces.
+    pub panorama: Arc<horizon_client::gfx::panorama::Faces>,
+}
+impl UiResources {
+    pub fn load(root: &std::path::Path) -> Result<Self> {
+        Ok(Self {
+            atlas: HudAtlas::build(root)?,
+            panorama: Arc::new(horizon_client::gfx::panorama::Faces::load(root)),
+        })
+    }
+}
 /// What a resource pack reload replaces (`Minecraft.reloadResourcePacks`):
 /// block models and sprites with their meshing tables, item models,
 /// translations and the textures read on the CPU. Each game holds its own;
@@ -702,7 +719,6 @@ pub struct PackResources {
     assets: Arc<Assets>,
     context: Arc<WorkerContext>,
     layer_names: Arc<HashMap<u32, String>>,
-    panorama: Arc<horizon_client::gfx::panorama::Faces>,
     /// Item definitions, baked item models and special renderers.
     item_renderer: Arc<horizon_client::item_render::ItemRenderer>,
     names: Arc<Names>,
@@ -741,7 +757,6 @@ impl PackResources {
                 light,
             }),
             assets,
-            panorama: Arc::new(horizon_client::gfx::panorama::Faces::load(root)),
             item_renderer: Arc::new(item_renderer),
             names: Arc::new(Names::load(root)),
             clouds: Arc::new(load_clouds(root)),
@@ -778,8 +793,8 @@ struct Game<'a> {
     motion: &'a MotionResources,
     /// This game's resource packs (`reload_packs` replaces them).
     pack: PackResources,
-    /// The GUI, font, particle, map and skin atlas.
-    atlas: HudAtlas,
+    /// The title and menu bundle (GUI atlas, font and panorama).
+    gui: UiResources,
     /// `FogRenderer`'s evolving state.
     fog: horizon_client::fog::FogState,
     screen_fx: horizon_client::screen_effects::ScreenEffects,
@@ -3741,7 +3756,7 @@ impl Game<'_> {
         let (stack, capped) = match drag.and_then(|d| d.slots.get(&slot)) {
             Some(None) => return,
             Some(Some((count, capped))) => {
-                batch.fill(&self.atlas, x, y, 16.0, 16.0, rgba(255, 255, 255, 128));
+                batch.fill(&self.gui.atlas, x, y, 16.0, 16.0, rgba(255, 255, 255, 128));
                 let carried = self
                     .carried
                     .clone()
@@ -3836,10 +3851,10 @@ impl Game<'_> {
             0,
             0,
             &decorations,
-            &self.atlas.font,
+            &self.gui.atlas.font,
         ));
         draws.push(hud_layout::GuiDraw::Pop);
-        hud_layout::paint(batch, &self.atlas, &draws);
+        hud_layout::paint(batch, &self.gui.atlas, &draws);
     }
     fn hud(&mut self, size: [u32; 2]) -> HudBatch {
         let mut batch = self.hud_layers(size);
@@ -3847,7 +3862,7 @@ impl Game<'_> {
         // and the toasts, so it is over everything, menus included.
         self.draw_debug_overlay(&mut batch, size);
         self.frame_graph
-            .draw(self.settings.horizon.overlay, &mut batch, &self.atlas);
+            .draw(self.settings.horizon.overlay, &mut batch, &self.gui.atlas);
         self.draw_pad_cursor(&mut batch);
         batch
     }
@@ -3868,12 +3883,12 @@ impl Game<'_> {
             if horizon_client::ui_theme::horizon() {
                 let fade = self.backdrop_fade();
                 let mut ui =
-                    horizon_client::ui_theme::Ui::new(&self.atlas, &mut batch, self.cursor);
+                    horizon_client::ui_theme::Ui::new(&self.gui.atlas, &mut batch, self.cursor);
                 title.draw_horizon(&mut ui, fade);
                 ui.finish();
             } else {
                 title.draw(
-                    &self.atlas,
+                    &self.gui.atlas,
                     &mut batch,
                     self.cursor,
                     self.settings.file.bool("hideSplashTexts"),
@@ -3881,7 +3896,7 @@ impl Game<'_> {
             }
             return batch;
         }
-        let atlas_ptr: *const HudAtlas = &self.atlas;
+        let atlas_ptr: *const HudAtlas = &self.gui.atlas;
         let _ = atlas_ptr;
         if self.remote_overlay(&mut batch) {
             return batch;
@@ -3912,7 +3927,7 @@ impl Game<'_> {
                     hud_layout::full_attack_indicator(a, delay, self.crosshair_living())
                 });
                 let draws = hud_layout::crosshair(wi, hi, attack, full);
-                hud_layout::paint(&mut batch, &self.atlas, &draws);
+                hud_layout::paint(&mut batch, &self.gui.atlas, &draws);
             }
             if !spectator {
                 let inputs = hud_layout::HotbarInputs {
@@ -3924,7 +3939,7 @@ impl Game<'_> {
                     attack: (indicator == 2).then_some(strength),
                 };
                 let draws = hud_layout::hotbar(wi, hi, &inputs);
-                hud_layout::paint(&mut batch, &self.atlas, &draws);
+                hud_layout::paint(&mut batch, &self.gui.atlas, &draws);
                 for d in &draws {
                     if let hud_layout::GuiDraw::Item { slot, x, y, .. } = *d {
                         let stack = if slot == 40 {
@@ -3954,7 +3969,7 @@ impl Game<'_> {
                 && !spectator
                 && let Some(p) = &mut self.player
             {
-                let atlas = &self.atlas;
+                let atlas = &self.gui.atlas;
                 let width = |s: &str| HudBatch::text_width(atlas, s) as i32;
                 let draws = hud_layout::experience(
                     wi,
@@ -4017,13 +4032,13 @@ impl Game<'_> {
         }
         // Hud.extractSleepOverlay: over all health/food bars, under titles and chat.
         let draws = hud_overlays::sleep_overlay(wi, hi, self.sleep_timer as i32);
-        hud_layout::paint(&mut batch, &self.atlas, &draws);
+        hud_layout::paint(&mut batch, &self.gui.atlas, &draws);
         if show_hud {
             self.draw_titles(&mut batch);
             self.draw_scoreboard(&mut batch);
             self.draw_subtitles(&mut batch);
         }
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         if show_hud
             && let Some((text, at)) = &self.message
             && at.elapsed() < Duration::from_secs(3)
@@ -4040,9 +4055,9 @@ impl Game<'_> {
             // PauseScreen(false): only its title, at the top.
             Screen::Paused => {
                 let title = self.translate("menu.paused", "Game Paused");
-                let tw = HudBatch::text_width(&self.atlas, &title);
+                let tw = HudBatch::text_width(&self.gui.atlas, &title);
                 batch.text(
-                    &self.atlas,
+                    &self.gui.atlas,
                     &title,
                     ((batch.width / 2.0).floor() - (tw / 2.0).floor()).floor(),
                     10.0,
@@ -4260,7 +4275,7 @@ impl Game<'_> {
             let (sx, sy) = self.slot_position(i);
             if i == 504 && self.offhand.is_none() {
                 batch.sprite(
-                    &self.atlas,
+                    &self.gui.atlas,
                     "gui/sprites/container/slot/shield",
                     ox + sx,
                     oy + sy,
@@ -4269,7 +4284,7 @@ impl Game<'_> {
             if (500..504).contains(&i) && self.armor[i - 500].is_none() {
                 let icon = ["helmet", "chestplate", "leggings", "boots"][i - 500];
                 batch.sprite(
-                    &self.atlas,
+                    &self.gui.atlas,
                     &format!("gui/sprites/container/slot/{icon}"),
                     ox + sx,
                     oy + sy,
@@ -4285,7 +4300,7 @@ impl Game<'_> {
         }
         let (ox, oy) = self.inventory_origin(batch);
         {
-            let atlas = &self.atlas;
+            let atlas = &self.gui.atlas;
             batch.fill(
                 atlas,
                 0.0,
@@ -4409,7 +4424,7 @@ impl Game<'_> {
         if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
             let (sx, sy) = self.slot_position(slot);
             batch.fill(
-                &self.atlas,
+                &self.gui.atlas,
                 ox + sx,
                 oy + sy,
                 16.0,
@@ -5435,7 +5450,7 @@ impl Game<'_> {
                     m.height(),
                     camera,
                     fire_yaw,
-                    &self.atlas.sprites,
+                    &self.gui.atlas.sprites,
                     self.world.light(
                         at.x.floor() as i32,
                         at.y.floor() as i32,
@@ -5457,7 +5472,7 @@ impl Game<'_> {
                 p.dimensions.height,
                 camera,
                 fire_yaw,
-                &self.atlas.sprites,
+                &self.gui.atlas.sprites,
                 self.world.light(
                     feet.x.floor() as i32,
                     feet.y.floor() as i32,
@@ -5480,7 +5495,7 @@ impl Game<'_> {
                     0.25,
                     camera,
                     fire_yaw,
-                    &self.atlas.sprites,
+                    &self.gui.atlas.sprites,
                     self.world.light(
                         at.x.floor() as i32,
                         at.y.floor() as i32,
@@ -5499,7 +5514,7 @@ impl Game<'_> {
                     1.975 * scale,
                     camera,
                     fire_yaw,
-                    &self.atlas.sprites,
+                    &self.gui.atlas.sprites,
                     self.world.light(
                         stand.position.x.floor() as i32,
                         stand.position.y.floor() as i32,
@@ -5524,7 +5539,7 @@ impl Game<'_> {
         self.name_tag_geometry(camera, alpha, &mut out, &mut see_through);
         self.see_through_vertices = see_through;
         // Entity shadows (EntityRenderer.extractShadow).
-        if let Some(sprite) = self.atlas.sprites.get("misc/shadow").copied() {
+        if let Some(sprite) = self.gui.atlas.sprites.get("misc/shadow").copied() {
             let ambient = if self.dim == Dim::Nether { 0.1 } else { 0.0 };
             let darken = self.sky_darken();
             let a = alpha;
@@ -5579,7 +5594,7 @@ impl Game<'_> {
                 game_time: self.world.game_time,
                 max_y: self.dim.max_y(),
                 world: &self.world,
-                sprites: &self.atlas.sprites,
+                sprites: &self.gui.atlas.sprites,
                 nether: self.dim == Dim::Nether,
                 lid: &lid,
                 sign: &|p| match self.world.block_entities.get(&(p[0], p[1], p[2])) {
@@ -5587,7 +5602,7 @@ impl Game<'_> {
                     _ => None,
                 },
                 banner: &|p| self.banner_layers_at(p),
-                glyph: &|c| self.atlas.glyph_cell(c),
+                glyph: &|c| self.gui.atlas.glyph_cell(c),
             };
             // Block entities outside the view frustum are skipped (with a
             // block of margin for models larger than their block).
@@ -5631,7 +5646,7 @@ impl Game<'_> {
             }
             if let Some(mining) = &self.mining
                 && mining.progress > 0.0
-                && self.atlas.sprites.contains_key(&format!(
+                && self.gui.atlas.sprites.contains_key(&format!(
                     "block/destroy_stage_{}",
                     ((mining.progress * 10.0) as u32).min(9)
                 ))
@@ -5646,6 +5661,7 @@ impl Game<'_> {
         }
         // Experience orbs (ExperienceOrbRenderer): pulsing billboards from a 4x4 icon sheet.
         if let Some(r) = self
+            .gui
             .atlas
             .sprites
             .get("entity/experience/experience_orb")
@@ -5758,7 +5774,7 @@ impl Game<'_> {
             &|b| world.light(b[0], b[1], b[2]),
             &mut out,
         );
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         // Breaking progress overlay (destroy_stage_0..9).
         if let Some(m) = &self.mining
             && m.progress > 0.0
@@ -6143,7 +6159,7 @@ impl Game<'_> {
     /// SkyRenderer.renderSunMoonAndStars: bodies on a frame rotated Y -90 then X by angle.
     fn celestial_geometry(&self, sky: &horizon_client::environment::Sky) -> Vec<Vertex> {
         let mut out = Vec::new();
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let frame = |angle: f32| {
             glam::Mat4::from_rotation_y((-90.0f32).to_radians())
                 * glam::Mat4::from_rotation_x(angle.to_radians())
@@ -7643,7 +7659,13 @@ impl Game<'_> {
                 let Some(arm) = self.res.player_arm.clone() else {
                     continue;
                 };
-                let Some(r) = self.atlas.sprites.get("entity/player/wide/steve").copied() else {
+                let Some(r) = self
+                    .gui
+                    .atlas
+                    .sprites
+                    .get("entity/player/wide/steve")
+                    .copied()
+                else {
                     continue;
                 };
                 // renderPlayerArm (right arm)
@@ -7767,22 +7789,22 @@ impl Game<'_> {
         }
         out
     }
-    /// The renderer for the window, with the current block sprites, shared
+    /// The renderer for the window, with the current block sprites, GUI
     /// atlas and world border texture.
     fn new_renderer(&self, window: Arc<Window>) -> Result<Renderer> {
-        self.renderer_for(window, &self.pack, &self.atlas)
+        self.renderer_for(window, &self.pack, &self.gui)
     }
     fn renderer_for(
         &self,
         window: Arc<Window>,
         pack: &PackResources,
-        atlas: &HudAtlas,
+        gui: &UiResources,
     ) -> Result<Renderer> {
         build_renderer(
             window,
             self.options.offscreen,
             pack,
-            atlas,
+            gui,
             self.renderer.as_ref(),
         )
     }
@@ -7899,7 +7921,7 @@ impl Game<'_> {
         if intensity <= 0.0 {
             return;
         }
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let (Some(rain_tex), Some(snow_tex)) = (
             atlas.sprites.get("environment/rain").copied(),
             atlas.sprites.get("environment/snow").copied(),
@@ -8095,7 +8117,7 @@ impl Game<'_> {
     }
     /// Vanilla tooltip: dark box with a purple gradient border.
     fn tooltip(&self, batch: &mut HudBatch, text: &str, x: f32, y: f32) {
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let w = HudBatch::text_width(atlas, text);
         let (x, y) = (x + 12.0, y - 12.0);
         batch.fill(atlas, x - 3.0, y - 4.0, w + 6.0, 16.0, rgba(16, 0, 16, 240));
@@ -8117,7 +8139,7 @@ impl Game<'_> {
             )
         };
         batch.fill(
-            &self.atlas,
+            &self.gui.atlas,
             0.0,
             0.0,
             batch.width,
@@ -8128,7 +8150,7 @@ impl Game<'_> {
         for (i, t) in tabs.iter().enumerate() {
             if i != selected {
                 let (tx, ty) = Creative::tab_position(t);
-                batch.sprite(&self.atlas, &tab_sprite(t, false), ox + tx, oy + ty);
+                batch.sprite(&self.gui.atlas, &tab_sprite(t, false), ox + tx, oy + ty);
             }
         }
         let background = if tab.search {
@@ -8138,13 +8160,13 @@ impl Game<'_> {
         } else {
             "gui/container/creative_inventory/tab_items"
         };
-        if let Some(mut r) = self.atlas.sprites.get(background).copied() {
+        if let Some(mut r) = self.gui.atlas.sprites.get(background).copied() {
             r.u1 = r.u0 + (r.u1 - r.u0) * Creative::WIDTH / r.w as f32;
             r.v1 = r.v0 + (r.v1 - r.v0) * Creative::HEIGHT / r.h as f32;
             batch.rect_uv(ox, oy, Creative::WIDTH, Creative::HEIGHT, r, u32::MAX);
         }
         let (tx, ty) = Creative::tab_position(&tab);
-        batch.sprite(&self.atlas, &tab_sprite(&tab, true), ox + tx, oy + ty);
+        batch.sprite(&self.gui.atlas, &tab_sprite(&tab, true), ox + tx, oy + ty);
         for t in &tabs {
             let (tx, ty) = Creative::tab_position(t);
             let stack = ItemStack {
@@ -8160,7 +8182,7 @@ impl Game<'_> {
                 oy + ty + if t.top { 9.0 } else { 7.0 },
             );
         }
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         if !tab.inventory {
             batch.text(
                 atlas,
@@ -8202,7 +8224,7 @@ impl Game<'_> {
             if Self::creative_trash_hovered(batch, self.cursor) {
                 let (x, y) = Creative::TRASH_POSITION;
                 batch.fill(
-                    &self.atlas,
+                    &self.gui.atlas,
                     ox + x,
                     oy + y,
                     16.0,
@@ -8213,7 +8235,7 @@ impl Game<'_> {
             if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
                 let (x, y) = self.slot_position(slot);
                 batch.fill(
-                    &self.atlas,
+                    &self.gui.atlas,
                     ox + x,
                     oy + y,
                     16.0,
@@ -8236,7 +8258,7 @@ impl Game<'_> {
                         && self.cursor.1 >= y
                         && self.cursor.1 < y + 16.0
                     {
-                        batch.fill(&self.atlas, x, y, 16.0, 16.0, rgba(255, 255, 255, 128));
+                        batch.fill(&self.gui.atlas, x, y, 16.0, 16.0, rgba(255, 255, 255, 128));
                         hovered = Some(stack.clone());
                     }
                 }
@@ -8262,7 +8284,7 @@ impl Game<'_> {
                 "gui/sprites/container/creative_inventory/scroller_disabled"
             };
             batch.sprite(
-                &self.atlas,
+                &self.gui.atlas,
                 scroller,
                 ox + Creative::SCROLL_X,
                 oy + Creative::SCROLL_Y + self.creative_screen.scroller_offset(),
@@ -8725,7 +8747,7 @@ impl Game<'_> {
             clouds: ((!title || live)
                 && self.dim == Dim::Overworld
                 && horizon_client::clouds::visible(&self.settings.clouds, sky.cloud_color[3]))
-            .then(|| self.atlas.sprites.get("horizon/white"))
+            .then(|| self.gui.atlas.sprites.get("horizon/white"))
             .flatten()
             .map(|white| horizon_client::clouds::Input {
                 texture: &self.pack.clouds,
@@ -8755,14 +8777,15 @@ impl Game<'_> {
                 .mining
                 .as_ref()
                 .and_then(|m| {
-                    self.atlas.sprites.get(&format!(
+                    self.gui.atlas.sprites.get(&format!(
                         "block/destroy_stage_{}",
                         ((m.progress * 10.0) as u32).min(9)
                     ))
                 })
                 .map_or([0.0; 4], |r| [r.u0, r.v0, r.u1 - r.u0, r.v1 - r.v0]),
             end_portal_sprites: ["environment/end_sky", "entity/end_portal/end_portal"].map(|n| {
-                self.atlas
+                self.gui
+                    .atlas
                     .sprites
                     .get(n)
                     .map_or([0.0; 4], |r| [r.u0, r.v0, r.u1 - r.u0, r.v1 - r.v0])
@@ -8822,7 +8845,7 @@ impl Game<'_> {
         reason: horizon_client::level_loading::Reason,
     ) {
         use horizon_client::level_loading::{self, Reason, STATUS_RADIUS};
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let (w, h) = (batch.width, batch.height);
         match reason {
             // The panorama and its blur are drawn by the renderer.
@@ -9333,7 +9356,7 @@ impl ApplicationHandler for Game<'_> {
                             && !horizon_client::ui_theme::horizon()
                         {
                             title.drag(self.cursor, (b.width, b.height));
-                            title.drag_field(&self.atlas, self.cursor.0);
+                            title.drag_field(&self.gui.atlas, self.cursor.0);
                         }
                         if self.dragging && self.screen == Screen::Options {
                             let _ = b;
@@ -9438,7 +9461,7 @@ impl ApplicationHandler for Game<'_> {
                         .map(|r| [r.config.width, r.config.height])
                         .unwrap_or([1, 1]);
                     let mut b = HudBatch::new(size);
-                    let atlas = &self.atlas;
+                    let atlas = &self.gui.atlas;
                     let shift = self.has_shift_down();
                     let (action, sound) = self.title.as_mut().map_or((Action::None, false), |t| {
                         if horizon_client::ui_theme::horizon() {
@@ -9982,7 +10005,7 @@ impl<'a> Game<'a> {
     fn new(
         res: &'a Arc<Resources>,
         pack: PackResources,
-        atlas: HudAtlas,
+        gui: UiResources,
         options: Options,
         settings: Settings,
         audio: Audio,
@@ -10016,13 +10039,13 @@ impl<'a> Game<'a> {
         let inventory = vec![None; 36];
         let now = Instant::now();
         let look = options.look;
-        let particles = horizon_client::particles::ParticleEngine::new(&root, &atlas.sprites);
+        let particles = horizon_client::particles::ParticleEngine::new(&root, &gui.atlas.sprites);
         Ok(Game {
             res: res.clone(),
             collision: &res.collision,
             motion: &res.motion,
             pack,
-            atlas,
+            gui,
             fog: Default::default(),
             screen_fx: Default::default(),
             world,
@@ -10303,7 +10326,7 @@ struct Loaded {
     pack_error: Option<String>,
     resources: Resources,
     pack: PackResources,
-    atlas: HudAtlas,
+    gui: UiResources,
 }
 
 /// The loader's checkpoints, in order; the loading screen reports them.
@@ -10407,7 +10430,7 @@ fn load_resources(
     let pack = PackResources::load(&root, assets.clone(), &facts, biomes.clone(), light)?;
     log::info!("load pack tables: {:.2}s", started.elapsed().as_secs_f32());
     on_stage(4);
-    let atlas = HudAtlas::build(&root)?;
+    let gui = UiResources::load(&root)?;
     horizon_client::ui::load_metadata(&root);
     horizon_client::lang::set(horizon_client::lang::Language::load(
         &[&root],
@@ -10484,7 +10507,7 @@ fn load_resources(
         pack_error,
         resources,
         pack,
-        atlas,
+        gui,
     })
 }
 
@@ -10494,10 +10517,11 @@ fn build_renderer(
     window: Arc<Window>,
     offscreen: bool,
     pack: &PackResources,
-    atlas: &HudAtlas,
+    gui: &UiResources,
     previous: Option<&Renderer>,
 ) -> Result<Renderer> {
     let assets = &pack.assets;
+    let atlas = &gui.atlas;
     let mut renderer = pollster::block_on(Renderer::new(
         window,
         offscreen,
@@ -10509,7 +10533,7 @@ fn build_renderer(
         &assets.animations,
         (&atlas.pixels, atlas.width, atlas.height),
         (&pack.forcefield.2, pack.forcefield.0),
-        &pack.panorama,
+        &gui.panorama,
         previous,
     ))?;
     renderer.hud.fire_animations = atlas
@@ -10619,7 +10643,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
 fn start_game<'a>(
     res: &'a Arc<Resources>,
     pack: PackResources,
-    atlas: HudAtlas,
+    gui: UiResources,
     options: Options,
     pack_error: Option<String>,
     audio: Audio,
@@ -10638,7 +10662,7 @@ fn start_game<'a>(
     if let Some(d) = options.distance_override {
         settings.render_distance = d;
     }
-    let mut game = Game::new(res, pack, atlas, options, settings, audio)?;
+    let mut game = Game::new(res, pack, gui, options, settings, audio)?;
     game.ui.vanilla_root = vanilla_root;
     if let Some(error) = pack_error {
         game.open_options_at(true, horizon_client::options_ui::Page::Packs);
@@ -10911,7 +10935,7 @@ impl Loading {
             window.clone(),
             options.offscreen,
             &loaded.pack,
-            &loaded.atlas,
+            &loaded.gui,
             self.renderer.as_ref(),
         )?;
         let pack_error = loaded.pack_error.or_else(|| self.pack_error.take());
@@ -10921,7 +10945,7 @@ impl Loading {
         let Some(mut game) = start_game(
             res,
             loaded.pack,
-            loaded.atlas,
+            loaded.gui,
             options,
             pack_error,
             audio,
@@ -11122,7 +11146,7 @@ pub fn run() -> Result<()> {
     let game = start_game(
         &resources,
         loaded.pack,
-        loaded.atlas,
+        loaded.gui,
         options,
         loaded.pack_error.or(pack_error),
         audio,

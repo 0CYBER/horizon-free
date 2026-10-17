@@ -255,7 +255,7 @@ impl Game<'_> {
         item_render::gui::draw(
             &state,
             &self.pack.item_renderer,
-            &self.atlas.sprites,
+            &self.gui.atlas.sprites,
             &self.item_host(),
             batch,
             x,
@@ -279,7 +279,7 @@ impl Game<'_> {
         };
         state.submit(
             &self.pack.item_renderer,
-            &self.atlas.sprites,
+            &self.gui.atlas.sprites,
             &self.item_host(),
             pose,
             &mut sink,
@@ -300,7 +300,7 @@ impl Game<'_> {
         };
         state.submit(
             &self.pack.item_renderer,
-            &self.atlas.sprites,
+            &self.gui.atlas.sprites,
             &self.item_host(),
             pose,
             &mut sink,

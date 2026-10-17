@@ -111,7 +111,7 @@ impl Game<'_> {
     }
     pub(super) fn draw_options(&mut self, batch: &mut HudBatch) {
         let mut ui = std::mem::take(&mut self.ui.options);
-        ui.draw(&self.settings, batch, &self.atlas, self.cursor);
+        ui.draw(&self.settings, batch, &self.gui.atlas, self.cursor);
         self.ui.options = ui;
     }
     pub(super) fn options_mouse(&mut self, pressed: bool, right: bool) -> Result<()> {
@@ -133,7 +133,7 @@ impl Game<'_> {
         let mut ui = std::mem::take(&mut self.ui.options);
         let events = ui.click(
             &mut self.settings,
-            &self.atlas,
+            &self.gui.atlas,
             self.cursor.0,
             self.cursor.1,
             size,
@@ -152,7 +152,7 @@ impl Game<'_> {
         let mut ui = std::mem::take(&mut self.ui.options);
         let events = ui.click(
             &mut self.settings,
-            &self.atlas,
+            &self.gui.atlas,
             self.cursor.0,
             self.cursor.1,
             size,
@@ -165,7 +165,7 @@ impl Game<'_> {
     }
     pub(super) fn options_key(&mut self, key: KeyCode, text: Option<&str>) -> Result<()> {
         let mut ui = std::mem::take(&mut self.ui.options);
-        let events = ui.key(&mut self.settings, &self.atlas, key, text);
+        let events = ui.key(&mut self.settings, &self.gui.atlas, key, text);
         self.ui.options = ui;
         self.handle_option_events(events)
     }
@@ -176,7 +176,7 @@ impl Game<'_> {
     ) -> bool {
         self.ui
             .options
-            .shortcut(&self.atlas, shortcut, &mut self.clipboard)
+            .shortcut(&self.gui.atlas, shortcut, &mut self.clipboard)
     }
     pub(super) fn options_scroll(&mut self, amount: f32) {
         let size = self.gui_size();
@@ -233,7 +233,7 @@ impl Game<'_> {
     pub(super) fn load_language(&mut self, code: &str) {
         let root = self.options.resources.clone();
         lang::set(lang::Language::load(&[&root], code));
-        self.ui.chat.rescale(&self.atlas);
+        self.ui.chat.rescale(&self.gui.atlas);
     }
     /// Settings that Horizon applies beyond render distance, volume and GUI scale.
     pub(super) fn apply_ui_settings(&mut self) {
@@ -264,14 +264,14 @@ impl Game<'_> {
         };
         self.ui.chat.options = chat;
         if rescale {
-            self.ui.chat.rescale(&self.atlas);
+            self.ui.chat.rescale(&self.gui.atlas);
         }
-        let font = &mut self.atlas.font;
+        let font = &mut self.gui.atlas.font;
         if font.uniform != s.force_unicode || font.japanese != s.japanese_glyphs {
             font.uniform = s.force_unicode;
             font.japanese = s.japanese_glyphs;
             font.reset_cache();
-            self.ui.chat.rescale(&self.atlas);
+            self.ui.chat.rescale(&self.gui.atlas);
         }
         // A new renderer (resource reload, first window) takes the loaded pack.
         let stale = self

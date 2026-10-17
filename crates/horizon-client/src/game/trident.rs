@@ -343,6 +343,7 @@ impl Game<'_> {
             return;
         };
         let Some(uv) = self
+            .gui
             .atlas
             .sprites
             .get("entity/trident/trident")

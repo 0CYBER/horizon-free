@@ -283,7 +283,7 @@ impl Game<'_> {
         let Some(open) = self.mount_menu.open.as_ref() else {
             return;
         };
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         batch.sprite_region(
             atlas,
             "gui/container/horse",
@@ -376,7 +376,7 @@ impl Game<'_> {
         m.hurt_time = 0;
         m.death_time = 0;
         let camera = glam::DVec3::new(m.position.x, m.position.y, m.position.z);
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         let mut verts = Vec::new();
         horizon_client::mobs::render::render_with(

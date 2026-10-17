@@ -39,7 +39,7 @@ impl Game<'_> {
         };
         switcher.hover(w, h, (self.cursor.0 as i32, self.cursor.1 as i32));
         let selected = switcher.selected;
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         batch.sprite_region(
             atlas,
             "gui/container/gamemode_switcher",
@@ -62,14 +62,14 @@ impl Game<'_> {
         for (index, mode) in MODES.into_iter().enumerate() {
             let (x, y) = slot_origin(w, h, index);
             batch.sprite(
-                &self.atlas,
+                &self.gui.atlas,
                 "gui/sprites/gamemode_switcher/slot",
                 x as f32,
                 y as f32,
             );
             if mode == selected {
                 batch.sprite(
-                    &self.atlas,
+                    &self.gui.atlas,
                     "gui/sprites/gamemode_switcher/selection",
                     x as f32,
                     y as f32,
