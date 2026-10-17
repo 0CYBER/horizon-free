@@ -46,6 +46,8 @@ pub struct Guest {
     pub left_reason: String,
     pub uuid: u128,
     pub name: String,
+    /// The profile's properties, for the player list (skins).
+    pub properties: Vec<horizon_protocol::packets::login::Property>,
     pub entity_id: i32,
     pub sender: PlayerSender,
     pub latency: Arc<AtomicI32>,
@@ -150,6 +152,7 @@ impl Guest {
             left_reason: String::new(),
             uuid: j.uuid,
             name: j.name,
+            properties: j.properties,
             entity_id,
             sender: j.sender,
             latency: j.latency,

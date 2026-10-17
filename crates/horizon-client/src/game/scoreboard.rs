@@ -735,6 +735,7 @@ mod tab_list_tests {
                 conn: uuid as u32,
                 uuid,
                 name: name.into(),
+                properties: Vec::new(),
                 info: ClientInformation::new(8),
                 brand: "test".into(),
                 sender: PlayerSender::new(tx, Arc::default()),
