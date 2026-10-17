@@ -577,6 +577,14 @@ packet!(
 );
 packet!(Text { text: Tag => Nbt });
 packet!(SetChunkCacheCenter { x: i32 => VarInt, z: i32 => VarInt });
+packet!(
+    /// ClientboundTickingStatePacket: the tick rate and whether the level is frozen.
+    TickingState { rate: f32 => Float, frozen: bool => Bool }
+);
+packet!(
+    /// ClientboundTickingStepPacket: the ticks a frozen level runs (`/tick step`).
+    TickingStep { steps: i32 => VarInt }
+);
 packet!(Distance { distance: i32 => VarInt });
 packet!(SetCursorItem { item: Option<Stack> => Slot });
 packet!(SetDefaultSpawnPosition { pos: GlobalPos => GlobalPos, yaw: f32 => Float, pitch: f32 => Float });
@@ -1066,6 +1074,8 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     TabList(TabList) = TAB_LIST,
     TakeItemEntity(TakeItemEntity) = TAKE_ITEM_ENTITY,
     TeleportEntity(TeleportEntity) = TELEPORT_ENTITY,
+    TickingState(TickingState) = TICKING_STATE,
+    TickingStep(TickingStep) = TICKING_STEP,
     UpdateMobEffect(UpdateMobEffect) = UPDATE_MOB_EFFECT,
     UpdateTags(UpdateTags) = UPDATE_TAGS,
 });
@@ -1573,6 +1583,11 @@ mod tests {
                 relatives: 0,
                 on_ground: true,
             }),
+            Clientbound::TickingState(TickingState {
+                rate: 40.0,
+                frozen: true,
+            }),
+            Clientbound::TickingStep(TickingStep { steps: 7 }),
         ];
         for p in packets {
             round_trip(p, Clientbound::encode, Clientbound::decode);
