@@ -8,7 +8,7 @@ use std::io::Read;
 use std::{collections::BTreeSet, fs, io, path::Path, path::PathBuf};
 
 // Bump when overlay/merge semantics change. Markers are disposable cache data.
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 
 #[derive(Default, Serialize, Deserialize)]
 pub(super) struct Dependencies {
@@ -275,7 +275,6 @@ pub(super) fn build(vanilla: &Path, packs: &[Pack], out: &Path) -> io::Result<()
         .truncate(false)
         .open(lock_path(out))?;
     lock.lock()?;
-    // Resolve marker identity only; preserve the builder's original link targets.
     let vanilla_key = absolute(vanilla)?;
     let marker_path = marker_path(out);
     let signature = pack_signature(packs);
@@ -484,7 +483,9 @@ mod tests {
         // a cache tree changed outside the builder.
         packs::build_overlay(&f.0.join("vanilla"), std::slice::from_ref(&low), &out).unwrap();
         assert_eq!(fs::read(out.join(resource)).unwrap(), b"corrupt");
-        fs::remove_file(&marker).unwrap();
+        let mut old: Marker = serde_json::from_slice(&fs::read(&marker).unwrap()).unwrap();
+        old.version = VERSION - 1;
+        fs::write(&marker, serde_json::to_vec(&old).unwrap()).unwrap();
         f.rebuild_matches(std::slice::from_ref(&low));
         fs::remove_file(out.join(resource)).unwrap();
         fs::remove_file(&marker).unwrap();
@@ -564,8 +565,14 @@ mod tests {
         f.write("pack.zip", &archive(&files(b"ddd"), true));
         f.rebuild_matches(std::slice::from_ref(&pack));
         fs::remove_file(f.0.join("pack.zip")).unwrap();
-        assert!(packs::build_overlay(&f.0.join("vanilla"), &[pack], &out).is_err());
+        assert!(
+            packs::build_overlay(&f.0.join("vanilla"), std::slice::from_ref(&pack), &out).is_err()
+        );
         assert!(!marker_path(&out).exists());
+        assert!(
+            packs::resource_root(&f.0.join("vanilla"), &[pack], &f.0.join("selection-cache"))
+                .is_err()
+        );
     }
 
     #[cfg(unix)]
@@ -758,7 +765,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn relative_builder_targets_are_preserved() {
+    fn relative_sources_are_readable_through_cached_and_uncached_overlays() {
         let f = Fixture::new();
         f.write("vanilla/facts.json", b"[]");
         let mut pack = f.dir_pack("pack");
@@ -777,15 +784,21 @@ mod tests {
         let out = f.0.join("cached");
         let reference = f.0.join("reference");
         packs::build_overlay(&vanilla, std::slice::from_ref(&pack), &out).unwrap();
-        build_overlay_uncached(&vanilla, &[pack], &reference, &mut Dependencies::default())
-            .unwrap();
-        let expected = relative.join("pack").join(name);
-        assert_eq!(fs::read_link(out.join(name)).unwrap(), expected);
-        assert_eq!(fs::read_link(reference.join(name)).unwrap(), expected);
-        assert_eq!(
-            fs::read_link(out.join("facts.json")).unwrap(),
-            vanilla.join("facts.json")
-        );
+        build_overlay_uncached(
+            &vanilla,
+            std::slice::from_ref(&pack),
+            &reference,
+            &mut Dependencies::default(),
+        )
+        .unwrap();
+        for root in [&out, &reference] {
+            assert!(fs::read_link(root.join(name)).unwrap().is_absolute());
+            assert_eq!(fs::read(root.join(name)).unwrap(), b"pack");
+            assert_eq!(fs::read(root.join("facts.json")).unwrap(), b"[]");
+        }
+        packs::build_overlay(&vanilla, &[pack], &out).unwrap();
+        assert_eq!(fs::read(out.join(name)).unwrap(), b"pack");
+        assert_eq!(fs::read(out.join("facts.json")).unwrap(), b"[]");
     }
 
     #[test]
@@ -827,14 +840,17 @@ mod tests {
             let cached_cache = f.0.join("cached");
             fs::create_dir_all(&reference_cache).unwrap();
             let reference = original(&vanilla, selected, &reference_cache);
-            let out = packs::resource_root(&vanilla, selected, &cached_cache);
+            let out = packs::resource_root(&vanilla, selected, &cached_cache).unwrap();
             assert_ne!(out, vanilla, "resource_root must not fall back to vanilla");
             assert!(marker_path(&out).exists());
             let expected = output_signature(&reference).unwrap();
             assert_eq!(output_signature(&out).unwrap(), expected);
             for _ in 0..2 {
                 original(&vanilla, selected, &reference_cache);
-                assert_eq!(packs::resource_root(&vanilla, selected, &cached_cache), out);
+                assert_eq!(
+                    packs::resource_root(&vanilla, selected, &cached_cache).unwrap(),
+                    out
+                );
             }
             let mut baseline = Vec::new();
             let mut cold = Vec::new();
@@ -861,6 +877,7 @@ mod tests {
                             black_box(selected),
                             black_box(&cached_cache),
                         )
+                        .unwrap()
                     };
                     black_box(&result);
                     let ms = started.elapsed().as_secs_f64() * 1000.0;

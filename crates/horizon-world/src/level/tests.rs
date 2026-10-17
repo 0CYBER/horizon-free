@@ -635,6 +635,27 @@ impl World<'_> {
 }
 
 #[test]
+fn mining_lights_redstone_ore_until_its_random_tick() {
+    let mut w = world!();
+    let pos = BlockPos::new(0, 1, 0);
+    for ore in ["redstone_ore", "deepslate_redstone_ore"] {
+        let unlit = w.id(ore, &[("lit", "false")]);
+        let lit = w.id(ore, &[("lit", "true")]);
+        w.put(pos, unlit);
+        w.b().attack_block(&mut w.level, &mut w.ticks, pos);
+        assert_eq!(w.get(pos), lit);
+        w.b().attack_block(&mut w.level, &mut w.ticks, pos);
+        assert_eq!(w.get(pos), lit);
+        w.b().random_tick(&mut w.level, &mut w.ticks, pos);
+        assert_eq!(w.get(pos), unlit);
+    }
+    let stone = w.id("stone", &[]);
+    w.put(pos, stone);
+    w.b().attack_block(&mut w.level, &mut w.ticks, pos);
+    assert_eq!(w.get(pos), stone);
+}
+
+#[test]
 fn placement_orients_blocks() {
     let mut w = world!();
     w.floor(0, 6, "stone");

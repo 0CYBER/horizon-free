@@ -369,7 +369,8 @@ fn pack_files(pack: &Pack) -> io::Result<BTreeMap<String, Provided>> {
 }
 #[cfg(unix)]
 fn link(target: &Path, at: &Path) -> io::Result<()> {
-    std::os::unix::fs::symlink(target, at)
+    // Relative sources are relative to the process, not the overlay directory.
+    std::os::unix::fs::symlink(std::path::absolute(target)?, at)
 }
 #[cfg(not(unix))]
 fn link(target: &Path, at: &Path) -> io::Result<()> {
@@ -635,9 +636,9 @@ pub fn enabled(all: &[Pack], ids: &[String]) -> Vec<Pack> {
         .collect()
 }
 /// Resource root for a pack selection: vanilla itself when no pack is on.
-pub fn resource_root(vanilla: &Path, packs: &[Pack], cache: &Path) -> PathBuf {
+pub fn resource_root(vanilla: &Path, packs: &[Pack], cache: &Path) -> io::Result<PathBuf> {
     if packs.is_empty() {
-        return vanilla.to_path_buf();
+        return Ok(vanilla.to_path_buf());
     }
     let key: String = packs
         .iter()
@@ -648,13 +649,8 @@ pub fn resource_root(vanilla: &Path, packs: &[Pack], cache: &Path) -> PathBuf {
         (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3)
     });
     let out = cache.join(format!("{hash:016x}"));
-    match build_overlay(vanilla, packs, &out) {
-        Ok(()) => out,
-        Err(e) => {
-            log::warn!("Horizon: resource packs not applied: {e}");
-            vanilla.to_path_buf()
-        }
-    }
+    build_overlay(vanilla, packs, &out)?;
+    Ok(out)
 }
 
 /// `Pack.Position`: where a pack goes when it is added to a list.

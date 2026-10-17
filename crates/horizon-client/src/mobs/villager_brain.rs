@@ -924,8 +924,35 @@ fn tickets(m: &Mob, w: &MobWorld, p: [i32; 3]) -> usize {
     }
     n
 }
+/// The POIs of chunk `(qx, qz)` from `y0` to `y1` (within the world), in
+/// scan order: y, then z, then x. Only the indexed POI blocks of the sections
+/// are visited (`PoiManager.getInChunk`).
+fn chunk_pois(
+    w: &MobWorld,
+    (qx, qz): (i32, i32),
+    y0: i32,
+    y1: i32,
+    mut visit: impl FnMut(Poi, [i32; 3]),
+) {
+    let Some(chunk) = w.world.chunks.get(&(qx, qz)) else {
+        return;
+    };
+    let kind = |state: u32| poi_of_state(w, horizon_world::registry::BlockStateId(state));
+    let min = crate::chunk::MIN_Y;
+    for s in (y0 - min) >> 4..=(y1 - min) >> 4 {
+        let section = &chunk.sections[s as usize];
+        for &(i, poi) in w.world.pois.get((qx, s, qz), section, kind).iter() {
+            let i = i32::from(i);
+            let y = min + s * 16 + (i >> 8);
+            if (y0..=y1).contains(&y) {
+                visit(poi, [qx * 16 + (i & 15), y, qz * 16 + (i >> 4 & 15)]);
+            }
+        }
+    }
+}
 /// `PoiManager.getInRange` with `HAS_SPACE`, nearest first (`distSqr` to the
-/// block, ties in scan order), filtered by `accept`.
+/// block, ties in scan order: chunk by chunk, z then x, and y, z, x within),
+/// filtered by `accept`.
 fn pois_in_range(
     m: &Mob,
     w: &MobWorld,
@@ -940,62 +967,24 @@ fn pois_in_range(
     let chunks = radius.div_euclid(16) + 1;
     let y0 = (c[1] - radius).max(crate::chunk::MIN_Y);
     let y1 = (c[1] + radius).min(crate::chunk::MIN_Y + crate::chunk::HEIGHT - 1);
-    // Sections whose palette holds no POI state are skipped whole, as
-    // PoiManager only visits sections with records: the same positions in
-    // the same order, without reading and naming every block of the sphere.
-    let kind = |state: u32| poi_of_state(w, horizon_world::registry::BlockStateId(state));
     for qz in cz - chunks..=cz + chunks {
         for qx in cx - chunks..=cx + chunks {
-            let Some(chunk) = w.world.chunks.get(&(qx, qz)) else {
-                continue;
-            };
-            let holds: Vec<bool> = chunk
-                .sections
-                .iter()
-                .map(|s| s.blocks.maybe_has(|v| kind(v).is_some()))
-                .collect();
-            for y in y0..=y1 {
-                if !holds[((y - crate::chunk::MIN_Y) >> 4) as usize] {
-                    continue;
+            chunk_pois(w, (qx, qz), y0, y1, |poi, p| {
+                if (p[0] - c[0]).abs() > radius
+                    || (p[2] - c[2]).abs() > radius
+                    || dist_sqr(p, c) > r2
+                    || !poi_matches(m, f, poi)
+                    || tickets(m, w, p) >= poi.max_tickets()
+                {
+                    return;
                 }
-                for z in qz * 16..qz * 16 + 16 {
-                    for x in qx * 16..qx * 16 + 16 {
-                        if (x - c[0]).abs() > radius || (z - c[2]).abs() > radius {
-                            continue;
-                        }
-                        let d = i64::from(x - c[0]).pow(2)
-                            + i64::from(y - c[1]).pow(2)
-                            + i64::from(z - c[2]).pow(2);
-                        if d > r2 {
-                            continue;
-                        }
-                        let state = chunk.block(x & 15, y, z & 15);
-                        if w.facts.is_air(state) {
-                            continue;
-                        }
-                        let Some(poi) = kind(state.0) else {
-                            continue;
-                        };
-                        if !poi_matches(m, f, poi) {
-                            continue;
-                        }
-                        let p = [x, y, z];
-                        if tickets(m, w, p) >= poi.max_tickets() {
-                            continue;
-                        }
-                        if accept(p) {
-                            found.push((poi, p));
-                        }
-                    }
+                if accept(p) {
+                    found.push((poi, p));
                 }
-            }
+            });
         }
     }
-    found.sort_by_key(|(_, p)| {
-        i64::from(p[0] - c[0]).pow(2)
-            + i64::from(p[1] - c[1]).pow(2)
-            + i64::from(p[2] - c[2]).pow(2)
-    });
+    found.sort_by_key(|&(_, p)| dist_sqr(p, c));
     found
 }
 /// `PoiManager.exists(pos, predicate)`.
@@ -3389,26 +3378,23 @@ fn dist_sqr(a: [i32; 3], b: [i32; 3]) -> i64 {
     manhattan_sq(a, b)
 }
 /// Every bed head within `radius` (`PoiManager.getInRange(HOME, ..., ANY)`),
-/// in scan order.
+/// in the order of a scan of the cube: y, then z, then x.
 fn homes_in_range(m: &Mob, w: &MobWorld, radius: i32) -> Vec<[i32; 3]> {
     let c = block_of(m.position);
     let r2 = i64::from(radius) * i64::from(radius);
     let mut out = Vec::new();
     let y0 = (c[1] - radius).max(crate::chunk::MIN_Y);
     let y1 = (c[1] + radius).min(crate::chunk::MIN_Y + crate::chunk::HEIGHT - 1);
-    for y in y0..=y1 {
-        for z in c[2] - radius..=c[2] + radius {
-            for x in c[0] - radius..=c[0] + radius {
-                let p = [x, y, z];
-                if dist_sqr(p, c) <= r2
-                    && w.world.loaded(x, z)
-                    && poi_at(w, x, y, z) == Some(Poi::Home)
-                {
+    for qz in (c[2] - radius) >> 4..=(c[2] + radius) >> 4 {
+        for qx in (c[0] - radius) >> 4..=(c[0] + radius) >> 4 {
+            chunk_pois(w, (qx, qz), y0, y1, |poi, p| {
+                if poi == Poi::Home && dist_sqr(p, c) <= r2 {
                     out.push(p);
                 }
-            }
+            });
         }
     }
+    out.sort_unstable_by_key(|p| (p[1], p[2], p[0]));
     out
 }
 /// `MoveToSkySeeingSpot.hasNoBlocksAbove`.

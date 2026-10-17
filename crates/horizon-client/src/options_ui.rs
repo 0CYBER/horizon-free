@@ -708,12 +708,14 @@ pub enum Page {
     Language,
     Font,
     Packs,
+    Mods,
     /// Horizon's graphics settings (`graphics_ui`).
     Graphics,
     GraphicsAdvanced,
     /// Horizon's controller settings and button binds.
     Controller,
     PadBinds,
+    Extras,
 }
 #[derive(Clone, Debug, PartialEq)]
 enum Act {
@@ -721,6 +723,7 @@ enum Act {
     Push(Page),
     Done,
     Cycle(Opt),
+    Extra(crate::extras::Item),
     Key(&'static str),
     ResetKey(&'static str),
     ResetKeys,
@@ -730,6 +733,7 @@ enum Act {
     ResetPadKeys,
     /// Back to Horizon's own menus (Horizon only, see `list_rows`).
     HorizonMenus,
+    ToggleMod(usize),
 }
 enum WKind {
     Button {
@@ -824,6 +828,8 @@ pub struct OptionsUi {
     pub pack_selection: Vec<String>,
     /// The open pack screen, made at its first frame.
     pub pack_screen: Option<crate::pack_screen::PackScreen>,
+    /// A reload failure, dismissed before returning to the current page.
+    pub resource_error: Option<String>,
     /// When the pack screen's search box took the focus (its cursor blink).
     pack_focus: Instant,
     pub in_world: bool,
@@ -854,6 +860,7 @@ impl Default for OptionsUi {
             pack_infos: Vec::new(),
             pack_selection: Vec::new(),
             pack_screen: None,
+            resource_error: None,
             pack_focus: Instant::now(),
             in_world: false,
             center_language: false,
@@ -971,9 +978,11 @@ impl OptionsUi {
             Page::Language => "options.language.title",
             Page::Font => "options.font.title",
             Page::Packs => "resourcePack.title",
+            Page::Mods => "Mods",
             Page::Graphics | Page::GraphicsAdvanced => "options.videoTitle",
             Page::Controller => "Controller Settings",
             Page::PadBinds => "Controller Binds",
+            Page::Extras => "Horizon Extras",
         }
     }
     fn scrollbar_x(&self, width: f32) -> f32 {
@@ -986,6 +995,22 @@ impl OptionsUi {
     }
     fn list_rows(&self, s: &Settings) -> Vec<Row> {
         match self.page() {
+            Page::Extras => crate::extras::rows()
+                .into_iter()
+                .map(|row| match row {
+                    Err(header) => Row::Header(header),
+                    Ok(item) => {
+                        let value = format!("{}: {}", item.caption(), item.value(&s.extras));
+                        let label =
+                            if item.key_name().is_some() && self.selected_key == item.key_name() {
+                                Text::literal(format!("> {value} <")).with_color(text::YELLOW)
+                            } else {
+                                Text::literal(value)
+                            };
+                        Row::Buttons(button(0.0, 0.0, 310.0, label, Act::Extra(item)), None)
+                    }
+                })
+                .collect(),
             Page::Video => {
                 // Horizon's graphics screens, Simple and Advanced.
                 let mut rows = vec![Row::Buttons(
@@ -1161,6 +1186,36 @@ impl OptionsUi {
                 Opt::AutoJump,
             ]),
             Page::Font => pairs(&[Opt::ForceUnicode, Opt::JapaneseGlyphs]),
+            Page::Mods => {
+                if s.mods.installed.is_empty() {
+                    return vec![Row::Header(
+                        "No mods: put .hmod files in the horizon-mods folder",
+                    )];
+                }
+                s.mods
+                    .installed
+                    .iter()
+                    .enumerate()
+                    .map(|(i, installed)| {
+                        let mut label = Text::literal(format!("{}: ", installed.title))
+                            .append(on_off(s.mods.is_on(i)));
+                        if installed.problem.is_some() {
+                            label = label.append(" (Stopped)");
+                        } else if installed.dev {
+                            label = label.append(" (Dev)");
+                        }
+                        let widget = button(0.0, 0.0, 310.0, label, Act::ToggleMod(i));
+                        Row::Buttons(
+                            if installed.dev || installed.id.is_empty() {
+                                inactive(widget)
+                            } else {
+                                widget
+                            },
+                            None,
+                        )
+                    })
+                    .collect()
+            }
             _ => {
                 let _ = s;
                 Vec::new()
@@ -1206,8 +1261,8 @@ impl OptionsUi {
                     ("options.chat", Some(Page::Chat)),
                     ("options.resourcepack", Some(Page::Packs)),
                     ("options.accessibility", Some(Page::Accessibility)),
-                    ("options.telemetry", None),
-                    ("options.credits_and_attribution", None),
+                    ("Mods...", Some(Page::Mods)),
+                    ("Horizon Extras...", Some(Page::Extras)),
                 ];
                 let gy = (61.0 + 30.0f32).min(h - 33.0 - 120.0);
                 for (i, (key, page)) in entries.iter().enumerate() {
@@ -1596,6 +1651,42 @@ impl OptionsUi {
         cursor: (f32, f32),
     ) {
         let (w, h) = (batch.width, batch.height);
+        if let Some(error) = &self.resource_error {
+            ui::menu_background(batch, atlas, 0.0, 0.0, w, h, self.in_world);
+            let title = tr("resourcePack.load_fail");
+            batch.text_styled(
+                atlas,
+                &title,
+                ((w - atlas.font.width_text(&title)) / 2.0).floor(),
+                30.0,
+                u32::MAX,
+                true,
+            );
+            let lines = atlas.font.split(&Text::literal(error), (w - 50.0).max(1.0));
+            let limit = ((h - 110.0) / 9.0).max(1.0) as usize;
+            for (i, line) in lines.iter().take(limit).enumerate() {
+                batch.text_styled(
+                    atlas,
+                    line,
+                    ((w - atlas.font.width_text(line)) / 2.0).floor(),
+                    60.0 + i as f32 * 9.0,
+                    u32::MAX,
+                    true,
+                );
+            }
+            ui::button(
+                batch,
+                atlas,
+                w / 2.0 - 100.0,
+                h - 28.0,
+                200.0,
+                20.0,
+                &tr("gui.done"),
+                true,
+                ui::hovered(cursor, w / 2.0 - 100.0, h - 28.0, 200.0, 20.0),
+            );
+            return;
+        }
         if crate::ui_theme::horizon() && self.page() == Page::Main {
             self.draw_horizon(s, batch, atlas, cursor);
             return;
@@ -1631,6 +1722,13 @@ impl OptionsUi {
             let hover = ui::hovered(cursor, wd.x, wd.y, wd.w, wd.h)
                 && (!wd.list || cursor.1 >= top && cursor.1 < bottom);
             if hover {
+                if let WKind::Button {
+                    act: Act::Extra(item),
+                    ..
+                } = &wd.kind
+                {
+                    tooltip = Some(atlas.font.split(&Text::literal(item.description()), 170.0));
+                }
                 let key = match &wd.kind {
                     WKind::Button {
                         act: Act::Cycle(opt),
@@ -1649,6 +1747,21 @@ impl OptionsUi {
                 };
                 if let Some(key) = key.filter(|key| lang::has(key)) {
                     tooltip = Some(atlas.font.split(&tr(&key), 170.0));
+                }
+                if let WKind::Button {
+                    act: Act::ToggleMod(i),
+                    ..
+                } = &wd.kind
+                    && let Some(installed) = s.mods.installed.get(*i)
+                {
+                    let description = installed
+                        .problem
+                        .as_deref()
+                        .unwrap_or(&installed.description);
+                    tooltip = Some(atlas.font.split(
+                        &Text::literal(format!("{}\n{description}", installed.title)),
+                        170.0,
+                    ));
                 }
             }
             match &wd.kind {
@@ -1756,7 +1869,7 @@ impl OptionsUi {
         if self.page() == Page::Language {
             let mut search = self.language_search.clone();
             search.draw(batch, atlas, None);
-            if search.value.is_empty() {
+            if search.value.is_empty() && !search.focused {
                 batch.text_styled(
                     atlas,
                     &tr("gui.language.search").with_color(text::GRAY).italic(),
@@ -1784,6 +1897,16 @@ impl OptionsUi {
         drag: bool,
         right: bool,
     ) -> Vec<Event> {
+        if self.resource_error.is_some() {
+            if !drag
+                && !right
+                && ui::hovered((x, y), size.0 / 2.0 - 100.0, size.1 - 28.0, 200.0, 20.0)
+            {
+                self.resource_error = None;
+                return vec![Event::ButtonClick];
+            }
+            return Vec::new();
+        }
         if crate::ui_theme::horizon() && self.page() == Page::Main {
             return self.click_horizon(s, atlas, x, y, framebuffer, drag, right);
         }
@@ -1876,15 +1999,13 @@ impl OptionsUi {
             return events;
         }
         // Key Binds: a mouse button pressed while waiting binds it.
-        if let Some(name) = self.selected_key.take() {
+        if self.selected_key.is_some() {
             let button = if right {
-                "key.mouse.right"
+                winit::event::MouseButton::Right
             } else {
-                "key.mouse.left"
+                winit::event::MouseButton::Left
             };
-            s.keys.set(name, button);
-            events.push(Event::Changed);
-            return events;
+            return self.bind_mouse(s, button);
         }
         // AbstractWidget accepts only the primary button. Rebinding above
         // accepts other mouse buttons, but is not a widget activation.
@@ -1919,6 +2040,14 @@ impl OptionsUi {
                             }
                             events.push(Event::Changed);
                         }
+                        Act::Extra(item) => {
+                            if let Some(name) = item.key_name() {
+                                self.selected_key = Some(name);
+                            } else {
+                                item.cycle(&mut s.extras, right);
+                                events.push(Event::Changed);
+                            }
+                        }
                         Act::Key(name) => self.selected_key = Some(name),
                         Act::ResetKey(name) => {
                             s.keys.set(name, KeyBinds::default_of(name));
@@ -1943,6 +2072,10 @@ impl OptionsUi {
                             if let Ok(dir) = std::env::current_dir() {
                                 crate::ui_theme::save_preferences(&dir);
                             }
+                        }
+                        Act::ToggleMod(i) => {
+                            s.mods.toggle(i);
+                            events.push(Event::Changed);
                         }
                         Act::None => {}
                     }
@@ -2012,6 +2145,9 @@ impl OptionsUi {
     }
     /// The mouse wheel at the cursor.
     pub fn scroll_at(&mut self, s: &Settings, size: (f32, f32), cursor: (f32, f32), amount: f32) {
+        if self.resource_error.is_some() {
+            return;
+        }
         if crate::ui_theme::horizon() && self.page() == Page::Main {
             self.scroll_horizon(amount);
             return;
@@ -2090,6 +2226,9 @@ impl OptionsUi {
     }
     /// Typed text (the language search box).
     pub fn type_text(&mut self, atlas: &HudAtlas, text: &str) {
+        if self.resource_error.is_some() {
+            return;
+        }
         if self.page() == Page::Packs
             && let Some(p) = &mut self.pack_screen
         {
@@ -2109,7 +2248,7 @@ impl OptionsUi {
         shortcut: crate::clipboard::EditShortcut,
         clipboard: &mut dyn crate::clipboard::Clipboard,
     ) -> bool {
-        if self.selected_key.is_some() {
+        if self.resource_error.is_some() || self.selected_key.is_some() {
             return false;
         }
         if self.page() == Page::Packs
@@ -2126,6 +2265,23 @@ impl OptionsUi {
         }
         false
     }
+    fn bind_key(&mut self, s: &mut Settings, value: String) -> Vec<Event> {
+        let Some(name) = self.selected_key.take() else {
+            return Vec::new();
+        };
+        if !s.extras.set_key(name, value.clone()) {
+            s.keys.set(name, &value);
+        }
+        vec![Event::Changed]
+    }
+    /// Mouse bindings use the same settings and persistence as keyboard bindings.
+    pub fn bind_mouse(
+        &mut self,
+        s: &mut Settings,
+        button: winit::event::MouseButton,
+    ) -> Vec<Event> {
+        self.bind_key(s, keybinds::mouse_name(button))
+    }
     /// Keys while the options are open. Returns events; `handled` false lets
     /// Escape fall through.
     pub fn key(
@@ -2136,6 +2292,12 @@ impl OptionsUi {
         text: Option<&str>,
     ) -> Vec<Event> {
         use winit::keyboard::KeyCode as K;
+        if self.resource_error.is_some() {
+            if matches!(key, K::Escape | K::Enter | K::NumpadEnter) {
+                self.resource_error = None;
+            }
+            return Vec::new();
+        }
         if self.page() == Page::Packs
             && let Some(p) = &mut self.pack_screen
         {
@@ -2160,7 +2322,7 @@ impl OptionsUi {
             }
             return vec![Event::Changed];
         }
-        if let Some(name) = self.selected_key.take() {
+        if self.selected_key.is_some() {
             // KeyBindsScreen.keyPressed: Escape unbinds.
             let value = if key == K::Escape {
                 "key.keyboard.unknown".to_owned()
@@ -2169,10 +2331,7 @@ impl OptionsUi {
                     .unwrap_or("key.keyboard.unknown")
                     .to_owned()
             };
-            if !s.extras.set_key(name, value.clone()) {
-                s.keys.set(name, &value);
-            }
-            return vec![Event::Changed];
+            return self.bind_key(s, value);
         }
         if key == K::Escape {
             return self.back(s);
@@ -2199,6 +2358,137 @@ mod tests {
 
     fn atlas() -> HudAtlas {
         HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets")).unwrap()
+    }
+
+    #[test]
+    fn resource_reload_error_blocks_options_until_dismissed() {
+        use winit::keyboard::KeyCode;
+        let atlas = atlas();
+        let mut settings = Settings::default();
+        let mut ui = OptionsUi {
+            resource_error: Some("broken pack".into()),
+            ..Default::default()
+        };
+        let stack = ui.stack.clone();
+        assert!(
+            ui.click(
+                &mut settings,
+                &atlas,
+                10.0,
+                10.0,
+                (480.0, 270.0),
+                [960, 540],
+                false,
+                false
+            )
+            .is_empty()
+        );
+        assert!(ui.resource_error.is_some());
+        assert!(
+            ui.key(&mut settings, &atlas, KeyCode::KeyW, None)
+                .is_empty()
+        );
+        assert!(ui.resource_error.is_some());
+        ui.key(&mut settings, &atlas, KeyCode::Escape, None);
+        assert!(ui.resource_error.is_none());
+        assert_eq!(ui.stack, stack);
+        ui.resource_error = Some("broken pack".into());
+        assert_eq!(
+            ui.click(
+                &mut settings,
+                &atlas,
+                240.0,
+                250.0,
+                (480.0, 270.0),
+                [960, 540],
+                false,
+                false
+            ),
+            vec![Event::ButtonClick]
+        );
+        assert!(ui.resource_error.is_none());
+    }
+
+    #[test]
+    fn classic_mods_page_toggles_mods_and_keeps_dev_and_invalid_entries_inactive() {
+        let atlas = atlas();
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        let size = (480.0, 240.0);
+        assert!(ui.layout(&s, size.0, size.1).0.iter().any(|w| {
+            matches!(
+                w.kind,
+                WKind::Button {
+                    active: true,
+                    act: Act::Push(Page::Mods),
+                    ..
+                }
+            )
+        }));
+        ui.show(Page::Mods);
+        let empty = ui.layout(&s, size.0, size.1).0;
+        assert!(empty.iter().any(|w| {
+            matches!(&w.kind, WKind::Text { text, .. } if text.plain().contains(".hmod"))
+        }));
+        for (id, dev) in [("normal", false), ("dev", true), ("", false)] {
+            s.mods.installed.push(crate::mod_list::Installed {
+                id: id.into(),
+                title: id.into(),
+                description: "May show HUD panels.".into(),
+                problem: id.is_empty().then(|| "Invalid package".into()),
+                dev,
+            });
+        }
+        let (widgets, ..) = ui.layout(&s, size.0, size.1);
+        let rows: Vec<_> = widgets
+            .iter()
+            .filter(|w| {
+                matches!(
+                    w.kind,
+                    WKind::Button {
+                        act: Act::ToggleMod(_),
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert_eq!(rows.len(), 3);
+        for (i, row) in rows.iter().enumerate() {
+            let events = ui.click(
+                &mut s,
+                &atlas,
+                row.x + 1.0,
+                row.y + 1.0,
+                size,
+                [480, 240],
+                false,
+                false,
+            );
+            if i == 0 {
+                assert!(events.contains(&Event::Changed));
+                assert!(events.contains(&Event::ButtonClick));
+            } else {
+                assert!(events.is_empty());
+            }
+        }
+        assert!(s.mods.is_on(0));
+        assert!(s.mods.is_on(1));
+        assert!(!s.mods.is_on(2));
+        assert_eq!(s.mods.serialize(), "mod.normal:true\n");
+        let row = rows[0];
+        ui.click(
+            &mut s,
+            &atlas,
+            row.x + 1.0,
+            row.y + 1.0,
+            size,
+            [480, 240],
+            false,
+            false,
+        );
+        assert!(!s.mods.is_on(0));
+        assert!(!ui.back(&mut s).contains(&Event::Close));
+        assert_eq!(ui.page(), Page::Main);
     }
 
     #[test]
@@ -2314,6 +2604,83 @@ mod tests {
             assert_eq!(s.gui_scale, expected);
             assert!(ui.release().is_empty());
         }
+    }
+
+    #[test]
+    fn classic_extras_entry_edits_shared_settings_and_returns_without_changing_style() {
+        let previous_style = style();
+        set_style(MenuStyle::Classic);
+        let atlas = atlas();
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        let size = (480.0, 480.0);
+        let click = |ui: &mut OptionsUi, s: &mut Settings, act: Act| {
+            let (widgets, _, _, _) = ui.layout(s, size.0, size.1);
+            let widget = widgets
+                .iter()
+                .find(
+                    |w| matches!(&w.kind, WKind::Button { act: a, active: true, .. } if *a == act),
+                )
+                .unwrap();
+            ui.click(
+                s,
+                &atlas,
+                widget.x + 1.0,
+                widget.y + 1.0,
+                size,
+                [960, 960],
+                false,
+                false,
+            )
+        };
+        assert_eq!(
+            click(&mut ui, &mut s, Act::Push(Page::Extras)),
+            vec![Event::ButtonClick]
+        );
+        assert_eq!(ui.page(), Page::Extras);
+        let (widgets, _, _, _) = ui.layout(&s, size.0, size.1);
+        assert_eq!(
+            widgets
+                .iter()
+                .filter(|w| matches!(
+                    w.kind,
+                    WKind::Button {
+                        act: Act::Extra(_),
+                        ..
+                    }
+                ))
+                .count(),
+            crate::extras::rows().iter().filter(|r| r.is_ok()).count()
+        );
+        assert_eq!(
+            click(&mut ui, &mut s, Act::Extra(crate::extras::Item::Zoom)),
+            vec![Event::ButtonClick, Event::Changed]
+        );
+        assert!(s.extras.zoom);
+        assert_eq!(
+            click(&mut ui, &mut s, Act::Extra(crate::extras::Item::ZoomKey)),
+            vec![Event::ButtonClick]
+        );
+        assert_eq!(ui.selected_key, Some(crate::extras::ZOOM_KEY));
+        assert_eq!(
+            ui.key(&mut s, &atlas, winit::keyboard::KeyCode::KeyC, None),
+            vec![Event::Changed]
+        );
+        assert_eq!(s.extras.zoom_key, "key.keyboard.c");
+        assert_eq!(
+            crate::extras::Extras::parse(&s.extras.serialize()),
+            s.extras
+        );
+        ui.scroll(&s, size, -1000.0);
+        let (_, top, bottom, content) = ui.layout(&s, size.0, size.1);
+        assert_eq!(ui.scroll, content - (bottom - top));
+        assert_eq!(
+            ui.key(&mut s, &atlas, winit::keyboard::KeyCode::Escape, None),
+            vec![Event::Changed]
+        );
+        assert_eq!(ui.page(), Page::Main);
+        assert_eq!(style(), MenuStyle::Classic);
+        set_style(previous_style);
     }
 
     #[test]
@@ -2613,6 +2980,35 @@ mod tests {
         );
     }
 
+    #[test]
+    fn language_search_hint_does_not_overlap_the_focused_caret() {
+        let atlas = atlas();
+        let settings = Settings::default();
+        let mut ui = OptionsUi::default();
+        ui.show(Page::Language);
+        let draw_hint = |ui: &mut OptionsUi| {
+            let mut batch = HudBatch::new([960, 640]);
+            ui.draw(&settings, &mut batch, &atlas, (-1.0, -1.0));
+            let search = &ui.language_search;
+            batch.vertices.iter().any(|v| {
+                v.color == rgba(170, 170, 170, 255)
+                    && v.pos[0] >= search.text_x()
+                    && v.pos[0] < search.x + search.width
+                    && v.pos[1] >= search.text_y()
+                    && v.pos[1] < search.y + search.height
+            })
+        };
+        ui.language_search.focused = false;
+        assert!(draw_hint(&mut ui));
+        ui.language_search.focused = true;
+        assert!(!draw_hint(&mut ui));
+        ui.language_search.focused = false;
+        ui.language_search.set_value("english");
+        assert!(!draw_hint(&mut ui));
+        ui.language_search.set_value("");
+        assert!(draw_hint(&mut ui));
+    }
+
     fn languages() -> Vec<LanguageInfo> {
         (0..30)
             .map(|i| LanguageInfo {
@@ -2828,6 +3224,55 @@ mod tests {
             assert!(ui.scrollbar_drag_y.is_some());
             ui.show(Page::Mouse);
             assert_eq!(ui.scrollbar_drag_y, None);
+        }
+    }
+
+    #[test]
+    fn extras_and_vanilla_bindings_accept_mouse_buttons() {
+        use crate::extras::{Extras, SORT_KEY, ZOOM_KEY};
+        use winit::event::MouseButton;
+        for button in [
+            MouseButton::Left,
+            MouseButton::Right,
+            MouseButton::Middle,
+            MouseButton::Back,
+            MouseButton::Forward,
+        ] {
+            for name in [SORT_KEY, ZOOM_KEY, "key.jump"] {
+                let mut ui = OptionsUi::default();
+                let mut s = Settings::default();
+                ui.selected_key = Some(name);
+                assert_eq!(ui.bind_mouse(&mut s, button), vec![Event::Changed]);
+                assert_eq!(ui.selected_key, None);
+                let value = keybinds::mouse_name(button);
+                match name {
+                    SORT_KEY => assert_eq!(s.extras.sort_key, value),
+                    ZOOM_KEY => assert_eq!(s.extras.zoom_key, value),
+                    _ => assert_eq!(s.keys.get(name), value),
+                }
+                assert_eq!(Extras::parse(&s.extras.serialize()), s.extras);
+                if name != "key.jump" {
+                    assert_eq!(s.keys, Settings::default().keys);
+                }
+                assert!(ui.bind_mouse(&mut s, button).is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn horizon_extra_mouse_binding_consumes_the_click() {
+        let atlas = atlas();
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        for (right, expected) in [(false, "key.mouse.left"), (true, "key.mouse.right")] {
+            ui.selected_key = Some(crate::extras::SORT_KEY);
+            assert_eq!(
+                ui.click_horizon(&mut s, &atlas, 2.0, 2.0, [960, 480], false, right),
+                vec![Event::Changed]
+            );
+            assert_eq!(s.extras.sort_key, expected);
+            assert_eq!(ui.selected_key, None);
+            assert_eq!(ui.section, 0);
         }
     }
 

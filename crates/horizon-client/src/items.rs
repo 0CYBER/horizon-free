@@ -274,16 +274,20 @@ pub(crate) fn load_tags(root: &Path, kind: &str) -> Result<HashMap<String, HashS
 }
 /// Every tag's contents in `TagLoader.tryBuildTag` order (a `LinkedHashSet`).
 pub(crate) fn load_tag_lists(root: &Path, kind: &str) -> Result<HashMap<String, Vec<String>>> {
-    let dir = root.join(format!("data/minecraft/tags/{kind}"));
     let mut raw: HashMap<String, Vec<String>> = HashMap::new();
-    fn walk(dir: &Path, base: &Path, raw: &mut HashMap<String, Vec<String>>) -> Result<()> {
+    fn walk(
+        dir: &Path,
+        base: &Path,
+        namespace: &str,
+        raw: &mut HashMap<String, Vec<String>>,
+    ) -> Result<()> {
         for entry in fs::read_dir(dir)?.flatten() {
             let p = entry.path();
             if p.is_dir() {
-                walk(&p, base, raw)?;
+                walk(&p, base, namespace, raw)?;
             } else if p.extension().is_some_and(|e| e == "json") {
                 let name = format!(
-                    "minecraft:{}",
+                    "{namespace}:{}",
                     p.strip_prefix(base)?
                         .with_extension("")
                         .to_string_lossy()
@@ -301,8 +305,12 @@ pub(crate) fn load_tag_lists(root: &Path, kind: &str) -> Result<HashMap<String, 
         }
         Ok(())
     }
-    if dir.exists() {
-        walk(&dir, &dir, &mut raw)?;
+    // Vanilla's tags; with content mods also the convention (`c`) tags and the mods' own.
+    for namespace in crate::mod_content::tag_namespaces(root) {
+        let dir = root.join(format!("data/{namespace}/tags/{kind}"));
+        if dir.exists() {
+            walk(&dir, &dir, &namespace, &mut raw)?;
+        }
     }
     fn resolve(name: &str, raw: &HashMap<String, Vec<String>>, out: &mut Vec<String>, depth: u32) {
         if depth > 32 {

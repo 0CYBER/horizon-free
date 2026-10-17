@@ -21,7 +21,7 @@ pub mod playerdata;
 mod recipes;
 pub mod tracking;
 
-pub use conn::PlayerSender;
+pub use conn::{Holding, PlayerSender};
 use horizon_protocol::packets::play;
 use horizon_protocol::{
     GAME_VERSION, PROTOCOL_VERSION, crypto::uuid_string, packets::configuration::ClientInformation,
@@ -69,6 +69,8 @@ pub struct Joined {
 pub enum Out {
     /// A packet body: VarInt id and payload.
     Packet(Vec<u8>),
+    /// Packet bodies held during a tick, in order.
+    Packets(Vec<Vec<u8>>),
     /// Send a play disconnect with this component, then close.
     Disconnect(horizon_world::nbt::Tag),
     Close,
@@ -310,6 +312,8 @@ pub struct Lan {
     events: Receiver<NetEvent>,
     pub port: u16,
     listener: Option<JoinHandle<()>>,
+    /// Stops the accept loop alone: local connections stay.
+    listener_stop: Arc<AtomicBool>,
     /// The multicast announcement (LanServerPinger); absent when the socket failed.
     _pinger: Option<discovery::Pinger>,
 }
@@ -325,26 +329,8 @@ impl Lan {
     }
     /// ServerConnectionListener.startTcpServerListener with a configuration.
     pub fn start_with(sync: Arc<data::SyncData>, config: NetConfig) -> io::Result<Self> {
-        let listener = if config.listen {
-            let bind = config
-                .bind
-                .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
-            let listener = TcpListener::bind((bind, config.port))?;
-            listener.set_nonblocking(true)?;
-            Some(listener)
-        } else {
-            None
-        };
-        let port = match &listener {
-            Some(l) => l.local_addr()?.port(),
-            None => 0,
-        };
-        let _pinger = if config.announce && listener.is_some() {
-            discovery::Pinger::start(config.motd.clone(), port).ok()
-        } else {
-            None
-        };
         let (tx, events) = channel();
+        let (listen, port, announce) = (config.listen, config.port, config.announce);
         let shared = Arc::new(Shared {
             sync,
             events: tx,
@@ -357,21 +343,77 @@ impl Lan {
             random: Mutex::new(crate::server::java_properties::now_millis() as u64 | 1),
             config,
         });
-        let accept_shared = shared.clone();
-        let listener = listener
-            .map(|listener| {
-                std::thread::Builder::new()
-                    .name("horizon-lan-accept".into())
-                    .spawn(move || accept_loop(listener, accept_shared))
-            })
-            .transpose()?;
-        Ok(Self {
+        let mut lan = Self {
             shared,
             events,
-            port,
-            listener,
-            _pinger,
-        })
+            port: 0,
+            listener: None,
+            listener_stop: Arc::new(AtomicBool::new(false)),
+            _pinger: None,
+        };
+        if listen {
+            lan.listen(port, announce)?;
+        }
+        Ok(lan)
+    }
+    /// Start accepting connections on `port` (0 picks a free one), and
+    /// announce the world on the local network when `announce`
+    /// (`IntegratedServer.publishServer`'s LanServerPinger). Returns the port.
+    pub fn listen(&mut self, port: u16, announce: bool) -> io::Result<u16> {
+        if self.listener.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "already listening",
+            ));
+        }
+        let listener = Self::bind(self.shared.config.bind, port)?;
+        self.listen_on(listener, announce)
+    }
+    /// The socket [`Lan::listen`] accepts on, bound ahead so that a failure
+    /// can be reported before the hub is at hand.
+    pub fn bind(address: Option<std::net::IpAddr>, port: u16) -> io::Result<TcpListener> {
+        let bind = address.unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+        let listener = TcpListener::bind((bind, port))?;
+        listener.set_nonblocking(true)?;
+        Ok(listener)
+    }
+    /// [`Lan::listen`] on a socket already bound.
+    pub fn listen_on(&mut self, listener: TcpListener, announce: bool) -> io::Result<u16> {
+        if self.listener.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "already listening",
+            ));
+        }
+        let port = listener.local_addr()?.port();
+        let stop = Arc::new(AtomicBool::new(false));
+        let (accept_shared, accept_stop) = (self.shared.clone(), stop.clone());
+        let thread = std::thread::Builder::new()
+            .name("horizon-lan-accept".into())
+            .spawn(move || accept_loop(listener, accept_shared, &accept_stop))?;
+        self._pinger = if announce {
+            discovery::Pinger::start(self.shared.motd(), port).ok()
+        } else {
+            None
+        };
+        self.listener = Some(thread);
+        self.listener_stop = stop;
+        self.port = port;
+        Ok(port)
+    }
+    /// Stop accepting connections and announcing; connections already in
+    /// (the local one included) stay.
+    pub fn stop_listening(&mut self) {
+        self.listener_stop.store(true, Ordering::Relaxed);
+        if let Some(t) = self.listener.take() {
+            let _ = t.join();
+        }
+        self._pinger = None;
+        self.port = 0;
+    }
+    /// Whether connections from the network are accepted.
+    pub fn listening(&self) -> bool {
+        self.listener.is_some()
     }
     /// `Connection.connectToLocalServer`: a connection through memory, its
     /// server end served on its own thread like an accepted socket.
@@ -402,10 +444,7 @@ impl Lan {
     }
     pub fn stop(&mut self) {
         self.shared.stop.store(true, Ordering::Relaxed);
-        if let Some(t) = self.listener.take() {
-            let _ = t.join();
-        }
-        self._pinger = None;
+        self.stop_listening();
     }
 }
 impl Drop for Lan {
@@ -414,8 +453,8 @@ impl Drop for Lan {
     }
 }
 
-fn accept_loop(listener: TcpListener, shared: Arc<Shared>) {
-    while !shared.stop.load(Ordering::Relaxed) {
+fn accept_loop(listener: TcpListener, shared: Arc<Shared>, stop: &AtomicBool) {
+    while !shared.stop.load(Ordering::Relaxed) && !stop.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, addr)) => {
                 let shared = shared.clone();

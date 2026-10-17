@@ -58,8 +58,12 @@ impl Game<'_> {
     pub(super) fn extras_scroll(&mut self, steps: f32) -> bool {
         self.settings.extras.zoom && self.extras.zoom.scroll(steps)
     }
-    /// Mouse buttons while playing, for the keystroke overlay.
+    /// Mouse buttons while playing, for zoom and the keystroke overlay.
     pub(super) fn extras_mouse(&mut self, button: MouseButton, pressed: bool) {
+        let e = &self.settings.extras;
+        if e.zoom && e.zoom_key == keybinds::mouse_name(button) {
+            self.extras.zoom.key(pressed, false, true, e.zoom_level);
+        }
         let i = match button {
             MouseButton::Left => 0,
             MouseButton::Right => 1,

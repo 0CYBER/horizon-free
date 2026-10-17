@@ -139,19 +139,74 @@ impl HudAtlas {
         (g.rect, g.advance)
     }
     pub fn build(root: &Path) -> Result<Self> {
+        Self::pack(
+            root,
+            &[
+                "gui",
+                "item",
+                "block",
+                "font",
+                "environment",
+                "misc",
+                "painting",
+                "entity",
+                "particle",
+                "mob_effect",
+                "map",
+            ],
+            true,
+        )
+    }
+    /// Empty slots written at run time: map textures (game/maps.rs), the
+    /// minimap, downloaded skins, world icons and the Horizon menu text.
+    fn slots(images: &mut Vec<PackedImage>) {
+        for i in 0..MAP_SLOTS {
+            images.push((format!("horizon/map{i}"), 128, 128, vec![0; 128 * 128 * 4]));
+        }
+        // The minimap extra's image (game/extras.rs).
+        images.push((
+            MINIMAP_SPRITE.into(),
+            crate::minimap::SIZE as u32,
+            crate::minimap::SIZE as u32,
+            vec![0; crate::minimap::SIZE * crate::minimap::SIZE * 4],
+        ));
+        // Downloaded skins (game/scoreboard.rs).
+        for i in 0..SKIN_SLOTS {
+            images.push((format!("horizon/skin{i}"), 64, 64, vec![0; 64 * 64 * 4]));
+        }
+        for i in 0..WORLD_ICON_SLOTS {
+            images.push((
+                format!("horizon/world-icon{i}"),
+                64,
+                64,
+                vec![0; 64 * 64 * 4],
+            ));
+        }
+        // Horizon-style menu text and corner masks (ui_theme), rasterized at run time.
+        images.push((
+            "horizon/ui-text".into(),
+            2048,
+            1024,
+            vec![0; 2048 * 1024 * 4],
+        ));
+    }
+    /// Only the font's metrics, for a game that draws nothing (the
+    /// integrated server): text measures as with the full atlas, without
+    /// holding its textures. The pixels are dropped once the glyph widths are
+    /// read, since nothing uploads them.
+    pub fn fonts(root: &Path) -> Result<Self> {
+        let mut atlas = Self::pack(root, &["font"], false)?;
+        atlas.pixels = Vec::new();
+        Ok(atlas)
+    }
+    /// Pack the textures under these folders of `textures/`, and for the
+    /// `full` atlas the generated sprites and the run-time slots too.
+    fn pack(root: &Path, folders: &[&str], full: bool) -> Result<Self> {
         let textures = root.join("assets/minecraft/textures");
         let mut files = Vec::new();
-        walk(&textures.join("gui"), &mut files);
-        walk(&textures.join("item"), &mut files);
-        walk(&textures.join("block"), &mut files);
-        walk(&textures.join("font"), &mut files);
-        walk(&textures.join("environment"), &mut files);
-        walk(&textures.join("misc"), &mut files);
-        walk(&textures.join("painting"), &mut files);
-        walk(&textures.join("entity"), &mut files);
-        walk(&textures.join("particle"), &mut files);
-        walk(&textures.join("mob_effect"), &mut files);
-        walk(&textures.join("map"), &mut files);
+        for folder in folders {
+            walk(&textures.join(folder), &mut files);
+        }
         files.retain(|p| {
             let s = p.to_string_lossy();
             !s.contains("title/background") && !s.contains("realms") && !s.contains("presets")
@@ -187,7 +242,9 @@ impl HudAtlas {
                 .flat_map(|h| h.join().unwrap_or_default())
                 .collect()
         });
-        images.extend(atlas_sprites(root, &images));
+        if full {
+            images.extend(atlas_sprites(root, &images));
+        }
         // The title screen's "JAVA EDITION" banner reads "RUST EDITION".
         if let Some(edition) = images
             .iter_mut()
@@ -198,36 +255,9 @@ impl HudAtlas {
             edition.3 = pixels;
         }
         images.push(("horizon/white".into(), 4, 4, vec![255; 64]));
-        // Map textures (game/maps.rs) are written into these slots at run time.
-        for i in 0..MAP_SLOTS {
-            images.push((format!("horizon/map{i}"), 128, 128, vec![0; 128 * 128 * 4]));
+        if full {
+            Self::slots(&mut images);
         }
-        // The minimap extra's image (game/extras.rs).
-        images.push((
-            MINIMAP_SPRITE.into(),
-            crate::minimap::SIZE as u32,
-            crate::minimap::SIZE as u32,
-            vec![0; crate::minimap::SIZE * crate::minimap::SIZE * 4],
-        ));
-        // Downloaded skins (game/scoreboard.rs) likewise.
-        for i in 0..SKIN_SLOTS {
-            images.push((format!("horizon/skin{i}"), 64, 64, vec![0; 64 * 64 * 4]));
-        }
-        for i in 0..WORLD_ICON_SLOTS {
-            images.push((
-                format!("horizon/world-icon{i}"),
-                64,
-                64,
-                vec![0; 64 * 64 * 4],
-            ));
-        }
-        // Horizon-style menu text and corner masks (ui_theme), rasterized at run time.
-        images.push((
-            "horizon/ui-text".into(),
-            2048,
-            1024,
-            vec![0; 2048 * 1024 * 4],
-        ));
         images.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
         let width = 4096u32;
         let mut placements = Vec::with_capacity(images.len());
@@ -319,6 +349,7 @@ pub struct HudVertex {
     pub pos: [f32; 2],
     pub uv: [f32; 2],
     pub color: u32,
+    pub depth: f32,
 }
 /// The GUI Scale option (0 = auto).
 pub static GUI_SCALE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -330,10 +361,10 @@ pub struct HudBatch {
     pub height: f32,
     /// Glyph pixels to upload into the atlas before drawing.
     pub patches: Vec<crate::font::Patch>,
-    /// Vertex ranges drawn with another blend than alpha blending, in order.
+    /// Vertex ranges with another blend or depth/scissor state, in order.
     pub blends: Vec<(std::ops::Range<u32>, Blend)>,
 }
-/// How a run of HUD vertices blends with what is under it.
+/// How a run of HUD vertices blends and tests depth.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Blend {
     /// `BlendFunction.TRANSLUCENT`.
@@ -342,6 +373,8 @@ pub enum Blend {
     Invert,
     /// `BlendFunction.ADDITIVE` (`RenderPipelines.GUI_TEXT_HIGHLIGHT`).
     Additive,
+    /// Alpha blending with an isolated depth buffer and a pixel scissor.
+    Depth([u32; 4]),
 }
 pub fn rgba(r: u8, g: u8, b: u8, a: u8) -> u32 {
     u32::from(a) << 24 | u32::from(b) << 16 | u32::from(g) << 8 | u32::from(r)
@@ -430,8 +463,43 @@ impl HudBatch {
                 pos: p[i],
                 uv: uv[i],
                 color,
+                depth: 0.0,
             });
         }
+    }
+    pub fn quad_3d(&mut self, p: [[f32; 3]; 4], uv: [[f32; 2]; 4], color: u32) {
+        for i in [0, 1, 2, 0, 2, 3] {
+            self.vertices.push(HudVertex {
+                pos: [p[i][0], p[i][1]],
+                uv: uv[i],
+                color,
+                depth: p[i][2],
+            });
+        }
+    }
+    /// Keep per-vertex depth for an orthographic GUI model, with +z toward the viewer.
+    pub fn depth_since(&mut self, start: usize, clip: [f32; 4]) {
+        let vertices = &mut self.vertices[start..];
+        if vertices.is_empty() {
+            return;
+        }
+        let min = vertices
+            .iter()
+            .map(|v| v.depth)
+            .fold(f32::INFINITY, f32::min);
+        let max = vertices
+            .iter()
+            .map(|v| v.depth)
+            .fold(f32::NEG_INFINITY, f32::max);
+        for v in vertices {
+            v.depth = (max - v.depth) / (max - min).max(f32::EPSILON);
+        }
+        let [x0, y0, x1, y1] = clip.map(|v| (v * self.scale).max(0.0) as u32);
+        // Separate previews clear depth independently, even if their scissors match.
+        self.blends.push((
+            start as u32..self.vertices.len() as u32,
+            Blend::Depth([x0, y0, x1.saturating_sub(x0), y1.saturating_sub(y0)]),
+        ));
     }
     pub fn rect_uv(&mut self, x: f32, y: f32, w: f32, h: f32, r: Rect, color: u32) {
         self.quad(
@@ -569,6 +637,7 @@ impl HudBatch {
                 pos: p[i],
                 uv,
                 color: c[i],
+                depth: 0.0,
             });
         }
     }
@@ -729,6 +798,7 @@ pub struct HudRenderer {
     /// `RenderPipelines.CROSSHAIR`.
     invert_pipeline: wgpu::RenderPipeline,
     additive_pipeline: wgpu::RenderPipeline,
+    depth_pipeline: wgpu::RenderPipeline,
     group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
     buffer: wgpu::Buffer,
@@ -808,8 +878,8 @@ impl HudRenderer {
             bind_group_layouts: &[Some(&layout)],
             ..Default::default()
         });
-        let attributes = wgpu::vertex_attr_array![0=>Float32x2,1=>Float32x2,2=>Unorm8x4];
-        let create = |label, blend, fragment_entry| {
+        let attributes = wgpu::vertex_attr_array![0=>Float32x2,1=>Float32x2,2=>Unorm8x4,3=>Float32];
+        let create = |label, blend, fragment_entry, depth: bool| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&pipeline_layout),
@@ -824,7 +894,13 @@ impl HudRenderer {
                     })],
                 },
                 primitive: Default::default(),
-                depth_stencil: None,
+                depth_stencil: depth.then_some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
                 multisample: Default::default(),
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
@@ -840,7 +916,13 @@ impl HudRenderer {
                 cache: None,
             })
         };
-        let pipeline = create("HUD", wgpu::BlendState::ALPHA_BLENDING, "fs_main");
+        let pipeline = create("HUD", wgpu::BlendState::ALPHA_BLENDING, "fs_main", false);
+        let depth_pipeline = create(
+            "HUD model",
+            wgpu::BlendState::ALPHA_BLENDING,
+            "fs_main",
+            true,
+        );
         // BlendFunction.INVERT: ONE_MINUS_DST_COLOR, ONE_MINUS_SRC_COLOR,
         // ONE, ZERO.
         let invert_pipeline = create(
@@ -858,6 +940,7 @@ impl HudRenderer {
                 },
             },
             "fs_crosshair",
+            false,
         );
         // BlendFunction.ADDITIVE: ONE, ONE.
         let add = wgpu::BlendComponent {
@@ -872,6 +955,7 @@ impl HudRenderer {
                 alpha: add,
             },
             "fs_main",
+            false,
         );
         let capacity = 1 << 16;
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -886,6 +970,7 @@ impl HudRenderer {
             pipeline,
             invert_pipeline,
             additive_pipeline,
+            depth_pipeline,
             group,
             uniform,
             buffer,
@@ -935,6 +1020,7 @@ impl HudRenderer {
         uploads: &mut crate::gfx::upload::Uploads,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
         batch: &HudBatch,
         size: [u32; 2],
     ) {
@@ -965,7 +1051,7 @@ impl HudRenderer {
                 );
             }
         }
-        if batch.vertices.is_empty() {
+        if batch.vertices.is_empty() || size.contains(&0) {
             return;
         }
         let count = batch.vertices.len() as u64;
@@ -1001,20 +1087,55 @@ impl HudRenderer {
                 store: wgpu::StoreOp::Store,
             },
         })];
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("HUD"),
-            color_attachments: &attachments,
-            ..Default::default()
-        });
-        pass.set_bind_group(0, &self.group, &[]);
-        pass.set_vertex_buffer(0, self.buffer.slice(..));
-        for (range, blend) in batch.runs() {
-            pass.set_pipeline(match blend {
-                Blend::Alpha => &self.pipeline,
-                Blend::Invert => &self.invert_pipeline,
-                Blend::Additive => &self.additive_pipeline,
+        let runs = batch.runs();
+        let mut at = 0;
+        while at < runs.len() {
+            let clip = match runs[at].1 {
+                Blend::Depth(clip) => Some(clip),
+                _ => None,
+            };
+            let end = if clip.is_some() {
+                at + 1
+            } else {
+                runs[at..]
+                    .iter()
+                    .position(|(_, b)| matches!(b, Blend::Depth(_)))
+                    .map_or(runs.len(), |n| at + n)
+            };
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("HUD"),
+                color_attachments: &attachments,
+                depth_stencil_attachment: clip.map(|_| wgpu::RenderPassDepthStencilAttachment {
+                    view: depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
             });
-            pass.draw(range, 0..1);
+            pass.set_bind_group(0, &self.group, &[]);
+            pass.set_vertex_buffer(0, self.buffer.slice(..));
+            if let Some([x, y, w, h]) = clip {
+                let (x, y) = (x.min(size[0]), y.min(size[1]));
+                let (w, h) = (w.min(size[0] - x), h.min(size[1] - y));
+                if w == 0 || h == 0 {
+                    at = end;
+                    continue;
+                }
+                pass.set_scissor_rect(x, y, w, h);
+            }
+            for (range, blend) in &runs[at..end] {
+                pass.set_pipeline(match blend {
+                    Blend::Alpha => &self.pipeline,
+                    Blend::Invert => &self.invert_pipeline,
+                    Blend::Additive => &self.additive_pipeline,
+                    Blend::Depth(_) => &self.depth_pipeline,
+                });
+                pass.draw(range.clone(), 0..1);
+            }
+            at = end;
         }
     }
 }
@@ -1022,6 +1143,43 @@ impl HudRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_fonts_only_atlas_measures_text_like_the_full_one() {
+        // A synthetic default font: two 8x8 glyphs, 3 and 5 pixels wide.
+        let root = std::env::temp_dir().join(format!("horizon-fonts-atlas-{}", std::process::id()));
+        let font = root.join("assets/minecraft/font");
+        let textures = root.join("assets/minecraft/textures/font");
+        fs::create_dir_all(&font).unwrap();
+        fs::create_dir_all(&textures).unwrap();
+        fs::write(
+            font.join("default.json"),
+            r#"{"providers":[{"type":"bitmap","file":"minecraft:font/test.png","ascent":7,"chars":["ab"]}]}"#,
+        )
+        .unwrap();
+        let mut pixels = vec![0u8; 16 * 8 * 4];
+        for y in 0..8 {
+            for x in (0..3).chain(8..13) {
+                pixels[(y * 16 + x) * 4 + 3] = 255;
+            }
+        }
+        let mut encoder =
+            png::Encoder::new(fs::File::create(textures.join("test.png")).unwrap(), 16, 8);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder
+            .write_header()
+            .unwrap()
+            .write_image_data(&pixels)
+            .unwrap();
+        let full = HudAtlas::build(&root).unwrap();
+        let fonts = HudAtlas::fonts(&root).unwrap();
+        let _ = fs::remove_dir_all(&root);
+        assert!(fonts.pixels.is_empty());
+        let width = full.font.width("abba");
+        assert!(width > 0.0);
+        assert_eq!(fonts.font.width("abba"), width);
+    }
 
     #[test]
     fn effect_icons_are_painted_from_the_mob_effect_directory() {
@@ -1090,6 +1248,41 @@ mod tests {
                 < 1e-6
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn gui_models_keep_separate_depth_runs_between_overlay_draws() {
+        let mut batch = HudBatch::new([640, 480]);
+        batch.scale = 2.0;
+        let p = [
+            [0.0, 0.0, 2.0],
+            [0.0, 1.0, 2.0],
+            [1.0, 1.0, 2.0],
+            [1.0, 0.0, 2.0],
+        ];
+        let uv = [[0.0; 2]; 4];
+        batch.quad([[0.0; 2]; 4], uv, u32::MAX);
+        for _ in 0..2 {
+            let start = batch.vertices.len();
+            batch.quad_3d(p, uv, u32::MAX);
+            batch.depth_since(start, [1.0, 2.0, 4.0, 6.0]);
+        }
+        batch.quad([[0.0; 2]; 4], uv, u32::MAX);
+        assert_eq!(
+            batch.runs(),
+            vec![
+                (0..6, Blend::Alpha),
+                (6..12, Blend::Depth([2, 4, 6, 8])),
+                (12..18, Blend::Depth([2, 4, 6, 8])),
+                (18..24, Blend::Alpha),
+            ]
+        );
+        assert!(
+            batch
+                .vertices
+                .iter()
+                .all(|v| v.depth.is_finite() && (0.0..=1.0).contains(&v.depth))
+        );
     }
 
     #[test]

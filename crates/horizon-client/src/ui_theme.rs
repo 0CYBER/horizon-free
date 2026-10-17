@@ -269,6 +269,10 @@ struct Cache {
 thread_local! {
     static CACHE: RefCell<Option<Cache>> = const { RefCell::new(None) };
 }
+/// Reloaded atlases can occupy the same address with empty run-time slots.
+pub fn reset_atlas() {
+    CACHE.with(|cache| *cache.borrow_mut() = None);
+}
 fn with_cache<R>(atlas: &HudAtlas, f: impl FnOnce(&mut Cache) -> R) -> R {
     CACHE.with(|c| {
         let mut c = c.borrow_mut();
@@ -692,6 +696,7 @@ impl<'a> Ui<'a> {
                 pos: p[i],
                 uv: [cu, cv],
                 color: c[i],
+                depth: 0.0,
             });
         }
     }
@@ -1392,5 +1397,33 @@ mod tests {
             preferred_style(Some("horizon"), Some("invalid")),
             MenuStyle::Horizon
         );
+    }
+
+    #[test]
+    fn atlas_reload_regenerates_text_and_corners_at_the_same_address() {
+        let atlas = HudAtlas::build(Path::new("/nonexistent/horizon-test-assets")).unwrap();
+        reset_atlas();
+        let draw = |cache: &mut Cache| {
+            let glyph = cache.fonts.face(Face::Regular).glyph_id('A');
+            assert!(
+                cache
+                    .glyph(&atlas, Face::Regular, glyph, 16.0)
+                    .rect
+                    .is_some()
+            );
+            assert!(cache.corner(&atlas, 8, false).is_some());
+            std::mem::take(&mut cache.pending)
+        };
+        let before = with_cache(&atlas, draw);
+        assert_eq!(before.len(), 2);
+        assert!(with_cache(&atlas, draw).is_empty());
+        reset_atlas();
+        let after = with_cache(&atlas, draw);
+        assert_eq!(after.len(), 2);
+        for (a, b) in before.iter().zip(&after) {
+            assert_eq!((a.x, a.y, a.width, a.height), (b.x, b.y, b.width, b.height));
+            assert_eq!(a.rgba, b.rgba);
+        }
+        reset_atlas();
     }
 }

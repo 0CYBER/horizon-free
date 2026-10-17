@@ -83,6 +83,41 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn direct_connection_remembers_the_address_on_cancel_escape_and_join() {
+    let mut f = Fixture::new();
+    f.title.last_server = "localhost:25566".into();
+    f.click("Multiplayer");
+    f.click("Direct Connection");
+    assert_eq!(f.title.focused_field().unwrap().1, "localhost:25566");
+
+    *f.title.focused_field().unwrap().1 = "example.org:25567".into();
+    f.click("Cancel");
+    f.click("Direct Connection");
+    assert_eq!(f.title.focused_field().unwrap().1, "example.org:25567");
+
+    *f.title.focused_field().unwrap().1 = "[::1]:25568".into();
+    f.title.escape();
+    f.title.escape();
+    f.click("Multiplayer");
+    f.click("Direct Connection");
+    assert_eq!(f.title.focused_field().unwrap().1, "[::1]:25568");
+
+    *f.title.focused_field().unwrap().1 = "localhost:25569".into();
+    assert_eq!(
+        f.click("Join Server"),
+        Action::Connect {
+            address: "localhost:25569".into(),
+        }
+    );
+    assert_eq!(f.title.last_server, "localhost:25569");
+
+    f.title.focused_field().unwrap().1.clear();
+    f.title.escape();
+    f.click("Direct Connection");
+    assert!(f.title.focused_field().unwrap().1.is_empty());
+}
+
+#[test]
 fn empty_singleplayer_opens_creation_and_cancel_returns_to_title() {
     let mut f = Fixture::new();
     f.click("Singleplayer");

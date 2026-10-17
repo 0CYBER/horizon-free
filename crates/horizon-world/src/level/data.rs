@@ -1,6 +1,6 @@
 //! Behaviour tables built once from the pinned client resources.
 use super::{
-    Behaviours,
+    Behaviours, GameplayStateSource,
     classes::{Class, ClassSet, Interface},
     states::{BlockId, PropKey, StateTable},
 };
@@ -653,20 +653,37 @@ pub fn load_registry(root: &Path) -> io::Result<BlockRegistry> {
 }
 
 pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviours> {
+    let behaviour = read_json(&root.join("block-behaviours.json"))?;
+    load_with_behaviour_json(registry, root, &behaviour)
+}
+
+pub(super) fn load_with_behaviour_json(
+    registry: &BlockRegistry,
+    root: &Path,
+    behaviour: &Value,
+) -> io::Result<Behaviours> {
+    let gameplay = read_json(&root.join("gameplay-facts.json"))?;
+    let gameplay_states = gameplay["states"]
+        .as_array()
+        .ok_or_else(|| fail("missing gameplay states"))?;
+    load_with_gameplay(registry, root, behaviour, gameplay_states)
+}
+
+pub(super) fn load_with_gameplay<G: GameplayStateSource>(
+    registry: &BlockRegistry,
+    root: &Path,
+    behaviour: &Value,
+    gameplay_states: &[G],
+) -> io::Result<Behaviours> {
     let mut table = StateTable::new(registry)?;
     let props = Props::resolve(&mut table);
     let named = Named::resolve(&table)?;
-    let behaviour = read_json(&root.join("block-behaviours.json"))?;
-    let gameplay = read_json(&root.join("gameplay-facts.json"))?;
     let blocks_json = behaviour["blocks"]
         .as_array()
         .ok_or_else(|| fail("missing behaviour blocks"))?;
     let states_json = behaviour["states"]
         .as_array()
         .ok_or_else(|| fail("missing behaviour states"))?;
-    let gameplay_states = gameplay["states"]
-        .as_array()
-        .ok_or_else(|| fail("missing gameplay states"))?;
     if blocks_json.len() != table.block_count()
         || states_json.len() != table.state_count()
         || gameplay_states.len() != table.state_count()
@@ -798,7 +815,7 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
             .as_array()
             .ok_or_else(|| fail("invalid behaviour state row"))?;
         let int = |i: usize| row.get(i).and_then(Value::as_i64).unwrap_or(0);
-        let gb = |key: &str| game.get(key).and_then(Value::as_bool).unwrap_or(false);
+        let gb = |key: &str| game.flag(key);
         let mut flags = int(1) as u32 & 0x7f;
         for (key, bit) in [
             ("replaceable", state_flags::REPLACEABLE),
@@ -832,14 +849,10 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
             weak: int(5) as u32,
             strong: int(6) as u32,
             fluid,
-            emission: game.get("emission").and_then(Value::as_u64).unwrap_or(0) as u8,
-            dampening: game.get("dampening").and_then(Value::as_u64).unwrap_or(0) as u8,
-            hardness: game.get("hardness").and_then(Value::as_f64).unwrap_or(0.0) as f32,
-            push: match game
-                .get("push")
-                .and_then(Value::as_str)
-                .unwrap_or("PUSH_PULL")
-            {
+            emission: game.unsigned("emission") as u8,
+            dampening: game.unsigned("dampening") as u8,
+            hardness: game.number("hardness") as f32,
+            push: match game.text("push") {
                 "PUSH" => PushReaction::Push,
                 "POPPED" => PushReaction::Popped,
                 "IMMOVEABLE" => PushReaction::Immoveable,
@@ -951,23 +964,13 @@ pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviou
             _ => Direction::Up,
         };
         let default = table.default_state(block);
-        let sound = &gameplay_states[default.0 as usize]["sound"];
-        let sound_id = |key: &str, strings: &mut HashMap<String, Arc<str>>| {
-            interned(
-                strings,
-                sound
-                    .get(key)
-                    .and_then(|s| s.get("id"))
-                    .and_then(Value::as_str)
-                    .unwrap_or(""),
-            )
-        };
+        let sound = &gameplay_states[default.0 as usize];
         let sounds = Arc::new(Sounds {
-            volume: sound.get("volume").and_then(Value::as_f64).unwrap_or(1.0) as f32,
-            pitch: sound.get("pitch").and_then(Value::as_f64).unwrap_or(1.0) as f32,
-            place: sound_id("place", &mut strings),
-            break_: sound_id("break", &mut strings),
-            fall: sound_id("fall", &mut strings),
+            volume: sound.sound_number("volume") as f32,
+            pitch: sound.sound_number("pitch") as f32,
+            place: interned(&mut strings, sound.sound_id("place")),
+            break_: interned(&mut strings, sound.sound_id("break")),
+            fall: interned(&mut strings, sound.sound_id("fall")),
         });
         blocks.push(BlockData {
             class,
@@ -1144,4 +1147,32 @@ fn instrument_index(name: &str) -> u8 {
         .iter()
         .position(|n| n.eq_ignore_ascii_case(name))
         .map_or(0, |i| i as u8)
+}
+
+impl GameplayStateSource for Value {
+    fn flag(&self, name: &str) -> bool {
+        self.get(name).and_then(Value::as_bool).unwrap_or(false)
+    }
+    fn unsigned(&self, name: &str) -> u64 {
+        self.get(name).and_then(Value::as_u64).unwrap_or(0)
+    }
+    fn number(&self, name: &str) -> f64 {
+        self.get(name).and_then(Value::as_f64).unwrap_or(0.0)
+    }
+    fn text(&self, name: &str) -> &str {
+        self.get(name).and_then(Value::as_str).unwrap_or("")
+    }
+    fn sound_number(&self, name: &str) -> f64 {
+        self.get("sound")
+            .and_then(|s| s.get(name))
+            .and_then(Value::as_f64)
+            .unwrap_or(1.0)
+    }
+    fn sound_id(&self, name: &str) -> &str {
+        self.get("sound")
+            .and_then(|s| s.get(name))
+            .and_then(|s| s.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+    }
 }

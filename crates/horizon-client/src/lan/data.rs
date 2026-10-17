@@ -109,24 +109,14 @@ pub fn json_to_nbt(v: &Value) -> Tag {
     }
 }
 
-/// A component's JSON as NbtOps writes it: a list whose elements differ in
-/// type (translation arguments mixing numbers and components) holds each
-/// element that isn't a compound wrapped in one under the empty key.
+/// A component's JSON as NbtOps writes it. A list whose elements differ in type
+/// (translation arguments mixing numbers and components) stays one list: the NBT
+/// writer wraps each element that isn't a compound under the empty key, as
+/// `ListTag.wrapIfNeeded` does, so wrapping it here too would leave the client a
+/// `{"": 1}` argument it cannot read.
 pub fn component_nbt(v: &Value) -> Tag {
     match v {
-        Value::Array(a) => {
-            let kind = |v: &Value| std::mem::discriminant(&json_to_nbt(v));
-            let mixed = a.windows(2).any(|w| kind(&w[0]) != kind(&w[1]));
-            Tag::List(
-                a.iter()
-                    .map(|e| match component_nbt(e) {
-                        t @ Tag::Compound(_) => t,
-                        t if mixed => Tag::compound([("", t)]),
-                        t => t,
-                    })
-                    .collect(),
-            )
-        }
+        Value::Array(a) => Tag::List(a.iter().map(component_nbt).collect()),
         Value::Object(o) => Tag::compound(o.iter().map(|(k, v)| (k.as_str(), component_nbt(v)))),
         other => json_to_nbt(other),
     }
@@ -311,5 +301,29 @@ mod tests {
         assert!(matches!(t.get("a"), Some(Tag::Int(1))));
         assert!(matches!(t.get("c"), Some(Tag::String(_))));
         assert!(matches!(t.get("b"), Some(Tag::List(l)) if l.len() == 2));
+    }
+}
+
+#[cfg(test)]
+mod component_tests {
+    use super::*;
+    use horizon_world::nbt::{Limits, read_network, write_network};
+
+    /// `/give`'s reply: a count, then components. On the wire each element is wrapped
+    /// once, and read back (ListTag.addAndUnwrap) it is the number again.
+    #[test]
+    fn mixed_translation_arguments_are_wrapped_once() {
+        let json = serde_json::json!({
+            "translate": "commands.give.success.single",
+            "with": [1, {"text": "Raw Iron"}, {"text": "Tester"}],
+        });
+        let tag = component_nbt(&json);
+        let Some(Tag::List(args)) = tag.get("with") else {
+            panic!("no arguments: {tag:?}");
+        };
+        assert_eq!(args[0], Tag::Int(1));
+        // Read back as ListTag.addAndUnwrap does: a wrapper wrapped twice stays a compound.
+        let bytes = write_network(&tag, Limits::default()).unwrap();
+        assert_eq!(read_network(&bytes, Limits::default()).unwrap().0, tag);
     }
 }

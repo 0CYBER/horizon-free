@@ -60,17 +60,14 @@ impl Game<'_> {
             && horizon_client::ui_theme::horizon()
     }
     fn pause_labels(&self) -> (String, &'static str) {
-        let world = if self.remote.is_some() {
-            "Multiplayer".to_owned()
+        if let Some(server) = &self.integrated {
+            return (server.world_name.clone(), "Save and quit");
+        }
+        if self.remote.is_some() {
+            ("Multiplayer".to_owned(), "Disconnect")
         } else {
-            self.level.name.clone()
-        };
-        let quit = if self.remote.is_some() {
-            "Disconnect"
-        } else {
-            "Save and quit"
-        };
-        (world, quit)
+            (self.level.name.clone(), "Save and quit")
+        }
     }
     pub(super) fn draw_pause_menu(&mut self, batch: &mut HudBatch) {
         if horizon_client::ui_theme::horizon() {
@@ -149,9 +146,6 @@ impl Game<'_> {
                 .find(|b| b.5 && ui::hovered(self.cursor, b.0, b.1, b.2, 20.0))
                 .map(|b| b.4)
         };
-        if hit.is_some() && !horizon_client::ui_theme::horizon() {
-            self.audio.play_button_click();
-        }
         match hit {
             Some(0) => {
                 self.screen = Screen::Playing;
@@ -170,6 +164,9 @@ impl Game<'_> {
             Some(12) => self.friends_stop(),
             Some(2) => self.close_world()?,
             _ => {}
+        }
+        if hit.is_some() && !horizon_client::ui_theme::horizon() {
+            self.audio.play_button_click();
         }
         Ok(())
     }
@@ -263,8 +260,9 @@ impl Game<'_> {
             .into_iter()
             .find(|d| ui::hovered(self.cursor, d.0, d.1, 200.0, 20.0))
             .map(|d| d.3);
-        if hit.is_some() {
-            self.audio.play_button_click();
+        if hit == Some(0) && self.remote.is_none() {
+            let keep = self.ui.rules.bool("keep_inventory") || self.spectator();
+            self.experience.respawn(keep);
         }
         match hit {
             Some(0) if self.remote.is_some() => {
@@ -294,6 +292,9 @@ impl Game<'_> {
             }
             Some(1) => self.close_world()?,
             _ => {}
+        }
+        if hit.is_some() {
+            self.audio.play_button_click();
         }
         Ok(())
     }

@@ -481,23 +481,30 @@ fn ingredient(v: &Value, items: &Items) -> Ingredient {
 }
 impl StationRecipes {
     pub fn load(root: &Path, items: &Items) -> Self {
-        let mut files: Vec<_> = fs::read_dir(root.join("data/minecraft/recipe"))
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|e| e == "json"))
-            .collect();
-        files.sort();
+        // Vanilla's recipes, then the content mods' (docs/modpacks.md).
+        let mut files = Vec::new();
+        let namespaces =
+            std::iter::once("minecraft".to_owned()).chain(crate::mod_content::namespaces(root));
+        for namespace in namespaces {
+            let mut more: Vec<_> = fs::read_dir(root.join(format!("data/{namespace}/recipe")))
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|e| e == "json"))
+                .collect();
+            more.sort();
+            files.extend(more.into_iter().map(|p| (namespace.clone(), p)));
+        }
         let mut smithing = Vec::new();
         let mut stonecutting = Vec::new();
-        for p in files {
+        for (namespace, p) in files {
             let Ok(bytes) = fs::read(&p) else { continue };
             let Ok(v) = serde_json::from_slice::<Value>(&bytes) else {
                 continue;
             };
             let id = format!(
-                "minecraft:{}",
+                "{namespace}:{}",
                 p.file_stem().and_then(|s| s.to_str()).unwrap_or("")
             );
             match v["type"].as_str().unwrap_or("") {

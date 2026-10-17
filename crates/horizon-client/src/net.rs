@@ -29,6 +29,8 @@ use std::{
 pub enum Event {
     /// Progress text for the connecting screen.
     Status(String),
+    /// The server's `minecraft:brand` custom payload.
+    Brand(String),
     /// Configuration finished: the play state begins with these registries.
     Joined {
         registries: Arc<Dynamic>,
@@ -374,7 +376,7 @@ fn run(
     .map_err(e)?;
     let (mut reader, writer) = c.split();
     *shared_writer.lock().unwrap() = Some(writer);
-    let registries = configure(&mut reader, shared_writer, lang)?;
+    let registries = configure(&mut reader, shared_writer, lang, send)?;
     let _ = send.send(Event::Joined {
         registries: Arc::new(registries),
         uuid: profile.uuid,
@@ -413,10 +415,13 @@ fn run(
             }
             play::Clientbound::StartConfiguration(_) => {
                 reply(play::Serverbound::ConfigurationAcknowledged(Empty));
-                let registries = configure(&mut reader, shared_writer, lang)?;
+                let registries = configure(&mut reader, shared_writer, lang, send)?;
                 let _ = send.send(Event::Reconfigured(Arc::new(registries)));
             }
             play::Clientbound::Disconnect(d) => return Ok(plain(&d.reason, lang)),
+            play::Clientbound::CustomPayload(p) if p.channel == "minecraft:brand" => {
+                receive_brand(&p, send);
+            }
             other => {
                 if send.send(Event::Packet(Box::new(other))).is_err() {
                     return Ok("Disconnected".into());
@@ -432,6 +437,7 @@ fn configure(
     reader: &mut ConnReader,
     writer: &Mutex<Option<ConnWriter>>,
     lang: &Language,
+    send: &Sender<Event>,
 ) -> Result<Dynamic, String> {
     let mut registries = Dynamic::default();
     let reply = |p: cfg::Serverbound| -> Result<(), String> {
@@ -444,6 +450,7 @@ fn configure(
         let (id, payload) = reader.recv().map_err(|e| e.to_string())?;
         match cfg::Clientbound::decode(id, &payload).map_err(|e| e.to_string())? {
             cfg::Clientbound::KeepAlive(k) => reply(cfg::Serverbound::KeepAlive(k))?,
+            cfg::Clientbound::CustomPayload(p) => receive_brand(&p, send),
             cfg::Clientbound::Ping(p) => reply(cfg::Serverbound::Pong(p))?,
             // Know no packs: the server then sends every registry entry in full.
             cfg::Clientbound::SelectKnownPacks(_) => {
@@ -474,6 +481,14 @@ fn configure(
             }
             _ => {}
         }
+    }
+}
+
+fn receive_brand(payload: &cfg::CustomPayload, send: &Sender<Event>) {
+    if payload.channel == "minecraft:brand"
+        && let Ok(brand) = horizon_protocol::buf::Reader::new(&payload.data).string(32767)
+    {
+        let _ = send.send(Event::Brand(brand));
     }
 }
 
@@ -564,4 +579,29 @@ pub fn ping(address: &str, timeout: Duration) -> Result<(serde_json::Value, u128
         .map_err(e)?;
     let _ = c.recv().map_err(e)?;
     Ok((json, start.elapsed().as_millis()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_brand_payload_is_decoded_and_invalid_or_unrelated_payloads_are_ignored() {
+        let (send, events) = channel();
+        let mut writer = horizon_protocol::buf::Writer::new();
+        writer.string("vanilla");
+        let mut payload = cfg::CustomPayload {
+            channel: "minecraft:brand".into(),
+            data: writer.data,
+        };
+        receive_brand(&payload, &send);
+        assert!(matches!(events.try_recv(), Ok(Event::Brand(brand)) if brand == "vanilla"));
+        payload.channel = "example:other".into();
+        receive_brand(&payload, &send);
+        assert!(events.try_recv().is_err());
+        payload.channel = "minecraft:brand".into();
+        payload.data = vec![0xff];
+        receive_brand(&payload, &send);
+        assert!(events.try_recv().is_err());
+    }
 }

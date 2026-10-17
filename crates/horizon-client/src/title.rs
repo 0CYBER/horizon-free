@@ -125,6 +125,8 @@ pub enum Action {
 }
 pub struct Title {
     pub mode: Mode,
+    /// Direct Connection's address, synchronized with `options.txt`'s `lastServer`.
+    pub last_server: String,
     pub saves: PathBuf,
     pub started: std::time::Instant,
     search: String,
@@ -232,6 +234,7 @@ impl Title {
         Self {
             shown: std::cell::Cell::new((std::mem::discriminant(&mode), now)),
             mode,
+            last_server: String::new(),
             saves,
             started: now,
             search: String::new(),
@@ -397,7 +400,7 @@ impl Title {
         scroll.wheel(delta, ROW_HEIGHT / 2.0, top, bottom, content);
         self.scroll.set(scroll);
     }
-    fn failed(&mut self, error: impl std::fmt::Display) {
+    pub fn failed(&mut self, error: impl std::fmt::Display) {
         let return_to = Box::new(self.mode.clone());
         self.mode = Mode::Error {
             message: error.to_string(),
@@ -1162,6 +1165,7 @@ impl Title {
     /// The action and whether to play `AbstractWidget.playButtonClickSound`.
     /// Navigation buttons can return `Action::None` while still sounding.
     pub fn click(&mut self, x: f32, y: f32, size: (f32, f32)) -> (Action, bool) {
+        self.remember_direct_address();
         let (w, h) = (size.0.ceil(), size.1.ceil());
         // MenuTabBar: a new tab clears the focus and clicks.
         if let Mode::Create { focus, options, .. } = &mut self.mode
@@ -1195,16 +1199,14 @@ impl Title {
                 self.mode = Mode::Multiplayer(crate::multiplayer::Screen::list(&self.saves));
                 Action::None
             }
-            (Mode::Multiplayer(screen), hit) => {
-                match screen.click(hit, x, y, (w, h), &self.saves) {
-                    crate::multiplayer::Outcome::Back => {
-                        self.mode = Mode::Main;
-                        Action::None
-                    }
-                    crate::multiplayer::Outcome::Connect(address) => Action::Connect { address },
-                    crate::multiplayer::Outcome::None => Action::None,
+            (Mode::Multiplayer(_), hit) => match self.multiplayer_click(hit, x, y, (w, h)) {
+                crate::multiplayer::Outcome::Back => {
+                    self.mode = Mode::Main;
+                    Action::None
                 }
-            }
+                crate::multiplayer::Outcome::Connect(address) => Action::Connect { address },
+                crate::multiplayer::Outcome::None => Action::None,
+            },
             (Mode::Main, Some(3)) => Action::Options,
             (Mode::Main, Some(7)) => Action::Accessibility,
             (Mode::Main, Some(6)) => Action::Language,
@@ -1512,7 +1514,31 @@ impl Title {
             _ => None,
         }
     }
+    pub(crate) fn remember_direct_address(&mut self) {
+        if let Mode::Multiplayer(crate::multiplayer::Screen::Direct { address }) = &self.mode {
+            self.last_server.clone_from(address);
+        }
+    }
+    pub(crate) fn multiplayer_click(
+        &mut self,
+        hit: Option<u8>,
+        x: f32,
+        y: f32,
+        size: (f32, f32),
+    ) -> crate::multiplayer::Outcome {
+        let Mode::Multiplayer(screen) = &mut self.mode else {
+            return crate::multiplayer::Outcome::None;
+        };
+        let outcome = screen.click(hit, x, y, size, &self.saves);
+        if hit == Some(41)
+            && let crate::multiplayer::Screen::Direct { address } = screen
+        {
+            address.clone_from(&self.last_server);
+        }
+        outcome
+    }
     pub fn escape(&mut self) {
+        self.remember_direct_address();
         if let Mode::Multiplayer(screen) = &mut self.mode
             && !screen.escape(&self.saves)
         {
