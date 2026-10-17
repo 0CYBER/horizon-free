@@ -389,7 +389,7 @@ impl Hub {
     /// Disconnect a guest with a reason (ServerGamePacketListenerImpl.disconnect).
     pub fn kick(&mut self, conn: u32, reason: Tag) {
         if let Some(g) = self.guest(conn) {
-            let _ = g.sender.tx.send(super::Out::Disconnect(reason));
+            g.sender.disconnect(reason);
         }
     }
 
@@ -1655,7 +1655,7 @@ impl Hub {
     pub fn disconnect_all(&mut self) {
         let reason = translatable("multiplayer.disconnect.server_shutdown", &[]);
         for g in &self.guests {
-            let _ = g.sender.tx.send(super::Out::Disconnect(reason.clone()));
+            g.sender.disconnect(reason.clone());
         }
     }
 }

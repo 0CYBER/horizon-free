@@ -155,7 +155,7 @@ mod tick_parity {
         position::{BlockPos, ChunkPos},
         random::{LegacyRandom, RandomSource},
     };
-    use horizon_world::level::{Behaviours, LevelAccess, LevelEvent, Ticks, data};
+    use horizon_world::level::{LevelAccess, LevelEvent, Ticks, data};
     use std::{cell::RefCell, path::PathBuf};
 
     #[derive(Clone)]
@@ -208,7 +208,14 @@ mod tick_parity {
         let root = std::env::var_os("HORIZON_RESOURCES")
             .map(PathBuf::from)
             .unwrap_or_else(|| {
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3")
+                let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+                let local = manifest.join("../../.local/horizon-client/26.3");
+                if local.join("gameplay-facts.json").exists() {
+                    local
+                } else {
+                    // The branch worktree lives below the main checkout.
+                    manifest.join("../../../../.local/horizon-client/26.3")
+                }
             });
         if !root.join("gameplay-facts.json").exists() {
             eprintln!(
@@ -218,8 +225,7 @@ mod tick_parity {
             return;
         }
         let registry = data::load_registry(&root).unwrap();
-        let mut facts = BlockFacts::load(&root, &registry).unwrap();
-        let behaviours = Behaviours::load(&registry, &root).unwrap();
+        let (mut facts, behaviours) = BlockFacts::load_pair(&root, &registry).unwrap();
         let grass = registry.default_state("minecraft:grass_block").unwrap();
         let chunk = |x| {
             let mut c = Chunk::empty(x, 0);

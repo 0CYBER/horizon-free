@@ -301,6 +301,20 @@ pub struct Experience {
     pub total: i32,
 }
 impl Experience {
+    /// `Player.getBaseExperienceReward`: keep-inventory and spectators drop none.
+    pub fn death_reward(&self, keep: bool) -> u32 {
+        if keep {
+            0
+        } else {
+            self.level.wrapping_mul(7).clamp(0, 100) as u32
+        }
+    }
+    /// `ServerPlayer.restoreFrom`: only keep-inventory and spectators retain XP.
+    pub fn respawn(&mut self, keep: bool) {
+        if !keep {
+            *self = Self::default();
+        }
+    }
     pub fn needed(level: i32) -> i32 {
         if level >= 30 {
             112 + (level - 30) * 9
@@ -537,6 +551,37 @@ impl ArmorStand {
             v = Vec3::new(0.0, if moved.y != wanted.y { 0.0 } else { v.y * 0.98 }, 0.0);
         }
         self.velocity = v;
+    }
+}
+
+#[cfg(test)]
+mod experience_tests {
+    use super::*;
+
+    #[test]
+    fn death_reward_uses_levels_and_caps_the_recoverable_points() {
+        for (level, reward) in [(0, 0), (1, 7), (14, 98), (15, 100), (30, 100)] {
+            let xp = Experience {
+                level,
+                progress: 0.75,
+                total: 10_000,
+            };
+            assert_eq!(xp.death_reward(false), reward);
+            assert_eq!(xp.death_reward(true), 0);
+        }
+    }
+
+    #[test]
+    fn respawn_clears_all_xp_unless_it_is_kept() {
+        let mut xp = Experience::default();
+        xp.give(155);
+        let before = (xp.level, xp.progress, xp.total);
+        xp.respawn(true);
+        assert_eq!((xp.level, xp.progress, xp.total), before);
+        xp.respawn(false);
+        assert_eq!((xp.level, xp.progress, xp.total), (0, 0.0, 0));
+        xp.give(7);
+        assert_eq!((xp.level, xp.progress, xp.total), (1, 0.0, 7));
     }
 }
 
