@@ -792,7 +792,7 @@ pub fn preparer(
         match sources::resolve(minecraft, &pins, &known, &linked, &fetch, log)? {
             sources::Resolved::Folder(dir) => dir,
             sources::Resolved::NotFound(checked) => {
-                let not_found = sources::not_found(&version, &checked);
+                let not_found = sources::not_found(&version, &checked, minecraft);
                 download_for_owner(&pins, &own, &fetch, log).map_err(|e| not_found + &e)?;
                 own
             }
