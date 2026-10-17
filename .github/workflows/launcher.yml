@@ -1,7 +1,6 @@
 name: launcher
 # Builds the launcher on Linux, macOS and Windows, and releases it by itself (docs/release-flow.md): after a
-# push to main that changes the launcher or what it builds in (crates/horizon-prepare, crates/horizon-theme,
-# crates/horizon-telemetry),
+# push to main that changes the launcher or a crate it builds in (the paths below),
 # every 10 minutes (a release waiting for merges to settle goes out) and by hand, tools/release_train.py decides as
 # for the game.
 # A release is launcher-vX.Y.Z: the patch after the last launcher tag, or the next minor when a merged pull
@@ -14,10 +13,15 @@ on:
   push:
     branches: [main, launcher, 'launcher-*']
     paths:
+      # Every crate the launcher builds in, as tools/release_train.py's LAUNCHER_PATHS.
       - 'launcher/**'
+      - 'crates/horizon-bench/**'
+      - 'crates/horizon-friends/**'
+      - 'crates/horizon-mods/**'
+      - 'crates/horizon-port-pack/**'
       - 'crates/horizon-prepare/**'
-      - 'crates/horizon-theme/**'
       - 'crates/horizon-telemetry/**'
+      - 'crates/horizon-theme/**'
       - '.github/workflows/launcher.yml'
   schedule:
     - cron: '7-59/10 * * * *'

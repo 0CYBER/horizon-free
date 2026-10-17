@@ -39,7 +39,17 @@ EXPORTERS = "mods/horizon/src/test/java/dev/horizonlab/parity/"
 
 # What players run. Documentation (*.md), tests, benchmarks and harness probes (examples/) never count.
 GAME_PATHS = ["crates/", "xtask/", "packaging/", "Cargo.toml", "Cargo.lock", "research-lock.json"]
-LAUNCHER_PATHS = ["launcher/", "crates/horizon-prepare/", "crates/horizon-theme/", "crates/horizon-telemetry/"]
+# Every crate the launcher builds in (cargo metadata --manifest-path launcher/Cargo.toml: the path packages).
+LAUNCHER_PATHS = [
+    "launcher/",
+    "crates/horizon-bench/",
+    "crates/horizon-friends/",
+    "crates/horizon-mods/",
+    "crates/horizon-port-pack/",
+    "crates/horizon-prepare/",
+    "crates/horizon-telemetry/",
+    "crates/horizon-theme/",
+]
 LAUNCHER_IGNORED = ["launcher/links.json", "launcher/docs/", "launcher/tests/"]
 
 FOOTER = {
