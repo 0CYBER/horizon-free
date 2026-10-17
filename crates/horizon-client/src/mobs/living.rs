@@ -398,10 +398,7 @@ impl Mob {
     /// (touching water resets the fall), then Entity.checkFallDamage.
     fn check_fall_damage(&mut self, w: &MobWorld, moved: Vec3, events: &mut Vec<MobEvent>) {
         if !self.fluids.in_water {
-            self.fluids = w.fluids(self.bounds(), self.eye_y());
-            if self.fluids.in_water {
-                self.fall_distance = 0.0;
-            }
+            self.update_fluids(w, events);
         }
         if !self.fluids.in_water && moved.y < 0.0 {
             self.fall_distance -= f64::from(moved.y as f32);
@@ -411,6 +408,23 @@ impl Mob {
                 self.cause_fall_damage(events);
             }
             self.fall_distance = 0.0;
+        }
+    }
+    /// Entity.updateFluidInteraction: the fluid state, then touching water
+    /// resets the fall and entering it (after the first tick) splashes.
+    pub(super) fn update_fluids(&mut self, w: &MobWorld, events: &mut Vec<MobEvent>) {
+        let was_touching_water = self.fluids.in_water;
+        self.fluids = w.fluids(self.bounds(), self.eye_y());
+        if self.fluids.in_water {
+            self.fall_distance = 0.0;
+            if !was_touching_water && !self.first_tick {
+                // The splash is the mob's own: Horizon's mobs carry no
+                // controlling passenger here.
+                let _ = horizon_world::water_splash::water_splash(
+                    &mut Splash { mob: self, events },
+                    1_000_000,
+                );
+            }
         }
     }
     /// Entity.applyMovementEmissionAndPlaySound: walked distance, footsteps
@@ -811,7 +825,8 @@ impl Mob {
         self.velocity.y += if self.species() == super::Species::Bee {
             0.01
         } else if self.ai.nav.can_float {
-            0.04
+            // LivingEntity.jumpInLiquid adds 0.04F.
+            f64::from(0.04_f32)
         } else {
             0.3
         };
@@ -914,4 +929,94 @@ fn free_position(
     }
     let free = allowed_shape.join(&collisions, ShapeOp::ONLY_FIRST).ok()?;
     free.closest_point(preferred)
+}
+
+/// `Entity.doWaterSplashEffect` for a mob: its own random, its splash sound
+/// (`getSwimSplashSound`), particles for the client and the SPLASH game event.
+struct Splash<'a> {
+    mob: &'a mut Mob,
+    events: &'a mut Vec<MobEvent>,
+}
+impl horizon_world::water_splash::WaterSplashWorld for Splash<'_> {
+    type Error = std::convert::Infallible;
+    type Entity = ();
+    type Sound = &'static str;
+    fn this_entity(&self) {}
+    fn controlling_passenger(&mut self) -> Result<Option<()>, Self::Error> {
+        Ok(None)
+    }
+    fn velocity(&mut self, _: ()) -> Result<Vec3, Self::Error> {
+        Ok(self.mob.velocity)
+    }
+    fn splash_sound(&mut self, _high_speed: bool) -> Result<&'static str, Self::Error> {
+        use super::Species;
+        // Entity.getSwimSplashSound and getSwimHighSpeedSplashSound: the
+        // overrides are Monster's, the hoglin's, the dolphin's and the axolotl's.
+        let species = self.mob.species();
+        Ok(match species {
+            Species::Dolphin => "entity.dolphin.splash",
+            Species::Axolotl => "entity.axolotl.splash",
+            _ if species == Species::Hoglin || super::ai::is_monster(species) => {
+                "entity.hostile.splash"
+            }
+            _ => "entity.generic.splash",
+        })
+    }
+    fn random_float(&mut self) -> Result<f32, Self::Error> {
+        Ok(self.mob.random.next_float())
+    }
+    fn random_double(&mut self) -> Result<f64, Self::Error> {
+        Ok(self.mob.random.next_double())
+    }
+    fn play_sound(
+        &mut self,
+        sound: &'static str,
+        volume: f32,
+        pitch: f32,
+    ) -> Result<(), Self::Error> {
+        if !self.mob.silent {
+            let at = [
+                self.mob.position.x,
+                self.mob.position.y,
+                self.mob.position.z,
+            ];
+            self.events.push(MobEvent::Sound(sound, at, volume, pitch));
+        }
+        Ok(())
+    }
+    fn position(&self) -> Vec3 {
+        self.mob.position
+    }
+    fn width(&self) -> f32 {
+        self.mob.width()
+    }
+    fn particle(
+        &mut self,
+        kind: horizon_world::water_splash::SplashParticle,
+        position: Vec3,
+        velocity: Vec3,
+    ) -> Result<(), Self::Error> {
+        self.events.push(MobEvent::ParticleAt {
+            kind: match kind {
+                horizon_world::water_splash::SplashParticle::Bubble => "bubble",
+                horizon_world::water_splash::SplashParticle::Splash => "splash",
+            },
+            at: [position.x, position.y, position.z],
+            velocity: [velocity.x, velocity.y, velocity.z],
+        });
+        Ok(())
+    }
+    fn splash_event(&mut self) -> Result<(), Self::Error> {
+        self.events.push(MobEvent::GameEvent {
+            event: "minecraft:splash",
+            at: [
+                self.mob.position.x,
+                self.mob.position.y,
+                self.mob.position.z,
+            ],
+            source: self.mob.id,
+            state: horizon_world::registry::BlockStateId(0),
+        });
+        Ok(())
+    }
 }

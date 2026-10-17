@@ -35,7 +35,8 @@ exactly:
   shift-click changes and its lit and cooking totals;
 - the console lines about the player, the chat, `list`, `say` and `stop`;
 - the files the servers leave: server.properties (but the date line),
-  eula.txt, ops.json, whitelist.json, banned-players.json, banned-ips.json.
+  eula.txt, ops.json, whitelist.json, banned-players.json, banned-ips.json,
+  usercache.json (but the date the player's entry expires).
 
 Online mode needs Mojang's session servers and is not tested.
 """
@@ -238,7 +239,8 @@ def console_lines(lines):
 
 def server_files(directory):
     out = []
-    for name in ['server.properties', 'eula.txt', 'ops.json', 'whitelist.json', 'banned-players.json', 'banned-ips.json']:
+    for name in ['server.properties', 'eula.txt', 'ops.json', 'whitelist.json', 'banned-players.json', 'banned-ips.json',
+                 'usercache.json']:
         path = directory / name
         if not path.exists():
             out.append(f'{name}: missing')
@@ -249,6 +251,9 @@ def server_files(directory):
             text = re.sub(r'^(#[^\n]*\n)#[^\n]*\n', r'\1#<date>\n', text)
             # Random per server, and each side has its own port.
             text = re.sub(r'\n(management-server-secret|server-port)=[^\n]*', r'\n\1=<varies>', text)
+        if name == 'usercache.json':
+            # A month from when the player joined.
+            text = re.sub(r'"expiresOn":"[^"]*"', '"expiresOn":"<a month on>"', text)
         out.append(f'{name}: {text!r}')
     return out
 

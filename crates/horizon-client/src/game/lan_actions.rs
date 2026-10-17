@@ -51,6 +51,9 @@ pub(super) struct GuestPlay {
     pub(super) crafting: super::lan_crafting::GuestCrafting,
     /// What the guest's body was given for its effects and enchantments.
     potions: super::potions::BodyPotions,
+    /// `ServerPlayer.getStats` and the inventory `inventory_changed` last saw.
+    pub(super) stats: super::stats::Stats,
+    last_inventory: u64,
 }
 
 struct ItemRules<'a>(&'a horizon_client::items::Items);
@@ -165,6 +168,15 @@ impl Game<'_> {
         let host_ender = self.ender_open;
         self.close_ender_chest();
         std::mem::swap(&mut self.ender_items, &mut g.ender_items);
+        // The guest's advancements, recipe book and statistics.
+        self.advancement_tree();
+        std::mem::swap(&mut self.adv.progress, &mut g.advancements);
+        std::mem::swap(&mut self.adv.changed, &mut g.advancements_changed);
+        std::mem::swap(&mut self.adv.unlocked, &mut g.recipes_unlocked);
+        std::mem::swap(&mut self.level.recipe_book, &mut g.recipe_book);
+        std::mem::swap(&mut self.stats, &mut play.stats);
+        let adv_loaded = std::mem::replace(&mut self.adv.loaded, true);
+        let last_inventory = std::mem::replace(&mut self.adv.last_inventory, play.last_inventory);
         self.lan_acting = Some(conn);
         self.lan_acting_name = Some(g.name.clone());
         self.lan_acting_uuid = Some(g.uuid);
@@ -200,6 +212,15 @@ impl Game<'_> {
         }
         let g = &mut host.hub.guests[i];
         std::mem::swap(&mut self.ender_items, &mut g.ender_items);
+        std::mem::swap(&mut self.adv.progress, &mut g.advancements);
+        std::mem::swap(&mut self.adv.changed, &mut g.advancements_changed);
+        std::mem::swap(&mut self.adv.unlocked, &mut g.recipes_unlocked);
+        std::mem::swap(&mut self.level.recipe_book, &mut g.recipe_book);
+        std::mem::swap(&mut self.stats, &mut play.stats);
+        self.adv.loaded = adv_loaded;
+        play.last_inventory = std::mem::replace(&mut self.adv.last_inventory, last_inventory);
+        let stat_events = std::mem::take(&mut play.stats.events);
+        let name = g.name.clone();
         self.potions.swap_player(&mut g.effects, &mut play.potions);
         if let Some(key) = host_ender {
             self.world
@@ -244,6 +265,7 @@ impl Game<'_> {
             host.hub.set_game_mode(conn, new_mode);
         }
         host.play.insert(conn, play);
+        self.stat_criteria_changed(&name, stat_events);
         if let Some(pos) = opened
             && !self.lan_open_container(host, conn, pos)
             && !host.hub.guests[i].spectator()
@@ -540,6 +562,70 @@ impl Game<'_> {
                 }
             }
             S::ChatCommand(c) => self.guest_command(host, conn, &c.command),
+            S::ChangeDifficulty(p) if host.hub.guests[gi].permission >= 2 => {
+                if !self.level.difficulty_locked && (0..=3).contains(&p.difficulty) {
+                    self.ui.difficulty = if self.level.hardcore {
+                        3
+                    } else {
+                        p.difficulty as u8
+                    };
+                    self.sync_rules();
+                    if self.ui.difficulty == 0 {
+                        self.mobs.retain(|m| !m.hostile());
+                    }
+                    host.hub
+                        .broadcast(&C::ChangeDifficulty(play::ChangeDifficulty {
+                            difficulty: i32::from(self.ui.difficulty),
+                            locked: self.level.difficulty_locked,
+                        }));
+                }
+            }
+            S::LockDifficulty(p) if host.hub.guests[gi].permission >= 2 => {
+                self.level.difficulty_locked = p.locked;
+                host.hub
+                    .broadcast(&C::ChangeDifficulty(play::ChangeDifficulty {
+                        difficulty: i32::from(self.ui.difficulty),
+                        locked: self.level.difficulty_locked,
+                    }));
+            }
+            S::ClientCommand(p) if p.action == 2 && host.hub.guests[gi].permission >= 2 => {
+                host.hub.send_to(
+                    conn,
+                    &C::GameRuleValues(play::GameRuleValues {
+                        entries: horizon_client::gamerules::RULES
+                            .iter()
+                            .map(|r| play::GameRuleEntry {
+                                name: format!("minecraft:{}", r.name),
+                                value: self.ui.rules.get(r.name).unwrap_or(r.default).to_string(),
+                            })
+                            .collect(),
+                    }),
+                );
+            }
+            S::SetGameRule(p) if host.hub.guests[gi].permission >= 2 => {
+                for entry in p.entries {
+                    if self.ui.rules.set_string(&entry.name, &entry.value) {
+                        let message = horizon_client::text::Text::tr(
+                            "commands.gamerule.set",
+                            &[&entry.name, &entry.value],
+                        );
+                        let content =
+                            horizon_client::lan::data::component_nbt(&message.component());
+                        for g in &host.hub.guests {
+                            if g.permission >= 2 {
+                                g.send(&C::SystemChat(play::SystemChat {
+                                    content: content.clone(),
+                                    overlay: false,
+                                }));
+                            }
+                        }
+                        if self.options.dedicated.is_none() && self.allow_commands() {
+                            self.system_message(message);
+                        }
+                    }
+                }
+                self.sync_rules();
+            }
             S::ChangeGameMode(p) if host.hub.guests[gi].permission >= 2 => {
                 if let Some(mode) = usize::try_from(p.mode)
                     .ok()
@@ -578,6 +664,15 @@ impl Game<'_> {
                 self.guest_suggestions(host, conn, &payload);
             }
             S::ClientCommand(c) if c.action == 0 => self.guest_respawn(host, conn),
+            // ServerStatsCounter.sendStats.
+            S::ClientCommand(c) if c.action == 1 => {
+                let stats = host
+                    .play
+                    .get_mut(&conn)
+                    .map(|p| p.stats.take_dirty())
+                    .unwrap_or_default();
+                host.hub.send_stats(conn, &stats);
+            }
             S::PickItemFromBlock(p) => {
                 let state = self.world.block(p.pos[0], p.pos[1], p.pos[2]);
                 let item = self.res.facts.get(state).item.clone();
@@ -815,6 +910,7 @@ impl Game<'_> {
         if !host.hub.guests[i].dead {
             return;
         }
+        self.respawn_level(host);
         let g = &mut host.hub.guests[i];
         g.dead = false;
         g.health = 20.0;
@@ -855,6 +951,7 @@ impl Game<'_> {
     /// Per tick, for every guest: dig, use items, pick up drops, die.
     pub(super) fn tick_guests(&mut self, host: &mut LanHost) {
         self.lan_merchant_tick(host);
+        self.announce_guest_advancements(host);
         let conns: Vec<u32> = host
             .hub
             .guests
@@ -866,7 +963,7 @@ impl Game<'_> {
             let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn) else {
                 continue;
             };
-            if host.hub.guests[gi].dead {
+            if host.hub.guests[gi].dead || self.on_server_trip(conn) {
                 continue;
             }
             let play = host.play.entry(conn).or_default();
@@ -898,6 +995,14 @@ impl Game<'_> {
             }
             self.guest_delayed_destroy(host, conn);
             self.guest_server_tick(host, conn);
+            // Player.tick's statistics and ServerPlayer.tick's triggers, then
+            // PlayerAdvancements.flushDirty.
+            let sleeping = host.hub.guests[gi].sleeping;
+            self.as_guest(host, conn, |g| {
+                g.count_tick_stats(sleeping);
+                g.tick_advancements();
+            });
+            host.hub.flush_progress(conn);
             self.guest_dig_feedback(host, conn);
             self.guest_pickups(host, gi);
             let g = &mut host.hub.guests[gi];
@@ -919,6 +1024,18 @@ impl Game<'_> {
                 // LivingEntity.die: the death animation, the dying player included.
                 host.hub.entity_event(id, 3, at);
                 self.spawn_orbs(at, reward);
+            }
+        }
+    }
+
+    /// `PlayerList.broadcastSystemMessage` of the advancements guests made
+    /// (their own actions, commands and ticks).
+    fn announce_guest_advancements(&mut self, host: &mut LanHost) {
+        for text in std::mem::take(&mut self.adv.announced) {
+            host.hub
+                .system_message(horizon_client::lan::data::component_nbt(&text.component()));
+            if self.options.dedicated.is_none() {
+                self.system_message(text);
             }
         }
     }
@@ -970,6 +1087,7 @@ impl Game<'_> {
             w.player.health.advance_clock();
             let _ = w.fluid_base_tick();
             w.player.ground.on_ground = from_ground;
+            let travelled: Vec<[f64; 3]> = moves.iter().map(|m| m.0).collect();
             for (moved, on_ground) in moves {
                 let movement = Vec3::new(moved[0], moved[1], moved[2]);
                 if w.player.ground.on_ground && !on_ground && moved[1] > 0.0 {
@@ -994,6 +1112,11 @@ impl Game<'_> {
             let _ = w.apply_fire_contact();
             let _ = w.server_hazards_tick(in_wall);
             let mut events = std::mem::take(&mut w.player.events);
+            // ServerGamePacketListenerImpl.handleMovePlayer:
+            // Player.checkMovementStatistics for each move.
+            for d in travelled {
+                game.movement_stats(Vec3::new(d[0], d[1], d[2]));
+            }
             // LivingEntity.baseTick ends with tickEffects.
             game.tick_mob_effects();
             let Some(player) = game.player.as_mut() else {

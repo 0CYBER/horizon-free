@@ -218,6 +218,42 @@ impl Codec<Option<Stack>> for Slot {
     }
 }
 
+/// ItemStackTemplate.STREAM_CODEC: the item, the count, then the patch.
+pub struct Template;
+impl Codec<Stack> for Template {
+    fn read(r: &mut Reader) -> Result<Stack> {
+        let item = r.varint()?;
+        let count = r.varint()?;
+        let positive = r.count(65536)?;
+        let negative = r.count(65536)?;
+        let mut added = Vec::with_capacity(positive.min(64));
+        for _ in 0..positive {
+            let kind = r.varint()?;
+            added.push((kind, Component::read(kind, r)?));
+        }
+        let removed = (0..negative).map(|_| r.varint()).collect::<Result<_>>()?;
+        Ok(Stack {
+            item,
+            count,
+            added,
+            removed,
+        })
+    }
+    fn write(s: &Stack, w: &mut Writer) {
+        w.varint(s.item);
+        w.varint(s.count);
+        w.varint(s.added.len() as i32);
+        w.varint(s.removed.len() as i32);
+        for (kind, c) in &s.added {
+            w.varint(*kind);
+            c.write(*kind, w);
+        }
+        for kind in &s.removed {
+            w.varint(*kind);
+        }
+    }
+}
+
 /// HashedStack: what the client believes a slot holds. Component values are
 /// sent as hashes; Horizon sends patches without hashes, so a server whose
 /// stack carries components resynchronises that slot (as it does for any

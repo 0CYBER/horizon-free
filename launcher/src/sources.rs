@@ -426,16 +426,26 @@ fn make_link(target: &Path, link: &Path) -> std::io::Result<()> {
     std::os::unix::fs::symlink(target, link)
 }
 
-/// Symlinks need developer mode on Windows: a junction for a folder, a hard link for a file.
+/// Symlinks need developer mode on Windows: a junction for a folder, a hard link for a file (a
+/// copy on another volume).
 #[cfg(windows)]
 fn make_link(target: &Path, link: &Path) -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt;
     if !target.is_dir() {
         return fs::hard_link(target, link).or_else(|_| fs::copy(target, link).map(|_| ()));
     }
+    // Always quoted: cmd reads `&`, `^` or `(` in an unquoted path (a user folder may have
+    // them) as its own syntax. A Windows path never holds a quote.
+    let quoted = |path: &Path| {
+        let mut arg = std::ffi::OsString::from("\"");
+        arg.push(path);
+        arg.push("\"");
+        arg
+    };
     let status = std::process::Command::new("cmd")
         .args(["/C", "mklink", "/J"])
-        .arg(link)
-        .arg(target)
+        .raw_arg(quoted(link))
+        .raw_arg(quoted(target))
         .stdout(std::process::Stdio::null())
         .status()?;
     match status.success() {

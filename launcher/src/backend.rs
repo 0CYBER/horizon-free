@@ -1709,6 +1709,10 @@ pub enum Msg {
     /// The selected account's session file for the game about to start (none = offline), or
     /// why it could not be renewed.
     Session(Result<Option<PathBuf>, String>),
+    /// A modpack step's line (`modpacks`).
+    PackLine(String),
+    /// A modpack step ended: the pack as it now is.
+    PackDone(Result<Box<crate::modpacks::Imported>, String>),
 }
 
 /// A running process; its output arrives as `Msg::Line`, its end as `Msg::Exit`.

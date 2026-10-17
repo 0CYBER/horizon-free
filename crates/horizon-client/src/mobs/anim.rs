@@ -235,6 +235,8 @@ pub enum ArmPose {
     Bow,
     CrossbowHold,
     CrossbowCharge,
+    /// Raising a trident to throw it (or to launch with Riptide).
+    ThrowTrident,
 }
 /// HumanoidModel.setupAnim for piglins: `PiglinModel` poses the arms itself.
 pub fn humanoid_item(p: &mut Poses, s: &State, _holding: bool) {
@@ -276,6 +278,12 @@ pub struct Hum {
     pub charge: (f32, f32),
     /// `PiglinModel.setupAttackAnimation`: swing a held weapon down.
     pub weapon_swing: bool,
+    /// `swimAmount` at this frame.
+    pub swim: f32,
+    /// `isUsingItem`: the swim stroke leaves the arms alone.
+    pub using_item: bool,
+    /// The arm the current swing moves (`Some(true)` for the right one).
+    pub swing_right_arm: Option<bool>,
 }
 impl Hum {
     pub fn new(right: ArmPose, left: ArmPose) -> Self {
@@ -290,6 +298,9 @@ impl Hum {
             holding: false,
             charge: (0.0, 0.0),
             weapon_swing: false,
+            swim: 0.0,
+            using_item: false,
+            swing_right_arm: None,
         }
     }
 }
@@ -298,7 +309,7 @@ impl ArmPose {
         matches!(self, Self::Bow | Self::CrossbowHold | Self::CrossbowCharge)
     }
     fn affects_offhand(self) -> bool {
-        self.two_handed()
+        self.two_handed() || self == Self::ThrowTrident
     }
 }
 /// `AnimationUtils.animateCrossbowHold`.
@@ -349,6 +360,11 @@ fn pose_arm(p: &mut Poses, pose: ArmPose, right: bool, h: &Hum) {
             p.yrot("left_arm", 0.1 + hy + if right { 0.4 } else { 0.0 });
             p.xrot("right_arm", -PI / 2.0 + hx);
             p.xrot("left_arm", -PI / 2.0 + hx);
+        }
+        ArmPose::ThrowTrident => {
+            let x = p.get(arm)[3];
+            p.xrot(arm, x * 0.5 - PI);
+            p.yrot(arm, 0.0);
         }
         ArmPose::CrossbowHold => crossbow_hold(p, hx, hy, right),
         ArmPose::CrossbowCharge => crossbow_charge(p, h.charge.0, h.charge.1, right),
@@ -435,12 +451,17 @@ pub(super) fn humanoid(p: &mut Poses, s: &State, h: &Hum) {
         let xm = ((1.0 - (1.0 - swing) * (1.0 - swing)) * PI).msin();
         let x = drop + ym * 1.2 - xm * 0.4;
         let y = 0.1 - ym * 0.6;
-        p.xrot("right_arm", x);
-        p.yrot("right_arm", if raise { -y } else { y });
-        p.zrot("right_arm", 0.0);
-        p.xrot("left_arm", x);
-        p.yrot("left_arm", if raise { y } else { -y });
-        p.zrot("left_arm", 0.0);
+        // An arm raising a trident keeps its pose.
+        if h.right != ArmPose::ThrowTrident {
+            p.xrot("right_arm", x);
+            p.yrot("right_arm", if raise { -y } else { y });
+            p.zrot("right_arm", 0.0);
+        }
+        if h.left != ArmPose::ThrowTrident {
+            p.xrot("left_arm", x);
+            p.yrot("left_arm", if raise { y } else { -y });
+            p.zrot("left_arm", 0.0);
+        }
     }
     if h.crouching {
         p.xrot("body", 0.5);
@@ -455,6 +476,86 @@ pub(super) fn humanoid(p: &mut Poses, s: &State, h: &Hum) {
     }
     bob(p, "right_arm", s.age, 1.0);
     bob(p, "left_arm", s.age, -1.0);
+    if h.swim > 0.0 {
+        swim(p, s.pos, h);
+    }
+}
+/// `Mth.rotLerpRad`.
+fn rot_lerp_rad(a: f32, from: f32, to: f32) -> f32 {
+    let mut diff = to - from;
+    while diff < -PI {
+        diff += PI * 2.0;
+    }
+    while diff >= PI {
+        diff -= PI * 2.0;
+    }
+    from + a * diff
+}
+/// `HumanoidModel.setupSwimAnimation`: the stroke of both arms over 26
+/// walk-animation units, the head down and a slow flutter kick. The left arm
+/// eases the short way round, the right one linearly, as in vanilla.
+fn swim(p: &mut Poses, pos: f32, h: &Hum) {
+    let amount = h.swim;
+    if !h.fall_flying {
+        let x = p.get("head")[3];
+        p.xrot(
+            "head",
+            rot_lerp_rad(amount, x, -std::f32::consts::FRAC_PI_4),
+        );
+    }
+    let swim_pos = pos % 26.0;
+    let right_amount = if h.swing_right_arm == Some(true) {
+        0.0
+    } else {
+        amount
+    };
+    let left_amount = if h.swing_right_arm == Some(false) {
+        0.0
+    } else {
+        amount
+    };
+    let lerp = |a: f32, from: f32, to: f32| from + a * (to - from);
+    let quadratic = |x: f32| -65.0 * x + x * x;
+    if !h.using_item {
+        // Targets (x, y, z) for the left and right arm.
+        let targets = if swim_pos < 14.0 {
+            let stroke = 1.870_796_4 * quadratic(swim_pos) / quadratic(14.0);
+            Some(([0.0, PI, PI + stroke], [0.0, PI, PI - stroke]))
+        } else if swim_pos < 22.0 {
+            let t = (swim_pos - 14.0) / 8.0;
+            let x = PI / 2.0 * t;
+            Some((
+                [x, PI, 5.012_389 - 1.870_796_4 * t],
+                [x, PI, 1.270_796_3 + 1.870_796_4 * t],
+            ))
+        } else if swim_pos < 26.0 {
+            let t = (swim_pos - 22.0) / 4.0;
+            let x = PI / 2.0 - PI / 2.0 * t;
+            Some(([x, PI, PI], [x, PI, PI]))
+        } else {
+            None
+        };
+        if let Some((left, right)) = targets {
+            for (i, target) in left.into_iter().enumerate() {
+                let angle = &mut p.get("left_arm")[3 + i];
+                *angle = rot_lerp_rad(left_amount, *angle, target);
+            }
+            for (i, target) in right.into_iter().enumerate() {
+                let angle = &mut p.get("right_arm")[3 + i];
+                *angle = lerp(right_amount, *angle, target);
+            }
+        }
+    }
+    let x = p.get("left_leg")[3];
+    p.xrot(
+        "left_leg",
+        lerp(amount, x, 0.3 * (pos * 0.333_333_34 + PI).mcos()),
+    );
+    let x = p.get("right_leg")[3];
+    p.xrot(
+        "right_leg",
+        lerp(amount, x, 0.3 * (pos * 0.333_333_34).mcos()),
+    );
 }
 /// Apply the mob's model animation to `p`.
 pub fn setup(
@@ -526,7 +627,21 @@ pub fn setup(
         | Anim::ZombieVillager
         | Anim::ZombifiedPiglin
         | Anim::Humanoid { zombie_arms: true } => {
-            let mut h = Hum::new(ArmPose::Empty, ArmPose::Empty);
+            // DrownedRenderer.getArmPose: an aggressive drowned raises the
+            // trident in its main arm.
+            let throwing = m.kind.anim == Anim::Drowned
+                && m.ai.aggressive
+                && m.extra.main_hand.as_deref() == Some("minecraft:trident");
+            let main = if throwing {
+                ArmPose::ThrowTrident
+            } else {
+                ArmPose::Empty
+            };
+            let mut h = if m.extra.main_hand_left {
+                Hum::new(ArmPose::Empty, main)
+            } else {
+                Hum::new(main, ArmPose::Empty)
+            };
             h.zombie = Some(m.ai.aggressive);
             h.holding = m.extra.main_hand.is_some();
             h.crouching = m.extra.crouching;
@@ -549,6 +664,7 @@ pub fn setup(
             let pose = if player {
                 match m.extra.main_hand.as_deref() {
                     Some("minecraft:bow") if m.extra.using_item > 0 => ArmPose::Bow,
+                    Some("minecraft:trident") if m.extra.using_item > 0 => ArmPose::ThrowTrident,
                     Some("minecraft:crossbow") if m.extra.using_item > 0 && !m.extra.charged => {
                         ArmPose::CrossbowCharge
                     }
@@ -561,7 +677,7 @@ pub fn setup(
             } else {
                 right
             };
-            let off = if player && m.extra.off_hand.is_some() && !pose.two_handed() {
+            let off = if player && m.extra.off_hand.is_some() && !pose.affects_offhand() {
                 ArmPose::Item
             } else {
                 ArmPose::Empty
@@ -580,6 +696,9 @@ pub fn setup(
             }
             h.crouching = m.extra.crouching;
             h.passenger = m.extra.passenger;
+            h.swim = m.extra.swim.amount(s.partial);
+            h.using_item = m.extra.using_item > 0;
+            h.swing_right_arm = m.extra.swing_right_arm;
             humanoid(p, s, &h);
             if m.ai.aggressive && !bow {
                 // SkeletonModel melee pose.
@@ -709,5 +828,74 @@ mod flight_pose_tests {
         humanoid(&mut flight, &state, &h);
         assert_eq!(flight.get("head")[3], -std::f32::consts::FRAC_PI_4);
         assert_eq!(flight.get("right_leg")[3], ground.get("right_leg")[3] / 8.0);
+        // THROW_TRIDENT: the arm goes up over the head, and zombie arms leave it there.
+        let mut throw = make();
+        let mut h = Hum::new(ArmPose::ThrowTrident, ArmPose::Item);
+        h.zombie = Some(true);
+        humanoid(&mut throw, &state, &h);
+        let still = (state.pos * 0.6662 + PI).mcos() * 2.0 * 0.5;
+        assert_eq!(throw.get("right_arm")[3], still * 0.5 - PI);
+        assert_eq!(throw.get("right_arm")[4], 0.0);
+        assert_eq!(throw.get("left_arm")[3], -PI / 1.5);
+    }
+
+    #[test]
+    fn swimming_strokes_the_arms_and_kicks() {
+        let state = State {
+            pos: 7.0,
+            speed: 1.0,
+            age: 0.0,
+            y_rot: 0.0,
+            x_rot: 30.0,
+            swing: 0.0,
+            baby: false,
+            partial: 0.0,
+        };
+        let make = || Poses {
+            map: ["head", "right_arm", "left_arm", "right_leg", "left_leg"]
+                .into_iter()
+                .map(|n| (n.to_string(), [0.0; 9]))
+                .collect(),
+            dummy: [0.0; 9],
+            skipped: Default::default(),
+            hidden: Default::default(),
+        };
+        let same_angle = |a: f32, b: f32| ((a - b + PI).rem_euclid(PI * 2.0) - PI).abs() < 1e-5;
+        let mut h = Hum::new(ArmPose::Empty, ArmPose::Empty);
+        h.swim = 1.0;
+        let mut p = make();
+        humanoid(&mut p, &state, &h);
+        // Mid-stroke: both arms sweep out from overhead by the quadratic.
+        let stroke = 1.870_796_4 * (-65.0 * 7.0 + 49.0) / (-65.0 * 14.0 + 196.0);
+        assert_eq!(p.get("right_arm")[5], PI - stroke);
+        assert!(same_angle(p.get("left_arm")[5], PI + stroke));
+        assert_eq!(p.get("right_arm")[4], PI);
+        assert!(same_angle(p.get("head")[3], -std::f32::consts::FRAC_PI_4));
+        assert!(same_angle(
+            p.get("right_leg")[3],
+            0.3 * (7.0f32 * 0.333_333_34).mcos()
+        ));
+        // Using an item keeps the arms; a swing frees its own arm only.
+        let mut using = make();
+        h.using_item = true;
+        humanoid(&mut using, &state, &h);
+        assert_eq!(using.get("right_arm")[4], 0.0);
+        h.using_item = false;
+        h.swing_right_arm = Some(true);
+        let mut swinging = make();
+        humanoid(
+            &mut swinging,
+            &State {
+                swing: 0.5,
+                ..state
+            },
+            &h,
+        );
+        assert!(swinging.get("right_arm")[4] < 1.0);
+        assert!(same_angle(swinging.get("left_arm")[4], PI));
+        // Out of the pose nothing changes.
+        let mut dry = make();
+        humanoid(&mut dry, &state, &Hum::new(ArmPose::Empty, ArmPose::Empty));
+        assert_eq!(dry.get("head")[3], 30.0f32.to_radians());
     }
 }
