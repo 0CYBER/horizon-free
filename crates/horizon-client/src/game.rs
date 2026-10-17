@@ -5856,6 +5856,38 @@ impl Game<'_> {
         let delay = 20.0 / (4.0 + speed).max(0.1);
         ((self.attack_ticks as f32 + 0.5) / delay).clamp(0.0, 1.0)
     }
+    /// `Player.isSweepAttack`: a charged, grounded sword hit below the movement limit.
+    pub(super) fn sweep_attack_position(&self, scale: f32, crit: bool) -> Option<[f64; 3]> {
+        let p = self.player.as_ref()?;
+        let sword = self.held().is_some_and(|s| {
+            self.res
+                .items
+                .item_tags
+                .get("minecraft:swords")
+                .is_some_and(|tag| tag.contains(&*s.item))
+        });
+        if !p.is_sweep_attack(scale, crit, sword) {
+            return None;
+        }
+        let yaw = f64::from(self.yaw.to_radians());
+        Some([
+            p.position.x - yaw.sin(),
+            p.position.y + f64::from(p.dimensions.height) * 0.5,
+            p.position.z + yaw.cos(),
+        ])
+    }
+    /// The visual and sound part of `Player.doSweepAttack` after a successful hit.
+    pub(super) fn sweep_attack(&mut self, at: [f64; 3], from: Option<[f64; 3]>) {
+        self.particles.add(
+            &horizon_client::particles::ParticleOptions::simple(
+                horizon_client::particles::ParticleType::SweepAttack,
+            ),
+            at,
+            [0.0; 3],
+        );
+        self.audio
+            .play("minecraft:entity.player.attack.sweep", from, 1.0, 1.0);
+    }
     /// `Player.attack`'s sounds when a vehicle takes the hit (it always does,
     /// and can't be hit critically): knockback when sprinting at full
     /// strength, then strong or weak. Before `swing_arm` resets the charge.
@@ -5872,7 +5904,11 @@ impl Game<'_> {
         } else {
             "minecraft:entity.player.attack.weak"
         };
-        self.audio.play(sound, from, 1.0, 1.0);
+        if let Some(at) = self.sweep_attack_position(self.attack_strength_scale(), false) {
+            self.sweep_attack(at, from);
+        } else {
+            self.audio.play(sound, from, 1.0, 1.0);
+        }
     }
     /// Player.attack with the attack-strength charge, crits and knockback.
     fn attack(&mut self) -> bool {
@@ -5924,6 +5960,7 @@ impl Game<'_> {
         let target_kind = self.mobs[index].kind.id.clone();
         let target_kind = format!("minecraft:{}", target_kind.trim_start_matches("minecraft:"));
         let (amount, scale, crit) = self.melee_damage(&target_kind);
+        let sweep = self.sweep_attack_position(scale, crit);
         self.attack_ticks = 0;
         if let Some(p) = self.player.as_mut()
             && !self.creative
@@ -5983,7 +6020,11 @@ impl Game<'_> {
                 "minecraft:entity.player.attack.weak"
             };
             // Player.playServerSideSound: at the player.
-            self.audio.play(sound, from, 1.0, 1.0);
+            if let Some(at) = sweep {
+                self.sweep_attack(at, from);
+            } else {
+                self.audio.play(sound, from, 1.0, 1.0);
+            }
             // The hurt or death sound the mob raised (getHurtSound / getDeathSound,
             // its voice pitch from its own random).
             let queued = std::mem::take(&mut self.mobs[index].outbox);
