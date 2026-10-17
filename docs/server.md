@@ -84,7 +84,7 @@ not tick cost, so it is in scope here (see section 9).
 | Management | Only stdin. There is no service, no backups, no status beyond `list`, no restart after a crash, and a server can't be managed while it runs in the background. |
 | Packaging | The server is the full game client. Resources come from `horizon-prepare`, which needs a JDK and the official launcher's client install, both awkward on a headless VPS. |
 | Tick times | The dedicated loop never recorded its tick times in the game clock (only the windowed loop did), so `/tick query` on a dedicated server reported 0 ms. Fixed in PR 2b, which the benchmark needs (section 9). |
-| Scale | Not measured with more than one player. The tick is single-threaded, and each remote player costs the hub one tracking and chunk-sending pass. |
+| Scale | Measured against vanilla on equal work (section 9, `benchmarks/server-equal-work-2026-10-17/`): 20 TPS up to 50 bots, 9 to 11 TPS at 100, where vanilla's watchdog stops it. Horizon is ahead with few players and when exploring; with 25 to 50 players near spawn vanilla's tick is shorter. |
 
 ### Harnesses on main
 
@@ -457,8 +457,22 @@ reproducible by anyone, and show the same gameplay on both sides.
   - Vanilla's chunk sending yields under load.
   - Horizon sent each nearby `walk` bot 1.5–4 times as many chunks.
 
-  Horizon sent 2–4 times the chunks per second in every multi-bot run. The next run equalises the work
-  (slower `explore`, a `walk`-only pass) on a quiet machine before anything is published.
+  Horizon sent 2–4 times the chunks per second in every multi-bot run.
+- **Equal-work run (2026-10-17,** `benchmarks/server-equal-work-2026-10-17/`, on the ThinkPad with the bots
+  on the Mac mini). Horizon now checks moves and paces chunks as vanilla does (#586), the bots wait for the
+  chunk they stand in, an `--explore-speed` pass keeps both servers at the same rate, and vanilla runs with
+  `gamerule locator_bar false` (Horizon has no locator bar yet). Results:
+  - Memory: Horizon's RSS is 1.9 to 2.6 times smaller in every run (vanilla's heap is fixed at 4 GB).
+  - Walking near spawn: Horizon's tick is shorter with 1 and 10 bots (5.5 against 18.3 ms, 11.5 against
+    16.8), and longer with 25 and 50 (20.7 against 16.0, 31.4 against 20.5). Both keep 20 TPS up to 50.
+  - Exploring at the same rate: Horizon's tick is about half of vanilla's (13.5 against 29.2 ms at 10 bots,
+    20.2 against 37.0 at 25).
+  - At 100 bots: vanilla's watchdog stops it in every pass; Horizon runs at 9 to 11 TPS.
+
+  Two server costs were found and fixed on the way: every chunk section was encoded once per player (#623),
+  and every packet woke its connection's writer thread (#649). Together they took the 50-bot walking tick
+  from 281 ms to 31 ms. At 25 walking bots most of what remains is the engine's streaming and block entity
+  ticks, both of which grow with players (the README has the profile).
 - **Ownership.** perf-server-1 owns making the tick faster. This work only measures it, files what it finds,
   and fixes startup, RAM and packaging.
 
