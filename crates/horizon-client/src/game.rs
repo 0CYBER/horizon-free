@@ -324,7 +324,10 @@ impl Options {
             dedicated: None,
             benchmark: None,
             dev_mods: Vec::new(),
-            server_thread: std::env::var("HORIZON_SERVER_THREAD").map_or(true, |v| v != "0"),
+            // The command harness (HORIZON_COMMAND_SCRIPT) drives the world
+            // itself, without the event loop: it stays in the frame.
+            server_thread: std::env::var("HORIZON_SERVER_THREAD").map_or(true, |v| v != "0")
+                && std::env::var_os("HORIZON_COMMAND_SCRIPT").is_none(),
             integrated: false,
         };
         let mut session_file = std::env::var("HORIZON_SESSION_FILE").ok();

@@ -529,6 +529,28 @@ impl Game<'_> {
         }
     }
 
+    /// The minecarts the server sent, for the control socket's `status`
+    /// (their velocity is not tracked here).
+    pub(super) fn remote_carts(&self) -> Option<Vec<serde_json::Value>> {
+        let r = self.remote.as_ref()?;
+        let mut carts: Vec<&Tracked> = r
+            .entities
+            .values()
+            .filter(|t| t.kind.ends_with("minecart"))
+            .collect();
+        carts.sort_by(|a, b| {
+            a.position
+                .partial_cmp(&b.position)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        Some(
+            carts
+                .into_iter()
+                .map(|t| serde_json::json!({"kind": t.kind, "position": t.position, "velocity": [0.0, 0.0, 0.0]}))
+                .collect(),
+        )
+    }
+
     /// The names in the server's player list, sorted.
     pub(super) fn remote_online_names(&self) -> Option<Vec<String>> {
         let r = self.remote.as_ref()?;
