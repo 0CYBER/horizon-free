@@ -58,6 +58,9 @@ impl<T> Resident<T> {
     pub fn get(&self, slot: u32) -> &T {
         &self.items[slot as usize].1
     }
+    pub fn get_mut(&mut self, slot: u32) -> &mut T {
+        &mut self.items[slot as usize].1
+    }
     pub fn clear(&mut self) {
         self.items.clear();
         self.slots.clear();
