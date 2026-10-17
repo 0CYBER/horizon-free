@@ -119,7 +119,7 @@ impl VanillaTerrain {
             chunk.terrain.min_y().max(MIN_Y),
             (chunk.terrain.min_y() + chunk.terrain.height()).min(MIN_Y + HEIGHT),
         );
-        let mut values = Box::new([0u16; 4096]);
+        let mut values = Box::new([0u32; 4096]);
         for si in 0..SECTIONS as i32 {
             let base = MIN_Y + si * 16;
             if base + 16 <= lo || base >= hi {
@@ -130,7 +130,7 @@ impl VanillaTerrain {
             for y in base.max(lo)..(base + 16).min(hi) {
                 for z in 0..16 {
                     for x in 0..16 {
-                        let id = chunk.block(bx + x, y, bz + z).0 as u16;
+                        let id = chunk.block(bx + x, y, bz + z).0;
                         values[((y & 15) << 8 | z << 4 | x) as usize] = id;
                         any |= id != 0;
                     }

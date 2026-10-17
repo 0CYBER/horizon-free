@@ -9,7 +9,7 @@
 use super::{Dim, Game, Mining, Screen};
 use horizon_client::{
     Result,
-    chunk::{BIOME_STRATEGY, BLOCK_STRATEGY, Chunk, Light, MIN_Y, SECTIONS, Section},
+    chunk::{BIOME_STRATEGY, Chunk, Light, MIN_Y, SECTIONS, Section, block_strategy},
     containers::{BlockEntity, Furnace, FurnaceKind},
     entities::{Experience, ItemEntity},
     hud::{HudBatch, rgba},
@@ -22,7 +22,11 @@ use horizon_client::{
     streaming::{ChunkGenerator, Proto, Streaming},
     world::World,
 };
-use horizon_core::{geometry::Vec3, paletted::PalettedContainer, random::RandomSource};
+use horizon_core::{
+    geometry::Vec3,
+    paletted::{PalettedContainer, Strategy},
+    random::RandomSource,
+};
 use horizon_protocol::{
     entity_data::{ITEM_ENTITY_ITEM, Value},
     item::{Hashed, Stack},
@@ -624,11 +628,24 @@ impl Game<'_> {
             if !(0..SECTIONS as i32).contains(&target) {
                 continue;
             }
-            let strategy = BLOCK_STRATEGY;
+            // A global section is as wide as the server's registry: 16 bits
+            // from a vanilla server, wider from a Horizon host with the same
+            // content mods. Read it at that width, then widen it to ours.
+            let ours = block_strategy();
+            let strategy = if ours.wire_has_palette(s.states.bits) {
+                ours
+            } else {
+                Strategy::blocks(s.states.bits)
+            };
             let palette = s.states.palette.iter().map(|&p| p as u32).collect();
             let words = s.states.data.iter().map(|&w| w as u64).collect();
-            let blocks = PalettedContainer::from_wire(strategy, s.states.bits, palette, words)
+            let mut blocks = PalettedContainer::from_wire(strategy, s.states.bits, palette, words)
                 .map_err(|e| e.to_string())?;
+            if strategy.global_bits != ours.global_bits {
+                let mut values = [0u32; 4096];
+                blocks.unpack(&mut values);
+                blocks = PalettedContainer::from_values(ours, &values);
+            }
             let mut section = Section {
                 blocks,
                 biomes: PalettedContainer::from_values(BIOME_STRATEGY, &cells),

@@ -145,23 +145,23 @@ impl ChunkEncoder {
             tables: None,
         }
     }
-    pub fn entity_type(&self, state: u16) -> Option<i32> {
+    pub fn entity_type(&self, state: u32) -> Option<i32> {
         self.entity_types
-            .get(usize::from(state))
+            .get(state as usize)
             .filter(|t| **t >= 0)
             .map(|t| i32::from(*t))
     }
-    pub fn is_air(&self, state: u16) -> bool {
+    pub fn is_air(&self, state: u32) -> bool {
         self.flags
-            .get(usize::from(state))
+            .get(state as usize)
             .is_none_or(|f| f & NON_AIR == 0)
     }
 
     fn section(&self, section: &Section) -> (horizon_protocol::chunk::Section, bool) {
         let mut values = Vec::with_capacity(BLOCKS);
         let (mut non_empty, mut fluids, mut entities) = (0i16, 0i16, false);
-        let mut count = |state: u16, n: i16| {
-            let f = self.flags.get(usize::from(state)).copied().unwrap_or(0);
+        let mut count = |state: u32, n: i16| {
+            let f = self.flags.get(state as usize).copied().unwrap_or(0);
             if f & NON_AIR != 0 {
                 non_empty += n;
                 if f & FLUID != 0 {
@@ -170,11 +170,11 @@ impl ChunkEncoder {
             }
             f & ENTITY != 0
         };
-        let mut unpacked = [0u16; BLOCKS];
+        let mut unpacked = [0u32; BLOCKS];
         section.unpack(&mut unpacked);
         for &v in &unpacked {
             entities |= count(v, 1);
-            values.push(i32::from(v));
+            values.push(v as i32);
         }
         let biome_values: Vec<i32> = (0..BIOMES)
             .map(|j| {
@@ -189,7 +189,11 @@ impl ChunkEncoder {
             horizon_protocol::chunk::Section {
                 non_empty,
                 fluids,
-                states: Paletted::from_values(&values, Strategy::Blocks, 16),
+                states: Paletted::from_values(
+                    &values,
+                    Strategy::Blocks,
+                    crate::chunk::block_strategy().global_bits,
+                ),
                 biomes: Paletted::from_values(&biome_values, Strategy::Biomes, self.biome_bits),
             },
             entities,
@@ -201,11 +205,11 @@ impl ChunkEncoder {
     fn occupied(&self, chunk: &Chunk) -> u64 {
         let mut bits = 0u64;
         for (i, s) in chunk.sections.iter().enumerate() {
-            let mut unpacked = [0u16; BLOCKS];
+            let mut unpacked = [0u32; BLOCKS];
             s.unpack(&mut unpacked);
             let any = unpacked
                 .iter()
-                .any(|&v| self.flags.get(usize::from(v)).copied().unwrap_or(0) & NON_AIR != 0);
+                .any(|&v| self.flags.get(v as usize).copied().unwrap_or(0) & NON_AIR != 0);
             if any {
                 bits |= 1 << i;
             }

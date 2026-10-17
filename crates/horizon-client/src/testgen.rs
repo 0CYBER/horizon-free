@@ -4,24 +4,24 @@ use crate::{chunk::Chunk, streaming::ChunkGenerator};
 use horizon_world::registry::BlockRegistry;
 
 pub struct TestTerrain {
-    stone: u16,
-    dirt: u16,
-    grass: u16,
-    water: u16,
-    sand: u16,
-    bedrock: u16,
-    log: u16,
-    leaves: u16,
-    short_grass: u16,
+    stone: u32,
+    dirt: u32,
+    grass: u32,
+    water: u32,
+    sand: u32,
+    bedrock: u32,
+    log: u32,
+    leaves: u32,
+    short_grass: u32,
     plains: u16,
 }
 impl TestTerrain {
     pub fn new(registry: &BlockRegistry, biomes: &crate::biome::Biomes) -> crate::Result<Self> {
-        let id = |name: &str| -> crate::Result<u16> {
+        let id = |name: &str| -> crate::Result<u32> {
             Ok(registry
                 .default_state(name)
                 .ok_or_else(|| format!("missing {name}"))?
-                .0 as u16)
+                .0)
         };
         Ok(Self {
             stone: id("minecraft:stone")?,
@@ -41,7 +41,7 @@ impl TestTerrain {
                     ]
                     .into(),
                 })?
-                .0 as u16,
+                .0,
             short_grass: id("minecraft:short_grass")?,
             plains: biomes.id("minecraft:plains"),
         })

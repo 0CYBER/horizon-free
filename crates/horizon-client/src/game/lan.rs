@@ -258,7 +258,7 @@ fn mob_meta(m: &Mob, hub: &Hub) -> Vec<(u8, i32, Value)> {
                 meta.push((
                     16,
                     serializer::OPTIONAL_BLOCK_STATE,
-                    Value::Id(i32::from(state.0 as u16)),
+                    Value::Id(state.0 as i32),
                 ));
             }
         }
@@ -859,7 +859,7 @@ impl Game<'_> {
     /// `Level.blockEvent` for the guests (`ClientboundBlockEventPacket`).
     pub(super) fn lan_block_event(&mut self, pos: [i32; 3], b0: i32, b1: i32) {
         if self.audio.capture.is_some() {
-            let state = self.world.block(pos[0], pos[1], pos[2]).0 as u16;
+            let state = self.world.block(pos[0], pos[1], pos[2]).0;
             self.lan_block_events.push((pos, b0, b1, state));
         }
     }
