@@ -235,6 +235,8 @@ pub enum ArmPose {
     Bow,
     CrossbowHold,
     CrossbowCharge,
+    /// Raising a trident to throw it (or to launch with Riptide).
+    ThrowTrident,
 }
 /// HumanoidModel.setupAnim for piglins: `PiglinModel` poses the arms itself.
 pub fn humanoid_item(p: &mut Poses, s: &State, _holding: bool) {
@@ -298,7 +300,7 @@ impl ArmPose {
         matches!(self, Self::Bow | Self::CrossbowHold | Self::CrossbowCharge)
     }
     fn affects_offhand(self) -> bool {
-        self.two_handed()
+        self.two_handed() || self == Self::ThrowTrident
     }
 }
 /// `AnimationUtils.animateCrossbowHold`.
@@ -349,6 +351,11 @@ fn pose_arm(p: &mut Poses, pose: ArmPose, right: bool, h: &Hum) {
             p.yrot("left_arm", 0.1 + hy + if right { 0.4 } else { 0.0 });
             p.xrot("right_arm", -PI / 2.0 + hx);
             p.xrot("left_arm", -PI / 2.0 + hx);
+        }
+        ArmPose::ThrowTrident => {
+            let x = p.get(arm)[3];
+            p.xrot(arm, x * 0.5 - PI);
+            p.yrot(arm, 0.0);
         }
         ArmPose::CrossbowHold => crossbow_hold(p, hx, hy, right),
         ArmPose::CrossbowCharge => crossbow_charge(p, h.charge.0, h.charge.1, right),
@@ -435,12 +442,17 @@ pub(super) fn humanoid(p: &mut Poses, s: &State, h: &Hum) {
         let xm = ((1.0 - (1.0 - swing) * (1.0 - swing)) * PI).msin();
         let x = drop + ym * 1.2 - xm * 0.4;
         let y = 0.1 - ym * 0.6;
-        p.xrot("right_arm", x);
-        p.yrot("right_arm", if raise { -y } else { y });
-        p.zrot("right_arm", 0.0);
-        p.xrot("left_arm", x);
-        p.yrot("left_arm", if raise { y } else { -y });
-        p.zrot("left_arm", 0.0);
+        // An arm raising a trident keeps its pose.
+        if h.right != ArmPose::ThrowTrident {
+            p.xrot("right_arm", x);
+            p.yrot("right_arm", if raise { -y } else { y });
+            p.zrot("right_arm", 0.0);
+        }
+        if h.left != ArmPose::ThrowTrident {
+            p.xrot("left_arm", x);
+            p.yrot("left_arm", if raise { y } else { -y });
+            p.zrot("left_arm", 0.0);
+        }
     }
     if h.crouching {
         p.xrot("body", 0.5);
@@ -526,7 +538,21 @@ pub fn setup(
         | Anim::ZombieVillager
         | Anim::ZombifiedPiglin
         | Anim::Humanoid { zombie_arms: true } => {
-            let mut h = Hum::new(ArmPose::Empty, ArmPose::Empty);
+            // DrownedRenderer.getArmPose: an aggressive drowned raises the
+            // trident in its main arm.
+            let throwing = m.kind.anim == Anim::Drowned
+                && m.ai.aggressive
+                && m.extra.main_hand.as_deref() == Some("minecraft:trident");
+            let main = if throwing {
+                ArmPose::ThrowTrident
+            } else {
+                ArmPose::Empty
+            };
+            let mut h = if m.extra.main_hand_left {
+                Hum::new(ArmPose::Empty, main)
+            } else {
+                Hum::new(main, ArmPose::Empty)
+            };
             h.zombie = Some(m.ai.aggressive);
             h.holding = m.extra.main_hand.is_some();
             h.crouching = m.extra.crouching;
@@ -549,6 +575,7 @@ pub fn setup(
             let pose = if player {
                 match m.extra.main_hand.as_deref() {
                     Some("minecraft:bow") if m.extra.using_item > 0 => ArmPose::Bow,
+                    Some("minecraft:trident") if m.extra.using_item > 0 => ArmPose::ThrowTrident,
                     Some("minecraft:crossbow") if m.extra.using_item > 0 && !m.extra.charged => {
                         ArmPose::CrossbowCharge
                     }
@@ -561,7 +588,7 @@ pub fn setup(
             } else {
                 right
             };
-            let off = if player && m.extra.off_hand.is_some() && !pose.two_handed() {
+            let off = if player && m.extra.off_hand.is_some() && !pose.affects_offhand() {
                 ArmPose::Item
             } else {
                 ArmPose::Empty
@@ -709,5 +736,14 @@ mod flight_pose_tests {
         humanoid(&mut flight, &state, &h);
         assert_eq!(flight.get("head")[3], -std::f32::consts::FRAC_PI_4);
         assert_eq!(flight.get("right_leg")[3], ground.get("right_leg")[3] / 8.0);
+        // THROW_TRIDENT: the arm goes up over the head, and zombie arms leave it there.
+        let mut throw = make();
+        let mut h = Hum::new(ArmPose::ThrowTrident, ArmPose::Item);
+        h.zombie = Some(true);
+        humanoid(&mut throw, &state, &h);
+        let still = (state.pos * 0.6662 + PI).mcos() * 2.0 * 0.5;
+        assert_eq!(throw.get("right_arm")[3], still * 0.5 - PI);
+        assert_eq!(throw.get("right_arm")[4], 0.0);
+        assert_eq!(throw.get("left_arm")[3], -PI / 1.5);
     }
 }
