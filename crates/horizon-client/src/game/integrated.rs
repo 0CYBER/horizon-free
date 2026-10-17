@@ -292,7 +292,8 @@ fn serve(
     flags: &Flags,
     ready: &Sender<std::result::Result<Pipe, String>>,
 ) -> Result<()> {
-    let atlas = HudAtlas::build(&options.resources)?;
+    // It draws nothing: only the font, which books and chat measure with.
+    let atlas = HudAtlas::fonts(&options.resources)?;
     let audio = Audio::silent(&options.resources);
     let mut server = Game::new(res, pack, atlas, options, settings, audio)?;
     server.run_integrated(launch, flags, ready)

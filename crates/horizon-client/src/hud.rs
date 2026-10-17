@@ -139,19 +139,74 @@ impl HudAtlas {
         (g.rect, g.advance)
     }
     pub fn build(root: &Path) -> Result<Self> {
+        Self::pack(
+            root,
+            &[
+                "gui",
+                "item",
+                "block",
+                "font",
+                "environment",
+                "misc",
+                "painting",
+                "entity",
+                "particle",
+                "mob_effect",
+                "map",
+            ],
+            true,
+        )
+    }
+    /// Empty slots written at run time: map textures (game/maps.rs), the
+    /// minimap, downloaded skins, world icons and the Horizon menu text.
+    fn slots(images: &mut Vec<PackedImage>) {
+        for i in 0..MAP_SLOTS {
+            images.push((format!("horizon/map{i}"), 128, 128, vec![0; 128 * 128 * 4]));
+        }
+        // The minimap extra's image (game/extras.rs).
+        images.push((
+            MINIMAP_SPRITE.into(),
+            crate::minimap::SIZE as u32,
+            crate::minimap::SIZE as u32,
+            vec![0; crate::minimap::SIZE * crate::minimap::SIZE * 4],
+        ));
+        // Downloaded skins (game/scoreboard.rs).
+        for i in 0..SKIN_SLOTS {
+            images.push((format!("horizon/skin{i}"), 64, 64, vec![0; 64 * 64 * 4]));
+        }
+        for i in 0..WORLD_ICON_SLOTS {
+            images.push((
+                format!("horizon/world-icon{i}"),
+                64,
+                64,
+                vec![0; 64 * 64 * 4],
+            ));
+        }
+        // Horizon-style menu text and corner masks (ui_theme), rasterized at run time.
+        images.push((
+            "horizon/ui-text".into(),
+            2048,
+            1024,
+            vec![0; 2048 * 1024 * 4],
+        ));
+    }
+    /// Only the font's metrics, for a game that draws nothing (the
+    /// integrated server): text measures as with the full atlas, without
+    /// holding its textures. The pixels are dropped once the glyph widths are
+    /// read, since nothing uploads them.
+    pub fn fonts(root: &Path) -> Result<Self> {
+        let mut atlas = Self::pack(root, &["font"], false)?;
+        atlas.pixels = Vec::new();
+        Ok(atlas)
+    }
+    /// Pack the textures under these folders of `textures/`, and for the
+    /// `full` atlas the generated sprites and the run-time slots too.
+    fn pack(root: &Path, folders: &[&str], full: bool) -> Result<Self> {
         let textures = root.join("assets/minecraft/textures");
         let mut files = Vec::new();
-        walk(&textures.join("gui"), &mut files);
-        walk(&textures.join("item"), &mut files);
-        walk(&textures.join("block"), &mut files);
-        walk(&textures.join("font"), &mut files);
-        walk(&textures.join("environment"), &mut files);
-        walk(&textures.join("misc"), &mut files);
-        walk(&textures.join("painting"), &mut files);
-        walk(&textures.join("entity"), &mut files);
-        walk(&textures.join("particle"), &mut files);
-        walk(&textures.join("mob_effect"), &mut files);
-        walk(&textures.join("map"), &mut files);
+        for folder in folders {
+            walk(&textures.join(folder), &mut files);
+        }
         files.retain(|p| {
             let s = p.to_string_lossy();
             !s.contains("title/background") && !s.contains("realms") && !s.contains("presets")
@@ -187,7 +242,9 @@ impl HudAtlas {
                 .flat_map(|h| h.join().unwrap_or_default())
                 .collect()
         });
-        images.extend(atlas_sprites(root, &images));
+        if full {
+            images.extend(atlas_sprites(root, &images));
+        }
         // The title screen's "JAVA EDITION" banner reads "RUST EDITION".
         if let Some(edition) = images
             .iter_mut()
@@ -198,36 +255,9 @@ impl HudAtlas {
             edition.3 = pixels;
         }
         images.push(("horizon/white".into(), 4, 4, vec![255; 64]));
-        // Map textures (game/maps.rs) are written into these slots at run time.
-        for i in 0..MAP_SLOTS {
-            images.push((format!("horizon/map{i}"), 128, 128, vec![0; 128 * 128 * 4]));
+        if full {
+            Self::slots(&mut images);
         }
-        // The minimap extra's image (game/extras.rs).
-        images.push((
-            MINIMAP_SPRITE.into(),
-            crate::minimap::SIZE as u32,
-            crate::minimap::SIZE as u32,
-            vec![0; crate::minimap::SIZE * crate::minimap::SIZE * 4],
-        ));
-        // Downloaded skins (game/scoreboard.rs) likewise.
-        for i in 0..SKIN_SLOTS {
-            images.push((format!("horizon/skin{i}"), 64, 64, vec![0; 64 * 64 * 4]));
-        }
-        for i in 0..WORLD_ICON_SLOTS {
-            images.push((
-                format!("horizon/world-icon{i}"),
-                64,
-                64,
-                vec![0; 64 * 64 * 4],
-            ));
-        }
-        // Horizon-style menu text and corner masks (ui_theme), rasterized at run time.
-        images.push((
-            "horizon/ui-text".into(),
-            2048,
-            1024,
-            vec![0; 2048 * 1024 * 4],
-        ));
         images.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
         let width = 4096u32;
         let mut placements = Vec::with_capacity(images.len());
@@ -1022,6 +1052,43 @@ impl HudRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_fonts_only_atlas_measures_text_like_the_full_one() {
+        // A synthetic default font: two 8x8 glyphs, 3 and 5 pixels wide.
+        let root = std::env::temp_dir().join(format!("horizon-fonts-atlas-{}", std::process::id()));
+        let font = root.join("assets/minecraft/font");
+        let textures = root.join("assets/minecraft/textures/font");
+        fs::create_dir_all(&font).unwrap();
+        fs::create_dir_all(&textures).unwrap();
+        fs::write(
+            font.join("default.json"),
+            r#"{"providers":[{"type":"bitmap","file":"minecraft:font/test.png","ascent":7,"chars":["ab"]}]}"#,
+        )
+        .unwrap();
+        let mut pixels = vec![0u8; 16 * 8 * 4];
+        for y in 0..8 {
+            for x in (0..3).chain(8..13) {
+                pixels[(y * 16 + x) * 4 + 3] = 255;
+            }
+        }
+        let mut encoder =
+            png::Encoder::new(fs::File::create(textures.join("test.png")).unwrap(), 16, 8);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder
+            .write_header()
+            .unwrap()
+            .write_image_data(&pixels)
+            .unwrap();
+        let full = HudAtlas::build(&root).unwrap();
+        let fonts = HudAtlas::fonts(&root).unwrap();
+        let _ = fs::remove_dir_all(&root);
+        assert!(fonts.pixels.is_empty());
+        let width = full.font.width("abba");
+        assert!(width > 0.0);
+        assert_eq!(fonts.font.width("abba"), width);
+    }
 
     #[test]
     fn effect_icons_are_painted_from_the_mob_effect_directory() {
