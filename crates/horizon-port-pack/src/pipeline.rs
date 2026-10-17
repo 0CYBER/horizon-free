@@ -139,11 +139,20 @@ pub fn carry(
         if !chosen {
             continue;
         }
+        // The oracle's facts for the mods it ran; a mod it did not load (a
+        // library missing) keeps the guesses from its blockstates.
+        let prefix = format!("{}:", info.mod_id);
+        let seen = |f: &&oracle::Facts| {
+            f.blocks
+                .keys()
+                .chain(f.items.keys())
+                .any(|k| k.starts_with(&prefix))
+        };
         match carry::carry(
             jar,
             info,
             &work.join("mods").join(&r.key),
-            facts.as_ref(),
+            facts.as_ref().filter(seen),
             &allowed,
         ) {
             Ok(report) => {
