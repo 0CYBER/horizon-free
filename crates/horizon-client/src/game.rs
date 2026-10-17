@@ -9363,6 +9363,18 @@ impl ApplicationHandler for Game<'_> {
                 }
                 WindowEvent::MouseInput { state, button, .. } => {
                     let pressed = state == ElementState::Pressed;
+                    if matches!(self.screen, Screen::Inventory | Screen::Creative)
+                        && let Some(key) = self
+                            .settings
+                            .keys
+                            .container_mouse_key(button, self.creative)
+                    {
+                        if pressed && self.carried.is_none() {
+                            self.inventory_hotkey(key);
+                        }
+                        // Neither edge of a bound button is an ordinary slot click.
+                        return Ok(());
+                    }
                     match self.screen {
                         Screen::Playing => {
                             if pressed && !self.captured {
