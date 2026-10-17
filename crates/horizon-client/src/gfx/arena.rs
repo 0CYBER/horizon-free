@@ -54,6 +54,11 @@ pub struct Arena {
     page_limit: u64,
     initial_capacity: u64,
     usage: wgpu::BufferUsages,
+    /// A page had to go to system memory (logged once).
+    spilled: bool,
+    /// Tests: GPU-local pages fail as if video memory were full.
+    #[cfg(test)]
+    video_memory_full: bool,
 }
 
 impl Arena {
@@ -79,19 +84,44 @@ impl Arena {
             page_limit,
             initial_capacity: capacity,
             usage,
+            spilled: false,
+            #[cfg(test)]
+            video_memory_full: false,
         }
     }
-    fn create(
-        device: &wgpu::Device,
-        stride: u64,
-        capacity: u64,
-        usage: wgpu::BufferUsages,
-    ) -> wgpu::Buffer {
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Section buffer arena"),
-            size: capacity * stride,
-            usage: usage | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
+    /// A buffer of `capacity` vertices in video memory or, when that is full
+    /// and the device allows it, in system memory: Vulkan drivers fail an
+    /// allocation rather than page like OpenGL ones, and wgpu's default error
+    /// handler panics. `None` when neither has room.
+    fn create(&mut self, device: &wgpu::Device, capacity: u64) -> Option<wgpu::Buffer> {
+        let usage = self.usage | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC;
+        #[cfg(test)]
+        let local = (!self.video_memory_full)
+            .then(|| try_create(device, capacity * self.stride, usage))
+            .flatten();
+        #[cfg(not(test))]
+        let local = try_create(device, capacity * self.stride, usage);
+        local.or_else(|| {
+            // Mappable buffers are placed in host-visible memory, which the
+            // allocator takes from system memory once video memory is full.
+            if !device
+                .features()
+                .contains(wgpu::Features::MAPPABLE_PRIMARY_BUFFERS)
+            {
+                return None;
+            }
+            let buffer = try_create(
+                device,
+                capacity * self.stride,
+                usage | wgpu::BufferUsages::MAP_WRITE,
+            )?;
+            if !std::mem::replace(&mut self.spilled, true) {
+                log::warn!(
+                    "Horizon: video memory is full; more terrain is kept in system memory \
+                     (lower the render distance if frames slow down)"
+                );
+            }
+            Some(buffer)
         })
     }
     /// The rounded length a request of `vertices` occupies.
@@ -110,19 +140,19 @@ impl Arena {
     }
     /// A range of `vertices`: (page, first vertex). Grows the newest page
     /// (copying its contents on the GPU) or starts a new one when nothing
-    /// free is large enough.
+    /// free is large enough; `None` when no memory is left for it.
     pub fn alloc(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         vertices: u64,
-    ) -> (u32, u64) {
+    ) -> Option<(u32, u64)> {
         let len = Self::span(vertices).min(self.page_limit);
         for (i, page) in self.pages.iter_mut().enumerate() {
             if let Some(page) = page
                 && let Some(start) = page.free.take(len)
             {
-                return (i as u32, start);
+                return Some((i as u32, start));
             }
         }
         let last = self.pages.len().saturating_sub(1);
@@ -131,11 +161,11 @@ impl Arena {
         {
             let current = page.capacity;
             let grown = (current * 2).max(current + len).min(self.page_limit);
-            if grown - current >= len || grown == self.page_limit {
-                self.grow(device, queue, last, grown);
-                if let Some(start) = self.pages[last].as_mut().unwrap().free.take(len) {
-                    return (last as u32, start);
-                }
+            if (grown - current >= len || grown == self.page_limit)
+                && self.grow(device, queue, last, grown)
+                && let Some(start) = self.pages[last].as_mut().unwrap().free.take(len)
+            {
+                return Some((last as u32, start));
             }
         }
         let capacity = if self.pages.is_empty() {
@@ -145,10 +175,16 @@ impl Arena {
         }
         .max(len)
         .min(self.page_limit);
+        // A page just large enough when memory is short.
+        let (buffer, capacity) = match self.create(device, capacity) {
+            Some(buffer) => (buffer, capacity),
+            None if capacity > len => (self.create(device, len)?, len),
+            None => return None,
+        };
         let mut free = FreeList::new(capacity);
         let start = free.take(len).expect("a new page fits one section");
         let page = Page {
-            buffer: Self::create(device, self.stride, capacity, self.usage),
+            buffer,
             capacity,
             free,
         };
@@ -161,7 +197,7 @@ impl Arena {
                 self.pages.len() - 1
             });
         self.pages[index] = Some(page);
-        (index as u32, start)
+        Some((index as u32, start))
     }
     pub fn release(&mut self, page: u32, start: u64, vertices: u64) {
         let len = Self::span(vertices).min(self.page_limit);
@@ -171,9 +207,19 @@ impl Arena {
             .free
             .give(start, len);
     }
-    fn grow(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, page: usize, capacity: u64) {
+    /// Moves a page into a larger buffer; false (the page unchanged) when
+    /// there is no memory for it.
+    fn grow(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        page: usize,
+        capacity: u64,
+    ) -> bool {
         let capacity = capacity.next_multiple_of(GRAIN).min(self.page_limit);
-        let buffer = Self::create(device, self.stride, capacity, self.usage);
+        let Some(buffer) = self.create(device, capacity) else {
+            return false;
+        };
         let old = self.pages[page].as_mut().expect("live arena page");
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Grow section arena"),
@@ -185,6 +231,7 @@ impl Arena {
         old.buffer = buffer;
         old.capacity = capacity;
         old.free.give(previous, capacity - previous);
+        true
     }
     /// Reclaim after an upload batch, so replacing a section can reuse its range.
     pub fn trim(&mut self) {
@@ -206,15 +253,39 @@ impl Arena {
     }
 }
 
+/// `create_buffer` with an out-of-memory failure returned instead of raised
+/// (raised errors are fatal).
+fn try_create(device: &wgpu::Device, size: u64, usage: wgpu::BufferUsages) -> Option<wgpu::Buffer> {
+    let scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Section buffer arena"),
+        size,
+        usage,
+        mapped_at_creation: false,
+    });
+    // Native error scopes resolve at once.
+    pollster::block_on(scope.pop()).is_none().then_some(buffer)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
+        device_with(wgpu::Features::empty())
+    }
+
+    /// A device with those of `features` the adapter has.
+    fn device_with(features: wgpu::Features) -> Option<(wgpu::Device, wgpu::Queue)> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(instance.request_adapter(&Default::default())).ok()?;
         eprintln!("arena GPU regression: {}", adapter.get_info().name);
-        pollster::block_on(adapter.request_device(&Default::default())).ok()
+        let required_features = adapter.features() & features;
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_features,
+            ..Default::default()
+        }))
+        .ok()
     }
 
     #[test]
@@ -226,9 +297,9 @@ mod tests {
         let mut arena = Arena::new(&device, 4, GRAIN);
         arena.page_limit = 2 * GRAIN;
         assert_eq!(arena.bytes(), 0);
-        let (first, a) = arena.alloc(&device, &queue, GRAIN);
-        let (_, b) = arena.alloc(&device, &queue, GRAIN);
-        let (live, c) = arena.alloc(&device, &queue, 2 * GRAIN);
+        let (first, a) = arena.alloc(&device, &queue, GRAIN).unwrap();
+        let (_, b) = arena.alloc(&device, &queue, GRAIN).unwrap();
+        let (live, c) = arena.alloc(&device, &queue, 2 * GRAIN).unwrap();
         let buffer = arena.buffer(live).clone();
         let data = [1u8, 2, 3, 4];
         queue.write_buffer(&buffer, c * 4, &data);
@@ -240,7 +311,7 @@ mod tests {
         arena.trim();
         assert_eq!(arena.bytes(), 2 * GRAIN * 4);
         assert_eq!(arena.buffer(live), &buffer);
-        let (reused, d) = arena.alloc(&device, &queue, GRAIN);
+        let (reused, d) = arena.alloc(&device, &queue, GRAIN).unwrap();
         assert_eq!(reused, first);
 
         let (tx, rx) = std::sync::mpsc::channel();
@@ -269,11 +340,11 @@ mod tests {
             Arena::new(&device, 28, GRAIN),
             Arena::indices(&device, GRAIN),
         ] {
-            arena.alloc(&device, &queue, GRAIN);
+            arena.alloc(&device, &queue, GRAIN).unwrap();
             assert_eq!(arena.bytes(), arena.stride * GRAIN);
             arena.clear();
             assert_eq!(arena.bytes(), 0);
-            assert_eq!(arena.alloc(&device, &queue, GRAIN), (0, 0));
+            assert_eq!(arena.alloc(&device, &queue, GRAIN), Some((0, 0)));
             assert_eq!(arena.bytes(), arena.stride * GRAIN);
         }
     }
@@ -301,5 +372,64 @@ mod tests {
         let _b = free.take(GRAIN).unwrap();
         free.give(a, GRAIN);
         assert_eq!(free.take(GRAIN), Some(a));
+    }
+
+    fn read(device: &wgpu::Device, queue: &wgpu::Queue, buffer: &wgpu::Buffer, offset: u64) -> u32 {
+        let (tx, rx) = std::sync::mpsc::channel();
+        wgpu::util::DownloadBuffer::read_buffer(
+            device,
+            queue,
+            &buffer.slice(offset..offset + 4),
+            move |result| tx.send(result.unwrap().to_vec()).unwrap(),
+        );
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        u32::from_le_bytes(rx.recv().unwrap()[..4].try_into().unwrap())
+    }
+
+    #[test]
+    fn full_video_memory_spills_to_system_memory() {
+        let Some((device, queue)) = device_with(wgpu::Features::MAPPABLE_PRIMARY_BUFFERS) else {
+            return;
+        };
+        if !device
+            .features()
+            .contains(wgpu::Features::MAPPABLE_PRIMARY_BUFFERS)
+        {
+            return;
+        }
+        let mut arena = Arena::indices(&device, GRAIN);
+        let (page, start) = arena.alloc(&device, &queue, GRAIN).unwrap();
+        queue.write_buffer(arena.buffer(page), start * 4, &7u32.to_le_bytes());
+        arena.video_memory_full = true;
+        // The full page can't grow in video memory: it moves to system
+        // memory with its contents, and new ranges come from there.
+        let (grown, next) = arena.alloc(&device, &queue, GRAIN).unwrap();
+        assert!(arena.spilled);
+        assert_eq!(grown, page);
+        assert!(
+            arena
+                .buffer(page)
+                .usage()
+                .contains(wgpu::BufferUsages::MAP_WRITE)
+        );
+        queue.write_buffer(arena.buffer(grown), next * 4, &9u32.to_le_bytes());
+        assert_eq!(read(&device, &queue, arena.buffer(page), start * 4), 7);
+        assert_eq!(read(&device, &queue, arena.buffer(grown), next * 4), 9);
+    }
+
+    #[test]
+    fn no_memory_left_is_not_an_error() {
+        let Some((device, queue)) = device() else {
+            return;
+        };
+        let mut arena = Arena::indices(&device, GRAIN);
+        arena.alloc(&device, &queue, GRAIN).unwrap();
+        arena.video_memory_full = true;
+        // Without mappable primary buffers nothing can spill: the request
+        // fails, and the arena keeps what it has.
+        assert_eq!(arena.alloc(&device, &queue, GRAIN), None);
+        assert_eq!(arena.bytes(), GRAIN * 4);
+        arena.release(0, 0, GRAIN);
+        assert_eq!(arena.alloc(&device, &queue, GRAIN), Some((0, 0)));
     }
 }
