@@ -253,6 +253,20 @@ impl Game<'_> {
     pub(super) fn rocket_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
         let orientation = glam::Mat4::from_quat(self.camera_orientation());
         for r in self.rockets.iter().filter(|r| !r.attached) {
+            // FireworkRocketEntity.shouldRenderAtSqrDistance: within 64 blocks;
+            // EntityRenderer.shouldRender: its 0.25 box in the view.
+            if !self.standing_entity_in_view(
+                camera,
+                super::entity_culling::at(r.previous),
+                super::entity_culling::at(r.position),
+                alpha,
+                0.25,
+                0.25,
+                64.0,
+                0.0,
+            ) {
+                continue;
+            }
             let p = glam::DVec3::new(
                 r.previous.x + (r.position.x - r.previous.x) * alpha,
                 r.previous.y + (r.position.y - r.previous.y) * alpha,

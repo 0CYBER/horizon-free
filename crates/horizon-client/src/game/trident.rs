@@ -350,7 +350,26 @@ impl Game<'_> {
         else {
             return;
         };
+        // AbstractArrow.shouldRenderAtSqrDistance: ten times the default.
+        let range = 10.0
+            * super::entity_culling::default_range(
+                glam::DVec3::splat(2.0 * HALF),
+                self.settings.entity_distance,
+            );
         for t in &self.tridents {
+            // EntityRenderer.shouldRender; ThrownTridentRenderer grows the box by 1.5.
+            if !self.standing_entity_in_view(
+                camera,
+                super::entity_culling::at(t.previous),
+                super::entity_culling::at(t.position),
+                alpha,
+                2.0 * HALF,
+                2.0 * HALF,
+                range,
+                1.5,
+            ) {
+                continue;
+            }
             let p = glam::DVec3::new(
                 t.previous.x + (t.position.x - t.previous.x) * alpha,
                 t.previous.y + (t.position.y - t.previous.y) * alpha,
