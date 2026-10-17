@@ -616,6 +616,9 @@ impl Game<'_> {
             "screen": self.screen_label(),
             "buttons": buttons,
         });
+        if let Some(chat) = &self.ui.chat_screen {
+            v["chat_input"] = json!(chat.input.value);
+        }
         if self.title.is_some() {
             v["menu"] = self.title_value();
         }

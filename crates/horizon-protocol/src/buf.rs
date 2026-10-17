@@ -23,6 +23,10 @@ impl<'a> Reader<'a> {
     pub fn position(&self) -> usize {
         self.pos
     }
+    /// The bytes read since `start` (a `position()`).
+    pub fn since(&self, start: usize) -> &'a [u8] {
+        &self.data[start.min(self.pos)..self.pos]
+    }
     pub fn rest(&mut self) -> &'a [u8] {
         let rest = &self.data[self.pos..];
         self.pos = self.data.len();

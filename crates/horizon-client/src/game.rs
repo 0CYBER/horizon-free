@@ -3722,10 +3722,7 @@ impl Game<'_> {
     /// LevelLoadingScreen.onClose -> Gui.setScreen(null) -> grabMouse.
     fn capture_loaded_world(&mut self) {
         // Loading may finish after focus was lost or another screen opened.
-        if self.title.is_none()
-            && self.screen == Screen::Playing
-            && !self.remote.as_ref().is_some_and(|r| r.chat_input.is_some())
-        {
+        if self.title.is_none() && self.screen == Screen::Playing {
             self.capture(true);
         }
     }
@@ -9676,9 +9673,6 @@ impl ApplicationHandler for Game<'_> {
                         self.station_text(event.text.as_deref(), backspace);
                     }
                 }
-                WindowEvent::KeyboardInput { event, .. } if self.remote_chat_open() => {
-                    self.remote_chat_key(&event)
-                }
                 WindowEvent::KeyboardInput { event, .. }
                     if self.screen == Screen::WorldOptions
                         && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape)) =>
@@ -9785,7 +9779,6 @@ impl ApplicationHandler for Game<'_> {
                         && self.title.is_none()
                         && self.sign_edit.is_none()
                         && self.book.is_none()
-                        && !self.remote_chat_open()
                     {
                         let turn = |k| f32::from(u8::from(self.keys.contains(&k)));
                         let secs = elapsed.as_secs_f32().min(0.1);
