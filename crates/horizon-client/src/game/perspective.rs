@@ -427,7 +427,7 @@ impl Game<'_> {
     }
     /// `extractEntityInInventoryFollowsMouse`: the player in the box
     /// `[x0, x1) x [y0, y1)`, `size` pixels per block, turned toward the
-    /// cursor; drawn as depth-sorted, back-face-culled quads.
+    /// cursor; drawn with a depth buffer and back-face culling.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn draw_player_preview(
         &self,
@@ -495,9 +495,9 @@ impl Game<'_> {
         let quads = player_preview_quads(verts, gui, fire, &atlas.sprites);
         let start = batch.vertices.len();
         for (_, p, uv, color) in quads {
-            batch.quad(p, uv, color);
+            batch.quad_3d(p, uv, color);
         }
-        batch.clip_since(start, x0, y0, x1, y1);
+        batch.depth_since(start, [x0, y0, x1, y1]);
     }
     /// The survival inventory's player box (`InventoryScreen`).
     pub(super) fn draw_inventory_player(&self, batch: &mut HudBatch, ox: f32, oy: f32) {
@@ -570,7 +570,7 @@ fn player_preview_quads(
     gui: glam::Mat4,
     fire: Option<(f32, f32)>,
     sprites: &std::collections::HashMap<String, horizon_client::hud::Rect>,
-) -> Vec<(f32, [[f32; 2]; 4], [[f32; 2]; 4], u32)> {
+) -> Vec<(f32, [[f32; 3]; 4], [[f32; 2]; 4], u32)> {
     let flame_start = verts.len();
     if let Some((width, height)) = fire {
         horizon_client::fire_render::flames(
@@ -584,7 +584,7 @@ fn player_preview_quads(
             &mut verts,
         );
     }
-    let mut quads: Vec<(f32, [[f32; 2]; 4], [[f32; 2]; 4], u32)> = Vec::new();
+    let mut quads: Vec<(f32, [[f32; 3]; 4], [[f32; 2]; 4], u32)> = Vec::new();
     for (index, q) in verts.as_chunks::<4>().0.iter().enumerate() {
         let p: [glam::Vec3; 4] =
             std::array::from_fn(|i| gui.transform_point3(glam::Vec3::from_array(q[i].pos)));
@@ -606,12 +606,12 @@ fn player_preview_quads(
         let depth = p.iter().map(|v| v.z).sum::<f32>() / 4.0;
         quads.push((
             depth,
-            p.map(|v| [v.x, v.y]),
+            p.map(|v| v.to_array()),
             std::array::from_fn(|i| q[i].uv),
             color,
         ));
     }
-    // Far (low z) first: the viewer is on the +z side.
+    // Keep far-to-near order for translucent faces; opaque overlap uses depth.
     quads.sort_by(|a, b| a.0.total_cmp(&b.0));
     quads
 }
@@ -619,6 +619,60 @@ fn player_preview_quads(
 #[cfg(test)]
 mod preview_tests {
     use super::*;
+    #[test]
+    fn preview_keeps_crossing_faces_depth_and_clips_without_dropping_faces() {
+        use horizon_client::{
+            hud::{Blend, HudBatch},
+            mesher::Vertex,
+        };
+        let face = |z: [f32; 4]| {
+            [[-2.0, -1.0], [-2.0, 1.0], [2.0, 1.0], [2.0, -1.0]]
+                .into_iter()
+                .zip(z)
+                .map(|([x, y], z)| Vertex {
+                    pos: [x, y, z],
+                    uv: [0.0; 2],
+                    layer: 0,
+                    color: u32::MAX,
+                    light: 0,
+                    normal: [0; 4],
+                })
+        };
+        // A shield and arm can intersect: neither average depth orders both ends.
+        let verts = face([1.0, 1.0, -1.0, -1.0]).chain(face([0.0; 4])).collect();
+        let quads = player_preview_quads(verts, glam::Mat4::IDENTITY, None, &Default::default());
+        assert_eq!(quads.len(), 2);
+        let mut batch = HudBatch::new([320, 240]);
+        for (_, p, uv, color) in quads {
+            batch.quad_3d(p, uv, color);
+        }
+        // Its centre is outside this scissor; the visible part must still be drawn.
+        batch.depth_since(0, [1.0, 0.0, 2.0, 1.0]);
+        assert_eq!(batch.vertices.len(), 12);
+        let shield = &batch.vertices[..6];
+        let arm = &batch.vertices[6..];
+        assert!(shield[0].depth < arm[0].depth);
+        assert!(shield[2].depth > arm[2].depth);
+        assert_eq!(batch.runs(), vec![(0..12, Blend::Depth([1, 0, 1, 1]))]);
+    }
+
+    #[test]
+    #[ignore = "requires prepared model data in HORIZON_TEST_RESOURCES"]
+    fn player_render_transform_uses_vanilla_avatar_scale() {
+        let root = std::path::PathBuf::from(
+            std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),
+        );
+        let mut m = Mob::new(1, player_type(&root).unwrap(), Vec3::ZERO, 0.0);
+        for (id, expected) in [("minecraft:player", 0.9375), ("minecraft:zombie", 1.0)] {
+            Arc::make_mut(&mut m.kind).id = id.into();
+            let transform =
+                horizon_client::mobs::render::base_transform_at(&m, 1.0, glam::Mat4::IDENTITY);
+            for axis in [glam::Vec3::X, glam::Vec3::Y, glam::Vec3::Z] {
+                assert!((transform.transform_vector3(axis).length() - expected).abs() < 1e-6);
+            }
+        }
+    }
+
     #[test]
     fn burning_inventory_preview_keeps_visible_fullbright_flames() {
         let rect = |u0| horizon_client::hud::Rect {
