@@ -2664,6 +2664,7 @@ dependencies = [
  "gpui",
  "horizon-bench",
  "horizon-friends",
+ "horizon-port-pack",
  "horizon-prepare",
  "horizon-telemetry",
  "horizon-theme",
@@ -2677,6 +2678,18 @@ dependencies = [
  "tar",
  "ureq",
  "winresource",
+ "zip",
+]
+
+[[package]]
+name = "horizon-port-pack"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha1",
+ "toml 1.1.8+spec-1.1.0",
+ "ureq",
  "zip",
 ]
 
