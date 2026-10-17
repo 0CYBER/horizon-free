@@ -748,6 +748,82 @@ fn read_loop(
     }
 }
 
+/// Packet bodies at least this large are compressed once for every
+/// connection: chunk columns, mostly, which every player near them receives.
+const SHARED_FRAME_MIN: usize = 8 << 10;
+/// The compressed frames kept, in bytes; the oldest go first.
+const SHARED_FRAME_BYTES: usize = 32 << 20;
+
+/// Compressed frame contents by the body they were made from: its length,
+/// two independently keyed 64-bit hashes of it, and the threshold.
+struct SharedFrames {
+    hashers: (std::hash::RandomState, std::hash::RandomState),
+    frames: Mutex<FrameCache>,
+    /// [`SHARED_FRAME_BYTES`].
+    limit: usize,
+}
+type FrameKey = (usize, u64, u64, usize);
+#[derive(Default)]
+struct FrameCache {
+    frames: crate::fast_hash::FxHashMap<FrameKey, Arc<[u8]>>,
+    order: std::collections::VecDeque<FrameKey>,
+    bytes: usize,
+}
+impl SharedFrames {
+    fn get() -> &'static Self {
+        static FRAMES: std::sync::OnceLock<SharedFrames> = std::sync::OnceLock::new();
+        FRAMES.get_or_init(|| Self::new(SHARED_FRAME_BYTES))
+    }
+    fn new(limit: usize) -> Self {
+        Self {
+            hashers: Default::default(),
+            frames: Mutex::default(),
+            limit,
+        }
+    }
+    /// `frame::contents(body, Some(threshold))`, compressed only when no
+    /// connection has sent the same body lately.
+    fn contents(&self, body: &[u8], threshold: usize) -> horizon_protocol::Result<Arc<[u8]>> {
+        use std::hash::BuildHasher;
+        let key = (
+            body.len(),
+            self.hashers.0.hash_one(body),
+            self.hashers.1.hash_one(body),
+            threshold,
+        );
+        let cache = || self.frames.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(contents) = cache().frames.get(&key) {
+            return Ok(contents.clone());
+        }
+        let contents: Arc<[u8]> = horizon_protocol::frame::contents(body, Some(threshold))?.into();
+        let mut cache = cache();
+        if cache.frames.insert(key, contents.clone()).is_none() {
+            cache.order.push_back(key);
+            cache.bytes += contents.len();
+            while cache.bytes > self.limit
+                && let Some(old) = cache.order.pop_front()
+            {
+                if let Some(c) = cache.frames.remove(&old) {
+                    cache.bytes -= c.len();
+                }
+            }
+        }
+        Ok(contents)
+    }
+}
+
+/// Send one packet body: a large one compressed through [`SharedFrames`],
+/// so a chunk column sent to fifty players is compressed once, not fifty
+/// times. The bytes on the wire are the same.
+fn send_body(writer: &mut ConnWriter, body: &[u8]) -> horizon_protocol::Result<()> {
+    match writer.threshold {
+        Some(t) if body.len() >= t.max(SHARED_FRAME_MIN) => {
+            writer.send_contents(&SharedFrames::get().contents(body, t)?)
+        }
+        _ => writer.send(body),
+    }
+}
+
 fn write_loop(
     mut writer: ConnWriter,
     rx: Receiver<Out>,
@@ -761,7 +837,7 @@ fn write_loop(
     loop {
         let mut write = |body: Vec<u8>| {
             pending.fetch_sub(body.len(), Ordering::Relaxed);
-            writer.send(&body).is_ok() && pending.load(Ordering::Relaxed) <= MAX_PENDING
+            send_body(&mut writer, &body).is_ok() && pending.load(Ordering::Relaxed) <= MAX_PENDING
         };
         match rx.recv_timeout(Duration::from_millis(200)) {
             Ok(Out::Packet(body)) => {
@@ -828,6 +904,41 @@ mod tests {
                 Out::Close => vec![b"close".to_vec()],
             })
             .collect()
+    }
+
+    #[test]
+    fn shared_frames_are_the_frames_compressed_here() {
+        use horizon_protocol::frame;
+        let frames = SharedFrames::new(usize::MAX);
+        let a: Vec<u8> = (0..40_000u32).map(|i| (i * 7 % 13) as u8).collect();
+        let mut b = a.clone();
+        b[20_000] ^= 1;
+        for (body, threshold) in [(&a, 256), (&b, 256), (&a, 256), (&a, 64), (&b, 256)] {
+            let shared = frames.contents(body, threshold).unwrap();
+            assert_eq!(*shared, *frame::contents(body, Some(threshold)).unwrap());
+        }
+        // One frame per body and threshold.
+        assert_eq!(frames.frames.lock().unwrap().frames.len(), 3);
+    }
+
+    #[test]
+    fn shared_frames_keep_the_newest_within_their_limit() {
+        let first = SharedFrames::new(0)
+            .contents(&[1; 9000], 256)
+            .unwrap()
+            .len();
+        let frames = SharedFrames::new(first * 2);
+        for n in 0..5u8 {
+            frames.contents(&[n; 9000], 256).unwrap();
+        }
+        let cache = frames.frames.lock().unwrap();
+        assert!((1..=2).contains(&cache.frames.len()));
+        assert_eq!(cache.order.len(), cache.frames.len());
+        assert_eq!(
+            cache.bytes,
+            cache.frames.values().map(|c| c.len()).sum::<usize>()
+        );
+        assert!(cache.bytes <= first * 2);
     }
 
     #[test]
