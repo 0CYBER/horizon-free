@@ -4546,6 +4546,10 @@ impl Game<'_> {
     /// Several clicks on one menu instance (a quick craft drag is three).
     fn menu_ops(&mut self, ops: &[(Option<usize>, i32, horizon_client::menu::Input)]) -> bool {
         use horizon_client::menu::Input;
+        if self.remote.is_some() && self.screen == Screen::Inventory {
+            // On a server the clicks are the server's: predicted and sent.
+            return self.remote_menu_ops(ops);
+        }
         if let [(Some(slot), button, input)] = ops {
             self.crafter_slot_clicked(*slot, *button, *input);
         }
@@ -4720,7 +4724,7 @@ impl Game<'_> {
                     plain: false,
                 };
                 (kind, map)
-            } else if self.station.is_none() && !self.mount_active() && self.remote.is_none() {
+            } else if self.station.is_none() && !self.mount_active() {
                 let table = self.craft_size == 3;
                 let map = Map {
                     container: 0,
@@ -4833,7 +4837,12 @@ impl Game<'_> {
             Some(false) => return true,
             Some(true) => {}
         }
-        self.register_exploration_maps(made);
+        // On a server the clicks only predict: the server drops, crafts and
+        // makes maps itself.
+        let predicting = self.remote.is_some();
+        if !predicting {
+            self.register_exploration_maps(made);
+        }
         if let Some(s) = menu.merchant.take() {
             self.merchant_sync_out(s);
         }
@@ -4851,10 +4860,12 @@ impl Game<'_> {
         if !offhand_mapped {
             self.offhand = menu.player_item(40).cloned();
         }
-        for stack in dropped {
-            self.player_drop(stack);
+        if !predicting {
+            for stack in dropped {
+                self.player_drop(stack);
+            }
+            self.award_crafted(&crafted);
         }
-        self.award_crafted(&crafted);
         if kind == Kind::Loom {
             if let Some(s) = self.station.as_mut() {
                 s.loom.selected = usize::try_from(menu.data[0]).ok();
@@ -4986,9 +4997,13 @@ impl Game<'_> {
                     return;
                 }
                 if let Some(moved) = self.last_quick_moved.clone() {
-                    self.menu_session(|menu, env, to_menu| {
-                        Some(menu.quick_move_all(env, to_menu(slot)?, &moved).is_ok())
-                    });
+                    if self.remote.is_some() {
+                        self.remote_quick_move_all(slot, &moved);
+                    } else {
+                        self.menu_session(|menu, env, to_menu| {
+                            Some(menu.quick_move_all(env, to_menu(slot)?, &moved).is_ok())
+                        });
+                    }
                 }
                 self.last_inv_click = None;
                 self.inv_clicks.skip_release();
