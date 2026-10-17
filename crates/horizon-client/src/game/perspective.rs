@@ -620,6 +620,23 @@ fn player_preview_quads(
 mod preview_tests {
     use super::*;
     #[test]
+    #[ignore = "requires prepared model data in HORIZON_TEST_RESOURCES"]
+    fn player_render_transform_uses_vanilla_avatar_scale() {
+        let root = std::path::PathBuf::from(
+            std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),
+        );
+        let mut m = Mob::new(1, player_type(&root).unwrap(), Vec3::ZERO, 0.0);
+        for (id, expected) in [("minecraft:player", 0.9375), ("minecraft:zombie", 1.0)] {
+            Arc::make_mut(&mut m.kind).id = id.into();
+            let transform =
+                horizon_client::mobs::render::base_transform_at(&m, 1.0, glam::Mat4::IDENTITY);
+            for axis in [glam::Vec3::X, glam::Vec3::Y, glam::Vec3::Z] {
+                assert!((transform.transform_vector3(axis).length() - expected).abs() < 1e-6);
+            }
+        }
+    }
+
+    #[test]
     fn burning_inventory_preview_keeps_visible_fullbright_flames() {
         let rect = |u0| horizon_client::hud::Rect {
             u0,

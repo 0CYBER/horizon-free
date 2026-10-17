@@ -4336,14 +4336,7 @@ impl Game<'_> {
                     } else {
                         ("Crafting", 97.0)
                     };
-                    batch.text(
-                        atlas,
-                        title,
-                        ox + tx,
-                        oy + if self.craft_size == 3 { 6.0 } else { 8.0 },
-                        grey,
-                        false,
-                    );
+                    batch.text(atlas, title, ox + tx, oy + 6.0, grey, false);
                     if self.craft_size == 3 {
                         batch.text(atlas, "Inventory", ox + 8.0, oy + 72.0, grey, false);
                     }
