@@ -163,11 +163,18 @@ impl Game<'_> {
         }
         let tree = self.adv.tree.clone();
         let kids = tree.children();
-        let pos = tree
-            .layout()
-            .into_iter()
-            .map(|p| p.map(|(x, y)| (x * 28, (y * 27.0).floor() as i32)))
-            .collect();
+        // A server's advancements come placed (`DisplayInfo` x, y).
+        let pos = match &self.adv.positions {
+            Some(server) => server
+                .iter()
+                .map(|&(x, y)| Some(((x * 28.0).floor() as i32, (y * 27.0).floor() as i32)))
+                .collect(),
+            None => tree
+                .layout()
+                .into_iter()
+                .map(|p| p.map(|(x, y)| (x * 28, (y * 27.0).floor() as i32)))
+                .collect(),
+        };
         self.adv_ui.cache = Some(Cache { tree, kids, pos });
     }
     fn adv_done(&self, i: usize) -> bool {
@@ -184,7 +191,12 @@ impl Game<'_> {
             };
         };
         let tree = &c.tree;
-        let visible = tree.visible(&c.kids, |i| self.adv.progress.done(&tree.list[i]));
+        // A server sends only what the player may see.
+        let visible = if self.adv.positions.is_some() {
+            vec![true; tree.list.len()]
+        } else {
+            tree.visible(&c.kids, |i| self.adv.progress.done(&tree.list[i]))
+        };
         // AdvancementTab.create: a displayed root with a background.
         let mut tabs: Vec<usize> = (0..tree.list.len())
             .filter(|&i| {
