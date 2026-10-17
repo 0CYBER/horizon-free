@@ -16,6 +16,12 @@ pub const MAX_UNCOMPRESSED: usize = 8_388_608;
 /// length prefix, and with compression enabled the uncompressed-length
 /// field (0 when below the threshold).
 pub fn encode(body: &[u8], threshold: Option<usize>) -> Result<Vec<u8>> {
+    Ok(prefixed(&contents(body, threshold)?))
+}
+
+/// What [`encode`] puts after the length prefix: the same for every
+/// connection with the same threshold.
+pub fn contents(body: &[u8], threshold: Option<usize>) -> Result<Vec<u8>> {
     let inner = match threshold {
         None => body.to_vec(),
         Some(t) if body.len() < t => {
@@ -38,10 +44,15 @@ pub fn encode(body: &[u8], threshold: Option<usize>) -> Result<Vec<u8>> {
             inner.len()
         )));
     }
-    let mut out = Vec::with_capacity(inner.len() + 3);
-    write_varint(&mut out, inner.len() as i32);
-    out.extend_from_slice(&inner);
-    Ok(out)
+    Ok(inner)
+}
+
+/// A frame: the length prefix, then the [`contents`].
+pub fn prefixed(contents: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(contents.len() + 3);
+    write_varint(&mut out, contents.len() as i32);
+    out.extend_from_slice(contents);
+    out
 }
 
 /// Split one complete frame off the front of `buffer`, if available.
