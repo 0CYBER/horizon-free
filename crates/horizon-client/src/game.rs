@@ -3156,6 +3156,11 @@ impl Game<'_> {
         player.may_fly = self.creative || spectator;
         player.invulnerable = self.creative || spectator;
         player.spectator = spectator;
+        if spectator {
+            player.flying = true;
+        } else if !player.may_fly {
+            player.flying = false;
+        }
         player.respiration = self.armor[0]
             .as_ref()
             .map_or(0, |s| s.enchantment_level("minecraft:respiration") as i32);
@@ -8458,6 +8463,7 @@ impl Game<'_> {
 
             level.food = p.health.food.food;
             level.saturation = p.health.food.saturation;
+            level.flying = p.flying;
         }
         level.inventory = self
             .inventory

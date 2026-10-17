@@ -68,6 +68,7 @@ pub fn apply(guest: &mut Guest, level: &Level) {
     guest.xp_total = level.xp_total;
     guest.effects = crate::effects::PlayerEffects::from_saved(&level.active_effects);
     guest.game_mode = level.mode();
+    guest.flying = level.flying;
     guest.selected = (level.selected_slot.max(0) as usize).min(8);
     guest.saved = level.player_extra.clone();
     guest.recipe_book = level.recipe_book.clone();
@@ -128,6 +129,7 @@ pub fn store(guest: &Guest, level: &mut Level) {
     level.active_effects = guest.effects.saved();
     level.game_mode = guest.game_mode;
     level.creative = guest.game_mode == 1;
+    level.flying = guest.flying;
     level.selected_slot = guest.selected as i32;
     level.on_ground = guest.on_ground;
     level.player_extra = guest.saved.clone();

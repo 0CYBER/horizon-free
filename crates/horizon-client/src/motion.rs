@@ -309,6 +309,7 @@ impl PlayerMotion {
             self.set_health(level.health, false)?;
             self.health.food.food = level.food;
             self.health.food.saturation = level.saturation;
+            self.flying = level.flying;
         }
         Ok(())
     }
@@ -2610,6 +2611,7 @@ mod tests {
             food: 11,
             saturation: 2.25,
             player_extra: Some(extra),
+            flying: true,
             ..Default::default()
         };
         let mut pending = true;
@@ -2617,6 +2619,7 @@ mod tests {
             .load_saved_state_once(&mut pending, &level)
             .unwrap();
         assert_eq!((w.player.fire_ticks, w.player.air), (160, 8));
+        assert!(w.player.flying);
         assert_eq!(
             (
                 w.player.health.health(),
@@ -2628,6 +2631,7 @@ mod tests {
         let mut respawn = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
         respawn.load_saved_state_once(&mut pending, &level).unwrap();
         assert_eq!((respawn.fire_ticks, respawn.air), (-20, 300));
+        assert!(!respawn.flying);
         assert_eq!(
             (respawn.health.health(), respawn.health.food.food),
             (20.0, 20)

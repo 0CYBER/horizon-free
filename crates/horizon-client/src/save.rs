@@ -2146,6 +2146,8 @@ pub struct Level {
     pub on_ground: bool,
     pub food_exhaustion: f32,
     pub food_tick_timer: i32,
+    /// Abilities.flying: whether creative/spectator flight is active.
+    pub flying: bool,
     /// The player compound as loaded, for fields Horizon does not model
     /// (ender chest, effects, abilities, recipe book, attributes, ...).
     pub player_extra: Option<Tag>,
@@ -2309,6 +2311,10 @@ impl Level {
             self.creative = mode == 1;
             self.game_mode = mode as i32;
         }
+        self.flying = p
+            .get("abilities")
+            .and_then(|a| number(a.get("flying")))
+            .is_some_and(|v| v != 0);
         if let Some(d) = text(p.get("Dimension")) {
             self.dimension = d;
         }
@@ -2440,7 +2446,9 @@ impl Level {
         }
         if spectator {
             put(&mut abilities, "flying", Tag::Byte(1));
-        } else if !creative {
+        } else if creative {
+            put(&mut abilities, "flying", Tag::Byte(i8::from(self.flying)));
+        } else {
             put(&mut abilities, "flying", Tag::Byte(0));
         }
         if let Tag::Compound(map) = &mut abilities {
@@ -3153,6 +3161,7 @@ mod tests {
             world_spawn: Some([8, 64, 8]),
             spawn: Some([20.0, 70.0, 20.0]),
             difficulty_locked: true,
+            flying: true,
             ..Level::default()
         };
         level.weather.raining = true;
@@ -3164,6 +3173,7 @@ mod tests {
         assert_eq!(back.seed, -42);
         assert_eq!((back.time, back.day_time), (1234, 25000));
         assert!(back.creative);
+        assert!(back.flying);
         assert_eq!(back.position, Some([1.5, 70.0, -3.25]));
         assert_eq!(back.rotation, [90.0, 10.0]);
         assert_eq!((back.health, back.food, back.saturation), (17.0, 15, 2.5));
@@ -3245,5 +3255,34 @@ mod tests {
         level.player_extra = Some(loaded);
         level.active_effects.clear();
         assert!(level.player_tag().get("active_effects").is_none());
+    }
+
+    #[test]
+    fn creative_flight_status_persists_in_save_and_resets_for_survival() {
+        let mut level = Level {
+            creative: true,
+            flying: true,
+            ..Level::default()
+        };
+        let tag = level.player_tag();
+        let flying_byte = tag
+            .get("abilities")
+            .and_then(|a| number(a.get("flying")))
+            .unwrap_or(0);
+        assert_eq!(flying_byte, 1);
+
+        let mut loaded = Level::default();
+        loaded.read_player(&tag);
+        assert!(loaded.flying);
+
+        // Survival mode resets flying ability to 0 in save.
+        level.creative = false;
+        level.game_mode = 0;
+        let tag_survival = level.player_tag();
+        let flying_survival = tag_survival
+            .get("abilities")
+            .and_then(|a| number(a.get("flying")))
+            .unwrap_or(0);
+        assert_eq!(flying_survival, 0);
     }
 }
