@@ -10246,7 +10246,11 @@ pub fn run() -> Result<()> {
     let root = options.resources.clone();
     let assets = Arc::new(assets);
     log::info!("load assets: {:.2}s", started.elapsed().as_secs_f32());
-    let facts = BlockFacts::load(&root, assets.registry)?;
+    let behaviour_json: serde_json::Value = serde_json::from_reader(std::io::BufReader::new(
+        std::fs::File::open(root.join("block-behaviours.json"))?,
+    ))?;
+    let (facts, gameplay_projection) =
+        BlockFacts::load_with_projection(&root, assets.registry, &behaviour_json)?;
     let mob_data = horizon_client::mobs::MobData::load(&root, &facts);
     horizon_client::mobs::trial_spawner::load_registry(&root);
     log::info!("load facts: {:.2}s", started.elapsed().as_secs_f32());
@@ -10313,7 +10317,12 @@ pub fn run() -> Result<()> {
         ambient: horizon_client::ambience::AmbientTables::load(&root),
         nether_environment: Environment::load_dimension(&root, "the_nether", false)?,
         end_environment: Environment::load_dimension(&root, "the_end", false)?,
-        behaviours: Behaviours::load(registry_owner.registry, &root)?,
+        behaviours: Behaviours::load_with_gameplay(
+            registry_owner.registry,
+            &root,
+            &behaviour_json,
+            &gameplay_projection,
+        )?,
         mob_types: MobTypes::load(&root)?
             .types
             .into_iter()
@@ -10325,6 +10334,10 @@ pub fn run() -> Result<()> {
         player_arm: horizon_client::mobs::load_model(&root, "minecraft:player#main")
             .and_then(|m| m.children.into_iter().find(|c| c.name == "right_arm")),
     });
+    // Both inputs are needed only while constructing the behaviour tables.
+    // Release their owned JSON/Arc buffers before entering the long-lived game loop.
+    drop(gameplay_projection);
+    drop(behaviour_json);
     let mut settings = Settings::load(&std::env::current_dir()?.join("options.txt"));
     horizon_client::ui_theme::load_preferences(&std::env::current_dir()?);
     // Scripted and frame-limited runs (the parity harnesses) see vanilla's
