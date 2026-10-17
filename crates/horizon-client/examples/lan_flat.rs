@@ -116,6 +116,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             clock_rate: 1.0,
             tick_rate: 20.0,
             tick_frozen: false,
+            collision: None,
         };
         for event in hub.tick(&mut ctx) {
             match event {
@@ -127,7 +128,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         eprintln!("[lan] {packet:?}");
                     }
                 }
-                HostEvent::Chat(line) => println!("{line}"),
+                HostEvent::Chat(line) | HostEvent::Warn(line) => println!("{line}"),
                 HostEvent::Left(_) => {}
             }
         }

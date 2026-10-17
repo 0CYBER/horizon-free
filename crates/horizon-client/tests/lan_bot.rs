@@ -193,6 +193,7 @@ impl Server {
             clock_rate: 1.0,
             tick_rate: 20.0,
             tick_frozen: false,
+            collision: None,
         };
         let events = self.hub.tick(&mut ctx);
         for event in events {

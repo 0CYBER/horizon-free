@@ -6242,6 +6242,7 @@ impl Game<'_> {
         self.fns = Default::default();
         self.bosses = Default::default();
         reset_world_progress(&mut self.adv, &mut self.stats);
+        self.prefetch_advancement_tree();
         self.restore_player_environment = true;
         // RandomSequences: the world's data/minecraft/random_sequences.dat.
         self.rand_sequences =

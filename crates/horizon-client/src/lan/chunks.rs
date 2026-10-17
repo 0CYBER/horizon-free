@@ -4,6 +4,7 @@
 use crate::{
     chunk::{Chunk, Light, MIN_Y, SECTIONS, Section},
     containers::BlockEntity,
+    fast_hash::FxHashMap,
 };
 use horizon_protocol::{
     buf::set_bit,
@@ -91,7 +92,7 @@ pub struct ChunkEncoder {
     /// The save's tables, for the heightmaps.
     pub tables: Option<Arc<crate::save::SaveTables>>,
     /// Sections already looked at, by address (see `Encoded`).
-    cache: std::sync::Mutex<HashMap<usize, Encoded>>,
+    cache: std::sync::Mutex<FxHashMap<usize, Encoded>>,
     /// Each column's heightmaps, with the sections they were made from.
     heights: std::sync::Mutex<HashMap<(i32, i32), Heights>>,
     /// The level's sections among a column's: all of them in the Overworld,
@@ -115,11 +116,15 @@ struct Heights {
 struct Encoded {
     section: std::sync::Weak<Section>,
     non_air: bool,
-    /// LevelChunkSection.write, and whether it holds block entity blocks.
-    wire: Option<(Arc<[u8]>, bool)>,
+    /// LevelChunkSection.write, and its block entity blocks.
+    wire: Option<(Arc<[u8]>, Entities)>,
     /// The section's light as the wire's two DataLayers, when not uniform.
     light: Option<Arc<Layers>>,
 }
+
+/// A section's blocks that have a block entity type, as (index, state) in
+/// index order (y, then z, then x).
+type Entities = Arc<[(u16, u32)]>;
 
 /// One section's light as DataLayers (two blocks per byte, the even one in
 /// the low nibble), and whether each holds any light.
@@ -258,22 +263,29 @@ impl ChunkEncoder {
 
     /// The cached entry for a section, made with `non_air` when missing.
     fn cached<T>(&self, section: &Arc<Section>, read: impl FnOnce(&mut Encoded) -> T) -> T {
-        let mut cache = self.cache.lock().unwrap();
+        read(self.entry(&mut self.cache.lock().unwrap(), section))
+    }
+
+    /// A section's entry in the locked cache, made with `non_air` when missing.
+    fn entry<'a>(
+        &self,
+        cache: &'a mut FxHashMap<usize, Encoded>,
+        section: &Arc<Section>,
+    ) -> &'a mut Encoded {
         if cache.len() >= CACHE_SWEEP {
             cache.retain(|_, e| e.section.strong_count() > 0);
             if cache.len() >= CACHE_SWEEP / 2 {
                 cache.clear();
             }
         }
-        let entry = cache
+        cache
             .entry(Arc::as_ptr(section) as usize)
             .or_insert_with(|| Encoded {
                 section: Arc::downgrade(section),
                 non_air: self.non_air(section),
                 wire: None,
                 light: None,
-            });
-        read(entry)
+            })
     }
 
     /// LevelChunkSection.hasOnlyAir, negated.
@@ -291,14 +303,14 @@ impl ChunkEncoder {
     }
 
     /// A section on the wire, from the cache or encoded now.
-    fn section_wire(&self, section: &Arc<Section>) -> (Arc<[u8]>, bool) {
+    fn section_wire(&self, section: &Arc<Section>) -> (Arc<[u8]>, Entities) {
         if let Some(wire) = self.cached(section, |e| e.wire.clone()) {
             return wire;
         }
         let (encoded, entities) = self.section(section);
         let mut w = horizon_protocol::buf::Writer::new();
         encoded.write(&mut w);
-        let wire: (Arc<[u8]>, bool) = (w.data.into(), entities);
+        let wire: (Arc<[u8]>, Entities) = (w.data.into(), entities.into());
         self.cached(section, |e| e.wire = Some(wire.clone()));
         wire
     }
@@ -326,9 +338,9 @@ impl ChunkEncoder {
             .is_none_or(|f| f & NON_AIR == 0)
     }
 
-    fn section(&self, section: &Section) -> (horizon_protocol::chunk::Section, bool) {
+    fn section(&self, section: &Section) -> (horizon_protocol::chunk::Section, Vec<(u16, u32)>) {
         let mut values = Vec::with_capacity(BLOCKS);
-        let (mut non_empty, mut fluids, mut entities) = (0i16, 0i16, false);
+        let (mut non_empty, mut fluids, mut entities) = (0i16, 0i16, Vec::new());
         let mut count = |state: u32, n: i16| {
             let f = self.flags.get(state as usize).copied().unwrap_or(0);
             if f & NON_AIR != 0 {
@@ -342,12 +354,16 @@ impl ChunkEncoder {
         // One block everywhere (all air, mostly): what from_values would give.
         let uniform = section.blocks.uniform();
         if let Some(v) = uniform {
-            entities = count(v, BLOCKS as i16);
+            if count(v, BLOCKS as i16) {
+                entities = (0..BLOCKS as u16).map(|i| (i, v)).collect();
+            }
         } else {
             let mut unpacked = [0u32; BLOCKS];
             section.unpack(&mut unpacked);
-            for &v in &unpacked {
-                entities |= count(v, 1);
+            for (i, &v) in unpacked.iter().enumerate() {
+                if count(v, 1) {
+                    entities.push((i as u16, v));
+                }
                 values.push(v as i32);
             }
         }
@@ -386,8 +402,10 @@ impl ChunkEncoder {
     /// The non-air sections of a column as bits (LevelChunkSection.hasOnlyAir).
     fn occupied(&self, chunk: &Chunk) -> u64 {
         let mut bits = 0u64;
+        // One lock for the column: encode_in asks for nine columns' sections.
+        let mut cache = self.cache.lock().unwrap();
         for (i, s) in chunk.sections[self.sections.clone()].iter().enumerate() {
-            if self.cached(s, |e| e.non_air) {
+            if self.entry(&mut cache, s).non_air {
                 bits |= 1 << i;
             }
         }
@@ -435,29 +453,30 @@ impl ChunkEncoder {
             .skip(self.sections.start)
             .take(self.sections.len())
         {
-            let (encoded, has_entities) = self.section_wire(s);
-            if has_entities {
-                for y in 0..16 {
-                    for z in 0..16 {
-                        for x in 0..16 {
-                            let state = s.get(crate::chunk::index(x, y, z));
-                            if let Some(kind) = self.entity_type(state) {
-                                let wy = MIN_Y + (i as i32) * 16 + y;
-                                let pos = (chunk.x * 16 + x, wy, chunk.z * 16 + z);
-                                entity_infos.push(BlockEntityInfo {
-                                    packed_xz: ((x << 4) | z) as i8,
-                                    y: wy as i16,
-                                    kind,
-                                    // BlockEntityInfo.create: an empty update tag is not sent.
-                                    tag: block_entities
-                                        .get(&pos)
-                                        .and_then(entity_tag)
-                                        .unwrap_or(Tag::End),
-                                });
-                            }
-                        }
-                    }
-                }
+            let (encoded, entities) = self.section_wire(s);
+            // The section's block entity blocks, kept with its bytes, in the
+            // order a scan of every block would find them.
+            for &(index, state) in entities.iter() {
+                let Some(kind) = self.entity_type(state) else {
+                    continue;
+                };
+                let (x, y, z) = (
+                    i32::from(index & 15),
+                    i32::from(index >> 8),
+                    i32::from(index >> 4 & 15),
+                );
+                let wy = MIN_Y + (i as i32) * 16 + y;
+                let pos = (chunk.x * 16 + x, wy, chunk.z * 16 + z);
+                entity_infos.push(BlockEntityInfo {
+                    packed_xz: ((x << 4) | z) as i8,
+                    y: wy as i16,
+                    kind,
+                    // BlockEntityInfo.create: an empty update tag is not sent.
+                    tag: block_entities
+                        .get(&pos)
+                        .and_then(entity_tag)
+                        .unwrap_or(Tag::End),
+                });
             }
             buffer.extend_from_slice(&encoded);
         }
@@ -671,6 +690,73 @@ mod tests {
             Some("minecraft:shulker_box")
         );
         assert_eq!(block_entity_type("minecraft:stone"), None);
+    }
+
+    #[test]
+    fn block_entities_come_from_the_cached_section_in_scan_order() {
+        let builtin = Builtin::parse(
+            r#"{"minecraft:block_entity_type": {"entries": {
+                "minecraft:chest": {"protocol_id": 1},
+                "minecraft:sign": {"protocol_id": 7}}}}"#,
+        )
+        .unwrap();
+        let states = [
+            "minecraft:air",
+            "minecraft:stone",
+            "minecraft:chest",
+            "minecraft:oak_sign",
+        ]
+        .map(|n| (Arc::<str>::from(n), false));
+        let encoder = ChunkEncoder::new(states, &builtin, &[], &[]);
+        let mut chunk = Chunk::empty(2, -3);
+        for (x, y, z, state) in [(15, 3, 0, 2), (0, 3, 15, 3), (4, 3, 4, 1), (7, 40, 2, 2)] {
+            chunk.set(x, MIN_Y + y, z, state);
+        }
+        // Every block of a section looked at, as the scan did before the cache.
+        let scan = |chunk: &Chunk| {
+            let mut found = Vec::new();
+            for (i, s) in chunk.sections.iter().enumerate() {
+                for y in 0..16 {
+                    for z in 0..16 {
+                        for x in 0..16 {
+                            let state = s.get(crate::chunk::index(x, y, z));
+                            if let Some(kind) = encoder.entity_type(state) {
+                                found.push((x, MIN_Y + i as i32 * 16 + y, z, kind));
+                            }
+                        }
+                    }
+                }
+            }
+            // Then the order the packet gives them, as encode_blocks does.
+            java_hash_order(&mut found, |e| {
+                (chunk.x * 16 + e.0, e.1, chunk.z * 16 + e.2)
+            });
+            found
+        };
+        let sent = |chunk: &Chunk| {
+            let packet = encoder.encode(chunk, &HashMap::new());
+            let infos = packet.chunk.block_entities;
+            infos
+                .iter()
+                .map(|e| {
+                    let xz = e.packed_xz as u8;
+                    (
+                        i32::from(xz >> 4),
+                        i32::from(e.y),
+                        i32::from(xz & 15),
+                        e.kind,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let expected = scan(&chunk);
+        assert_eq!(expected.len(), 3);
+        assert_eq!(sent(&chunk), expected);
+        // From the cache the second time, and after an edit.
+        assert_eq!(sent(&chunk), expected);
+        chunk.set(15, MIN_Y + 3, 0, 0);
+        chunk.set(9, MIN_Y + 3, 9, 3);
+        assert_eq!(sent(&chunk), scan(&chunk));
     }
 
     fn encoder() -> ChunkEncoder {
