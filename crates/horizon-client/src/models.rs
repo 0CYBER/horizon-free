@@ -120,7 +120,7 @@ pub fn load_visibility(
         nbt::{self, Limits},
     };
     use std::{collections::BTreeMap, fs};
-    let data = nbt::read_named(&fs::read(root.join("occlusion.nbt"))?, Limits::default())?
+    let data = nbt::read_named(&fs::read(root.join("occlusion.nbt"))?, Limits::tables())?
         .0
         .tag;
     let occlusion = CachedCollisionRegistry::from_nbt(&data, registry)?;

@@ -498,6 +498,7 @@ impl Game<'_> {
             seed: self.level.seed,
             max_players: props.max_players.max(0) as usize,
             dedicated: true,
+            integrated: false,
         };
         let settings = LanSettings {
             port,

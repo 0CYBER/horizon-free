@@ -68,6 +68,7 @@ struct Lerp {
 
 pub(super) struct Remote {
     pub session: Session,
+    pub brand: String,
     builtin: Arc<Builtin>,
     lang: Arc<Language>,
     registries: Arc<Dynamic>,
@@ -88,6 +89,11 @@ pub(super) struct Remote {
     was_sprinting: bool,
     carried: Option<usize>,
     loaded_sent: bool,
+    /// BlockStatePredictionHandler: blocks changed ahead of the server (a predicted break),
+    /// with the sequence of the last action that changed them and the state the server
+    /// last said they have. Until the server acknowledges that sequence its block updates
+    /// only replace the remembered state; then the block takes it.
+    predictions: HashMap<[i32; 3], (i32, i32)>,
     /// Open container: (window id, menu name).
     menu: Option<(i32, String)>,
     /// The open menu's title as the server named it.
@@ -153,7 +159,20 @@ fn number_format(f: &play::NumberFormat) -> horizon_client::scoreboard::NumberFo
 impl Game<'_> {
     /// Leave the title for a server (ConnectScreen): an empty world fed by the connection.
     pub(super) fn connect_server(&mut self, address: &str, name: &str) -> Result<()> {
-        self.join_server(address, name, None)
+        if let Err(error) = self.join_server(address, name, None) {
+            log::warn!("Horizon: could not join server: {error}");
+            if self.title.is_none() {
+                self.title = Some(horizon_client::title::Title::new(
+                    std::env::current_dir()?.join("saves"),
+                    &self.options.resources,
+                ));
+            }
+            if let Some(title) = &mut self.title {
+                title.failed(error);
+            }
+            self.capture(false);
+        }
+        Ok(())
     }
     /// Join single player's integrated server through memory.
     pub(super) fn connect_local(
@@ -173,7 +192,7 @@ impl Game<'_> {
         let root = self.options.resources.clone();
         let builtin = Builtin::find(&root)
             .and_then(|p| Builtin::load(&p).ok())
-            .ok_or("registries.json not found next to the resources; run the data generator reports (horizon-prepare)")?;
+            .ok_or("Resources are incomplete: registries.json is missing or invalid. Click \"Prepare again\" in the launcher (or run horizon-prepare), then try again.")?;
         let lang = Arc::new(horizon_client::net::load_language(&root));
         let view = self.settings.render_distance.clamp(2, 32) as i8;
         if local.is_none() {
@@ -229,6 +248,7 @@ impl Game<'_> {
             progress: 0.0,
             total: 0,
         };
+        self.ui.registries.permission = 0;
         self.screen = Screen::Playing;
         self.title = None;
         self.dim = Dim::Overworld;
@@ -238,6 +258,7 @@ impl Game<'_> {
         self.apply_settings();
         self.remote = Some(Remote {
             session,
+            brand: "unknown".into(),
             builtin: Arc::new(builtin),
             lang,
             registries: Arc::new(Dynamic::default()),
@@ -258,6 +279,7 @@ impl Game<'_> {
             was_sprinting: false,
             carried: None,
             loaded_sent: false,
+            predictions: HashMap::new(),
             menu: None,
             menu_title: None,
             state_id: 0,
@@ -330,6 +352,7 @@ impl Game<'_> {
         }
         let saves = std::env::current_dir()?.join("saves");
         let mut title = horizon_client::title::Title::new(saves.clone(), &self.options.resources);
+        title.last_server = self.settings.file.string("lastServer");
         if single_player && reason.is_none() {
             self.title = Some(title);
             self.capture(false);
@@ -366,6 +389,31 @@ impl Game<'_> {
                 .unwrap_or("minecraft:air"),
         )
     }
+    /// A mob effect's network id as the effect (`brewing::EFFECTS` id).
+    fn remote_effect_id(&self, effect: i32) -> Option<&'static str> {
+        let r = self.remote.as_ref()?;
+        let name = r.builtin.get("minecraft:mob_effect")?.name(effect)?;
+        horizon_client::brewing::effect(name).map(|d| d.id)
+    }
+    /// ClientPacketListener.handleUpdateMobEffect for the player itself
+    /// (`LivingEntity.forceAddEffect`): the effect replaces any of its kind.
+    /// Other entities' effects are not shown.
+    fn remote_effect(&mut self, p: &play::UpdateMobEffect) {
+        if !self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) {
+            return;
+        }
+        let Some(id) = self.remote_effect_id(p.effect) else {
+            return;
+        };
+        let mut e = horizon_client::effects::EffectInstance::new(id, p.duration, p.amplifier);
+        e.ambient = p.flags & 1 != 0;
+        e.visible = p.flags & 2 != 0;
+        let list = &mut self.potions.effects.list;
+        match list.iter_mut().find(|x| x.id == id) {
+            Some(existing) => *existing = e,
+            None => list.push(e),
+        }
+    }
     fn item_id(&self, name: &str) -> i32 {
         let r = self.remote.as_ref().expect("remote");
         r.builtin
@@ -401,7 +449,7 @@ impl Game<'_> {
         }
         Some(stack)
     }
-    fn chat_line(&mut self, text: String) {
+    pub(super) fn chat_line(&mut self, text: String) {
         log::info!("[chat] {text}");
         if let Some(r) = self.remote.as_mut() {
             r.chat.push((text, Instant::now()));
@@ -440,6 +488,11 @@ impl Game<'_> {
                         r.joined = true;
                         r.profile = uuid;
                         r.status = format!("Joined as {name}; loading terrain...");
+                    }
+                }
+                Event::Brand(brand) => {
+                    if let Some(remote) = &mut self.remote {
+                        remote.brand = brand;
                     }
                 }
                 Event::Reconfigured(registries) => self.set_registries(registries),
@@ -495,6 +548,7 @@ impl Game<'_> {
         r.dimension = dimension;
         r.game_mode = spawn.game_type;
         r.loaded_sent = false;
+        r.predictions.clear();
         self.set_mode_id(spawn.game_type);
         self.dim = if spawn.dimension == "minecraft:the_nether" {
             Dim::Nether
@@ -622,6 +676,42 @@ impl Game<'_> {
             }
         }
     }
+    /// ClientLevel.setServerVerifiedBlockState: a block the client predicted keeps its
+    /// predicted state until the server acknowledges the action; the server's state is
+    /// remembered for then.
+    fn server_block(&mut self, pos: [i32; 3], state: i32) {
+        if let Some((_, known)) = self
+            .remote
+            .as_mut()
+            .and_then(|r| r.predictions.get_mut(&pos))
+        {
+            *known = state;
+            return;
+        }
+        self.set_block(pos, state);
+    }
+    /// BlockStatePredictionHandler.endPredictionsUpTo (ClientboundBlockChangedAckPacket): the
+    /// actions up to `sequence` are settled, so the blocks they predicted take the state the
+    /// server gave them (a break the server refused comes back).
+    fn end_predictions(&mut self, sequence: i32) {
+        let Some(r) = self.remote.as_mut() else {
+            return;
+        };
+        let settled: Vec<_> = r
+            .predictions
+            .iter()
+            .filter(|(_, (s, _))| *s <= sequence)
+            .map(|(&pos, &(_, state))| (pos, state))
+            .collect();
+        for (pos, state) in settled {
+            if let Some(r) = self.remote.as_mut() {
+                r.predictions.remove(&pos);
+            }
+            if self.world.block(pos[0], pos[1], pos[2]).0 as i32 != state {
+                self.set_block(pos, state);
+            }
+        }
+    }
     fn set_block(&mut self, pos: [i32; 3], state: i32) {
         let state = BlockStateId(state.max(0) as u32);
         if self.world.loaded(pos[0], pos[2])
@@ -732,6 +822,8 @@ impl Game<'_> {
                 5..=8 => Some(500 + s - 5),
                 9..=35 => Some(s),
                 36..=44 => Some(s - 36),
+                // InventoryMenu.SHIELD_SLOT: the off hand.
+                45 => Some(504),
                 _ => None,
             },
             "minecraft:crafting" => match s {
@@ -791,6 +883,7 @@ impl Game<'_> {
                 self.debug_charts.ping.log(delay);
             }
             C::Login(p) => {
+                self.level.hardcore = p.hardcore;
                 if let Some(r) = self.remote.as_mut() {
                     r.online_mode = p.online_mode;
                     r.entity_id = p.player_id;
@@ -806,6 +899,8 @@ impl Game<'_> {
                 ));
             }
             C::Respawn(p) => {
+                // A new player, without effects: the server sends them again.
+                self.potions.effects.clear();
                 self.enter_remote_dimension(&p.spawn, true);
                 self.screen = Screen::Playing;
                 if let Some(r) = self.remote.as_mut() {
@@ -865,7 +960,7 @@ impl Game<'_> {
                     chunks_per_tick: 64.0,
                 }));
             }
-            C::BlockUpdate(p) => self.set_block(p.pos, p.state),
+            C::BlockUpdate(p) => self.server_block(p.pos, p.state),
             C::SectionBlocksUpdate(p) => {
                 let [sx, sy, sz] = p.section;
                 for change in p.changes {
@@ -875,10 +970,10 @@ impl Game<'_> {
                         sy * 16 + (local & 15),
                         sz * 16 + (local >> 4 & 15),
                     ];
-                    self.set_block(pos, (change >> 12) as i32);
+                    self.server_block(pos, (change >> 12) as i32);
                 }
             }
-            C::BlockChangedAck(_) => {}
+            C::BlockChangedAck(p) => self.end_predictions(p.sequence),
             // ClientLevel.blockEvent: BlockEntity.triggerEvent (chest lids,
             // shulker boxes, bells) when the block is still the one it names.
             C::BlockEvent(p) => {
@@ -1106,6 +1201,13 @@ impl Game<'_> {
                 }
             }
             C::EntityEvent(p) => {
+                // LocalPlayer.setPermissions also refreshes an open World Options screen.
+                if (24..=28).contains(&p.event)
+                    && self.remote.as_ref().is_some_and(|r| r.entity_id == p.id)
+                {
+                    self.ui.registries.permission = (p.event - 24) as u8;
+                    self.remote_world_options_permission(p.event >= 26);
+                }
                 if p.event == 1
                     && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
                     && m.species() == horizon_client::mobs::Species::Rabbit
@@ -1120,6 +1222,20 @@ impl Game<'_> {
                 }
             }
             C::Animate(p) if p.action == 0 => {}
+            C::UpdateMobEffect(p) => self.remote_effect(&p),
+            C::RemoveMobEffect(p) => {
+                if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id)
+                    && let Some(id) = self.remote_effect_id(p.effect)
+                {
+                    self.potions.effects.list.retain(|e| e.id != id);
+                }
+            }
+            C::ChangeDifficulty(p) => {
+                self.ui.difficulty = p.difficulty.clamp(0, 3) as u8;
+                self.level.difficulty_locked = p.locked;
+                self.remote_world_options_difficulty(self.ui.difficulty, p.locked);
+            }
+            C::GameRuleValues(p) => self.remote_world_options_rules(p.entries),
             C::SetHealth(p) => {
                 if let Some(r) = self.remote.as_mut() {
                     r.health = (p.health, p.food, p.saturation);
@@ -1231,6 +1347,8 @@ impl Game<'_> {
                 match p.slot {
                     0..=35 => self.inventory[p.slot as usize] = stack,
                     36..=39 => self.armor[3 - (p.slot - 36) as usize] = stack,
+                    // Inventory.SLOT_OFFHAND.
+                    40 => self.offhand = stack,
                     _ => {}
                 }
                 self.remote_synced();
@@ -1789,6 +1907,7 @@ impl Game<'_> {
         self.tick_block_entity_anims();
         self.tick_hand();
         self.tick_particles();
+        self.tick_client_effects();
         let ghast_collisions = self.happy_ghast_player_collisions();
         let Some(player) = self.player.as_mut() else {
             return Ok(());
@@ -1806,6 +1925,7 @@ impl Game<'_> {
             if let Some(r) = self.remote.as_mut() {
                 r.loaded_sent = true;
             }
+            self.capture_loaded_world();
         }
         let stick = self.pad_move();
         let Some(player) = self.player.as_mut() else {
@@ -2057,6 +2177,17 @@ impl Game<'_> {
         }
     }
 
+    pub(super) fn stop_remote_mining(&mut self) {
+        if let Some((pos, _, _)) = self.remote.as_mut().and_then(|r| r.destroying.take()) {
+            self.send(S::PlayerAction(play::PlayerAction {
+                action: 2,
+                pos,
+                direction: 0,
+                sequence: 0,
+            }));
+        }
+    }
+
     /// MultiPlayerGameMode.startDestroyBlock / continueDestroyBlock.
     fn remote_mining(&mut self) {
         let Some(r) = self.remote.as_mut() else {
@@ -2067,14 +2198,7 @@ impl Game<'_> {
         }
         let chatting = r.chat_input.is_some();
         if !self.left || self.screen != Screen::Playing || chatting {
-            if let Some((pos, _, _)) = r.destroying.take() {
-                self.send(S::PlayerAction(play::PlayerAction {
-                    action: 2,
-                    pos,
-                    direction: 0,
-                    sequence: 0,
-                }));
-            }
+            self.stop_remote_mining();
             self.mining = None;
             return;
         }
@@ -2094,7 +2218,7 @@ impl Game<'_> {
         self.send(S::Punch(Empty));
         if self.creative {
             let seq = self.next_sequence();
-            self.predict_break(hit.pos, state);
+            self.predict_break(hit.pos, state, seq);
             self.send(S::PlayerAction(play::PlayerAction {
                 action: 0,
                 pos: hit.pos,
@@ -2143,7 +2267,7 @@ impl Game<'_> {
                 sequence: seq,
             }));
             if progress >= 1.0 {
-                self.predict_break(hit.pos, state);
+                self.predict_break(hit.pos, state, seq);
                 if let Some(r) = self.remote.as_mut() {
                     r.destroy_delay = 5;
                 }
@@ -2180,7 +2304,7 @@ impl Game<'_> {
         self.crack_particle(pos, hit.face, state);
         if done >= 1.0 {
             let seq = self.next_sequence();
-            self.predict_break(pos, state);
+            self.predict_break(pos, state, seq);
             self.send(S::PlayerAction(play::PlayerAction {
                 action: 3,
                 pos,
@@ -2212,7 +2336,14 @@ impl Game<'_> {
         }
     }
     /// MultiPlayerGameMode.destroyBlock: the predicted break.
-    fn predict_break(&mut self, pos: [i32; 3], state: BlockStateId) {
+    fn predict_break(&mut self, pos: [i32; 3], state: BlockStateId, sequence: i32) {
+        // BlockStatePredictionHandler.retainKnownServerState.
+        if let Some(r) = self.remote.as_mut() {
+            r.predictions
+                .entry(pos)
+                .and_modify(|p| p.0 = sequence)
+                .or_insert((sequence, state.0 as i32));
+        }
         let s = self.res.facts.get(state).sounds.clone();
         let at = [
             f64::from(pos[0]) + 0.5,
@@ -2502,6 +2633,17 @@ impl Game<'_> {
                 },
             }));
         }
+    }
+    /// Minecraft.handleKeybinds, key.swapOffhand: the server swaps the hands
+    /// (ServerboundPlayerActionPacket SWAP_ITEM_WITH_OFFHAND at BlockPos.ZERO, facing down) and
+    /// sends both slots back; nothing is predicted.
+    pub(super) fn remote_swap_hands(&mut self) {
+        self.send(S::PlayerAction(play::PlayerAction {
+            action: 7,
+            pos: [0; 3],
+            direction: 0,
+            sequence: 0,
+        }));
     }
     /// A container click: the server answers with the authoritative slots.
     pub(super) fn remote_click(&mut self, right: bool) {
@@ -2921,5 +3063,22 @@ impl Game<'_> {
             "decode_errors": r.decode_errors,
             "chat": r.chat.iter().rev().take(10).rev().map(|(t, _)| t.clone()).collect::<Vec<_>>(),
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Game;
+
+    #[test]
+    fn every_inventory_menu_slot_is_a_game_slot_and_45_is_the_off_hand() {
+        // InventoryMenu: result, 2x2 grid, armour, 27 + 9 inventory slots, then the off hand.
+        assert_eq!(Game::menu_slot("inventory", 45), Some(504));
+        let mut seen = std::collections::HashSet::new();
+        for slot in 0..46 {
+            let internal = Game::menu_slot("inventory", slot);
+            assert!(internal.is_some_and(|i| seen.insert(i)), "slot {slot}");
+        }
+        assert_eq!(Game::menu_slot("inventory", 46), None);
     }
 }

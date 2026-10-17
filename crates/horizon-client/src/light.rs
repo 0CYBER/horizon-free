@@ -71,7 +71,7 @@ impl LightTables {
         };
         let data = nbt::read_named(
             &std::fs::read(root.join("occlusion.nbt"))?,
-            Limits::default(),
+            Limits::tables(),
         )?
         .0
         .tag;

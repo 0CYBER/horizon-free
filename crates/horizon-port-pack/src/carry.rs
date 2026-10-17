@@ -3,7 +3,7 @@
 //! upgraded from 1.21.1 to 26.3, item models get their `items/` client
 //! definitions, and each blockstate gets a vanilla template guessed from its
 //! properties until the oracle's facts replace the guess.
-use crate::jar::JarInfo;
+use crate::{jar::JarInfo, oracle::Facts};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
@@ -20,14 +20,26 @@ pub struct Report {
     /// data other than tags), kept in `outside/` for review.
     pub outside: Vec<String>,
     pub recipes_upgraded: usize,
+    pub loot_tables_upgraded: usize,
+    /// Worldgen and structure files (`data/<id>/worldgen/`, `structure/`).
+    pub worldgen: usize,
     /// Recipes left as they were: custom types, NeoForge conditions.
     pub recipes_kept: Vec<String>,
     pub item_definitions_added: usize,
-    /// Declared blocks and their guessed templates.
+    /// Templates and properties came from the NeoForge oracle's facts, not
+    /// from guesses.
+    pub oracle: bool,
+    /// Declared blocks and their templates.
     pub blocks: BTreeMap<String, String>,
-    /// Blockstates whose properties match no template.
-    pub blocks_unknown: Vec<String>,
+    /// What a declared block's template does not reproduce (oracle only).
+    pub differences: BTreeMap<String, Vec<String>>,
+    /// Blocks left out, and why.
+    pub blocks_unknown: BTreeMap<String, String>,
     pub items: usize,
+    /// Items left out, and why (oracle only).
+    pub items_unknown: BTreeMap<String, String>,
+    /// Convention (`c:`) tags the recipes use, filled in from the oracle.
+    pub convention_tags: usize,
 }
 
 /// Vanilla blocks by their sorted property names.
@@ -42,6 +54,7 @@ const TEMPLATES: &[(&str, &str)] = &[
         "minecraft:oak_trapdoor",
     ),
     ("east,north,south,waterlogged,west", "minecraft:oak_fence"),
+    ("east,north,south,waterlogged,west", "minecraft:glass_pane"),
     (
         "east,north,south,up,waterlogged,west",
         "minecraft:cobblestone_wall",
@@ -58,9 +71,24 @@ const TEMPLATES: &[(&str, &str)] = &[
     ("stage", "minecraft:oak_sapling"),
 ];
 
-pub fn template(properties: &BTreeSet<String>) -> Option<&'static str> {
-    let key = properties.iter().cloned().collect::<Vec<_>>().join(",");
-    TEMPLATES.iter().find(|(k, _)| *k == key).map(|(_, t)| *t)
+/// A guess without the oracle: the template whose properties include the
+/// blockstate's with the fewest left over (a blockstate may leave out what
+/// its models ignore, such as `powered` or `waterlogged`), the block's name
+/// breaking ties (`_pane`, `_gate`, `_trapdoor`).
+pub fn template(name: &str, properties: &BTreeSet<String>) -> Option<&'static str> {
+    let fits = TEMPLATES.iter().filter_map(|(k, t)| {
+        let have: BTreeSet<&str> = k.split(',').filter(|p| !p.is_empty()).collect();
+        properties
+            .iter()
+            .all(|p| have.contains(p.as_str()))
+            .then(|| (have.len() - properties.len(), *t))
+    });
+    let hint = |t: &str| {
+        let kind = t.rsplit('_').next().unwrap_or(t);
+        !name.ends_with(&format!("_{kind}"))
+    };
+    fits.min_by_key(|&(extra, t)| (extra, hint(t)))
+        .map(|(_, t)| t)
 }
 
 /// The property names a blockstate file uses.
@@ -165,7 +193,92 @@ pub fn upgrade_recipe(recipe: &mut Value) -> bool {
     true
 }
 
-/// Where a jar entry goes: `Some(true)` inside the content mod, `Some(false)`
+/// A 1.21.1 loot table in 26.3's shape, in place: `conditions` lists become
+/// one `condition` (`all_of` for several), `functions` become `modifier`,
+/// and conditions and functions name their kind in `type`. A tool match on
+/// silk touch alone, or on shears alone, becomes 26.3's
+/// `minecraft:tool/can_silk_touch` or `minecraft:tool/can_shear`.
+pub fn upgrade_loot(v: &mut Value) {
+    match v {
+        Value::Array(a) => a.iter_mut().for_each(upgrade_loot),
+        Value::Object(o) => {
+            if let Some(Value::Array(mut list)) = o.remove("conditions") {
+                list.iter_mut().for_each(upgrade_condition);
+                let one = match <[Value; 1]>::try_from(list) {
+                    Ok([c]) => c,
+                    Err(list) => json!({"type": "minecraft:all_of", "terms": list}),
+                };
+                o.insert("condition".to_owned(), one);
+            }
+            if let Some(Value::Array(mut list)) = o.remove("functions") {
+                for f in &mut list {
+                    rename_kind(f, "function");
+                    upgrade_loot(f);
+                }
+                o.insert("modifier".to_owned(), Value::Array(list));
+            }
+            for (k, x) in o.iter_mut() {
+                if k != "condition" && k != "modifier" {
+                    upgrade_loot(x);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `{"<key>": kind, ...}` as `{"type": kind, ...}`.
+fn rename_kind(v: &mut Value, key: &str) {
+    if let Some(o) = v.as_object_mut()
+        && !o.contains_key("type")
+        && let Some(kind) = o.remove(key)
+    {
+        o.insert("type".to_owned(), kind);
+    }
+}
+
+/// One 1.21.1 loot condition in 26.3's shape.
+fn upgrade_condition(c: &mut Value) {
+    rename_kind(c, "condition");
+    if let Some(term) = c.get_mut("term") {
+        upgrade_condition(term);
+    }
+    if let Some(Value::Array(terms)) = c.get_mut("terms") {
+        terms.iter_mut().for_each(upgrade_condition);
+    }
+    if c["type"] == "minecraft:match_tool"
+        && let Some(named) = named_tool_condition(&c["predicate"])
+    {
+        *c = json!(named);
+    }
+}
+
+/// 26.3's named tool conditions for the 1.21.1 predicates they replace.
+fn named_tool_condition(predicate: &Value) -> Option<&'static str> {
+    let keys: Vec<&str> = predicate.as_object()?.keys().map(String::as_str).collect();
+    match keys.as_slice() {
+        ["predicates"] => {
+            let list = predicate["predicates"]["minecraft:enchantments"].as_array()?;
+            let [e] = list.as_slice() else {
+                return None;
+            };
+            let silk = e["enchantments"] == "minecraft:silk_touch"
+                && e["levels"]["min"].as_u64().unwrap_or(1) <= 1
+                && e["levels"].get("max").is_none()
+                && predicate["predicates"].as_object()?.len() == 1;
+            silk.then_some("minecraft:tool/can_silk_touch")
+        }
+        ["items"] => {
+            let items = &predicate["items"];
+            let shears = items == "minecraft:shears" || *items == json!(["minecraft:shears"]);
+            shears.then_some("minecraft:tool/can_shear")
+        }
+        _ => None,
+    }
+}
+
+/// Where a jar entry goes: `Some(true)` inside the content mod (its own
+/// namespace, additions to vanilla and convention tags), `Some(false)`
 /// to `outside/`, `None` not carried (code, metadata).
 fn place(name: &str, id: &str) -> Option<bool> {
     let mut parts = name.splitn(3, '/');
@@ -173,10 +286,21 @@ fn place(name: &str, id: &str) -> Option<bool> {
     if !(root == "assets" || root == "data") || rest.is_empty() || name.ends_with('/') {
         return None;
     }
-    Some(ns == id || (root == "data" && ns == "minecraft" && rest.starts_with("tags/")))
+    let shared_tags =
+        root == "data" && (ns == "minecraft" || ns == "c") && rest.starts_with("tags/");
+    Some(ns == id || shared_tags)
 }
 
-pub fn carry(jar: &Path, info: &JarInfo, out: &Path) -> Result<Report, String> {
+/// Carries `jar` over into `out/carry/`. With the oracle's `facts`, blocks
+/// and items are the ones the mod registers, with the templates and numbers
+/// the facts give; `allowed` says which vanilla blocks the game has.
+pub fn carry(
+    jar: &Path,
+    info: &JarInfo,
+    out: &Path,
+    facts: Option<&Facts>,
+    allowed: &dyn Fn(&str) -> bool,
+) -> Result<Report, String> {
     let id = &info.mod_id;
     if id.is_empty()
         || id.len() > 64
@@ -196,6 +320,7 @@ pub fn carry(jar: &Path, info: &JarInfo, out: &Path) -> Result<Report, String> {
     let mut report = Report::default();
     let mut blockstates: BTreeMap<String, Value> = BTreeMap::new();
     let mut item_models = BTreeSet::new();
+    let mut convention = BTreeSet::new();
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
         let name = entry.name().to_owned();
@@ -218,16 +343,31 @@ pub fn carry(jar: &Path, info: &JarInfo, out: &Path) -> Result<Report, String> {
         };
         if keep {
             let rel = name.split_once(&format!("/{id}/")).map_or("", |(_, r)| r);
+            if name.starts_with("data/")
+                && (rel.starts_with("worldgen/") || rel.starts_with("structure/"))
+            {
+                report.worldgen += 1;
+            }
             if let Some(file) = rel
                 .strip_prefix("recipe/")
                 .filter(|_| name.starts_with("data/"))
             {
                 if let Ok(mut recipe) = serde_json::from_slice::<Value>(&bytes) {
+                    tags_used(&recipe, &mut convention);
                     if upgrade_recipe(&mut recipe) {
                         report.recipes_upgraded += 1;
                         bytes = serde_json::to_vec_pretty(&recipe).unwrap_or(bytes);
                     } else {
                         report.recipes_kept.push(file.to_owned());
+                    }
+                }
+            } else if rel.starts_with("loot_table/") && name.starts_with("data/") {
+                if let Ok(mut table) = serde_json::from_slice::<Value>(&bytes) {
+                    let before = table.clone();
+                    upgrade_loot(&mut table);
+                    if table != before {
+                        report.loot_tables_upgraded += 1;
+                        bytes = serde_json::to_vec_pretty(&table).unwrap_or(bytes);
                     }
                 }
             } else if let Some(b) = rel
@@ -257,25 +397,116 @@ pub fn carry(jar: &Path, info: &JarInfo, out: &Path) -> Result<Report, String> {
         }
     }
     let decl = inside.join(format!("data/{id}/horizon"));
-    for (b, state) in &blockstates {
-        match template(&properties(state)) {
-            Some(t) => {
-                write(
-                    &decl.join(format!("block/{b}.json")),
-                    json!({"template": t}).to_string().as_bytes(),
-                )?;
-                report.blocks.insert(b.clone(), t.to_owned());
+    let write_decl = |kind: &str, name: &str, v: &Value| {
+        let text = serde_json::to_vec_pretty(v).unwrap_or_default();
+        write(&decl.join(format!("{kind}/{name}.json")), &text)
+    };
+    if let Some(facts) = facts {
+        report.oracle = true;
+        let prefix = format!("{id}:");
+        let mut declared = BTreeSet::new();
+        for (full, block) in facts.blocks.range(prefix.clone()..) {
+            let Some(b) = full.strip_prefix(&prefix) else {
+                break;
+            };
+            let Some(choice) = facts.template(full, allowed) else {
+                let props: Vec<&str> = block.properties.keys().map(String::as_str).collect();
+                let why = format!(
+                    "no vanilla {} with properties [{}]",
+                    block.vanilla_class().rsplit('.').next().unwrap_or(""),
+                    props.join(", ")
+                );
+                report.blocks_unknown.insert(b.to_owned(), why);
+                continue;
+            };
+            let mut v = json!({"template": choice.template, "properties": choice.properties});
+            if block.item == "minecraft:air" {
+                v["item"] = json!(false);
+            } else if block.item != *full {
+                v["item"] = json!(false);
+                report
+                    .differences
+                    .entry(b.to_owned())
+                    .or_default()
+                    .push(format!("its item is {}", block.item));
+            } else {
+                declared.insert(full.clone());
             }
-            None => report.blocks_unknown.push(b.clone()),
+            write_decl("block", b, &v)?;
+            report.blocks.insert(b.to_owned(), choice.template);
+            if !choice.differences.is_empty() {
+                report
+                    .differences
+                    .entry(b.to_owned())
+                    .or_default()
+                    .extend(choice.differences);
+            }
         }
-    }
-    for m in item_models.iter().filter(|m| !blockstates.contains_key(*m)) {
-        let item = json!({"template": "minecraft:stick"});
-        write(
-            &decl.join(format!("item/{m}.json")),
-            item.to_string().as_bytes(),
-        )?;
-        report.items += 1;
+        for (full, item) in facts.items.range(prefix.clone()..) {
+            let Some(name) = full.strip_prefix(&prefix) else {
+                break;
+            };
+            if declared.contains(full) {
+                continue;
+            }
+            if item
+                .block
+                .as_ref()
+                .is_some_and(|b| facts.blocks.contains_key(b))
+                && report.blocks_unknown.contains_key(name)
+            {
+                report
+                    .items_unknown
+                    .insert(name.to_owned(), "its block is left out".into());
+                continue;
+            }
+            match facts.item(full) {
+                Ok((v, differences)) => {
+                    write_decl("item", name, &v)?;
+                    report.items += 1;
+                    if !differences.is_empty() {
+                        report.differences.insert(name.to_owned(), differences);
+                    }
+                }
+                Err(e) => {
+                    report.items_unknown.insert(name.to_owned(), e);
+                }
+            }
+        }
+        // Convention tags are NeoForge's and the pack's: the recipes get the
+        // members the oracle saw, those of vanilla and of this mod.
+        for tag in &convention {
+            let Some(path) = tag.strip_prefix("c:") else {
+                continue;
+            };
+            let file = inside.join(format!("data/c/tags/item/{path}.json"));
+            if file.exists() {
+                continue;
+            }
+            if let Some(members) = facts.tag_members("item", tag, id) {
+                let v = json!({"values": members});
+                write(&file, &serde_json::to_vec_pretty(&v).unwrap_or_default())?;
+                report.convention_tags += 1;
+            }
+        }
+    } else {
+        for (b, state) in &blockstates {
+            match template(b, &properties(state)) {
+                Some(t) => {
+                    write_decl("block", b, &json!({"template": t}))?;
+                    report.blocks.insert(b.clone(), t.to_owned());
+                }
+                None => {
+                    let props: Vec<String> = properties(state).into_iter().collect();
+                    let why = format!("no template for properties [{}]", props.join(", "));
+                    report.blocks_unknown.insert(b.clone(), why);
+                }
+            }
+        }
+        for m in item_models.iter().filter(|m| !blockstates.contains_key(*m)) {
+            write_decl("item", m, &json!({"template": "minecraft:stick"}))?;
+            report.items += 1;
+        }
     }
     let q = |s: &str| toml::Value::String(s.to_owned()).to_string();
     let name = if info.name.is_empty() { id } else { &info.name };
@@ -297,6 +528,30 @@ pub fn carry(jar: &Path, info: &JarInfo, out: &Path) -> Result<Report, String> {
         &serde_json::to_vec_pretty(&report).unwrap_or_default(),
     )?;
     Ok(report)
+}
+
+/// The tags a recipe's ingredients name (`#ns:path` or `{"tag": ...}`).
+fn tags_used(v: &Value, out: &mut BTreeSet<String>) {
+    match v {
+        Value::String(s) => {
+            if let Some(t) = s.strip_prefix('#') {
+                out.insert(t.to_owned());
+            }
+        }
+        Value::Array(a) => a.iter().for_each(|x| tags_used(x, out)),
+        Value::Object(o) => {
+            for (k, x) in o {
+                match (k.as_str(), x) {
+                    ("tag", Value::String(t)) => {
+                        out.insert(t.clone());
+                    }
+                    ("result", _) => {}
+                    _ => tags_used(x, out),
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn write(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -326,20 +581,85 @@ mod tests {
     }
 
     #[test]
+    fn upgrades_loot_tables() {
+        let mut slab = json!({"type": "minecraft:block", "pools": [{"rolls": 1.0, "entries": [{
+            "type": "minecraft:item", "name": "m:slab",
+            "functions": [{"function": "minecraft:set_count", "count": 2.0, "add": false,
+                "conditions": [{"condition": "minecraft:block_state_property", "block": "m:slab",
+                    "properties": {"type": "double"}}]},
+                {"function": "minecraft:explosion_decay"}]}]}]});
+        upgrade_loot(&mut slab);
+        assert_eq!(
+            slab["pools"][0]["entries"][0]["modifier"][0],
+            json!({"type": "minecraft:set_count", "count": 2.0, "add": false,
+                "condition": {"type": "minecraft:block_state_property", "block": "m:slab",
+                    "properties": {"type": "double"}}})
+        );
+        let silk = json!({"condition": "minecraft:match_tool", "predicate": {"predicates": {
+            "minecraft:enchantments": [{"enchantments": "minecraft:silk_touch", "levels": {"min": 1}}]}}});
+        let shears = json!({"condition": "minecraft:match_tool", "predicate": {"items": "minecraft:shears"}});
+        let mut glass = json!({"pools": [{"conditions": [silk.clone()], "entries": []},
+            {"conditions": [{"condition": "minecraft:any_of", "terms": [silk, shears]},
+                {"condition": "minecraft:survives_explosion"}], "entries": []}]});
+        upgrade_loot(&mut glass);
+        assert_eq!(
+            glass["pools"][0]["condition"],
+            "minecraft:tool/can_silk_touch"
+        );
+        assert_eq!(
+            glass["pools"][1]["condition"],
+            json!({"type": "minecraft:all_of", "terms": [
+                {"type": "minecraft:any_of", "terms": ["minecraft:tool/can_silk_touch", "minecraft:tool/can_shear"]},
+                {"type": "minecraft:survives_explosion"}]})
+        );
+        // A loot table already in 26.3's shape stays as it is.
+        let mut new = glass.clone();
+        upgrade_loot(&mut new);
+        assert_eq!(new, glass);
+    }
+
+    #[test]
     fn templates_from_blockstate_properties() {
         let door =
             json!({"variants": {"facing=east,half=lower,hinge=left,open=false,powered=false": {}}});
-        assert_eq!(template(&properties(&door)), Some("minecraft:oak_door"));
+        assert_eq!(
+            template("gem_door", &properties(&door)),
+            Some("minecraft:oak_door")
+        );
+        // Models that ignore `powered`: still a door.
+        let door = json!({"variants": {"facing=east,half=lower,hinge=left,open=false": {}}});
+        assert_eq!(
+            template("gem_door", &properties(&door)),
+            Some("minecraft:oak_door")
+        );
+        let trapdoor = json!({"variants": {"facing=east,half=top,open=false": {}}});
+        assert_eq!(
+            template("gem_trapdoor", &properties(&trapdoor)),
+            Some("minecraft:oak_trapdoor")
+        );
+        let sides = json!({"multipart": [{"when": {"north": "true"}}, {"when": {"east": "true"}},
+            {"when": {"south": "true"}}, {"when": {"west": "true"}}]});
+        assert_eq!(
+            template("gem_pane", &properties(&sides)),
+            Some("minecraft:glass_pane")
+        );
+        assert_eq!(
+            template("gem_fence", &properties(&sides)),
+            Some("minecraft:oak_fence")
+        );
         let fence = json!({"multipart": [{"apply": {}}, {"when": {"north": "true"}, "apply": {}},
             {"when": {"east": "true"}}, {"when": {"south": "true"}}, {"when": {"west": "true"}},
             {"when": {"OR": [{"waterlogged": "true"}]}}]});
-        assert_eq!(template(&properties(&fence)), Some("minecraft:oak_fence"));
         assert_eq!(
-            template(&properties(&json!({"variants": {"": {}}}))),
+            template("gem_fence", &properties(&fence)),
+            Some("minecraft:oak_fence")
+        );
+        assert_eq!(
+            template("gem_block", &properties(&json!({"variants": {"": {}}}))),
             Some("minecraft:stone")
         );
         let odd = json!({"variants": {"charge=1,mode=fast": {}}});
-        assert_eq!(template(&properties(&odd)), None);
+        assert_eq!(template("gem_core", &properties(&odd)), None);
     }
 
     /// A small NeoForge jar carried over is a content mod Horizon loads.
@@ -411,14 +731,17 @@ mod tests {
         );
         assert_eq!(info.census.classes, 1);
         let out = dir.join("work/mods/gem");
-        let report = carry(&jar, &info, &out).unwrap();
-        assert_eq!(report.copied, 11);
-        assert_eq!(report.outside, ["data/c/tags/item/gems.json"]);
+        let report = carry(&jar, &info, &out, None, &|_| true).unwrap();
+        assert_eq!(report.copied, 12);
+        assert!(report.outside.is_empty());
         assert_eq!((report.recipes_upgraded, report.recipes_kept.len()), (1, 1));
         assert_eq!(report.item_definitions_added, 2);
         assert_eq!(report.blocks["gem_door"], "minecraft:oak_door");
         assert_eq!(report.blocks["gem_block"], "minecraft:stone");
-        assert_eq!(report.blocks_unknown, ["gem_core"]);
+        assert_eq!(
+            report.blocks_unknown.keys().collect::<Vec<_>>(),
+            ["gem_core"]
+        );
         assert_eq!(report.items, 1);
         let carried = out.join("carry");
         assert!(!carried.join("com").exists());

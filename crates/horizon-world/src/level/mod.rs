@@ -431,6 +431,17 @@ pub fn raw_brightness<L: LevelAccess + ?Sized>(level: &L, pos: BlockPos, sky_dar
     (level.sky_light(pos) - sky_darken).max(level.block_light(pos))
 }
 
+/// Access only the gameplay fields needed by level behaviour tables.
+/// Both the JSON fallback and the client's typed decoder implement this.
+pub trait GameplayStateSource {
+    fn flag(&self, name: &str) -> bool;
+    fn unsigned(&self, name: &str) -> u64;
+    fn number(&self, name: &str) -> f64;
+    fn text(&self, name: &str) -> &str;
+    fn sound_number(&self, name: &str) -> f64;
+    fn sound_id(&self, name: &str) -> &str;
+}
+
 /// Immutable vanilla block-behaviour tables. Build once with [`Behaviours::load`].
 pub struct Behaviours {
     pub table: StateTable,
@@ -455,6 +466,23 @@ impl Behaviours {
     /// Load from a prepared client resource directory (`.local/horizon-client/<version>`).
     pub fn load(registry: &BlockRegistry, resources_dir: &Path) -> io::Result<Self> {
         data::load(registry, resources_dir)
+    }
+    /// Reuse the client's typed gameplay projection while it is borrowed from the JSON bytes.
+    pub fn load_with_gameplay<G: GameplayStateSource>(
+        registry: &BlockRegistry,
+        resources_dir: &Path,
+        behaviour: &serde_json::Value,
+        gameplay: &[G],
+    ) -> io::Result<Self> {
+        data::load_with_gameplay(registry, resources_dir, behaviour, gameplay)
+    }
+
+    pub fn load_with_behaviour_json(
+        registry: &BlockRegistry,
+        resources_dir: &Path,
+        behaviour: &serde_json::Value,
+    ) -> io::Result<Self> {
+        data::load_with_behaviour_json(registry, resources_dir, behaviour)
     }
     pub fn facts(&self, state: BlockStateId) -> &StateFacts {
         &self.facts[state.0 as usize]
