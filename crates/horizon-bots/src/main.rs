@@ -49,6 +49,7 @@ horizon-bots: load-test bots for a Minecraft Java Edition 26.3 server (offline m
   --seconds N            how long to run after the first bot joins; default 60
   --view-distance N      what the bots ask for; default 10
   --seed N               default 12345
+  --explore-speed B      blocks a second an explore bot flies; default 22 (as fast as chunks come)
   --name PREFIX          bot names: PREFIX0, PREFIX1...; default Bot
   --report FILE          a JSON summary at the end (- prints it after the per-second lines)
 ";
@@ -79,6 +80,7 @@ struct Options {
     seconds: u64,
     view_distance: i8,
     seed: u64,
+    explore_speed: f64,
     name: String,
     report: Option<String>,
 }
@@ -93,6 +95,7 @@ fn options() -> Result<Options, String> {
         seconds: 60,
         view_distance: 10,
         seed: 12345,
+        explore_speed: 22.0,
         name: "Bot".into(),
         report: None,
     };
@@ -116,6 +119,9 @@ fn options() -> Result<Options, String> {
             "--seconds" => o.seconds = value.parse().map_err(|_| number("seconds"))?,
             "--view-distance" => o.view_distance = value.parse().map_err(|_| number("2 to 32"))?,
             "--seed" => o.seed = value.parse().map_err(|_| number("a number"))?,
+            "--explore-speed" => {
+                o.explore_speed = value.parse().map_err(|_| number("blocks a second"))?;
+            }
             "--name" => o.name = value,
             "--report" => o.report = Some(value),
             _ => return Err(format!("unknown option {arg}; --help lists them")),
@@ -521,9 +527,11 @@ fn run_bot(
                     }
                 }
                 Behaviour::Explore => {
-                    // Flying fast in creative: about 22 blocks a second, which keeps new chunks coming.
-                    pos[0] += heading.cos() * 1.1;
-                    pos[2] += heading.sin() * 1.1;
+                    // Flying in creative, by default about 22 blocks a second, which keeps new
+                    // chunks coming as fast as the server sends them.
+                    let step = o.explore_speed / 20.0;
+                    pos[0] += heading.cos() * step;
+                    pos[2] += heading.sin() * step;
                 }
             }
         }
@@ -643,6 +651,7 @@ fn main() {
         "bots": o.bots,
         "behaviour": o.behaviour,
         "seed": o.seed,
+        "explore_speed": o.explore_speed,
         "view_distance": o.view_distance,
         "seconds": o.seconds,
         "joined": bots.iter().filter(|b| b.joined_after_ms.load(Ordering::SeqCst) > 0).count(),

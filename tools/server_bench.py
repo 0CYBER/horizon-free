@@ -17,7 +17,9 @@ then measures for a while:
 
 The bots can run on another machine, so they don't take the server's CPU: `--bots-via 'ssh macmini'` with
 `--bots-bin` naming horizon-bots there and `--connect` the address it reaches this machine at. `--nice 19`
-runs every server at the lowest priority (a shared machine).
+runs every server at the lowest priority (a shared machine). The explore bots fly as fast as each server
+sends them chunks, so a faster server gets more terrain to generate; `--explore-speed` slows them to a rate
+both servers keep up with, for equal work.
 
 The vanilla side runs the pinned server jar from tools/lab.py prepare (your own copy). It needs Java 25. The
 Horizon side runs target/release/horizon-server with the engine beside it; build both first:
@@ -228,7 +230,8 @@ def run_once(kind, bots, behaviour, args, out):
         bot_process = subprocess.Popen(
             [*bots_command(args), '--server', f'{args.connect}:{port}', '--bots', str(bots),
              '--behaviour', behaviour, '--join-every', str(args.join_every), '--seconds', str(int(total)),
-             '--seed', str(args.seed), '--report', '-'],
+             '--seed', str(args.seed), '--report', '-',
+             *(['--explore-speed', str(args.explore_speed)] if args.explore_speed else [])],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         bot_lines = []
         threading.Thread(target=lambda: bot_lines.extend(bot_process.stdout), daemon=True).start()
@@ -312,6 +315,9 @@ def main():
     parser.add_argument('--warmup', type=int, default=60)
     parser.add_argument('--seconds', type=int, default=300)
     parser.add_argument('--seed', type=int, default=12345)
+    parser.add_argument('--explore-speed', type=float, default=0,
+                        help='blocks a second the explore bots fly (default: the bots\' 22, as fast as chunks '
+                             'come); a speed both servers keep up with makes the explore pass equal work')
     parser.add_argument('--gamerule', default='',
                         help="more game rules for both servers, 'name=value,...' (locator_bar=false: Horizon has "
                              "no locator bar yet)")
