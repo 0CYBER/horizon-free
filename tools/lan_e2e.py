@@ -10,8 +10,10 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - armour:    each side draws the other player in that player's own armour;
 - nametags:  each side draws the other player's name above them;
 - chest:     a chest the guest opens opens on the guest's screen, its lid opens on both sides and
-             closes on both when the guest closes it;
-- crafting:  the guest crafts planks in the inventory's 2x2 grid and opens a crafting table;
+             closes on both when the guest closes it; the host keeps playing with its mouse look (#687);
+- crafting:  the guest crafts planks in the inventory's 2x2 grid and opens a crafting table, which
+             leaves the host's screen and mouse look alone;
+- sign:      a sign the guest places doesn't open a sign editor on the host;
 - damage:    a guest in survival takes fall damage;
 - mobs:      with the host in creative, a zombie and a skeleton go for the guest and hurt them;
 - hazards:   a guest in survival gets hungry sprint-jumping and is hurt by lava, a block at the eyes,
@@ -19,7 +21,11 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - pvp:       the guest and the host hit each other with a sword; with the pvp game rule off, nothing;
 - containers: the guest's ender chest holds the guest's items, not the host's, and a double chest
              opens as 9x6 with the right half first;
-- feedback:  the guest's command feedback names the guest and shows the numbers.
+- feedback:  the guest's command feedback names the guest and shows the numbers;
+- effects:   a beacon's power reaches every player in range, the host and the guest;
+- portals:   (--server-thread) the server holds a level per dimension: the guest goes to the Nether
+             through a portal while the host stays, then the host goes to the End while the guest is in
+             the Nether, and both come back.
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -27,6 +33,7 @@ both sides go to --out (host-*.png, guest-*.png).
     python3 tools/lan_e2e.py                          # build with the fast profile, run every check
     python3 tools/lan_e2e.py --bin-dir target/fast    # prebuilt binaries
     python3 tools/lan_e2e.py --check chest --check tab
+    python3 tools/lan_e2e.py --server-thread --check portals   # the host's world on its server thread
 
 Needs the prepared resources in .local/horizon-client and, on Linux, vscreen (the desktop); on
 macOS both games render offscreen. Games started here have no audio (HORIZON_NO_AUDIO=1).
@@ -48,7 +55,9 @@ from agent_control_e2e import Cli, Failed, game_env  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'trials']
+# The host plays single player on its server thread (--server-thread).
+SERVER_THREAD = False
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'trials', 'effects', 'portals']
 
 
 class Game:
@@ -180,6 +189,19 @@ def check_nametags(host, guest, out):
     return {'host': h, 'guest': g}
 
 
+def grab(game):
+    """Mouse look on, as a player's grabbed pointer: an agent's mouse-move stands in for it."""
+    game.raw('mouse-move', 1, 0)
+    game.raw('mouse-move', -1, 0)
+
+
+def host_unaffected(host, what):
+    """What a guest opens is the guest's: the host keeps its world on screen and its mouse look (#687)."""
+    state = host('state')
+    assert state.get('screen') == 'playing', f'{what} opened the {state.get("screen")} screen on the host'
+    assert state.get('pointer_grabbed'), f"{what} released the host's pointer"
+
+
 def lid(game, pos):
     return game.raw('block', *pos).get('lid', 0.0)
 
@@ -189,9 +211,11 @@ def check_chest(host, guest, out):
     chest = (x, y, z + 2)
     guest('command', command=f'setblock {chest[0]} {chest[1]} {chest[2]} minecraft:chest')
     guest.wait(10)
+    grab(host)
     guest.raw('interact', *chest)
     screen = guest.raw('wait-for', 'screen', 'container', '--timeout', 10)
     guest.wait(20)
+    host_unaffected(host, "the guest's chest")
     opened = {'guest': lid(guest, chest), 'host': lid(host, chest)}
     host.raw('look-at', chest[0] + 0.5, chest[1] + 0.5, chest[2] + 0.5)
     host.wait(2)
@@ -231,8 +255,10 @@ def check_crafting(host, guest, out):
     table = (x, y, z - 2)
     guest('command', command=f'setblock {table[0]} {table[1]} {table[2]} minecraft:crafting_table')
     guest.wait(10)
+    grab(host)
     guest.raw('interact', *table)
     guest.raw('wait-for', 'screen', 'inventory', '--timeout', 10)
+    host_unaffected(host, "the guest's crafting table")
     size = guest('screen').get('craft_size')
     assert size == 3, f'the crafting table opened a {size}x{size} grid'
     # Two planks one above the other in the 3x3 grid: four sticks.
@@ -250,6 +276,104 @@ def check_crafting(host, guest, out):
     counts = guest('inventory')['counts']
     assert counts.get('minecraft:stick') == 4 and counts.get('minecraft:oak_planks') == 2, f'after the table: {counts}'
     return {'planks': planks, 'table': counts}
+
+
+def check_sign(host, guest, out):
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    spot = (x + 2, y, z)
+    guest('command', command=f'setblock {spot[0]} {spot[1] - 1} {spot[2]} minecraft:stone')
+    guest('command', command=f'setblock {spot[0]} {spot[1]} {spot[2]} minecraft:air')
+    guest('command', command='give @s minecraft:oak_sign 1')
+    guest.wait(10)
+    grab(host)
+    guest.raw('place', *spot, '--item', 'minecraft:oak_sign')
+    guest.wait(20)
+    placed = host.raw('block', *spot).get('block')
+    host.shot(out, 'sign')
+    assert placed and 'sign' in placed, f'the guest placed {placed}'
+    host_unaffected(host, "the guest's sign")
+    return placed
+
+
+def effect_ids(game):
+    return [e.get('id', '').removeprefix('minecraft:') for e in game('state')['player'].get('effects', [])]
+
+
+def check_effects(host, guest, out):
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    bx, by, bz = x - 3, y, z - 3
+    host('command', command=f'fill {bx - 1} {by - 1} {bz - 1} {bx + 1} {by - 1} {bz + 1} minecraft:iron_block')
+    host('command', command=f'setblock {bx} {by} {bz} minecraft:beacon{{primary_effect:"minecraft:speed"}}')
+    # BeaconBlockEntity.tick applies its powers every 80 ticks, once the beam has reached the sky.
+    seen = {}
+    for _ in range(15):
+        host.wait(20)
+        seen = {'host': effect_ids(host), 'guest': effect_ids(guest)}
+        if all('speed' in v for v in seen.values()):
+            break
+    host.shot(out, 'effects')
+    guest.shot(out, 'effects')
+    assert 'speed' in seen['host'] and 'speed' in seen['guest'], f'beacon effects: {seen}'
+    return seen
+
+
+def wait_dimension(game, dimension, ticks):
+    """Wait up to `ticks` for the game to be in `dimension` with its world loaded around it."""
+    for _ in range(ticks // 20):
+        state = game('state')
+        if state.get('dimension') == dimension and state.get('player'):
+            return state
+        game.wait(20)
+    return game('state')
+
+
+def nether_portal(game, x, y, z):
+    """A lit portal along x, two blocks wide and three tall, its inside starting at x y z."""
+    game('command', command=f'fill {x - 1} {y - 1} {z} {x + 2} {y + 3} {z} minecraft:obsidian')
+    game('command', command=f'fill {x} {y} {z} {x + 1} {y + 2} {z} minecraft:nether_portal[axis=x]')
+
+
+def check_portals(host, guest, out):
+    if not SERVER_THREAD:
+        return 'skipped (needs --server-thread)'
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    nether_portal(guest, x, y, z + 3)
+    guest.wait(5)
+    guest('command', command=f'tp @s {x + 0.5} {y} {z + 3.5}')
+    # players_nether_portal_default_delay: 80 ticks in survival.
+    there = wait_dimension(guest, 'minecraft:the_nether', 600)
+    guest.wait(40)
+    guest.shot(out, 'portals-nether')
+    host_dim = host('state').get('dimension')
+    assert there.get('dimension') == 'minecraft:the_nether', f'the guest is in {there.get("dimension")}'
+    assert host_dim == 'minecraft:overworld', f'the host went to {host_dim} with the guest'
+    arrived = [int(v // 1) for v in pos_of(guest)]
+    below = guest.raw('block', arrived[0], arrived[1] - 1, arrived[2])
+    assert below.get('loaded') and below.get('block') != 'minecraft:air', f'under the guest in the Nether: {below}'
+    # The host takes an End portal while the guest is in the Nether: three levels at once.
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    host('command', command=f'setblock {hx} {hy} {hz} minecraft:end_portal')
+    end = wait_dimension(host, 'minecraft:the_end', 600)
+    host.wait(40)
+    host.shot(out, 'portals-end')
+    guest_dim = guest('state').get('dimension')
+    assert end.get('dimension') == 'minecraft:the_end', f'the host is in {end.get("dimension")}'
+    assert guest_dim == 'minecraft:the_nether', f'the guest left the Nether for {guest_dim}'
+    # Both come back: the host through an exit portal, the guest out of its portal and in again.
+    ex, ey, ez = (int(v // 1) for v in pos_of(host))
+    host('command', command=f'setblock {ex + 2} {ey} {ez} minecraft:end_portal')
+    host('command', command=f'tp @s {ex + 2.5} {ey} {ez + 0.5}')
+    guest('command', command=f'tp @s {arrived[0] + 0.5} {arrived[1]} {arrived[2] - 2.5}')
+    guest.wait(30)
+    guest('command', command=f'tp @s {arrived[0] + 0.5} {arrived[1]} {arrived[2] + 0.5}')
+    home = wait_dimension(host, 'minecraft:overworld', 600)
+    back = wait_dimension(guest, 'minecraft:overworld', 600)
+    guest.wait(40)
+    host.shot(out, 'portals-back')
+    guest.shot(out, 'portals-back')
+    assert home.get('dimension') == 'minecraft:overworld', f'the host stayed in {home.get("dimension")}'
+    assert back.get('dimension') == 'minecraft:overworld', f'the guest stayed in {back.get("dimension")}'
+    return {'guest_nether': arrived, 'host_end': [ex, ey, ez], 'back': pos_of(guest)}
 
 
 def check_damage(host, guest, out):
@@ -623,14 +747,16 @@ def check_trials(host, guest, out):
 
 
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
-             'chest': check_chest, 'crafting': check_crafting, 'damage': check_damage,
+             'chest': check_chest, 'crafting': check_crafting, 'sign': check_sign, 'damage': check_damage,
              'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
              'containers': check_containers, 'feedback': check_feedback, 'trials': check_trials,
-             'walls': check_walls}
+             'walls': check_walls, 'effects': check_effects, 'portals': check_portals}
 
 
 def run(ctl, out, resources, checks):
     host, guest = Game('host', ctl, resources), Game('guest', ctl, resources)
+    if SERVER_THREAD:
+        host.d.env['HORIZON_SERVER_THREAD'] = '1'
     results = {}
     try:
         host('launch', wait=False, offscreen=sys.platform == 'darwin')
@@ -676,7 +802,10 @@ def main():
     parser.add_argument('--bin-dir', help='prebuilt horizon-client and horizon-ctl (default: build with the fast profile)')
     parser.add_argument('--check', action='append', choices=CHECKS, help='run only these checks (repeatable)')
     parser.add_argument('--out', default=str(ROOT / '.local/lan-e2e'), help='screenshots and game logs go here')
+    parser.add_argument('--server-thread', action='store_true', help="the host's world runs on its server thread")
     args = parser.parse_args()
+    global SERVER_THREAD
+    SERVER_THREAD = args.server_thread
     if args.bin_dir:
         bins = Path(args.bin_dir).resolve()
     else:

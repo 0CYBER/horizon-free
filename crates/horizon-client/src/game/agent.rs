@@ -469,6 +469,9 @@ impl Game<'_> {
             "time": { "day_time": self.world.day_time, "day": self.world.day_time.div_euclid(24000), "time_of_day": self.world.day_time.rem_euclid(24000) },
             "weather": { "raining": self.world.weather.raining, "thundering": self.world.weather.thundering },
             "paused": self.pause,
+            // Mouse movement turns the camera (`apply_mouse_look`): the real
+            // pointer is grabbed, or an agent's `mouse-move` stands in for it.
+            "pointer_grabbed": self.captured || self.agent_pointer,
             "player": player,
             "selected": self.selected + 1,
             "held": self.held().map(|s| self.stack_value(s)),

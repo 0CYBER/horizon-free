@@ -25,7 +25,7 @@ impl Hub {
         for g in self
             .guests
             .iter()
-            .filter(|g| g.placed && Some(g.conn) != except)
+            .filter(|g| self.here(g) && Some(g.conn) != except)
         {
             let d: f64 = (0..3).map(|k| (g.position[k] - at[k]).powi(2)).sum();
             if d <= range * range {
@@ -464,7 +464,7 @@ impl Hub {
             let Some(menu) = self.guests[i]
                 .menu
                 .as_ref()
-                .filter(|_| self.guests[i].placed)
+                .filter(|_| self.here(&self.guests[i]))
             else {
                 continue;
             };

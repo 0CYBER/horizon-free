@@ -23,7 +23,7 @@ impl Game<'_> {
                         .guests
                         .iter()
                         .filter(|g| {
-                            g.placed
+                            host.hub.here(g)
                                 && g.loaded
                                 && !g.dead
                                 && !g.creative()

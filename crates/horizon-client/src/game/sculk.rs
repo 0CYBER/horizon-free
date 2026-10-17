@@ -80,6 +80,15 @@ pub(super) struct SculkState {
     ticks: u32,
     pub tracker_loaded: bool,
 }
+
+impl SculkState {
+    /// Exchange the level-held parts (its sculk block entities and the
+    /// chunks scanned for them) with another level's (game/levels.rs).
+    pub(super) fn swap_level(&mut self, other: &mut Self) {
+        std::mem::swap(&mut self.index, &mut other.index);
+        std::mem::swap(&mut self.known, &mut other.known);
+    }
+}
 /// An insertion-ordered set of block positions (`Level.blockEntityTickers`
 /// keeps the order block entities were added in).
 #[derive(Default)]
@@ -1168,6 +1177,9 @@ impl Game<'_> {
 
     /// `Warden.applyDarknessAround` / `MobEffectUtil.addEffectToPlayersAround`.
     pub(super) fn apply_darkness(&mut self, at: [f64; 3], radius: f64) {
+        self.for_each_player(|g| g.darkness_on_player(at, radius));
+    }
+    fn darkness_on_player(&mut self, at: [f64; 3], radius: f64) {
         if self.creative || self.spectator() {
             return;
         }

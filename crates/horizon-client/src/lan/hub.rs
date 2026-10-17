@@ -39,6 +39,7 @@ pub mod game_event {
     pub const CHANGE_GAME_MODE: u8 = 3;
     pub const RAIN_LEVEL: u8 = 7;
     pub const THUNDER_LEVEL: u8 = 8;
+    pub const GUARDIAN_ELDER_EFFECT: u8 = 10;
     pub const LEVEL_CHUNKS_LOAD_START: u8 = 13;
 }
 
@@ -127,6 +128,9 @@ pub struct Hub {
     last_rate: f32,
     ticking: (f32, bool),
     weather: (bool, f32, f32),
+    /// The clock and weather last sent in the levels not in place, by
+    /// dimension (`set_dimension` swaps them with the fields above).
+    level_sync: std::collections::HashMap<String, LevelSync>,
     /// Operators and their permission levels (dedicated servers).
     pub ops: std::collections::HashMap<u128, u8>,
     chat_type: i32,
@@ -195,6 +199,24 @@ fn tracked(cx: i32, cz: i32, r: i32, x: i32, z: i32) -> bool {
     dx * dx + dz * dz < i64::from(r) * i64::from(r)
 }
 
+/// What a level's players were last told of its clock and weather.
+#[derive(Clone, Copy)]
+struct LevelSync {
+    last_clock: i64,
+    last_rate: f32,
+    weather: (bool, f32, f32),
+}
+
+impl Default for LevelSync {
+    fn default() -> Self {
+        Self {
+            last_clock: i64::MIN,
+            last_rate: 0.0,
+            weather: (false, 0.0, 0.0),
+        }
+    }
+}
+
 impl Hub {
     pub fn new(lan: Lan, sync: Arc<SyncData>, encoder: ChunkEncoder, config: HubConfig) -> Self {
         let chat_type = sync
@@ -220,6 +242,7 @@ impl Hub {
             ticking: (20.0, false),
             ops: Default::default(),
             weather: (false, 0.0, 0.0),
+            level_sync: Default::default(),
             chat_type,
             dimension_type,
             clock_ids,
@@ -270,6 +293,18 @@ impl Hub {
     pub fn broadcast(&self, packet: &C) {
         let body = packet.encode();
         for g in self.guests.iter().filter(|g| g.placed) {
+            g.sender.send(body.clone());
+        }
+    }
+    /// Whether a guest is placed in the level in place (`config.dimension`).
+    pub fn here(&self, g: &Guest) -> bool {
+        g.placed && g.dimension == self.config.dimension
+    }
+    /// `PlayerList.broadcastAll(packet, dimension)`: the players in the
+    /// level in place.
+    pub fn broadcast_level(&self, packet: &C) {
+        let body = packet.encode();
+        for g in self.guests.iter().filter(|g| self.here(g)) {
             g.sender.send(body.clone());
         }
     }
@@ -464,6 +499,7 @@ impl Hub {
         guest.joined_tick = self.ticks;
         guest.position = ctx.spawn;
         guest.previous_position = ctx.spawn;
+        guest.dimension = self.config.dimension.clone();
         self.guests.push(guest);
         conn
     }
@@ -875,7 +911,19 @@ impl Hub {
 
     // ---- per tick ------------------------------------------------------
 
+    /// A whole tick with one level: the network, the level, then the
+    /// players' latencies.
     pub fn tick(&mut self, ctx: &mut TickCtx) -> Vec<HostEvent> {
+        let mut events = self.poll(ctx);
+        events.extend(self.tick_level(ctx));
+        self.end_tick();
+        events
+    }
+
+    /// The network since the last tick, once per server tick before any
+    /// level ticks: joins (into the level in place), leaves, and each guest's
+    /// packets queued for its own level's pass.
+    pub fn poll(&mut self, ctx: &mut TickCtx) -> Vec<HostEvent> {
         self.ticks += 1;
         let mut events = Vec::new();
         for event in self.lan.poll() {
@@ -911,13 +959,25 @@ impl Hub {
                 }
             }
         }
+        events
+    }
+
+    /// The level in place's part of the tick (`ServerLevel.tick`'s chunk
+    /// map and the connections of the players in it): their packets, then
+    /// the chunks, block changes, containers and entities they see.
+    pub fn tick_level(&mut self, ctx: &mut TickCtx) -> Vec<HostEvent> {
+        let mut events = Vec::new();
         for i in 0..self.guests.len() {
-            if self.guests[i].placed {
+            if self.here(&self.guests[i]) {
                 self.process_inbox(i, ctx, &mut events);
             }
         }
-        if !self.guests.iter().any(|g| g.placed) {
-            if self.guests.is_empty() {
+        if !self.guests.iter().any(|g| self.here(g)) {
+            if !self
+                .guests
+                .iter()
+                .any(|g| g.dimension == self.config.dimension)
+            {
                 let _ = ctx.world.block_log.take();
             }
             return events;
@@ -927,7 +987,7 @@ impl Hub {
         }
         self.sync_world(ctx);
         for i in 0..self.guests.len() {
-            if self.guests[i].placed {
+            if self.here(&self.guests[i]) {
                 self.update_chunks(i, ctx);
             }
         }
@@ -935,7 +995,7 @@ impl Hub {
         // ServerGamePacketListenerImpl.tick: the actions handled since the last tick are
         // acknowledged after the block changes they made were sent, so a client's predicted
         // blocks settle on the server's states.
-        for g in &self.guests {
+        for g in self.guests.iter().filter(|g| self.here(g)) {
             let sequence = g.ack_up_to.replace(-1);
             if sequence >= 0 {
                 g.send(&C::BlockChangedAck(play::BlockChangedAck { sequence }));
@@ -944,11 +1004,16 @@ impl Hub {
         self.sync_containers(ctx.world);
         self.track_entities(ctx);
         for i in 0..self.guests.len() {
-            if self.guests[i].placed {
+            if self.here(&self.guests[i]) {
                 self.sync_player_state(i);
                 self.sync_effects(i);
             }
         }
+        events
+    }
+
+    /// After every level: `PlayerList.tick`.
+    pub fn end_tick(&mut self) {
         let latencies: Vec<_> = self
             .guests
             .iter()
@@ -970,7 +1035,6 @@ impl Hub {
                 entries,
             }));
         }
-        events
     }
 
     fn remove_guest(&mut self, i: usize, reason: &str) -> Guest {
@@ -1001,7 +1065,7 @@ impl Hub {
         // MinecraftServer.tickServer: the game time every 20 ticks
         // (forceGameTimeSynchronization, no clocks).
         if self.ticks.is_multiple_of(20) {
-            self.broadcast(&C::SetTime(play::SetTime {
+            self.broadcast_level(&C::SetTime(play::SetTime {
                 game_time: world.game_time,
                 clocks: Vec::new(),
             }));
@@ -1017,7 +1081,7 @@ impl Hub {
                 .sync
                 .id("minecraft:world_clock", "minecraft:overworld")
                 .unwrap_or(0);
-            self.broadcast(&C::SetTime(play::SetTime {
+            self.broadcast_level(&C::SetTime(play::SetTime {
                 game_time: world.game_time,
                 clocks: vec![play::ClockState {
                     clock: overworld,
@@ -1036,7 +1100,7 @@ impl Hub {
         let w = &world.weather;
         let (raining, rain, thunder) = self.weather;
         if w.raining != raining {
-            self.broadcast(&C::GameEvent(play::GameEvent {
+            self.broadcast_level(&C::GameEvent(play::GameEvent {
                 event: if w.raining {
                     game_event::START_RAINING
                 } else {
@@ -1046,13 +1110,13 @@ impl Hub {
             }));
         }
         if (w.rain_level.1 - rain).abs() > f32::EPSILON {
-            self.broadcast(&C::GameEvent(play::GameEvent {
+            self.broadcast_level(&C::GameEvent(play::GameEvent {
                 event: game_event::RAIN_LEVEL,
                 param: w.rain_level.1,
             }));
         }
         if (w.thunder_level.1 - thunder).abs() > f32::EPSILON {
-            self.broadcast(&C::GameEvent(play::GameEvent {
+            self.broadcast_level(&C::GameEvent(play::GameEvent {
                 event: game_event::THUNDER_LEVEL,
                 param: w.thunder_level.1,
             }));
@@ -1183,7 +1247,7 @@ impl Hub {
         for ((sx, sy, sz), positions) in sections {
             let viewers: Vec<usize> = (0..self.guests.len())
                 .filter(|&i| {
-                    self.guests[i].placed && self.guests[i].sent_chunks.contains(&(sx, sz))
+                    self.here(&self.guests[i]) && self.guests[i].sent_chunks.contains(&(sx, sz))
                 })
                 .collect();
             if viewers.is_empty() {
@@ -1348,7 +1412,7 @@ impl Hub {
             ));
         }
         let placed: Vec<usize> = (0..self.guests.len())
-            .filter(|&i| self.guests[i].placed)
+            .filter(|&i| self.here(&self.guests[i]))
             .collect();
         let guest_states: Vec<_> = placed
             .into_iter()
@@ -1388,7 +1452,7 @@ impl Hub {
             .map(|e| super::entity::tracking_chunks(&e.kind))
             .collect();
         for gi in 0..self.guests.len() {
-            if !self.guests[gi].placed {
+            if !self.here(&self.guests[gi]) {
                 continue;
             }
             let view = self.guests[gi].view_distance;
@@ -1983,12 +2047,15 @@ impl Hub {
         let mode = self.guests[i].game_mode;
         let mut info = self.spawn_info(mode);
         // Player.getLastDeathLocation, set where the player died.
+        // The level they died in: theirs until now.
         info.last_death = self.guests[i].last_death.map(|pos| play::GlobalPos {
-            dimension: self.config.dimension.clone(),
+            dimension: self.guests[i].dimension.clone(),
             pos,
         });
         self.close_container_for(i);
         let g = &mut self.guests[i];
+        // PlayerList.respawn: into the level in place (the respawn level).
+        g.dimension = self.config.dimension.clone();
         // ServerLevel.removePlayerImmediately: every entity paired with the dead player is
         // removed (ServerEntity.removePairing, one packet each). Its chunks are dropped
         // without ForgetLevelChunk (PlayerChunkSender.dropChunk skips dead players): the
@@ -2057,6 +2124,20 @@ impl Hub {
     /// The level the players are in: the server holds one at a time, and the
     /// hub's packets name it.
     pub fn set_dimension(&mut self, dimension: &str) {
+        if self.config.dimension == dimension {
+            return;
+        }
+        // What this level's players were told stays with it.
+        let leaving = LevelSync {
+            last_clock: self.last_clock,
+            last_rate: self.last_rate,
+            weather: self.weather,
+        };
+        let entering = self.level_sync.remove(dimension).unwrap_or_default();
+        self.level_sync
+            .insert(std::mem::take(&mut self.config.dimension), leaving);
+        (self.last_clock, self.last_rate, self.weather) =
+            (entering.last_clock, entering.last_rate, entering.weather);
         self.config.dimension = dimension.to_owned();
         self.dimension_type = self
             .sync
@@ -2076,6 +2157,7 @@ impl Hub {
         let info = self.spawn_info(mode);
         self.close_container_for(i);
         let g = &mut self.guests[i];
+        g.dimension = self.config.dimension.clone();
         g.tracker.clear();
         g.sent_chunks.clear();
         g.chunk_queue.clear();
