@@ -12,7 +12,9 @@ chunks around the spawn (their bytes are compared: the world is loaded from
 the same files), chats, runs /list and commands that fail (`/random value
 7..7`, `/random value x`, `/trigger nope`), trades, is made an operator by
 the console, runs /kill, respawns (as vanilla's LevelLoadTracker waits: until the "level
-chunks load start" event and the chunk under the player) and leaves. The
+chunks load start" event and the chunk under the player), sets a furnace
+beside itself, gives itself raw iron and coal, opens the furnace, shift-clicks
+the ore and the coal in and the ingot out, and leaves. The
 console then runs `list` and `say` and `stop`. Compared, all of them
 exactly:
 
@@ -29,6 +31,8 @@ exactly:
   inventory (PlayerList.respawn; chat, chunk data, light and keep-alives
   left out, runs of a packet counted), then that the level loads where the
   player respawned (guests' death messages aren't Horizon's yet: left out);
+- the furnace menu: its type and title, its contents, the slots each
+  shift-click changes and its lit and cooking totals;
 - the console lines about the player, the chat, `list`, `say` and `stop`;
 - the files the servers leave: server.properties (but the date line),
   eula.txt, ops.json, whitelist.json, banned-players.json, banned-ips.json.
@@ -204,9 +208,10 @@ CONSOLE_LINE = re.compile(r'^\[\d\d:\d\d:\d\d\] \[([^\]]+)\]: (.*)$')
 KEPT = re.compile(r'Tester|\[Server\]|\[Not Secure\]|There are|Stopping|Saving|ThreadedAnvilChunkStorage|All dimensions|Unknown or incomplete')
 
 
-# Guests' death messages and the op's command feedback broadcast to the console aren't
-# Horizon's yet (the client's own transcript leaves the death message out as well).
-NOT_YET = re.compile(r'Tester was killed|Killed Tester|^\[Tester: ')
+# Guests' death messages, the op's command feedback broadcast to the console and guests'
+# advancement announcements aren't Horizon's yet (the client's own transcript leaves the
+# death message out as well).
+NOT_YET = re.compile(r'Tester was killed|Killed Tester|System chat: \[Tester: |Tester has made the advancement')
 
 
 def console_lines(lines):

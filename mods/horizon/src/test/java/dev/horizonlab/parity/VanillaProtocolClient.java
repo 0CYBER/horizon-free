@@ -125,7 +125,10 @@ public final class VanillaProtocolClient {
             client.status(host, port);
             client.join(host, port, name);
         } catch (Exception e) {
-            client.lines.add("error " + client.state + " " + e);
+            // With its causes: a decoder error names the field it could not read there.
+            StringBuilder line = new StringBuilder("error " + client.state + " " + e);
+            for (Throwable c = e.getCause(); c != null; c = c.getCause()) line.append(" / caused by ").append(c);
+            client.lines.add(line.toString());
         } finally {
             if (client.socket != null) client.socket.close();
         }
@@ -427,7 +430,7 @@ public final class VanillaProtocolClient {
         boolean loaded = false;
         PositionMoveRotation position = new PositionMoveRotation(Vec3.ZERO, Vec3.ZERO, 0, 0);
         long lastChunk = 0;
-        long deadline = System.currentTimeMillis() + 90_000;
+        long deadline = System.currentTimeMillis() + 150_000;
         int step = 0;
         long stepAt = 0;
         // The death the console deals and the respawn after it (PlayerList.respawn): from the
@@ -440,6 +443,10 @@ public final class VanillaProtocolClient {
         String runType = null;
         int run = 0;
         PositionMoveRotation respawnAt = null;
+        // The furnace set beside the respawn point: its window and the menu's state id.
+        net.minecraft.core.BlockPos furnace = null;
+        int furnaceWindow = -1;
+        int furnaceState = 0;
         // The villager the server's console summoned beside the spawn.
         int villager = -1;
         net.minecraft.world.phys.Vec3 villagerAt = null;
@@ -500,6 +507,18 @@ public final class VanillaProtocolClient {
                     int pz = (int) Math.floor(position.position().z) >> 4;
                     if (p.x() == px && p.z() == pz && !respawning) chunkParts(p);
                     if (p.x() == px && p.z() == pz && respawnAt != null) respawnChunk = true;
+                } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundContainerSetContentPacket p
+                    && furnaceWindow > 0 && p.containerId() == furnaceWindow) {
+                    furnaceState = p.stateId();
+                    record("play-furnace", "content " + p.items() + " carried " + p.carriedItem());
+                } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundContainerSetSlotPacket p
+                    && furnaceWindow > 0 && p.getContainerId() == furnaceWindow) {
+                    furnaceState = p.getStateId();
+                    record("play-furnace", "slot " + p.getSlot() + " " + p.getItem());
+                } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundContainerSetDataPacket p
+                    && furnaceWindow > 0 && p.getContainerId() == furnaceWindow && (p.getId() == 1 || p.getId() == 3)) {
+                    // Lit total and cooking total; the time left and the cooking timer follow the ticks.
+                    record("play-furnace", "data " + p.getId() + " " + p.getValue());
                 } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundEntityEventPacket p
                     && step == 5 + REPLIES.length && (int) (byte) field(p, "eventId") == 28) {
                     // Operator (level 4, as the console made it): it may run /kill on itself.
@@ -524,6 +543,10 @@ public final class VanillaProtocolClient {
                     && p.getType() == net.minecraft.world.entity.EntityTypes.VILLAGER) {
                     villager = p.getId();
                     villagerAt = new net.minecraft.world.phys.Vec3(p.getX(), p.getY(), p.getZ());
+                } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundOpenScreenPacket p && step > 6 + REPLIES.length) {
+                    furnaceWindow = p.getContainerId();
+                    record("play-furnace", "open " + net.minecraft.core.registries.BuiltInRegistries.MENU.getKey(p.getType()) + " "
+                        + json(p.getTitle()));
                 } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundOpenScreenPacket p && step > 0) {
                     record("play-trade", "open " + p.getContainerId() + " "
                         + net.minecraft.core.registries.BuiltInRegistries.MENU.getKey(p.getType()) + " "
@@ -614,6 +637,36 @@ public final class VanillaProtocolClient {
                 if (runType != null) record("play-respawn", runLine(runType, run));
                 record("play-respawn", "level loaded at " + text(respawnAt.position()));
                 send(new ServerboundPlayerLoadedPacket());
+                // A furnace two blocks south, an ore and its fuel.
+                furnace = net.minecraft.core.BlockPos.containing(respawnAt.position()).south(2);
+                send(new ServerboundChatCommandPacket("setblock " + furnace.getX() + " " + furnace.getY() + " " + furnace.getZ()
+                    + " minecraft:furnace"));
+                send(new ServerboundChatCommandPacket("give @s minecraft:raw_iron"));
+                send(new ServerboundChatCommandPacket("give @s minecraft:coal"));
+                step++;
+                stepAt = now;
+            } else if (step == 7 + REPLIES.length && now - stepAt > 1500) {
+                // Right-click it with an empty hand (AbstractFurnaceBlock.useWithoutItem).
+                send(new net.minecraft.network.protocol.game.ServerboundUseItemOnPacket(net.minecraft.world.InteractionHand.MAIN_HAND,
+                    new net.minecraft.world.phys.BlockHitResult(net.minecraft.world.phys.Vec3.atCenterOf(furnace),
+                        net.minecraft.core.Direction.NORTH, furnace, false), 1));
+                step++;
+                stepAt = now;
+            } else if (step >= 8 + REPLIES.length && step <= 10 + REPLIES.length && furnaceWindow > 0
+                && now - stepAt > (step == 10 + REPLIES.length ? 12_000 : 1500)) {
+                // Shift-click the ore (hotbar 0) into the input, the coal (hotbar 1) into the
+                // fuel slot, and the smelted ingot out of the result; nothing claimed, so the
+                // server sends every slot the click changed.
+                int slot = step == 8 + REPLIES.length ? 30 : step == 9 + REPLIES.length ? 31 : 2;
+                record("play-furnace", "quick move " + slot);
+                send(new net.minecraft.network.protocol.game.ServerboundContainerClickPacket(furnaceWindow, furnaceState, (short) slot,
+                    (byte) 0, net.minecraft.world.inventory.ContainerInput.QUICK_MOVE,
+                    new it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap<>(), net.minecraft.network.HashedStack.EMPTY));
+                step++;
+                stepAt = now;
+            } else if (step == 11 + REPLIES.length && now - stepAt > 1500) {
+                send(new net.minecraft.network.protocol.game.ServerboundContainerClosePacket(furnaceWindow));
+                record("play-furnace", "closed");
                 return;
             }
         }

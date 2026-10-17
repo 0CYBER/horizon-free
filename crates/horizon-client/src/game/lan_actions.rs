@@ -275,6 +275,14 @@ impl Game<'_> {
                 "container.enderchest",
                 Slots::Ender,
             )
+        } else if let Some(BlockEntity::Furnace(f)) = self.world.block_entities.get(&pos) {
+            // AbstractFurnaceBlock.openContainer: FurnaceMenu, BlastFurnaceMenu, SmokerMenu.
+            let (menu, title) = match f.kind.recipe_type() {
+                "minecraft:blasting" => ("minecraft:blast_furnace", "container.blast_furnace"),
+                "minecraft:smoking" => ("minecraft:smoker", "container.smoker"),
+                _ => ("minecraft:furnace", "container.furnace"),
+            };
+            (menu, title, Slots::Block(pos))
         } else if let Some((other, right)) = self.chest_partner(pos) {
             // ChestBlock.combine: the right half's slots come first.
             let halves = if right {
@@ -475,6 +483,7 @@ impl Game<'_> {
             S::ContainerClick(p) if self.lan_merchant_click(host, conn, &p) => {}
             S::ContainerClick(p) if self.lan_inventory_click(host, conn, &p) => {}
             S::ContainerClick(p) if self.lan_crafting_click(host, conn, &p) => {}
+            S::ContainerClick(p) if self.lan_furnace_click(host, conn, &p) => {}
             S::SelectTrade(p) => self.lan_select_trade(host, conn, p.item),
             S::ContainerClose(p) if self.lan_merchant_closed(host, conn, Some(p.container)) => {
                 let g = &mut host.hub.guests[gi];
