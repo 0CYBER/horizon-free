@@ -174,7 +174,14 @@ jobs:
           case "${{ matrix.asset }}" in
             *.tar.gz) tar czf "${{ matrix.asset }}" "${{ matrix.dir }}" ;;
             *) if [[ "$RUNNER_OS" == Windows ]]; then 7z a -tzip "${{ matrix.asset }}" "${{ matrix.dir }}" > /dev/null
-               else ditto -c -k --keepParent "${{ matrix.dir }}" "${{ matrix.asset }}"; fi ;;
+               else
+                 # Without resource forks and extended attributes: plain ditto adds an
+                 # AppleDouble `._` file beside every file that has any.
+                 ditto -c -k --norsrc --noextattr --noqtn --keepParent "${{ matrix.dir }}" "${{ matrix.asset }}"
+                 if unzip -Z1 "${{ matrix.asset }}" | grep -E '(^|/)(\._|__MACOSX/)'; then
+                   echo "::error::macOS metadata files in ${{ matrix.asset }}"; exit 1
+                 fi
+               fi ;;
           esac
           ls -l "${{ matrix.asset }}"
       - uses: actions/upload-artifact@v4
