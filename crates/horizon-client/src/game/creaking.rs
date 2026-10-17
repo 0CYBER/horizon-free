@@ -333,7 +333,7 @@ impl Game<'_> {
                 }
                 for i in 0..4096 {
                     let id = section.get(i);
-                    if !hearts.get(usize::from(id)).copied().unwrap_or(false) {
+                    if !hearts.get(id as usize).copied().unwrap_or(false) {
                         continue;
                     }
                     let (lx, lz, ly) = ((i & 15) as i32, ((i >> 4) & 15) as i32, (i >> 8) as i32);
@@ -361,4 +361,12 @@ pub(super) struct CreakingState {
     scanned: horizon_client::fast_hash::FxHashSet<(i32, i32)>,
     /// Which block states are creaking hearts, by state id.
     hearts: Vec<bool>,
+}
+
+impl CreakingState {
+    /// Exchange the chunks scanned for creaking hearts with another level's
+    /// (game/levels.rs).
+    pub(super) fn swap_level(&mut self, other: &mut Self) {
+        std::mem::swap(&mut self.scanned, &mut other.scanned);
+    }
 }

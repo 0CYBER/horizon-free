@@ -25,7 +25,7 @@ impl Hub {
         for g in self
             .guests
             .iter()
-            .filter(|g| g.placed && Some(g.conn) != except)
+            .filter(|g| self.here(g) && Some(g.conn) != except)
         {
             let d: f64 = (0..3).map(|k| (g.position[k] - at[k]).powi(2)).sum();
             if d <= range * range {
@@ -79,11 +79,11 @@ impl Hub {
     }
 
     /// ClientboundBlockEventPacket (`PlayerList.broadcast` within 64 blocks).
-    pub fn block_event(&self, pos: [i32; 3], b0: i32, b1: i32, state: u16) {
+    pub fn block_event(&self, pos: [i32; 3], b0: i32, b1: i32, state: u32) {
         let block = self
             .encoder
             .block_ids
-            .get(usize::from(state))
+            .get(state as usize)
             .copied()
             .unwrap_or(0);
         let at = [f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])];
@@ -464,7 +464,7 @@ impl Hub {
             let Some(menu) = self.guests[i]
                 .menu
                 .as_ref()
-                .filter(|_| self.guests[i].placed)
+                .filter(|_| self.here(&self.guests[i]))
             else {
                 continue;
             };

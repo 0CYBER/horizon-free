@@ -241,7 +241,8 @@ mod tests {
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
         assert_eq!(args.len(), 4);
-        assert!(args[1].ends_with("a/carry") && args[3].ends_with("b/carry"));
+        assert_eq!(Path::new(&args[1]), work.join("mods").join("a").join("carry"));
+        assert_eq!(Path::new(&args[3]), work.join("mods").join("b").join("carry"));
         assert_eq!(cmd.get_current_dir(), Some(profile_home(&work).as_path()));
         assert!(profile_home(&work).is_dir());
         fs::remove_dir_all(&root).unwrap();

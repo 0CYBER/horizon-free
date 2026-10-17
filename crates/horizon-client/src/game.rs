@@ -71,6 +71,7 @@ mod lan_trading;
 mod lan_waypoints;
 mod leads;
 mod level_particles;
+mod levels;
 mod lightning;
 mod llamas;
 mod loom;
@@ -975,8 +976,14 @@ struct Game<'a> {
     world_root: PathBuf,
     /// A player carried through a portal, re-placed once the destination loads.
     travelling: Option<(PlayerMotion, Vec3)>,
-    /// A server's lone player on its way to another level.
-    server_trip: Option<server_travel::Trip>,
+    /// A server's players on their way to another level, each waiting for
+    /// the destination to load around them.
+    server_trips: Vec<server_travel::Trip>,
+    /// A server's levels other than the one in place (game/levels.rs).
+    levels: levels::Levels,
+    /// Which pass of a server tick runs (`tick_server`): the first one reads
+    /// the network, the last one ends the players' tick.
+    level_pass: levels::Pass,
     /// Nether portals: the player's, items' and mobs' (game/nether_portal.rs).
     portals: nether_portal::Portals,
     /// The pending travel goes through an End portal (EndPortalBlock destinations).
@@ -1127,7 +1134,7 @@ struct Game<'a> {
     lan_events: Vec<(i32, [i32; 3], i32, Option<u32>)>,
     /// Block events (position, b0, b1, state) and entity events (id, event,
     /// position) for the guests.
-    lan_block_events: Vec<([i32; 3], i32, i32, u16)>,
+    lan_block_events: Vec<([i32; 3], i32, i32, u32)>,
     lan_entity_events: Vec<(i32, i8, [f64; 3])>,
     /// `ContainerOpenersCounter`: how many players (the host and the guests)
     /// have each chest open.
@@ -1139,6 +1146,10 @@ struct Game<'a> {
     lan_acting_uuid: Option<u128>,
     /// Command feedback to forward to a guest.
     chat_capture: Option<Vec<horizon_client::text::Text>>,
+    /// `broadcastToAdmins` lines a guest's command queued, sent once it
+    /// returns: the line, whether operators get it and whether the console
+    /// logs it.
+    admin_feedback: Vec<(horizon_client::text::Text, bool, bool)>,
     /// State of `/spectate`, `/posteffect`, `/debug`, `/waypoint` and friends.
     cmds: commands::extra::CommandExtras,
     ui: chat::UiState,
@@ -1158,7 +1169,7 @@ struct Game<'a> {
     tab_list: horizon_client::tab_list::TabList,
     subtitles: subtitle_hud::SubtitleState,
     adv: advancements::AdvState,
-    restore_player_environment: bool,
+    restore_player_state: bool,
     stats_ui: stats_screen::StatsUi,
     adv_ui: advancements_screen::AdvUi,
     camera_type: perspective::CameraType,
@@ -1166,7 +1177,7 @@ struct Game<'a> {
     /// The local player as a model (third person, the inventory).
     player_model: Option<Mob>,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Dim {
     Overworld,
     Nether,
@@ -1529,6 +1540,7 @@ impl Game<'_> {
         self.dropped.push(ItemEntity {
             health: 5,
             fire_ticks: 0,
+            thrower: None,
             id: self.next_entity,
             stack,
             position: p,
@@ -1611,6 +1623,10 @@ impl Game<'_> {
             yaw.cos() * pitch.cos() * 0.3 + spread.sin() * strength,
         ];
         self.spawn_item(thrown, [eye[0], eye[1] - 0.3, eye[2]], v, 40);
+        if self.lan_acting.is_none() {
+            let uuid = self.level.ensure_player_uuid();
+            self.dropped.last_mut().unwrap().thrower = Some(uuid);
+        }
     }
     fn tick_items(&mut self) {
         let mut items = std::mem::take(&mut self.dropped);
@@ -3077,10 +3093,7 @@ impl Game<'_> {
         };
         let mut player = PlayerMotion::new(self.motion, feet)?;
         player.yaw = self.yaw;
-        player.load_environment_once(
-            &mut self.restore_player_environment,
-            self.level.player_extra.as_ref(),
-        );
+        player.load_saved_state_once(&mut self.restore_player_state, &self.level)?;
         let spectator = self.mode == horizon_client::command::args::GameMode::Spectator;
         player.may_fly = self.creative || spectator;
         player.invulnerable = self.creative || spectator;
@@ -3096,10 +3109,12 @@ impl Game<'_> {
                 .get(&s.item)
                 .is_some_and(|i| i.glider && (i.max_damage == 0 || s.damage + 1 < i.max_damage))
         });
-        if self.level.health > 0.0 && self.ticks < 2 {
-            player.set_health(self.level.health, false)?;
-            player.health.food.food = self.level.food;
-            player.health.food.saturation = self.level.saturation;
+        // A saved death already dropped inventory/XP and counted the death.
+        if player.health.dead_or_dying() {
+            self.screen = Screen::Dead;
+            self.ui.died_at = Some(Instant::now());
+            self.ui.death_text = None;
+            self.capture(false);
         }
         self.previous_position = feet;
         self.player = Some(player);
@@ -3677,6 +3692,11 @@ impl Game<'_> {
             ) || self.book.is_some())
     }
     fn capture(&mut self, capture: bool) {
+        // A guest's action (`as_guest`) opens and closes screens on the
+        // guest's own client: the window's pointer stays the host's (#687).
+        if self.lan_acting.is_some() {
+            return;
+        }
         // MouseHandler.grabMouse never captures an inactive window.
         if capture && !self.focused {
             return;
@@ -5592,6 +5612,9 @@ impl Game<'_> {
                 )
             };
             let visible = r.block_entities().filter(|(p, state)| {
+                if !self.res.block_entity_render.renders(*state) {
+                    return false;
+                }
                 off_screen(*state)
                     || view.is_none_or(|v| {
                         let o =
@@ -5713,9 +5736,10 @@ impl Game<'_> {
             let start = out.len();
             self.block_model_vertices(
                 f.state,
-                f.start_pos,
+                horizon_core::random::position_seed(f.start_pos),
                 glam::Mat4::from_translation(o),
                 packed,
+                false,
                 &mut out,
             );
             let tint = horizon_client::mobs::render::abgr(tint);
@@ -6239,7 +6263,8 @@ impl Game<'_> {
         self.fns = Default::default();
         self.bosses = Default::default();
         reset_world_progress(&mut self.adv, &mut self.stats);
-        self.restore_player_environment = true;
+        self.prefetch_advancement_tree();
+        self.restore_player_state = true;
         // RandomSequences: the world's data/minecraft/random_sequences.dat.
         self.rand_sequences =
             horizon_client::save::read_dat(&save_root.join("data/minecraft/random_sequences.dat"))
@@ -8444,18 +8469,10 @@ impl Game<'_> {
         if self.remote.is_some() {
             return Ok(());
         }
-        self.streaming.save(&mut self.world, wait);
-        let keys: Vec<_> = self.world.modified.drain().collect();
-        let chunks = self.with_entities(keys.iter().filter_map(|k| self.world.chunks.get(k)));
-        self.save
-            .save_later(&chunks, self.pack.assets.registry, &self.res.biomes)?;
-        if wait {
-            self.save.flush();
-        }
-        self.save_entities(wait)?;
+        self.save_level(wait)?;
+        self.save_parked_levels(wait)?;
         self.save_maps();
         self.save_random_sequences();
-        self.save_raids();
         self.save_fight();
         self.save_wandering_trader();
         self.save_portal_arrivals();
@@ -8470,6 +8487,20 @@ impl Game<'_> {
         self.level.write(&self.world_root)?;
         self.save_world_state();
         self.message = Some(("Saved the game".into(), Instant::now()));
+        Ok(())
+    }
+    /// Save the level in place: its changed chunks, its entities and its raids.
+    fn save_level(&mut self, wait: bool) -> Result<()> {
+        self.streaming.save(&mut self.world, wait);
+        let keys: Vec<_> = self.world.modified.drain().collect();
+        let chunks = self.with_entities(keys.iter().filter_map(|k| self.world.chunks.get(k)));
+        self.save
+            .save_later(&chunks, self.pack.assets.registry, &self.res.biomes)?;
+        if wait {
+            self.save.flush();
+        }
+        self.save_entities(wait)?;
+        self.save_raids();
         Ok(())
     }
     fn render(&mut self) -> Result<bool> {
@@ -10160,7 +10191,9 @@ impl<'a> Game<'a> {
             dim: Dim::Overworld,
             world_root: PathBuf::new(),
             travelling: None,
-            server_trip: None,
+            server_trips: Vec::new(),
+            levels: Default::default(),
+            level_pass: Default::default(),
             portals: Default::default(),
             end_travel: false,
             respawn_config: None,
@@ -10266,6 +10299,7 @@ impl<'a> Game<'a> {
             lan_acting_name: None,
             lan_acting_uuid: None,
             chat_capture: None,
+            admin_feedback: Vec::new(),
             cmds: Default::default(),
             ui: Default::default(),
             combat: Default::default(),
@@ -10282,7 +10316,7 @@ impl<'a> Game<'a> {
             tab_list: Default::default(),
             subtitles: Default::default(),
             adv: Default::default(),
-            restore_player_environment: true,
+            restore_player_state: true,
             stats_ui: Default::default(),
             adv_ui: Default::default(),
             camera_type: Default::default(),

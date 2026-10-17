@@ -467,6 +467,41 @@ impl Game<'_> {
             self.splash(&stack, at);
         }
     }
+    /// A splash potion's effects on the player in place, by their distance.
+    fn splash_on_player(
+        &mut self,
+        effects: &'static [(&'static str, i32, i32)],
+        at: Vec3,
+        scale: f64,
+    ) {
+        if let Some(p) = self.player.as_ref() {
+            let center = Vec3::new(
+                p.position.x,
+                p.position.y + f64::from(p.dimensions.height) / 2.0,
+                p.position.z,
+            );
+            let d2 =
+                (center.x - at.x).powi(2) + (center.y - at.y).powi(2) + (center.z - at.z).powi(2);
+            if d2 < 16.0 && (center.y - at.y).abs() <= 2.0 + f64::from(p.dimensions.height) {
+                let intensity = 1.0 - d2.sqrt() / 4.0;
+                for (id, duration, amp) in effects {
+                    let instant = brewing::effect(id).is_some_and(|e| e.instant);
+                    if instant {
+                        if let Some(a) = horizon_client::effects::instant(id, *amp, intensity) {
+                            self.apply_effect_action(a);
+                        }
+                    } else {
+                        let d = (intensity * f64::from(*duration) * scale + 0.5) as i32;
+                        if d > 20
+                            && let Some(e) = brewing::effect(id)
+                        {
+                            self.potions.effects.add(EffectInstance::new(e.id, d, *amp));
+                        }
+                    }
+                }
+            }
+        }
+    }
     /// `ThrownSplashPotion.onHitAsPotion` (lingering clouds apply as a weaker splash).
     fn splash(&mut self, stack: &ItemStack, at: Vec3) {
         if &*stack.item == "minecraft:experience_bottle" {
@@ -527,34 +562,9 @@ impl Game<'_> {
         let Some(def) = stack.potion().and_then(brewing::potion) else {
             return;
         };
-        // The player.
-        if let Some(p) = self.player.as_ref() {
-            let center = Vec3::new(
-                p.position.x,
-                p.position.y + f64::from(p.dimensions.height) / 2.0,
-                p.position.z,
-            );
-            let d2 =
-                (center.x - at.x).powi(2) + (center.y - at.y).powi(2) + (center.z - at.z).powi(2);
-            if d2 < 16.0 && (center.y - at.y).abs() <= 2.0 + f64::from(p.dimensions.height) {
-                let intensity = 1.0 - d2.sqrt() / 4.0;
-                for (id, duration, amp) in def.effects {
-                    let instant = brewing::effect(id).is_some_and(|e| e.instant);
-                    if instant {
-                        if let Some(a) = horizon_client::effects::instant(id, *amp, intensity) {
-                            self.apply_effect_action(a);
-                        }
-                    } else {
-                        let d = (intensity * f64::from(*duration) * scale + 0.5) as i32;
-                        if d > 20
-                            && let Some(e) = brewing::effect(id)
-                        {
-                            self.potions.effects.add(EffectInstance::new(e.id, d, *amp));
-                        }
-                    }
-                }
-            }
-        }
+        // Every player in range (`ThrownSplashPotion.applySplash` over
+        // `LivingEntity`s, the players among them).
+        self.for_each_player(|g| g.splash_on_player(def.effects, at, scale));
         // Mobs take the instant effects (undead invert healing and harming).
         let undead = &self.res.stations.enchantments.entity_tags;
         let mut hits = Vec::new();

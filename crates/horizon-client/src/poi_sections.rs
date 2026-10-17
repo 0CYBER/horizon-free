@@ -54,12 +54,12 @@ impl<T: Copy> PoiSections<T> {
             return cached.pois.clone();
         }
         let pois: SectionPois<T> = if section.blocks.maybe_has(|v| kind(v).is_some()) {
-            let mut states = [0u16; 4096];
+            let mut states = [0u32; 4096];
             section.unpack(&mut states);
             states
                 .iter()
                 .enumerate()
-                .filter_map(|(i, &state)| kind(u32::from(state)).map(|poi| (i as u16, poi)))
+                .filter_map(|(i, &state)| kind(state).map(|poi| (i as u16, poi)))
                 .collect()
         } else {
             Arc::from([])

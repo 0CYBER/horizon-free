@@ -206,7 +206,7 @@ impl NaturalLevel for GameLevel<'_, '_> {
             .chunks
             .get(&(x >> 4, z >> 4))
             .and_then(|chunk| {
-                chunk.highest(world.air.0 as u16, |y| {
+                chunk.highest(world.air.0, |y| {
                     spawn_selection::heightmap_blocks(self, kind, x, y, z)
                 })
             })

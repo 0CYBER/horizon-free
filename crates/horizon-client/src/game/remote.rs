@@ -9,7 +9,7 @@
 use super::{Dim, Game, Mining, Screen};
 use horizon_client::{
     Result,
-    chunk::{BIOME_STRATEGY, BLOCK_STRATEGY, Chunk, Light, MIN_Y, SECTIONS, Section},
+    chunk::{BIOME_STRATEGY, Chunk, Light, MIN_Y, SECTIONS, Section, block_strategy},
     containers::{BlockEntity, Furnace, FurnaceKind},
     entities::{Experience, ItemEntity},
     hud::{HudBatch, rgba},
@@ -22,7 +22,11 @@ use horizon_client::{
     streaming::{ChunkGenerator, Proto, Streaming},
     world::World,
 };
-use horizon_core::{geometry::Vec3, paletted::PalettedContainer, random::RandomSource};
+use horizon_core::{
+    geometry::Vec3,
+    paletted::{PalettedContainer, Strategy},
+    random::RandomSource,
+};
 use horizon_protocol::{
     entity_data::{ITEM_ENTITY_ITEM, Value},
     item::{Hashed, Stack},
@@ -641,11 +645,31 @@ impl Game<'_> {
             if !(0..SECTIONS as i32).contains(&target) {
                 continue;
             }
-            let strategy = BLOCK_STRATEGY;
+            // A global section is as wide as the server's registry: 16 bits
+            // from a vanilla server, wider from a Horizon host with the same
+            // content mods. Read it at that width, then widen it to ours.
+            let ours = block_strategy();
+            let strategy = if ours.wire_has_palette(s.states.bits) {
+                ours
+            } else {
+                Strategy::blocks(s.states.bits)
+            };
             let palette = s.states.palette.iter().map(|&p| p as u32).collect();
             let words = s.states.data.iter().map(|&w| w as u64).collect();
-            let blocks = PalettedContainer::from_wire(strategy, s.states.bits, palette, words)
+            let mut blocks = PalettedContainer::from_wire(strategy, s.states.bits, palette, words)
                 .map_err(|e| e.to_string())?;
+            if strategy.global_bits != ours.global_bits {
+                let mut values = [0u32; 4096];
+                blocks.unpack(&mut values);
+                // Ids past our registry (a host with mods we lack) read as air.
+                let limit = 1u64 << ours.global_bits;
+                for v in &mut values {
+                    if u64::from(*v) >= limit {
+                        *v = 0;
+                    }
+                }
+                blocks = PalettedContainer::from_values(ours, &values);
+            }
             let mut section = Section {
                 blocks,
                 biomes: PalettedContainer::from_values(BIOME_STRATEGY, &cells),
@@ -1447,6 +1471,21 @@ impl Game<'_> {
                 }
             }
             C::GameEvent(p) => match p.event {
+                // GUARDIAN_ELDER_EFFECT: the apparition, and the curse sound
+                // unless the elder guardian is silent.
+                10 => {
+                    self.creatures.elder_apparition = super::mob_blocks::APPARITION_TICKS;
+                    if p.param == 1.0
+                        && let Some(at) = self.player.as_ref().map(|m| m.position)
+                    {
+                        self.audio.play(
+                            "minecraft:entity.elder_guardian.curse",
+                            Some([at.x, at.y, at.z]),
+                            1.0,
+                            1.0,
+                        );
+                    }
+                }
                 1 => {
                     self.world.weather.raining = true;
                     self.world.weather.rain_level = (0.0, 0.0);
@@ -2018,6 +2057,7 @@ impl Game<'_> {
         self.dropped.push(ItemEntity {
             health: 5,
             fire_ticks: 0,
+            thrower: None,
             id: id as u32,
             stack,
             position: at,

@@ -58,6 +58,7 @@ pub fn outline_vertices(edges: &[[f64; 6]], camera: glam::DVec3) -> Vec<[f32; 6]
 }
 
 mod arena;
+mod flat;
 mod java_stages;
 mod occlusion;
 mod pack_stages;
@@ -101,6 +102,8 @@ struct SectionGpu {
     faces: crate::mesher::FaceGroups,
     sort: translucency::SortState,
     sorted_indices: Option<(u32, u64)>,
+    /// Its id for flat draws (`flat::Flat::add`), when they are on.
+    flat_id: Option<u32>,
 }
 /// Line segments the hit outline can hold.
 const MAX_OUTLINE_EDGES: u64 = 256;
@@ -251,6 +254,10 @@ pub struct Renderer {
     pub config: wgpu::SurfaceConfiguration,
     solid: wgpu::RenderPipeline,
     translucent: wgpu::RenderPipeline,
+    /// Flat section draws (`flat`), where multi-draw is emulated.
+    flat: Option<flat::Flat>,
+    /// `flat` draws this frame's sections (off: the per-section draws).
+    flat_on: bool,
     sky: wgpu::RenderPipeline,
     dark_disc: wgpu::RenderPipeline,
     lines: wgpu::RenderPipeline,
@@ -355,6 +362,10 @@ pub struct Renderer {
     pub info: wgpu::AdapterInfo,
     pub suspended: bool,
     pub drawn_sections: usize,
+    /// Last frame's section draws (face ranges and translucent sections),
+    /// and the draw calls the backend issued for them.
+    pub section_draws: usize,
+    pub section_draw_calls: usize,
     pub uploaded_bytes: u64,
     started: Instant,
     /// Write the next presented frame to this PNG path (control socket).
@@ -385,7 +396,7 @@ fn sprite_split() -> u32 {
         .unwrap_or(SPRITE_SPLIT)
 }
 /// Sprite arrays terrain.wgsl binds (`sprites`, `sprites_1`...).
-const SPRITE_ARRAYS: u32 = 4;
+const SPRITE_ARRAYS: u32 = 8;
 /// The views of terrain.wgsl's sprite arrays, the unused ones a 1-layer
 /// stand-in.
 fn sprite_views(
@@ -441,6 +452,10 @@ fn terrain_group(
             view(5, &sprites[1]),
             view(6, &sprites[2]),
             view(7, &sprites[3]),
+            view(8, &sprites[4]),
+            view(9, &sprites[5]),
+            view(10, &sprites[6]),
+            view(11, &sprites[7]),
         ],
     })
 }
@@ -743,6 +758,10 @@ impl Renderer {
                 entry(5, vf, sprite_array),
                 entry(6, vf, sprite_array),
                 entry(7, vf, sprite_array),
+                entry(8, vf, sprite_array),
+                entry(9, vf, sprite_array),
+                entry(10, vf, sprite_array),
+                entry(11, vf, sprite_array),
             ],
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -777,18 +796,19 @@ impl Renderer {
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &debug_line_attributes,
         })];
-        let pipeline = |label: &str,
-                        vertex: &str,
-                        fragment: &str,
-                        buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
-                        topology: wgpu::PrimitiveTopology,
-                        cull: Option<wgpu::Face>,
-                        depth_write: bool,
-                        depth_test: bool,
-                        blend: Option<wgpu::BlendState>| {
+        let pipeline_in = |layout: &wgpu::PipelineLayout,
+                           label: &str,
+                           vertex: &str,
+                           fragment: &str,
+                           buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
+                           topology: wgpu::PrimitiveTopology,
+                           cull: Option<wgpu::Face>,
+                           depth_write: bool,
+                           depth_test: bool,
+                           blend: Option<wgpu::BlendState>| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
-                layout: Some(&layout),
+                layout: Some(layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
                     entry_point: Some(vertex),
@@ -828,6 +848,28 @@ impl Renderer {
                 multiview_mask: None,
                 cache: None,
             })
+        };
+        let pipeline = |label: &str,
+                        vertex: &str,
+                        fragment: &str,
+                        buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
+                        topology: wgpu::PrimitiveTopology,
+                        cull: Option<wgpu::Face>,
+                        depth_write: bool,
+                        depth_test: bool,
+                        blend: Option<wgpu::BlendState>| {
+            pipeline_in(
+                &layout,
+                label,
+                vertex,
+                fragment,
+                buffers,
+                topology,
+                cull,
+                depth_write,
+                depth_test,
+                blend,
+            )
         };
         let tri = wgpu::PrimitiveTopology::TriangleList;
         let solid = pipeline(
@@ -1645,7 +1687,34 @@ impl Renderer {
             std::mem::size_of::<TerrainVertex>() as u64,
             1 << 20,
         );
-        let sorted_indices = arena::Arena::indices(&device, 1 << 16);
+        // Sections as one index list per frame where multi-draw is emulated.
+        let flat = flat::wanted(&adapter, &device).then(|| {
+            let buffers = [Some(wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<TerrainVertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &TERRAIN_ATTRIBUTES,
+            })];
+            flat::Flat::new(
+                &device,
+                &bindings,
+                arena.page_vertices(),
+                |layout, label, fragment, blend| {
+                    pipeline_in(
+                        layout,
+                        label,
+                        "vs_terrain_flat",
+                        fragment,
+                        &buffers,
+                        tri,
+                        Some(wgpu::Face::Back),
+                        true,
+                        true,
+                        blend,
+                    )
+                },
+            )
+        });
+        let sorted_indices = arena::Arena::indices(&device, 1 << 16, flat.is_some());
         let indirect = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Section draws"),
             size: 1024 * 20,
@@ -1680,6 +1749,8 @@ impl Renderer {
             config,
             solid,
             translucent,
+            flat_on: flat.is_some(),
+            flat,
             sky,
             dark_disc,
             lines,
@@ -1759,6 +1830,8 @@ impl Renderer {
             info,
             suspended: size.width == 0 || size.height == 0,
             drawn_sections: 0,
+            section_draws: 0,
+            section_draw_calls: 0,
             uploaded_bytes: 0,
             started: Instant::now(),
             screenshot: None,
@@ -1839,30 +1912,12 @@ impl Renderer {
             })
             .create_view(&Default::default())
     }
-    /// VSync on: tear-free presentation (Mailbox, else Fifo); off: Immediate when available.
-    /// VSync, unless Horizon's present-mode setting names a supported mode.
+    /// VSync on presents with Fifo, capped to the display's refresh rate in a
+    /// window and in fullscreen alike; Horizon's present-mode setting applies
+    /// only with VSync off (`window::chosen_present_mode`).
     pub fn set_present_mode(&mut self, vsync: bool, mode: crate::graphics::PresentMode) {
         use crate::graphics::PresentMode as P;
-        let wanted = match mode {
-            P::Auto => None,
-            P::Fifo => Some(wgpu::PresentMode::Fifo),
-            P::Mailbox => Some(wgpu::PresentMode::Mailbox),
-            P::Immediate => Some(wgpu::PresentMode::Immediate),
-        };
-        match wanted.filter(|m| self.present_modes.contains(m)) {
-            Some(m) => {
-                if self.config.present_mode != m
-                    && let Some(surface) = &self.surface
-                {
-                    self.config.present_mode = m;
-                    surface.configure(&self.device, &self.config);
-                }
-            }
-            None => self.set_vsync(vsync),
-        }
-    }
-    pub fn set_vsync(&mut self, vsync: bool) {
-        use crate::window::{PresentMode, vsync_present_mode};
+        use crate::window::{PresentMode, chosen_present_mode};
         let supported: Vec<PresentMode> = self
             .present_modes
             .iter()
@@ -1873,8 +1928,13 @@ impl Renderer {
                 _ => None,
             })
             .collect();
-        // GpuSurface.PresentMode.getSupportedVsyncMode.
-        let mode = match vsync_present_mode(&supported, vsync) {
+        let setting = match mode {
+            P::Auto => None,
+            P::Fifo => Some(PresentMode::Fifo),
+            P::Mailbox => Some(PresentMode::Mailbox),
+            P::Immediate => Some(PresentMode::Immediate),
+        };
+        let mode = match chosen_present_mode(&supported, vsync, setting) {
             Some(PresentMode::Mailbox) => wgpu::PresentMode::Mailbox,
             Some(PresentMode::Immediate) => wgpu::PresentMode::Immediate,
             _ => wgpu::PresentMode::Fifo,
@@ -1899,6 +1959,18 @@ impl Renderer {
             self.offscreen = Some(Self::offscreen_target(&self.device, &self.config));
         }
         self.depth = Self::depth(&self.device, &self.config);
+    }
+    /// Whether sections are drawn as one index list per frame (`flat`).
+    pub fn flat_draws(&self) -> bool {
+        self.flat_on
+    }
+    /// Switches between flat and per-section draws, for A/B checks.
+    pub fn set_flat_draws(&mut self, on: bool) -> Result<()> {
+        if on && self.flat.is_none() {
+            return Err("flat section draws are off on this device".into());
+        }
+        self.flat_on = on;
+        Ok(())
     }
     pub fn section_count(&self) -> usize {
         self.sections.len()
@@ -1941,6 +2013,10 @@ impl Renderer {
         } else {
             None
         };
+        let flat_id = self
+            .flat
+            .as_mut()
+            .map(|f| f.add(&self.device, &self.queue, page, start, vertices));
         let stride = std::mem::size_of::<TerrainVertex>() as u64;
         for (offset, part) in [(0, &mesh.solid), (mesh.solid.len(), &mesh.translucent)] {
             if !part.is_empty() {
@@ -1970,6 +2046,7 @@ impl Renderer {
                         .collect(),
                 ),
                 sorted_indices,
+                flat_id,
             },
         );
     }
@@ -2000,6 +2077,9 @@ impl Renderer {
     }
     fn release_section(&mut self, key: SectionKey) {
         if let Some(s) = self.sections.remove(key) {
+            if let (Some(flat), Some(id)) = (&mut self.flat, s.flat_id) {
+                flat.remove(id);
+            }
             if let Some((page, start)) = s.sorted_indices {
                 self.sorted_indices
                     .release(page, start, u64::from(s.translucent) * 6);
@@ -2016,6 +2096,9 @@ impl Renderer {
         self.block_entities.clear();
         self.sections.clear();
         self.arena.clear();
+        if let Some(flat) = &mut self.flat {
+            flat.clear();
+        }
         self.sorted_indices.clear();
         self.translucency_cursor = 0;
         self.occlusion.clear();
@@ -2198,6 +2281,9 @@ impl Renderer {
     pub fn render(&mut self, frame: &Frame) -> Result<bool> {
         self.arena.trim();
         self.sorted_indices.trim();
+        if let Some(flat) = &mut self.flat {
+            flat.trim(|page| self.arena.has_page(page));
+        }
         if self.suspended {
             return Ok(false);
         }
@@ -2388,18 +2474,22 @@ impl Renderer {
         let culling = !frame.title && frame.cave_culling;
         if culling {
             let radius = (frame.distance / 16.0) as i32 + 2;
-            self.occlusion.update(camera_section, radius);
+            crate::spans::time("occlusion", || {
+                self.occlusion.update(camera_section, radius)
+            });
         }
         let reachable = &self.occlusion;
         let mut visible = std::mem::take(&mut self.visible);
         visible.clear();
-        self.sections.visible(
-            camera,
-            (frame.distance / 16.0) as i32,
-            &view,
-            |k| !culling || reachable.contains(k),
-            &mut visible,
-        );
+        crate::spans::time("visibility", || {
+            self.sections.visible(
+                camera,
+                (frame.distance / 16.0) as i32,
+                &view,
+                |k| !culling || reachable.contains(k),
+                &mut visible,
+            )
+        });
         self.drawn_sections = visible.len();
         if visible.len() as u64 > self.instance_capacity {
             self.instance_capacity = (visible.len() as u64).next_power_of_two();
@@ -2487,7 +2577,45 @@ impl Renderer {
         }
         self.translucency_cursor += budget;
         let translucent_draws = self.draws.len() as u32 - solid_draws;
-        if self.multi_draw && !self.draws.is_empty() {
+        self.section_draws = self.draws.len();
+        // Metal replays a multi-draw as one draw call per entry.
+        self.section_draw_calls = if self.multi_draw && self.info.backend != wgpu::Backend::Metal {
+            (0..self.draws.len())
+                .filter(|&i| {
+                    i == 0
+                        || i == solid_draws as usize
+                        || self.draw_pages[i] != self.draw_pages[i - 1]
+                })
+                .count()
+        } else {
+            self.draws.len()
+        };
+        let flat_frame = match &mut self.flat {
+            Some(flat)
+                if self.flat_on && !self.draws.is_empty() && self.draws.len() >= flat.min_draws =>
+            {
+                let sections = &self.sections;
+                let sorted = &self.sorted_indices;
+                crate::spans::time("flatten", || {
+                    flat.prepare(
+                        &self.device,
+                        &mut encoder,
+                        &mut self.uploads,
+                        &self.draws,
+                        &self.draw_pages,
+                        solid_draws as usize,
+                        visible
+                            .iter()
+                            .filter_map(|v| sections.get(v.slot).flat_id.map(|id| (id, v.origin))),
+                        |page| sorted.buffer(page).clone(),
+                    )
+                })
+            }
+            _ => false,
+        };
+        if flat_frame {
+            self.section_draw_calls = self.flat.as_ref().map_or(0, |f| f.calls.len());
+        } else if self.multi_draw && !self.draws.is_empty() {
             if self.draws.len() as u64 > self.indirect_capacity {
                 self.indirect_capacity = (self.draws.len() as u64).next_power_of_two();
                 self.indirect = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -2722,10 +2850,22 @@ impl Renderer {
                     pass.draw(0..3, 0..1);
                 }
             }
-            pass.set_pipeline(&self.solid);
-            pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
-            pass.set_vertex_buffer(1, self.instances.slice(..));
-            self.draw_sections(&mut pass, 0, solid_draws);
+            match self.flat.as_ref().filter(|_| flat_frame) {
+                Some(flat) => {
+                    pass.set_pipeline(&flat.solid);
+                    flat.draw(&mut pass, &flat.calls[..flat.solid_calls], |p| {
+                        self.arena.buffer(p)
+                    });
+                    pass.set_bind_group(0, &self.group, &[]);
+                    pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                }
+                None => {
+                    pass.set_pipeline(&self.solid);
+                    pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.set_vertex_buffer(1, self.instances.slice(..));
+                    self.draw_sections(&mut pass, 0, solid_draws);
+                }
+            }
             if entity_quads > 0 {
                 pass.set_pipeline(&self.entity_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
@@ -2762,10 +2902,22 @@ impl Renderer {
                 pass.set_vertex_buffer(0, self.debug_line_buffer.slice(..));
                 pass.draw(0..4, debug_depth..debug_depth + debug_top);
             }
-            pass.set_pipeline(&self.translucent);
-            pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
-            pass.set_vertex_buffer(1, self.instances.slice(..));
-            self.draw_sections(&mut pass, solid_draws, translucent_draws);
+            match self.flat.as_ref().filter(|_| flat_frame) {
+                Some(flat) => {
+                    pass.set_pipeline(&flat.translucent);
+                    flat.draw(&mut pass, &flat.calls[flat.solid_calls..], |p| {
+                        self.arena.buffer(p)
+                    });
+                    pass.set_bind_group(0, &self.group, &[]);
+                    pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                }
+                None => {
+                    pass.set_pipeline(&self.translucent);
+                    pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.set_vertex_buffer(1, self.instances.slice(..));
+                    self.draw_sections(&mut pass, solid_draws, translucent_draws);
+                }
+            }
             // LevelRenderer.executeClassicTransparency: translucent targets'
             // outlines follow terrain, so its blending cannot wash them out.
             if outline_edges > 0 && frame.outline_after_terrain {
@@ -3006,7 +3158,8 @@ impl Renderer {
             .take()
             .map(|path| (path, self.copy_frame(&mut encoder, &target_texture)));
         self.uploads.finish(&encoder);
-        let submission = self.queue.submit([encoder.finish()]);
+        let commands = crate::spans::time("encode", || encoder.finish());
+        let submission = crate::spans::time("submit", || self.queue.submit([commands]));
         if let Some(timer) = &mut self.gpu_timer {
             timer.submitted();
             timer.collect(&self.device, &mut self.gpu_times);

@@ -290,6 +290,78 @@ impl Lists {
     }
 }
 
+/// The world presets of 26.3's `worldgen/world_preset`.
+const WORLD_PRESETS: [&str; 6] = [
+    "minecraft:normal",
+    "minecraft:flat",
+    "minecraft:large_biomes",
+    "minecraft:amplified",
+    "minecraft:single_biome_surface",
+    "minecraft:debug_all_block_states",
+];
+
+/// Identifier.tryParse: `namespace:path`, or a path in `minecraft`.
+fn parse_identifier(text: &str) -> Option<String> {
+    let (namespace, path) = text.split_once(':').unwrap_or(("minecraft", text));
+    let valid = |s: &str, extra: &[char]| {
+        s.chars()
+            .all(|c| matches!(c, 'a'..='z' | '0'..='9' | '_' | '.' | '-') || extra.contains(&c))
+    };
+    (valid(namespace, &[]) && valid(path, &['/'])).then(|| format!("{namespace}:{path}"))
+}
+
+impl Game<'_> {
+    /// DedicatedServerProperties.createDimensions for a world that doesn't
+    /// exist yet: `level-type`'s preset, a flat world's `generator-settings`
+    /// and `generate-structures`, written before the world opens so that
+    /// streaming reads them. Horizon generates the normal and flat presets.
+    fn write_world_gen(&self, dir: &std::path::Path, props: &ServerProperties) -> Result<()> {
+        let level_type = &props.level_type;
+        let preset = parse_identifier(level_type)
+            .filter(|id| WORLD_PRESETS.contains(&id.as_str()))
+            .unwrap_or_else(|| {
+                log_from(
+                    "Worker-Main-1",
+                    "WARN",
+                    &format!(
+                        "Failed to parse level-type {level_type}, defaulting to minecraft:normal"
+                    ),
+                );
+                "minecraft:normal".to_owned()
+            });
+        let flat = preset == "minecraft:flat";
+        if !flat && preset != "minecraft:normal" {
+            log_from(
+                "Worker-Main-1",
+                "WARN",
+                &format!(
+                    "Horizon doesn't generate the {preset} world preset yet: using minecraft:normal"
+                ),
+            );
+        }
+        let settings = if flat {
+            let biomes = &self.res.biomes;
+            let (settings, errors) = horizon_client::flatgen::settings_from_json(
+                &props.generator_settings,
+                |b| self.pack.assets.registry.default_state(b).is_some(),
+                |b| biomes.get(biomes.id(b)).name == b,
+            );
+            for e in errors {
+                log_from("Worker-Main-1", "ERROR", &e);
+            }
+            settings
+        } else {
+            None
+        };
+        let options = horizon_client::save::WorldGen {
+            flat,
+            structures: props.generate_structures,
+            bonus_chest: false,
+        };
+        horizon_client::save::write_world_gen_settings_with(dir, props.seed, options, settings)
+    }
+}
+
 /// PlayerList.BAN_DATE_FORMAT ("yyyy-MM-dd 'at' HH:mm:ss z"), in UTC.
 fn ban_date(millis: i64) -> String {
     let s = format_date(millis);
@@ -345,6 +417,13 @@ impl Game<'_> {
             .get()
             .and_then(|m| m.lock().unwrap().take())
             .ok_or("dedicated server not prepared")?;
+        // Main's WorldLoader: a new world's dimensions come from
+        // server.properties before the server starts.
+        let world_dir = std::env::current_dir()?.join(&universe).join(&level_name);
+        let new_world = !world_dir.join("level.dat").exists();
+        if new_world {
+            self.write_world_gen(&world_dir, &props)?;
+        }
         // The console thread starts first, as in initServer.
         let (tx, console) = mpsc::channel();
         std::thread::Builder::new()
@@ -425,9 +504,7 @@ impl Game<'_> {
         lists.enforce_whitelist = props.enforce_whitelist;
         let lists = Arc::new(Mutex::new(lists));
         log("INFO", &format!("Preparing level \"{level_name}\""));
-        let world_dir = std::env::current_dir()?.join(&universe).join(&level_name);
         let folder = world_dir.to_string_lossy().into_owned();
-        let new_world = !world_dir.join("level.dat").exists();
         self.open_world(
             &folder,
             Some(&level_name),
@@ -565,18 +642,12 @@ impl Game<'_> {
                 );
                 self.save_game()?;
             }
-            self.update_dedicated_streaming();
-            self.update_world();
-            if paused {
-                // MinecraftServer.tickServer: only the connections run.
-                self.tick_lan();
-            } else {
-                if !state.autosave {
-                    // `save-off`: the periodic save inside the tick is skipped.
-                    self.ticks = self.ticks.max(1);
-                }
-                self.tick()?;
+            if !paused && !state.autosave {
+                // `save-off`: the periodic save inside the tick is skipped.
+                self.ticks = self.ticks.max(1);
             }
+            // MinecraftServer.tickServer: while paused only the connections run.
+            self.tick_server(paused)?;
             if idle_timeout > 0 {
                 self.kick_idle(idle_timeout);
             }
@@ -617,7 +688,13 @@ impl Game<'_> {
         let center = self
             .lan
             .as_ref()
-            .and_then(|h| h.hub.guests.iter().find(|g| g.placed).map(|g| g.chunk()))
+            .and_then(|h| {
+                h.hub
+                    .guests
+                    .iter()
+                    .find(|g| h.hub.here(g))
+                    .map(|g| g.chunk())
+            })
             .or_else(|| {
                 self.spawn
                     .map(|s| ((s.x.floor() as i32) >> 4, (s.z.floor() as i32) >> 4))

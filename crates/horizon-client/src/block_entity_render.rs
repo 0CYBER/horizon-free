@@ -737,6 +737,8 @@ pub struct Scene<'a> {
 pub struct BlockEntityRenderer {
     models: HashMap<&'static str, ModelPart>,
     kinds: Vec<Kind>,
+    // Closed chest geometry: dimension lighting, chest part, horizontal facing.
+    closed_chests: [[[Vec<Vertex>; 4]; 3]; 2],
     /// Item id to its `PROVIDES_POTTERY_PATTERN` side texture (`Sheets.DECORATED_POT_MAPPER`).
     pot_patterns: HashMap<String, String>,
     /// `Block.shouldRenderFace` for End gateway faces (its occlusion pair cache needs a lock).
@@ -817,6 +819,43 @@ impl BlockEntityRenderer {
         Ok(renderer)
     }
     fn new(models: HashMap<&'static str, ModelPart>, registry: &BlockRegistry) -> Self {
+        let closed_chests = [false, true].map(|nether| {
+            ["chest", "double_chest_left", "double_chest_right"].map(|name| {
+                [0.0f32, 90.0, 180.0, 270.0].map(|y_rot| {
+                    let mut vertices = Vec::new();
+                    if let Some(model) = models.get(name) {
+                        draw_part(
+                            model,
+                            "root",
+                            around(
+                                Mat4::from_rotation_y((-y_rot).to_radians()),
+                                Vec3::new(0.5, 0.0, 0.5),
+                            ),
+                            &|name, p| {
+                                if name == "lid" || name == "lock" {
+                                    p[3] = crate::block_entity_anim::chest_lid_x_rot(0.0);
+                                }
+                            },
+                            Paint {
+                                sprite: Rect {
+                                    u0: 0.0,
+                                    v0: 0.0,
+                                    u1: 1.0,
+                                    v1: 1.0,
+                                    w: 16,
+                                    h: 16,
+                                },
+                                tint: 0xFFFFFF,
+                                light: 0,
+                                lights: diffuse_lights(nether),
+                            },
+                            &mut vertices,
+                        );
+                    }
+                    vertices
+                })
+            })
+        });
         let kinds = (0..registry.len() as u32)
             .map(|id| {
                 registry.state(BlockStateId(id)).map_or(Kind::None, |s| {
@@ -831,6 +870,7 @@ impl BlockEntityRenderer {
         Self {
             models,
             kinds,
+            closed_chests,
             pot_patterns: HashMap::new(),
             visibility: None,
         }
@@ -876,7 +916,7 @@ impl BlockEntityRenderer {
                 .as_vec3();
             let base = Mat4::from_translation(origin);
             let packed = scene.world.light(pos[0], pos[1], pos[2]);
-            self.render_one(scene, *pos, kind, base, packed, lights, false, out);
+            self.render_one(scene, *pos, kind, base, packed, lights, false, true, out);
         }
     }
     /// One block entity at `pos` drawn under `base` with the given packed light
@@ -892,7 +932,7 @@ impl BlockEntityRenderer {
     ) {
         let kind = self.kind(state);
         let lights = diffuse_lights(scene.nether);
-        self.render_one(scene, pos, kind, base, packed, lights, false, out);
+        self.render_one(scene, pos, kind, base, packed, lights, false, false, out);
     }
     /// Whether this block state has a block-entity renderer here.
     pub fn renders(&self, state: u32) -> bool {
@@ -915,6 +955,7 @@ impl BlockEntityRenderer {
             0xff,
             diffuse_lights(scene.nether),
             true,
+            false,
             out,
         );
         crate::breaking::entity_geometry(&mut out[start..], origin);
@@ -991,7 +1032,17 @@ impl BlockEntityRenderer {
         let kind = self.kind(state);
         if !matches!(kind, Kind::None) {
             let lights = diffuse_lights(scene.nether);
-            self.render_one(scene, [i32::MAX; 3], kind, base, packed, lights, false, out);
+            self.render_one(
+                scene,
+                [i32::MAX; 3],
+                kind,
+                base,
+                packed,
+                lights,
+                false,
+                false,
+                out,
+            );
         }
     }
     #[allow(clippy::too_many_arguments)]
@@ -1004,6 +1055,7 @@ impl BlockEntityRenderer {
         packed: u8,
         lights: (Vec3, Vec3),
         crumbling: bool,
+        world_chests: bool,
         out: &mut Vec<Vertex>,
     ) {
         let sprite = |name: &str| scene.sprites.get(name).copied();
@@ -1106,6 +1158,23 @@ impl BlockEntityRenderer {
                 if let Some(other) = other {
                     let l = scene.world.light(other[0], other[1], other[2]);
                     packed = (packed >> 4).max(l >> 4) << 4 | (packed & 15).max(l & 15);
+                }
+                if world_chests && open == 0.0 {
+                    if let Some(paint) = paint(texture, 0xFFFFFF, packed) {
+                        let vertices = &self.closed_chests[usize::from(scene.nether)]
+                            [*part as usize][*y_rot as usize / 90];
+                        let origin = base.w_axis.truncate();
+                        out.extend(vertices.iter().map(|v| Vertex {
+                            pos: (Vec3::from_array(v.pos) + origin).to_array(),
+                            uv: [
+                                paint.sprite.u0 + (paint.sprite.u1 - paint.sprite.u0) * v.uv[0],
+                                paint.sprite.v0 + (paint.sprite.v1 - paint.sprite.v0) * v.uv[1],
+                            ],
+                            light: paint.light,
+                            ..*v
+                        }));
+                    }
+                    return;
                 }
                 let m = base
                     * around(
@@ -1791,16 +1860,18 @@ mod tests {
             (
                 name.to_owned(),
                 Rect {
-                    u0: 0.0,
-                    v0: 0.0,
-                    u1: 1.0,
-                    v1: 1.0,
+                    u0: 0.25,
+                    v0: 0.125,
+                    u1: 0.375,
+                    v1: 0.25,
                     w: 16,
                     h: 16,
                 },
             )
         })
         .collect();
+        let cache_open = std::cell::Cell::new(0.0);
+        let cache_lid = |_| cache_open.get();
         let mut scene = Scene {
             camera: DVec3::ZERO,
             orientation: Quat::IDENTITY,
@@ -1817,6 +1888,56 @@ mod tests {
             banner: &|_| Vec::new(),
             glyph: &|_| (None, 0.0),
         };
+        // Compare the cached world path with the original model renderer,
+        // including atlas replacement, current light and animated fallback.
+        scene.lid = &cache_lid;
+        for nether in [false, true] {
+            scene.nether = nether;
+            for part in [ChestPart::Single, ChestPart::Left, ChestPart::Right] {
+                for y_rot in [0.0, 90.0, 180.0, 270.0] {
+                    let kind = Kind::Chest {
+                        block: "chest".into(),
+                        texture: "entity/chest/normal",
+                        part,
+                        y_rot,
+                        double_with: None,
+                    };
+                    for (open, packed) in [(0.0, 0xF0), (0.0, 0x7F), (0.5, 0x7F)] {
+                        cache_open.set(open);
+                        let base = Mat4::from_translation(Vec3::new(3.25, -8.5, 12.75));
+                        let mut cached = Vec::new();
+                        let mut original = Vec::new();
+                        for (use_cache, out) in [(true, &mut cached), (false, &mut original)] {
+                            renderer.render_one(
+                                &scene,
+                                [0; 3],
+                                &kind,
+                                base,
+                                packed,
+                                diffuse_lights(nether),
+                                false,
+                                use_cache,
+                                out,
+                            );
+                        }
+                        assert!(!cached.is_empty());
+                        assert_eq!(cached.len(), original.len());
+                        for (a, b) in cached.iter().zip(&original) {
+                            assert!(
+                                (Vec3::from_array(a.pos) - Vec3::from_array(b.pos)).length() < 3e-6
+                            );
+                            assert_eq!(a.uv, b.uv);
+                            assert_eq!(a.color, b.color);
+                            assert_eq!(a.light, b.light);
+                            assert_eq!(a.normal, b.normal);
+                            assert_eq!(a.layer, b.layer);
+                        }
+                    }
+                }
+            }
+        }
+        scene.nether = false;
+        scene.lid = &|_| 0.0;
         for state in 0..names.len() as u32 {
             let mut base = Vec::new();
             renderer.render_block(&scene, [0; 3], state, Mat4::IDENTITY, 0xff, &mut base);
