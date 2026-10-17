@@ -27,3 +27,17 @@ A render subset is possible, but the current facts decoder also validates regist
 Measurements on this machine are warm runs with `HORIZON_NO_AUDIO=1`. Other compilation and parity jobs were running, so elapsed times are diagnostic rather than a controlled benchmark.
 
 Before phasing (3a, `42d65465`), `--offscreen --frames 3 --smoke-report` completed successfully with peak RSS 762,536 KiB. The report contained 3 frames, no chunks, no generated or meshed sections, no player, and no error. This is the synchronous harness path; the progressive path is measured separately after 3c.
+
+After phasing, the same warm three-frame synchronous smoke completed successfully with peak RSS 774,080 KiB, up 11,544 KiB (1.5%) from the 3a measurement. Both reports had 3 frames, no chunks, no generated or meshed sections, no player, and no error. Elapsed time is intentionally excluded from the comparison because the machine was running concurrent builds.
+
+The progressive checks used an overlay of the prepared resources with `mob-data.json` replaced by a FIFO. This holds WorldRest without a production delay hook. Core and the real renderer became ready, Options → Video opened, and the backdrop logged `title backdrop ready; world rest ready: false` before the FIFO was released. In an unblocked Horizon launch, core was ready at 4,776 ms, the renderer at 5,260 ms, and rest at 6,282 ms under compilation load. Backdrop generation and fade-in still take their own time; these marks measure bundle readiness separately.
+
+A direct singleplayer launch while the FIFO was held displayed `Loading items` and handled a window resize. Releasing the FIFO resumed entry; the run exited cleanly with a player, 85 chunks, 529 meshed sections and no error. That delayed-entry run peaked at 1,142,560 KiB, including the loaded world. Integrated-server entry also joined after release and rendered a world. Dedicated startup reached `Done`, handled `list` and `stop`, saved and exited with status 0 without constructing a renderer.
+
+Screenshots from these probes:
+
+- [Video options before rest was ready](../../benchmarks/startup-stage-3-20261018/video-before-rest.png)
+- [Loading screen while entry waited for rest](../../benchmarks/startup-stage-3-20261018/loading-before-rest.png)
+- [World after the tail join](../../benchmarks/startup-stage-3-20261018/world-after-rest.png)
+
+The full parity selection against `origin/main` also includes the unmerged Stage 2 ancestors (313 harnesses). The local run was bounded at 30 minutes; its log recorded passes for `active_effects`, `active_effect_tick` and `anchor`. The remainder needs CI or a longer dedicated run. The client Rust tests, focused startup probes and memory measurements are separate from that incomplete parity run.
