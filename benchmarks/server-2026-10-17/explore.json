@@ -1,0 +1,212 @@
+{
+  "kind": "horizon-server-benchmark",
+  "date": "2026-10-17T08:36:03+00:00",
+  "machine": {
+    "system": "Darwin",
+    "machine": "arm64",
+    "cpus": 14
+  },
+  "commit": "123987c4591b8209cc3e7df495482298803bbd9a",
+  "java": [
+    "openjdk 25.0.4.1 2026-08-18 LTS"
+  ],
+  "settings": {
+    "servers": "horizon,vanilla",
+    "bots": "1,10,25,50,100",
+    "behaviour": "explore",
+    "join_every": 1.0,
+    "warmup": 60,
+    "seconds": 180,
+    "seed": 12345,
+    "heap": "4g",
+    "out": "explore.json",
+    "properties": {
+      "level-seed": "12345",
+      "view-distance": "10",
+      "simulation-distance": "10",
+      "online-mode": "false",
+      "white-list": "false",
+      "gamemode": "creative",
+      "force-gamemode": "true",
+      "spawn-protection": "0",
+      "max-players": "200",
+      "difficulty": "easy",
+      "sync-chunk-writes": "true"
+    }
+  },
+  "runs": [
+    {
+      "server": "horizon",
+      "bots": 1,
+      "start_seconds": 14.21,
+      "mspt": {
+        "average": 11.56,
+        "p50": 3.73,
+        "p95": 50.42,
+        "p99": 122.65
+      },
+      "mspt_worst_p99": 317.7,
+      "tps": 20.0,
+      "rss_mb": {
+        "mean": 1686.0,
+        "max": 1730.8
+      },
+      "cpu_percent": 119.52,
+      "chunks_per_second": 44.48,
+      "bots_joined": 1,
+      "bots_failed": [],
+      "tick_queries": 32
+    },
+    {
+      "server": "vanilla",
+      "bots": 1,
+      "start_seconds": 36.45,
+      "mspt": {
+        "average": 15.93,
+        "p50": 9.44,
+        "p95": 51.1,
+        "p99": 110.42
+      },
+      "mspt_worst_p99": 318.2,
+      "tps": 20.0,
+      "rss_mb": {
+        "mean": 3515.74,
+        "max": 3579.8
+      },
+      "cpu_percent": 92.34,
+      "chunks_per_second": 32.26,
+      "bots_joined": 1,
+      "bots_failed": [],
+      "tick_queries": 31
+    },
+    {
+      "server": "horizon",
+      "bots": 10,
+      "start_seconds": 26.41,
+      "mspt": {
+        "average": 8.23,
+        "p50": 5.34,
+        "p95": 25.13,
+        "p99": 47.67
+      },
+      "mspt_worst_p99": 127.9,
+      "tps": 20.0,
+      "rss_mb": {
+        "mean": 2029.74,
+        "max": 2151.8
+      },
+      "cpu_percent": 274.97,
+      "chunks_per_second": 10.82,
+      "bots_joined": 10,
+      "bots_failed": [],
+      "tick_queries": 33
+    },
+    {
+      "server": "vanilla",
+      "bots": 10,
+      "start_seconds": 20.36,
+      "mspt": {
+        "average": 30.76,
+        "p50": 10.81,
+        "p95": 121.47,
+        "p99": 281.86
+      },
+      "mspt_worst_p99": 753.1,
+      "tps": 20.0,
+      "rss_mb": {
+        "mean": 4616.8,
+        "max": 4873.9
+      },
+      "cpu_percent": 168.65,
+      "chunks_per_second": 41.36,
+      "bots_joined": 10,
+      "bots_failed": [],
+      "tick_queries": 32
+    },
+    {
+      "server": "horizon",
+      "bots": 25,
+      "start_seconds": 17.82,
+      "mspt": {
+        "average": 14.61,
+        "p50": 10.07,
+        "p95": 43.57,
+        "p99": 80.55
+      },
+      "mspt_worst_p99": 127.2,
+      "tps": 20.0,
+      "rss_mb": {
+        "mean": 1936.5,
+        "max": 1996.0
+      },
+      "cpu_percent": 230.76,
+      "chunks_per_second": 0.0,
+      "bots_joined": 25,
+      "bots_failed": [],
+      "tick_queries": 32
+    },
+    {
+      "server": "vanilla",
+      "bots": 25,
+      "start_seconds": 30.92,
+      "error": "[Errno 32] Broken pipe"
+    },
+    {
+      "server": "horizon",
+      "bots": 50,
+      "start_seconds": 23.74,
+      "mspt": {
+        "average": 72.2,
+        "p50": 57.53,
+        "p95": 207.54,
+        "p99": 284.82
+      },
+      "mspt_worst_p99": 399.2,
+      "tps": 13.85,
+      "rss_mb": {
+        "mean": 2694.26,
+        "max": 2781.4
+      },
+      "cpu_percent": 162.62,
+      "chunks_per_second": 0.0,
+      "bots_joined": 50,
+      "bots_failed": [],
+      "tick_queries": 32
+    },
+    {
+      "server": "vanilla",
+      "bots": 50,
+      "start_seconds": 35.21,
+      "error": "[Errno 32] Broken pipe"
+    },
+    {
+      "server": "horizon",
+      "bots": 100,
+      "start_seconds": 25.69,
+      "mspt": {
+        "average": 239.02,
+        "p50": 245.93,
+        "p95": 442.44,
+        "p99": 581.13
+      },
+      "mspt_worst_p99": 776.5,
+      "tps": 4.18,
+      "rss_mb": {
+        "mean": 1835.34,
+        "max": 1838.4
+      },
+      "cpu_percent": 106.19,
+      "chunks_per_second": 0.0,
+      "bots_joined": 100,
+      "bots_failed": [],
+      "tick_queries": 32
+    },
+    {
+      "server": "vanilla",
+      "bots": 100,
+      "start_seconds": 36.46,
+      "error": "[Errno 32] Broken pipe"
+    }
+  ],
+  "worktree_commit": "171fbeb8ac4877109fc95e93c5db1b0f2360652b"
+}
