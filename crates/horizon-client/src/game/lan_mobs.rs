@@ -92,7 +92,7 @@ impl Game<'_> {
             .hub
             .guests
             .iter()
-            .filter(|g| g.placed && g.loaded && !g.dead)
+            .filter(|g| host.hub.here(g) && g.loaded && !g.dead)
             .map(|g| {
                 let moved = [0, 1, 2].map(|k| g.position[k] - g.previous_position[k]);
                 (g.conn, g.uuid, moved)
