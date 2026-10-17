@@ -72,6 +72,9 @@ impl Toast {
 #[derive(Default)]
 pub(super) struct AdvState {
     pub(super) tree: Arc<Tree>,
+    /// `ClientAdvancements`: a server's tree carries each advancement's
+    /// place on its tab (`DisplayInfo` x, y), in tree order.
+    pub(super) positions: Option<Vec<(f32, f32)>>,
     pub(super) progress: Progress,
     pub(super) loaded: bool,
     pub(super) toasts: VecDeque<Toast>,
@@ -839,6 +842,110 @@ impl Game<'_> {
                     any |= self.adv.progress.revoke(&a.id, &c.name);
                 }
                 any
+            }
+        }
+    }
+}
+impl Game<'_> {
+    /// `ClientAdvancements.update` (ClientboundUpdateAdvancementsPacket):
+    /// the server's advancements replace or join the tree, each changed one
+    /// takes the progress sent, and one just done shows its toast. `icons`
+    /// are the added advancements' icon items by name.
+    pub(super) fn remote_advancements(
+        &mut self,
+        p: horizon_protocol::packets::play::UpdateAdvancements,
+        icons: Vec<String>,
+    ) {
+        use horizon_client::scoreboard::tag_to_json;
+        let mut list: Vec<adv::Advancement> = Vec::new();
+        let mut positions: Vec<(f32, f32)> = Vec::new();
+        if !p.reset {
+            let old = self.adv.positions.take().unwrap_or_default();
+            for (i, a) in self.adv.tree.list.iter().enumerate() {
+                if !p.removed.contains(&a.id) {
+                    list.push(a.clone());
+                    positions.push(old.get(i).copied().unwrap_or((0.0, 0.0)));
+                }
+            }
+        } else {
+            self.adv.progress = Progress::default();
+        }
+        for id in &p.removed {
+            self.adv.progress.criteria.remove(id);
+        }
+        for (a, icon) in p.added.into_iter().zip(icons) {
+            list.retain(|o| o.id != a.id);
+            let display = a.display.map(|d| adv::Display {
+                icon,
+                title: tag_to_json(&d.title),
+                description: tag_to_json(&d.description),
+                frame: match d.frame {
+                    1 => Frame::Challenge,
+                    2 => Frame::Goal,
+                    _ => Frame::Task,
+                },
+                background: d.background,
+                show_toast: d.show_toast,
+                announce: false,
+                hidden: d.hidden,
+            });
+            let mut criteria: Vec<adv::Criterion> = Vec::new();
+            for name in a.requirements.iter().flatten() {
+                if !criteria.iter().any(|c| &c.name == name) {
+                    criteria.push(adv::Criterion {
+                        name: name.clone(),
+                        trigger: String::new(),
+                        conditions: Value::Null,
+                    });
+                }
+            }
+            list.push(adv::Advancement {
+                id: a.id,
+                parent: a.parent,
+                display,
+                criteria,
+                requirements: a.requirements,
+                rewards: Default::default(),
+            });
+            positions.push((a.x, a.y));
+        }
+        let mut tree = Tree {
+            list,
+            ..Tree::default()
+        };
+        for (i, a) in tree.list.iter().enumerate() {
+            tree.by_id.insert(a.id.clone(), i);
+        }
+        self.ui.registries.advancements = tree.list.iter().map(|a| a.id.clone()).collect();
+        self.adv.tree = Arc::new(tree);
+        self.adv.positions = Some(positions);
+        let tree = self.adv.tree.clone();
+        for (id, criteria) in p.progress {
+            let Some(&i) = tree.by_id.get(&id) else {
+                continue;
+            };
+            // The client only shows whether a criterion is obtained, not when.
+            let obtained: BTreeMap<String, String> = criteria
+                .into_iter()
+                .filter(|(_, at)| at.is_some())
+                .map(|(name, _)| (name, String::new()))
+                .collect();
+            self.adv.progress.criteria.insert(id, obtained);
+            let a = &tree.list[i];
+            if !p.reset
+                && p.show
+                && self.adv.progress.done(a)
+                && let Some(d) = a.display.as_ref().filter(|d| d.show_toast)
+            {
+                self.adv.toasts.push_back(Toast {
+                    icon: d.icon.clone(),
+                    frame: d.frame,
+                    title: text_of(&d.title),
+                    slide: Slide::default(),
+                    recipes: Vec::new(),
+                    changed: false,
+                    last_changed: 0,
+                });
             }
         }
     }

@@ -313,6 +313,9 @@ impl Game<'_> {
         });
         // The level's TickRateManager follows the server's ticking packets.
         self.clock = horizon_client::clock::FixedStep::client();
+        // The player's advancements and statistics are the server's.
+        self.adv = Default::default();
+        self.stats = Default::default();
         Ok(())
     }
 
@@ -336,6 +339,8 @@ impl Game<'_> {
         };
         horizon_client::crash::clear_detail("Server");
         self.clock = Default::default();
+        self.adv = Default::default();
+        self.stats = Default::default();
         self.debug_charts.reset();
         self.tab_list.reset();
         self.score.board = Default::default();
@@ -1718,6 +1723,46 @@ impl Game<'_> {
                 self.clock.set_frozen(p.frozen);
             }
             C::TickingStep(p) => self.clock.set_frozen_ticks_to_run(p.steps),
+            C::UpdateAdvancements(p) => {
+                let icons = p
+                    .added
+                    .iter()
+                    .map(|a| {
+                        a.display
+                            .as_ref()
+                            .map_or_else(String::new, |d| self.item_name(d.icon.item).to_string())
+                    })
+                    .collect();
+                self.remote_advancements(p, icons);
+            }
+            // handleAwardStats: StatsCounter.setValue for each.
+            C::AwardStats(p) => {
+                let Some(r) = self.remote.as_ref() else {
+                    return Ok(());
+                };
+                let mut known = Vec::new();
+                for (ty, value, count) in p.stats {
+                    let Some(ty) = r
+                        .builtin
+                        .get("minecraft:stat_type")
+                        .and_then(|t| t.name(ty))
+                    else {
+                        continue;
+                    };
+                    let values = match ty {
+                        "minecraft:mined" => "minecraft:block",
+                        "minecraft:killed" | "minecraft:killed_by" => "minecraft:entity_type",
+                        "minecraft:custom" => "minecraft:custom_stat",
+                        _ => "minecraft:item",
+                    };
+                    if let Some(key) = r.builtin.get(values).and_then(|v| v.name(value)) {
+                        known.push((ty.to_owned(), key.to_owned(), count));
+                    }
+                }
+                for (ty, key, count) in known {
+                    self.stats.values.entry(ty).or_default().insert(key, count);
+                }
+            }
             C::SetActionBarText(p) | C::SetTitleText(p) => {
                 let lang = self
                     .remote
