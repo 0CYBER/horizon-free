@@ -1362,6 +1362,12 @@ impl Hub {
         all.extend(ctx.entities.iter().cloned());
         let by_id: std::collections::HashMap<i32, usize> =
             all.iter().enumerate().map(|(i, e)| (e.id, i)).collect();
+        // Each entity type's tracking range, looked up once rather than for
+        // every player.
+        let ranges: Vec<i32> = all
+            .iter()
+            .map(|e| super::entity::tracking_chunks(&e.kind))
+            .collect();
         for gi in 0..self.guests.len() {
             if !self.guests[gi].placed {
                 continue;
@@ -1371,8 +1377,9 @@ impl Hub {
             let origin = self.guests[gi].position;
             // TrackedEntity.updatePlayer: within the type's range (capped by the
             // view distance) horizontally, in a chunk the client has.
-            let visible = |g: &Guest, e: &EntityState| {
-                let range = super::entity::visible_range(&e.kind, view);
+            let visible = |g: &Guest, ei: usize| {
+                let e = &all[ei];
+                let range = f64::from(ranges[ei].min(view) * 16);
                 let (dx, dz) = (origin[0] - e.position[0], origin[2] - e.position[2]);
                 let chunk = (
                     (e.position[0].floor() as i32) >> 4,
@@ -1384,7 +1391,7 @@ impl Hub {
             let mut removed = Vec::new();
             for id in self.guests[gi].tracker.ids() {
                 match by_id.get(&id) {
-                    Some(&ei) if visible(&self.guests[gi], &all[ei]) => {}
+                    Some(&ei) if visible(&self.guests[gi], ei) => {}
                     _ => removed.push(id),
                 }
             }
@@ -1394,14 +1401,14 @@ impl Hub {
                 }
                 self.guests[gi].send(&C::RemoveEntities(play::RemoveEntities { ids: removed }));
             }
-            for e in &all {
+            for (ei, e) in all.iter().enumerate() {
                 if e.id == me {
                     continue;
                 }
                 if self.guests[gi].tracker.is_tracking(e.id) {
                     let packets = self.guests[gi].tracker.update(e);
                     self.guests[gi].send_all(&packets);
-                } else if visible(&self.guests[gi], e) {
+                } else if visible(&self.guests[gi], ei) {
                     let Some(kind) = self.entity_type(&e.kind) else {
                         continue;
                     };

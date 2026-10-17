@@ -66,11 +66,11 @@ fn encode(v: f64) -> i64 {
     (v * 4096.0).round() as i64
 }
 
-/// The horizontal range within which a client sees an entity of `kind`
-/// (TrackedEntity.updatePlayer: the type's range, capped by the view distance).
-pub fn visible_range(kind: &str, view_distance: i32) -> f64 {
-    let chunks = i32::from(tracking::settings(kind).0);
-    f64::from(chunks.min(view_distance) * 16)
+/// The type's tracking range in chunks: a client sees an entity of `kind`
+/// within it, capped by the view distance, horizontally
+/// (TrackedEntity.updatePlayer).
+pub fn tracking_chunks(kind: &str) -> i32 {
+    i32::from(tracking::settings(kind).0)
 }
 
 impl Tracker {
