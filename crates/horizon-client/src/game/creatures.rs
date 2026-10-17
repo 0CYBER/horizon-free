@@ -1358,25 +1358,52 @@ impl Game<'_> {
     /// mining fatigue III for five minutes unless a stronger or longer one
     /// is on, with the curse sound and the elder's apparition.
     fn elder_curse(&mut self, at: [f64; 3]) {
+        let mut cursed = Vec::new();
+        self.for_each_player(|g| {
+            if g.elder_curse_player(at) {
+                cursed.push(g.lan_acting);
+            }
+        });
+        // A guest's client shows the apparition and plays the curse itself
+        // (ClientboundGameEventPacket.GUARDIAN_ELDER_EFFECT).
+        if let Some(host) = self.lan.as_ref() {
+            for conn in cursed.into_iter().flatten() {
+                host.hub.send_to(
+                    conn,
+                    &horizon_protocol::packets::play::Clientbound::GameEvent(
+                        horizon_protocol::packets::play::GameEvent {
+                            event: horizon_client::lan::hub::game_event::GUARDIAN_ELDER_EFFECT,
+                            param: 1.0,
+                        },
+                    ),
+                );
+            }
+        }
+    }
+    /// The curse on the player in place; whether it took.
+    fn elder_curse_player(&mut self, at: [f64; 3]) -> bool {
         if self.creative || self.spectator() {
-            return;
+            return false;
         }
         let Some(p) = self.player.as_ref() else {
-            return;
+            return false;
         };
         let d = p.position.subtract(Vec3::new(at[0], at[1], at[2]));
         if d.x * d.x + d.y * d.y + d.z * d.z >= 2500.0 || p.health.dead_or_dying() {
-            return;
+            return false;
         }
         let active = self.potions.effects.get("minecraft:mining_fatigue");
         if active.is_some_and(|e| e.amplifier >= 2 && e.duration >= 1200) {
-            return;
+            return false;
         }
         let at = [p.position.x, p.position.y, p.position.z];
         self.give_player_effect("minecraft:mining_fatigue", 6000, 2);
-        self.audio
-            .play("minecraft:entity.elder_guardian.curse", Some(at), 1.0, 1.0);
-        self.creatures.elder_apparition = super::mob_blocks::APPARITION_TICKS;
+        if self.lan_acting.is_none() {
+            self.audio
+                .play("minecraft:entity.elder_guardian.curse", Some(at), 1.0, 1.0);
+            self.creatures.elder_apparition = super::mob_blocks::APPARITION_TICKS;
+        }
+        true
     }
     /// Damage of a given type to the player from a point.
     pub(super) fn mob_hits_player_kind(&mut self, amount: f32, from: [f64; 3], kind: &str) {

@@ -1439,6 +1439,21 @@ impl Game<'_> {
                 }
             }
             C::GameEvent(p) => match p.event {
+                // GUARDIAN_ELDER_EFFECT: the apparition, and the curse sound
+                // unless the elder guardian is silent.
+                10 => {
+                    self.creatures.elder_apparition = super::mob_blocks::APPARITION_TICKS;
+                    if p.param == 1.0
+                        && let Some(at) = self.player.as_ref().map(|m| m.position)
+                    {
+                        self.audio.play(
+                            "minecraft:entity.elder_guardian.curse",
+                            Some([at.x, at.y, at.z]),
+                            1.0,
+                            1.0,
+                        );
+                    }
+                }
                 1 => {
                     self.world.weather.raining = true;
                     self.world.weather.rain_level = (0.0, 0.0);

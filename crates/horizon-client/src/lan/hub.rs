@@ -32,6 +32,7 @@ pub mod game_event {
     pub const CHANGE_GAME_MODE: u8 = 3;
     pub const RAIN_LEVEL: u8 = 7;
     pub const THUNDER_LEVEL: u8 = 8;
+    pub const GUARDIAN_ELDER_EFFECT: u8 = 10;
     pub const LEVEL_CHUNKS_LOAD_START: u8 = 13;
 }
 

@@ -1180,6 +1180,9 @@ impl Game<'_> {
 
     /// `Warden.applyDarknessAround` / `MobEffectUtil.addEffectToPlayersAround`.
     pub(super) fn apply_darkness(&mut self, at: [f64; 3], radius: f64) {
+        self.for_each_player(|g| g.darkness_on_player(at, radius));
+    }
+    fn darkness_on_player(&mut self, at: [f64; 3], radius: f64) {
         if self.creative || self.spectator() {
             return;
         }
