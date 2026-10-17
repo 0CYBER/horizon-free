@@ -7,7 +7,7 @@ use super::Game;
 mod crafter;
 use horizon_client::{
     Result,
-    containers::BlockEntity,
+    containers::{BlockEntity, HOPPER_SLOTS},
     items::{ItemStack, Items},
     world::World,
 };
@@ -506,14 +506,16 @@ impl Game<'_> {
             .default_state("minecraft:hopper")
             .map(|s| self.res.facts.get(s).name.clone());
         let Some(hopper) = hopper else { return Ok(()) };
-        // A hopper's block entity is a plain container (`Chest`): only those
-        // need their block looked up (the ticker runs for a HopperBlockEntity
-        // whose block is still a hopper, `BlockEntityType.isValid`).
+        // A hopper's block entity is the plain container with five slots
+        // (`BlockEntity::for_block`; `BlockEntity::id` names it the hopper):
+        // only those need their block looked up (the ticker runs for a
+        // HopperBlockEntity whose block is still a hopper,
+        // `BlockEntityType.isValid`).
         let mut positions: Vec<Pos> = self
             .world
             .block_entities
             .iter()
-            .filter(|(_, e)| matches!(e, BlockEntity::Chest(_)))
+            .filter(|(_, e)| matches!(e, BlockEntity::Chest(items) if items.len() == HOPPER_SLOTS))
             .map(|(p, _)| *p)
             .filter(|p| self.res.facts.get(self.world.block(p.0, p.1, p.2)).name == hopper)
             .collect();
