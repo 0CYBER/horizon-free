@@ -61,7 +61,7 @@ impl Game<'_> {
             .and_then(|s| VaultState::from_name(s))
             .unwrap_or_default();
         let ominous = block.properties.get("ominous").is_some_and(|v| v == "true");
-        let Some(BlockEntity::Vault(vault)) = self.world.block_entities.remove(&key) else {
+        let Some(BlockEntity::Vault(vault)) = self.world.block_entities.take(&key) else {
             return None;
         };
         Some((vault, current, ominous))
@@ -118,28 +118,19 @@ impl Game<'_> {
         self.rand_sequences = sequences;
         self.world
             .block_entities
-            .insert(key, BlockEntity::Vault(vault));
+            .put(key, BlockEntity::Vault(vault));
         Some(self.vault_events(key, events).map(|()| out))
     }
-    /// Every vault's server tick, then its client tick.
-    pub(super) fn tick_vaults(&mut self) -> Result<()> {
-        let keys: Vec<Pos> = self
-            .world
-            .block_entities
-            .iter()
-            .filter(|(_, e)| matches!(e, BlockEntity::Vault(_)))
-            .map(|(k, _)| *k)
-            .collect();
-        for key in keys {
-            let pos = [key.0, key.1, key.2];
-            let ticked = self.with_vault(key, |v, l, random, state, ominous, roll, events| {
-                v.server_tick(l, random, pos, state, ominous, roll, events);
-            });
-            if let Some(result) = ticked {
-                result?;
-            }
-            self.client_tick_vault(key);
+    /// The server tick of the vault at `key`, then its client tick.
+    pub(super) fn tick_vault(&mut self, key: Pos) -> Result<()> {
+        let pos = [key.0, key.1, key.2];
+        let ticked = self.with_vault(key, |v, l, random, state, ominous, roll, events| {
+            v.server_tick(l, random, pos, state, ominous, roll, events);
+        });
+        if let Some(result) = ticked {
+            result?;
         }
+        self.client_tick_vault(key);
         Ok(())
     }
     /// `VaultBlock.useItemOn` with `held` in the hand that acts: true when the

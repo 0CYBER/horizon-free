@@ -10,6 +10,7 @@ mod banners;
 mod beacon;
 mod beehives;
 mod block_entity_anims;
+mod block_entity_ticks;
 mod block_items;
 mod blockctl;
 mod boats;
@@ -2196,13 +2197,13 @@ impl Game<'_> {
             self.audio
                 .play("minecraft:block.ender_chest.open", Some(at), 0.5, pitch);
         } else if &*name == "minecraft:beacon" && self.open_station(pos, &name) {
-            self.world.block_entities.entry(key).or_insert_with(|| {
+            self.world.block_entities.get_or_insert_with(key, || {
                 BlockEntity::for_block(&name).unwrap_or(BlockEntity::Chest(Vec::new()))
             });
         } else if storage::is_shulker_box(&name) && !self.shulker_can_open(pos) {
             // ShulkerBoxBlock.canOpen: the lid has no room; nothing opens.
         } else if let Some(entity) = BlockEntity::for_block(&name) {
-            self.world.block_entities.entry(key).or_insert(entity);
+            self.world.block_entities.get_or_insert_with(key, || entity);
             let centre = [
                 f64::from(key.0) + 0.5,
                 f64::from(key.1) + 0.5,
@@ -6086,38 +6087,6 @@ impl Game<'_> {
             explosion::BlockInteraction::DestroyWithDecay,
             false,
         )
-    }
-    fn tick_block_entities(&mut self) -> Result<()> {
-        self.tick_hoppers()?;
-        self.tick_crafters();
-        self.tick_mount_menu();
-        self.tick_jukeboxes();
-        self.tick_beacons();
-        self.tick_creaking_hearts()?;
-        self.tick_spawners()?;
-        self.tick_trial_spawners()?;
-        self.tick_vaults()?;
-        self.tick_beehives();
-        let mut lit_changes = Vec::new();
-        for (pos, entity) in self.world.block_entities.iter_mut() {
-            if let BlockEntity::Furnace(f) = entity
-                && let Some(lit) = f.tick(&self.res.recipes, &self.res.items, &self.res.providers)
-            {
-                lit_changes.push((*pos, lit));
-            }
-        }
-        for ((x, y, z), lit) in lit_changes {
-            let state = self.world.block(x, y, z);
-            if let Some(mut s) = self.pack.assets.registry.state(state).cloned()
-                && s.properties.contains_key("lit")
-            {
-                s.properties.insert("lit".into(), lit.to_string());
-                if let Ok(id) = self.pack.assets.registry.resolve(&s) {
-                    self.world.set(x, y, z, id)?;
-                }
-            }
-        }
-        Ok(())
     }
     /// Copies of a save batch carrying its live block entities and save data.
     fn with_entities<'a>(
