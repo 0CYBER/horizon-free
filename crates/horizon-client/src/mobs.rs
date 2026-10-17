@@ -686,6 +686,8 @@ pub struct Extra {
     pub legs: Option<Arc<str>>,
     pub feet: Option<Arc<str>>,
     pub using_item: i32,
+    pub using_off_hand: bool,
+    pub blocking: bool,
     pub fall_flying: bool,
     pub fall_fly_ticks: i32,
     pub main_hand_left: bool,
