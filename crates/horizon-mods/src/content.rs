@@ -192,6 +192,13 @@ impl Content {
         Ok(content)
     }
 
+    /// Where the files are read from: the mod's folder or its `.hmod`.
+    pub fn source(&self) -> &Path {
+        match &self.source {
+            Source::Dir(path) | Source::Zip(path) => path,
+        }
+    }
+
     /// No files: a mod with code only.
     pub fn is_empty(&self) -> bool {
         self.files.is_empty()

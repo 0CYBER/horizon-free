@@ -31,8 +31,7 @@ use horizon_world::{
     movement_restitution::{self, RestitutionInput, RestitutionWorld},
     movement_statistics::{self, MovementStat, MovementStatisticsWorld},
     movement_support::{self, MovementLocation},
-    nbt::{self, Limits},
-    registry::BlockStateId,
+    registry::{BlockStateId, BlockTableFile},
     world_movement::{self, MovementRequest},
     worldgen::tags::TagDefinitions,
 };
@@ -57,17 +56,27 @@ pub struct MotionResources {
     pub fluids: FluidResources,
 }
 impl MotionResources {
+    /// [`Self::load_with_facts`] with the block facts decoded here.
     pub fn load(root: &Path, assets: &Assets) -> Result<Self> {
+        Self::load_with_facts(
+            root,
+            assets,
+            &crate::blocks::BlockFacts::load(root, assets.registry)?,
+        )
+    }
+    /// The motion tables, with the block facts the game already decoded
+    /// (decoding `gameplay-facts.json` again costs a second or more and, with
+    /// a big modpack, hundreds of megabytes while it runs).
+    pub fn load_with_facts(
+        root: &Path,
+        assets: &Assets,
+        facts: &crate::blocks::BlockFacts,
+    ) -> Result<Self> {
         let attributes = Arc::new(Catalog::from_json(&serde_json::from_slice(&fs::read(
             root.join("attributes.json"),
         )?)?)?);
-        let data = nbt::read_named(
-            &fs::read(root.join("movement-properties.nbt"))?,
-            Limits::tables(),
-        )?
-        .0
-        .tag;
-        let properties = MovementProperties::from_nbt(&data, assets.registry)?;
+        let file = BlockTableFile::open(&root.join("movement-properties.nbt"), assets.registry)?;
+        let properties = MovementProperties::from_table(file.table("movement")?)?;
         let bundle: BTreeMap<String, String> =
             serde_json::from_slice(&fs::read(root.join("block-tags.json"))?)?;
         let mut definitions = TagDefinitions::default();
@@ -91,7 +100,7 @@ impl MotionResources {
         Ok(Self {
             landing: crate::landing::load(root, &properties)?,
             health: crate::health::HealthResources::load(root)?,
-            fluids: FluidResources::load(root, assets)?,
+            fluids: FluidResources::new(assets, facts)?,
             attributes,
             blocks: properties.bind(&MovementTags {
                 fences: tag("minecraft:fences")?,

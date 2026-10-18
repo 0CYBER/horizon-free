@@ -157,6 +157,10 @@ pub(super) struct Rail {
     powered: bool,
 }
 impl Minecart {
+    /// `Entity.onGround`.
+    pub(super) fn on_ground(&self) -> bool {
+        self.on_ground
+    }
     pub fn new(id: u32, kind: CartKind, position: Vec3) -> Self {
         Self {
             id,

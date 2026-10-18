@@ -124,6 +124,8 @@ pub struct Hub {
     /// The `player_movement_check` and `elytra_movement_check` game rules,
     /// set by the game before each tick.
     pub movement_checks: (bool, bool),
+    /// Who rides what, set by the game before each tick.
+    pub riding: super::entity::Riding,
     last_clock: i64,
     last_rate: f32,
     ticking: (f32, bool),
@@ -237,6 +239,7 @@ impl Hub {
             sync,
             ticks: 0,
             movement_checks: (true, true),
+            riding: Default::default(),
             last_clock: i64::MIN,
             last_rate: 0.0,
             ticking: (20.0, false),
@@ -1375,6 +1378,7 @@ impl Hub {
             data: 0,
             meta,
             equipment,
+            precise: false,
         }
     }
 
@@ -1501,14 +1505,14 @@ impl Hub {
                     continue;
                 }
                 if self.guests[gi].tracker.is_tracking(e.id) {
-                    let packets = self.guests[gi].tracker.update(e);
+                    let packets = self.guests[gi].tracker.update(e, &self.riding);
                     self.guests[gi].send_all(&packets);
                 } else if visible(&self.guests[gi], ei) {
                     let Some(kind) = self.entity_type(&e.kind) else {
                         continue;
                     };
                     // Players need their list entry first; guests got it at join.
-                    let packets = self.guests[gi].tracker.spawn(e, kind);
+                    let packets = self.guests[gi].tracker.spawn(e, kind, &self.riding);
                     self.guests[gi].send_all(&packets);
                 }
             }
@@ -2197,7 +2201,15 @@ impl Hub {
     /// names (`set_dimension`): ClientboundRespawnPacket keeping all data,
     /// then vanilla's packet order. Nothing tracked in the old level is
     /// removed one by one: the client drops its whole level.
-    pub fn change_level(&mut self, i: usize, at: [f64; 3], yaw: f32, ctx: &TickCtx) {
+    pub fn change_level(
+        &mut self,
+        i: usize,
+        at: [f64; 3],
+        yaw: f32,
+        pitch: Option<f32>,
+        portal_sound: bool,
+        ctx: &TickCtx,
+    ) {
         let mode = self.guests[i].game_mode;
         let info = self.spawn_info(mode);
         self.close_container_for(i);
@@ -2208,6 +2220,9 @@ impl Hub {
         g.chunk_queue.clear();
         g.center = None;
         g.yaw = yaw;
+        if let Some(pitch) = pitch {
+            g.pitch = pitch;
+        }
         g.position = at;
         g.previous_position = at;
         g.send(&C::Respawn(play::Respawn {
@@ -2239,12 +2254,14 @@ impl Hub {
         // ServerPlayer.sendPostEffects.
         g.send(&raw(ids::POST_EFFECTS, vec![0]));
         // TeleportTransition.PLAY_PORTAL_SOUND.
-        g.send(&C::LevelEvent(play::LevelEvent {
-            kind: 1032,
-            pos: [0, 0, 0],
-            data: 0,
-            global: false,
-        }));
+        if portal_sound {
+            g.send(&C::LevelEvent(play::LevelEvent {
+                kind: 1032,
+                pos: [0, 0, 0],
+                data: 0,
+                global: false,
+            }));
+        }
         // lastSentExp, lastSentHealth and lastSentFood.
         g.sent_health = None;
         g.sent_xp = None;

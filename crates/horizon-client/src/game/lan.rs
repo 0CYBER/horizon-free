@@ -73,7 +73,7 @@ pub(super) struct Owner {
 }
 
 /// A stable UUID for an entity that has none.
-fn entity_uuid(id: u32) -> u128 {
+pub(super) fn entity_uuid(id: u32) -> u128 {
     0x4856_5a4e_0000_0000_0000_0000_0000_0000u128 | u128::from(id)
 }
 
@@ -144,11 +144,15 @@ fn mob_meta(m: &Mob, hub: &Hub) -> Vec<(u8, i32, Value)> {
             meta.push((3, serializer::BOOLEAN, Value::Bool(true)));
         }
     }
-    if m.health < m.kind.max_health {
-        meta.push((9, serializer::FLOAT, Value::Float(m.health.max(0.0))));
+    // LivingEntity.DATA_HEALTH_ID: defined as 1, then set to the max health.
+    let health = m.health.max(0.0);
+    if health != 1.0 {
+        meta.push((9, serializer::FLOAT, Value::Float(health)));
     }
-    if kind == "minecraft:rabbit" && m.no_ai {
-        meta.push((15, serializer::BYTE, Value::Byte(1)));
+    // Mob.DATA_MOB_FLAGS_ID: no AI 1, left-handed 2.
+    let flags = i8::from(m.no_ai) | i8::from(m.extra.left_handed) << 1;
+    if flags != 0 {
+        meta.push((15, serializer::BYTE, Value::Byte(flags)));
     }
     if m.is_baby()
         && let Some(index) = baby_index(kind)
@@ -719,8 +723,8 @@ impl Game<'_> {
         })
     }
 
-    /// Mobs and items as the entities guests track.
-    fn lan_entities(&self, hub: &mut Hub) -> Vec<EntityState> {
+    /// The entities guests track: mobs, items and the rest (game/lan_entities.rs).
+    fn lan_entities(&self, host_entity: Option<i32>, hub: &mut Hub) -> Vec<EntityState> {
         let mut out = Vec::with_capacity(self.mobs.len() + self.dropped.len() + self.orbs.len());
         for m in self.mobs.iter().filter(|m| !m.removed) {
             let kind = m.kind.id.as_str();
@@ -740,6 +744,7 @@ impl Game<'_> {
                 data: 0,
                 meta,
                 equipment,
+                precise: false,
             });
         }
         for d in &self.dropped {
@@ -757,6 +762,7 @@ impl Game<'_> {
                 data: 0,
                 meta: vec![(8, serializer::ITEM_STACK, Value::Item(stack))],
                 equipment: Vec::new(),
+                precise: false,
             });
         }
         for o in &self.orbs {
@@ -774,8 +780,10 @@ impl Game<'_> {
                 // ExperienceOrb.DATA_VALUE.
                 meta: vec![(8, serializer::INT, Value::Int(o.value as i32))],
                 equipment: Vec::new(),
+                precise: false,
             });
         }
+        self.lan_object_states(host_entity, hub, &mut out);
         out
     }
 
@@ -786,12 +794,19 @@ impl Game<'_> {
         };
         // What the tick sends a guest goes to its connection at the end.
         let holding = lan::Holding::start();
+        // The host's own commands' broadcastToAdmins lines.
+        if !self.admin_feedback.is_empty() {
+            self.send_admin_feedback(&mut host, None);
+        }
         let state = self.lan_host_state(&host);
         // A dedicated server runs the hub without a host player.
         if state.is_some() || host.hub.config.dedicated {
             let has_guests = !host.hub.guests.is_empty();
             let entities = if has_guests {
-                self.lan_entities(&mut host.hub)
+                let host_entity = state.as_ref().map(|s| s.entity_id);
+                self.lan_assign_ids();
+                self.lan_riding(host_entity, &mut host.hub.riding);
+                self.lan_entities(host_entity, &mut host.hub)
             } else {
                 Vec::new()
             };
@@ -974,7 +989,8 @@ impl Game<'_> {
                 log::error!("could not open {}: {e}", level.id());
                 return;
             }
-            theirs = self.lan_entities(&mut host.hub);
+            // A dedicated server has no host player.
+            theirs = self.lan_entities(None, &mut host.hub);
             &theirs[..]
         } else {
             entities

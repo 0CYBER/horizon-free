@@ -65,6 +65,7 @@ mod jukebox;
 mod lan;
 mod lan_actions;
 mod lan_crafting;
+mod lan_entities;
 mod lan_mobs;
 mod lan_pvp;
 mod lan_screen;
@@ -108,6 +109,8 @@ mod powder_snow;
 mod raids;
 mod recipe_book;
 mod remote;
+mod remote_objects;
+mod remote_projectiles;
 mod render_control;
 mod render_tick;
 mod respawn_anchor;
@@ -648,6 +651,8 @@ impl LevelAccess for GameLevel<'_> {
 /// FallingBlockEntity carrying a block state.
 #[derive(Clone, Debug)]
 struct FallingBlock {
+    /// The entity id a server tracks it by (0 until it is tracked).
+    id: u32,
     state: BlockStateId,
     /// `DATA_START_POS`: spawn position used to select weighted block models.
     start_pos: BlockPos,
@@ -985,6 +990,8 @@ struct Game<'a> {
     /// A server's players on their way to another level, each waiting for
     /// the destination to load around them.
     server_trips: Vec<server_travel::Trip>,
+    /// Players a command sends to another level, once it has run.
+    level_teleports: Vec<server_travel::LevelTeleport>,
     /// A server's levels other than the one in place (game/levels.rs).
     levels: levels::Levels,
     /// Which pass of a server tick runs (`tick_server`): the first one reads
@@ -1158,6 +1165,10 @@ struct Game<'a> {
     /// returns: the line, whether operators get it and whether the console
     /// logs it.
     admin_feedback: Vec<(horizon_client::text::Text, bool, bool)>,
+    /// The server console is running a command: whether its feedback goes to
+    /// the operators (`DedicatedServer.shouldInformAdmins`,
+    /// `broadcast-console-to-ops`).
+    console_broadcast: Option<bool>,
     /// State of `/spectate`, `/posteffect`, `/debug`, `/waypoint` and friends.
     cmds: commands::extra::CommandExtras,
     ui: chat::UiState,
@@ -2055,6 +2066,7 @@ impl Game<'_> {
                         f64::from(pos.z) + 0.5,
                     );
                     self.falling.push(FallingBlock {
+                        id: 0,
                         state,
                         start_pos: pos,
                         position: p,
@@ -6545,7 +6557,10 @@ impl Game<'_> {
                 res.threads,
             )
         } else {
-            let inner = Arc::new(VanillaTerrain::for_dimension(&self.options.resources.join("worldgen"), pack.assets.registry, &res.biomes, seed, dim.id()).map_err(|e| {
+            // WorldOptions.generateStructures, from the world's settings.
+            let structures =
+                horizon_client::save::WorldGen::read(world_root).is_none_or(|w| w.structures);
+            let inner = Arc::new(VanillaTerrain::for_world(&self.options.resources.join("worldgen"), pack.assets.registry, &res.biomes, seed, dim.id(), structures).map_err(|e| {
                 format!("{e}\nPrepare the worldgen bundle with the launcher, or: horizon-prepare --prepare")
             })?);
             self.end.set_locator(Some(inner.clone()));
@@ -10283,6 +10298,7 @@ impl<'a> Game<'a> {
             world_root: PathBuf::new(),
             travelling: None,
             server_trips: Vec::new(),
+            level_teleports: Vec::new(),
             levels: Default::default(),
             level_pass: Default::default(),
             portals: Default::default(),
@@ -10392,6 +10408,7 @@ impl<'a> Game<'a> {
             lan_acting_uuid: None,
             chat_capture: None,
             admin_feedback: Vec::new(),
+            console_broadcast: None,
             cmds: Default::default(),
             ui: Default::default(),
             combat: Default::default(),
@@ -10538,7 +10555,7 @@ fn load_resources(
     on_stage(5);
     let registry_owner = assets.clone();
     let collision = collisions::load(&root, registry_owner.registry)?;
-    let motion = MotionResources::load(&root, &registry_owner)?;
+    let motion = MotionResources::load_with_facts(&root, &registry_owner, &facts)?;
     log::info!(
         "load collision+motion: {:.2}s",
         started.elapsed().as_secs_f32()

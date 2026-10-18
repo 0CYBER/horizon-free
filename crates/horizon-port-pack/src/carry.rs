@@ -25,6 +25,9 @@ pub struct Report {
     pub unreadable: BTreeMap<String, String>,
     pub recipes_upgraded: usize,
     pub loot_tables_upgraded: usize,
+    /// Blocks whose jar has no loot table but drop themselves in the oracle:
+    /// the mod registers that table in code, and carry-over writes it.
+    pub loot_tables_added: usize,
     /// Worldgen and structure files (`data/<id>/worldgen/`, `structure/`).
     pub worldgen: usize,
     /// Recipes left as they were: custom types, NeoForge conditions.
@@ -44,6 +47,11 @@ pub struct Report {
     pub items_unknown: BTreeMap<String, String>,
     /// Convention (`c:`) tags the recipes use, filled in from the oracle.
     pub convention_tags: usize,
+    /// Structure, placement and pool element types rewritten as vanilla's,
+    /// and those left as they are.
+    pub worldgen_types: crate::worldgen::Upgrade,
+    /// The loader's convention biome tags the structures name, carried.
+    pub convention_biome_tags: usize,
 }
 
 /// Vanilla blocks by their sorted property names.
@@ -330,6 +338,7 @@ pub fn carry(
     out: &Path,
     facts: Option<&Facts>,
     allowed: &dyn Fn(&str) -> bool,
+    conventions: &BTreeMap<String, Value>,
 ) -> Result<Report, String> {
     let id = &info.mod_id;
     if id.is_empty()
@@ -351,6 +360,8 @@ pub fn carry(
     let mut blockstates: BTreeMap<String, Value> = BTreeMap::new();
     let mut item_models = BTreeSet::new();
     let mut convention = BTreeSet::new();
+    let mut block_loot = BTreeSet::new();
+    let mut biome_conventions = BTreeSet::new();
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
         let name = entry.name().to_owned();
@@ -400,7 +411,31 @@ pub fn carry(
                         report.recipes_kept.push(file.to_owned());
                     }
                 }
+            } else if let Some(kind) = rel
+                .strip_prefix("worldgen/")
+                .and_then(|r| r.split_once('/'))
+                .map(|(kind, _)| kind)
+                .filter(|_| name.starts_with("data/") && name.ends_with(".json"))
+            {
+                if let Ok(mut v) = serde_json::from_slice::<Value>(&bytes) {
+                    if kind == "structure" {
+                        crate::worldgen::convention_tags(&v["biomes"], &mut biome_conventions);
+                    }
+                    if crate::worldgen::upgrade(kind, &mut v, &mut report.worldgen_types) {
+                        bytes = serde_json::to_vec_pretty(&v).unwrap_or(bytes);
+                    }
+                }
+            } else if rel.starts_with("tags/worldgen/biome/") && name.starts_with("data/") {
+                if let Ok(v) = serde_json::from_slice::<Value>(&bytes) {
+                    crate::worldgen::convention_tags(&v, &mut biome_conventions);
+                }
             } else if rel.starts_with("loot_table/") && name.starts_with("data/") {
+                if let Some(b) = rel
+                    .strip_prefix("loot_table/blocks/")
+                    .and_then(|b| b.strip_suffix(".json"))
+                {
+                    block_loot.insert(b.to_owned());
+                }
                 if let Ok(mut table) = serde_json::from_slice::<Value>(&bytes) {
                     let before = table.clone();
                     upgrade_loot(&mut table);
@@ -433,6 +468,18 @@ pub fn carry(
                 json!({"model": {"type": "minecraft:model", "model": format!("{id}:item/{m}")}});
             write(&def, &serde_json::to_vec_pretty(&model).unwrap_or_default())?;
             report.item_definitions_added += 1;
+        }
+    }
+    // The loader's convention biome tags the structures and their tags name
+    // (NeoForge's `c:is_plains`...): the game has no loader, so they come along.
+    for tag in crate::worldgen::with_included(&biome_conventions, conventions) {
+        let file = inside.join(format!("data/c/tags/worldgen/biome/{tag}.json"));
+        if !file.exists() {
+            write(
+                &file,
+                &serde_json::to_vec_pretty(&conventions[&tag]).unwrap_or_default(),
+            )?;
+            report.convention_biome_tags += 1;
         }
     }
     let decl = inside.join(format!("data/{id}/horizon"));
@@ -470,6 +517,34 @@ pub fn carry(
                     .push(format!("its item is {}", block.item));
             } else {
                 declared.insert(full.clone());
+                let drop = (!block_loot.contains(b))
+                    .then(|| block.drops_itself(full))
+                    .flatten();
+                if let Some(drop) = drop {
+                    let mut entry = json!({"type": "minecraft:item", "name": full});
+                    if let crate::oracle::SelfDrop::When(property, value) = drop {
+                        entry["condition"] = json!({
+                            "type": "minecraft:match_block",
+                            "blocks": full,
+                            "state": {property: value}
+                        });
+                    }
+                    let table = json!({
+                        "type": "minecraft:block",
+                        "pools": [{
+                            "condition": {"type": "minecraft:survives_explosion"},
+                            "entries": [entry],
+                            "rolls": 1
+                        }],
+                        "random_sequence": format!("{id}:blocks/{b}")
+                    });
+                    let file = inside.join(format!("data/{id}/loot_table/blocks/{b}.json"));
+                    write(
+                        &file,
+                        &serde_json::to_vec_pretty(&table).unwrap_or_default(),
+                    )?;
+                    report.loot_tables_added += 1;
+                }
             }
             write_decl("block", b, &v)?;
             report.blocks.insert(b.to_owned(), choice.template);
@@ -781,7 +856,7 @@ mod tests {
         );
         assert_eq!(info.census.classes, 1);
         let out = dir.join("work/mods/gem");
-        let report = carry(&jar, &info, &out, None, &|_| true).unwrap();
+        let report = carry(&jar, &info, &out, None, &|_| true, &BTreeMap::new()).unwrap();
         assert_eq!(report.copied, 13);
         let unreadable: Vec<&str> = report.unreadable.keys().map(String::as_str).collect();
         assert_eq!(

@@ -61,7 +61,7 @@ use crate::{
     collision::CachedCollisionRegistry,
     compression::invalid,
     nbt::Tag,
-    registry::{BlockRegistry, BlockStateId},
+    registry::{BlockRegistry, BlockStateId, BlockTable},
 };
 use std::{collections::HashMap, io};
 /// Cached branch of BlockState.isFaceSturdy. Dynamic support-shape selection
@@ -72,10 +72,14 @@ pub struct CachedBlockSupportRegistry<'r> {
 }
 impl<'r> CachedBlockSupportRegistry<'r> {
     pub fn from_nbt(tag: &Tag, registry: &'r BlockRegistry) -> io::Result<Self> {
-        if tag.get("Kind") != Some(&Tag::String("block_support".into())) {
+        Self::from_table(BlockTable::check(tag, registry, "support")?)
+    }
+    pub fn from_table(table: BlockTable<'_, 'r>) -> io::Result<Self> {
+        if table.get("Kind") != Some(&Tag::String("block_support".into())) {
             return Err(invalid("wrong cached support data kind"));
         }
-        let shapes = CachedCollisionRegistry::from_nbt(tag, registry)?;
+        let registry = table.registry();
+        let shapes = CachedCollisionRegistry::from_table(table)?;
         let mut cache = HashMap::new();
         let mut states = Vec::with_capacity(registry.len());
         for id in 0..registry.len() {
@@ -163,7 +167,11 @@ impl<E: std::fmt::Display> std::fmt::Display for SupportQueryError<E> {
 impl<E: std::error::Error + 'static> std::error::Error for SupportQueryError<E> {}
 impl<'r> BlockSupportRegistry<'r> {
     pub fn from_nbt(tag: &Tag, registry: &'r BlockRegistry) -> io::Result<Self> {
-        let cached = CachedBlockSupportRegistry::from_nbt(tag, registry)?;
+        Self::from_table(BlockTable::check(tag, registry, "support")?)
+    }
+    pub fn from_table(table: BlockTable<'_, 'r>) -> io::Result<Self> {
+        let registry = table.registry();
+        let cached = CachedBlockSupportRegistry::from_table(table)?;
         let mut dynamic = HashMap::new();
         for id in 0..registry.len() {
             let id = BlockStateId(id as u32);

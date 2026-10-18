@@ -117,13 +117,11 @@ pub fn load_visibility(
     use horizon_world::{
         block_render::{FaceVisibility, RenderDefinition, SkipRendering},
         collision::CachedCollisionRegistry,
-        nbt::{self, Limits},
+        registry::BlockTableFile,
     };
     use std::{collections::BTreeMap, fs};
-    let data = nbt::read_named(&fs::read(root.join("occlusion.nbt"))?, Limits::tables())?
-        .0
-        .tag;
-    let occlusion = CachedCollisionRegistry::from_nbt(&data, registry)?;
+    let file = BlockTableFile::open(&root.join("occlusion.nbt"), registry)?;
+    let occlusion = CachedCollisionRegistry::from_table(file.table("occlusion")?)?;
     let raw: BTreeMap<String, Value> =
         serde_json::from_slice(&fs::read(root.join("render-definitions.json"))?)?;
     let definitions = raw

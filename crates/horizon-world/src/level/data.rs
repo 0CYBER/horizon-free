@@ -8,8 +8,7 @@ use crate::{
     collision::CachedCollisionRegistry,
     compression::invalid,
     fluid::{FluidBlockBindings, FluidKind, FluidState},
-    nbt::{self, Limits},
-    registry::{BlockRegistry, BlockStateId},
+    registry::{BlockRegistry, BlockStateId, BlockTableFile},
     worldgen::tags::TagDefinitions,
 };
 use horizon_core::geometry::{Aabb, Direction, ShapeOp, Vec3, VoxelShape};
@@ -787,14 +786,8 @@ fn build_with_gameplay<G: GameplayStateSource>(
     };
 
     // Collision shapes.
-    let collision_tag = nbt::read_named(
-        &fs::read(root.join("cached-collision.nbt"))?,
-        Limits::tables(),
-    )
-    .map_err(|e| invalid(e.to_string()))?
-    .0
-    .tag;
-    let cached = CachedCollisionRegistry::from_nbt(&collision_tag, registry)?;
+    let collision_file = BlockTableFile::open(&root.join("cached-collision.nbt"), registry)?;
+    let cached = CachedCollisionRegistry::from_table(collision_file.table("collision")?)?;
     let mut shapes: Vec<VoxelShape> = Vec::new();
     let mut shape_ids = Vec::with_capacity(table.state_count());
     for id in 0..table.state_count() {
