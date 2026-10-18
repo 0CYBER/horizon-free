@@ -362,6 +362,7 @@ pub fn carry(
     let mut convention = BTreeSet::new();
     let mut block_loot = BTreeSet::new();
     let mut biome_conventions = BTreeSet::new();
+    let set_tags = crate::worldgen::structure_set_tags(&mut zip);
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
         let name = entry.name().to_owned();
@@ -421,7 +422,8 @@ pub fn carry(
                     if kind == "structure" {
                         crate::worldgen::convention_tags(&v["biomes"], &mut biome_conventions);
                     }
-                    if crate::worldgen::upgrade(kind, &mut v, &mut report.worldgen_types) {
+                    if crate::worldgen::upgrade(kind, &mut v, &mut report.worldgen_types, &set_tags)
+                    {
                         bytes = serde_json::to_vec_pretty(&v).unwrap_or(bytes);
                     }
                 }
