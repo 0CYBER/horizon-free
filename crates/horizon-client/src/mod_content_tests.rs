@@ -537,3 +537,84 @@ fn content_root_is_reused_until_a_mod_changes() {
     );
     let _ = fs::remove_dir_all(&scratch);
 }
+
+/// A structure mod's worldgen reaches the worldgen loader: its structure,
+/// set, pool and templates join the bundles, and its biome tag keeps only
+/// what the loader knows.
+#[test]
+fn content_root_carries_a_structure_mod() {
+    let Some(base) = prepared() else {
+        return;
+    };
+    let scratch = std::env::temp_dir().join(format!("horizon-mod-worldgen-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    let dir = scratch.join("huts");
+    let files = [
+        (
+            "horizon-mod.toml",
+            "id = \"huts\"\nname = \"Huts\"\nversion = \"1.0\"\napi = \"0.2\"\nside = \"both\"\ncapabilities = [\"registries\"]\n",
+        ),
+        (
+            "data/huts/worldgen/structure/hut.json",
+            r##"{"type": "minecraft:jigsaw", "biomes": "#huts:has_hut", "step": "surface_structures",
+                "spawn_overrides": {}, "terrain_adaptation": "beard_thin", "start_pool": "huts:hut/start",
+                "size": 1, "start_height": {"absolute": 0}, "project_start_to_heightmap": "WORLD_SURFACE_WG",
+                "max_distance_from_center": 80}"##,
+        ),
+        (
+            "data/huts/worldgen/template_pool/hut/start.json",
+            r#"{"fallback": "minecraft:empty", "elements": [{"weight": 1, "element": {
+                "element_type": "minecraft:single_pool_element", "location": "huts:hut",
+                "projection": "rigid", "processors": "minecraft:empty"}}]}"#,
+        ),
+        (
+            "data/huts/worldgen/structure_set/huts.json",
+            r#"{"structures": [{"structure": "huts:hut", "weight": 1}],
+                "placement": {"type": "minecraft:random_spread", "salt": 7, "spacing": 4, "separation": 2}}"#,
+        ),
+        (
+            "data/huts/tags/worldgen/biome/has_hut.json",
+            r##"{"values": ["#minecraft:is_overworld", "#c:is_plains", "othermod:glade", "minecraft:plains"]}"##,
+        ),
+    ];
+    for (name, text) in files {
+        let path = dir.join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+    // The template: vanilla's smallest plains house, as the mod's own file.
+    let house =
+        base.join("worldgen/structure/minecraft/village/plains/houses/plains_small_house_1.nbt");
+    fs::create_dir_all(dir.join("data/huts/structure")).unwrap();
+    fs::copy(&house, dir.join("data/huts/structure/hut.nbt")).unwrap();
+    let package = horizon_mods::Package::read(&dir).unwrap();
+    let m = ContentMod {
+        id: "huts".into(),
+        content: Content::read(&dir, &package.manifest).unwrap(),
+    };
+    let root = resource_root(&base, &[m], &scratch.join("cache")).unwrap();
+    assert!(root.join("worldgen/structure/huts/hut.nbt").exists());
+    let tags: BTreeMap<String, String> =
+        serde_json::from_slice(&fs::read(root.join("worldgen/biome_tags.json")).unwrap()).unwrap();
+    let hut: serde_json::Value = serde_json::from_str(&tags["huts:has_hut"]).unwrap();
+    assert_eq!(
+        hut["values"],
+        serde_json::json!(["#minecraft:is_overworld", "minecraft:plains"])
+    );
+
+    let assets = Assets::load(&root).unwrap();
+    let biomes = crate::biome::Biomes::load(&root).unwrap();
+    let terrain = crate::vanillagen::VanillaTerrain::new(
+        &root.join("worldgen"),
+        assets.registry,
+        &biomes,
+        1234,
+    )
+    .unwrap();
+    let (name, at) = terrain
+        .locate(&["huts:hut".to_owned()], [0, 64, 0], 16)
+        .expect("the mod's structure generates");
+    assert_eq!(name, "huts:hut");
+    assert!(at[0].abs() < 1024 && at[2].abs() < 1024, "{at:?}");
+    let _ = fs::remove_dir_all(&scratch);
+}
