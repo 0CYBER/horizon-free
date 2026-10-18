@@ -755,3 +755,43 @@ fn spline_lazy_branch_failure_preserves_completed_output_and_returns_scratch() {
     assert_eq!(context.scratch.len(), 2);
     assert_eq!(sampler.sample_value(&mut context, [0; 3]), Ok(7.0));
 }
+
+#[test]
+fn unary_bulk_keeps_child_failure_writes_and_full_buffer_tail() {
+    #[derive(Debug)]
+    struct PartialInput;
+    impl DensitySampler for PartialInput {
+        fn sample_value(&self, _: &mut SamplerContext, _: [i32; 3]) -> Result<f32, SampleError> {
+            Err(SampleError::ZeroGradientPeriod)
+        }
+        fn sample_volume(
+            &self,
+            _: &mut SamplerContext,
+            buffer: &mut [f32],
+            _: DensityVolume,
+        ) -> Result<(), SampleError> {
+            buffer[0] = -3.0;
+            Err(SampleError::ZeroGradientPeriod)
+        }
+    }
+    let volume = DensityVolume::new([1; 3], [0; 3], [1; 3]).unwrap();
+    let mut context = SamplerContext::default();
+    let mut buffer = [17.0; 3];
+    let sampler = UnarySampler {
+        input: Arc::new(PartialInput),
+        operation: UnaryOp::Square,
+    };
+    assert_eq!(
+        sampler.sample_volume(&mut context, &mut buffer, volume),
+        Err(SampleError::ZeroGradientPeriod)
+    );
+    assert_eq!(buffer, [-3.0, 17.0, 17.0]);
+    let sampler = UnarySampler {
+        input: Arc::new(ConstantSampler(-3.0)),
+        operation: UnaryOp::Square,
+    };
+    sampler
+        .sample_volume(&mut context, &mut buffer, volume)
+        .unwrap();
+    assert_eq!(buffer, [9.0; 3]);
+}
