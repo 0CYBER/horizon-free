@@ -1606,6 +1606,15 @@ impl Game<'_> {
                     pl.velocity = Vec3::new(p.velocity[0], p.velocity[1], p.velocity[2]);
                 }
             }
+            // ClientPacketListener.handleDamageEvent: LivingEntity.handleDamageEvent
+            // jolts the walk animation and restarts the hurt flash. Its hurt
+            // sound comes as a sound from Horizon's host, which plays it itself.
+            C::DamageEvent(p) => {
+                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
+                    m.limb_speed = 1.5;
+                    m.hurt_time = 10;
+                }
+            }
             C::HurtAnimation(p) => {
                 if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
                     m.hurt_time = 10;

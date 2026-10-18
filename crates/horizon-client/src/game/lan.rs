@@ -1086,8 +1086,30 @@ impl Game<'_> {
                 .and_then(|s| s.get(&m.id))
                 .copied();
             let at = [m.position.x, m.position.y, m.position.z];
-            if m.hurt_time > old.map_or(0, |o| o.0) && !dead {
-                host.hub.entity_event(m.id as i32, 2, at);
+            // LivingEntity.hurtServer: a hurt that restarted the hurt time.
+            if m.hurt_time > old.map_or(0, |o| o.0)
+                && !dead
+                && let Some((source, _)) = m.last_damage
+            {
+                use horizon_client::mobs::{DamageKind as K, Who};
+                let player = source.attacker == Some(Who::Player);
+                let kind = super::creatures::damage_type(source.kind, player);
+                // The player a mob sees is the guest acting, else the host.
+                let cause = source.attacker.map(|who| match who {
+                    Who::Player => host
+                        .mob_players
+                        .get(&m.id)
+                        .and_then(|conn| host.hub.guest(*conn))
+                        .map_or(host.host_entity, |g| g.entity_id),
+                    Who::Mob(id) => id as i32,
+                });
+                // A projectile is the direct entity of its hit: not tracked here.
+                let melee = matches!(
+                    source.kind,
+                    K::PlayerAttack | K::MaceSmash | K::MobAttack | K::Sting | K::SonicBoom
+                );
+                let direct = cause.filter(|_| melee);
+                host.hub.damage_event(m.id as i32, kind, cause, direct, at);
             }
             if dead && !old.is_some_and(|o| o.1) {
                 host.hub.entity_event(m.id as i32, 3, at);

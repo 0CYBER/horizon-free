@@ -109,6 +109,33 @@ impl Hub {
         );
     }
 
+    /// `ServerLevel.broadcastDamageEvent`: the clients around show the hurt
+    /// entity's flash and hear its hurt sound.
+    pub fn damage_event(
+        &self,
+        id: i32,
+        kind: &str,
+        cause: Option<i32>,
+        direct: Option<i32>,
+        at: [f64; 3],
+    ) {
+        let Some(source_type) = self.sync.id("minecraft:damage_type", kind) else {
+            return;
+        };
+        self.broadcast_near(
+            at,
+            128.0,
+            &C::DamageEvent(play::DamageEvent {
+                id,
+                source_type,
+                cause,
+                direct,
+                position: None,
+            }),
+            None,
+        );
+    }
+
     pub fn swing(&self, id: i32, hand: i32, at: [f64; 3], except: Option<u32>) {
         self.broadcast_near(
             at,
