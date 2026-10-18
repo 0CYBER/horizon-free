@@ -382,7 +382,12 @@ impl Game<'_> {
             subject: None,
         };
         let mut dead = Vec::new();
+        // ServerLevel.tick: only entities in entity-ticking chunks tick.
+        let ticking = self.entity_ticking_area();
         for (i, a) in self.armor_stands.iter_mut().enumerate() {
+            if !ticking(a.position.x.floor() as i32, a.position.z.floor() as i32) {
+                continue;
+            }
             a.tick(&mut scene);
             if !a.environment_tick(&self.world, self.res.facts(), self.pack.assets.registry) {
                 dead.push(i);

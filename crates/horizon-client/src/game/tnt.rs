@@ -156,8 +156,14 @@ impl Game<'_> {
     pub(super) fn tick_tnt(&mut self) -> Result<()> {
         let mut count = self.tnts.len();
         let mut i = 0;
+        // ServerLevel.tick: only entities in entity-ticking chunks tick.
+        let ticking = self.entity_ticking_area();
         while i < count {
             let t = &mut self.tnts[i];
+            if !ticking(t.position.x.floor() as i32, t.position.z.floor() as i32) {
+                i += 1;
+                continue;
+            }
             t.tick(
                 &self.world,
                 self.collision,

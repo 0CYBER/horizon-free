@@ -2594,7 +2594,12 @@ impl Game<'_> {
         let mut dropped = Vec::new();
         let mut collision_error = None;
         let entity_drops = self.ui.rules.bool("entity_drops");
+        // ServerLevel.tick: only entities in entity-ticking chunks tick.
+        let ticking = self.entity_ticking_area();
         falling.retain_mut(|f| {
+            if !ticking(f.position.x.floor() as i32, f.position.z.floor() as i32) {
+                return true;
+            }
             let original = f.clone();
             f.previous = f.position;
             f.age = f.age.wrapping_add(1);
