@@ -2173,22 +2173,22 @@ impl Game<'_> {
 
     // ---------------------------------------------------------------- brewing stand
 
-    /// Ticks every brewing stand (`BrewingStandBlockEntity.serverTick`).
-    pub(super) fn tick_brewing_stands(&mut self) -> horizon_client::Result<()> {
-        let mut changes = Vec::new();
-        for (pos, entity) in self.world.block_entities.iter_mut() {
-            if let BlockEntity::Brewing(b) = entity {
-                let out = b.tick(
-                    &self.res.stations.brewing,
-                    &self.res.items,
-                    &self.res.providers,
-                );
-                if out != brewing::BrewTick::default() {
-                    changes.push((*pos, out));
-                }
-            }
-        }
-        for ((x, y, z), out) in changes {
+    /// `BrewingStandBlockEntity.serverTick` of the brewing stand at `pos`, in
+    /// its place among the level's block entity tickers.
+    pub(super) fn tick_brewing_stand(
+        &mut self,
+        pos: (i32, i32, i32),
+    ) -> horizon_client::Result<()> {
+        let Some(BlockEntity::Brewing(b)) = self.world.block_entities.get_mut(&pos) else {
+            return Ok(());
+        };
+        let out = b.tick(
+            &self.res.stations.brewing,
+            &self.res.items,
+            &self.res.providers,
+        );
+        if out != brewing::BrewTick::default() {
+            let (x, y, z) = pos;
             self.world.modified.insert((x >> 4, z >> 4));
             if out.brewed {
                 self.play_at("minecraft:block.brewing_stand.brew", [x, y, z], 1.0, 1.0);

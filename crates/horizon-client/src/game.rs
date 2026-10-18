@@ -3630,7 +3630,6 @@ impl Game<'_> {
             horizon_client::spans::time("tick_block_entities", || self.tick_block_entities())?;
             horizon_client::spans::time("tick_sculk_entities", || self.tick_sculk_entities());
             horizon_client::spans::time("tick_sculk_blocks", || self.tick_sculk_blocks())?;
-            horizon_client::spans::time("tick_brewing_stands", || self.tick_brewing_stands())?;
         }
         if running {
             // ClientLevel.tickBlockEntities (not while paused or frozen):

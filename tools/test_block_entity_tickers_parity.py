@@ -9,7 +9,7 @@ of a server level and prints, after each tick, the positions of the live
 tickers in list order; `examples/block_entity_tickers_fixture` runs the same
 on `horizon_client::block_entities::BlockEntities`. The block entities are
 the kinds the game ticks in that list (hoppers, furnaces, beacons, spawners,
-trial spawners, vaults, hives, crafters, jukebox), with chests and barrels,
+trial spawners, vaults, hives, crafters, brewing stands, jukebox), with chests and barrels,
 which have no ticker, among them.
 """
 import argparse
@@ -25,7 +25,7 @@ except ImportError:
 
 PARITY = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity'
 TICKING = ['hopper', 'furnace', 'blast_furnace', 'smoker', 'beacon', 'spawner', 'trial_spawner', 'vault',
-           'beehive', 'bee_nest', 'crafter', 'jukebox_record']
+           'beehive', 'bee_nest', 'crafter', 'brewing_stand', 'jukebox_record']
 KINDS = TICKING + ['jukebox', 'chest', 'barrel']
 
 
