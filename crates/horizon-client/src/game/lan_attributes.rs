@@ -53,7 +53,7 @@ impl Game<'_> {
         out: &mut Vec<AttributeSnapshot>,
     ) {
         for (slot, item) in slots {
-            let Some(info) = item.and_then(|i| self.res.items.get(i)) else {
+            let Some(info) = item.and_then(|i| self.res.items().get(i)) else {
                 continue;
             };
             for (attribute, id, amount, op, group) in &info.modifiers {
