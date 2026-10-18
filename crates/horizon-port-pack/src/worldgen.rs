@@ -32,6 +32,16 @@ const NETHER_JIGSAWS: [&str; 2] = [
     "moogs_structures:moogs_structures_generic_nether_jigsaw_structure",
     "repurposed_structures:generic_nether_jigsaw_structure",
 ];
+/// Repurposed Structures' generic jigsaws with a start check of their own: the
+/// `repurposed` key of `horizon:start_checks` names it.
+const REPURPOSED_CHECKED: [(&str, &str); 3] = [
+    ("repurposed_structures:city_nether_structure", "city_nether"),
+    (
+        "repurposed_structures:shipwreck_nether_structure",
+        "shipwreck_nether",
+    ),
+    ("repurposed_structures:stronghold_end", "stronghold_end"),
+];
 /// Layout rules the piece-limited assembler keeps (`horizon:piece_limited`).
 const PIECE_LIMITED_RULES: [&str; 4] = [
     "y_allowance",
@@ -408,7 +418,13 @@ fn upgrade_types(
                 yung_structure(v, lost);
                 true
             }
-            Some(t) if JIGSAWS.contains(&t) || NETHER_JIGSAWS.contains(&t) => {
+            Some(t)
+                if JIGSAWS.contains(&t)
+                    || NETHER_JIGSAWS.contains(&t)
+                    || REPURPOSED_CHECKED.iter().any(|(r, _)| *r == t) =>
+            {
+                let check = REPURPOSED_CHECKED.iter().find(|(r, _)| *r == t);
+                let check = check.map(|(_, c)| *c);
                 let library = match t.split_once(':').map(|(ns, _)| ns) {
                     Some("moogs_structures") => Some("moogs"),
                     Some("repurposed_structures") => Some("repurposed"),
@@ -421,6 +437,12 @@ fn upgrade_types(
                 };
                 let limited = library.map(|l| piece_limited(v, l));
                 start_checks(v, liquid, lost, limited.is_some());
+                if let Some(check) = check {
+                    if !v["horizon:start_checks"].is_object() {
+                        v["horizon:start_checks"] = Value::Object(Default::default());
+                    }
+                    v["horizon:start_checks"]["repurposed"] = check.into();
+                }
                 if let Some(limited) = limited {
                     v["horizon:piece_limited"] = limited;
                 }
@@ -1084,6 +1106,20 @@ mod tests {
             "cannot_spawn_in_liquid": true});
         assert!(upgrade("structure", &mut rs, &mut report, &NO_TAGS));
         assert_eq!(rs["horizon:start_checks"], json!({"liquid": "lowest"}));
+        // Repurposed's own checks: the Nether city, Nether shipwrecks, the End stronghold.
+        for (t, check) in [
+            ("city_nether_structure", "city_nether"),
+            ("shipwreck_nether_structure", "shipwreck_nether"),
+            ("stronghold_end", "stronghold_end"),
+        ] {
+            let mut rs = json!({"type": format!("repurposed_structures:{t}"),
+                "cannot_spawn_in_liquid": false, "size": 7});
+            assert!(upgrade("structure", &mut rs, &mut report, &NO_TAGS));
+            assert_eq!(rs["type"], "minecraft:jigsaw");
+            assert_eq!(rs["horizon:start_checks"], json!({"repurposed": check}));
+            assert_eq!(rs["horizon:piece_limited"]["library"], "repurposed");
+        }
+        assert!(report.unsupported.is_empty());
         // Nothing to check: no key.
         let mut plain = json!({"type": "lithostitched:jigsaw", "cannot_spawn_in_liquid": false});
         assert!(upgrade("structure", &mut plain, &mut report, &NO_TAGS));
