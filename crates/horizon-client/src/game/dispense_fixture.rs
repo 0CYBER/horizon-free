@@ -284,7 +284,7 @@ impl Game<'_> {
         let state = self.world.block(origin.x, origin.y, origin.z);
         let mut used = Vec::new();
         if let Some(op) = case.get("remove") {
-            self.fixture_remove(origin, op)?;
+            used = self.fixture_remove(origin, op)?;
         } else if let Some(op) = case.get("use") {
             used = self.fixture_use(origin, op)?;
         } else if let Some(op) = case.get("use_item") {
@@ -788,8 +788,9 @@ impl Game<'_> {
             other => *other = Tag::List(vec![item]),
         }
     }
-    /// `Level.setBlock`, `destroyBlock` or `removeBlock` on the case's block.
-    fn fixture_remove(&mut self, origin: BlockPos, op: &Value) -> Result<()> {
+    /// `Level.setBlock`, `destroyBlock` or `removeBlock` on the case's block, or
+    /// a player mining it (`fixture_mine`).
+    fn fixture_remove(&mut self, origin: BlockPos, op: &Value) -> Result<Vec<String>> {
         match op["op"].as_str().unwrap_or("") {
             "set" => {
                 let state = BlockStateId(op["state"].as_u64().unwrap_or(0) as u32);
@@ -803,9 +804,61 @@ impl Game<'_> {
             "remove" => {
                 self.with_level(|b, level, ticks| b.remove_block(level, ticks, origin, false));
             }
+            "mine" => return self.fixture_mine(origin, op),
             other => return Err(format!("unknown removal {other}").into()),
         }
-        self.process_level_events()
+        self.process_level_events()?;
+        Ok(Vec::new())
+    }
+
+    /// A survival player three blocks south of `pos` mines it holding the
+    /// case's item (`break_block`, which every player's mining goes through):
+    /// the statistics and the held stack, as `VanillaDispenserOracle.mine`
+    /// prints them.
+    fn fixture_mine(&mut self, pos: BlockPos, op: &Value) -> Result<Vec<String>> {
+        let stack = parse_stack(op["item"].as_str().unwrap_or("-"))?;
+        self.mode = GameMode::Survival;
+        self.creative = false;
+        self.player = Some(PlayerMotion::new(
+            self.motion,
+            horizon_core::geometry::Vec3::new(
+                f64::from(pos.x) + 0.5,
+                f64::from(pos.y) + 1.0,
+                f64::from(pos.z) + 3.5,
+            ),
+        )?);
+        self.yaw = 0.0;
+        self.pitch = 90.0;
+        self.keys.clear();
+        self.inventory[self.selected] = stack.clone();
+        self.offhand = None;
+        let state = self.world.block(pos.x, pos.y, pos.z);
+        let block = self.res.facts.get(state).name.clone();
+        let item = stack.as_ref().map(|s| s.item.clone());
+        let before = |game: &Self| {
+            let used = item.as_ref().map_or(0, |i| game.stats.get("used", i));
+            (used, game.stats.get("mined", &block))
+        };
+        let (used, mined) = before(self);
+        self.break_block([pos.x, pos.y, pos.z])?;
+        let (used_after, mined_after) = before(self);
+        let mut out = Vec::new();
+        if let Some(item) = &item
+            && used_after != used
+        {
+            out.push(format!("stat {item} minecraft:used {}", used_after - used));
+        }
+        if mined_after != mined {
+            out.push(format!(
+                "stat {block} minecraft:mined {}",
+                mined_after - mined
+            ));
+        }
+        out.push(format!(
+            "mine held {}",
+            canon_stack(self.inventory[self.selected].as_ref())
+        ));
+        Ok(out)
     }
 
     /// `EntityType.create` and `snapTo` for one target: no spawn finalization.

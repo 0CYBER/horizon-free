@@ -67,6 +67,9 @@ pub struct ItemInfo {
     pub block: Option<BlockStateId>,
     pub tool: Vec<ToolRule>,
     pub tool_default_speed: f32,
+    /// The `tool` component's `damage_per_block`, when the item has the
+    /// component (a mace or trident has one without rules).
+    pub tool_damage_per_block: Option<u32>,
     pub food: Option<(u32, f32)>,
     pub can_always_eat: bool,
     pub consumable: bool,
@@ -528,6 +531,9 @@ impl Items {
                     tool_default_speed: c["minecraft:tool"]["default_mining_speed"]
                         .as_f64()
                         .unwrap_or(1.0) as f32,
+                    tool_damage_per_block: c
+                        .get("minecraft:tool")
+                        .map(|t| t["damage_per_block"].as_u64().unwrap_or(1) as u32),
                     food,
                     can_always_eat,
                     consumable: c.get("minecraft:consumable").is_some(),
@@ -693,6 +699,10 @@ impl Items {
             loot: HashMap::new(),
             songs: HashMap::new(),
         }
+    }
+    /// Whether `block` is in the block tag `tag` (`minecraft:fire`, no `#`).
+    pub fn block_in_tag(&self, tag: &str, block: &str) -> bool {
+        self.block_tags.get(tag).is_some_and(|s| s.contains(block))
     }
     fn block_matches(&self, spec: &str, block: &str) -> bool {
         match spec.strip_prefix('#') {
