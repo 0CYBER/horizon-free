@@ -31,7 +31,7 @@ use horizon_world::{
     compression::Compression,
     heightmap::{Heightmap, HeightmapChunk, HeightmapType},
     nbt::{self, Compound, JavaString, Limits, NamedTag, Tag},
-    region::{ChunkRecord, RegionFile, RegionWriter},
+    region::{ChunkRecord, RegionFile},
     registry::{BlockRegistry, BlockStateId},
     worldgen::terrain::TerrainBlockStates,
 };
@@ -1306,94 +1306,87 @@ pub fn load_light(tag: &Tag, chunk: &mut Chunk, sky_light: bool) {
 }
 
 type RegionCache = Mutex<HashMap<(i32, i32), Option<Arc<Mutex<RegionFile>>>>>;
-/// Rewrite every region file in `folder` touched by `records`, keeping its
-/// other chunks. `None` deletes a chunk.
+/// The region file at `path` through the cache, which readers and the writer
+/// share, so a read never sees a header older than the sectors it points to.
+/// `create` makes a missing file (for a write); otherwise a missing file is
+/// `None`, until a write creates it.
+fn cached_region(
+    cache: &RegionCache,
+    key: (i32, i32),
+    path: &Path,
+    create: bool,
+) -> Result<Option<Arc<Mutex<RegionFile>>>> {
+    let mut regions = cache.lock().map_err(|_| "region cache poisoned")?;
+    if let Some(Some(region)) = regions.get(&key) {
+        return Ok(Some(region.clone()));
+    }
+    if !create && regions.contains_key(&key) {
+        return Ok(None);
+    }
+    if create && let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    // A file this process can't write (a read-only world) is still read.
+    let region = match RegionFile::open_writable(path, create) {
+        Err(e) if !create && e.kind() == std::io::ErrorKind::PermissionDenied => {
+            RegionFile::open(path)
+        }
+        other => other,
+    };
+    let region = match region {
+        Ok(r) => Some(Arc::new(Mutex::new(r))),
+        Err(_) if !create => None,
+        Err(e) => return Err(e.into()),
+    };
+    regions.insert(key, region.clone());
+    Ok(region)
+}
+/// Write `records` into the region files of `folder` in place, as vanilla's
+/// `RegionFile.write` does: each chunk takes free sectors and the header
+/// then points to it; the region's other chunks are not touched. `None`
+/// clears a chunk. The chunks are compressed before their region is locked
+/// for the writes, and each region is flushed to the disk once.
 fn write_region_records(
     root: &Path,
     cache: &RegionCache,
     folder: &str,
     records: Vec<((i32, i32), Option<Arc<NamedTag>>)>,
 ) -> Result<()> {
-    let mut by_region: BTreeMap<(i32, i32), Vec<((i32, i32), Option<Arc<NamedTag>>)>> =
-        BTreeMap::new();
-    for (key, tag) in records {
-        by_region
-            .entry((key.0 >> 5, key.1 >> 5))
-            .or_default()
-            .push((key, tag));
-    }
-    if by_region.is_empty() {
-        return Ok(());
-    }
-    let staging = root.join(folder).join(".staging");
-    fs::create_dir_all(&staging)?;
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as u32);
+    let mut by_region: BTreeMap<(i32, i32), Vec<(ChunkPos, Option<ChunkRecord>)>> = BTreeMap::new();
+    for ((x, z), tag) in records {
+        let record = tag
+            .map(|tag| ChunkRecord::from_nbt(&tag, Compression::Zlib, timestamp, Limits::default()))
+            .transpose()?;
+        by_region
+            .entry((x >> 5, z >> 5))
+            .or_default()
+            .push((ChunkPos::new(x, z), record));
+    }
     for ((rx, rz), list) in by_region {
         let path = region_path(root, folder, rx, rz);
-        let mut records: BTreeMap<(i32, i32), ChunkRecord> = BTreeMap::new();
-        let only_deletes = list.iter().all(|(_, tag)| tag.is_none());
-        if let Ok(mut existing) = RegionFile::open(&path) {
-            let positions: Vec<ChunkPos> = existing.chunks().map(|(p, _)| p).collect();
-            if only_deletes
-                && !positions
-                    .iter()
-                    .any(|p| list.iter().any(|(k, _)| *k == (p.x, p.z)))
-            {
-                continue;
-            }
-            for p in positions {
-                if let Ok(Some(r)) = existing.read(p) {
-                    records.insert((p.x, p.z), r);
-                }
-            }
-        } else if only_deletes {
+        // Clearing chunks of a region that doesn't exist changes nothing.
+        let create = list.iter().any(|(_, r)| r.is_some());
+        let Some(region) = cached_region(cache, (rx, rz), &path, create)? else {
             continue;
-        }
-        // Deleting chunks the region doesn't hold changes nothing: leave
-        // the file alone (unloading empty entity chunks asks for that).
+        };
+        let mut region = region.lock().map_err(|_| "region file poisoned")?;
         let mut changed = false;
-        for (key, tag) in list {
-            match tag {
-                Some(tag) => {
+        for (pos, record) in &list {
+            match record {
+                Some(record) => {
+                    region.write(*pos, record)?;
                     changed = true;
-                    records.insert(
-                        key,
-                        ChunkRecord::from_nbt(
-                            &tag,
-                            Compression::Zlib,
-                            timestamp,
-                            Limits::default(),
-                        )?,
-                    );
                 }
-                None => {
-                    changed |= records.remove(&key).is_some();
-                }
+                None => changed |= region.clear(*pos, timestamp)?,
             }
         }
-        if !changed {
-            continue;
+        if changed {
+            region.sync()?;
         }
-        if records.is_empty() {
-            let _ = fs::remove_file(&path);
-        } else {
-            let temporary = staging.join(format!("r.{rx}.{rz}.mca"));
-            let _ = fs::remove_file(&temporary);
-            let mut writer = RegionWriter::create(&temporary)?;
-            for ((x, z), r) in &records {
-                writer.write(ChunkPos::new(*x, *z), r)?;
-            }
-            writer.finish()?;
-            fs::rename(&temporary, &path)?;
-        }
-        cache
-            .lock()
-            .map_err(|_| "region cache poisoned")?
-            .remove(&(rx, rz));
     }
-    let _ = fs::remove_dir(&staging);
     Ok(())
 }
 
@@ -1436,7 +1429,7 @@ impl Record {
 type PendingWrites = Mutex<HashMap<(bool, i32, i32), (u64, Record)>>;
 type WriteBatch = (bool, Vec<((i32, i32), Record, u64)>);
 
-/// The background thread that encodes chunks and rewrites region files, in
+/// The background thread that encodes chunks and writes them into the region files, in
 /// submission order.
 struct Writer {
     send: mpsc::Sender<WriteBatch>,
@@ -1498,17 +1491,8 @@ impl SaveDir {
         } else {
             &self.entity_regions
         };
-        let region = {
-            let mut regions = cache.lock().ok()?;
-            regions
-                .entry(key)
-                .or_insert_with(|| {
-                    RegionFile::open(self.region_path(folder, key.0, key.1))
-                        .ok()
-                        .map(|r| Arc::new(Mutex::new(r)))
-                })
-                .clone()?
-        };
+        let path = self.region_path(folder, key.0, key.1);
+        let region = cached_region(cache, key, &path, false).ok()??;
         let record = region.lock().ok()?.read(ChunkPos::new(x, z)).ok()??;
         record.nbt(Limits::default()).ok()
     }
@@ -1614,7 +1598,18 @@ impl SaveDir {
                     } else {
                         ("region", &regions)
                     };
-                    let records = batch.iter().map(|(k, r, _)| (*k, r.tag())).collect();
+                    // IOWorker.pendingWrites: a chunk queued again since is
+                    // written once, by its newest batch.
+                    let newest = |k: &(i32, i32), seq: u64| {
+                        pending.lock().map_or(true, |p| {
+                            p.get(&(entities, k.0, k.1)).is_none_or(|p| p.0 <= seq)
+                        })
+                    };
+                    let records = batch
+                        .iter()
+                        .filter(|(k, _, seq)| newest(k, *seq))
+                        .map(|(k, r, _)| (*k, r.tag()))
+                        .collect();
                     if let Err(e) = write_region_records(&root, cache, folder, records) {
                         log::warn!("Horizon: failed to write {folder} files: {e}");
                     }
@@ -1650,7 +1645,7 @@ impl SaveDir {
             };
         }
     }
-    /// Rewrite every region touched by `chunks`, keeping their other chunks.
+    /// Write `chunks` into their region files and wait until they are on disk.
     pub fn save(
         &self,
         chunks: &[Arc<Chunk>],
