@@ -14,8 +14,13 @@ pub struct Uploads {
 
 impl Uploads {
     pub fn new(device: &wgpu::Device) -> Self {
+        Self::with_chunk(device, CHUNK)
+    }
+    /// A belt whose staging buffers hold `chunk` bytes (larger writes get
+    /// a buffer of their own).
+    pub fn with_chunk(device: &wgpu::Device, chunk: u64) -> Self {
         Self {
-            belt: wgpu::util::StagingBelt::new(device.clone(), CHUNK),
+            belt: wgpu::util::StagingBelt::new(device.clone(), chunk),
         }
     }
     /// Copy tightly packed RGBA8 `pixels` (`width` by `height`) into one mip
