@@ -502,3 +502,38 @@ fn independent_reloads_read_changed_behaviour_json_and_report_invalid_files() {
     );
     fs::remove_dir_all(&scratch).unwrap();
 }
+
+/// A built root is kept for later starts, and built again when a mod's
+/// files change.
+#[test]
+fn content_root_is_reused_until_a_mod_changes() {
+    let Some(base) = prepared() else {
+        return;
+    };
+    let scratch = std::env::temp_dir().join(format!("horizon-mod-reuse-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    let m = ruby_mod(&scratch.join("ruby"));
+    let cache = scratch.join("cache");
+    let root = resource_root(&base, std::slice::from_ref(&m), &cache).unwrap();
+    // A rebuild starts from an empty folder: this file tells them apart.
+    let sentinel = root.join("sentinel");
+    fs::write(&sentinel, b"").unwrap();
+    assert_eq!(
+        resource_root(&base, std::slice::from_ref(&m), &cache).unwrap(),
+        root
+    );
+    assert!(sentinel.exists(), "an unchanged mod rebuilt the root");
+    let lang = scratch.join("ruby/assets/ruby/lang/en_us.json");
+    fs::write(&lang, r#"{"block.ruby.ruby_block": "Ruby Block"}"#).unwrap();
+    let file = fs::File::options().write(true).open(&lang).unwrap();
+    file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(5))
+        .unwrap();
+    resource_root(&base, std::slice::from_ref(&m), &cache).unwrap();
+    assert!(!sentinel.exists(), "a changed mod kept the old root");
+    assert!(
+        fs::read_to_string(root.join("assets/ruby/lang/en_us.json"))
+            .unwrap()
+            .contains("Ruby Block")
+    );
+    let _ = fs::remove_dir_all(&scratch);
+}
