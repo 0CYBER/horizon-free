@@ -76,6 +76,206 @@ pub struct Upgrade {
     pub rules_lost: BTreeMap<String, usize>,
     /// Processors written in Java, taken out of their lists, by type.
     pub processors_dropped: BTreeMap<String, usize>,
+    /// Entries added to other structure sets and template pools
+    /// (`horizon:add_to`), by the set or pool they join.
+    pub added_to: BTreeMap<String, usize>,
+    /// Lithostitched worldgen modifiers not carried: by type, `conditions`
+    /// when they need a mod that is not ported along, `target` when they
+    /// name their sets or pools by a tag.
+    pub modifiers_left: BTreeMap<String, usize>,
+}
+
+/// Where a mod's additions to other sets and pools go in its carry:
+/// `data/<id>/worldgen/<kind>/horizon_added/<name>.json`.
+pub const ADDED: &str = "horizon_added";
+
+/// A lithostitched worldgen modifier
+/// (`data/<ns>/lithostitched/worldgen_modifier/`) that adds to structure
+/// sets or template pools, as a file the game merges into them (the key
+/// `horizon:add_to`, `horizon_client::mod_content`): (kind, file). The
+/// modifier's conditions are checked against `loaded`, the mods ported
+/// along: a compat addition for a mod that is not would place that mod's
+/// blocks, which the game does not have. Other modifier types are left out.
+/// Both are counted in `report`.
+pub fn modifier(
+    v: &Value,
+    loaded: &dyn Fn(&str) -> bool,
+    report: &mut Upgrade,
+) -> Option<(&'static str, Value)> {
+    let t = v["type"].as_str().unwrap_or_default();
+    let mut left = |why: &str| *report.modifiers_left.entry(why.to_owned()).or_default() += 1;
+    let (kind, targets, from, to) = match t {
+        "lithostitched:add_structure_set_entries" => {
+            ("structure_set", "structure_sets", "entries", "structures")
+        }
+        "lithostitched:add_template_pool_elements" => {
+            ("template_pool", "template_pools", "elements", "elements")
+        }
+        _ => {
+            left(t);
+            return None;
+        }
+    };
+    if !conditions_hold(v, loaded) {
+        left("conditions");
+        return None;
+    }
+    let targets: Option<Vec<&str>> = match &v[targets] {
+        Value::String(s) => Some(vec![s.as_str()]),
+        Value::Array(a) => a.iter().map(Value::as_str).collect(),
+        _ => None,
+    };
+    let Some(targets) = targets.filter(|t| !t.is_empty() && t.iter().all(|t| !t.starts_with('#')))
+    else {
+        left("target");
+        return None;
+    };
+    let entries = v[from].as_array().cloned().unwrap_or_default();
+    for target in &targets {
+        *report.added_to.entry((*target).to_owned()).or_default() += entries.len();
+    }
+    Some((
+        kind,
+        serde_json::json!({"horizon:add_to": targets, to: entries}),
+    ))
+}
+
+/// Whether a modifier's load conditions hold: lithostitched's `predicate`,
+/// and the loader's conditions (NeoForge's, else Fabric's). A condition
+/// type not known here does not hold.
+fn conditions_hold(v: &Value, loaded: &dyn Fn(&str) -> bool) -> bool {
+    let all = |list: &Value, test: &dyn Fn(&Value) -> bool| {
+        list.as_array().is_some_and(|a| a.iter().all(test))
+    };
+    fn predicate(p: &Value, loaded: &dyn Fn(&str) -> bool) -> bool {
+        let test = |q: &Value| predicate(q, loaded);
+        let list = &p["predicates"];
+        match p["type"]
+            .as_str()
+            .map(|t| t.trim_start_matches("lithostitched:"))
+        {
+            Some("true") => true,
+            Some("mod_loaded") => p["mod_id"].as_str().is_some_and(loaded),
+            Some("not") => !predicate(&p["predicate"], loaded),
+            Some("all_of") => list.as_array().is_some_and(|a| a.iter().all(test)),
+            Some("any_of") => list.as_array().is_some_and(|a| a.iter().any(test)),
+            _ => false,
+        }
+    }
+    fn neoforge(c: &Value, loaded: &dyn Fn(&str) -> bool) -> bool {
+        let test = |q: &Value| neoforge(q, loaded);
+        match c["type"].as_str() {
+            Some("neoforge:true") => true,
+            Some("neoforge:mod_loaded") => c["modid"].as_str().is_some_and(loaded),
+            Some("neoforge:not") => !neoforge(&c["value"], loaded),
+            Some("neoforge:and") => c["values"].as_array().is_some_and(|a| a.iter().all(test)),
+            Some("neoforge:or") => c["values"].as_array().is_some_and(|a| a.iter().any(test)),
+            _ => false,
+        }
+    }
+    fn fabric(c: &Value, loaded: &dyn Fn(&str) -> bool) -> bool {
+        let test = |q: &Value| fabric(q, loaded);
+        let mods = || {
+            c["values"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(Value::as_str)
+        };
+        match c["condition"].as_str() {
+            Some("fabric:true") => true,
+            Some("fabric:all_mods_loaded") => mods().all(|m| m.is_some_and(loaded)),
+            Some("fabric:any_mods_loaded") => mods().any(|m| m.is_some_and(loaded)),
+            Some("fabric:not") => !fabric(&c["value"], loaded),
+            Some("fabric:and") => c["values"].as_array().is_some_and(|a| a.iter().all(test)),
+            Some("fabric:or") => c["values"].as_array().is_some_and(|a| a.iter().any(test)),
+            _ => false,
+        }
+    }
+    let litho = v.get("predicate").is_none_or(|p| predicate(p, loaded));
+    let loader = match (
+        v.get("neoforge:conditions"),
+        v.get("fabric:load_conditions"),
+    ) {
+        (Some(c), _) => all(c, &|c| neoforge(c, loaded)),
+        // One condition or a list of them.
+        (None, Some(c)) if c.is_array() => all(c, &|c| fabric(c, loaded)),
+        (None, Some(c)) => fabric(c, loaded),
+        (None, None) => true,
+    };
+    litho && loader
+}
+
+/// ChoiceTheorem's Overhauled Village's villages and outposts, which it adds
+/// to vanilla's `villages` and `pillager_outposts` sets in Java code
+/// (`CTOV.registerstructure`, through lithostitched), with its default
+/// config: every village type in three sizes, weighted 10, 4 and 1, and
+/// every outpost weighted 1. Vanilla's own entries stay (weight 1 each).
+const CTOV_VILLAGES: [&str; 21] = [
+    "beach",
+    "christmas",
+    "desert",
+    "desert_oasis",
+    "dark_forest",
+    "jungle",
+    "jungle_tree",
+    "mesa",
+    "mesa_fortified",
+    "mountain",
+    "mountain_alpine",
+    "mushroom",
+    "plains",
+    "plains_fortified",
+    "savanna",
+    "savanna_na",
+    "snowy_igloo",
+    "swamp",
+    "swamp_fortified",
+    "taiga",
+    "taiga_fortified",
+];
+const CTOV_OUTPOSTS: [&str; 11] = [
+    "beach",
+    "dark_forest",
+    "desert",
+    "jungle",
+    "badlands",
+    "mountain",
+    "plains",
+    "savanna",
+    "snowy",
+    "swamp",
+    "taiga",
+];
+
+/// The entries a mod adds to other structure sets in Java code, as its
+/// default config has them: (file name, set, `[(structure, weight)]`).
+/// Lithostitched appends them in the order of a hash map of every modifier
+/// in the pack, which carry cannot know; they are written in the order the
+/// mod registers them. Each set picks by weight, so how often each starts
+/// is the same.
+pub fn code_set_entries(mod_id: &str) -> Vec<(&'static str, &'static str, Vec<(String, u32)>)> {
+    match mod_id {
+        "ctov" => {
+            let outposts = CTOV_OUTPOSTS
+                .iter()
+                .map(|v| (format!("ctov:pillager_outpost_{v}"), 1))
+                .collect();
+            let villages = [("small", 10), ("medium", 4), ("large", 1)]
+                .into_iter()
+                .flat_map(|(size, weight)| {
+                    CTOV_VILLAGES
+                        .iter()
+                        .map(move |v| (format!("ctov:{size}/village_{v}"), weight))
+                })
+                .collect();
+            vec![
+                ("pillager_outposts", "minecraft:pillager_outposts", outposts),
+                ("villages", "minecraft:villages", villages),
+            ]
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// Rewrites one `data/<ns>/worldgen/<kind>/...` file in place; whether it
@@ -673,6 +873,88 @@ mod tests {
         ));
         assert_eq!(report.block_states, 2);
         assert_eq!(report.mapped, 0);
+    }
+
+    #[test]
+    fn modifiers_add_to_sets_and_pools() {
+        let mut report = Upgrade::default();
+        let only_fd = |m: &str| m == "farmersdelight";
+        let set = json!({"type": "lithostitched:add_structure_set_entries",
+            "structure_sets": "minecraft:villages",
+            "entries": [{"structure": "x:village", "weight": 4}]});
+        let (kind, added) = modifier(&set, &only_fd, &mut report).unwrap();
+        assert_eq!(kind, "structure_set");
+        assert_eq!(
+            added,
+            json!({"horizon:add_to": ["minecraft:villages"],
+                "structures": [{"structure": "x:village", "weight": 4}]})
+        );
+        // A compat addition holds only when its mod is ported along.
+        let pool = |modid: &str| {
+            json!({"type": "lithostitched:add_template_pool_elements",
+                "neoforge:conditions": [{"type": "neoforge:mod_loaded", "modid": modid}],
+                "fabric:load_conditions": {"condition": "fabric:all_mods_loaded", "values": ["other"]},
+                "template_pools": ["x:houses", "y:houses"],
+                "elements": [{"weight": 5, "element": {"element_type": "minecraft:single_pool_element",
+                    "location": "x:fd_farm", "projection": "rigid", "processors": "minecraft:empty"}}]})
+        };
+        let (kind, added) = modifier(&pool("farmersdelight"), &only_fd, &mut report).unwrap();
+        assert_eq!(kind, "template_pool");
+        assert_eq!(added["horizon:add_to"], json!(["x:houses", "y:houses"]));
+        assert_eq!(added["elements"][0]["weight"], 5);
+        assert!(modifier(&pool("create"), &only_fd, &mut report).is_none());
+        // Fabric's conditions when there are no NeoForge ones; lithostitched's own.
+        let fabric = json!({"type": "lithostitched:add_structure_set_entries",
+            "fabric:load_conditions": [{"condition": "fabric:not",
+                "value": {"condition": "fabric:any_mods_loaded", "values": ["create"]}}],
+            "predicate": {"type": "lithostitched:all_of", "predicates": [
+                {"type": "lithostitched:mod_loaded", "mod_id": "farmersdelight"},
+                {"type": "lithostitched:true"}]},
+            "structure_sets": "minecraft:villages", "entries": []});
+        assert!(modifier(&fabric, &only_fd, &mut report).is_some());
+        let tagged = json!({"type": "lithostitched:add_structure_set_entries",
+            "structure_sets": "#x:sets", "entries": []});
+        assert!(modifier(&tagged, &only_fd, &mut report).is_none());
+        let features = json!({"type": "lithostitched:add_features"});
+        assert!(modifier(&features, &only_fd, &mut report).is_none());
+        assert_eq!(
+            report.added_to,
+            BTreeMap::from([
+                ("minecraft:villages".into(), 1),
+                ("x:houses".into(), 1),
+                ("y:houses".into(), 1),
+            ])
+        );
+        assert_eq!(
+            report.modifiers_left,
+            BTreeMap::from([
+                ("conditions".into(), 1),
+                ("lithostitched:add_features".into(), 1),
+                ("target".into(), 1),
+            ])
+        );
+    }
+
+    #[test]
+    fn ctov_joins_vanillas_villages_and_outposts() {
+        let sets = code_set_entries("ctov");
+        let (file, set, outposts) = &sets[0];
+        assert_eq!(
+            (*file, *set),
+            ("pillager_outposts", "minecraft:pillager_outposts")
+        );
+        assert_eq!(outposts.len(), 11);
+        assert!(outposts.iter().all(|(_, w)| *w == 1));
+        let (_, set, villages) = &sets[1];
+        assert_eq!(*set, "minecraft:villages");
+        assert_eq!(villages.len(), 63);
+        assert_eq!(villages[0], ("ctov:small/village_beach".into(), 10));
+        assert_eq!(villages[21], ("ctov:medium/village_beach".into(), 4));
+        assert_eq!(
+            villages[62],
+            ("ctov:large/village_taiga_fortified".into(), 1)
+        );
+        assert!(code_set_entries("mvs").is_empty());
     }
 
     #[test]
