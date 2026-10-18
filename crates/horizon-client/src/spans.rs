@@ -54,3 +54,29 @@ pub fn take() -> Vec<(&'static str, f32)> {
     sums.sort_by(|a, b| b.1.total_cmp(&a.1));
     sums
 }
+
+#[cfg(test)]
+mod tests {
+    /// The thread's CPU clock moves with work done on it, not with time
+    /// spent asleep.
+    #[cfg(unix)]
+    #[test]
+    fn thread_cpu_counts_work_not_sleep() {
+        let start = super::thread_cpu().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let slept = super::thread_cpu().unwrap() - start;
+        // Busy until the clock shows 10 ms of work (a loaded machine gives
+        // the thread less than its wall time).
+        let mut x = 0u64;
+        let busy = std::time::Instant::now();
+        let worked = loop {
+            x = std::hint::black_box(x.wrapping_mul(31).wrapping_add(7));
+            let worked = super::thread_cpu().unwrap() - start - slept;
+            if worked.as_millis() >= 10 || busy.elapsed().as_secs() >= 10 {
+                break worked;
+            }
+        };
+        assert!(slept.as_millis() < 25, "{slept:?} while asleep");
+        assert!(worked.as_millis() >= 10, "{worked:?} while busy");
+    }
+}
