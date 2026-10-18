@@ -324,7 +324,7 @@ impl Game<'_> {
             )
             .unwrap_or_else(|_| VoxelShape::empty())
     }
-    fn block_in_tag(&self, tag: &str, block: &str) -> bool {
+    pub(super) fn block_in_tag(&self, tag: &str, block: &str) -> bool {
         self.res
             .items
             .block_tags

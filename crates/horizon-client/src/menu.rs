@@ -1669,6 +1669,18 @@ impl Menu {
         clicked: usize,
         moved: &ItemStack,
     ) -> Result<(), &'static str> {
+        self.quick_move_all_each(env, clicked, moved, &mut |_, _| {})
+    }
+
+    /// `quick_move_all`, calling `each` with the menu and the slot after each
+    /// QUICK_MOVE (a server's client sends every one of them).
+    pub fn quick_move_all_each(
+        &mut self,
+        env: &Env,
+        clicked: usize,
+        moved: &ItemStack,
+        each: &mut dyn FnMut(&Self, usize),
+    ) -> Result<(), &'static str> {
         if clicked >= self.slots.len() || !self.can_take_for_pick_all(clicked) {
             return Ok(());
         }
@@ -1680,6 +1692,7 @@ impl Menu {
                 && self.quick_replace(t, moved, env)
             {
                 self.click(env, t as i32, 0, Input::QuickMove)?;
+                each(self, t);
             }
         }
         Ok(())

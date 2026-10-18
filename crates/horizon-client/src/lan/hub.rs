@@ -1515,10 +1515,44 @@ impl Hub {
         }
     }
 
+    /// ServerPlayer.stopSleepInBed: the wake-up animation goes to the player
+    /// and those around, the pose is standing again and the sleep counter
+    /// starts the wake-up fade (100).
+    pub fn wake(&mut self, i: usize) {
+        let g = &mut self.guests[i];
+        if g.bed.take().is_none() && !g.sleeping {
+            return;
+        }
+        g.sleeping = false;
+        g.sleep_timer = 100;
+        let (id, at) = (g.entity_id, g.position);
+        // ClientboundAnimatePacket.WAKE_UP.
+        self.broadcast_near(
+            at,
+            128.0,
+            &C::Animate(play::Animate { id, action: 0 }),
+            None,
+        );
+    }
+
     // ---- per-player state ------------------------------------------------
 
     /// ServerPlayer.doTick: health, food, experience and the inventory menu.
     fn sync_player_state(&mut self, i: usize) {
+        // LivingEntity.startSleeping / stopSleeping: the pose and the bed go
+        // to the player too (its client lies down in the bed from them).
+        let g = &mut self.guests[i];
+        if g.bed != g.sent_bed {
+            g.sent_bed = g.bed;
+            let pose = if g.bed.is_some() { 2 } else { 0 };
+            g.send(&C::SetEntityData(play::SetEntityData {
+                id: g.entity_id,
+                values: vec![
+                    (6, serializer::POSE, Value::Id(pose)),
+                    (14, serializer::OPTIONAL_BLOCK_POS, Value::OptPos(g.bed)),
+                ],
+            }));
+        }
         // ServerEntity.sendDirtyEntityData on the player's first tick: the
         // health its creation set is still dirty, and goes to the player too.
         if self.guests[i].sent_health.is_none() {
@@ -1767,7 +1801,8 @@ impl Hub {
                     1 => self.guests[i].sprinting = true,
                     2 => self.guests[i].sprinting = false,
                     6 => self.guests[i].fall_flying = true,
-                    0 => self.guests[i].sleeping = false,
+                    // STOP_SLEEPING.
+                    0 => self.wake(i),
                     _ => {}
                 },
                 S::Chat(c) => {

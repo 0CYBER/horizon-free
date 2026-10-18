@@ -4599,6 +4599,10 @@ impl Game<'_> {
     /// Several clicks on one menu instance (a quick craft drag is three).
     fn menu_ops(&mut self, ops: &[(Option<usize>, i32, horizon_client::menu::Input)]) -> bool {
         use horizon_client::menu::Input;
+        if self.remote.is_some() && self.screen == Screen::Inventory {
+            // On a server the clicks are the server's: predicted and sent.
+            return self.remote_menu_ops(ops);
+        }
         if let [(Some(slot), button, input)] = ops {
             self.crafter_slot_clicked(*slot, *button, *input);
         }
@@ -4773,7 +4777,7 @@ impl Game<'_> {
                     plain: false,
                 };
                 (kind, map)
-            } else if self.station.is_none() && !self.mount_active() && self.remote.is_none() {
+            } else if self.station.is_none() && !self.mount_active() {
                 let table = self.craft_size == 3;
                 let map = Map {
                     container: 0,
@@ -4886,7 +4890,12 @@ impl Game<'_> {
             Some(false) => return true,
             Some(true) => {}
         }
-        self.register_exploration_maps(made);
+        // On a server the clicks only predict: the server drops, crafts and
+        // makes maps itself.
+        let predicting = self.remote.is_some();
+        if !predicting {
+            self.register_exploration_maps(made);
+        }
         if let Some(s) = menu.merchant.take() {
             self.merchant_sync_out(s);
         }
@@ -4904,10 +4913,12 @@ impl Game<'_> {
         if !offhand_mapped {
             self.offhand = menu.player_item(40).cloned();
         }
-        for stack in dropped {
-            self.player_drop(stack);
+        if !predicting {
+            for stack in dropped {
+                self.player_drop(stack);
+            }
+            self.award_crafted(&crafted);
         }
-        self.award_crafted(&crafted);
         if kind == Kind::Loom {
             if let Some(s) = self.station.as_mut() {
                 s.loom.selected = usize::try_from(menu.data[0]).ok();
@@ -5039,9 +5050,13 @@ impl Game<'_> {
                     return;
                 }
                 if let Some(moved) = self.last_quick_moved.clone() {
-                    self.menu_session(|menu, env, to_menu| {
-                        Some(menu.quick_move_all(env, to_menu(slot)?, &moved).is_ok())
-                    });
+                    if self.remote.is_some() {
+                        self.remote_quick_move_all(slot, &moved);
+                    } else {
+                        self.menu_session(|menu, env, to_menu| {
+                            Some(menu.quick_move_all(env, to_menu(slot)?, &moved).is_ok())
+                        });
+                    }
                 }
                 self.last_inv_click = None;
                 self.inv_clicks.skip_release();
@@ -7431,7 +7446,9 @@ impl Game<'_> {
         let mut r = dispenser::entity_random();
         let _yaw = r.next_float();
         let p = Vec3::new(at[0], at[1], at[2]);
+        self.next_entity += 1;
         self.orbs.push(ExperienceOrb {
+            id: self.next_entity,
             position: p,
             previous: p,
             velocity: Vec3::new(
@@ -7495,13 +7512,29 @@ impl Game<'_> {
             .player
             .as_ref()
             .filter(|p| !p.health.dead_or_dying() && !spectator);
-        let target = player.map(|p| {
-            [
-                p.position.x,
-                p.position.y + f64::from(p.dimensions.eye_height) / 2.0,
-                p.position.z,
-            ]
-        });
+        // ExperienceOrb.followNearbyPlayer: each orb goes for the nearest
+        // living player within 8 blocks, the host's own or a guest.
+        let mut followed: Vec<([f64; 3], [f64; 3])> = player
+            .map(|p| {
+                let feet = [p.position.x, p.position.y, p.position.z];
+                let eye = f64::from(p.dimensions.eye_height);
+                (feet, [feet[0], feet[1] + eye / 2.0, feet[2]])
+            })
+            .into_iter()
+            .collect();
+        if let Some(host) = self.lan.as_ref() {
+            followed.extend(
+                host.hub
+                    .guests
+                    .iter()
+                    .filter(|g| g.placed && g.loaded && !g.dead && g.health > 0.0)
+                    .filter(|g| !g.spectator())
+                    .map(|g| {
+                        let p = g.position;
+                        (p, [p[0], p[1] + g.eye_height() / 2.0, p[2]])
+                    }),
+            );
+        }
         let bounds = player.map(|p| {
             let w = f64::from(p.dimensions.width) / 2.0;
             (
@@ -7514,7 +7547,19 @@ impl Game<'_> {
             )
         });
         let mut orbs = std::mem::take(&mut self.orbs);
-        orbs.retain_mut(|o| o.tick(&self.world, &self.res.facts, self.collision, target));
+        orbs.retain_mut(|o| {
+            let distance = |feet: &[f64; 3]| -> f64 {
+                (feet[0] - o.position.x).powi(2)
+                    + (feet[1] - o.position.y).powi(2)
+                    + (feet[2] - o.position.z).powi(2)
+            };
+            let target = followed
+                .iter()
+                .filter(|(feet, _)| distance(feet) < 64.0)
+                .min_by(|a, b| distance(&a.0).total_cmp(&distance(&b.0)))
+                .map(|(_, target)| *target);
+            o.tick(&self.world, &self.res.facts, self.collision, target)
+        });
         let mut gained = 0;
         let mut taken = Vec::new();
         if let Some((min, max)) = bounds {
@@ -7548,19 +7593,25 @@ impl Game<'_> {
                 (self.world.random.next_float() - self.world.random.next_float()) * 0.35 + 0.9;
             self.audio
                 .play("minecraft:entity.experience_orb.pickup", at, 0.1, pitch);
-            if self.experience.give(gained as i32)
-                && self.experience.level % 5 == 0
-                && self.ticks > self.last_level_up + 100
-            {
-                self.last_level_up = self.ticks;
-                let volume = if self.experience.level > 30 {
-                    1.0
-                } else {
-                    self.experience.level as f32 / 30.0
-                };
-                self.audio
-                    .play("minecraft:entity.player.levelup", at, volume * 0.75, 1.0);
-            }
+            self.give_orb_points(gained);
+        }
+    }
+    /// `Player.giveExperiencePoints`, and `giveExperienceLevels`' level-up
+    /// sound every fifth level (at most every 100 ticks).
+    pub(super) fn give_orb_points(&mut self, gained: u32) {
+        let at = self.eye_position();
+        if self.experience.give(gained as i32)
+            && self.experience.level % 5 == 0
+            && self.ticks > self.last_level_up + 100
+        {
+            self.last_level_up = self.ticks;
+            let volume = if self.experience.level > 30 {
+                1.0
+            } else {
+                self.experience.level as f32 / 30.0
+            };
+            self.audio
+                .play("minecraft:entity.player.levelup", at, volume * 0.75, 1.0);
         }
     }
     /// BowItem.releaseUsing: power from charge time, arrows at power * 3.
@@ -8122,40 +8173,48 @@ impl Game<'_> {
         self.stats.reset("custom", "minecraft:time_since_rest");
     }
     fn wake_up(&mut self) {
+        if self.remote.is_some() {
+            // InBedChatScreen.sendWakeUp: the server wakes the player.
+            self.remote_stop_sleeping();
+            return;
+        }
         self.sleeping = None;
         self.sleep_timer = 100;
     }
     fn tick_sleep(&mut self) {
         self.sleep_timer = tick_sleep_timer(self.sleep_timer, self.sleeping.is_some());
-        let Some(head) = self.sleeping else {
-            return;
-        };
-        if self.keys.contains(&KeyCode::ShiftLeft)
-            || self
-                .player
-                .as_ref()
-                .is_none_or(|p| p.health.dead_or_dying())
-        {
-            self.wake_up();
-            return;
+        if let Some(head) = self.sleeping {
+            if self.keys.contains(&KeyCode::ShiftLeft)
+                || self
+                    .player
+                    .as_ref()
+                    .is_none_or(|p| p.health.dead_or_dying())
+            {
+                self.wake_up();
+                return;
+            }
+            if let Some(p) = self.player.as_mut() {
+                p.position = Vec3::new(
+                    f64::from(head[0]) + 0.5,
+                    f64::from(head[1]) + 0.5625,
+                    f64::from(head[2]) + 0.5,
+                );
+                p.velocity = Vec3::ZERO;
+            }
         }
-        if let Some(p) = self.player.as_mut() {
-            p.position = Vec3::new(
-                f64::from(head[0]) + 0.5,
-                f64::from(head[1]) + 0.5625,
-                f64::from(head[2]) + 0.5,
-            );
-            p.velocity = Vec3::ZERO;
-        }
-        // ServerLevel: once everyone has slept 100 ticks, skip to morning and clear weather.
-        if self.sleep_timer >= 100 {
+        // ServerLevel.tick: once enough of the players have slept 100 ticks,
+        // skip to morning, clear the weather and wake everyone.
+        if self.enough_slept() {
             let t = self.world.day_time;
             self.world.day_time = t + 24000 - t.rem_euclid(24000);
             self.world.weather.raining = false;
             self.world.weather.thundering = false;
             self.world.weather.rain_time = 0;
             self.world.weather.thunder_time = 0;
-            self.wake_up();
+            if self.sleeping.is_some() {
+                self.wake_up();
+            }
+            self.wake_guests();
         }
     }
     fn creative_origin(batch: &HudBatch) -> (f32, f32) {

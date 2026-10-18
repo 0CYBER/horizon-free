@@ -30,6 +30,18 @@ address. The script then checks, from both sides, what a guest's game used to ge
              tree (Tab), and runs what it completed;
 - recipes:   the guest's recipe book lists the planks recipe the logs unlock, and clicking it
              places a log in the inventory's crafting grid (the server places it).
+- feedback:  the guest's command feedback names the guest and shows the numbers.
+- clicks:    with real mouse presses (not click-slot, which skips the screen's press and drag
+             handling), the guest puts a stack into a chest and a furnace, drags planks across
+             its crafting grid and gathers a stack with a double click; the server has each.
+- sleep:     at night the guest lies down in its own bed (not the host); alone it stays night, it
+             gets up with Escape, and once the host sleeps too the night ends and both wake.
+- push:      a cow standing in the guest pushes it just clear of the cow (the guest's own client
+             pushes it, as in vanilla), not ever faster across the ground.
+- eat:       holding right click with bread, the guest's own screen plays the eating (the item in use
+             counts up) and the server eats one loaf and feeds the guest.
+- xp:        experience orbs 4 blocks away fly to the guest, show on the guest's screen and give the
+             guest their points (not the host).
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -50,6 +62,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import zlib
 from pathlib import Path
@@ -61,7 +74,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'commands', 'recipes', 'trials', 'effects', 'portals']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'push', 'eat', 'xp', 'effects', 'portals']
 
 
 class Game:
@@ -584,6 +597,91 @@ def check_containers(host, guest, out):
     return {'ender': ender, 'double': double, 'taken': taken}
 
 
+def slot_point(game, slot):
+    """The GUI point in the middle of slot `slot` of the open screen (`ui`'s slot-N)."""
+    for w in game.raw('ui')['widgets']:
+        if w.get('id') == f'slot-{slot}':
+            x, y, width, height = w['bounds']
+            return x + width / 2, y + height / 2
+    raise Failed(f'no slot {slot} on the screen')
+
+
+def mouse(game, *slots, right=False):
+    """Press over the first slot, move over the others and release: one click, or a drag."""
+    points = [f'{v:.1f}' for s in slots for v in slot_point(game, s)]
+    game.raw('drag-at', *(['right'] if right else []), *points)
+    game.wait(4)
+
+
+def hotbar_slot(game, item):
+    return next(s['slot'] for s in game('inventory')['hotbar'] if s and s.get('item') == item)
+
+
+def check_clicks(host, guest, out):
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    guest('command', command='give @s minecraft:cobblestone 10')
+    guest('command', command='give @s minecraft:coal 3')
+    guest('command', command='give @s minecraft:raw_iron 2')
+    guest('command', command='give @s minecraft:oak_planks 2')
+    guest.wait(10)
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    chest, furnace = (x, y, z + 2), (x, y, z - 2)
+    guest('command', command=f'setblock {chest[0]} {chest[1]} {chest[2]} minecraft:chest')
+    guest('command', command=f'setblock {furnace[0]} {furnace[1]} {furnace[2]} minecraft:furnace')
+    guest.wait(10)
+    # Pick the cobblestone up and put it down in the chest's first slot.
+    guest.raw('interact', *chest)
+    guest.raw('wait-for', 'screen', 'container', '--timeout', 10)
+    guest.wait(10)
+    mouse(guest, hotbar_slot(guest, 'minecraft:cobblestone'))
+    mouse(guest, 300)
+    guest.wait(10)
+    guest.shot(out, 'clicks-chest')
+    guest.raw('key', 'esc', 'tap')
+    guest.wait(10)
+    in_chest, _ = open_container(guest, chest, out, 'clicks-chest-after')
+    # Coal into the fuel slot, raw iron into the input.
+    guest.raw('interact', *furnace)
+    guest.raw('wait-for', 'screen', 'container', '--timeout', 10)
+    guest.wait(10)
+    mouse(guest, hotbar_slot(guest, 'minecraft:coal'))
+    mouse(guest, 301)
+    mouse(guest, hotbar_slot(guest, 'minecraft:raw_iron'))
+    mouse(guest, 300)
+    guest.wait(10)
+    guest.shot(out, 'clicks-furnace')
+    guest.raw('key', 'esc', 'tap')
+    guest.wait(10)
+    # Opening the furnace again resends the whole menu: the server's own view.
+    in_furnace, _ = open_container(guest, furnace, out, 'clicks-furnace-after')
+    # Two planks dragged over the 2x2 grid's left column: one each, four sticks.
+    guest.raw('key', 'e', 'tap')
+    guest.raw('wait-for', 'screen', 'inventory')
+    guest.wait(5)
+    mouse(guest, hotbar_slot(guest, 'minecraft:oak_planks'))
+    mouse(guest, 100, 102)
+    guest.wait(10)
+    grid = {s['slot']: (s.get('item'), s.get('count')) for s in guest('screen').get('slots', [])
+            if s.get('slot') in (100, 102, 200) and s.get('item')}
+    guest.shot(out, 'clicks-drag')
+    guest.raw('click-slot', 200, 'shift')
+    guest.wait(10)
+    guest.raw('key', 'esc', 'tap')
+    guest.wait(10)
+    # The chest's menu brings the whole inventory as the server has it.
+    open_container(guest, chest, out, 'clicks-inventory')
+    counts = guest('inventory')['counts']
+    for at in (chest, furnace):
+        guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:air')
+    assert in_chest == {0: 'minecraft:cobblestone'}, f'the chest holds {in_chest} after the guest put cobblestone in'
+    assert in_furnace == {0: 'minecraft:raw_iron', 1: 'minecraft:coal'}, f'the furnace holds {in_furnace}'
+    assert grid.get(100) == ('minecraft:oak_planks', 1) and grid.get(102) == ('minecraft:oak_planks', 1), \
+        f'the drag left the grid as {grid}'
+    assert counts.get('minecraft:stick') == 4 and 'minecraft:cobblestone' not in counts, f'inventory after: {counts}'
+    return {'chest': in_chest, 'furnace': in_furnace, 'grid': grid, 'inventory': counts}
+
+
 def check_feedback(host, guest, out):
     x, y, z = (round(v, 1) for v in pos_of(guest))
     guest('command', command='item replace entity @s weapon.mainhand with minecraft:stick')
@@ -824,13 +922,136 @@ def check_trials(host, guest, out):
     return {'spawner': trial, 'vault': active, 'rewarded': uuid(rewarded), 'host': uuid(host_uuid)}
 
 
+def bed_at(game, foot):
+    """A bed whose foot is at `foot`, its head one block east."""
+    x, y, z = foot
+    game('command', command=f'setblock {x} {y} {z} minecraft:red_bed[facing=east,part=foot]')
+    game('command', command=f'setblock {x + 1} {y} {z} minecraft:red_bed[facing=east,part=head]')
+    return [x + 1, y, z]
+
+
+def check_sleep(host, guest, out):
+    for g in (host, guest):
+        g('command', command='gamemode survival')
+    host('command', command='time set midnight')
+    gx, gy, gz = (int(v // 1) for v in pos_of(guest))
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    guest_bed = bed_at(guest, (gx, gy, gz + 2))
+    host_bed = bed_at(host, (hx, hy, hz + 2))
+    guest.wait(10)
+    guest.raw('interact', *guest_bed)
+    guest.wait(10)
+    asleep = {'guest': guest('state').get('sleeping'), 'host': host('state').get('sleeping'),
+              'server': host.raw('lan', 'status')['guests'][0].get('sleeping')}
+    guest.shot(out, 'sleep-guest')
+    # Alone in bed: still night 120 ticks later (everyone must sleep).
+    guest.wait(120)
+    night = host('state')['time']['time_of_day']
+    # Escape gets the guest up (InBedChatScreen), then back to bed.
+    guest.raw('key', 'esc', 'tap')
+    guest.wait(10)
+    up = guest('state').get('sleeping')
+    guest.raw('interact', *guest_bed)
+    host.raw('interact', *host_bed)
+    host.wait(130)
+    after = {'guest': guest('state').get('sleeping'), 'host': host('state').get('sleeping'),
+             'time': host('state')['time']['time_of_day']}
+    guest.shot(out, 'sleep-morning')
+    for at in (guest_bed, host_bed):
+        guest('command', command=f'fill {at[0] - 1} {at[1]} {at[2]} {at[0]} {at[1]} {at[2]} minecraft:air')
+    host('command', command='time set day')
+    detail = {'asleep': asleep, 'night': night, 'up': up, 'after': after}
+    assert asleep['guest'] == guest_bed and asleep['server'] == guest_bed, f'the guest is not in its bed: {detail}'
+    assert asleep['host'] is None, f'the guest\'s bed put the host to sleep: {detail}'
+    assert 13000 < night < 23000, f'one of two players asleep ended the night: {detail}'
+    assert up is None, f'Escape did not get the guest up: {detail}'
+    assert after['guest'] is None and after['host'] is None and after['time'] < 1000, f'no morning: {detail}'
+    return detail
+def check_push(host, guest, out):
+    guest('command', command='gamemode survival')
+    x, y, z = (int(v // 1) + 0.5 for v in pos_of(guest))
+    guest('command', command=f'tp @s {x} {y - 0.5} {z}')
+    guest.wait(20)
+    x, y, z = pos_of(guest)
+    # A cow that doesn't walk, 0.3 east of the guest: the two boxes overlap until their centres are
+    # 0.75 apart, so the push stops a fraction of a block away.
+    guest('command', command=f'summon minecraft:cow {x + 0.3:.2f} {y:.2f} {z:.2f} {{NoAI:1b}}')
+    guest.wait(60)
+    nx, _, nz = pos_of(guest)
+    guest.shot(out, 'push')
+    guest('command', command='kill @e[type=minecraft:cow]')
+    moved = ((nx - x) ** 2 + (nz - z) ** 2) ** 0.5
+    detail = {'from': [round(x, 3), round(z, 3)], 'to': [round(nx, 3), round(nz, 3)], 'moved': round(moved, 3)}
+    assert nx < x, f'the cow did not push the guest west: {detail}'
+    assert moved < 1.5, f'the cow pushed the guest too far: {detail}'
+    return detail
+def check_eat(host, guest, out):
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    # Hungry: the eating needs food below 20 (Player.canEat).
+    guest('command', command='effect give @s minecraft:hunger 3 255')
+    guest.wait(70)
+    guest('command', command='effect clear @s')
+    guest('command', command='give @s minecraft:bread 3')
+    guest.wait(5)
+    guest.raw('select', 'minecraft:bread')
+    hungry = guest('state')['player']['food']
+    # use-item --hold returns once released: watch the guest's screen meanwhile.
+    hold = threading.Thread(target=guest.raw, args=('use-item', '--hold', 2.2))
+    hold.start()
+    using = []
+    for _ in range(4):
+        time.sleep(0.2)
+        using.append(guest('state').get('using'))
+    guest.shot(out, 'eat')
+    hold.join()
+    guest.wait(10)
+    fed = guest('state')['player']['food']
+    left = guest('inventory')['counts'].get('minecraft:bread', 0)
+    detail = {'hungry': hungry, 'fed': fed, 'bread': left, 'using': using, 'after': guest('state').get('using')}
+    assert hungry < 20, f'the guest is not hungry: {detail}'
+    ticks = [u['ticks'] for u in using if u]
+    assert len(ticks) >= 3 and ticks == sorted(ticks) and ticks[-1] > ticks[0], f'no eating on the guest\'s screen: {detail}'
+    assert left == 2 and fed > hungry, f'the server did not eat one loaf: {detail}'
+    assert detail['after'] is None, f'still eating after the release: {detail}'
+    return detail
+
+
+def check_xp(host, guest, out):
+    for g in (host, guest):
+        g('command', command='gamemode survival')
+        g('command', command='xp set @s 0 levels')
+        g('command', command='xp set @s 0 points')
+    guest.wait(10)
+    x, y, z = pos_of(guest)
+    # Three orbs of 7 points 4 blocks east of the guest (out of reach, within the 8 blocks orbs
+    # follow from): they fly to the guest.
+    for _ in range(3):
+        guest('command', command=f'summon minecraft:experience_orb {x + 4:.2f} {y + 0.5:.2f} {z:.2f} {{Value:7s}}')
+    guest.wait(2)
+    seen = remote(guest).get('entities', {}).get('minecraft:experience_orb', 0)
+    guest.shot(out, 'xp-orbs')
+    guest.wait(60)
+    xp = guest('state')['player']['xp']
+    host_xp = host('state')['player']['xp']
+    left = remote(guest).get('entities', {}).get('minecraft:experience_orb', 0)
+    detail = {'seen': seen, 'guest': xp, 'host': host_xp, 'left': left}
+    # ExperienceOrb.scanForMerges: orbs of one value side by side can merge into one.
+    assert 1 <= seen <= 3, f'the guest saw {seen} orbs: {detail}'
+    assert xp['total'] == 21 and xp['level'] == 2, f'the guest\'s experience after three 7-point orbs: {detail}'
+    assert host_xp['total'] == 0, f'the host took the orbs: {detail}'
+    assert left == 0, f'orbs left on the guest\'s screen: {detail}'
+    return {'seen': seen, 'guest': xp, 'host': host_xp}
+
+
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
              'chest': check_chest, 'crafting': check_crafting, 'sign': check_sign, 'damage': check_damage,
              'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
              'containers': check_containers, 'feedback': check_feedback, 'commands': check_commands,
-             'recipes': check_recipes,
-             'trials': check_trials,
-             'walls': check_walls, 'effects': check_effects, 'portals': check_portals}
+             'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,
+             'effects': check_effects, 'portals': check_portals, 'clicks': check_clicks,
+             'sleep': check_sleep, 'push': check_push, 'eat': check_eat,
+             'xp': check_xp}
 
 
 def run(ctl, out, resources, checks):
