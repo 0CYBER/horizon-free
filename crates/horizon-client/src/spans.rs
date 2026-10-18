@@ -1,11 +1,12 @@
 //! Named timings within a frame, for finding what makes a frame slow:
 //! `HORIZON_SPIKES=MS` prints the spans of every frame whose CPU time
-//! exceeds MS milliseconds. Costs one clock read per span when enabled and
-//! a relaxed load otherwise.
+//! exceeds MS milliseconds, and of every server tick (dedicated or
+//! integrated) longer than MS. Costs one clock read per span when enabled
+//! and a relaxed load otherwise.
 use std::{
     cell::RefCell,
     sync::atomic::{AtomicBool, Ordering},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
@@ -27,6 +28,18 @@ pub fn time<T>(name: &'static str, f: impl FnOnce() -> T) -> T {
     let ms = started.elapsed().as_secs_f32() * 1000.0;
     SPANS.with(|s| s.borrow_mut().push((name, ms)));
     out
+}
+/// The CPU time this thread has used, where the platform tells it: a tick
+/// with more wall time than CPU time waited (for a lock, or for a core on a
+/// busy machine).
+pub fn thread_cpu() -> Option<Duration> {
+    #[cfg(unix)]
+    {
+        let t = rustix::time::clock_gettime(rustix::time::ClockId::ThreadCPUTime);
+        Some(Duration::new(t.tv_sec as u64, t.tv_nsec as u32))
+    }
+    #[cfg(not(unix))]
+    None
 }
 /// The frame's spans, summed by name, slowest first; clears them.
 pub fn take() -> Vec<(&'static str, f32)> {

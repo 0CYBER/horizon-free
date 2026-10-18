@@ -335,11 +335,11 @@ impl Game<'_> {
             self.run_tasks();
             if flags.paused.load(Ordering::Relaxed) {
                 // Only the connections run.
-                self.tick_server(true)?;
+                self.tick_server_timed(true)?;
             } else {
                 self.follow_distances(&flags);
                 let started = Instant::now();
-                self.tick_server(false)?;
+                self.tick_server_timed(false)?;
                 self.debug_charts.log_tick(started, started.elapsed());
                 flags.smoothed_tick_ms.store(
                     self.debug_charts.smoothed_tick_ms.to_bits(),

@@ -51,6 +51,10 @@ horizon-dualsense = { path = "../horizon-dualsense" }
 # HTTPS to the Minecraft services (online-mode session join).
 ureq = { version = "2", default-features = false, features = ["tls"] }
 
+[target.'cfg(unix)'.dependencies]
+# The server thread's CPU time per tick (`HORIZON_SPIKES`, spans.rs).
+rustix = { version = "1", default-features = false, features = ["std", "time"] }
+
 [target.'cfg(windows)'.build-dependencies]
 # The icon resource in the .exe (build.rs).
 winresource = "0.1"
