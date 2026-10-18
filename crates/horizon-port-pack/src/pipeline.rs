@@ -120,13 +120,27 @@ pub fn carry(
     });
     let allowed = |b: &str| vanilla.as_ref().is_none_or(|v| v.contains(b));
     let conventions = crate::worldgen::loader_biome_tags(work);
-    let mut done = 0;
-    for r in &records {
-        let chosen = if only.is_empty() {
+    let chosen = |r: &inventory::Record| {
+        if only.is_empty() {
             r.class == "content"
         } else {
             only.contains(&r.key)
-        };
+        }
+    };
+    // The mods ported along (carried now or before), for the conditions of
+    // the mods' worldgen modifiers.
+    let ported: BTreeSet<&str> = records
+        .iter()
+        .filter(|r| {
+            r.jar.is_some() && (chosen(r) || work.join("mods").join(&r.key).join("carry").is_dir())
+        })
+        .filter_map(|r| Some(r.info.as_ref()?.mod_id.as_str()))
+        .chain(["minecraft"])
+        .collect();
+    let loaded = |m: &str| ported.contains(m);
+    let mut done = 0;
+    for r in &records {
+        let chosen = chosen(r);
         let (Some(jar), Some(info)) = (&r.jar, &r.info) else {
             if chosen && !only.is_empty() {
                 log(format!(
@@ -155,6 +169,7 @@ pub fn carry(
             &work.join("mods").join(&r.key),
             facts.as_ref().filter(seen),
             &allowed,
+            &loaded,
             &conventions,
         ) {
             Ok(report) => {

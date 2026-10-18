@@ -110,6 +110,19 @@ impl Limits {
             max_depth: 512,
         }
     }
+
+    /// Structure templates (`structure/*.nbt`): vanilla reads them with
+    /// `NbtAccounter.unlimitedHeap()` (TemplateSource.readStructure), and
+    /// mods ship templates past the default node cap (YUNG's Better Ocean
+    /// Monuments' start piece, 115x64x126 blocks, holds millions of tags).
+    /// The byte cap stays as the only guard on the decompressed file.
+    pub fn templates() -> Self {
+        Self {
+            max_bytes: 1 << 28,
+            max_nodes: usize::MAX,
+            max_depth: 512,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -834,6 +847,18 @@ mod tests {
         };
         assert!(write_network(&tag, limits).is_err());
         assert!(read_network(&bytes, limits).is_err());
+    }
+    #[test]
+    fn templates_read_past_the_default_node_cap() {
+        // A big mod template (YUNG's monument start) holds more tags than the
+        // default cap; vanilla reads templates with an unlimited accounter.
+        let root = NamedTag {
+            name: JavaString::default(),
+            tag: Tag::compound([("blocks", Tag::List(vec![Tag::Byte(1); 1_000_001]))]),
+        };
+        let bytes = write_named(&root, Limits::templates()).unwrap();
+        assert!(read_named(&bytes, Limits::default()).is_err());
+        assert_eq!(read_named(&bytes, Limits::templates()).unwrap().0, root);
     }
     #[test]
     fn depth_boundary_and_every_truncated_prefix() {
