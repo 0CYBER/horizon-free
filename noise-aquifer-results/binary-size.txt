@@ -1,3 +1,0 @@
-   text	   data	    bss	    dec	    hex	filename
-5164975	 130720	   3344	5299039	 50db5f	/srv/bob-data/horizon-noise-aquifer-e477fa56/baseline
-5167835	 130640	    576	5299051	 50db6b	/srv/bob-data/horizon-noise-aquifer-e477fa56/candidate

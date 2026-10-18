@@ -1,3 +1,0 @@
-57c0bf92bc3a01d28d3aa08c916a0b37f5568d7d287b98508516fd0488fae020  /srv/bob-data/horizon-noise-aquifer-e477fa56/snapshot-baseline
-a43dc6817c55a55e7f869c2134eec9ac8e0c28505b06bd100c34b4b20ea4dbcd  /srv/bob-data/horizon-noise-aquifer-e477fa56/snapshot-candidate
-c3c042098409f9bb2aa2f3c92bca70c803474e2a4af32c4afc0d9cebeb111ca4  /srv/bob-data/horizon-noise-aquifer-e477fa56/horizon-density-parity

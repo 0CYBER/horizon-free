@@ -1,9 +1,0 @@
-overworld 1 12345 [0, 0] initialized 12.270935 -> 10.566346 (13.891%) combined 14.202495 -> 12.541112 (11.698%) slower pairs 0
-overworld 4 12345 [0, 0] initialized 3.837939 -> 3.408437 (11.191%) combined 4.405165 -> 3.987592 (9.479%) slower pairs 0
-the_nether 1 12345 [0, 0] initialized 5.000868 -> 4.843412 (3.149%) combined 5.381649 -> 5.215208 (3.093%) slower pairs 2
-the_nether 4 12345 [0, 0] initialized 1.395740 -> 1.367372 (2.033%) combined 1.497615 -> 1.473427 (1.615%) slower pairs 0
-the_end 1 12345 [0, 0] initialized 1.087874 -> 1.054903 (3.031%) combined 1.161584 -> 1.128076 (2.885%) slower pairs 1
-the_end 4 12345 [0, 0] initialized 0.275263 -> 0.260434 (5.387%) combined 0.302814 -> 0.288325 (4.785%) slower pairs 0
-overworld 1 -1 [32, -32] initialized 11.333986 -> 9.786101 (13.657%) combined 12.356760 -> 10.854422 (12.158%) slower pairs 0
-overworld 4 -1 [32, -32] initialized 3.058178 -> 2.639180 (13.701%) combined 3.357631 -> 2.938479 (12.484%) slower pairs 0
-overworld 1 12345 [0, 0] cold 23.049481 -> 21.473030 (6.839%) combined 24.984204 -> 23.443390 (6.167%) slower pairs 0

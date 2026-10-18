@@ -1,5 +1,0 @@
-/private-parity/
-/__pycache__/
-*.log
-!core-final-tests.log
-!world-final-tests.log
