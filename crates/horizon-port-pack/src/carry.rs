@@ -331,13 +331,16 @@ fn unreadable(name: &str, bytes: &mut Vec<u8>) -> Option<String> {
 
 /// Carries `jar` over into `out/carry/`. With the oracle's `facts`, blocks
 /// and items are the ones the mod registers, with the templates and numbers
-/// the facts give; `allowed` says which vanilla blocks the game has.
+/// the facts give; `allowed` says which vanilla blocks the game has;
+/// `loaded` which mods are ported along, for the conditions of the mod's
+/// worldgen modifiers.
 pub fn carry(
     jar: &Path,
     info: &JarInfo,
     out: &Path,
     facts: Option<&Facts>,
     allowed: &dyn Fn(&str) -> bool,
+    loaded: &dyn Fn(&str) -> bool,
     conventions: &BTreeMap<String, Value>,
 ) -> Result<Report, String> {
     let id = &info.mod_id;
@@ -427,6 +430,26 @@ pub fn carry(
                         bytes = serde_json::to_vec_pretty(&v).unwrap_or(bytes);
                     }
                 }
+            } else if let Some(path) = rel
+                .strip_prefix("lithostitched/worldgen_modifier/")
+                .filter(|_| name.starts_with("data/") && name.ends_with(".json"))
+            {
+                // Additions to other sets and pools, as files the game merges.
+                let modifier = serde_json::from_slice::<Value>(&bytes).ok();
+                let types = &mut report.worldgen_types;
+                if let Some((kind, mut added)) =
+                    modifier.and_then(|v| crate::worldgen::modifier(&v, loaded, types))
+                {
+                    crate::worldgen::upgrade(kind, &mut added, types, &set_tags);
+                    let to = format!(
+                        "data/{id}/worldgen/{kind}/{}/{path}",
+                        crate::worldgen::ADDED
+                    );
+                    write(
+                        &inside.join(to),
+                        &serde_json::to_vec_pretty(&added).unwrap_or_default(),
+                    )?;
+                }
             } else if rel.starts_with("tags/worldgen/biome/") && name.starts_with("data/") {
                 if let Ok(v) = serde_json::from_slice::<Value>(&bytes) {
                     crate::worldgen::convention_tags(&v, &mut biome_conventions);
@@ -461,6 +484,35 @@ pub fn carry(
             }
         }
         write(&dest, &bytes)?;
+    }
+    // Entries the mod adds to other structure sets in Java code, for the
+    // structures it has.
+    for (file, set, entries) in crate::worldgen::code_set_entries(id) {
+        let entries: Vec<Value> = entries
+            .into_iter()
+            .filter(|(s, _)| {
+                s.split_once(':').is_some_and(|(ns, path)| {
+                    inside
+                        .join(format!("data/{ns}/worldgen/structure/{path}.json"))
+                        .exists()
+                })
+            })
+            .map(|(structure, weight)| json!({"structure": structure, "weight": weight}))
+            .collect();
+        if entries.is_empty() {
+            continue;
+        }
+        let added = &mut report.worldgen_types.added_to;
+        *added.entry(set.to_owned()).or_default() += entries.len();
+        let to = format!(
+            "data/{id}/worldgen/structure_set/{}/{file}.json",
+            crate::worldgen::ADDED
+        );
+        let v = json!({"horizon:add_to": set, "structures": entries});
+        write(
+            &inside.join(to),
+            &serde_json::to_vec_pretty(&v).unwrap_or_default(),
+        )?;
     }
     // 1.21.4 moved item models behind `items/<name>.json` definitions.
     for m in &item_models {
@@ -832,6 +884,14 @@ mod tests {
                 r#"{"values": ["gem:gem_block"]}"#,
             ),
             ("data/c/tags/item/gems.json", r#"{"values": ["gem:gem"]}"#),
+            (
+                "data/gem/lithostitched/worldgen_modifier/houses.json",
+                r#"{"type": "lithostitched:add_template_pool_elements",
+                    "template_pools": "minecraft:village/plains/houses",
+                    "elements": [{"weight": 2, "element": {"element_type": "minecraft:single_pool_element",
+                    "location": "gem:hut", "projection": "rigid",
+                    "processors": {"processors": [{"processor_type": "lithostitched:block_swap"}]}}}]}"#,
+            ),
             // What the game would refuse: vanilla skips these files alone.
             ("assets/gem/lang/ry_UA.json", r#"{"item.gem.gem": "Gem"}"#),
             ("data/gem/tags/item/empty.json", ""),
@@ -858,8 +918,17 @@ mod tests {
         );
         assert_eq!(info.census.classes, 1);
         let out = dir.join("work/mods/gem");
-        let report = carry(&jar, &info, &out, None, &|_| true, &BTreeMap::new()).unwrap();
-        assert_eq!(report.copied, 13);
+        let report = carry(
+            &jar,
+            &info,
+            &out,
+            None,
+            &|_| true,
+            &|_| true,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(report.copied, 14);
         let unreadable: Vec<&str> = report.unreadable.keys().map(String::as_str).collect();
         assert_eq!(
             unreadable,
@@ -892,6 +961,25 @@ mod tests {
         )
         .unwrap();
         assert_eq!(recipe["key"]["#"], "gem:gem");
+        // A lithostitched pool addition, as a file the game merges, upgraded
+        // as the mod's own pools are.
+        let added: Value = serde_json::from_slice(
+            &fs::read(carried.join("data/gem/worldgen/template_pool/horizon_added/houses.json"))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            added["horizon:add_to"],
+            json!(["minecraft:village/plains/houses"])
+        );
+        assert_eq!(
+            added["elements"][0]["element"]["processors"],
+            json!({"processors": []})
+        );
+        assert_eq!(
+            report.worldgen_types.added_to["minecraft:village/plains/houses"],
+            1
+        );
 
         // Horizon's own reader accepts it: blocks and items declared, files fenced.
         let package = horizon_mods::Package::read(&carried).unwrap();
