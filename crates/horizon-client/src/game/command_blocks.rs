@@ -357,6 +357,7 @@ impl Game<'_> {
                 silent: false,
                 store: None,
                 elsewhere: false,
+                level: None,
                 block: Some(pos),
             };
             // performPrefixedCommand: a leading slash is allowed.
