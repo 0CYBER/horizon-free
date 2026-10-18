@@ -244,6 +244,18 @@ packet!(EntityPositionSync { id: i32 => VarInt, path: PositionPath => PositionPa
 packet!(ForgetLevelChunk { pos: [i32; 2] => ChunkPos });
 packet!(GameEvent { event: u8 => UByte, param: f32 => Float });
 packet!(HurtAnimation { id: i32 => VarInt, yaw: f32 => Float });
+packet!(
+    /// ClientboundDamageEventPacket: the hurt entity, the damage type's
+    /// registry id, the causing and the direct entity (none: -1 on the wire's
+    /// id + 1) and the source's position.
+    DamageEvent {
+        id: i32 => VarInt,
+        source_type: i32 => VarInt,
+        cause: Option<i32> => OptVarInt,
+        direct: Option<i32> => OptVarInt,
+        position: Option<[f64; 3]> => Opt<Vec3d>,
+    }
+);
 packet!(LevelChunkWithLight { x: i32 => Int, z: i32 => Int, chunk: ChunkData => ChunkData, light: LightData => LightData });
 packet!(LevelEvent { kind: i32 => Int, pos: [i32; 3] => Pos, data: i32 => Int, global: bool => Bool });
 packet!(LightUpdate { x: i32 => VarInt, z: i32 => VarInt, light: LightData => LightData });
@@ -1406,6 +1418,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     GameEvent(GameEvent) = GAME_EVENT,
     GameRuleValues(GameRuleValues) = GAME_RULE_VALUES,
     HurtAnimation(HurtAnimation) = HURT_ANIMATION,
+    DamageEvent(DamageEvent) = DAMAGE_EVENT,
     KeepAlive(KeepAlive) = KEEP_ALIVE,
     InitializeBorder(InitializeBorder) = INITIALIZE_BORDER,
     LevelChunkWithLight(LevelChunkWithLight) = LEVEL_CHUNK_WITH_LIGHT,
@@ -2140,6 +2153,13 @@ mod tests {
                         operation: 1,
                     }],
                 }],
+            }),
+            Clientbound::DamageEvent(DamageEvent {
+                id: 7,
+                source_type: 31,
+                cause: Some(0),
+                direct: None,
+                position: Some([1.5, -2.0, 3.25]),
             }),
             Clientbound::SetHealth(SetHealth {
                 health: 17.5,

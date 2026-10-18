@@ -109,6 +109,33 @@ impl Hub {
         );
     }
 
+    /// `ServerLevel.broadcastDamageEvent`: the clients around show the hurt
+    /// entity's flash and hear its hurt sound.
+    pub fn damage_event(
+        &self,
+        id: i32,
+        kind: &str,
+        cause: Option<i32>,
+        direct: Option<i32>,
+        at: [f64; 3],
+    ) {
+        let Some(source_type) = self.sync.id("minecraft:damage_type", kind) else {
+            return;
+        };
+        self.broadcast_near(
+            at,
+            128.0,
+            &C::DamageEvent(play::DamageEvent {
+                id,
+                source_type,
+                cause,
+                direct,
+                position: None,
+            }),
+            None,
+        );
+    }
+
     pub fn swing(&self, id: i32, hand: i32, at: [f64; 3], except: Option<u32>) {
         self.broadcast_near(
             at,
@@ -428,15 +455,17 @@ impl Hub {
         let Slots::Block(pos) = m.slots else {
             return;
         };
-        let Some(BlockEntity::Furnace(f)) = world.block_entities.get(&pos) else {
-            return;
-        };
-        let data = [
-            f.lit_remaining,
-            f.lit_total,
-            f.cooking_timer,
-            f.cooking_total,
-        ]
+        // AbstractFurnaceBlockEntity.dataAccess, BrewingStandBlockEntity.dataAccess.
+        let data = match world.block_entities.get(&pos) {
+            Some(BlockEntity::Furnace(f)) => [
+                f.lit_remaining,
+                f.lit_total,
+                f.cooking_timer,
+                f.cooking_total,
+            ],
+            Some(BlockEntity::Brewing(b)) => [b.brew_time, b.fuel, b.total_brew_time, b.total_fuel],
+            _ => return,
+        }
         .map(|v| v as i16);
         m.sent_data.resize(data.len(), i16::MIN);
         let window = m.window;

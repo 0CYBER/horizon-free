@@ -42,6 +42,8 @@ pub(super) struct LanHost {
     pub hub: Hub,
     pub settings: LanSettings,
     pub host_entity: i32,
+    /// The host's swings the guests were told of (`Game::swings_started`).
+    pub host_swings: u32,
     pub host_uuid: u128,
     /// The host's profile name (the account's, or the offline name).
     pub host_name: String,
@@ -398,6 +400,8 @@ impl Game<'_> {
                         [&m.extra.head, &m.extra.chest, &m.extra.legs, &m.extra.feet]
                             .map(|s| s.as_deref())
                     }),
+                    // The host draws this guest's arm swinging.
+                    "model_swinging": h.models.get(&g.conn).map(|m| m.ai.swinging),
                 })).collect::<Vec<_>>(),
             }),
             _ => json!({ "open": false }),
@@ -512,6 +516,7 @@ impl Game<'_> {
             hub,
             settings: LanSettings { port, ..settings },
             host_entity,
+            host_swings: self.swings_started,
             host_uuid,
             host_name: self.options.player_name(),
             models: HashMap::new(),
@@ -827,6 +832,7 @@ impl Game<'_> {
             };
             let spawn = self.spawn.map_or([0.5, 80.0, 0.5], |s| [s.x, s.y, s.z]);
             let events = {
+                let clock_rate = self.network_clock_rate();
                 let mut ctx = TickCtx {
                     world: &mut self.world,
                     host: state.as_ref(),
@@ -835,11 +841,7 @@ impl Game<'_> {
                     spawn,
                     difficulty: i32::from(self.ui.difficulty),
                     difficulty_locked: self.level.difficulty_locked,
-                    clock_rate: if self.ui.rules.bool("advance_time") {
-                        self.ui.clock.rate
-                    } else {
-                        0.0
-                    },
+                    clock_rate,
                     tick_rate: self.clock.rate(),
                     tick_frozen: self.clock.frozen(),
                     collision: Some(self.collision),
@@ -1009,6 +1011,7 @@ impl Game<'_> {
         } else {
             entities
         };
+        let clock_rate = self.network_clock_rate();
         let mut ctx = TickCtx {
             world: &mut self.world,
             host: state,
@@ -1017,7 +1020,7 @@ impl Game<'_> {
             spawn,
             difficulty: i32::from(self.ui.difficulty),
             difficulty_locked: self.level.difficulty_locked,
-            clock_rate: self.ui.clock.rate,
+            clock_rate,
             tick_rate: self.clock.rate(),
             tick_frozen: self.clock.frozen(),
             collision: Some(self.collision),
@@ -1086,8 +1089,30 @@ impl Game<'_> {
                 .and_then(|s| s.get(&m.id))
                 .copied();
             let at = [m.position.x, m.position.y, m.position.z];
-            if m.hurt_time > old.map_or(0, |o| o.0) && !dead {
-                host.hub.entity_event(m.id as i32, 2, at);
+            // LivingEntity.hurtServer: a hurt that restarted the hurt time.
+            if m.hurt_time > old.map_or(0, |o| o.0)
+                && !dead
+                && let Some((source, _)) = m.last_damage
+            {
+                use horizon_client::mobs::{DamageKind as K, Who};
+                let player = source.attacker == Some(Who::Player);
+                let kind = super::creatures::damage_type(source.kind, player);
+                // The player a mob sees is the guest acting, else the host.
+                let cause = source.attacker.map(|who| match who {
+                    Who::Player => host
+                        .mob_players
+                        .get(&m.id)
+                        .and_then(|conn| host.hub.guest(*conn))
+                        .map_or(host.host_entity, |g| g.entity_id),
+                    Who::Mob(id) => id as i32,
+                });
+                // A projectile is the direct entity of its hit: not tracked here.
+                let melee = matches!(
+                    source.kind,
+                    K::PlayerAttack | K::MaceSmash | K::MobAttack | K::Sting | K::SonicBoom
+                );
+                let direct = cause.filter(|_| melee);
+                host.hub.damage_event(m.id as i32, kind, cause, direct, at);
             }
             if dead && !old.is_some_and(|o| o.1) {
                 host.hub.entity_event(m.id as i32, 3, at);
@@ -1176,6 +1201,9 @@ impl Game<'_> {
                 .each_ref()
                 .map(|s| s.as_ref().map(|s| s.item.clone()));
             m.extra.crouching = g.sneaking;
+            // LivingEntity.updateSwingTime: the arm swing lan_swings started.
+            m.anim.attack_anim_o = m.anim.attack_anim;
+            horizon_client::mobs::ai::tick_swing(m);
         }
     }
 

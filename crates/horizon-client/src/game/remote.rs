@@ -151,7 +151,12 @@ pub(super) struct Remote {
     synced: Vec<Option<ItemStack>>,
     decode_errors: u32,
     clock: Option<i32>,
+    /// `ClientClockManager.ClientClockInstance`'s rate and partial tick for
+    /// the level's clock (its total is `world.day_time`), and
+    /// `lastTickGameTime`.
     clock_rate: f32,
+    clock_partial: f32,
+    clock_game_time: i64,
     /// `ClientChunkCache.Storage`'s view centre (ClientboundSetChunkCacheCenterPacket).
     chunk_center: (i32, i32),
 }
@@ -341,6 +346,8 @@ impl Game<'_> {
             decode_errors: 0,
             clock: None,
             clock_rate: 1.0,
+            clock_partial: 0.0,
+            clock_game_time: 0,
             chunk_center: (0, 0),
         });
         // The level's TickRateManager follows the server's ticking packets.
@@ -1141,14 +1148,16 @@ impl Game<'_> {
     /// Map a menu slot to Horizon's inventory screen slot ids.
     fn menu_slot(menu: &str, slot: i32) -> Option<usize> {
         let s = usize::try_from(slot).ok()?;
-        let rows = |n: usize| -> Option<usize> {
+        // A container of `n` slots, then the inventory and the hotbar.
+        let slots = |n: usize| -> Option<usize> {
             match s {
-                _ if s < n * 9 => Some(300 + s),
-                _ if s < n * 9 + 27 => Some(9 + s - n * 9),
-                _ if s < n * 9 + 36 => Some(s - n * 9 - 27),
+                _ if s < n => Some(300 + s),
+                _ if s < n + 27 => Some(9 + s - n),
+                _ if s < n + 36 => Some(s - n - 27),
                 _ => None,
             }
         };
+        let rows = |n: usize| slots(n * 9);
         match menu {
             "inventory" => match s {
                 0 => Some(200),
@@ -1186,6 +1195,10 @@ impl Game<'_> {
             "minecraft:generic_9x4" => rows(4),
             "minecraft:generic_9x5" => rows(5),
             "minecraft:generic_9x6" => rows(6),
+            // HopperMenu; DispenserMenu (dispensers and droppers).
+            "minecraft:hopper" => slots(5),
+            "minecraft:generic_3x3" => slots(9),
+            "minecraft:brewing_stand" => slots(5),
             _ => None,
         }
     }
@@ -1600,6 +1613,15 @@ impl Game<'_> {
                     pl.velocity = Vec3::new(p.velocity[0], p.velocity[1], p.velocity[2]);
                 }
             }
+            // ClientPacketListener.handleDamageEvent: LivingEntity.handleDamageEvent
+            // jolts the walk animation and restarts the hurt flash. Its hurt
+            // sound comes as a sound from Horizon's host, which plays it itself.
+            C::DamageEvent(p) => {
+                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
+                    m.limb_speed = 1.5;
+                    m.hurt_time = 10;
+                }
+            }
             C::HurtAnimation(p) => {
                 if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
                     m.hurt_time = 10;
@@ -1627,6 +1649,21 @@ impl Game<'_> {
                 }
             }
             C::Animate(p) => self.remote_animate(p.id, p.action),
+            // ClientPacketListener.handleSwingAnimation: the entity swings
+            // (LivingEntity.swing, which a swing in its first half ignores).
+            C::SwingAnimation(p) => {
+                use horizon_client::first_person::Hand;
+                let hand = if p.hand == 1 { Hand::Off } else { Hand::Main };
+                let animation = horizon_client::first_person::SwingAnimation {
+                    kind: p.kind.clamp(0, 255) as u8,
+                    duration: p.duration,
+                };
+                if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) {
+                    self.swing_hand(hand, animation);
+                } else if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
+                    m.swing();
+                }
+            }
             C::UpdateMobEffect(p) => self.remote_effect(&p),
             C::RemoveMobEffect(p) => {
                 if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id)
@@ -1676,8 +1713,12 @@ impl Game<'_> {
                     total: p.total,
                 }
             }
+            // ClientPacketListener.handleSetTime: the game time, then
+            // ClientClockManager.handleUpdates: the clock catches up with the
+            // game time and takes the server's state.
             C::SetTime(p) => {
                 self.world.game_time = p.game_time;
+                self.remote_clock_tick();
                 let clock = {
                     let r = self.remote.as_ref();
                     let names =
@@ -1698,6 +1739,7 @@ impl Game<'_> {
                     if let Some(r) = self.remote.as_mut() {
                         r.clock = Some(c.clock);
                         r.clock_rate = c.rate;
+                        r.clock_partial = c.partial_tick;
                     }
                 }
             }
@@ -1781,17 +1823,27 @@ impl Game<'_> {
                 self.remote_synced();
             }
             C::ContainerSetData(p) => {
-                if let Some(key) = self.container
-                    && let Some(BlockEntity::Furnace(f)) = self.world.block_entities.get_mut(&key)
+                let v = i32::from(p.value);
+                match self
+                    .container
+                    .and_then(|key| self.world.block_entities.get_mut(&key))
                 {
-                    let v = i32::from(p.value);
-                    match p.id {
+                    Some(BlockEntity::Furnace(f)) => match p.id {
                         0 => f.lit_remaining = v,
                         1 => f.lit_total = v,
                         2 => f.cooking_timer = v,
                         3 => f.cooking_total = v,
                         _ => {}
-                    }
+                    },
+                    // BrewingStandBlockEntity.dataAccess.
+                    Some(BlockEntity::Brewing(b)) => match p.id {
+                        0 => b.brew_time = v,
+                        1 => b.fuel = v,
+                        2 => b.total_brew_time = v,
+                        3 => b.total_fuel = v,
+                        _ => {}
+                    },
+                    _ => {}
                 }
             }
             C::OpenScreen(p) => self.remote_open_screen(p),
@@ -2408,15 +2460,12 @@ impl Game<'_> {
                 horizon_protocol::packets::configuration::ClientInformation::new(view),
             ));
         }
-        // Minecraft.tick: TickRateManager.tick; ClientLevel.tick advances
+        // Minecraft.tick: TickRateManager.tick; ClientLevel.tickTime advances
         // the time only while the level runs normally.
         let running = self.clock.world_runs();
         if running {
             self.world.game_time += 1;
-            let rate = self.remote.as_ref().map_or(1.0, |r| r.clock_rate);
-            if rate > 0.0 {
-                self.world.day_time += rate.round() as i64;
-            }
+            self.remote_clock_tick();
         }
         // Weather levels drift toward their targets between server updates.
         let w = &mut self.world.weather;
@@ -2661,6 +2710,9 @@ impl Game<'_> {
             if !m.alive() {
                 m.death_time += 1;
             }
+            // LivingEntity.updateSwingTime.
+            m.anim.attack_anim_o = m.anim.attack_anim;
+            horizon_client::mobs::ai::tick_swing(m);
             // Entity.commonTick: LinearInterpolationHandler.interpolate.
             if let Some(l) = lerps.get_mut(&(m.id as i32))
                 && l.steps > 0
@@ -3589,6 +3641,14 @@ impl Game<'_> {
                     speed: 1.0,
                 }))
             }
+            // HopperMenu, and DispenserMenu (MenuType.GENERIC_3x3: dispensers
+            // and droppers).
+            "minecraft:hopper" => Some(BlockEntity::Chest(vec![None; 5])),
+            // BrewingStandMenu: its times come in ContainerSetData.
+            "minecraft:brewing_stand" => Some(BlockEntity::Brewing(Box::new(
+                horizon_client::brewing::BrewingStand::new(),
+            ))),
+            "minecraft:generic_3x3" => Some(BlockEntity::Chest(vec![None; 9])),
             m if m.starts_with("minecraft:generic_9x") || m == "minecraft:shulker_box" => {
                 let rows = m
                     .strip_prefix("minecraft:generic_9x")
@@ -3635,6 +3695,14 @@ impl Game<'_> {
         }
         self.screen = Screen::Inventory;
         self.capture(false);
+    }
+    /// The type of the menu a server opened (`MenuType`'s id).
+    pub(super) fn remote_menu_type(&self) -> Option<&str> {
+        Some(self.remote.as_ref()?.menu.as_ref()?.1.as_str())
+    }
+    /// The title the server gave the menu it opened.
+    pub(super) fn remote_menu_title(&self) -> Option<String> {
+        self.remote.as_ref()?.menu_title.clone()
     }
     /// A server's chest-like menu (`MenuType.GENERIC_9xN`): its rows and title.
     pub(super) fn remote_chest_menu(&self) -> Option<(usize, String)> {
@@ -3746,6 +3814,20 @@ impl Game<'_> {
             .filter_map(|(id, uuid)| Some((*id as u32, r.players.get(uuid)?.clone())))
             .collect()
     }
+    /// `ClientClockManager.tick`: the clock moves on by the game time that
+    /// passed since its last tick, at its rate. A game time the server sets
+    /// forward (its sync every second) moves the clock with it.
+    fn remote_clock_tick(&mut self) {
+        let Some(r) = self.remote.as_mut() else {
+            return;
+        };
+        let delta = self.world.game_time - r.clock_game_time;
+        r.clock_game_time = self.world.game_time;
+        let partial = f64::from(r.clock_partial) + delta as f64 * f64::from(r.clock_rate);
+        let full = partial.floor();
+        r.clock_partial = (partial - full) as f32;
+        self.world.day_time += full as i64;
+    }
     pub(super) fn remote_status(&self) -> Option<serde_json::Value> {
         let r = self.remote.as_ref()?;
         Some(serde_json::json!({
@@ -3776,6 +3858,7 @@ impl Game<'_> {
                     let armor = [&e.head, &e.chest, &e.legs, &e.feet].map(|s| s.as_deref());
                     serde_json::json!({
                         "id": m.id,
+                        "swinging": m.ai.swinging,
                         "armor": armor,
                         "main_hand": e.main_hand.as_deref(),
                         "off_hand": e.off_hand.as_deref(),
