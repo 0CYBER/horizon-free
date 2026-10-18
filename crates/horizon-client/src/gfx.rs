@@ -71,7 +71,6 @@ pub mod translucency;
 pub(crate) mod upload;
 mod world_post;
 
-/// A new value for `Renderer::block_entity_revision`.
 /// A section's instance: its camera-relative origin and, in `w`, the step of
 /// its fixed-point UVs (`terrain.wgsl`'s `terrain_uv`).
 fn section_instance(origin: [f32; 3]) -> [f32; 4] {
@@ -82,6 +81,7 @@ fn section_instance(origin: [f32; 3]) -> [f32; 4] {
         1.0 / crate::mesher::UV_STEPS,
     ]
 }
+/// A new value for `Renderer::block_entity_revision`.
 fn next_block_entity_revision() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -2814,6 +2814,9 @@ impl Renderer {
                 ));
             }
         }
+        // Sections went back to front (`visible` is sorted by distance, then
+        // key): tiles' water only needs sorting in when there is some.
+        let section_translucent = self.translucent_draws.len();
         for (i, v) in visible_lods.iter().enumerate() {
             let instance = visible.len() + i;
             let tile = self.lods.get_mut(&v.key).expect("visible resident tile");
@@ -2850,8 +2853,10 @@ impl Renderer {
             }
         }
         // Near water and distant water share one back-to-front draw order.
-        self.translucent_draws
-            .sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+        if self.translucent_draws.len() > section_translucent {
+            self.translucent_draws
+                .sort_unstable_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+        }
         for &(_, _, draw, pages) in &self.translucent_draws {
             self.draws.push(draw);
             self.draw_pages.push(pages);
