@@ -342,11 +342,7 @@ impl StructureResources {
             flate2::read::GzDecoder::new(bytes.as_slice())
                 .read_to_end(&mut raw)
                 .ok()?;
-            let limits = Limits {
-                max_bytes: 1 << 28,
-                ..Limits::default()
-            };
-            let tag = nbt::read_named(&raw, limits).ok()?.0.tag;
+            let tag = nbt::read_named(&raw, Limits::templates()).ok()?.0.tag;
             Some(Arc::new(StructureTemplate::from_nbt(
                 &tag,
                 self.registry,
