@@ -1321,22 +1321,22 @@ fn cached_region(
 /// Write `records` into the region files of `folder` in place, as vanilla's
 /// `RegionFile.write` does: each chunk takes free sectors and the header
 /// then points to it; the region's other chunks are not touched. `None`
-/// clears a chunk. The chunks are compressed before their region is locked
-/// for the writes, and each region is flushed to the disk once.
+/// clears a chunk. The chunks are encoded and compressed before their region
+/// is locked for the writes (`compress_records`), and each region is flushed
+/// to the disk once.
 fn write_region_records(
     root: &Path,
     cache: &RegionCache,
     folder: &str,
-    records: Vec<((i32, i32), Option<Arc<NamedTag>>)>,
+    records: &[((i32, i32), &Record)],
 ) -> Result<()> {
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as u32);
+    let compressed = compress_records(records, timestamp);
     let mut by_region: BTreeMap<(i32, i32), Vec<(ChunkPos, Option<ChunkRecord>)>> = BTreeMap::new();
-    for ((x, z), tag) in records {
-        let record = tag
-            .map(|tag| ChunkRecord::from_nbt(&tag, Compression::Zlib, timestamp, Limits::default()))
-            .transpose()?;
+    for (&((x, z), _), record) in records.iter().zip(compressed) {
+        let record = record?;
         by_region
             .entry((x >> 5, z >> 5))
             .or_default()
@@ -1365,6 +1365,57 @@ fn write_region_records(
         }
     }
     Ok(())
+}
+
+/// Fewest chunks each helper of `compress_records` takes: below this a thread
+/// costs more to start than it saves.
+const CHUNKS_PER_HELPER: usize = 4;
+/// Each record encoded and compressed (`None` for a deletion), in the order
+/// given. Vanilla's IOWorker does this one chunk after another; here a batch
+/// is shared out to scoped threads, which take the next chunk as they finish
+/// one. Each chunk's bytes depend only on the chunk, and the writes stay in
+/// order, so the files are the same as from one thread. At most half the
+/// hardware threads help, leaving the rest to the game and its workers.
+fn compress_records(
+    records: &[((i32, i32), &Record)],
+    timestamp: u32,
+) -> Vec<std::io::Result<Option<ChunkRecord>>> {
+    let compress = |record: &Record| {
+        record
+            .tag()
+            .map(|tag| ChunkRecord::from_nbt(&tag, Compression::Zlib, timestamp, Limits::default()))
+            .transpose()
+    };
+    let helpers = std::thread::available_parallelism()
+        .map_or(1, |n| n.get().div_ceil(2))
+        .min(records.len() / CHUNKS_PER_HELPER);
+    if helpers <= 1 {
+        return records.iter().map(|(_, r)| compress(r)).collect();
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let mut done: Vec<(usize, std::io::Result<Option<ChunkRecord>>)> =
+        std::thread::scope(|scope| {
+            let threads: Vec<_> = (0..helpers)
+                .map(|_| {
+                    scope.spawn(|| {
+                        let mut out = Vec::new();
+                        loop {
+                            let i = next.fetch_add(1, Ordering::Relaxed);
+                            let Some((_, record)) = records.get(i) else {
+                                return out;
+                            };
+                            out.push((i, compress(record)));
+                        }
+                    })
+                })
+                .collect();
+            threads
+                .into_iter()
+                .flat_map(|t| t.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
+                .collect()
+        });
+    done.sort_unstable_by_key(|(i, _)| *i);
+    done.into_iter().map(|(_, r)| r).collect()
 }
 
 fn region_path(root: &Path, folder: &str, rx: i32, rz: i32) -> PathBuf {
@@ -1582,12 +1633,12 @@ impl SaveDir {
                             p.get(&(entities, k.0, k.1)).is_none_or(|p| p.0 <= seq)
                         })
                     };
-                    let records = batch
+                    let records: Vec<_> = batch
                         .iter()
                         .filter(|(k, _, seq)| newest(k, *seq))
-                        .map(|(k, r, _)| (*k, r.tag()))
+                        .map(|(k, r, _)| (*k, r))
                         .collect();
-                    if let Err(e) = write_region_records(&root, cache, folder, records) {
+                    if let Err(e) = write_region_records(&root, cache, folder, &records) {
                         log::warn!("Horizon: failed to write {folder} files: {e}");
                     }
                     // Readers find the files (and a fresh region cache) from here on.
@@ -2903,6 +2954,43 @@ mod tests {
         assert!(!snapshot[0].block_names.is_empty());
         assert_eq!(source.block_names[0].1, "stale");
         assert_eq!(source.block_entities[0].0, (99, 0, 99));
+    }
+
+    #[test]
+    fn records_compressed_on_helpers_match_one_thread_in_order() {
+        use super::{Record, compress_records};
+        let records: Vec<((i32, i32), Record)> = (0..53i32)
+            .map(|i| {
+                let record = if i % 7 == 3 {
+                    Record::Delete
+                } else {
+                    let payload: Vec<i64> = (0..i * 97 % 2000).map(|v| i64::from(v * i)).collect();
+                    Record::Tag(Arc::new(NamedTag {
+                        name: "".into(),
+                        tag: Tag::compound([
+                            ("xPos", Tag::Int(i)),
+                            ("Data", Tag::LongArray(payload)),
+                        ]),
+                    }))
+                };
+                ((i, -i), record)
+            })
+            .collect();
+        let refs: Vec<_> = records.iter().map(|(k, r)| (*k, r)).collect();
+        let compressed = compress_records(&refs, 1234);
+        assert_eq!(compressed.len(), records.len());
+        for ((_, record), got) in records.iter().zip(compressed) {
+            let want = record
+                .tag()
+                .map(|t| ChunkRecord::from_nbt(&t, Compression::Zlib, 1234, Limits::default()))
+                .transpose()
+                .unwrap();
+            let got = got.unwrap();
+            assert_eq!(
+                got.as_ref().map(|r| (&r.compressed, r.timestamp)),
+                want.as_ref().map(|r| (&r.compressed, r.timestamp))
+            );
+        }
     }
 
     #[test]
