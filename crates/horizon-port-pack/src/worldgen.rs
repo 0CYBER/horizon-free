@@ -31,6 +31,35 @@ const SPREADS: [&str; 2] = [
     "moogs_structures:advanced_random_spread",
     "repurposed_structures:advanced_random_spread",
 ];
+/// YUNG's placements: vanilla's random spread with an enhanced exclusion
+/// zone (several sets), plus, for the temples, no start near an ocean or a
+/// river, and for strongholds, starts only in odd rings around the origin.
+const YUNG_SPREADS: [&str; 4] = [
+    "yungsapi:enhanced_random_spread",
+    "betterdeserttemples:desert_temple",
+    "betterjungletemples:jungle_temple",
+    "betterstrongholds:stronghold",
+];
+/// YUNG's structures and the vanilla structure type each one's mod turns
+/// off (its DisableVanilla*Mixin, on by default in each mod's config).
+const YUNG_REPLACES: [(&str, &str); 7] = [
+    (
+        "betterdeserttemples:desert_temple",
+        "minecraft:desert_pyramid",
+    ),
+    (
+        "betterjungletemples:jungle_temple",
+        "minecraft:jungle_temple",
+    ),
+    ("betterwitchhuts:witch_hut", "minecraft:swamp_hut"),
+    (
+        "betteroceanmonuments:ocean_monument",
+        "minecraft:ocean_monument",
+    ),
+    ("betterstrongholds:stronghold", "minecraft:stronghold"),
+    ("betterfortresses:fortress", "minecraft:fortress"),
+    ("bettermineshafts:mineshaft_", "minecraft:mineshaft"),
+];
 /// Moog's Structure Lib spreads its structures 1.65 times as far apart as
 /// its files say (AdvancedRandomSpread's constructor).
 const MOOGS_SPACING: f64 = 1.65;
@@ -208,6 +237,11 @@ fn upgrade_types(
                 }
                 placement_rules(p, set_tags, lost);
                 p["type"] = "minecraft:random_spread".into();
+                true
+            }
+            Some(t) if YUNG_SPREADS.contains(&t) => {
+                let t = t.to_owned();
+                yung_placement(&t, &mut v["placement"], set_tags, lost);
                 true
             }
             Some(t) if !t.starts_with("minecraft:") => {
@@ -425,7 +459,10 @@ fn placement_rules(
     if let Some(d) = o.remove("min_distance_from_world_origin") {
         o.insert("horizon:min_distance_from_world_origin".into(), d);
     }
-    if let Some(zone) = o.remove("super_exclusion_zone") {
+    let zone = ["super_exclusion_zone", "enhanced_exclusion_zone"]
+        .into_iter()
+        .find_map(|k| Some((k, o.remove(k)?)));
+    if let Some((key, zone)) = zone {
         let sets: Vec<String> = match &zone["other_set"] {
             Value::String(s) => match s.strip_prefix('#') {
                 Some(tag) => set_tags.get(tag).cloned().unwrap_or_default(),
@@ -438,7 +475,7 @@ fn placement_rules(
             _ => Vec::new(),
         };
         if sets.is_empty() {
-            *lost.entry("super_exclusion_zone".into()).or_default() += 1;
+            *lost.entry(key.into()).or_default() += 1;
         } else {
             o.insert(
                 "horizon:exclusion_zone".into(),
@@ -446,6 +483,65 @@ fn placement_rules(
             );
         }
     }
+}
+
+/// One of YUNG's placements as vanilla's random spread with `horizon:` keys:
+/// the enhanced exclusion zone as `horizon:exclusion_zone`; the temples'
+/// ocean and river search (findBiomeHorizontal around the chunk's middle
+/// block at y 120, 48 blocks, every 2 quarts) as `horizon:avoid_biomes`; the
+/// strongholds' rings as `horizon:ring_sections`.
+fn yung_placement(
+    t: &str,
+    p: &mut Value,
+    set_tags: &BTreeMap<String, Vec<String>>,
+    lost: &mut BTreeMap<String, usize>,
+) {
+    placement_rules(p, set_tags, lost);
+    p["type"] = "minecraft:random_spread".into();
+    let Some(o) = p.as_object_mut() else {
+        return;
+    };
+    match t {
+        "betterdeserttemples:desert_temple" | "betterjungletemples:jungle_temple" => {
+            o.insert(
+                "horizon:avoid_biomes".into(),
+                serde_json::json!({"biomes": ["#minecraft:is_river", "#minecraft:is_ocean"],
+                    "radius": 48, "step": 2, "y": 120}),
+            );
+        }
+        "betterstrongholds:stronghold" => {
+            let mut rings = serde_json::Map::new();
+            for (from, to) in [
+                ("chunk_distance_to_first_ring", "distance_to_first_ring"),
+                ("ring_chunk_thickness", "thickness"),
+                ("max_ring_section", "max_section"),
+            ] {
+                if let Some(n) = o.remove(from) {
+                    rings.insert(to.into(), n);
+                }
+            }
+            o.insert("horizon:ring_sections".into(), rings.into());
+        }
+        _ => {}
+    }
+}
+
+/// Marks a YUNG's structure that the game can start (its type is vanilla's
+/// after the upgrade) with the vanilla type its mod turns off, under
+/// `horizon:disables`. One the game cannot start leaves the vanilla
+/// structure in place, so the world keeps one of the two.
+pub fn disables(id: &str, v: &mut Value) -> bool {
+    let Some((_, vanilla)) = YUNG_REPLACES.iter().find(|(s, _)| id.starts_with(s)) else {
+        return false;
+    };
+    if !v["type"]
+        .as_str()
+        .is_some_and(|t| t.starts_with("minecraft:"))
+    {
+        return false;
+    }
+    v["horizon:disables"] = serde_json::json!([vanilla]);
+    true
 }
 
 /// The mod's structure set tags (`data/<ns>/tags/worldgen/structure_set/`),
@@ -806,6 +902,59 @@ mod tests {
                 ("repurposed_structures:bottom_pillar_processor".into(), 1),
             ])
         );
+    }
+
+    #[test]
+    fn yungs_placements_keep_their_rules() {
+        let tags = BTreeMap::from([(
+            "bf:avoid".to_owned(),
+            vec!["minecraft:nether_complexes".to_owned()],
+        )]);
+        let mut report = Upgrade::default();
+        let mut fortress = json!({"placement": {"type": "yungsapi:enhanced_random_spread",
+            "salt": 1, "spacing": 30, "separation": 20,
+            "enhanced_exclusion_zone": {"other_set": "#bf:avoid", "chunk_count": 10}}});
+        assert!(upgrade("structure_set", &mut fortress, &mut report, &tags));
+        assert_eq!(
+            fortress["placement"],
+            json!({"type": "minecraft:random_spread", "salt": 1, "spacing": 30, "separation": 20,
+                "horizon:exclusion_zone": {"other_sets": ["minecraft:nether_complexes"], "chunk_count": 10}})
+        );
+        let mut temple = json!({"placement": {"type": "betterdeserttemples:desert_temple",
+            "salt": 2, "spacing": 30, "separation": 20,
+            "exclusion_zone": {"other_set": "minecraft:villages", "chunk_count": 6}}});
+        assert!(upgrade("structure_set", &mut temple, &mut report, &tags));
+        assert_eq!(temple["placement"]["type"], "minecraft:random_spread");
+        assert_eq!(temple["placement"]["exclusion_zone"]["chunk_count"], 6);
+        assert_eq!(
+            temple["placement"]["horizon:avoid_biomes"],
+            json!({"biomes": ["#minecraft:is_river", "#minecraft:is_ocean"],
+                "radius": 48, "step": 2, "y": 120})
+        );
+        let mut stronghold = json!({"placement": {"type": "betterstrongholds:stronghold",
+            "salt": 3, "spacing": 85, "separation": 50,
+            "chunk_distance_to_first_ring": 80, "ring_chunk_thickness": 96}});
+        assert!(upgrade(
+            "structure_set",
+            &mut stronghold,
+            &mut report,
+            &tags
+        ));
+        assert_eq!(
+            stronghold["placement"],
+            json!({"type": "minecraft:random_spread", "salt": 3, "spacing": 85, "separation": 50,
+                "horizon:ring_sections": {"distance_to_first_ring": 80, "thickness": 96}})
+        );
+        assert_eq!(report.mapped, 3);
+        assert!(report.unsupported.is_empty());
+        // The vanilla counterpart is turned off only for a structure the game starts.
+        let mut ported = json!({"type": "minecraft:jigsaw"});
+        assert!(disables("betterstrongholds:stronghold", &mut ported));
+        assert_eq!(ported["horizon:disables"], json!(["minecraft:stronghold"]));
+        let mut java = json!({"type": "bettermineshafts:mineshaft"});
+        assert!(!disables("bettermineshafts:mineshaft_oak", &mut java));
+        let mut circle = json!({"type": "minecraft:jigsaw"});
+        assert!(!disables("betterwitchhuts:witch_circle", &mut circle));
     }
 
     #[test]
