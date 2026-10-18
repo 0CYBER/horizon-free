@@ -420,21 +420,52 @@ Two cases the oracle fills in:
   - their `advanced_random_spread` becomes `minecraft:random_spread`;
   - their versioned, legacy and empty pool elements become vanilla's.
 
-  The rules these libraries add on top of vanilla's (no start in liquid, a minimum distance,
-  caps per piece) are lost, so a mapped structure can start where the mod would not. NeoForge's
-  convention biome tags (`#c:is_forest`, ...) come from the loader jar
-  (`<work>/loader/neoforge-<version>-universal.jar`, fetched dev-only and SHA-1 checked) and
-  are written into the carry. Each mod's `carry-report.json` lists what was mapped and the
-  types left as they are. The game skips the structures it cannot decode.
+  Three more rewrites make the mapped structures decode and start where their mod would:
+  - **Block states.** 1.21.1 writes a block or fluid state as `{"Name", "Properties"}`, 26.3
+    as `{"id", "properties"}` and refuses the old shape, which failed the whole processor
+    list, feature or pool. Carry rewrites them (#816; 1,005 files in 17 of ATM10's mods).
+  - **Start and placement rules** (#820 in the game, #821 in carry). Repurposed Structures'
+    and Moog's jigsaws refuse to start in liquid and check biomes and terrain height in a
+    radius; their spreads keep a minimum distance from the world origin and away from other
+    sets (named by a structure set tag). Carry writes these under `horizon:start_checks`,
+    `horizon:min_distance_from_world_origin` and `horizon:exclusion_zone`; the game runs them
+    (`horizon-world`'s `structure/start_checks.rs`). Vanilla data has none of the keys. Moog's
+    also spreads its structures 1.65 times as far apart as its files say, which carry now
+    applies. MVS went from 829 starts to 90 in a 128×128-chunk square (seed 1234): 294 from the
+    spacing, the rest from the start checks.
+  - **Processors written in Java** are taken out of their lists (#822). The game, like
+    vanilla, refuses a list holding a type it does not know, and with it every pool naming the
+    list. The structures now generate undecorated (no pillars under them, spawners as the
+    template has them); 1,427 processors of 146 types in ATM10's mods, the most common
+    `lithostitched:block_swap`, Formations' `biome_replacements` and Repurposed Structures'
+    pillar, fluid and void processors. Porting the common ones is next.
 
-  On ATM10's 40 data-tier mods:
+  Each mod's `carry-report.json` lists what was mapped, the rules and processors lost by name,
+  and the types left as they are. NeoForge's convention biome tags (`#c:is_forest`, ...) come
+  from the loader jar (`<work>/loader/neoforge-<version>-universal.jar`, fetched dev-only and
+  SHA-1 checked) and are written into the carry. The game skips the structures it cannot
+  decode.
+
+  On ATM10's 42 data-tier mods with a jar (seed 1234, chunks -64..63, `chunkgen_bench
+  --starts` over the carried worldgen): 286 starts with 15,097 pieces, 150 of them vanilla's
+  (unchanged), and no pool that fails to decode (65 before #816 in the 64×64 centre).
   - 1,061 files were mapped (MVS 413, MNS 210, MSS 157, MES 110, Repurposed Structures 104,
     ChoiceTheorem's Overhauled Village 66), and 103 convention biome tags written.
   - When Dungeons Arise, Structory and Towns and Towers use vanilla's types already.
-  - Not generated yet, because their types are Java code: YUNG's API (491 elements and
-    jigsaws: every "YUNG's Better" mod), Formations (179), the nether jigsaw variants of Moog's
-    and Repurposed (69), MO Structures (38), and Repurposed's mineshafts, mansions, monuments
-    and cities.
+  - Still lost, written in Java:
+    - YUNG's API: its own jigsaw assembler (priority pieces, per-piece caps, conditions,
+      enhanced terrain adaptation) and 491 elements and jigsaws, behind every "YUNG's Better"
+      mod;
+    - Formations' structure and element types (179);
+    - the nether jigsaw variants of Moog's and Repurposed (69), which search the column for
+      land after the layout;
+    - Moog's and Repurposed's layout rules: they centre the pieces on the start, bury or lift
+      the structure to the terrain and cap pieces per pool;
+    - Repurposed's mineshafts, mansions, monuments and cities, and MO Structures (38; its
+      library is only on CurseForge).
+  - CTOV's villages and outposts are added to vanilla's `villages` and `pillager_outposts`
+    sets by Java code, as lithostitched's `add_structure_set_entries` worldgen modifiers do for
+    many packs; a content mod has no way to add to a vanilla set yet, so none start.
 
   In a world with the 40 mods, seed 1234, `/locate structure mvs:azelea_house` finds one 27
   blocks from spawn and it stands there as the template builds it; When Dungeons Arise's
@@ -682,8 +713,10 @@ ATM10 mods (153,511 states), the peak of each step falls by about 210 MB:
 The fluid tables no longer decode the 211 MB `gameplay-facts.json` a second time (#754). The
 content root is kept between starts (#756). What is left at startup:
 
-- `facts.json` goes through a JSON tree, then an NBT tree, in both the registry and the assets
-  step;
+- `facts.json` went through a JSON tree, then an NBT tree, in both the registry and the assets
+  step. It now streams (#825): at ATM10's size (214,338 states) each step's peak fell from
+  816 MB to 153 MB (registry) and 235 MB (assets), and the RSS after the assets step from
+  1,344 MB to 442 MB;
 - on a first start, the content-root build and `Behaviours`' decode of `gameplay-facts.json`
   (cached afterwards in the behaviour snapshot).
 
