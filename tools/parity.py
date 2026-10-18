@@ -36,8 +36,9 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -61,14 +62,14 @@ SHIM = STATE_DIR / "shim"
 # so a harness whose inputs match one that passed elsewhere doesn't run again.
 SHARED = Path(os.environ.get("PARITY_SHARED") or (LOCAL / "minecraft").resolve().parent / "parity-shared")
 MACHINE_JOBS = int(os.environ.get("PARITY_MACHINE_JOBS") or max(1, (os.cpu_count() or 4) // 2))
-HOST = os.uname().nodename.split(".")[0]
+HOST = socket.gethostname().split(".")[0]
 DEFAULT_MEMORY = 3 << 30  # assumed peak for a harness that never ran here
 
 
 def harness_settings(path):
     """PARITY_SHARDS and PARITY_RUST_SCOPE, read from a harness's source without running it."""
     import ast
-    text = Path(path).read_text()
+    text = Path(path).read_text(encoding="utf-8")
     settings = {}
     if "PARITY_" in text:
         for node in ast.parse(text).body:
@@ -102,7 +103,7 @@ def base_name(name):
 
 
 def load_state():
-    return json.loads(STATE.read_text()) if STATE.exists() else {"harnesses": {}, "hashes": {}}
+    return json.loads(STATE.read_text(encoding="utf-8")) if STATE.exists() else {"harnesses": {}, "hashes": {}}
 
 
 def save_state(state):
@@ -129,7 +130,7 @@ class Hasher:
         if cached and cached[0] == stamp:
             return cached[1]
         if keep:
-            digest = hashlib.sha256(crate_root_without_modules(Path(real).read_text(), set(keep.split(","))).encode()).hexdigest()
+            digest = hashlib.sha256(crate_root_without_modules(Path(real).read_text(encoding="utf-8"), set(keep.split(","))).encode()).hexdigest()
         else:
             with open(real, "rb") as stream:
                 digest = hashlib.file_digest(stream, "sha256").hexdigest()
@@ -168,7 +169,7 @@ def environment_key(hasher):
             return (result.stdout + result.stderr).strip()
         except FileNotFoundError:
             return "missing"
-    lock = json.loads((ROOT / "research-lock.json").read_text())
+    lock = json.loads((ROOT / "research-lock.json").read_text(encoding="utf-8"))
     version_dir = LOCAL / "minecraft" / lock["minecraft"]["version"]
     parts = [version(["rustc", "-V"]), version(["java", "-version"]), version(["javac", "-version"]),
              json.dumps(PROFILE, sort_keys=True), hasher(ROOT / "research-lock.json"), hasher(ROOT / "Cargo.lock"),
@@ -197,7 +198,7 @@ def dep_info(binary):
     if not info.exists():
         return []
     sources = []
-    for line in info.read_text().splitlines():
+    for line in info.read_text(encoding="utf-8").splitlines():
         _, separator, rest = line.partition(": ")
         if separator:
             sources += [part.replace("\\ ", " ") for part in re.split(r"(?<!\\) ", rest.strip()) if part]
@@ -371,17 +372,17 @@ def narrow_rust_sources(sources, scope):
             for candidate in (crate_dir / "src" / Path(*parts[:count - 1]) / f"{parts[count - 1]}.rs",
                               crate_dir / "src" / Path(*parts[:count]) / "mod.rs"):
                 if candidate.is_file():
-                    return str(candidate.relative_to(ROOT)), count
+                    return candidate.relative_to(ROOT).as_posix(), count
         return None, 0
 
     def module_path(path):
-        parts = list(Path(*Path(path).parts[3:]).with_suffix("").parts)  # crates/<crate>/src/...
+        parts = list(PurePosixPath(path).parts[3:-1] + (PurePosixPath(path).with_suffix("").name,))
         return parts[:-1] if parts[-1] in ("mod", "lib") else parts
 
     defined_types, used_macros, kept_modules = set(), set(), {}
     for path in inner + entry:
-        text = rust_code((ROOT / path).read_text(errors="replace"))
-        crate_name = Path(path).parts[1].replace("-", "_")
+        text = rust_code((ROOT / path).read_text(encoding="utf-8", errors="replace"))
+        crate_name = PurePosixPath(path).parts[1].replace("-", "_")
         nesting = inline_modules(text)
         if re.search(r"\binclude!\s*\(", text):
             return sources, f"{path} includes source"
@@ -401,7 +402,7 @@ def narrow_rust_sources(sources, scope):
             if head in crates:  # a workspace crate
                 base, crate_name = [], head
             elif head.startswith(("crate", "self", "super")) and path in inner:
-                own, crate_name = module_path(path) + nesting(match.start()), Path(path).parts[1].replace("-", "_")
+                own, crate_name = module_path(path) + nesting(match.start()), PurePosixPath(path).parts[1].replace("-", "_")
                 ups = head.count("super")
                 if head != "crate" and ups <= len(nesting(match.start())):
                     continue  # within this file
@@ -415,14 +416,14 @@ def narrow_rust_sources(sources, scope):
                 item = (base + parts)[0]
                 defined_in_root = root.is_file() and re.search(
                     rf"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:const|static|fn|struct|enum|type|trait|union)\s+{item}\b",
-                    root.read_text(), re.MULTILINE)
+                    root.read_text(encoding="utf-8"), re.MULTILINE)
                 if not defined_in_root:
                     return sources, f"{path} names {head}::{rest}, which the crate root doesn't define itself"
                 continue
             if not scoped(target):
                 return sources, f"{path} names {head}::{rest} ({target})"
     for path in outside:
-        text = rust_code((ROOT / path).read_text(errors="replace"))
+        text = rust_code((ROOT / path).read_text(encoding="utf-8", errors="replace"))
         defined = set(RUST_MACRO_DEFINITION.findall(text)) & used_macros
         if defined:
             return sources, f"the scope uses macro {sorted(defined)[0]}! defined in {path}"
@@ -433,7 +434,7 @@ def narrow_rust_sources(sources, scope):
     kept = [path for path in sources if path not in outside and not path.endswith("/src/lib.rs")]
     for path in sources:
         if path.endswith("/src/lib.rs"):
-            modules = kept_modules.get(Path(path).parts[1].replace("-", "_")) or {"-"}  # "-": no module of it is reachable
+            modules = kept_modules.get(PurePosixPath(path).parts[1].replace("-", "_")) or {"-"}  # "-": no module of it is reachable
             kept.append(f"{path}{KEEP}{','.join(sorted(modules))}")
     return sorted(kept), None
 
@@ -549,7 +550,7 @@ def clear_large_outputs(name, trace):
     everything else large under the harness's .local directories is rebuilt on
     its next run."""
     local = LOCAL.resolve()
-    keep = {os.path.realpath(line) for line in outputs_listing(name).read_text().splitlines() if line}
+    keep = {os.path.realpath(line) for line in outputs_listing(name).read_text(encoding="utf-8").splitlines() if line}
     directories = set()
     for command in trace["commands"]:
         for argument in command[1:]:
@@ -600,7 +601,7 @@ def memory_available():
     """Bytes the system can give harnesses now: MemAvailable on Linux, free and reclaimable pages on macOS."""
     meminfo = Path("/proc/meminfo")
     if meminfo.exists():
-        for line in meminfo.read_text().splitlines():
+        for line in meminfo.read_text(encoding="utf-8").splitlines():
             if line.startswith("MemAvailable:"):
                 return int(line.split()[1]) * 1024
     try:
@@ -634,7 +635,7 @@ def outcome(name, script, passed, elapsed, trace_path, hasher=None):
     record = {"status": "pass" if passed else "fail", "seconds": round(elapsed, 1),
               "finished": time.strftime("%Y-%m-%dT%H:%M:%S"), "host": HOST}
     try:
-        trace = json.loads(Path(trace_path).read_text())
+        trace = json.loads(Path(trace_path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         trace = None  # killed before writing it, or the disk was full: the pass can't be keyed
     if trace:
@@ -726,7 +727,7 @@ class LocalExecutor:
 def host_config():
     """tools/parity_hosts.json: the machines harnesses can run on, and the harnesses that must stay local."""
     path = ROOT / "tools" / "parity_hosts.json"
-    return json.loads(path.read_text()) if path.exists() else {"default": [], "hosts": {}, "local_only": {}}
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"default": [], "hosts": {}, "local_only": {}}
 
 
 class RemoteExecutor:
@@ -1017,11 +1018,11 @@ def stale(name, state, hasher, environment):
     candidates = [record] if record and record.get("dependencies") else []
     template = SHARED / "dependencies" / f"{name}.json"
     if template.exists():
-        candidates.append(json.loads(template.read_text()))
+        candidates.append(json.loads(template.read_text(encoding="utf-8")))
     for candidate in candidates:
         shared = SHARED / "passes" / name / f"{key(candidate, hasher, environment)}.json"
         if shared.exists():
-            state["harnesses"][name] = dict(json.loads(shared.read_text()), shared=True)
+            state["harnesses"][name] = dict(json.loads(shared.read_text(encoding="utf-8")), shared=True)
             return False
     return True
 
@@ -1088,7 +1089,7 @@ def changed_harnesses(found, records, ref):
     for name, script in found.items():
         specific = [path for path in records.get(name, {}).get("dependencies", [])
                     if path.startswith("mods/horizon/src/test/") or "/examples/" in path or "/src/bin/" in path]
-        if str(Path(script).relative_to(ROOT)) in changed or any(path in changed for path in specific):
+        if Path(script).relative_to(ROOT).as_posix() in changed or any(path in changed for path in specific):
             found_changed.add(name)
     return found_changed
 
@@ -1103,8 +1104,8 @@ def affected_harnesses(found, records, changed):
         dependencies = records.get(name, {}).get("dependencies")
         template = SHARED / "dependencies" / f"{name}.json"
         if dependencies is None and template.exists():
-            dependencies = json.loads(template.read_text()).get("dependencies")
-        if dependencies is None or str(Path(script).relative_to(ROOT)) in changed or \
+            dependencies = json.loads(template.read_text(encoding="utf-8")).get("dependencies")
+        if dependencies is None or Path(script).relative_to(ROOT).as_posix() in changed or \
                 any(path.split(KEEP)[0] in changed for path in dependencies):
             affected.add(name)
     return affected
@@ -1180,7 +1181,7 @@ def main():
         chosen = [name for name in found if records.get(name, {}).get("status") == "fail"]
     elif args.changed or args.changed_files:
         if args.changed_files:
-            changed, since = set(Path(args.changed_files).read_text().split("\n")) - {""}, ""
+            changed, since = set(Path(args.changed_files).read_text(encoding="utf-8").split("\n")) - {""}, ""
         else:
             changed, since = changed_files(args.changed), f" since the merge base with {args.changed}"
         if changed is None:

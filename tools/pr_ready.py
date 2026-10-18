@@ -29,6 +29,10 @@ import subprocess
 import sys
 import time
 
+if os.name == "nt":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 FLEET_SHARED = Path.home() / "code" / "horizon-parity" / "shared-local" / "parity-shared"
@@ -184,7 +188,7 @@ def line_counts(base, changed):
     for path in git("ls-files", "--others", "--exclude-standard").splitlines():
         if path in changed:
             try:
-                counts[path] = (len((ROOT / path).read_text().splitlines()), 0)
+                counts[path] = (len((ROOT / path).read_text(encoding="utf-8").splitlines()), 0)
             except (UnicodeDecodeError, OSError):
                 pass
     return counts
@@ -303,6 +307,9 @@ def run_script(steps, host, verbose):
     """Runs the steps in one shell on host (here for "local"), each between markers, reading results as they come."""
     if not steps:
         return
+    if host == "local" and os.name == "nt":
+        run_windows(steps, verbose)
+        return
     parts = [HOST_SETUP.get(host, ""), "set +e"]
     for index, step in enumerate(steps):
         parts.append(f"echo '@@pr_ready:begin:{index}'; started=$(date +%s)\n( {step.command}\n) 2>&1 < /dev/null\n"
@@ -336,6 +343,61 @@ def run_script(steps, host, verbose):
         if step.status is None:
             step.status, step.detail = "fail", ("did not finish" if step.output else f"not run: {host} unreachable?")
             finish(step, verbose)
+
+
+def run_windows(steps, verbose):
+    """Run local checks directly on Windows without requiring a Unix shell."""
+    for step in steps:
+        command = shlex.split(step.command)
+        cwd = ROOT
+        env = os.environ.copy()
+        env["PYTHONUTF8"] = "1"
+        if step.name == "Public tree":
+            command = [sys.executable, "tools/check_public_tree.py"]
+        elif step.name == "Python tests":
+            command = [sys.executable, "-m", "unittest", "discover", "-s", "tests"]
+        elif step.name == "rustfmt":
+            command = ["cargo", "fmt", "--all", "--", "--check"]
+        elif step.name == "clippy":
+            command = ["cargo", "clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"]
+        elif step.name.startswith("tests"):
+            command = shlex.split(step.command)
+        elif step.name == "tokens.css up to date":
+            command = shlex.split(step.command)
+        elif step.name == "launcher rustfmt":
+            command = ["cargo", "fmt", "--check"]
+            cwd = ROOT / "launcher"
+        elif step.name == "launcher clippy":
+            command = ["cargo", "clippy", "--all-targets", "--locked", "--", "-D", "warnings"]
+            cwd = ROOT / "launcher"
+        elif step.name == "launcher tests":
+            command = ["cargo", "test", "--locked", "--lib"]
+            cwd = ROOT / "launcher"
+        elif step.name == "Parity":
+            command = shlex.split(step.command)
+            if command and command[0] == "PARITY_HOSTS=":
+                command.pop(0)
+            if command and command[0] == "python3":
+                command[0] = sys.executable
+            env["PARITY_HOSTS"] = ""
+        elif command and command[0] == "python3":
+            command[0] = sys.executable
+
+        print(f"  {step.name}...", file=sys.stderr, flush=True)
+        started = time.monotonic()
+        try:
+            with subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT, text=True, errors="replace") as process:
+                for line in process.stdout:
+                    step.output += line
+                    if verbose:
+                        print("    " + line, end="", file=sys.stderr)
+                status = process.wait()
+            step.status = "pass" if status == 0 else "fail"
+        except OSError as error:
+            step.status, step.detail = "fail", str(error)
+        step.seconds = int(time.monotonic() - started)
+        finish(step, verbose)
 
 
 def finish(step, verbose):
