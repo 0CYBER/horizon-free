@@ -502,16 +502,38 @@ impl Streaming {
             }
         }
     }
-    /// A column received from a server: store it and relight it and its neighbours.
+    /// A column received from a server, with the light it sent
+    /// (`ClientPacketListener.handleLevelChunkWithLight`): nothing is
+    /// relit, and it and its neighbours remesh (`enableChunkLight`).
     pub fn insert_remote(&mut self, world: &mut World, chunk: Chunk) {
         let key = (chunk.x, chunk.z);
-        self.lit.remove(&key);
         self.lighting.remove(&key);
+        self.light_snapshots.remove(&key);
         world.chunks.insert(key, Arc::new(chunk));
+        self.lit.insert(key);
         self.generated_total += 1;
         for dz in -1..=1 {
             for dx in -1..=1 {
-                world.dirty_light.insert((key.0 + dx, key.1 + dz));
+                for sy in 0..SECTIONS as i32 {
+                    world.dirty_sections.insert((key.0 + dx, sy, key.1 + dz));
+                }
+            }
+        }
+    }
+    /// A server's light update for a resident column: the sections whose
+    /// light changed and their neighbours remesh
+    /// (`setSectionDirtyWithNeighbors`).
+    pub fn light_updated(world: &mut World, x: i32, z: i32, sections: &[usize]) {
+        for &sy in sections {
+            for dz in -1..=1 {
+                for dy in -1..=1 {
+                    for dx in -1..=1 {
+                        let s = sy as i32 + dy;
+                        if (0..SECTIONS as i32).contains(&s) {
+                            world.dirty_sections.insert((x + dx, s, z + dz));
+                        }
+                    }
+                }
             }
         }
     }
@@ -1148,6 +1170,11 @@ impl Streaming {
     /// Sections whose meshes sample a changed light value (faces and corners
     /// read light from neighbouring blocks).
     fn mark_light_changes(world: &mut World, changed: &[(i32, i32, i32)]) {
+        if let Some(log) = &mut world.light_log {
+            for &(x, y, z) in changed {
+                *log.entry((x >> 4, z >> 4)).or_default() |= 1 << ((y - crate::chunk::MIN_Y) >> 4);
+            }
+        }
         let mut last = None;
         for &(x, y, z) in changed {
             for dz in -1..=1 {

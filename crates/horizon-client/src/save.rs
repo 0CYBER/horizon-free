@@ -1278,31 +1278,8 @@ pub fn load_light(tag: &Tag, chunk: &mut Chunk, sky_light: bool) {
         };
         layers[si as usize] = (layer("SkyLight"), layer("BlockLight"));
     }
-    let sky_default = if sky_light { 15u8 } else { 0 };
-    // Sky nibbles of the section above's bottom layer, going down.
-    let mut above: [u8; 256] = [sky_default; 256];
-    for si in (0..SECTIONS).rev() {
-        let (sky, block) = layers[si];
-        let mut data = Box::new([0u8; 4096]);
-        let nibble = |a: &[u8], i: usize| (a[i >> 1] >> ((i & 1) * 4)) & 15;
-        for (i, packed) in data.iter_mut().enumerate() {
-            let s = match sky {
-                Some(a) if sky_light => nibble(a, i),
-                _ => above[i & 255],
-            };
-            let b = block.map_or(0, |a| nibble(a, i));
-            *packed = s << 4 | b;
-        }
-        for (i, a) in above.iter_mut().enumerate() {
-            *a = data[i] >> 4;
-        }
-        let mut section = (*chunk.sections[si]).clone();
-        section.light = Light::Full(data);
-        section.compact();
-        chunk.sections[si] = Arc::new(section);
-    }
-    chunk.lit = true;
-    chunk.light_loaded = true;
+    let above = [if sky_light { 15 } else { 0 }; 256];
+    crate::light::light_from_layers(chunk, &layers, above, sky_light);
 }
 
 type RegionCache = Mutex<HashMap<(i32, i32), Option<Arc<Mutex<RegionFile>>>>>;

@@ -109,7 +109,7 @@ game accepts, test hooks included.
 - **Observe:** `state` (position, rotation, velocity, health, food, saturation,
   XP, effects, game mode, dimension, time, weather, the screen and what the
   crosshair points at), `looking-at`, `entities [RADIUS] [TYPE]` (mobs with
-  ids and health, dropped items, orbs), `block X Y Z`, `blocks X1 Y1 Z1 X2 Y2 Z2`,
+  ids and health, dropped items, orbs), `block X Y Z`, `blocks X1 Y1 Z1 X2 Y2 Z2`, `light X1 Y1 Z1 X2 Y2 Z2`,
   `find-block BLOCK [RADIUS]`, `inventory` (stacks with their components as
   SNBT), `screen` (the open screen or title menu, its buttons and slots) and
   `messages` (chat, title, subtitle and action bar).

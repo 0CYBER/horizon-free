@@ -6633,6 +6633,7 @@ impl Game<'_> {
         world.weather = self.world.weather;
         // An open hub keeps hearing the new level's block changes.
         world.block_log = self.world.block_log.as_ref().map(|_| Vec::new());
+        world.light_log = self.world.light_log.as_ref().map(|_| Default::default());
         // The sculk tables' watched blocks are built once per game.
         world.watched = std::mem::take(&mut self.world.watched);
         self.streaming = streaming;
