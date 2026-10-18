@@ -98,10 +98,11 @@ impl Mesher {
                     } else {
                         "block/lava_still"
                     };
-                    let layer = assets
+                    let render = &context.render;
+                    let layer = render
                         .sprite_layers
                         .get(sprite)
-                        .or_else(|| assets.sprite_layers.get(&format!("minecraft:{sprite}")))
+                        .or_else(|| render.sprite_layers.get(&format!("minecraft:{sprite}")))
                         .copied()
                         .unwrap_or(0) as u16;
                     return Styles {
@@ -125,7 +126,8 @@ impl Mesher {
                     _ if leaves => Tint::Foliage,
                     _ => Tint::Grass,
                 };
-                let models = assets
+                let models = context
+                    .render
                     .model_catalog
                     .collect(span.state, BlockPos::new(0, 0, 0))
                     .ok();
@@ -716,7 +718,23 @@ fn merge(rects: &mut Vec<Rect>) {
     }
     rects.truncate(end);
 }
+/// The widest face `emit` writes, in blocks: its UVs, counted from the face's
+/// corner, must stay within `TerrainVertex::tiled`'s range.
+const MAX_FACE: f32 = 1024.0;
 fn emit(mesh: &mut SectionMesh, key: FaceKey, rect: Rect) {
+    let mut u0 = rect.u0;
+    while u0 < rect.u1 {
+        let u1 = rect.u1.min(u0 + MAX_FACE);
+        let mut v0 = rect.v0;
+        while v0 < rect.v1 {
+            let v1 = rect.v1.min(v0 + MAX_FACE);
+            emit_quad(mesh, key, Rect { u0, v0, u1, v1 });
+            v0 = v1;
+        }
+        u0 = u1;
+    }
+}
+fn emit_quad(mesh: &mut SectionMesh, key: FaceKey, rect: Rect) {
     let Rect { u0, v0, u1, v1 } = rect;
     let p = f32::from_bits(key.plane);
     let mut points = match key.direction {
@@ -735,21 +753,29 @@ fn emit(mesh: &mut SectionMesh, key: FaceKey, rect: Rect) {
     } else {
         &mut mesh.solid
     };
-    out.extend(points.map(|pos| {
-        // Tile origins are integer multiples of a block, so local coordinates
-        // retain the world texture phase without distant-coordinate precision loss.
-        let uv = match key.direction {
-            Direction::Up | Direction::Down => [pos[0], -pos[2]],
-            Direction::North | Direction::South => [pos[0], -pos[1]],
-            Direction::West | Direction::East => [pos[2], -pos[1]],
-        };
-        TerrainVertex {
+    // Tile origins are integer multiples of a block, so local coordinates
+    // retain the world texture phase without distant-coordinate precision loss;
+    // a whole number of blocks off each UV keeps it (the sampler repeats) and
+    // counts it from the face's corner.
+    let uvs = points.map(|pos| match key.direction {
+        Direction::Up | Direction::Down => [pos[0], -pos[2]],
+        Direction::North | Direction::South => [pos[0], -pos[1]],
+        Direction::West | Direction::East => [pos[2], -pos[1]],
+    });
+    let corner = [0, 1].map(|i| {
+        uvs.iter()
+            .map(|uv| uv[i])
+            .fold(f32::INFINITY, f32::min)
+            .floor()
+    });
+    out.extend(points.into_iter().zip(uvs).map(|(pos, uv)| {
+        TerrainVertex::tiled(
             pos,
-            uv,
-            layer: key.layer,
-            light: key.light,
-            color: key.color,
-        }
+            [uv[0] - corner[0], uv[1] - corner[1]],
+            key.layer,
+            key.color,
+            key.light,
+        )
     }));
 }
 
@@ -802,6 +828,48 @@ mod tests {
             material,
         )
     }
+    fn tiled_uv(v: &TerrainVertex) -> [f32; 2] {
+        v.uv.map(|u| f32::from(u) / crate::mesher::TILED_UV_STEPS)
+    }
+    #[test]
+    fn wide_faces_split_and_keep_their_texture_phase() {
+        let mut mesh = SectionMesh::default();
+        let key = FaceKey {
+            direction: Direction::Up,
+            plane: 64.0f32.to_bits(),
+            overlay: 0,
+            layer: 1,
+            light: 0,
+            color: 0,
+            translucent: false,
+        };
+        emit(
+            &mut mesh,
+            key,
+            Rect {
+                u0: 0.0,
+                v0: 0.5,
+                u1: 2500.0,
+                v1: 16.0,
+            },
+        );
+        // 2500 blocks: 1024 + 1024 + 452.
+        assert_eq!(mesh.solid.len(), 3 * 4);
+        let mut area = 0.0;
+        for q in mesh.solid.as_chunks::<4>().0 {
+            let x =
+                |f: fn(f32, f32) -> f32, i: usize| q.iter().map(|v| v.pos[i]).reduce(f).unwrap();
+            area += (x(f32::max, 0) - x(f32::min, 0)) * (x(f32::max, 2) - x(f32::min, 2));
+            for v in q {
+                // UVs follow the world position modulo a block.
+                let uv = tiled_uv(v);
+                assert_eq!((uv[0] - v.pos[0]).rem_euclid(1.0), 0.0);
+                assert_eq!((uv[1] + v.pos[2]).rem_euclid(1.0), 0.0);
+                assert!(uv[0] <= MAX_FACE + 1.0 && uv[1] <= MAX_FACE + 1.0);
+            }
+        }
+        assert_eq!(area, 2500.0 * 15.5);
+    }
     fn normal(q: &[TerrainVertex; 4]) -> glam::Vec3 {
         let p = |i: usize| glam::Vec3::from(q[i].pos);
         (p(1) - p(0)).cross(p(2) - p(0))
@@ -824,13 +892,21 @@ mod tests {
                 / 4.0;
             assert!(normal(q).dot(center - glam::Vec3::splat(8.0)) > 0.0);
             assert_eq!(
-                q.iter().map(|v| v.uv[0]).fold(f32::NEG_INFINITY, f32::max)
-                    - q.iter().map(|v| v.uv[0]).fold(f32::INFINITY, f32::min),
+                q.iter()
+                    .map(|v| tiled_uv(v)[0])
+                    .fold(f32::NEG_INFINITY, f32::max)
+                    - q.iter()
+                        .map(|v| tiled_uv(v)[0])
+                        .fold(f32::INFINITY, f32::min),
                 16.0
             );
             assert_eq!(
-                q.iter().map(|v| v.uv[1]).fold(f32::NEG_INFINITY, f32::max)
-                    - q.iter().map(|v| v.uv[1]).fold(f32::INFINITY, f32::min),
+                q.iter()
+                    .map(|v| tiled_uv(v)[1])
+                    .fold(f32::NEG_INFINITY, f32::max)
+                    - q.iter()
+                        .map(|v| tiled_uv(v)[1])
+                        .fold(f32::INFINITY, f32::min),
                 16.0
             );
         }

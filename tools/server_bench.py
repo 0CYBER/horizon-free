@@ -19,7 +19,9 @@ The bots can run on another machine, so they don't take the server's CPU: `--bot
 `--bots-bin` naming horizon-bots there and `--connect` the address it reaches this machine at. `--nice 19`
 runs every server at the lowest priority (a shared machine). The explore bots fly as fast as each server
 sends them chunks, so a faster server gets more terrain to generate; `--explore-speed` slows them to a rate
-both servers keep up with, for equal work.
+both servers keep up with, for equal work. After the runs, the work table compares the servers at each bot
+count: chunks sent and new chunks generated a second, against the busiest server's. A run whose work is more
+than 10 % apart isn't a fair comparison of its tick times.
 
 The vanilla side runs the pinned server jar from tools/lab.py prepare (your own copy). It needs Java 25. The
 Horizon side runs target/release/horizon-server with the engine beside it; build both first:
@@ -306,6 +308,38 @@ def run_once(kind, bots, behaviour, args, out):
     return result
 
 
+# How far apart two servers' chunks a second (sent, and new) may be and still count as the same work: 10 %,
+# or a chunk a second when there are few.
+EQUAL_WORK = 0.10
+
+
+def work(runs):
+    """Each pass and bot count that ran on more than one server: every server's chunks sent and new chunks a
+    second as a share of the busiest one's, the ticks a second its bots stood waiting for their own chunk,
+    and whether the work was equal (within EQUAL_WORK on both)."""
+    groups = {}
+    for r in runs:
+        if 'error' not in r:
+            groups.setdefault((r['behaviour'], r['bots']), []).append(r)
+    rows = []
+    for (behaviour, bots), group in groups.items():
+        if len(group) < 2:
+            continue
+        row = {'behaviour': behaviour, 'bots': bots, 'servers': {}, 'equal': True}
+        for key in ('chunks_per_second', 'unique_per_second'):
+            top = max(r.get(key) or 0 for r in group)
+            for r in group:
+                value = r.get(key) or 0
+                share = round(value / top, 3) if top else 1.0
+                row['servers'].setdefault(r['server'], {})[key] = {'value': value, 'share': share}
+                if top - value > max(EQUAL_WORK * top, 1.0):
+                    row['equal'] = False
+        for r in group:
+            row['servers'][r['server']]['waited_ticks_per_second'] = r.get('waited_ticks_per_second')
+        rows.append(row)
+    return rows
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     parser.add_argument('--servers', default='horizon,vanilla')
@@ -346,6 +380,7 @@ def main():
         'java': subprocess.run(['java', '--version'], capture_output=True, text=True).stdout.splitlines()[:1],
         'settings': {**vars(args), 'out': str(args.out), 'properties': PROPERTIES},
         'runs': runs,
+        'work': work(runs),
     }
     path = args.out or out / 'report.json'
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -356,11 +391,20 @@ def main():
         if 'error' in r:
             print(f'{r["server"]:8} {r["behaviour"]:8} {r["bots"]:>4}  failed: {r["error"].splitlines()[0]}')
             continue
-        per_bot = r['chunks_per_bot'].get(r['behaviour'])
+        # A mixed pass: every bot's.
+        per_bot = r['chunks_per_bot'].get(r['behaviour']) or round((r['chunks_total'] or 0) / r['bots'])
         print(f'{r["server"]:8} {r["behaviour"]:8} {r["bots"]:>4} {r["start_seconds"]:>8} {r["mspt"]["average"]!s:>6} '
               f'{r["mspt"]["p95"]!s:>6} {r["mspt"]["p99"]!s:>6} {r["rss_mb"]["mean"]!s:>7} {r["cpu_percent"]!s:>6} '
               f'{r["chunks_per_second"]!s:>8} {per_bot!s:>6} {r["resent"]!s:>6} {r["pulled_back"]!s:>6} '
               f'{r["bots_joined"]!s:>6}')
+    if report['work']:
+        print(f'\nWork, against the busiest server (chunks a second sent, new; ticks a second bots waited):')
+        for row in report['work']:
+            cells = '  '.join(
+                f'{server} {w["chunks_per_second"]["value"]} ({w["chunks_per_second"]["share"]:.0%}), '
+                f'{w["unique_per_second"]["value"]} ({w["unique_per_second"]["share"]:.0%}), '
+                f'{w["waited_ticks_per_second"]}' for server, w in row['servers'].items())
+            print(f'{row["behaviour"]:8} {row["bots"]:>4}  {"equal" if row["equal"] else "NOT EQUAL"}  {cells}')
     print(f'\nWrote {path}')
 
 

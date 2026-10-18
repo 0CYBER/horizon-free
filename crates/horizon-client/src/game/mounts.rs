@@ -90,7 +90,11 @@ impl Game<'_> {
             && let Some(stack) = self.inventory[self.selected].as_mut()
         {
             stack.damage += wear;
-            let max = self.res.items.get(&stack.item).map_or(25, |i| i.max_damage);
+            let max = self
+                .res
+                .items()
+                .get(&stack.item)
+                .map_or(25, |i| i.max_damage);
             if stack.damage >= max {
                 self.inventory[self.selected] = Some(ItemStack::new("minecraft:fishing_rod", 1));
             }
@@ -406,7 +410,7 @@ impl Game<'_> {
             .find(|c| {
                 let f = |dy: i32| {
                     self.res
-                        .facts
+                        .facts()
                         .get(self.world.block(
                             c.x.floor() as i32,
                             c.y.floor() as i32 + dy,
@@ -457,7 +461,7 @@ impl Game<'_> {
             return (0, false);
         };
         let m = &self.mobs[i];
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let hearts = horizon_client::hud_layout::vehicle_max_hearts(m.attrs.max_health);
         let draws = horizon_client::hud_layout::vehicle_health(w, h, hearts, m.health);
         horizon_client::hud_layout::paint(batch, atlas, &draws);

@@ -47,6 +47,16 @@ impl Bounds {
     }
 }
 
+/// A tile's instance: like a section's, with the UV step of merged faces.
+pub(super) fn instance(origin: [f32; 3]) -> [f32; 4] {
+    [
+        origin[0],
+        origin[1],
+        origin[2],
+        1.0 / crate::mesher::TILED_UV_STEPS,
+    ]
+}
+
 pub(super) struct Visible {
     pub key: TileKey,
     pub distance: u64,
@@ -104,13 +114,7 @@ mod tests {
 
     #[test]
     fn large_tile_bounds_include_water_and_do_not_cull_by_origin() {
-        let vertex = |pos| TerrainVertex {
-            pos,
-            uv: [0.0; 2],
-            layer: 0,
-            light: 0,
-            color: 0,
-        };
+        let vertex = |pos| TerrainVertex::tiled(pos, [0.0; 2], 0, 0, 0);
         let mesh = SectionMesh {
             solid: vec![vertex([0.0, -64.0, 0.0]), vertex([1024.0, 100.0, 1024.0])],
             translucent: vec![vertex([512.0, 120.0, 512.0])],

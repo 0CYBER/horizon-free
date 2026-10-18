@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import tempfile
 import unittest
 from unittest import mock
@@ -151,6 +152,7 @@ class ShardTests(unittest.TestCase):
             self.assertEqual(parity.base_name("x#2"), "x")
 
 
+@unittest.skipIf(os.name == "nt", "oracle PATH shimming uses Unix executable symlink semantics")
 class OracleReuseTests(unittest.TestCase):
     """tools/parity_shim.py replays a run only when its inputs and outputs are as recorded."""
 

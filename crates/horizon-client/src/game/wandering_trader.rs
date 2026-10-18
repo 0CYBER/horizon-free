@@ -126,14 +126,14 @@ impl Game<'_> {
         }
         let biome = self.world.chunks.get(&(pos[0] >> 4, pos[2] >> 4)).map(|c| {
             self.res
-                .biomes
+                .biomes()
                 .get(c.biome(pos[0], pos[1], pos[2]))
                 .name
                 .clone()
         });
         if biome.is_some_and(|b| {
             self.res
-                .mob_data
+                .mob_data()
                 .biome_has("minecraft:without_wandering_trader_spawns", &b)
         }) {
             return false;
@@ -214,7 +214,7 @@ impl Game<'_> {
                 (0..=1).all(|dz| {
                     !self
                         .res
-                        .facts
+                        .facts()
                         .get(self.world.block(pos[0] + dx, pos[1] + dy, pos[2] + dz))
                         .full_collision
                 })
@@ -230,7 +230,7 @@ impl Game<'_> {
                     continue;
                 }
                 for y in (from[1] - range).max(horizon_client::chunk::MIN_Y)..=from[1] + range {
-                    if &*self.res.facts.get(self.world.block(x, y, z)).name != "minecraft:bell" {
+                    if &*self.res.facts().get(self.world.block(x, y, z)).name != "minecraft:bell" {
                         continue;
                     }
                     let d = (x - from[0]).pow(2) + (y - from[1]).pow(2) + (z - from[2]).pow(2);

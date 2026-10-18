@@ -32,7 +32,8 @@ pub fn name(dir: &Path) -> String {
 }
 
 /// The program the service runs: the `horizon-server` on the PATH (the installer's launcher, which keeps
-/// running the current version after an update), else this program.
+/// running the current version after an update), else this program, through the installer's `current`
+/// link when it runs from an installed release.
 fn program() -> Result<PathBuf, String> {
     let on_path = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
@@ -42,8 +43,28 @@ fn program() -> Result<PathBuf, String> {
         .find(|p| p.is_file());
     match on_path {
         Some(path) => Ok(path),
-        None => std::env::current_exe().map_err(|e| e.to_string()),
+        None => std::env::current_exe()
+            .map(|exe| through_current(&exe))
+            .map_err(|e| e.to_string()),
     }
+}
+
+/// `<dir>/releases/<tag>/horizon-server` as `<dir>/current/horizon-server` while `current` points at that
+/// release (install.sh and install.ps1's layout), so an update applies at the next restart. Linux reports
+/// the running program with links resolved, so the release's own path is what this program sees there.
+fn through_current(exe: &Path) -> PathBuf {
+    let current = (|| {
+        let release = exe.parent()?;
+        let releases = release.parent()?;
+        if releases.file_name()? != "releases" {
+            return None;
+        }
+        let current = releases.parent()?.join("current");
+        let name = exe.file_name()?;
+        let same = std::fs::canonicalize(&current).ok()? == std::fs::canonicalize(release).ok()?;
+        same.then(|| current.join(name))
+    })();
+    current.unwrap_or_else(|| exe.to_path_buf())
 }
 
 /// A systemd unit: a user unit, or with `user` a system unit running as that user.
@@ -373,5 +394,23 @@ mod tests {
         );
         assert!(plist.contains("<string>/srv/R&amp;D</string>"));
         assert!(plist.contains("<string>/srv/R&amp;D/logs/supervisor.log</string>"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_installed_release_runs_through_current() {
+        let root =
+            std::env::temp_dir().join(format!("horizon-service-current-{}", std::process::id()));
+        let release = root.join("releases/v1");
+        std::fs::create_dir_all(&release).unwrap();
+        let exe = release.join("horizon-server");
+        std::fs::write(&exe, "").unwrap();
+        // Not the release in use (or no installer layout): this program as it is.
+        assert_eq!(through_current(&exe), exe);
+        std::os::unix::fs::symlink(&release, root.join("current")).unwrap();
+        assert_eq!(through_current(&exe), root.join("current/horizon-server"));
+        let other = root.join("bin/horizon-server");
+        assert_eq!(through_current(&other), other);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

@@ -361,10 +361,10 @@ impl Game<'_> {
     fn containers(&self) -> Containers<'_> {
         Containers {
             world: &self.world,
-            behaviours: &self.res.behaviours,
-            items: &self.res.items,
+            behaviours: self.res.behaviours(),
+            items: self.res.items(),
             registry: self.pack.assets.registry,
-            brewing: Some(&self.res.stations.brewing),
+            brewing: Some(&self.res.stations().brewing),
             bone_meal: bone_meal(),
         }
     }
@@ -502,7 +502,7 @@ impl Game<'_> {
     pub(super) fn tick_hopper(&mut self, pos: Pos) {
         let hopper = self
             .res
-            .facts
+            .facts()
             .get(self.world.block(pos.0, pos.1, pos.2))
             .name
             .as_ref()
@@ -626,12 +626,12 @@ impl Game<'_> {
             return false;
         }
         let above_state = self.world.block(above.0, above.1, above.2);
-        let blocked = self.res.facts.get(above_state).full_collision
+        let blocked = self.res.facts().get(above_state).full_collision
             && !self
                 .res
-                .behaviours
+                .behaviours()
                 .tag("minecraft:does_not_block_hoppers")
-                .is_some_and(|t| t.contains(self.res.behaviours.block(above_state)));
+                .is_some_and(|t| t.contains(self.res.behaviours().block(above_state)));
         if blocked {
             return false;
         }
@@ -678,7 +678,7 @@ impl Game<'_> {
     /// `DispenserBlock.dispenseFrom` / `DropperBlock.dispenseFrom`.
     pub(super) fn dispense_from(&mut self, pos: BlockPos, state: BlockStateId) -> Result<()> {
         let key = (pos.x, pos.y, pos.z);
-        let name = self.res.facts.get(state).name.clone();
+        let name = self.res.facts().get(state).name.clone();
         if &*name == "minecraft:crafter" {
             return self.crafter_dispense(pos, state);
         }
@@ -770,12 +770,20 @@ enum Screen {
 impl Game<'_> {
     fn machine_screen(&self) -> Option<Screen> {
         let key = self.container?;
+        // A server's menu shows by its type, whatever block (or minecart) holds it.
+        if let Some(menu) = self.remote_menu_type() {
+            return match menu {
+                "minecraft:hopper" => Some(Screen::Hopper),
+                "minecraft:generic_3x3" => Some(Screen::Dispenser),
+                _ => None,
+            };
+        }
         if key.1 == super::minecarts::CART_KEY_Y {
             return (self.open_cart_kind() == Some(super::minecarts::CartKind::Hopper))
                 .then_some(Screen::Hopper);
         }
         let state = self.world.block(key.0, key.1, key.2);
-        match &*self.res.facts.get(state).name {
+        match &*self.res.facts().get(state).name {
             "minecraft:hopper" => Some(Screen::Hopper),
             "minecraft:dispenser" => Some(Screen::Dispenser),
             "minecraft:dropper" => Some(Screen::Dropper),
@@ -832,7 +840,7 @@ impl Game<'_> {
         let Some(screen) = self.machine_screen() else {
             return false;
         };
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let key_is_cart = self
             .container
             .is_some_and(|k| k.1 == super::minecarts::CART_KEY_Y);
@@ -852,7 +860,9 @@ impl Game<'_> {
             batch.rect_uv(ox, oy, 176.0, height, r, u32::MAX);
         }
         let grey = horizon_client::hud::rgba(64, 64, 64, 255);
-        let title = &self.container_title(title.to_owned());
+        let title = &self
+            .remote_menu_title()
+            .unwrap_or_else(|| self.container_title(title.to_owned()));
         let title_x = if screen == Screen::Hopper {
             8.0
         } else {

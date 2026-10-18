@@ -66,15 +66,21 @@ impl Game<'_> {
     ) -> FogData {
         let forward = self.forward();
         let at = [camera.x, camera.y, camera.z];
-        let fog_type = fog_type(&self.world, &self.res.facts, at, forward);
-        let water = self.res.biomes.get(biome).water_fog;
+        let fog_type = fog_type(&self.world, self.res.facts(), at, forward);
+        let water = self.res.biomes().get(biome).water_fog;
         let (rain, thunder) = if self.dim == Dim::Overworld {
             self.world.weather.levels(self.clock.fraction() as f32)
         } else {
             (0.0, 0.0)
         };
+        let title_fog = horizon_client::fog::FogTables::default();
+        let tables = if self.title.is_some() {
+            &title_fog
+        } else {
+            self.res.fog()
+        };
         horizon_client::fog::setup_fog(
-            &self.res.fog,
+            tables,
             &self.fog,
             &FogInputs {
                 fog_type,
@@ -118,7 +124,7 @@ impl Game<'_> {
         horizon_client::gfx::ShaderInputs {
             rain,
             thunder,
-            submerged: match fog_type(&self.world, &self.res.facts, at, self.forward()) {
+            submerged: match fog_type(&self.world, self.res.facts(), at, self.forward()) {
                 FogType::Atmospheric => 0,
                 FogType::Water => 1,
                 FogType::Lava => 2,
@@ -140,7 +146,7 @@ impl Game<'_> {
         camera.y < 63.0
             && fog_type(
                 &self.world,
-                &self.res.facts,
+                self.res.facts(),
                 [camera.x, camera.y, camera.z],
                 self.forward(),
             ) != FogType::Water
@@ -171,7 +177,7 @@ impl Game<'_> {
                 t[1].floor() as i32,
                 t[2].floor() as i32,
             );
-            let f = self.res.facts.get(state);
+            let f = self.res.facts().get(state);
             if f.render_shape != horizon_client::blocks::RenderShape::Invisible
                 && f.solid_render
                 && f.full_collision
@@ -181,7 +187,7 @@ impl Game<'_> {
             }
         }
         let in_water =
-            fog_type(&self.world, &self.res.facts, eye, self.forward()) == FogType::Water;
+            fog_type(&self.world, self.res.facts(), eye, self.forward()) == FogType::Water;
         let water =
             (in_water && !spectator).then(|| (self.eye_brightness(eye), self.yaw, self.pitch));
         // Hud.extractCameraOverlays; the spyglass scope (and its easing) is
@@ -212,7 +218,7 @@ impl Game<'_> {
         let gui_overlays =
             hud_overlays::camera_overlays(size[0] as i32, size[1] as i32, &overlays, &mut scope);
         self.screen_fx.build(&ScreenInputs {
-            sprites: &self.atlas.sprites,
+            sprites: &self.gui.atlas.sprites,
             aspect: size[0] as f32 / size[1].max(1) as f32,
             partial,
             block_overlay,
@@ -244,7 +250,7 @@ impl Game<'_> {
             self.screen_fx.tick(brightness, inside_portal);
             // LocalPlayer water vision and AtmosphericFogEnvironment rain fog.
             let in_water =
-                fog_type(&self.world, &self.res.facts, e, self.forward()) == FogType::Water;
+                fog_type(&self.world, self.res.facts(), e, self.forward()) == FogType::Water;
             self.fog.tick(in_water);
             let b = [
                 e[0].floor() as i32,
@@ -261,7 +267,7 @@ impl Game<'_> {
                 .chunks
                 .get(&(b[0] >> 4, b[2] >> 4))
                 .map_or(0, |c| c.biome(b[0], b[1], b[2]));
-            let rains = self.res.biomes.get(biome).precipitation;
+            let rains = self.res.biomes().get(biome).precipitation;
             update_rain_fog(
                 &mut self.fog,
                 rain,
@@ -279,8 +285,8 @@ impl Game<'_> {
             (0.0, 0.0)
         };
         let world = &self.world;
-        let facts = &self.res.facts;
-        let biomes = &self.res.biomes;
+        let facts = self.res.facts();
+        let biomes = self.res.biomes();
         let raining = rain > 0.2;
         let raining_at = |p: [i32; 3]| {
             raining
@@ -301,7 +307,7 @@ impl Game<'_> {
                 e[1].floor() as i32,
                 e[2].floor() as i32,
             ];
-            animate_tick(&self.res.animate, &mut self.particles, &ctx, block);
+            animate_tick(self.res.animate(), &mut self.particles, &ctx, block);
             if rain > 0.0 {
                 // ClientLevel.tickWeatherEffects: rain splashes (weather radius 10).
                 let mut random = LegacyRandom::new(self.world.game_time.wrapping_mul(312_987_231));
@@ -337,7 +343,7 @@ impl Game<'_> {
                     let smoke = f.fluid == Fluid::Lava
                         || &*f.name == "minecraft:magma_block"
                         || (f.name.ends_with("campfire")
-                            && self.res.animate.is_lit_campfire(state.0));
+                            && self.res.animate().is_lit_campfire(state.0));
                     let ty = if smoke {
                         ParticleType::Smoke
                     } else {
@@ -355,7 +361,7 @@ impl Game<'_> {
         }
         if let Some(r) = &self.renderer {
             campfire_particles(
-                &self.res.animate,
+                self.res.animate(),
                 &mut self.particles,
                 &ctx,
                 r.block_entities(),

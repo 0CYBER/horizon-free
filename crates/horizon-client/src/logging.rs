@@ -330,6 +330,14 @@ pub fn write_only(level: log::Level, message: &str) {
     }
 }
 
+/// Writes `message` to the log file only, under the thread vanilla names for it (`Server thread` for
+/// a login refused on a connection's own thread), as the console line beside it shows.
+pub fn write_as(thread: &str, level: log::Level, message: &str) {
+    if let Some(logger) = LOGGER.get() {
+        logger.write(thread, level, message);
+    }
+}
+
 /// The last lines written, oldest first (for crash reports).
 pub fn recent_lines() -> Vec<String> {
     LOGGER.get().map_or_else(Vec::new, |l| {

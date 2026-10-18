@@ -30,7 +30,8 @@ import net.minecraft.world.phys.Vec3;
  * equipment, attributes and passengers, and where the position syncs leave
  * it (VecDeltaCodec, as handleMoveEntity and handleEntityPositionSync).
  * Entity ids differ between servers: an entity is named by its type and the
- * block it was added in, passengers by those names. Players are left out.
+ * block it was added in, passengers by those names. Players are left out, but
+ * for the attributes the player itself is sent from its login on.
  */
 final class EntityTranscript {
     private static final class Tracked {
@@ -67,6 +68,21 @@ final class EntityTranscript {
 
     private final Map<Integer, Tracked> byId = new HashMap<>();
     private final List<Tracked> all = new ArrayList<>();
+    private int self = Integer.MIN_VALUE;
+    private final Map<String, String> selfAttributes = new TreeMap<>();
+
+    /** The player's own id (login) and attribute instances; false for any other packet. */
+    boolean acceptSelf(Packet<?> packet) {
+        if (packet instanceof net.minecraft.network.protocol.game.ClientboundLoginPacket p) {
+            self = p.playerId();
+            return true;
+        }
+        if (packet instanceof ClientboundUpdateAttributesPacket p && p.getEntityId() == self) {
+            p.getValues().forEach(a -> selfAttributes.put(a.attribute().getRegisteredName(), a.base() + " " + a.modifiers()));
+            return true;
+        }
+        return false;
+    }
     private int unknown;
 
     /** Applies one packet; false when it isn't about a tracked entity. */
@@ -158,6 +174,7 @@ final class EntityTranscript {
                 + " | attributes " + t.attributes + " | passengers " + riders + " | now " + t.codec.getBase() + " rot " + t.xRot + ","
                 + t.yRot + " head " + t.headRot + " ground " + t.onGround + " motion " + t.motion + t.power + (t.removed ? " | removed" : ""));
         }
+        out.add("self attributes " + selfAttributes);
         out.sort(null);
         return out;
     }

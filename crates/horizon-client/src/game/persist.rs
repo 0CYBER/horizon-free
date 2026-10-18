@@ -105,7 +105,9 @@ impl Game<'_> {
         chunk.saved = Some(Arc::new(extras));
     }
     /// Register a newly resident chunk with the tick scheduler, with the
-    /// block and fluid ticks it was saved with.
+    /// block and fluid ticks it was saved with (`LevelChunk.registerTickContainerInLevel`
+    /// at FULL). They are unpacked when the chunk starts ticking
+    /// (`start_ticking_chunks`).
     pub(super) fn register_chunk_ticks(&mut self, key: (i32, i32)) {
         let pos = ChunkPos::new(key.0, key.1);
         let saved = self.world.chunks.get(&key).and_then(|c| c.saved.clone());
@@ -130,9 +132,7 @@ impl Game<'_> {
             .is_ok()
             && loaded
         {
-            let time = self.world.game_time;
-            self.block_ticks.blocks.unpack_chunk(pos, time);
-            self.block_ticks.fluids.unpack_chunk(pos, time);
+            self.tick_chunks.wait(key);
         }
         // The saved list is consumed: later saves take the scheduler's ticks.
         if loaded && let Some(c) = self.world.chunks.get_mut(&key) {
@@ -215,7 +215,7 @@ impl Game<'_> {
                                 fall_distance,
                                 damage: horizon_client::falling_block::Damage::from_nbt(
                                     &tag,
-                                    self.res.facts.get(state).name.ends_with("anvil"),
+                                    self.res.facts().get(state).name.ends_with("anvil"),
                                 ),
                                 saved: uuid.map(|u| Box::new((u, tag.clone()))),
                             });
@@ -321,7 +321,7 @@ impl Game<'_> {
                             self.persist.unknown.entry(key).or_default().push(tag);
                         }
                     }
-                    _ if self.res.mob_types.contains_key(&kind) => {
+                    _ if self.res.mob_types().contains_key(&kind) => {
                         self.load_mob(tag, None);
                     }
                     _ if !kind.is_empty() && entity_nbt::position(&tag).is_some() => {
@@ -346,7 +346,7 @@ impl Game<'_> {
             if let Some(Tag::List(list)) = c.remove(&"Passengers".into()) {
                 for p in list {
                     let known =
-                        entity_nbt::kind(&p).is_some_and(|k| self.res.mob_types.contains_key(&k));
+                        entity_nbt::kind(&p).is_some_and(|k| self.res.mob_types().contains_key(&k));
                     if known {
                         riders.push(p);
                     } else {
@@ -358,7 +358,7 @@ impl Game<'_> {
                 c.insert("Passengers".into(), Tag::List(unknown));
             }
         }
-        let mut m = entity_nbt::mob_from_nbt(&tag, &self.res.mob_types, self.next_entity)?;
+        let mut m = entity_nbt::mob_from_nbt(&tag, self.res.mob_types(), self.next_entity)?;
         m.extra.mount = mount;
         m.extra.passenger = mount.is_some();
         if finalize {

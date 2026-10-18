@@ -100,7 +100,7 @@ impl RaidLevel for Lvl<'_, '_> {
         let w = g.mob_world_base(&[]);
         spawn_rules::is_spawn_position_ok(Species::Ravager, &w, x, y, z)
             || w.block_name(x, y - 1, z) == "minecraft:snow"
-                && g.res.facts.is_air(g.world.block(x, y, z))
+                && g.res.facts().is_air(g.world.block(x, y, z))
     }
     fn player(&self) -> Option<RaidPlayer> {
         let p = self.game.player.as_ref()?;
@@ -221,7 +221,7 @@ impl Game<'_> {
         let top = if self.dim == Dim::Nether { 127 } else { 319 };
         (horizon_client::chunk::MIN_Y..=top)
             .rev()
-            .find(|&y| !self.res.facts.is_air(self.world.block(x, y, z)))
+            .find(|&y| !self.res.facts().is_air(self.world.block(x, y, z)))
             .map_or(horizon_client::chunk::MIN_Y, |y| y + 1)
     }
     /// Every claimed village point of interest (job sites, beds, bells).
@@ -356,7 +356,7 @@ impl Game<'_> {
             .get(&(at[0] >> 4, at[2] >> 4))
             .map(|c| {
                 self.res
-                    .biomes
+                    .biomes()
                     .get(c.biome(at[0], at[1], at[2]))
                     .name
                     .clone()
@@ -716,7 +716,7 @@ impl Game<'_> {
         leader: bool,
         reason: raider::Reason,
     ) -> Option<u32> {
-        let t = self.res.mob_types.get(kind).cloned()?;
+        let t = self.res.mob_types().get(kind).cloned()?;
         self.next_entity += 1;
         let mut mob = Mob::new(self.next_entity, t, Vec3::new(at[0], at[1], at[2]), 0.0);
         if leader {
@@ -982,11 +982,11 @@ impl Game<'_> {
                 for z in c[2] - 64..=c[2] + 64 {
                     for x in c[0] - 64..=c[0] + 64 {
                         let state = self.world.block(x, y, z);
-                        if self.res.facts.is_air(state) {
+                        if self.res.facts().is_air(state) {
                             continue;
                         }
                         let bed = *known.entry(state.0).or_insert_with(|| {
-                            self.res.facts.get(state).name.ends_with("_bed")
+                            self.res.facts().get(state).name.ends_with("_bed")
                                 && self.pack.assets.registry.state(state).is_some_and(|s| {
                                     s.properties.get("part").map(String::as_str) == Some("head")
                                 })
@@ -1121,7 +1121,7 @@ impl Game<'_> {
     pub(super) fn throw_gift(&mut self, table: &str, from: [f64; 3], to: [f64; 3]) {
         let drops = self
             .res
-            .items
+            .items()
             .loot_table(table, false, None, &mut self.world.random);
         let d = Vec3::new(to[0] - from[0], to[1] - from[1], to[2] - from[2]).normalize();
         for stack in drops {
@@ -1163,7 +1163,7 @@ impl Game<'_> {
                 .get(&(at[0] >> 4, at[2] >> 4))
                 .map(|c| {
                     game.res
-                        .biomes
+                        .biomes()
                         .get(c.biome(at[0], at[1], at[2]))
                         .name
                         .clone()

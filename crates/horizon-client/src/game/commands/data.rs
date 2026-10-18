@@ -35,6 +35,11 @@ impl Game<'_> {
     pub(in crate::game) fn entity_nbt(&mut self, t: Target) -> Option<Tag> {
         let player_uuid = self.level.player_uuid;
         Some(match t {
+            Target::Guest(_) => {
+                return self
+                    .for_player(t, |g| g.entity_nbt(Target::Player))
+                    .flatten();
+            }
             Target::Player => {
                 self.player.as_ref()?;
                 self.sync_level();
@@ -142,7 +147,7 @@ impl Game<'_> {
                     set_key(&mut tag, "id", Tag::String(k.as_str().into()));
                 }
                 let new =
-                    entity_nbt::mob_from_nbt(&tag, &self.res.mob_types, id).ok_or_else(stale)?;
+                    entity_nbt::mob_from_nbt(&tag, self.res.mob_types(), id).ok_or_else(stale)?;
                 if let Some(slot) = self.mobs.iter_mut().find(|m| m.id == id) {
                     // Runtime-only state (AI, animation) carries over.
                     let old = std::mem::replace(slot, new);

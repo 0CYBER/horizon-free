@@ -110,7 +110,7 @@ impl Game<'_> {
         let mut next_entity = self.next_entity;
         let mut random = self.world.random.clone();
         let spawning = self.spawning_monsters();
-        let creaking = self.res.mob_types.get("minecraft:creaking").cloned();
+        let creaking = self.res.mob_types().get("minecraft:creaking").cloned();
         let player_uuid = self.level.player_uuid;
         let snapshot: Vec<_> = mobs.iter().map(|m| seen(m, player_uuid)).collect();
         let mut events = Vec::new();
@@ -220,6 +220,12 @@ impl Game<'_> {
     /// death and a natural heart drops experience.
     pub(super) fn creaking_heart_broken(&mut self, pos: [i32; 3]) {
         let key = (pos[0], pos[1], pos[2]);
+        if !matches!(
+            self.world.block_entities.get(&key),
+            Some(BlockEntity::CreakingHeart(_))
+        ) {
+            return;
+        }
         let Some(BlockEntity::CreakingHeart(mut heart)) = self.world.block_entities.take(&key)
         else {
             return;
@@ -259,7 +265,7 @@ impl Game<'_> {
             return Ok(());
         };
         let state = self.world.block(key.0, key.1, key.2);
-        if &*self.res.facts.get(state).name != "minecraft:creaking_heart" {
+        if &*self.res.facts().get(state).name != "minecraft:creaking_heart" {
             // The block is gone: preRemoveSideEffects.
             self.world.block_entities.forget(&key);
             self.with_heart(key, &mut heart, |h, _, _, host, out| {
@@ -311,7 +317,7 @@ impl Game<'_> {
             if self.creaking.hearts.is_empty() {
                 self.creaking.hearts = self
                     .res
-                    .facts
+                    .facts()
                     .states
                     .iter()
                     .map(|f| &*f.name == "minecraft:creaking_heart")

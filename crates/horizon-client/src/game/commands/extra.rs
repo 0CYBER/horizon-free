@@ -586,7 +586,7 @@ impl Game<'_> {
         );
         let hit = traverse_blocks(eye, end, 256, |b: BlockPos| {
             let state = self.world.block(b.x, b.y, b.z);
-            (!self.res.facts.is_air(state)).then_some([b.x, b.y, b.z])
+            (!self.res.facts().is_air(state)).then_some([b.x, b.y, b.z])
         });
         hit.ok().flatten().unwrap_or([
             end.x.floor() as i32,

@@ -1333,10 +1333,12 @@ mod tests {
             std::env::var_os("HORIZON_TEST_RESOURCES").expect("HORIZON_TEST_RESOURCES"),
         );
         let assets = Arc::new(Assets::load(&root)?);
+        let render = Arc::new(assets.reload(&root)?);
         let facts = BlockFacts::load(&root, assets.registry)?;
         let biomes = Arc::new(Biomes::load(&root)?);
         let tables = Arc::new(MeshTables::new(
             &assets,
+            &render,
             &facts,
             crate::models::load_visibility(&root, assets.registry)?,
         )?);
@@ -1344,6 +1346,7 @@ mod tests {
             light: Arc::new(LightTables::load(&root, assets.registry, &facts)?),
             tables,
             assets: assets.clone(),
+            render,
             biomes: biomes.clone(),
         });
         let source = Arc::new(TestTerrain::new(assets.registry, &biomes)?);

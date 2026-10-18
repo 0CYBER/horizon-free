@@ -9,9 +9,10 @@ fn leaf_culling_removes_only_internal_leaf_and_root_faces() {
         return;
     }
     let assets = Assets::load(&root).unwrap();
+    let render = assets.reload(&root).unwrap();
     let facts = BlockFacts::load(&root, assets.registry).unwrap();
     let visibility = crate::models::load_visibility(&root, assets.registry).unwrap();
-    let tables = MeshTables::new(&assets, &facts, visibility.clone()).unwrap();
+    let tables = MeshTables::new(&assets, &render, &facts, visibility.clone()).unwrap();
     let biomes = Biomes::load(&root).unwrap();
     let state = |name| assets.registry.default_state(name).unwrap().0;
     let oak = state("minecraft:oak_leaves");
@@ -31,6 +32,7 @@ fn leaf_culling_removes_only_internal_leaf_and_root_faces() {
         Mesher {
             nether_shading: false,
             assets: &assets,
+            render: &render,
             tables: &tables,
             biomes: &biomes,
             visibility: visibility.clone(),
@@ -49,7 +51,7 @@ fn leaf_culling_removes_only_internal_leaf_and_root_faces() {
     // preserving every other quad and its full vertex attributes.
     let without_face = |at: [i32; 3], id, direction| {
         let vertices = mesh(&[(at, id)], false, true);
-        let models = assets
+        let models = render
             .model_catalog
             .collect(BlockStateId(id), BlockPos::new(at[0], at[1], at[2]))
             .unwrap();

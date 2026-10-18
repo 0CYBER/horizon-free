@@ -68,7 +68,7 @@ impl Game<'_> {
     /// (`client_tick_spawners`).
     pub(super) fn tick_spawner(&mut self, key: Pos) -> Result<()> {
         let state = self.world.block(key.0, key.1, key.2);
-        if &*self.res.facts.get(state).name != "minecraft:spawner" {
+        if &*self.res.facts().get(state).name != "minecraft:spawner" {
             return Ok(());
         }
         let Some(BlockEntity::Spawner(mut spawner)) = self.world.block_entities.take(&key) else {
@@ -145,7 +145,7 @@ impl Game<'_> {
         r: &SpawnerSpawn,
         planned: &mut Vec<Planned>,
     ) -> Option<SpawnerAdded> {
-        let kind = self.res.mob_types.get(r.id)?.clone();
+        let kind = self.res.mob_types().get(r.id)?.clone();
         let [x, y, z] = r.position;
         let at = Vec3::new(x, y, z);
         let bounds = if r.finalize {
@@ -195,7 +195,7 @@ impl Game<'_> {
                 tag.insert("PersistenceRequired".into(), Tag::Byte(1));
             }
             let tag = Tag::Compound(tag);
-            let mob = horizon_client::entity_nbt::mob_from_nbt(&tag, &self.res.mob_types, 0)?;
+            let mob = horizon_client::entity_nbt::mob_from_nbt(&tag, self.res.mob_types(), 0)?;
             let bounds = mob.bounds();
             planned.push(Planned::Loaded(tag));
             bounds
@@ -331,7 +331,7 @@ impl Game<'_> {
             .get(&key)
             .is_none_or(|(k, _)| *k != kind)
         {
-            let Some(t) = self.res.mob_types.get(&kind).cloned() else {
+            let Some(t) = self.res.mob_types().get(&kind).cloned() else {
                 return false;
             };
             let mob = Mob::new(u32::MAX, t, Vec3::ZERO, 0.0);
@@ -351,7 +351,7 @@ impl Game<'_> {
             }
             _ => return None,
         };
-        self.res.mob_types.contains_key(&id).then_some(id)
+        self.res.mob_types().contains_key(&id).then_some(id)
     }
     /// `SpawnEggItem.useOn` on a spawner: the egg sets its mob. None when the
     /// clicked block has no spawner.
@@ -393,7 +393,7 @@ impl Game<'_> {
         alpha: f64,
         out: &mut Vec<horizon_client::mesher::Vertex>,
     ) {
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         for (key, (_, mob)) in &self.spawners.displays {
             let at = glam::DVec3::new(f64::from(key.0), f64::from(key.1), f64::from(key.2));
@@ -436,7 +436,7 @@ impl Game<'_> {
                 origin,
                 &lookup,
                 packed,
-                &self.res.mob_data,
+                self.res.mob_data(),
                 out,
             );
         }

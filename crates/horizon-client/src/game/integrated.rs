@@ -10,7 +10,7 @@
 //! player joins as a network player, and the server side of a network player
 //! does not do everything single player does yet.
 use super::{
-    Game, Options, PackResources, Resources,
+    Game, Options, PackResources, Resources, UiResources,
     lan::{LanSettings, Owner},
 };
 use horizon_client::{
@@ -201,6 +201,7 @@ impl Game<'_> {
         options.server = None;
         options.world = None;
         options.dev_mods.clear();
+        self.join_world_rest()?;
         let (res, pack, settings) = (self.res.clone(), self.pack.clone(), self.settings.clone());
         let flags = Arc::new(Flags::default());
         flags
@@ -316,6 +317,7 @@ impl Game<'_> {
             // The owner is an operator when the world allows commands
             // (`IntegratedPlayerList`, `MinecraftServer.getProfilePermissions`).
             host.hub.ops.insert(owner, if commands { 4 } else { 0 });
+            host.hub.singleplayer_owner = Some(owner);
             host.owner = Some(Owner {
                 uuid: owner,
                 saved: Some(saved),
@@ -335,11 +337,11 @@ impl Game<'_> {
             self.run_tasks();
             if flags.paused.load(Ordering::Relaxed) {
                 // Only the connections run.
-                self.tick_server(true)?;
+                self.tick_server_timed(true)?;
             } else {
                 self.follow_distances(&flags);
                 let started = Instant::now();
-                self.tick_server(false)?;
+                self.tick_server_timed(false)?;
                 self.debug_charts.log_tick(started, started.elapsed());
                 flags.smoothed_tick_ms.store(
                     self.debug_charts.smoothed_tick_ms.to_bits(),
@@ -409,6 +411,60 @@ impl Game<'_> {
     pub(super) fn serving(&self) -> bool {
         self.serving.is_some()
     }
+    /// The window's agent runs a command as single player's console does
+    /// (`as_console`, as without a server thread): as the world's owner, in
+    /// the owner's level, at the owner permission level. The feedback goes to
+    /// the owner's chat and is returned.
+    pub(super) fn owner_console_command(&mut self, command: &str) -> Vec<String> {
+        let Some(owner) = self.serving.as_ref().map(|s| s.owner) else {
+            return Vec::new();
+        };
+        let Some(mut host) = self.lan.take() else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        if let Some(g) = host.hub.guests.iter().find(|g| g.uuid == owner && g.placed) {
+            let conn = g.conn;
+            // Commands.performCommand runs in the player's level.
+            let (back, theirs) = (self.dim, super::Dim::from_id(&g.dimension));
+            let entered = theirs == back || self.enter_level(Some(&mut host), theirs).is_ok();
+            if entered {
+                let command = command.trim_start_matches('/').to_owned();
+                let lines = self.as_guest(&mut host, conn, |g| {
+                    g.as_console(|g| {
+                        g.chat_capture = Some(Vec::new());
+                        g.run_command(&command);
+                        g.chat_capture.take().unwrap_or_default()
+                    })
+                });
+                // A teleport into another level happens before its feedback is sent.
+                self.run_level_teleports(&mut host);
+                for line in lines.unwrap_or_default() {
+                    out.push(line.plain());
+                    host.hub.send_to(
+                        conn,
+                        &horizon_protocol::packets::play::Clientbound::SystemChat(
+                            horizon_protocol::packets::play::SystemChat {
+                                content: horizon_client::lan::data::component_nbt(
+                                    &line.component(),
+                                ),
+                                overlay: false,
+                            },
+                        ),
+                    );
+                }
+                self.send_admin_feedback(&mut host, Some(conn));
+            }
+            if theirs != back
+                && let Err(e) = self.enter_level(Some(&mut host), back)
+            {
+                log::error!("could not reopen {}: {e}", back.id());
+            }
+        }
+        self.lan = Some(host);
+        out
+    }
+
     /// The window's requests, between two ticks.
     fn run_tasks(&mut self) {
         let tasks: Vec<Task> = match &self.serving {
@@ -594,7 +650,14 @@ fn serve(
 ) -> Result<()> {
     // It draws nothing: only the font, which books and chat measure with.
     let atlas = HudAtlas::fonts(&options.resources)?;
+    let gui = UiResources {
+        atlas,
+        panorama: Arc::new(horizon_client::gfx::panorama::Faces {
+            size: 1,
+            pixels: [0u8; 4].repeat(6),
+        }),
+    };
     let audio = Audio::silent(&options.resources);
-    let mut server = Game::new(res, pack, atlas, options, settings, audio)?;
+    let mut server = Game::new(res, pack, gui, options, settings, audio)?;
     server.run_integrated(launch, flags, tasks, ready)
 }

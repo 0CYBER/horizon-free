@@ -8,6 +8,46 @@ use std::{
     sync::Arc,
 };
 
+/// Sections (x, section index, z) waiting to be remeshed, kept by column
+/// (a bit per section index), so the mesh scheduler looks at each column once
+/// rather than at every section of it.
+#[derive(Clone, Debug, Default)]
+pub struct DirtySections {
+    columns: crate::fast_hash::FxHashMap<(i32, i32), u32>,
+}
+const _: () = assert!(SECTIONS <= 32);
+impl DirtySections {
+    pub fn insert(&mut self, (x, sy, z): (i32, i32, i32)) {
+        debug_assert!((0..SECTIONS as i32).contains(&sy));
+        *self.columns.entry((x, z)).or_default() |= 1 << sy;
+    }
+    pub fn contains(&self, &(x, sy, z): &(i32, i32, i32)) -> bool {
+        (0..SECTIONS as i32).contains(&sy)
+            && self.columns.get(&(x, z)).is_some_and(|m| m & 1 << sy != 0)
+    }
+    /// The dirty section indexes of column (x, z), as bits, removed.
+    pub fn take_column(&mut self, x: i32, z: i32) -> u32 {
+        self.columns.remove(&(x, z)).unwrap_or(0)
+    }
+    /// Keep the columns `keep` accepts.
+    pub fn retain_columns(&mut self, mut keep: impl FnMut(i32, i32) -> bool) {
+        self.columns.retain(|&(x, z), _| keep(x, z));
+    }
+    /// The columns holding dirty sections, with their section bits.
+    pub fn columns(&self) -> impl Iterator<Item = ((i32, i32), u32)> + '_ {
+        self.columns.iter().map(|(&c, &m)| (c, m))
+    }
+    pub fn clear(&mut self) {
+        self.columns.clear();
+    }
+    pub fn is_empty(&self) -> bool {
+        self.columns.is_empty()
+    }
+    /// How many sections are dirty.
+    pub fn len(&self) -> usize {
+        self.columns.values().map(|m| m.count_ones() as usize).sum()
+    }
+}
 pub struct World {
     pub fast_lava: bool,
     pub chunks: crate::chunk_map::ChunkMap,
@@ -16,7 +56,7 @@ pub struct World {
     pub health_rules: crate::health::HealthRules,
     pub air: BlockStateId,
     /// Sections whose geometry changed and need remeshing.
-    pub dirty_sections: crate::fast_hash::FxHashSet<(i32, i32, i32)>,
+    pub dirty_sections: DirtySections,
     /// Chunks whose light must be recomputed.
     pub dirty_light: crate::fast_hash::FxHashSet<(i32, i32)>,
     /// Edits on lit chunks (position, old state, new state), relit
@@ -143,7 +183,11 @@ impl World {
     }
     /// A controlled blockstate scene for the native scene probes: material
     /// layers, a stepped pyramid and the model gallery. Not generated terrain.
-    pub fn test_scene(assets: &crate::assets::Assets, radius: i32) -> crate::Result<Self> {
+    pub fn test_scene(
+        assets: &crate::assets::Assets,
+        render: &crate::assets::RenderAssets,
+        radius: i32,
+    ) -> crate::Result<Self> {
         let air = assets
             .registry
             .default_state("minecraft:air")
@@ -188,7 +232,7 @@ impl World {
                 }
             }
         }
-        for (position, state) in &assets.model_placements {
+        for (position, state) in &render.model_placements {
             world.set(position.x, position.y, position.z, *state)?;
         }
         world.revision = 0;
@@ -242,6 +286,13 @@ impl World {
             }
         }
         Ok(())
+    }
+    /// `getHeight(Heightmap.Types.WORLD_SURFACE, x, z)`: one above the highest
+    /// block that isn't `air`, or `MIN_Y` (also where the chunk isn't loaded).
+    pub fn world_surface(&self, x: i32, z: i32, air: impl Fn(BlockStateId) -> bool) -> i32 {
+        self.chunks.get(&(x >> 4, z >> 4)).map_or(MIN_Y, |chunk| {
+            chunk.world_surface(x, z, |v| air(BlockStateId(v)))
+        })
     }
     pub fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId {
         self.chunks

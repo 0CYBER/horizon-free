@@ -12,6 +12,7 @@ pub const HELP: &[&str] = &[
     "particle NAME X Y Z [DX DY DZ] [COUNT]  spawn particles (vanilla /particle spread)",
     "signedit X Y Z [front|back]    open the sign editor for the sign at X Y Z",
     "section-draws [flat|indirect]  how terrain sections are drawn (A/B checks); replies the mode",
+    "section-cull [on|off]          occlusion culling of solid sections (A/B checks); replies the mode",
 ];
 
 impl Game<'_> {
@@ -120,7 +121,7 @@ impl Game<'_> {
                 let key = (int(1)?, int(2)?, int(3)?);
                 let name = self
                     .res
-                    .facts
+                    .facts()
                     .get(self.world.block(key.0, key.1, key.2))
                     .name
                     .clone();

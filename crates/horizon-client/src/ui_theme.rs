@@ -1042,6 +1042,49 @@ impl<'a> Ui<'a> {
         self.opacity = saved;
         hover
     }
+    /// A search field styled like the launcher's rounded text inputs.
+    pub fn text_field(&mut self, id: u64, rect: [f32; 4], value: &str, focused: bool) {
+        let [x, y, w, h] = rect;
+        self.record_label(value, rect, true, crate::widgets::Kind::Button);
+        let hover = self.interact(id, x, y, w, h, true);
+        self.rounded(
+            x,
+            y,
+            w,
+            h,
+            8.0,
+            if focused { color::HOVER } else { color::RAISED },
+        );
+        self.rounded(
+            x,
+            y,
+            w,
+            h,
+            8.0,
+            color::with_alpha(color::HOVER, hover * 0.5),
+        );
+        let display = if value.is_empty() {
+            "Search settings".to_owned()
+        } else if focused {
+            format!("{value}|")
+        } else {
+            value.to_owned()
+        };
+        let display = self.fit(Face::Regular, BODY, &display, w - 24.0);
+        self.text_line(
+            Face::Regular,
+            BODY,
+            h,
+            x + 12.0,
+            y,
+            if value.is_empty() {
+                color::FAINT
+            } else {
+                color::TEXT
+            },
+            &display,
+        );
+    }
     /// The width the launcher's button gives a label (padding 16, or 24 large).
     pub fn button_width(&self, label: &str, large: bool) -> f32 {
         let (size, pad) = if large { (LARGE, 24.0) } else { (BODY, 16.0) };

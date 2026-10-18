@@ -53,13 +53,7 @@ impl Game<'_> {
             let Ok(raw) = Compression::Gzip.decode(&bytes, 1 << 28) else {
                 continue;
             };
-            let Ok((named, _)) = nbt::read_named(
-                &raw,
-                Limits {
-                    max_bytes: 1 << 28,
-                    ..Limits::default()
-                },
-            ) else {
+            let Ok((named, _)) = nbt::read_named(&raw, Limits::templates()) else {
                 continue;
             };
             return Some(Arc::new(StructureTemplate::from_nbt(

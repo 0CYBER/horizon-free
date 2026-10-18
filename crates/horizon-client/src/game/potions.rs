@@ -169,7 +169,7 @@ impl Game<'_> {
                     return Ok(false);
                 };
                 let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-                if self.res.facts.get(state).fluid != horizon_client::blocks::Fluid::Water {
+                if self.res.facts().get(state).fluid != horizon_client::blocks::Fluid::Water {
                     return Ok(false);
                 }
                 let at = [
@@ -369,11 +369,11 @@ impl Game<'_> {
         let armor: Vec<Option<ItemStack>> = self.armor.to_vec();
         if self.potions.protection_for.as_ref() != Some(&armor) {
             let mut table = Vec::new();
-            let e = &self.res.stations.enchantments;
+            let e = &self.res.stations().enchantments;
             let mut random = horizon_core::random::LegacyRandom::new(0);
             for (_, def) in self.motion.health.damage.entries() {
                 let ctx = horizon_client::enchant::EffectContext {
-                    items: Some(&self.res.items),
+                    items: Some(self.res.items()),
                     damage_type: Some(&def.name),
                     this: Some("minecraft:player"),
                     ..Default::default()
@@ -429,7 +429,7 @@ impl Game<'_> {
                 let state =
                     self.world
                         .block(p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32);
-                if self.res.facts.get(state).full_collision
+                if self.res.facts().get(state).full_collision
                     || self.mobs.iter().any(|m| {
                         m.alive()
                             && (m.position.x - p.x).abs() < m.kind.width / 2.0 + 0.125
@@ -587,7 +587,7 @@ impl Game<'_> {
         // `LivingEntity`s, the players among them).
         self.for_each_player(|g| g.splash_on_player(def.effects, at, scale));
         // Mobs take the instant effects (undead invert healing and harming).
-        let undead = &self.res.stations.enchantments.entity_tags;
+        let undead = &self.res.stations().enchantments.entity_tags;
         let mut hits = Vec::new();
         for (i, m) in self.mobs.iter().enumerate() {
             let d2 = (m.position.x - at.x).powi(2)
@@ -644,7 +644,7 @@ impl Game<'_> {
             .map(hud_overlays::EffectIcon::from)
             .collect();
         let draws = hud_overlays::effects(batch.width as i32, false, &icons);
-        hud_layout::paint(batch, &self.atlas, &draws);
+        hud_layout::paint(batch, &self.gui.atlas, &draws);
     }
     /// `EffectsInInventory`: panels to the right of survival/creative inventory.
     pub(super) fn draw_inventory_effects(
@@ -660,11 +660,11 @@ impl Game<'_> {
             &self.potions.effects.list,
             self.clock.rate(),
             &|key| self.pack.names.get(key).map(str::to_owned),
-            &|text| self.atlas.font.width(text).ceil() as i32,
+            &|text| self.gui.atlas.font.width(text).ceil() as i32,
         );
         if let Some(lines) = inventory_effects::paint(
             batch,
-            &self.atlas,
+            &self.gui.atlas,
             &panels,
             [self.cursor.0 as i32, self.cursor.1 as i32],
         ) {

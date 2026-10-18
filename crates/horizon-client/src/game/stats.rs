@@ -216,14 +216,14 @@ impl Game<'_> {
             p.position.y.floor() as i32,
             p.position.z.floor() as i32,
         ];
-        let eye_in_water = self.res.facts.get(self.world.block(
+        let eye_in_water = self.res.facts().get(self.world.block(
             feet[0],
             (p.position.y + f64::from(p.dimensions.eye_height)).floor() as i32,
             feet[2],
         ));
         let in_water = self
             .res
-            .facts
+            .facts()
             .get(self.world.block(feet[0], feet[1], feet[2]))
             .fluid
             == horizon_client::blocks::Fluid::Water;
@@ -317,7 +317,11 @@ impl Game<'_> {
             pos[1] + 20 + r.next_int_bound(15).unwrap_or(0),
             pos[2] - 10 + r.next_int_bound(21).unwrap_or(10),
         ];
-        if !self.res.facts.is_air(self.world.block(at[0], at[1], at[2])) {
+        if !self
+            .res
+            .facts()
+            .is_air(self.world.block(at[0], at[1], at[2]))
+        {
             return;
         }
         let group = 1 + self.world.random.next_int_bound(3).unwrap_or(0);
@@ -335,7 +339,7 @@ impl Game<'_> {
     }
     fn can_see_sky(&self, pos: [i32; 3]) -> bool {
         (pos[1] + 1..pos[1] + 256).all(|y| {
-            let f = self.res.facts.get(self.world.block(pos[0], y, pos[2]));
+            let f = self.res.facts().get(self.world.block(pos[0], y, pos[2]));
             !f.full_collision && f.fluid == horizon_client::blocks::Fluid::None
         })
     }

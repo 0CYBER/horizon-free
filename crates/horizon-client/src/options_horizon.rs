@@ -212,8 +212,15 @@ const DONE: u64 = id("options.done", 0);
 const ROW: u64 = id("options.row", 0);
 const STYLE: u64 = id("options.style", 0);
 const LEVEL: u64 = id("options.level", 0);
+const SEARCH: u64 = id("options.search", 0);
 const ROW_H: f32 = 12.0 + CONTROL + 12.0;
 const HEADER_H: f32 = 40.0;
+pub(crate) fn searchable_section(section: usize) -> bool {
+    matches!(
+        SECTIONS.get(section).map(|s| s.name),
+        Some("Video" | "Controls")
+    )
+}
 
 /// Whether an option is an on/off switch, and its value.
 fn switch_value(opt: Opt, s: &Settings) -> Option<bool> {
@@ -263,6 +270,7 @@ fn caption_value(opt: Opt, s: &Settings) -> (String, String) {
 enum Target {
     Nav(usize),
     Done,
+    Search,
     Row(usize),
     Slider(Item, f32),
     Style(usize),
@@ -288,6 +296,22 @@ fn horizon_batch(framebuffer: [i32; 2]) -> HudBatch {
     HudBatch::new([framebuffer[0].max(1) as u32, framebuffer[1].max(1) as u32])
 }
 impl OptionsUi {
+    fn horizon_rows(&self, s: &Settings, section: usize) -> Vec<HRow> {
+        let rows = (SECTIONS[section].rows)(s);
+        let query = self.settings_search.value.to_lowercase();
+        if query.is_empty() || !searchable_section(section) {
+            return rows;
+        }
+        rows.into_iter()
+            .filter(|row| match row {
+                HRow::Opt(opt) => caption_value(*opt, s).0.to_lowercase().contains(&query),
+                HRow::Graphics(item, ..) => item.caption_value(s).0.to_lowercase().contains(&query),
+                HRow::Page(label, ..) => label.to_lowercase().contains(&query),
+                HRow::Level => true,
+                _ => false,
+            })
+            .collect()
+    }
     /// Lay out (and draw, on a real frame) the Horizon options shell.
     /// Returns the sliders' tracks and the scroll area for pointer input.
     fn horizon_layout(&mut self, s: &Settings, ui: &mut Ui, backdrop: f32) -> HorizonLayout {
@@ -326,8 +350,17 @@ impl OptionsUi {
         let sec = &SECTIONS[section];
         let mut y = 36.0;
         y += ui.page_header(x, y, sec.name, sec.blurb) + 24.0;
+        if searchable_section(section) {
+            ui.text_field(
+                SEARCH,
+                [x + cw - 240.0, y, 240.0, CONTROL],
+                &self.settings_search.value,
+                self.settings_search.focused,
+            );
+            y += CONTROL + 12.0;
+        }
         let top = y;
-        let rows = (sec.rows)(s);
+        let rows = self.horizon_rows(s, section);
         let content: f32 = rows
             .iter()
             .map(|r| {
@@ -586,6 +619,9 @@ impl OptionsUi {
         let Some(hit) = ui.hit((x, y)) else {
             return (None, scrollbar, cursor);
         };
+        if hit == SEARCH {
+            return (Some(Target::Search), scrollbar, cursor);
+        }
         let section = self.section.min(SECTIONS.len() - 1);
         if (NAV..NAV + SECTIONS.len() as u64).contains(&hit) {
             return (Some(Target::Nav((hit - NAV) as usize)), scrollbar, cursor);
@@ -610,7 +646,7 @@ impl OptionsUi {
         let Some(i) = hit.checked_sub(ROW).map(|i| i as usize) else {
             return (None, scrollbar, cursor);
         };
-        let rows = (SECTIONS[section].rows)(s);
+        let rows = self.horizon_rows(s, section);
         let item = match rows.get(i) {
             Some(HRow::Opt(opt)) => Some(Item::Vanilla(*opt)),
             Some(HRow::Graphics(item, ..)) => Some(*item),
@@ -687,6 +723,7 @@ impl OptionsUi {
             );
         }
         let (target, scrollbar, cursor) = self.horizon_target(s, atlas, x, y, framebuffer);
+        self.settings_search.focused = false;
         // AbstractScrollArea.updateScrolling grabs anywhere in the scrollbar column.
         if !right
             && let Some(scrollbar) = scrollbar
@@ -697,8 +734,15 @@ impl OptionsUi {
         }
         match target {
             Some(Target::Nav(i)) => {
+                if searchable_section(self.section) || searchable_section(i) {
+                    self.settings_search.set_value("");
+                }
                 self.section = i;
                 self.hscroll = 0.0;
+            }
+            Some(Target::Search) => {
+                self.settings_search.focused = true;
+                self.settings_search.move_cursor_to_end(false);
             }
             Some(Target::Done) => events.extend(self.back(s)),
             Some(Target::Style(i)) => {
@@ -723,7 +767,7 @@ impl OptionsUi {
             }
             Some(Target::Row(i)) => {
                 let section = self.section.min(SECTIONS.len() - 1);
-                match (SECTIONS[section].rows)(s).get(i) {
+                match self.horizon_rows(s, section).get(i) {
                     Some(HRow::Opt(opt)) => {
                         opt.cycle(s, right, framebuffer);
                         if *opt == Opt::Preset {

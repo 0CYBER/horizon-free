@@ -8,7 +8,7 @@ use super::{
     Lan, NetEvent,
     chunks::ChunkEncoder,
     data::SyncData,
-    entity::EntityState,
+    entity::{Entities, EntityState, Viewer},
     guest::{Guest, SentEffect, stack_to_network},
 };
 use crate::{
@@ -80,6 +80,10 @@ pub struct HostState {
     pub sprinting: bool,
     pub equipment: [Option<ItemStack>; 6],
     pub health: f32,
+    /// The host player's client-syncable attribute instances.
+    pub attributes: Vec<play::AttributeSnapshot>,
+    /// `LivingEntity.DATA_LIVING_ENTITY_FLAGS` (the item in use).
+    pub living_flags: i8,
 }
 
 /// Everything the hub needs from the game for one tick.
@@ -132,6 +136,9 @@ pub struct Hub {
     /// The `player_movement_check` and `elytra_movement_check` game rules,
     /// set by the game before each tick.
     pub movement_checks: (bool, bool),
+    /// An integrated server's owner (`MinecraftServer.isSingleplayerOwner`),
+    /// whose moves are never checked.
+    pub singleplayer_owner: Option<u128>,
     /// Who rides what, set by the game before each tick.
     pub riding: super::entity::Riding,
     last_clock: i64,
@@ -148,6 +155,10 @@ pub struct Hub {
     clock_ids: Vec<i32>,
     item_ids: std::collections::HashMap<Arc<str>, i32>,
     entity_types: std::collections::HashMap<String, i32>,
+    /// Each level's tracked entities, by dimension.
+    entities: std::collections::HashMap<String, Entities>,
+    /// What one tick of entity tracking sends each guest, kept between ticks.
+    entity_out: Vec<Vec<Vec<u8>>>,
 }
 
 fn string(s: &str) -> Tag {
@@ -201,6 +212,20 @@ fn yellow_names(key: &str, names: Vec<Tag>) -> Tag {
     ])
 }
 
+/// An entity type's registry id, remembered once looked up.
+fn entity_type(
+    types: &mut std::collections::HashMap<String, i32>,
+    sync: &SyncData,
+    kind: &str,
+) -> Option<i32> {
+    if let Some(id) = types.get(kind) {
+        return Some(*id);
+    }
+    let id = sync.builtin.get("minecraft:entity_type")?.id(kind)?;
+    types.insert(kind.to_owned(), id);
+    Some(id)
+}
+
 /// ChunkTrackingView.contains: the chunks a player at (cx, cz) with view
 /// distance `r` is sent (isWithinDistance with the neighbours' buffer).
 fn tracked(cx: i32, cz: i32, r: i32, x: i32, z: i32) -> bool {
@@ -247,6 +272,7 @@ impl Hub {
             sync,
             ticks: 0,
             movement_checks: (true, true),
+            singleplayer_owner: None,
             riding: Default::default(),
             last_clock: i64::MIN,
             last_rate: 0.0,
@@ -259,6 +285,8 @@ impl Hub {
             clock_ids,
             item_ids: Default::default(),
             entity_types: Default::default(),
+            entities: Default::default(),
+            entity_out: Vec::new(),
         }
     }
 
@@ -291,14 +319,6 @@ impl Hub {
         let id = s.as_ref().map(|s| self.item_id(&s.item))?;
         let sync = self.sync.clone();
         stack_to_network(|_| id, |name| sync.id("minecraft:enchantment", name), s)
-    }
-    fn entity_type(&mut self, kind: &str) -> Option<i32> {
-        if let Some(id) = self.entity_types.get(kind) {
-            return Some(*id);
-        }
-        let id = self.sync.builtin.get("minecraft:entity_type")?.id(kind)?;
-        self.entity_types.insert(kind.to_owned(), id);
-        Some(id)
     }
 
     pub fn broadcast(&self, packet: &C) {
@@ -670,6 +690,16 @@ impl Hub {
     /// onEffectsRemoved, from what changed since the client was told: an
     /// effect that only counted down is not sent again, except at every
     /// 600 ticks left (`LivingEntity.tickEffects`).
+    /// `sync_effects` for every player at once: what a command changed
+    /// leaves with its feedback (ServerPlayer.onEffectAdded sends at once),
+    /// not after the tick's countdown.
+    pub fn sync_all_effects(&mut self) {
+        for i in 0..self.guests.len() {
+            if self.guests[i].placed {
+                self.sync_effects(i);
+            }
+        }
+    }
     fn sync_effects(&mut self, i: usize) {
         let g = &self.guests[i];
         if g.effects.list.is_empty() && g.sent_effects.is_empty() {
@@ -982,6 +1012,12 @@ impl Hub {
             }
         }
         if !self.guests.iter().any(|g| self.here(g)) {
+            // ServerTickRateManager broadcasts a change to the players there
+            // are; one who joins later is sent the state as it is then
+            // (`updateJoiningPlayer`).
+            if !self.guests.iter().any(|g| g.placed) {
+                self.ticking = (ctx.tick_rate, ctx.tick_frozen);
+            }
             if !self
                 .guests
                 .iter()
@@ -1363,9 +1399,11 @@ impl Hub {
         rot: (f32, f32, f32),
         on_ground: bool,
         flags: (bool, bool, bool, bool),
+        living_flags: i8,
         skin: u8,
         health: f32,
         equipment: Vec<(u8, Option<horizon_protocol::item::Stack>)>,
+        attributes: Vec<play::AttributeSnapshot>,
     ) -> EntityState {
         let (sneaking, sprinting, gliding, sleeping) = flags;
         let mut shared = 0i8;
@@ -1394,6 +1432,9 @@ impl Hub {
         if pose != 0 {
             meta.push((6, serializer::POSE, Value::Id(pose)));
         }
+        // Always there: the trackers send the entries that changed, and an
+        // item no longer in use is a change back to 0.
+        meta.push((8, serializer::BYTE, Value::Byte(living_flags)));
         if (health - 1.0).abs() > f32::EPSILON && health != 20.0 {
             meta.push((9, serializer::FLOAT, Value::Float(health)));
         }
@@ -1413,6 +1454,7 @@ impl Hub {
             data: 0,
             meta,
             equipment,
+            attributes,
             precise: false,
         }
     }
@@ -1457,9 +1499,11 @@ impl Hub {
                 (h.yaw, h.pitch, h.head_yaw),
                 h.on_ground,
                 (h.sneaking, h.sprinting, false, false),
+                h.living_flags,
                 0x7F,
                 h.health,
                 equipment,
+                h.attributes.clone(),
             ));
         }
         let placed: Vec<usize> = (0..self.guests.len())
@@ -1486,72 +1530,52 @@ impl Hub {
                     (g.yaw, g.pitch, g.head_yaw),
                     g.on_ground,
                     (g.sneaking, g.sprinting, g.fall_flying, g.sleeping),
+                    g.living_flags,
                     g.info.model_customisation,
                     g.health,
                     equipment,
+                    g.motion
+                        .as_ref()
+                        .map(|m| super::attributes::syncable(&m.attributes))
+                        .unwrap_or_default(),
                 )
             })
             .collect();
         all.extend(guest_states);
-        all.extend(ctx.entities.iter().cloned());
-        let by_id: std::collections::HashMap<i32, usize> =
-            all.iter().enumerate().map(|(i, e)| (e.id, i)).collect();
-        // Each entity type's tracking range, looked up once rather than for
-        // every player.
-        let ranges: Vec<i32> = all
-            .iter()
-            .map(|e| super::entity::tracking_chunks(&e.kind))
+        let entities: Vec<&EntityState> = all.iter().chain(ctx.entities).collect();
+        // ChunkMap.tick: the level's entities, once for all its players.
+        let mut level = self
+            .entities
+            .remove(&self.config.dimension)
+            .unwrap_or_default();
+        let mut outs = std::mem::take(&mut self.entity_out);
+        let dimension = &self.config.dimension;
+        let here = |g: &Guest| g.placed && g.dimension == *dimension;
+        outs.resize_with(self.guests.iter().filter(|g| here(g)).count(), Vec::new);
+        let mut viewers: Vec<Viewer> = self
+            .guests
+            .iter_mut()
+            .filter(|g| here(g))
+            .zip(outs.iter_mut())
+            .map(|(g, out)| Viewer {
+                entity_id: g.entity_id,
+                position: g.position,
+                view_distance: g.view_distance,
+                chunks: &g.sent_chunks,
+                tracker: &mut g.tracker,
+                out,
+            })
             .collect();
-        for gi in 0..self.guests.len() {
-            if !self.here(&self.guests[gi]) {
-                continue;
-            }
-            let view = self.guests[gi].view_distance;
-            let me = self.guests[gi].entity_id;
-            let origin = self.guests[gi].position;
-            // TrackedEntity.updatePlayer: within the type's range (capped by the
-            // view distance) horizontally, in a chunk the client has.
-            let visible = |g: &Guest, ei: usize| {
-                let e = &all[ei];
-                let range = f64::from(ranges[ei].min(view) * 16);
-                let (dx, dz) = (origin[0] - e.position[0], origin[2] - e.position[2]);
-                let chunk = (
-                    (e.position[0].floor() as i32) >> 4,
-                    (e.position[2].floor() as i32) >> 4,
-                );
-                dx * dx + dz * dz <= range * range && g.sent_chunks.contains(&chunk)
-            };
-            // Forget what disappeared or left range.
-            let mut removed = Vec::new();
-            for id in self.guests[gi].tracker.ids() {
-                match by_id.get(&id) {
-                    Some(&ei) if visible(&self.guests[gi], ei) => {}
-                    _ => removed.push(id),
-                }
-            }
-            if !removed.is_empty() {
-                for id in &removed {
-                    self.guests[gi].tracker.forget(*id);
-                }
-                self.guests[gi].send(&C::RemoveEntities(play::RemoveEntities { ids: removed }));
-            }
-            for (ei, e) in all.iter().enumerate() {
-                if e.id == me {
-                    continue;
-                }
-                if self.guests[gi].tracker.is_tracking(e.id) {
-                    let packets = self.guests[gi].tracker.update(e, &self.riding);
-                    self.guests[gi].send_all(&packets);
-                } else if visible(&self.guests[gi], ei) {
-                    let Some(kind) = self.entity_type(&e.kind) else {
-                        continue;
-                    };
-                    // Players need their list entry first; guests got it at join.
-                    let packets = self.guests[gi].tracker.spawn(e, kind, &self.riding);
-                    self.guests[gi].send_all(&packets);
-                }
-            }
+        let (types, sync) = (&mut self.entity_types, &self.sync);
+        level.tick(&entities, &self.riding, &mut viewers, |kind| {
+            entity_type(types, sync, kind)
+        });
+        drop(viewers);
+        for (g, out) in self.guests.iter().filter(|g| here(g)).zip(outs.iter_mut()) {
+            g.sender.send_many(out.drain(..));
         }
+        self.entity_out = outs;
+        self.entities.insert(self.config.dimension.clone(), level);
     }
 
     /// ServerPlayer.stopSleepInBed: the wake-up animation goes to the player
@@ -1622,6 +1646,19 @@ impl Hub {
                 g.advancements_changed.clear();
             } else {
                 self.flush_advancements(i, true);
+            }
+        }
+        // ServerEntity.sendDirtyEntityData: the player's changed attribute
+        // instances go to the player too (its trackers get them from
+        // track_entities).
+        let g = &mut self.guests[i];
+        if let Some(m) = g.motion.as_mut() {
+            let values = super::attributes::take_dirty(&mut m.attributes);
+            if !values.is_empty() {
+                g.send(&C::UpdateAttributes(play::UpdateAttributes {
+                    id: g.entity_id,
+                    values,
+                }));
             }
         }
         // Sent when the health or the food level changes, or the saturation
@@ -1906,6 +1943,7 @@ impl Hub {
     ) {
         let (frozen, (check, elytra_check)) = (self.ticking.1, self.movement_checks);
         let g = &mut self.guests[i];
+        let owner = self.singleplayer_owner == Some(g.uuid);
         let to = [
             to[0].clamp(-3.0E7, 3.0E7),
             to[1].clamp(-2.0E7, 2.0E7),
@@ -1929,9 +1967,10 @@ impl Hub {
             if packets > 5 {
                 packets = 1;
             }
-            // shouldCheckPlayerMovement. The server holds no velocity for a
-            // guest (getDeltaMovement), so nothing is expected.
-            if check && (!g.fall_flying || elytra_check) {
+            // shouldCheckPlayerMovement (never the single-player owner).
+            // The server holds no velocity for a guest (getDeltaMovement),
+            // so nothing is expected.
+            if !owner && check && (!g.fall_flying || elytra_check) {
                 let limit = if g.fall_flying { 300.0 } else { 100.0 };
                 if moved > limit * f64::from(packets) {
                     events.push(HostEvent::Warn(format!(
@@ -2119,6 +2158,18 @@ impl Hub {
             .map(str::to_owned)
     }
 
+    /// ServerLevel.removePlayerImmediately, then addRespawnedPlayer: the other players
+    /// lose the dead player's entity (ServerEntity.removePairing) and are sent the
+    /// respawned one as a new entity at the next tick. Their clients would otherwise keep
+    /// the dead body, lying down, wherever the player goes.
+    pub fn respawned(&mut self, id: i32) {
+        for g in &mut self.guests {
+            if g.entity_id != id && g.tracker.forget(id) {
+                g.send(&C::RemoveEntities(play::RemoveEntities { ids: vec![id] }));
+            }
+        }
+    }
+
     /// PlayerList.respawn: back to `at` with a fresh start. The vanilla client waits on its
     /// level loading screen from the Respawn packet until the level info's "level chunks load
     /// start" event and the chunk under the player, so the packets follow vanilla's order.
@@ -2145,6 +2196,9 @@ impl Hub {
         g.tracker.clear();
         g.sent_chunks.clear();
         g.chunk_queue.clear();
+        let id = g.entity_id;
+        self.respawned(id);
+        let g = &mut self.guests[i];
         // ServerPlayer.restoreFrom: the game mode again (onUpdateAbilities).
         g.send(&C::PlayerAbilities(play::PlayerAbilities {
             flags: g.ability_flags(),

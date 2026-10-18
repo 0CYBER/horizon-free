@@ -32,6 +32,7 @@ pub struct FogData {
 }
 
 /// Per-biome water fog end multipliers (`visual/water_fog_end_distance`).
+#[derive(Default)]
 pub struct FogTables {
     water_fog_end: Vec<f32>,
 }

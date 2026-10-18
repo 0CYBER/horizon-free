@@ -181,6 +181,8 @@ impl Server {
             sprinting: false,
             equipment: Default::default(),
             health: 20.0,
+            attributes: Vec::new(),
+            living_flags: 0,
         };
         let mut ctx = TickCtx {
             world: &mut self.world,
@@ -422,6 +424,7 @@ fn guests_see_each_other_and_the_world_entities() {
         data: 0,
         meta: Vec::new(),
         equipment: Vec::new(),
+        attributes: Vec::new(),
         precise: false,
     };
     let first = thread::spawn(move || {

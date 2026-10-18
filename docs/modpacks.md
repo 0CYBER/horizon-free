@@ -438,7 +438,52 @@ Two cases the oracle fills in:
     list. The structures now generate undecorated (no pillars under them, spawners as the
     template has them); 1,427 processors of 146 types in ATM10's mods, the most common
     `lithostitched:block_swap`, Formations' `biome_replacements` and Repurposed Structures'
-    pillar, fluid and void processors. Porting the common ones is next.
+    pillar, fluid and void processors.
+  - **Spawner processors** carried as data (`horizon-port-pack/src/processors.rs`). Most
+    chests in the mods' templates already name their loot table; what the Java processors add
+    is the spawners' mobs. Moog's and Repurposed Structures' spawner randomizing processors
+    become `horizon:spawner_mobs` (a weighted mob per spawner, picked with the placement's
+    random as theirs do, and the spawner NBT they write; Repurposed's `rs_spawners` lists are
+    written in). YUNG's Better Dungeons and Better Desert Temples turn a spawner or a
+    placeholder block (gravel, bone block, yellow wool...) into a spawner of a fixed mob: that
+    is vanilla's `rule` processor with an `append_static` block entity. Moog's vanilla loot
+    swap acts only when a "replace vanilla" preset is on, and they ship off. 119 of the 1,427
+    processors are carried; 1,308 are still taken out (blocks swapped, aged or propped up,
+    Moog's trial spawner and vault configs, YUNG's chest caps).
+    In the 128×128-chunk square (seed 1234), every spawner of a mod structure now has its mob:
+    in the Overworld 83 Better Dungeons spawners held the template's placeholder pig and 17 of
+    Moog's were empty (763 spawners with a mob, up from 628); in the Nether the 52 empty ones
+    in Moog's Nether Structures are filled (162, up from 110). Chests are unchanged: 2,777
+    and 1,405 with a loot table.
+  - **Big templates** (#838). Vanilla reads structure templates with no limit on their tag
+    count; Horizon now does too (`nbt::Limits::templates`). Seven of ATM10's 8,962 carried
+    templates are past the old 1,000,000-tag cap: YUNG's monument start, four When Dungeons
+    Arise main pieces and two Nullscape pieces. They used to load as empty templates, so their
+    structures never started.
+  - **Additions to other sets and pools** (#832 in the game, #833 in carry). A set or pool file
+    holding `horizon:add_to` appends its entries to the sets or pools it names (docs/mods.md).
+    Carry writes these from lithostitched's `add_structure_set_entries` and
+    `add_template_pool_elements` modifiers whose load conditions hold for the mods ported
+    along, and from CTOV's Java registration: its 21 village types and 11 outposts join
+    vanilla's `villages` and `pillager_outposts` with the mod's default weights.
+  - **YUNG's API** (#839, #846 in the game; #840, #847 in carry). `yungsapi:yung_jigsaw` and its
+    elements become vanilla's jigsaw and single element, with their rules under
+    `horizon:yungsapi`. The game assembles them as YUNG's `JigsawManager` does: priority
+    pieces, caps by name, depth ranges, `ignore_bounds` and the conditions tree. YUNG's
+    placements become `horizon:` keys on a random spread: `horizon:exclusion_zone` for the
+    enhanced exclusion zone, `horizon:avoid_biomes` for the temples' ocean and river search,
+    `horizon:ring_sections` for Better Strongholds' rings. `horizon:disables` on a YUNG
+    structure turns off the vanilla type its mod's mixin turns off. It is written only when
+    the game can start the replacement, so vanilla mineshafts stay while Better Mineshafts (a
+    Java type) can't.
+  - **Repurposed Structures' and Moog's own assembler** (#850 in the game, #851 in carry). Both
+    lay out their jigsaws with `PieceLimitedJigsawManager`, not vanilla's. Their structures, the
+    Nether variants too, get `horizon:piece_limited`: `y_allowance`, burying, the pools whose
+    fallbacks ignore the bounds, liquid, the Nether land search and ledge, and each
+    structure's piece caps and required pieces from the mod's `*_pieces_spawn_counts` files.
+    The game assembles them the mods' way and runs their post-layout steps (centring,
+    burying, the Nether land search).
+
 
   Each mod's `carry-report.json` lists what was mapped, the rules and processors lost by name,
   and the types left as they are. NeoForge's convention biome tags (`#c:is_forest`, ...) come
@@ -453,19 +498,30 @@ Two cases the oracle fills in:
     ChoiceTheorem's Overhauled Village 66), and 103 convention biome tags written.
   - When Dungeons Arise, Structory and Towns and Towers use vanilla's types already.
   - Still lost, written in Java:
-    - YUNG's API: its own jigsaw assembler (priority pieces, per-piece caps, conditions,
-      enhanced terrain adaptation) and 491 elements and jigsaws, behind every "YUNG's Better"
-      mod;
-    - Formations' structure and element types (179);
-    - the nether jigsaw variants of Moog's and Repurposed (69), which search the column for
-      land after the layout;
-    - Moog's and Repurposed's layout rules: they centre the pieces on the start, bury or lift
-      the structure to the terrain and cap pieces per pool;
-    - Repurposed's mineshafts, mansions, monuments and cities, and MO Structures (38; its
-      library is only on CurseForge).
-  - CTOV's villages and outposts are added to vanilla's `villages` and `pillager_outposts`
-    sets by Java code, as lithostitched's `add_structure_set_entries` worldgen modifiers do for
-    many packs; a content mod has no way to add to a vanilla set yet, so none start.
+    - Formations' structure and element types (179): their placements read block states in the
+      noise column (solid, water, lava), which the structure context doesn't give yet;
+    - Repurposed's mineshafts, mansions and monuments, Better Mineshafts and two Better
+      Dungeons types: Java structure types;
+    - YUNG's and Moog's enhanced terrain adaptation, YUNG's piece modifiers and dead-end pools,
+      and the block processors written in Java (YUNG's banners, legs and decorations, Repurposed's
+      pillars and fluid fixes, Lithostitched's block swaps);
+    - MO Structures (38; its library is only on CurseForge).
+
+  With every structure PR above, the same square (seed 1234, chunks -64..63) holds 362
+  overworld starts with 22,026 pieces. CTOV has 7, Better Dungeons 72 and Better Ocean
+  Monuments 3, and vanilla's monuments are gone as YUNG's mod has them. In the Nether there
+  are 512 starts, up from 322: Moog's Nether Structures 147, Repurposed's Nether structures
+  40, Better Fortresses 7, with no vanilla fortress. Over chunks -256..255: Better Strongholds 10
+  (vanilla 0), Better Jungle Temples 5, Better Witch Huts 11. Vanilla's own worlds are
+  unchanged: the structure-start oracle still matches 35 of 35.
+
+  Repurposed's Nether city, Nether shipwrecks and End stronghold are its generic jigsaw with
+  one more start check each, carried as `minecraft:jigsaw` with the check named in
+  `horizon:start_checks.repurposed`: open air from sea level + 20 to + 45 around the city's
+  chunk, no solid block in a 33×30×33 grid over a shipwreck, and land 45 blocks up at nine
+  points 35 and 70 blocks apart for the stronghold. Over chunks -320..319 in the Nether there
+  are 2 cities and 45 shipwrecks (30 and 865 without the checks); the End stronghold keeps
+  8,000 blocks from the centre, and chunks 500..1139 × -320..319 hold 2 (43 without).
 
   In a world with the 40 mods, seed 1234, `/locate structure mvs:azelea_house` finds one 27
   blocks from spawn and it stands there as the template builds it; When Dungeons Arise's

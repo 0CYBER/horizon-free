@@ -91,9 +91,9 @@ impl Game<'_> {
         let cost = random
             .next_int_between_inclusive(MIN_COST, top)
             .unwrap_or(MIN_COST);
-        let e = &self.res.stations.enchantments;
+        let e = &self.res.stations().enchantments;
         let pool = e.tag("minecraft:on_mob_spawn_equipment");
-        let picked = e.select(&self.res.items, random, item, cost, pool);
+        let picked = e.select(self.res.items(), random, item, cost, pool);
         if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
             for (enchantment, level) in picked {
                 gear::upgrade(m, slot, &enchantment, level);

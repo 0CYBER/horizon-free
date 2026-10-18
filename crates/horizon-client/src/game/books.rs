@@ -45,7 +45,7 @@ pub(super) enum BookScreen {
 }
 impl Game<'_> {
     fn book_lines(&self, page: &str) -> Vec<Text> {
-        self.atlas.font.split(&Text::literal(page), 114.0)
+        self.gui.atlas.font.split(&Text::literal(page), 114.0)
     }
     /// `WritableBookItem.use` / `WrittenBookItem.use`.
     pub(super) fn use_book(&mut self, stack: &ItemStack) -> bool {
@@ -242,7 +242,7 @@ impl Game<'_> {
     /// the page (`MultilineTextField.insertText`: line breaks kept, cut to
     /// the 1024 characters left, rejected when it overflows the 14 lines).
     fn book_shortcut(&mut self, shortcut: horizon_client::clipboard::EditShortcut) {
-        let font = &self.atlas.font;
+        let font = &self.gui.atlas.font;
         match self.book.as_mut() {
             Some(BookScreen::Edit {
                 signing: true,
@@ -397,7 +397,7 @@ impl Game<'_> {
         let key = (pos[0], pos[1], pos[2]);
         if &*self
             .res
-            .facts
+            .facts()
             .get(self.world.block(pos[0], pos[1], pos[2]))
             .name
             != "minecraft:lectern"
@@ -549,7 +549,7 @@ impl Game<'_> {
     }
     pub(super) fn draw_book(&self, batch: &mut HudBatch) {
         let Some(book) = &self.book else { return };
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let (w, h) = (batch.width, batch.height);
         let (mx, my) = self.cursor;
         let hover =

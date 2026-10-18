@@ -1,9 +1,11 @@
 #!/bin/sh
 # Installs horizon-server (docs/server.md) on Linux or macOS: the latest Horizon release for this computer,
-# downloaded from GitHub Releases and checked against the SHA-256 GitHub publishes for it.
+# downloaded from GitHub Releases and checked against the SHA-256 GitHub publishes for it. On Linux that is
+# the server build (horizon-server-linux-x86_64.tar.gz), which needs neither ALSA nor udev.
 #
 #   curl -fsSL https://raw.githubusercontent.com/ludovic111/horizon/main/packaging/server/install.sh | sh
 #   curl -fsSL .../install.sh | sh -s -- --version v0.5.0 --dir /opt/horizon --bin /usr/local/bin
+#   sh install.sh --archive horizon-server-linux-x86_64.tar.gz --version mybuild   (an archive you have)
 #
 # It needs curl, tar or unzip, and sha256sum or shasum; it never asks for sudo (pick folders you can write).
 # Releases go to <dir>/releases/<version>, <dir>/current points at the one in use, and <bin>/horizon-server
@@ -15,6 +17,7 @@ REPO=ludovic111/horizon
 VERSION=latest
 DIR="${XDG_DATA_HOME:-$HOME/.local/share}/horizon"
 BIN="$HOME/.local/bin"
+ARCHIVE=
 
 die() { echo "horizon install: $*" >&2; exit 1; }
 
@@ -23,45 +26,58 @@ while [ $# -gt 0 ]; do
     --version) [ $# -ge 2 ] || die "--version needs a tag"; VERSION=$2; shift 2 ;;
     --dir) [ $# -ge 2 ] || die "--dir needs a folder"; DIR=$2; shift 2 ;;
     --bin) [ $# -ge 2 ] || die "--bin needs a folder"; BIN=$2; shift 2 ;;
-    -h|--help) sed -n '2,12p' "$0" 2>/dev/null || true; exit 0 ;;
+    --archive) [ $# -ge 2 ] || die "--archive needs a file"; ARCHIVE=$2; shift 2 ;;
+    -h|--help) sed -n '2,14p' "$0" 2>/dev/null || true; exit 0 ;;
     *) die "unknown option $1" ;;
   esac
 done
 
+# The archives to look for, in order: on Linux the server build, else (releases before it) the full game.
 case "$(uname -s)-$(uname -m)" in
-  Linux-x86_64) ASSET=horizon-linux-x86_64.tar.gz ;;
-  Darwin-arm64) ASSET=horizon-macos-arm64.zip ;;
+  Linux-x86_64) ASSETS="horizon-server-linux-x86_64.tar.gz horizon-linux-x86_64.tar.gz" ;;
+  Darwin-arm64) ASSETS=horizon-macos-arm64.zip ;;
   *) die "no Horizon release for $(uname -s) $(uname -m) yet: build it from source (docs/server.md)" ;;
 esac
 
-command -v curl >/dev/null || die "curl is needed"
-if command -v sha256sum >/dev/null; then SHA="sha256sum"
-elif command -v shasum >/dev/null; then SHA="shasum -a 256"
-else die "sha256sum or shasum is needed"; fi
-
-if [ "$VERSION" = latest ]; then API="https://api.github.com/repos/$REPO/releases/latest"
-else API="https://api.github.com/repos/$REPO/releases/tags/$VERSION"; fi
-JSON=$(curl -fsSL -H "Accept: application/vnd.github+json" "$API") || die "no release $VERSION on GitHub"
-
-TAG=$(printf '%s\n' "$JSON" | sed -n 's/^  "tag_name": "\([^"]*\)".*/\1/p' | head -n 1)
-[ -n "$TAG" ] || die "could not read the release's tag"
-# The asset's download address and digest, from its block in the release's JSON.
-FIELDS=$(printf '%s\n' "$JSON" | awk -v asset="$ASSET" '
-  /"name": / { line = $0; sub(/.*"name": "/, "", line); sub(/".*/, "", line); current = line }
-  current == asset && /"digest": / { line = $0; sub(/.*"digest": "sha256:/, "", line); sub(/".*/, "", line); digest = line }
-  current == asset && /"browser_download_url": / { line = $0; sub(/.*"browser_download_url": "/, "", line); sub(/".*/, "", line); url = line }
-  END { print url; print digest }')
-URL=$(printf '%s\n' "$FIELDS" | sed -n 1p)
-DIGEST=$(printf '%s\n' "$FIELDS" | sed -n 2p)
-[ -n "$URL" ] || die "release $TAG has no $ASSET"
-[ -n "$DIGEST" ] || die "release $TAG publishes no SHA-256 for $ASSET"
-
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
-echo "Downloading Horizon $TAG ($ASSET)..."
-curl -fL --progress-bar -o "$TMP/$ASSET" "$URL"
-GOT=$($SHA "$TMP/$ASSET" | cut -d' ' -f1)
-[ "$GOT" = "$DIGEST" ] || die "$ASSET doesn't match its SHA-256 (got $GOT, expected $DIGEST): not installed"
+if [ -n "$ARCHIVE" ]; then
+  # An archive already here (a build of your own, or one fetched by hand): checking it is up to you.
+  [ -f "$ARCHIVE" ] || die "no archive $ARCHIVE"
+  if [ "$VERSION" = latest ]; then TAG=local; else TAG=$VERSION; fi
+  ASSET=$(basename "$ARCHIVE")
+  cp "$ARCHIVE" "$TMP/$ASSET"
+else
+  command -v curl >/dev/null || die "curl is needed"
+  if command -v sha256sum >/dev/null; then SHA="sha256sum"
+  elif command -v shasum >/dev/null; then SHA="shasum -a 256"
+  else die "sha256sum or shasum is needed"; fi
+
+  if [ "$VERSION" = latest ]; then API="https://api.github.com/repos/$REPO/releases/latest"
+  else API="https://api.github.com/repos/$REPO/releases/tags/$VERSION"; fi
+  JSON=$(curl -fsSL -H "Accept: application/vnd.github+json" "$API") || die "no release $VERSION on GitHub"
+
+  TAG=$(printf '%s\n' "$JSON" | sed -n 's/^  "tag_name": "\([^"]*\)".*/\1/p' | head -n 1)
+  [ -n "$TAG" ] || die "could not read the release's tag"
+  # The first asset the release has: its download address and digest, from its block in the release's JSON.
+  for ASSET in $ASSETS; do
+    FIELDS=$(printf '%s\n' "$JSON" | awk -v asset="$ASSET" '
+      /"name": / { line = $0; sub(/.*"name": "/, "", line); sub(/".*/, "", line); current = line }
+      current == asset && /"digest": / { line = $0; sub(/.*"digest": "sha256:/, "", line); sub(/".*/, "", line); digest = line }
+      current == asset && /"browser_download_url": / { line = $0; sub(/.*"browser_download_url": "/, "", line); sub(/".*/, "", line); url = line }
+      END { print url; print digest }')
+    URL=$(printf '%s\n' "$FIELDS" | sed -n 1p)
+    DIGEST=$(printf '%s\n' "$FIELDS" | sed -n 2p)
+    [ -z "$URL" ] || break
+  done
+  [ -n "$URL" ] || die "release $TAG has none of $ASSETS"
+  [ -n "$DIGEST" ] || die "release $TAG publishes no SHA-256 for $ASSET"
+
+  echo "Downloading Horizon $TAG ($ASSET)..."
+  curl -fL --progress-bar -o "$TMP/$ASSET" "$URL"
+  GOT=$($SHA "$TMP/$ASSET" | cut -d' ' -f1)
+  [ "$GOT" = "$DIGEST" ] || die "$ASSET doesn't match its SHA-256 (got $GOT, expected $DIGEST): not installed"
+fi
 
 mkdir -p "$TMP/x"
 case "$ASSET" in
@@ -86,6 +102,18 @@ for tool in horizon-server horizon-prepare; do
 done
 
 echo "Installed Horizon $TAG in $RELEASE; horizon-server and horizon-prepare are in $BIN."
+# The full game (releases before the server build) links ALSA and udev; minimal Linux images often lack them.
+if [ "$(uname -s)" = Linux ] && [ ! -e "$RELEASE/horizon-engine" ] && command -v ldd >/dev/null; then
+  MISSING=$(ldd "$RELEASE/horizon-client" 2>/dev/null | awk '/not found/ { printf "%s ", $1 }')
+  if [ -n "$MISSING" ]; then
+    echo "The game needs libraries this system doesn't have: $MISSING"
+    echo "Install them before starting a server:"
+    echo "  Debian, Ubuntu: sudo apt install libasound2 libudev1   (Ubuntu 24.04 and later: libasound2t64)"
+    echo "  Fedora, RHEL: sudo dnf install alsa-lib systemd-libs"
+    echo "  Arch: sudo pacman -S alsa-lib systemd-libs"
+    echo "  NixOS: enable programs.nix-ld with alsa-lib and udev in its libraries"
+  fi
+fi
 case ":$PATH:" in
   *":$BIN:"*) ;;
   *) echo "Add $BIN to your PATH, for example: echo 'export PATH=\"$BIN:\$PATH\"' >> ~/.profile" ;;

@@ -18,9 +18,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().collect();
     let root = Path::new(&args[1]);
     let assets = Assets::load(root)?;
+    let render = assets.reload(root)?;
     let facts = BlockFacts::load(root, assets.registry)?;
     let tables = MeshTables::new(
         &assets,
+        &render,
         &facts,
         models::load_visibility(root, assets.registry)?,
     )?;
@@ -33,7 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut vertices = Vec::new();
         let mut translucent = false;
         if facts.get(state).render_shape == RenderShape::Model {
-            let models = assets
+            let models = render
                 .model_catalog
                 .collect(state, BlockPos::new(p[0], p[1], p[2]))?;
             let offset = tables.offset(state, p[0], p[2]).unwrap_or([0.0; 3]);

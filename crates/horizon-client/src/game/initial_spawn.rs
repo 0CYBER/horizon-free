@@ -83,7 +83,7 @@ impl Game<'_> {
                 horizon_client::flatgen::FlatTerrain::from_settings(
                     &s,
                     self.pack.assets.registry,
-                    &self.res.biomes,
+                    self.res.biomes(),
                 )
             })
         {

@@ -476,7 +476,7 @@ public final class VanillaProtocolClient {
             if (r != null) {
                 Packet<?> packet = r.packet;
                 counts.merge(r.type, 1, Integer::sum);
-                if (entities != null && step >= ENTITIES) entities.accept(packet);
+                if (entities != null && !entities.acceptSelf(packet) && step >= ENTITIES) entities.accept(packet);
                 if (r.type.equals("minecraft:chunk_batch_start")) ordered = false;
                 if (respawning && !respawned) {
                     String line = respawnLine(r);

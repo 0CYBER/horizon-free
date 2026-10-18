@@ -36,7 +36,9 @@ impl Uploads {
         let row = width as usize * 4;
         debug_assert_eq!(pixels.len(), row * height as usize);
         let padded = row.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize);
-        let size = NonZeroU64::new((padded * height as usize) as u64).expect("non-empty texture");
+        let Some(size) = NonZeroU64::new((padded * height as usize) as u64) else {
+            return;
+        };
         let alignment = NonZeroU64::new(u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT))
             .expect("non-zero alignment");
         let slice = self.belt.allocate(size, alignment);
