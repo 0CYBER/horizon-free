@@ -51,6 +51,9 @@ impl DebugHost for Host<'_, '_> {
 
 impl Game<'_> {
     fn open_screen(&self) -> OpenScreen {
+        if self.title.is_some() {
+            return OpenScreen::Other;
+        }
         match self.screen {
             Screen::GameModeSwitcher => OpenScreen::GameModeSwitcher,
             Screen::Playing if self.book.is_none() && self.sign_edit.is_none() => OpenScreen::None,

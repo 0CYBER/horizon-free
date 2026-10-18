@@ -9555,7 +9555,6 @@ impl ApplicationHandler for Game<'_> {
             event: key_event, ..
         } = &event
             && let PhysicalKey::Code(key) = key_event.physical_key
-            && self.title.is_none()
         {
             use horizon_client::debug_keys::KeyAction;
             let action = match (key_event.state, key_event.repeat) {
