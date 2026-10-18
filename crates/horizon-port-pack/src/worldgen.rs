@@ -74,6 +74,8 @@ pub struct Upgrade {
     pub unsupported: BTreeMap<String, usize>,
     /// Rules of mapped types the game does not run, by field.
     pub rules_lost: BTreeMap<String, usize>,
+    /// Processors written in Java, taken out of their lists, by type.
+    pub processors_dropped: BTreeMap<String, usize>,
 }
 
 /// Rewrites one `data/<ns>/worldgen/<kind>/...` file in place; whether it
@@ -88,7 +90,55 @@ pub fn upgrade(
 ) -> bool {
     let states = block_states(v);
     report.block_states += usize::from(states);
-    upgrade_types(kind, v, report, set_tags) || states
+    let dropped = match kind {
+        "processor_list" => drop_java_processors(v, &mut report.processors_dropped),
+        "template_pool" => {
+            let mut changed = false;
+            for e in v["elements"].as_array_mut().into_iter().flatten() {
+                let element = &mut e["element"];
+                if let Some(list) = element.get_mut("elements").and_then(Value::as_array_mut) {
+                    for inner in list {
+                        if let Some(p) = inner.get_mut("processors") {
+                            changed |= drop_java_processors(p, &mut report.processors_dropped);
+                        }
+                    }
+                } else if let Some(p) = element.get_mut("processors") {
+                    changed |= drop_java_processors(p, &mut report.processors_dropped);
+                }
+            }
+            changed
+        }
+        _ => false,
+    };
+    upgrade_types(kind, v, report, set_tags) || states || dropped
+}
+
+/// Takes the processors written in Java (any type outside `minecraft:`)
+/// out of a processor list: `{"processors": [...]}`, a bare list, or an id
+/// (left as it is). The game, like vanilla, refuses a list holding a type it
+/// does not know, and with it every pool that names the list, so without
+/// this the structure does not generate at all. Without them it generates
+/// undecorated: no pillars under it, spawners left as the template has
+/// them, blocks not swapped. Whether anything was taken out.
+fn drop_java_processors(list: &mut Value, dropped: &mut BTreeMap<String, usize>) -> bool {
+    let processors = match list {
+        Value::Array(a) => a,
+        Value::Object(o) => match o.get_mut("processors") {
+            Some(Value::Array(a)) => a,
+            _ => return false,
+        },
+        _ => return false,
+    };
+    let before = processors.len();
+    processors.retain(|p| {
+        let t = p["processor_type"].as_str().unwrap_or_default();
+        let java = !t.starts_with("minecraft:");
+        if java {
+            *dropped.entry(t.to_owned()).or_default() += 1;
+        }
+        !java
+    });
+    processors.len() != before
 }
 
 /// 1.21.1 writes a block or fluid state as `{"Name": ..., "Properties":
@@ -547,6 +597,50 @@ mod tests {
             "super_exclusion_zone": {"chunk_count": 4, "other_set": "#rs:none"}}});
         assert!(upgrade("structure_set", &mut unknown, &mut report, &tags));
         assert_eq!(report.rules_lost["super_exclusion_zone"], 1);
+    }
+
+    #[test]
+    fn drops_processors_written_in_java() {
+        let mut report = Upgrade::default();
+        let mut list = json!({"processors": [
+            {"processor_type": "repurposed_structures:bottom_pillar_processor"},
+            {"processor_type": "minecraft:gravity", "heightmap": "WORLD_SURFACE_WG", "offset": -1},
+            {"processor_type": "moogs_structures:spawner_randomizing_processor"}]});
+        assert!(upgrade("processor_list", &mut list, &mut report, &NO_TAGS));
+        assert_eq!(
+            list["processors"],
+            json!([{"processor_type": "minecraft:gravity",
+            "heightmap": "WORLD_SURFACE_WG", "offset": -1}])
+        );
+        let mut pool = json!({"elements": [
+            {"weight": 1, "element": {"element_type": "minecraft:single_pool_element",
+                "processors": {"processors": [{"processor_type": "lithostitched:block_swap"}]}}},
+            {"weight": 1, "element": {"element_type": "minecraft:list_pool_element", "elements": [
+                {"element_type": "minecraft:single_pool_element", "processors": "x:named"}]}}]});
+        assert!(upgrade("template_pool", &mut pool, &mut report, &NO_TAGS));
+        assert_eq!(
+            pool["elements"][0]["element"]["processors"],
+            json!({"processors": []})
+        );
+        assert_eq!(
+            pool["elements"][1]["element"]["elements"][0]["processors"],
+            "x:named"
+        );
+        let mut vanilla = json!({"processors": [{"processor_type": "minecraft:nop"}]});
+        assert!(!upgrade(
+            "processor_list",
+            &mut vanilla,
+            &mut report,
+            &NO_TAGS
+        ));
+        assert_eq!(
+            report.processors_dropped,
+            BTreeMap::from([
+                ("lithostitched:block_swap".into(), 1),
+                ("moogs_structures:spawner_randomizing_processor".into(), 1),
+                ("repurposed_structures:bottom_pillar_processor".into(), 1),
+            ])
+        );
     }
 
     #[test]
