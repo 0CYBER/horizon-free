@@ -882,6 +882,24 @@ packet!(
 );
 packet!(RemoveMobEffect { id: i32 => VarInt, effect: i32 => VarInt });
 packet!(
+    /// AttributeModifier.STREAM_CODEC: id, amount and operation (0 add_value,
+    /// 1 add_multiplied_base, 2 add_multiplied_total).
+    AttributeModifier { id: String => Ident, amount: f64 => Double, operation: i32 => VarInt }
+);
+packet!(
+    /// ClientboundUpdateAttributesPacket.AttributeSnapshot: the attribute's
+    /// registry id, its base value and every modifier.
+    AttributeSnapshot {
+        attribute: i32 => VarInt,
+        base: f64 => Double,
+        modifiers: Vec<AttributeModifier> => List<AttributeModifier>,
+    }
+);
+packet!(
+    /// ClientboundUpdateAttributesPacket: an entity's synced attribute instances.
+    UpdateAttributes { id: i32 => VarInt, values: Vec<AttributeSnapshot> => List<AttributeSnapshot> }
+);
+packet!(
     /// ClientboundSwingAnimationPacket: hand (0 main, 1 off) and the swing
     /// type (0 none, 1 whack, 2 stab) with its duration in ticks.
     SwingAnimation { id: i32 => VarInt, hand: i32 => VarInt, kind: i32 => VarInt, duration: i32 => VarInt }
@@ -1455,6 +1473,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     TickingState(TickingState) = TICKING_STATE,
     TickingStep(TickingStep) = TICKING_STEP,
     UpdateAdvancements(UpdateAdvancements) = UPDATE_ADVANCEMENTS,
+    UpdateAttributes(UpdateAttributes) = UPDATE_ATTRIBUTES,
     UpdateMobEffect(UpdateMobEffect) = UPDATE_MOB_EFFECT,
     UpdateTags(UpdateTags) = UPDATE_TAGS,
     TrackedWaypoint(TrackedWaypoint) = WAYPOINT,
@@ -2110,6 +2129,18 @@ mod tests {
                 id: 2,
                 slots: vec![(0, None), (5, Some(Stack::new(1, 1)))],
             }),
+            Clientbound::UpdateAttributes(UpdateAttributes {
+                id: 2,
+                values: vec![AttributeSnapshot {
+                    attribute: 26,
+                    base: 0.23,
+                    modifiers: vec![AttributeModifier {
+                        id: "minecraft:baby".into(),
+                        amount: 0.5,
+                        operation: 1,
+                    }],
+                }],
+            }),
             Clientbound::SetHealth(SetHealth {
                 health: 17.5,
                 food: 18,
@@ -2346,5 +2377,32 @@ mod tests {
             Clientbound::Unknown(crate::ids::play::clientbound::BOSS_EVENT, vec![1, 2, 3])
         );
         assert_eq!(p.encode()[1..], [1, 2, 3]);
+    }
+
+    #[test]
+    fn update_attributes_encode_like_vanilla() {
+        let p = Clientbound::UpdateAttributes(UpdateAttributes {
+            id: 5,
+            values: vec![AttributeSnapshot {
+                attribute: 1,
+                base: 0.0,
+                modifiers: vec![AttributeModifier {
+                    id: "minecraft:armor.helmet".into(),
+                    amount: 3.0,
+                    operation: 0,
+                }],
+            }],
+        });
+        let body = p.encode();
+        // The packet id (134) is a two-byte VarInt.
+        let mut expected = vec![134, 1, 5, 1, 1];
+        expected.extend(0.0f64.to_be_bytes());
+        expected.extend([1, 22]);
+        expected.extend(b"minecraft:armor.helmet");
+        expected.extend(3.0f64.to_be_bytes());
+        expected.push(0);
+        assert_eq!(body, expected);
+        assert_eq!(crate::ids::play::clientbound::UPDATE_ATTRIBUTES, 134);
+        assert_eq!(Clientbound::decode(134, &body[2..]).unwrap(), p);
     }
 }

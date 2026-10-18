@@ -167,7 +167,11 @@ impl Game<'_> {
         Snapshot {
             screen: self.screen_label(),
             dimension: self.dim.id().to_string(),
-            chat: self.ui.chat.received,
+            // A remote client counts the server's lines itself.
+            chat: self
+                .remote
+                .as_ref()
+                .map_or(self.ui.chat.received, |r| r.chat_received),
             counts: if world.is_some() {
                 self.inventory_counts()
             } else {
@@ -189,8 +193,19 @@ impl Game<'_> {
         if let Some(before) = &self.events.last
             && *before != now
         {
-            let new_chat = (now.chat - before.chat).min(100) as usize;
-            let lines = self.ui.chat.recent_lines(new_chat);
+            // Joining or leaving a server starts another count.
+            let new_chat = now.chat.saturating_sub(before.chat).min(100) as usize;
+            // Newest first; the remote client keeps its lines oldest first.
+            let lines = match &self.remote {
+                Some(r) => r
+                    .chat
+                    .iter()
+                    .rev()
+                    .take(new_chat)
+                    .map(|(t, _)| t.clone())
+                    .collect(),
+                None => self.ui.chat.recent_lines(new_chat),
+            };
             for event in diff(before, &now, &lines) {
                 self.events.push(self.ticks, event);
             }

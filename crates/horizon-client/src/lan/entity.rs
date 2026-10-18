@@ -8,14 +8,30 @@
 use super::tracking;
 use horizon_protocol::{
     buf::pack_degrees,
-    entity_data::Value,
+    entity_data::{Value, serializer},
     item::Stack,
     packets::play::{
-        self, AddEntity, EntityPositionSync, MoveEntity, MoveEntityPos, MoveEntityPosRot,
-        MoveEntityRot, PositionPath, RotateHead, SetEntityData, SetEntityMotion, SetEquipment,
-        SetPassengers, VecDelta,
+        self, AddEntity, AttributeSnapshot, EntityPositionSync, MoveEntity, MoveEntityPos,
+        MoveEntityPosRot, MoveEntityRot, PositionPath, RotateHead, SetEntityData, SetEntityMotion,
+        SetEquipment, SetPassengers, UpdateAttributes, VecDelta,
     },
 };
+
+/// The attribute instances of `now` that differ from what `sent` held (an
+/// instance is never removed: one that disappears is left as it was sent).
+pub fn changed_attributes(
+    now: &[AttributeSnapshot],
+    sent: &[AttributeSnapshot],
+) -> Vec<AttributeSnapshot> {
+    now.iter()
+        .filter(|a| {
+            sent.iter()
+                .find(|b| b.attribute == a.attribute)
+                .is_none_or(|b| b != *a)
+        })
+        .cloned()
+        .collect()
+}
 
 /// What the game says about one entity this tick.
 #[derive(Clone, Debug)]
@@ -37,6 +53,9 @@ pub struct EntityState {
     /// EquipmentSlot ordinals (0 main hand, 1 off hand, 2 feet, 3 legs,
     /// 4 chest, 5 head, 6 body, 7 saddle) and their stacks.
     pub equipment: Vec<(u8, Option<Stack>)>,
+    /// A living entity's client-syncable attribute instances
+    /// (`AttributeMap.getSyncableAttributes`), by registry id.
+    pub attributes: Vec<AttributeSnapshot>,
     /// `Entity.getRequiresPrecisePosition` (primed TNT and falling blocks
     /// touching a block): moves are sent as full position syncs.
     pub precise: bool,
@@ -117,6 +136,8 @@ struct ServerEntity {
     /// trackedDataValues: the entity data the clients hold.
     meta: Vec<(u8, i32, Value)>,
     equipment: Vec<(u8, Option<Stack>)>,
+    /// The attribute instances the clients hold.
+    attributes: Vec<AttributeSnapshot>,
     was_on_ground: bool,
     tick: u32,
     teleport_delay: u32,
@@ -153,6 +174,7 @@ impl ServerEntity {
             velocity: e.velocity,
             meta: e.meta.clone(),
             equipment: e.equipment.clone(),
+            attributes: e.attributes.clone(),
             was_on_ground: e.on_ground,
             tick: 0,
             teleport_delay: 0,
@@ -188,6 +210,13 @@ impl ServerEntity {
             out.push(play::Clientbound::SetEntityData(SetEntityData {
                 id: e.id,
                 values: self.meta.clone(),
+            }));
+        }
+        // getSyncableAttributes: the instances as they are now.
+        if !e.attributes.is_empty() {
+            out.push(play::Clientbound::UpdateAttributes(UpdateAttributes {
+                id: e.id,
+                values: e.attributes.clone(),
             }));
         }
         if !self.equipment.is_empty() {
@@ -342,24 +371,48 @@ impl ServerEntity {
         self.send_equipment(e, out);
     }
 
-    /// ServerEntity.sendDirtyEntityData.
+    /// ServerEntity.sendDirtyEntityData: the changed entity data, then the
+    /// attribute instances that changed since they were last sent
+    /// (`AttributeMap.getAttributesToSync`).
     fn send_dirty(&mut self, e: &EntityState, dirty: bool, out: &mut Vec<play::Clientbound>) {
-        if !dirty {
-            return;
+        if dirty {
+            let mut changed: Vec<_> = e
+                .meta
+                .iter()
+                .filter(|m| !self.meta.contains(m))
+                .cloned()
+                .collect();
+            // A value back at its default is left out of the state, but the
+            // clients still hold the old one: Entity's shared flags and pose go
+            // back to 0 (a player standing up again, a mob no longer on fire).
+            for (index, kind, _) in &self.meta {
+                let default = match (*index, *kind) {
+                    (0, serializer::BYTE) => Value::Byte(0),
+                    (6, serializer::POSE) => Value::Id(0),
+                    _ => continue,
+                };
+                if !e.meta.iter().any(|m| m.0 == *index) {
+                    changed.push((*index, *kind, default));
+                }
+            }
+            if !changed.is_empty() {
+                out.push(play::Clientbound::SetEntityData(SetEntityData {
+                    id: e.id,
+                    values: changed,
+                }));
+            }
+            self.meta.clone_from(&e.meta);
         }
-        let changed: Vec<_> = e
-            .meta
-            .iter()
-            .filter(|m| !self.meta.contains(m))
-            .cloned()
-            .collect();
-        if !changed.is_empty() {
-            out.push(play::Clientbound::SetEntityData(SetEntityData {
-                id: e.id,
-                values: changed,
-            }));
+        if e.attributes != self.attributes {
+            let changed = changed_attributes(&e.attributes, &self.attributes);
+            if !changed.is_empty() {
+                out.push(play::Clientbound::UpdateAttributes(UpdateAttributes {
+                    id: e.id,
+                    values: changed,
+                }));
+            }
+            self.attributes.clone_from(&e.attributes);
         }
-        self.meta.clone_from(&e.meta);
     }
 
     fn send_head(&mut self, e: &EntityState, out: &mut Vec<play::Clientbound>) {
@@ -415,6 +468,11 @@ impl Tracker {
     }
     pub fn clear(&mut self) {
         self.seen.clear();
+    }
+    /// Stop tracking `id` without a packet: the caller removes it from the
+    /// client, and the next tick pairs it again if it is still in range.
+    pub fn forget(&mut self, id: i32) -> bool {
+        self.seen.remove(&id)
     }
     pub fn len(&self) -> usize {
         self.seen.len()
@@ -645,6 +703,7 @@ mod tests {
             data: 0,
             meta: Vec::new(),
             equipment: Vec::new(),
+            attributes: Vec::new(),
             precise: false,
         }
     }
@@ -739,6 +798,71 @@ mod tests {
             changes(&mut s, &e)[..],
             [play::Clientbound::EntityPositionSync(_)]
         ));
+    }
+
+    #[test]
+    fn attributes_pair_whole_then_send_the_changed_instances_when_due() {
+        let speed = |base| AttributeSnapshot {
+            attribute: 26,
+            base,
+            modifiers: Vec::new(),
+        };
+        let armor = AttributeSnapshot {
+            attribute: 1,
+            base: 0.0,
+            modifiers: Vec::new(),
+        };
+        let mut e = state(0.0);
+        e.attributes = vec![speed(0.23), armor];
+        let mut s = added(&e);
+        let mut spawn = Vec::new();
+        s.pairing(&e, 100, &Riding::default(), &mut spawn);
+        let Some(play::Clientbound::UpdateAttributes(p)) = spawn.get(1) else {
+            panic!("expected the attributes after the add");
+        };
+        assert_eq!(p.values, e.attributes);
+        changes(&mut s, &e);
+        e.attributes[0] = speed(0.3);
+        // Not due (a zombie's interval is 3): sendDirtyEntityData waits for the update.
+        assert!(changes(&mut s, &e).is_empty());
+        assert!(changes(&mut s, &e).is_empty());
+        let out = changes(&mut s, &e);
+        let Some(play::Clientbound::UpdateAttributes(p)) = out
+            .iter()
+            .find(|p| matches!(p, play::Clientbound::UpdateAttributes(_)))
+        else {
+            panic!("expected the changed attribute");
+        };
+        assert_eq!(p.values, vec![speed(0.3)]);
+    }
+
+    #[test]
+    fn cleared_flags_and_pose_go_back_to_their_default() {
+        let mut e = state(0.0);
+        let mut s = added(&e);
+        changes(&mut s, &e);
+        // A crouching player: the crouch flag and the crouching pose.
+        e.meta = vec![
+            (0, serializer::BYTE, Value::Byte(2)),
+            (6, serializer::POSE, Value::Id(5)),
+        ];
+        changes(&mut s, &e);
+        e.meta.clear();
+        let data = changes(&mut s, &e)
+            .into_iter()
+            .find_map(|p| match p {
+                play::Clientbound::SetEntityData(d) => Some(d),
+                _ => None,
+            })
+            .expect("standing up is sent");
+        assert_eq!(
+            data.values,
+            vec![
+                (0, serializer::BYTE, Value::Byte(0)),
+                (6, serializer::POSE, Value::Id(0)),
+            ]
+        );
+        assert!(changes(&mut s, &e).is_empty());
     }
 
     #[test]
@@ -901,5 +1025,29 @@ mod tests {
         for t in &c.trackers {
             assert!(!t.is_tracking(7) && t.is_tracking(8) && t.is_tracking(9));
         }
+    }
+
+    #[test]
+    fn a_forgotten_entity_is_paired_again_at_the_next_tick() {
+        // A respawned player: the hub removes it from the other clients and
+        // forgets it, and the next tick pairs it again as a new entity.
+        let mut level = Entities::default();
+        let mut c = Clients::new();
+        let mut player = state(0.0);
+        player.id = 1;
+        player.kind = "minecraft:player".into();
+        c.tick(&mut level, &[&player]);
+        c.tick(&mut level, &[&player]);
+        assert!(c.trackers[1].forget(1));
+        assert!(!c.trackers[1].forget(1));
+        c.tick(&mut level, &[&player]);
+        assert!(c.trackers[1].is_tracking(1));
+        let paired = c.out[1]
+            .first()
+            .and_then(|p| play::Clientbound::decode(i32::from(p[0]), &p[1..]).ok());
+        assert!(
+            matches!(paired, Some(play::Clientbound::AddEntity(ref a)) if a.id == 1),
+            "{paired:?}"
+        );
     }
 }

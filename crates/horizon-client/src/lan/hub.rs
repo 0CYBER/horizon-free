@@ -80,6 +80,8 @@ pub struct HostState {
     pub sprinting: bool,
     pub equipment: [Option<ItemStack>; 6],
     pub health: f32,
+    /// The host player's client-syncable attribute instances.
+    pub attributes: Vec<play::AttributeSnapshot>,
 }
 
 /// Everything the hub needs from the game for one tick.
@@ -686,6 +688,16 @@ impl Hub {
     /// onEffectsRemoved, from what changed since the client was told: an
     /// effect that only counted down is not sent again, except at every
     /// 600 ticks left (`LivingEntity.tickEffects`).
+    /// `sync_effects` for every player at once: what a command changed
+    /// leaves with its feedback (ServerPlayer.onEffectAdded sends at once),
+    /// not after the tick's countdown.
+    pub fn sync_all_effects(&mut self) {
+        for i in 0..self.guests.len() {
+            if self.guests[i].placed {
+                self.sync_effects(i);
+            }
+        }
+    }
     fn sync_effects(&mut self, i: usize) {
         let g = &self.guests[i];
         if g.effects.list.is_empty() && g.sent_effects.is_empty() {
@@ -1382,6 +1394,7 @@ impl Hub {
         skin: u8,
         health: f32,
         equipment: Vec<(u8, Option<horizon_protocol::item::Stack>)>,
+        attributes: Vec<play::AttributeSnapshot>,
     ) -> EntityState {
         let (sneaking, sprinting, gliding, sleeping) = flags;
         let mut shared = 0i8;
@@ -1429,6 +1442,7 @@ impl Hub {
             data: 0,
             meta,
             equipment,
+            attributes,
             precise: false,
         }
     }
@@ -1476,6 +1490,7 @@ impl Hub {
                 0x7F,
                 h.health,
                 equipment,
+                h.attributes.clone(),
             ));
         }
         let placed: Vec<usize> = (0..self.guests.len())
@@ -1505,6 +1520,10 @@ impl Hub {
                     g.info.model_customisation,
                     g.health,
                     equipment,
+                    g.motion
+                        .as_ref()
+                        .map(|m| super::attributes::syncable(&m.attributes))
+                        .unwrap_or_default(),
                 )
             })
             .collect();
@@ -1613,6 +1632,19 @@ impl Hub {
                 g.advancements_changed.clear();
             } else {
                 self.flush_advancements(i, true);
+            }
+        }
+        // ServerEntity.sendDirtyEntityData: the player's changed attribute
+        // instances go to the player too (its trackers get them from
+        // track_entities).
+        let g = &mut self.guests[i];
+        if let Some(m) = g.motion.as_mut() {
+            let values = super::attributes::take_dirty(&mut m.attributes);
+            if !values.is_empty() {
+                g.send(&C::UpdateAttributes(play::UpdateAttributes {
+                    id: g.entity_id,
+                    values,
+                }));
             }
         }
         // Sent when the health or the food level changes, or the saturation
@@ -2112,6 +2144,18 @@ impl Hub {
             .map(str::to_owned)
     }
 
+    /// ServerLevel.removePlayerImmediately, then addRespawnedPlayer: the other players
+    /// lose the dead player's entity (ServerEntity.removePairing) and are sent the
+    /// respawned one as a new entity at the next tick. Their clients would otherwise keep
+    /// the dead body, lying down, wherever the player goes.
+    pub fn respawned(&mut self, id: i32) {
+        for g in &mut self.guests {
+            if g.entity_id != id && g.tracker.forget(id) {
+                g.send(&C::RemoveEntities(play::RemoveEntities { ids: vec![id] }));
+            }
+        }
+    }
+
     /// PlayerList.respawn: back to `at` with a fresh start. The vanilla client waits on its
     /// level loading screen from the Respawn packet until the level info's "level chunks load
     /// start" event and the chunk under the player, so the packets follow vanilla's order.
@@ -2138,6 +2182,9 @@ impl Hub {
         g.tracker.clear();
         g.sent_chunks.clear();
         g.chunk_queue.clear();
+        let id = g.entity_id;
+        self.respawned(id);
+        let g = &mut self.guests[i];
         // ServerPlayer.restoreFrom: the game mode again (onUpdateAbilities).
         g.send(&C::PlayerAbilities(play::PlayerAbilities {
             flags: g.ability_flags(),

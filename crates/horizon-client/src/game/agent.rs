@@ -1546,6 +1546,13 @@ impl Game<'_> {
                     return Err("command TEXT".into());
                 }
                 let command = format!("/{text}");
+                // Single player's console is its server thread's.
+                if let Some(server) = &self.integrated {
+                    let chat = server
+                        .call(move |g| g.owner_console_command(&command))
+                        .ok_or("the integrated server stopped")?;
+                    return ok(json!({ "ok": true, "chat": chat }));
+                }
                 if self.remote.is_some() {
                     self.send_chat(&command);
                     return ok(json!({ "ok": true }));

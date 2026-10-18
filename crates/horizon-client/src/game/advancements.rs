@@ -497,10 +497,13 @@ impl Game<'_> {
                 // PlayerList.broadcastSystemMessage: everyone hears of a
                 // network player's advancement.
                 match self.lan_acting_name.clone() {
-                    Some(player) => self
-                        .adv
-                        .announced
-                        .push(Text::translate(key, &[Text::literal(&player), name])),
+                    // Player.getDisplayName.
+                    Some(_) => {
+                        let player = self.target_name(super::commands::Target::Player);
+                        self.adv
+                            .announced
+                            .push(Text::translate(key, &[player, name]));
+                    }
                     None => self.system_message(Text::translate(
                         key,
                         &[Text::literal(super::chat::PLAYER_NAME), name],
@@ -832,18 +835,25 @@ pub(super) fn adv_name(a: &adv::Advancement) -> Text {
         Frame::Challenge => text::DARK_PURPLE,
         _ => text::GREEN,
     };
-    let tooltip = text_of(&d.title)
-        .with_color(color)
+    // Advancement.decorateName: the title in the frame's colour (styles
+    // merged into it), a new line and the description.
+    let coloured = text_of(&d.title).with_color(color);
+    let mut component = coloured.component();
+    if let Some(o) = component.as_object_mut() {
+        o.insert(
+            "extra".into(),
+            serde_json::json!(["\n", text_of(&d.description).component()]),
+        );
+    }
+    let tooltip = coloured
         .append("\n")
-        .append(text_of(&d.description));
+        .append(text_of(&d.description))
+        .with_component(component);
     let title = text_of(&d.title).with_style(&Style {
         hover: Some(Box::new(tooltip)),
         ..Style::default()
     });
-    Text::literal("[")
-        .append(title)
-        .append("]")
-        .with_color(color)
+    Text::translate("chat.square_brackets", &[title]).with_color(color)
 }
 impl Game<'_> {
     /// `AdvancementCommands.Action.GRANT` on one advancement (or one of

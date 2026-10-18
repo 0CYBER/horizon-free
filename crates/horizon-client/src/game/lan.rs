@@ -61,6 +61,9 @@ pub(super) struct LanHost {
     /// are dead, whose respawn replaces their waypoint.
     pub waypoints: lan::waypoints::Waypoints,
     pub waypoint_dead: std::collections::HashSet<u128>,
+    /// Guests' commands waiting for the hub to be back in `self.lan`, where
+    /// a command can reach every player (game/lan_actions.rs).
+    pub commands: Vec<super::lan_actions::GuestCommand>,
 }
 
 /// The player who owns an integrated server's world: a guest whose state is
@@ -520,6 +523,7 @@ impl Game<'_> {
             owner: None,
             waypoints: Default::default(),
             waypoint_dead: Default::default(),
+            commands: Vec::new(),
         });
         self.audio.capture = Some(Vec::new());
         Ok(())
@@ -722,6 +726,7 @@ impl Game<'_> {
             sprinting: p.sprinting,
             equipment,
             health: p.health.health(),
+            attributes: horizon_client::lan::attributes::syncable(&p.attributes),
         })
     }
 
@@ -732,6 +737,7 @@ impl Game<'_> {
             let kind = m.kind.id.as_str();
             let meta = mob_meta(m, hub);
             let equipment = mob_equipment(m, hub);
+            let attributes = self.mob_attributes(m);
             let (yaw, pitch) = (m.yaw, m.head_pitch);
             out.push(EntityState {
                 id: m.id as i32,
@@ -746,6 +752,7 @@ impl Game<'_> {
                 data: 0,
                 meta,
                 equipment,
+                attributes,
                 precise: false,
             });
         }
@@ -764,6 +771,7 @@ impl Game<'_> {
                 data: 0,
                 meta: vec![(8, serializer::ITEM_STACK, Value::Item(stack))],
                 equipment: Vec::new(),
+                attributes: Vec::new(),
                 precise: false,
             });
         }
@@ -782,6 +790,7 @@ impl Game<'_> {
                 // ExperienceOrb.DATA_VALUE.
                 meta: vec![(8, serializer::INT, Value::Int(o.value as i32))],
                 equipment: Vec::new(),
+                attributes: Vec::new(),
                 precise: false,
             });
         }
@@ -796,7 +805,11 @@ impl Game<'_> {
         };
         // What the tick sends a guest goes to its connection at the end.
         let holding = lan::Holding::start();
-        // The host's own commands' broadcastToAdmins lines.
+        // The host's own commands' (and command blocks') players moving
+        // to another level, and their broadcastToAdmins lines.
+        if !self.level_teleports.is_empty() {
+            self.run_level_teleports(&mut host);
+        }
         if !self.admin_feedback.is_empty() {
             self.send_admin_feedback(&mut host, None);
         }
@@ -918,6 +931,11 @@ impl Game<'_> {
                     }
                     HostEvent::Packet(conn, packet) => {
                         self.lan_guest_packet(&mut host, conn, *packet);
+                        if !host.commands.is_empty() {
+                            self.lan = Some(host);
+                            self.run_guest_commands();
+                            host = self.lan.take().expect("the hub is back after the commands");
+                        }
                     }
                 }
             }

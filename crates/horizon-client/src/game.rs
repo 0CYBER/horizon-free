@@ -65,6 +65,7 @@ mod item_particles;
 mod jukebox;
 mod lan;
 mod lan_actions;
+mod lan_attributes;
 mod lan_chat;
 mod lan_crafting;
 mod lan_entities;
@@ -3846,6 +3847,10 @@ impl Game<'_> {
             }
             self.audio
                 .play("minecraft:entity.player.death", Some(at), 1.0, 1.0);
+            // LivingEntity.die: the LAN guests see the host's death animation.
+            if let Some(host) = &self.lan {
+                host.hub.entity_event(host.host_entity, 3, feet);
+            }
             self.screen = Screen::Dead;
             self.capture(false);
         }

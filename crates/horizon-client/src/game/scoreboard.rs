@@ -131,6 +131,7 @@ impl Game<'_> {
     pub(super) fn holder_name(&mut self, t: Target) -> Option<String> {
         match t {
             Target::Player => Some(self.acting_player_name().to_owned()),
+            Target::Guest(conn) => self.command_guest(conn).map(|g| g.name.clone()),
             Target::Mob(id) | Target::Item(id) => Some(uuid_text(self.uuid_for(id))),
             _ => None,
         }
@@ -179,7 +180,7 @@ impl Game<'_> {
             | Target::Cart(id)
             | Target::Other(id) => self.persist.raw.get(&id),
             Target::Player => self.level.player_extra.as_ref(),
-            Target::Orb(_) | Target::Arrow(_) => None,
+            Target::Guest(_) | Target::Orb(_) | Target::Arrow(_) => None,
         };
         match raw.and_then(|r| r.get("Tags")) {
             Some(Tag::List(l)) => l

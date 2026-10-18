@@ -411,6 +411,60 @@ impl Game<'_> {
     pub(super) fn serving(&self) -> bool {
         self.serving.is_some()
     }
+    /// The window's agent runs a command as single player's console does
+    /// (`as_console`, as without a server thread): as the world's owner, in
+    /// the owner's level, at the owner permission level. The feedback goes to
+    /// the owner's chat and is returned.
+    pub(super) fn owner_console_command(&mut self, command: &str) -> Vec<String> {
+        let Some(owner) = self.serving.as_ref().map(|s| s.owner) else {
+            return Vec::new();
+        };
+        let Some(mut host) = self.lan.take() else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        if let Some(g) = host.hub.guests.iter().find(|g| g.uuid == owner && g.placed) {
+            let conn = g.conn;
+            // Commands.performCommand runs in the player's level.
+            let (back, theirs) = (self.dim, super::Dim::from_id(&g.dimension));
+            let entered = theirs == back || self.enter_level(Some(&mut host), theirs).is_ok();
+            if entered {
+                let command = command.trim_start_matches('/').to_owned();
+                let lines = self.as_guest(&mut host, conn, |g| {
+                    g.as_console(|g| {
+                        g.chat_capture = Some(Vec::new());
+                        g.run_command(&command);
+                        g.chat_capture.take().unwrap_or_default()
+                    })
+                });
+                // A teleport into another level happens before its feedback is sent.
+                self.run_level_teleports(&mut host);
+                for line in lines.unwrap_or_default() {
+                    out.push(line.plain());
+                    host.hub.send_to(
+                        conn,
+                        &horizon_protocol::packets::play::Clientbound::SystemChat(
+                            horizon_protocol::packets::play::SystemChat {
+                                content: horizon_client::lan::data::component_nbt(
+                                    &line.component(),
+                                ),
+                                overlay: false,
+                            },
+                        ),
+                    );
+                }
+                self.send_admin_feedback(&mut host, Some(conn));
+            }
+            if theirs != back
+                && let Err(e) = self.enter_level(Some(&mut host), back)
+            {
+                log::error!("could not reopen {}: {e}", back.id());
+            }
+        }
+        self.lan = Some(host);
+        out
+    }
+
     /// The window's requests, between two ticks.
     fn run_tasks(&mut self) {
         let tasks: Vec<Task> = match &self.serving {

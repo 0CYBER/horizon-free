@@ -125,6 +125,8 @@ pub(super) struct Remote {
     health: (f32, i32, f32),
     game_mode: i32,
     pub chat: Vec<(String, Instant)>,
+    /// Lines received since joining, for the control socket's events.
+    pub chat_received: u64,
     /// The server's command tree (ClientboundCommandsPacket).
     pub commands: Option<horizon_client::command::Dispatcher>,
     players: HashMap<u128, String>,
@@ -321,6 +323,7 @@ impl Game<'_> {
             health: (20.0, 20, 5.0),
             game_mode: 0,
             chat: Vec::new(),
+            chat_received: 0,
             commands: None,
             players: HashMap::new(),
             tab_players: HashMap::new(),
@@ -494,6 +497,7 @@ impl Game<'_> {
         log::info!("[chat] {text}");
         if let Some(r) = self.remote.as_mut() {
             r.chat.push((text, Instant::now()));
+            r.chat_received += 1;
             if r.chat.len() > 100 {
                 r.chat.remove(0);
             }
@@ -1497,6 +1501,20 @@ impl Game<'_> {
                                 self.sleep_timer = 0;
                             }
                             self.sleeping = *bed;
+                        }
+                    }
+                }
+                // Entity.DATA_SHARED_FLAGS_ID's crouching bit: another
+                // player's crouch (their model and Entity.isDiscrete's name tag).
+                if self
+                    .remote
+                    .as_ref()
+                    .is_some_and(|r| r.level_players.contains_key(&p.id))
+                    && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
+                {
+                    for (index, _, value) in &p.values {
+                        if let (0, Value::Byte(flags)) = (index, value) {
+                            m.extra.crouching = flags & 2 != 0;
                         }
                     }
                 }
@@ -3769,6 +3787,13 @@ impl Game<'_> {
                 .values()
                 .filter(|t| t.kind == "minecraft:player")
                 .map(|t| t.position)
+                .collect::<Vec<_>>(),
+            // The other players this client draws dead (lying down, after EntityEvent DEATH).
+            "dead_players": self
+                .mobs
+                .iter()
+                .filter(|m| r.level_players.contains_key(&(m.id as i32)) && !m.alive())
+                .map(|m| m.id)
                 .collect::<Vec<_>>(),
             // The player's own model exists (third person and the inventory draw it).
             "player_model": self.player_model.is_some(),

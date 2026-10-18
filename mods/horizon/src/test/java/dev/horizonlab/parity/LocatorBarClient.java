@@ -82,13 +82,16 @@ import net.minecraft.world.phys.Vec3;
  * players on|off} (whether each player also records the other players added
  * to and removed from its level, and its own respawns into a dimension),
  * {@code chat on|off} (whether the system chat each player receives is
- * recorded too, as component JSON) and {@code end}, which writes each
+ * recorded too, as component JSON), {@code state on|off} (whether each player
+ * also records what the server changes about it: its game mode, teleports,
+ * inventory slots, effects and death) and {@code end}, which writes each
  * player's lines to OUT.
  */
 public final class LocatorBarClient {
     private static volatile String step = "start";
     private static volatile boolean players;
     private static volatile boolean chat;
+    private static volatile boolean state;
     private static final Map<UUID, String> NAMES = new LinkedHashMap<>();
 
     public static void main(String[] args) throws Exception {
@@ -122,6 +125,7 @@ public final class LocatorBarClient {
                     case "quit" -> players.get(w[1]).close();
                     case "players" -> LocatorBarClient.players = w[1].equals("on");
                     case "chat" -> chat = w[1].equals("on");
+                    case "state" -> state = w[1].equals("on");
                     case "end" -> {
                         try (PrintWriter out = new PrintWriter(Files.newBufferedWriter(output, StandardCharsets.UTF_8))) {
                             for (Player p : players.values()) {
@@ -179,6 +183,8 @@ public final class LocatorBarClient {
         private ProtocolInfo<?> outbound;
         private volatile PositionMoveRotation position = new PositionMoveRotation(Vec3.ZERO, Vec3.ZERO, 0, 0);
         private boolean loaded;
+        /** This player's own entity id (ClientboundLoginPacket). */
+        private volatile int id = -1;
         /** The other players this one was sent, by entity id. */
         private final Map<Integer, String> seen = new java.util.HashMap<>();
         private final Object replyLock = new Object();
@@ -287,6 +293,10 @@ public final class LocatorBarClient {
                 while (true) {
                     Received r = read();
                     Packet<?> p = r.packet;
+                    if (p instanceof net.minecraft.network.protocol.game.ClientboundLoginPacket l) {
+                        id = l.playerId();
+                    }
+                    if (state) recordState(p);
                     if (p instanceof net.minecraft.network.protocol.game.ClientboundAddEntityPacket a
                         && a.getType() == net.minecraft.world.entity.EntityTypes.PLAYER) {
                         String who = NAMES.getOrDefault(a.getUUID(), "uuid?");
@@ -319,6 +329,10 @@ public final class LocatorBarClient {
                     } else if (p instanceof ClientboundPlayerPositionPacket t) {
                         position = PositionMoveRotation.calculateAbsolute(position, t.change(), t.relatives());
                         Vec3 at = position.position();
+                        if (state) {
+                            record(String.format(java.util.Locale.ROOT, "teleport %.3f %.3f %.3f %.1f %.1f",
+                                at.x, at.y, at.z, position.yRot(), position.xRot()));
+                        }
                         send(new ServerboundAcceptTeleportationPacket(t.id(), at.x, at.y, at.z, position.yRot(), position.xRot()));
                         // Only the spawn teleport is answered with a position too (VanillaProtocolClient).
                         if (!loaded) {
@@ -336,6 +350,31 @@ public final class LocatorBarClient {
             } catch (Exception e) {
                 if (!socket.isClosed()) record("error play " + e);
             }
+        }
+
+        /** What the server changed about this player ({@code state on}). */
+        private void recordState(Packet<?> p) {
+            if (p instanceof net.minecraft.network.protocol.game.ClientboundGameEventPacket g
+                && g.getEvent() == net.minecraft.network.protocol.game.ClientboundGameEventPacket.CHANGE_GAME_MODE) {
+                record("gamemode " + (int) g.getParam());
+            } else if (p instanceof net.minecraft.network.protocol.game.ClientboundContainerSetSlotPacket c) {
+                record("slot " + c.getContainerId() + " " + c.getSlot() + " " + item(c.getItem()));
+            } else if (p instanceof net.minecraft.network.protocol.game.ClientboundSetPlayerInventoryPacket i) {
+                record("inventory " + i.slot() + " " + item(i.contents()));
+            } else if (p instanceof net.minecraft.network.protocol.game.ClientboundUpdateMobEffectPacket e && e.getEntityId() == id) {
+                record("effect " + e.getEffect().getRegisteredName() + " " + e.getEffectAmplifier() + " " + e.getEffectDurationTicks());
+            } else if (p instanceof net.minecraft.network.protocol.game.ClientboundRemoveMobEffectPacket e && e.entityId() == id) {
+                record("effect-removed " + e.effect().getRegisteredName());
+            } else if (p instanceof net.minecraft.network.protocol.game.ClientboundPlayerCombatKillPacket k) {
+                record("killed " + net.minecraft.network.chat.ComponentSerialization.CODEC
+                    .encodeStart(ParityData.access.createSerializationContext(com.mojang.serialization.JsonOps.INSTANCE), k.message())
+                    .getOrThrow());
+            }
+        }
+
+        private static String item(net.minecraft.world.item.ItemStack stack) {
+            return stack.isEmpty() ? "empty"
+                : net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(stack.getItem()) + " x" + stack.getCount();
         }
 
         private record Received(Packet<?> packet, byte[] payload) {}
