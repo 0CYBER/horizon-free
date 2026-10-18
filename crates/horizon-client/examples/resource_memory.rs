@@ -122,20 +122,6 @@ fn main() -> Result<()> {
     step("collision");
     let motion = MotionResources::load(&root, &assets)?;
     step("motion");
-    for name in [
-        "worldgen/blocks/block-properties.nbt",
-        "worldgen/blocks/cached-collision.nbt",
-        "worldgen/blocks/cached-support.nbt",
-        "cached-collision.nbt",
-        "occlusion.nbt",
-        "movement-properties.nbt",
-    ] {
-        let bytes = std::fs::read(root.join(name))?;
-        let tree = horizon_world::nbt::read_named(&bytes, horizon_world::nbt::Limits::tables())?;
-        step(&format!("  tree of {name}"));
-        drop((tree, bytes));
-        step("  dropped");
-    }
     let terrain = VanillaTerrain::new(&root.join("worldgen"), assets.registry, &biomes, 1234)?;
     step("worldgen");
     println!(

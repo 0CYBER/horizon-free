@@ -65,17 +65,9 @@ impl LightTables {
     }
     /// Full tables with the vanilla occlusion shapes from `occlusion.nbt`.
     pub fn load(root: &Path, registry: &BlockRegistry, facts: &BlockFacts) -> crate::Result<Self> {
-        use horizon_world::{
-            collision::CachedCollisionRegistry,
-            nbt::{self, Limits},
-        };
-        let data = nbt::read_named(
-            &std::fs::read(root.join("occlusion.nbt"))?,
-            Limits::tables(),
-        )?
-        .0
-        .tag;
-        let occlusion = CachedCollisionRegistry::from_nbt(&data, registry)?;
+        use horizon_world::{collision::CachedCollisionRegistry, registry::BlockTableFile};
+        let file = BlockTableFile::open(&root.join("occlusion.nbt"), registry)?;
+        let occlusion = CachedCollisionRegistry::from_table(file.table("occlusion")?)?;
         let mut tables = Self::new(facts);
         let block = VoxelShape::block();
         let mut shapes: Vec<VoxelShape> = vec![VoxelShape::empty(), block.clone()];

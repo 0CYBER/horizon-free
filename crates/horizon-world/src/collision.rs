@@ -5,10 +5,10 @@
 //! This module covers the cached branch only; uncached states remain explicit.
 use crate::{
     DATA_VERSION,
-    chunk::{BlockSection, BlockState},
+    chunk::BlockSection,
     compression::invalid,
     nbt::Tag,
-    registry::{BlockRegistry, BlockStateId},
+    registry::{BlockRegistry, BlockStateId, BlockTable},
 };
 use horizon_core::geometry::{Axis, VoxelShape};
 use std::{collections::HashMap, io};
@@ -35,19 +35,12 @@ impl<'r> CachedCollisionRegistry<'r> {
         self.registry
     }
     pub fn from_nbt(tag: &Tag, registry: &'r BlockRegistry) -> io::Result<Self> {
+        Self::from_table(BlockTable::check(tag, registry, "collision")?)
+    }
+    pub fn from_table(table: BlockTable<'_, 'r>) -> io::Result<Self> {
+        let (tag, registry) = (table.tag(), table.registry());
         if tag.get("DataVersion") != Some(&Tag::Int(DATA_VERSION)) {
             return Err(invalid("collision DataVersion mismatch"));
-        }
-        let Some(Tag::List(states)) = tag.get("states") else {
-            return Err(invalid("missing collision state identities"));
-        };
-        if states.len() != registry.len() {
-            return Err(invalid("collision registry size mismatch"));
-        }
-        for (id, state) in states.iter().enumerate() {
-            if registry.state(BlockStateId(id as u32)) != Some(&BlockState::from_nbt(state)?) {
-                return Err(invalid("collision state identities differ"));
-            }
         }
         let Some(Tag::List(entries)) = tag.get("shapes") else {
             return Err(invalid("missing collision shapes"));

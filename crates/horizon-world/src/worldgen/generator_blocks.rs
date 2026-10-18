@@ -8,8 +8,7 @@ use crate::{
     block_support::BlockSupportRegistry,
     block_survival::{BlockSurvivalRegistry, SurvivalDefinitions, SurvivalRule},
     collision::CachedCollisionRegistry,
-    nbt::{self, Limits, Tag},
-    registry::BlockRegistry,
+    registry::{BlockRegistry, BlockTableFile},
 };
 use serde_json::Value;
 use std::{
@@ -102,24 +101,21 @@ impl BlockBehavior {
         if !dir.join("block-properties.nbt").exists() {
             return Ok(None);
         }
-        let read = |name: &str| -> Result<Tag, GeneratorError> {
-            Ok(
-                nbt::read_named(&fs::read(dir.join(name))?, Limits::tables())
-                    .map_err(|e| resource(format!("{name}: {e:?}")))?
-                    .0
-                    .tag,
-            )
+        let read = |name: &str| -> Result<BlockTableFile<'static>, GeneratorError> {
+            BlockTableFile::open(&dir.join(name), registry)
+                .map_err(|e| resource(format!("{name}: {e}")))
         };
         let json = |name: &str| -> Result<Value, GeneratorError> {
             Ok(serde_json::from_str(&fs::read_to_string(dir.join(name))?)?)
         };
         let collisions =
-            CachedCollisionRegistry::from_nbt(&read("cached-collision.nbt")?, registry)?;
-        let properties =
-            BlockPropertiesRegistry::from_nbt(&read("block-properties.nbt")?, &collisions)?;
-        let support = Arc::new(BlockSupportRegistry::from_nbt(
-            &read("cached-support.nbt")?,
-            registry,
+            CachedCollisionRegistry::from_table(read("cached-collision.nbt")?.table("collision")?)?;
+        let properties = BlockPropertiesRegistry::from_table(
+            read("block-properties.nbt")?.table("block property")?,
+            &collisions,
+        )?;
+        let support = Arc::new(BlockSupportRegistry::from_table(
+            read("cached-support.nbt")?.table("support")?,
         )?);
         let collision = Arc::new(BlockCollisionRegistry::new(Arc::new(collisions))?);
         let rules = json("survival-rules.json")?
