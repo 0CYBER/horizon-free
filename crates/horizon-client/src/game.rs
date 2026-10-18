@@ -6568,8 +6568,9 @@ impl Game<'_> {
         streaming.biome_zoom = BiomeZoom::new(obfuscate_seed(seed));
         streaming.sky_light = dim != Dim::Nether;
         streaming.nether_shading = dim == Dim::Nether;
-        // The integrated server draws nothing (the dedicated server keeps its behaviour).
-        streaming.mesh = !self.options.integrated;
+        // A server draws nothing: neither the integrated server nor the
+        // dedicated one meshes sections.
+        streaming.mesh = !self.options.integrated && self.options.dedicated.is_none();
         Ok((streaming, save))
     }
     /// Change dimension through a portal (Entity.changeDimension with
