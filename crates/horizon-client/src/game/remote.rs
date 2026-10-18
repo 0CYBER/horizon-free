@@ -151,7 +151,12 @@ pub(super) struct Remote {
     synced: Vec<Option<ItemStack>>,
     decode_errors: u32,
     clock: Option<i32>,
+    /// `ClientClockManager.ClientClockInstance`'s rate and partial tick for
+    /// the level's clock (its total is `world.day_time`), and
+    /// `lastTickGameTime`.
     clock_rate: f32,
+    clock_partial: f32,
+    clock_game_time: i64,
     /// `ClientChunkCache.Storage`'s view centre (ClientboundSetChunkCacheCenterPacket).
     chunk_center: (i32, i32),
 }
@@ -341,6 +346,8 @@ impl Game<'_> {
             decode_errors: 0,
             clock: None,
             clock_rate: 1.0,
+            clock_partial: 0.0,
+            clock_game_time: 0,
             chunk_center: (0, 0),
         });
         // The level's TickRateManager follows the server's ticking packets.
@@ -1706,8 +1713,12 @@ impl Game<'_> {
                     total: p.total,
                 }
             }
+            // ClientPacketListener.handleSetTime: the game time, then
+            // ClientClockManager.handleUpdates: the clock catches up with the
+            // game time and takes the server's state.
             C::SetTime(p) => {
                 self.world.game_time = p.game_time;
+                self.remote_clock_tick();
                 let clock = {
                     let r = self.remote.as_ref();
                     let names =
@@ -1728,6 +1739,7 @@ impl Game<'_> {
                     if let Some(r) = self.remote.as_mut() {
                         r.clock = Some(c.clock);
                         r.clock_rate = c.rate;
+                        r.clock_partial = c.partial_tick;
                     }
                 }
             }
@@ -2448,15 +2460,12 @@ impl Game<'_> {
                 horizon_protocol::packets::configuration::ClientInformation::new(view),
             ));
         }
-        // Minecraft.tick: TickRateManager.tick; ClientLevel.tick advances
+        // Minecraft.tick: TickRateManager.tick; ClientLevel.tickTime advances
         // the time only while the level runs normally.
         let running = self.clock.world_runs();
         if running {
             self.world.game_time += 1;
-            let rate = self.remote.as_ref().map_or(1.0, |r| r.clock_rate);
-            if rate > 0.0 {
-                self.world.day_time += rate.round() as i64;
-            }
+            self.remote_clock_tick();
         }
         // Weather levels drift toward their targets between server updates.
         let w = &mut self.world.weather;
@@ -3804,6 +3813,20 @@ impl Game<'_> {
             .filter(|(_, uuid)| **uuid != r.profile)
             .filter_map(|(id, uuid)| Some((*id as u32, r.players.get(uuid)?.clone())))
             .collect()
+    }
+    /// `ClientClockManager.tick`: the clock moves on by the game time that
+    /// passed since its last tick, at its rate. A game time the server sets
+    /// forward (its sync every second) moves the clock with it.
+    fn remote_clock_tick(&mut self) {
+        let Some(r) = self.remote.as_mut() else {
+            return;
+        };
+        let delta = self.world.game_time - r.clock_game_time;
+        r.clock_game_time = self.world.game_time;
+        let partial = f64::from(r.clock_partial) + delta as f64 * f64::from(r.clock_rate);
+        let full = partial.floor();
+        r.clock_partial = (partial - full) as f32;
+        self.world.day_time += full as i64;
     }
     pub(super) fn remote_status(&self) -> Option<serde_json::Value> {
         let r = self.remote.as_ref()?;

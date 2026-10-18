@@ -697,6 +697,16 @@ impl Game<'_> {
         c.partial -= whole;
         self.world.day_time += whole as i64;
     }
+    /// `ServerClockInstance.packNetworkState`: the rate players' clients
+    /// advance the overworld clock at, 0 while it is paused (`/time pause`)
+    /// or `advance_time` is off.
+    pub(super) fn network_clock_rate(&self) -> f32 {
+        if self.ui.rules.bool("advance_time") && !self.ui.clock.paused {
+            self.ui.clock.rate
+        } else {
+            0.0
+        }
+    }
     /// The engine-side rule values (block behaviour and health).
     pub(super) fn level_rules(&self) -> horizon_world::level::GameRules {
         let r = &self.ui.rules;

@@ -1289,6 +1289,7 @@ impl Game<'_> {
         if let Some(play) = host.play.get_mut(&conn) {
             play.potions = Default::default();
         }
+        let clock_rate = self.network_clock_rate();
         let ctx = TickCtx {
             world: &mut self.world,
             host: None,
@@ -1297,11 +1298,7 @@ impl Game<'_> {
             spawn,
             difficulty: i32::from(self.ui.difficulty),
             difficulty_locked: self.level.difficulty_locked,
-            clock_rate: if self.ui.rules.bool("advance_time") {
-                self.ui.clock.rate
-            } else {
-                0.0
-            },
+            clock_rate,
             tick_rate: self.clock.rate(),
             tick_frozen: self.clock.frozen(),
             collision: Some(self.collision),

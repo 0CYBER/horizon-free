@@ -832,6 +832,7 @@ impl Game<'_> {
             };
             let spawn = self.spawn.map_or([0.5, 80.0, 0.5], |s| [s.x, s.y, s.z]);
             let events = {
+                let clock_rate = self.network_clock_rate();
                 let mut ctx = TickCtx {
                     world: &mut self.world,
                     host: state.as_ref(),
@@ -840,11 +841,7 @@ impl Game<'_> {
                     spawn,
                     difficulty: i32::from(self.ui.difficulty),
                     difficulty_locked: self.level.difficulty_locked,
-                    clock_rate: if self.ui.rules.bool("advance_time") {
-                        self.ui.clock.rate
-                    } else {
-                        0.0
-                    },
+                    clock_rate,
                     tick_rate: self.clock.rate(),
                     tick_frozen: self.clock.frozen(),
                     collision: Some(self.collision),
@@ -1014,6 +1011,7 @@ impl Game<'_> {
         } else {
             entities
         };
+        let clock_rate = self.network_clock_rate();
         let mut ctx = TickCtx {
             world: &mut self.world,
             host: state,
@@ -1022,7 +1020,7 @@ impl Game<'_> {
             spawn,
             difficulty: i32::from(self.ui.difficulty),
             difficulty_locked: self.level.difficulty_locked,
-            clock_rate: self.ui.clock.rate,
+            clock_rate,
             tick_rate: self.clock.rate(),
             tick_frozen: self.clock.frozen(),
             collision: Some(self.collision),
