@@ -770,6 +770,14 @@ enum Screen {
 impl Game<'_> {
     fn machine_screen(&self) -> Option<Screen> {
         let key = self.container?;
+        // A server's menu shows by its type, whatever block (or minecart) holds it.
+        if let Some(menu) = self.remote_menu_type() {
+            return match menu {
+                "minecraft:hopper" => Some(Screen::Hopper),
+                "minecraft:generic_3x3" => Some(Screen::Dispenser),
+                _ => None,
+            };
+        }
         if key.1 == super::minecarts::CART_KEY_Y {
             return (self.open_cart_kind() == Some(super::minecarts::CartKind::Hopper))
                 .then_some(Screen::Hopper);
@@ -852,7 +860,9 @@ impl Game<'_> {
             batch.rect_uv(ox, oy, 176.0, height, r, u32::MAX);
         }
         let grey = horizon_client::hud::rgba(64, 64, 64, 255);
-        let title = &self.container_title(title.to_owned());
+        let title = &self
+            .remote_menu_title()
+            .unwrap_or_else(|| self.container_title(title.to_owned()));
         let title_x = if screen == Screen::Hopper {
             8.0
         } else {
