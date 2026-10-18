@@ -480,6 +480,8 @@ struct GameLevel<'w> {
     rand_sequences: &'w mut horizon_client::random_sequences::RandomSequences,
     pending: &'w mut spill::Pending,
     spill: &'w mut spill::Spill,
+    /// Where the chunk tickets let blocks tick.
+    tickets: horizon_client::ticket_levels::Levels,
 }
 struct PlayerCollision {
     y: f64,
@@ -676,6 +678,11 @@ impl LevelAccess for GameLevel<'_> {
             &shape,
         )
         .unwrap_or(false)
+    }
+    /// `ServerLevel.isPositionTickingWithEntitiesLoaded`: block ticking, and
+    /// a ticking chunk.
+    fn is_ticking_chunk(&self, chunk: horizon_core::position::ChunkPos) -> bool {
+        self.tickets.block_ticking(chunk.x, chunk.z) && ticking_chunk(self.world, chunk.x, chunk.z)
     }
     /// Entities that trigger pressure plates, tripwires and detector rails:
     /// the players (the host and the LAN guests, mobs) and the minecarts.
@@ -953,6 +960,12 @@ struct DragView {
     left: Option<u32>,
 }
 /// Ctrl+Q reads the physical keyboard, independently of sprint key mappings.
+/// A chunk whose ticking future can complete (`ChunkMap.prepareTickingChunk`):
+/// lit, with its neighbours loaded, as `postprocess_chunks` waits for.
+fn ticking_chunk(world: &World, x: i32, z: i32) -> bool {
+    world.chunks.get(&(x, z)).is_some_and(|c| c.lit)
+        && (-1..=1).all(|dz| (-1..=1).all(|dx| world.chunks.contains_key(&(x + dx, z + dz))))
+}
 fn drop_whole_stack(physical_keys: &HashSet<KeyCode>) -> bool {
     physical_keys.contains(&KeyCode::ControlLeft) || physical_keys.contains(&KeyCode::ControlRight)
 }
@@ -1205,6 +1218,7 @@ struct Game<'a> {
     end: end::EndState,
     block_ticks: Ticks,
     tick_chunks: horizon_client::tick_chunk_membership::TickChunkMembership,
+    tickets: horizon_client::ticket_levels::ChunkTickets,
     random_tick_sections: horizon_client::random_tick_sections::RandomTickSections,
     level_events: Vec<LevelEvent>,
     falling: Vec<FallingBlock>,
@@ -2038,6 +2052,7 @@ impl Game<'_> {
             rand_sequences: &mut self.rand_sequences,
             pending: &mut self.pending,
             spill: &mut self.spill,
+            tickets: self.tickets.levels(),
         };
         let result = f(self.res.behaviours(), &mut level, &mut self.block_ticks);
         self.flush_spill();
@@ -2080,22 +2095,62 @@ impl Game<'_> {
         }
         self.tick_chunks.recycle_added(added);
     }
-    /// ServerLevel.tick block phases: scheduled ticks, random ticks within the
-    /// simulation distance, block events and moving pistons.
+    /// `DistanceManager`'s tickets of the level in place, from every player in
+    /// it (the local player, LAN guests, a server's players) and its forced
+    /// chunks. A game with neither a server nor a player (the headless
+    /// fixtures) ticks everywhere.
+    fn update_chunk_tickets(&mut self) {
+        let mut players: Vec<(i32, i32)> = self.lan.as_ref().map_or_else(Vec::new, |h| {
+            h.hub
+                .guests
+                .iter()
+                .filter(|g| h.hub.here(g))
+                .map(|g| g.chunk())
+                .collect()
+        });
+        if let Some(p) = &self.player {
+            players.push((
+                (p.position.x.floor() as i32) >> 4,
+                (p.position.z.floor() as i32) >> 4,
+            ));
+        }
+        let sources = (self.options.dedicated.is_some() || !players.is_empty()).then(|| {
+            horizon_client::ticket_levels::Sources {
+                players,
+                forced: self.streaming.forced.iter().copied().collect(),
+                view_distance: self.settings.render_distance.clamp(2, 32),
+                simulation_distance: self.settings.simulation_distance.max(2),
+            }
+        });
+        self.tickets.update(sources);
+    }
+    /// `ServerLevel.startTickingChunk`: a loaded chunk's saved ticks are
+    /// scheduled from the game time at which it becomes a ticking chunk
+    /// (block ticking, with its neighbours loaded). Chunks become ticking
+    /// between ticks in vanilla: before this tick's clock advanced.
+    fn start_ticking_chunks(&mut self) {
+        let levels = self.tickets.levels();
+        let world = &self.world;
+        let started = self
+            .tick_chunks
+            .start_ticking(|(x, z)| levels.loaded_ticking(x, z) && ticking_chunk(world, x, z));
+        let time = self.world.game_time - 1;
+        for (x, z) in started {
+            let pos = horizon_core::position::ChunkPos::new(x, z);
+            self.block_ticks.blocks.unpack_chunk(pos, time);
+            self.block_ticks.fluids.unpack_chunk(pos, time);
+        }
+    }
+    /// ServerLevel.tick block phases: scheduled ticks, random ticks in the
+    /// chunks the tickets simulate, block events and moving pistons.
     fn tick_blocks(&mut self) -> Result<()> {
         self.sync_tick_chunks();
-        let Some(p) = self.player.as_ref() else {
-            return Ok(());
-        };
-        let (pcx, pcz) = (
-            (p.position.x.floor() as i32) >> 4,
-            (p.position.z.floor() as i32) >> 4,
-        );
-        let simulation = self.settings.render_distance.min(8);
+        self.start_ticking_chunks();
+        let levels = self.tickets.levels();
         let mut ticking = Vec::new();
         let facts = self.res.facts();
         for (&(x, z), chunk) in &self.world.chunks {
-            if (x - pcx).abs() > simulation || (z - pcz).abs() > simulation || !chunk.lit {
+            if !levels.random_ticking(x, z) || !ticking_chunk(&self.world, x, z) {
                 continue;
             }
             // Capture eligibility before inside-block and scheduled updates, as
@@ -3872,6 +3927,7 @@ impl Game<'_> {
     /// What the tick runs after the local player's own update: effects, the
     /// world's entities and blocks, and the network hub.
     fn tick_world(&mut self, running: bool) -> Result<()> {
+        self.update_chunk_tickets();
         horizon_client::spans::time("tick_effects", || self.tick_effects());
         horizon_client::spans::time("tick_using", || self.tick_using());
         horizon_client::spans::time("tick_hud", || self.tick_hud());
@@ -10683,6 +10739,7 @@ impl<'a> Game<'a> {
             end: Default::default(),
             block_ticks: Ticks::new(0),
             tick_chunks: Default::default(),
+            tickets: Default::default(),
             random_tick_sections: Default::default(),
             level_events: Vec::new(),
             falling: Vec::new(),

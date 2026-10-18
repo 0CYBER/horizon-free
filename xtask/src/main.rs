@@ -6,6 +6,10 @@
 //! them to its own), and PLAY.txt. It holds none of Minecraft's files: players prepare those
 //! from their own copy. .github/workflows/release.yml makes the release folders with it.
 //!
+//! `package-server ENGINE OUTDIR`: a server folder (docs/server.md): the server build of the game
+//! (`cargo build --release -p horizon-client --no-default-features`, without sound or controllers)
+//! as horizon-engine, with horizon-prepare and horizon-server from beside it and the same sources.
+//!
 //! `tokens`: writes `website/src/tokens.css`, the design tokens of `crates/horizon-theme` as CSS
 //! custom properties (a horizon-theme test fails when the file is out of date).
 //!
@@ -17,7 +21,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-const USAGE: &str = "usage: cargo run -p xtask -- package BINARY OUTDIR | tokens | icons";
+const USAGE: &str = "usage: cargo run -p xtask -- package BINARY OUTDIR | package-server ENGINE OUTDIR | tokens | icons";
 
 /// What the release folder takes from the repository at HEAD, as `git archive` writes it.
 const ARCHIVED: [&str; 5] = [
@@ -34,10 +38,16 @@ const ARCHIVED: [&str; 5] = [
 /// (docs/server.md).
 const TOOLS: [&str; 3] = ["horizon-ctl", "horizon-prepare", "horizon-server"];
 
+/// The programs beside the engine in a server folder.
+const SERVER_TOOLS: [&str; 2] = ["horizon-prepare", "horizon-server"];
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.as_slice() {
         [task, binary, out] if task == "package" => package(Path::new(binary), Path::new(out)),
+        [task, engine, out] if task == "package-server" => {
+            package_server(Path::new(engine), Path::new(out))
+        }
         [task] if task == "tokens" => tokens(),
         [task] if task == "icons" => icons(),
         _ => Err(USAGE.to_string()),
@@ -209,6 +219,21 @@ fn icons() -> Result<(), String> {
 }
 
 fn package(binary: &Path, out: &Path) -> Result<(), String> {
+    let repo = new_folder(out)?;
+    copy_into(binary, out)?;
+    copy_beside(binary, &TOOLS, out)?;
+    let play = repo.join("packaging/PLAY.txt");
+    copy(&play, &out.join("PLAY.txt"))
+}
+
+fn package_server(engine: &Path, out: &Path) -> Result<(), String> {
+    new_folder(out)?;
+    copy(engine, &out.join(program_name(engine, "horizon-engine")))?;
+    copy_beside(engine, &SERVER_TOOLS, out)
+}
+
+/// `OUT`, emptied, with the sources the release folders take (`ARCHIVED`); the repository's path.
+fn new_folder(out: &Path) -> Result<PathBuf, String> {
     let top = git(
         Path::new(env!("CARGO_MANIFEST_DIR")),
         &["rev-parse", "--show-toplevel"],
@@ -224,15 +249,25 @@ fn package(binary: &Path, out: &Path) -> Result<(), String> {
     let mut args = vec!["archive", "--format=tar", "HEAD"];
     args.extend(ARCHIVED);
     extract(&git(&repo, &args)?, out)?;
-    copy_into(binary, out)?;
-    let exe = binary.extension().is_some_and(|e| e == "exe");
-    for tool in TOOLS {
-        let name = if exe {
-            format!("{tool}.exe")
-        } else {
-            tool.to_string()
-        };
-        let path = binary.parent().unwrap_or(Path::new("")).join(name);
+    Ok(repo)
+}
+
+/// `name`, with `.exe` when `program` has it.
+fn program_name(program: &Path, name: &str) -> String {
+    if program.extension().is_some_and(|e| e == "exe") {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    }
+}
+
+/// Copies `tools`, built beside `program`, into `out`.
+fn copy_beside(program: &Path, tools: &[&str], out: &Path) -> Result<(), String> {
+    for tool in tools {
+        let path = program
+            .parent()
+            .unwrap_or(Path::new(""))
+            .join(program_name(program, tool));
         if !path.is_file() {
             return Err(format!(
                 "{} is missing; build it too: cargo build --release -p horizon-client --bins -p horizon-prepare -p horizon-server",
@@ -241,8 +276,7 @@ fn package(binary: &Path, out: &Path) -> Result<(), String> {
         }
         copy_into(&path, out)?;
     }
-    let play = repo.join("packaging/PLAY.txt");
-    copy(&play, &out.join("PLAY.txt"))
+    Ok(())
 }
 
 /// `cp FILE DIR/`.

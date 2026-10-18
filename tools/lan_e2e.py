@@ -69,6 +69,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              swing when its hoe tills dirt (the server's use) (#848).
 - time:      the guest's clock is the host's: it stops with `/time pause`, and catches up with the
              server's game time after the guest's game stalls for a few seconds (#848).
+- growth:    far from the host, the chunks around the guest tick (#890): water placed there flows
+             and wheat on farmland grows (random ticks), however the host runs its world.
 - light:     the guest's light matches the host's: around a torch placed near it, under a roof and
              once a block of the roof is removed under the sky, and in the last chunk it tracks next to
              glowstone in a chunk it doesn't (only the server's light updates bring that one).
@@ -105,7 +107,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'light', 'time', 'swings', 'plates', 'effects', 'portals', 'distance']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'light', 'time', 'swings', 'plates', 'effects', 'portals', 'distance', 'growth']
 
 
 class Game:
@@ -1528,6 +1530,48 @@ def same_light(host, guest, lo, hi, what, ticks=100):
                          f'{h["sky"][i]} block {h["block"][i]}, guest sky {g["sky"][i]} block {g["block"][i]}')
 
 
+def check_growth(host, guest, out):
+    """Block ticks near a guest 1000 blocks from the host: only the guest's tickets tick them."""
+    x0, y0, z0 = pos_of(guest)
+    guest('command', command='gamemode creative')
+    guest('command', command=f'tp @s {x0 + 1000:.2f} 200 {z0:.2f}')
+    guest.wait(100)
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    # A platform in the air over wherever the guest landed: a water source two blocks east of the
+    # guest, wheat on farmland two blocks west. Vanilla's water spreads only towards the nearest
+    # drop (FlowingFluid.getSpread), so any of the source's four neighbours may take it. Wheat
+    # grows only in daylight (raw brightness 9 or more).
+    top = max(y + 12, 120)
+    water = (x + 2, top + 1, z)
+    beside = [(water[0] + dx, water[1], water[2] + dz) for dx, dz in ((1, 0), (-1, 0), (0, 1), (0, -1))]
+    wheat = (x - 2, top + 1, z)
+    flowed = []
+    try:
+        host('command', command='time set noon')
+        guest('command', command=f'fill {x - 4} {top} {z - 2} {x + 4} {top} {z + 2} minecraft:stone')
+        guest('command', command=f'setblock {wheat[0]} {top} {wheat[2]} minecraft:farmland[moisture=7]')
+        guest('command', command=f'setblock {wheat[0]} {wheat[1]} {wheat[2]} minecraft:wheat[age=0]')
+        guest('command', command='gamerule random_tick_speed 1000')
+        guest('command', command=f'setblock {water[0]} {water[1]} {water[2]} minecraft:water')
+        for _ in range(40):
+            guest.wait(10)
+            flowed = [p for p in beside if guest.raw('block', *p).get('block') == 'minecraft:water']
+            if flowed:
+                break
+        age = wait_state(guest, wheat, 'age', '7', 2400)
+        guest.shot(out, 'growth')
+    finally:
+        guest('command', command='gamerule random_tick_speed 3')
+        host('command', command='time set day')
+        guest('command', command=f'tp @s {x0:.2f} {y0:.2f} {z0:.2f}')
+        guest('command', command='gamemode survival')
+        guest.wait(40)
+    detail = {'flowed': flowed, 'wheat age': age}
+    assert flowed, f'the water beside the guest did not flow: {detail}'
+    assert age == '7', f'the wheat beside the guest did not grow: {detail}'
+    return detail
+
+
 def check_light(host, guest, out):
     gx, gy, gz = (int(v // 1) for v in pos_of(guest))
     results = {}
@@ -1591,7 +1635,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles,
              'light': check_light, 'plates': check_plates,
              'swings': check_swings,
-             'time': check_time}
+             'time': check_time, 'growth': check_growth}
 
 
 def run(ctl, out, resources, checks):

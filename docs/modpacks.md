@@ -468,6 +468,17 @@ Two cases the oracle fills in:
     Moog's were empty (763 spawners with a mob, up from 628); in the Nether the 52 empty ones
     in Moog's Nether Structures are filled (162, up from 110). Chests are unchanged: 2,777
     and 1,405 with a loot table.
+  - **Rule tests** written in Java. Repurposed Structures' mineshafts and Nether monument test
+    blocks with three of the mod's own rule tests inside vanilla `rule` processors: what a
+    block is made of (solid, liquid, air, with rails and chains), a chance over the distance
+    from the template's origin along one axis, and a world height range. The game runs them
+    as `horizon:matter_phase`, `horizon:piece_origin_axis_aligned_linear_pos` and
+    `horizon:y_value` with the mod's fields, and carry renames them (213 in 75 lists).
+  - **Renamed ids.** 26.3 calls 1.21.1's chain the iron chain (its datafixers rename it in
+    worlds). Carry renames it in recipes, loot tables and worldgen files (112 files in 5 mods:
+    Repurposed's mineshafts, Better Dungeons' processors, Regions Unexplored's hanging sign
+    recipes...), which otherwise fail to load in 26.3. With both, the 5 Nether mineshaft pools load: 47 of
+    Repurposed's Nether mineshafts in the 128×128-chunk square (seed 1234), under the lava sea.
   - **Big templates** (#838). Vanilla reads structure templates with no limit on their tag
     count; Horizon now does too (`nbt::Limits::templates`). Seven of ATM10's 8,962 carried
     templates are past the old 1,000,000-tag cap: YUNG's monument start, four When Dungeons

@@ -5,6 +5,10 @@ servers: --offlineDeveloperMode) and optionally join a server straight away
 
   vscreen start python3 tools/vanilla_client.py --name Guest --join localhost:25565
 
+On Linux (x86_64) and on macOS (Apple silicon, from the logged-in screen session), from the files
+tools/lab.py prepared on that machine. On macOS vsync is off: with it on, a window nobody can see (a
+locked session, or covered) blocks in SDL_GL_SwapWindow and the client stops before it joins.
+
 Sound goes to OpenAL's null backend. The game directory gets an options.txt
 that skips the first-run screens, keeps the game running unfocused and
 renders few chunks, so a harness can drive it with vscreen keys.
@@ -21,6 +25,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 GAME = ROOT / ".local/minecraft/26.3"
+MAC = sys.platform == "darwin"
+# The natives of this machine's platform, and the shared libraries in them.
+NATIVES, LIBRARY_SUFFIX = ("natives-macos-arm64.jar", ".dylib") if MAC else ("natives-linux.jar", ".so")
 
 OPTIONS = {
     "onboardAccessibility": "false",
@@ -40,6 +47,8 @@ OPTIONS = {
     "onlyShowSecureChat": "false",
     "rawMouseInput": "false",
 }
+if sys.platform == "darwin":
+    OPTIONS["enableVsync"] = "false"
 
 
 def offline_uuid(name):
@@ -49,10 +58,12 @@ def offline_uuid(name):
     return uuid.UUID(bytes=bytes(digest))
 
 
-def linux_library(path):
+def host_library(path):
     name = Path(path).name
     if "natives-" in name:
-        return name.endswith("natives-linux.jar")
+        return name.endswith(NATIVES)
+    if MAC:
+        return "netty-transport-native" not in name or "linux" not in name
     if "netty-transport-native" in name and ("osx" in name or "aarch_64" in name):
         return False
     return "java-objc-bridge" not in name
@@ -60,18 +71,18 @@ def linux_library(path):
 
 def classpath():
     prepared = json.loads((GAME / "prepared.json").read_text())
-    jars = [ROOT / p for p in prepared["libraries"]["client"] if linux_library(p)]
+    jars = [ROOT / p for p in prepared["libraries"]["client"] if host_library(p)]
     return [GAME / "jars/client.jar", *jars]
 
 
 def extract_natives(jars, target):
     target.mkdir(parents=True, exist_ok=True)
     for jar in jars:
-        if not jar.name.endswith("natives-linux.jar"):
+        if not jar.name.endswith(NATIVES):
             continue
         with zipfile.ZipFile(jar) as archive:
             for name in archive.namelist():
-                if name.endswith(".so") and "arm" not in name and "aarch" not in name:
+                if name.endswith(LIBRARY_SUFFIX) and (MAC or ("arm" not in name and "aarch" not in name)):
                     out = target / Path(name).name
                     if not out.exists():
                         out.write_bytes(archive.read(name))
@@ -105,7 +116,7 @@ def command(args):
     extract_natives(jars, natives)
     assets = args.assets or (args.game_dir / "assets")
     (assets / "indexes").mkdir(parents=True, exist_ok=True)
-    cmd = ["java", f"-Xmx{args.heap}", "-XX:StackShadowPages=32",
+    cmd = ["java", f"-Xmx{args.heap}", *(["-XstartOnFirstThread"] if MAC else []), "-XX:StackShadowPages=32",
            "--enable-native-access=ALL-UNNAMED",
            "--add-exports", "java.base/jdk.internal.misc=ALL-UNNAMED",
            f"-Djava.library.path={natives}", f"-Dorg.lwjgl.system.SharedLibraryExtractPath={natives}",

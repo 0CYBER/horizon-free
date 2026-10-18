@@ -105,7 +105,9 @@ impl Game<'_> {
         chunk.saved = Some(Arc::new(extras));
     }
     /// Register a newly resident chunk with the tick scheduler, with the
-    /// block and fluid ticks it was saved with.
+    /// block and fluid ticks it was saved with (`LevelChunk.registerTickContainerInLevel`
+    /// at FULL). They are unpacked when the chunk starts ticking
+    /// (`start_ticking_chunks`).
     pub(super) fn register_chunk_ticks(&mut self, key: (i32, i32)) {
         let pos = ChunkPos::new(key.0, key.1);
         let saved = self.world.chunks.get(&key).and_then(|c| c.saved.clone());
@@ -130,9 +132,7 @@ impl Game<'_> {
             .is_ok()
             && loaded
         {
-            let time = self.world.game_time;
-            self.block_ticks.blocks.unpack_chunk(pos, time);
-            self.block_ticks.fluids.unpack_chunk(pos, time);
+            self.tick_chunks.wait(key);
         }
         // The saved list is consumed: later saves take the scheduler's ticks.
         if loaded && let Some(c) = self.world.chunks.get_mut(&key) {
