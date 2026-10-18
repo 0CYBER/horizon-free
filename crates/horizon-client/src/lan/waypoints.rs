@@ -10,10 +10,10 @@
 //! `waypoint_transmit_range` and tracks or untracks the waypoint, as
 //! `LivingEntity.onAttributeUpdated` does; joining or leaving a team remakes the
 //! connections with the team's colour (`ServerScoreboard.updatePlayerWaypoint`).
+use crate::fast_hash::FxHashMap as HashMap;
 use horizon_protocol::packets::play::{
     Clientbound as C, TrackedWaypoint, WaypointId, WaypointTarget, waypoint_operation,
 };
-use std::collections::HashMap;
 
 /// `Player.createAttributes`: both waypoint ranges.
 pub const PLAYER_RANGE: f64 = 6.0e7;
@@ -304,8 +304,13 @@ impl Tick<'_> {
                 WaypointTarget::Azimuth(now)
             }
         };
-        let icon = c.icon.clone();
-        self.send(receiver, source, waypoint_operation::UPDATE, &icon, target);
+        self.send(
+            receiver,
+            source,
+            waypoint_operation::UPDATE,
+            &c.icon,
+            target,
+        );
     }
 }
 
@@ -347,28 +352,39 @@ impl Waypoints {
             }
         }
     }
-    /// `updateConnection`.
+    /// `updateConnection`, on the connection in its place.
     fn update_connection(&mut self, t: &mut Tick, receiver: u128, source: u128) {
         if receiver == source || !t.enabled {
             return;
         }
-        let Some(mut c) = self.connection(receiver, source).cloned() else {
+        let Some(row) = self.connections.get_mut(&receiver) else {
             return;
         };
-        if !t.broken(&c, source, receiver) {
-            t.update(&mut c, source, receiver);
-            self.put(receiver, source, c);
+        let Some(i) = row.iter().position(|(s, _)| *s == source) else {
+            return;
+        };
+        let c = &mut row[i].1;
+        if !t.broken(c, source, receiver) {
+            t.update(c, source, receiver);
             return;
         }
         match t.make(source, receiver) {
             Some(new) => {
                 t.connect(receiver, source, &new);
-                self.put(receiver, source, new);
+                *c = new;
             }
             None => {
                 t.disconnect(receiver, source);
-                self.take(receiver, source);
+                row.remove(i);
             }
+        }
+    }
+    /// The receiver's connection to the source updated, or made if it has none.
+    fn update_or_create(&mut self, t: &mut Tick, receiver: u128, source: u128) {
+        if self.connection(receiver, source).is_some() {
+            self.update_connection(t, receiver, source);
+        } else {
+            self.create_connection(t, receiver, source);
         }
     }
     /// `trackWaypoint`.
@@ -385,12 +401,9 @@ impl Waypoints {
         if !self.waypoints.contains(&source) {
             return;
         }
-        for receiver in self.players.clone() {
-            if self.connection(receiver, source).is_some() {
-                self.update_connection(t, receiver, source);
-            } else {
-                self.create_connection(t, receiver, source);
-            }
+        // Connections change; the players don't.
+        for k in 0..self.players.len() {
+            self.update_or_create(t, self.players[k], source);
         }
     }
     /// `untrackWaypoint`.
@@ -416,12 +429,9 @@ impl Waypoints {
     }
     /// `updatePlayer`.
     fn update_player(&mut self, t: &mut Tick, player: u128) {
-        for source in self.waypoints.clone() {
-            if self.connection(player, source).is_some() {
-                self.update_connection(t, player, source);
-            } else {
-                self.create_connection(t, player, source);
-            }
+        // Connections change; the waypoints don't.
+        for k in 0..self.waypoints.len() {
+            self.update_or_create(t, player, self.waypoints[k]);
         }
     }
     /// `removePlayer`.
@@ -454,7 +464,7 @@ impl Waypoints {
     ) -> Vec<(u32, C)> {
         let mut t = Tick {
             players: players.iter().map(|p| (p.uuid, p)).collect(),
-            view: HashMap::new(),
+            view: HashMap::default(),
             fresh: respawned,
             enabled: locator_bar,
             out: Vec::new(),
