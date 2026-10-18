@@ -12,6 +12,7 @@ use super::{
     guest::{Guest, SentEffect, stack_to_network},
 };
 use crate::{
+    chunk::Chunk,
     collisions::SceneCollisions,
     effects::{EffectInstance, PlayerEffects},
     items::ItemStack,
@@ -1035,11 +1036,7 @@ impl Hub {
             ctx.world.light_log = Some(Default::default());
         }
         self.sync_world(ctx);
-        for i in 0..self.guests.len() {
-            if self.here(&self.guests[i]) {
-                self.update_chunks(i, ctx);
-            }
-        }
+        crate::spans::time("lan_chunks", || self.update_chunks(ctx));
         self.broadcast_light_changes(ctx.world);
         self.broadcast_block_changes(ctx.world);
         // ServerGamePacketListenerImpl.tick: the actions handled since the last tick are
@@ -1178,86 +1175,140 @@ impl Hub {
 
     // ---- chunks --------------------------------------------------------
 
-    fn update_chunks(&mut self, i: usize, ctx: &TickCtx) {
+    /// Every player's chunks here: their views, then the next batch of each
+    /// (PlayerChunkSender.sendNextChunks). The batches are chosen first, the
+    /// columns in them encoded once each, their new sections on the warm-up
+    /// threads too (`ChunkEncoder::warm`), then sent: nothing changes the
+    /// level in between, and each player's packets keep their order.
+    fn update_chunks(&mut self, ctx: &TickCtx) {
+        let world = &*ctx.world;
+        let mut batches = Vec::new();
+        for i in 0..self.guests.len() {
+            if self.here(&self.guests[i]) {
+                self.update_view(i);
+                if let Some(batch) = self.next_batch(i, world) {
+                    batches.push((i, batch));
+                }
+            }
+        }
+        if batches.is_empty() {
+            return;
+        }
+        // Each column once, however many players it goes to, with the
+        // number of batches that take it.
+        let (mut columns, mut uses): (Vec<&Chunk>, Vec<usize>) = Default::default();
+        let mut index = crate::fast_hash::FxHashMap::default();
+        let batches: Vec<(usize, Vec<usize>, Vec<usize>)> = batches
+            .into_iter()
+            .map(|(i, batch)| {
+                let (taken, bodies) = batch
+                    .into_iter()
+                    .map(|(idx, chunk)| {
+                        let j = *index.entry((chunk.x, chunk.z)).or_insert_with(|| {
+                            columns.push(chunk);
+                            uses.push(0);
+                            columns.len() - 1
+                        });
+                        uses[j] += 1;
+                        (idx, j)
+                    })
+                    .unzip();
+                (i, taken, bodies)
+            })
+            .collect();
+        self.encoder.warm(&columns);
+        let mut bodies: Vec<Vec<u8>> = columns
+            .iter()
+            .map(|c| self.encoder.body_in(c, world))
+            .collect();
+        for (i, taken, batch) in batches {
+            let g = &mut self.guests[i];
+            let size = batch.len();
+            g.batch_quota -= size as f32;
+            g.send(&C::ChunkBatchStart(horizon_protocol::packets::Empty));
+            g.sender.send_many(batch.into_iter().map(|j| {
+                uses[j] -= 1;
+                if uses[j] == 0 {
+                    std::mem::take(&mut bodies[j])
+                } else {
+                    bodies[j].clone()
+                }
+            }));
+            g.send(&C::ChunkBatchFinished(play::ChunkBatchFinished {
+                size: size as i32,
+            }));
+            g.unacknowledged += 1;
+            for idx in taken.into_iter().rev() {
+                let key = g.chunk_queue.remove(idx);
+                g.sent_chunks.insert(key);
+            }
+        }
+    }
+
+    /// ChunkMap.move's view change: the new centre, the chunks that left
+    /// the view forgotten and the ones that entered it queued, closest first.
+    fn update_view(&mut self, i: usize) {
         let (cx, cz) = self.guests[i].chunk();
         let r = self.guests[i].view_distance;
         let g = &mut self.guests[i];
-        if g.center != Some((cx, cz)) {
-            g.center = Some((cx, cz));
-            if g.center_sent.take() != Some((cx, cz)) {
-                g.send(&C::SetChunkCacheCenter(play::SetChunkCacheCenter {
-                    x: cx,
-                    z: cz,
-                }));
-            }
-            // Chunks that left the view.
-            let forget: Vec<_> = g
-                .sent_chunks
-                .iter()
-                .copied()
-                .filter(|&(x, z)| !tracked(cx, cz, r, x, z))
-                .collect();
-            for (x, z) in forget {
-                g.sent_chunks.remove(&(x, z));
-                g.send(&C::ForgetLevelChunk(play::ForgetLevelChunk { pos: [x, z] }));
-            }
-            g.chunk_queue.retain(|&(x, z)| tracked(cx, cz, r, x, z));
-            for dz in -r - 2..=r + 2 {
-                for dx in -r - 2..=r + 2 {
-                    let key = (cx + dx, cz + dz);
-                    if tracked(cx, cz, r, key.0, key.1)
-                        && !g.sent_chunks.contains(&key)
-                        && !g.chunk_queue.contains(&key)
-                    {
-                        g.chunk_queue.push(key);
-                    }
+        if g.center == Some((cx, cz)) {
+            return;
+        }
+        g.center = Some((cx, cz));
+        if g.center_sent.take() != Some((cx, cz)) {
+            g.send(&C::SetChunkCacheCenter(play::SetChunkCacheCenter {
+                x: cx,
+                z: cz,
+            }));
+        }
+        // Chunks that left the view.
+        let forget: Vec<_> = g
+            .sent_chunks
+            .iter()
+            .copied()
+            .filter(|&(x, z)| !tracked(cx, cz, r, x, z))
+            .collect();
+        for (x, z) in forget {
+            g.sent_chunks.remove(&(x, z));
+            g.send(&C::ForgetLevelChunk(play::ForgetLevelChunk { pos: [x, z] }));
+        }
+        g.chunk_queue.retain(|&(x, z)| tracked(cx, cz, r, x, z));
+        for dz in -r - 2..=r + 2 {
+            for dx in -r - 2..=r + 2 {
+                let key = (cx + dx, cz + dz);
+                if tracked(cx, cz, r, key.0, key.1)
+                    && !g.sent_chunks.contains(&key)
+                    && !g.chunk_queue.contains(&key)
+                {
+                    g.chunk_queue.push(key);
                 }
             }
-            g.chunk_queue
-                .sort_by_key(|&(x, z)| i64::from(x - cx).pow(2) + i64::from(z - cz).pow(2));
         }
-        // PlayerChunkSender.sendNextChunks: ready chunks, closest first, in
-        // batches the client's acknowledgements pace.
+        g.chunk_queue
+            .sort_by_key(|&(x, z)| i64::from(x - cx).pow(2) + i64::from(z - cz).pow(2));
+    }
+
+    /// PlayerChunkSender.sendNextChunks' choice: ready chunks, closest first,
+    /// as many as the batch quota the client's acknowledgements pace allows,
+    /// with their places in the queue.
+    fn next_batch<'w>(&mut self, i: usize, world: &'w World) -> Option<Vec<(usize, &'w Chunk)>> {
+        let g = &mut self.guests[i];
         if self.ticks <= g.placed_at + 1 || g.unacknowledged >= g.max_unacknowledged {
-            return;
+            return None;
         }
         g.batch_quota = (g.batch_quota + g.chunks_per_tick).min(g.chunks_per_tick.max(1.0));
         if g.batch_quota < 1.0 || g.chunk_queue.is_empty() {
-            return;
+            return None;
         }
         let budget = g.batch_quota.floor() as usize;
-        let mut packets = Vec::new();
-        let mut taken = Vec::new();
-        for (idx, key) in g.chunk_queue.iter().enumerate() {
-            if packets.len() >= budget {
-                break;
-            }
-            let Some(chunk) = ctx.world.chunks.get(key) else {
-                continue;
-            };
-            if !chunk.lit {
-                continue;
-            }
-            packets.push(self.encoder.body_in(chunk, ctx.world));
-            taken.push(idx);
-        }
-        if packets.is_empty() {
-            return;
-        }
-        let size = packets.len();
-        g.batch_quota -= size as f32;
-        g.send(&C::ChunkBatchStart(horizon_protocol::packets::Empty));
-        for body in packets {
-            g.sender.send(body);
-        }
-        g.send(&C::ChunkBatchFinished(play::ChunkBatchFinished {
-            size: size as i32,
-        }));
-        g.unacknowledged += 1;
-        for idx in taken.into_iter().rev() {
-            let key = g.chunk_queue.remove(idx);
-            g.sent_chunks.insert(key);
-        }
+        let batch: Vec<_> = g
+            .chunk_queue
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, key)| Some((idx, &**world.chunks.get(key).filter(|c| c.lit)?)))
+            .take(budget)
+            .collect();
+        (!batch.is_empty()).then_some(batch)
     }
 
     /// Resend a chunk to everyone who has it (a block entity changed, relight).
