@@ -203,6 +203,35 @@ fn prism_launcher_and_multimc_are_read_through_their_metadata() {
     assert_eq!(mojang.urls.lock().unwrap().len(), 1);
 }
 
+/// famescare's Prism Launcher 26.3 install on Windows (#849): Prism keeps a native jar under
+/// the name its metadata gives it, not at the version JSON's path, and preparing found it.
+#[test]
+fn prism_native_jars_are_found_through_the_linked_folder() {
+    let s = Scratch::new("prism-natives");
+    let jar = "libraries/com/mojang/minecraft/26.3/minecraft-26.3-client.jar";
+    let dir = s.launcher("PrismLauncher", "", jar);
+    s.write(
+        "PrismLauncher/meta/net.minecraft/26.3.json",
+        br#"{"mainJar": {"name": "com.mojang:minecraft:26.3:client"}}"#,
+    );
+    let prism =
+        "libraries/com/mojang/jtracy-natives-windows/1.14.38/jtracy-natives-windows-1.14.38.jar";
+    s.write(&format!("PrismLauncher/{prism}"), b"jtracy natives");
+    let linked = s.0.join("linked");
+    assert_eq!(
+        resolve_with(&dir, &[], &linked, &Mojang::new(MANIFEST)).unwrap(),
+        linked
+    );
+    let official = Path::new("com/mojang/jtracy/1.14.38/jtracy-1.14.38-natives-windows.jar");
+    assert!(!linked.join("libraries").join(official).exists());
+    let found = horizon_prepare::artifacts::launcher_library(
+        &linked,
+        "com.mojang:jtracy:1.14.38:natives-windows",
+        official,
+    );
+    assert!(same_file(&found, &dir.join(prism)));
+}
+
 #[test]
 fn a_main_jar_elsewhere_is_found_from_the_metadata() {
     let s = Scratch::new("meta-jar");
@@ -388,7 +417,10 @@ fn relinking_follows_the_launcher_the_files_now_come_from() {
     s.write("ModrinthApp/meta/versions/26.3/26.3.jar", CLIENT);
     resolve_with(&modrinth, &[], &linked, &mojang).unwrap();
     let jar = linked.join("versions/26.3/26.3.jar");
-    assert!(same_file(&jar, &modrinth.join("meta/versions/26.3/26.3.jar")));
+    assert!(same_file(
+        &jar,
+        &modrinth.join("meta/versions/26.3/26.3.jar")
+    ));
     assert!(!same_file(&jar, &prism.join(prism_jar)));
     // The Modrinth App folder has no libraries or assets: the old links are gone, and the
     // folders they pointed at are untouched.
