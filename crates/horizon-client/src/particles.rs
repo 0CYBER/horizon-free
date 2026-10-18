@@ -1264,12 +1264,21 @@ impl ParticleEngine {
         }
         self.create(options, p, v);
     }
-    /// `LevelEventHandler.singleBlockTeleportationParticles` (event 2015).
-    pub fn block_teleportation(&mut self, from: [i32; 3], data: i32, particle_level: u8) {
+    /// `LevelEventHandler.singleBlockTeleportationParticles` towards
+    /// `BlockUtil.unpackDifferenceInPosition(from, data, radius)`: the dragon
+    /// egg's event 2015 packs offsets within (16, 8, 16), a consumable's
+    /// teleport (2017) within (127, 127, 127).
+    pub fn block_teleportation(
+        &mut self,
+        from: [i32; 3],
+        data: i32,
+        radius: [i32; 3],
+        particle_level: u8,
+    ) {
         let to = [
-            from[0].wrapping_add(((data >> 16) & 255) - 16),
-            from[1].wrapping_add(((data >> 8) & 255) - 8),
-            from[2].wrapping_add((data & 255) - 16),
+            from[0].wrapping_add(((data >> 16) & 255) - radius[0]),
+            from[1].wrapping_add(((data >> 8) & 255) - radius[1]),
+            from[2].wrapping_add((data & 255) - radius[2]),
         ]
         .map(f64::from);
         let from = from.map(f64::from);
@@ -3798,7 +3807,7 @@ mod tests {
         let mut engine = ParticleEngine::new(Path::new(""), &HashMap::new());
         engine.seed_randoms(0, 0, 0);
         // Destination offset (-15, 7, 15); the unused top byte is ignored.
-        engine.block_teleportation([4, 12, -5], 0xff01_0f1fu32 as i32, 0);
+        engine.block_teleportation([4, 12, -5], 0xff01_0f1fu32 as i32, [16, 8, 16], 0);
         assert_eq!(engine.pending.len(), 128);
         assert!(engine.pending.iter().all(|p| p.ty == ParticleType::Portal));
         let first = &engine.pending[0];
@@ -3819,6 +3828,25 @@ mod tests {
     }
 
     #[test]
+    fn consume_teleport_unpacks_offsets_within_127() {
+        let mut engine = ParticleEngine::new(Path::new(""), &HashMap::new());
+        engine.seed_randoms(0, 0, 0);
+        // TeleportRandomlyConsumeEffect: BlockUtil.clampedPackDifferenceInPosition
+        // of the move (-7, -3, 9) with radii 127, from (4, 12, -5) to (-3, 9, 4).
+        let data = (-7 + 127) << 16 | (-3 + 127) << 8 | (9 + 127);
+        engine.block_teleportation([4, 12, -5], data, [127, 127, 127], 0);
+        assert_eq!(engine.pending.len(), 128);
+        for p in &engine.pending {
+            let [x, y, z] = p.position;
+            assert!((-3.0..5.0).contains(&x), "{x}");
+            assert!((8.5..12.5).contains(&y), "{y}");
+            assert!((-5.0..5.0).contains(&z), "{z}");
+        }
+        // The same draws as the egg's: only the unpacking differs.
+        assert_eq!(engine.level_random.state(), 99_413_408_083_437);
+    }
+
+    #[test]
     fn egg_teleport_options_roll_before_distance_rejection() {
         for (option, count, state) in [
             (0, 128, 99_413_408_083_437),
@@ -3831,7 +3859,7 @@ mod tests {
                 if distant {
                     engine.camera = [1000.0; 3];
                 }
-                engine.block_teleportation([4, 12, -5], 0x010f1f, option);
+                engine.block_teleportation([4, 12, -5], 0x010f1f, [16, 8, 16], option);
                 assert_eq!(engine.pending.len(), if distant { 0 } else { count });
                 assert_eq!(engine.level_random.state(), state);
             }

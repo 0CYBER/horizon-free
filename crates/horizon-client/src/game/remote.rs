@@ -1204,6 +1204,9 @@ impl Game<'_> {
             C::LevelEvent(p) if p.kind == 2015 => {
                 self.dragon_egg_particles(p.pos, p.data);
             }
+            C::LevelEvent(p) if p.kind == 2017 => {
+                self.consume_teleport_particles(p.pos, p.data);
+            }
             C::LevelEvent(p) if p.kind == 2001 => {
                 // LevelEvent.PARTICLES_DESTROY_BLOCK: someone else broke a block.
                 let state = BlockStateId(p.data.max(0) as u32);
@@ -2901,7 +2904,7 @@ impl Game<'_> {
             }
         }
     }
-    /// `LivingEntity.updatingUsingItem` for food on a server client: the
+    /// `LivingEntity.updatingUsingItem` for a consumable on a server client: the
     /// eating animation and its crumbs. The server eats it and sends the
     /// stack, the hunger and the sounds.
     fn remote_tick_using(&mut self) {
@@ -2909,11 +2912,11 @@ impl Game<'_> {
             return;
         };
         let stack = self.stack_in(slot).cloned();
-        let food = stack
+        let consumable = stack
             .as_ref()
             .and_then(|s| self.res.items.get(&s.item))
-            .is_some_and(|i| i.consumable && i.food.is_some());
-        let (Some(stack), true) = (stack, food) else {
+            .and_then(|i| i.consumable.clone());
+        let (Some(stack), Some(consumable)) = (stack, consumable) else {
             self.using = None;
             return;
         };
@@ -2922,14 +2925,16 @@ impl Game<'_> {
             return;
         }
         // Consumable.shouldEmitParticlesAndSounds, as in tick_used_item.
-        let duration = 32;
+        let duration = consumable.ticks().max(0) as u32;
         let remaining = duration - ticks.min(duration);
-        if duration - remaining > (duration as f32 * 0.21875) as u32 && remaining % 4 == 0 {
+        if consumable.particles && consumable.should_emit(remaining as i32) {
             self.eat_particles(&stack, 5);
         }
         if ticks + 1 >= duration {
             self.using = None;
-            self.eat_particles(&stack, 16);
+            if consumable.particles {
+                self.eat_particles(&stack, 16);
+            }
         } else {
             self.using = Some((slot, ticks + 1));
         }

@@ -54,7 +54,8 @@ pub enum ConsumeEffect {
     },
     ClearAllEffects,
     RemoveEffects(Vec<String>),
-    TeleportRandomly,
+    /// `TeleportRandomlyConsumeEffect`.
+    TeleportRandomly(horizon_world::teleport_consume::TeleportConsume),
     PlaySound(String),
 }
 
@@ -69,8 +70,10 @@ pub struct ItemInfo {
     pub tool_default_speed: f32,
     pub food: Option<(u32, f32)>,
     pub can_always_eat: bool,
-    pub consumable: bool,
-    pub consume_effects: Vec<ConsumeEffect>,
+    /// `consumable`: its timing, sound, particles and `on_consume_effects`.
+    pub consumable: Option<horizon_world::consumable::Consumable<String, ConsumeEffect>>,
+    /// `use_remainder`: what a finished use leaves (`UseRemainder`).
+    pub use_remainder: Option<String>,
     pub model: String,
     /// Main-hand `attack_damage` / `attack_speed` modifier amounts.
     pub attack_damage: f32,
@@ -504,7 +507,18 @@ impl Items {
                             consume_effects.push(ConsumeEffect::RemoveEffects(targets));
                         }
                         Some("minecraft:teleport_randomly") => {
-                            consume_effects.push(ConsumeEffect::TeleportRandomly);
+                            consume_effects.push(ConsumeEffect::TeleportRandomly(
+                                horizon_world::teleport_consume::TeleportConsume {
+                                    diameter: effect
+                                        .get("diameter")
+                                        .and_then(Value::as_f64)
+                                        .map_or(16.0, |d| d as f32),
+                                    directional_particles: effect
+                                        .get("directional_particles")
+                                        .and_then(Value::as_bool)
+                                        .unwrap_or(true),
+                                },
+                            ));
                         }
                         Some("minecraft:play_sound") => {
                             if let Some(sound) = effect.get("sound").and_then(|s| s.as_str()) {
@@ -530,8 +544,22 @@ impl Items {
                         .unwrap_or(1.0) as f32,
                     food,
                     can_always_eat,
-                    consumable: c.get("minecraft:consumable").is_some(),
-                    consume_effects,
+                    // Consumable.CODEC's defaults.
+                    consumable: c.get("minecraft:consumable").map(|cons| {
+                        horizon_world::consumable::Consumable {
+                            seconds: cons["consume_seconds"].as_f64().map_or(1.6, |s| s as f32),
+                            animation: crate::first_person::consumable_animation(cons),
+                            sound: cons["sound"]
+                                .as_str()
+                                .unwrap_or("minecraft:entity.generic.eat")
+                                .to_owned(),
+                            particles: cons["has_consume_particles"].as_bool().unwrap_or(true),
+                            effects: std::mem::take(&mut consume_effects),
+                        }
+                    }),
+                    use_remainder: c["minecraft:use_remainder"]["id"]
+                        .as_str()
+                        .map(str::to_owned),
                     model: c["minecraft:item_model"]
                         .as_str()
                         .unwrap_or(name)
@@ -1607,18 +1635,63 @@ mod tests {
         let apple = items.get("minecraft:golden_apple").expect("golden apple");
         assert!(apple.can_always_eat);
         assert!(apple.food.is_some());
-        assert!(!apple.consume_effects.is_empty());
+        assert!(!apple.consumable.as_ref().unwrap().effects.is_empty());
 
         let enchanted = items
             .get("minecraft:enchanted_golden_apple")
             .expect("enchanted golden apple");
         assert!(enchanted.can_always_eat);
         assert!(enchanted.food.is_some());
-        assert!(!enchanted.consume_effects.is_empty());
+        assert!(!enchanted.consumable.as_ref().unwrap().effects.is_empty());
 
         let beef = items.get("minecraft:cooked_beef").expect("cooked beef");
         assert!(!beef.can_always_eat);
         assert!(beef.food.is_some());
+
+        // Consumables without food, their style and their remainders.
+        use horizon_world::consumable::UseAnimation;
+        let milk = items.get("minecraft:milk_bucket").expect("milk bucket");
+        let drink = milk.consumable.as_ref().unwrap();
+        assert!(milk.food.is_none());
+        assert_eq!(drink.effects, [ConsumeEffect::ClearAllEffects]);
+        assert_eq!((drink.ticks(), drink.animation), (32, UseAnimation::Drink));
+        assert_eq!(drink.sound, "minecraft:entity.generic.drink");
+        assert!(!drink.particles);
+        assert_eq!(milk.use_remainder.as_deref(), Some("minecraft:bucket"));
+        let honey = items.get("minecraft:honey_bottle").expect("honey bottle");
+        let sip = honey.consumable.as_ref().unwrap();
+        assert_eq!(sip.ticks(), 40);
+        assert_eq!(sip.sound, "minecraft:item.honey_bottle.drink");
+        assert_eq!(
+            sip.effects,
+            [ConsumeEffect::RemoveEffects(vec![
+                "minecraft:poison".into()
+            ])]
+        );
+        assert_eq!(
+            honey.use_remainder.as_deref(),
+            Some("minecraft:glass_bottle")
+        );
+        let kelp = items.get("minecraft:dried_kelp").unwrap();
+        let bite = kelp.consumable.as_ref().unwrap();
+        assert_eq!((bite.ticks(), bite.animation), (16, UseAnimation::Eat));
+        assert_eq!(bite.sound, "minecraft:entity.generic.eat");
+        assert!(bite.particles && kelp.use_remainder.is_none());
+        let chorus = items.get("minecraft:chorus_fruit").unwrap();
+        assert_eq!(
+            chorus.consumable.as_ref().unwrap().effects,
+            [ConsumeEffect::TeleportRandomly(
+                horizon_world::teleport_consume::TeleportConsume {
+                    diameter: 16.0,
+                    directional_particles: true,
+                }
+            )]
+        );
+        let chicken = items.get("minecraft:chicken").unwrap();
+        assert!(matches!(
+            chicken.consumable.as_ref().unwrap().effects[..],
+            [ConsumeEffect::ApplyEffects { probability, .. }] if probability == 0.3
+        ));
     }
 }
 
