@@ -49,6 +49,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              guest as the host has them (kind, place, rotation, what they hold or wear, the variant).
 - projectiles: primed TNT (one falling), an end crystal and an arrow that lands reach the guest where
              the host has them; a falling block lands on both sides.
+- time:      the guest's clock is the host's: it stops with `/time pause`, and catches up with the
+             server's game time after the guest's game stalls for a few seconds (#848).
 - light:     the guest's light matches the host's: around a torch placed near it, under a roof and
              once a block of the roof is removed under the sky, and in the last chunk it tracks next to
              glowstone in a chunk it doesn't (only the server's light updates bring that one).
@@ -69,6 +71,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -84,7 +87,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'titles', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'push', 'eat', 'xp', 'objects', 'projectiles', 'light', 'effects', 'portals', 'distance']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'titles', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'push', 'eat', 'xp', 'objects', 'projectiles', 'light', 'time', 'effects', 'portals', 'distance']
 
 
 class Game:
@@ -1122,6 +1125,29 @@ def check_xp(host, guest, out):
     return {'seen': seen, 'guest': xp, 'host': host_xp}
 
 
+def check_time(host, guest, out):
+    def times():
+        return host('state')['time']['day_time'], guest('state')['time']['day_time']
+    host('command', command='time set 1000')
+    host('command', command='time pause')
+    host.wait(60)
+    paused = times()
+    host('command', command='time resume')
+    guest.wait(20)
+    # A stalled game runs at most 10 missed ticks when it wakes (DeltaTracker); the server's
+    # game time, sent every second, moves the guest's clock on (ClientClockManager.tick).
+    os.kill(guest.pid, signal.SIGSTOP)
+    time.sleep(4)
+    os.kill(guest.pid, signal.SIGCONT)
+    guest.wait(60)
+    stalled = times()
+    detail = {'paused': paused, 'after_stall': stalled}
+    assert paused[0] == paused[1] and 1000 <= paused[0] < 1010, f'the clock while paused: {detail}'
+    # The two reads are a tick or two apart.
+    assert abs(stalled[0] - stalled[1]) <= 3, f'the guest\'s clock after its game stalled: {detail}'
+    return detail
+
+
 def objects_near(game, centre, key='objects'):
     """`status`'s objects within 8 blocks of centre, without their ids (each side numbers its own)."""
     out = []
@@ -1278,7 +1304,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'effects': check_effects, 'portals': check_portals, 'distance': check_distance, 'clicks': check_clicks,
              'sleep': check_sleep, 'push': check_push, 'eat': check_eat,
              'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles,
-             'light': check_light}
+             'light': check_light, 'time': check_time}
 
 
 def run(ctl, out, resources, checks):
@@ -1301,7 +1327,7 @@ def run(ctl, out, resources, checks):
         host('command', command='gamerule spawn_mobs false')
         port = host.raw('lan', 'open', 0, 'commands')['port']
         host.player = host.raw('lan', 'status').get('host', 'Player')  # the host's profile name
-        guest('launch', wait=False, offscreen=sys.platform == 'darwin')
+        guest.pid = guest('launch', wait=False, offscreen=sys.platform == 'darwin')['pid']
         guest.raw('connect', f'127.0.0.1:{port}', GUEST_NAME)
         guest.raw('wait-for', 'loaded', '--timeout', 300)
         guest.wait(40)
