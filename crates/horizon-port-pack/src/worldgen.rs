@@ -42,6 +42,9 @@ const REPURPOSED_CHECKED: [(&str, &str); 3] = [
     ),
     ("repurposed_structures:stronghold_end", "stronghold_end"),
 ];
+/// Repurposed Structures' mineshaft: its generic jigsaw laid out under the
+/// terrain (`"layout": "mineshaft"` in `horizon:piece_limited`).
+const REPURPOSED_MINESHAFT: &str = "repurposed_structures:generic_mineshaft";
 /// Layout rules the piece-limited assembler keeps (`horizon:piece_limited`).
 const PIECE_LIMITED_RULES: [&str; 4] = [
     "y_allowance",
@@ -425,8 +428,10 @@ fn upgrade_types(
             Some(t)
                 if JIGSAWS.contains(&t)
                     || NETHER_JIGSAWS.contains(&t)
+                    || t == REPURPOSED_MINESHAFT
                     || REPURPOSED_CHECKED.iter().any(|(r, _)| *r == t) =>
             {
+                let mineshaft = t == REPURPOSED_MINESHAFT;
                 let check = REPURPOSED_CHECKED.iter().find(|(r, _)| *r == t);
                 let check = check.map(|(_, c)| *c);
                 let library = match t.split_once(':').map(|(ns, _)| ns) {
@@ -439,7 +444,10 @@ fn upgrade_types(
                 } else {
                     "lowest"
                 };
-                let limited = library.map(|l| piece_limited(v, l));
+                let mut limited = library.map(|l| piece_limited(v, l));
+                if let Some(limited) = limited.as_mut().filter(|_| mineshaft) {
+                    limited["layout"] = "mineshaft".into();
+                }
                 start_checks(v, liquid, lost, limited.is_some());
                 if let Some(check) = check {
                     if !v["horizon:start_checks"].is_object() {
@@ -1349,6 +1357,17 @@ mod tests {
             moogs["horizon:piece_limited"],
             json!({"library": "moogs", "burying": "average_land"})
         );
+        // Repurposed's mineshaft is laid out under the terrain.
+        let mut mineshaft = json!({"type": "repurposed_structures:generic_mineshaft",
+            "start_pool": "rs:mineshafts/birch/start_pool", "size": 9,
+            "liquid_settings": "ignore_waterlogging"});
+        assert!(upgrade("structure", &mut mineshaft, &mut report, &NO_TAGS));
+        assert_eq!(mineshaft["type"], "minecraft:jigsaw");
+        assert_eq!(
+            mineshaft["horizon:piece_limited"],
+            json!({"library": "repurposed", "layout": "mineshaft"})
+        );
+        assert_eq!(mineshaft["liquid_settings"], "ignore_waterlogging");
         // Lithostitched's jigsaw is vanilla's: no key.
         let mut litho = json!({"type": "lithostitched:jigsaw"});
         assert!(upgrade("structure", &mut litho, &mut report, &NO_TAGS));
