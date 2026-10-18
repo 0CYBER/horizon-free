@@ -139,9 +139,118 @@ pub enum Processor {
     BlockAge(f32),
     LavaSubmerged,
     BlackstoneReplace,
+    SpawnerMobs(Box<SpawnerMobs>),
 }
 #[derive(Clone, Debug, Default)]
 pub struct ProcessorList(pub Vec<Processor>);
+
+/// The spawner fields `horizon:spawner_mobs` writes: its JSON key, the NBT
+/// key and the default (BaseSpawner's).
+const SPAWNER_FIELDS: [(&str, &str, i16); 7] = [
+    ("delay", "Delay", 20),
+    ("min_spawn_delay", "MinSpawnDelay", 200),
+    ("max_spawn_delay", "MaxSpawnDelay", 800),
+    ("spawn_count", "SpawnCount", 4),
+    ("max_nearby_entities", "MaxNearbyEntities", 6),
+    ("required_player_range", "RequiredPlayerRange", 16),
+    ("spawn_range", "SpawnRange", 4),
+];
+
+/// `horizon:spawner_mobs`, which `horizon-port-pack` writes for the spawner
+/// randomizing processors of Moog's Structure Lib and Repurposed Structures
+/// (Java code in the mods): a spawner gets one mob of a weighted list,
+/// picked with `settings.getRandom(pos).nextFloat()` as theirs do, and the
+/// spawner NBT they write. With no mob to pick it becomes `replacement`.
+#[derive(Clone, Debug)]
+pub struct SpawnerMobs {
+    /// Each mob's entity compound (its `id` and any NBT) and weight.
+    mobs: Vec<(Compound, f64)>,
+    /// [`SPAWNER_FIELDS`]' values.
+    fields: [i16; 7],
+    /// `custom_spawn_rules`, in `SpawnData` and the potential alike.
+    rules: Option<Compound>,
+    replacement: BlockStateId,
+}
+impl SpawnerMobs {
+    fn decode(
+        value: &Value,
+        replacement: impl FnOnce(Option<&Value>) -> Result<BlockStateId, DecodeError>,
+    ) -> Result<Self, DecodeError> {
+        let mobs = value["mobs"]
+            .as_array()
+            .ok_or(DecodeError::Field("spawner_mobs mobs"))?
+            .iter()
+            .map(
+                |m| match (json_to_nbt(&m["entity"]), m["weight"].as_f64()) {
+                    (Tag::Compound(entity), Some(weight))
+                        if entity.contains_key(&JavaString::from("id")) =>
+                    {
+                        Ok((entity, weight))
+                    }
+                    _ => Err(DecodeError::Field("spawner_mobs mob")),
+                },
+            )
+            .collect::<Result<_, _>>()?;
+        let mut fields = [0; 7];
+        for (field, (key, _, default)) in fields.iter_mut().zip(SPAWNER_FIELDS) {
+            // The mods' codecs read ints; the spawner saves them as shorts.
+            *field = value
+                .get(key)
+                .map_or(Some(default), |v| v.as_i64().map(|v| v as i16))
+                .ok_or(DecodeError::Field("spawner_mobs field"))?;
+        }
+        let rules = match value.get("custom_spawn_rules").map(json_to_nbt) {
+            None => None,
+            Some(Tag::Compound(c)) => Some(c),
+            Some(_) => return Err(DecodeError::Field("spawner_mobs custom_spawn_rules")),
+        };
+        Ok(Self {
+            mobs,
+            fields,
+            rules,
+            replacement: replacement(value.get("replacement"))?,
+        })
+    }
+    /// The mob for a spawner, drawing from `random` only when there is one
+    /// to pick (pickWeightedRandom; Repurposed Structures' getSpawnerMob,
+    /// whose float product can round differently only on a boundary).
+    fn pick(&self, random: impl FnOnce() -> f32) -> Option<&Compound> {
+        let total: f64 = self.mobs.iter().map(|m| m.1).sum();
+        if self.mobs.is_empty() || total <= 0. {
+            return None;
+        }
+        let mut pick = f64::from(random()) * total;
+        for (entity, weight) in &self.mobs {
+            pick -= weight;
+            if pick <= 0. {
+                return Some(entity);
+            }
+        }
+        self.mobs.last().map(|m| &m.0)
+    }
+    /// The spawner's NBT with `entity` as its only potential and next spawn.
+    fn nbt(&self, entity: &Compound) -> Compound {
+        let mut data = Compound::new();
+        data.insert("entity".into(), Tag::Compound(entity.clone()));
+        if let Some(rules) = &self.rules {
+            data.insert("custom_spawn_rules".into(), Tag::Compound(rules.clone()));
+        }
+        let mut potential = Compound::new();
+        potential.insert("data".into(), Tag::Compound(data.clone()));
+        potential.insert("weight".into(), Tag::Int(1));
+        let mut nbt: Compound = SPAWNER_FIELDS
+            .iter()
+            .zip(self.fields)
+            .map(|((_, key, _), v)| (JavaString::from(*key), Tag::Short(v)))
+            .collect();
+        nbt.insert(
+            "SpawnPotentials".into(),
+            Tag::List(vec![Tag::Compound(potential)]),
+        );
+        nbt.insert("SpawnData".into(), Tag::Compound(data));
+        nbt
+    }
+}
 
 fn holder_set(
     value: &Value,
@@ -272,6 +381,12 @@ impl Processor {
                     })
                     .collect::<Result<_, DecodeError>>()?,
             ),
+            "horizon:spawner_mobs" => {
+                Self::SpawnerMobs(Box::new(SpawnerMobs::decode(value, |v| match v {
+                    Some(v) => state(v),
+                    None => Ok(resources.registry.default_state("minecraft:air").unwrap()),
+                })?))
+            }
             _ => return Err(DecodeError::Field("structure processor type")),
         })
     }
@@ -537,6 +652,24 @@ fn process_block<W: PlacementContext>(
             Some(info)
         }
         Processor::Capped { .. } => Some(info),
+        Processor::SpawnerMobs(spawner) => {
+            if name(info.state) != "minecraft:spawner" {
+                return Ok(Some(info));
+            }
+            let pos = info.pos;
+            let entity = spawner.pick(|| settings.with_random(pos, |r| r.float()));
+            Some(match entity {
+                Some(entity) => BlockInfo {
+                    nbt: Some(spawner.nbt(entity)),
+                    ..info
+                },
+                None => BlockInfo {
+                    pos,
+                    state: spawner.replacement,
+                    nbt: None,
+                },
+            })
+        }
     })
 }
 fn block_age(
@@ -1031,6 +1164,91 @@ fn update_shape_at_edge<W: PlacementContext>(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn spawner(value: Value) -> SpawnerMobs {
+        SpawnerMobs::decode(&value, |v| {
+            assert_eq!(v, Some(&json!({"id": "minecraft:cobblestone"})));
+            Ok(BlockStateId(7))
+        })
+        .unwrap()
+    }
+    fn id(entity: Option<&Compound>) -> Option<String> {
+        match entity?.get(&JavaString::from("id")) {
+            Some(Tag::String(s)) => Some(s.to_string_lossy()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn spawner_mobs_pick_by_weight() {
+        let s = spawner(json!({
+            "mobs": [
+                {"entity": {"id": "minecraft:zombie"}, "weight": 1},
+                {"entity": {"id": "minecraft:husk"}, "weight": 3}],
+            "replacement": {"id": "minecraft:cobblestone"}}));
+        // pick = nextFloat * 4, less each weight in turn, until <= 0.
+        for (r, mob) in [
+            (0., "zombie"),
+            (0.25, "zombie"),
+            (0.2501, "husk"),
+            (0.999, "husk"),
+        ] {
+            assert_eq!(id(s.pick(|| r)), Some(format!("minecraft:{mob}")), "{r}");
+        }
+        let empty = spawner(json!({"mobs": [], "replacement": {"id": "minecraft:cobblestone"}}));
+        assert_eq!(empty.pick(|| unreachable!()), None);
+        assert_eq!(empty.replacement, BlockStateId(7));
+    }
+
+    #[test]
+    fn spawner_mobs_write_the_mods_nbt() {
+        let s = spawner(json!({
+            "mobs": [{"entity": {"id": "minecraft:skeleton", "Health": 30}, "weight": 2}],
+            "delay": 10, "spawn_count": 2,
+            "custom_spawn_rules": {"block_light_limit": {"min_inclusive": 0, "max_inclusive": 7}},
+            "replacement": {"id": "minecraft:cobblestone"}}));
+        let nbt = s.nbt(s.pick(|| 0.5).unwrap());
+        let short = |k: &str| nbt.get(&JavaString::from(k)).cloned();
+        for (k, v) in [
+            ("Delay", 10),
+            ("MinSpawnDelay", 200),
+            ("MaxSpawnDelay", 800),
+            ("SpawnCount", 2),
+            ("MaxNearbyEntities", 6),
+            ("RequiredPlayerRange", 16),
+            ("SpawnRange", 4),
+        ] {
+            assert_eq!(short(k), Some(Tag::Short(v)), "{k}");
+        }
+        let Some(Tag::Compound(data)) = short("SpawnData") else {
+            panic!("SpawnData")
+        };
+        assert!(data.contains_key(&JavaString::from("custom_spawn_rules")));
+        let Some(Tag::Compound(entity)) = data.get(&JavaString::from("entity")) else {
+            panic!("entity")
+        };
+        assert_eq!(entity.get(&JavaString::from("Health")), Some(&Tag::Int(30)));
+        let Some(Tag::List(potentials)) = short("SpawnPotentials") else {
+            panic!("SpawnPotentials")
+        };
+        let Tag::Compound(potential) = &potentials[0] else {
+            panic!("potential")
+        };
+        assert_eq!(
+            potential.get(&JavaString::from("weight")),
+            Some(&Tag::Int(1))
+        );
+        assert_eq!(
+            potential.get(&JavaString::from("data")),
+            Some(&Tag::Compound(data.clone()))
+        );
+    }
+
+    #[test]
+    fn spawner_mobs_refuse_a_mob_without_an_id() {
+        let bad = json!({"mobs": [{"entity": {}, "weight": 1}]});
+        assert!(SpawnerMobs::decode(&bad, |_| Ok(BlockStateId(0))).is_err());
+    }
 
     #[test]
     fn rule_parts_read_ids_without_a_namespace() {
