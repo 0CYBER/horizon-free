@@ -1,5 +1,6 @@
 //! Runtime block-state IDs imported from a version-pinned registry data export.
 //! This supplies identities and default properties, not block behavior.
+mod facts;
 mod json;
 use crate::{DATA_VERSION, chunk::BlockState, compression::invalid, nbt::Tag};
 pub use json::BlockStateJsonCodec;
@@ -45,17 +46,53 @@ impl BlockRegistry {
         let Some(Tag::Compound(defaults)) = tag.get("defaults") else {
             return Err(invalid("missing registry defaults"));
         };
-        if entries.is_empty() || entries.len() > i32::MAX as usize {
+        let states = entries
+            .iter()
+            .map(BlockState::from_nbt)
+            .collect::<io::Result<_>>()?;
+        let defaults = defaults
+            .iter()
+            .map(|(name, id)| {
+                let name = name.to_string().map_err(|e| invalid(e.to_string()))?;
+                let Tag::Int(id) = id else {
+                    return Err(invalid("default state ID is not an int"));
+                };
+                Ok((name, i64::from(*id)))
+            })
+            .collect::<io::Result<_>>()?;
+        Self::from_states(states, defaults)
+    }
+
+    /// The registry of a resources `facts.json` (`{"states": [[..., ..., ...,
+    /// ..., state], ...], "defaults": {name: id}}`), read as it streams: no
+    /// JSON or NBT tree of the whole file is built. For a pack of 190,000
+    /// states the two trees were several hundred megabytes at startup.
+    pub fn from_facts_json(reader: impl io::Read) -> io::Result<Self> {
+        Ok(Self::from_facts_json_with_flags(reader)?.0)
+    }
+
+    /// [`Self::from_facts_json`], with each state's `(air, fluid)` columns.
+    pub fn from_facts_json_with_flags(
+        reader: impl io::Read,
+    ) -> io::Result<(Self, Vec<(bool, bool)>)> {
+        let facts: facts::Facts = serde_json::from_reader(io::BufReader::new(reader))
+            .map_err(|e| invalid(e.to_string()))?;
+        let flags = facts.states.iter().map(|r| (r.air, r.fluid)).collect();
+        let states = facts.states.into_iter().map(|r| r.state).collect();
+        Ok((Self::from_states(states, facts.defaults)?, flags))
+    }
+
+    fn from_states(states: Vec<BlockState>, defaults: BTreeMap<String, i64>) -> io::Result<Self> {
+        if states.is_empty() || states.len() > i32::MAX as usize {
             return Err(invalid("invalid registry size"));
         }
         let mut result = Self {
-            states: Vec::with_capacity(entries.len()),
-            ids: HashMap::with_capacity(entries.len()),
+            states: Vec::with_capacity(states.len()),
+            ids: HashMap::with_capacity(states.len()),
             collided: BTreeMap::new(),
             defaults: BTreeMap::new(),
         };
-        for (i, entry) in entries.iter().enumerate() {
-            let state = BlockState::from_nbt(entry)?;
+        for (i, state) in states.into_iter().enumerate() {
             if result.id(&state).is_some() {
                 return Err(invalid("duplicate block registry state"));
             }
@@ -72,19 +109,16 @@ impl BlockRegistry {
             result.states.push(state);
         }
         for (name, id) in defaults {
-            let name = name.to_string().map_err(|e| invalid(e.to_string()))?;
-            let Tag::Int(id) = id else {
-                return Err(invalid("default state ID is not an int"));
-            };
-            if *id < 0
+            if id < 0
+                || id > i64::from(i32::MAX)
                 || result
                     .states
-                    .get(*id as usize)
+                    .get(id as usize)
                     .is_none_or(|s| s.name != name)
             {
                 return Err(invalid("invalid default block state ID"));
             }
-            result.defaults.insert(name, BlockStateId(*id as u32));
+            result.defaults.insert(name, BlockStateId(id as u32));
         }
         let names: BTreeSet<_> = result.states.iter().map(|s| &s.name).collect();
         if names.len() != result.defaults.len()
