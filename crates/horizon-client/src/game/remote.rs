@@ -49,6 +49,9 @@ fn remote_text(tag: &Tag) -> horizon_client::text::Text {
     comp_text(&tag_to_json(tag))
 }
 
+/// A section's sky and block light layers from the wire.
+type LightLayers = (Option<Vec<u8>>, Option<Vec<u8>>);
+
 /// Streaming needs a generator; a server world never generates.
 struct NoTerrain;
 impl ChunkGenerator for NoTerrain {
@@ -771,7 +774,63 @@ impl Game<'_> {
                     PalettedContainer::from_values(BIOME_STRATEGY, &cells);
             }
         }
+        // ClientPacketListener.applyLightData: the column keeps the light
+        // the server sent; nothing is relit.
+        let (layers, above) = self.wire_light(&p.light);
+        let sky = r.dimension.has_skylight;
+        horizon_client::light::light_from_layers(&mut chunk, &layers, above, sky);
         Ok(chunk)
+    }
+    /// `ClientPacketListener.readSectionList`: the sky and block layers of a
+    /// light packet, by section of the client's column, and the sky light
+    /// above the column's top section (from the light section just above
+    /// it, else open sky).
+    fn wire_light(
+        &self,
+        light: &horizon_protocol::chunk::LightData,
+    ) -> (Vec<LightLayers>, [u8; 256]) {
+        let mut layers: Vec<LightLayers> = vec![(None, None); SECTIONS];
+        let Some(r) = self.remote.as_ref() else {
+            return (layers, [0; 256]);
+        };
+        let sky = r.dimension.has_skylight;
+        let mut above = [if sky { 15 } else { 0 }; 256];
+        // Light section b is the dimension's section b - 1.
+        let first = (r.dimension.min_y - MIN_Y).div_euclid(16) - 1;
+        for (b, layer) in light
+            .layers(r.dimension.sections() + 2)
+            .into_iter()
+            .enumerate()
+        {
+            let si = first + b as i32;
+            if (0..SECTIONS as i32).contains(&si) {
+                layers[si as usize] = layer;
+            } else if si == SECTIONS as i32
+                && sky
+                && let Some(l) = &layer.0
+            {
+                for (i, a) in above.iter_mut().enumerate() {
+                    *a = (l[i >> 1] >> ((i & 1) * 4)) & 15;
+                }
+            }
+        }
+        (layers, above)
+    }
+    /// `handleLightUpdatePacket`: the sections it names take its light.
+    fn remote_light_update(&mut self, p: &play::LightUpdate) {
+        let Some(sky) = self.remote.as_ref().map(|r| r.dimension.has_skylight) else {
+            return;
+        };
+        if !self.world.chunks.contains_key(&(p.x, p.z)) {
+            return;
+        }
+        let (layers, _) = self.wire_light(&p.light);
+        let Some(chunk) = self.world.chunks.get_mut(&(p.x, p.z)) else {
+            return;
+        };
+        let changed =
+            horizon_client::light::update_light_layers(Arc::make_mut(chunk), &layers, sky);
+        Streaming::light_updated(&mut self.world, p.x, p.z, &changed);
     }
     /// `ClientChunkCache.Storage.inRange`: within the storage around the
     /// view centre, `calculateStorageRange` (the server's radius, at least
@@ -1219,6 +1278,7 @@ impl Game<'_> {
                 }
                 Err(e) => log::warn!("Horizon: chunk {} {}: {e}", p.x, p.z),
             },
+            C::LightUpdate(p) => self.remote_light_update(&p),
             C::ForgetLevelChunk(p) => {
                 let [x, z] = p.pos;
                 self.streaming.forget(&mut self.world, x, z);

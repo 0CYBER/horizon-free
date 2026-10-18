@@ -504,6 +504,7 @@ impl Game<'_> {
         let hub = Hub::new(lan, sync, encoder, config);
         let port = hub.lan.port;
         self.world.block_log = Some(Vec::new());
+        self.world.light_log = Some(Default::default());
         self.lan = Some(LanHost {
             hub,
             settings: LanSettings { port, ..settings },
@@ -553,6 +554,7 @@ impl Game<'_> {
         // Give the writer threads a moment to flush the disconnect packets.
         std::thread::sleep(std::time::Duration::from_millis(100));
         self.world.block_log = None;
+        self.world.light_log = None;
         self.audio.capture = None;
         self.lan_events.clear();
         self.streaming.extra.clear();

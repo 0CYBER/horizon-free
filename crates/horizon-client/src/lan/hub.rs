@@ -988,11 +988,15 @@ impl Hub {
                 .any(|g| g.dimension == self.config.dimension)
             {
                 let _ = ctx.world.block_log.take();
+                let _ = ctx.world.light_log.take();
             }
             return events;
         }
         if ctx.world.block_log.is_none() {
             ctx.world.block_log = Some(Vec::new());
+        }
+        if ctx.world.light_log.is_none() {
+            ctx.world.light_log = Some(Default::default());
         }
         self.sync_world(ctx);
         for i in 0..self.guests.len() {
@@ -1000,6 +1004,7 @@ impl Hub {
                 self.update_chunks(i, ctx);
             }
         }
+        self.broadcast_light_changes(ctx.world);
         self.broadcast_block_changes(ctx.world);
         // ServerGamePacketListenerImpl.tick: the actions handled since the last tick are
         // acknowledged after the block changes they made were sent, so a client's predicted
@@ -1231,6 +1236,42 @@ impl Hub {
             .filter(|g| g.sent_chunks.contains(&(x, z)))
         {
             g.sender.send(body.clone());
+        }
+    }
+
+    /// `ChunkHolder.broadcastChanges`' light part: the light sections that
+    /// changed in a column go to the players for whom it is on the border of
+    /// what they track (`ChunkMap.isChunkOnTrackedBorder`); the others light
+    /// the blocks they are sent themselves.
+    fn broadcast_light_changes(&mut self, world: &mut World) {
+        let Some(log) = world.light_log.as_mut() else {
+            return;
+        };
+        if log.is_empty() {
+            return;
+        }
+        let mut changes: Vec<((i32, i32), u32)> = log.drain().collect();
+        changes.sort_unstable();
+        for ((x, z), sections) in changes {
+            let tracked = |g: &Guest, x: i32, z: i32| g.sent_chunks.contains(&(x, z));
+            let viewers: Vec<usize> = (0..self.guests.len())
+                .filter(|&i| {
+                    let g = &self.guests[i];
+                    self.here(g)
+                        && tracked(g, x, z)
+                        && (-1..=1).any(|dz| (-1..=1).any(|dx| !tracked(g, x + dx, z + dz)))
+                })
+                .collect();
+            if viewers.is_empty() {
+                continue;
+            }
+            let Some(chunk) = world.chunks.get(&(x, z)) else {
+                continue;
+            };
+            let body = self.encoder.light_update(chunk, sections);
+            for &i in &viewers {
+                self.guests[i].sender.send(body.clone());
+            }
         }
     }
 

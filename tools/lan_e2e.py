@@ -49,6 +49,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
              guest as the host has them (kind, place, rotation, what they hold or wear, the variant).
 - projectiles: primed TNT (one falling), an end crystal and an arrow that lands reach the guest where
              the host has them; a falling block lands on both sides.
+- light:     the guest's light matches the host's: around a torch placed near it, under a roof and
+             once a block of the roof is removed under the sky, and in the last chunk it tracks next to
+             glowstone in a chunk it doesn't (only the server's light updates bring that one).
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -81,7 +84,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'titles', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'push', 'eat', 'xp', 'objects', 'projectiles', 'effects', 'portals', 'distance']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'titles', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'push', 'eat', 'xp', 'objects', 'projectiles', 'light', 'effects', 'portals', 'distance']
 
 
 class Game:
@@ -1201,6 +1204,71 @@ def check_projectiles(host, guest, out):
     return f'{len(theirs)} identical, fuses (host, guest) {fuses}'
 
 
+def light_differences(host, guest, lo, hi):
+    """Positions of the box loaded on both sides, and those whose sky or block light differ."""
+    h, g = host.raw('light', *lo, *hi), guest.raw('light', *lo, *hi)
+    both = [i for i in range(len(h['sky'])) if h['sky'][i] != '.' and g['sky'][i] != '.']
+    differ = [i for i in both if (h['sky'][i], h['block'][i]) != (g['sky'][i], g['block'][i])]
+    return h, g, both, differ
+
+
+def same_light(host, guest, lo, hi, what, ticks=100):
+    """Wait until the guest's light over the box is the host's; the number of positions compared."""
+    for _ in range(ticks // 10):
+        h, g, both, differ = light_differences(host, guest, lo, hi)
+        if not differ:
+            assert both, f'{what}: no position of the box is loaded on both sides'
+            return len(both)
+        host.wait(10)
+    i = differ[0]
+    nx, nz = hi[0] - lo[0] + 1, hi[2] - lo[2] + 1
+    pos = (lo[0] + i % nx, lo[1] + i // (nx * nz), lo[2] + i // nx % nz)
+    raise AssertionError(f'{what}: {len(differ)} of {len(both)} positions differ, first {pos}: host sky '
+                         f'{h["sky"][i]} block {h["block"][i]}, guest sky {g["sky"][i]} block {g["block"][i]}')
+
+
+def check_light(host, guest, out):
+    gx, gy, gz = (int(v // 1) for v in pos_of(guest))
+    results = {}
+    # A torch near the guest: the guest lights it itself, as vanilla's client does.
+    torch = (gx + 3, gy, gz + 3)
+    host('command', command=f'setblock {torch[0]} {torch[1]} {torch[2]} minecraft:torch')
+    try:
+        results['torch'] = same_light(host, guest, (gx - 12, gy - 1, gz - 12), (gx + 16, gy + 3, gz + 16), 'torch')
+    finally:
+        host('command', command=f'setblock {torch[0]} {torch[1]} {torch[2]} minecraft:air')
+    # A roof over the guest, then a hole in it: sky light falls through.
+    roof = f'{gx - 3} {gy + 4} {gz - 3} {gx + 3} {gy + 4} {gz + 3}'
+    box = (gx - 6, gy - 1, gz - 6), (gx + 6, gy + 5, gz + 6)
+    host('command', command=f'fill {roof} minecraft:stone')
+    try:
+        results['roof'] = same_light(host, guest, *box, 'roof')
+        host('command', command=f'setblock {gx} {gy + 4} {gz} minecraft:air')
+        results['hole'] = same_light(host, guest, *box, 'hole in the roof')
+    finally:
+        host('command', command=f'fill {roof} minecraft:air')
+    # The last chunk the guest tracks eastwards, and glowstone high up just past it in a chunk it
+    # doesn't track: the guest never sees that block, only the light updates of its border chunk.
+    y = 200
+    row = guest.raw('light', gx, y, gz, gx + 16 * 24, y, gz)['sky']
+    assert '.' in row, 'the guest has every chunk 24 chunks east'
+    untracked = (gx + row.index('.')) >> 4
+    near = untracked * 16 + 1
+    # On its server thread the host's own game is a client too, sent the same light updates.
+    if not SERVER_THREAD:
+        assert host.raw('light', near, y, gz, near, y, gz)['sky'] != '.', 'the host lacks the chunk past the guest'
+    host('command', command=f'setblock {near} {y} {gz} minecraft:glowstone')
+    try:
+        lo, hi = (untracked * 16 - 16, y - 3, gz - 8), (untracked * 16 - 1, y + 3, gz + 8)
+        results['border'] = same_light(host, guest, lo, hi, 'border chunk')
+        lit = guest.raw('light', near - 2, y, gz, near - 2, y, gz)['block']
+        assert lit == 'd', f'the border chunk by the glowstone has block light {lit}, not 13'
+    finally:
+        host('command', command=f'setblock {near} {y} {gz} minecraft:air')
+    results['border_cleared'] = same_light(host, guest, lo, hi, 'border chunk without the glowstone')
+    return results
+
+
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
              'chest': check_chest, 'crafting': check_crafting, 'sign': check_sign, 'damage': check_damage,
              'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
@@ -1209,7 +1277,8 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,
              'effects': check_effects, 'portals': check_portals, 'distance': check_distance, 'clicks': check_clicks,
              'sleep': check_sleep, 'push': check_push, 'eat': check_eat,
-             'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles}
+             'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles,
+             'light': check_light}
 
 
 def run(ctl, out, resources, checks):
