@@ -179,6 +179,13 @@ fn number_format(f: &play::NumberFormat) -> horizon_client::scoreboard::NumberFo
 impl Game<'_> {
     /// Leave the title for a server (ConnectScreen): an empty world fed by the connection.
     pub(super) fn connect_server(&mut self, address: &str, name: &str) -> Result<()> {
+        if self.defer_world_entry(super::PendingWorldEntry::Server {
+            address: address.to_owned(),
+            name: name.to_owned(),
+        })? {
+            return Ok(());
+        }
+        self.join_world_rest()?;
         if let Err(error) = self.join_server(address, name, None) {
             log::warn!("Horizon: could not join server: {error}");
             if self.title.is_none() {
@@ -235,12 +242,12 @@ impl Game<'_> {
         let mut streaming = Streaming::new(
             Arc::new(NoTerrain),
             self.pack.context.clone(),
-            self.res.threads,
+            self.res.threads(),
         );
         streaming.remote = true;
         streaming.radius = self.settings.render_distance;
         self.streaming = streaming;
-        self.world = World::new(self.res.facts.air, 0);
+        self.world = World::new(self.res.facts().air, 0);
         self.save = Arc::new(SaveDir::new(
             std::env::temp_dir().join("horizon-remote-unused"),
         ));
@@ -368,7 +375,7 @@ impl Game<'_> {
         self.score.board = Default::default();
         self.streaming = Streaming::new(Arc::new(NoTerrain), self.pack.context.clone(), 1);
         self.streaming.paused = true;
-        self.world = World::new(self.res.facts.air, 0);
+        self.world = World::new(self.res.facts().air, 0);
         self.player = None;
         self.mobs.clear();
         self.clear_remote_objects();
@@ -626,7 +633,7 @@ impl Game<'_> {
             .get("minecraft:worldgen/biome")
             .map(|list| {
                 list.iter()
-                    .map(|(name, _)| self.res.biomes.id(name))
+                    .map(|(name, _)| self.res.biomes().id(name))
                     .collect()
             })
             .unwrap_or_default();
@@ -653,7 +660,7 @@ impl Game<'_> {
             let mut streaming = Streaming::new(
                 Arc::new(NoTerrain),
                 self.pack.context.clone(),
-                self.res.threads,
+                self.res.threads(),
             );
             streaming.remote = true;
             streaming.radius = self.streaming.radius;
@@ -663,7 +670,7 @@ impl Game<'_> {
                 self.world.day_time,
                 self.world.weather,
             );
-            self.world = World::new(self.res.facts.air, spawn.seed);
+            self.world = World::new(self.res.facts().air, spawn.seed);
             self.world.game_time = time;
             self.world.day_time = day;
             self.world.weather = weather;
@@ -957,7 +964,7 @@ impl Game<'_> {
     }
     /// Keep the renderable block entities (chests, furnaces) in step with blocks.
     fn sync_block_entity(&mut self, pos: (i32, i32, i32), state: BlockStateId) {
-        let name = self.res.facts.get(state).name.clone();
+        let name = self.res.facts().get(state).name.clone();
         match BlockEntity::for_block(&name) {
             Some(entity) => {
                 let same = self
@@ -1020,9 +1027,9 @@ impl Game<'_> {
         // A block we just placed: play its place sound (the server skips the placer).
         if let Some((target, _)) = self.remote.as_ref().and_then(|r| r.placing)
             && target == pos
-            && !self.res.facts.is_air(state)
+            && !self.res.facts().is_air(state)
         {
-            let s = self.res.facts.get(state).sounds.clone();
+            let s = self.res.facts().get(state).sounds.clone();
             let at = [
                 f64::from(pos[0]) + 0.5,
                 f64::from(pos[1]) + 0.5,
@@ -1043,7 +1050,7 @@ impl Game<'_> {
         let mob_type = if kind == "minecraft:player" {
             self.remote.as_ref().and_then(|r| r.player_type.clone())
         } else {
-            self.res.mob_types.get(kind).cloned()
+            self.res.mob_types().get(kind).cloned()
         };
         if kind == "minecraft:experience_orb" {
             // Its value (ExperienceOrb.DATA_VALUE) follows in SetEntityData.
@@ -1315,7 +1322,7 @@ impl Game<'_> {
             // shulker boxes, bells) when the block is still the one it names.
             C::BlockEvent(p) => {
                 let state = self.world.block(p.pos[0], p.pos[1], p.pos[2]);
-                let block = &self.res.facts.get(state).name;
+                let block = &self.res.facts().get(state).name;
                 let named = self.remote.as_ref().and_then(|r| {
                     r.builtin
                         .get("minecraft:block")?
@@ -1335,7 +1342,7 @@ impl Game<'_> {
             C::LevelEvent(p) if p.kind == 2001 => {
                 // LevelEvent.PARTICLES_DESTROY_BLOCK: someone else broke a block.
                 let state = BlockStateId(p.data.max(0) as u32);
-                let s = self.res.facts.get(state).sounds.clone();
+                let s = self.res.facts().get(state).sounds.clone();
                 let at = [
                     f64::from(p.pos[0]) + 0.5,
                     f64::from(p.pos[1]) + 0.5,
@@ -2184,10 +2191,11 @@ impl Game<'_> {
             self.skin_slots.len()
         } else {
             let (old, slot) = self.skin_slots.remove(0);
-            self.atlas.sprites.remove(&old);
+            self.gui.atlas.sprites.remove(&old);
             slot
         };
         let Some(rect) = self
+            .gui
             .atlas
             .sprites
             .get(&format!("horizon/skin{slot}"))
@@ -2195,7 +2203,7 @@ impl Game<'_> {
         else {
             return;
         };
-        let (w, h) = (self.atlas.width as f32, self.atlas.height as f32);
+        let (w, h) = (self.gui.atlas.width as f32, self.gui.atlas.height as f32);
         self.map_patches.push(horizon_client::font::Patch {
             x: (rect.u0 * w).round() as u32,
             y: (rect.v0 * h).round() as u32,
@@ -2203,7 +2211,7 @@ impl Game<'_> {
             height: 64,
             rgba,
         });
-        self.atlas.sprites.insert(location.clone(), rect);
+        self.gui.atlas.sprites.insert(location.clone(), rect);
         self.skin_slots.push((location, slot));
     }
     /// Whether a downloaded skin is in the atlas, marking it recently shown.
@@ -2504,7 +2512,7 @@ impl Game<'_> {
                 horizon_client::motion::MotionEvent::Emission {
                     state, in_water, ..
                 } if !crouching => {
-                    let sounds = self.res.facts.get(state).sounds.clone();
+                    let sounds = self.res.facts().get(state).sounds.clone();
                     // Player.playStepSound: muffled under the swim sound in water.
                     let (volume, pitch) = if in_water {
                         (sounds.volume * 0.05, sounds.pitch * 0.8)
@@ -2860,7 +2868,7 @@ impl Game<'_> {
         };
         let face = face_direction(hit.face);
         let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-        if self.res.facts.is_air(state) {
+        if self.res.facts().is_air(state) {
             return;
         }
         if self.remote.as_ref().is_some_and(|r| r.destroy_delay > 0) {
@@ -2882,14 +2890,17 @@ impl Game<'_> {
             }
             return;
         }
-        let facts = self.res.facts.get(state).clone();
+        let facts = self.res.facts().get(state).clone();
         let held = self.held().cloned();
-        let mut speed = self.res.items.mining_speed(held.as_ref(), &facts.name);
+        let mut speed = self.res.items().mining_speed(held.as_ref(), &facts.name);
         if self.player.as_ref().is_some_and(|p| !p.ground.on_ground) {
             speed /= 5.0;
         }
-        let harvest =
-            !facts.requires_tool || self.res.items.correct_for_drops(held.as_ref(), &facts.name);
+        let harvest = !facts.requires_tool
+            || self
+                .res
+                .items()
+                .correct_for_drops(held.as_ref(), &facts.name);
         let progress = if facts.hardness < 0.0 {
             0.0
         } else if facts.hardness == 0.0 {
@@ -2996,7 +3007,7 @@ impl Game<'_> {
                 .and_modify(|p| p.0 = sequence)
                 .or_insert((sequence, state.0 as i32));
         }
-        let s = self.res.facts.get(state).sounds.clone();
+        let s = self.res.facts().get(state).sounds.clone();
         let at = [
             f64::from(pos[0]) + 0.5,
             f64::from(pos[1]) + 0.5,
@@ -3020,7 +3031,7 @@ impl Game<'_> {
     fn remote_use(&mut self) {
         let held_block = self
             .held()
-            .and_then(|h| self.res.items.get(&h.item))
+            .and_then(|h| self.res.items().get(&h.item))
             .is_some_and(|i| i.block.is_some());
         let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
         // Entities first (interact), like the hit result order.
@@ -3084,7 +3095,7 @@ impl Game<'_> {
             }));
             // MultiPlayerGameMode.useItem runs the use here too: food starts
             // being eaten (Consumable.startConsuming).
-            if let Some(info) = self.res.items.get(&held.item).cloned() {
+            if let Some(info) = self.res.items().get(&held.item).cloned() {
                 self.start_eating(&info);
             }
         }
@@ -3099,7 +3110,7 @@ impl Game<'_> {
         let stack = self.stack_in(slot).cloned();
         let consumable = stack
             .as_ref()
-            .and_then(|s| self.res.items.get(&s.item))
+            .and_then(|s| self.res.items().get(&s.item))
             .and_then(|i| i.consumable.clone());
         let (Some(stack), Some(consumable)) = (stack, consumable) else {
             self.using = None;
@@ -3595,7 +3606,7 @@ impl Game<'_> {
             // an ender chest's or a double chest's slots are no one block's,
             // so they go under a key no block has.
             let holds = |k: &(i32, i32, i32)| {
-                let name = &self.res.facts.get(self.world.block(k.0, k.1, k.2)).name;
+                let name = &self.res.facts().get(self.world.block(k.0, k.1, k.2)).name;
                 BlockEntity::for_block(name).is_some_and(|e| {
                     e.id() == entity.id() && e.slots().len() == entity.slots().len()
                 })
@@ -3638,7 +3649,7 @@ impl Game<'_> {
         if self.player.is_some() {
             return false;
         }
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let (w, h) = (batch.width, batch.height);
         batch.fill(atlas, 0.0, 0.0, w, h, rgba(20, 20, 20, 255));
         let shown = horizon_client::net::shown_address(&r.session.address);
@@ -3663,7 +3674,7 @@ impl Game<'_> {
     /// Chat (ChatComponent), the chat input line and the action bar.
     pub(super) fn remote_hud(&self, batch: &mut HudBatch) {
         let Some(r) = &self.remote else { return };
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let (w, h) = (batch.width, batch.height);
         let open = self.screen == Screen::Chat;
         let now = Instant::now();

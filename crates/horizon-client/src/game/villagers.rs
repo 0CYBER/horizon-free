@@ -40,7 +40,7 @@ impl Game<'_> {
             .position(|m| m.id == id && m.species() == Species::Villager)
     }
     fn item_max_stack(&self, item: &str) -> u32 {
-        self.res.items.get(item).map_or(64, |i| i.max_stack)
+        self.res.items().get(item).map_or(64, |i| i.max_stack)
     }
     /// `BehaviorUtils.throwItem`: toss a stack from a villager's hand toward
     /// a point.
@@ -57,7 +57,7 @@ impl Game<'_> {
             return;
         };
         let now = self.world.game_time;
-        let items = &self.res.items;
+        let items = self.res.items();
         let meeting = villager::meet(&mut self.mobs, ia, ib, now, |item| {
             items.get(item).map_or(64, |i| i.max_stack)
         });
@@ -121,13 +121,13 @@ impl Game<'_> {
             for _ in 0..=12 {
                 y -= 1;
                 let here = self.world.block(x, y, z);
-                let f = self.res.facts.get(here);
-                let above_f = self.res.facts.get(above);
-                let air_or_liquid = self.res.facts.is_air(above)
+                let f = self.res.facts().get(here);
+                let above_f = self.res.facts().get(above);
+                let air_or_liquid = self.res.facts().is_air(above)
                     || above_f.fluid != horizon_client::blocks::Fluid::None;
-                let solid = self.res.mob_data.state(here).flags & horizon_client::mobs::data::SOLID
-                    != 0
-                    || f.name.as_ref() == "minecraft:powder_snow";
+                let solid =
+                    self.res.mob_data().state(here).flags & horizon_client::mobs::data::SOLID != 0
+                        || f.name.as_ref() == "minecraft:powder_snow";
                 if golem_floor_ok(&f.name) && air_or_liquid && solid {
                     found = Some(y + 1);
                     break;
@@ -137,7 +137,7 @@ impl Game<'_> {
             let Some(y) = found else { continue };
             // IronGolem.checkSpawnRules: a floor and three free blocks.
             let free = |g: &Self, yy: i32| {
-                g.res.mob_data.state(g.world.block(x, yy, z)).flags
+                g.res.mob_data().state(g.world.block(x, yy, z)).flags
                     & horizon_client::mobs::data::VALID_EMPTY_SPAWN
                     != 0
             };
@@ -260,7 +260,7 @@ impl Game<'_> {
         }
         let picks_up = self
             .res
-            .items
+            .items()
             .item_tags
             .get("minecraft:villager_picks_up")
             .cloned();

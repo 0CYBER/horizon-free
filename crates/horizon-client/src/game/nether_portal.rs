@@ -114,7 +114,7 @@ impl Game<'_> {
             Dim::Nether
         };
         let state = self.world.block(entry.x, entry.y, entry.z);
-        let b = &self.res.behaviours;
+        let b = self.res.behaviours();
         let (entry_x_axis, offset) = match b.portal_axis(state) {
             Some(x_axis) => {
                 let area = largest_rectangle_around(
@@ -152,7 +152,7 @@ impl Game<'_> {
     /// (the points of interest `PortalForcer` searches): loaded chunks as
     /// they are, the others as saved; chunks never generated have none.
     fn portal_blocks(&self, center: BlockPos, radius: i32) -> Vec<BlockPos> {
-        let b = &self.res.behaviours;
+        let b = self.res.behaviours();
         let chunk_radius = radius.div_euclid(16) + 1;
         let (cx, cz) = (center.x >> 4, center.z >> 4);
         let mut out = Vec::new();
@@ -163,7 +163,7 @@ impl Game<'_> {
                     Some(c) => &**c,
                     None => match self
                         .save
-                        .load(x, z, self.pack.assets.registry, &self.res.biomes)
+                        .load(x, z, self.pack.assets.registry, self.res.biomes())
                     {
                         Some(c) => {
                             saved = c;
@@ -213,7 +213,7 @@ impl Game<'_> {
         );
         if let Some(found) = found {
             let state = self.world.block(found.x, found.y, found.z);
-            let x_axis = self.res.behaviours.portal_axis(state).unwrap_or(true);
+            let x_axis = self.res.behaviours().portal_axis(state).unwrap_or(true);
             return Some(largest_rectangle_around(
                 found,
                 if x_axis { Axis::X } else { Axis::Z },
@@ -234,7 +234,7 @@ impl Game<'_> {
     /// `NetherPortalBlock.createDimensionTransition`: the arrival position
     /// and the yaw turned by.
     pub(super) fn arrival(&self, plan: &Plan, exit: FoundRectangle) -> (Vec3, f32) {
-        let b = &self.res.behaviours;
+        let b = self.res.behaviours();
         let corner = exit.min_corner;
         let exit_x_axis = b
             .portal_axis(self.world.block(corner.x, corner.y, corner.z))
@@ -540,7 +540,7 @@ impl Game<'_> {
             |p, _| {
                 if self
                     .res
-                    .behaviours
+                    .behaviours()
                     .portal_axis(self.world.block(p.x, p.y, p.z))
                     .is_some()
                 {
@@ -584,7 +584,7 @@ impl Game<'_> {
         for sy in y0..=y1 {
             y_mask |= 1 << sy;
         }
-        let behaviours = &self.res.behaviours;
+        let behaviours = self.res.behaviours();
         let chunks = &self.world.chunks;
         (x0..=x1).any(|cx| {
             (z0..=z1).any(|cz| {

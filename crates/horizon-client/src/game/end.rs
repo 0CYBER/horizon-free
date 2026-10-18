@@ -132,9 +132,9 @@ impl Game<'_> {
     /// The environment attributes of the current dimension.
     pub(super) fn dim_environment(&self) -> &Environment {
         match self.dim {
-            Dim::Overworld => &self.res.environment,
-            Dim::Nether => &self.res.nether_environment,
-            Dim::End => &self.res.end_environment,
+            Dim::Overworld => self.res.environment(),
+            Dim::Nether => self.res.nether_environment(),
+            Dim::End => self.res.end_environment(),
         }
     }
 
@@ -142,7 +142,7 @@ impl Game<'_> {
     /// tinted 0x282828. The atlas does not wrap, so each face is 16×16 quads.
     pub(super) fn end_sky_geometry(&self) -> Vec<Vertex> {
         let mut out = Vec::with_capacity(6 * 256 * 4);
-        let Some(r) = self.atlas.sprites.get("environment/end_sky").copied() else {
+        let Some(r) = self.gui.atlas.sprites.get("environment/end_sky").copied() else {
             return out;
         };
         use std::f32::consts::FRAC_PI_2;
@@ -184,6 +184,7 @@ impl Game<'_> {
         let intensity = self.end.flash.intensity(self.clock.fraction() as f32);
         if intensity > 1e-5
             && let Some(r) = self
+                .gui
                 .atlas
                 .sprites
                 .get("environment/celestial/end_flash")
@@ -224,7 +225,7 @@ impl Game<'_> {
 
     pub(super) fn block_name(&self, p: [i32; 3]) -> std::sync::Arc<str> {
         self.res
-            .facts
+            .facts()
             .get(self.world.block(p[0], p[1], p[2]))
             .name
             .clone()
@@ -561,7 +562,7 @@ impl Game<'_> {
         let mut y = (0..256)
             .rev()
             .find(|&y| {
-                let f = self.res.facts.get(self.world.block(0, y, 0));
+                let f = self.res.facts().get(self.world.block(0, y, 0));
                 (f.full_collision || f.fluid != horizon_client::blocks::Fluid::None)
                     && !f.name.ends_with("_leaves")
             })
@@ -783,7 +784,7 @@ impl Game<'_> {
                 let mut y = 255;
                 while y > floor {
                     let p = [around[0] + xd, y, around[2] + zd];
-                    let f = self.res.facts.get(self.world.block(p[0], p[1], p[2]));
+                    let f = self.res.facts().get(self.world.block(p[0], p[1], p[2]));
                     if f.full_collision && (allow_bedrock || &*f.name != "minecraft:bedrock") {
                         tallest = Some(p);
                         break;
@@ -839,12 +840,12 @@ impl Game<'_> {
                             if &*self.block_name([x, y, z]) != "minecraft:end_stone"
                                 || self
                                     .res
-                                    .facts
+                                    .facts()
                                     .get(self.world.block(x, y + 1, z))
                                     .full_collision
                                 || self
                                     .res
-                                    .facts
+                                    .facts()
                                     .get(self.world.block(x, y + 2, z))
                                     .full_collision
                             {
@@ -920,7 +921,8 @@ impl Game<'_> {
     fn end_crystal_geometry(&self, camera: glam::DVec3, out: &mut Vec<Vertex>) {
         let (Some(model), Some(r)) = (
             self.crystal_model.as_ref(),
-            self.atlas
+            self.gui
+                .atlas
                 .sprites
                 .get("entity/end_crystal/end_crystal")
                 .copied(),
@@ -1073,7 +1075,7 @@ impl Game<'_> {
 
     /// ThrownItemRenderer: the ender eye item facing the camera.
     fn eye_geometry(&self, camera: glam::DVec3, out: &mut Vec<Vertex>) {
-        let Some(r) = self.atlas.sprites.get("item/ender_eye").copied() else {
+        let Some(r) = self.gui.atlas.sprites.get("item/ender_eye").copied() else {
             return;
         };
         let alpha = self.clock.fraction();

@@ -10,7 +10,7 @@
 //! player joins as a network player, and the server side of a network player
 //! does not do everything single player does yet.
 use super::{
-    Game, Options, PackResources, Resources,
+    Game, Options, PackResources, Resources, UiResources,
     lan::{LanSettings, Owner},
 };
 use horizon_client::{
@@ -201,6 +201,7 @@ impl Game<'_> {
         options.server = None;
         options.world = None;
         options.dev_mods.clear();
+        self.join_world_rest()?;
         let (res, pack, settings) = (self.res.clone(), self.pack.clone(), self.settings.clone());
         let flags = Arc::new(Flags::default());
         flags
@@ -595,7 +596,14 @@ fn serve(
 ) -> Result<()> {
     // It draws nothing: only the font, which books and chat measure with.
     let atlas = HudAtlas::fonts(&options.resources)?;
+    let gui = UiResources {
+        atlas,
+        panorama: Arc::new(horizon_client::gfx::panorama::Faces {
+            size: 1,
+            pixels: [0u8; 4].repeat(6),
+        }),
+    };
     let audio = Audio::silent(&options.resources);
-    let mut server = Game::new(res, pack, atlas, options, settings, audio)?;
+    let mut server = Game::new(res, pack, gui, options, settings, audio)?;
     server.run_integrated(launch, flags, tasks, ready)
 }

@@ -584,11 +584,11 @@ impl Game<'_> {
             batch.height as i32,
             board,
             objective,
-            &self.atlas.font,
+            &self.gui.atlas.font,
             self.settings.text_background(0.3),
             self.settings.text_background(0.4),
         );
-        hud_layout::paint(batch, &self.atlas, &draws);
+        hud_layout::paint(batch, &self.gui.atlas, &draws);
     }
 }
 
@@ -648,8 +648,8 @@ impl Game<'_> {
             ),
             upside_down: &up,
         };
-        let draws = self.tab_list.layout(&inputs, &self.atlas.font);
-        horizon_client::hud_layout::paint(batch, &self.atlas, &draws);
+        let draws = self.tab_list.layout(&inputs, &self.gui.atlas.font);
+        horizon_client::hud_layout::paint(batch, &self.gui.atlas, &draws);
     }
 }
 

@@ -154,7 +154,7 @@ impl Game<'_> {
         let states: Vec<_> = blocks.map(|(x, y, z)| self.world.block(x, y, z)).collect();
         let liquid = states
             .iter()
-            .any(|&s| self.res.facts.get(s).fluid != horizon_client::blocks::Fluid::None);
+            .any(|&s| self.res.facts().get(s).fluid != horizon_client::blocks::Fluid::None);
         if !free || liquid || states.iter().any(|&s| self.state_in_tag(avoid, s)) {
             return false;
         }
@@ -167,9 +167,9 @@ impl Game<'_> {
         true
     }
     fn state_in_tag(&self, tag: &str, state: horizon_world::registry::BlockStateId) -> bool {
-        let name = &self.res.facts.get(state).name;
+        let name = &self.res.facts().get(state).name;
         self.res
-            .items
+            .items()
             .block_tags
             .get(tag)
             .is_some_and(|s| s.contains(&**name))

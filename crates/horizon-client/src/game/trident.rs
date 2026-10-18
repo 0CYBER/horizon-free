@@ -98,7 +98,7 @@ impl Game<'_> {
         }
         let max = self
             .res
-            .items
+            .items()
             .get(&stack.item)
             .map_or(250, |i| i.max_damage);
         let riptide = stack.enchantment_level("minecraft:riptide") > 0;
@@ -117,7 +117,7 @@ impl Game<'_> {
             p.position.y.floor() as i32,
             p.position.z.floor() as i32,
         );
-        let water = self.res.facts.get(self.world.block(x, y, z)).fluid
+        let water = self.res.facts().get(self.world.block(x, y, z)).fluid
             == horizon_client::blocks::Fluid::Water;
         let sky = self.world.light(x, y + 1, z) >> 4 == 15;
         water || (self.world.weather.raining && sky)
@@ -372,6 +372,7 @@ impl Game<'_> {
             return;
         };
         let Some(uv) = self
+            .gui
             .atlas
             .sprites
             .get("entity/trident/trident")

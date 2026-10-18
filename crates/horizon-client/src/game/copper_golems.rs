@@ -106,7 +106,7 @@ impl Game<'_> {
     fn golem_chest_sound(&mut self, p: [i32; 3], open: bool) {
         let name = self
             .res
-            .facts
+            .facts()
             .get(self.world.block(p[0], p[1], p[2]))
             .name
             .clone();
@@ -292,7 +292,7 @@ impl Game<'_> {
     pub(super) fn golem_shearable(&self, index: usize) -> bool {
         self.mobs[index].saddle_item().is_some_and(|a| {
             self.res
-                .items
+                .items()
                 .item_tags
                 .get("minecraft:shearable_from_copper_golem")
                 .is_some_and(|t| t.contains(&*a.item))

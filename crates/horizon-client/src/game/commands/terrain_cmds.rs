@@ -174,7 +174,7 @@ impl Game<'_> {
         if volume > i64::from(limit) {
             return Err(err("commands.fillbiome.toobig", &[&limit, &volume]));
         }
-        let Some(target) = self.res.biomes.list.iter().position(|b| b.name == biome) else {
+        let Some(target) = self.res.biomes().list.iter().position(|b| b.name == biome) else {
             return Err(err(
                 "argument.resource.not_found",
                 &[&biome, &"minecraft:worldgen/biome"],
@@ -201,7 +201,7 @@ impl Game<'_> {
                         continue;
                     };
                     let current = chunk.biome(x, y, z);
-                    let current_name = &self.res.biomes.list[usize::from(current)].name;
+                    let current_name = &self.res.biomes().list[usize::from(current)].name;
                     if let Some(f) = &filter
                         && !self.biome_matches(f, current_name)
                     {
@@ -474,11 +474,11 @@ impl Game<'_> {
                     let json = horizon_client::scoreboard::tag_to_json(&tag);
                     let drops = self
                         .res
-                        .items
+                        .items()
                         .inline_loot_table(&json, &mut self.world.random);
                     (drops, None)
                 } else {
-                    if !self.res.items.has_loot_table(&table) {
+                    if !self.res.items().has_loot_table(&table) {
                         return Err(err("argument.resource_or_id.failed_to_parse", &[&table]));
                     }
                     let held = if id == "loot.fish" {
@@ -486,14 +486,14 @@ impl Game<'_> {
                     } else {
                         None
                     };
-                    let drops = match self.res.items.loot_sequence(&table) {
+                    let drops = match self.res.items().loot_sequence(&table) {
                         Some(seq) => {
                             let random = self.rand_sequences.get(&seq, self.level.seed);
                             self.res
-                                .items
+                                .items()
                                 .loot_table(&table, false, held.as_ref(), random)
                         }
-                        None => self.res.items.loot_table(
+                        None => self.res.items().loot_table(
                             &table,
                             false,
                             held.as_ref(),
@@ -510,7 +510,7 @@ impl Game<'_> {
                 };
                 let ty = self.target_type(t);
                 let table = format!("minecraft:entities/{}", ty.trim_start_matches("minecraft:"));
-                if t == Target::Player || !self.res.items.has_loot_table(&table) {
+                if t == Target::Player || !self.res.items().has_loot_table(&table) {
                     return Err(err(
                         "commands.drop.no_loot_table.entity",
                         &[&self.target_name(t).plain()],
@@ -521,14 +521,14 @@ impl Game<'_> {
                     None | Some(Some(Target::Player))
                 );
                 let held = self.slot_get(&super::items::Slot::Inv(self.selected));
-                let drops = match self.res.items.loot_sequence(&table) {
+                let drops = match self.res.items().loot_sequence(&table) {
                     Some(seq) => {
                         let random = self.rand_sequences.get(&seq, self.level.seed);
                         self.res
-                            .items
+                            .items()
                             .entity_drops(&ty, by_player, held.as_ref(), random)
                     }
-                    None => self.res.items.entity_drops(
+                    None => self.res.items().entity_drops(
                         &ty,
                         by_player,
                         held.as_ref(),
@@ -543,21 +543,21 @@ impl Game<'_> {
                 let state = self.world.block(p[0], p[1], p[2]);
                 let name = self.data_block_name(p);
                 let table = format!("minecraft:blocks/{}", name.trim_start_matches("minecraft:"));
-                if !self.res.items.has_loot_table(&table) {
+                if !self.res.items().has_loot_table(&table) {
                     return Err(err("commands.drop.no_loot_table.block", &[&name]));
                 }
                 let tool = self.tool_stack(ctx)?;
-                let drops = match self.res.items.loot_sequence(&table) {
+                let drops = match self.res.items().loot_sequence(&table) {
                     Some(seq) => {
                         let random = self.rand_sequences.get(&seq, self.level.seed);
-                        self.res.items.block_drops(
+                        self.res.items().block_drops(
                             self.pack.assets.registry,
                             state,
                             tool.as_ref(),
                             random,
                         )
                     }
-                    None => self.res.items.block_drops(
+                    None => self.res.items().block_drops(
                         self.pack.assets.registry,
                         state,
                         tool.as_ref(),
@@ -624,7 +624,7 @@ impl Game<'_> {
                                 && cur.damage == left.damage
                                 && cur.extra == left.extra =>
                         {
-                            let max = self.res.items.get(&cur.item).map_or(64, |i| i.max_stack);
+                            let max = self.res.items().get(&cur.item).map_or(64, |i| i.max_stack);
                             let take = left.count.min(max.saturating_sub(cur.count));
                             if take > 0 {
                                 cur.count += take;

@@ -74,6 +74,15 @@ fn vanilla_info() -> PackInfo {
         fixed: false,
     }
 }
+/// Shared by the startup menu, which has no world resources yet.
+pub(super) fn pack_infos(vanilla: &Path) -> Vec<PackInfo> {
+    let mut infos: Vec<PackInfo> = packs::discover(vanilla, &packs_dir())
+        .iter()
+        .map(info)
+        .collect();
+    infos.push(vanilla_info());
+    infos
+}
 impl Game<'_> {
     fn vanilla_root(&self) -> PathBuf {
         if self.ui.vanilla_root.as_os_str().is_empty() {
@@ -85,9 +94,7 @@ impl Game<'_> {
     /// The packs the pack screen offers and the current selection
     /// (`PackSelectionScreen` makes its `PackSelectionModel` from them).
     pub(super) fn refresh_pack_lists(&mut self) {
-        let all = packs::discover(&self.vanilla_root(), &packs_dir());
-        let mut infos: Vec<PackInfo> = all.iter().map(info).collect();
-        infos.push(vanilla_info());
+        let infos = pack_infos(&self.vanilla_root());
         let o = &mut self.ui.options;
         o.pack_infos = infos;
         o.pack_selection = self.settings.resource_packs.clone();
@@ -100,6 +107,12 @@ impl Game<'_> {
     /// particle and font textures), item models, sounds, languages, GUI
     /// metadata and the cloud and world border textures.
     pub(super) fn reload_packs(&mut self) {
+        // Pack reload updates tail-owned mob metadata. Keep menus responsive
+        // until those resources exist, then apply the latest selection once.
+        if self.rest_loader.is_some() {
+            self.pending_pack_reload = true;
+            return;
+        }
         let vanilla = self.vanilla_root();
         if self.ui.vanilla_root.as_os_str().is_empty() {
             self.ui.vanilla_root = vanilla.clone();
@@ -119,14 +132,19 @@ impl Game<'_> {
         }
     }
     fn reload_resources(&mut self, root: &Path) -> horizon_client::Result<()> {
-        let assets = std::sync::Arc::new(self.pack.assets.reload(root)?);
+        let render = std::sync::Arc::new(self.pack.assets.reload(root)?);
         let mut atlas = HudAtlas::build(root)?;
         atlas.font.uniform = self.settings.force_unicode;
         atlas.font.japanese = self.settings.japanese_glyphs;
+        let gui = super::UiResources {
+            atlas,
+            panorama: std::sync::Arc::new(horizon_client::gfx::panorama::Faces::load(root)),
+        };
         let pack = super::PackResources::load(
             root,
-            assets,
-            &self.res.facts,
+            self.pack.assets.clone(),
+            render,
+            self.res.facts(),
             self.pack.context.biomes.clone(),
             self.pack.context.light.clone(),
         )?;
@@ -137,7 +155,7 @@ impl Game<'_> {
         let renderer = match self
             .window
             .clone()
-            .map(|window| self.renderer_for(window, &pack, &atlas))
+            .map(|window| self.renderer_for(window, &pack, &gui))
             .transpose()
         {
             Ok(renderer) => renderer,
@@ -158,12 +176,12 @@ impl Game<'_> {
         self.options.resources = root.to_path_buf();
         let context = pack.context.clone();
         self.pack = pack;
-        self.atlas = atlas;
+        self.gui = gui;
         horizon_client::ui_theme::reset_atlas();
         // Villager hats come from the pack's texture metadata (shared data, swapped in place).
         *self
             .res
-            .mob_data
+            .mob_data()
             .villager_hats
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
@@ -179,7 +197,7 @@ impl Game<'_> {
             self.renderer = Some(renderer);
             self.apply_ui_settings();
         }
-        self.ui.chat.rescale(&self.atlas);
+        self.ui.chat.rescale(&self.gui.atlas);
         Ok(())
     }
 }

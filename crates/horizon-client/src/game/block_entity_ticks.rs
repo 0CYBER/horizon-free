@@ -76,7 +76,7 @@ impl Game<'_> {
         (0..registry.len())
             .map(|i| {
                 let state = BlockStateId(i as u32);
-                let name: &str = &self.res.facts.get(state).name;
+                let name: &str = &self.res.facts().get(state).name;
                 match name {
                     "minecraft:hopper"
                     | "minecraft:crafter"
@@ -129,7 +129,7 @@ impl Game<'_> {
         let Some(BlockEntity::Furnace(f)) = self.world.block_entities.get_mut(&pos) else {
             return Ok(());
         };
-        let Some(lit) = f.tick(&self.res.recipes, &self.res.items, &self.res.providers) else {
+        let Some(lit) = f.tick(self.res.recipes(), self.res.items(), self.res.providers()) else {
             return Ok(());
         };
         let state = self.world.block(pos.0, pos.1, pos.2);

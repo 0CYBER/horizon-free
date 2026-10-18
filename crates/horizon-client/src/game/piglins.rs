@@ -11,14 +11,18 @@ use horizon_core::random::RandomSource;
 impl Game<'_> {
     fn piglin_loved(&self, item: &str) -> bool {
         self.res
-            .items
+            .items()
             .item_tags
             .get("minecraft:piglin_loved")
             .is_some_and(|t| t.contains(item))
     }
     /// `PiglinAi.isWearingSafeArmor`.
     pub(super) fn wearing_gold(&self) -> bool {
-        let tag = self.res.items.item_tags.get("minecraft:piglin_safe_armor");
+        let tag = self
+            .res
+            .items()
+            .item_tags
+            .get("minecraft:piglin_safe_armor");
         self.armor
             .iter()
             .flatten()
@@ -119,7 +123,7 @@ impl Game<'_> {
         let m = &self.mobs[i];
         let from = [m.position.x, m.position.y + 1.3, m.position.z];
         let items = if &*item == "minecraft:gold_ingot" && !m.is_baby() {
-            self.res.items.loot_table(
+            self.res.items().loot_table(
                 "minecraft:gameplay/piglin_bartering",
                 false,
                 None,
@@ -191,7 +195,7 @@ impl Game<'_> {
             ];
             !self
                 .res
-                .facts
+                .facts()
                 .get(self.world.block(
                     p[0].floor() as i32,
                     p[1].floor() as i32,
@@ -203,7 +207,7 @@ impl Game<'_> {
     /// Whether breaking or opening this block angers piglins.
     pub(super) fn guarded_by_piglins(&self, name: &str) -> bool {
         self.res
-            .items
+            .items()
             .block_tags
             .get("minecraft:guarded_by_piglins")
             .is_some_and(|t| t.contains(name))

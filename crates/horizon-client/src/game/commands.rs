@@ -941,7 +941,7 @@ impl Game<'_> {
         };
         let count = Self::int(ctx, "count").unwrap_or(1);
         let targets = self.entities(ctx, "targets", true)?;
-        let max_stack = self.res.items.get(&id).map_or(64, |i| i.max_stack) as i32;
+        let max_stack = self.res.items().get(&id).map_or(64, |i| i.max_stack) as i32;
         if count > max_stack * 100 {
             return Err(CommandError::new(Text::translate(
                 "commands.give.failed.toomanyitems",
@@ -1468,7 +1468,7 @@ impl Game<'_> {
             if self.ui.difficulty == 0
                 && self
                     .res
-                    .mob_types
+                    .mob_types()
                     .get(&format!("minecraft:{short}"))
                     .is_some_and(|t| t.category == "monster")
             {
@@ -1485,7 +1485,7 @@ impl Game<'_> {
         let name;
         if let Some(t) = self
             .res
-            .mob_types
+            .mob_types()
             .get(&format!("minecraft:{short}"))
             .cloned()
         {
@@ -1561,10 +1561,10 @@ impl Game<'_> {
         let name_ok = if b.tag {
             let tag = b.id.trim_start_matches("minecraft:");
             self.res
-                .items
+                .items()
                 .block_tags
                 .get(tag)
-                .or_else(|| self.res.items.block_tags.get(&b.id))
+                .or_else(|| self.res.items().block_tags.get(&b.id))
                 .is_some_and(|set| {
                     set.contains(&s.name) || set.contains(s.name.trim_start_matches("minecraft:"))
                 })
@@ -1589,8 +1589,8 @@ impl Game<'_> {
         }
         // A different block replaces the block entity (Level.setBlock).
         let (old, new) = (
-            self.res.facts.get(previous).name.clone(),
-            self.res.facts.get(state).name.clone(),
+            self.res.facts().get(previous).name.clone(),
+            self.res.facts().get(state).name.clone(),
         );
         // The command clears the old block entity without its side effects
         // (UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS); the new block gets a fresh one.
@@ -2184,10 +2184,10 @@ impl Game<'_> {
             let tag = predicate.id.trim_start_matches("minecraft:");
             return self
                 .res
-                .items
+                .items()
                 .item_tags
                 .get(tag)
-                .or_else(|| self.res.items.item_tags.get(&predicate.id))
+                .or_else(|| self.res.items().item_tags.get(&predicate.id))
                 .is_some_and(|s| {
                     s.contains(item) || s.contains(item.trim_start_matches("minecraft:"))
                 });
@@ -2633,7 +2633,7 @@ impl Game<'_> {
         let focused = self.screen == Screen::Chat;
         self.ui
             .chat
-            .add(&self.atlas, line, None, self.ticks, focused);
+            .add(&self.gui.atlas, line, None, self.ticks, focused);
         Ok(1)
     }
     /// MessageArgument: `@p`-style selectors in a message become names.

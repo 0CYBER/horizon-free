@@ -75,7 +75,7 @@ impl Game<'_> {
     }
     /// The fluid at the camera, as `Camera.getFluidInCamera` reports it.
     fn camera_fluid(&self, camera: [f64; 3]) -> CameraFluid {
-        match fog_type(&self.world, &self.res.facts, camera, self.forward()) {
+        match fog_type(&self.world, self.res.facts(), camera, self.forward()) {
             FogType::Water => CameraFluid::Water,
             FogType::Lava => CameraFluid::Lava,
             FogType::PowderSnow => CameraFluid::PowderSnow,
@@ -177,6 +177,6 @@ impl Game<'_> {
         }
         let draws =
             hud_overlays::spyglass(batch.width as i32, batch.height as i32, self.scope_scale);
-        hud_layout::paint(batch, &self.atlas, &draws);
+        hud_layout::paint(batch, &self.gui.atlas, &draws);
     }
 }

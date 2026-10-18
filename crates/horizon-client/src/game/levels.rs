@@ -105,7 +105,7 @@ impl Game<'_> {
     fn open_level(&self, dim: Dim) -> Result<Parked> {
         let (streaming, save) =
             self.make_streaming(&self.world_root.clone(), dim, self.level.seed)?;
-        let mut world = World::new(self.res.facts.air, self.level.seed);
+        let mut world = World::new(self.res.facts().air, self.level.seed);
         world.fast_lava = dim == Dim::Nether;
         Ok(Parked {
             world,

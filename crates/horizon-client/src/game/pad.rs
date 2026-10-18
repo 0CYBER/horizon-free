@@ -477,7 +477,7 @@ impl Game<'_> {
         let attacking = match &self.mining {
             Some(m) if !self.creative => {
                 let state = self.world.block(m.pos[0], m.pos[1], m.pos[2]);
-                TriggerFeel::Texture(self.res.facts.get(state).hardness)
+                TriggerFeel::Texture(self.res.facts().get(state).hardness)
             }
             _ => TriggerFeel::Free,
         };

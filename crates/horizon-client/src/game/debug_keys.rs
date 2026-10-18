@@ -440,7 +440,7 @@ impl Game<'_> {
             }
         }
         let (left, right) = d.columns(&self.debug_chart_lines());
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let mut draws = debug_overlay::draw(&atlas.font, [&left, &right], scale, width);
         let charts = self.debug_charts.draw(
             &atlas.font,
