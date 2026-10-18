@@ -150,6 +150,49 @@ pub fn carry(
     })
 }
 
+/// Repurposed Structures' rule tests and the game's types that run them
+/// (`horizon_world::worldgen`'s `rule_test` and `structure::processor`).
+const RULE_TESTS: [(&str, &str); 3] = [
+    (
+        "repurposed_structures:matter_phase_rule_test",
+        "horizon:matter_phase",
+    ),
+    (
+        "repurposed_structures:piece_origin_axis_aligned_linear_pos_rule_test",
+        "horizon:piece_origin_axis_aligned_linear_pos",
+    ),
+    (
+        "repurposed_structures:y_value_pos_rule_test",
+        "horizon:y_value",
+    ),
+];
+
+/// Renames the rule tests written in Java that the game runs under its own
+/// type ([`RULE_TESTS`]) in a worldgen file's processor lists; each is
+/// counted by type in `carried`. Their fields are the mod's. Whether
+/// anything changed. Without this the game, like vanilla, refuses the list
+/// and every pool naming it: Repurposed's mineshafts and Nether monument.
+pub fn rule_tests(kind: &str, v: &mut Value, carried: &mut BTreeMap<String, usize>) -> bool {
+    fn rename(v: &mut Value, carried: &mut BTreeMap<String, usize>) -> bool {
+        match v {
+            Value::Object(o) => {
+                let mut changed = false;
+                if let Some(Value::String(t)) = o.get_mut("predicate_type")
+                    && let Some((old, new)) = RULE_TESTS.iter().find(|(old, _)| t == old)
+                {
+                    *carried.entry((*old).to_owned()).or_default() += 1;
+                    *t = (*new).to_owned();
+                    changed = true;
+                }
+                o.values_mut().fold(changed, |c, x| rename(x, carried) | c)
+            }
+            Value::Array(a) => a.iter_mut().fold(false, |c, x| rename(x, carried) | c),
+            _ => false,
+        }
+    }
+    each_list(kind, v, &mut |list| rename(list, carried))
+}
+
 /// The data form of a Java processor: the processors to put in its place
 /// (none for a no-op), or `None` when it has none.
 fn as_data(kind: &str, p: &Value, data: &ProcessorData) -> Option<Vec<Value>> {
@@ -872,5 +915,59 @@ mod tests {
             "betterdeserttemples:quartz_pillar_processor"
         );
         assert_eq!(carried.values().sum::<usize>(), 4);
+    }
+
+    #[test]
+    fn repurposed_rule_tests_become_the_games() {
+        let rule = |input: Value, position: Value| {
+            json!({"input_predicate": input, "location_predicate": {"predicate_type":
+                "repurposed_structures:matter_phase_rule_test", "phase_to_test_for": "AIR"},
+                "position_predicate": position, "output_state": {"id": "minecraft:lava"}})
+        };
+        let mut pool = json!({"elements": [{"weight": 1, "element": {
+            "element_type": "minecraft:single_pool_element", "processors": {"processors": [
+                {"processor_type": "minecraft:rule", "rules": [rule(
+                    json!({"predicate_type": "minecraft:always_true"}),
+                    json!({"predicate_type": "repurposed_structures:y_value_pos_rule_test",
+                        "min_y_value": 0, "max_y_value": 31}))]},
+                {"processor_type": "minecraft:capped", "limit": 2, "delegate": {
+                    "processor_type": "minecraft:rule", "rules": [rule(
+                        json!({"predicate_type": "minecraft:block_match", "block": "minecraft:rail"}),
+                        json!({"predicate_type":
+                            "repurposed_structures:piece_origin_axis_aligned_linear_pos_rule_test",
+                            "axis": "y", "min_dist": 0, "max_dist": 1}))]}}]}}}]});
+        let mut carried = BTreeMap::new();
+        assert!(rule_tests("template_pool", &mut pool, &mut carried));
+        let list = &pool["elements"][0]["element"]["processors"]["processors"];
+        let first = &list[0]["rules"][0];
+        assert_eq!(
+            first["location_predicate"]["predicate_type"],
+            "horizon:matter_phase"
+        );
+        assert_eq!(first["location_predicate"]["phase_to_test_for"], "AIR");
+        assert_eq!(
+            first["position_predicate"]["predicate_type"],
+            "horizon:y_value"
+        );
+        assert_eq!(first["position_predicate"]["max_y_value"], 31);
+        let delegated = &list[1]["delegate"]["rules"][0];
+        assert_eq!(
+            delegated["position_predicate"]["predicate_type"],
+            "horizon:piece_origin_axis_aligned_linear_pos"
+        );
+        assert_eq!(
+            delegated["input_predicate"]["predicate_type"],
+            "minecraft:block_match"
+        );
+        assert_eq!(carried.values().sum::<usize>(), 4);
+        assert_eq!(carried["repurposed_structures:matter_phase_rule_test"], 2);
+        // A file holding none is left as it is.
+        assert!(!rule_tests("template_pool", &mut pool, &mut carried));
+        assert!(!rule_tests(
+            "structure",
+            &mut json!({"predicate_type":
+            "repurposed_structures:y_value_pos_rule_test"}),
+            &mut carried
+        ));
     }
 }

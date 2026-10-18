@@ -55,9 +55,10 @@ distance 10. The vanilla server was the pinned 26.3 `server.jar` on Java 25 with
 | What has to be installed | one 46.8 MB binary + 589 MB of prepared resources | Java 25 + the 62 MB jar |
 | Crates linked | 384 (wgpu, winit, cpal, gilrs, arboard, naga…) | n/a |
 
-On Linux the binary loads `libasound.so.2` (cpal) and `libudev.so.1` (gilrs) at startup, even on a server.
-wgpu, winit and the Wayland/X11 libraries are loaded only when a window opens. That makes a minimal
-container image need ALSA and udev for a program that never plays a sound or reads a controller.
+On Linux the full game loads `libasound.so.2` (cpal) and `libudev.so.1` (gilrs) at startup. wgpu, winit
+and the Wayland/X11 libraries are loaded only when a window opens. The server build (`horizon-engine`,
+section 3) is the same program built without its `audio` and `controllers` features, so it needs neither
+library, and a minimal server image runs it as it is.
 
 The two clear losses are RAM and idle CPU. The dedicated server loads everything the client needs to draw
 (the HUD atlas, item renderer, block-entity models, panorama, fog and music tables, entity models), and it
@@ -74,9 +75,13 @@ not tick cost, so it is in scope here (see section 9).
   headless client built from vanilla's own codecs, pings and joins Horizon's server and vanilla's from the
   same world copy. It compares every login, configuration and play packet up to the first chunk batch, the
   chunk bytes, chat, `/list`, failing commands, the console lines and the files left behind. Result on main:
-  see "Harnesses on main" below. The real vanilla GUI client (`tools/vanilla_client.py`) could not be run
-  here: the tool only knows Linux natives, and the Mac mini's session was locked, which stalls the client's
-  rendering. It runs on the desktop under vscreen.
+  see "Harnesses on main" below.
+- **The real vanilla 26.3 client** (`tools/vanilla_client.py`, from the owner's own files, dev-only) joins
+  too. On 2026-10-18 it joined the server build of the game (`horizon-engine`, section 3) on the Mac mini:
+  `python3 tools/vanilla_client.py --name Vanilla --join localhost:PORT`. It logged in, drew the terrain
+  around spawn and stayed connected for four minutes, with no warning or error on the server. The tool
+  runs on Linux under vscreen and on macOS from the logged-in screen session, even a locked one, with vsync
+  off.
 
 ### What fails or is missing
 
@@ -145,16 +150,22 @@ game built in `Game::new`, the integrated server on its own thread. On that base
 1. The dedicated path skips everything only a window uses: the HUD atlas, item renderer, block-entity and
    entity models, panorama, fog, music, and mesh tables (perf-ticks-2 already stops server-side meshing).
    This is the RAM and start-time item.
-2. The game moves into a library crate, with the window, audio and controller parts behind a `client`
-   feature. A `horizon-engine` binary built without that feature links no wgpu, winit, cpal or gilrs, and
-   needs neither ALSA nor udev. The supervisor finds it beside itself and falls back to `horizon-client`.
+2. The game moves into a library crate, with the window parts behind a `client` feature, so
+   `horizon-engine` links no wgpu or winit either. Sound and controllers are already optional (the
+   `audio` and `controllers` features, on by default): `horizon-engine` today is the game built without
+   them (section 3).
 
 ## 3. Packaging
 
-**Binaries.** The release archives already hold `horizon-client`, `horizon-ctl` and `horizon-prepare`.
-`horizon-server` joins them (PR 3: `xtask package` and `release.yml` build it and check it starts). Once
-`horizon-engine` exists (section 2), a separate small archive per platform
-(`horizon-server-<os>-<arch>.tar.gz` or `.zip`) holds just the server's binaries.
+**Binaries.** The release archives hold `horizon-client`, `horizon-ctl`, `horizon-prepare` and
+`horizon-server`. On Linux the release also has `horizon-server-linux-x86_64.tar.gz`: `horizon-server`,
+`horizon-prepare` and `horizon-engine`, the game built with `--no-default-features` (no sound, no
+controllers), which links neither `libasound.so.2` nor `libudev.so.1`. `release.yml` builds it after the
+client archive (`xtask package-server`) and fails if `tools/check_imports.py --server` finds either library;
+CI lints the same build. `horizon-server` runs `horizon-engine` when it is beside it or on the PATH, else
+`horizon-client`. Build it yourself with `cargo build --release -p horizon-client --no-default-features`
+and copy `target/release/horizon-client` as `horizon-engine`. macOS and Windows have no such libraries to
+avoid, so they keep the one archive.
 
 **Game files: the owner's own copy, as with `prepare`.** Nothing of Mojang's is redistributed and nothing is
 downloaded on the owner's behalf. `horizon-server` looks for prepared resources in this order:
@@ -181,15 +192,16 @@ comes out of the headless-engine work.
 
 - Linux and macOS:
   `curl -fsSL https://raw.githubusercontent.com/ludovic111/horizon/main/packaging/server/install.sh | sh`
-  The script picks the release archive for the OS and architecture (Linux x86_64, macOS arm64), downloads
-  it from GitHub Releases, and checks it against the SHA-256 GitHub publishes for each asset. It never asks
-  for sudo. Options: `--version vX.Y.Z`, `--dir` (default `~/.local/share/horizon`), `--bin` (default
-  `~/.local/bin`).
-  On Linux the game links ALSA's and udev's libraries (`libasound.so.2`, `libudev.so.1`) even as a server,
-  until the headless engine exists. Minimal server images often lack ALSA (Debian and Ubuntu:
-  `sudo apt install libasound2 libudev1`, `libasound2t64` on Ubuntu 24.04 and later). The script lists any
-  that are missing, `init` warns, and `run` stops at once with what to install, rather than restarting a
-  game that can't load.
+  The script picks the release archive for the OS and architecture (on Linux x86_64 the server archive,
+  on macOS arm64 the game's), downloads it from GitHub Releases, and checks it against the SHA-256 GitHub
+  publishes for each asset. It never asks for sudo. Options: `--version vX.Y.Z`, `--dir` (default
+  `~/.local/share/horizon`), `--bin` (default `~/.local/bin`), and `--archive FILE` to install an archive
+  already on the machine (a build of your own; no download and no checksum).
+  A Linux release from before the server archive installs the full game, which links ALSA's and udev's
+  libraries (`libasound.so.2`, `libudev.so.1`); minimal server images often lack them (Debian and Ubuntu:
+  `sudo apt install libasound2 libudev1`, `libasound2t64` on Ubuntu 24.04 and later). Then the script lists
+  any that are missing, `init` warns, and `run` stops at once with what to install, rather than restarting
+  a game that can't load.
 - Windows:
   `irm https://raw.githubusercontent.com/ludovic111/horizon/main/packaging/server/install.ps1 | iex`
   The script does the same into `%LOCALAPPDATA%\Horizon` (`-Version`, `-Dir`), with junctions instead of
@@ -201,8 +213,8 @@ comes out of the headless-engine work.
   (`horizon-prepare`, `horizon-server init`).
 
 **Docker** (`packaging/server/Dockerfile`, built the same way as the relay's image): a multi-stage build that
-ends on `debian:bookworm-slim` as user `horizon`. It adds `libasound2` and `libudev1` until the headless engine
-lands. It uses volume `/data` for the server folder, takes the owner's prepared game files as a read-only
+ends on `debian:bookworm-slim` as user `horizon`, with the server build as `horizon-engine`, so the image needs
+no ALSA or udev. It uses volume `/data` for the server folder, takes the owner's prepared game files as a read-only
 mount on `/opt/horizon/.local/horizon-client/26.3`, exposes port `25565/tcp`, and keeps the control API (and
 later the panel) on 127.0.0.1 inside the container: `docker exec <name> horizon-server status|cmd|backup`.
 On the first start, `HORIZON_EULA=true` and `HORIZON_WORLD`, `HORIZON_SEED`, `HORIZON_PORT`,
@@ -495,6 +507,20 @@ reproducible by anyone, and show the same gameplay on both sides.
     24.0 against 31.6) and longer with 50 (35.2 against 29.7). Its P99 was lower at every count.
   - Horizon also did more work: it kept up with the exploring bots, so it generated 1.9 to 2.9 times
     the new terrain a second.
+- **Mixed bots, equal work (2026-10-18,** `benchmarks/server-equal-mixed-2026-10-18/`). This is the same
+  run with the load made equal. The explore bots fly at 0.8 blocks a second, so every bot follows the same
+  path on both servers and none waits for terrain. A 300-second warm-up lets both finish the bots' first
+  views before the measurement. `server_bench.py` now prints a work table that compares each count's chunks
+  a second across servers and flags a run that isn't equal. Horizon ran as `horizon-engine`, the server
+  build, installed from its archive. Results, on the ThinkPad again (the desktop didn't wake):
+  - The work was equal at 1 and 10 bots. At 25 the chunks sent a second were equal (158.6 against 157.6),
+    and vanilla still sent 2.5 more first-time chunks a second while it caught up.
+  - Tick: 1.8 against 11.3 ms at 1 bot, 4.7 against 34.3 at 10, 11.7 against 50.5 at 25 (vanilla 19.8 TPS).
+    At 50 Horizon ran at 23.8 ms. Vanilla's watchdog stopped its server 30 s after the last bot joined (a
+    60-second tick). This is one pass, to repeat on a bigger machine.
+  - Horizon's RSS was 4.1 to 4.9 times smaller (1.03 GB at 50).
+  - Served in full, vanilla's walking bots got 5400 to 6100 chunks each, against 640 to 1100 in the first
+    run. That is why vanilla held 50 bots there and not here.
 - **Ownership.** perf-server-1 owns making the tick faster. This work only measures it, files what it finds,
   and fixes startup, RAM and packaging.
 
@@ -513,7 +539,8 @@ vanilla.
    archive in the release.
 3. The web panel MVP: status, live TPS/MSPT/RAM/CPU, players, console, backups and login links.
 4. `horizon-bots` and `tools/server_bench.py`, with a first run against vanilla (1/10/25/50 bots, `mixed`)
-   published in `benchmarks/`: done, `benchmarks/server-mixed-2026-10-18/` (section 9).
+   published in `benchmarks/`: done, `benchmarks/server-mixed-2026-10-18/`, and with equal work
+   `benchmarks/server-equal-mixed-2026-10-18/` (section 9).
 5. Small engine fixes found on the way: logging refused logins (vanilla's lines).
 
 **Where it stands (2026-10-16):** items 1 to 4 are built and in review (section 11). What's left for the 23rd:

@@ -195,11 +195,19 @@ impl StructureState {
         for (i, def) in registry.structures.iter().enumerate() {
             by_step[def.step].push(i);
         }
-        let bindings = FeatureBlockBindings::with_tags(
+        let mut bindings = FeatureBlockBindings::with_tags(
             data.registry(),
             data.integers().clone(),
             &data.block_tags,
         )?;
+        // Processors that test what a block is made of read canOcclude.
+        if let Some(blocks) = data
+            .feature_resources
+            .as_ref()
+            .and_then(|r| r.blocks.as_ref())
+        {
+            bindings = bindings.with_block_properties(&blocks.properties)?;
+        }
         Ok(Some(Self {
             registry,
             resources: resources.clone(),

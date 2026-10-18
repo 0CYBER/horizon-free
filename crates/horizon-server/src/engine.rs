@@ -11,7 +11,9 @@ use std::{
     time::Duration,
 };
 
-/// The game's program names, most specific first: a headless engine once there is one, else the game.
+/// The game's program names, most specific first: the server build (the game without sound or
+/// controllers, so it needs neither ALSA nor udev on Linux; `horizon-server-linux-x86_64.tar.gz` holds it),
+/// else the full game.
 const PROGRAMS: [&str; 2] = ["horizon-engine", "horizon-client"];
 
 fn exe(name: &str) -> String {
@@ -50,8 +52,8 @@ pub fn program(config: &Config, dir: &Path) -> Result<PathBuf, String> {
 }
 
 /// Checks that the game program starts at all: `--help` loads no game files, so it fails only when the
-/// system can't load the program, as on a Linux without the ALSA and udev libraries it links (even a
-/// server needs them until there is a headless engine). The reason, with what to install.
+/// system can't load the program, as on a Linux without the ALSA and udev libraries the full game links
+/// (the server build doesn't). The reason, with what to install.
 pub fn check_starts(program: &Path) -> Result<(), String> {
     let output = Command::new(program)
         .arg("--help")
@@ -84,10 +86,13 @@ fn start_failure(program: &Path, code: Option<i32>, stderr: &str) -> String {
             format!(": {reason}")
         }
     );
-    if reason.contains("error while loading shared libraries") {
+    if reason.contains("error while loading shared libraries")
+        && (reason.contains("libasound") || reason.contains("libudev"))
+    {
         text.push_str(
-            "\nIt needs ALSA's and udev's libraries (libasound.so.2, libudev.so.1), even on a server. Install \
-             them:\n  Debian, Ubuntu: sudo apt install libasound2 libudev1   (Ubuntu 24.04 and later: \
+            "\nThe full game needs ALSA's and udev's libraries (libasound.so.2, libudev.so.1). Install the \
+             server build, which needs neither (packaging/server/install.sh picks it on Linux), or the \
+             libraries:\n  Debian, Ubuntu: sudo apt install libasound2 libudev1   (Ubuntu 24.04 and later: \
              libasound2t64)\n  Fedora, RHEL: sudo dnf install alsa-lib systemd-libs\n  Arch: sudo pacman -S \
              alsa-lib systemd-libs\n  NixOS: enable programs.nix-ld with alsa-lib and udev in its libraries",
         );
@@ -256,6 +261,14 @@ mod tests {
              error while loading shared libraries: libasound.so.2"
         ));
         assert!(text.contains("sudo apt install libasound2 libudev1"));
+        // Another library: no ALSA advice (the server build, horizon-engine, links neither).
+        let engine = start_failure(
+            Path::new("/opt/horizon/horizon-engine"),
+            Some(127),
+            "/opt/horizon/horizon-engine: error while loading shared libraries: libgcc_s.so.1: cannot open \
+             shared object file: No such file or directory\n",
+        );
+        assert!(!engine.contains("libasound"), "{engine}");
         let other = start_failure(program, Some(1), "something else\n");
         assert_eq!(
             other,

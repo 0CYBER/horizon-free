@@ -39,7 +39,7 @@ impl Game<'_> {
         });
         self.clicks.destroying = destroying;
         self.attack_clicks = 0;
-        self.stop_remote_mining();
+        self.request_remote_mining_stop();
         self.mining = None;
     }
     /// `LivingEntity.swing` with `getModifiedSwingDuration`.
