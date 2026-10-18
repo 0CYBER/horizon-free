@@ -1026,14 +1026,11 @@ fn check_despawn(m: &mut Mob, w: &MobWorld) -> bool {
         || super::nautilus::is_nautilus(m.species()) && m.extra.tame
         || m.species() == Species::SulfurCube
             && (super::sulfur_cube::has_body(m) || m.extra.scratch[3] != 0);
-    // removeWhenFarAway: animals, wardens, allays, patrols and raiders,
-    // zombie villagers being cured and ridden mobs stay; the wither's
-    // checkDespawn never removes it for distance.
+    // removeWhenFarAway: animals, villagers, golems, patrols and raiders,
+    // zombie villagers being cured and ridden mobs stay.
     let creature = m.kind.category == "creature";
-    let removable = !(matches!(
-        m.species(),
-        Species::Warden | Species::Allay | Species::Wither
-    ) || creature && m.kind.flags.animal && !m.extra.jockey
+    let removable = !(never_removed_when_far(m.species())
+        || creature && m.kind.flags.animal && !m.extra.jockey
         || super::raider::keeps_alive(m, d)
         || super::zombie_villager::keeps_alive(m)
         || super::riders::keeps_alive(m));
@@ -1058,6 +1055,24 @@ fn check_despawn(m: &mut Mob, w: &MobWorld) -> bool {
         m.ai.no_action_time = 0;
     }
     true
+}
+/// The types whose `removeWhenFarAway` is always false (`Villager`,
+/// `WanderingTrader`, `AbstractGolem`: iron, snow and copper golems and
+/// shulkers; `Allay`, `Warden`), and the wither, whose `checkDespawn` never
+/// removes it for distance.
+fn never_removed_when_far(s: Species) -> bool {
+    matches!(
+        s,
+        Species::Villager
+            | Species::WanderingTrader
+            | Species::IronGolem
+            | Species::SnowGolem
+            | Species::CopperGolem
+            | Species::Shulker
+            | Species::Allay
+            | Species::Warden
+            | Species::Wither
+    )
 }
 /// Movement speed bonus multiplier (baby zombies are 50% faster, etc.).
 pub fn speed_bonus(m: &Mob) -> f64 {
@@ -1577,5 +1592,27 @@ mod bucket_axolotl_tests {
     #[test]
     fn bucket_axolotl_uses_aquatic_not_generic_land_ai() {
         assert_eq!(family(Species::Axolotl), Family::Aquatic);
+    }
+}
+#[cfg(test)]
+mod despawn_tests {
+    use super::*;
+    /// Village villagers are placed without PersistenceRequired (unlike the
+    /// village's iron golem), so they must never despawn for distance.
+    #[test]
+    fn villagers_traders_and_golems_never_despawn_for_distance() {
+        for s in [
+            Species::Villager,
+            Species::WanderingTrader,
+            Species::IronGolem,
+            Species::SnowGolem,
+            Species::CopperGolem,
+            Species::Shulker,
+        ] {
+            assert!(never_removed_when_far(s), "{s:?}");
+        }
+        for s in [Species::Zombie, Species::ZombieVillager, Species::Pillager] {
+            assert!(!never_removed_when_far(s), "{s:?}");
+        }
     }
 }
