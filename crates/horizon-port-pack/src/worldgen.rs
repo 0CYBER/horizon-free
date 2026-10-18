@@ -26,6 +26,19 @@ const JIGSAWS: [&str; 3] = [
     "moogs_structures:moogs_structures_generic_jigsaw_structure",
     "repurposed_structures:generic_jigsaw_structure",
 ];
+/// The Nether variants of the piece-limited jigsaws: laid out the same,
+/// then moved onto land.
+const NETHER_JIGSAWS: [&str; 2] = [
+    "moogs_structures:moogs_structures_generic_nether_jigsaw_structure",
+    "repurposed_structures:generic_nether_jigsaw_structure",
+];
+/// Layout rules the piece-limited assembler keeps (`horizon:piece_limited`).
+const PIECE_LIMITED_RULES: [&str; 4] = [
+    "y_allowance",
+    "burying_type",
+    "use_bounding_box_hack",
+    "pools_that_ignore_boundaries",
+];
 /// Placements that are vanilla's random spread with extra rules.
 const SPREADS: [&str; 2] = [
     "moogs_structures:advanced_random_spread",
@@ -213,12 +226,22 @@ fn upgrade_types(
                 yung_structure(v, lost);
                 true
             }
-            Some(t) if JIGSAWS.contains(&t) => {
-                let liquid = match t.split_once(':').map(|(ns, _)| ns) {
-                    Some("moogs_structures") => "top",
-                    _ => "lowest",
+            Some(t) if JIGSAWS.contains(&t) || NETHER_JIGSAWS.contains(&t) => {
+                let library = match t.split_once(':').map(|(ns, _)| ns) {
+                    Some("moogs_structures") => Some("moogs"),
+                    Some("repurposed_structures") => Some("repurposed"),
+                    _ => None,
                 };
-                start_checks(v, liquid, lost);
+                let liquid = if library == Some("moogs") {
+                    "top"
+                } else {
+                    "lowest"
+                };
+                let limited = library.map(|l| piece_limited(v, l));
+                start_checks(v, liquid, lost, limited.is_some());
+                if let Some(limited) = limited {
+                    v["horizon:piece_limited"] = limited;
+                }
                 v["type"] = "minecraft:jigsaw".into();
                 true
             }
@@ -399,7 +422,7 @@ fn yung_condition(c: &Value, lost: &mut BTreeMap<String, usize>) -> Value {
 /// Moves a Repurposed Structures or Moog's jigsaw's start rules under
 /// `horizon:start_checks`, and counts the layout rules it loses. `liquid` is
 /// the block its no-start-in-liquid rule reads.
-fn start_checks(v: &mut Value, liquid: &str, lost: &mut BTreeMap<String, usize>) {
+fn start_checks(v: &mut Value, liquid: &str, lost: &mut BTreeMap<String, usize>, limited: bool) {
     let Some(o) = v.as_object_mut() else {
         return;
     };
@@ -420,12 +443,128 @@ fn start_checks(v: &mut Value, liquid: &str, lost: &mut BTreeMap<String, usize>)
         }
     }
     for rule in LAYOUT_RULES {
-        if o.remove(rule).is_some_and(|r| r != Value::Bool(false)) {
+        let kept = limited && PIECE_LIMITED_RULES.contains(&rule);
+        if o.remove(rule).is_some_and(|r| r != Value::Bool(false)) && !kept {
             *lost.entry(rule.into()).or_default() += 1;
         }
     }
     if !checks.is_empty() {
         o.insert("horizon:start_checks".into(), checks.into());
+    }
+}
+
+/// A Repurposed Structures or Moog's jigsaw's layout rules for the game's
+/// piece-limited assembler: y_allowance, burying, the pools whose fallbacks
+/// ignore the bounds, liquid, and the Nether variants' land search. The
+/// bounding box hack is vanilla's expansion hack. The pieces' counts are
+/// added from the mod's count files ([`piece_counts`]).
+fn piece_limited(v: &mut Value, library: &str) -> Value {
+    let mut out = serde_json::Map::new();
+    out.insert("library".into(), library.into());
+    let lower = |x: &Value| x.as_str().map(str::to_ascii_lowercase);
+    for (from, to) in [("min_y_allowed", "min_y"), ("max_y_allowed", "max_y")] {
+        if let Some(n) = v.get("y_allowance").and_then(|y| y.get(from)) {
+            out.insert(to.into(), n.clone());
+        }
+    }
+    if let Some(b) = v.get("burying_type").and_then(lower) {
+        out.insert("burying".into(), b.into());
+    }
+    if v["cannot_spawn_in_liquid"].as_bool() == Some(true) {
+        out.insert("no_liquid".into(), true.into());
+    }
+    if let Some(pools) = v
+        .get("pools_that_ignore_boundaries")
+        .filter(|p| p.is_array())
+    {
+        out.insert("ignore_bounds_pools".into(), pools.clone());
+    }
+    if v["use_bounding_box_hack"].as_bool() == Some(true) {
+        v["use_expansion_hack"] = true.into();
+    }
+    if let Some(o) = v.as_object_mut() {
+        if let Some(search) = o.remove("land_search_direction") {
+            out.insert("land_search".into(), lower(&search).into());
+        }
+        if let Some(ledge) = o.remove("ledge_offset_y") {
+            out.insert("ledge_offset_y".into(), ledge);
+        }
+    }
+    out.into()
+}
+
+/// The pieces' spawn counts of the structures a mod ships, by structure id:
+/// Repurposed Structures' `rs_pieces_spawn_counts` (each file names its
+/// `target_structure`) and Moog's `msl_pieces_spawn_counts` (the file's id),
+/// in the game's `horizon:piece_limited` shape.
+pub fn piece_counts<R: Read + std::io::Seek>(
+    zip: &mut zip::ZipArchive<R>,
+) -> BTreeMap<String, Value> {
+    let mut out = BTreeMap::new();
+    for i in 0..zip.len() {
+        let Ok(mut entry) = zip.by_index(i) else {
+            continue;
+        };
+        let name = entry.name().to_owned();
+        let Some((ns, rest)) = name
+            .strip_prefix("data/")
+            .and_then(|r| r.strip_suffix(".json"))
+            .and_then(|r| r.split_once('/'))
+        else {
+            continue;
+        };
+        let (rs, path) = if let Some(p) = rest.strip_prefix("rs_pieces_spawn_counts/") {
+            (true, p)
+        } else if let Some(p) = rest.strip_prefix("msl_pieces_spawn_counts/") {
+            (false, p)
+        } else {
+            continue;
+        };
+        let mut text = String::new();
+        let Ok(v) = entry
+            .read_to_string(&mut text)
+            .map_err(|_| ())
+            .and_then(|_| serde_json::from_str::<Value>(&text).map_err(|_| ()))
+        else {
+            continue;
+        };
+        let id = match v["target_structure"].as_str() {
+            Some(target) if rs => target.to_owned(),
+            _ if rs => continue,
+            _ => format!("{ns}:{path}"),
+        };
+        let pieces: Vec<Value> = v["pieces_spawn_counts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|p| {
+                let mut e = serde_json::Map::new();
+                e.insert("name".into(), p["nbt_piece_name"].as_str()?.into());
+                for (from, to) in [
+                    ("always_spawn_this_many", "required"),
+                    ("never_spawn_more_than_this_many", "max"),
+                    ("minimum_distance_from_center_piece", "min_depth"),
+                ] {
+                    if let Some(n) = p.get(from).filter(|n| n.is_number()) {
+                        e.insert(to.into(), n.clone());
+                    }
+                }
+                Some(Value::Object(e))
+            })
+            .collect();
+        out.insert(id, pieces.into());
+    }
+    out
+}
+
+/// Adds a structure's piece counts to its `horizon:piece_limited` key.
+pub fn add_piece_counts(id: &str, v: &mut Value, counts: &BTreeMap<String, Value>) -> bool {
+    match (counts.get(id), v.get_mut("horizon:piece_limited")) {
+        (Some(pieces), Some(limited)) => {
+            limited["pieces"] = pieces.clone();
+            true
+        }
+        _ => false,
     }
 }
 
@@ -691,9 +830,8 @@ mod tests {
         let mut s = json!({"type": "lithostitched:jigsaw", "start_pool": "a:b"});
         assert!(upgrade("structure", &mut s, &mut report, &NO_TAGS));
         assert_eq!(s["type"], "minecraft:jigsaw");
-        let mut nether =
-            json!({"type": "moogs_structures:moogs_structures_generic_nether_jigsaw_structure"});
-        assert!(!upgrade("structure", &mut nether, &mut report, &NO_TAGS));
+        let mut formation = json!({"type": "formations:simple"});
+        assert!(!upgrade("structure", &mut formation, &mut report, &NO_TAGS));
         let mut set = json!({"placement": {"type": "moogs_structures:advanced_random_spread",
             "spacing": 10, "separation": 5, "min_distance_from_world_origin": 250}});
         assert!(upgrade("structure_set", &mut set, &mut report, &NO_TAGS));
@@ -730,10 +868,7 @@ mod tests {
         assert_eq!(
             report.unsupported,
             BTreeMap::from([
-                (
-                    "moogs_structures:moogs_structures_generic_nether_jigsaw_structure".into(),
-                    1
-                ),
+                ("formations:simple".into(), 1),
                 ("somelib:element".into(), 1),
             ])
         );
@@ -771,9 +906,12 @@ mod tests {
         let mut plain = json!({"type": "lithostitched:jigsaw", "cannot_spawn_in_liquid": false});
         assert!(upgrade("structure", &mut plain, &mut report, &NO_TAGS));
         assert!(plain.get("horizon:start_checks").is_none());
+        // The layout rules go to the piece-limited assembler.
+        assert!(report.rules_lost.is_empty());
         assert_eq!(
-            report.rules_lost,
-            BTreeMap::from([("burying_type".into(), 1), ("y_allowance".into(), 1)])
+            moogs["horizon:piece_limited"],
+            json!({"library": "moogs", "min_y": 60, "burying": "lowest_corner",
+                "no_liquid": true})
         );
     }
 
@@ -955,6 +1093,74 @@ mod tests {
         assert!(!disables("bettermineshafts:mineshaft_oak", &mut java));
         let mut circle = json!({"type": "minecraft:jigsaw"});
         assert!(!disables("betterwitchhuts:witch_circle", &mut circle));
+    }
+
+    #[test]
+    fn piece_limited_jigsaws_keep_their_layout() {
+        let mut report = Upgrade::default();
+        let mut nether = json!({"type": "repurposed_structures:generic_nether_jigsaw_structure",
+            "start_pool": "rs:x", "size": 8, "y_allowance": {"min_y_allowed": 40, "max_y_allowed": 90},
+            "cannot_spawn_in_liquid": true, "pools_that_ignore_boundaries": ["rs:roof"],
+            "use_bounding_box_hack": true, "land_search_direction": "HIGHEST_LAND",
+            "ledge_offset_y": 2});
+        assert!(upgrade("structure", &mut nether, &mut report, &NO_TAGS));
+        assert_eq!(nether["type"], "minecraft:jigsaw");
+        assert_eq!(
+            nether["horizon:piece_limited"],
+            json!({"library": "repurposed", "min_y": 40, "max_y": 90, "no_liquid": true,
+                "ignore_bounds_pools": ["rs:roof"], "land_search": "highest_land",
+                "ledge_offset_y": 2})
+        );
+        assert_eq!(nether["use_expansion_hack"], true);
+        for gone in [
+            "y_allowance",
+            "use_bounding_box_hack",
+            "land_search_direction",
+            "ledge_offset_y",
+        ] {
+            assert!(nether.get(gone).is_none(), "{gone}");
+        }
+        let mut moogs = json!({"type": "moogs_structures:moogs_structures_generic_jigsaw_structure",
+            "burying_type": "AVERAGE_LAND"});
+        assert!(upgrade("structure", &mut moogs, &mut report, &NO_TAGS));
+        assert_eq!(
+            moogs["horizon:piece_limited"],
+            json!({"library": "moogs", "burying": "average_land"})
+        );
+        // Lithostitched's jigsaw is vanilla's: no key.
+        let mut litho = json!({"type": "lithostitched:jigsaw"});
+        assert!(upgrade("structure", &mut litho, &mut report, &NO_TAGS));
+        assert!(litho.get("horizon:piece_limited").is_none());
+        assert!(report.rules_lost.is_empty(), "{:?}", report.rules_lost);
+        assert!(report.unsupported.is_empty());
+
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default();
+        for (name, text) in [
+            (
+                "data/rs/rs_pieces_spawn_counts/city.json",
+                r#"{"target_structure": "rs:city_nether", "pieces_spawn_counts": [
+                    {"nbt_piece_name": "rs:city/center", "always_spawn_this_many": 1,
+                     "never_spawn_more_than_this_many": 1, "minimum_distance_from_center_piece": 3}]}"#,
+            ),
+            (
+                "data/mvs/msl_pieces_spawn_counts/tower.json",
+                r#"{"pieces_spawn_counts": [{"nbt_piece_name": "mvs:top", "never_spawn_more_than_this_many": 2}]}"#,
+            ),
+        ] {
+            zip.start_file(name, opts).unwrap();
+            std::io::Write::write_all(&mut zip, text.as_bytes()).unwrap();
+        }
+        let mut zip = zip::ZipArchive::new(zip.finish().unwrap()).unwrap();
+        let counts = piece_counts(&mut zip);
+        assert_eq!(
+            counts["rs:city_nether"],
+            json!([{"name": "rs:city/center", "required": 1, "max": 1, "min_depth": 3}])
+        );
+        assert_eq!(counts["mvs:tower"], json!([{"name": "mvs:top", "max": 2}]));
+        assert!(add_piece_counts("rs:city_nether", &mut nether, &counts));
+        assert_eq!(nether["horizon:piece_limited"]["pieces"][0]["required"], 1);
+        assert!(!add_piece_counts("rs:other", &mut nether, &counts));
     }
 
     #[test]
