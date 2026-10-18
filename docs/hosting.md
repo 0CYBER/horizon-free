@@ -20,8 +20,9 @@ plan are in [docs/server.md](https://github.com/ludovic111/horizon/blob/main/doc
   Until then Horizon players can join offline servers only (`online_mode = false`). An offline server never
   checks accounts: anyone who reaches it can join under any name. Keep it on your LAN or a tailnet
   (Tailscale, ZeroTier), or share it only with friends you trust.
-- **No secure chat.** Chat isn't signed, and `enforce-secure-profile` has no effect. Vanilla clients show
-  chat from the server as not secure.
+- **Secure chat** works as on vanilla's server: in online mode, vanilla clients sign their chat, and with
+  `enforce-secure-profile=true` (the default) unsigned chat is refused. On an offline server, or for a player
+  without a chat session (Horizon's own client today), chat stays unsigned and shows as not secure.
 - **Nether and End:** each player travels on their own through portals, and operators with `execute in
   <dimension> run tp`. The players in the level they leave stop seeing them, and the ones in the level they
   arrive in start to, as on vanilla (checked against vanilla with two players, by command and through an End

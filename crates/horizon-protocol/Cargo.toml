@@ -13,6 +13,8 @@ serde_json = "1.0.151"
 # The shared secret and RSA padding (OS randomness) and the server hash.
 getrandom = "0.3"
 sha1 = "0.10"
+# Secure chat: SHA256withRSA message signatures.
+sha2 = "0.10"
 
 [lints]
 workspace = true
