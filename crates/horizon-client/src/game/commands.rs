@@ -1481,7 +1481,13 @@ impl Game<'_> {
                     self.carts.push(cart);
                     name = Text::translate(&format!("entity.minecraft.{k}"), &[]);
                 }
-                _ => return Err(err("commands.summon.failed", &[])),
+                // SummonCommand.createEntity: any other type from an empty compound.
+                _ => {
+                    let Some(target) = self.summon_with_nbt(&kind, pos, "{}")? else {
+                        return Err(err("commands.summon.failed", &[]));
+                    };
+                    name = self.target_name(target);
+                }
             }
         }
         self.feedback(Text::translate("commands.summon.success", &[name]));

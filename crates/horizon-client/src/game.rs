@@ -65,6 +65,7 @@ mod jukebox;
 mod lan;
 mod lan_actions;
 mod lan_crafting;
+mod lan_entities;
 mod lan_mobs;
 mod lan_pvp;
 mod lan_screen;

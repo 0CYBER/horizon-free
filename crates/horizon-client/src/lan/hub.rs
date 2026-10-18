@@ -124,6 +124,8 @@ pub struct Hub {
     /// The `player_movement_check` and `elytra_movement_check` game rules,
     /// set by the game before each tick.
     pub movement_checks: (bool, bool),
+    /// Who rides what, set by the game before each tick.
+    pub riding: super::entity::Riding,
     last_clock: i64,
     last_rate: f32,
     ticking: (f32, bool),
@@ -237,6 +239,7 @@ impl Hub {
             sync,
             ticks: 0,
             movement_checks: (true, true),
+            riding: Default::default(),
             last_clock: i64::MIN,
             last_rate: 0.0,
             ticking: (20.0, false),
@@ -1501,14 +1504,14 @@ impl Hub {
                     continue;
                 }
                 if self.guests[gi].tracker.is_tracking(e.id) {
-                    let packets = self.guests[gi].tracker.update(e);
+                    let packets = self.guests[gi].tracker.update(e, &self.riding);
                     self.guests[gi].send_all(&packets);
                 } else if visible(&self.guests[gi], ei) {
                     let Some(kind) = self.entity_type(&e.kind) else {
                         continue;
                     };
                     // Players need their list entry first; guests got it at join.
-                    let packets = self.guests[gi].tracker.spawn(e, kind);
+                    let packets = self.guests[gi].tracker.spawn(e, kind, &self.riding);
                     self.guests[gi].send_all(&packets);
                 }
             }
