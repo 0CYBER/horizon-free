@@ -639,7 +639,8 @@ impl Game<'_> {
                     self.drop_guest_items(host, gi, vec![c]);
                 }
             }
-            S::ChatCommand(c) => self.guest_command(host, conn, &c.command),
+            S::ChatCommand(c) => self.guest_chat_command(host, conn, &c.command),
+            S::ChatCommandSigned(p) => self.guest_signed_command(host, conn, p),
             S::ChangeDifficulty(p) if host.hub.guests[gi].permission >= 2 => {
                 if !self.level.difficulty_locked && (0..=3).contains(&p.difficulty) {
                     self.ui.difficulty = if self.level.hardcore {
@@ -729,12 +730,6 @@ impl Game<'_> {
                         );
                     }
                     self.send_admin_feedback(host, Some(conn));
-                }
-            }
-            S::Unknown(8, payload) => {
-                // A signed command: the text comes first.
-                if let Ok(text) = horizon_protocol::buf::Reader::new(&payload).string(32767) {
-                    self.guest_command(host, conn, &text);
                 }
             }
             S::Unknown(id, payload)
@@ -861,7 +856,18 @@ impl Game<'_> {
     }
 
     /// Commands.performCommand for a guest with command access.
-    fn guest_command(&mut self, host: &mut LanHost, conn: u32, command: &str) {
+    /// Commands.performCommand for a guest, with the message arguments it
+    /// signed (none after an unsigned command packet).
+    pub(super) fn guest_command(
+        &mut self,
+        host: &mut LanHost,
+        conn: u32,
+        command: &str,
+        signed: Option<Vec<(String, horizon_client::lan::hub::chat::ChatMessage)>>,
+    ) {
+        if self.guest_message_command(host, conn, command, signed.as_ref()) {
+            return;
+        }
         // ListPlayersCommand needs no permission and lists every player.
         let words: Vec<&str> = command.trim_start_matches('/').split(' ').collect();
         if words[0] == "list" && (words.len() == 1 || words[1..] == ["uuids"]) {

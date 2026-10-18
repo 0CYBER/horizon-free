@@ -855,6 +855,9 @@ impl Game<'_> {
             }
             for event in events {
                 match event {
+                    event @ (HostEvent::Chat { .. } | HostEvent::Warn(_) | HostEvent::Error(_)) => {
+                        self.lan_log_event(event);
+                    }
                     HostEvent::Joined(conn) => {
                         self.lan_guest_joined(&mut host, conn, state.as_ref(), &entities, spawn);
                         if self.options.dedicated.is_some()
@@ -911,15 +914,6 @@ impl Game<'_> {
                             );
                         }
                     }
-                    // MinecraftServer.logChatMessage of an unsigned message.
-                    HostEvent::Chat(line) if self.options.dedicated.is_some() => {
-                        super::dedicated::log("INFO", &format!("[Not Secure] {line}"));
-                    }
-                    HostEvent::Chat(line) => self.system_message(Text::literal(line)),
-                    HostEvent::Warn(line) if self.options.dedicated.is_some() => {
-                        super::dedicated::log("WARN", &line);
-                    }
-                    HostEvent::Warn(line) => log::warn!("{line}"),
                     HostEvent::Packet(conn, packet) => {
                         self.lan_guest_packet(&mut host, conn, *packet);
                     }
@@ -1206,6 +1200,27 @@ impl Game<'_> {
     pub(super) fn lan_host_chat(&mut self, message: &str) {
         if let Some(host) = &self.lan {
             host.hub.chat(&host.host_name, message);
+        }
+    }
+}
+
+impl Game<'_> {
+    /// A hub's chat and log lines: a dedicated server logs them
+    /// (MinecraftServer.logChatMessage, `[Not Secure]` for unsigned or
+    /// expired messages); a LAN host shows the chat.
+    pub(super) fn lan_log_event(&mut self, event: HostEvent) {
+        let dedicated = self.options.dedicated.is_some();
+        match event {
+            HostEvent::Chat { line, secure } if dedicated => {
+                let tag = if secure { "" } else { "[Not Secure] " };
+                super::dedicated::log("INFO", &format!("{tag}{line}"));
+            }
+            HostEvent::Chat { line, .. } => self.system_message(Text::literal(line)),
+            HostEvent::Warn(line) if dedicated => super::dedicated::log("WARN", &line),
+            HostEvent::Warn(line) => log::warn!("{line}"),
+            HostEvent::Error(line) if dedicated => super::dedicated::log("ERROR", &line),
+            HostEvent::Error(line) => log::error!("{line}"),
+            _ => {}
         }
     }
 }

@@ -33,6 +33,8 @@ use horizon_world::{
 use std::sync::{Arc, atomic::Ordering};
 
 /// GameEvent types (ClientboundGameEventPacket).
+pub mod chat;
+
 pub mod game_event {
     pub const START_RAINING: u8 = 1;
     pub const STOP_RAINING: u8 = 2;
@@ -108,10 +110,16 @@ pub enum HostEvent {
     /// A guest left (state to save, entities to drop).
     Left(Box<Guest>),
     Packet(u32, Box<S>),
-    /// A chat line to show on the host (already broadcast to the guests).
-    Chat(String),
+    /// A chat line to show on the host (already broadcast to the guests);
+    /// a dedicated server logs it, `[Not Secure]` unless signed and fresh.
+    Chat {
+        line: String,
+        secure: bool,
+    },
     /// A server log warning (ServerGamePacketListenerImpl's LOGGER.warn).
     Warn(String),
+    /// A server log error (LOGGER.error).
+    Error(String),
 }
 
 pub struct Hub {
@@ -411,56 +419,23 @@ impl Hub {
             },
         }));
     }
-    /// PlayerList.broadcastChatMessage of a guest's unsigned message
-    /// (PlayerChatMessage.unsigned): a ClientboundPlayerChatPacket to every
-    /// player, each connection numbering its messages.
-    pub fn player_chat(&mut self, from: usize, text: &str) {
-        let (uuid, name) = (self.guests[from].uuid, self.guests[from].name.clone());
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis() as i64);
-        let bound = play::ChatTypeBound {
-            chat_type: self.chat_type,
-            name: display_name(uuid, &name),
-            target: None,
-        };
-        for g in self.guests.iter_mut().filter(|g| g.placed) {
-            let packet = C::PlayerChat(play::PlayerChat {
-                global_index: g.chat_index,
-                sender: uuid,
-                index: 0,
-                signature: None,
-                content: text.to_owned(),
-                timestamp,
-                salt: 0,
-                last_seen: Vec::new(),
-                unsigned_content: None,
-                filter: (0, Vec::new()),
-                chat_type: bound.clone(),
-            });
-            g.chat_index += 1;
-            g.send(&packet);
-        }
-    }
-
     /// Disconnect a guest with a reason (ServerGamePacketListenerImpl.disconnect).
     pub fn kick(&mut self, conn: u32, reason: Tag) {
-        if let Some(g) = self.guest(conn) {
+        // The log's "lost connection" line gives the reason, as vanilla's.
+        let text = self.english(&reason);
+        if let Some(g) = self.guest_mut(conn) {
+            g.left_reason = text;
             g.sender.disconnect(reason);
         }
     }
 
     fn player_info(&self, uuid: u128, name: &str, mode: i32, latency: i32) -> play::PlayerInfo {
+        let guest = self.guests.iter().find(|g| g.uuid == uuid);
         play::PlayerInfo {
             uuid,
             name: Some(name.to_owned()),
-            properties: self
-                .guests
-                .iter()
-                .find(|g| g.uuid == uuid)
-                .map(|g| g.properties.clone())
-                .unwrap_or_default(),
-            chat_session: None,
+            properties: guest.map(|g| g.properties.clone()).unwrap_or_default(),
+            chat_session: guest.and_then(|g| g.chain.session()).map(|s| s.data()),
             game_mode: Some(mode),
             listed: Some(true),
             latency: Some(latency),
@@ -553,8 +528,9 @@ impl Hub {
             show_death_screen: true,
             limited_crafting: false,
             spawn: self.spawn_info(mode),
-            online_mode: false,
-            enforces_secure_chat: false,
+            // MinecraftServer.usesAuthentication, enforceSecureProfile.
+            online_mode: self.lan.shared.config.online.is_some(),
+            enforces_secure_chat: self.enforces_secure_chat(),
         }));
         g.send(&C::ChangeDifficulty(play::ChangeDifficulty {
             difficulty: ctx.difficulty,
@@ -1056,7 +1032,9 @@ impl Hub {
 
     fn remove_guest(&mut self, i: usize, reason: &str) -> Guest {
         let mut g = self.guests.remove(i);
-        g.left_reason = reason.to_owned();
+        if g.left_reason.is_empty() {
+            g.left_reason = reason.to_owned();
+        }
         if std::env::var_os("HORIZON_NET_DEBUG").is_some() {
             log::info!("[lan] {} left: {reason}", g.name);
         }
@@ -1807,14 +1785,9 @@ impl Hub {
                     0 => self.wake(i),
                     _ => {}
                 },
-                S::Chat(c) => {
-                    let text: String = c.message.chars().filter(|c| !c.is_control()).collect();
-                    if !text.is_empty() {
-                        let name = self.guests[i].name.clone();
-                        self.player_chat(i, &text);
-                        events.push(HostEvent::Chat(format!("<{name}> {text}")));
-                    }
-                }
+                S::Chat(c) => self.handle_chat(i, c, events),
+                S::ChatAck(p) => self.chat_ack(i, p.offset, events),
+                S::ChatSessionUpdate(p) => self.chat_session_update(i, p, events),
                 other => events.push(HostEvent::Packet(conn, Box::new(other))),
             }
         }

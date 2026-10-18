@@ -6,6 +6,7 @@ use crate::{
     json::{self, Json},
     user_lists::NameAndId,
 };
+use horizon_protocol::rsa::RsaPublicKey;
 use std::time::Duration;
 
 /// Mojang's services discovery document.
@@ -49,6 +50,57 @@ pub fn find_by_name(discovery: &str, name: &str) -> Option<NameAndId> {
     let doc = json::parse(&agent.get(discovery).call().ok()?.into_string().ok()?, true).ok()?;
     let url = endpoint(&doc, "profiles", "getByName")?.replace("{name}", &name.to_lowercase());
     found(&agent.get(&url).call().ok()?.into_string().ok()?, name)
+}
+
+/// MinecraftServicesKeyInfo.get: the services' public keys from the
+/// discovery document's `authentication` / `getPublicKeys` endpoint. The
+/// profile-key keys (`playerCertificateKeys`, ServicesKeyType.PROFILE_KEY)
+/// sign the players' chat keys; secure chat checks them. The error is the
+/// line vanilla logs, after which it has no keys.
+pub fn fetch_profile_key_keys(discovery: &str) -> Result<Vec<RsaPublicKey>, &'static str> {
+    const FAILED: &str = "Failed to request Minecraft Services public key";
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(15))
+        .user_agent(concat!("Horizon/", env!("CARGO_PKG_VERSION")))
+        .build();
+    let get = |url: &str| agent.get(url).call().ok()?.into_string().ok();
+    let doc = get(discovery)
+        .and_then(|d| json::parse(&d, true).ok())
+        .ok_or(FAILED)?;
+    let url = endpoint(&doc, "authentication", "getPublicKeys").ok_or(FAILED)?;
+    profile_key_keys(&get(&url).ok_or(FAILED)?)
+}
+
+/// The key set answer: `{"profilePropertyKeys": [...], "playerCertificateKeys":
+/// [...]}`, each `{"publicKey": base64 X.509}`. One bad key makes the whole
+/// answer malformed (parseList throws).
+pub fn profile_key_keys(answer: &str) -> Result<Vec<RsaPublicKey>, &'static str> {
+    use base64::Engine;
+    const MALFORMED: &str = "Received malformed Minecraft Services public key data";
+    let doc = json::parse(answer, true).map_err(|_| MALFORMED)?;
+    let list = |name: &str| -> Result<Vec<RsaPublicKey>, &'static str> {
+        let Some(entries) = doc.get(name) else {
+            return Ok(Vec::new());
+        };
+        let Json::Array(entries) = entries else {
+            return Err(MALFORMED);
+        };
+        entries
+            .iter()
+            .map(|e| {
+                let text = e
+                    .get("publicKey")
+                    .and_then(Json::as_string)
+                    .ok_or(MALFORMED)?;
+                let der = base64::engine::general_purpose::STANDARD
+                    .decode(text)
+                    .map_err(|_| MALFORMED)?;
+                RsaPublicKey::from_der(&der).map_err(|_| MALFORMED)
+            })
+            .collect()
+    };
+    list("profilePropertyKeys")?;
+    list("playerCertificateKeys")
 }
 
 /// MinecraftServicesDiscoveryService.getUrl(service, endpoint).
@@ -96,5 +148,21 @@ mod tests {
         assert_eq!(found(answer, "Steve"), None);
         assert_eq!(found("{}", "Notch"), None);
         assert_eq!(found("", "Notch"), None);
+    }
+
+    #[test]
+    fn services_key_sets() {
+        // The 1024-bit test key of horizon-protocol's RSA tests, base64.
+        let key = "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCrAmB0+SRQqPcm84lbsRF2yo8GXzEAzUFDusT302dO3P+VtBoFJdI2WlScEG7GaFiBs5IXdCD9Mf9cFE/xG6JDEedRzSxrXRgXtq9mhqQ8ldYSQ2EwBeaUW2CTzZUiPOxeiFaCbanS7hsyM2KsHOvqs2WcvEUxmptUDdqBakeY/wIDAQAB";
+        let answer = format!(
+            r#"{{"profilePropertyKeys":[{{"publicKey":"{key}"}}],"playerCertificateKeys":[{{"publicKey":"{key}"}},{{"publicKey":"{key}"}}]}}"#
+        );
+        let keys = profile_key_keys(&answer).unwrap();
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0].size(), 128);
+        assert_eq!(profile_key_keys("{}").unwrap().len(), 0);
+        let bad = r#"{"profilePropertyKeys":[{"publicKey":"AAAA"}],"playerCertificateKeys":[]}"#;
+        assert!(profile_key_keys(bad).is_err());
+        assert!(profile_key_keys("not json").is_err());
     }
 }

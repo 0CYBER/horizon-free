@@ -37,6 +37,12 @@ pub struct Guest {
     pub last_action_tick: u64,
     /// The next ClientboundPlayerChatPacket.globalIndex for this connection.
     pub chat_index: i32,
+    /// Secure chat (ServerGamePacketListenerImpl): the player's message
+    /// chain, keyed once it sends a chat session; the messages its
+    /// acknowledgements cover; the signatures its client caches.
+    pub chain: horizon_protocol::secure_chat::Chain,
+    pub last_seen: horizon_protocol::secure_chat::LastSeenValidator,
+    pub signatures: horizon_protocol::secure_chat::SignatureCache,
     /// The hub tick the player was placed on: chunks go out from the tick
     /// after next, behind the first doTick's packets, as vanilla's do.
     pub placed_at: u64,
@@ -188,6 +194,9 @@ impl Guest {
             address: j.address,
             last_action_tick: 0,
             chat_index: 0,
+            chain: Default::default(),
+            last_seen: Default::default(),
+            signatures: Default::default(),
             placed_at: 0,
             center_sent: None,
             left_reason: String::new(),

@@ -82,7 +82,8 @@ not tick cost, so it is in scope here (see section 9).
 
 | Area | Status |
 |---|---|
-| `online-mode=true` | **Works** (ServerLoginPacketListenerImpl): a 1024-bit RSA key pair at start ("Generating keypair"), the encryption request, the shared secret and challenge, AES/CFB8, and the session service's `hasJoined` check (with the address when `prevent-proxy-connections` is on), with vanilla's log lines and messages. `test_online_mode_parity.py` runs the same logins against vanilla's server and Horizon's with a mock session service. Not yet: secure chat (chat is unsigned, as on a server that doesn't enforce it). |
+| `online-mode=true` | **Works** (ServerLoginPacketListenerImpl): a 1024-bit RSA key pair at start ("Generating keypair"), the encryption request, the shared secret and challenge, AES/CFB8, and the session service's `hasJoined` check (with the address when `prevent-proxy-connections` is on), with vanilla's log lines and messages. `test_online_mode_parity.py` runs the same logins against vanilla's server and Horizon's with a mock session service. |
+| Secure chat | **Works** (`SignedMessageChain`, `LastSeenMessagesValidator`, `MessageSignatureCache`): the chat session update and its profile key, checked against the services' `playerCertificateKeys`; signed chat, `say`, `me` and `msg`, relayed with their signatures and last-seen lists; `enforce-secure-profile` (with `online-mode`) refuses unsigned chat; and vanilla's log lines (`[Not Secure]`, the decoder's warnings, the kicks). Offline servers and players without a chat session chat unsigned, as on vanilla. `test_secure_chat_parity.py` runs the same signed and unsigned players against vanilla's server and Horizon's, with test keys and a mock services server. |
 | Nether and End | **Players can't change dimension.** The engine keeps one dimension loaded (`Game::enter_dimension` moves only the local single-player player), and the hub serves one `dimension` to everyone. |
 | Refused logins | Logged as vanilla does: `Disconnecting <name> (/address): <reason>`, then `<name> (/address) lost connection: <reason>`, and the session errors (`Username '<name>' tried to join with an invalid session`, `Couldn't verify username because servers are unavailable`). |
 | Gameplay for remote players | The LAN guest leftovers apply: an item used on a block is used twice, the recipe book doesn't work, status effects don't apply to guests, arrows don't record their owner, team friendly fire is ignored (#484). Block desync and short freezes are reported on a same-machine server (#500). |
@@ -507,7 +508,6 @@ machine, then published in `benchmarks/`; and item 5.
 
 **Out (next):**
 
-- secure chat on the server (online mode itself works);
 - the Nether and End for remote players;
 - the headless engine and its RAM win;
 - a server-only prepare without a JDK;
