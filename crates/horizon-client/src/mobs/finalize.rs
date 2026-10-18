@@ -483,7 +483,7 @@ pub fn base_value(m: &Mob, a: Attr) -> f64 {
         .unwrap_or(if a == Attr::BurningTime { 1.0 } else { 0.0 })
 }
 /// The transient modifiers of the mob's state (`SPEED_MODIFIER_BABY`).
-fn transient(m: &Mob, a: Attr) -> Option<(f64, Op)> {
+pub fn transient(m: &Mob, a: Attr) -> Option<(f64, Op)> {
     if a != Attr::MovementSpeed || !m.is_baby() {
         return None;
     }
@@ -1961,19 +1961,7 @@ fn sulfur_size(m: &mut Mob, size: i32) {
     m.health = max_health(m);
 }
 fn cube_size(m: &mut Mob, size: i32) {
-    let size = size.clamp(1, 127);
-    m.extra.size = size;
-    set_base(m, Attr::MaxHealth, f64::from(size * size));
-    set_base(
-        m,
-        Attr::MovementSpeed,
-        f64::from(0.2f32 + 0.1f32 * size as f32),
-    );
-    set_base(m, Attr::AttackDamage, f64::from(size));
-    if m.species() == Species::MagmaCube {
-        set_base(m, Attr::Armor, f64::from(size * 3));
-    }
-    m.health = max_health(m);
+    super::cube::set_size(m, size);
 }
 /// The index the game keeps for a variant registry entry.
 pub fn variant_index(s: Species, name: &str) -> u8 {

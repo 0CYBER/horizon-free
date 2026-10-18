@@ -64,6 +64,7 @@ mod item_particles;
 mod jukebox;
 mod lan;
 mod lan_actions;
+mod lan_attributes;
 mod lan_chat;
 mod lan_crafting;
 mod lan_entities;
