@@ -268,6 +268,12 @@ def run_side(label, command, directory, client):
         # it stays put; experience keeps its profession).
         server.console('summon minecraft:villager ~1 ~ ~ {NoAI:1b,Xp:1,VillagerData:'
                        '{profession:"minecraft:librarian",level:2,type:"minecraft:plains"}}')
+        # The saved world still has fluid ticks due in the area the client is sent (a lava fall
+        # that never settles), and they run once their chunk ticks. When that is, against when the
+        # chunk is sent, follows how fast the server loads the chunks around the joining player:
+        # each run, vanilla sends a different set of them already flowed. Frozen until the client
+        # has its chunks, both servers send the world as saved; blocks tick again from the chat on.
+        server.console('tick freeze')
         port = int(PROPERTIES_PORTS[label])
         legacy = legacy_ping(port)
         # The client asks to be made an operator once it has traded, runs /kill and respawns.
@@ -282,7 +288,11 @@ def run_side(label, command, directory, client):
         joined = threading.Thread(target=join)
         joined.start()
         deadline = time.time() + 300
+        frozen = True
         while joined.is_alive() and not any('<Tester> ready to respawn' in l for l in server.lines):
+            if frozen and any('<Tester> hello from the parity client' in l for l in server.lines):
+                server.console('tick unfreeze')
+                frozen = False
             if time.time() > deadline:
                 break
             time.sleep(0.2)

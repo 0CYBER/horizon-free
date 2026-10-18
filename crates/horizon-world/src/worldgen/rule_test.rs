@@ -3,7 +3,11 @@ use super::{
     DecodeError, Object, block_feature::FeatureBlockBindings, density::identifier, integer,
     number_text, required,
 };
-use crate::registry::BlockStateId;
+use crate::{
+    block_properties::BoundBlockProperty,
+    fluid::{FluidKind, FluidStateTable},
+    registry::BlockStateId,
+};
 use horizon_core::random::RandomSource;
 use serde_json::value::RawValue;
 use std::{collections::BTreeSet, sync::Arc};
@@ -21,6 +25,85 @@ enum Node {
     RandomStates(Arc<BTreeSet<BlockStateId>>, f32),
     RandomState(BlockStateId, f32),
     Height(i32, i32),
+    Phase(Box<MatterPhase>),
+}
+/// `horizon:matter_phase`: Repurposed Structures' MatterPhaseRuleTest, which
+/// its mineshafts and Nether monument use to match a block by what it is
+/// made of (`phase_to_test_for`), optionally inverted (`invert_condition`).
+#[derive(Clone, Debug)]
+struct MatterPhase {
+    phase: Phase,
+    invert: bool,
+    air: [BlockStateId; 3],
+    fluids: Arc<FluidStateTable>,
+    /// Only for `SOLID`.
+    can_occlude: Option<BoundBlockProperty>,
+    /// Blocks.RAIL and Blocks.CHAIN (26.3's iron chain).
+    rail_or_chain: BTreeSet<BlockStateId>,
+}
+#[derive(Clone, Copy, Debug)]
+enum Phase {
+    Solid,
+    Liquid,
+    Air,
+    AirRailOrChain,
+    LiquidRailOrChain,
+}
+impl MatterPhase {
+    fn decode(object: &Object, bindings: &FeatureBlockBindings<'_>) -> Result<Self, DecodeError> {
+        let name: String = serde_json::from_str(required(object, "phase_to_test_for")?.get())?;
+        let phase = match name.as_str() {
+            "SOLID" => Phase::Solid,
+            "LIQUID" => Phase::Liquid,
+            "AIR" => Phase::Air,
+            "AIR_RAIL_OR_CHAIN" => Phase::AirRailOrChain,
+            "LIQUID_RAIL_OR_CHAIN" => Phase::LiquidRailOrChain,
+            _ => return Err(DecodeError::Field("matter phase")),
+        };
+        let invert = match object.get("invert_condition") {
+            Some(v) => serde_json::from_str(v.get())?,
+            None => false,
+        };
+        let can_occlude = match phase {
+            Phase::Solid => Some(
+                bindings
+                    .can_occlude
+                    .clone()
+                    .ok_or(DecodeError::Field("matter phase block properties"))?,
+            ),
+            _ => None,
+        };
+        let mut rail_or_chain = BTreeSet::new();
+        for name in ["minecraft:rail", "minecraft:iron_chain"] {
+            rail_or_chain.extend(bindings.blocks.get(name).into_iter().flat_map(|s| s.iter()));
+        }
+        Ok(Self {
+            phase,
+            invert,
+            air: bindings.air,
+            fluids: bindings.fluids.table().clone(),
+            can_occlude,
+            rail_or_chain,
+        })
+    }
+    fn test(&self, state: BlockStateId) -> bool {
+        let air = self.air.contains(&state);
+        let liquid = self
+            .fluids
+            .get(state)
+            .is_some_and(|f| f.kind() != FluidKind::Empty);
+        let rail_or_chain = || self.rail_or_chain.contains(&state);
+        let matched = match self.phase {
+            Phase::Solid => {
+                !air && !liquid && self.can_occlude.as_ref().is_some_and(|c| c.contains(state))
+            }
+            Phase::Liquid => liquid,
+            Phase::Air => air,
+            Phase::AirRailOrChain => air || rail_or_chain(),
+            Phase::LiquidRailOrChain => liquid || rail_or_chain(),
+        };
+        matched != self.invert
+    }
 }
 impl RuleTest {
     pub fn from_json(json: &str, bindings: &FeatureBlockBindings<'_>) -> Result<Self, DecodeError> {
@@ -104,6 +187,9 @@ impl RuleTest {
                     Node::Any(values)
                 }
             }
+            "horizon:matter_phase" => {
+                Node::Phase(Box::new(MatterPhase::decode(&object, bindings)?))
+            }
             _ => return Err(DecodeError::Field("replacement rule type")),
         };
         Ok(Self(node))
@@ -128,6 +214,7 @@ impl RuleTest {
                 state == *expected && random.next_float() < *probability
             }
             Node::Height(min, max) => *min <= position[1] && position[1] <= *max,
+            Node::Phase(phase) => phase.test(state),
         }
     }
 }
