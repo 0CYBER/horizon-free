@@ -6,13 +6,14 @@
 use super::{Game, Result};
 use horizon_client::{
     containers::BlockEntity,
+    fast_hash::{FxHashMap, FxHashSet},
     mobs::{Mob, Species, Who, warden},
     particles::{ParticleOptions, ParticleType},
     sculk::{self, Context, Info, SculkEntity, SculkKind, WardenSpawnTracker},
 };
 use horizon_core::{geometry::Direction, position::BlockPos, random::RandomSource};
 use horizon_world::registry::BlockStateId;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use winit::keyboard::KeyCode;
 
 pub const HELP: &[&str] = &[
@@ -70,8 +71,9 @@ pub(super) struct SculkState {
     /// The sculk block entities in the order they were added.
     index: Index,
     pub known: HashSet<(i32, i32)>,
-    steps: HashMap<Who, Steps>,
-    damaged: HashMap<u32, i64>,
+    // Keyed by mob ids the server gives out: the fast hasher is safe.
+    steps: FxHashMap<Who, Steps>,
+    damaged: FxHashMap<u32, i64>,
     last_health: Option<f32>,
     /// The darkness effect's blend factor, previous and current tick.
     darkness: (f32, f32),
@@ -1528,7 +1530,7 @@ impl Game<'_> {
                 }
             }
         }
-        let alive: HashSet<u32> = self.mobs.iter().map(|m| m.id).collect();
+        let alive: FxHashSet<u32> = self.mobs.iter().map(|m| m.id).collect();
         self.sculk.damaged.retain(|id, _| alive.contains(id));
         self.sculk.steps.retain(|who, _| match who {
             Who::Player => true,
