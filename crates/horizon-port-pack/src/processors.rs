@@ -236,6 +236,11 @@ fn as_data(kind: &str, p: &Value, data: &ProcessorData) -> Option<Vec<Value>> {
                 |s| config(s.get("ominous") == Some(&"true")),
             )]
         }
+        _ if ns == "betterdeserttemples"
+            && let Some(processor) = desert_temple(kind) =>
+        {
+            vec![processor]
+        }
         _ if ns == "betterdungeons" || ns == "betterdeserttemples" => vec![yung_spawner(kind, p)?],
         _ => return None,
     })
@@ -362,6 +367,110 @@ pub fn upgrade_trial_spawner(config: &mut Value) -> bool {
         changed |= upgrade_entity(&mut p["data"]["entity"]);
     }
     changed
+}
+
+/// A block state as 26.3 writes it.
+fn block(id: &str) -> Value {
+    json!({"id": id})
+}
+
+/// Better Desert Temples' placeholder blocks (glass, concrete and wool in
+/// the templates) as the mod's processors turn them: the fixed ones as
+/// vanilla's `rule`, the random ones as the game's `horizon:pick`, with the
+/// mod's bounds on one `nextFloat` (YUNG's BlockStateRandomizer adds its
+/// chances up in floats). The ones that read or change the world around
+/// (pillars, Diorite's waterlogging) stay dropped.
+fn desert_temple(kind: &str) -> Option<Value> {
+    let swap = |from: &str, to: &str| {
+        json!({"processor_type": "minecraft:rule", "rules": [{
+            "input_predicate": {"predicate_type": "minecraft:block_match", "block": from},
+            "location_predicate": {"predicate_type": "minecraft:always_true"},
+            "output_state": block(to)}]})
+    };
+    let pick = |from: &str, picks: Vec<Value>, default: Value| json!({"processor_type": "horizon:pick", "block": from, "picks": picks, "default": default});
+    // YUNG's BlockStateRandomizer: an entry wins below the sum of the
+    // chances so far, summed as floats.
+    let randomizer = |entries: &[(f32, &str)]| {
+        let mut bottom = 0f32;
+        entries
+            .iter()
+            .map(|(chance, id)| {
+                bottom += chance;
+                json!({"below": bottom as f64, "state": block(id)})
+            })
+            .collect::<Vec<_>>()
+    };
+    let at = |below: f32, id: &str| json!({"below": below as f64, "state": block(id)});
+    // Sandstone stairs, upside down, facing Plane.HORIZONTAL.getRandomDirection.
+    let stairs = || {
+        let states: Vec<Value> = ["north", "east", "south", "west"]
+            .iter()
+            .map(|facing| {
+                json!({"id": "minecraft:sandstone_stairs", "properties": {
+                    "facing": facing, "half": "top", "shape": "straight", "waterlogged": "false"}})
+            })
+            .collect();
+        json!({"states": states})
+    };
+    Some(match kind.strip_prefix("betterdeserttemples:")? {
+        "blue_concrete_processor" => swap("minecraft:blue_concrete", "minecraft:blue_terracotta"),
+        "yellow_concrete_processor" => {
+            swap("minecraft:yellow_concrete", "minecraft:yellow_terracotta")
+        }
+        "red_wool_processor" => swap("minecraft:red_wool", "minecraft:tnt"),
+        "white_stained_glass_processor" => pick(
+            "minecraft:white_stained_glass",
+            randomizer(&[(0.4, "minecraft:cobweb")]),
+            json!({"state": block("minecraft:air")}),
+        ),
+        "polished_diorite_processor" => pick(
+            "minecraft:polished_diorite",
+            randomizer(&[(0.6, "minecraft:cut_sandstone")]),
+            json!({"state": block("minecraft:sandstone")}),
+        ),
+        "orange_stained_glass_processor" => {
+            let mut sus = at(0.01, "minecraft:suspicious_sand");
+            sus["nbt"] = json!({"LootTable": "minecraft:archaeology/desert_pyramid"});
+            let mut stairs = stairs();
+            stairs["below"] = (0.45f32 as f64).into();
+            pick(
+                "minecraft:orange_stained_glass",
+                vec![
+                    sus,
+                    at(0.1, "minecraft:sand"),
+                    at(0.2, "minecraft:sandstone"),
+                    stairs,
+                ],
+                json!({"state": block("minecraft:cut_sandstone")}),
+            )
+        }
+        "red_stained_glass_processor" => pick(
+            "minecraft:red_stained_glass",
+            vec![at(0.3, "minecraft:sand"), at(0.75, "minecraft:sandstone")],
+            stairs(),
+        ),
+        "pot_processor" => {
+            // Four sherds, one float each; the pot back to its default state.
+            let values: Vec<Value> = [
+                (0.05f32, "archer"),
+                (0.1, "miner"),
+                (0.15, "prize"),
+                (0.2, "skull"),
+            ]
+            .iter()
+            .map(|(below, sherd)| {
+                json!({"below": *below as f64, "value": format!("minecraft:{sherd}_pottery_sherd")})
+            })
+            .collect();
+            pick(
+                "minecraft:decorated_pot",
+                Vec::new(),
+                json!({"state": block("minecraft:decorated_pot"), "lists": [{
+                    "key": "sherds", "count": 4, "values": values, "default": "minecraft:brick"}]}),
+            )
+        }
+        _ => return None,
+    })
 }
 
 /// [`as_data`]'s `horizon:spawner_mobs` for the mods' spawner randomizing
@@ -728,5 +837,40 @@ mod tests {
                    "drop_chances": {"head": 0.0}})
         );
         assert!(!upgrade_trial_spawner(&mut config));
+    }
+
+    #[test]
+    fn desert_temple_placeholders_become_rules_and_picks() {
+        let mut list = json!({"processors": [
+            {"processor_type": "betterdeserttemples:red_wool_processor"},
+            {"processor_type": "betterdeserttemples:white_stained_glass_processor"},
+            {"processor_type": "betterdeserttemples:orange_stained_glass_processor"},
+            {"processor_type": "betterdeserttemples:pot_processor"},
+            {"processor_type": "betterdeserttemples:quartz_pillar_processor"}]});
+        let mut carried = BTreeMap::new();
+        assert!(carry("processor_list", &mut list, &data(), &mut carried));
+        let p = list["processors"].as_array().unwrap();
+        assert_eq!(
+            p[0]["rules"][0]["output_state"],
+            json!({"id": "minecraft:tnt"})
+        );
+        assert_eq!(p[1]["processor_type"], "horizon:pick");
+        assert_eq!(p[1]["picks"][0]["below"], 0.4f32 as f64);
+        assert_eq!(p[1]["default"]["state"]["id"], "minecraft:air");
+        let glass = &p[2]["picks"];
+        assert_eq!(glass[0]["state"]["id"], "minecraft:suspicious_sand");
+        assert_eq!(
+            glass[0]["nbt"]["LootTable"],
+            "minecraft:archaeology/desert_pyramid"
+        );
+        assert_eq!(glass[3]["states"].as_array().unwrap().len(), 4);
+        assert_eq!(glass[3]["below"], 0.45f32 as f64);
+        assert_eq!(p[3]["default"]["lists"][0]["count"], 4);
+        // The pillar reads the world below: still Java, still dropped later.
+        assert_eq!(
+            p[4]["processor_type"],
+            "betterdeserttemples:quartz_pillar_processor"
+        );
+        assert_eq!(carried.values().sum::<usize>(), 4);
     }
 }
