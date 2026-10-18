@@ -735,11 +735,29 @@ def check_commands(host, guest, out):
     screen = guest('state').get('screen')
     guest('command', command='gamemode survival')
     guest.wait(10)
+    # A node the tree marks ask_server (a bossbar id): the guest asks the
+    # server, which completes it from its own bossbars.
+    host('command', command='bossbar add pt6:check "Check"')
+    host.wait(5)
+    guest.raw('key', 'slash', 'tap')
+    guest.wait(3)
+    guest.raw('type', 'bossbar get pt')
+    guest.wait(10)
+    guest.raw('key', 'tab', 'tap')
+    guest.wait(2)
+    asked = chat_input(guest)
+    for _ in range(3):
+        if guest('screen').get('screen') != 'chat':
+            break
+        guest.raw('key', 'esc', 'tap')
+        guest.wait(3)
+    host('command', command='bossbar remove pt6:check')
     assert literal == '/gamemode', f'Tab after /gamem: {literal!r}'
     assert argument == '/gamemode creative', f'Tab after /gamemode cr: {argument!r}'
     assert mode == 'creative', f'the completed command did not run: {mode}'
     assert screen in (None, 'playing'), f'the chat did not close: {screen}'
-    return {'literal': literal, 'argument': argument, 'mode': mode}
+    assert asked == '/bossbar get pt6:check', f'Tab after /bossbar get pt: {asked!r}'
+    return {'literal': literal, 'argument': argument, 'mode': mode, 'ask_server': asked}
 
 
 def centre(rect):

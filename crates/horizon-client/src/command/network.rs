@@ -83,10 +83,9 @@ pub fn from_packet(packet: &Commands, local: &Dispatcher) -> Dispatcher {
             }
             _ => NodeKind::Root,
         };
-        let suggests = match local_node {
-            Some(l) => l.suggests.clone(),
-            None => node.suggestions.as_deref().and_then(provider),
-        };
+        // The server's providers, as the client knows them
+        // (ArgumentNodeStub.build): its own custom ones arrive as `ask_server`.
+        let suggests = node.suggestions.as_deref().and_then(provider);
         nodes[index(i)] = Some(Node {
             kind: if i == root { NodeKind::Root } else { kind },
             children: node.children.iter().filter_map(valid).map(index).collect(),
@@ -104,10 +103,10 @@ pub fn from_packet(packet: &Commands, local: &Dispatcher) -> Dispatcher {
     d
 }
 
-/// SuggestionProviders by id (`ask_server` asks the server; the client's
-/// own argument suggestions stand in for it).
+/// SuggestionProviders by id (`SuggestionProviders.getProvider`).
 fn provider(id: &str) -> Option<Suggests> {
     match id {
+        "minecraft:ask_server" => Some(Suggests::AskServer),
         "minecraft:summonable_entities" => Some(Suggests::SummonableEntities),
         _ => None,
     }
