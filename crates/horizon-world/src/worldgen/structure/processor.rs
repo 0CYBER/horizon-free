@@ -286,6 +286,7 @@ pub enum Processor {
     LavaSubmerged,
     BlackstoneReplace,
     SpawnerMobs(Box<SpawnerMobs>),
+    Pick(Box<Pick>),
 }
 #[derive(Clone, Debug, Default)]
 pub struct ProcessorList(pub Vec<Processor>);
@@ -301,6 +302,146 @@ const SPAWNER_FIELDS: [(&str, &str, i16); 7] = [
     ("required_player_range", "RequiredPlayerRange", 16),
     ("spawn_range", "SpawnRange", 4),
 ];
+
+/// `horizon:pick`, which `horizon-port-pack` writes for the mods' processors
+/// that turn a placeholder block into one of several (YUNG's, written in
+/// Java): a block of `block` takes the first of `picks` whose `below` is past
+/// one `settings.getRandom(pos).nextFloat()`, else `default` (no float is
+/// drawn when there are no picks; with no default the block stays).
+#[derive(Clone, Debug)]
+pub struct Pick {
+    block: String,
+    picks: Vec<(f32, Outcome)>,
+    default: Option<Outcome>,
+}
+#[derive(Clone, Debug)]
+struct Outcome {
+    /// The state, or one of them by `nextInt(len)` (Util.getRandom), drawn
+    /// after the pick.
+    states: Vec<BlockStateId>,
+    /// The new block entity; the block's own stays when missing.
+    nbt: Option<Compound>,
+    /// Keys set to lists of `count` strings, each the first of `values`
+    /// whose bound is past a new `nextFloat`, else `default` (pot sherds).
+    lists: Vec<PickedList>,
+}
+#[derive(Clone, Debug)]
+struct PickedList {
+    key: String,
+    count: usize,
+    values: Vec<(f32, String)>,
+    default: String,
+}
+fn below(v: &Value) -> Result<f32, DecodeError> {
+    v["below"]
+        .as_f64()
+        .map(|b| b as f32)
+        .ok_or(DecodeError::Field("pick bound"))
+}
+impl Pick {
+    fn decode(
+        value: &Value,
+        state: impl Fn(&Value) -> Result<BlockStateId, DecodeError>,
+    ) -> Result<Self, DecodeError> {
+        let outcome = |v: &Value| -> Result<Outcome, DecodeError> {
+            let states = match v.get("states") {
+                Some(list) => list
+                    .as_array()
+                    .ok_or(DecodeError::Field("pick states"))?
+                    .iter()
+                    .map(&state)
+                    .collect::<Result<Vec<_>, _>>()?,
+                None => vec![state(&v["state"])?],
+            };
+            if states.is_empty() {
+                return Err(DecodeError::Field("pick states"));
+            }
+            let nbt = match v.get("nbt").map(json_to_nbt) {
+                Some(Tag::Compound(c)) => Some(c),
+                Some(_) => return Err(DecodeError::Field("pick nbt")),
+                None => None,
+            };
+            let text = |v: &Value| {
+                v.as_str()
+                    .map(str::to_owned)
+                    .ok_or(DecodeError::Field("pick list"))
+            };
+            let lists = v["lists"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|l| {
+                    Ok(PickedList {
+                        key: text(&l["key"])?,
+                        count: l["count"].as_u64().ok_or(DecodeError::Field("pick list"))? as usize,
+                        values: l["values"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .map(|e| Ok((below(e)?, text(&e["value"])?)))
+                            .collect::<Result<_, DecodeError>>()?,
+                        default: text(&l["default"])?,
+                    })
+                })
+                .collect::<Result<_, DecodeError>>()?;
+            Ok(Outcome { states, nbt, lists })
+        };
+        Ok(Self {
+            block: value["block"]
+                .as_str()
+                .map(|b| super::super::tags::identifier(b).map(|i| i.to_string()))
+                .ok_or(DecodeError::Field("pick block"))??,
+            picks: value["picks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|p| Ok((below(p)?, outcome(p)?)))
+                .collect::<Result<_, DecodeError>>()?,
+            default: value.get("default").map(outcome).transpose()?,
+        })
+    }
+    fn apply(&self, info: BlockInfo, random: &mut dyn ProcessorRandom) -> BlockInfo {
+        let outcome = match self.picks.is_empty() {
+            true => self.default.as_ref(),
+            false => {
+                let f = random.float();
+                self.picks
+                    .iter()
+                    .find(|(b, _)| f < *b)
+                    .map(|(_, o)| o)
+                    .or(self.default.as_ref())
+            }
+        };
+        let Some(outcome) = outcome else {
+            return info;
+        };
+        let state = match outcome.states.as_slice() {
+            [one] => *one,
+            many => many[random.int(many.len() as i32) as usize],
+        };
+        let mut nbt = outcome.nbt.clone().or(info.nbt);
+        for list in &outcome.lists {
+            let values = (0..list.count)
+                .map(|_| {
+                    let f = random.float();
+                    let v = list
+                        .values
+                        .iter()
+                        .find(|(b, _)| f < *b)
+                        .map_or(&list.default, |(_, v)| v);
+                    Tag::String(v.as_str().into())
+                })
+                .collect();
+            nbt.get_or_insert_with(Compound::new)
+                .insert(list.key.as_str().into(), Tag::List(values));
+        }
+        BlockInfo {
+            pos: info.pos,
+            state,
+            nbt,
+        }
+    }
+}
 
 /// `horizon:spawner_mobs`, which `horizon-port-pack` writes for the spawner
 /// randomizing processors of Moog's Structure Lib and Repurposed Structures
@@ -533,6 +674,7 @@ impl Processor {
                     None => Ok(resources.registry.default_state("minecraft:air").unwrap()),
                 })?))
             }
+            "horizon:pick" => Self::Pick(Box::new(Pick::decode(value, state)?)),
             _ => return Err(DecodeError::Field("structure processor type")),
         })
     }
@@ -764,6 +906,10 @@ fn process_block<W: PlacementContext>(
             Some(info)
         }
         Processor::Capped { .. } => Some(info),
+        Processor::Pick(pick) => match name(info.state) == pick.block {
+            true => Some(settings.with_random(info.pos, |r| pick.apply(info, r))),
+            false => Some(info),
+        },
         Processor::SpawnerMobs(spawner) => {
             if name(info.state) != "minecraft:spawner" {
                 return Ok(Some(info));
@@ -1470,5 +1616,112 @@ mod tests {
         );
         let bad = json!({"type": "horizon:edit", "remove": [1], "data": {}});
         assert!(Modifier::decode(Some(&bad)).is_err());
+    }
+
+    /// Scripted draws: floats in turn, then ints.
+    struct Draws(Vec<f32>, Vec<i32>);
+    impl ProcessorRandom for Draws {
+        fn float(&mut self) -> f32 {
+            self.0.remove(0)
+        }
+        fn int(&mut self, bound: i32) -> i32 {
+            let i = self.1.remove(0);
+            assert!(i < bound);
+            i
+        }
+        fn long(&mut self) -> i64 {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn picks_follow_yungs_cascade() {
+        // States by name: sand 1, sandstone 2, the four stairs 10..13.
+        let id = |v: &Value| {
+            Ok(BlockStateId(match v["Name"].as_str() {
+                Some("minecraft:sand") => 1,
+                Some("minecraft:sandstone") => 2,
+                Some("minecraft:suspicious_sand") => 3,
+                _ => {
+                    10 + ["north", "east", "south", "west"]
+                        .iter()
+                        .position(|f| v["Properties"]["facing"] == *f)
+                        .unwrap_or(9) as u32
+                }
+            }))
+        };
+        let stairs: Vec<Value> = ["north", "east", "south", "west"]
+            .iter()
+            .map(|f| json!({"Name": "minecraft:sandstone_stairs", "Properties": {"facing": f}}))
+            .collect();
+        let pick = Pick::decode(
+            &json!({"block": "red_stained_glass", "picks": [
+                {"below": 0.01, "state": {"Name": "minecraft:suspicious_sand"},
+                 "nbt": {"LootTable": "minecraft:archaeology/desert_pyramid"}},
+                {"below": 0.3, "state": {"Name": "minecraft:sand"}},
+                {"below": 0.75, "state": {"Name": "minecraft:sandstone"}}],
+                "default": {"states": stairs}}),
+            id,
+        )
+        .unwrap();
+        assert_eq!(pick.block, "minecraft:red_stained_glass");
+        let glass = || BlockInfo {
+            pos: [1, 2, 3],
+            state: BlockStateId(0),
+            nbt: Some(Compound::new()),
+        };
+        let run = |f: f32, i: Vec<i32>| pick.apply(glass(), &mut Draws(vec![f], i));
+        let sus = run(0.005, vec![]);
+        assert_eq!(sus.state, BlockStateId(3));
+        assert!(
+            sus.nbt
+                .unwrap()
+                .contains_key(&JavaString::from("LootTable"))
+        );
+        assert_eq!(run(0.01, vec![]).state, BlockStateId(1));
+        assert_eq!(run(0.2999, vec![]).nbt, Some(Compound::new()));
+        assert_eq!(run(0.3, vec![]).state, BlockStateId(2));
+        // The stairs' facing: Plane.HORIZONTAL[nextInt(4)] after the pick.
+        assert_eq!(run(0.75, vec![2]).state, BlockStateId(12));
+        assert_eq!(run(0.99, vec![1]).state, BlockStateId(11));
+
+        let pot = Pick::decode(
+            &json!({"block": "minecraft:decorated_pot", "default": {
+                "state": {"Name": "minecraft:sand"},
+                "lists": [{"key": "sherds", "count": 4, "default": "minecraft:brick",
+                           "values": [{"below": 0.05, "value": "minecraft:archer_pottery_sherd"},
+                                      {"below": 0.1, "value": "minecraft:miner_pottery_sherd"}]}]}}),
+            id,
+        )
+        .unwrap();
+        // No picks: no float for them; one float per sherd.
+        let out = pot.apply(
+            BlockInfo {
+                nbt: None,
+                ..glass()
+            },
+            &mut Draws(vec![0.5, 0.01, 0.07, 0.1], vec![]),
+        );
+        let Some(Tag::List(sherds)) = out.nbt.unwrap().get(&JavaString::from("sherds")).cloned()
+        else {
+            panic!("sherds")
+        };
+        let names: Vec<String> = sherds
+            .iter()
+            .map(|t| match t {
+                Tag::String(s) => s.to_string_lossy(),
+                _ => String::new(),
+            })
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "minecraft:brick",
+                "minecraft:archer_pottery_sherd",
+                "minecraft:miner_pottery_sherd",
+                "minecraft:brick"
+            ]
+        );
+        assert!(Pick::decode(&json!({"block": "a", "default": {"states": []}}), id).is_err());
     }
 }

@@ -453,9 +453,13 @@ Two cases the oracle fills in:
     template was saved with (a vault saved with `state_updating_resumes_at` far in the future
     never opens; a spawner's saved `spawn_data` blocks its own mobs) and merges in the
     spawner's normal and ominous configs (by id: the carry upgrades `trial_spawner/` files'
-    mobs to 26.3's `equipment`) or the vault's loot table and key. 125 of the 1,427
-    processors are carried; 1,302 are still taken out (blocks swapped, aged or propped up,
-    YUNG's chest caps).
+    mobs to 26.3's `equipment`) or the vault's loot table and key. Better Desert Temples'
+    placeholder blocks (orange, red and white glass, blue and yellow concrete, red wool,
+    polished diorite, blank pots) become what its processors make of them: the fixed swaps as
+    vanilla's `rule`, the random ones (suspicious sand, sand and sandstone, upside-down stairs,
+    cobwebs, sherds on the pots) as the game's `horizon:pick`, on the same `nextFloat` as the
+    mod. 133 of the 1,427 processors are carried; 1,294 are still taken out (blocks swapped,
+    aged or propped up, YUNG's chest caps).
     In the 128×128-chunk square (seed 1234), every spawner of a mod structure now has its mob:
     in the Overworld 83 Better Dungeons spawners held the template's placeholder pig and 17 of
     Moog's were empty (763 spawners with a mob, up from 628); in the Nether the 52 empty ones
