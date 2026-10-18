@@ -1165,6 +1165,10 @@ struct Game<'a> {
     /// returns: the line, whether operators get it and whether the console
     /// logs it.
     admin_feedback: Vec<(horizon_client::text::Text, bool, bool)>,
+    /// The server console is running a command: whether its feedback goes to
+    /// the operators (`DedicatedServer.shouldInformAdmins`,
+    /// `broadcast-console-to-ops`).
+    console_broadcast: Option<bool>,
     /// State of `/spectate`, `/posteffect`, `/debug`, `/waypoint` and friends.
     cmds: commands::extra::CommandExtras,
     ui: chat::UiState,
@@ -10404,6 +10408,7 @@ impl<'a> Game<'a> {
             lan_acting_uuid: None,
             chat_capture: None,
             admin_feedback: Vec::new(),
+            console_broadcast: None,
             cmds: Default::default(),
             ui: Default::default(),
             combat: Default::default(),
