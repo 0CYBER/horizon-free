@@ -59,6 +59,9 @@ pub struct JigsawDef {
     checks: super::start_checks::StartChecks,
     /// Laid out by YUNG's API's assembler (`"horizon:yungsapi"`).
     yung: Option<super::yung::Config>,
+    /// Laid out by Repurposed Structures' and Moog's piece-limited
+    /// assembler (`"horizon:piece_limited"`).
+    piece_limited: Option<super::piece_limited::Config>,
 }
 #[derive(Debug)]
 pub enum StructureKind {
@@ -320,6 +323,9 @@ impl StructureRegistry {
                     waterlogging: v["liquid_settings"].as_str() != Some("ignore_waterlogging"),
                     checks: super::start_checks::StartChecks::decode(v.get("horizon:start_checks")),
                     yung: v.get("horizon:yungsapi").map(super::yung::Config::decode),
+                    piece_limited: v
+                        .get("horizon:piece_limited")
+                        .map(super::piece_limited::Config::decode),
                 }),
                 "minecraft:buried_treasure" => StructureKind::BuriedTreasure,
                 "minecraft:igloo" => StructureKind::Igloo,
@@ -812,8 +818,18 @@ fn try_generate(
                 padding: jigsaw.padding,
                 waterlogging: jigsaw.waterlogging,
             };
-            let (position, mut pieces) = match &jigsaw.yung {
-                Some(yung) => super::yung::assemble(
+            let (position, mut pieces) = match (&jigsaw.yung, &jigsaw.piece_limited) {
+                (_, Some(limits)) => super::piece_limited::assemble(
+                    &config,
+                    limits,
+                    context,
+                    &registry.pools,
+                    resources,
+                    bindings,
+                    chunk,
+                    start,
+                )?,
+                (Some(yung), None) => super::yung::assemble(
                     &config,
                     yung,
                     context,
@@ -823,7 +839,7 @@ fn try_generate(
                     &mut random,
                     start,
                 )?,
-                None => assemble(
+                (None, None) => assemble(
                     &config,
                     context,
                     &registry.pools,
@@ -833,7 +849,9 @@ fn try_generate(
                     start,
                 )?,
             };
-            if jigsaw.max_depth <= 0 {
+            // Vanilla's JigsawPlacement keeps no piece at size 0; the
+            // piece-limited assembler keeps the start piece.
+            if jigsaw.max_depth <= 0 && jigsaw.piece_limited.is_none() {
                 pieces.clear();
             }
             (

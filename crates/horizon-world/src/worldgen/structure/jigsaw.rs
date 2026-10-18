@@ -311,7 +311,7 @@ pub struct Pool {
     max_size: OnceLock<i32>,
 }
 impl Pool {
-    fn random_template(&self, random: &mut impl RandomSource) -> Arc<PoolElement> {
+    pub(super) fn random_template(&self, random: &mut impl RandomSource) -> Arc<PoolElement> {
         if self.templates.is_empty() {
             return Arc::new(PoolElement::Empty);
         }
