@@ -110,6 +110,7 @@ mod raids;
 mod recipe_book;
 mod remote;
 mod remote_objects;
+mod remote_projectiles;
 mod render_control;
 mod render_tick;
 mod respawn_anchor;
