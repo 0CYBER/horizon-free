@@ -1191,6 +1191,7 @@ impl Game<'_> {
             // HopperMenu; DispenserMenu (dispensers and droppers).
             "minecraft:hopper" => slots(5),
             "minecraft:generic_3x3" => slots(9),
+            "minecraft:brewing_stand" => slots(5),
             _ => None,
         }
     }
@@ -1786,17 +1787,27 @@ impl Game<'_> {
                 self.remote_synced();
             }
             C::ContainerSetData(p) => {
-                if let Some(key) = self.container
-                    && let Some(BlockEntity::Furnace(f)) = self.world.block_entities.get_mut(&key)
+                let v = i32::from(p.value);
+                match self
+                    .container
+                    .and_then(|key| self.world.block_entities.get_mut(&key))
                 {
-                    let v = i32::from(p.value);
-                    match p.id {
+                    Some(BlockEntity::Furnace(f)) => match p.id {
                         0 => f.lit_remaining = v,
                         1 => f.lit_total = v,
                         2 => f.cooking_timer = v,
                         3 => f.cooking_total = v,
                         _ => {}
-                    }
+                    },
+                    // BrewingStandBlockEntity.dataAccess.
+                    Some(BlockEntity::Brewing(b)) => match p.id {
+                        0 => b.brew_time = v,
+                        1 => b.fuel = v,
+                        2 => b.total_brew_time = v,
+                        3 => b.total_fuel = v,
+                        _ => {}
+                    },
+                    _ => {}
                 }
             }
             C::OpenScreen(p) => self.remote_open_screen(p),
@@ -3597,6 +3608,10 @@ impl Game<'_> {
             // HopperMenu, and DispenserMenu (MenuType.GENERIC_3x3: dispensers
             // and droppers).
             "minecraft:hopper" => Some(BlockEntity::Chest(vec![None; 5])),
+            // BrewingStandMenu: its times come in ContainerSetData.
+            "minecraft:brewing_stand" => Some(BlockEntity::Brewing(Box::new(
+                horizon_client::brewing::BrewingStand::new(),
+            ))),
             "minecraft:generic_3x3" => Some(BlockEntity::Chest(vec![None; 9])),
             m if m.starts_with("minecraft:generic_9x") || m == "minecraft:shulker_box" => {
                 let rows = m
