@@ -170,14 +170,82 @@ public final class VanillaDispenserOracle {
         throw new IllegalStateException("no slots in " + be);
     }
 
-    /** The removal a "remove" case runs on the block at its origin. */
-    static void remove(VanillaBlockUpdateOracle.World w, BlockPos origin, JsonObject op) {
+    /** The removal a "remove" case runs on the block at its origin; a player's mining prints its statistics and held stack. */
+    static List<String> remove(VanillaBlockUpdateOracle.World w, BlockPos origin, JsonObject op) throws Exception {
         switch (op.get("op").getAsString()) {
             case "set" -> w.setBlock(origin, Block.stateById(op.get("state").getAsInt()), op.get("flags").getAsInt());
             case "destroy" -> w.destroyBlock(origin, op.get("drop").getAsBoolean());
             case "remove" -> w.removeBlock(origin, false);
+            case "mine" -> {
+                return mine(w, origin, op);
+            }
             default -> throw new IllegalStateException(op.toString());
         }
+        return new ArrayList<>();
+    }
+
+    /**
+     * A survival player three blocks south of `pos` mines it holding the case's
+     * item: the real `ServerPlayerGameMode.destroyBlock` (playerWillDestroy,
+     * removeBlock with the block entity's side effects, mineBlock, playerDestroy's
+     * statistic, exhaustion and drops). The statistics and the held stack follow.
+     */
+    static List<String> mine(VanillaBlockUpdateOracle.World w, BlockPos pos, JsonObject op) throws Exception {
+        Miner player = (Miner) VanillaBlockUpdateOracle.allocate.invoke(VanillaBlockUpdateOracle.unsafe, Miner.class);
+        player.world = w;
+        player.hand = stack(op.get("item").getAsString());
+        player.offhand = ItemStack.EMPTY;
+        player.stats = new ArrayList<>();
+        VanillaBlockUpdateOracle.set(net.minecraft.world.entity.player.Player.class, player, "abilities", new net.minecraft.world.entity.player.Abilities());
+        VanillaBlockUpdateOracle.set(net.minecraft.world.entity.player.Player.class, player, "foodData", new net.minecraft.world.food.FoodData());
+        var advancements = (net.minecraft.server.PlayerAdvancements) VanillaBlockUpdateOracle.allocate.invoke(VanillaBlockUpdateOracle.unsafe, net.minecraft.server.PlayerAdvancements.class);
+        VanillaBlockUpdateOracle.set(net.minecraft.server.PlayerAdvancements.class, advancements, "activeTriggers", new HashMap<>());
+        VanillaBlockUpdateOracle.set(net.minecraft.server.level.ServerPlayer.class, player, "advancements", advancements);
+        var at = net.minecraft.world.phys.Vec3.atBottomCenterOf(pos).add(0, 1, 3);
+        VanillaBlockUpdateOracle.set(Entity.class, player, "position", at);
+        VanillaBlockUpdateOracle.set(Entity.class, player, "blockPosition", BlockPos.containing(at));
+        // PiglinAi.angerNearbyPiglins looks around the player's box (gold, chests, barrels...).
+        player.setBoundingBox(EntityTypes.PLAYER.getDimensions().makeBoundingBox(at));
+        var gameMode = new net.minecraft.server.level.ServerPlayerGameMode(player);
+        VanillaBlockUpdateOracle.set(net.minecraft.server.level.ServerPlayerGameMode.class, gameMode, "gameModeForPlayer",
+            net.minecraft.world.level.GameType.SURVIVAL);
+        gameMode.destroyBlock(pos);
+        List<String> out = new ArrayList<>(player.stats);
+        out.add("mine held " + ParityData.canon(player.hand));
+        return out;
+    }
+
+    /** The player of a "mine" case: a survival `Clicker` whose selected inventory slot is its main hand. */
+    static final class Miner extends net.minecraft.server.level.ServerPlayer {
+        VanillaBlockUpdateOracle.World world;
+        ItemStack hand, offhand;
+        List<String> stats;
+        Miner() {
+            super(null, null, null, null);
+        }
+        @Override public ServerLevel level() { return world; }
+        @Override public boolean hasInfiniteMaterials() { return false; }
+        @Override public boolean isCreative() { return false; }
+        @Override public boolean isSpectator() { return false; }
+        @Override public EntityType<?> getType() { return EntityTypes.PLAYER; }
+        @Override public net.minecraft.core.Holder<EntityType<?>> typeHolder() { return EntityTypes.PLAYER.builtInRegistryHolder(); }
+        @Override public ItemStack getItemBySlot(EquipmentSlot slot) {
+            return slot == EquipmentSlot.MAINHAND ? hand : slot == EquipmentSlot.OFFHAND ? offhand : ItemStack.EMPTY;
+        }
+        @Override public void setItemSlot(EquipmentSlot slot, ItemStack stack) {
+            if (slot == EquipmentSlot.MAINHAND) hand = stack; else if (slot == EquipmentSlot.OFFHAND) offhand = stack;
+        }
+        @Override public ItemStack getItemInHand(net.minecraft.world.InteractionHand h) {
+            return h == net.minecraft.world.InteractionHand.MAIN_HAND ? hand : offhand;
+        }
+        // Player.hasCorrectToolForDrops asks the inventory's selected slot: the main hand.
+        @Override public boolean hasCorrectToolForDrops(BlockState state) {
+            return !state.requiresCorrectToolForDrops() || hand.isCorrectToolForDrops(state);
+        }
+        @Override public void awardStat(net.minecraft.stats.Stat<?> stat, int count) {
+            stats.add("stat " + User.key(stat) + " " + BuiltInRegistries.STAT_TYPE.getKey(stat.getType()) + " " + count);
+        }
+        @Override public net.minecraft.server.players.NameAndId nameAndId() { return new net.minecraft.server.players.NameAndId(new UUID(0L, 0L), "Player"); }
     }
 
     static boolean hasList(Object be) {
@@ -324,7 +392,7 @@ public final class VanillaDispenserOracle {
         BlockState state = w.getBlockState(origin);
         List<String> used = new ArrayList<>();
         if (f.has("remove")) {
-            remove(w, origin, f.getAsJsonObject("remove"));
+            used = remove(w, origin, f.getAsJsonObject("remove"));
         } else if (f.has("use")) {
             used = use(w, origin, f.getAsJsonObject("use"));
         } else if (f.has("use_item")) {

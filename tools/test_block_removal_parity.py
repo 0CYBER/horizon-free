@@ -5,8 +5,9 @@ A container, jukebox, lectern, campfire, decorated pot, chiseled bookshelf,
 shelf, shulker box or another block entity holder at the origin holds random
 contents; the case then replaces it with `Level.setBlock` (another block, the
 same block in another state, with or without UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS),
-destroys it with `Level.destroyBlock` (with or without drops) or removes it with
-`Level.removeBlock`. Vanilla runs over the headless level of the dispenser oracle
+destroys it with `Level.destroyBlock` (with or without drops), removes it with
+`Level.removeBlock`, or a survival player mines it (`ServerPlayerGameMode.destroyBlock`,
+holding a tool or nothing, #844). Vanilla runs over the headless level of the dispenser oracle
 (`VanillaDispenserOracle`, "remove" cases), which replays `LevelChunk.setBlockState`'s
 `BlockEntity.preRemoveSideEffects`; Horizon runs its game glue in a headless game
 (`HORIZON_DISPENSE_FIXTURE`). Both print the block changes, the contents left,
@@ -63,6 +64,10 @@ LISTED = {'chest', 'trapped_chest', 'barrel', 'hopper', 'dispenser', 'dropper', 
 REPLACEMENTS = ['air', 'stone', 'glass', 'water', 'oak_planks', 'barrel', 'chest', 'hopper', 'blue_shulker_box', 'dirt', 'tnt',
                 'copper_chest', 'oxidized_copper_chest', 'lectern', 'jukebox']
 FLAGS = [3, 3, 3, 2, 18, 2 | 256, 816, 3 | 64, 1]
+# What a mining player holds: the right tool, a tool too weak or of another kind (swords and maces
+# wear 2 a block, shears any block but fire), or nothing.
+TOOLS = [plain('diamond_pickaxe'), plain('wooden_pickaxe'), plain('stone_axe'), plain('iron_shovel'), plain('iron_sword'),
+         plain('shears'), plain('mace'), '-']
 
 
 def contents(rng, name, slots, pool):
@@ -135,8 +140,12 @@ def cases(facts, count, seed, only):
             op = {'op': 'destroy', 'drop': True}
         elif roll < 0.85:
             op = {'op': 'destroy', 'drop': False}
-        else:
+        elif roll < 0.92:
             op = {'op': 'remove'}
+        else:
+            # ServerPlayerGameMode.destroyBlock: a survival player mines it (#844). The tool comes
+            # from the roll, not another draw, so the cases after this one stay the same.
+            op = {'op': 'mine', 'item': TOOLS[int(roll * 1000) % len(TOOLS)]}
         case = {**h.environment(rng), 'mode': 'remove', 'pos': [0, 0, 0], 'cells': cells, 'items': items, 'remove': op}
         case.pop('raining', None)
         case.pop('thundering', None)

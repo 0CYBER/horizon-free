@@ -2505,6 +2505,75 @@ impl Game<'_> {
         }
         Ok(())
     }
+    /// `DecoratedPotBlock.playerWillDestroy`: a pot mined with an item in
+    /// `breaks_decorated_pots`, unless an enchantment prevents shattering, is
+    /// cracked first (flags 260), so it shatters into its sherds.
+    fn crack_mined_pot(&mut self, pos: [i32; 3], state: BlockStateId) -> BlockStateId {
+        let registry = &self.pack.assets.registry;
+        let Some(mut pot) = registry
+            .state(state)
+            .filter(|s| s.name == "minecraft:decorated_pot")
+            .cloned()
+        else {
+            return state;
+        };
+        let Some(held) = self.held() else {
+            return state;
+        };
+        let breaks = self
+            .res
+            .items
+            .item_tags
+            .get("minecraft:breaks_decorated_pots")
+            .is_some_and(|t| t.contains(&*held.item));
+        let enchantments = &self.res.stations.enchantments;
+        let kept = held
+            .enchantments()
+            .iter()
+            .any(|(e, _)| enchantments.in_tag("minecraft:prevents_decorated_pot_shattering", e));
+        if !breaks || kept {
+            return state;
+        }
+        pot.properties.insert("cracked".into(), "true".into());
+        let Ok(cracked) = registry.resolve(&pot) else {
+            return state;
+        };
+        let at = BlockPos::new(pos[0], pos[1], pos[2]);
+        self.with_level(|b, level, ticks| b.set_block(level, ticks, at, cracked, 260));
+        cracked
+    }
+    /// `ItemStack.mineBlock` for the held stack once a survival player has
+    /// mined the block `name`: an item with a `tool` component counts as used
+    /// and loses its `damage_per_block` on a block that doesn't break
+    /// instantly (`ShearsItem`: on any block but fire).
+    fn mine_block_with_held(&mut self, name: &str, hardness: f32) {
+        let Some(stack) = self.inventory[self.selected].clone() else {
+            return;
+        };
+        let Some((per_block, max)) = self
+            .res
+            .items
+            .get(&stack.item)
+            .and_then(|i| Some((i.tool_damage_per_block?, i.max_damage)))
+        else {
+            return;
+        };
+        let wears = if &*stack.item == "minecraft:shears" {
+            !self.res.items.block_in_tag("minecraft:fire", name)
+        } else {
+            hardness != 0.0
+        };
+        if wears && per_block > 0 && max > 0 {
+            let loss = self.durability_loss(&stack, per_block);
+            if let Some(held) = self.inventory[self.selected].as_mut() {
+                held.damage += loss;
+                if held.damage >= max {
+                    self.inventory[self.selected] = None;
+                }
+            }
+        }
+        self.stats.add("used", &stack.item, 1);
+    }
     fn break_block(&mut self, pos: [i32; 3]) -> Result<()> {
         self.with_player_actor(|game| game.break_block_as_player(pos))
     }
@@ -2513,6 +2582,7 @@ impl Game<'_> {
         // ServerPlayerGameMode.destroyBlock.
         let state = self.world.block(pos[0], pos[1], pos[2]);
         let facts = self.res.facts.get(state).clone();
+        let state = self.crack_mined_pot(pos, state);
         // Block.playerWillDestroy: mining their gold angers all nearby piglins.
         if self.guarded_by_piglins(&facts.name) {
             self.anger_piglins(false);
@@ -2544,24 +2614,7 @@ impl Game<'_> {
         });
         if removed && !creative {
             let held = self.held().cloned();
-            // ItemStack.mineBlock: tools lose durability on blocks with nonzero hardness.
-            if facts.hardness > 0.0
-                && let Some(stack) = self.inventory[self.selected].clone()
-                && let Some(max) = self
-                    .res
-                    .items
-                    .get(&stack.item)
-                    .filter(|i| i.max_damage > 0 && !i.tool.is_empty())
-                    .map(|i| i.max_damage)
-            {
-                let loss = self.durability_loss(&stack, 1);
-                if let Some(stack) = self.inventory[self.selected].as_mut() {
-                    stack.damage += loss;
-                    if stack.damage >= max {
-                        self.inventory[self.selected] = None;
-                    }
-                }
-            }
+            self.mine_block_with_held(&facts.name, facts.hardness);
             let harvest = !facts.requires_tool
                 || self.res.items.correct_for_drops(held.as_ref(), &facts.name);
             if harvest {
