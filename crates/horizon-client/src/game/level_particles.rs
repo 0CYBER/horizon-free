@@ -1,6 +1,7 @@
 //! Level events whose client handler (`LevelEventHandler`) spawns particles
-//! on a block: dragon egg teleportation (2015), electric sparks (3002),
-//! waxing (3003), wax off (3004) and scraping (3005).
+//! on a block: dragon egg teleportation (2015), a consumable's teleport
+//! (2017), electric sparks (3002), waxing (3003), wax off (3004) and
+//! scraping (3005).
 use super::Game;
 use horizon_client::particles::{self, ParticleOptions, ParticleType};
 use horizon_core::position::BlockPos;
@@ -9,7 +10,12 @@ use horizon_world::level::LevelEvent;
 impl Game<'_> {
     pub(super) fn dragon_egg_particles(&mut self, pos: [i32; 3], data: i32) {
         self.particles
-            .block_teleportation(pos, data, self.settings.particles);
+            .block_teleportation(pos, data, [16, 8, 16], self.settings.particles);
+    }
+    /// Event 2017: `TeleportRandomlyConsumeEffect`'s directional particles.
+    pub(super) fn consume_teleport_particles(&mut self, pos: [i32; 3], data: i32) {
+        self.particles
+            .block_teleportation(pos, data, [127, 127, 127], self.settings.particles);
     }
     /// `LevelEventHandler.levelEvent` 3002 to 3005, drawing from the client
     /// level's random.
