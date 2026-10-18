@@ -25,6 +25,9 @@ pub struct Report {
     pub unreadable: BTreeMap<String, String>,
     pub recipes_upgraded: usize,
     pub loot_tables_upgraded: usize,
+    /// Blocks whose jar has no loot table but drop themselves in the oracle:
+    /// the mod registers that table in code, and carry-over writes it.
+    pub loot_tables_added: usize,
     /// Worldgen and structure files (`data/<id>/worldgen/`, `structure/`).
     pub worldgen: usize,
     /// Recipes left as they were: custom types, NeoForge conditions.
@@ -351,6 +354,7 @@ pub fn carry(
     let mut blockstates: BTreeMap<String, Value> = BTreeMap::new();
     let mut item_models = BTreeSet::new();
     let mut convention = BTreeSet::new();
+    let mut block_loot = BTreeSet::new();
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
         let name = entry.name().to_owned();
@@ -401,6 +405,12 @@ pub fn carry(
                     }
                 }
             } else if rel.starts_with("loot_table/") && name.starts_with("data/") {
+                if let Some(b) = rel
+                    .strip_prefix("loot_table/blocks/")
+                    .and_then(|b| b.strip_suffix(".json"))
+                {
+                    block_loot.insert(b.to_owned());
+                }
                 if let Ok(mut table) = serde_json::from_slice::<Value>(&bytes) {
                     let before = table.clone();
                     upgrade_loot(&mut table);
@@ -470,6 +480,34 @@ pub fn carry(
                     .push(format!("its item is {}", block.item));
             } else {
                 declared.insert(full.clone());
+                let drop = (!block_loot.contains(b))
+                    .then(|| block.drops_itself(full))
+                    .flatten();
+                if let Some(drop) = drop {
+                    let mut entry = json!({"type": "minecraft:item", "name": full});
+                    if let crate::oracle::SelfDrop::When(property, value) = drop {
+                        entry["condition"] = json!({
+                            "type": "minecraft:match_block",
+                            "blocks": full,
+                            "state": {property: value}
+                        });
+                    }
+                    let table = json!({
+                        "type": "minecraft:block",
+                        "pools": [{
+                            "condition": {"type": "minecraft:survives_explosion"},
+                            "entries": [entry],
+                            "rolls": 1
+                        }],
+                        "random_sequence": format!("{id}:blocks/{b}")
+                    });
+                    let file = inside.join(format!("data/{id}/loot_table/blocks/{b}.json"));
+                    write(
+                        &file,
+                        &serde_json::to_vec_pretty(&table).unwrap_or_default(),
+                    )?;
+                    report.loot_tables_added += 1;
+                }
             }
             write_decl("block", b, &v)?;
             report.blocks.insert(b.to_owned(), choice.template);
