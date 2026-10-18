@@ -5,7 +5,7 @@
 use crate::fast_hash::{FxHashMap, FxHashSet};
 use crate::{
     chunk::{Chunk, SECTIONS},
-    light::{LightTables, apply_lighting, apply_relighting, light_chunk},
+    light::{LightChanges, LightTables, apply_lighting, apply_relighting, light_chunk},
     mesher::{MeshTables, Mesher, Region, SectionMesh, borrow},
     world::World,
 };
@@ -748,12 +748,12 @@ impl Streaming {
                         // only around the light that changed, as vanilla's light
                         // updates dirty only their sections (#270).
                         let first = self.lit.insert((x, z));
-                        let changed = if first {
+                        let mut changed = LightChanges::default();
+                        if first {
                             apply_lighting(chunk, sections);
-                            Vec::new()
                         } else {
-                            apply_relighting(chunk, sections)
-                        };
+                            apply_relighting(chunk, sections, &mut changed);
+                        }
                         chunk.lit = true;
                         if first {
                             for dz in -1..=1 {
@@ -1125,12 +1125,14 @@ impl Streaming {
         if positions.is_empty() {
             return;
         }
-        let changed = crate::light::relight(
+        let mut changed = LightChanges::default();
+        crate::light::relight(
             &mut world.chunks,
             &self.light_tables,
             self.sky_light,
             &positions,
             false,
+            &mut changed,
         );
         Self::mark_light_changes(world, &changed);
         if !self.light_snapshots.is_empty() {
@@ -1152,12 +1154,14 @@ impl Streaming {
             .map(|(_, p)| *p)
             .collect();
         if !positions.is_empty() {
-            let changed = crate::light::relight(
+            let mut changed = LightChanges::default();
+            crate::light::relight(
                 &mut world.chunks,
                 &self.light_tables,
                 self.sky_light,
                 &positions,
                 true,
+                &mut changed,
             );
             Self::mark_light_changes(world, &changed);
         }
@@ -1169,31 +1173,15 @@ impl Streaming {
     }
     /// Sections whose meshes sample a changed light value (faces and corners
     /// read light from neighbouring blocks).
-    fn mark_light_changes(world: &mut World, changed: &[(i32, i32, i32)]) {
+    fn mark_light_changes(world: &mut World, changed: &LightChanges) {
         if let Some(log) = &mut world.light_log {
-            for &(x, y, z) in changed {
-                *log.entry((x >> 4, z >> 4)).or_default() |= 1 << ((y - crate::chunk::MIN_Y) >> 4);
+            for (x, sy, z) in changed.sections() {
+                *log.entry((x, z)).or_default() |= 1 << sy;
             }
         }
-        let mut last = None;
-        for &(x, y, z) in changed {
-            for dz in -1..=1 {
-                for dy in -1..=1 {
-                    for dx in -1..=1 {
-                        let s = (
-                            (y + dy - crate::chunk::MIN_Y) >> 4,
-                            (x + dx) >> 4,
-                            (z + dz) >> 4,
-                        );
-                        if last == Some(s) || !(0..SECTIONS as i32).contains(&s.0) {
-                            continue;
-                        }
-                        last = Some(s);
-                        world.dirty_sections.insert((s.1, s.0, s.2));
-                    }
-                }
-            }
-        }
+        changed.dirty_sections(|section| {
+            world.dirty_sections.insert(section);
+        });
     }
     fn ranges(&self) -> Ranges<'_> {
         Ranges {

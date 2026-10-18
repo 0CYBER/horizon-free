@@ -14,6 +14,7 @@
 //! most 15 blocks, so the 48-wide region determines the centre exactly.
 //! `relight_block` applies vanilla's incremental decrease/increase passes
 //! directly to resident chunks after a block change.
+use crate::fast_hash::FxHashMap;
 use crate::{
     blocks::BlockFacts,
     chunk::{Chunk, HEIGHT, Light, MIN_Y, SECTIONS, index},
@@ -464,10 +465,8 @@ pub fn apply_lighting(chunk: &mut Chunk, lights: Vec<Light>) {
 }
 
 /// `apply_lighting` for a chunk lit before: writes only the sections whose
-/// light changed and returns the block positions that changed.
-pub fn apply_relighting(chunk: &mut Chunk, lights: Vec<Light>) -> Vec<(i32, i32, i32)> {
-    let mut changed = Vec::new();
-    let (bx, bz) = (chunk.x * 16, chunk.z * 16);
+/// light changed and adds the cells that changed to `changed`.
+pub fn apply_relighting(chunk: &mut Chunk, lights: Vec<Light>, changed: &mut LightChanges) {
     for (sy, (section, light)) in chunk.sections.iter_mut().zip(lights).enumerate() {
         let old = &section.light;
         if let (Light::Uniform(a), Light::Uniform(b)) = (old, &light)
@@ -475,18 +474,18 @@ pub fn apply_relighting(chunk: &mut Chunk, lights: Vec<Light>) -> Vec<(i32, i32,
         {
             continue;
         }
-        let before = changed.len();
+        let mut classes = 0;
         for i in 0..4096 {
             if old.get(i) != light.get(i) {
-                let y = MIN_Y + sy as i32 * 16 + (i >> 8) as i32;
-                changed.push((bx + (i & 15) as i32, y, bz + (i >> 4 & 15) as i32));
+                let (x, y, z) = (i as i32 & 15, (i >> 8) as i32, (i >> 4) as i32 & 15);
+                classes |= 1 << LightChanges::class(x, y, z);
             }
         }
-        if changed.len() > before {
+        if classes != 0 {
+            changed.add((chunk.x, sy as i32, chunk.z), classes);
             Arc::make_mut(section).light = light;
         }
     }
-    changed
 }
 
 /// `DataLayer.get`: the nibble at index `i` (`y << 8 | z << 4 | x`), low first.
@@ -607,6 +606,90 @@ impl<S: std::hash::BuildHasher> LightWorld for HashMap<(i32, i32), Arc<Chunk>, S
     }
 }
 type Pos = (i32, i32, i32);
+/// Changed light by section, as vanilla's light engine reports it to
+/// `LevelRenderer` (`setSectionDirty`) instead of cell by cell: for each
+/// section (x, section index, z), a bit per class of position the changed
+/// cells take in it, `3 * 3 * 3` classes for the low face, the inside and the
+/// high face of each axis. Meshes sample light one block across a face, so the
+/// class says which neighbouring sections a change dirties too.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LightChanges {
+    sections: FxHashMap<Pos, u32>,
+}
+impl LightChanges {
+    /// A cell whose stored light changed.
+    #[inline]
+    pub fn push(&mut self, (x, y, z): Pos) {
+        let key = (x >> 4, (y - MIN_Y) >> 4, z >> 4);
+        *self.sections.entry(key).or_default() |= 1 << Self::class(x, y, z);
+    }
+    /// Cells of section `key` (x, section index, z) in the given classes.
+    fn add(&mut self, key: Pos, classes: u32) {
+        *self.sections.entry(key).or_default() |= classes;
+    }
+    /// The class of a cell in its section: per axis 0 on the low face, 1
+    /// inside, 2 on the high face.
+    fn class(x: i32, y: i32, z: i32) -> u32 {
+        let axis = |v: i32| match v & 15 {
+            0 => 0,
+            15 => 2,
+            _ => 1,
+        };
+        axis(x) + 3 * axis(y) + 9 * axis(z)
+    }
+    pub fn is_empty(&self) -> bool {
+        self.sections.is_empty()
+    }
+    /// The sections (x, section index, z) holding changed cells.
+    pub fn sections(&self) -> impl Iterator<Item = Pos> + '_ {
+        self.sections.keys().copied()
+    }
+    /// Every section (x, section index, z) whose cells lie within one block
+    /// of a changed cell, section indexes outside `0..SECTIONS` left out (a
+    /// section next to several changed ones comes once for each).
+    pub fn dirty_sections(&self, mut out: impl FnMut(Pos)) {
+        // Per class, the bit set of neighbour offsets (dx, dy, dz in -1..=1,
+        // bit (dx + 1) + 3 (dy + 1) + 9 (dz + 1)) its cells reach.
+        const REACH: [u32; 27] = {
+            let mut reach = [0; 27];
+            let mut class = 0;
+            while class < 27 {
+                let axis = [class % 3, class / 3 % 3, class / 9];
+                let mut offset = 0;
+                while offset < 27 {
+                    let d = [offset % 3, offset / 3 % 3, offset / 9];
+                    // Every class reaches its own section (d = 1, offset 0);
+                    // the low face also -1 (d = 0), the high face +1 (d = 2).
+                    if (d[0] == 1 || d[0] == axis[0])
+                        && (d[1] == 1 || d[1] == axis[1])
+                        && (d[2] == 1 || d[2] == axis[2])
+                    {
+                        reach[class] |= 1 << offset;
+                    }
+                    offset += 1;
+                }
+                class += 1;
+            }
+            reach
+        };
+        for (&(x, sy, z), &classes) in &self.sections {
+            let mut offsets = 0;
+            let mut rest = classes;
+            while rest != 0 {
+                offsets |= REACH[rest.trailing_zeros() as usize];
+                rest &= rest - 1;
+            }
+            while offsets != 0 {
+                let o = offsets.trailing_zeros() as i32;
+                offsets &= offsets - 1;
+                let s = sy + o / 3 % 3 - 1;
+                if (0..SECTIONS as i32).contains(&s) {
+                    out((x + o % 3 - 1, s, z + o / 9 - 1));
+                }
+            }
+        }
+    }
+}
 fn level(world: &impl LightWorld, sky: bool, p: Pos) -> Option<u8> {
     world
         .light(p.0, p.1, p.2)
@@ -645,8 +728,8 @@ pub fn lowest_sky_source(world: &impl LightWorld, tables: &LightTables, x: i32, 
 /// Vanilla's `checkBlock` + `runLightUpdates` for changed positions on
 /// resident, lit chunks: clear the light that may have come through or from
 /// the old states (decrease pass), then re-seed sources and propagate back in
-/// from the brighter boundary (increase pass). Returns every position whose
-/// stored light changed, for remeshing. `force` clears around each position
+/// from the brighter boundary (increase pass). Adds every position whose
+/// stored light changed to `changed`, for remeshing. `force` clears around each position
 /// as if it had been fully lit, for light computed from outdated blocks.
 pub fn relight(
     world: &mut impl LightWorld,
@@ -654,16 +737,9 @@ pub fn relight(
     sky_light: bool,
     positions: &[Pos],
     force: bool,
-) -> Vec<Pos> {
-    let mut changed = Vec::new();
-    relight_layer(
-        world,
-        tables,
-        false,
-        positions.to_vec(),
-        force,
-        &mut changed,
-    );
+    changed: &mut LightChanges,
+) {
+    relight_layer(world, tables, false, positions.to_vec(), force, changed);
     if sky_light {
         let mut seeds = positions.to_vec();
         let mut columns: HashMap<(i32, i32), i32> = HashMap::new();
@@ -686,11 +762,8 @@ pub fn relight(
                 y -= 1;
             }
         }
-        relight_layer(world, tables, true, seeds, force, &mut changed);
+        relight_layer(world, tables, true, seeds, force, changed);
     }
-    changed.sort_unstable();
-    changed.dedup();
-    changed
 }
 fn relight_layer(
     world: &mut impl LightWorld,
@@ -698,7 +771,7 @@ fn relight_layer(
     sky: bool,
     seeds: Vec<Pos>,
     force: bool,
-    changed: &mut Vec<Pos>,
+    changed: &mut LightChanges,
 ) {
     let mut decrease: VecDeque<(Pos, u8)> = VecDeque::new();
     let mut cleared: Vec<Pos> = Vec::new();
@@ -894,7 +967,14 @@ mod tests {
         ];
         for ((x, y, z), state) in edits {
             Arc::make_mut(w.get_mut(&(0, 0)).unwrap()).set(x, y, z, state);
-            relight(&mut w, &tables(), true, &[(x, y, z)], false);
+            relight(
+                &mut w,
+                &tables(),
+                true,
+                &[(x, y, z)],
+                false,
+                &mut LightChanges::default(),
+            );
         }
         let region: [[Option<&Chunk>; 3]; 3] = std::array::from_fn(|dz| {
             std::array::from_fn(|dx| w.get(&(dx as i32 - 1, dz as i32 - 1)).map(|c| &**c))
@@ -940,7 +1020,16 @@ mod tests {
         assert_eq!(edited_snapshot.sections[0].light(index(8, MIN_Y, 8)), 0xF0);
         let mut world = HashMap::from([((0, 0), Arc::new(current))]);
         // Streaming replays edits made after the job snapshot with force=true.
-        relight(&mut world, &tables(), true, &[(8, MIN_Y, 8)], true);
+        let mut changed = LightChanges::default();
+        relight(
+            &mut world,
+            &tables(),
+            true,
+            &[(8, MIN_Y, 8)],
+            true,
+            &mut changed,
+        );
+        assert!(!changed.is_empty());
         let region = [[None; 3], [None, Some(&*world[&(0, 0)]), None], [None; 3]];
         let fresh = light_chunk(&region, &tables(), true);
         for (section, light) in world[&(0, 0)].sections.iter().zip(fresh) {
@@ -963,7 +1052,9 @@ mod tests {
         let sections: Vec<_> = chunk.sections.iter().map(Arc::as_ptr).collect();
         // The same light again: nothing changes and no section is copied.
         let light = lit(&chunk);
-        assert!(apply_relighting(&mut chunk, light).is_empty());
+        let mut changed = LightChanges::default();
+        apply_relighting(&mut chunk, light, &mut changed);
+        assert!(changed.is_empty());
         assert_eq!(
             sections,
             chunk.sections.iter().map(Arc::as_ptr).collect::<Vec<_>>()
@@ -971,8 +1062,8 @@ mod tests {
         let before = chunk.clone();
         chunk.set(3, MIN_Y + 20, 5, STONE);
         let light = lit(&chunk);
-        let changed = apply_relighting(&mut chunk, light);
-        let mut expected = Vec::new();
+        apply_relighting(&mut chunk, light, &mut changed);
+        let mut expected = LightChanges::default();
         for (sy, (old, new)) in before.sections.iter().zip(&chunk.sections).enumerate() {
             for i in 0..4096 {
                 if old.light(i) != new.light(i) {
@@ -990,6 +1081,57 @@ mod tests {
             .filter(|(old, new)| **old != Arc::as_ptr(new))
             .count();
         assert!(copied <= 3, "{copied} sections copied");
+    }
+
+    #[test]
+    fn changes_dirty_the_sections_within_a_block_of_each_cell() {
+        // Cells inside sections, on each face and corner, at the bottom and
+        // top of the world, on negative coordinates.
+        let mut cells = Vec::new();
+        for x in [-17, -16, -1, 0, 7, 15, 16, 31] {
+            for y in [
+                MIN_Y,
+                MIN_Y + 15,
+                MIN_Y + 16,
+                70,
+                79,
+                80,
+                MIN_Y + HEIGHT - 1,
+            ] {
+                for z in [-33, -32, 5, 15] {
+                    cells.push((x, y, z));
+                }
+            }
+        }
+        for n in [1, 2, cells.len()] {
+            for start in 0..cells.len().min(8) {
+                let some: Vec<Pos> = cells.iter().copied().cycle().skip(start).take(n).collect();
+                let mut changes = LightChanges::default();
+                some.iter().for_each(|&c| changes.push(c));
+                let mut dirty = std::collections::BTreeSet::new();
+                changes.dirty_sections(|s| {
+                    dirty.insert(s);
+                });
+                let mut expected = std::collections::BTreeSet::new();
+                for &(x, y, z) in &some {
+                    for (dx, dy, dz) in (-1..=1)
+                        .flat_map(|a| (-1..=1).flat_map(move |b| (-1..=1).map(move |c| (a, b, c))))
+                    {
+                        let s = (y + dy - MIN_Y) >> 4;
+                        if (0..SECTIONS as i32).contains(&s) {
+                            expected.insert(((x + dx) >> 4, s, (z + dz) >> 4));
+                        }
+                    }
+                }
+                assert_eq!(dirty, expected, "{some:?}");
+                let sections: std::collections::BTreeSet<_> = changes.sections().collect();
+                let own: std::collections::BTreeSet<_> = some
+                    .iter()
+                    .map(|&(x, y, z)| (x >> 4, (y - MIN_Y) >> 4, z >> 4))
+                    .collect();
+                assert_eq!(sections, own);
+            }
+        }
     }
 
     #[test]
