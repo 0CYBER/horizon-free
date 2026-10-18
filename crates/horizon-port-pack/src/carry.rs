@@ -367,6 +367,7 @@ pub fn carry(
     let mut biome_conventions = BTreeSet::new();
     let set_tags = crate::worldgen::structure_set_tags(&mut zip);
     let piece_counts = crate::worldgen::piece_counts(&mut zip);
+    let processor_data = crate::processors::ProcessorData::read(&mut zip);
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
         let name = entry.name().to_owned();
@@ -426,12 +427,15 @@ pub fn carry(
                     if kind == "structure" {
                         crate::worldgen::convention_tags(&v["biomes"], &mut biome_conventions);
                     }
-                    let mut changed = crate::worldgen::upgrade(
+                    let types = &mut report.worldgen_types;
+                    let carried = crate::processors::carry(
                         kind,
                         &mut v,
-                        &mut report.worldgen_types,
-                        &set_tags,
+                        &processor_data,
+                        &mut types.processors_carried,
                     );
+                    let mut changed =
+                        crate::worldgen::upgrade(kind, &mut v, types, &set_tags) || carried;
                     if kind == "structure" {
                         let path = rel.trim_start_matches("worldgen/structure/");
                         let structure = format!("{id}:{}", path.trim_end_matches(".json"));
@@ -453,6 +457,12 @@ pub fn carry(
                 if let Some((kind, mut added)) =
                     modifier.and_then(|v| crate::worldgen::modifier(&v, loaded, types))
                 {
+                    crate::processors::carry(
+                        kind,
+                        &mut added,
+                        &processor_data,
+                        &mut types.processors_carried,
+                    );
                     crate::worldgen::upgrade(kind, &mut added, types, &set_tags);
                     let to = format!(
                         "data/{id}/worldgen/{kind}/{}/{path}",

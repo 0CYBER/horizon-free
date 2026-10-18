@@ -438,7 +438,23 @@ Two cases the oracle fills in:
     list. The structures now generate undecorated (no pillars under them, spawners as the
     template has them); 1,427 processors of 146 types in ATM10's mods, the most common
     `lithostitched:block_swap`, Formations' `biome_replacements` and Repurposed Structures'
-    pillar, fluid and void processors. Porting the common ones is next.
+    pillar, fluid and void processors.
+  - **Spawner processors** carried as data (`horizon-port-pack/src/processors.rs`). Most
+    chests in the mods' templates already name their loot table; what the Java processors add
+    is the spawners' mobs. Moog's and Repurposed Structures' spawner randomizing processors
+    become `horizon:spawner_mobs` (a weighted mob per spawner, picked with the placement's
+    random as theirs do, and the spawner NBT they write; Repurposed's `rs_spawners` lists are
+    written in). YUNG's Better Dungeons and Better Desert Temples turn a spawner or a
+    placeholder block (gravel, bone block, yellow wool...) into a spawner of a fixed mob: that
+    is vanilla's `rule` processor with an `append_static` block entity. Moog's vanilla loot
+    swap acts only when a "replace vanilla" preset is on, and they ship off. 119 of the 1,427
+    processors are carried; 1,308 are still taken out (blocks swapped, aged or propped up,
+    Moog's trial spawner and vault configs, YUNG's chest caps).
+    In the 128×128-chunk square (seed 1234), every spawner of a mod structure now has its mob:
+    in the Overworld 83 Better Dungeons spawners held the template's placeholder pig and 17 of
+    Moog's were empty (763 spawners with a mob, up from 628); in the Nether the 52 empty ones
+    in Moog's Nether Structures are filled (162, up from 110). Chests are unchanged: 2,777
+    and 1,405 with a loot table.
   - **Big templates** (#838). Vanilla reads structure templates with no limit on their tag
     count; Horizon now does too (`nbt::Limits::templates`). Seven of ATM10's 8,962 carried
     templates are past the old 1,000,000-tag cap: YUNG's monument start, four When Dungeons
@@ -484,11 +500,11 @@ Two cases the oracle fills in:
   - Still lost, written in Java:
     - Formations' structure and element types (179): their placements read block states in the
       noise column (solid, water, lava), which the structure context doesn't give yet;
-    - Repurposed's mineshafts, mansions, monuments, Nether cities and shipwrecks, Better
-      Mineshafts and two Better Dungeons types: Java structure types;
+    - Repurposed's mineshafts, mansions and monuments, Better Mineshafts and two Better
+      Dungeons types: Java structure types;
     - YUNG's and Moog's enhanced terrain adaptation, YUNG's piece modifiers and dead-end pools,
-      and the processors written in Java (YUNG's spawners, chests, banners; 29 in Better Dungeons
-      alone), so these structures place their template blocks only;
+      and the block processors written in Java (YUNG's banners, legs and decorations, Repurposed's
+      pillars and fluid fixes, Lithostitched's block swaps);
     - MO Structures (38; its library is only on CurseForge).
 
   With every structure PR above, the same square (seed 1234, chunks -64..63) holds 362
@@ -498,6 +514,14 @@ Two cases the oracle fills in:
   40, Better Fortresses 7, with no vanilla fortress. Over chunks -256..255: Better Strongholds 10
   (vanilla 0), Better Jungle Temples 5, Better Witch Huts 11. Vanilla's own worlds are
   unchanged: the structure-start oracle still matches 35 of 35.
+
+  Repurposed's Nether city, Nether shipwrecks and End stronghold are its generic jigsaw with
+  one more start check each, carried as `minecraft:jigsaw` with the check named in
+  `horizon:start_checks.repurposed`: open air from sea level + 20 to + 45 around the city's
+  chunk, no solid block in a 33×30×33 grid over a shipwreck, and land 45 blocks up at nine
+  points 35 and 70 blocks apart for the stronghold. Over chunks -320..319 in the Nether there
+  are 2 cities and 45 shipwrecks (30 and 865 without the checks); the End stronghold keeps
+  8,000 blocks from the centre, and chunks 500..1139 × -320..319 hold 2 (43 without).
 
   In a world with the 40 mods, seed 1234, `/locate structure mvs:azelea_house` finds one 27
   blocks from spawn and it stands there as the template builds it; When Dungeons Arise's

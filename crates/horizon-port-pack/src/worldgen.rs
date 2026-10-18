@@ -32,6 +32,16 @@ const NETHER_JIGSAWS: [&str; 2] = [
     "moogs_structures:moogs_structures_generic_nether_jigsaw_structure",
     "repurposed_structures:generic_nether_jigsaw_structure",
 ];
+/// Repurposed Structures' generic jigsaws with a start check of their own: the
+/// `repurposed` key of `horizon:start_checks` names it.
+const REPURPOSED_CHECKED: [(&str, &str); 3] = [
+    ("repurposed_structures:city_nether_structure", "city_nether"),
+    (
+        "repurposed_structures:shipwreck_nether_structure",
+        "shipwreck_nether",
+    ),
+    ("repurposed_structures:stronghold_end", "stronghold_end"),
+];
 /// Layout rules the piece-limited assembler keeps (`horizon:piece_limited`).
 const PIECE_LIMITED_RULES: [&str; 4] = [
     "y_allowance",
@@ -118,6 +128,9 @@ pub struct Upgrade {
     pub rules_lost: BTreeMap<String, usize>,
     /// Processors written in Java, taken out of their lists, by type.
     pub processors_dropped: BTreeMap<String, usize>,
+    /// Processors written in Java carried as data the game runs
+    /// ([`crate::processors`]), by type.
+    pub processors_carried: BTreeMap<String, usize>,
     /// Entries added to other structure sets and template pools
     /// (`horizon:add_to`), by the set or pool they join.
     pub added_to: BTreeMap<String, usize>,
@@ -332,49 +345,28 @@ pub fn upgrade(
 ) -> bool {
     let states = block_states(v);
     report.block_states += usize::from(states);
-    let dropped = match kind {
-        "processor_list" => drop_java_processors(v, &mut report.processors_dropped),
-        "template_pool" => {
-            let mut changed = false;
-            for e in v["elements"].as_array_mut().into_iter().flatten() {
-                let element = &mut e["element"];
-                if let Some(list) = element.get_mut("elements").and_then(Value::as_array_mut) {
-                    for inner in list {
-                        if let Some(p) = inner.get_mut("processors") {
-                            changed |= drop_java_processors(p, &mut report.processors_dropped);
-                        }
-                    }
-                } else if let Some(p) = element.get_mut("processors") {
-                    changed |= drop_java_processors(p, &mut report.processors_dropped);
-                }
-            }
-            changed
-        }
-        _ => false,
-    };
+    let dropped = crate::processors::each_list(kind, v, &mut |list| {
+        drop_java_processors(list, &mut report.processors_dropped)
+    });
     upgrade_types(kind, v, report, set_tags) || states || dropped
 }
 
-/// Takes the processors written in Java (any type outside `minecraft:`)
-/// out of a processor list: `{"processors": [...]}`, a bare list, or an id
-/// (left as it is). The game, like vanilla, refuses a list holding a type it
+/// Takes the processors written in Java (any type outside `minecraft:` and
+/// the game's own `horizon:`) out of a processor list: `{"processors":
+/// [...]}`, a bare list, or an id (left as it is). The ones with a data form
+/// were rewritten before ([`crate::processors::carry`]). The game, like vanilla, refuses a list holding a type it
 /// does not know, and with it every pool that names the list, so without
 /// this the structure does not generate at all. Without them it generates
 /// undecorated: no pillars under it, spawners left as the template has
 /// them, blocks not swapped. Whether anything was taken out.
 fn drop_java_processors(list: &mut Value, dropped: &mut BTreeMap<String, usize>) -> bool {
-    let processors = match list {
-        Value::Array(a) => a,
-        Value::Object(o) => match o.get_mut("processors") {
-            Some(Value::Array(a)) => a,
-            _ => return false,
-        },
-        _ => return false,
+    let Some(processors) = crate::processors::processors(list) else {
+        return false;
     };
     let before = processors.len();
     processors.retain(|p| {
         let t = p["processor_type"].as_str().unwrap_or_default();
-        let java = !t.starts_with("minecraft:");
+        let java = !t.starts_with("minecraft:") && !t.starts_with("horizon:");
         if java {
             *dropped.entry(t.to_owned()).or_default() += 1;
         }
@@ -426,7 +418,13 @@ fn upgrade_types(
                 yung_structure(v, lost);
                 true
             }
-            Some(t) if JIGSAWS.contains(&t) || NETHER_JIGSAWS.contains(&t) => {
+            Some(t)
+                if JIGSAWS.contains(&t)
+                    || NETHER_JIGSAWS.contains(&t)
+                    || REPURPOSED_CHECKED.iter().any(|(r, _)| *r == t) =>
+            {
+                let check = REPURPOSED_CHECKED.iter().find(|(r, _)| *r == t);
+                let check = check.map(|(_, c)| *c);
                 let library = match t.split_once(':').map(|(ns, _)| ns) {
                     Some("moogs_structures") => Some("moogs"),
                     Some("repurposed_structures") => Some("repurposed"),
@@ -439,6 +437,12 @@ fn upgrade_types(
                 };
                 let limited = library.map(|l| piece_limited(v, l));
                 start_checks(v, liquid, lost, limited.is_some());
+                if let Some(check) = check {
+                    if !v["horizon:start_checks"].is_object() {
+                        v["horizon:start_checks"] = Value::Object(Default::default());
+                    }
+                    v["horizon:start_checks"]["repurposed"] = check.into();
+                }
                 if let Some(limited) = limited {
                     v["horizon:piece_limited"] = limited;
                 }
@@ -1102,6 +1106,20 @@ mod tests {
             "cannot_spawn_in_liquid": true});
         assert!(upgrade("structure", &mut rs, &mut report, &NO_TAGS));
         assert_eq!(rs["horizon:start_checks"], json!({"liquid": "lowest"}));
+        // Repurposed's own checks: the Nether city, Nether shipwrecks, the End stronghold.
+        for (t, check) in [
+            ("city_nether_structure", "city_nether"),
+            ("shipwreck_nether_structure", "shipwreck_nether"),
+            ("stronghold_end", "stronghold_end"),
+        ] {
+            let mut rs = json!({"type": format!("repurposed_structures:{t}"),
+                "cannot_spawn_in_liquid": false, "size": 7});
+            assert!(upgrade("structure", &mut rs, &mut report, &NO_TAGS));
+            assert_eq!(rs["type"], "minecraft:jigsaw");
+            assert_eq!(rs["horizon:start_checks"], json!({"repurposed": check}));
+            assert_eq!(rs["horizon:piece_limited"]["library"], "repurposed");
+        }
+        assert!(report.unsupported.is_empty());
         // Nothing to check: no key.
         let mut plain = json!({"type": "lithostitched:jigsaw", "cannot_spawn_in_liquid": false});
         assert!(upgrade("structure", &mut plain, &mut report, &NO_TAGS));

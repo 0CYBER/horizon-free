@@ -49,6 +49,52 @@ pub fn program(config: &Config, dir: &Path) -> Result<PathBuf, String> {
         })
 }
 
+/// Checks that the game program starts at all: `--help` loads no game files, so it fails only when the
+/// system can't load the program, as on a Linux without the ALSA and udev libraries it links (even a
+/// server needs them until there is a headless engine). The reason, with what to install.
+pub fn check_starts(program: &Path) -> Result<(), String> {
+    let output = Command::new(program)
+        .arg("--help")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("the game ({}) can't start: {e}", program.display()))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(start_failure(program, output.status.code(), &stderr))
+}
+
+/// What to tell the owner when the game program exits at once.
+fn start_failure(program: &Path, code: Option<i32>, stderr: &str) -> String {
+    let reason = stderr
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim();
+    let mut text = format!(
+        "the game ({}) can't start{}{}",
+        program.display(),
+        code.map_or(String::new(), |c| format!(" (exit status {c})")),
+        if reason.is_empty() {
+            String::new()
+        } else {
+            format!(": {reason}")
+        }
+    );
+    if reason.contains("error while loading shared libraries") {
+        text.push_str(
+            "\nIt needs ALSA's and udev's libraries (libasound.so.2, libudev.so.1), even on a server. Install \
+             them:\n  Debian, Ubuntu: sudo apt install libasound2 libudev1   (Ubuntu 24.04 and later: \
+             libasound2t64)\n  Fedora, RHEL: sudo dnf install alsa-lib systemd-libs\n  Arch: sudo pacman -S \
+             alsa-lib systemd-libs\n  NixOS: enable programs.nix-ld with alsa-lib and udev in its libraries",
+        );
+    }
+    text
+}
+
 /// Where the prepared game files may be, in the order they are tried.
 pub fn resource_candidates(config: &Config, dir: &Path, program: Option<&Path>) -> Vec<PathBuf> {
     if !config.engine.resources.is_empty() {
@@ -65,12 +111,13 @@ pub fn resource_candidates(config: &Config, dir: &Path, program: Option<&Path>) 
     out
 }
 
-/// The prepared game files: a folder holding the asset index `horizon-prepare` writes.
+/// The prepared game files: a folder holding the manifest every `horizon-prepare` run writes
+/// (`asset-index.json` comes only with the optional sounds, which a server doesn't need).
 pub fn resources(config: &Config, dir: &Path, program: Option<&Path>) -> Result<PathBuf, String> {
     let candidates = resource_candidates(config, dir, program);
     candidates
         .iter()
-        .find(|d| d.join("asset-index.json").is_file())
+        .find(|d| d.join("horizon-resources.json").is_file())
         .cloned()
         .ok_or_else(|| {
             let tried: Vec<String> = candidates
@@ -178,5 +225,66 @@ mod tests {
             resource_candidates(&config, dir, Some(program)),
             [PathBuf::from("/data/res")]
         );
+    }
+
+    #[test]
+    fn resources_prepared_without_sounds_are_found() {
+        let root = std::env::temp_dir().join(format!("horizon-server-res-{}", std::process::id()));
+        let prepared = root.join(".local/horizon-client/26.3");
+        std::fs::create_dir_all(&prepared).unwrap();
+        let program = root.join("horizon-client");
+        let config = Config::default();
+        let server = root.join("server");
+        assert!(resources(&config, &server, Some(&program)).is_err());
+        // What `horizon-prepare` writes on every run; no asset index without `horizon-prepare sounds`.
+        std::fs::write(prepared.join("horizon-resources.json"), "{}").unwrap();
+        assert_eq!(resources(&config, &server, Some(&program)), Ok(prepared));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_missing_library_says_what_to_install() {
+        let program = Path::new("/opt/horizon/horizon-client");
+        let text = start_failure(
+            program,
+            Some(127),
+            "/opt/horizon/horizon-client: error while loading shared libraries: libasound.so.2: cannot open \
+             shared object file: No such file or directory\n",
+        );
+        assert!(text.starts_with(
+            "the game (/opt/horizon/horizon-client) can't start (exit status 127): /opt/horizon/horizon-client: \
+             error while loading shared libraries: libasound.so.2"
+        ));
+        assert!(text.contains("sudo apt install libasound2 libudev1"));
+        let other = start_failure(program, Some(1), "something else\n");
+        assert_eq!(
+            other,
+            "the game (/opt/horizon/horizon-client) can't start (exit status 1): something else"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_check_runs_the_program() {
+        use std::os::unix::fs::PermissionsExt;
+        let root =
+            std::env::temp_dir().join(format!("horizon-server-check-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let script = |name: &str, body: &str| {
+            let path = root.join(name);
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            path
+        };
+        assert_eq!(check_starts(&script("starts", "exit 0")), Ok(()));
+        let fails = script("fails", "echo 'no luck' >&2; exit 3");
+        assert_eq!(
+            check_starts(&fails),
+            Err(format!(
+                "the game ({}) can't start (exit status 3): no luck",
+                fails.display()
+            ))
+        );
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

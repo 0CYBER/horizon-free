@@ -86,6 +86,18 @@ for tool in horizon-server horizon-prepare; do
 done
 
 echo "Installed Horizon $TAG in $RELEASE; horizon-server and horizon-prepare are in $BIN."
+# The game links ALSA and udev, even as a server; minimal Linux images often lack them.
+if [ "$(uname -s)" = Linux ] && command -v ldd >/dev/null; then
+  MISSING=$(ldd "$RELEASE/horizon-client" 2>/dev/null | awk '/not found/ { printf "%s ", $1 }')
+  if [ -n "$MISSING" ]; then
+    echo "The game needs libraries this system doesn't have: $MISSING"
+    echo "Install them before starting a server:"
+    echo "  Debian, Ubuntu: sudo apt install libasound2 libudev1   (Ubuntu 24.04 and later: libasound2t64)"
+    echo "  Fedora, RHEL: sudo dnf install alsa-lib systemd-libs"
+    echo "  Arch: sudo pacman -S alsa-lib systemd-libs"
+    echo "  NixOS: enable programs.nix-ld with alsa-lib and udev in its libraries"
+  fi
+fi
 case ":$PATH:" in
   *":$BIN:"*) ;;
   *) echo "Add $BIN to your PATH, for example: echo 'export PATH=\"$BIN:\$PATH\"' >> ~/.profile" ;;

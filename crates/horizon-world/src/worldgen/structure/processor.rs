@@ -57,6 +57,58 @@ enum Modifier {
     AppendLoot(String),
     AppendStatic(Compound),
 }
+impl PosRule {
+    /// A rule's `position_predicate` (always true when missing). Types are
+    /// identifiers: `"always_true"` is `minecraft:always_true`, as vanilla
+    /// reads it.
+    fn decode(value: Option<&Value>) -> Result<Self, DecodeError> {
+        let Some(p) = value else {
+            return Ok(Self::Always);
+        };
+        let kind = p["predicate_type"]
+            .as_str()
+            .unwrap_or("minecraft:always_true");
+        Ok(match super::super::tags::identifier(kind)?.as_str() {
+            "minecraft:always_true" => Self::Always,
+            kind @ ("minecraft:linear_pos" | "minecraft:axis_aligned_linear_pos") => Self::Linear {
+                min_chance: p.get("min_chance").and_then(Value::as_f64).unwrap_or(0.) as f32,
+                max_chance: p.get("max_chance").and_then(Value::as_f64).unwrap_or(0.) as f32,
+                min_dist: p.get("min_dist").and_then(Value::as_i64).unwrap_or(0) as i32,
+                max_dist: p.get("max_dist").and_then(Value::as_i64).unwrap_or(0) as i32,
+                axis: (kind == "minecraft:axis_aligned_linear_pos").then(|| {
+                    match p.get("axis").and_then(Value::as_str) {
+                        Some("x") => 0,
+                        Some("z") => 2,
+                        _ => 1,
+                    }
+                }),
+            },
+            _ => return Err(DecodeError::Field("position predicate")),
+        })
+    }
+}
+impl Modifier {
+    /// A rule's `block_entity_modifier` (passthrough when missing).
+    fn decode(value: Option<&Value>) -> Result<Self, DecodeError> {
+        let Some(m) = value else {
+            return Ok(Self::Passthrough);
+        };
+        Ok(
+            match super::super::tags::identifier(m["type"].as_str().unwrap_or(""))?.as_str() {
+                "minecraft:passthrough" => Self::Passthrough,
+                "minecraft:clear" => Self::Clear,
+                "minecraft:append_loot" => {
+                    Self::AppendLoot(m["loot_table"].as_str().unwrap_or_default().to_owned())
+                }
+                "minecraft:append_static" => match json_to_nbt(&m["data"]) {
+                    Tag::Compound(c) => Self::AppendStatic(c),
+                    _ => Self::AppendStatic(Compound::new()),
+                },
+                _ => return Err(DecodeError::Field("block entity modifier")),
+            },
+        )
+    }
+}
 #[derive(Clone, Debug)]
 pub struct Rule {
     input: RuleTest,
@@ -87,9 +139,118 @@ pub enum Processor {
     BlockAge(f32),
     LavaSubmerged,
     BlackstoneReplace,
+    SpawnerMobs(Box<SpawnerMobs>),
 }
 #[derive(Clone, Debug, Default)]
 pub struct ProcessorList(pub Vec<Processor>);
+
+/// The spawner fields `horizon:spawner_mobs` writes: its JSON key, the NBT
+/// key and the default (BaseSpawner's).
+const SPAWNER_FIELDS: [(&str, &str, i16); 7] = [
+    ("delay", "Delay", 20),
+    ("min_spawn_delay", "MinSpawnDelay", 200),
+    ("max_spawn_delay", "MaxSpawnDelay", 800),
+    ("spawn_count", "SpawnCount", 4),
+    ("max_nearby_entities", "MaxNearbyEntities", 6),
+    ("required_player_range", "RequiredPlayerRange", 16),
+    ("spawn_range", "SpawnRange", 4),
+];
+
+/// `horizon:spawner_mobs`, which `horizon-port-pack` writes for the spawner
+/// randomizing processors of Moog's Structure Lib and Repurposed Structures
+/// (Java code in the mods): a spawner gets one mob of a weighted list,
+/// picked with `settings.getRandom(pos).nextFloat()` as theirs do, and the
+/// spawner NBT they write. With no mob to pick it becomes `replacement`.
+#[derive(Clone, Debug)]
+pub struct SpawnerMobs {
+    /// Each mob's entity compound (its `id` and any NBT) and weight.
+    mobs: Vec<(Compound, f64)>,
+    /// [`SPAWNER_FIELDS`]' values.
+    fields: [i16; 7],
+    /// `custom_spawn_rules`, in `SpawnData` and the potential alike.
+    rules: Option<Compound>,
+    replacement: BlockStateId,
+}
+impl SpawnerMobs {
+    fn decode(
+        value: &Value,
+        replacement: impl FnOnce(Option<&Value>) -> Result<BlockStateId, DecodeError>,
+    ) -> Result<Self, DecodeError> {
+        let mobs = value["mobs"]
+            .as_array()
+            .ok_or(DecodeError::Field("spawner_mobs mobs"))?
+            .iter()
+            .map(
+                |m| match (json_to_nbt(&m["entity"]), m["weight"].as_f64()) {
+                    (Tag::Compound(entity), Some(weight))
+                        if entity.contains_key(&JavaString::from("id")) =>
+                    {
+                        Ok((entity, weight))
+                    }
+                    _ => Err(DecodeError::Field("spawner_mobs mob")),
+                },
+            )
+            .collect::<Result<_, _>>()?;
+        let mut fields = [0; 7];
+        for (field, (key, _, default)) in fields.iter_mut().zip(SPAWNER_FIELDS) {
+            // The mods' codecs read ints; the spawner saves them as shorts.
+            *field = value
+                .get(key)
+                .map_or(Some(default), |v| v.as_i64().map(|v| v as i16))
+                .ok_or(DecodeError::Field("spawner_mobs field"))?;
+        }
+        let rules = match value.get("custom_spawn_rules").map(json_to_nbt) {
+            None => None,
+            Some(Tag::Compound(c)) => Some(c),
+            Some(_) => return Err(DecodeError::Field("spawner_mobs custom_spawn_rules")),
+        };
+        Ok(Self {
+            mobs,
+            fields,
+            rules,
+            replacement: replacement(value.get("replacement"))?,
+        })
+    }
+    /// The mob for a spawner, drawing from `random` only when there is one
+    /// to pick (pickWeightedRandom; Repurposed Structures' getSpawnerMob,
+    /// whose float product can round differently only on a boundary).
+    fn pick(&self, random: impl FnOnce() -> f32) -> Option<&Compound> {
+        let total: f64 = self.mobs.iter().map(|m| m.1).sum();
+        if self.mobs.is_empty() || total <= 0. {
+            return None;
+        }
+        let mut pick = f64::from(random()) * total;
+        for (entity, weight) in &self.mobs {
+            pick -= weight;
+            if pick <= 0. {
+                return Some(entity);
+            }
+        }
+        self.mobs.last().map(|m| &m.0)
+    }
+    /// The spawner's NBT with `entity` as its only potential and next spawn.
+    fn nbt(&self, entity: &Compound) -> Compound {
+        let mut data = Compound::new();
+        data.insert("entity".into(), Tag::Compound(entity.clone()));
+        if let Some(rules) = &self.rules {
+            data.insert("custom_spawn_rules".into(), Tag::Compound(rules.clone()));
+        }
+        let mut potential = Compound::new();
+        potential.insert("data".into(), Tag::Compound(data.clone()));
+        potential.insert("weight".into(), Tag::Int(1));
+        let mut nbt: Compound = SPAWNER_FIELDS
+            .iter()
+            .zip(self.fields)
+            .map(|((_, key, _), v)| (JavaString::from(*key), Tag::Short(v)))
+            .collect();
+        nbt.insert(
+            "SpawnPotentials".into(),
+            Tag::List(vec![Tag::Compound(potential)]),
+        );
+        nbt.insert("SpawnData".into(), Tag::Compound(data));
+        nbt
+    }
+}
 
 fn holder_set(
     value: &Value,
@@ -208,55 +369,8 @@ impl Processor {
                     .iter()
                     .map(|rule| {
                         let test = |key| RuleTest::from_json(&rule[key].to_string(), bindings);
-                        let position = match rule.get("position_predicate") {
-                            Some(p) => match p["predicate_type"]
-                                .as_str()
-                                .unwrap_or("minecraft:always_true")
-                            {
-                                "minecraft:always_true" => PosRule::Always,
-                                kind @ ("minecraft:linear_pos"
-                                | "minecraft:axis_aligned_linear_pos") => PosRule::Linear {
-                                    min_chance: p
-                                        .get("min_chance")
-                                        .and_then(Value::as_f64)
-                                        .unwrap_or(0.)
-                                        as f32,
-                                    max_chance: p
-                                        .get("max_chance")
-                                        .and_then(Value::as_f64)
-                                        .unwrap_or(0.)
-                                        as f32,
-                                    min_dist: p.get("min_dist").and_then(Value::as_i64).unwrap_or(0)
-                                        as i32,
-                                    max_dist: p.get("max_dist").and_then(Value::as_i64).unwrap_or(0)
-                                        as i32,
-                                    axis: (kind == "minecraft:axis_aligned_linear_pos").then(
-                                        || match p.get("axis").and_then(Value::as_str) {
-                                            Some("x") => 0,
-                                            Some("z") => 2,
-                                            _ => 1,
-                                        },
-                                    ),
-                                },
-                                _ => return Err(DecodeError::Field("position predicate")),
-                            },
-                            None => PosRule::Always,
-                        };
-                        let modifier = match rule.get("block_entity_modifier") {
-                            None => Modifier::Passthrough,
-                            Some(m) => match m["type"].as_str().unwrap_or("") {
-                                "minecraft:passthrough" => Modifier::Passthrough,
-                                "minecraft:clear" => Modifier::Clear,
-                                "minecraft:append_loot" => Modifier::AppendLoot(
-                                    m["loot_table"].as_str().unwrap_or_default().to_owned(),
-                                ),
-                                "minecraft:append_static" => match json_to_nbt(&m["data"]) {
-                                    Tag::Compound(c) => Modifier::AppendStatic(c),
-                                    _ => Modifier::AppendStatic(Compound::new()),
-                                },
-                                _ => return Err(DecodeError::Field("block entity modifier")),
-                            },
-                        };
+                        let position = PosRule::decode(rule.get("position_predicate"))?;
+                        let modifier = Modifier::decode(rule.get("block_entity_modifier"))?;
                         Ok(Rule {
                             input: test("input_predicate")?,
                             location: test("location_predicate")?,
@@ -267,6 +381,12 @@ impl Processor {
                     })
                     .collect::<Result<_, DecodeError>>()?,
             ),
+            "horizon:spawner_mobs" => {
+                Self::SpawnerMobs(Box::new(SpawnerMobs::decode(value, |v| match v {
+                    Some(v) => state(v),
+                    None => Ok(resources.registry.default_state("minecraft:air").unwrap()),
+                })?))
+            }
             _ => return Err(DecodeError::Field("structure processor type")),
         })
     }
@@ -532,6 +652,24 @@ fn process_block<W: PlacementContext>(
             Some(info)
         }
         Processor::Capped { .. } => Some(info),
+        Processor::SpawnerMobs(spawner) => {
+            if name(info.state) != "minecraft:spawner" {
+                return Ok(Some(info));
+            }
+            let pos = info.pos;
+            let entity = spawner.pick(|| settings.with_random(pos, |r| r.float()));
+            Some(match entity {
+                Some(entity) => BlockInfo {
+                    nbt: Some(spawner.nbt(entity)),
+                    ..info
+                },
+                None => BlockInfo {
+                    pos,
+                    state: spawner.replacement,
+                    nbt: None,
+                },
+            })
+        }
     })
 }
 fn block_age(
@@ -1020,4 +1158,128 @@ fn update_shape_at_edge<W: PlacementContext>(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn spawner(value: Value) -> SpawnerMobs {
+        SpawnerMobs::decode(&value, |v| {
+            assert_eq!(v, Some(&json!({"id": "minecraft:cobblestone"})));
+            Ok(BlockStateId(7))
+        })
+        .unwrap()
+    }
+    fn id(entity: Option<&Compound>) -> Option<String> {
+        match entity?.get(&JavaString::from("id")) {
+            Some(Tag::String(s)) => Some(s.to_string_lossy()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn spawner_mobs_pick_by_weight() {
+        let s = spawner(json!({
+            "mobs": [
+                {"entity": {"id": "minecraft:zombie"}, "weight": 1},
+                {"entity": {"id": "minecraft:husk"}, "weight": 3}],
+            "replacement": {"id": "minecraft:cobblestone"}}));
+        // pick = nextFloat * 4, less each weight in turn, until <= 0.
+        for (r, mob) in [
+            (0., "zombie"),
+            (0.25, "zombie"),
+            (0.2501, "husk"),
+            (0.999, "husk"),
+        ] {
+            assert_eq!(id(s.pick(|| r)), Some(format!("minecraft:{mob}")), "{r}");
+        }
+        let empty = spawner(json!({"mobs": [], "replacement": {"id": "minecraft:cobblestone"}}));
+        assert_eq!(empty.pick(|| unreachable!()), None);
+        assert_eq!(empty.replacement, BlockStateId(7));
+    }
+
+    #[test]
+    fn spawner_mobs_write_the_mods_nbt() {
+        let s = spawner(json!({
+            "mobs": [{"entity": {"id": "minecraft:skeleton", "Health": 30}, "weight": 2}],
+            "delay": 10, "spawn_count": 2,
+            "custom_spawn_rules": {"block_light_limit": {"min_inclusive": 0, "max_inclusive": 7}},
+            "replacement": {"id": "minecraft:cobblestone"}}));
+        let nbt = s.nbt(s.pick(|| 0.5).unwrap());
+        let short = |k: &str| nbt.get(&JavaString::from(k)).cloned();
+        for (k, v) in [
+            ("Delay", 10),
+            ("MinSpawnDelay", 200),
+            ("MaxSpawnDelay", 800),
+            ("SpawnCount", 2),
+            ("MaxNearbyEntities", 6),
+            ("RequiredPlayerRange", 16),
+            ("SpawnRange", 4),
+        ] {
+            assert_eq!(short(k), Some(Tag::Short(v)), "{k}");
+        }
+        let Some(Tag::Compound(data)) = short("SpawnData") else {
+            panic!("SpawnData")
+        };
+        assert!(data.contains_key(&JavaString::from("custom_spawn_rules")));
+        let Some(Tag::Compound(entity)) = data.get(&JavaString::from("entity")) else {
+            panic!("entity")
+        };
+        assert_eq!(entity.get(&JavaString::from("Health")), Some(&Tag::Int(30)));
+        let Some(Tag::List(potentials)) = short("SpawnPotentials") else {
+            panic!("SpawnPotentials")
+        };
+        let Tag::Compound(potential) = &potentials[0] else {
+            panic!("potential")
+        };
+        assert_eq!(
+            potential.get(&JavaString::from("weight")),
+            Some(&Tag::Int(1))
+        );
+        assert_eq!(
+            potential.get(&JavaString::from("data")),
+            Some(&Tag::Compound(data.clone()))
+        );
+    }
+
+    #[test]
+    fn spawner_mobs_refuse_a_mob_without_an_id() {
+        let bad = json!({"mobs": [{"entity": {}, "weight": 1}]});
+        assert!(SpawnerMobs::decode(&bad, |_| Ok(BlockStateId(0))).is_err());
+    }
+
+    #[test]
+    fn rule_parts_read_ids_without_a_namespace() {
+        // CTOV writes "always_true"; vanilla reads it as minecraft:always_true.
+        for kind in ["always_true", "minecraft:always_true"] {
+            let p = json!({"predicate_type": kind});
+            assert!(
+                matches!(PosRule::decode(Some(&p)), Ok(PosRule::Always)),
+                "{kind}"
+            );
+        }
+        let linear = json!({"predicate_type": "axis_aligned_linear_pos", "axis": "z",
+                            "min_chance": 0.1, "max_dist": 8});
+        assert!(matches!(
+            PosRule::decode(Some(&linear)),
+            Ok(PosRule::Linear {
+                axis: Some(2),
+                max_dist: 8,
+                ..
+            })
+        ));
+        assert!(PosRule::decode(Some(&json!({"predicate_type": "x:unknown"}))).is_err());
+        assert!(matches!(PosRule::decode(None), Ok(PosRule::Always)));
+        let loot = json!({"type": "append_loot", "loot_table": "minecraft:chests/x"});
+        assert!(
+            matches!(Modifier::decode(Some(&loot)), Ok(Modifier::AppendLoot(t)) if t == "minecraft:chests/x")
+        );
+        assert!(matches!(
+            Modifier::decode(Some(&json!({"type": "clear"}))),
+            Ok(Modifier::Clear)
+        ));
+        assert!(Modifier::decode(Some(&json!({"type": ""}))).is_err());
+    }
 }
