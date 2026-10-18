@@ -463,6 +463,8 @@ struct GameLevel<'w> {
     raining: bool,
     thundering: bool,
     player_box: Option<([f64; 3], [f64; 3])>,
+    /// The LAN guests in this level who trigger blocks (not spectators).
+    guest_boxes: Vec<([f64; 3], [f64; 3])>,
     player_collision: Option<PlayerCollision>,
     /// Minecart boxes (detector rails).
     cart_boxes: Vec<([f64; 3], [f64; 3])>,
@@ -676,7 +678,7 @@ impl LevelAccess for GameLevel<'_> {
         .unwrap_or(false)
     }
     /// Entities that trigger pressure plates, tripwires and detector rails:
-    /// the player (a mob) and the minecarts.
+    /// the players (the host and the LAN guests, mobs) and the minecarts.
     fn count_entities(&self, area: Aabb, query: EntityQuery) -> usize {
         let hit = |(lo, hi): &([f64; 3], [f64; 3])| {
             area.intersects(Aabb::new(
@@ -685,10 +687,17 @@ impl LevelAccess for GameLevel<'_> {
             ))
         };
         let carts = || self.cart_boxes.iter().filter(|b| hit(b)).count();
+        let players = || {
+            self.player_box
+                .iter()
+                .chain(&self.guest_boxes)
+                .filter(|b| hit(b))
+                .count()
+        };
         match query {
             EntityQuery::Minecart => carts(),
-            EntityQuery::Mobs => self.player_box.iter().filter(|b| hit(b)).count(),
-            EntityQuery::Everything => self.player_box.iter().filter(|b| hit(b)).count() + carts(),
+            EntityQuery::Mobs => players(),
+            EntityQuery::Everything => players() + carts(),
         }
     }
     fn emit(&mut self, event: LevelEvent) {
@@ -1999,6 +2008,7 @@ impl Game<'_> {
                 )
             })
             .collect();
+        let guest_boxes = self.lan_block_trigger_boxes();
         let dimension = match self.dim {
             Dim::Overworld => LevelDimension::Overworld,
             Dim::Nether => LevelDimension::Nether,
@@ -2016,6 +2026,7 @@ impl Game<'_> {
             raining: rain > 0.2,
             thundering: thunder > 0.9,
             player_box,
+            guest_boxes,
             player_collision,
             biomes: self.res.biomes(),
             seed: self.level.seed,
@@ -2094,8 +2105,9 @@ impl Game<'_> {
             ticking.push((x, z, sections));
         }
         // Entity.checkInsideBlocks for the plates, tripwires and detector rails
-        // under the player and the minecarts.
+        // under the players (the host and the LAN guests) and the minecarts.
         let mut inside = Vec::new();
+        let guests = self.lan_block_trigger_boxes();
         let boxes = self
             .player
             .iter()
@@ -2114,7 +2126,8 @@ impl Game<'_> {
                     [p.x - 0.49, p.y, p.z - 0.49],
                     [p.x + 0.49, p.y + 0.7, p.z + 0.49],
                 )
-            }));
+            }))
+            .chain(guests);
         for (lo, hi) in boxes {
             for x in (lo[0] + 1e-7).floor() as i32..=(hi[0] - 1e-7).floor() as i32 {
                 for y in (lo[1] + 1e-7).floor() as i32..=(hi[1] - 1e-7).floor() as i32 {

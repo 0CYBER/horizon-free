@@ -131,6 +131,26 @@ impl Game<'_> {
         self.lan = Some(host);
     }
 
+    /// The guests' boxes for the blocks entities trigger (pressure plates,
+    /// tripwires, detector rails): `Entity.checkInsideBlocks` and
+    /// `Level.getEntities` see every player in the level, but not spectators
+    /// (`Entity.isIgnoringBlockTriggers`).
+    pub(super) fn lan_block_trigger_boxes(&self) -> Vec<([f64; 3], [f64; 3])> {
+        let Some(host) = self.lan.as_ref() else {
+            return Vec::new();
+        };
+        host.hub
+            .guests
+            .iter()
+            .filter(|g| host.hub.here(g) && g.loaded && !g.dead && !g.spectator())
+            .map(|g| {
+                let [x, y, z] = g.position;
+                let height = if g.sneaking { 1.5 } else { 1.8 };
+                ([x - 0.3, y, z - 0.3], [x + 0.3, y + height, z + 0.3])
+            })
+            .collect()
+    }
+
     /// The guests a projectile can hit, under their entity ids.
     pub(super) fn lan_projectile_targets(&self) -> Vec<(Who, Aabb)> {
         let Some(host) = self.lan.as_ref() else {

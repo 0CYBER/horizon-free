@@ -59,6 +59,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              guest as the host has them (kind, place, rotation, what they hold or wear, the variant).
 - projectiles: primed TNT (one falling), an end crystal and an arrow that lands reach the guest where
              the host has them; a falling block lands on both sides.
+- plates:    a stone pressure plate the guest steps on is pressed on both sides, and comes up once
+             the guest steps off (#848).
 - light:     the guest's light matches the host's: around a torch placed near it, under a roof and
              once a block of the roof is removed under the sky, and in the last chunk it tracks next to
              glowstone in a chunk it doesn't (only the server's light updates bring that one).
@@ -94,7 +96,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'push', 'eat', 'xp', 'objects', 'projectiles', 'light', 'effects', 'portals', 'distance']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'push', 'eat', 'xp', 'objects', 'projectiles', 'light', 'plates', 'effects', 'portals', 'distance']
 
 
 class Game:
@@ -1081,6 +1083,27 @@ def wait_state(game, pos, key, want, ticks):
     return state_of(game, pos, key)
 
 
+def check_plates(host, guest, out):
+    guest('command', command='gamemode survival')
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    plate = (x + 2, y, z)
+    guest('command', command=f'setblock {plate[0]} {plate[1]} {plate[2]} minecraft:stone_pressure_plate')
+    guest.wait(10)
+    guest('command', command=f'tp @s {plate[0] + 0.5} {plate[1]} {plate[2] + 0.5}')
+    pressed = {'host': wait_state(host, plate, 'powered', 'true', 40),
+               'guest': wait_state(guest, plate, 'powered', 'true', 40)}
+    guest.shot(out, 'plate-pressed')
+    guest('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+    # PressurePlateBlock.getPressedTime: a stone plate checks again every 20 ticks.
+    released = {'host': wait_state(host, plate, 'powered', 'false', 60),
+                'guest': wait_state(guest, plate, 'powered', 'false', 60)}
+    guest('command', command=f'setblock {plate[0]} {plate[1]} {plate[2]} minecraft:air')
+    detail = {'pressed': pressed, 'released': released}
+    assert pressed == {'host': 'true', 'guest': 'true'}, f'the plate under the guest: {detail}'
+    assert released == {'host': 'false', 'guest': 'false'}, f'the plate after the guest left: {detail}'
+    return detail
+
+
 def check_trials(host, guest, out):
     # The host watches as a spectator, whom neither block detects: only the guest can wake them.
     hx, hy, hz = pos_of(host)
@@ -1404,7 +1427,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'effects': check_effects, 'portals': check_portals, 'distance': check_distance, 'clicks': check_clicks,
              'sleep': check_sleep, 'push': check_push, 'eat': check_eat,
              'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles,
-             'light': check_light}
+             'light': check_light, 'plates': check_plates}
 
 
 def run(ctl, out, resources, checks):
