@@ -1545,6 +1545,7 @@ impl Hub {
             .zip(outs.iter_mut())
             .map(|(g, out)| Viewer {
                 entity_id: g.entity_id,
+                moved: std::mem::take(&mut g.moved),
                 position: g.position,
                 view_distance: g.view_distance,
                 chunks: &g.sent_chunks,
@@ -1986,6 +1987,8 @@ impl Hub {
         let g = &mut self.guests[i];
         g.previous_position = g.position;
         g.position = to;
+        // ServerChunkCache.move: its pairs are checked again.
+        g.moved = true;
         let moved = [0, 1, 2].map(|k| g.position[k] - g.previous_position[k]);
         if g.moves.is_empty() {
             g.moves_from_ground = g.on_ground;
