@@ -686,6 +686,16 @@ impl Hub {
     /// onEffectsRemoved, from what changed since the client was told: an
     /// effect that only counted down is not sent again, except at every
     /// 600 ticks left (`LivingEntity.tickEffects`).
+    /// `sync_effects` for every player at once: what a command changed
+    /// leaves with its feedback (ServerPlayer.onEffectAdded sends at once),
+    /// not after the tick's countdown.
+    pub fn sync_all_effects(&mut self) {
+        for i in 0..self.guests.len() {
+            if self.guests[i].placed {
+                self.sync_effects(i);
+            }
+        }
+    }
     fn sync_effects(&mut self, i: usize) {
         let g = &self.guests[i];
         if g.effects.list.is_empty() && g.sent_effects.is_empty() {

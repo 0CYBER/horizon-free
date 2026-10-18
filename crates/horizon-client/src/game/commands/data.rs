@@ -35,6 +35,11 @@ impl Game<'_> {
     pub(in crate::game) fn entity_nbt(&mut self, t: Target) -> Option<Tag> {
         let player_uuid = self.level.player_uuid;
         Some(match t {
+            Target::Guest(_) => {
+                return self
+                    .for_player(t, |g| g.entity_nbt(Target::Player))
+                    .flatten();
+            }
             Target::Player => {
                 self.player.as_ref()?;
                 self.sync_level();
