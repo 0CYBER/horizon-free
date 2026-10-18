@@ -316,6 +316,7 @@ impl Game<'_> {
             // The owner is an operator when the world allows commands
             // (`IntegratedPlayerList`, `MinecraftServer.getProfilePermissions`).
             host.hub.ops.insert(owner, if commands { 4 } else { 0 });
+            host.hub.singleplayer_owner = Some(owner);
             host.owner = Some(Owner {
                 uuid: owner,
                 saved: Some(saved),

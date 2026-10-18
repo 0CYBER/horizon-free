@@ -2418,6 +2418,17 @@ impl Game<'_> {
             (player.position.z.floor() as i32) >> 4,
         );
         if !self.streaming.is_lit(cx, cz) {
+            // Moved where nothing is loaded by horizon-ctl (`tp`, `fly`):
+            // the server hears of it, and sends the chunks there. A player
+            // who walked there has already sent that move.
+            let pos = [player.position.x, player.position.y, player.position.z];
+            if let Some(r) = self.remote.as_ref()
+                && r.loaded_sent
+                && r.last_pos != pos
+            {
+                let input = r.last_input;
+                self.remote_send_state(input);
+            }
             return Ok(());
         }
         if self.remote.as_ref().is_some_and(|r| !r.loaded_sent) {
@@ -3707,6 +3718,9 @@ impl Game<'_> {
             "address": horizon_client::net::shown_address(&r.session.address),
             "name": r.session.name,
             "joined": r.joined,
+            // ServerboundPlayerLoadedPacket sent: the level around the
+            // player is ready, and the client ticks and sends its moves.
+            "loaded": r.loaded_sent,
             "status": r.status,
             "entity_id": r.entity_id,
             "dimension": r.dimension.name,

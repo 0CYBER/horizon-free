@@ -132,6 +132,9 @@ pub struct Hub {
     /// The `player_movement_check` and `elytra_movement_check` game rules,
     /// set by the game before each tick.
     pub movement_checks: (bool, bool),
+    /// An integrated server's owner (`MinecraftServer.isSingleplayerOwner`),
+    /// whose moves are never checked.
+    pub singleplayer_owner: Option<u128>,
     /// Who rides what, set by the game before each tick.
     pub riding: super::entity::Riding,
     last_clock: i64,
@@ -265,6 +268,7 @@ impl Hub {
             sync,
             ticks: 0,
             movement_checks: (true, true),
+            singleplayer_owner: None,
             riding: Default::default(),
             last_clock: i64::MIN,
             last_rate: 0.0,
@@ -1893,6 +1897,7 @@ impl Hub {
     ) {
         let (frozen, (check, elytra_check)) = (self.ticking.1, self.movement_checks);
         let g = &mut self.guests[i];
+        let owner = self.singleplayer_owner == Some(g.uuid);
         let to = [
             to[0].clamp(-3.0E7, 3.0E7),
             to[1].clamp(-2.0E7, 2.0E7),
@@ -1916,9 +1921,10 @@ impl Hub {
             if packets > 5 {
                 packets = 1;
             }
-            // shouldCheckPlayerMovement. The server holds no velocity for a
-            // guest (getDeltaMovement), so nothing is expected.
-            if check && (!g.fall_flying || elytra_check) {
+            // shouldCheckPlayerMovement (never the single-player owner).
+            // The server holds no velocity for a guest (getDeltaMovement),
+            // so nothing is expected.
+            if !owner && check && (!g.fall_flying || elytra_check) {
                 let limit = if g.fall_flying { 300.0 } else { 100.0 };
                 if moved > limit * f64::from(packets) {
                     events.push(HostEvent::Warn(format!(
