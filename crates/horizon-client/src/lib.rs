@@ -172,6 +172,7 @@ pub mod telemetry;
 pub mod testgen;
 pub mod text;
 pub mod tick_chunk_membership;
+pub mod ticket_levels;
 pub mod title;
 pub mod title_edition;
 pub mod toasts;

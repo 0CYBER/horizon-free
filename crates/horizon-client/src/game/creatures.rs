@@ -475,24 +475,11 @@ impl Game<'_> {
         self.tick_raids();
         self.tick_creature_entities()
     }
-    /// `DistanceManager.inEntityTickingRange`: chunks within the simulation
-    /// distance (Chebyshev, in chunks) of the player or of a guest.
+    /// `DistanceManager.inEntityTickingRange` in an entity-ticking chunk
+    /// (block coordinates), from every player's tickets (`update_chunk_tickets`).
     pub(super) fn entity_ticking_area(&self) -> impl Fn(i32, i32) -> bool + use<> {
-        let d = self.settings.simulation_distance.max(2);
-        let mut centres: Vec<(i32, i32)> = self.streaming.extra.iter().map(|&(c, _)| c).collect();
-        if let Some(p) = &self.player {
-            centres.push((
-                (p.position.x.floor() as i32) >> 4,
-                (p.position.z.floor() as i32) >> 4,
-            ));
-        }
-        let everywhere = centres.is_empty();
-        move |x, z| {
-            everywhere
-                || centres
-                    .iter()
-                    .any(|&(cx, cz)| ((x >> 4) - cx).abs().max(((z >> 4) - cz).abs()) <= d)
-        }
+        let levels = self.tickets.levels();
+        move |x, z| levels.entity_ticking_at(x, z)
     }
     /// The entity phase of `tick_creatures`: every mob's tick, deaths, and the
     /// projectiles and effects that follow from them.

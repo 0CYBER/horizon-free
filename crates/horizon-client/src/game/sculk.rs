@@ -705,18 +705,10 @@ impl Game<'_> {
         }
         Ok(())
     }
-    /// `ServerLevel.shouldTickBlocksAt`, as `tick_blocks` decides it.
+    /// `ServerLevel.shouldTickBlocksAt` in a block-ticking chunk, from every
+    /// player's tickets (`update_chunk_tickets`), once the chunk is lit.
     fn chunk_ticks(&self, cx: i32, cz: i32) -> bool {
-        let Some(p) = self.player.as_ref() else {
-            return false;
-        };
-        let (pcx, pcz) = (
-            (p.position.x.floor() as i32) >> 4,
-            (p.position.z.floor() as i32) >> 4,
-        );
-        let simulation = self.settings.render_distance.min(8);
-        (cx - pcx).abs() <= simulation
-            && (cz - pcz).abs() <= simulation
+        self.tickets.levels().block_ticking(cx, cz)
             && self.world.chunks.get(&(cx, cz)).is_some_and(|c| c.lit)
     }
     fn tick_sculk_block(&mut self, key: (i32, i32, i32)) -> Result<()> {

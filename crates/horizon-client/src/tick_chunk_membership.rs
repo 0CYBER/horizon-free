@@ -10,6 +10,9 @@ pub struct TickChunkMembership {
     revision: Option<u64>,
     added: Vec<Key>,
     removed: Vec<Key>,
+    /// Loaded chunks with saved ticks that have not started ticking yet
+    /// (`LevelChunkTicks.pendingTicks`, unpacked by `startTickingChunk`).
+    waiting: HashSet<Key>,
 }
 
 impl TickChunkMembership {
@@ -20,6 +23,7 @@ impl TickChunkMembership {
         self.revision = None;
         self.added.clear();
         self.removed.clear();
+        self.waiting.clear();
     }
 
     /// Returns false in O(1) when resident membership is unchanged. On change,
@@ -36,6 +40,7 @@ impl TickChunkMembership {
                 true
             } else {
                 self.removed.push(*key);
+                self.waiting.remove(key);
                 false
             }
         });
@@ -61,6 +66,28 @@ impl TickChunkMembership {
 
     pub fn removed(&self) -> &[Key] {
         &self.removed
+    }
+
+    /// `key` was registered with saved ticks to unpack once it ticks.
+    pub fn wait(&mut self, key: Key) {
+        self.waiting.insert(key);
+    }
+
+    /// The waiting chunks that `ticking` says now tick, no longer waiting.
+    pub fn start_ticking(&mut self, mut ticking: impl FnMut(Key) -> bool) -> Vec<Key> {
+        if self.waiting.is_empty() {
+            return Vec::new();
+        }
+        let started: Vec<Key> = self
+            .waiting
+            .iter()
+            .copied()
+            .filter(|&k| ticking(k))
+            .collect();
+        for key in &started {
+            self.waiting.remove(key);
+        }
+        started
     }
 }
 
@@ -122,6 +149,24 @@ mod tests {
         old.clear();
         map = ChunkMap::default();
         compare(&mut cache, &mut old, &map);
+    }
+
+    #[test]
+    fn waiting_chunks_start_ticking_once_and_unloaded_ones_stop_waiting() {
+        let mut map = ChunkMap::default();
+        let mut cache = TickChunkMembership::default();
+        for key in [(0, 0), (1, 0), (2, 0)] {
+            map.insert(key, Arc::new(Chunk::empty(key.0, key.1)));
+            cache.wait(key);
+        }
+        cache.synchronize(&map);
+        assert_eq!(cache.start_ticking(|k| k == (0, 0)), vec![(0, 0)]);
+        assert!(cache.start_ticking(|k| k == (0, 0)).is_empty());
+        map.remove(&(1, 0));
+        cache.synchronize(&map);
+        let mut started = cache.start_ticking(|_| true);
+        started.sort_unstable();
+        assert_eq!(started, vec![(2, 0)]);
     }
 
     #[test]
