@@ -231,8 +231,8 @@ impl Game<'_> {
             .ok_or_else(|| err("argument.pos.missing.int", &[]))?;
         // BlockPos.containing(getPosition)
         let p = self.resolve_coords(&c).map(|v| v.floor() as i32);
-        let elsewhere = self.command_source.is_some_and(|s| s.elsewhere);
-        if elsewhere || !self.world.chunks.contains_key(&(p[0] >> 4, p[2] >> 4)) {
+        let dimension = self.command_source.map_or(self.dim, |s| s.dimension);
+        if dimension != self.dim || !self.world.chunks.contains_key(&(p[0] >> 4, p[2] >> 4)) {
             return Err(err("argument.pos.unloaded", &[]));
         }
         if p[1] < horizon_client::chunk::MIN_Y
@@ -1056,6 +1056,42 @@ impl Game<'_> {
             Target::Frame(_) | Target::Painting(_) => {}
         }
     }
+    /// Teleport the local player into the command source's dimension. Unlike
+    /// portal travel, `/tp` keeps the coordinates given by the command.
+    fn teleport_player_to_dimension(
+        &mut self,
+        dimension: Dim,
+        pos: [f64; 3],
+        rotation: Option<[f32; 2]>,
+    ) -> R<()> {
+        let Some(mut player) = self.player.take() else {
+            return Ok(());
+        };
+        let from = self.dim;
+        if self.switch_level(dimension, player.position).is_err() {
+            self.player = Some(player);
+            return Err(err("command.failed", &[]));
+        }
+        self.trigger_dimension(from, dimension);
+        let target = Vec3::new(pos[0], pos[1], pos[2]);
+        player.position = target;
+        player.velocity = Vec3::ZERO;
+        player.fall_distance = 0.0;
+        player.ground.on_ground = false;
+        if let Some([yaw, pitch]) = rotation {
+            let pitch = pitch.clamp(-90.0, 90.0);
+            self.yaw = yaw;
+            self.pitch = pitch;
+            player.yaw = yaw;
+            player.head_yaw = yaw;
+            player.pitch = pitch;
+        }
+        self.travelling = Some((player, target));
+        self.portals.travel = None;
+        self.end_travel = false;
+        self.end_portal_travel = false;
+        Ok(())
+    }
     fn cmd_teleport(&mut self, id: &str, ctx: &Context) -> R<i32> {
         let targets = if id.starts_with("teleport.targets") {
             self.entities(ctx, "targets", false)?
@@ -1125,7 +1161,12 @@ impl Game<'_> {
             ]);
         }
         for &t in &targets {
-            self.teleport_to(t, pos, rotation);
+            let dimension = self.command_source.map_or(self.dim, |s| s.dimension);
+            if t == Target::Player && dimension != self.dim {
+                self.teleport_player_to_dimension(dimension, pos, rotation)?;
+            } else {
+                self.teleport_to(t, pos, rotation);
+            }
         }
         let [x, y, z] = pos.map(|v| Text::literal(format_double(v)));
         let message = if targets.len() == 1 {

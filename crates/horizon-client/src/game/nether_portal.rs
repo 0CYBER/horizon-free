@@ -352,10 +352,23 @@ impl Game<'_> {
     ) -> Result<()> {
         self.resolve_arrivals();
         let plan = self.portals.travel.take();
-        let exit = plan.as_ref().and_then(|plan| self.nether_exit_portal(plan));
-        let (position, rotation) = match (plan, exit) {
-            (Some(plan), Some(exit)) => self.arrival(&plan, exit),
-            _ => (target, 0.0),
+        let Some(plan) = plan else {
+            // A command teleport can change dimensions without going through
+            // a portal. It has no portal placement, rotation, or sound effect.
+            player.position = target;
+            player.velocity = Vec3::ZERO;
+            player.fall_distance = 0.0;
+            self.previous_position = target;
+            self.player = Some(player);
+            self.pad.player_replaced();
+            self.sway = Default::default();
+            self.apply_equipment();
+            return Ok(());
+        };
+        let exit = self.nether_exit_portal(&plan);
+        let (position, rotation) = match exit {
+            Some(exit) => self.arrival(&plan, exit),
+            None => (target, 0.0),
         };
         player.position = position;
         // Relative.ROTATION and Relative.DELTA: the yaw turns, the motion

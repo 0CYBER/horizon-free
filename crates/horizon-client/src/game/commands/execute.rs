@@ -1,7 +1,7 @@
 //! `/execute` (ExecuteCommand): walk the parsed redirect chain, forking and
 //! filtering command sources, then run the final command once per source,
 //! reporting each result to the `store` callbacks of its source.
-use super::{Arg, Context, Game, R, Target, data::DataRef, err};
+use super::{Arg, Context, Dim, Game, R, Target, data::DataRef, err};
 use horizon_client::{
     command::{CommandError, vanilla},
     nbt_path::NbtPath,
@@ -23,9 +23,9 @@ pub(in crate::game) struct Source {
     pub silent: bool,
     /// Index of the newest `store` in `ExecState::stores`.
     pub store: Option<u32>,
-    /// `execute in` another dimension than the one Horizon has loaded: none
-    /// of its chunks are loaded.
-    pub elsewhere: bool,
+    /// The level this command source uses. Horizon has only this dimension's
+    /// chunks loaded in the single-player client.
+    pub dimension: Dim,
     /// The command block whose output this source is
     /// (`BaseCommandBlock.CloseableCommandBlockSource`).
     pub block: Option<(i32, i32, i32)>,
@@ -76,7 +76,7 @@ impl Game<'_> {
             eyes: false,
             silent: false,
             store: None,
-            elsewhere: false,
+            dimension: self.dim,
             block: None,
         }
     }
@@ -89,7 +89,7 @@ impl Game<'_> {
             eyes: false,
             silent: true,
             store: None,
-            elsewhere: false,
+            dimension: self.dim,
             block: None,
         }
     }
@@ -440,7 +440,7 @@ impl Game<'_> {
                     Some(Source {
                         pos: self.target_position(t)?,
                         rot: self.target_rotation(t),
-                        elsewhere: false,
+                        dimension: self.dim,
                         ..s
                     })
                 })
@@ -531,8 +531,8 @@ impl Game<'_> {
                 ..s
             }],
             "in" => {
-                // Horizon keeps one dimension loaded: in another one, no
-                // chunk is loaded (as in vanilla without a player there).
+                // CommandSourceStack.withLevel scales the source position;
+                // absolute coordinates passed to /tp are unaffected.
                 let Some(Arg::Resource(dim)) = c.get("dimension") else {
                     return Ok(vec![s]);
                 };
@@ -542,8 +542,12 @@ impl Game<'_> {
                 ) {
                     return Err(err("argument.dimension.invalid", &[dim]));
                 }
+                let dimension = Dim::from_id(dim);
+                let coordinate_scale = |dim| if dim == Dim::Nether { 8.0 } else { 1.0 };
+                let scale = coordinate_scale(s.dimension) / coordinate_scale(dimension);
                 vec![Source {
-                    elsewhere: dim != self.dim.id(),
+                    pos: [s.pos[0] * scale, s.pos[1], s.pos[2] * scale],
+                    dimension,
                     ..s
                 }]
             }
@@ -785,14 +789,16 @@ impl Game<'_> {
             let p = self
                 .coords(c, "pos")
                 .map(|co| co.block(self.source_position(), self.source_rotation()));
-            return Ok(flag(p.is_some_and(|p| {
-                self.world.chunks.contains_key(&(p[0] >> 4, p[2] >> 4))
-            })));
+            let dimension = self.command_source.map_or(self.dim, |s| s.dimension);
+            return Ok(flag(
+                dimension == self.dim
+                    && p.is_some_and(|p| self.world.chunks.contains_key(&(p[0] >> 4, p[2] >> 4))),
+            ));
         }
         if c.has("dimension") {
-            return Ok(flag(
-                matches!(c.get("dimension"), Some(Arg::Resource(d)) if d == self.dim.id()),
-            ));
+            let dimension = self.command_source.map_or(self.dim, |s| s.dimension);
+            return Ok(flag(matches!(c.get("dimension"), Some(Arg::Resource(d))
+                if d.as_str() == dimension.id())));
         }
         if c.has("block") {
             let p = self.block_pos_arg(c, "pos")?;
