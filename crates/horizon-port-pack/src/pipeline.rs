@@ -119,6 +119,7 @@ pub fn carry(
             .ok()
     });
     let allowed = |b: &str| vanilla.as_ref().is_none_or(|v| v.contains(b));
+    let conventions = crate::worldgen::loader_biome_tags(work);
     let mut done = 0;
     for r in &records {
         let chosen = if only.is_empty() {
@@ -154,6 +155,7 @@ pub fn carry(
             &work.join("mods").join(&r.key),
             facts.as_ref().filter(seen),
             &allowed,
+            &conventions,
         ) {
             Ok(report) => {
                 done += 1;
