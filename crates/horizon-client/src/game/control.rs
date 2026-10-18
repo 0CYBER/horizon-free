@@ -758,6 +758,8 @@ impl Game<'_> {
                 .map(|e| self.shown_name_tags(glam::DVec3::from_array(e))),
         });
         status["physical_keys"] = json!(physical_keys);
+        // Boats, minecarts, armor stands, item frames and paintings.
+        status["objects"] = json!(self.objects_status());
         status
     }
 }
