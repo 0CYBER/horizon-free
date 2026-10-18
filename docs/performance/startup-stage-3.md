@@ -34,12 +34,6 @@ The progressive checks used an overlay of the prepared resources with `mob-data.
 
 A direct singleplayer launch while the FIFO was held displayed `Loading items` and handled a window resize. Releasing the FIFO resumed entry; the run exited cleanly with a player, 85 chunks, 529 meshed sections and no error. That delayed-entry run peaked at 1,142,560 KiB, including the loaded world. Integrated-server entry also joined after release and rendered a world. Dedicated startup reached `Done`, handled `list` and `stop`, saved and exited with status 0 without constructing a renderer.
 
-Screenshots from these probes:
-
-- [Video options before rest was ready](../../benchmarks/startup-stage-3-20261018/video-before-rest.png)
-- [Loading screen while entry waited for rest](../../benchmarks/startup-stage-3-20261018/loading-before-rest.png)
-- [World after the tail join](../../benchmarks/startup-stage-3-20261018/world-after-rest.png)
-
 The full parity selection against `origin/main` also includes the unmerged Stage 2 ancestors (313 harnesses). The local run was bounded at 30 minutes; its log recorded passes for `active_effects`, `active_effect_tick` and `anchor`. The remainder needs CI or a longer dedicated run. The client Rust tests, focused startup probes and memory measurements are separate from that incomplete parity run.
 
 Progressive-title RSS was measured separately with audio disabled, render distance 4 and a 30 FPS cap, using separate temporary game directories. The first 30-second pair measured 1,055,132 KiB before and 1,721,772 KiB after. A warm 60-second repeat in reverse order measured 1,031,948 KiB before and 1,145,776 KiB after: an increase of 113,828 KiB (about 111 MiB, 11%). These launches ran during compilation and did not advance through startup/streaming identically. They establish a memory cost to investigate, not a claim of RSS parity; a quiet-machine cold/warm comparison remains needed before merging the stack.
