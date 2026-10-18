@@ -4,7 +4,7 @@ The PR dispatches unary and binary density operations once per bulk buffer, reso
 
 ## Whole-terrain measurements
 
-**Times below are complete terrain wall elapsed divided by 256 input chunks, with no thread multiplier.** Four-worker figures are elapsed latency/throughput measurements, not per-thread CPU costs. Combined time adds the complete decoration phase, still divided by 256; 196 interior chunks are decorated with unchanged border work. At the primary site, 256 terrain chunks take about 2.578 seconds with one worker versus 0.860 seconds with four: approximately 3.00× throughput, or 75% of ideal fourfold scaling. Two/eight-worker behavior was not measured.
+**Times below are complete terrain wall elapsed divided by 256 input chunks, with no thread multiplier.** Four-worker figures are elapsed latency/throughput measurements, not per-thread CPU costs. Combined time adds the complete decoration phase, still divided by 256; 196 interior chunks are decorated with unchanged border work. At the primary site, 256 terrain chunks take about 2.578 seconds with one worker versus 0.860 seconds with four: approximately 3.00× throughput, or 75% of ideal fourfold scaling. A subsequent 1/2/4/8-worker scaling experiment is reported below.
 
 Fresh equivalent optimized builds compare baseline `e4f8154cb4115aa1ee622381d9b12387cdf515d4` with the extended candidate. Every case has one discarded process pair, then five measured pairs alternating baseline/candidate order. Initialized processes first generate and discard the same offset 9×9 region at center+(64,64), using the same seeded generator, before timing fresh measured workers. This excludes lazy ring initialization without pre-generating target chunks. All cases use size 16; primary seed/site is 12345/(0,0), second Overworld seed/site is -1/(32,-32).
 
@@ -30,6 +30,19 @@ A separate five-pair alternating comparison uses the existing unary-only PR revi
 - **4 worker(s):** terrain 3.536831 → 3.312338 (6.35%); combined 4.110268 → 3.897104 (5.19%).
 
 All ten incremental terrain pairs improved. Pair reductions ranged 4.72–9.93% with one worker and 2.10–8.61% with four, so not every individual pair exceeds 5%. A preliminary gate was excluded in its entirety because a concurrent Horizon client consumed roughly seven cores. Its raw samples remain in `contended-gate/`; all qualification runs began after the client was closed. No individual samples were selectively removed from the restarted runs.
+
+## Worker scaling follow-up
+
+Candidate revision `c47b30fcf0db87b8023e6784d941a4f06524b453` was tested at 1, 2, 4 and 8 workers on the same primary initialized Overworld workload. The saved `final-candidate` optimized binary is used without rebuilding or changing instrumentation. After one discarded process per worker count, eight measured processes per count run sequentially. Worker orders `[1,2,4,8]`, `[2,8,1,4]`, `[4,1,8,2]`, `[8,4,2,1]` repeat twice, placing each count in each order position twice. Every process initializes its generator using the same offset 9×9 region before measuring 256 terrain chunks and 196 interior decorations. No baseline comparison or new correctness claim is inferred from this scaling experiment.
+
+| Workers | Terrain median ms/chunk (min–max) | Terrain chunks/s | Speedup | Efficiency | Combined median ms/chunk | Combined speedup |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 9.994644 (9.842544–10.312603) | 100.05 | 1.000× | 100.0% | 11.950737 | 1.000× |
+| 2 | 5.580046 (5.499388–5.772284) | 179.21 | 1.791× | 89.6% | 6.644499 | 1.799× |
+| 4 | 3.405281 (3.238112–3.525516) | 293.66 | 2.935× | 73.4% | 3.996531 | 2.990× |
+| 8 | 2.750915 (2.662450–2.915874) | 363.52 | 3.633× | 45.4% | 3.220818 | 3.710× |
+
+Speedup is the one-worker median divided by the respective median; efficiency divides speedup by worker count. Eight workers give 23.8% more terrain throughput than four workers, with 19.2% lower wall ms/chunk. This is sublinear scaling on this machine and site; eight workers exceed the six physical cores, and this experiment does not identify the causes of diminishing returns. Ordinary desktop activity was not isolated. All 32 measured runs are retained. Raw samples, per-process logs, binary SHA-256, protocol, runnable script and combined ranges are in `/srv/bob-data/horizon-noise-aquifer-e477fa56/extension/scaling/` (`raw.json`, `summary.json`, `protocol.json`, `run.py`). Run with `python /srv/bob-data/horizon-noise-aquifer-e477fa56/extension/scaling/run.py`; the script uses the prepared resources and saved optimized binary, requiring no build. The earlier comparison medians above remain unchanged.
 
 ## Machine and validation
 
