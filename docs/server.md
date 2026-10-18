@@ -495,6 +495,20 @@ reproducible by anyone, and show the same gameplay on both sides.
     24.0 against 31.6) and longer with 50 (35.2 against 29.7). Its P99 was lower at every count.
   - Horizon also did more work: it kept up with the exploring bots, so it generated 1.9 to 2.9 times
     the new terrain a second.
+- **Mixed bots, equal work (2026-10-18,** `benchmarks/server-equal-mixed-2026-10-18/`). This is the same
+  run with the load made equal. The explore bots fly at 0.8 blocks a second, so every bot follows the same
+  path on both servers and none waits for terrain. A 300-second warm-up lets both finish the bots' first
+  views before the measurement. `server_bench.py` now prints a work table that compares each count's chunks
+  a second across servers and flags a run that isn't equal. Horizon ran as `horizon-engine`, the server
+  build, installed from its archive. Results, on the ThinkPad again (the desktop didn't wake):
+  - The work was equal at 1 and 10 bots. At 25 the chunks sent a second were equal (158.6 against 157.6),
+    and vanilla still sent 2.5 more first-time chunks a second while it caught up.
+  - Tick: 1.8 against 11.3 ms at 1 bot, 4.7 against 34.3 at 10, 11.7 against 50.5 at 25 (vanilla 19.8 TPS).
+    At 50 Horizon ran at 23.8 ms. Vanilla's watchdog stopped its server 30 s after the last bot joined (a
+    60-second tick). This is one pass, to repeat on a bigger machine.
+  - Horizon's RSS was 4.1 to 4.9 times smaller (1.03 GB at 50).
+  - Served in full, vanilla's walking bots got 5400 to 6100 chunks each, against 640 to 1100 in the first
+    run. That is why vanilla held 50 bots there and not here.
 - **Ownership.** perf-server-1 owns making the tick faster. This work only measures it, files what it finds,
   and fixes startup, RAM and packaging.
 
@@ -513,7 +527,8 @@ vanilla.
    archive in the release.
 3. The web panel MVP: status, live TPS/MSPT/RAM/CPU, players, console, backups and login links.
 4. `horizon-bots` and `tools/server_bench.py`, with a first run against vanilla (1/10/25/50 bots, `mixed`)
-   published in `benchmarks/`: done, `benchmarks/server-mixed-2026-10-18/` (section 9).
+   published in `benchmarks/`: done, `benchmarks/server-mixed-2026-10-18/`, and with equal work
+   `benchmarks/server-equal-mixed-2026-10-18/` (section 9).
 5. Small engine fixes found on the way: logging refused logins (vanilla's lines).
 
 **Where it stands (2026-10-16):** items 1 to 4 are built and in review (section 11). What's left for the 23rd:
