@@ -52,6 +52,7 @@ impl Game<'_> {
                 Some(BlockEntity::Vault(_)) => self.tick_vault(pos)?,
                 Some(BlockEntity::Beehive(_)) => self.tick_beehive(pos),
                 Some(BlockEntity::Furnace(_)) => self.tick_furnace(pos)?,
+                Some(BlockEntity::Brewing(_)) => self.tick_brewing_stand(pos)?,
                 _ => {}
             }
         }
@@ -85,7 +86,8 @@ impl Game<'_> {
                     | "minecraft:trial_spawner"
                     | "minecraft:vault"
                     | "minecraft:beehive"
-                    | "minecraft:bee_nest" => Ticking::Yes,
+                    | "minecraft:bee_nest"
+                    | "minecraft:brewing_stand" => Ticking::Yes,
                     "minecraft:jukebox" => {
                         let record = registry
                             .state(state)
