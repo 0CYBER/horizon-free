@@ -82,9 +82,38 @@ pub trait ChunkGenerator: Send + Sync + 'static {
     /// neighbours' decoration is done, so it can't be generated again.
     fn save_finished(&self, _chunk: Chunk) {}
 }
+pub type LodDetail = ((i32, i32), Arc<[crate::lod::Column; 256]>);
+
 /// Independent, thread-owned far-terrain sampling state.
 pub trait LodSampler: Send {
+    /// Independent sampling state; native detail generation stays with the owner.
+    fn fork(&self) -> Option<Box<dyn LodSampler>> {
+        None
+    }
+    fn request_detail(&mut self, _chunks: &[(i32, i32)], _center: [i32; 2]) {}
+    fn drain_details(&mut self) -> Vec<LodDetail> {
+        Vec::new()
+    }
     fn sample(&mut self, x: i32, z: i32) -> Option<crate::lod::Surface>;
+    fn column(&mut self, x: i32, z: i32) -> crate::lod::Column {
+        crate::lod::Column::from_surface(self.sample(x, z))
+    }
+    fn reduced_column(&mut self, x: i32, z: i32, _width: i32) -> crate::lod::Column {
+        self.column(x, z)
+    }
+    fn grid(&mut self, x: i32, z: i32, stride: i32, side: usize) -> Vec<crate::lod::Column> {
+        let mut columns = Vec::with_capacity(side * side);
+        for dz in 0..side {
+            for dx in 0..side {
+                columns.push(self.reduced_column(
+                    x + dx as i32 * stride,
+                    z + dz as i32 * stride,
+                    stride,
+                ));
+            }
+        }
+        columns
+    }
 }
 pub trait LodSource: Send + Sync {
     fn sampler(self: Arc<Self>) -> Box<dyn LodSampler>;

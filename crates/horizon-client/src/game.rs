@@ -6446,6 +6446,7 @@ impl Game<'_> {
         self.screen = Screen::Playing;
         self.title = None;
         self.clear_lod();
+        self.pending_uploads.clear();
         if let Some(r) = self.renderer.as_mut() {
             r.clear_sections();
         }
@@ -6596,6 +6597,7 @@ impl Game<'_> {
         self.orbs.clear();
         self.mining = None;
         self.clear_lod();
+        self.pending_uploads.clear();
         if let Some(r) = self.renderer.as_mut() {
             r.clear_sections();
         }
@@ -6775,6 +6777,7 @@ impl Game<'_> {
         self.clear_entities();
         self.screen = Screen::Playing;
         self.clear_lod();
+        self.pending_uploads.clear();
         if let Some(r) = self.renderer.as_mut() {
             r.clear_sections();
         }
@@ -8738,7 +8741,13 @@ impl Game<'_> {
             fog: Some({
                 let mut fog = self.frame_fog(camera, &sky, biome);
                 // Horizon's fog setting: no distance fog (fluids keep theirs).
-                if !self.settings.horizon.fog && !underwater && fog.environmental_end >= distance {
+                if !self.settings.horizon.fog
+                    && !underwater
+                    && self.darkness_fog().is_none()
+                    && !self.dragon_bar_shown()
+                    && self.potions.effects.get("blindness").is_none()
+                    && fog.environmental_end >= (self.streaming.radius * 16) as f32
+                {
                     (fog.render_distance_start, fog.render_distance_end) = (1e9, 2e9);
                     (fog.environmental_start, fog.environmental_end) = (1e9, 2e9);
                 }
@@ -9112,9 +9121,9 @@ impl Game<'_> {
         }
         Ok(())
     }
-    /// Only surface LOD worlds extend the renderer's range, never simulation.
+    /// Only enabled LOD worlds extend the renderer's range, never simulation.
     fn terrain_distance(&self) -> i32 {
-        if self.lod.is_some() && self.dim != Dim::Nether {
+        if self.lod.is_some() {
             self.streaming
                 .radius
                 .max(self.settings.horizon.lod_distance.min(1024) as i32)
@@ -9132,7 +9141,6 @@ impl Game<'_> {
     }
     fn prepare_lod(&mut self) {
         let enabled = self.settings.horizon.lod_distance > 0
-            && self.dim != Dim::Nether
             && self.renderer.is_some()
             && self.player.is_some()
             && self.title.is_none()
@@ -9181,14 +9189,16 @@ impl Game<'_> {
             self.lod_observe
                 .extend(uploads.iter().map(|(key, _)| (key.0, key.2)));
             for chunk in &unloaded {
-                lod.observe(chunk, &self.res.facts);
+                horizon_client::spans::time("lod_observe", || lod.observe(chunk, &self.res.facts));
                 self.lod_observe.remove(&(chunk.x, chunk.z));
             }
             let observe: Vec<_> = self.lod_observe.iter().copied().take(2).collect();
             for key in observe {
                 self.lod_observe.remove(&key);
                 if let Some(chunk) = self.world.chunks.get(&key) {
-                    lod.observe(chunk, &self.res.facts);
+                    horizon_client::spans::time("lod_observe", || {
+                        lod.observe(chunk, &self.res.facts)
+                    });
                 }
             }
         }
@@ -9219,39 +9229,37 @@ impl Game<'_> {
         }
         if let Some(renderer) = self.renderer.as_mut() {
             let g = &self.settings.horizon;
-            let budgeted = g.chunk_updates > 0 || g.upload_budget_kib > 0;
-            if !budgeted && self.pending_uploads.is_empty() {
-                horizon_client::spans::time("upload", || {
-                    for (key, mesh) in uploads {
-                        renderer.upload(key, &mesh);
-                    }
-                });
-            } else {
+            // Even unlimited count/byte settings must yield during a join's
+            // upload burst; draining it all blocked input/rendering for seconds.
+            horizon_client::spans::time("upload", || {
                 // Horizon's chunk-update and upload budgets: the nearest
                 // sections go first, the rest wait for later frames; a newer
                 // mesh of a waiting section replaces it.
                 let pending = &mut self.pending_uploads;
                 let fresh: horizon_client::fast_hash::FxHashSet<(i32, i32, i32)> =
                     uploads.iter().map(|(k, _)| *k).collect();
-                let gone: horizon_client::fast_hash::FxHashSet<(i32, i32)> =
-                    unloaded.iter().map(|c| (c.x, c.z)).collect();
-                pending.retain(|(k, _)| !fresh.contains(k) && !gone.contains(&(k.0, k.2)));
-                pending.extend(uploads);
+                let chunks = &self.world.chunks;
+                pending.retain(|(k, _)| !fresh.contains(k) && chunks.contains_key(&(k.0, k.2)));
+                pending.extend(
+                    uploads
+                        .into_iter()
+                        .filter(|(k, _)| chunks.contains_key(&(k.0, k.2))),
+                );
                 let centre = self.streaming.center;
                 let far = |k: &(i32, i32, i32)| (k.0 - centre.0).pow(2) + (k.2 - centre.1).pow(2);
                 pending.sort_unstable_by_key(|(k, _)| std::cmp::Reverse(far(k)));
-                let (limit, budget) = if budgeted {
-                    (
-                        g.chunk_updates as usize,
-                        u64::from(g.upload_budget_kib) * 1024,
-                    )
-                } else {
-                    (0, 0)
-                };
+                let (limit, budget) = (
+                    g.chunk_updates as usize,
+                    u64::from(g.upload_budget_kib) * 1024,
+                );
                 let (mut count, mut bytes) = (0, 0u64);
+                let upload_started = Instant::now();
                 while let Some((_, mesh)) = pending.last() {
-                    let size = ((mesh.solid.len() + mesh.translucent.len()) * 32) as u64;
-                    if (limit > 0 && count >= limit)
+                    let size = ((mesh.solid.len() + mesh.translucent.len())
+                        * std::mem::size_of::<horizon_client::mesher::TerrainVertex>())
+                        as u64;
+                    if (count > 0 && upload_started.elapsed() >= Duration::from_millis(4))
+                        || (limit > 0 && count >= limit)
                         || (budget > 0 && bytes > 0 && bytes + size > budget)
                     {
                         break;
@@ -9261,7 +9269,7 @@ impl Game<'_> {
                     count += 1;
                     bytes += size;
                 }
-            }
+            });
             for c in unloaded {
                 for sy in 0..(HEIGHT / 16) {
                     renderer.remove((c.x, sy, c.z));
@@ -9279,13 +9287,16 @@ impl Game<'_> {
                         )
                     })
                     .collect();
-                for (key, mesh) in lod.update(
-                    [player.position.x, player.position.y, player.position.z],
-                    self.streaming.radius,
-                    self.settings.horizon.lod_distance,
-                    covered,
-                ) {
-                    renderer.upload_lod(key, &mesh);
+                for (key, mesh) in horizon_client::spans::time("lod_update", || {
+                    lod.update(
+                        [player.position.x, player.position.y, player.position.z],
+                        self.yaw,
+                        self.streaming.radius,
+                        self.settings.horizon.lod_distance,
+                        covered,
+                    )
+                }) {
+                    horizon_client::spans::time("lod_upload", || renderer.upload_lod(key, &mesh));
                 }
                 for key in lod.removed() {
                     renderer.remove_lod(key);

@@ -28,6 +28,14 @@ impl SamplerContext {
             ..Self::default()
         }
     }
+    /// Far previews evaluate only the supplied lattice. Ordinary generation
+    /// retains vanilla's dense strided-volume evaluation and rounding.
+    pub fn sparse() -> Self {
+        Self {
+            sparse: true,
+            ..Self::cached()
+        }
+    }
     pub fn clear_caches(&mut self) {
         if let Some(caches) = &mut self.caches {
             caches.clear();

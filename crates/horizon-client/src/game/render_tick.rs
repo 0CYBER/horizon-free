@@ -86,6 +86,7 @@ impl Game<'_> {
                 ],
                 biome,
                 render_distance_chunks: self.terrain_distance(),
+                distant_terrain: self.lod.is_some(),
                 cloud_range_chunks: self.settings.cloud_range,
                 camera_y: camera.y,
                 // level.getMinY(): the Nether and the End start at y 0.

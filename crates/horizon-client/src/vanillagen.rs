@@ -4,7 +4,7 @@ use crate::{
     biome::Biomes,
     chunk::{BIOME_STRATEGY, Chunk, HEIGHT, MIN_Y, SECTIONS, Section},
     save::SavedProto,
-    streaming::{ChunkGenerator, Proto},
+    streaming::{ChunkGenerator, LodSampler, Proto},
 };
 use horizon_core::{
     paletted::PalettedContainer,
@@ -16,11 +16,15 @@ use horizon_world::{
     nbt::Tag,
     registry::BlockRegistry,
     worldgen::{
-        generator::{GeneratorData, GeneratorWorker, OverworldGenerator, ProtoChunk},
+        generator::{
+            GeneratorData, GeneratorWorker, OverworldGenerator, ProtoChunk, SurfaceSample,
+        },
         terrain::PreLightChunkStage,
     },
 };
 use std::{path::Path, sync::Arc};
+mod lod;
+use lod::VanillaLodSampler;
 
 pub struct VanillaTerrain {
     generator: OverworldGenerator,
@@ -35,7 +39,8 @@ pub struct VanillaTerrain {
     tick_blocks: Vec<u32>,
     /// Block index -> default state id: `tick_blocks` the other way.
     tick_states: Vec<u32>,
-    lod_supported: bool,
+    seed: i64,
+    dimension: String,
 }
 /// A proto chunk, or the position of one whose generation failed.
 enum VanillaProto {
@@ -43,6 +48,18 @@ enum VanillaProto {
     Failed(i32, i32),
 }
 impl VanillaTerrain {
+    fn client_surface(&self, surface: SurfaceSample) -> crate::lod::Surface {
+        crate::lod::Surface {
+            height: surface.height,
+            state: surface.state,
+            water: surface.water,
+            biome: self
+                .biome_map
+                .get(surface.biome.0 as usize)
+                .copied()
+                .unwrap_or(0),
+        }
+    }
     pub fn new(
         dir: &Path,
         registry: &'static BlockRegistry,
@@ -107,7 +124,8 @@ impl VanillaTerrain {
             query: std::sync::Mutex::new(None),
             tick_blocks,
             tick_states,
-            lod_supported: dimension != "minecraft:the_nether",
+            seed,
+            dimension: dimension.to_owned(),
         })
     }
     /// A proto chunk's blocks, biomes, scheduled ticks and post-processing
@@ -267,26 +285,16 @@ impl ChunkGenerator for VanillaTerrain {
     fn worker(&self) -> GeneratorWorker {
         self.generator.worker()
     }
+    fn lod_sampler(self: Arc<Self>) -> Box<dyn LodSampler> {
+        Box::new(VanillaLodSampler::new(self))
+    }
     fn lod_surface(
         &self,
         worker: &mut GeneratorWorker,
         x: i32,
         z: i32,
     ) -> Option<crate::lod::Surface> {
-        if !self.lod_supported {
-            return None;
-        }
-        let surface = worker.surface_sample(x, z)?;
-        Some(crate::lod::Surface {
-            height: surface.height,
-            state: surface.state,
-            water: surface.water,
-            biome: self
-                .biome_map
-                .get(surface.biome.0 as usize)
-                .copied()
-                .unwrap_or(0),
-        })
+        Some(self.client_surface(worker.surface_sample(x, z)?))
     }
     /// The structure starts a saved chunk references, as vanilla reads them
     /// with the chunk: built here, on the loading worker, into the

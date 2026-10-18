@@ -260,6 +260,7 @@ impl Game<'_> {
         self.title = None;
         self.dim = Dim::Overworld;
         self.clear_lod();
+        self.pending_uploads.clear();
         if let Some(r) = self.renderer.as_mut() {
             r.clear_sections();
         }
@@ -365,6 +366,7 @@ impl Game<'_> {
         self.screen = Screen::Playing;
         self.container = None;
         self.clear_lod();
+        self.pending_uploads.clear();
         if let Some(r) = self.renderer.as_mut() {
             r.clear_sections();
         }
@@ -613,6 +615,7 @@ impl Game<'_> {
                 r.chunk_center = (0, 0);
             }
             self.clear_lod();
+            self.pending_uploads.clear();
             if let Some(renderer) = self.renderer.as_mut() {
                 renderer.clear_sections();
             }

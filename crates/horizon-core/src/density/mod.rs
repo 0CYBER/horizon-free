@@ -90,6 +90,7 @@ pub struct SamplerContext {
     scratch: Vec<Vec<f32>>,
     caches: Option<Vec<cache::CacheCell>>,
     fields: WorldFields,
+    sparse: bool,
 }
 impl SamplerContext {
     fn with_buffer<T>(

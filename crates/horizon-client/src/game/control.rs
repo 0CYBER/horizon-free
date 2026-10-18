@@ -717,6 +717,7 @@ impl Game<'_> {
             "active_tiles": self.lod.as_ref().map_or(0, |lod| lod.stats().0),
             "cached_tiles": self.lod.as_ref().map_or(0, |lod| lod.stats().1),
             "pending_observations": self.lod_observe.len(),
+            "refined_samples": self.lod.as_ref().map_or(0, |lod| lod.refined_samples()),
         });
         let mut status = json!({
             "screen": self.screen_name(),
@@ -777,6 +778,10 @@ impl Game<'_> {
                 .map(|e| self.shown_name_tags(glam::DVec3::from_array(e))),
         });
         status["lod"] = lod;
+        let (target, sampled) = self.lod.as_ref().map_or((0, 0), |lod| lod.progress());
+        status["lod"]["target_tiles"] = target.into();
+        status["lod"]["sampled_target_tiles"] = sampled.into();
+        status["pending_uploads"] = self.pending_uploads.len().into();
         status["physical_keys"] = json!(physical_keys);
         status
     }
