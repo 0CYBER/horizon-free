@@ -480,6 +480,16 @@ reproducible by anyone, and show the same gameplay on both sides.
   and every packet woke its connection's writer thread (#649). Together they took the 50-bot walking tick
   from 281 ms to 31 ms. At 25 walking bots most of what remains is the engine's streaming and block entity
   ticks, both of which grow with players (the README has the profile).
+- **Mixed bots, as installed (2026-10-18,** `benchmarks/server-mixed-2026-10-18/`, the first published
+  run for the working version). It used the v2026.10.18.15 release as `install.sh` installs it, against
+  vanilla 26.3, with 1, 10, 25 and 50 `mixed` bots and vanilla's default game rules on both (Horizon has
+  the locator bar now). The servers ran on the ThinkPad and the bots on the Mac mini. Results:
+  - Both kept 20 TPS in every run.
+  - Horizon's RSS was 3.7 to 5.2 times smaller (1.0 GB against 4.0 GB at 50).
+  - Horizon's average tick was shorter with 1, 10 and 25 bots (2.4 against 17.9 ms, 12.4 against 34.5,
+    24.0 against 31.6) and longer with 50 (35.2 against 29.7). Its P99 was lower at every count.
+  - Horizon also did more work: it kept up with the exploring bots, so it generated 1.9 to 2.9 times
+    the new terrain a second.
 - **Ownership.** perf-server-1 owns making the tick faster. This work only measures it, files what it finds,
   and fixes startup, RAM and packaging.
 
@@ -498,7 +508,7 @@ vanilla.
    archive in the release.
 3. The web panel MVP: status, live TPS/MSPT/RAM/CPU, players, console, backups and login links.
 4. `horizon-bots` and `tools/server_bench.py`, with a first run against vanilla (1/10/25/50 bots, `mixed`)
-   published in `benchmarks/`.
+   published in `benchmarks/`: done, `benchmarks/server-mixed-2026-10-18/` (section 9).
 5. Small engine fixes found on the way: logging refused logins (vanilla's lines).
 
 **Where it stands (2026-10-16):** items 1 to 4 are built and in review (section 11). What's left for the 23rd:
