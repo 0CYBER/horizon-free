@@ -977,7 +977,12 @@ impl HudRenderer {
             capacity,
         })
     }
-    pub fn animate_fire(&mut self, queue: &wgpu::Queue, tick: u64) {
+    pub fn animate_fire(
+        &mut self,
+        uploads: &mut crate::gfx::upload::Uploads,
+        encoder: &mut wgpu::CommandEncoder,
+        tick: u64,
+    ) {
         let Some(texture) = &self.atlas_texture else {
             return;
         };
@@ -987,7 +992,8 @@ impl HudRenderer {
                 continue;
             }
             let pixels = animation.resized_pixels(frame, rect.w, rect.h);
-            queue.write_texture(
+            uploads.texture(
+                encoder,
                 wgpu::TexelCopyTextureInfo {
                     texture,
                     mip_level: 0,
@@ -998,35 +1004,27 @@ impl HudRenderer {
                     },
                     aspect: wgpu::TextureAspect::All,
                 },
+                rect.w,
+                rect.h,
                 &pixels,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(rect.w * 4),
-                    rows_per_image: Some(rect.h),
-                },
-                wgpu::Extent3d {
-                    width: rect.w,
-                    height: rect.h,
-                    depth_or_array_layers: 1,
-                },
             );
             *previous = frame;
         }
     }
-    pub fn draw(
+    /// Stage the batch's atlas patches, vertices and uniform: before the
+    /// frame's first pass, so the copies share one command buffer.
+    pub fn prepare(
         &mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         uploads: &mut crate::gfx::upload::Uploads,
         encoder: &mut wgpu::CommandEncoder,
-        target: &wgpu::TextureView,
-        depth: &wgpu::TextureView,
         batch: &HudBatch,
         size: [u32; 2],
     ) {
         if let Some(texture) = &self.atlas_texture {
             for p in &batch.patches {
-                queue.write_texture(
+                uploads.texture(
+                    encoder,
                     wgpu::TexelCopyTextureInfo {
                         texture,
                         mip_level: 0,
@@ -1037,17 +1035,9 @@ impl HudRenderer {
                         },
                         aspect: wgpu::TextureAspect::All,
                     },
+                    p.width,
+                    p.height,
                     &p.rgba,
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(p.width * 4),
-                        rows_per_image: None,
-                    },
-                    wgpu::Extent3d {
-                        width: p.width,
-                        height: p.height,
-                        depth_or_array_layers: 1,
-                    },
                 );
             }
         }
@@ -1078,6 +1068,19 @@ impl HudRenderer {
                 size: [size[0] as f32, size[1] as f32, batch.scale, 0.0],
             }),
         );
+    }
+    /// Draw the batch `prepare` staged.
+    pub fn draw(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        batch: &HudBatch,
+        size: [u32; 2],
+    ) {
+        if batch.vertices.is_empty() || size.contains(&0) {
+            return;
+        }
         let attachments = [Some(wgpu::RenderPassColorAttachment {
             view: target,
             resolve_target: None,
