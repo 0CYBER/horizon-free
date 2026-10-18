@@ -1260,9 +1260,15 @@ def check_light(host, guest, out):
     host('command', command=f'setblock {near} {y} {gz} minecraft:glowstone')
     try:
         lo, hi = (untracked * 16 - 16, y - 3, gz - 8), (untracked * 16 - 1, y + 3, gz + 8)
+        # On the server thread the host's game is a client too, as dark as the guest until the light
+        # update arrives: wait for it before comparing them.
+        for _ in range(10):
+            lit = guest.raw('light', near - 2, y, gz, near - 2, y, gz)['block']
+            if lit == 'd':
+                break
+            host.wait(10)
+        assert lit == 'd', f'the border chunk by the glowstone has block light {lit}, not 13, after 100 ticks'
         results['border'] = same_light(host, guest, lo, hi, 'border chunk')
-        lit = guest.raw('light', near - 2, y, gz, near - 2, y, gz)['block']
-        assert lit == 'd', f'the border chunk by the glowstone has block light {lit}, not 13'
     finally:
         host('command', command=f'setblock {near} {y} {gz} minecraft:air')
     results['border_cleared'] = same_light(host, guest, lo, hi, 'border chunk without the glowstone')
