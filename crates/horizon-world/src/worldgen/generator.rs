@@ -635,6 +635,7 @@ struct Pipeline<R: RandomSource> {
     picker: GlobalFluidPicker,
     zoom: BiomeZoom,
     biome_cache: BiomeCache,
+    biome_work: ChunkWork,
     carver_cache: Mutex<HashMap<(i32, i32), BiomeId>>,
     pub(super) decoration: Option<super::generator_decoration::Decoration>,
     pub(super) structures: Option<super::generator_structures::StructureState>,
@@ -643,6 +644,30 @@ struct Pipeline<R: RandomSource> {
     spawn_position: std::sync::OnceLock<[i32; 2]>,
 }
 const CACHE_LIMIT: usize = 16384;
+/// Coordinates only equal missing neighbour keys. Weak entries retain no
+/// computed values across eviction or explicit invalidation. Only one work
+/// lock may be held at a time; finish shared prerequisites before acquiring it.
+pub(super) struct ChunkWork(Mutex<HashMap<(i32, i32), std::sync::Weak<Mutex<()>>>>);
+impl ChunkWork {
+    pub(super) fn new() -> Self {
+        Self(Mutex::new(HashMap::new()))
+    }
+    pub(super) fn at(&self, key: (i32, i32)) -> Arc<Mutex<()>> {
+        let mut work = self.0.lock().unwrap();
+        if let Some(lock) = work.get(&key).and_then(std::sync::Weak::upgrade) {
+            return lock;
+        }
+        if work.len() >= 4096 {
+            // Keep every active builder/waiter on its original lock, including
+            // when the result cache was cleared while it was in flight.
+            work.retain(|_, lock| lock.strong_count() > 0);
+        }
+        let lock = Arc::new(Mutex::new(()));
+        work.insert(key, Arc::downgrade(&lock));
+        lock
+    }
+}
+
 type BiomeCache = Mutex<HashMap<(i32, i32), Arc<BiomeChunk<BiomeId>>>>;
 
 fn state(registry: &BlockRegistry, raw: &Value) -> Result<BlockStateId, GeneratorError> {
@@ -834,6 +859,7 @@ where
             extensions,
             picker,
             biome_cache: Mutex::new(HashMap::new()),
+            biome_work: ChunkWork::new(),
             carver_cache: Mutex::new(HashMap::new()),
             decoration: None,
             structures: None,
@@ -867,6 +893,11 @@ where
         worker: &mut WorkerState,
         pos: ChunkPos,
     ) -> Result<Arc<BiomeChunk<BiomeId>>, GeneratorError> {
+        if let Some(chunk) = self.biome_cache.lock().unwrap().get(&(pos.x, pos.z)) {
+            return Ok(chunk.clone());
+        }
+        let work = self.biome_work.at((pos.x, pos.z));
+        let _work = work.lock().unwrap();
         if let Some(chunk) = self.biome_cache.lock().unwrap().get(&(pos.x, pos.z)) {
             return Ok(chunk.clone());
         }
@@ -2012,5 +2043,122 @@ mod tests {
             quantize_parameter_report(r#"{"biomes":[{"parameters":{"temperature":"x"}}]}"#)
                 .is_err()
         );
+    }
+    #[test]
+    fn neighbour_work_cleanup_keeps_active_keys_and_releases_idle_keys() {
+        let work = ChunkWork::new();
+        let first = work.at((0, 0));
+        let held = first.lock().unwrap();
+        let same = work.at((0, 0));
+        assert!(Arc::ptr_eq(&first, &same));
+        assert!(!Arc::ptr_eq(&first, &work.at((1, 0))));
+        // Sweep many expired weak entries while a builder and a prospective
+        // waiter retain their key. Cleanup must not split their coordination.
+        for x in 1..8192 {
+            drop(work.at((x, 1)));
+        }
+        assert!(work.0.lock().unwrap().len() <= 4096);
+        assert!(Arc::ptr_eq(&same, &work.at((0, 0))));
+        let weak = Arc::downgrade(&first);
+        drop(held);
+        drop((first, same));
+        assert!(weak.upgrade().is_none());
+        let next = work.at((0, 0));
+        assert_eq!(Arc::strong_count(&next), 1);
+    }
+
+    /// Equal concurrent misses share one biome volume and the same mutable
+    /// structure pieces. Exercise cold ring startup before work coordination,
+    /// then cache eviction and explicit start invalidation with old Arcs alive.
+    #[test]
+    fn concurrent_neighbours_share_results_and_survive_invalidation() {
+        let root = std::env::var_os("HORIZON_RESOURCES")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3")
+            });
+        if !root.join("worldgen/world_presets.json").exists() {
+            eprintln!("skipping: no worldgen bundle at {}", root.display());
+            return;
+        }
+        let registry = Box::leak(Box::new(
+            crate::level::data::load_registry(&root).expect("registry"),
+        ));
+        let data = GeneratorData::load(&root.join("worldgen"), registry).expect("worldgen data");
+        let preset: Value = serde_json::from_str(&data.world_presets["minecraft:normal"]).unwrap();
+        let generator_json = &preset["dimensions"]["minecraft:overworld"]["generator"];
+        let settings: Value =
+            serde_json::from_str(&data.settings[generator_json["settings"].as_str().unwrap()])
+                .unwrap();
+        let pipeline = Arc::new(
+            Pipeline::new(
+                data,
+                12345,
+                XoroshiroRandom::new(12345),
+                generator_json,
+                &settings,
+                true,
+                Some((-64, 384)),
+            )
+            .expect("pipeline"),
+        );
+        let generator = OverworldGenerator {
+            pipeline: pipeline.clone(),
+        };
+        let barrier = std::sync::Barrier::new(6);
+        let pos = ChunkPos::new(11, -11); // ancient city for this seed
+        let results = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..6)
+                .map(|_| {
+                    scope.spawn(|| {
+                        let mut worker = generator.worker();
+                        barrier.wait();
+                        let biomes = pipeline.biome_chunk(&mut worker.state, pos).unwrap();
+                        let starts = pipeline.structure_starts(&mut worker.state, pos);
+                        (biomes, starts)
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        let (biomes, starts) = &results[0];
+        assert!(!starts.is_empty(), "fixture must exercise shared pieces");
+        for (b, s) in &results[1..] {
+            assert!(Arc::ptr_eq(biomes, b));
+            assert_eq!(starts.len(), s.len());
+            for (first, other) in starts.iter().zip(s) {
+                assert!(Arc::ptr_eq(first, other));
+            }
+        }
+        // Force the existing whole-cache biome eviction threshold.
+        {
+            let mut cache = pipeline.biome_cache.lock().unwrap();
+            cache.clear();
+            for x in 0..CACHE_LIMIT as i32 {
+                cache.insert((x, 10000), biomes.clone());
+            }
+        }
+        let mut worker = generator.worker();
+        let rebuilt = pipeline.biome_chunk(&mut worker.state, pos).unwrap();
+        assert!(!Arc::ptr_eq(biomes, &rebuilt));
+        assert_eq!(pipeline.biome_cache.lock().unwrap().len(), 1);
+        for section in 0..24 {
+            assert_eq!(biomes.section(section), rebuilt.section(section));
+        }
+        worker.forget_structure_starts();
+        let fresh = worker.structure_starts(pos);
+        assert_eq!(starts.len(), fresh.len());
+        for (old, new) in starts.iter().zip(&fresh) {
+            assert!(!Arc::ptr_eq(old, new));
+            assert_eq!(old.name, new.name);
+            assert_eq!(old.bounding_box, new.bounding_box);
+        }
+        let again = worker.structure_starts(pos);
+        for (first, hit) in fresh.iter().zip(&again) {
+            assert!(Arc::ptr_eq(first, hit));
+        }
     }
 }
