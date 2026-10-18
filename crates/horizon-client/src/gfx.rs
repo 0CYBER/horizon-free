@@ -113,6 +113,12 @@ struct SectionGpu {
 }
 /// Line segments the hit outline can hold.
 const MAX_OUTLINE_EDGES: u64 = 256;
+/// Staging buffer size for section meshes: a frame of uploads while
+/// exploring fits in a few.
+const SECTION_UPLOAD_CHUNK: u64 = 4 << 20;
+/// Section copies are submitted early past this many staged bytes, which
+/// bounds the staging memory frames that are not drawn can hold.
+const SECTION_COPY_LIMIT: u64 = 64 << 20;
 pub struct Frame<'a> {
     pub camera: DVec3,
     pub yaw: f32,
@@ -325,6 +331,13 @@ pub struct Renderer {
     lightmap_sampler: wgpu::Sampler,
     animations: AnimatedSprites,
     uploads: upload::Uploads,
+    /// Section meshes are staged through their own belt into
+    /// `section_copies`, which the next submission runs ahead of the frame:
+    /// `Queue::write_buffer` would make a staging buffer per write.
+    section_uploads: upload::Uploads,
+    section_copies: Option<wgpu::CommandEncoder>,
+    /// Bytes staged in `section_copies`.
+    section_copy_bytes: u64,
     /// Whether `lightmap` holds `lightmap_pixels` yet.
     lightmap_uploaded: bool,
     sprite_minimum_size: u32,
@@ -1734,6 +1747,7 @@ impl Renderer {
             .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE);
         let world_post = world_post::Post::new(&device, config.format.remove_srgb_suffix());
         let uploads = upload::Uploads::new(&device);
+        let section_uploads = upload::Uploads::with_chunk(&device, SECTION_UPLOAD_CHUNK);
         let panorama = panorama::Panorama::new(
             &device,
             &queue,
@@ -1808,6 +1822,9 @@ impl Renderer {
             lightmap_sampler,
             animations: AnimatedSprites::new(animations, sprite_size, sprite_mips),
             uploads,
+            section_uploads,
+            section_copies: None,
+            section_copy_bytes: 0,
             lightmap_uploaded: false,
             sprite_minimum_size,
             indices,
@@ -2017,14 +2034,20 @@ impl Renderer {
             self.indices = Self::quad_indices(&self.device, self.index_quads);
         }
         let vertices = (mesh.solid.len() + mesh.translucent.len()) as u64;
+        let encoder = self.section_copies.get_or_insert_with(|| {
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Section uploads"),
+                })
+        });
         // With video and system memory both full, the section is not drawn.
-        let Some((page, start)) = self.arena.alloc(&self.device, &self.queue, vertices) else {
+        let Some((page, start)) = self.arena.alloc(&self.device, encoder, vertices) else {
             return;
         };
         let sorted_indices = if translucent > 0 {
             let indices =
                 self.sorted_indices
-                    .alloc(&self.device, &self.queue, u64::from(translucent) * 6);
+                    .alloc(&self.device, encoder, u64::from(translucent) * 6);
             if indices.is_none() {
                 self.arena.release(page, start, vertices);
                 return;
@@ -2033,21 +2056,34 @@ impl Renderer {
         } else {
             None
         };
-        let flat_id = self
-            .flat
-            .as_mut()
-            .map(|f| f.add(&self.device, &self.queue, page, start, vertices));
+        let flat_id = self.flat.as_mut().map(|f| {
+            f.add(
+                &self.device,
+                encoder,
+                &mut self.section_uploads,
+                page,
+                start,
+                vertices,
+            )
+        });
         let stride = std::mem::size_of::<TerrainVertex>() as u64;
         for (offset, part) in [(0, &mesh.solid), (mesh.solid.len(), &mesh.translucent)] {
             if !part.is_empty() {
                 let bytes: &[u8] = bytemuck::cast_slice(part);
                 self.uploaded_bytes += bytes.len() as u64;
-                self.queue.write_buffer(
+                self.section_copy_bytes += bytes.len() as u64;
+                self.section_uploads.buffer(
+                    encoder,
                     self.arena.buffer(page),
                     (start + offset as u64) * stride,
                     bytes,
                 );
             }
+        }
+        if self.section_copy_bytes >= SECTION_COPY_LIMIT
+            && let Some(copies) = self.take_section_copies()
+        {
+            self.queue.submit([copies]);
         }
         self.sections.insert(
             key,
@@ -2069,6 +2105,13 @@ impl Renderer {
                 flat_id,
             },
         );
+    }
+    /// The section copies recorded since the last submission, closed.
+    fn take_section_copies(&mut self) -> Option<wgpu::CommandBuffer> {
+        let encoder = self.section_copies.take()?;
+        self.section_copy_bytes = 0;
+        self.section_uploads.finish(&encoder);
+        Some(encoder.finish())
     }
     /// Draws `count` section draws from `first` with the arena and section
     /// origins bound: one indirect multi-draw, or a loop without it.
@@ -2306,6 +2349,14 @@ impl Renderer {
         );
     }
     pub fn render(&mut self, frame: &Frame) -> Result<bool> {
+        let rendered = self.draw_frame(frame);
+        // A frame that was not drawn still submits the section copies.
+        if let Some(copies) = self.take_section_copies() {
+            self.queue.submit([copies]);
+        }
+        rendered
+    }
+    fn draw_frame(&mut self, frame: &Frame) -> Result<bool> {
         self.arena.trim();
         self.sorted_indices.trim();
         if let Some(flat) = &mut self.flat {
@@ -3179,7 +3230,11 @@ impl Renderer {
             .map(|path| (path, self.copy_frame(&mut encoder, &target_texture)));
         self.uploads.finish(&encoder);
         let commands = crate::spans::time("encode", || encoder.finish());
-        let submission = crate::spans::time("submit", || self.queue.submit([commands]));
+        // The section copies run first: this frame draws what they write.
+        let copies = self.take_section_copies();
+        let submission = crate::spans::time("submit", || {
+            self.queue.submit(copies.into_iter().chain([commands]))
+        });
         if let Some(timer) = &mut self.gpu_timer {
             timer.submitted();
             timer.collect(&self.device, &mut self.gpu_times);
