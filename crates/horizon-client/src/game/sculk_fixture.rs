@@ -696,6 +696,8 @@ impl Game<'_> {
                 seed_fresh(m, 0x5eed + (named + i + 1) as i64);
             }
         }
+        // The player's tickets, as `tick_world` takes them.
+        self.update_chunk_tickets();
         // Entities: the player's warden spawn tracker, then the mobs.
         self.tick_sculk_entities();
         // (ServerChunkCache.tick, natural spawning and its chunk shuffle, is not run.)
