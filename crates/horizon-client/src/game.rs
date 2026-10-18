@@ -193,6 +193,8 @@ use horizon_core::{
 use horizon_core::{geometry::Vec3, random::RandomSource};
 use horizon_world::{
     block_collision::BlockCollisionRegistry,
+    collision_context::{CollisionContext, CollisionEntity, CollisionItem},
+    entity_obstruction::{EntityIdentity, EntityObstructionWorld, ObstructionEntity},
     level::{
         Behaviours, Dimension as LevelDimension, EntityQuery, Landing, LevelAccess, LevelEvent,
         PlaceContext, PlaceOutcome, PlayerContext, PlayerEffect, Ticks, flags as level_flags,
@@ -451,12 +453,14 @@ struct Hit {
 struct GameLevel<'w> {
     world: &'w mut World,
     facts: &'w BlockFacts,
+    collision: &'w BlockCollisionRegistry<'w>,
     events: &'w mut Vec<LevelEvent>,
     dimension: LevelDimension,
     darken: i32,
     raining: bool,
     thundering: bool,
     player_box: Option<([f64; 3], [f64; 3])>,
+    player_collision: Option<PlayerCollision>,
     /// Minecart boxes (detector rails).
     cart_boxes: Vec<([f64; 3], [f64; 3])>,
     biomes: &'w Biomes,
@@ -471,6 +475,32 @@ struct GameLevel<'w> {
     rand_sequences: &'w mut horizon_client::random_sequences::RandomSequences,
     pending: &'w mut spill::Pending,
     spill: &'w mut spill::Spill,
+}
+struct PlayerCollision {
+    y: f64,
+    descending: bool,
+    fall_distance: f64,
+    main_hand_item: Arc<str>,
+    main_hand_count: i32,
+    leather_boots: bool,
+}
+struct PlayerObstruction(Aabb);
+impl EntityObstructionWorld for PlayerObstruction {
+    type Error = std::convert::Infallible;
+    fn obstruction_candidates(
+        &mut self,
+        _excluded: Option<EntityIdentity>,
+        _bounds: Aabb,
+    ) -> std::result::Result<Vec<ObstructionEntity>, Self::Error> {
+        Ok(vec![ObstructionEntity {
+            identity: EntityIdentity(0),
+            root_vehicle: EntityIdentity(0),
+            bounds: self.0,
+            removed: false,
+            spectator: false,
+            blocks_building: true,
+        }])
+    }
 }
 impl LevelAccess for GameLevel<'_> {
     fn precipitation(&self, pos: BlockPos) -> Option<horizon_world::level::Precipitation> {
@@ -584,21 +614,63 @@ impl LevelAccess for GameLevel<'_> {
     fn dimension(&self) -> LevelDimension {
         self.dimension
     }
-    /// Level.isUnobstructed against the player for full-collision blocks.
+    /// `Level.isUnobstructed`: the placed state's collision shape against the player.
     fn is_unobstructed(&self, pos: BlockPos, state: BlockStateId) -> bool {
         let Some((lo, hi)) = self.player_box else {
             return true;
         };
-        if !self.facts.get(state).full_collision {
+        let player = self.player_collision.as_ref();
+        let context = player.map_or_else(
+            || CollisionContext::position(lo[1]),
+            |player| {
+                CollisionContext::for_entity(
+                    CollisionEntity {
+                        identity: EntityIdentity(0),
+                        y: player.y,
+                        descending: player.descending,
+                        main_hand: Some(CollisionItem {
+                            item: &player.main_hand_item,
+                            count: player.main_hand_count,
+                        }),
+                    },
+                    false,
+                )
+            },
+        );
+        let mut scene = collisions::SceneCollisions {
+            world: &*self.world,
+            binding: self.collision,
+            subject: player.map(|player| horizon_client::collisions::PowderSnowSubject {
+                fall_distance: player.fall_distance,
+                falling_block: false,
+                leather_boots: player.leather_boots,
+                walkable_type: false,
+                lava_walker: false,
+            }),
+        };
+        let Ok(shape) = self
+            .collision
+            .collision_shape_with_context(&mut scene, state, pos, &context)
+        else {
+            return false;
+        };
+        if shape.is_empty() {
             return true;
         }
-        let (x, y, z) = (f64::from(pos.x), f64::from(pos.y), f64::from(pos.z));
-        !(x < hi[0] - 1e-7
-            && x + 1.0 > lo[0] + 1e-7
-            && y < hi[1] - 1e-7
-            && y + 1.0 > lo[1] + 1e-7
-            && z < hi[2] - 1e-7
-            && z + 1.0 > lo[2] + 1e-7)
+        let shape = shape.moved(horizon_core::geometry::Vec3::new(
+            f64::from(pos.x),
+            f64::from(pos.y),
+            f64::from(pos.z),
+        ));
+        horizon_world::entity_obstruction::is_unobstructed(
+            &mut PlayerObstruction(Aabb::new(
+                horizon_core::geometry::Vec3::new(lo[0], lo[1], lo[2]),
+                horizon_core::geometry::Vec3::new(hi[0], hi[1], hi[2]),
+            )),
+            None,
+            &shape,
+        )
+        .unwrap_or(false)
     }
     /// Entities that trigger pressure plates, tripwires and detector rails:
     /// the player (a mob) and the minecarts.
@@ -1769,6 +1841,22 @@ impl Game<'_> {
                 ],
             )
         });
+        let player_collision = self.player.as_ref().filter(|_| !spectator).map(|p| {
+            let main_hand = self.inventory.get(self.selected).and_then(Option::as_ref);
+            PlayerCollision {
+                y: p.position.y,
+                descending: p.velocity.y < 0.0,
+                fall_distance: p.fall_distance,
+                main_hand_item: main_hand.map_or_else(
+                    || Arc::from("minecraft:air"),
+                    |stack| Arc::clone(&stack.item),
+                ),
+                main_hand_count: main_hand.map_or(0, |stack| stack.count as i32),
+                leather_boots: self.armor[3]
+                    .as_ref()
+                    .is_some_and(|stack| stack.item.as_ref() == "minecraft:leather_boots"),
+            }
+        });
         let cart_boxes = self
             .carts
             .iter()
@@ -1790,12 +1878,14 @@ impl Game<'_> {
             cart_boxes,
             world: &mut self.world,
             facts: &self.res.facts,
+            collision: self.collision,
             events: &mut self.level_events,
             dimension,
             darken,
             raining: rain > 0.2,
             thundering: thunder > 0.9,
             player_box,
+            player_collision,
             biomes: &self.res.biomes,
             seed: self.level.seed,
             behaviours: &self.res.behaviours,
@@ -2297,65 +2387,87 @@ impl Game<'_> {
         let mut falling = std::mem::take(&mut self.falling);
         let mut landed = Vec::new();
         let mut dropped = Vec::new();
+        let mut collision_error = None;
         let entity_drops = self.ui.rules.bool("entity_drops");
         falling.retain_mut(|f| {
+            let original = f.clone();
             f.previous = f.position;
             f.age = f.age.wrapping_add(1);
             if !f.no_gravity {
                 f.velocity.y -= 0.04;
             }
+            let wanted = f.velocity;
+            let mut scene = collisions::SceneCollisions {
+                world: &self.world,
+                binding: self.collision,
+                subject: Some(collisions::PowderSnowSubject {
+                    fall_distance: f.fall_distance,
+                    falling_block: true,
+                    ..Default::default()
+                }),
+            };
+            let context = CollisionContext::for_entity(
+                CollisionEntity {
+                    identity: EntityIdentity(0),
+                    y: f.position.y,
+                    descending: wanted.y < 0.0,
+                    main_hand: None,
+                },
+                false,
+            );
+            let movement = match scene.resolve_with_context(
+                horizon_client::falling_block::bounds(f.position),
+                wanted,
+                0.0,
+                false,
+                context,
+            ) {
+                Ok(movement) => movement,
+                Err(error) => {
+                    *f = original;
+                    collision_error.get_or_insert(error);
+                    return true;
+                }
+            };
             let next = Vec3::new(
-                f.position.x + f.velocity.x,
-                f.position.y + f.velocity.y,
-                f.position.z + f.velocity.z,
+                f.position.x + movement.x,
+                f.position.y + movement.y,
+                f.position.z + movement.z,
             );
-            let below = self.world.block(
-                next.x.floor() as i32,
-                next.y.floor() as i32,
-                next.z.floor() as i32,
-            );
-            let below_facts = self.res.facts.get(below);
-            // PowderSnowBlock.getCollisionShape for a FallingBlockEntity: the
-            // whole block, or 0.9 high after a fall of more than 2.5 blocks,
-            // where the block it rests in is the snow itself.
-            let powder_snow = &*below_facts.name == "minecraft:powder_snow";
-            let sunk = powder_snow
-                && f.fall_distance > 2.5
-                && next.y - next.y.floor() < f64::from(0.9_f32);
-            let solid =
-                (below_facts.full_collision || powder_snow && f.fall_distance <= 2.5 || sunk)
-                    && f.velocity.y < 0.0;
+            let on_ground = wanted.y < 0.0 && movement.y != wanted.y;
             // FallingBlockEntity.tick: off the ground, it gives up after 600
             // ticks (100 outside the world) and drops itself as an item.
             let y = next.y.floor() as i32;
             let outside =
                 y <= horizon_client::chunk::MIN_Y || y >= horizon_client::chunk::MIN_Y + 384;
-            if !solid && (f.age > 100 && outside || f.age > 600) {
+            if !on_ground && (f.age > 100 && outside || f.age > 600) {
                 if f.drop_item && entity_drops {
                     dropped.push((f.state, next));
                 }
-                return false;
-            }
-            if solid {
-                let pos = [
-                    next.x.floor() as i32,
-                    next.y.floor() as i32 + i32::from(!sunk),
-                    next.z.floor() as i32,
-                ];
-                let landing_y = if sunk {
-                    next.y.floor() + f64::from(0.9_f32)
-                } else {
-                    f64::from(pos[1])
-                };
-                f.fall_distance += (f.position.y - landing_y).max(0.0);
-                f.position = Vec3::new(next.x, landing_y, next.z);
-                landed.push((f.clone(), pos));
                 return false;
             }
             if next.y < f.position.y {
                 f.fall_distance += f.position.y - next.y;
             }
             f.position = next;
+            if on_ground {
+                let pos = [
+                    f.position.x.floor() as i32,
+                    f.position.y.floor() as i32,
+                    f.position.z.floor() as i32,
+                ];
+                landed.push((f.clone(), pos));
+                return false;
+            }
+            if movement.x != wanted.x {
+                f.velocity.x = 0.0;
+            }
+            if movement.y != wanted.y {
+                f.velocity.y = 0.0;
+            }
+            if movement.z != wanted.z {
+                f.velocity.z = 0.0;
+            }
             f.velocity = Vec3::new(
                 f.velocity.x * 0.98,
                 f.velocity.y * 0.98,
@@ -2386,7 +2498,11 @@ impl Game<'_> {
         for (block, pos) in landed {
             self.finish_falling_block(block, pos);
         }
-        self.process_level_events()
+        self.process_level_events()?;
+        if let Some(error) = collision_error {
+            return Err(error);
+        }
+        Ok(())
     }
     fn break_block(&mut self, pos: [i32; 3]) -> Result<()> {
         self.with_player_actor(|game| game.break_block_as_player(pos))

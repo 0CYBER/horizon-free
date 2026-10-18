@@ -132,11 +132,24 @@ impl SceneCollisions<'_, '_> {
         max_step: f32,
         on_ground: bool,
     ) -> Result<Vec3> {
+        self.resolve_with_context(bounds, movement, max_step, on_ground, self.context(bounds))
+    }
+    /// Resolve movement with the entity's captured collision context. Most
+    /// callers only need the position context; entities such as falling blocks
+    /// also affect contextual block shapes (for example powder snow).
+    pub fn resolve_with_context(
+        &mut self,
+        bounds: Aabb,
+        movement: Vec3,
+        max_step: f32,
+        on_ground: bool,
+        context: CollisionContext<'_>,
+    ) -> Result<Vec3> {
         Ok(resolve_world_movement(
             self,
             MovementRequest {
                 entity: EntityIdentity(0),
-                context: self.context(bounds),
+                context,
                 bounds,
                 movement,
                 max_step,
