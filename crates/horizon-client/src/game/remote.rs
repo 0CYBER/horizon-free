@@ -1599,6 +1599,21 @@ impl Game<'_> {
                 }
             }
             C::Animate(p) => self.remote_animate(p.id, p.action),
+            // ClientPacketListener.handleSwingAnimation: the entity swings
+            // (LivingEntity.swing, which a swing in its first half ignores).
+            C::SwingAnimation(p) => {
+                use horizon_client::first_person::Hand;
+                let hand = if p.hand == 1 { Hand::Off } else { Hand::Main };
+                let animation = horizon_client::first_person::SwingAnimation {
+                    kind: p.kind.clamp(0, 255) as u8,
+                    duration: p.duration,
+                };
+                if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) {
+                    self.swing_hand(hand, animation);
+                } else if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
+                    m.swing();
+                }
+            }
             C::UpdateMobEffect(p) => self.remote_effect(&p),
             C::RemoveMobEffect(p) => {
                 if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id)
@@ -2621,6 +2636,9 @@ impl Game<'_> {
             if !m.alive() {
                 m.death_time += 1;
             }
+            // LivingEntity.updateSwingTime.
+            m.anim.attack_anim_o = m.anim.attack_anim;
+            horizon_client::mobs::ai::tick_swing(m);
             // Entity.commonTick: LinearInterpolationHandler.interpolate.
             if let Some(l) = lerps.get_mut(&(m.id as i32))
                 && l.steps > 0
@@ -3728,6 +3746,7 @@ impl Game<'_> {
                     let armor = [&e.head, &e.chest, &e.legs, &e.feet].map(|s| s.as_deref());
                     serde_json::json!({
                         "id": m.id,
+                        "swinging": m.ai.swinging,
                         "armor": armor,
                         "main_hand": e.main_hand.as_deref(),
                         "off_hand": e.off_hand.as_deref(),

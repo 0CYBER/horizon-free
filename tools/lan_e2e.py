@@ -49,6 +49,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              guest as the host has them (kind, place, rotation, what they hold or wear, the variant).
 - projectiles: primed TNT (one falling), an end crystal and an arrow that lands reach the guest where
              the host has them; a falling block lands on both sides.
+- swings:    each side sees the other's arm swing while it mines a block, and the guest sees its own
+             swing when its hoe tills dirt (the server's use) (#848).
 - light:     the guest's light matches the host's: around a torch placed near it, under a roof and
              once a block of the roof is removed under the sky, and in the last chunk it tracks next to
              glowstone in a chunk it doesn't (only the server's light updates bring that one).
@@ -84,7 +86,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'titles', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'push', 'eat', 'xp', 'objects', 'projectiles', 'light', 'effects', 'portals', 'distance']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'titles', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'push', 'eat', 'xp', 'objects', 'projectiles', 'light', 'swings', 'effects', 'portals', 'distance']
 
 
 class Game:
@@ -1095,6 +1097,60 @@ def check_eat(host, guest, out):
     return detail
 
 
+def watch_mining(miner, pos, seen):
+    """Mine the block at `pos` (by hand, for seconds) and sample `seen()` meanwhile."""
+    dig = threading.Thread(target=miner.raw, args=('break', *pos))
+    dig.start()
+    samples = []
+    for _ in range(8):
+        time.sleep(0.25)
+        samples.append(seen())
+    dig.join()
+    return samples
+
+
+def check_swings(host, guest, out):
+    for g in (host, guest):
+        g('command', command='gamemode survival')
+        g('command', command='clear @s')
+    face_each_other(host, guest)
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    gx, gy, gz = (int(v // 1) for v in pos_of(guest))
+    # Stone by hand takes 7.5 seconds: ServerboundPunchPacket every tick keeps the arm swinging.
+    guest('command', command=f'setblock {gx} {gy} {gz + 1} minecraft:stone')
+    host('command', command=f'setblock {hx} {hy} {hz + 1} minecraft:stone')
+    host.wait(10)
+    def swinging(game):
+        # On its server thread the host's window is a client of its server too.
+        if game is host and not SERVER_THREAD:
+            return lan_guest(host).get('model_swinging')
+        return any(e.get('swinging') for e in remote(game).get('player_equipment', []))
+    # Most samples: a swing restarts only past its first half (SwingState.startIfAble), so a sample can
+    # fall between two.
+    host_sees = watch_mining(guest, (gx, gy, gz + 1), lambda: swinging(host))
+    guest_sees = watch_mining(host, (hx, hy, hz + 1), lambda: swinging(guest))
+    # A hoe on dirt: the server tills it and swings the guest's hand, on the guest's screen too.
+    # Where the guest stands now (an earlier check can leave it on a ledge it then drops from).
+    gx, gy, gz = (int(v // 1) for v in pos_of(guest))
+    soil = (gx, gy - 1, gz + 1)
+    guest('command', command=f'setblock {soil[0]} {soil[1]} {soil[2]} minecraft:dirt')
+    # HoeItem.useOn tills only under air.
+    guest('command', command=f'setblock {soil[0]} {soil[1] + 1} {soil[2]} minecraft:air')
+    guest('command', command='give @s minecraft:wooden_hoe')
+    guest.wait(10)
+    guest.raw('select', 'minecraft:wooden_hoe')
+    before = guest('state')['swings']
+    guest.raw('interact', *soil)
+    guest.wait(10)
+    hoe = {'swings': guest('state')['swings'] - before, 'soil': host.raw('block', *soil)['block']}
+    guest('command', command=f'setblock {soil[0]} {soil[1]} {soil[2]} minecraft:stone')
+    detail = {'host_sees_guest': host_sees, 'guest_sees_host': guest_sees, 'hoe': hoe}
+    assert sum(map(bool, host_sees)) >= 4, f'the host does not see the guest mine: {detail}'
+    assert sum(map(bool, guest_sees)) >= 4, f'the guest does not see the host mine: {detail}'
+    assert hoe == {'swings': 1, 'soil': 'minecraft:farmland'}, f'the guest\'s hoe: {detail}'
+    return detail
+
+
 def check_xp(host, guest, out):
     for g in (host, guest):
         g('command', command='gamemode survival')
@@ -1278,7 +1334,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'effects': check_effects, 'portals': check_portals, 'distance': check_distance, 'clicks': check_clicks,
              'sleep': check_sleep, 'push': check_push, 'eat': check_eat,
              'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles,
-             'light': check_light}
+             'light': check_light, 'swings': check_swings}
 
 
 def run(ctl, out, resources, checks):

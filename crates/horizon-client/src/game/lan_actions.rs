@@ -10,6 +10,7 @@ use horizon_client::{
     command::vanilla,
     containers::BlockEntity,
     entities::Experience,
+    first_person::{Hand, SwingAnimation},
     items::ItemStack,
     lan::{
         guest::SPECTATOR,
@@ -43,8 +44,9 @@ pub(super) struct GuestPlay {
     /// its progress since `dig_start` is complete (ServerPlayerGameMode.hasDelayedDestroy).
     delayed: Option<([i32; 3], u64)>,
     last_progress: i32,
-    /// Hand movements the client announced and the host animated.
-    swung: bool,
+    /// Swings the guest's actions started this tick, for the players around
+    /// (`LivingEntity.swing` sends ClientboundSwingAnimationPacket).
+    swings: u32,
     /// The trading screen the guest has open.
     pub(super) merchant: Option<super::lan_trading::GuestMerchant>,
     /// The inventory menu and the crafting table the guest crafts in.
@@ -202,7 +204,11 @@ impl Game<'_> {
         self.lan_acting_name = Some(g.name.clone());
         self.lan_acting_uuid = Some(g.uuid);
 
+        // The guest's swings are theirs: the host's own count stays the host's.
+        let swings = self.swings_started;
         let result = f(self);
+        play.swings += self.swings_started.wrapping_sub(swings);
+        self.swings_started = swings;
         for packet in std::mem::take(&mut self.guest_packets) {
             host.hub.send_to(conn, &packet);
         }
@@ -542,6 +548,16 @@ impl Game<'_> {
                     }
                 }
             }
+            // ServerGamePacketListenerImpl.handlePunch: the main hand swings
+            // with the held item's attack animation (mining, attacking, a
+            // click on nothing), seen by the players around, and the attack
+            // strength starts again.
+            S::Punch(_) => {
+                self.as_guest(host, conn, |g| {
+                    g.swing_hand(Hand::Main, SwingAnimation::DEFAULT);
+                    g.reset_attack_strength();
+                });
+            }
             S::UseItemOn(p) => {
                 host.hub.ack(conn, p.sequence);
                 if spectator {
@@ -557,11 +573,14 @@ impl Game<'_> {
                         f64::from(p.pos[2]) + f64::from(p.cursor[2]),
                     ],
                 };
-                self.as_guest(host, conn, |g| {
+                let swung = self.as_guest(host, conn, |g| {
                     g.forced_hit = Some(hit);
+                    let swings = g.swings_started;
                     let _ = g.use_item();
                     g.forced_hit = None;
+                    g.swings_started != swings
                 });
+                self.lan_swing_back(host, conn, swung);
                 // The client predicted a result: correct it with what really is.
                 for pos in [
                     p.pos,
@@ -579,20 +598,26 @@ impl Game<'_> {
                 }
                 // handleUseItem: the client's rotation, then the item alone. What it
                 // looked at a moment ago (a block, a mob) is UseItemOn's or Interact's.
-                self.as_guest(host, conn, |g| {
+                let swung = self.as_guest(host, conn, |g| {
                     (g.yaw, g.pitch) = (p.yaw, p.pitch);
                     g.lan_item_only = true;
+                    let swings = g.swings_started;
                     let _ = g.use_item();
                     g.lan_item_only = false;
+                    g.swings_started != swings
                 });
+                self.lan_swing_back(host, conn, swung);
             }
             S::Attack(p) => self.guest_attack(host, conn, p.id),
             S::Interact(p) => {
                 if let Some((position, eye)) = self.look_at_entity(host, gi, p.id) {
                     let _ = (position, eye);
-                    self.as_guest(host, conn, |g| {
+                    let swung = self.as_guest(host, conn, |g| {
+                        let swings = g.swings_started;
                         let _ = g.use_item();
+                        g.swings_started != swings
                     });
+                    self.lan_swing_back(host, conn, swung);
                 }
             }
             S::SetCreativeModeSlot(p) => {
@@ -1619,23 +1644,63 @@ impl Game<'_> {
         }
     }
 
-    /// Guests' arm swings for everyone else.
+    /// A use the server ran swung the guest's hand: their own client is told
+    /// too (`swing(hand, true)` for a SwingSource.SERVER result). Horizon's
+    /// client does not run uses itself, so it does not predict the swing; a
+    /// client that did (a block placed) is still in the first half of its
+    /// swing and ignores it (`SwingState.startIfAble`).
+    fn lan_swing_back(&mut self, host: &mut LanHost, conn: u32, swung: Option<bool>) {
+        if swung != Some(true) {
+            return;
+        }
+        let (Some(g), Some(play)) = (host.hub.guest(conn), host.play.get(&conn)) else {
+            return;
+        };
+        if let Some(c) = play.swing.current {
+            host.hub
+                .send_to(conn, &swing_packet(g.entity_id, c.hand, c.animation));
+        }
+    }
+
+    /// The tick's arm swings for the players around (the guests' to everyone
+    /// else, the host's to the guests), and `LivingEntity.updateSwingTime`
+    /// for the guests' bodies here.
     pub(super) fn lan_swings(&mut self, host: &mut LanHost) {
         let conns: Vec<u32> = host.play.keys().copied().collect();
         for conn in conns {
             let Some(g) = host.hub.guests.iter().find(|g| g.conn == conn) else {
                 continue;
             };
-            if !host.hub.here(g) {
-                continue;
-            }
-            let (id, at) = (g.entity_id, g.position);
+            let (id, at, here) = (g.entity_id, g.position, host.hub.here(g));
             let play = host.play.get_mut(&conn).expect("play");
-            let swinging = play.swing.swinging() && play.swing.ticks == 0;
-            if swinging && !play.swung {
-                host.hub.swing(id, 0, at, Some(conn));
+            let swung = std::mem::take(&mut play.swings) > 0;
+            if let (true, true, Some(c)) = (swung, here, play.swing.current) {
+                let packet = swing_packet(id, c.hand, c.animation);
+                host.hub.broadcast_near(at, 128.0, &packet, Some(conn));
+                if let Some(m) = host.models.get_mut(&conn) {
+                    m.swing();
+                }
             }
-            play.swung = swinging;
+            play.swing.tick();
+        }
+        if self.swings_started != host.host_swings {
+            host.host_swings = self.swings_started;
+            if let (Some(p), Some(c)) = (self.player.as_ref(), self.swing.current) {
+                let at = [p.position.x, p.position.y, p.position.z];
+                let packet = swing_packet(host.host_entity, c.hand, c.animation);
+                host.hub.broadcast_near(at, 128.0, &packet, None);
+            }
         }
     }
+}
+
+/// ClientboundSwingAnimationPacket: the hand and the animation (its type and
+/// base duration; each client applies the swinger's haste and fatigue).
+fn swing_packet(id: i32, hand: Hand, animation: SwingAnimation) -> C {
+    C::SwingAnimation(play::SwingAnimation {
+        id,
+        hand: i32::from(hand == Hand::Off),
+        kind: i32::from(animation.kind),
+        duration: animation.duration,
+    })
 }
