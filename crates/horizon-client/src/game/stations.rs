@@ -1051,7 +1051,8 @@ impl Game<'_> {
         }
     }
     pub(super) fn station_click(&mut self, right: bool) -> bool {
-        if self.station.is_none() && !self.brewing_open() {
+        // A server's brewing stand: its slots are the server's.
+        if self.station.is_none() && (!self.brewing_open() || self.remote.is_some()) {
             return false;
         }
         let Some(size) = self
@@ -1396,6 +1397,7 @@ impl Game<'_> {
                 .as_ref()
                 .and_then(|s| self.world.block_names.get(&(s.pos[0], s.pos[1], s.pos[2])))
                 .cloned()
+                .or_else(|| self.remote_menu_title())
                 .unwrap_or(default);
             let tw = HudBatch::text_width(atlas, &title);
             batch.text(

@@ -21,9 +21,10 @@ pub(super) struct GuestCrafting {
     inventory: Option<Box<Menu>>,
     /// The open crafting table: its window, state id and menu.
     table: Option<(i32, i32, Box<Menu>)>,
-    /// The open furnace's window and menu (`AbstractFurnaceMenu`); its slots live in
-    /// the furnace block entity and the hub's container menu keeps the client in sync.
-    furnace: Option<(i32, Box<Menu>)>,
+    /// The open furnace's or brewing stand's window and menu (`AbstractFurnaceMenu`,
+    /// `BrewingStandMenu`); its slots live in the block entity and the hub's
+    /// container menu keeps the client in sync.
+    machine: Option<(i32, Box<Menu>)>,
 }
 
 /// ServerboundContainerClickPacket's input.
@@ -157,10 +158,11 @@ impl Game<'_> {
         true
     }
 
-    /// A click on the guest's open furnace, blast furnace or smoker: the host's
-    /// `AbstractFurnaceMenu` (fuel slot, take-only result, quick moves by recipe and
-    /// fuel) over the block entity's slots. False for other windows.
-    pub(super) fn lan_furnace_click(
+    /// A click on the guest's open furnace, blast furnace, smoker or brewing stand:
+    /// the host's `AbstractFurnaceMenu` (fuel slot, take-only result, quick moves by
+    /// recipe and fuel) or `BrewingStandMenu` (one bottle per slot, ingredient and
+    /// blaze powder slots) over the block entity's slots. False for other windows.
+    pub(super) fn lan_machine_click(
         &mut self,
         host: &mut LanHost,
         conn: u32,
@@ -180,15 +182,18 @@ impl Game<'_> {
         else {
             return false;
         };
-        let Some(BlockEntity::Furnace(f)) = self.world.block_entities.get(&pos) else {
-            return false;
+        let (kind, items) = match self.world.block_entities.get(&pos) {
+            Some(BlockEntity::Furnace(f)) => {
+                let recipe = match f.kind.recipe_type() {
+                    "minecraft:blasting" => "blasting",
+                    "minecraft:smoking" => "smoking",
+                    _ => "smelting",
+                };
+                (Kind::Furnace(recipe), f.items.to_vec())
+            }
+            Some(BlockEntity::Brewing(b)) => (Kind::Brewing, b.items.to_vec()),
+            _ => return false,
         };
-        let recipe = match f.kind.recipe_type() {
-            "minecraft:blasting" => "blasting",
-            "minecraft:smoking" => "smoking",
-            _ => "smelting",
-        };
-        let items = f.items.clone();
         if host.hub.guests[gi].spectator() {
             return true;
         }
@@ -197,10 +202,10 @@ impl Game<'_> {
             .entry(conn)
             .or_default()
             .crafting
-            .furnace
+            .machine
             .take()
             .filter(|(window, _)| *window == p.container)
-            .map_or_else(|| Box::new(Menu::new(Kind::Furnace(recipe))), |(_, m)| m);
+            .map_or_else(|| Box::new(Menu::new(kind)), |(_, m)| m);
         let changed = self.guest_menu_op(host, gi, &mut menu, |menu, env| {
             for (k, s) in items.iter().enumerate() {
                 menu.set_slot(env, k, s.clone());
@@ -213,14 +218,23 @@ impl Game<'_> {
                 .filter(|&s| menu.slot(s) != before[s].as_ref())
                 .collect::<Vec<_>>()
         });
-        if let Some(BlockEntity::Furnace(f)) = self.world.block_entities.get_mut(&pos) {
-            for k in 0..3 {
-                f.items[k] = menu.slot(k).cloned();
+        match self.world.block_entities.get_mut(&pos) {
+            Some(BlockEntity::Furnace(f)) => {
+                for k in 0..3 {
+                    f.items[k] = menu.slot(k).cloned();
+                }
+                // AbstractFurnaceBlockEntity.setItem: only a new input restarts cooking.
+                f.input_clicked(&self.res.recipes, items[0].clone());
             }
-            // AbstractFurnaceBlockEntity.setItem: only a new input restarts cooking.
-            f.input_clicked(&self.res.recipes, items[0].clone());
+            // BrewingStandBlockEntity.serverTick notices a new ingredient itself.
+            Some(BlockEntity::Brewing(b)) => {
+                for k in 0..5 {
+                    b.items[k] = menu.slot(k).cloned();
+                }
+            }
+            _ => {}
         }
-        host.play.entry(conn).or_default().crafting.furnace = Some((p.container, menu));
+        host.play.entry(conn).or_default().crafting.machine = Some((p.container, menu));
         host.hub.inventory_clicked(conn, p, &self.world, &changed);
         true
     }

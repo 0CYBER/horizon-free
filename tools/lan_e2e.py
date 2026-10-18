@@ -23,6 +23,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
              opens as 9x6 with the right half first;
 - machines:  a hopper, a dispenser and a dropper open on the guest's screen with their 5 and 9
              slots, and keep what the guest shift-clicks into them (#848);
+- brewing:   a brewing stand opens on the guest's screen; blaze powder, nether wart and a bottle the
+             guest shift-clicks go to the fuel, ingredient and bottle slots, and the stand's fuel shows
+             (#848);
 - feedback:  the guest's command feedback names the guest and shows the numbers;
 - effects:   a beacon's power reaches every player in range, the host and the guest;
 - distance:  (--server-thread) the server follows the host's render distance, past vanilla's 32 too
@@ -86,7 +89,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'titles', 'commands', 'recipes', 'machines', 'trials', 'clicks', 'sleep', 'push', 'eat', 'xp', 'objects', 'projectiles', 'light', 'effects', 'portals', 'distance']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'titles', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'push', 'eat', 'xp', 'objects', 'projectiles', 'light', 'effects', 'portals', 'distance']
 
 
 class Game:
@@ -665,6 +668,40 @@ def check_machines(host, guest, out):
     want = {'hopper': (5, {0: 'minecraft:cobblestone'}), 'dispenser': (9, {0: 'minecraft:cobblestone'}),
             'dropper': (9, {0: 'minecraft:cobblestone'})}
     assert seen == want, f'the machines on the guest: {seen}'
+    return seen
+
+
+def check_brewing(host, guest, out):
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    loads = ('blaze_powder', 'nether_wart', 'glass_bottle')
+    for item in loads:
+        guest('command', command=f'give @s minecraft:{item}')
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    at = (x, y, z + 2)
+    guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:brewing_stand')
+    guest.wait(10)
+    guest.raw('interact', *at)
+    guest.raw('wait-for', 'screen', 'container', '--timeout', 10)
+    guest.wait(10)
+    size = container_items(guest)[1]
+    # BrewingStandMenu.quickMoveStack: blaze powder to the fuel slot, an ingredient to its slot,
+    # a bottle to the bottle slots.
+    for item in loads:
+        guest.raw('click-slot', hotbar_slot(guest, f'minecraft:{item}'), 'shift')
+        guest.wait(5)
+    # BrewingStandBlockEntity.serverTick burns the blaze powder into 20 uses; the guest sees them
+    # through the menu's data slots.
+    guest.wait(10)
+    info = guest.raw('menu')['info']
+    guest.shot(out, 'brewing')
+    guest.raw('key', 'esc', 'tap')
+    guest.wait(10)
+    items = open_container(guest, at, out, 'brewing-after')[0]
+    guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:air')
+    seen = {'size': size, 'items': items, 'fuel': info and info.get('fuel')}
+    want = {'size': 5, 'items': {0: 'minecraft:glass_bottle', 3: 'minecraft:nether_wart'}, 'fuel': 20}
+    assert seen == want, f'the brewing stand on the guest: {seen}'
     return seen
 
 
@@ -1303,7 +1340,7 @@ def check_light(host, guest, out):
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
              'chest': check_chest, 'crafting': check_crafting, 'sign': check_sign, 'damage': check_damage,
              'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
-             'containers': check_containers, 'machines': check_machines, 'feedback': check_feedback, 'titles': check_titles,
+             'containers': check_containers, 'machines': check_machines, 'brewing': check_brewing, 'feedback': check_feedback, 'titles': check_titles,
              'commands': check_commands,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,
              'effects': check_effects, 'portals': check_portals, 'distance': check_distance, 'clicks': check_clicks,

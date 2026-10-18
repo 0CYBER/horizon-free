@@ -395,6 +395,13 @@ impl Game<'_> {
                 _ => ("minecraft:furnace", "container.furnace"),
             };
             (menu, title, Slots::Block(pos))
+        } else if let Some(BlockEntity::Brewing(_)) = self.world.block_entities.get(&pos) {
+            // BrewingStandBlock.useWithoutItem: BrewingStandMenu.
+            (
+                "minecraft:brewing_stand",
+                "container.brewing",
+                Slots::Block(pos),
+            )
         } else if let Some((other, right)) = self.chest_partner(pos) {
             // ChestBlock.combine: the right half's slots come first.
             let halves = if right {
@@ -606,7 +613,7 @@ impl Game<'_> {
             S::ContainerClick(p) if self.lan_merchant_click(host, conn, &p) => {}
             S::ContainerClick(p) if self.lan_inventory_click(host, conn, &p) => {}
             S::ContainerClick(p) if self.lan_crafting_click(host, conn, &p) => {}
-            S::ContainerClick(p) if self.lan_furnace_click(host, conn, &p) => {}
+            S::ContainerClick(p) if self.lan_machine_click(host, conn, &p) => {}
             S::SelectTrade(p) => self.lan_select_trade(host, conn, p.item),
             S::ContainerClose(p) if self.lan_merchant_closed(host, conn, Some(p.container)) => {
                 let g = &mut host.hub.guests[gi];

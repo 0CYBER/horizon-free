@@ -4948,6 +4948,9 @@ impl Game<'_> {
                         };
                         (kind, size)
                     }
+                    // A server's BrewingStandMenu; a local stand's clicks are the
+                    // station screen's.
+                    Some(BlockEntity::Brewing(_)) if self.remote.is_some() => (Kind::Brewing, 5),
                     Some(BlockEntity::Furnace(f)) => (
                         Kind::Furnace(
                             match f.kind.recipe_type().trim_start_matches("minecraft:") {

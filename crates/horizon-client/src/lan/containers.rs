@@ -428,15 +428,17 @@ impl Hub {
         let Slots::Block(pos) = m.slots else {
             return;
         };
-        let Some(BlockEntity::Furnace(f)) = world.block_entities.get(&pos) else {
-            return;
-        };
-        let data = [
-            f.lit_remaining,
-            f.lit_total,
-            f.cooking_timer,
-            f.cooking_total,
-        ]
+        // AbstractFurnaceBlockEntity.dataAccess, BrewingStandBlockEntity.dataAccess.
+        let data = match world.block_entities.get(&pos) {
+            Some(BlockEntity::Furnace(f)) => [
+                f.lit_remaining,
+                f.lit_total,
+                f.cooking_timer,
+                f.cooking_total,
+            ],
+            Some(BlockEntity::Brewing(b)) => [b.brew_time, b.fuel, b.total_brew_time, b.total_fuel],
+            _ => return,
+        }
         .map(|v| v as i16);
         m.sent_data.resize(data.len(), i16::MIN);
         let window = m.window;
