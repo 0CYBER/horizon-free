@@ -3016,7 +3016,7 @@ impl Game<'_> {
 }
 /// Mob.getBaseExperienceReward
 /// The damage type id of a Horizon damage kind.
-fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) -> &'static str {
+pub(super) fn damage_type(kind: horizon_client::mobs::DamageKind, player: bool) -> &'static str {
     use horizon_client::mobs::DamageKind as K;
     match kind {
         K::PlayerAttack => "minecraft:player_attack",

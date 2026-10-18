@@ -19,6 +19,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - hazards:   a guest in survival gets hungry sprint-jumping and is hurt by lava, a block at the eyes,
              drowning and the void (then respawns);
 - pvp:       the guest and the host hit each other with a sword; with the pvp game rule off, nothing;
+- hurt:      a pig the guest hits, and one the host hits, flashes red on the other side too (the
+             server's damage event) (#848);
 - containers: the guest's ender chest holds the guest's items, not the host's, and a double chest
              opens as 9x6 with the right half first;
 - feedback:  the guest's command feedback names the guest and shows the numbers;
@@ -84,7 +86,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'titles', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'push', 'eat', 'xp', 'objects', 'projectiles', 'light', 'effects', 'portals', 'distance']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'hurt', 'containers', 'feedback', 'titles', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'push', 'eat', 'xp', 'objects', 'projectiles', 'light', 'effects', 'portals', 'distance']
 
 
 class Game:
@@ -573,6 +575,33 @@ def check_pvp(host, guest, out):
     assert hits['host hits guest'][1] < hits['host hits guest'][0], f'the host did not hurt the guest: {hits}'
     assert hits['pvp off'][1] == hits['pvp off'][0], f'pvp off still hurts: {hits}'
     return hits
+
+
+def check_hurt(host, guest, out):
+    for g in (host, guest):
+        g('command', command='gamemode survival')
+        g('command', command='clear @s')
+    face_each_other(host, guest)
+    hx, hy, hz = pos_of(host)
+    # Between the two, within both players' reach; bare hands leave it alive.
+    host('command', command=f'summon minecraft:pig {hx + 1.5:.2f} {hy:.2f} {hz + 0.8:.2f} {{NoAI:1b}}')
+    host.wait(30)
+
+    def pig(game):
+        return game.raw('entities', 6, 'pig')['entities'][0]
+    seen = {}
+    for name, attacker, watcher in (('guest hits', guest, host), ('host hits', host, guest)):
+        attacker.wait(30)  # a full attack charge
+        attacker.raw('attack', pig(attacker)['id'])
+        seen[name] = {'attacker': pig(attacker)['hurt_time'], 'watcher': pig(watcher)['hurt_time']}
+        attacker.shot(out, 'hurt-' + name.replace(' ', '-'))
+        watcher.shot(out, 'hurt-' + name.replace(' ', '-') + '-seen')
+        attacker.wait(20)
+    host('command', command='kill @e[type=minecraft:pig]')
+    # LivingEntity.hurtTime: 10 when hurt, one less each tick; the reads come a few ticks later.
+    for name, sides in seen.items():
+        assert all(t > 0 for t in sides.values()), f'{name}: the pig\'s hurt flash {seen}'
+    return seen
 
 
 def container_items(game):
@@ -1100,7 +1129,13 @@ def check_xp(host, guest, out):
         g('command', command='gamemode survival')
         g('command', command='xp set @s 0 levels')
         g('command', command='xp set @s 0 points')
+    # Out of the orbs' way wherever an earlier check left the host (ExperienceOrb follows the
+    # nearest player who isn't a spectator).
+    host('command', command='gamemode spectator')
     guest.wait(10)
+    # `xp set` leaves Player.totalExperience (the score): experience from earlier checks stays in it.
+    total = guest('state')['player']['xp']['total']
+    host_total = host('state')['player']['xp']['total']
     x, y, z = pos_of(guest)
     # Three orbs of 7 points 4 blocks east of the guest (out of reach, within the 8 blocks orbs
     # follow from): they fly to the guest.
@@ -1116,8 +1151,8 @@ def check_xp(host, guest, out):
     detail = {'seen': seen, 'guest': xp, 'host': host_xp, 'left': left}
     # ExperienceOrb.scanForMerges: orbs of one value side by side can merge into one.
     assert 1 <= seen <= 3, f'the guest saw {seen} orbs: {detail}'
-    assert xp['total'] == 21 and xp['level'] == 2, f'the guest\'s experience after three 7-point orbs: {detail}'
-    assert host_xp['total'] == 0, f'the host took the orbs: {detail}'
+    assert xp['total'] - total == 21 and xp['level'] == 2, f'the guest\'s experience after three 7-point orbs: {detail}'
+    assert host_xp['total'] == host_total, f'the host took the orbs: {detail}'
     assert left == 0, f'orbs left on the guest\'s screen: {detail}'
     return {'seen': seen, 'guest': xp, 'host': host_xp}
 
@@ -1271,7 +1306,7 @@ def check_light(host, guest, out):
 
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
              'chest': check_chest, 'crafting': check_crafting, 'sign': check_sign, 'damage': check_damage,
-             'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
+             'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp, 'hurt': check_hurt,
              'containers': check_containers, 'feedback': check_feedback, 'titles': check_titles,
              'commands': check_commands,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,

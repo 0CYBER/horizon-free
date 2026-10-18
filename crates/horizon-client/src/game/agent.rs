@@ -579,7 +579,7 @@ impl Game<'_> {
             push(
                 [m.position.x, m.position.y, m.position.z],
                 m.kind.id.as_ref(),
-                json!({ "id": m.id, "kind": "mob", "health": m.health, "baby": m.is_baby() }),
+                json!({ "id": m.id, "kind": "mob", "health": m.health, "baby": m.is_baby(), "hurt_time": m.hurt_time }),
             );
         }
         for item in &self.dropped {
