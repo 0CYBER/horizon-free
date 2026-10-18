@@ -57,6 +57,58 @@ enum Modifier {
     AppendLoot(String),
     AppendStatic(Compound),
 }
+impl PosRule {
+    /// A rule's `position_predicate` (always true when missing). Types are
+    /// identifiers: `"always_true"` is `minecraft:always_true`, as vanilla
+    /// reads it.
+    fn decode(value: Option<&Value>) -> Result<Self, DecodeError> {
+        let Some(p) = value else {
+            return Ok(Self::Always);
+        };
+        let kind = p["predicate_type"]
+            .as_str()
+            .unwrap_or("minecraft:always_true");
+        Ok(match super::super::tags::identifier(kind)?.as_str() {
+            "minecraft:always_true" => Self::Always,
+            kind @ ("minecraft:linear_pos" | "minecraft:axis_aligned_linear_pos") => Self::Linear {
+                min_chance: p.get("min_chance").and_then(Value::as_f64).unwrap_or(0.) as f32,
+                max_chance: p.get("max_chance").and_then(Value::as_f64).unwrap_or(0.) as f32,
+                min_dist: p.get("min_dist").and_then(Value::as_i64).unwrap_or(0) as i32,
+                max_dist: p.get("max_dist").and_then(Value::as_i64).unwrap_or(0) as i32,
+                axis: (kind == "minecraft:axis_aligned_linear_pos").then(|| {
+                    match p.get("axis").and_then(Value::as_str) {
+                        Some("x") => 0,
+                        Some("z") => 2,
+                        _ => 1,
+                    }
+                }),
+            },
+            _ => return Err(DecodeError::Field("position predicate")),
+        })
+    }
+}
+impl Modifier {
+    /// A rule's `block_entity_modifier` (passthrough when missing).
+    fn decode(value: Option<&Value>) -> Result<Self, DecodeError> {
+        let Some(m) = value else {
+            return Ok(Self::Passthrough);
+        };
+        Ok(
+            match super::super::tags::identifier(m["type"].as_str().unwrap_or(""))?.as_str() {
+                "minecraft:passthrough" => Self::Passthrough,
+                "minecraft:clear" => Self::Clear,
+                "minecraft:append_loot" => {
+                    Self::AppendLoot(m["loot_table"].as_str().unwrap_or_default().to_owned())
+                }
+                "minecraft:append_static" => match json_to_nbt(&m["data"]) {
+                    Tag::Compound(c) => Self::AppendStatic(c),
+                    _ => Self::AppendStatic(Compound::new()),
+                },
+                _ => return Err(DecodeError::Field("block entity modifier")),
+            },
+        )
+    }
+}
 #[derive(Clone, Debug)]
 pub struct Rule {
     input: RuleTest,
@@ -208,55 +260,8 @@ impl Processor {
                     .iter()
                     .map(|rule| {
                         let test = |key| RuleTest::from_json(&rule[key].to_string(), bindings);
-                        let position = match rule.get("position_predicate") {
-                            Some(p) => match p["predicate_type"]
-                                .as_str()
-                                .unwrap_or("minecraft:always_true")
-                            {
-                                "minecraft:always_true" => PosRule::Always,
-                                kind @ ("minecraft:linear_pos"
-                                | "minecraft:axis_aligned_linear_pos") => PosRule::Linear {
-                                    min_chance: p
-                                        .get("min_chance")
-                                        .and_then(Value::as_f64)
-                                        .unwrap_or(0.)
-                                        as f32,
-                                    max_chance: p
-                                        .get("max_chance")
-                                        .and_then(Value::as_f64)
-                                        .unwrap_or(0.)
-                                        as f32,
-                                    min_dist: p.get("min_dist").and_then(Value::as_i64).unwrap_or(0)
-                                        as i32,
-                                    max_dist: p.get("max_dist").and_then(Value::as_i64).unwrap_or(0)
-                                        as i32,
-                                    axis: (kind == "minecraft:axis_aligned_linear_pos").then(
-                                        || match p.get("axis").and_then(Value::as_str) {
-                                            Some("x") => 0,
-                                            Some("z") => 2,
-                                            _ => 1,
-                                        },
-                                    ),
-                                },
-                                _ => return Err(DecodeError::Field("position predicate")),
-                            },
-                            None => PosRule::Always,
-                        };
-                        let modifier = match rule.get("block_entity_modifier") {
-                            None => Modifier::Passthrough,
-                            Some(m) => match m["type"].as_str().unwrap_or("") {
-                                "minecraft:passthrough" => Modifier::Passthrough,
-                                "minecraft:clear" => Modifier::Clear,
-                                "minecraft:append_loot" => Modifier::AppendLoot(
-                                    m["loot_table"].as_str().unwrap_or_default().to_owned(),
-                                ),
-                                "minecraft:append_static" => match json_to_nbt(&m["data"]) {
-                                    Tag::Compound(c) => Modifier::AppendStatic(c),
-                                    _ => Modifier::AppendStatic(Compound::new()),
-                                },
-                                _ => return Err(DecodeError::Field("block entity modifier")),
-                            },
-                        };
+                        let position = PosRule::decode(rule.get("position_predicate"))?;
+                        let modifier = Modifier::decode(rule.get("block_entity_modifier"))?;
                         Ok(Rule {
                             input: test("input_predicate")?,
                             location: test("location_predicate")?,
@@ -1020,4 +1025,43 @@ fn update_shape_at_edge<W: PlacementContext>(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn rule_parts_read_ids_without_a_namespace() {
+        // CTOV writes "always_true"; vanilla reads it as minecraft:always_true.
+        for kind in ["always_true", "minecraft:always_true"] {
+            let p = json!({"predicate_type": kind});
+            assert!(
+                matches!(PosRule::decode(Some(&p)), Ok(PosRule::Always)),
+                "{kind}"
+            );
+        }
+        let linear = json!({"predicate_type": "axis_aligned_linear_pos", "axis": "z",
+                            "min_chance": 0.1, "max_dist": 8});
+        assert!(matches!(
+            PosRule::decode(Some(&linear)),
+            Ok(PosRule::Linear {
+                axis: Some(2),
+                max_dist: 8,
+                ..
+            })
+        ));
+        assert!(PosRule::decode(Some(&json!({"predicate_type": "x:unknown"}))).is_err());
+        assert!(matches!(PosRule::decode(None), Ok(PosRule::Always)));
+        let loot = json!({"type": "append_loot", "loot_table": "minecraft:chests/x"});
+        assert!(
+            matches!(Modifier::decode(Some(&loot)), Ok(Modifier::AppendLoot(t)) if t == "minecraft:chests/x")
+        );
+        assert!(matches!(
+            Modifier::decode(Some(&json!({"type": "clear"}))),
+            Ok(Modifier::Clear)
+        ));
+        assert!(Modifier::decode(Some(&json!({"type": ""}))).is_err());
+    }
 }
