@@ -288,6 +288,9 @@ pub enum Processor {
     SpawnerMobs(Box<SpawnerMobs>),
     Pick(Box<Pick>),
     CountCap(Box<CountCap>),
+    /// `horizon:block_swap` (Lithostitched's `block_swap`): blocks by name
+    /// become others, keeping the properties both have.
+    BlockSwap(std::collections::BTreeMap<String, String>),
 }
 #[derive(Clone, Debug, Default)]
 pub struct ProcessorList(pub Vec<Processor>);
@@ -726,6 +729,20 @@ impl Processor {
                 })?))
             }
             "horizon:pick" => Self::Pick(Box::new(Pick::decode(value, state)?)),
+            "horizon:block_swap" => Self::BlockSwap(
+                value["blocks"]
+                    .as_object()
+                    .ok_or(DecodeError::Field("blocks"))?
+                    .iter()
+                    .map(|(from, to)| {
+                        let to = to.as_str().ok_or(DecodeError::Field("blocks"))?;
+                        Ok((
+                            super::super::tags::identifier(from)?.to_string(),
+                            super::super::tags::identifier(to)?.to_string(),
+                        ))
+                    })
+                    .collect::<Result<_, DecodeError>>()?,
+            ),
             "horizon:count_cap" => Self::CountCap(Box::new(CountCap::decode(value, state)?)),
             _ => return Err(DecodeError::Field("structure processor type")),
         })
@@ -816,6 +833,30 @@ impl<'a> PlaceSettings<'a> {
             )))),
         }
     }
+}
+
+/// Block.withPropertiesOf: `block`'s default state with each property of
+/// `from` it has too (by name, when the value is one of its own). None for
+/// a block the registry does not know (the mod keeps the block then).
+fn with_properties_of(
+    registry: &crate::registry::BlockRegistry,
+    block: &str,
+    from: BlockStateId,
+) -> Option<BlockStateId> {
+    let default = registry.default_state(block)?;
+    let mut state = registry.state(default)?.clone();
+    for (key, value) in &registry.state(from)?.properties {
+        if let Some(own) = state.properties.get(key)
+            && own != value
+        {
+            let mut changed = state.clone();
+            changed.properties.insert(key.clone(), value.clone());
+            if registry.id(&changed).is_some() {
+                state = changed;
+            }
+        }
+    }
+    registry.id(&state)
 }
 
 /// BlackstoneReplaceProcessor's block map.
@@ -961,6 +1002,15 @@ fn process_block<W: PlacementContext>(
             Some(info)
         }
         Processor::Capped { .. } => Some(info),
+        Processor::BlockSwap(blocks) => {
+            let swapped = blocks
+                .get(name(info.state))
+                .and_then(|to| with_properties_of(registry, to, info.state));
+            Some(match swapped {
+                Some(state) => BlockInfo { state, ..info },
+                None => info,
+            })
+        }
         Processor::CountCap(cap) => match cap.blocks.contains(name(info.state)) {
             true => {
                 let pos = info.pos;
@@ -1817,6 +1867,38 @@ mod tests {
         assert_eq!(counted, 2);
         assert!(
             CountCap::decode(&json!({"blocks": [], "min": -1}), |_| Ok(BlockStateId(5))).is_err()
+        );
+    }
+
+    #[test]
+    fn block_swaps_keep_the_properties_both_blocks_have() {
+        let row = |name: &str, props: Value| json!([name, false, false, "", {"id": name, "properties": props}]);
+        let facts = json!({"defaults": {"a:log": 1, "a:stairs": 4, "a:stone": 6},
+            "states": [
+                row("a:log", json!({"axis": "x"})), row("a:log", json!({"axis": "y"})),
+                row("a:stairs", json!({"facing": "east", "half": "top"})),
+                row("a:stairs", json!({"facing": "east", "half": "bottom"})),
+                row("a:stairs", json!({"facing": "north", "half": "bottom"})),
+                row("a:stairs", json!({"facing": "north", "half": "top"})),
+                ["a:stone", false, false, "", "a:stone"]]});
+        let registry =
+            crate::registry::BlockRegistry::from_facts_json(facts.to_string().as_bytes()).unwrap();
+        // facing and half carried over; the default where `from` has none.
+        assert_eq!(
+            with_properties_of(&registry, "a:stairs", BlockStateId(2)),
+            Some(BlockStateId(2))
+        );
+        assert_eq!(
+            with_properties_of(&registry, "a:stairs", BlockStateId(0)),
+            Some(BlockStateId(4))
+        );
+        assert_eq!(
+            with_properties_of(&registry, "a:stone", BlockStateId(5)),
+            Some(BlockStateId(6))
+        );
+        assert_eq!(
+            with_properties_of(&registry, "a:missing", BlockStateId(0)),
+            None
         );
     }
 }

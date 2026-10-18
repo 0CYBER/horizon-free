@@ -461,8 +461,12 @@ Two cases the oracle fills in:
     mod. Better Dungeons' small dungeons keep one chest and each other one with a fifth's
     chance, two at most (the game's `horizon:count_cap`, counted per placement as the mod's
     DungeonContext is): 12 chests in five small dungeons at seed 1234 become 6.
-    136 of the 1,427 processors are carried; 1,291 are still taken out (blocks swapped, aged
-    or propped up).
+    Lithostitched's `block_swap` (137 lists, all in ChoiceTheorem's Overhauled Village) is the
+    game's `horizon:block_swap`: the same map, with Block.withPropertiesOf's properties kept;
+    a target block the game does not have (most of them are Nature's Spirit's and Croptopia's)
+    leaves the block as it is, as the mod does. 273 of the 1,427 processors are carried; 1,154
+    are still taken out (Formations' biome replacements, Repurposed's pillars and fluid fixes,
+    Lithostitched's reference, condition and apply_random, blocks aged or propped up).
     In the 128×128-chunk square (seed 1234), every spawner of a mod structure now has its mob:
     in the Overworld 83 Better Dungeons spawners held the template's placeholder pig and 17 of
     Moog's were empty (763 spawners with a mob, up from 628); in the Nether the 52 empty ones

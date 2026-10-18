@@ -284,6 +284,11 @@ fn as_data(kind: &str, p: &Value, data: &ProcessorData) -> Option<Vec<Value>> {
         {
             vec![processor]
         }
+        "lithostitched:block_swap" => {
+            // The same map; the game's swap keeps the properties both have.
+            p["blocks"].as_object()?;
+            vec![json!({"processor_type": "horizon:block_swap", "blocks": p["blocks"]})]
+        }
         "betterdungeons:small_dungeon_chest_processor" => {
             // Its config's defaults: one chest at least, two at most, a
             // fifth of the others kept until then; ChestBlock covers both.
@@ -938,6 +943,24 @@ mod tests {
             (Some(1), Some(2))
         );
         assert_eq!(cap["replacement"], json!({"id": "minecraft:cave_air"}));
+    }
+
+    #[test]
+    fn lithostitched_block_swaps_become_the_games() {
+        let mut list = json!({"processors": [
+            {"processor_type": "lithostitched:block_swap",
+             "blocks": {"minecraft:cobblestone": "minecraft:mossy_cobblestone"}},
+            {"processor_type": "lithostitched:block_swap", "blocks": []}]});
+        let mut carried = BTreeMap::new();
+        assert!(carry("processor_list", &mut list, &data(), &mut carried));
+        let p = list["processors"].as_array().unwrap();
+        assert_eq!(
+            p[0],
+            json!({"processor_type": "horizon:block_swap",
+                   "blocks": {"minecraft:cobblestone": "minecraft:mossy_cobblestone"}})
+        );
+        // A map that is not one stays Java (dropped later).
+        assert_eq!(p[1]["processor_type"], "lithostitched:block_swap");
     }
 
     #[test]
