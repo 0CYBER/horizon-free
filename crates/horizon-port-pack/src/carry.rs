@@ -425,8 +425,18 @@ pub fn carry(
                     if kind == "structure" {
                         crate::worldgen::convention_tags(&v["biomes"], &mut biome_conventions);
                     }
-                    if crate::worldgen::upgrade(kind, &mut v, &mut report.worldgen_types, &set_tags)
-                    {
+                    let mut changed = crate::worldgen::upgrade(
+                        kind,
+                        &mut v,
+                        &mut report.worldgen_types,
+                        &set_tags,
+                    );
+                    if kind == "structure" {
+                        let path = rel.trim_start_matches("worldgen/structure/");
+                        let structure = format!("{id}:{}", path.trim_end_matches(".json"));
+                        changed |= crate::worldgen::disables(&structure, &mut v);
+                    }
+                    if changed {
                         bytes = serde_json::to_vec_pretty(&v).unwrap_or(bytes);
                     }
                 }
