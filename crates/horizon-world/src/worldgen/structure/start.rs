@@ -57,6 +57,8 @@ pub struct JigsawDef {
     waterlogging: bool,
     /// A carried mod's start rules (`"horizon:start_checks"`).
     checks: super::start_checks::StartChecks,
+    /// Laid out by YUNG's API's assembler (`"horizon:yungsapi"`).
+    yung: Option<super::yung::Config>,
 }
 #[derive(Debug)]
 pub enum StructureKind {
@@ -202,6 +204,7 @@ impl StructureRegistry {
                     padding: pair(v.get("dimension_padding"), "bottom", "top", 0),
                     waterlogging: v["liquid_settings"].as_str() != Some("ignore_waterlogging"),
                     checks: super::start_checks::StartChecks::decode(v.get("horizon:start_checks")),
+                    yung: v.get("horizon:yungsapi").map(super::yung::Config::decode),
                 }),
                 "minecraft:buried_treasure" => StructureKind::BuriedTreasure,
                 "minecraft:igloo" => StructureKind::Igloo,
@@ -669,15 +672,27 @@ fn try_generate(
                 padding: jigsaw.padding,
                 waterlogging: jigsaw.waterlogging,
             };
-            let (position, mut pieces) = assemble(
-                &config,
-                context,
-                &registry.pools,
-                resources,
-                bindings,
-                &mut random,
-                start,
-            )?;
+            let (position, mut pieces) = match &jigsaw.yung {
+                Some(yung) => super::yung::assemble(
+                    &config,
+                    yung,
+                    context,
+                    &registry.pools,
+                    resources,
+                    bindings,
+                    &mut random,
+                    start,
+                )?,
+                None => assemble(
+                    &config,
+                    context,
+                    &registry.pools,
+                    resources,
+                    bindings,
+                    &mut random,
+                    start,
+                )?,
+            };
             if jigsaw.max_depth <= 0 {
                 pieces.clear();
             }
