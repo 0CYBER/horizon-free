@@ -37,6 +37,7 @@ fn state(id: u32, kind: &str, position: [f64; 3], yaw: f32, on_ground: bool) -> 
         data: 0,
         meta: Vec::new(),
         equipment: Vec::new(),
+        attributes: Vec::new(),
         precise: false,
     }
 }
@@ -179,6 +180,7 @@ impl Game<'_> {
                     e.equipment.push((slot as u8, hub.stack(item)));
                 }
             }
+            e.attributes = self.stand_attributes(a.id, &a.equipment);
             out.push(e);
         }
         for f in &self.item_frames {

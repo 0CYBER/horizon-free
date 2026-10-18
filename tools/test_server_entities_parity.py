@@ -6,13 +6,17 @@ world vanilla generated first, with the same server.properties (offline, view di
 client (VanillaProtocolClient in its entity mode) joins, and once its chunks are in it asks for the scene: the
 console freezes the ticks, builds a wall and a rail and summons, around the spawn, every kind of minecart (one
 set rolling along the rail), boats and a raft (one falling onto the ground), armor stands (posed, small, with
-arms, wearing a helmet, one falling), a chicken jockey, item frames (one holding a turned diamond), paintings,
-primed TNT (one falling), a floating falling block, an arrow that lands and an end crystal. The client records
-for 20 seconds, the ticks running for 200 more after 3, what ClientPacketListener would make of the packets (EntityTranscript): each entity's spawn
+arms, wearing a helmet, one falling), a chicken jockey, a slime, a pig whose scale `/attribute` sets, item
+frames (one holding a turned diamond), paintings, primed TNT (one falling), a floating falling block, an arrow
+that lands and an end crystal. The client records for 20 seconds, the ticks running for 200 more after 3, what
+ClientPacketListener would make of the packets (EntityTranscript): each entity's spawn
 packet (position, rotations, data, motion), the entity data it was paired with and all it was sent since, its
-equipment and passengers, and where its position syncs leave it. Both transcripts must match exactly,
-entity by entity (named by type and the block it was added in). Attributes are recorded but not compared yet:
-Horizon sends no ClientboundUpdateAttributesPacket, for mobs either.
+equipment, its attribute instances (ClientboundUpdateAttributesPacket: the ones its first tick creates, the
+type's set by finalizeSpawn, the baby speed modifier, effects', equipment's and /attribute's) and passengers, and
+where its position syncs leave it; and the attribute instances the player itself is sent from its login on. Both
+transcripts must match exactly, entity by entity (named by type and the block it was added in), once the amounts
+of vanilla's random spawn modifiers are normalised (only client-syncable attributes are sent, so follow range and
+knockback resistance never show).
 """
 import os
 from pathlib import Path
@@ -63,6 +67,10 @@ SCENE = [
     'Pose:{Head:[10f,20f,0f],RightArm:[-30f,0f,15f]},equipment:{head:{id:"minecraft:diamond_helmet",count:1}}}',
     # A chicken jockey (passengers).
     'summon minecraft:chicken -6.5 -60 -2.5 {NoAI:1b,Passengers:[{id:"minecraft:husk",IsBaby:1b,NoAI:1b}]}',
+    # Attributes: a slime's size sets its bases, /attribute a pig's scale.
+    'summon minecraft:slime 2.5 -60 1.5 {Size:1,NoAI:1b}',
+    'summon minecraft:pig -0.5 -60 1.5 {NoAI:1b}',
+    'attribute @e[type=minecraft:pig,limit=1,x=-0.5,y=-60,z=1.5,distance=..1] minecraft:scale base set 1.5',
     # Frames and paintings on the wall's south face.
     'summon minecraft:item_frame -3.5 -59 -4.97 {block_pos:[I;-4,-59,-5],Facing:3b,'
     'Item:{id:"minecraft:diamond",count:1},ItemRotation:3b}',
@@ -78,14 +86,19 @@ SCENE = [
 ]
 
 
+# finalizeSpawn's random modifiers on client-syncable attributes (a leader zombie's max health); their amounts
+# differ from one server to the other.
+RANDOM_MODIFIERS = re.compile(r'(id=minecraft:(?:random_spawn_bonus|leader_zombie_bonus), amount=)[^,]+')
+
+
 def scene_lines(lines):
-    """The transcript's entities in the scene's area (the world's own animals and slimes wander elsewhere),
-    without their attributes: ClientboundUpdateAttributesPacket isn't sent by Horizon yet, for mobs either."""
+    """The transcript's entities in the scene's area (the world's own animals and slimes wander elsewhere), the
+    amounts of random spawn modifiers normalised."""
     out = []
     for line in lines:
         m = re.match(r'play-entities entity \S+ (-?\d+),-?\d+,(-?\d+)', line)
-        if m and -8 <= int(m.group(1)) <= 8 and -7 <= int(m.group(2)) <= 10:
-            out.append(re.sub(r' \| attributes \{[^|]*\}', '', line))
+        if m and -8 <= int(m.group(1)) <= 8 and -7 <= int(m.group(2)) <= 10 or line.startswith('play-entities self '):
+            out.append(RANDOM_MODIFIERS.sub(r'\1~', line))
     return out
 
 
@@ -171,10 +184,10 @@ def main():
         schema=1, minecraft=lock['minecraft']['version'], platform=platform.platform(),
         java=subprocess.check_output(['java', '--version'], text=True).splitlines()[0],
         entities=len(vanilla), output_sha256=lab.digest(build / 'horizon.txt', 'sha256'),
-        scope='Minecarts (one rolling), boats (one falling), armor stands, a chicken jockey, item frames, paintings, primed '
-              'TNT, a falling block, an arrow and an end crystal tracked to a '
-              'vanilla-codec client by a dedicated server: spawn packets, entity data, equipment, passengers and the '
-              'positions the syncs leave them at.'))
+        scope='Minecarts (one rolling), boats (one falling), armor stands, a chicken jockey, a slime, a pig with a '
+              'scale, item frames, paintings, primed TNT, a falling block, an arrow and an end crystal '
+              'tracked to a vanilla-codec client by a dedicated server: spawn packets, entity data, equipment, '
+              'attributes, passengers and the positions the syncs leave them at.'))
     print(f'server entities: {len(vanilla)} entities identical')
 
 

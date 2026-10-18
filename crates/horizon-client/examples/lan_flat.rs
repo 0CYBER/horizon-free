@@ -101,6 +101,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         sprinting: false,
         equipment: Default::default(),
         health: 20.0,
+        attributes: Vec::new(),
     };
     loop {
         world.game_time += 1;

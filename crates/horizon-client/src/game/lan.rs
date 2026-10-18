@@ -726,6 +726,7 @@ impl Game<'_> {
             sprinting: p.sprinting,
             equipment,
             health: p.health.health(),
+            attributes: horizon_client::lan::attributes::syncable(&p.attributes),
         })
     }
 
@@ -736,6 +737,7 @@ impl Game<'_> {
             let kind = m.kind.id.as_str();
             let meta = mob_meta(m, hub);
             let equipment = mob_equipment(m, hub);
+            let attributes = self.mob_attributes(m);
             let (yaw, pitch) = (m.yaw, m.head_pitch);
             out.push(EntityState {
                 id: m.id as i32,
@@ -750,6 +752,7 @@ impl Game<'_> {
                 data: 0,
                 meta,
                 equipment,
+                attributes,
                 precise: false,
             });
         }
@@ -768,6 +771,7 @@ impl Game<'_> {
                 data: 0,
                 meta: vec![(8, serializer::ITEM_STACK, Value::Item(stack))],
                 equipment: Vec::new(),
+                attributes: Vec::new(),
                 precise: false,
             });
         }
@@ -786,6 +790,7 @@ impl Game<'_> {
                 // ExperienceOrb.DATA_VALUE.
                 meta: vec![(8, serializer::INT, Value::Int(o.value as i32))],
                 equipment: Vec::new(),
+                attributes: Vec::new(),
                 precise: false,
             });
         }

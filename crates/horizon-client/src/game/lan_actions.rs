@@ -1330,6 +1330,7 @@ impl Game<'_> {
             self.as_guest(host, conn, |g| {
                 g.count_tick_stats(sleeping);
                 g.tick_advancements();
+                g.update_player_attributes();
             });
             host.hub.flush_progress(conn);
             self.guest_dig_feedback(host, conn);
