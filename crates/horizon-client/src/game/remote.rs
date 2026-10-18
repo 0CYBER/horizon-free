@@ -94,11 +94,7 @@ pub(super) struct Remote {
     biome_bits: u8,
     view_distance: i32,
     sequence: i32,
-    last_pos: [f64; 3],
-    last_rot: (f32, f32),
-    last_on_ground: bool,
-    last_collision: bool,
-    reminder: u32,
+    position_sender: horizon_client::player_sync::PositionSender,
     last_input: u8,
     was_sprinting: bool,
     carried: Option<usize>,
@@ -144,6 +140,8 @@ pub(super) struct Remote {
     profile: u128,
     destroying: Option<([i32; 3], u8, f32)>,
     destroy_delay: u32,
+    input: horizon_client::interaction_input::InteractionInput,
+    stop_mining: bool,
     placing: Option<([i32; 3], u64)>,
     death_message: Option<String>,
     player_type: Option<Arc<MobType>>,
@@ -278,6 +276,7 @@ impl Game<'_> {
         self.container = None;
         self.carried = None;
         self.using = None;
+        self.clicks.miss_time = 0;
         self.set_mode_id(0);
         self.experience = Experience {
             level: 0,
@@ -306,11 +305,7 @@ impl Game<'_> {
             biome_bits: 7,
             view_distance: self.settings.render_distance,
             sequence: 0,
-            last_pos: [0.0; 3],
-            last_rot: (0.0, 0.0),
-            last_on_ground: false,
-            last_collision: false,
-            reminder: 0,
+            position_sender: Default::default(),
             last_input: 0,
             was_sprinting: false,
             carried: None,
@@ -339,6 +334,8 @@ impl Game<'_> {
             profile: 0,
             destroying: None,
             destroy_delay: 0,
+            input: Default::default(),
+            stop_mining: false,
             placing: None,
             death_message: None,
             player_type,
@@ -664,6 +661,8 @@ impl Game<'_> {
         r.dimension = dimension;
         r.game_mode = spawn.game_type;
         r.loaded_sent = false;
+        // A replacement LocalPlayer has a fresh sendPosition baseline.
+        r.position_sender = Default::default();
         r.predictions.clear();
         self.set_mode_id(spawn.game_type);
         self.dim = Dim::from_id(&spawn.dimension);
@@ -1224,6 +1223,9 @@ impl Game<'_> {
 
     fn handle_packet(&mut self, packet: C) -> Result<()> {
         match packet {
+            // ClientCommonPacketListenerImpl.handlePing runs on the game
+            // thread, after all preceding packets (especially teleports).
+            C::Ping(p) => self.send(S::Pong(p)),
             // PingDebugMonitor.onPongReceived.
             C::PongResponse(p) => {
                 let delay = self.debug_millis() - p.time;
@@ -2423,10 +2425,11 @@ impl Game<'_> {
             p.pitch
         })
         .clamp(-90.0, 90.0);
-        let delta = Vec3::new(
-            pick(rel::DELTA_X, velocity.x, p.delta[0]),
-            pick(rel::DELTA_Y, velocity.y, p.delta[1]),
-            pick(rel::DELTA_Z, velocity.z, p.delta[2]),
+        let delta = horizon_client::player_sync::teleport_velocity(
+            velocity,
+            (self.yaw, self.pitch),
+            (yaw, pitch),
+            p,
         );
         match self.player.as_mut() {
             Some(player) => {
@@ -2449,8 +2452,8 @@ impl Game<'_> {
         self.yaw = yaw;
         self.pitch = pitch;
         if let Some(r) = self.remote.as_mut() {
-            r.last_pos = [position.x, position.y, position.z];
-            r.last_rot = (yaw, pitch);
+            // handleMovePlayer does not change LocalPlayer.sendPosition's
+            // baseline: the next tick must still report the corrected state.
             r.destroying = None;
         }
         self.mining = None;
@@ -2467,6 +2470,16 @@ impl Game<'_> {
 
     /// One client tick while connected (Minecraft.tick with a ClientLevel).
     pub(super) fn tick_remote(&mut self) -> Result<()> {
+        self.tick_remote_level()?;
+        // Minecraft.tick sends this even when the player cannot tick yet,
+        // including while waiting for chunks. Keep it outside early returns.
+        if self.remote.as_ref().is_some_and(|r| r.joined) {
+            self.send(S::ClientTickEnd(Empty));
+        }
+        Ok(())
+    }
+
+    fn tick_remote_level(&mut self) -> Result<()> {
         self.ticks += 1;
         // Options.broadcastOptions: a changed render distance is sent again.
         let view = client_view_distance(self.settings.render_distance);
@@ -2493,6 +2506,10 @@ impl Game<'_> {
         if self.use_delay > 0 {
             self.use_delay -= 1;
         }
+        // Minecraft.handleKeybinds precedes entity ticking and sendChanges.
+        // Window callbacks only queue clicks, so an interaction cannot leak
+        // between CLIENT_TICK_END and a later pong.
+        self.remote_handle_input();
         // ClientLevel.tick: the border's size change.
         self.border.tick();
         self.tick_remote_entities(running);
@@ -2515,13 +2532,11 @@ impl Game<'_> {
             (player.position.z.floor() as i32) >> 4,
         );
         if !self.streaming.is_lit(cx, cz) {
-            // Moved where nothing is loaded by horizon-ctl (`tp`, `fly`):
-            // the server hears of it, and sends the chunks there. A player
-            // who walked there has already sent that move.
-            let pos = [player.position.x, player.position.y, player.position.z];
+            // LocalPlayer.tick can wait for chunks, but Minecraft.tick still
+            // calls sendChanges: rotations and the 20-tick position reminder
+            // must continue, as well as moves into the unloaded area.
             if let Some(r) = self.remote.as_ref()
                 && r.loaded_sent
-                && r.last_pos != pos
             {
                 let input = r.last_input;
                 self.remote_send_state(input);
@@ -2620,16 +2635,9 @@ impl Game<'_> {
         // The player's own model (third person, the inventory's preview).
         self.tick_player_model();
         if !dead {
-            self.remote_mining();
-            // Minecraft.handleKeybinds: no new use while an item is in use.
-            if self.right && self.use_delay == 0 && playing && self.using.is_none() {
-                self.remote_use();
-                self.use_delay = 4;
-            }
             self.remote_tick_using();
         }
         self.remote_send_state(input);
-        self.send(S::ClientTickEnd(Empty));
         Ok(())
     }
     /// The local player's share of every touching entity's
@@ -2929,41 +2937,12 @@ impl Game<'_> {
                 data: 0,
             }));
         }
-        r.reminder += 1;
-        let d = [
-            pos[0] - r.last_pos[0],
-            pos[1] - r.last_pos[1],
-            pos[2] - r.last_pos[2],
-        ];
-        let moved = d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > 2.0e-4 * 2.0e-4 || r.reminder >= 20;
-        let rotated = yaw != r.last_rot.0 || pitch != r.last_rot.1;
-        let flags = u8::from(on_ground) | u8::from(collision) << 1;
-        let [x, y, z] = pos;
-        if moved && rotated {
-            out.push(S::MovePlayerPosRot(play::MovePlayerPosRot {
-                x,
-                y,
-                z,
-                yaw,
-                pitch,
-                flags,
-            }));
-        } else if moved {
-            out.push(S::MovePlayerPos(play::MovePlayerPos { x, y, z, flags }));
-        } else if rotated {
-            out.push(S::MovePlayerRot(play::MovePlayerRot { yaw, pitch, flags }));
-        } else if r.last_on_ground != on_ground || r.last_collision != collision {
-            out.push(S::MovePlayerStatus(play::MovePlayerStatus { flags }));
+        if let Some(packet) = r
+            .position_sender
+            .update(pos, (yaw, pitch), on_ground, collision)
+        {
+            out.push(packet);
         }
-        if moved {
-            r.last_pos = pos;
-            r.reminder = 0;
-        }
-        if rotated {
-            r.last_rot = (yaw, pitch);
-        }
-        r.last_on_ground = on_ground;
-        r.last_collision = collision;
         // Creative inventory edits are sent slot by slot (SetCreativeModeSlot).
         let mut creative_slots = Vec::new();
         if self.creative {
@@ -3006,16 +2985,12 @@ impl Game<'_> {
     }
 
     /// MultiPlayerGameMode.startDestroyBlock / continueDestroyBlock.
-    fn remote_mining(&mut self) {
+    fn remote_mining(&mut self, start: bool) {
         let Some(r) = self.remote.as_mut() else {
             return;
         };
-        if r.destroy_delay > 0 {
+        if !start && r.destroy_delay > 0 {
             r.destroy_delay -= 1;
-        }
-        if !self.left || self.screen != Screen::Playing {
-            self.stop_remote_mining();
-            self.mining = None;
             return;
         }
         let Some(hit) = self.pick() else {
@@ -3027,11 +3002,6 @@ impl Game<'_> {
         if self.res.facts().is_air(state) {
             return;
         }
-        if self.remote.as_ref().is_some_and(|r| r.destroy_delay > 0) {
-            return;
-        }
-        self.swing_arm();
-        self.send(S::Punch(Empty));
         if self.creative {
             let seq = self.next_sequence();
             self.predict_break(hit.pos, state, seq);
@@ -3069,6 +3039,9 @@ impl Game<'_> {
             .as_ref()
             .and_then(|r| r.destroying)
             .is_some_and(|(p, _, _)| p == hit.pos);
+        if start && same {
+            return;
+        }
         if !same {
             if let Some((old, _, _)) = self.remote.as_mut().and_then(|r| r.destroying.take()) {
                 self.send(S::PlayerAction(play::PlayerAction {
@@ -3183,15 +3156,25 @@ impl Game<'_> {
         }
         self.mining = None;
     }
-    /// Minecraft.startUseItem: use on the targeted block, then the item itself.
+    /// Minecraft.startUseItem: use one crosshair target, then the item itself.
     fn remote_use(&mut self) {
-        let held_block = self
-            .held()
-            .and_then(|h| self.res.items().get(&h.item))
-            .is_some_and(|i| i.block.is_some());
+        // Minecraft.startUseItem returns before resetting rightClickDelay
+        // while a survival block break is active.
+        if self.remote.as_ref().is_some_and(|r| r.destroying.is_some()) {
+            return;
+        }
+        self.use_delay = 4;
+        // Resolve the crosshair once. A passing entity interaction keeps
+        // that target and may only fall back to using the item itself.
+        let entity = self.entity_targeted();
+        horizon_client::interaction_input::use_on_target(&mut RemoteUseWorld(self), entity);
+    }
+
+    fn remote_use_entity(&mut self) -> bool {
         let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
-        // Entities first (interact), like the hit result order.
-        if let Some((i, _)) = self.mob_hit() {
+        if let Some((i, distance)) = self.mob_hit()
+            && self.before_block(distance)
+        {
             let id = self.mobs[i].id as i32;
             self.send(S::Interact(play::Interact {
                 id,
@@ -3207,9 +3190,17 @@ impl Game<'_> {
                 .is_some_and(|r| r.level_players.contains_key(&id));
             if !player {
                 self.swing_arm();
-                return;
+                return true;
             }
         }
+        false
+    }
+
+    fn remote_use_block(&mut self) -> bool {
+        let held_block = self
+            .held()
+            .and_then(|h| self.res.items().get(&h.item))
+            .is_some_and(|i| i.block.is_some());
         if let Some(hit) = self.pick() {
             let seq = self.next_sequence();
             let cursor = [
@@ -3238,9 +3229,13 @@ impl Game<'_> {
             }
             if held_block {
                 self.swing_arm();
-                return;
+                return true;
             }
         }
+        false
+    }
+
+    fn remote_use_item(&mut self) {
         if let Some(held) = self.held().cloned() {
             let seq = self.next_sequence();
             self.send(S::UseItem(play::UseItem {
@@ -3272,7 +3267,10 @@ impl Game<'_> {
             self.using = None;
             return;
         };
-        if !self.right || slot != self.selected || self.screen != Screen::Playing {
+        // Button release belongs to the next handleKeybinds phase, which
+        // sends RELEASE_USE_ITEM. Do not silently clear a use begun by a
+        // quick press/release between ticks.
+        if slot != self.selected {
             self.using = None;
             return;
         }
@@ -3291,51 +3289,138 @@ impl Game<'_> {
             self.using = Some((slot, ticks + 1));
         }
     }
-    /// Left click: attack the targeted entity (MultiPlayerGameMode.attack).
+    /// MouseHandler updates KeyMapping; handleKeybinds sends packets on a tick.
     pub(super) fn remote_mouse(&mut self, button: MouseButton, pressed: bool) -> Result<()> {
-        if self.screen == Screen::Chat {
-            return Ok(());
-        }
-        match button {
+        use horizon_client::interaction_input::Button;
+        let input = match button {
             MouseButton::Left => {
-                if pressed && let Some((i, _)) = self.mob_hit() {
-                    let id = self.mobs[i].id as i32;
-                    self.send(S::Attack(play::Attack { id }));
-                    self.send(S::Punch(Empty));
-                    self.swing_arm();
-                    return Ok(());
-                }
-                if pressed && self.pick().is_none() {
-                    self.send(S::Punch(Empty));
-                    self.swing_arm();
-                }
-                self.left = pressed;
+                self.toggles
+                    .button(2, pressed, false, self.settings.toggle_attack);
+                self.left = self.toggles.is_down(2);
+                Some(Button::Attack)
             }
             MouseButton::Right => {
-                self.right = pressed;
-                if pressed {
-                    self.remote_use();
-                    self.use_delay = 4;
-                } else {
-                    self.send(S::PlayerAction(play::PlayerAction {
-                        action: 6,
-                        pos: [0; 3],
-                        direction: 0,
-                        sequence: 0,
-                    }));
-                }
+                self.toggles
+                    .button(3, pressed, false, self.settings.toggle_use);
+                self.right = self.toggles.is_down(3);
+                Some(Button::Use)
             }
-            MouseButton::Middle if pressed => {
-                if let Some(hit) = self.pick() {
-                    self.send(S::PickItemFromBlock(play::PickItemFromBlock {
-                        pos: hit.pos,
-                        include_data: self.has_control_down(),
-                    }));
-                }
-            }
-            _ => {}
+            MouseButton::Middle => Some(Button::Pick),
+            _ => None,
+        };
+        if pressed
+            && let Some(button) = input
+            && let Some(remote) = self.remote.as_mut()
+        {
+            remote.input.press(button);
         }
         Ok(())
+    }
+
+    pub(super) fn request_remote_mining_stop(&mut self) {
+        if let Some(r) = self.remote.as_mut() {
+            r.stop_mining = true;
+        }
+    }
+
+    fn remote_handle_input(&mut self) {
+        let Some(r) = self.remote.as_mut() else {
+            return;
+        };
+        let mut input = std::mem::take(&mut r.input);
+        let stop = std::mem::take(&mut r.stop_mining);
+        let ready = r.loaded_sent && self.screen == Screen::Playing && self.sleeping.is_none();
+        if stop || !ready {
+            self.stop_remote_mining();
+        }
+        if !ready {
+            return;
+        }
+        // MultiPlayerGameMode.tick syncs the carried slot before keybinds.
+        let carried_changed = self.remote.as_mut().is_some_and(|r| {
+            if r.carried == Some(self.selected) {
+                false
+            } else {
+                r.carried = Some(self.selected);
+                true
+            }
+        });
+        if carried_changed {
+            self.send(S::SetCarriedItem(play::SetCarriedItem {
+                slot: self.selected as i16,
+            }));
+        }
+        let (attack, use_item) = (self.left, self.right);
+        input.tick(&mut RemoteInputWorld(self), attack, use_item);
+        if self.clicks.miss_time > 0 {
+            self.clicks.miss_time -= 1;
+        }
+        if let Some(r) = self.remote.as_mut() {
+            r.input = input;
+        }
+    }
+
+    fn remote_start_attack(&mut self) -> bool {
+        if self.clicks.miss_time > 0 {
+            return false;
+        }
+        if self.spectator() {
+            return true;
+        }
+        let mut instant = false;
+        if let Some((i, distance)) = self.mob_hit()
+            && self.before_block(distance)
+        {
+            self.send(S::Attack(play::Attack {
+                id: self.mobs[i].id as i32,
+            }));
+            self.reset_attack_strength();
+        } else if !self.entity_targeted()
+            && let Some(hit) = self.pick()
+        {
+            self.remote_mining(true);
+            instant = self
+                .res
+                .facts()
+                .is_air(self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]));
+        } else {
+            if !self.creative {
+                self.clicks.miss_time = 10;
+            }
+            self.reset_attack_strength();
+        }
+        self.swing_arm();
+        self.send(S::Punch(Empty));
+        instant
+    }
+
+    fn remote_continue_attack(&mut self, down: bool) {
+        if !down {
+            self.clicks.miss_time = 0;
+        }
+        if self.clicks.miss_time > 0 || self.using.is_some() {
+            return;
+        }
+        let entity = self.entity_targeted();
+        if down
+            && !entity
+            && let Some(hit) = self.pick()
+        {
+            let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
+            if !self.res.facts().is_air(state) {
+                self.remote_mining(false);
+                self.swing_arm();
+                self.send(S::Punch(Empty));
+            } else {
+                if let Some(r) = self.remote.as_mut() {
+                    r.destroying = None;
+                }
+                self.mining = None;
+            }
+        } else {
+            self.stop_remote_mining();
+            self.mining = None;
+        }
     }
     /// Keys with a multiplayer meaning; returns true when consumed.
     pub(super) fn remote_key(&mut self, key: KeyCode) -> Result<bool> {
@@ -4054,6 +4139,57 @@ pub(super) fn input_ordinal(input: Input) -> i32 {
 /// lets go past vanilla's 32 (a vanilla server still caps it at its own).
 fn client_view_distance(render_distance: i32) -> i8 {
     render_distance.clamp(2, i32::from(i8::MAX)) as i8
+}
+
+struct RemoteInputWorld<'g, 'a>(&'g mut Game<'a>);
+
+struct RemoteUseWorld<'g, 'a>(&'g mut Game<'a>);
+
+impl horizon_client::interaction_input::TargetUseWorld for RemoteUseWorld<'_, '_> {
+    fn use_entity(&mut self) -> bool {
+        self.0.remote_use_entity()
+    }
+    fn use_block(&mut self) -> bool {
+        self.0.remote_use_block()
+    }
+    fn use_item(&mut self) {
+        self.0.remote_use_item();
+    }
+}
+
+impl horizon_client::interaction_input::InteractionWorld for RemoteInputWorld<'_, '_> {
+    fn using_item(&self) -> bool {
+        self.0.using.is_some()
+    }
+    fn release_using(&mut self) {
+        self.0.send(S::PlayerAction(play::PlayerAction {
+            action: 6,
+            pos: [0; 3],
+            direction: 0,
+            sequence: 0,
+        }));
+        self.0.using = None;
+    }
+    fn start_attack(&mut self) -> bool {
+        self.0.remote_start_attack()
+    }
+    fn start_use(&mut self) {
+        self.0.remote_use();
+    }
+    fn pick(&mut self) {
+        if let Some(hit) = self.0.pick() {
+            self.0.send(S::PickItemFromBlock(play::PickItemFromBlock {
+                pos: hit.pos,
+                include_data: self.0.has_control_down(),
+            }));
+        }
+    }
+    fn use_delay(&self) -> u32 {
+        self.0.use_delay
+    }
+    fn continue_attack(&mut self, down: bool) {
+        self.0.remote_continue_attack(down);
+    }
 }
 
 #[cfg(test)]
