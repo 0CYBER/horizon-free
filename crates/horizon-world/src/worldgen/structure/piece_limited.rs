@@ -13,7 +13,8 @@
 //!   "ignore_bounds_pools": ["x:pool"],
 //!   "land_search": "highest_land", // the Nether variants: or "lowest_land", "fixed_height"
 //!   "ledge_offset_y": 2,
-//!   "pieces": [{"name": "x:piece", "required": 1, "min_depth": 3, "max": 2}]
+//!   "pieces": [{"name": "x:piece", "required": 1, "min_depth": 3, "max": 2}],
+//!   "layout": "mineshaft"          // Repurposed's mineshafts: moved under the terrain
 //! }
 //! ```
 //!
@@ -25,6 +26,8 @@
 //! (`required`, from `min_depth`), the whole layout retried up to 40 times
 //! until every required piece is in, and after it the pieces centred on the
 //! chunk corner, then buried in the terrain or moved onto Nether land.
+//! Repurposed's overworld mineshafts are not centred: their top goes 15
+//! blocks under the terrain around the chunk.
 use super::{
     BoundingBox, Rotation, StructureResources, StructureTemplate,
     jigsaw::{
@@ -63,6 +66,15 @@ pub enum Burying {
     LowestSide,
 }
 
+/// The structure type's postLayoutAdjustments.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Layout {
+    /// GenericJigsawStructure's: centred, then buried or moved onto land.
+    Generic,
+    /// Repurposed Structures' MineshaftStructure.
+    Mineshaft,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LandSearch {
     Highest,
@@ -89,6 +101,7 @@ pub struct Config {
     ignore_bounds: HashSet<String>,
     land_search: Option<LandSearch>,
     ledge: i32,
+    layout: Layout,
     /// Counted templates by id, in the order of Java's HashMap of the
     /// required pieces (the first one still short is forced in first).
     pieces: Vec<(Identifier, Counted)>,
@@ -152,6 +165,10 @@ impl Config {
                 _ => None,
             },
             ledge: int("ledge_offset_y").unwrap_or(0),
+            layout: match v["layout"].as_str() {
+                Some("mineshaft") => Layout::Mineshaft,
+                _ => Layout::Generic,
+            },
             pieces: sorted,
         }
     }
@@ -353,6 +370,10 @@ fn adjust(
     if pieces.is_empty() {
         return;
     }
+    if limits.layout == Layout::Mineshaft {
+        below_terrain(limits, context, start, pieces);
+        return;
+    }
     // GeneralUtils.centerAllPieces on the chunk's corner.
     let center = pieces[0].bounding_box.center();
     let d = [start[0] - center[0], 0, start[2] - center[2]];
@@ -433,6 +454,44 @@ fn adjust(
     }
     let dy = land - box0.min[1] + offset_y;
     shift_all(limits, pieces, [0, dy, 0]);
+}
+
+/// MineshaftStructure.postLayoutAdjustments: the layout's top moved to 15
+/// blocks under the lowest ocean floor at the chunk's middle and 16 blocks
+/// to each side, within y_allowance; never up.
+fn below_terrain(
+    limits: &Config,
+    context: &mut impl StartContext,
+    start: [i32; 3],
+    pieces: &mut [PoolPiece],
+) {
+    let target = mineshaft_top(start, limits.min_y, |x, z| {
+        context.base_height(x, z, HeightmapType::OceanFloorWg)
+    });
+    let top = pieces
+        .iter()
+        .map(|p| p.bounding_box.max[1])
+        .max()
+        .unwrap_or(i32::MIN);
+    if target < limits.max_y.unwrap_or(i32::MAX) && target < top {
+        shift_all(limits, pieces, [0, target - top, 0]);
+    }
+}
+
+/// Where [`below_terrain`] puts a mineshaft's top: `floor` is the first free
+/// height over the ocean floor (getFirstFreeHeight, OCEAN_FLOOR_WG).
+fn mineshaft_top(
+    start: [i32; 3],
+    min_y: Option<i32>,
+    mut floor: impl FnMut(i32, i32) -> i32,
+) -> i32 {
+    let (x, z) = (start[0] + 7, start[2] + 7);
+    let mut terrain = floor(x, z) - 1;
+    // Plane.HORIZONTAL's order; the mod takes one more off after each.
+    for (dx, dz) in [(0, -16), (16, 0), (0, 16), (-16, 0)] {
+        terrain = terrain.min(floor(x + dx, z + dz)) - 1;
+    }
+    (terrain - 15).max(min_y.unwrap_or(i32::MIN))
 }
 
 /// AVERAGE_LAND: the mean land height over a grid on the first piece's
@@ -916,6 +975,22 @@ mod tests {
         );
         assert_eq!(limits.pieces[1].1.min_depth, 3);
         assert_eq!(limits.library, Library::Repurposed);
+    }
+
+    #[test]
+    fn mineshafts_go_under_the_lowest_floor_around() {
+        // Floor 80 at the middle (7, 7), 70 north, 90 east, 60 south, 85 west.
+        let floor = |x, z| match (x, z) {
+            (7, 7) => 80,
+            (7, -9) => 70,
+            (23, 7) => 90,
+            (7, 23) => 60,
+            (-9, 7) => 85,
+            other => panic!("{other:?}"),
+        };
+        // 79, min(79, 70) - 1 = 69, 68, min(68, 60) - 1 = 59, 58; 15 under it.
+        assert_eq!(mineshaft_top([0, 50, 0], None, floor), 43);
+        assert_eq!(mineshaft_top([0, 50, 0], Some(48), floor), 48);
     }
 
     #[test]
