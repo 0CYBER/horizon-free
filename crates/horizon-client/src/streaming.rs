@@ -589,7 +589,7 @@ impl Streaming {
         }
         world
             .block_entities
-            .extend(std::mem::take(&mut chunk.block_entities));
+            .load_chunk(std::mem::take(&mut chunk.block_entities));
         world
             .block_names
             .extend(std::mem::take(&mut chunk.block_names));

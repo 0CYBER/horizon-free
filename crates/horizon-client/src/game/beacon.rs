@@ -105,24 +105,13 @@ impl Game<'_> {
             .find(|&y| !self.res.facts.is_air(self.world.block(x, y, z)))
             .map_or(min, |y| y + 1)
     }
-    /// `BeaconBlockEntity.tick` for every beacon.
-    pub(super) fn tick_beacons(&mut self) {
-        let keys: Vec<(i32, i32, i32)> = self
-            .world
-            .block_entities
-            .iter()
-            .filter(|(_, e)| matches!(e, BlockEntity::Beacon(_)))
-            .map(|(k, _)| *k)
-            .collect();
-        for key in keys {
-            let Some(BlockEntity::Beacon(mut b)) = self.world.block_entities.remove(&key) else {
-                continue;
-            };
-            self.tick_beacon(key, &mut b);
-            self.world
-                .block_entities
-                .insert(key, BlockEntity::Beacon(b));
-        }
+    /// `BeaconBlockEntity.tick` of the beacon at `key`.
+    pub(super) fn tick_beacon_at(&mut self, key: (i32, i32, i32)) {
+        let Some(BlockEntity::Beacon(mut b)) = self.world.block_entities.take(&key) else {
+            return;
+        };
+        self.tick_beacon(key, &mut b);
+        self.world.block_entities.put(key, BlockEntity::Beacon(b));
     }
     fn tick_beacon(&mut self, (x, y, z): (i32, i32, i32), b: &mut Beacon) {
         let mut check = if b.last_check_y < y {

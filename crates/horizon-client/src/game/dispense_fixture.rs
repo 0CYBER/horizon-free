@@ -318,8 +318,18 @@ impl Game<'_> {
         } else {
             self.dispense_from(origin, state)?;
             // CrafterBlockEntity.serverTick, the crafting animation running down.
+            let mut crafters: Vec<(i32, i32, i32)> = self
+                .world
+                .block_entities
+                .iter()
+                .filter(|(_, e)| matches!(e, BlockEntity::Crafter(_)))
+                .map(|(p, _)| *p)
+                .collect();
+            crafters.sort_unstable();
             for _ in 0..case["ticks"].as_u64().unwrap_or(0) {
-                self.tick_crafters();
+                for &p in &crafters {
+                    self.tick_crafter(p);
+                }
             }
         }
 

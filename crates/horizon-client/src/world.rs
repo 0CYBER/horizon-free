@@ -26,7 +26,8 @@ pub struct World {
     pub loaded_entities: Vec<((i32, i32), Vec<horizon_world::nbt::Tag>)>,
     /// Chunks changed since the last save.
     pub modified: HashSet<(i32, i32)>,
-    pub block_entities: HashMap<(i32, i32, i32), crate::containers::BlockEntity>,
+    /// Block entities, and the order they tick in.
+    pub block_entities: crate::block_entities::BlockEntities,
     /// Each chest's `ContainerOpenersCounter`: opener count and largest
     /// interaction range.
     pub chest_openers: HashMap<(i32, i32, i32), (i32, f64)>,
@@ -122,7 +123,7 @@ impl World {
             light_edits: Vec::new(),
             loaded_entities: Vec::new(),
             modified: HashSet::new(),
-            block_entities: HashMap::new(),
+            block_entities: Default::default(),
             chest_openers: HashMap::new(),
             block_names: HashMap::new(),
             watched: Vec::new(),
@@ -200,6 +201,8 @@ impl World {
         }
         let previous = Arc::make_mut(chunk).set(x & 15, y, z & 15, state.0);
         if previous != state.0 {
+            self.block_entities
+                .state_changed((x, y, z), previous, state.0);
             let watches = |id: u32| self.watched.get(id as usize).copied().unwrap_or(false);
             if watches(previous) || watches(state.0) {
                 self.watched_writes.push(((x, y, z), previous, state.0));
@@ -239,6 +242,16 @@ impl World {
         self.chunks
             .get(&(x >> 4, z >> 4))
             .map_or(self.air, |chunk| chunk.block(x & 15, y, z & 15))
+    }
+    /// The block entities to tick this tick, in order (`BlockEntities::tickers`).
+    pub fn block_entity_tickers(&mut self) -> Vec<(crate::block_entities::Pos, u32)> {
+        let (chunks, air) = (&self.chunks, self.air);
+        self.block_entities.tickers(|(x, y, z)| {
+            chunks
+                .get(&(x >> 4, z >> 4))
+                .map_or(air, |chunk| chunk.block(x & 15, y, z & 15))
+                .0
+        })
     }
     pub fn light(&self, x: i32, y: i32, z: i32) -> u8 {
         self.chunks
