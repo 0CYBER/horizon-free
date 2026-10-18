@@ -25,6 +25,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - containers: the guest's ender chest holds the guest's items, not the host's, and a double chest
              opens as 9x6 with the right half first;
 - feedback:  the guest's command feedback names the guest and shows the numbers;
+- chat:      a line the host sends reaches the guest's event log (`wait-for chat`), and on the
+             server thread the host window's too;
 - effects:   a beacon's power reaches every player in range, the host and the guest;
 - distance:  (--server-thread) the server follows the host's render distance, past vanilla's 32 too
              (IntegratedServer.tickServer), and the guest's chunks follow the server's (#804)
@@ -87,7 +89,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'respawn', 'containers', 'feedback', 'titles', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'push', 'eat', 'xp', 'objects', 'projectiles', 'light', 'effects', 'portals', 'distance']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'push', 'eat', 'xp', 'objects', 'projectiles', 'light', 'effects', 'portals', 'distance']
 
 
 class Game:
@@ -895,6 +897,17 @@ def check_titles(host, guest, out):
     return {'shown': shown, 'cleared': cleared}
 
 
+def check_chat(host, guest, out):
+    # The agent's event log follows a remote client's chat: `wait-for chat` sees the line another
+    # player sends (and on the server thread the host window's own line, back from the server).
+    line = f'chat check {int(time.time())}'
+    host.raw('chat', line)
+    seen = {g.name: g.raw('wait-for', 'chat', line, '--timeout', 10, '--since', 0).get('ok')
+            for g in ((guest, host) if SERVER_THREAD else (guest,))}
+    guest.shot(out, 'chat')
+    return seen
+
+
 def png_rows(path):
     """The rows of an 8-bit RGB or RGBA PNG, unfiltered, as bytes of 4 (or 3) per pixel."""
     data = Path(path).read_bytes()
@@ -1315,7 +1328,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'chest': check_chest, 'crafting': check_crafting, 'sign': check_sign, 'damage': check_damage,
              'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
              'respawn': check_respawn,
-             'containers': check_containers, 'feedback': check_feedback, 'titles': check_titles,
+             'containers': check_containers, 'feedback': check_feedback, 'titles': check_titles, 'chat': check_chat,
              'commands': check_commands,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,
              'effects': check_effects, 'portals': check_portals, 'distance': check_distance, 'clicks': check_clicks,
