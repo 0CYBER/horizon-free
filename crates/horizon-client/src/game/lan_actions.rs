@@ -58,6 +58,69 @@ pub(super) struct GuestPlay {
     pub(super) portal: horizon_client::nether_portal::PortalState,
     /// `Player.takeXpDelay`: ticks until the next orb can be taken.
     xp_delay: u32,
+    /// What last killed the guest outright (`/kill`): the death message's key.
+    death_cause: Option<String>,
+}
+
+/// A guest's command waiting for the hub (`LanHost::commands`).
+pub(super) struct GuestCommand {
+    conn: u32,
+    command: String,
+    permission: u8,
+    /// An integrated server's: no admin feedback or level teleports (yet).
+    integrated: bool,
+}
+
+/// The game's own state while a guest's is swapped in (`enter_guest`), and
+/// the guest's records that live outside `Guest`.
+pub(super) struct GuestSwap {
+    conn: u32,
+    i: usize,
+    play: GuestPlay,
+    player: Option<PlayerMotion>,
+    /// The guest's eye height and the game's.
+    eye: (f32, f32),
+    yaw: f32,
+    pitch: f32,
+    selected: usize,
+    mode: horizon_client::command::args::GameMode,
+    creative: bool,
+    xp: Experience,
+    host_keys: std::collections::HashSet<KeyCode>,
+    screen: Screen,
+    host_sign: Option<super::sign_edit::SignEditor>,
+    host_book: Option<super::books::BookScreen>,
+    host_command_block: Option<super::command_blocks::CommandBlockScreen>,
+    host_mount_menu: super::mount_menu::MountMenu,
+    craft_size: usize,
+    craft_grid: Vec<Option<ItemStack>>,
+    container: Option<(i32, i32, i32)>,
+    mining: Option<Mining>,
+    destroy_delay: u32,
+    using: Option<(usize, u32)>,
+    use_delay: u32,
+    attack_ticks: u32,
+    swing: horizon_client::first_person::SwingState,
+    left: bool,
+    right: bool,
+    riding: Option<u32>,
+    host_station: Option<super::stations::Station>,
+    sleeping: Option<[i32; 3]>,
+    sleep_timer: u32,
+    spawn: Option<Vec3>,
+    respawn: (
+        Option<super::respawn_anchor::RespawnConfig>,
+        Option<[f64; 3]>,
+    ),
+    message: Option<(String, std::time::Instant)>,
+    host_ender: Option<(i32, i32, i32)>,
+    adv_loaded: bool,
+    last_inventory: u64,
+    death_cause: Option<String>,
+    /// The guest whose turn this one nests in, if any.
+    acting: (Option<u32>, Option<String>, Option<u128>),
+    /// The packets queued for that guest.
+    packets: Vec<play::Clientbound>,
 }
 
 struct ItemRules<'a>(&'a horizon_client::items::Items);
@@ -95,6 +158,24 @@ impl Game<'_> {
         conn: u32,
         f: impl FnOnce(&mut Self) -> R,
     ) -> Option<R> {
+        let swap = self.enter_guest(host, conn)?;
+        let result = f(self);
+        self.leave_guest(host, swap);
+        Some(result)
+    }
+
+    /// The first half of `as_guest`: the guest's state in place of the
+    /// game's, which the returned swap keeps until `leave_guest`. Between the
+    /// two the host may go back into `self.lan`, so that what the guest does
+    /// can reach the other players (their commands, `for_player`), and a
+    /// guest's turn can nest in another's: the acting guest and the packets
+    /// queued for them are kept and restored too.
+    pub(super) fn enter_guest(&mut self, host: &mut LanHost, conn: u32) -> Option<GuestSwap> {
+        // The guest whose turn it is is in place already (their record holds
+        // the game's state until their turn ends).
+        if self.lan_acting == Some(conn) {
+            return None;
+        }
         let i = host.hub.guests.iter().position(|g| g.conn == conn)?;
         if host.hub.guests[i].motion.is_none() {
             let p = Vec3::new(
@@ -198,17 +279,109 @@ impl Game<'_> {
         std::mem::swap(&mut self.stats, &mut play.stats);
         let adv_loaded = std::mem::replace(&mut self.adv.loaded, true);
         let last_inventory = std::mem::replace(&mut self.adv.last_inventory, play.last_inventory);
-        self.lan_acting = Some(conn);
-        self.lan_acting_name = Some(g.name.clone());
-        self.lan_acting_uuid = Some(g.uuid);
+        let death_cause = std::mem::replace(&mut self.ui.death_cause, play.death_cause.take());
+        let acting = (
+            self.lan_acting.replace(conn),
+            self.lan_acting_name.replace(g.name.clone()),
+            self.lan_acting_uuid.replace(g.uuid),
+        );
+        let packets = std::mem::take(&mut self.guest_packets);
+        Some(GuestSwap {
+            conn,
+            i,
+            play,
+            player,
+            eye,
+            yaw,
+            pitch,
+            selected,
+            mode,
+            creative,
+            xp,
+            host_keys,
+            screen,
+            host_sign,
+            host_book,
+            host_command_block,
+            host_mount_menu,
+            craft_size,
+            craft_grid,
+            container,
+            mining,
+            destroy_delay,
+            using,
+            use_delay,
+            attack_ticks,
+            swing,
+            left,
+            right,
+            riding,
+            host_station,
+            sleeping,
+            sleep_timer,
+            spawn,
+            respawn,
+            message,
+            host_ender,
+            adv_loaded,
+            last_inventory,
+            death_cause,
+            acting,
+            packets,
+        })
+    }
 
-        let result = f(self);
-        for packet in std::mem::take(&mut self.guest_packets) {
+    /// The second half of `as_guest`: the guest's state back into their
+    /// record, the game's back in place, and what the turn changed sent.
+    pub(super) fn leave_guest(&mut self, host: &mut LanHost, swap: GuestSwap) {
+        let GuestSwap {
+            conn,
+            i,
+            mut play,
+            mut player,
+            eye,
+            yaw,
+            pitch,
+            selected,
+            mode,
+            creative,
+            xp,
+            host_keys,
+            screen,
+            host_sign,
+            host_book,
+            host_command_block,
+            host_mount_menu,
+            craft_size,
+            craft_grid,
+            container,
+            mining,
+            destroy_delay,
+            using,
+            use_delay,
+            attack_ticks,
+            swing,
+            left,
+            right,
+            riding,
+            host_station,
+            sleeping,
+            sleep_timer,
+            spawn,
+            respawn,
+            message,
+            host_ender,
+            adv_loaded,
+            last_inventory,
+            death_cause,
+            acting,
+            packets,
+        } = swap;
+        for packet in std::mem::replace(&mut self.guest_packets, packets) {
             host.hub.send_to(conn, &packet);
         }
-        self.lan_acting = None;
-        self.lan_acting_name = None;
-        self.lan_acting_uuid = None;
+        (self.lan_acting, self.lan_acting_name, self.lan_acting_uuid) = acting;
+        play.death_cause = std::mem::replace(&mut self.ui.death_cause, death_cause);
         // An ender chest the guest opened: the menu shows their inventory
         // itself (lan_open_container), not a stand-in block entity.
         self.close_ender_chest();
@@ -281,6 +454,9 @@ impl Game<'_> {
         std::mem::swap(&mut self.armor, &mut g.armor);
         std::mem::swap(&mut self.offhand, &mut g.offhand);
         std::mem::swap(&mut self.carried, &mut g.carried);
+        // A teleport with a rotation (commands) turns the guest.
+        let turned = [self.yaw, self.pitch] != [g.yaw, g.pitch];
+        [g.yaw, g.pitch] = [self.yaw, self.pitch];
         self.yaw = yaw;
         self.pitch = pitch;
         self.eye = eye.1;
@@ -294,7 +470,7 @@ impl Game<'_> {
             m.sprinting = false;
             let moved: f64 = (0..3).map(|k| (at[k] - g.position[k]).powi(2)).sum();
             g.motion = Some(Box::new(m));
-            if moved > 0.0001 {
+            if moved > 0.0001 || turned {
                 host.hub.teleport(i, Some(at));
             }
         }
@@ -331,7 +507,6 @@ impl Game<'_> {
         if opened_table {
             self.lan_open_crafting(host, conn);
         }
-        Some(result)
     }
 
     /// `ServerLevel.players()` in turn: the host's own player, then each
@@ -884,34 +1059,12 @@ impl Game<'_> {
             return;
         }
         // An integrated server runs every player's commands at their own
-        // permission level (`CommandSourceStack.permissions`).
-        if host.hub.config.integrated {
-            let Some(level) = host.hub.guest(conn).map(|g| g.permission) else {
-                return;
-            };
-            let command = command.trim_start_matches('/').to_owned();
-            let lines = self.as_guest(host, conn, |g| {
-                let console = std::mem::replace(&mut g.ui.registries.permission, level);
-                g.chat_capture = Some(Vec::new());
-                g.run_command(&command);
-                g.ui.registries.permission = console;
-                g.chat_capture.take().unwrap_or_default()
-            });
-            for line in lines.unwrap_or_default() {
-                host.hub.send_to(
-                    conn,
-                    &C::SystemChat(play::SystemChat {
-                        content: horizon_client::lan::data::component_nbt(&line.component()),
-                        overlay: false,
-                    }),
-                );
-            }
-            return;
-        }
-        // A LAN world follows its Allow Commands; a dedicated server leaves
-        // it to the ops list (the guest's permission level).
+        // permission level (`CommandSourceStack.permissions`); a LAN world
+        // follows its Allow Commands, and a dedicated server leaves it to
+        // the ops list (the guest's permission level).
+        let integrated = host.hub.config.integrated;
         let allowed = self.options.dedicated.is_some() || self.allow_commands();
-        if !host.settings.guest_commands || !allowed {
+        if !integrated && (!host.settings.guest_commands || !allowed) {
             host.hub.send_to(
                 conn,
                 &C::SystemChat(play::SystemChat {
@@ -921,34 +1074,62 @@ impl Game<'_> {
             );
             return;
         }
-        let command = command.trim_start_matches('/').to_owned();
-        // The guest's own level (Commands.performCommand with the player's source): an
-        // operator's on a dedicated server, never the host's.
-        let permission = host.hub.guest(conn).map_or(0, |g| g.permission);
-        let lines = self.as_guest(host, conn, |g| {
-            g.chat_capture = Some(Vec::new());
-            let level = std::mem::replace(&mut g.ui.registries.permission, permission);
-            g.run_command(&command);
-            g.ui.registries.permission = level;
-            g.chat_capture
-                .take()
-                .unwrap_or_default()
-                .iter()
-                .map(|t| horizon_client::lan::data::component_nbt(&t.component()))
-                .collect::<Vec<_>>()
+        // The guest's own level (Commands.performCommand with the player's
+        // source): an operator's on a dedicated server, never the host's.
+        let Some(permission) = host.hub.guest(conn).map(|g| g.permission) else {
+            return;
+        };
+        host.commands.push(GuestCommand {
+            conn,
+            command: command.trim_start_matches('/').to_owned(),
+            permission,
+            integrated,
         });
-        // A teleport into another level happens before its feedback is sent.
-        self.run_level_teleports(host);
-        for content in lines.unwrap_or_default() {
-            host.hub.send_to(
-                conn,
-                &C::SystemChat(play::SystemChat {
-                    content,
-                    overlay: false,
-                }),
-            );
+    }
+
+    /// The guests' queued commands, run with the hub in `self.lan` so that
+    /// they reach the other players too (`/give Bob`, `/tp Bob`, `/kick`).
+    pub(super) fn run_guest_commands(&mut self) {
+        loop {
+            let Some(host) = self.lan.as_mut() else {
+                return;
+            };
+            if host.commands.is_empty() {
+                return;
+            }
+            let c = host.commands.remove(0);
+            let mut host = self.lan.take().expect("checked above");
+            let Some(swap) = self.enter_guest(&mut host, c.conn) else {
+                self.lan = Some(host);
+                continue;
+            };
+            self.lan = Some(host);
+            self.chat_capture = Some(Vec::new());
+            let level = std::mem::replace(&mut self.ui.registries.permission, c.permission);
+            self.run_command(&c.command);
+            self.ui.registries.permission = level;
+            let lines = self.chat_capture.take().unwrap_or_default();
+            let mut host = self.lan.take().expect("a command puts the hub back");
+            self.leave_guest(&mut host, swap);
+            host.hub.sync_all_effects();
+            if !c.integrated {
+                // A teleport into another level happens before its feedback is sent.
+                self.run_level_teleports(&mut host);
+            }
+            for line in lines {
+                host.hub.send_to(
+                    c.conn,
+                    &C::SystemChat(play::SystemChat {
+                        content: horizon_client::lan::data::component_nbt(&line.component()),
+                        overlay: false,
+                    }),
+                );
+            }
+            if !c.integrated {
+                self.send_admin_feedback(&mut host, Some(c.conn));
+            }
+            self.lan = Some(host);
         }
-        self.send_admin_feedback(host, Some(conn));
     }
 
     /// The `broadcastToAdmins` lines a command queued (`source`: the guest
@@ -1165,7 +1346,34 @@ impl Game<'_> {
                     total: g.xp_total,
                 }
                 .death_reward(self.ui.rules.bool("keep_inventory") || g.game_mode == SPECTATOR);
-                let message = literal(&format!("{} died", g.name));
+                let (name, uuid) = (g.name.clone(), g.uuid);
+                let cause = host.play.get_mut(&conn).and_then(|p| p.death_cause.take());
+                let message = match cause {
+                    // ServerPlayer.die: the death message, to everyone unless
+                    // the player's team hides it.
+                    Some(key) if self.ui.rules.bool("show_death_messages") => {
+                        let text = horizon_client::text::Text::translate(
+                            &key,
+                            &[self.player_text(&name, uuid)],
+                        );
+                        let message = horizon_client::lan::data::component_nbt(&text.component());
+                        let team = self.score.board.players_team(&name);
+                        if horizon_client::scoreboard::own_death_message_shown(team) {
+                            host.hub.system_message(message.clone());
+                            if self.options.dedicated.is_some() {
+                                super::dedicated::log(
+                                    "INFO",
+                                    &format!("System chat: {}", text.plain()),
+                                );
+                            } else if self.player.is_some() {
+                                self.system_message(text);
+                            }
+                        }
+                        message
+                    }
+                    Some(_) => literal(""),
+                    None => literal(&format!("{name} died")),
+                };
                 host.hub.send_to(
                     conn,
                     &C::PlayerCombatKill(play::PlayerCombatKill { id, message }),
