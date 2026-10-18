@@ -10,6 +10,7 @@ pub mod mineshaft;
 pub mod monument;
 pub mod nether_fossil;
 pub mod ocean_ruin;
+pub mod piece_limited;
 pub mod processor;
 pub mod ruined_portal;
 pub mod simple;
