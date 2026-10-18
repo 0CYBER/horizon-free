@@ -220,6 +220,12 @@ impl Game<'_> {
     /// death and a natural heart drops experience.
     pub(super) fn creaking_heart_broken(&mut self, pos: [i32; 3]) {
         let key = (pos[0], pos[1], pos[2]);
+        if !matches!(
+            self.world.block_entities.get(&key),
+            Some(BlockEntity::CreakingHeart(_))
+        ) {
+            return;
+        }
         let Some(BlockEntity::CreakingHeart(mut heart)) = self.world.block_entities.take(&key)
         else {
             return;
