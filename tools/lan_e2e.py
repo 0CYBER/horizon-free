@@ -21,6 +21,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - pvp:       the guest and the host hit each other with a sword; with the pvp game rule off, nothing;
 - containers: the guest's ender chest holds the guest's items, not the host's, and a double chest
              opens as 9x6 with the right half first;
+- machines:  a hopper, a dispenser and a dropper open on the guest's screen with their 5 and 9
+             slots, and keep what the guest shift-clicks into them (#848);
 - feedback:  the guest's command feedback names the guest and shows the numbers;
 - effects:   a beacon's power reaches every player in range, the host and the guest;
 - distance:  (--server-thread) the server follows the host's render distance, past vanilla's 32 too
@@ -84,7 +86,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'titles', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'push', 'eat', 'xp', 'objects', 'projectiles', 'light', 'effects', 'portals', 'distance']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'titles', 'commands', 'recipes', 'machines', 'trials', 'clicks', 'sleep', 'push', 'eat', 'xp', 'objects', 'projectiles', 'light', 'effects', 'portals', 'distance']
 
 
 class Game:
@@ -635,6 +637,35 @@ def check_containers(host, guest, out):
     assert taken.get('minecraft:emerald') == 1 and taken.get('minecraft:gold_ingot') == 1, f'taken: {taken}'
     assert after == ({}, {27: 'minecraft:iron_ingot'}), f'after taking: {after}'
     return {'ender': ender, 'double': double, 'taken': taken}
+
+
+def check_machines(host, guest, out):
+    # After `recipes`: the stacks given here unlock recipes, which would move the book's first one.
+    guest('command', command='gamemode survival')
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    at = (x, y, z + 2)
+    seen = {}
+    for block in ('hopper', 'dispenser', 'dropper'):
+        guest('command', command='clear @s')
+        guest('command', command='give @s minecraft:cobblestone 4')
+        guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:{block}')
+        guest.wait(10)
+        guest.raw('interact', *at)
+        guest.raw('wait-for', 'screen', 'container', '--timeout', 10)
+        guest.wait(10)
+        size = container_items(guest)[1]
+        guest.shot(out, f'machines-{block}')
+        guest.raw('click-slot', hotbar_slot(guest, 'minecraft:cobblestone'), 'shift')
+        guest.wait(10)
+        guest.raw('key', 'esc', 'tap')
+        guest.wait(10)
+        # Opened again, the menu holds what the server has.
+        seen[block] = (size, open_container(guest, at, out, f'machines-{block}-after')[0])
+        guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:air')
+    want = {'hopper': (5, {0: 'minecraft:cobblestone'}), 'dispenser': (9, {0: 'minecraft:cobblestone'}),
+            'dropper': (9, {0: 'minecraft:cobblestone'})}
+    assert seen == want, f'the machines on the guest: {seen}'
+    return seen
 
 
 def slot_point(game, slot):
@@ -1272,7 +1303,7 @@ def check_light(host, guest, out):
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
              'chest': check_chest, 'crafting': check_crafting, 'sign': check_sign, 'damage': check_damage,
              'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
-             'containers': check_containers, 'feedback': check_feedback, 'titles': check_titles,
+             'containers': check_containers, 'machines': check_machines, 'feedback': check_feedback, 'titles': check_titles,
              'commands': check_commands,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,
              'effects': check_effects, 'portals': check_portals, 'distance': check_distance, 'clicks': check_clicks,

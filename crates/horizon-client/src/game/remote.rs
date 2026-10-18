@@ -1130,14 +1130,16 @@ impl Game<'_> {
     /// Map a menu slot to Horizon's inventory screen slot ids.
     fn menu_slot(menu: &str, slot: i32) -> Option<usize> {
         let s = usize::try_from(slot).ok()?;
-        let rows = |n: usize| -> Option<usize> {
+        // A container of `n` slots, then the inventory and the hotbar.
+        let slots = |n: usize| -> Option<usize> {
             match s {
-                _ if s < n * 9 => Some(300 + s),
-                _ if s < n * 9 + 27 => Some(9 + s - n * 9),
-                _ if s < n * 9 + 36 => Some(s - n * 9 - 27),
+                _ if s < n => Some(300 + s),
+                _ if s < n + 27 => Some(9 + s - n),
+                _ if s < n + 36 => Some(s - n - 27),
                 _ => None,
             }
         };
+        let rows = |n: usize| slots(n * 9);
         match menu {
             "inventory" => match s {
                 0 => Some(200),
@@ -1175,6 +1177,9 @@ impl Game<'_> {
             "minecraft:generic_9x4" => rows(4),
             "minecraft:generic_9x5" => rows(5),
             "minecraft:generic_9x6" => rows(6),
+            // HopperMenu; DispenserMenu (dispensers and droppers).
+            "minecraft:hopper" => slots(5),
+            "minecraft:generic_3x3" => slots(9),
             _ => None,
         }
     }
@@ -3544,6 +3549,10 @@ impl Game<'_> {
                     speed: 1.0,
                 }))
             }
+            // HopperMenu, and DispenserMenu (MenuType.GENERIC_3x3: dispensers
+            // and droppers).
+            "minecraft:hopper" => Some(BlockEntity::Chest(vec![None; 5])),
+            "minecraft:generic_3x3" => Some(BlockEntity::Chest(vec![None; 9])),
             m if m.starts_with("minecraft:generic_9x") || m == "minecraft:shulker_box" => {
                 let rows = m
                     .strip_prefix("minecraft:generic_9x")
@@ -3590,6 +3599,14 @@ impl Game<'_> {
         }
         self.screen = Screen::Inventory;
         self.capture(false);
+    }
+    /// The type of the menu a server opened (`MenuType`'s id).
+    pub(super) fn remote_menu_type(&self) -> Option<&str> {
+        Some(self.remote.as_ref()?.menu.as_ref()?.1.as_str())
+    }
+    /// The title the server gave the menu it opened.
+    pub(super) fn remote_menu_title(&self) -> Option<String> {
+        self.remote.as_ref()?.menu_title.clone()
     }
     /// A server's chest-like menu (`MenuType.GENERIC_9xN`): its rows and title.
     pub(super) fn remote_chest_menu(&self) -> Option<(usize, String)> {
