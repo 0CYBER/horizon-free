@@ -5,7 +5,8 @@ Windows .exe: every DLL in the import and delay-import tables must ship with
 Windows (no VCRUNTIME140.dll, vulkan-1.dll, ...): Vulkan and the like are
 loaded at run time, so a missing driver is an error message, not a dialog.
 Linux ELF: the loader must be the standard one (not a /nix/store path) and the
-needed libraries the ones every desktop distribution has.
+needed libraries the ones every desktop distribution has. `--server`: a server
+build, which may not need ALSA or udev either (minimal server images lack them).
 """
 
 import argparse
@@ -30,6 +31,8 @@ LINUX_SYSTEM = {
     "libc.so.6", "libm.so.6", "libgcc_s.so.1", "libdl.so.2", "libpthread.so.0", "librt.so.1",
     "ld-linux-x86-64.so.2", "libasound.so.2", "libudev.so.1",
 }
+# The game's sound (cpal) and controllers (gilrs): a desktop has them, a server image may not.
+LINUX_DESKTOP_ONLY = {"libasound.so.2", "libudev.so.1"}
 
 
 def windows_allowed(name):
@@ -111,7 +114,7 @@ def elf_needs(data):
     return interpreter, needed, runpath
 
 
-def check(path):
+def check(path, server=False):
     data = Path(path).read_bytes()
     problems = []
     if data[:2] == b"MZ":
@@ -123,6 +126,8 @@ def check(path):
         if interpreter not in (None, LINUX_LOADER):
             problems.append(f"loader is {interpreter}, not {LINUX_LOADER}")
         problems += [f"needs {n}, which not every distribution has" for n in needed if n not in LINUX_SYSTEM]
+        if server:
+            problems += [f"needs {n}, which a server may not have" for n in needed if n in LINUX_DESKTOP_ONLY]
         problems += [f"has a run path to {p}" for p in runpath if "/nix/store" in p]
         summary = f"{interpreter}; " + ", ".join(needed)
     print(f"{path}: {summary}")
@@ -134,8 +139,10 @@ def check(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("binaries", nargs="+")
+    parser.add_argument("--server", action="store_true",
+                        help="a server build: not even ALSA or udev (the game's sound and controllers)")
     args = parser.parse_args()
-    ok = all([check(path) for path in args.binaries])
+    ok = all([check(path, args.server) for path in args.binaries])
     sys.exit(0 if ok else 1)
 
 

@@ -9,6 +9,7 @@ use crate::sound_engine::{
     Sounds, TickContext,
 };
 use crate::sound_events::{Sound, SoundRegistry};
+#[cfg(feature = "audio")]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use horizon_core::random::{LegacyRandom, RandomSource};
 use std::{
@@ -134,8 +135,14 @@ fn attach(mixer: &Mutex<Mixer>, channel: ChannelId, samples: Samples, looping: b
         c.looping |= looping;
     }
 }
+/// The open output stream. A build without the `audio` feature (the server build, which must not
+/// need libasound) never has one.
+#[cfg(feature = "audio")]
+type Stream = cpal::Stream;
+#[cfg(not(feature = "audio"))]
+type Stream = std::convert::Infallible;
 pub struct Audio {
-    _stream: Option<cpal::Stream>,
+    _stream: Option<Stream>,
     pub engine: SoundEngine,
     backend: MixerBackend,
     /// Record `Heard` sounds (the subtitle overlay is listening).
@@ -333,6 +340,8 @@ fn distance_gain(linear: Option<f32>, distance: f32) -> f32 {
         Some(_) => 0.0,
     }
 }
+// Only the output stream mixes; a build without one (no `audio` feature) never does.
+#[cfg_attr(not(feature = "audio"), allow(dead_code))]
 fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
     data.fill(0.0);
     let listener = mixer.listener;
@@ -415,6 +424,7 @@ fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
 /// `HORIZON_NO_AUDIO`, or a virtual screen (`vscreen`), where agents and
 /// harnesses run the game and must stay off the user's speakers.
 /// `HORIZON_AUDIO=1` opens the output anyway (testing into a null sink).
+#[cfg(any(feature = "audio", test))]
 fn output_disabled(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<String> {
     if var("HORIZON_NO_AUDIO").is_some() {
         return Some("audio off: HORIZON_NO_AUDIO is set".into());
@@ -430,6 +440,7 @@ fn output_disabled(var: impl Fn(&str) -> Option<std::ffi::OsString>) -> Option<S
 }
 /// An output stream on `device` in its default configuration, whatever its
 /// sample format: the mixer works in f32 and converts.
+#[cfg(feature = "audio")]
 fn open_device(
     device: &cpal::Device,
     mixer: Arc<Mutex<Mixer>>,
@@ -450,6 +461,7 @@ fn open_device(
     stream.play()?;
     Ok((stream, config))
 }
+#[cfg(feature = "audio")]
 fn build_stream<T: cpal::SizedSample + cpal::FromSample<f32>>(
     device: &cpal::Device,
     config: &cpal::SupportedStreamConfig,
@@ -523,7 +535,12 @@ impl Audio {
             capture: None,
         }
     }
-    fn open(mixer: Arc<Mutex<Mixer>>) -> Result<cpal::Stream> {
+    #[cfg(not(feature = "audio"))]
+    fn open(_: Arc<Mutex<Mixer>>) -> Result<Stream> {
+        Err("this build has no sound output (built without the `audio` feature)".into())
+    }
+    #[cfg(feature = "audio")]
+    fn open(mixer: Arc<Mutex<Mixer>>) -> Result<Stream> {
         if let Some(reason) = output_disabled(|name| std::env::var_os(name)) {
             return Err(reason.into());
         }

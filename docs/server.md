@@ -55,9 +55,10 @@ distance 10. The vanilla server was the pinned 26.3 `server.jar` on Java 25 with
 | What has to be installed | one 46.8 MB binary + 589 MB of prepared resources | Java 25 + the 62 MB jar |
 | Crates linked | 384 (wgpu, winit, cpal, gilrs, arboard, naga…) | n/a |
 
-On Linux the binary loads `libasound.so.2` (cpal) and `libudev.so.1` (gilrs) at startup, even on a server.
-wgpu, winit and the Wayland/X11 libraries are loaded only when a window opens. That makes a minimal
-container image need ALSA and udev for a program that never plays a sound or reads a controller.
+On Linux the full game loads `libasound.so.2` (cpal) and `libudev.so.1` (gilrs) at startup. wgpu, winit
+and the Wayland/X11 libraries are loaded only when a window opens. The server build (`horizon-engine`,
+section 3) is the same program built without its `audio` and `controllers` features, so it needs neither
+library, and a minimal server image runs it as it is.
 
 The two clear losses are RAM and idle CPU. The dedicated server loads everything the client needs to draw
 (the HUD atlas, item renderer, block-entity models, panorama, fog and music tables, entity models), and it
@@ -145,16 +146,22 @@ game built in `Game::new`, the integrated server on its own thread. On that base
 1. The dedicated path skips everything only a window uses: the HUD atlas, item renderer, block-entity and
    entity models, panorama, fog, music, and mesh tables (perf-ticks-2 already stops server-side meshing).
    This is the RAM and start-time item.
-2. The game moves into a library crate, with the window, audio and controller parts behind a `client`
-   feature. A `horizon-engine` binary built without that feature links no wgpu, winit, cpal or gilrs, and
-   needs neither ALSA nor udev. The supervisor finds it beside itself and falls back to `horizon-client`.
+2. The game moves into a library crate, with the window parts behind a `client` feature, so
+   `horizon-engine` links no wgpu or winit either. Sound and controllers are already optional (the
+   `audio` and `controllers` features, on by default): `horizon-engine` today is the game built without
+   them (section 3).
 
 ## 3. Packaging
 
-**Binaries.** The release archives already hold `horizon-client`, `horizon-ctl` and `horizon-prepare`.
-`horizon-server` joins them (PR 3: `xtask package` and `release.yml` build it and check it starts). Once
-`horizon-engine` exists (section 2), a separate small archive per platform
-(`horizon-server-<os>-<arch>.tar.gz` or `.zip`) holds just the server's binaries.
+**Binaries.** The release archives hold `horizon-client`, `horizon-ctl`, `horizon-prepare` and
+`horizon-server`. On Linux the release also has `horizon-server-linux-x86_64.tar.gz`: `horizon-server`,
+`horizon-prepare` and `horizon-engine`, the game built with `--no-default-features` (no sound, no
+controllers), which links neither `libasound.so.2` nor `libudev.so.1`. `release.yml` builds it after the
+client archive (`xtask package-server`) and fails if `tools/check_imports.py --server` finds either library;
+CI lints the same build. `horizon-server` runs `horizon-engine` when it is beside it or on the PATH, else
+`horizon-client`. Build it yourself with `cargo build --release -p horizon-client --no-default-features`
+and copy `target/release/horizon-client` as `horizon-engine`. macOS and Windows have no such libraries to
+avoid, so they keep the one archive.
 
 **Game files: the owner's own copy, as with `prepare`.** Nothing of Mojang's is redistributed and nothing is
 downloaded on the owner's behalf. `horizon-server` looks for prepared resources in this order:
@@ -181,15 +188,16 @@ comes out of the headless-engine work.
 
 - Linux and macOS:
   `curl -fsSL https://raw.githubusercontent.com/ludovic111/horizon/main/packaging/server/install.sh | sh`
-  The script picks the release archive for the OS and architecture (Linux x86_64, macOS arm64), downloads
-  it from GitHub Releases, and checks it against the SHA-256 GitHub publishes for each asset. It never asks
-  for sudo. Options: `--version vX.Y.Z`, `--dir` (default `~/.local/share/horizon`), `--bin` (default
-  `~/.local/bin`).
-  On Linux the game links ALSA's and udev's libraries (`libasound.so.2`, `libudev.so.1`) even as a server,
-  until the headless engine exists. Minimal server images often lack ALSA (Debian and Ubuntu:
-  `sudo apt install libasound2 libudev1`, `libasound2t64` on Ubuntu 24.04 and later). The script lists any
-  that are missing, `init` warns, and `run` stops at once with what to install, rather than restarting a
-  game that can't load.
+  The script picks the release archive for the OS and architecture (on Linux x86_64 the server archive,
+  on macOS arm64 the game's), downloads it from GitHub Releases, and checks it against the SHA-256 GitHub
+  publishes for each asset. It never asks for sudo. Options: `--version vX.Y.Z`, `--dir` (default
+  `~/.local/share/horizon`), `--bin` (default `~/.local/bin`), and `--archive FILE` to install an archive
+  already on the machine (a build of your own; no download and no checksum).
+  A Linux release from before the server archive installs the full game, which links ALSA's and udev's
+  libraries (`libasound.so.2`, `libudev.so.1`); minimal server images often lack them (Debian and Ubuntu:
+  `sudo apt install libasound2 libudev1`, `libasound2t64` on Ubuntu 24.04 and later). Then the script lists
+  any that are missing, `init` warns, and `run` stops at once with what to install, rather than restarting
+  a game that can't load.
 - Windows:
   `irm https://raw.githubusercontent.com/ludovic111/horizon/main/packaging/server/install.ps1 | iex`
   The script does the same into `%LOCALAPPDATA%\Horizon` (`-Version`, `-Dir`), with junctions instead of
@@ -201,8 +209,8 @@ comes out of the headless-engine work.
   (`horizon-prepare`, `horizon-server init`).
 
 **Docker** (`packaging/server/Dockerfile`, built the same way as the relay's image): a multi-stage build that
-ends on `debian:bookworm-slim` as user `horizon`. It adds `libasound2` and `libudev1` until the headless engine
-lands. It uses volume `/data` for the server folder, takes the owner's prepared game files as a read-only
+ends on `debian:bookworm-slim` as user `horizon`, with the server build as `horizon-engine`, so the image needs
+no ALSA or udev. It uses volume `/data` for the server folder, takes the owner's prepared game files as a read-only
 mount on `/opt/horizon/.local/horizon-client/26.3`, exposes port `25565/tcp`, and keeps the control API (and
 later the panel) on 127.0.0.1 inside the container: `docker exec <name> horizon-server status|cmd|backup`.
 On the first start, `HORIZON_EULA=true` and `HORIZON_WORLD`, `HORIZON_SEED`, `HORIZON_PORT`,
