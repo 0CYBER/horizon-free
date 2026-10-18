@@ -100,6 +100,8 @@ pub(super) struct Remote {
     was_sprinting: bool,
     carried: Option<usize>,
     loaded_sent: bool,
+    /// The view distance last sent in ClientInformation.
+    sent_view: i8,
     /// BlockStatePredictionHandler: blocks changed ahead of the server (a predicted break),
     /// with the sequence of the last action that changed them and the state the server
     /// last said they have. Until the server acknowledges that sequence its block updates
@@ -209,7 +211,7 @@ impl Game<'_> {
             .and_then(|p| Builtin::load(&p).ok())
             .ok_or("Resources are incomplete: registries.json is missing or invalid. Click \"Prepare again\" in the launcher (or run horizon-prepare), then try again.")?;
         let lang = Arc::new(horizon_client::net::load_language(&root));
-        let view = self.settings.render_distance.clamp(2, 32) as i8;
+        let view = client_view_distance(self.settings.render_distance);
         if local.is_none() {
             horizon_client::crash::set_detail(
                 "Server",
@@ -296,6 +298,7 @@ impl Game<'_> {
             was_sprinting: false,
             carried: None,
             loaded_sent: false,
+            sent_view: view,
             predictions: HashMap::new(),
             menu: None,
             menu_title: None,
@@ -1153,10 +1156,12 @@ impl Game<'_> {
                 self.streaming.radius =
                     self.settings.render_distance.min(p.chunk_radius + 1).max(2);
                 self.enter_remote_dimension(&p.spawn, false);
+                let view = client_view_distance(self.settings.render_distance);
+                if let Some(r) = self.remote.as_mut() {
+                    r.sent_view = view;
+                }
                 self.send(S::ClientInformation(
-                    horizon_protocol::packets::configuration::ClientInformation::new(
-                        self.settings.render_distance.clamp(2, 32) as i8,
-                    ),
+                    horizon_protocol::packets::configuration::ClientInformation::new(view),
                 ));
             }
             C::Respawn(p) => {
@@ -2303,6 +2308,17 @@ impl Game<'_> {
     /// One client tick while connected (Minecraft.tick with a ClientLevel).
     pub(super) fn tick_remote(&mut self) -> Result<()> {
         self.ticks += 1;
+        // Options.broadcastOptions: a changed render distance is sent again.
+        let view = client_view_distance(self.settings.render_distance);
+        if let Some(r) = self.remote.as_mut()
+            && r.joined
+            && r.sent_view != view
+        {
+            r.sent_view = view;
+            self.send(S::ClientInformation(
+                horizon_protocol::packets::configuration::ClientInformation::new(view),
+            ));
+        }
         // Minecraft.tick: TickRateManager.tick; ClientLevel.tick advances
         // the time only while the level runs normally.
         let running = self.clock.world_runs();
@@ -3747,6 +3763,12 @@ pub(super) fn input_ordinal(input: Input) -> i32 {
         Input::QuickCraft => 5,
         Input::PickupAll => 6,
     }
+}
+
+/// The view distance a client asks for: its render distance, which Horizon
+/// lets go past vanilla's 32 (a vanilla server still caps it at its own).
+fn client_view_distance(render_distance: i32) -> i8 {
+    render_distance.clamp(2, i32::from(i8::MAX)) as i8
 }
 
 #[cfg(test)]
