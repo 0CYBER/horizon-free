@@ -77,6 +77,9 @@ impl Beardifier {
     }
     fn sample_unchecked(&self, [x, y, z]: [i32; 3]) -> f32 {
         let mut value = 0.;
+        // The kernel is a process-wide constant; resolving it once keeps the
+        // per-piece and per-junction beard evaluations off the OnceLock.
+        let kernel = kernel();
         for piece in &self.pieces {
             let low = piece.bounds.minimum;
             let high = piece.bounds.maximum;
@@ -98,7 +101,7 @@ impl Beardifier {
                 TerrainAdjustment::None => 0.,
                 TerrainAdjustment::Bury => bury(dx as f32, distance_y as f32 / 2., dz as f32),
                 TerrainAdjustment::BeardThin | TerrainAdjustment::BeardBox => {
-                    beard(dx, distance_y, dz, dy) * 0.8
+                    beard(kernel, dx, distance_y, dz, dy) * 0.8
                 }
                 TerrainAdjustment::Encapsulate => {
                     bury(dx as f32 / 2., distance_y as f32 / 2., dz as f32 / 2.) * 0.8
@@ -109,7 +112,7 @@ impl Beardifier {
             let dx = x.wrapping_sub(junction.source_x);
             let dy = y.wrapping_sub(junction.source_ground_y);
             let dz = z.wrapping_sub(junction.source_z);
-            value += beard(dx, dy, dz, dy) * 0.4;
+            value += beard(kernel, dx, dy, dz, dy) * 0.4;
         }
         value
     }
@@ -184,7 +187,7 @@ fn bury(x: f32, y: f32, z: f32) -> f32 {
         1. - squared.sqrt() / 6.
     }
 }
-fn beard(x: i32, y: i32, z: i32, ground_delta: i32) -> f32 {
+fn beard(kernel: &[f32; 13824], x: i32, y: i32, z: i32, ground_delta: i32) -> f32 {
     let indices = [x, y, z].map(|v| v.wrapping_add(12));
     if indices.iter().any(|v| !(0..24).contains(v)) {
         return 0.;
@@ -192,7 +195,7 @@ fn beard(x: i32, y: i32, z: i32, ground_delta: i32) -> f32 {
     let vertical = ground_delta as f32 + 0.5;
     let squared = (x as f32 * x as f32 + vertical * vertical) + z as f32 * z as f32;
     let factor = (-vertical * fast_inverse_sqrt(f64::from(squared / 2.)) as f32) / 2.;
-    factor * kernel()[((indices[2] * 24 + indices[0]) * 24 + indices[1]) as usize]
+    factor * kernel[((indices[2] * 24 + indices[0]) * 24 + indices[1]) as usize]
 }
 fn fast_inverse_sqrt(value: f64) -> f64 {
     let half = 0.5 * value;

@@ -283,6 +283,23 @@ impl BinaryOp {
             }
         }
     }
+    fn apply_bulk(self, buffer: &mut [f32], right: &[f32]) {
+        macro_rules! apply {
+            ($operation:expr) => {
+                for (left, &right) in buffer.iter_mut().zip(right) {
+                    *left = ($operation)(*left, right);
+                }
+            };
+        }
+        match self {
+            Self::Add => apply!(|left, right| left + right),
+            Self::Subtract => apply!(|left, right| left - right),
+            Self::Multiply => apply!(|left, right| left * right),
+            Self::Divide => apply!(|left, right| left / right),
+            Self::Minimum { .. } => apply!(|left, right| if right < left { right } else { left }),
+            Self::Maximum { .. } => apply!(|left, right| if right > left { right } else { left }),
+        }
+    }
 }
 #[derive(Clone, Debug)]
 pub struct BinarySampler {
@@ -319,9 +336,7 @@ impl DensitySampler for BinarySampler {
         self.left.sample_volume(context, buffer, volume)?;
         context.with_buffer(volume.size(), |context, right| {
             self.right.sample_volume(context, right, volume)?;
-            for (left, right) in buffer.iter_mut().zip(right) {
-                *left = self.operation.apply(*left, *right, true);
-            }
+            self.operation.apply_bulk(buffer, right);
             Ok(())
         })
     }
@@ -415,6 +430,76 @@ mod bulk_tests {
                         actual.to_bits(),
                         expected.to_bits(),
                         "{operation:?}, index {i}, input {input:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[inline(never)]
+    fn dispatched_binary_reference(operation: BinaryOp, left: f32, right: f32) -> f32 {
+        operation.apply(left, right, true)
+    }
+
+    #[test]
+    fn fixed_binary_loops_preserve_float_bits() {
+        let edges = [
+            0,
+            0x8000_0000,
+            1,
+            0x8000_0001,
+            0x007f_ffff,
+            0x0080_0000,
+            0x3f80_0000,
+            0xbf80_0000,
+            0x7f7f_ffff,
+            0xff7f_ffff,
+            0x7f80_0000,
+            0xff80_0000,
+            0x7fc0_0000,
+            0x7fa0_0001,
+            0xffc0_1234,
+        ];
+        let mut left = Vec::new();
+        let mut right = Vec::new();
+        for a in edges {
+            for b in edges {
+                left.push(f32::from_bits(a));
+                right.push(f32::from_bits(b));
+            }
+        }
+        let mut bits = 0x484f_5249u32;
+        for _ in 0..8192 {
+            bits ^= bits << 13;
+            bits ^= bits >> 17;
+            bits ^= bits << 5;
+            left.push(f32::from_bits(bits));
+            bits ^= bits << 13;
+            bits ^= bits >> 17;
+            bits ^= bits << 5;
+            right.push(f32::from_bits(bits));
+        }
+        for operation in [
+            BinaryOp::Add,
+            BinaryOp::Subtract,
+            BinaryOp::Multiply,
+            BinaryOp::Divide,
+            BinaryOp::Minimum {
+                right_min: f32::NEG_INFINITY,
+            },
+            BinaryOp::Maximum {
+                right_max: f32::INFINITY,
+            },
+        ] {
+            for length in [0, 1, 3, 16, 257, left.len()] {
+                let mut actual = left[..length].to_vec();
+                operation.apply_bulk(&mut actual, &right[..length]);
+                for (i, actual) in actual.into_iter().enumerate() {
+                    let expected = dispatched_binary_reference(operation, left[i], right[i]);
+                    assert_eq!(
+                        actual.to_bits(),
+                        expected.to_bits(),
+                        "{operation:?}, index {i}"
                     );
                 }
             }

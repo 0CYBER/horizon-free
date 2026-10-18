@@ -795,3 +795,75 @@ fn unary_bulk_keeps_child_failure_writes_and_full_buffer_tail() {
         .unwrap();
     assert_eq!(buffer, [9.0; 3]);
 }
+
+#[test]
+fn binary_bulk_preserves_child_failure_order_and_output() {
+    #[derive(Debug)]
+    struct Input {
+        name: &'static str,
+        value: f32,
+        fail: bool,
+        calls: Arc<std::sync::Mutex<Vec<&'static str>>>,
+    }
+    impl DensitySampler for Input {
+        fn sample_value(&self, _: &mut SamplerContext, _: [i32; 3]) -> Result<f32, SampleError> {
+            unreachable!("bulk-only fixture")
+        }
+        fn sample_volume(
+            &self,
+            _: &mut SamplerContext,
+            buffer: &mut [f32],
+            _: DensityVolume,
+        ) -> Result<(), SampleError> {
+            self.calls.lock().unwrap().push(self.name);
+            buffer.fill(self.value);
+            if self.fail {
+                Err(SampleError::ZeroGradientPeriod)
+            } else {
+                Ok(())
+            }
+        }
+    }
+    let volume = DensityVolume::new([1; 3], [0; 3], [1; 3]).unwrap();
+    for left_fails in [true, false] {
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sampler = BinarySampler {
+            left: Arc::new(Input {
+                name: "left",
+                value: 3.0,
+                fail: left_fails,
+                calls: calls.clone(),
+            }),
+            right: Arc::new(Input {
+                name: "right",
+                value: 7.0,
+                fail: true,
+                calls: calls.clone(),
+            }),
+            operation: BinaryOp::Multiply,
+        };
+        let mut context = SamplerContext::default();
+        let mut wrong_size = [17.0; 2];
+        assert!(
+            sampler
+                .sample_volume(&mut context, &mut wrong_size, volume)
+                .is_err()
+        );
+        assert_eq!(wrong_size, [17.0; 2]);
+        assert!(calls.lock().unwrap().is_empty());
+        let mut output = [17.0];
+        assert_eq!(
+            sampler.sample_volume(&mut context, &mut output, volume),
+            Err(SampleError::ZeroGradientPeriod)
+        );
+        assert_eq!(output, [3.0]);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            if left_fails {
+                vec!["left"]
+            } else {
+                vec!["left", "right"]
+            }
+        );
+    }
+}

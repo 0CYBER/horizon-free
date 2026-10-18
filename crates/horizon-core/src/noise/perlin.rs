@@ -40,18 +40,29 @@ impl PerlinNoise {
     }
 
     fn gradients(&self, cell: [i32; 3]) -> [[i32; 3]; 8] {
-        let p = self.table.permute(cell[0]);
-        let q = self.table.permute(cell[0].wrapping_add(1));
-        let lower = self.table.permute(p.wrapping_add(cell[1]));
-        let upper = self.table.permute(p.wrapping_add(cell[1]).wrapping_add(1));
-        let lower_x = self.table.permute(q.wrapping_add(cell[1]));
-        let upper_x = self.table.permute(q.wrapping_add(cell[1]).wrapping_add(1));
+        self.gradients_at(
+            self.table.permute(cell[0]),
+            self.table.permute(cell[0].wrapping_add(1)),
+            cell[1],
+            cell[2],
+        )
+    }
+
+    /// Corner gradients for a Y cell, with the X column's permutation already
+    /// resolved. `add_volume` reuses one X column across every Y, so hoisting
+    /// the two X permutes out of that loop avoids repeating them per Y.
+    #[inline]
+    fn gradients_at(&self, p: i32, q: i32, cell_y: i32, cell_z: i32) -> [[i32; 3]; 8] {
+        let lower = self.table.permute(p.wrapping_add(cell_y));
+        let upper = self.table.permute(p.wrapping_add(cell_y).wrapping_add(1));
+        let lower_x = self.table.permute(q.wrapping_add(cell_y));
+        let upper_x = self.table.permute(q.wrapping_add(cell_y).wrapping_add(1));
         let rows = [
             lower, lower_x, upper, upper_x, lower, lower_x, upper, upper_x,
         ];
         std::array::from_fn(|i| {
             self.table
-                .gradient(rows[i].wrapping_add(cell[2]).wrapping_add((i / 4) as i32))
+                .gradient(rows[i].wrapping_add(cell_z).wrapping_add((i / 4) as i32))
         })
     }
 
@@ -166,6 +177,8 @@ impl PerlinNoise {
                 let cell_x = floor_i32(shifted_x);
                 let dx = (shifted_x - f64::from(cell_x)) as f32;
                 let fade_x = smoothstep(dx);
+                let p = self.table.permute(cell_x);
+                let q = self.table.permute(cell_x.wrapping_add(1));
                 let mut previous_y = i32::MIN;
                 let mut xz_dots = [0.0_f32; 8];
                 let mut y_gradients = [0.0_f32; 8];
@@ -176,7 +189,7 @@ impl PerlinNoise {
                     let dy = shifted_y - f64::from(cell_y);
                     let fade_y = smoothstep(dy as f32);
                     if previous_y != cell_y {
-                        let gradients = self.gradients([cell_x, cell_y, cell_z]);
+                        let gradients = self.gradients_at(p, q, cell_y, cell_z);
                         for i in 0..8 {
                             xz_dots[i] = gradients[i][0] as f32 * (dx - (i & 1) as f32)
                                 + gradients[i][2] as f32 * (dz - ((i >> 2) & 1) as f32);
