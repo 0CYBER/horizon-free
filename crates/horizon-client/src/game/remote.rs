@@ -1336,6 +1336,9 @@ impl Game<'_> {
             C::LevelEvent(p) if p.kind == 2015 => {
                 self.dragon_egg_particles(p.pos, p.data);
             }
+            C::LevelEvent(p) if p.kind == 2017 => {
+                self.consume_teleport_particles(p.pos, p.data);
+            }
             C::LevelEvent(p) if p.kind == 2001 => {
                 // LevelEvent.PARTICLES_DESTROY_BLOCK: someone else broke a block.
                 let state = BlockStateId(p.data.max(0) as u32);
@@ -2426,6 +2429,17 @@ impl Game<'_> {
             (player.position.z.floor() as i32) >> 4,
         );
         if !self.streaming.is_lit(cx, cz) {
+            // Moved where nothing is loaded by horizon-ctl (`tp`, `fly`):
+            // the server hears of it, and sends the chunks there. A player
+            // who walked there has already sent that move.
+            let pos = [player.position.x, player.position.y, player.position.z];
+            if let Some(r) = self.remote.as_ref()
+                && r.loaded_sent
+                && r.last_pos != pos
+            {
+                let input = r.last_input;
+                self.remote_send_state(input);
+            }
             return Ok(());
         }
         if self.remote.as_ref().is_some_and(|r| !r.loaded_sent) {
@@ -3086,7 +3100,7 @@ impl Game<'_> {
             }
         }
     }
-    /// `LivingEntity.updatingUsingItem` for food on a server client: the
+    /// `LivingEntity.updatingUsingItem` for a consumable on a server client: the
     /// eating animation and its crumbs. The server eats it and sends the
     /// stack, the hunger and the sounds.
     fn remote_tick_using(&mut self) {
@@ -3094,11 +3108,11 @@ impl Game<'_> {
             return;
         };
         let stack = self.stack_in(slot).cloned();
-        let food = stack
+        let consumable = stack
             .as_ref()
             .and_then(|s| self.res.items().get(&s.item))
-            .is_some_and(|i| i.consumable && i.food.is_some());
-        let (Some(stack), true) = (stack, food) else {
+            .and_then(|i| i.consumable.clone());
+        let (Some(stack), Some(consumable)) = (stack, consumable) else {
             self.using = None;
             return;
         };
@@ -3107,14 +3121,16 @@ impl Game<'_> {
             return;
         }
         // Consumable.shouldEmitParticlesAndSounds, as in tick_used_item.
-        let duration = 32;
+        let duration = consumable.ticks().max(0) as u32;
         let remaining = duration - ticks.min(duration);
-        if duration - remaining > (duration as f32 * 0.21875) as u32 && remaining % 4 == 0 {
+        if consumable.particles && consumable.should_emit(remaining as i32) {
             self.eat_particles(&stack, 5);
         }
         if ticks + 1 >= duration {
             self.using = None;
-            self.eat_particles(&stack, 16);
+            if consumable.particles {
+                self.eat_particles(&stack, 16);
+            }
         } else {
             self.using = Some((slot, ticks + 1));
         }
@@ -3718,6 +3734,9 @@ impl Game<'_> {
             "address": horizon_client::net::shown_address(&r.session.address),
             "name": r.session.name,
             "joined": r.joined,
+            // ServerboundPlayerLoadedPacket sent: the level around the
+            // player is ready, and the client ticks and sends its moves.
+            "loaded": r.loaded_sent,
             "status": r.status,
             "entity_id": r.entity_id,
             "dimension": r.dimension.name,

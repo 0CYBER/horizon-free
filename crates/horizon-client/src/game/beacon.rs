@@ -99,11 +99,8 @@ impl Game<'_> {
     }
     /// `getHeight(WORLD_SURFACE)`: above the highest non-air block.
     pub(super) fn world_surface(&self, x: i32, z: i32) -> i32 {
-        let (min, max) = (super::MIN_Y, super::MIN_Y + super::HEIGHT);
-        (min..max)
-            .rev()
-            .find(|&y| !self.res.facts().is_air(self.world.block(x, y, z)))
-            .map_or(min, |y| y + 1)
+        self.world
+            .world_surface(x, z, |id| self.res.facts().is_air(id))
     }
     /// `BeaconBlockEntity.tick` of the beacon at `key`.
     pub(super) fn tick_beacon_at(&mut self, key: (i32, i32, i32)) {

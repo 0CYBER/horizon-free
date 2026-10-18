@@ -25,6 +25,7 @@ mod command_blocks;
 mod command_harness;
 mod commands;
 mod composter;
+mod consume;
 mod control;
 mod copper_golems;
 mod creaking;
@@ -1400,6 +1401,21 @@ impl Dim {
             _ => Self::Overworld,
         }
     }
+    /// `Level.getMinY`: the dimension type's minimum y.
+    fn min_y(self) -> i32 {
+        match self {
+            Self::Overworld => MIN_Y,
+            Self::Nether | Self::End => 0,
+        }
+    }
+    /// `DimensionType.logicalHeight`.
+    fn logical_height(self) -> i32 {
+        match self {
+            Self::Overworld => HEIGHT,
+            Self::Nether => 128,
+            Self::End => 256,
+        }
+    }
     /// `Level.getMaxY`: the dimension type's minimum y plus height, less one.
     fn max_y(self) -> i32 {
         match self {
@@ -2197,6 +2213,11 @@ impl Game<'_> {
                     pos,
                     data,
                 } => self.dragon_egg_particles([pos.x, pos.y, pos.z], data),
+                LevelEvent::LevelEvent {
+                    id: 2017,
+                    pos,
+                    data,
+                } => self.consume_teleport_particles([pos.x, pos.y, pos.z], data),
                 LevelEvent::LevelEvent {
                     id: 2013,
                     pos,
@@ -3059,15 +3080,15 @@ impl Game<'_> {
         }
         Ok(true)
     }
-    /// `Consumable.startConsuming` for held food the player can eat
-    /// (`Player.canEat`): the right click is held for `consume_seconds`.
+    /// `Consumable.startConsuming` for a held consumable: food needs
+    /// `Player.canEat` (`Consumable.canConsume`), anything else is always
+    /// consumed. The right click is held for `consume_seconds`.
     fn start_eating(&mut self, info: &horizon_client::items::ItemInfo) -> bool {
-        if !info.consumable
-            || info.food.is_none()
-            || !self
-                .player
-                .as_ref()
-                .is_some_and(|p| info.can_always_eat || p.health.food.food < 20 || self.creative)
+        if info.consumable.is_none()
+            || (info.food.is_some()
+                && !self.player.as_ref().is_some_and(|p| {
+                    info.can_always_eat || p.health.food.food < 20 || self.creative
+                }))
         {
             return false;
         }
@@ -3076,18 +3097,17 @@ impl Game<'_> {
         }
         true
     }
-    fn apply_consume_effect(
-        &mut self,
-        effect: &horizon_client::items::ConsumeEffect,
-        eye: [f64; 3],
-    ) {
+    fn apply_consume_effect(&mut self, effect: &horizon_client::items::ConsumeEffect) {
         use horizon_client::items::ConsumeEffect;
         match effect {
             ConsumeEffect::ApplyEffects {
                 effects,
                 probability,
             } => {
-                if *probability >= 1.0 || self.world.random.next_float() <= *probability {
+                // ApplyStatusEffectsConsumeEffect.apply: the user's random
+                // (the level's stands in, as for every player draw) is drawn
+                // even at probability 1.
+                if self.world.random.next_float() < *probability {
                     for eff in effects {
                         if let Some(def) = horizon_client::brewing::effect(&eff.id) {
                             if def.instant {
@@ -3120,9 +3140,14 @@ impl Game<'_> {
                 }
                 self.apply_effect_status();
             }
-            ConsumeEffect::TeleportRandomly => {}
+            ConsumeEffect::TeleportRandomly(teleport) => self.teleport_randomly(teleport),
             ConsumeEffect::PlaySound(sound) => {
-                self.audio.play(sound, Some(eye), 1.0, 1.0);
+                // PlaySoundConsumeEffect: at the user's block position.
+                let at = self.player.as_ref().map(|p| {
+                    let b = horizon_core::position::BlockPos::containing(p.position);
+                    [b.x, b.y, b.z].map(|v| f64::from(v) + 0.5)
+                });
+                self.audio.play(sound, at, 1.0, 1.0);
             }
         }
     }
@@ -3204,49 +3229,21 @@ impl Game<'_> {
             }
             return;
         }
-        let duration = 32;
-        // Consumable.shouldEmitParticlesAndSounds(useItemRemainingTicks), with
-        // the remaining ticks before this tick counts down: every 4 ticks once
-        // more than 21.875% of the time has passed (none on the last tick).
+        let Some(consumable) = info.consumable.as_ref() else {
+            self.using = None;
+            return;
+        };
+        // ItemStack.onUseTick: Consumable.shouldEmitParticlesAndSounds with
+        // the remaining ticks before this tick counts them down.
+        let duration = consumable.ticks().max(0) as u32;
         let remaining = duration - ticks.min(duration);
         let ticks = ticks + 1;
-        let eye = self.eye_position().unwrap_or_default();
-        if duration - remaining > (duration as f32 * 0.21875) as u32 && remaining % 4 == 0 {
-            let pitch =
-                (self.world.random.next_float() - self.world.random.next_float()) * 0.2 + 1.0;
-            self.audio.play(
-                "minecraft:entity.generic.eat",
-                Some(eye),
-                0.5 + 0.5 * self.world.random.next_int_bound(2).unwrap_or(0) as f32,
-                pitch,
-            );
-            self.eat_particles(&stack, 5);
+        if consumable.should_emit(remaining as i32) {
+            self.emit_consume(consumable, &stack, 5);
         }
         if ticks >= duration {
             self.using = None;
-            // Consumable.onConsume: emitParticlesAndSounds(..., 16).
-            self.eat_particles(&stack, 16);
-            // Consumable.onConsume.
-            self.post_entity_event("minecraft:eat", horizon_client::mobs::Who::Player);
-            if let Some((nutrition, saturation)) = info.food {
-                if let Some(p) = self.player.as_mut() {
-                    // FoodData.eat(nutrition, saturation)
-                    let food = &mut p.health.food;
-                    food.food = (food.food + nutrition as i32).clamp(0, 20);
-                    food.saturation = (food.saturation + saturation).clamp(0.0, food.food as f32);
-                }
-                self.audio.play(
-                    "minecraft:entity.player.burp",
-                    Some(eye),
-                    0.5,
-                    self.world.random.next_float() * 0.1 + 0.9,
-                );
-                for effect in &info.consume_effects {
-                    self.apply_consume_effect(effect, eye);
-                }
-                self.trigger_item("minecraft:consume_item", &stack);
-                self.consume_held();
-            }
+            self.finish_consuming(&info, consumable, &stack);
         } else {
             self.using = Some((slot, ticks));
         }

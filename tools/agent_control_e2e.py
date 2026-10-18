@@ -7,7 +7,8 @@ runs through the CLI (one horizon-ctl process per command) and through `horizon-
 small JSON-RPC client, and saves a screenshot of each run. The ui scenario drives the menus by
 widget id instead: the title screen, the options (a slider set by id) and the inventory's slots;
 the options scenario reads and sets options.txt values by key; the events scenario waits for
-states (wait-for) and reads the event log.
+states (wait-for) and reads the event log; the consume scenario eats and drinks consumables (a
+golden apple, milk, honey, chorus fruit) and checks their effects, remainders and teleport.
 
     python3 tools/agent_control_e2e.py                 # both modes
     python3 tools/agent_control_e2e.py --mode mcp      # one of them
@@ -378,7 +379,52 @@ def events_scenario(d, out):
     return {'events': len(events)}
 
 
-SCENARIOS = {'survival': scenario, 'ui': ui_scenario, 'options': options_scenario, 'events': events_scenario}
+def consume_scenario(d, out):
+    # Consumables finish as vanilla's Consumable.onConsume: always-edible food at full hunger with its
+    # effects, milk and honey (no food or drink sounds) with their effects and use remainders, and
+    # chorus fruit's random teleport.
+    d('click', id='singleplayer')
+    if 'game' not in widgets(d):
+        d('click', id='create-new-world')
+    d('type', field='name', replace=True, text='Consume')
+    d('click', id='create-new-world')
+    d('wait_for', condition='loaded', timeout=400)
+
+    def consume(item, seconds):
+        d('command', command='clear @s')
+        d('give', item=item, count=1)
+        d('use_item', hold=seconds)
+        d('wait', ticks=5)
+        state = d('state')
+        return state, {e['id'] for e in state['player']['effects']}
+
+    def held(state):
+        return state['held'] and state['held']['item']
+
+    state, effects = consume('golden_apple', 2.2)
+    assert state['player']['food'] == 20 and {'regeneration', 'absorption'} <= effects, effects
+    assert held(state) is None, state['held']
+    d('command', command='effect give @s minecraft:speed 60')
+    state, effects = consume('milk_bucket', 2.2)
+    assert effects == set(), effects
+    assert held(state) == 'minecraft:bucket', state['held']
+    d('command', command='effect give @s minecraft:poison 60')
+    d('command', command='effect give @s minecraft:speed 60')
+    state, effects = consume('honey_bottle', 2.6)
+    assert effects == {'speed'}, effects
+    assert held(state) == 'minecraft:glass_bottle', state['held']
+    before = d('state')['player']['position']
+    state, _ = consume('chorus_fruit', 2.2)
+    after = state['player']['position']
+    moved = [b - a for a, b in zip(before, after)]
+    assert held(state) is None, state['held']
+    assert moved != [0, 0, 0] and abs(moved[0]) <= 8 and abs(moved[2]) <= 8, moved
+    d('screenshot', path=str(out / f'consume-{d.name}.png'))
+    return {'teleported': [round(m, 2) for m in moved]}
+
+
+SCENARIOS = {'survival': scenario, 'ui': ui_scenario, 'options': options_scenario, 'events': events_scenario,
+             'consume': consume_scenario}
 
 
 def run(mode, ctl, out, resources, which='survival'):

@@ -23,7 +23,7 @@ use horizon_client::{
     save::SaveDir, streaming::Streaming, tick_chunk_membership::TickChunkMembership, world::World,
 };
 use horizon_world::level::{LevelEvent, Ticks};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 /// Server ticks a level other than the Overworld stays loaded with no player
 /// in it, before it is saved and closed (vanilla unloads a level's chunks
@@ -285,6 +285,37 @@ impl Game<'_> {
         self.level_pass = Pass::default();
         result?;
         self.close_idle_levels()
+    }
+
+    /// `tick_server` as a server thread runs it. With `HORIZON_SPIKES=MS`, a
+    /// tick longer than MS is logged with its thread CPU time and spans.
+    pub(super) fn tick_server_timed(&mut self, paused: bool) -> Result<()> {
+        let Some(threshold) = self.options.spikes else {
+            return self.tick_server(paused);
+        };
+        let (started, cpu) = (Instant::now(), horizon_client::spans::thread_cpu());
+        let result = self.tick_server(paused);
+        let wall = started.elapsed().as_secs_f32() * 1000.0;
+        // Taken every tick: nothing else takes this thread's spans.
+        let spans = horizon_client::spans::take();
+        if wall > threshold {
+            let cpu = horizon_client::spans::thread_cpu()
+                .zip(cpu)
+                .map_or_else(String::new, |(end, start)| {
+                    format!(", cpu {:.1} ms", (end - start).as_secs_f32() * 1000.0)
+                });
+            let list: Vec<String> = spans
+                .iter()
+                .filter(|(_, ms)| *ms >= 0.5)
+                .map(|(n, ms)| format!("{n} {ms:.1}"))
+                .collect();
+            log::info!(
+                "Horizon: slow tick {wall:.1} ms{cpu} ({} mobs): {}",
+                self.mobs.len(),
+                list.join(", ")
+            );
+        }
+        result
     }
 
     /// The levels this server tick runs, in `MinecraftServer.levels` order

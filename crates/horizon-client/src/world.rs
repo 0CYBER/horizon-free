@@ -287,6 +287,13 @@ impl World {
         }
         Ok(())
     }
+    /// `getHeight(Heightmap.Types.WORLD_SURFACE, x, z)`: one above the highest
+    /// block that isn't `air`, or `MIN_Y` (also where the chunk isn't loaded).
+    pub fn world_surface(&self, x: i32, z: i32, air: impl Fn(BlockStateId) -> bool) -> i32 {
+        self.chunks.get(&(x >> 4, z >> 4)).map_or(MIN_Y, |chunk| {
+            chunk.world_surface(x, z, |v| air(BlockStateId(v)))
+        })
+    }
     pub fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId {
         self.chunks
             .get(&(x >> 4, z >> 4))
