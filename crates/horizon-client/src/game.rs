@@ -1152,6 +1152,8 @@ struct Game<'a> {
     lan_acting_uuid: Option<u128>,
     /// Command feedback to forward to a guest.
     chat_capture: Option<Vec<horizon_client::text::Text>>,
+    /// Packets for the guest acting now, sent once its action returns.
+    guest_packets: Vec<horizon_protocol::packets::play::Clientbound>,
     /// `broadcastToAdmins` lines a guest's command queued, sent once it
     /// returns: the line, whether operators get it and whether the console
     /// logs it.
@@ -10384,6 +10386,7 @@ impl<'a> Game<'a> {
             lan_entity_events: Vec::new(),
             lid_openers: HashMap::new(),
             lan_acting: None,
+            guest_packets: Vec::new(),
             lan_acting_name: None,
             lan_acting_uuid: None,
             chat_capture: None,

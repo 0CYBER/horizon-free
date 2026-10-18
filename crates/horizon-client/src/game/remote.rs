@@ -40,12 +40,14 @@ use horizon_protocol::{
     text::{Language, format_java, plain},
 };
 use horizon_world::{nbt::Tag, registry::BlockStateId};
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 use winit::{event::MouseButton, keyboard::KeyCode};
+
+/// A text component the server sent, for the HUD.
+fn remote_text(tag: &Tag) -> horizon_client::text::Text {
+    use horizon_client::scoreboard::{comp_text, tag_to_json};
+    comp_text(&tag_to_json(tag))
+}
 
 /// Streaming needs a generator; a server world never generates.
 struct NoTerrain;
@@ -120,7 +122,6 @@ pub(super) struct Remote {
     pub chat: Vec<(String, Instant)>,
     /// The server's command tree (ClientboundCommandsPacket).
     pub commands: Option<horizon_client::command::Dispatcher>,
-    action_bar: Option<(String, Instant)>,
     players: HashMap<u128, String>,
     /// `ClientPacketListener.playerInfoMap` as player-list entries, and
     /// which of them are listed.
@@ -306,7 +307,6 @@ impl Game<'_> {
             game_mode: 0,
             chat: Vec::new(),
             commands: None,
-            action_bar: None,
             players: HashMap::new(),
             tab_players: HashMap::new(),
             skin_textures: HashMap::new(),
@@ -1659,10 +1659,9 @@ impl Game<'_> {
                         .map(|r| r.lang.clone())
                         .unwrap_or_default(),
                 );
+                // ChatListener.handleOverlay.
                 if p.overlay {
-                    if let Some(r) = self.remote.as_mut() {
-                        r.action_bar = Some((text, Instant::now()));
-                    }
+                    self.titles.set_overlay(remote_text(&p.content), false);
                 } else {
                     self.chat_line(text);
                 }
@@ -1893,15 +1892,16 @@ impl Game<'_> {
                     self.stats.values.entry(ty).or_default().insert(key, count);
                 }
             }
-            C::SetActionBarText(p) | C::SetTitleText(p) => {
-                let lang = self
-                    .remote
-                    .as_ref()
-                    .map(|r| r.lang.clone())
-                    .unwrap_or_default();
-                let text = plain(&p.text, &lang);
-                if let Some(r) = self.remote.as_mut() {
-                    r.action_bar = Some((text, Instant::now()));
+            // ClientPacketListener.setActionBarText, setTitleText,
+            // setSubtitleText, setTitlesAnimation and handleTitlesClear.
+            C::SetActionBarText(p) => self.titles.set_overlay(remote_text(&p.text), false),
+            C::SetTitleText(p) => self.titles.set_title(remote_text(&p.text)),
+            C::SetSubtitleText(p) => self.titles.set_subtitle(remote_text(&p.text)),
+            C::SetTitlesAnimation(p) => self.titles.set_times(p.fade_in, p.stay, p.fade_out),
+            C::ClearTitles(p) => {
+                self.titles.clear();
+                if p.value {
+                    self.titles.reset_times();
                 }
             }
             _ => {}
@@ -2252,6 +2252,8 @@ impl Game<'_> {
         self.tick_client_effects();
         // Player.tick's sleep counter (the darkening and the wake-up fade).
         self.sleep_timer = super::tick_sleep_timer(self.sleep_timer, self.sleeping.is_some());
+        // Gui.tick: the titles, the action bar and the held item's name.
+        self.tick_hud();
         let ghast_collisions = self.happy_ghast_player_collisions();
         let pushed = self.remote_pushes();
         let Some(player) = self.player.as_mut() else {
@@ -3506,12 +3508,6 @@ impl Game<'_> {
             );
             batch.text(atlas, text, 4.0, y, rgba(255, 255, 255, a), true);
             y -= 9.0;
-        }
-        if let Some((text, at)) = &r.action_bar
-            && now.duration_since(*at) < Duration::from_secs(3)
-        {
-            let tw = HudBatch::text_width(atlas, text);
-            batch.text(atlas, text, (w - tw) / 2.0, h - 68.0, u32::MAX, true);
         }
         if self.screen == Screen::Dead
             && let Some(message) = &r.death_message
