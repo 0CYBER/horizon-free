@@ -65,12 +65,13 @@ pub fn resource_candidates(config: &Config, dir: &Path, program: Option<&Path>) 
     out
 }
 
-/// The prepared game files: a folder holding the asset index `horizon-prepare` writes.
+/// The prepared game files: a folder holding the manifest every `horizon-prepare` run writes
+/// (`asset-index.json` comes only with the optional sounds, which a server doesn't need).
 pub fn resources(config: &Config, dir: &Path, program: Option<&Path>) -> Result<PathBuf, String> {
     let candidates = resource_candidates(config, dir, program);
     candidates
         .iter()
-        .find(|d| d.join("asset-index.json").is_file())
+        .find(|d| d.join("horizon-resources.json").is_file())
         .cloned()
         .ok_or_else(|| {
             let tried: Vec<String> = candidates
@@ -178,5 +179,20 @@ mod tests {
             resource_candidates(&config, dir, Some(program)),
             [PathBuf::from("/data/res")]
         );
+    }
+
+    #[test]
+    fn resources_prepared_without_sounds_are_found() {
+        let root = std::env::temp_dir().join(format!("horizon-server-res-{}", std::process::id()));
+        let prepared = root.join(".local/horizon-client/26.3");
+        std::fs::create_dir_all(&prepared).unwrap();
+        let program = root.join("horizon-client");
+        let config = Config::default();
+        let server = root.join("server");
+        assert!(resources(&config, &server, Some(&program)).is_err());
+        // What `horizon-prepare` writes on every run; no asset index without `horizon-prepare sounds`.
+        std::fs::write(prepared.join("horizon-resources.json"), "{}").unwrap();
+        assert_eq!(resources(&config, &server, Some(&program)), Ok(prepared));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
