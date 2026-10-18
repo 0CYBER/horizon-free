@@ -277,7 +277,7 @@ impl Game<'_> {
         let n = registry.len();
         let tag = |name: &str| {
             self.res
-                .items
+                .items()
                 .block_tags
                 .get(name)
                 .cloned()
@@ -296,7 +296,7 @@ impl Game<'_> {
             resonator: vec![false; n],
         };
         for i in 0..n {
-            let facts = self.res.facts.get(BlockStateId(i as u32));
+            let facts = self.res.facts().get(BlockStateId(i as u32));
             let name: &str = &facts.name;
             t.kinds[i] = match name {
                 "minecraft:sculk_sensor" => KIND_SENSOR,
@@ -614,7 +614,7 @@ impl Game<'_> {
                 };
                 !own && !calibrated_out
                     && frequency != 0
-                    && self.res.behaviours.sculk_sensor_can_activate(state)
+                    && self.res.behaviours().sculk_sensor_can_activate(state)
             }
             SculkKind::Shrieker => !self.shrieker_shrieking(state) && ctx.player,
             SculkKind::Catalyst => false,
@@ -775,7 +775,7 @@ impl Game<'_> {
         match kind {
             SculkKind::Sensor | SculkKind::Calibrated => {
                 let state = self.world.block(key.0, key.1, key.2);
-                if self.res.behaviours.sculk_sensor_can_activate(state) {
+                if self.res.behaviours().sculk_sensor_can_activate(state) {
                     let frequency = sculk::frequency(info.event);
                     if let Some(e) = self.sculk_entity(key) {
                         e.last_frequency = frequency;
@@ -865,7 +865,7 @@ impl Game<'_> {
                 if self.mobs.iter().any(|m| m.id == id && m.species() == Species::Warden));
             match self.kind_of_state(state.0) {
                 KIND_SENSOR | KIND_CALIBRATED => {
-                    if is_warden || !self.res.behaviours.sculk_sensor_can_activate(state) {
+                    if is_warden || !self.res.behaviours().sculk_sensor_can_activate(state) {
                         continue;
                     }
                     let calibrated = self.kind_of_state(state.0) == KIND_CALIBRATED;
@@ -1008,7 +1008,7 @@ impl Game<'_> {
         if warning < 4 {
             return false;
         }
-        let Some(kind) = self.res.mob_types.get("minecraft:warden").cloned() else {
+        let Some(kind) = self.res.mob_types().get("minecraft:warden").cloned() else {
             return false;
         };
         for _ in 0..20 {
@@ -1051,7 +1051,7 @@ impl Game<'_> {
     /// `SpawnUtil.moveToPossibleSpawnPosition` with `ON_TOP_OF_COLLIDER`.
     fn spawn_position(&self, x: i32, y: i32, z: i32, range: i32) -> Option<(i32, i32, i32)> {
         use horizon_client::mobs::data;
-        let flags = |b: BlockStateId| self.res.mob_data.state(b);
+        let flags = |b: BlockStateId| self.res.mob_data().state(b);
         let mut search = y;
         let mut above = self.world.block(x, search, z);
         for _ in (-range..=range).rev() {
@@ -1170,7 +1170,7 @@ impl Game<'_> {
             && let Some(eye) = self.eye_position()
         {
             let in_water =
-                horizon_client::fog::fog_type(&self.world, &self.res.facts, eye, self.forward())
+                horizon_client::fog::fog_type(&self.world, self.res.facts(), eye, self.forward())
                     == FogType::Water;
             return self.fog.water_vision(in_water);
         }
@@ -1335,7 +1335,7 @@ impl Game<'_> {
                 .play("minecraft:block.sculk.charge", Some(c), 1.0, 1.0);
             let solid = self
                 .res
-                .facts
+                .facts()
                 .get(self.world.block(pos.x, pos.y, pos.z))
                 .full_collision;
             let (particles, spread) = if solid { (40, 0.45f32) } else { (20, 0.25f32) };
@@ -1543,7 +1543,8 @@ impl Game<'_> {
             at[1].floor() as i32,
             at[2].floor() as i32,
         );
-        self.res.facts.get(self.world.block(x, y, z)).fluid == horizon_client::blocks::Fluid::Water
+        self.res.facts().get(self.world.block(x, y, z)).fluid
+            == horizon_client::blocks::Fluid::Water
     }
     /// `Entity.move`'s emission: footsteps, swimming, landing and splashes.
     fn entity_motion_events(
@@ -1590,13 +1591,13 @@ impl Game<'_> {
             at[2].floor() as i32,
         );
         let state = self.world.block(block.0, block.1, block.2);
-        let air = self.res.facts.is_air(state);
+        let air = self.res.facts().is_air(state);
         let climbable = self
             .res
-            .items
+            .items()
             .block_tags
             .get("minecraft:climbable")
-            .is_some_and(|t| t.contains(&*self.res.facts.get(state).name));
+            .is_some_and(|t| t.contains(&*self.res.facts().get(state).name));
         let travelled = if climbable {
             ((dx * dx + dy * dy + dz * dz).sqrt() * f64::from(0.6f32)) as f32
         } else {

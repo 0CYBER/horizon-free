@@ -596,11 +596,11 @@ impl Game<'_> {
             View::Restrictions => self.draw_restrictions(batch),
             View::GameRules => {
                 if let Some(rules) = o.rules.as_mut() {
-                    rules.draw(batch, &self.atlas, self.cursor);
+                    rules.draw(batch, &self.gui.atlas, self.cursor);
                 } else {
                     ui::menu_background(
                         batch,
-                        &self.atlas,
+                        &self.gui.atlas,
                         0.0,
                         0.0,
                         batch.width,
@@ -614,7 +614,7 @@ impl Game<'_> {
     }
 
     fn draw_lock_question(&self, o: &WorldOptions, batch: &mut HudBatch) {
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let (w, h) = (batch.width, batch.height);
         // Screen.extractTransparentBackground.
         batch.fill_gradient(
@@ -656,7 +656,7 @@ impl Game<'_> {
     }
 
     fn draw_restrictions(&self, batch: &mut HudBatch) {
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let (w, h) = (batch.width, batch.height);
         ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
         let title = Text::translate("restrictions_screen.title", &[]);
@@ -687,7 +687,7 @@ impl Game<'_> {
     }
 
     fn draw_options_view(&self, o: &mut WorldOptions, batch: &mut HudBatch, cursor: (f32, f32)) {
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let (w, h) = (batch.width, batch.height);
         o.scroll = o.scroll.clamp(0.0, o.scroll_limit(h));
         // extractMenuBackground: the in-world background, the list
@@ -810,7 +810,7 @@ impl Game<'_> {
         match o.view {
             View::Options => {}
             View::GameRules => {
-                let atlas = &self.atlas;
+                let atlas = &self.gui.atlas;
                 let exit = o.rules.as_mut().and_then(|rules| {
                     if rules.clicks_button(atlas, self.cursor, (w, h)) {
                         self.audio.play_button_click();
@@ -824,7 +824,7 @@ impl Game<'_> {
                 return;
             }
             View::LockQuestion => {
-                let p = Popup::lock_question(&self.atlas.font, o.difficulty, (w, h));
+                let p = Popup::lock_question(&self.gui.atlas.font, o.difficulty, (w, h));
                 let hit = p
                     .buttons
                     .iter()
@@ -842,7 +842,8 @@ impl Game<'_> {
                 return;
             }
             View::Restrictions => {
-                let r = Restrictions::new(&self.atlas.font, self.settings.chat_visibility, (w, h));
+                let r =
+                    Restrictions::new(&self.gui.atlas.font, self.settings.chat_visibility, (w, h));
                 let in_body = self.cursor.1 >= r.area.0 && self.cursor.1 < r.area.1;
                 let action = r.action.is_some_and(|(ax, ay)| {
                     in_body && ui::hovered(self.cursor, ax, ay, 200.0, 20.0)

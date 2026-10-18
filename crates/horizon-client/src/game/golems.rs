@@ -8,7 +8,7 @@ use horizon_client::Result;
 impl Game<'_> {
     fn golem_block(&self, p: [i32; 3]) -> &str {
         let state = self.world.block(p[0], p[1], p[2]);
-        &self.res.facts.get(state).name
+        &self.res.facts().get(state).name
     }
     fn is_golem_head(&self, p: [i32; 3]) -> bool {
         matches!(
@@ -33,7 +33,7 @@ impl Game<'_> {
         for (ax, az) in [(1, 0), (0, 1)] {
             let side = |s: i32, row: i32| [head[0] + ax * s, head[1] - row, head[2] + az * s];
             let arms = (-1..=1).all(|s| self.golem_block(side(s, 1)) == "minecraft:iron_block");
-            let air = |p: [i32; 3]| self.res.facts.is_air(self.world.block(p[0], p[1], p[2]));
+            let air = |p: [i32; 3]| self.res.facts().is_air(self.world.block(p[0], p[1], p[2]));
             if arms
                 && self.golem_block(side(0, 2)) == "minecraft:iron_block"
                 && [-1, 1].iter().all(|&s| air(side(s, 0)) && air(side(s, 2)))
@@ -58,7 +58,7 @@ impl Game<'_> {
         let below = [head[0], head[1] - 1, head[2]];
         let name = self.golem_block(below);
         self.res
-            .items
+            .items()
             .block_tags
             .get("minecraft:copper")
             .is_some_and(|t| t.contains(name))
@@ -88,7 +88,7 @@ impl Game<'_> {
     /// `EntityType.create(level, TRIGGERED)` and `snapTo`: a built golem or
     /// wither has no spawn finalization and draws nothing from the level.
     pub(super) fn create_triggered(&mut self, kind: &str, at: [f64; 3], yaw: f32) -> Option<u32> {
-        let t = self.res.mob_types.get(kind).cloned()?;
+        let t = self.res.mob_types().get(kind).cloned()?;
         self.next_entity += 1;
         let mut mob = horizon_client::mobs::Mob::new(
             self.next_entity,
@@ -181,9 +181,9 @@ impl Game<'_> {
         });
         if let Some(chest) = chest {
             self.with_level(|b, level, ticks| b.set_block(level, ticks, pos, chest, 2));
-            if let Some(entity) =
-                horizon_client::containers::BlockEntity::for_block(&self.res.facts.get(chest).name)
-            {
+            if let Some(entity) = horizon_client::containers::BlockEntity::for_block(
+                &self.res.facts().get(chest).name,
+            ) {
                 self.world
                     .block_entities
                     .insert((below[0], below[1], below[2]), entity);

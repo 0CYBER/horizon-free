@@ -22,7 +22,7 @@ impl Game<'_> {
         let entity = self.world.block_entities.get(&key)?;
         let block = &self
             .res
-            .facts
+            .facts()
             .get(self.world.block(key.0, key.1, key.2))
             .name;
         let mut tag = save::encode_block_entity(key, entity, block);
@@ -37,7 +37,7 @@ impl Game<'_> {
     pub(super) fn picked_stack(&self, pos: [i32; 3], include_data: bool) -> Option<ItemStack> {
         let key = (pos[0], pos[1], pos[2]);
         let state = self.world.block(pos[0], pos[1], pos[2]);
-        let facts = self.res.facts.get(state);
+        let facts = self.res.facts().get(state);
         if &*facts.item == "minecraft:air" {
             return None;
         }

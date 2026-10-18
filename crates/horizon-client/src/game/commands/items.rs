@@ -375,7 +375,11 @@ impl Game<'_> {
                         } else {
                             0
                         };
-                        let max = self.res.items.get(&stack.item).map_or(64, |i| i.max_stack);
+                        let max = self
+                            .res
+                            .items()
+                            .get(&stack.item)
+                            .map_or(64, |i| i.max_stack);
                         stack.count = (base + n).clamp(0, max as i32) as u32;
                     }
                     "minecraft:limit_count" => {
@@ -389,7 +393,11 @@ impl Game<'_> {
                         }
                     }
                     "minecraft:set_damage" => {
-                        let max = self.res.items.get(&stack.item).map_or(0, |i| i.max_damage);
+                        let max = self
+                            .res
+                            .items()
+                            .get(&stack.item)
+                            .map_or(0, |i| i.max_damage);
                         if max > 0 {
                             let f = match m["damage"].as_f64() {
                                 Some(f) => f as f32,
@@ -587,7 +595,7 @@ impl Game<'_> {
         if let Some(Tag::Int(n)) = s.data().and_then(|d| d.other("minecraft:max_stack_size")) {
             return (*n).clamp(1, 99) as u32;
         }
-        self.res.items.get(&s.item).map_or(64, |i| i.max_stack)
+        self.res.items().get(&s.item).map_or(64, |i| i.max_stack)
     }
     /// `ResourceOrIdArgument.getItemModifier`: an inline modifier (SNBT) or
     /// a registered one.

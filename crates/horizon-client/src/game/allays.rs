@@ -29,7 +29,11 @@ impl Game<'_> {
                 continue;
             };
             let carried = self.mobs[i].extra.ints[1];
-            let max = self.res.items.get(&held).map_or(64, |i| i.max_stack as i32);
+            let max = self
+                .res
+                .items()
+                .get(&held)
+                .map_or(64, |i| i.max_stack as i32);
             // GoToWantedItem / wantsToPickUp: the same item within 32.
             let wanted = if griefing && carried < max && self.mobs[i].extra.ints[3] <= 0 {
                 self.dropped

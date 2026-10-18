@@ -192,7 +192,7 @@ impl Game<'_> {
             return Ok(0);
         };
         let level = Self::int(ctx, "level").unwrap_or(1);
-        let enchantments = &self.res.stations.enchantments;
+        let enchantments = &self.res.stations().enchantments;
         let Some(def) = enchantments.get(&id) else {
             return Err(err(
                 "argument.resource.not_found",
@@ -218,8 +218,8 @@ impl Game<'_> {
                         }
                         continue;
                     };
-                    let e = &self.res.stations.enchantments;
-                    let compatible = e.can_enchant(&self.res.items, &id, &stack.item)
+                    let e = &self.res.stations().enchantments;
+                    let compatible = e.can_enchant(self.res.items(), &id, &stack.item)
                         && stack
                             .crafting_enchantments()
                             .iter()
@@ -270,7 +270,7 @@ impl Game<'_> {
         }
         let (name, curse) = self
             .res
-            .stations
+            .stations()
             .enchantments
             .full_name(&id, level.max(0) as u32);
         let style = Style {

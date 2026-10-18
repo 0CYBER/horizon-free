@@ -21,7 +21,7 @@ impl Game<'_> {
             && self.settings.resource_packs.iter().all(|id| id == "vanilla")
             && self.player.is_some()
             && !self.spectator()
-            && !opaque(self.res.facts.get(self.world.block(at[0], at[1], at[2]))))
+            && !opaque(self.res.facts().get(self.world.block(at[0], at[1], at[2]))))
         .then(|| Culler::new(camera.to_array(), 8_192));
     }
 
@@ -31,7 +31,7 @@ impl Game<'_> {
         if let Some(culler) = &self.entity_culler {
             culler.cull_vertices(vertices, start, |pos| {
                 let state = self.world.block(pos[0], pos[1], pos[2]);
-                if !opaque(self.res.facts.get(state)) {
+                if !opaque(self.res.facts().get(state)) {
                     return false;
                 }
                 let Some(y) = pos[1].checked_sub(MIN_Y) else {

@@ -162,7 +162,7 @@ impl Game<'_> {
                 &self.world,
                 self.collision,
                 &self.pack.assets,
-                &self.res.facts,
+                self.res.facts(),
             )?;
             if t.fuse <= 0 {
                 let center = [
@@ -189,7 +189,7 @@ impl Game<'_> {
             return Ok(false);
         };
         let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-        if &*self.res.facts.get(state).name != "minecraft:tnt" {
+        if &*self.res.facts().get(state).name != "minecraft:tnt" {
             return Ok(false);
         }
         let pos = BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]);
@@ -219,7 +219,7 @@ impl Game<'_> {
         // Face sprites from the block model: up, down, north, south, west, east.
         let Ok(models) = self
             .pack
-            .assets
+            .render
             .model_catalog
             .collect(state, BlockPos::new(0, 0, 0))
         else {
@@ -241,7 +241,7 @@ impl Game<'_> {
                     .pack
                     .layer_names
                     .get(&face.layer)
-                    .and_then(|name| self.atlas.sprites.get(name).copied());
+                    .and_then(|name| self.gui.atlas.sprites.get(name).copied());
             }
         }
         let range = super::entity_culling::default_range(
@@ -487,9 +487,10 @@ mod tests {
             return;
         }
         let assets = horizon_client::assets::Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let facts = horizon_client::blocks::BlockFacts::load(&root, assets.registry).unwrap();
         let collision = horizon_client::collisions::load(&root, assets.registry).unwrap();
-        let mut world = horizon_client::world::World::test_scene(&assets, 3).unwrap();
+        let mut world = horizon_client::world::World::test_scene(&assets, &render, 3).unwrap();
         let stone = assets.registry.default_state("minecraft:stone").unwrap();
         let water = assets.registry.default_state("minecraft:water").unwrap();
         let mut state = assets.registry.state(water).unwrap().clone();

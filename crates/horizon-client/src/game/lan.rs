@@ -470,7 +470,7 @@ impl Game<'_> {
             .clone()?;
         let biome_names: Vec<String> = self
             .res
-            .biomes
+            .biomes()
             .list
             .iter()
             .map(|b| b.name.clone())
@@ -483,7 +483,7 @@ impl Game<'_> {
             .unwrap_or_default();
         let mut encoder = ChunkEncoder::new(
             self.res
-                .facts
+                .facts()
                 .states
                 .iter()
                 .map(|s| (s.name.clone(), s.fluid_level > 0 || s.waterlogged)),
@@ -1118,7 +1118,7 @@ impl Game<'_> {
 
     /// The guests' models, for the host to see them.
     fn lan_update_models(&mut self, host: &mut LanHost) {
-        let Some(kind) = self.res.player_type.clone() else {
+        let Some(kind) = self.res.player_type().clone() else {
             return;
         };
         host.models
@@ -1189,7 +1189,7 @@ impl Game<'_> {
         let Some(host) = &self.lan else {
             return;
         };
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         for m in host.models.values() {
             let entity_start = out.len();
@@ -1205,7 +1205,7 @@ impl Game<'_> {
                 camera,
                 &lookup,
                 packed,
-                &self.res.mob_data,
+                self.res.mob_data(),
                 &self.worn_armor_layers(m),
                 out,
             );

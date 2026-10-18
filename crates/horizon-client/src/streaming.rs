@@ -335,6 +335,7 @@ impl GenerationScan {
 }
 pub struct WorkerContext {
     pub assets: Arc<crate::assets::Assets>,
+    pub render: Arc<crate::assets::RenderAssets>,
     pub tables: Arc<MeshTables>,
     pub biomes: Arc<crate::biome::Biomes>,
     pub light: Arc<LightTables>,
@@ -424,6 +425,7 @@ impl Streaming {
                                         cutout_leaves: settings.cutout_leaves,
                                         cull_leaves: settings.cull_leaves,
                                         assets: &context.assets,
+                                        render: &context.render,
                                         tables: &context.tables,
                                         biomes: &context.biomes,
                                         visibility,

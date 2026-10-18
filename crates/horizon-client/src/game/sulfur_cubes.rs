@@ -52,7 +52,7 @@ impl Game<'_> {
         }
         // shortcut: the body slot retains only an item id; preserve the stack
         // before supporting its block-state components here.
-        let Some(state) = self.res.items.get(item).and_then(|item| item.block) else {
+        let Some(state) = self.res.items().get(item).and_then(|item| item.block) else {
             return;
         };
         let start = out.len();
@@ -60,7 +60,7 @@ impl Game<'_> {
             state,
             42,
             block_transform(base, mob.is_baby()),
-            block_light(light, self.res.facts.get(state).emission),
+            block_light(light, self.res.facts().get(state).emission),
             true,
             out,
         );
