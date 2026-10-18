@@ -287,6 +287,7 @@ pub enum Processor {
     BlackstoneReplace,
     SpawnerMobs(Box<SpawnerMobs>),
     Pick(Box<Pick>),
+    CountCap(Box<CountCap>),
 }
 #[derive(Clone, Debug, Default)]
 pub struct ProcessorList(pub Vec<Processor>);
@@ -440,6 +441,56 @@ impl Pick {
             state,
             nbt,
         }
+    }
+}
+
+/// `horizon:count_cap`, which `horizon-port-pack` writes for Better
+/// Dungeons' chest processor (Java in the mod): of the `blocks` one
+/// placement meets, the first `min` stay, the rest each stay when
+/// `settings.getRandom(pos).nextFloat() <= chance` until `max` have, and the
+/// others become `replacement`. The count is the placement's (the mod's
+/// DungeonContext, set up per StructureTemplate.placeInWorld: one chunk of
+/// the piece), shared by every such processor in it.
+#[derive(Clone, Debug)]
+pub struct CountCap {
+    blocks: BTreeSet<String>,
+    min: u32,
+    max: u32,
+    chance: f32,
+    replacement: BlockStateId,
+}
+impl CountCap {
+    fn decode(
+        value: &Value,
+        state: impl Fn(&Value) -> Result<BlockStateId, DecodeError>,
+    ) -> Result<Self, DecodeError> {
+        let count = |key: &'static str| {
+            value[key]
+                .as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or(DecodeError::Field(key))
+        };
+        Ok(Self {
+            blocks: value["blocks"]
+                .as_array()
+                .ok_or(DecodeError::Field("blocks"))?
+                .iter()
+                .map(|b| {
+                    let b = b.as_str().ok_or(DecodeError::Field("blocks"))?;
+                    Ok(super::super::tags::identifier(b)?.to_string())
+                })
+                .collect::<Result<_, DecodeError>>()?,
+            min: count("min")?,
+            max: count("max")?,
+            chance: float(value, "chance")?,
+            replacement: state(&value["replacement"])?,
+        })
+    }
+    /// Whether a counted block stays, counting it if so.
+    fn keeps(&self, counted: &mut u32, roll: impl FnOnce() -> f32) -> bool {
+        let keep = *counted < self.min || (*counted < self.max && roll() <= self.chance);
+        *counted += u32::from(keep);
+        keep
     }
 }
 
@@ -675,6 +726,7 @@ impl Processor {
                 })?))
             }
             "horizon:pick" => Self::Pick(Box::new(Pick::decode(value, state)?)),
+            "horizon:count_cap" => Self::CountCap(Box::new(CountCap::decode(value, state)?)),
             _ => return Err(DecodeError::Field("structure processor type")),
         })
     }
@@ -728,6 +780,8 @@ pub struct PlaceSettings<'a> {
     /// StructurePlaceSettings.ignoreEntities / finalizeEntities.
     pub ignore_entities: bool,
     pub finalize_entities: bool,
+    /// The blocks `horizon:count_cap` kept in this placement.
+    counted: u32,
 }
 impl<'a> PlaceSettings<'a> {
     pub fn new(rotation: Rotation) -> Self {
@@ -742,6 +796,7 @@ impl<'a> PlaceSettings<'a> {
             known_shape: false,
             ignore_entities: false,
             finalize_entities: false,
+            counted: 0,
         }
     }
     pub fn with_processors(mut self, list: &'a ProcessorList) -> Self {
@@ -906,6 +961,23 @@ fn process_block<W: PlacementContext>(
             Some(info)
         }
         Processor::Capped { .. } => Some(info),
+        Processor::CountCap(cap) => match cap.blocks.contains(name(info.state)) {
+            true => {
+                let pos = info.pos;
+                let mut counted = settings.counted;
+                let keep = cap.keeps(&mut counted, || settings.with_random(pos, |r| r.float()));
+                settings.counted = counted;
+                Some(match keep {
+                    true => info,
+                    false => BlockInfo {
+                        pos,
+                        state: cap.replacement,
+                        nbt: None,
+                    },
+                })
+            }
+            false => Some(info),
+        },
         Processor::Pick(pick) => match name(info.state) == pick.block {
             true => Some(settings.with_random(info.pos, |r| pick.apply(info, r))),
             false => Some(info),
@@ -1027,6 +1099,7 @@ fn process_infos<W: PlacementContext>(
     reference: [i32; 3],
     settings: &mut PlaceSettings<'_>,
 ) -> Result<Vec<BlockInfo>, PlacementQueryError> {
+    settings.counted = 0;
     let whole = settings
         .processors
         .iter()
@@ -1723,5 +1796,27 @@ mod tests {
             ]
         );
         assert!(Pick::decode(&json!({"block": "a", "default": {"states": []}}), id).is_err());
+    }
+
+    #[test]
+    fn count_caps_keep_the_first_then_some() {
+        let cap = CountCap::decode(
+            &json!({"blocks": ["chest", "minecraft:trapped_chest"], "min": 1, "max": 2,
+                    "chance": 0.2, "replacement": {"id": "minecraft:cave_air"}}),
+            |_| Ok(BlockStateId(5)),
+        )
+        .unwrap();
+        assert!(cap.blocks.contains("minecraft:chest"));
+        let mut counted = 0;
+        // The first stays without a roll.
+        assert!(cap.keeps(&mut counted, || unreachable!()));
+        // Then each stays on nextFloat <= 0.2, until two have.
+        assert!(!cap.keeps(&mut counted, || 0.21));
+        assert!(cap.keeps(&mut counted, || 0.2));
+        assert!(!cap.keeps(&mut counted, || unreachable!()));
+        assert_eq!(counted, 2);
+        assert!(
+            CountCap::decode(&json!({"blocks": [], "min": -1}), |_| Ok(BlockStateId(5))).is_err()
+        );
     }
 }
