@@ -14,6 +14,7 @@ pub mod processor;
 pub mod ruined_portal;
 pub mod simple;
 pub mod start;
+pub mod start_checks;
 pub mod stronghold;
 pub mod template;
 pub mod temple;

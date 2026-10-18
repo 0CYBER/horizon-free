@@ -55,6 +55,8 @@ pub struct JigsawDef {
     aliases: Vec<Value>,
     padding: [i32; 2],
     waterlogging: bool,
+    /// A carried mod's start rules (`"horizon:start_checks"`).
+    checks: super::start_checks::StartChecks,
 }
 #[derive(Debug)]
 pub enum StructureKind {
@@ -129,6 +131,12 @@ pub struct StructureSet {
     frequency: f32,
     reduction: Reduction,
     exclusion: Option<(String, i32)>,
+    /// A carried mod's placement rules: no start nearer the world origin
+    /// than this many blocks (`"horizon:min_distance_from_world_origin"`),
+    /// and none within `chunk_count` chunks of any of several sets
+    /// (`"horizon:exclusion_zone"`: `other_sets`, `chunk_count`).
+    min_distance: Option<i64>,
+    avoid: Option<(Vec<String>, i32)>,
 }
 
 fn heightmap(name: &str) -> Option<HeightmapType> {
@@ -193,6 +201,7 @@ impl StructureRegistry {
                     aliases: v["pool_aliases"].as_array().cloned().unwrap_or_default(),
                     padding: pair(v.get("dimension_padding"), "bottom", "top", 0),
                     waterlogging: v["liquid_settings"].as_str() != Some("ignore_waterlogging"),
+                    checks: super::start_checks::StartChecks::decode(v.get("horizon:start_checks")),
                 }),
                 "minecraft:buried_treasure" => StructureKind::BuriedTreasure,
                 "minecraft:igloo" => StructureKind::Igloo,
@@ -288,6 +297,20 @@ impl StructureRegistry {
                 exclusion: p.get("exclusion_zone").map(|z| {
                     (
                         z["other_set"].as_str().unwrap_or_default().to_owned(),
+                        z["chunk_count"].as_i64().unwrap_or(0) as i32,
+                    )
+                }),
+                min_distance: p
+                    .get("horizon:min_distance_from_world_origin")
+                    .and_then(Value::as_i64),
+                avoid: p.get("horizon:exclusion_zone").map(|z| {
+                    (
+                        z["other_sets"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|s| Some(s.as_str()?.to_owned()))
+                            .collect(),
                         z["chunk_count"].as_i64().unwrap_or(0) as i32,
                     )
                 }),
@@ -397,25 +420,46 @@ impl StructureRegistry {
         if !placed {
             return false;
         }
+        // AdvancedRandomSpread.isPlacementChunk, in blocks from the chunk's corner.
+        if let Some(d) = set.min_distance {
+            let (bx, bz) = (i64::from(x) * 16, i64::from(z) * 16);
+            if bx * bx + bz * bz < d * d {
+                return false;
+            }
+        }
+        if let Some((others, range)) = &set.avoid {
+            if others
+                .iter()
+                .any(|other| self.has_start_in_range(other, seed, x, z, *range, rings))
+            {
+                return false;
+            }
+        }
         if set.frequency < 1. && !reduce(set.reduction, seed, set.salt, x, z, set.frequency) {
             return false;
         }
         match &set.exclusion {
-            Some((other, range)) => {
-                let Some(other) = self.sets.iter().find(|s| s.name == *other) else {
-                    return true;
-                };
-                for tx in x - range..=x + range {
-                    for tz in z - range..=z + range {
-                        if self.is_structure_chunk(other, seed, tx, tz, rings) {
-                            return false;
-                        }
-                    }
-                }
-                true
-            }
+            Some((other, range)) => !self.has_start_in_range(other, seed, x, z, *range, rings),
             None => true,
         }
+    }
+    /// ChunkGeneratorStructureState.hasStructureChunkInRange: whether set
+    /// `other` places a structure within `range` chunks of (`x`, `z`).
+    fn has_start_in_range(
+        &self,
+        other: &str,
+        seed: i64,
+        x: i32,
+        z: i32,
+        range: i32,
+        rings: &Rings,
+    ) -> bool {
+        let Some(other) = self.sets.iter().find(|s| s.name == other) else {
+            return false;
+        };
+        (x - range..=x + range).any(|tx| {
+            (z - range..=z + range).any(|tz| self.is_structure_chunk(other, seed, tx, tz, rings))
+        })
     }
 }
 impl StructureSet {
@@ -606,6 +650,12 @@ fn try_generate(
                 .start_height
                 .sample(&mut random, context.generation())
                 .ok()?;
+            if !jigsaw
+                .checks
+                .pass(context, &def.biomes, chunk, height, jigsaw.project_to)
+            {
+                return None;
+            }
             let start = [chunk.x * 16, height, chunk.z * 16];
             let aliases = resolve_aliases(&jigsaw.aliases, start, seed);
             let config = JigsawConfig {
