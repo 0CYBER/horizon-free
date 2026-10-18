@@ -10824,18 +10824,14 @@ enum PendingWorldEntry {
 struct WorldRestLoader {
     progress: Progress,
     handle: JoinHandle<std::result::Result<(), String>>,
-    started: Instant,
 }
 
 impl WorldRestLoader {
     fn ready(&self) -> Result<bool> {
-        if self.handle.is_finished() {
-            return Ok(true);
-        }
-        if self.started.elapsed() > Duration::from_secs(120) {
-            return Err("world resource loading timed out after 120 seconds".into());
-        }
-        Ok(false)
+        // No time limit: the title stays usable while this loads, and a slow
+        // disk or a debug build can take minutes. A failure ends the thread
+        // and is reported by `finish`.
+        Ok(self.handle.is_finished())
     }
 
     fn finish(self) -> Result<()> {
@@ -11150,7 +11146,6 @@ fn load_resources(
         Some(WorldRestLoader {
             progress: rest_progress,
             handle,
-            started: Instant::now(),
         })
     } else {
         let rest = load_world_rest(
@@ -12005,7 +12000,6 @@ mod tests {
                 wait.recv().unwrap();
                 Ok(())
             }),
-            started: Instant::now(),
         };
         assert!(!loader.ready().unwrap());
         release.send(()).unwrap();
@@ -12013,7 +12007,7 @@ mod tests {
     }
 
     #[test]
-    fn world_rest_poll_reports_a_stalled_worker() {
+    fn world_rest_poll_waits_for_a_slow_worker() {
         let (release, wait) = std::sync::mpsc::channel();
         let loader = WorldRestLoader {
             progress: Progress::new(),
@@ -12021,12 +12015,14 @@ mod tests {
                 wait.recv().unwrap();
                 Ok(())
             }),
-            started: Instant::now() - Duration::from_secs(121),
         };
-        let error = loader.ready().unwrap_err().to_string();
+        // However long it takes, a worker still loading is not an error.
+        assert!(!loader.ready().unwrap());
         release.send(()).unwrap();
+        while !loader.ready().unwrap() {
+            std::thread::sleep(Duration::from_millis(1));
+        }
         loader.finish().unwrap();
-        assert_eq!(error, "world resource loading timed out after 120 seconds");
     }
 
     #[test]
@@ -12034,7 +12030,6 @@ mod tests {
         let loader = WorldRestLoader {
             progress: Progress::new(),
             handle: std::thread::spawn(|| Err("missing world table".to_owned())),
-            started: Instant::now(),
         };
         assert_eq!(
             loader.finish().unwrap_err().to_string(),
@@ -12047,7 +12042,6 @@ mod tests {
         let loader = WorldRestLoader {
             progress: Progress::new(),
             handle: std::thread::spawn(|| panic!("broken loader")),
-            started: Instant::now(),
         };
         assert_eq!(
             loader.finish().unwrap_err().to_string(),
