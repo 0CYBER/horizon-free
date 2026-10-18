@@ -22,8 +22,11 @@ plan are in [docs/server.md](https://github.com/ludovic111/horizon/blob/main/doc
   (Tailscale, ZeroTier), or share it only with friends you trust.
 - **No secure chat.** Chat isn't signed, and `enforce-secure-profile` has no effect. Vanilla clients show
   chat from the server as not secure.
-- **Nether and End:** the world follows a player through portals when they are alone on the server
-  (v2026.10.17.09 and newer). With several players online, portals don't move remote players yet.
+- **Nether and End:** each player travels on their own through portals, and operators with `execute in
+  <dimension> run tp`. The players in the level they leave stop seeing them, and the ones in the level they
+  arrive in start to, as on vanilla (checked against vanilla with two players, by command and through an End
+  portal: `tools/test_server_dimension_players_parity.py`). The console can't send another player to a
+  dimension yet (`execute in ... run tp NAME`).
 - **Movement checks and chunk pacing** (release v2026.10.17.16 and newer). The server pulls back players who
   move too fast ("moved too quickly"), as vanilla does, and sends chunks as fast as each client acknowledges
   them.
