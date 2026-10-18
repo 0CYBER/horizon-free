@@ -734,6 +734,7 @@ enum Act {
     /// Back to Horizon's own menus (Horizon only, see `list_rows`).
     HorizonMenus,
     ToggleMod(usize),
+    OpenModFolder,
 }
 enum WKind {
     Button {
@@ -780,6 +781,7 @@ pub enum Event {
     /// The pack selection changed (reload resources).
     Packs(Vec<String>),
     OpenPackFolder,
+    OpenModFolder,
 }
 /// `SliderableValueSet.applyValueImmediately`: these apply 600 ms after
 /// the last change (`OptionInstanceSliderButton.delayedApplyAt`).
@@ -1626,7 +1628,18 @@ impl OptionsUi {
                 }
                 content = y + self.scroll - top + 2.0;
                 out[list_start..].iter_mut().for_each(|w| w.list = true);
-                out.push(done(h - 27.0));
+                if page == Page::Mods {
+                    out.push(button(
+                        cx - 154.0,
+                        h - 27.0,
+                        150.0,
+                        Text::literal("Open Mod Folder"),
+                        Act::OpenModFolder,
+                    ));
+                    out.push(button(cx + 4.0, h - 27.0, 150.0, tr("gui.done"), Act::Done));
+                } else {
+                    out.push(done(h - 27.0));
+                }
             }
         }
         // Layout may change the offset (language centering), or the list may
@@ -2078,6 +2091,7 @@ impl OptionsUi {
                             s.mods.toggle(i);
                             events.push(Event::Changed);
                         }
+                        Act::OpenModFolder => events.push(Event::OpenModFolder),
                         Act::None => {}
                     }
                 }
@@ -2450,6 +2464,31 @@ mod tests {
         assert!(empty.iter().any(|w| {
             matches!(&w.kind, WKind::Text { text, .. } if text.plain().contains(".hmod"))
         }));
+        let open_folder = empty
+            .iter()
+            .find(|w| {
+                matches!(
+                    &w.kind,
+                    WKind::Button {
+                        act: Act::OpenModFolder,
+                        ..
+                    }
+                )
+            })
+            .expect("Mods page has an Open Mod Folder button");
+        assert_eq!(
+            ui.click(
+                &mut s,
+                &atlas,
+                open_folder.x + 1.0,
+                open_folder.y + 1.0,
+                size,
+                [480, 240],
+                false,
+                false,
+            ),
+            vec![Event::ButtonClick, Event::OpenModFolder]
+        );
         for (id, dev) in [("normal", false), ("dev", true), ("", false)] {
             s.mods.installed.push(crate::mod_list::Installed {
                 id: id.into(),
