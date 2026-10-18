@@ -16,7 +16,8 @@ def cases(build):
         (True, True, True),
     ]
     path = build / 'cases.txt'
-    path.write_text('\n'.join('\t'.join(map(str, row)) for row in values) + '\n')
+    # Lowercase: Rust's bool parser takes only true/false (Java's parseBoolean ignores case).
+    path.write_text('\n'.join('\t'.join(str(v).lower() for v in row) for row in values) + '\n')
     return path, len(values)
 
 
