@@ -364,6 +364,20 @@ def run_horizon(args, distance):
     for carry in dev_mods(args):
         command += ["--dev-mod", str(carry)]
     env = dict(os.environ, HORIZON_NO_AUDIO="1")
+    if args.warm:
+        # A first start to the title screen builds what later starts reuse (the content-mod
+        # root, the block behaviour snapshot). It is not measured: players see it once.
+        with (WORK / f"horizon-rd{distance}-warm.log").open("w") as log:
+            proc = subprocess.Popen(command, cwd=game_dir, env=env, stdout=log, stderr=subprocess.STDOUT)
+            try:
+                poll(Control(sock), lambda s: s.get("screen") == "title", 600)
+                try:
+                    Control(sock)("quit", timeout=60)
+                except (OSError, ValueError, RuntimeError):
+                    pass
+            finally:
+                stop(proc)
+                sock.unlink(missing_ok=True)
     log = (WORK / f"horizon-rd{distance}.log").open("w")
     started = time.time()
     proc = subprocess.Popen(command, cwd=game_dir, env=env, stdout=log, stderr=subprocess.STDOUT)
@@ -774,6 +788,8 @@ def main():
     p.add_argument("--build", default=str(ROOT / "target/release"))
     p.add_argument("--repeats", type=int, default=3, help="games per render distance; the report gives means and 95%% CIs")
     p.add_argument("--port-work", help="horizon: also load the mods carried over in this horizon-port-pack work folder")
+    p.add_argument("--warm", action="store_true",
+                   help="horizon: measure a later start, after one start to the title screen built the caches")
     p.add_argument("--mod-jars", help="neoforge: the mod jars to load (the user's own; never committed)")
     p.add_argument("--deps", help="neoforge: their required libraries")
     p.add_argument("--table", nargs="+", metavar="LABEL", help="print markdown tables of saved runs, and exit")

@@ -386,6 +386,12 @@ pub struct ChatScreen {
     parse: Option<ParseResults>,
     /// The completions at the cursor (`pendingSuggestions`): range start (bytes) and list.
     pending: Option<(usize, Vec<Suggestion>)>,
+    /// Completions waiting for the server's (an `ask_server` node at the
+    /// cursor): `pendingSuggestions` is not done until they come.
+    awaiting: Option<Awaiting>,
+    /// The request to send (`ServerboundCommandSuggestionPacket`): id and
+    /// the command up to the cursor.
+    request: Option<(i32, String)>,
     suggestions: Option<SuggestionList>,
     usage: Vec<Text>,
     usage_position: i32,
@@ -394,6 +400,16 @@ pub struct ChatScreen {
     keep_suggestions: bool,
     pub auto_suggestions: bool,
 }
+/// Local completions waiting for the server's reply to request `id`.
+struct Awaiting {
+    id: i32,
+    /// The command up to the cursor, as sent.
+    truncated: String,
+    local: Vec<Suggestion>,
+}
+/// `ClientSuggestionProvider.pendingSuggestionsId`: one counter for the
+/// connection, so a reply to an older request never matches.
+static SUGGESTION_ID: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 /// `CommandSuggestions`' fill colour.
 const FILL: i32 = -805306368;
 fn byte_at(s: &str, chars: usize) -> usize {
@@ -442,6 +458,8 @@ impl ChatScreen {
             history_pos: history_len,
             parse: None,
             pending: None,
+            awaiting: None,
+            request: None,
             suggestions: None,
             usage: Vec::new(),
             usage_position: 0,
@@ -518,23 +536,83 @@ impl ChatScreen {
             }
             if cursor >= 1 && (self.suggestions.is_none() || !self.keep_suggestions) {
                 let parse = self.parse.as_ref().expect("parsed above");
-                let (range, list) = c
-                    .dispatcher
-                    .client_suggestions(parse, cursor_b, c.registries);
-                self.pending = Some((range.0, list));
-                self.update_usage_info(m, c);
+                let (range, list, ask) =
+                    c.dispatcher
+                        .client_suggestions_asking(parse, cursor_b, c.registries);
+                if ask {
+                    // ClientSuggestionProvider.customSuggestion: the
+                    // suggestions are done when the server answers.
+                    let id = SUGGESTION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                    let truncated = command[..cursor_b].to_owned();
+                    self.request = Some((id, truncated.clone()));
+                    self.awaiting = Some(Awaiting {
+                        id,
+                        truncated,
+                        local: list,
+                    });
+                    self.pending = None;
+                } else {
+                    self.awaiting = None;
+                    self.pending = Some((range.0, list));
+                    self.update_usage_info(m, c);
+                }
             }
         } else if !command.chars().all(char::is_whitespace) {
             let partial = &command[..cursor_b];
             let mut builder = SuggestionsBuilder::new(partial, last_word_index(partial));
             builder.suggest_matching(c.registries.players.iter().map(String::as_str));
             let (range, list) = merge_suggestions(partial, builder.out);
+            self.awaiting = None;
             self.pending = Some((range.0, list));
             self.usage_width = 0;
             self.usage_position = 0;
         } else {
+            self.awaiting = None;
             self.pending = None;
         }
+    }
+    /// The completion request to send to the server, if one is waiting.
+    pub fn take_request(&mut self) -> Option<(i32, String)> {
+        self.request.take()
+    }
+    /// `ClientSuggestionProvider.completeCustomSuggestions`: the server's
+    /// completions for request `id`, with `range` in UTF-16 units of the
+    /// command sent. They join the local ones (`Suggestions.merge`) and the
+    /// pending suggestions are done.
+    pub fn server_suggestions(
+        &mut self,
+        m: &Measure,
+        c: &Commands,
+        id: i32,
+        range: (usize, usize),
+        list: Vec<(String, Option<String>)>,
+    ) {
+        let Some(awaiting) = self.awaiting.take_if(|a| a.id == id) else {
+            return;
+        };
+        let input = &awaiting.truncated;
+        let byte = |units: usize| {
+            let mut n = 0;
+            input
+                .char_indices()
+                .find(|(_, ch)| {
+                    let past = n >= units;
+                    n += ch.len_utf16();
+                    past
+                })
+                .map_or(input.len(), |(i, _)| i)
+        };
+        let range = (byte(range.0), byte(range.0 + range.1));
+        let mut all = awaiting.local;
+        all.extend(list.into_iter().map(|(text, tooltip)| Suggestion {
+            range,
+            text,
+            tooltip,
+            int_value: None,
+        }));
+        let (range, list) = merge_suggestions(input, all);
+        self.pending = Some((range.0, list));
+        self.update_usage_info(m, c);
     }
     /// `CommandSuggestions.updateUsageInfo`.
     fn update_usage_info(&mut self, m: &Measure, c: &Commands) {

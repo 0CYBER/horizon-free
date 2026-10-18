@@ -140,63 +140,53 @@ impl Game<'_> {
     pub(super) fn jukebox_removed(&mut self, pos: [i32; 3]) {
         self.stop_song(pos);
     }
-    /// `JukeboxSongPlayer.tick` for every playing jukebox.
-    pub(super) fn tick_jukeboxes(&mut self) {
-        let playing: Vec<((i32, i32, i32), String, i64)> = self
-            .world
-            .block_entities
-            .iter()
-            .filter_map(|(k, e)| match e {
-                BlockEntity::Jukebox(j) if j.playing => {
-                    let song = self
-                        .res
-                        .items
-                        .get(&j.record.as_ref()?.item)?
-                        .jukebox_song
-                        .clone()?;
-                    Some((*k, song, j.ticks))
-                }
-                _ => None,
-            })
-            .collect();
-        for (key, song, ticks) in playing {
-            let pos = [key.0, key.1, key.2];
-            let Some(s) = self.res.items.songs.get(&song).cloned() else {
-                continue;
-            };
-            if s.finished(ticks) {
-                if let Some(BlockEntity::Jukebox(j)) = self.world.block_entities.get_mut(&key) {
-                    j.playing = false;
-                    j.ticks = 0;
-                }
-                self.stop_song(pos);
-                self.jukebox_changed(pos);
-                continue;
-            }
-            if !self.jukebox_sounds.contains_key(&key) && ticks == 0 {
-                self.start_song(pos, &song);
-            }
-            if ticks % 20 == 0 {
-                let color = f64::from(self.world.random.next_int_bound(4).unwrap_or(0)) / 24.0;
-                let at = [
-                    f64::from(pos[0]) + 0.5,
-                    f64::from(pos[1]) + 1.2,
-                    f64::from(pos[2]) + 0.5,
-                ];
-                self.particles.add(
-                    &ParticleOptions::simple(ParticleType::Note),
-                    at,
-                    [color, 0.0, 0.0],
-                );
-            }
+    /// `JukeboxSongPlayer.tick` of the jukebox at `key`, while it plays.
+    pub(super) fn tick_jukebox(&mut self, key: (i32, i32, i32)) {
+        let playing = match self.world.block_entities.get(&key) {
+            Some(BlockEntity::Jukebox(j)) if j.playing => j.record.as_ref().and_then(|r| {
+                let song = self.res.items.get(&r.item)?.jukebox_song.clone()?;
+                Some((song, j.ticks))
+            }),
+            _ => None,
+        };
+        let Some((song, ticks)) = playing else {
+            return;
+        };
+        let pos = [key.0, key.1, key.2];
+        let Some(s) = self.res.items.songs.get(&song).cloned() else {
+            return;
+        };
+        if s.finished(ticks) {
             if let Some(BlockEntity::Jukebox(j)) = self.world.block_entities.get_mut(&key) {
-                j.ticks += 1;
+                j.playing = false;
+                j.ticks = 0;
             }
+            self.stop_song(pos);
+            self.jukebox_changed(pos);
+            return;
         }
-        self.update_song_volumes();
+        if !self.jukebox_sounds.contains_key(&key) && ticks == 0 {
+            self.start_song(pos, &song);
+        }
+        if ticks % 20 == 0 {
+            let color = f64::from(self.world.random.next_int_bound(4).unwrap_or(0)) / 24.0;
+            let at = [
+                f64::from(pos[0]) + 0.5,
+                f64::from(pos[1]) + 1.2,
+                f64::from(pos[2]) + 0.5,
+            ];
+            self.particles.add(
+                &ParticleOptions::simple(ParticleType::Note),
+                at,
+                [color, 0.0, 0.0],
+            );
+        }
+        if let Some(BlockEntity::Jukebox(j)) = self.world.block_entities.get_mut(&key) {
+            j.ticks += 1;
+        }
     }
     /// Let go of songs that ended or whose jukebox stopped.
-    fn update_song_volumes(&mut self) {
+    pub(super) fn update_song_volumes(&mut self) {
         let sounds: Vec<_> = self
             .jukebox_sounds
             .iter()

@@ -154,6 +154,7 @@ impl Game<'_> {
         };
         // Everything loaded: switch over.
         self.random_tick_sections.clear();
+        self.portals.sections.clear();
         self.options.resources = root.to_path_buf();
         let context = pack.context.clone();
         self.pack = pack;

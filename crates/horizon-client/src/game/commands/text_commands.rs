@@ -1,6 +1,7 @@
 //! `/tellraw` (TellRawCommand) and `/title` (TitleCommand).
 use super::{Arg, Context, Game, R, Target, err};
-use horizon_client::text::Text;
+use horizon_client::{hud_overlays::Titles, lan::data::component_nbt, text::Text};
+use horizon_protocol::packets::play::{self, Clientbound as C};
 
 impl Game<'_> {
     /// ComponentArgument with selectors resolved for the source
@@ -153,30 +154,45 @@ impl Game<'_> {
         let name = self.target_name(Target::Player);
         let single = n == 1;
         let key = if ctx.has("clear") {
-            self.titles.clear();
+            self.titles_or_packet(Titles::clear, C::ClearTitles(play::Bool1 { value: false }));
             "cleared"
         } else if ctx.has("reset") {
-            self.titles.clear();
-            self.titles.reset_times();
+            self.titles_or_packet(
+                |t| {
+                    t.clear();
+                    t.reset_times();
+                },
+                C::ClearTitles(play::Bool1 { value: true }),
+            );
             "reset"
         } else if ctx.has("times") {
             let get = |k: &str| match ctx.get(k) {
                 Some(Arg::Int(v)) => *v,
                 _ => -1,
             };
-            self.titles
-                .set_times(get("fadeIn"), get("stay"), get("fadeOut"));
+            let (fade_in, stay, fade_out) = (get("fadeIn"), get("stay"), get("fadeOut"));
+            self.titles_or_packet(
+                |t| t.set_times(fade_in, stay, fade_out),
+                C::SetTitlesAnimation(play::TitlesAnimation {
+                    fade_in,
+                    stay,
+                    fade_out,
+                }),
+            );
             "times"
         } else {
             let text = self.component_arg(ctx, "title")?;
+            let sent = play::Text {
+                text: component_nbt(&text.component()),
+            };
             if ctx.has("subtitle") {
-                self.titles.set_subtitle(text);
+                self.titles_or_packet(|t| t.set_subtitle(text), C::SetSubtitleText(sent));
                 "show.subtitle"
             } else if ctx.has("actionbar") {
-                self.titles.set_overlay(text, false);
+                self.titles_or_packet(|t| t.set_overlay(text, false), C::SetActionBarText(sent));
                 "show.actionbar"
             } else {
-                self.titles.set_title(text);
+                self.titles_or_packet(|t| t.set_title(text), C::SetTitleText(sent));
                 "show.title"
             }
         };
@@ -190,5 +206,14 @@ impl Game<'_> {
         };
         self.feedback(message);
         Ok(n as i32)
+    }
+    /// The player the title is for: the guest acting now is sent the packet
+    /// (TitleCommand's `connection.send`), the window's own player shows it.
+    fn titles_or_packet(&mut self, local: impl FnOnce(&mut Titles), packet: C) {
+        if self.lan_acting.is_some() {
+            self.guest_packets.push(packet);
+        } else {
+            local(&mut self.titles);
+        }
     }
 }

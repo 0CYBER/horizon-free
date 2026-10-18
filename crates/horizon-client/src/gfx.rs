@@ -70,6 +70,12 @@ pub mod translucency;
 pub(crate) mod upload;
 mod world_post;
 
+/// A new value for `Renderer::block_entity_revision`.
+fn next_block_entity_revision() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Globals {
@@ -108,6 +114,12 @@ struct SectionGpu {
 }
 /// Line segments the hit outline can hold.
 const MAX_OUTLINE_EDGES: u64 = 256;
+/// Staging buffer size for section meshes: a frame of uploads while
+/// exploring fits in a few.
+const SECTION_UPLOAD_CHUNK: u64 = 4 << 20;
+/// Section copies are submitted early past this many staged bytes, which
+/// bounds the staging memory frames that are not drawn can hold.
+const SECTION_COPY_LIMIT: u64 = 64 << 20;
 pub struct Frame<'a> {
     pub camera: DVec3,
     pub yaw: f32,
@@ -322,6 +334,13 @@ pub struct Renderer {
     lightmap_sampler: wgpu::Sampler,
     animations: AnimatedSprites,
     uploads: upload::Uploads,
+    /// Section meshes are staged through their own belt into
+    /// `section_copies`, which the next submission runs ahead of the frame:
+    /// `Queue::write_buffer` would make a staging buffer per write.
+    section_uploads: upload::Uploads,
+    section_copies: Option<wgpu::CommandEncoder>,
+    /// Bytes staged in `section_copies`.
+    section_copy_bytes: u64,
     /// Whether `lightmap` holds `lightmap_pixels` yet.
     lightmap_uploaded: bool,
     sprite_minimum_size: u32,
@@ -355,6 +374,8 @@ pub struct Renderer {
     draw_pages: Vec<(u32, Option<u32>)>,
     /// Block-entity blocks per meshed section (world position, state id).
     block_entities: HashMap<SectionKey, Vec<([i32; 3], u32)>>,
+    /// Changes whenever `block_entities` does (unique across renderers).
+    block_entity_revision: u64,
     /// VisGraph face connectivity per meshed section (cave culling).
     occlusion: occlusion::Occlusion,
     /// Resolution scale and FXAA (Horizon settings).
@@ -1734,6 +1755,7 @@ impl Renderer {
             .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE);
         let world_post = world_post::Post::new(&device, config.format.remove_srgb_suffix());
         let uploads = upload::Uploads::new(&device);
+        let section_uploads = upload::Uploads::with_chunk(&device, SECTION_UPLOAD_CHUNK);
         let panorama = panorama::Panorama::new(
             &device,
             &queue,
@@ -1808,6 +1830,9 @@ impl Renderer {
             lightmap_sampler,
             animations: AnimatedSprites::new(animations, sprite_size, sprite_mips),
             uploads,
+            section_uploads,
+            section_copies: None,
+            section_copy_bytes: 0,
             lightmap_uploaded: false,
             sprite_minimum_size,
             indices,
@@ -1833,6 +1858,7 @@ impl Renderer {
             draws: Vec::new(),
             draw_pages: Vec::new(),
             block_entities: HashMap::new(),
+            block_entity_revision: next_block_entity_revision(),
             occlusion: occlusion::Occlusion::new(crate::chunk::HEIGHT / 16),
             world_post,
             pack: None,
@@ -1990,12 +2016,23 @@ impl Renderer {
     pub fn has_section(&self, key: SectionKey) -> bool {
         self.sections.contains(key)
     }
+    /// Bring the cave culling graph up to date for `camera` without waiting:
+    /// a search this starts runs on its worker while the frame is prepared,
+    /// and `render` takes it if it has finished.
+    pub fn start_occlusion(&mut self, camera: DVec3, distance: f32) {
+        self.occlusion
+            .update(camera_section(camera), (distance / 16.0) as i32 + 2);
+    }
     pub fn upload(&mut self, key: SectionKey, mesh: &SectionMesh) {
         self.occlusion.set(key, mesh.visibility);
-        if mesh.block_entities.is_empty() {
-            self.block_entities.remove(&key);
+        let changed = if mesh.block_entities.is_empty() {
+            self.block_entities.remove(&key).is_some()
         } else {
-            self.block_entities.insert(key, mesh.block_entities.clone());
+            let old = self.block_entities.insert(key, mesh.block_entities.clone());
+            old.as_deref() != Some(&mesh.block_entities[..])
+        };
+        if changed {
+            self.block_entity_revision = next_block_entity_revision();
         }
         self.release_section(key);
         let section = self.upload_mesh(mesh);
@@ -2020,12 +2057,18 @@ impl Renderer {
             self.indices = Self::quad_indices(&self.device, self.index_quads);
         }
         let vertices = (mesh.solid.len() + mesh.translucent.len()) as u64;
+        let encoder = self.section_copies.get_or_insert_with(|| {
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Section uploads"),
+                })
+        });
         // With video and system memory both full, the section is not drawn.
-        let (page, start) = self.arena.alloc(&self.device, &self.queue, vertices)?;
+        let (page, start) = self.arena.alloc(&self.device, encoder, vertices)?;
         let sorted_indices = if translucent > 0 {
             let indices =
                 self.sorted_indices
-                    .alloc(&self.device, &self.queue, u64::from(translucent) * 6);
+                    .alloc(&self.device, encoder, u64::from(translucent) * 6);
             if indices.is_none() {
                 self.arena.release(page, start, vertices);
                 return None;
@@ -2034,21 +2077,34 @@ impl Renderer {
         } else {
             None
         };
-        let flat_id = self
-            .flat
-            .as_mut()
-            .map(|f| f.add(&self.device, &self.queue, page, start, vertices));
+        let flat_id = self.flat.as_mut().map(|f| {
+            f.add(
+                &self.device,
+                encoder,
+                &mut self.section_uploads,
+                page,
+                start,
+                vertices,
+            )
+        });
         let stride = std::mem::size_of::<TerrainVertex>() as u64;
         for (offset, part) in [(0, &mesh.solid), (mesh.solid.len(), &mesh.translucent)] {
             if !part.is_empty() {
                 let bytes: &[u8] = bytemuck::cast_slice(part);
                 self.uploaded_bytes += bytes.len() as u64;
-                self.queue.write_buffer(
+                self.section_copy_bytes += bytes.len() as u64;
+                self.section_uploads.buffer(
+                    encoder,
                     self.arena.buffer(page),
                     (start + offset as u64) * stride,
                     bytes,
                 );
             }
+        }
+        if self.section_copy_bytes >= SECTION_COPY_LIMIT
+            && let Some(copies) = self.take_section_copies()
+        {
+            self.queue.submit([copies]);
         }
         Some(SectionGpu {
             page,
@@ -2067,6 +2123,13 @@ impl Renderer {
             sorted_indices,
             flat_id,
         })
+    }
+    /// The section copies recorded since the last submission, closed.
+    fn take_section_copies(&mut self) -> Option<wgpu::CommandBuffer> {
+        let encoder = self.section_copies.take()?;
+        self.section_copy_bytes = 0;
+        self.section_uploads.finish(&encoder);
+        Some(encoder.finish())
     }
     /// Draws `count` section draws from `first` with the arena and section
     /// origins bound: one indirect multi-draw, or a loop without it.
@@ -2113,8 +2176,13 @@ impl Renderer {
     pub fn block_entities(&self) -> impl Iterator<Item = &([i32; 3], u32)> {
         self.block_entities.values().flatten()
     }
+    /// A value that changes whenever `block_entities` gives something else.
+    pub fn block_entity_revision(&self) -> u64 {
+        self.block_entity_revision
+    }
     pub fn clear_sections(&mut self) {
         self.block_entities.clear();
+        self.block_entity_revision = next_block_entity_revision();
         self.sections.clear();
         self.lods.clear();
         self.detail_columns.clear();
@@ -2139,7 +2207,9 @@ impl Renderer {
                 self.detail_columns.remove(&(key.0, key.2));
             }
         }
-        self.block_entities.remove(&key);
+        if self.block_entities.remove(&key).is_some() {
+            self.block_entity_revision = next_block_entity_revision();
+        }
         self.occlusion.remove(key);
         self.release_section(key);
     }
@@ -2314,6 +2384,14 @@ impl Renderer {
         );
     }
     pub fn render(&mut self, frame: &Frame) -> Result<bool> {
+        let rendered = self.draw_frame(frame);
+        // A frame that was not drawn still submits the section copies.
+        if let Some(copies) = self.take_section_copies() {
+            self.queue.submit([copies]);
+        }
+        rendered
+    }
+    fn draw_frame(&mut self, frame: &Frame) -> Result<bool> {
         self.arena.trim();
         self.sorted_indices.trim();
         if let Some(flat) = &mut self.flat {
@@ -2501,16 +2579,11 @@ impl Renderer {
             planes: frustum(view_proj),
         };
         let camera = frame.camera;
-        let camera_section = (
-            (camera.x.floor() as i32) >> 4,
-            (camera.y.floor() as i32 - crate::chunk::MIN_Y) >> 4,
-            (camera.z.floor() as i32) >> 4,
-        );
+        let camera_section = camera_section(camera);
         let culling = !frame.title && frame.cave_culling;
         if culling {
-            let radius = (frame.detail_distance / 16.0) as i32 + 2;
             crate::spans::time("occlusion", || {
-                self.occlusion.update(camera_section, radius)
+                self.start_occlusion(camera, frame.detail_distance)
             });
         }
         let reachable = &self.occlusion;
@@ -3268,7 +3341,11 @@ impl Renderer {
             .map(|path| (path, self.copy_frame(&mut encoder, &target_texture)));
         self.uploads.finish(&encoder);
         let commands = crate::spans::time("encode", || encoder.finish());
-        let submission = crate::spans::time("submit", || self.queue.submit([commands]));
+        // The section copies run first: this frame draws what they write.
+        let copies = self.take_section_copies();
+        let submission = crate::spans::time("submit", || {
+            self.queue.submit(copies.into_iter().chain([commands]))
+        });
         if let Some(timer) = &mut self.gpu_timer {
             timer.submitted();
             timer.collect(&self.device, &mut self.gpu_times);
@@ -3471,6 +3548,15 @@ fn shader_pack_uniform(
 enum Pack {
     Horizon(pack_stages::PackStages),
     Java(java_stages::JavaStages),
+}
+
+/// The section the camera is in.
+fn camera_section(camera: DVec3) -> SectionKey {
+    (
+        (camera.x.floor() as i32) >> 4,
+        (camera.y.floor() as i32 - crate::chunk::MIN_Y) >> 4,
+        (camera.z.floor() as i32) >> 4,
+    )
 }
 
 fn world_projection(fov_degrees: f32, aspect: f32, far: f32) -> Mat4 {

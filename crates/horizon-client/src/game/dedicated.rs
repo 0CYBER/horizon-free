@@ -402,7 +402,31 @@ struct ServerState {
     /// When the last passes of the loop ended, for the tick rate horizon-server shows.
     ticks: std::collections::VecDeque<Instant>,
     paused: bool,
+    /// `broadcast-console-to-ops`.
+    broadcast_console: bool,
 }
+
+/// The dedicated-only commands' replies vanilla sends with `broadcast`
+/// (`sendSuccess(..., true)`): the operators hear of them.
+const BROADCAST: &[&str] = &[
+    "commands.ban.success",
+    "commands.banip.info",
+    "commands.banip.success",
+    "commands.deop.success",
+    "commands.kick.success",
+    "commands.op.success",
+    "commands.pardon.success",
+    "commands.pardonip.success",
+    "commands.save.disabled",
+    "commands.save.enabled",
+    "commands.save.success",
+    "commands.stop.stopping",
+    "commands.whitelist.add.success",
+    "commands.whitelist.disabled",
+    "commands.whitelist.enabled",
+    "commands.whitelist.reloaded",
+    "commands.whitelist.remove.success",
+];
 
 impl Game<'_> {
     /// DedicatedServer.initServer and MinecraftServer.runServer.
@@ -449,6 +473,18 @@ impl Game<'_> {
         // DedicatedServer.initServer: names nobody has resolve offline only without authentication.
         cache.resolve_offline_users = !props.online_mode;
         *USER_CACHE.lock().unwrap() = Some(cache);
+        // Services.create: the services' public keys, fetched in the
+        // background (they check players' chat keys).
+        let secure_chat = Arc::new(horizon_client::lan::SecureChat::new(
+            props.enforce_secure_profile && props.online_mode,
+            || {
+                let discovery = profiles::discovery_url();
+                profiles::fetch_profile_key_keys(&discovery).unwrap_or_else(|e| {
+                    ::log::error!("{e}");
+                    Vec::new()
+                })
+            },
+        ));
         log("INFO", "Starting minecraft server version 26.3");
         log("INFO", "Loading properties");
         let game_mode = props.game_mode;
@@ -547,8 +583,7 @@ impl Game<'_> {
             enable_status: props.enable_status,
             hide_online_players: props.hide_online_players,
             favicon,
-            // DedicatedServer.enforceSecureProfile needs online mode.
-            enforces_secure_chat: false,
+            secure_chat: Some(secure_chat),
             accepts_transfers: props.accepts_transfers,
             announce: false,
             listen: true,
@@ -612,6 +647,7 @@ impl Game<'_> {
             empty_ticks: 0,
             ticks: Default::default(),
             paused: false,
+            broadcast_console: props.broadcast_console_to_ops,
         };
         let pause_after = props.pause_when_empty_seconds * 20;
         let idle_timeout = props.player_idle_timeout;
@@ -619,7 +655,7 @@ impl Game<'_> {
         while !state.stop {
             let tick_start = Instant::now();
             while let Ok(line) = state.console.try_recv() {
-                self.console_command(&mut state, &line);
+                self.console_line(&mut state, &line);
             }
             self.poll_server_control(&mut state);
             let players = self.lan.as_ref().map_or(0, |h| h.hub.guests.len());
@@ -767,14 +803,36 @@ impl Game<'_> {
             })
         });
         if found.is_none() {
-            self.console_reply(Text::translate("argument.player.unknown", &[]));
+            let unknown = Text::translate("argument.player.unknown", &[]);
+            log("INFO", &format!("System chat: {}", unknown.plain()));
         }
         found
     }
 
-    /// MinecraftServer.sendSystemMessage: what the console is told.
-    fn console_reply(&self, text: Text) {
+    /// MinecraftServer.sendSystemMessage: what the console is told; while
+    /// the console runs a command, the replies vanilla broadcasts go to the
+    /// operators too.
+    fn console_reply(&mut self, text: Text) {
         log("INFO", &format!("System chat: {}", text.plain()));
+        if self.console_broadcast.is_some()
+            && text
+                .translation_key()
+                .is_some_and(|k| BROADCAST.contains(&k))
+        {
+            self.broadcast_to_admins(text);
+        }
+    }
+
+    /// One console line, then the operators' share of its feedback.
+    fn console_line(&mut self, state: &mut ServerState, line: &str) {
+        self.console_broadcast = Some(state.broadcast_console);
+        self.console_command(state, line);
+        self.console_broadcast = None;
+        if let Some(mut host) = self.lan.take() {
+            self.send_admin_feedback(&mut host, None);
+            self.lan = Some(host);
+        }
+        self.admin_feedback.clear();
     }
 
     /// DedicatedServer.handleConsoleInputs: one console line, run as the

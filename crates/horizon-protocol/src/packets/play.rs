@@ -2,9 +2,9 @@
 use crate::{
     Error, Result,
     buf::{
-        Bool, Byte, ChunkPos, Codec, Double, Float, Ident, Int, List, Long, LpVec3, Nbt, Opt,
-        OptVarInt, Pos, Reader, SectionPos, Short, Str, StrN, UByte, Uuid, VarInt, VarLong, Vec3d,
-        Writer,
+        Bool, Byte, BytesN, ChunkPos, Codec, Double, Float, Ident, Int, List, Long, LpVec3, Nbt,
+        Opt, OptVarInt, Pos, Reader, SectionPos, Short, Str, StrN, UByte, Uuid, VarInt, VarLong,
+        Vec3d, Writer,
     },
     chunk::{ChunkData, LightData},
     entity_data::{EntityData, Value},
@@ -567,6 +567,10 @@ packet!(PlayerPosition {
     pitch: f32 => Float,
     relatives: i32 => Int,
 });
+packet!(
+    /// ClientboundProjectilePowerPacket: an AbstractHurtingProjectile's accelerationPower.
+    ProjectilePower { id: i32 => VarInt, power: f64 => Double }
+);
 packet!(PlayerRotation { yaw: f32 => Float, relative_yaw: bool => Bool, pitch: f32 => Float, relative_pitch: bool => Bool });
 packet!(RemoveEntities { ids: Vec<i32> => List<VarInt> });
 packet!(Respawn { spawn: SpawnInfo => SpawnInfo, keep: i8 => Byte });
@@ -590,6 +594,10 @@ packet!(SetCursorItem { item: Option<Stack> => Slot });
 packet!(SetDefaultSpawnPosition { pos: GlobalPos => GlobalPos, yaw: f32 => Float, pitch: f32 => Float });
 packet!(SetEntityData { id: i32 => VarInt, values: Vec<(u8, i32, Value)> => EntityData });
 packet!(SetEntityMotion { id: i32 => VarInt, velocity: [f64; 3] => LpVec3 });
+packet!(
+    /// ClientboundSetPassengersPacket: a vehicle and every entity riding it.
+    SetPassengers { vehicle: i32 => VarInt, passengers: Vec<i32> => List<VarInt> }
+);
 /// ClientboundSetEquipmentPacket: (EquipmentSlot ordinal, stack) pairs.
 pub struct Equipment;
 impl Codec<Vec<(u8, Option<Stack>)>> for Equipment {
@@ -1426,6 +1434,8 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     SetHealth(SetHealth) = SET_HEALTH,
     SetHeldSlot(SetHeldSlot) = SET_HELD_SLOT,
     SetObjective(SetObjective) = SET_OBJECTIVE,
+    SetPassengers(SetPassengers) = SET_PASSENGERS,
+    ProjectilePower(ProjectilePower) = PROJECTILE_POWER,
     SetPlayerInventory(SetPlayerInventory) = SET_PLAYER_INVENTORY,
     SetPlayerTeam(SetPlayerTeam) = SET_PLAYER_TEAM,
     SetScore(SetScore) = SET_SCORE,
@@ -1594,6 +1604,42 @@ packet!(Chat {
     last_seen: LastSeenUpdate => LastSeenUpdate,
 });
 packet!(ChatCommand { command: String => Str });
+packet!(ChatAck { offset: i32 => VarInt });
+/// ArgumentSignatures: each signed argument's name (at most 16 chars) and
+/// signature, at most 8.
+pub struct ArgumentSignatures;
+impl Codec<Vec<(String, Vec<u8>)>> for ArgumentSignatures {
+    fn read(r: &mut Reader) -> Result<Vec<(String, Vec<u8>)>> {
+        let n = r.count(8)?;
+        (0..n)
+            .map(|_| Ok((r.string(16)?, r.bytes(256)?.to_vec())))
+            .collect()
+    }
+    fn write(v: &Vec<(String, Vec<u8>)>, w: &mut Writer) {
+        w.varint(v.len() as i32);
+        for (name, signature) in v {
+            w.string(name);
+            w.bytes(signature);
+        }
+    }
+}
+packet!(ChatCommandSigned {
+    command: String => Str,
+    timestamp: i64 => Long,
+    salt: i64 => Long,
+    arguments: Vec<(String, Vec<u8>)> => ArgumentSignatures,
+    last_seen: LastSeenUpdate => LastSeenUpdate,
+});
+packet!(
+    /// RemoteChatSession.Data: the session id, then ProfilePublicKey.Data
+    /// (expiry in epoch milliseconds, X.509 key, the services' signature).
+    ChatSessionUpdate {
+        session: u128 => Uuid,
+        expires_at: i64 => Long,
+        key: Vec<u8> => BytesN<512>,
+        key_signature: Vec<u8> => BytesN<4096>,
+    }
+);
 packet!(ChangeDifficultyRequest { difficulty: i32 => VarInt });
 packet!(LockDifficulty { locked: bool => Bool });
 packet!(SetGameRule { entries: Vec<GameRuleEntry> => List<GameRuleEntry> });
@@ -1687,7 +1733,10 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     Attack(Attack) = ATTACK,
     ChangeGameMode(ChangeGameMode) = CHANGE_GAME_MODE,
     Chat(Chat) = CHAT,
+    ChatAck(ChatAck) = CHAT_ACK,
     ChatCommand(ChatCommand) = CHAT_COMMAND,
+    ChatCommandSigned(ChatCommandSigned) = CHAT_COMMAND_SIGNED,
+    ChatSessionUpdate(ChatSessionUpdate) = CHAT_SESSION_UPDATE,
     PlaceRecipe(super::recipes::PlaceRecipe) = PLACE_RECIPE,
     ChunkBatchReceived(ChunkBatchReceived) = CHUNK_BATCH_RECEIVED,
     ClientCommand(ClientCommand) = CLIENT_COMMAND,
@@ -2052,6 +2101,11 @@ mod tests {
                 id: 2,
                 velocity: [0.0; 3],
             }),
+            Clientbound::SetPassengers(SetPassengers {
+                vehicle: 2,
+                passengers: vec![3, 300],
+            }),
+            Clientbound::ProjectilePower(ProjectilePower { id: 4, power: 0.1 }),
             Clientbound::SetEquipment(SetEquipment {
                 id: 2,
                 slots: vec![(0, None), (5, Some(Stack::new(1, 1)))],
@@ -2168,6 +2222,24 @@ mod tests {
             }),
             Serverbound::ChatCommand(ChatCommand {
                 command: "time set day".into(),
+            }),
+            Serverbound::ChatAck(ChatAck { offset: 3 }),
+            Serverbound::ChatCommandSigned(ChatCommandSigned {
+                command: "say hi".into(),
+                timestamp: 1_700_000_000_000,
+                salt: -5,
+                arguments: vec![("message".into(), vec![9; 256])],
+                last_seen: LastSeenUpdate {
+                    offset: 1,
+                    acknowledged: [1, 0, 8],
+                    checksum: -3,
+                },
+            }),
+            Serverbound::ChatSessionUpdate(ChatSessionUpdate {
+                session: 0x1234,
+                expires_at: 1_800_000_000_000,
+                key: vec![0x30; 294],
+                key_signature: vec![7; 512],
             }),
             Serverbound::ChunkBatchReceived(ChunkBatchReceived {
                 chunks_per_tick: 9.5,

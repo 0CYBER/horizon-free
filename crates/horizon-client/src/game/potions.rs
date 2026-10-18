@@ -228,7 +228,7 @@ impl Game<'_> {
         }
         let (lasting, now) = PlayerEffects::potion_effects(stack.potion(), 1.0);
         for e in lasting {
-            self.potions.effects.add(e);
+            self.add_player_effect(e);
         }
         for a in now {
             self.apply_effect_action(a);
@@ -249,7 +249,7 @@ impl Game<'_> {
         }
         true
     }
-    fn apply_effect_action(&mut self, action: EffectAction) {
+    pub(super) fn apply_effect_action(&mut self, action: EffectAction) {
         let creative = self.creative;
         let rules = self.world.health_rules;
         let Some(p) = self.player.as_mut() else {
@@ -329,9 +329,24 @@ impl Game<'_> {
         }
         self.apply_effect_status();
     }
+    /// Add an active effect to the player and update attributes / absorption.
+    pub(super) fn add_player_effect(&mut self, effect: EffectInstance) -> bool {
+        let id = effect.id;
+        let amp = effect.amplifier;
+        let changed = self.potions.effects.add(effect);
+        self.apply_effect_status();
+        if id == "absorption"
+            && let Some(p) = self.player.as_mut()
+        {
+            let target = 4.0 * (amp + 1) as f32;
+            let current = p.health.absorption();
+            let _ = p.set_health(current.max(target), true);
+        }
+        changed
+    }
     /// The effects' attribute modifiers, armor protection and status flags
     /// on `self.player`.
-    fn apply_effect_status(&mut self) {
+    pub(super) fn apply_effect_status(&mut self) {
         let modifiers = self.potions.effects.modifiers();
         if modifiers != self.potions.applied
             && let Some(p) = self.player.as_mut()
@@ -343,6 +358,12 @@ impl Game<'_> {
                 let _ = p.set_modifier(attr, id, *amount, op, true);
             }
             self.potions.applied = modifiers;
+        }
+        if let Some(p) = self.player.as_mut()
+            && self.potions.effects.amplifier("absorption").is_none()
+            && p.health.absorption() > 0.0
+        {
+            let _ = p.set_health(0.0, true);
         }
         // EnchantmentHelper.getDamageProtection per damage type, recomputed on armor change.
         let armor: Vec<Option<ItemStack>> = self.armor.to_vec();
@@ -495,7 +516,7 @@ impl Game<'_> {
                         if d > 20
                             && let Some(e) = brewing::effect(id)
                         {
-                            self.potions.effects.add(EffectInstance::new(e.id, d, *amp));
+                            self.add_player_effect(EffectInstance::new(e.id, d, *amp));
                         }
                     }
                 }

@@ -15,3 +15,4 @@ pub mod modrinth;
 pub mod oracle;
 pub mod pipeline;
 pub mod report;
+pub mod worldgen;

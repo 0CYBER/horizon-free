@@ -23,6 +23,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              opens as 9x6 with the right half first;
 - feedback:  the guest's command feedback names the guest and shows the numbers;
 - effects:   a beacon's power reaches every player in range, the host and the guest;
+- distance:  (--server-thread) the server follows the host's render distance, past vanilla's 32 too
+             (IntegratedServer.tickServer), and the guest's chunks follow the server's (#804)
 - portals:   (--server-thread) the server holds a level per dimension: the guest goes to the Nether
              through a portal while the host stays, then the host goes to the End while the guest is in
              the Nether, and both come back.
@@ -30,6 +32,26 @@ address. The script then checks, from both sides, what a guest's game used to ge
              tree (Tab), and runs what it completed;
 - recipes:   the guest's recipe book lists the planks recipe the logs unlock, and clicking it
              places a log in the inventory's crafting grid (the server places it).
+- feedback:  the guest's command feedback names the guest and shows the numbers, and the host (an
+             operator) is told of it as `[Guest: ...]`.
+- clicks:    with real mouse presses (not click-slot, which skips the screen's press and drag
+             handling), the guest puts a stack into a chest and a furnace, drags planks across
+             its crafting grid and gathers a stack with a double click; the server has each.
+- sleep:     at night the guest lies down in its own bed (not the host); alone it stays night, it
+             gets up with Escape, and once the host sleeps too the night ends and both wake.
+- push:      a cow standing in the guest pushes it just clear of the cow (the guest's own client
+             pushes it, as in vanilla), not ever faster across the ground.
+- eat:       holding right click with bread, the guest's own screen plays the eating (the item in use
+             counts up) and the server eats one loaf and feeds the guest.
+- xp:        experience orbs 4 blocks away fly to the guest, show on the guest's screen and give the
+             guest their points (not the host).
+- objects:   boats, minecarts, armor stands, item frames and paintings the host summons reach the
+             guest as the host has them (kind, place, rotation, what they hold or wear, the variant).
+- projectiles: primed TNT (one falling), an end crystal and an arrow that lands reach the guest where
+             the host has them; a falling block lands on both sides.
+- light:     the guest's light matches the host's: around a torch placed near it, under a roof and
+             once a block of the roof is removed under the sky, and in the last chunk it tracks next to
+             glowstone in a chunk it doesn't (only the server's light updates bring that one).
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -50,6 +72,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import zlib
 from pathlib import Path
@@ -61,7 +84,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'commands', 'recipes', 'trials', 'effects', 'portals']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'titles', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'push', 'eat', 'xp', 'objects', 'projectiles', 'light', 'effects', 'portals', 'distance']
 
 
 class Game:
@@ -174,7 +197,7 @@ def check_armour(host, guest, out):
     face_each_other(host, guest)
     host.shot(out, 'armour')
     guest.shot(out, 'armour')
-    seen = host.raw('lan', 'status')['guests'][0].get('model_armor')
+    seen = lan_guest(host).get('model_armor')
     assert seen == [None, 'minecraft:diamond_chestplate', 'minecraft:diamond_leggings', None], \
         f'the host draws the guest in {seen}'
     host_gear = [e for e in remote(guest).get('player_equipment', [])]
@@ -337,6 +360,33 @@ def nether_portal(game, x, y, z):
     game('command', command=f'fill {x} {y} {z} {x + 1} {y + 2} {z} minecraft:nether_portal[axis=x]')
 
 
+def lan_guest(host):
+    """The guest's entry in the host's `lan status` (on the server thread the owner is listed too)."""
+    guests = host.raw('lan', 'status')['guests']
+    return next(g for g in guests if g['name'] == GUEST_NAME)
+
+def check_distance(host, guest, out):
+    """IntegratedServer.tickServer: the server takes the host's render distance as its view distance
+    (past 32, which Horizon's options allow) and sends it to every player (SetChunkCacheRadius)."""
+    if not SERVER_THREAD:
+        return 'skipped (needs --server-thread)'
+    seen = {}
+    try:
+        for distance in (48, 6):
+            host.raw('render-distance', distance)
+            # The pause screen doesn't hold the server here: it follows on its next tick.
+            host.wait(20)
+            guest.wait(20)
+            seen[distance] = (host('status').get('render_distance'), guest('status').get('render_distance'))
+    finally:
+        host.raw('render-distance', 12)
+    # A client streams out to min(its render distance, the server's view distance + 1).
+    assert seen[48][0] == 48, f'the host at 48 streams {seen[48][0]} chunks out (all: {seen})'
+    assert seen[6][0] == 6, f'the host at 6 streams {seen[6][0]} chunks out (all: {seen})'
+    assert seen[6][1] == 7, f'the guest streams {seen[6][1]} with the server at 6 (all: {seen})'
+    return seen
+
+
 def check_portals(host, guest, out):
     if not SERVER_THREAD:
         return 'skipped (needs --server-thread)'
@@ -441,6 +491,9 @@ def check_hazards(host, guest, out):
     # A fresh life: full health, so no regeneration eats food while the guest runs.
     guest('command', command='kill @s')
     guest.wait(20)
+    # ServerPlayer.doTick sends the dead player's health of 0 too.
+    died = {'screen': guest('state').get('screen'), 'health': remote(guest)['health']}
+    assert died == {'screen': 'dead', 'health': 0.0}, f'the guest was killed: {died}'
     guest.raw('respawn')
     guest.wait(40)
     # Sprint-jumping down a stone lane: ServerPlayer.jumpFromGround and checkMovementStatistics.
@@ -449,14 +502,14 @@ def check_hazards(host, guest, out):
     guest.wait(10)
     x, y, z = pos_of(guest)
     guest.raw('look-at', f'{x + 60:.2f}', f'{y + 1.6:.2f}', f'{z:.2f}')
-    food = host.raw('lan', 'status')['guests'][0]['food']
+    food = lan_guest(host)['food']
     for k in ('w', 'ctrl', 'space'):
         guest.raw('key', k, 'down')
     guest.wait(160)
     for k in ('space', 'ctrl', 'w'):
         guest.raw('key', k, 'up')
     guest.wait(10)
-    fed = host.raw('lan', 'status')['guests'][0]['food']
+    fed = lan_guest(host)['food']
     hunger = {'before': food, 'after': fed}
     hurt = {}
     hx, hy, hz = (int(v // 1) for v in pos_of(host))
@@ -493,7 +546,7 @@ def check_hazards(host, guest, out):
     assert spent > 1.0, f'no hunger from moving: {hunger} ({spent:.2f} spent)'
     for name, (before, after) in hurt.items():
         assert after < before, f'{name} never hurt the guest: health {before} -> {after} (all: {hurt})'
-    return {'hunger': hunger, **hurt}
+    return {'died': died, 'hunger': hunger, **hurt}
 
 
 def check_pvp(host, guest, out):
@@ -584,12 +637,99 @@ def check_containers(host, guest, out):
     return {'ender': ender, 'double': double, 'taken': taken}
 
 
+def slot_point(game, slot):
+    """The GUI point in the middle of slot `slot` of the open screen (`ui`'s slot-N)."""
+    for w in game.raw('ui')['widgets']:
+        if w.get('id') == f'slot-{slot}':
+            x, y, width, height = w['bounds']
+            return x + width / 2, y + height / 2
+    raise Failed(f'no slot {slot} on the screen')
+
+
+def mouse(game, *slots, right=False):
+    """Press over the first slot, move over the others and release: one click, or a drag."""
+    points = [f'{v:.1f}' for s in slots for v in slot_point(game, s)]
+    game.raw('drag-at', *(['right'] if right else []), *points)
+    game.wait(4)
+
+
+def hotbar_slot(game, item):
+    return next(s['slot'] for s in game('inventory')['hotbar'] if s and s.get('item') == item)
+
+
+def check_clicks(host, guest, out):
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    guest('command', command='give @s minecraft:cobblestone 10')
+    guest('command', command='give @s minecraft:coal 3')
+    guest('command', command='give @s minecraft:raw_iron 2')
+    guest('command', command='give @s minecraft:oak_planks 2')
+    guest.wait(10)
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    chest, furnace = (x, y, z + 2), (x, y, z - 2)
+    guest('command', command=f'setblock {chest[0]} {chest[1]} {chest[2]} minecraft:chest')
+    guest('command', command=f'setblock {furnace[0]} {furnace[1]} {furnace[2]} minecraft:furnace')
+    guest.wait(10)
+    # Pick the cobblestone up and put it down in the chest's first slot.
+    guest.raw('interact', *chest)
+    guest.raw('wait-for', 'screen', 'container', '--timeout', 10)
+    guest.wait(10)
+    mouse(guest, hotbar_slot(guest, 'minecraft:cobblestone'))
+    mouse(guest, 300)
+    guest.wait(10)
+    guest.shot(out, 'clicks-chest')
+    guest.raw('key', 'esc', 'tap')
+    guest.wait(10)
+    in_chest, _ = open_container(guest, chest, out, 'clicks-chest-after')
+    # Coal into the fuel slot, raw iron into the input.
+    guest.raw('interact', *furnace)
+    guest.raw('wait-for', 'screen', 'container', '--timeout', 10)
+    guest.wait(10)
+    mouse(guest, hotbar_slot(guest, 'minecraft:coal'))
+    mouse(guest, 301)
+    mouse(guest, hotbar_slot(guest, 'minecraft:raw_iron'))
+    mouse(guest, 300)
+    guest.wait(10)
+    guest.shot(out, 'clicks-furnace')
+    guest.raw('key', 'esc', 'tap')
+    guest.wait(10)
+    # Opening the furnace again resends the whole menu: the server's own view.
+    in_furnace, _ = open_container(guest, furnace, out, 'clicks-furnace-after')
+    # Two planks dragged over the 2x2 grid's left column: one each, four sticks.
+    guest.raw('key', 'e', 'tap')
+    guest.raw('wait-for', 'screen', 'inventory')
+    guest.wait(5)
+    mouse(guest, hotbar_slot(guest, 'minecraft:oak_planks'))
+    mouse(guest, 100, 102)
+    guest.wait(10)
+    grid = {s['slot']: (s.get('item'), s.get('count')) for s in guest('screen').get('slots', [])
+            if s.get('slot') in (100, 102, 200) and s.get('item')}
+    guest.shot(out, 'clicks-drag')
+    guest.raw('click-slot', 200, 'shift')
+    guest.wait(10)
+    guest.raw('key', 'esc', 'tap')
+    guest.wait(10)
+    # The chest's menu brings the whole inventory as the server has it.
+    open_container(guest, chest, out, 'clicks-inventory')
+    counts = guest('inventory')['counts']
+    for at in (chest, furnace):
+        guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:air')
+    assert in_chest == {0: 'minecraft:cobblestone'}, f'the chest holds {in_chest} after the guest put cobblestone in'
+    assert in_furnace == {0: 'minecraft:raw_iron', 1: 'minecraft:coal'}, f'the furnace holds {in_furnace}'
+    assert grid.get(100) == ('minecraft:oak_planks', 1) and grid.get(102) == ('minecraft:oak_planks', 1), \
+        f'the drag left the grid as {grid}'
+    assert counts.get('minecraft:stick') == 4 and 'minecraft:cobblestone' not in counts, f'inventory after: {counts}'
+    return {'chest': in_chest, 'furnace': in_furnace, 'grid': grid, 'inventory': counts}
+
+
 def check_feedback(host, guest, out):
     x, y, z = (round(v, 1) for v in pos_of(guest))
     guest('command', command='item replace entity @s weapon.mainhand with minecraft:stick')
     guest('command', command=f'tp @s {x:.1f} {y:.1f} {z:.1f}')
     guest.wait(10)
     chat = guest.raw('messages', 5)['chat']
+    # The host is an operator: broadcastToAdmins tells it, as `[Guest: ...]`.
+    host_chat = host.raw('messages', 5)['chat']
     guest.raw('key', 't', 'tap')
     guest.wait(5)
     guest.shot(out, 'feedback')
@@ -600,7 +740,9 @@ def check_feedback(host, guest, out):
     assert any(replaced in line for line in chat), f'no "{replaced}" in {chat}'
     assert any(line.startswith(f'Teleported {GUEST_NAME} to {x:.6f}') for line in chat), f'teleport feedback: {chat}'
     assert screen in (None, 'playing'), f'the chat did not close: {screen}'
-    return chat
+    told = f'[{GUEST_NAME}: Teleported {GUEST_NAME} to {x:.6f}'
+    assert any(line.startswith(told) for line in host_chat), f'no "{told}" for the host: {host_chat}'
+    return chat + host_chat
 
 
 def chat_input(game):
@@ -634,11 +776,29 @@ def check_commands(host, guest, out):
     screen = guest('state').get('screen')
     guest('command', command='gamemode survival')
     guest.wait(10)
+    # A node the tree marks ask_server (a bossbar id): the guest asks the
+    # server, which completes it from its own bossbars.
+    host('command', command='bossbar add pt6:check "Check"')
+    host.wait(5)
+    guest.raw('key', 'slash', 'tap')
+    guest.wait(3)
+    guest.raw('type', 'bossbar get pt')
+    guest.wait(10)
+    guest.raw('key', 'tab', 'tap')
+    guest.wait(2)
+    asked = chat_input(guest)
+    for _ in range(3):
+        if guest('screen').get('screen') != 'chat':
+            break
+        guest.raw('key', 'esc', 'tap')
+        guest.wait(3)
+    host('command', command='bossbar remove pt6:check')
     assert literal == '/gamemode', f'Tab after /gamem: {literal!r}'
     assert argument == '/gamemode creative', f'Tab after /gamemode cr: {argument!r}'
     assert mode == 'creative', f'the completed command did not run: {mode}'
     assert screen in (None, 'playing'), f'the chat did not close: {screen}'
-    return {'literal': literal, 'argument': argument, 'mode': mode}
+    assert asked == '/bossbar get pt6:check', f'Tab after /bossbar get pt: {asked!r}'
+    return {'literal': literal, 'argument': argument, 'mode': mode, 'ask_server': asked}
 
 
 def centre(rect):
@@ -675,6 +835,22 @@ def check_recipes(host, guest, out):
         guest.wait(5)
     assert any('oak_log' in str(item) for item in grid.values()), f'nothing placed in the grid: {grid}'
     return {'known': known, 'grid': grid}
+
+
+def check_titles(host, guest, out):
+    # TitleCommand sends the guest its title packets; its HUD shows and clears them.
+    for command in ('title @s times 10 400 10', 'title @s subtitle "Under"', 'title @s title "Over"',
+                    'title @s actionbar "Bar"'):
+        guest('command', command=command)
+    guest.wait(5)
+    shown = {k: guest.raw('messages', 1)[k] for k in ('title', 'subtitle', 'actionbar')}
+    guest.shot(out, 'titles')
+    guest('command', command='title @s clear')
+    guest.wait(5)
+    cleared = {k: guest.raw('messages', 1)[k] for k in ('title', 'subtitle')}
+    assert shown == {'title': 'Over', 'subtitle': 'Under', 'actionbar': 'Bar'}, f'titles shown: {shown}'
+    assert cleared == {'title': None, 'subtitle': None}, f'titles cleared: {cleared}'
+    return {'shown': shown, 'cleared': cleared}
 
 
 def png_rows(path):
@@ -721,7 +897,7 @@ def changed_pixels(a, b):
 def sneaking_on_host(host, want, ticks=40):
     """Whether the host sees the guest crouching, once it matches `want` or after `ticks`."""
     for _ in range(ticks // 5):
-        sneaking = host.raw('lan', 'status')['guests'][0]['sneaking']
+        sneaking = lan_guest(host)['sneaking']
         if sneaking == want:
             return sneaking
         host.wait(5)
@@ -824,13 +1000,285 @@ def check_trials(host, guest, out):
     return {'spawner': trial, 'vault': active, 'rewarded': uuid(rewarded), 'host': uuid(host_uuid)}
 
 
+def bed_at(game, foot):
+    """A bed whose foot is at `foot`, its head one block east."""
+    x, y, z = foot
+    game('command', command=f'setblock {x} {y} {z} minecraft:red_bed[facing=east,part=foot]')
+    game('command', command=f'setblock {x + 1} {y} {z} minecraft:red_bed[facing=east,part=head]')
+    return [x + 1, y, z]
+
+
+def check_sleep(host, guest, out):
+    for g in (host, guest):
+        g('command', command='gamemode survival')
+    host('command', command='time set midnight')
+    gx, gy, gz = (int(v // 1) for v in pos_of(guest))
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    guest_bed = bed_at(guest, (gx, gy, gz + 2))
+    host_bed = bed_at(host, (hx, hy, hz + 2))
+    guest.wait(10)
+    guest.raw('interact', *guest_bed)
+    guest.wait(10)
+    asleep = {'guest': guest('state').get('sleeping'), 'host': host('state').get('sleeping'),
+              'server': lan_guest(host).get('sleeping')}
+    guest.shot(out, 'sleep-guest')
+    # Alone in bed: still night 120 ticks later (everyone must sleep).
+    guest.wait(120)
+    night = host('state')['time']['time_of_day']
+    # Escape gets the guest up (InBedChatScreen), then back to bed.
+    guest.raw('key', 'esc', 'tap')
+    guest.wait(10)
+    up = guest('state').get('sleeping')
+    guest.raw('interact', *guest_bed)
+    host.raw('interact', *host_bed)
+    host.wait(130)
+    after = {'guest': guest('state').get('sleeping'), 'host': host('state').get('sleeping'),
+             'time': host('state')['time']['time_of_day']}
+    guest.shot(out, 'sleep-morning')
+    for at in (guest_bed, host_bed):
+        guest('command', command=f'fill {at[0] - 1} {at[1]} {at[2]} {at[0]} {at[1]} {at[2]} minecraft:air')
+    host('command', command='time set day')
+    detail = {'asleep': asleep, 'night': night, 'up': up, 'after': after}
+    assert asleep['guest'] == guest_bed and asleep['server'] == guest_bed, f'the guest is not in its bed: {detail}'
+    assert asleep['host'] is None, f'the guest\'s bed put the host to sleep: {detail}'
+    assert 13000 < night < 23000, f'one of two players asleep ended the night: {detail}'
+    assert up is None, f'Escape did not get the guest up: {detail}'
+    assert after['guest'] is None and after['host'] is None and after['time'] < 1000, f'no morning: {detail}'
+    return detail
+def check_push(host, guest, out):
+    guest('command', command='gamemode survival')
+    x, y, z = (int(v // 1) + 0.5 for v in pos_of(guest))
+    guest('command', command=f'tp @s {x} {y - 0.5} {z}')
+    guest.wait(20)
+    x, y, z = pos_of(guest)
+    # A cow that doesn't walk, 0.3 east of the guest: the two boxes overlap until their centres are
+    # 0.75 apart, so the push stops a fraction of a block away.
+    guest('command', command=f'summon minecraft:cow {x + 0.3:.2f} {y:.2f} {z:.2f} {{NoAI:1b}}')
+    guest.wait(60)
+    nx, _, nz = pos_of(guest)
+    guest.shot(out, 'push')
+    guest('command', command='kill @e[type=minecraft:cow]')
+    moved = ((nx - x) ** 2 + (nz - z) ** 2) ** 0.5
+    detail = {'from': [round(x, 3), round(z, 3)], 'to': [round(nx, 3), round(nz, 3)], 'moved': round(moved, 3)}
+    assert nx < x, f'the cow did not push the guest west: {detail}'
+    assert moved < 1.5, f'the cow pushed the guest too far: {detail}'
+    return detail
+def check_eat(host, guest, out):
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    # Hungry: the eating needs food below 20 (Player.canEat).
+    guest('command', command='effect give @s minecraft:hunger 3 255')
+    guest.wait(70)
+    guest('command', command='effect clear @s')
+    guest('command', command='give @s minecraft:bread 3')
+    guest.wait(5)
+    guest.raw('select', 'minecraft:bread')
+    hungry = guest('state')['player']['food']
+    # use-item --hold returns once released: watch the guest's screen meanwhile.
+    hold = threading.Thread(target=guest.raw, args=('use-item', '--hold', 2.2))
+    hold.start()
+    using = []
+    for _ in range(4):
+        time.sleep(0.2)
+        using.append(guest('state').get('using'))
+    guest.shot(out, 'eat')
+    hold.join()
+    guest.wait(10)
+    fed = guest('state')['player']['food']
+    left = guest('inventory')['counts'].get('minecraft:bread', 0)
+    detail = {'hungry': hungry, 'fed': fed, 'bread': left, 'using': using, 'after': guest('state').get('using')}
+    assert hungry < 20, f'the guest is not hungry: {detail}'
+    ticks = [u['ticks'] for u in using if u]
+    assert len(ticks) >= 3 and ticks == sorted(ticks) and ticks[-1] > ticks[0], f'no eating on the guest\'s screen: {detail}'
+    assert left == 2 and fed > hungry, f'the server did not eat one loaf: {detail}'
+    assert detail['after'] is None, f'still eating after the release: {detail}'
+    return detail
+
+
+def check_xp(host, guest, out):
+    for g in (host, guest):
+        g('command', command='gamemode survival')
+        g('command', command='xp set @s 0 levels')
+        g('command', command='xp set @s 0 points')
+    guest.wait(10)
+    x, y, z = pos_of(guest)
+    # Three orbs of 7 points 4 blocks east of the guest (out of reach, within the 8 blocks orbs
+    # follow from): they fly to the guest.
+    for _ in range(3):
+        guest('command', command=f'summon minecraft:experience_orb {x + 4:.2f} {y + 0.5:.2f} {z:.2f} {{Value:7s}}')
+    guest.wait(2)
+    seen = remote(guest).get('entities', {}).get('minecraft:experience_orb', 0)
+    guest.shot(out, 'xp-orbs')
+    guest.wait(60)
+    xp = guest('state')['player']['xp']
+    host_xp = host('state')['player']['xp']
+    left = remote(guest).get('entities', {}).get('minecraft:experience_orb', 0)
+    detail = {'seen': seen, 'guest': xp, 'host': host_xp, 'left': left}
+    # ExperienceOrb.scanForMerges: orbs of one value side by side can merge into one.
+    assert 1 <= seen <= 3, f'the guest saw {seen} orbs: {detail}'
+    assert xp['total'] == 21 and xp['level'] == 2, f'the guest\'s experience after three 7-point orbs: {detail}'
+    assert host_xp['total'] == 0, f'the host took the orbs: {detail}'
+    assert left == 0, f'orbs left on the guest\'s screen: {detail}'
+    return {'seen': seen, 'guest': xp, 'host': host_xp}
+
+
+def objects_near(game, centre, key='objects'):
+    """`status`'s objects within 8 blocks of centre, without their ids (each side numbers its own)."""
+    out = []
+    for o in game('status')[key]:
+        if all(abs(o['position'][i] - centre[i]) <= 8 for i in (0, 2)):
+            o = dict(o)
+            o.pop('id')
+            o['position'] = [round(v, 2) for v in o['position']]
+            if 'yaw' in o:  # as the packets carry it, in 256ths of a turn
+                o['yaw'] = round(o['yaw'] * 256 / 360) % 256
+            out.append(o)
+    return sorted(out, key=json.dumps)
+
+
+def check_objects(host, guest, out):
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    commands = [
+        f'fill {x - 6} {y} {z - 6} {x + 6} {y + 3} {z - 6} minecraft:stone',
+        f'summon minecraft:minecart {x - 4.5} {y} {z + 3.5}',
+        f'summon minecraft:chest_minecart {x - 2.5} {y} {z + 3.5}',
+        f'summon minecraft:furnace_minecart {x + 1.5} {y} {z + 3.5}',
+        f'summon minecraft:tnt_minecart {x + 4.5} {y} {z + 3.5}',
+        f'summon minecraft:oak_boat {x - 4.5} {y} {z + 6.5} {{Rotation:[45f,0f]}}',
+        f'summon minecraft:birch_chest_boat {x - 1.5} {y} {z + 6.5}',
+        f'summon minecraft:bamboo_raft {x + 2.5} {y} {z + 6.5}',
+        f'summon minecraft:armor_stand {x - 2.5} {y} {z - 2.5} {{Rotation:[90f,0f]}}',
+        f'summon minecraft:armor_stand {x - 4.5} {y} {z - 2.5} {{ShowArms:1b,Small:1b,NoBasePlate:1b,'
+        'equipment:{head:{id:"minecraft:diamond_helmet",count:1}}}',
+        f'summon minecraft:item_frame {x - 3.5} {y + 1} {z - 4.97} {{block_pos:[I;{x - 4},{y + 1},{z - 5}],Facing:3b,'
+        'Item:{id:"minecraft:diamond",count:1},ItemRotation:3b}',
+        f'summon minecraft:glow_item_frame {x - 1.5} {y + 1} {z - 4.97} {{block_pos:[I;{x - 2},{y + 1},{z - 5}],Facing:3b}}',
+        f'summon minecraft:painting {x + 1.5} {y + 1} {z - 4.97} {{block_pos:[I;{x + 1},{y + 1},{z - 5}],facing:0b,'
+        'variant:"minecraft:kebab"}',
+        f'summon minecraft:painting {x + 4} {y + 1} {z - 4.97} {{block_pos:[I;{x + 4},{y + 1},{z - 5}],facing:0b,'
+        'variant:"minecraft:courbet"}',
+    ]
+    try:
+        for command in commands:
+            host('command', command=command)
+        host.wait(60)
+        guest.raw('look-at', x, y, z - 5)
+        guest.wait(10)
+        guest.shot(out, 'objects')
+        host.shot(out, 'objects')
+        mine, theirs = objects_near(host, (x, y, z)), objects_near(guest, (x, y, z))
+    finally:
+        host('command', command=f'kill @e[type=!minecraft:player,x={x - 8},y={y - 2},z={z - 8},dx=16,dy=8,dz=16]')
+        host('command', command=f'fill {x - 6} {y} {z - 6} {x + 6} {y + 3} {z - 6} minecraft:air')
+    assert len(mine) == len(commands) - 1, f'the host has {len(mine)} objects: {mine}'
+    assert theirs == mine, f'the guest sees {theirs}\nthe host has {mine}'
+    return f'{len(theirs)} objects identical'
+
+
+def check_projectiles(host, guest, out):
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    commands = [
+        f'summon minecraft:tnt {x + 4.5} {y} {z + 4.5} {{fuse:2000s}}',
+        f'summon minecraft:end_crystal {x - 4.5} {y} {z + 4.5} {{ShowBottom:0b}}',
+        f'summon minecraft:tnt {x + 2.5} {y + 5} {z - 3.5} {{fuse:2000s}}',
+        f'summon minecraft:arrow {x - 2.5} {y + 4} {z - 2.5} {{Motion:[0.2d,0d,0d]}}',
+        f'summon minecraft:falling_block {x - 0.5} {y + 6} {z - 4.5} {{BlockState:{{Name:"minecraft:sand"}}}}',
+    ]
+    try:
+        for command in commands:
+            host('command', command=command)
+        host.wait(80)
+        guest.raw('look-at', x, y, z)
+        guest.wait(5)
+        guest.shot(out, 'projectiles')
+        mine = objects_near(host, (x, y, z), 'projectiles')
+        theirs = objects_near(guest, (x, y, z), 'projectiles')
+    finally:
+        host('command', command=f'kill @e[type=!minecraft:player,x={x - 8},y={y - 2},z={z - 8},dx=16,dy=10,dz=16]')
+        host('command', command=f'setblock {x - 1} {y} {z - 5} minecraft:air')
+    assert len(mine) == len(commands) - 1, f'the host has {len(mine)}: {mine}'
+    # The fuse counts down every tick: the guest's, read a moment later, may be a tick or two behind.
+    fuses = [(m.pop('fuse', 0), t.pop('fuse', 0)) for m, t in zip(mine, theirs)]
+    assert theirs == mine, f'the guest sees {theirs}\nthe host has {mine}'
+    assert all(abs(a - b) <= 2 for a, b in fuses), f'fuses (host, guest): {fuses}'
+    return f'{len(theirs)} identical, fuses (host, guest) {fuses}'
+
+
+def light_differences(host, guest, lo, hi):
+    """Positions of the box loaded on both sides, and those whose sky or block light differ."""
+    h, g = host.raw('light', *lo, *hi), guest.raw('light', *lo, *hi)
+    both = [i for i in range(len(h['sky'])) if h['sky'][i] != '.' and g['sky'][i] != '.']
+    differ = [i for i in both if (h['sky'][i], h['block'][i]) != (g['sky'][i], g['block'][i])]
+    return h, g, both, differ
+
+
+def same_light(host, guest, lo, hi, what, ticks=100):
+    """Wait until the guest's light over the box is the host's; the number of positions compared."""
+    for _ in range(ticks // 10):
+        h, g, both, differ = light_differences(host, guest, lo, hi)
+        if not differ:
+            assert both, f'{what}: no position of the box is loaded on both sides'
+            return len(both)
+        host.wait(10)
+    i = differ[0]
+    nx, nz = hi[0] - lo[0] + 1, hi[2] - lo[2] + 1
+    pos = (lo[0] + i % nx, lo[1] + i // (nx * nz), lo[2] + i // nx % nz)
+    raise AssertionError(f'{what}: {len(differ)} of {len(both)} positions differ, first {pos}: host sky '
+                         f'{h["sky"][i]} block {h["block"][i]}, guest sky {g["sky"][i]} block {g["block"][i]}')
+
+
+def check_light(host, guest, out):
+    gx, gy, gz = (int(v // 1) for v in pos_of(guest))
+    results = {}
+    # A torch near the guest: the guest lights it itself, as vanilla's client does.
+    torch = (gx + 3, gy, gz + 3)
+    host('command', command=f'setblock {torch[0]} {torch[1]} {torch[2]} minecraft:torch')
+    try:
+        results['torch'] = same_light(host, guest, (gx - 12, gy - 1, gz - 12), (gx + 16, gy + 3, gz + 16), 'torch')
+    finally:
+        host('command', command=f'setblock {torch[0]} {torch[1]} {torch[2]} minecraft:air')
+    # A roof over the guest, then a hole in it: sky light falls through.
+    roof = f'{gx - 3} {gy + 4} {gz - 3} {gx + 3} {gy + 4} {gz + 3}'
+    box = (gx - 6, gy - 1, gz - 6), (gx + 6, gy + 5, gz + 6)
+    host('command', command=f'fill {roof} minecraft:stone')
+    try:
+        results['roof'] = same_light(host, guest, *box, 'roof')
+        host('command', command=f'setblock {gx} {gy + 4} {gz} minecraft:air')
+        results['hole'] = same_light(host, guest, *box, 'hole in the roof')
+    finally:
+        host('command', command=f'fill {roof} minecraft:air')
+    # The last chunk the guest tracks eastwards, and glowstone high up just past it in a chunk it
+    # doesn't track: the guest never sees that block, only the light updates of its border chunk.
+    y = 200
+    row = guest.raw('light', gx, y, gz, gx + 16 * 24, y, gz)['sky']
+    assert '.' in row, 'the guest has every chunk 24 chunks east'
+    untracked = (gx + row.index('.')) >> 4
+    near = untracked * 16 + 1
+    # On its server thread the host's own game is a client too, sent the same light updates.
+    if not SERVER_THREAD:
+        assert host.raw('light', near, y, gz, near, y, gz)['sky'] != '.', 'the host lacks the chunk past the guest'
+    host('command', command=f'setblock {near} {y} {gz} minecraft:glowstone')
+    try:
+        lo, hi = (untracked * 16 - 16, y - 3, gz - 8), (untracked * 16 - 1, y + 3, gz + 8)
+        results['border'] = same_light(host, guest, lo, hi, 'border chunk')
+        lit = guest.raw('light', near - 2, y, gz, near - 2, y, gz)['block']
+        assert lit == 'd', f'the border chunk by the glowstone has block light {lit}, not 13'
+    finally:
+        host('command', command=f'setblock {near} {y} {gz} minecraft:air')
+    results['border_cleared'] = same_light(host, guest, lo, hi, 'border chunk without the glowstone')
+    return results
+
+
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
              'chest': check_chest, 'crafting': check_crafting, 'sign': check_sign, 'damage': check_damage,
              'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
-             'containers': check_containers, 'feedback': check_feedback, 'commands': check_commands,
-             'recipes': check_recipes,
-             'trials': check_trials,
-             'walls': check_walls, 'effects': check_effects, 'portals': check_portals}
+             'containers': check_containers, 'feedback': check_feedback, 'titles': check_titles,
+             'commands': check_commands,
+             'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,
+             'effects': check_effects, 'portals': check_portals, 'distance': check_distance, 'clicks': check_clicks,
+             'sleep': check_sleep, 'push': check_push, 'eat': check_eat,
+             'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles,
+             'light': check_light}
 
 
 def run(ctl, out, resources, checks):

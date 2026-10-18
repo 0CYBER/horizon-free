@@ -157,6 +157,10 @@ pub(super) struct Rail {
     powered: bool,
 }
 impl Minecart {
+    /// `Entity.onGround`.
+    pub(super) fn on_ground(&self) -> bool {
+        self.on_ground
+    }
     pub fn new(id: u32, kind: CartKind, position: Vec3) -> Self {
         Self {
             id,
@@ -1324,7 +1328,11 @@ impl Game<'_> {
             if let Some(state) = self.display_state(c) {
                 let display = base
                     * glam::Mat4::from_scale(glam::Vec3::splat(0.75))
-                    * glam::Mat4::from_translation(glam::Vec3::new(-0.5, (6.0 - 8.0) / 16.0, 0.5))
+                    * glam::Mat4::from_translation(glam::Vec3::new(
+                        -0.5,
+                        (display_offset(c.kind) as f32 - 8.0) / 16.0,
+                        0.5,
+                    ))
                     * glam::Mat4::from_rotation_y(90f32.to_radians());
                 if c.kind == CartKind::Chest {
                     self.cart_chest(state, display, l, out);
@@ -1458,5 +1466,20 @@ impl Minecart {
         c.push = [double("PushX"), double("PushZ")];
         c.fuse = int("fuse").unwrap_or(-1);
         Some(c)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_offset_matches_vanilla_for_each_cart_kind() {
+        assert_eq!(display_offset(CartKind::Hopper), 1.0);
+        assert_eq!(display_offset(CartKind::Chest), 6.0);
+        assert_eq!(display_offset(CartKind::Furnace), 6.0);
+        assert_eq!(display_offset(CartKind::Tnt), 6.0);
+        assert_eq!(display_offset(CartKind::CommandBlock), 6.0);
+        assert_eq!(display_offset(CartKind::Rideable), 6.0);
     }
 }

@@ -75,6 +75,19 @@ impl VanillaTerrain {
         seed: i64,
         dimension: &str,
     ) -> crate::Result<Self> {
+        Self::for_world(dir, registry, biomes, seed, dimension, true)
+    }
+    /// A dimension of a world whose `generate_structures` is `structures`
+    /// (`ChunkGenerator.createStructures` and `findNearestMapStructure` do
+    /// nothing without).
+    pub fn for_world(
+        dir: &Path,
+        registry: &'static BlockRegistry,
+        biomes: &Biomes,
+        seed: i64,
+        dimension: &str,
+        structures: bool,
+    ) -> crate::Result<Self> {
         let data: Arc<GeneratorData> = shared_data(dir, registry)?;
         let biome_map = data
             .biome_names()
@@ -82,7 +95,7 @@ impl VanillaTerrain {
             .map(|name| biomes.id(name))
             .collect();
         let generator =
-            OverworldGenerator::for_dimension(data, seed, "minecraft:normal", dimension)?;
+            OverworldGenerator::for_world(data, seed, "minecraft:normal", dimension, structures)?;
         let unsupported = generator.unsupported_features();
         if !unsupported.is_empty() {
             log::warn!(

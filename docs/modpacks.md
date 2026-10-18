@@ -236,7 +236,15 @@ How the game loads them, without touching vanilla's path:
   so the same mod set gives the same ids. Saves store block names, so ids never reach the disk.
 - Loaders that read only `data/minecraft/` (recipes, loot, tags) read every namespace, as
   vanilla does. With no mods there is only `minecraft`, so nothing changes.
-- The overlay is cached like the resource-pack overlay and rebuilt when a mod file changes.
+- The overlay is built on the first start with a set of mods and kept for later starts. A stamp
+  (`horizon-mod-content.stamp`) hashes the game executable, the base tables and every mod file's
+  size and mtime. Adding, removing or editing a mod, or a new build of Horizon, rebuilds it. For
+  ATM10's 40 data-tier mods the build takes about a minute of the first start on a busy machine.
+- **Worldgen.** Mods' structures, structure sets, template pools, processor lists, configured and
+  placed features join the `worldgen/*.json` bundles. Their structure templates go under
+  `worldgen/structure/<ns>/`. Their biome tags are merged into `worldgen/biome_tags.json`, minus
+  the biomes and tags Horizon does not have. Mod biomes, noise and density functions are not
+  carried yet.
 - **Limits.** Chunk sections size their global palette to the registry: 16 bits for vanilla's
   35,723 states (the same chunks, saves and packets as before), one more bit each time content
   mods double it, up to 2^20 states (1,048,576). Past that the content root is refused with the
@@ -398,6 +406,71 @@ Mechanical, the same for every mod, and no agent:
    carries those over.
 5. Write `<id>.hmod`. For a data-tier mod, it is now ported.
 
+Two cases the oracle fills in:
+
+- **Loot registered in code.** Chipped ships 7 loot tables for about 7,000 blocks; the rest
+  drop themselves through Java code. When a declared block has no table in the jar and the
+  oracle shows vanilla's drop-self, carry writes that table in 26.3's shape. When only the
+  states with one property value drop it (a door's lower half), the entry gets vanilla's
+  `match_block` condition. Chipped: 6,843 tables added.
+- **Worldgen carry-over.** Structure libraries give vanilla's types other names. Carry maps
+  these to vanilla's:
+  - `lithostitched:jigsaw`, MoogsStructureLib's and Repurposed Structures' generic jigsaws
+    become `minecraft:jigsaw`;
+  - their `advanced_random_spread` becomes `minecraft:random_spread`;
+  - their versioned, legacy and empty pool elements become vanilla's.
+
+  Three more rewrites make the mapped structures decode and start where their mod would:
+  - **Block states.** 1.21.1 writes a block or fluid state as `{"Name", "Properties"}`, 26.3
+    as `{"id", "properties"}` and refuses the old shape, which failed the whole processor
+    list, feature or pool. Carry rewrites them (#816; 1,005 files in 17 of ATM10's mods).
+  - **Start and placement rules** (#820 in the game, #821 in carry). Repurposed Structures'
+    and Moog's jigsaws refuse to start in liquid and check biomes and terrain height in a
+    radius; their spreads keep a minimum distance from the world origin and away from other
+    sets (named by a structure set tag). Carry writes these under `horizon:start_checks`,
+    `horizon:min_distance_from_world_origin` and `horizon:exclusion_zone`; the game runs them
+    (`horizon-world`'s `structure/start_checks.rs`). Vanilla data has none of the keys. Moog's
+    also spreads its structures 1.65 times as far apart as its files say, which carry now
+    applies. MVS went from 829 starts to 90 in a 128×128-chunk square (seed 1234): 294 from the
+    spacing, the rest from the start checks.
+  - **Processors written in Java** are taken out of their lists (#822). The game, like
+    vanilla, refuses a list holding a type it does not know, and with it every pool naming the
+    list. The structures now generate undecorated (no pillars under them, spawners as the
+    template has them); 1,427 processors of 146 types in ATM10's mods, the most common
+    `lithostitched:block_swap`, Formations' `biome_replacements` and Repurposed Structures'
+    pillar, fluid and void processors. Porting the common ones is next.
+
+  Each mod's `carry-report.json` lists what was mapped, the rules and processors lost by name,
+  and the types left as they are. NeoForge's convention biome tags (`#c:is_forest`, ...) come
+  from the loader jar (`<work>/loader/neoforge-<version>-universal.jar`, fetched dev-only and
+  SHA-1 checked) and are written into the carry. The game skips the structures it cannot
+  decode.
+
+  On ATM10's 42 data-tier mods with a jar (seed 1234, chunks -64..63, `chunkgen_bench
+  --starts` over the carried worldgen): 286 starts with 15,097 pieces, 150 of them vanilla's
+  (unchanged), and no pool that fails to decode (65 before #816 in the 64×64 centre).
+  - 1,061 files were mapped (MVS 413, MNS 210, MSS 157, MES 110, Repurposed Structures 104,
+    ChoiceTheorem's Overhauled Village 66), and 103 convention biome tags written.
+  - When Dungeons Arise, Structory and Towns and Towers use vanilla's types already.
+  - Still lost, written in Java:
+    - YUNG's API: its own jigsaw assembler (priority pieces, per-piece caps, conditions,
+      enhanced terrain adaptation) and 491 elements and jigsaws, behind every "YUNG's Better"
+      mod;
+    - Formations' structure and element types (179);
+    - the nether jigsaw variants of Moog's and Repurposed (69), which search the column for
+      land after the layout;
+    - Moog's and Repurposed's layout rules: they centre the pieces on the start, bury or lift
+      the structure to the terrain and cap pieces per pool;
+    - Repurposed's mineshafts, mansions, monuments and cities, and MO Structures (38; its
+      library is only on CurseForge).
+  - CTOV's villages and outposts are added to vanilla's `villages` and `pillager_outposts`
+    sets by Java code, as lithostitched's `add_structure_set_entries` worldgen modifiers do for
+    many packs; a content mod has no way to add to a vanilla set yet, so none start.
+
+  In a world with the 40 mods, seed 1234, `/locate structure mvs:azelea_house` finds one 27
+  blocks from spawn and it stands there as the template builds it; When Dungeons Arise's
+  bandit towers and Structory's chapel locate too.
+
 ### 5. Code: one agent per mod
 
 For tiers logic, machines and deep, in dependency order, as many agents at once as the AI
@@ -473,12 +546,15 @@ user's jars are, and its facts and results stay in the work folder. The first re
 | Glassential-renewed 3.4.7 | 105/114 | 5177/5177 | 5177/5177 | 4727/5177 | 6447/6447 | 210/210 | 105/105 | 143/143 | 106/115 |
 | Factory Blocks 1.4.0 | 42/49 | 42/42 | 0/42 | 42/42 | 294/294 | 84/84 | 42/42 | 1/1 | 42/49 |
 | Cloud Glass 1.1.0 | 16/16 | 16/16 | 16/16 | 0/16 | 112/112 | 32/32 | – | 31/31 | 16/16 |
+| Chipped 4.0.2 | 6857/6981 | 46212/46443 | 46443/46443 | 46396/46443 | 149093/149093 | 13548/13714 | 11984/12378 | 6/13 | 6849/6973 |
 
 What fails is what API 0.2 cannot express yet: shapes of their own (Japanese doors, hedges,
 paths a sixteenth high, glass without collision), sound events of the mod's own
 (`factory_blocks:metal_sound`), and blocks whose vanilla class has no vanilla block with the
 same states (garage doors, double gates, engraved and facing paths, fans). Every drop, recipe
-and tag of the declared blocks matches.
+and tag of the declared blocks matches. Chipped's 124 missing blocks are its own classes (workbenches and
+`DirectionBlock`), and its workbench recipes need those blocks. Its drops match since carry writes
+the self-drop tables it registers in code (step 4).
 
 ### 7. Coverage report
 
@@ -520,9 +596,9 @@ files; `inventory`; `carry` and the harness on the eight mods we downloaded; `re
 By tier, the 367 not yet: data 57 (carry-over and the harness, no agent: their jars were not
 downloaded), logic 66 (API 0.3), machines 97 (0.4), deep 92 (0.5), client 35, unclassified 20.
 Ported: Macaw's Trapdoors. Partial: Macaw's Doors, Fences and Walls, Paths and Pavings,
-Glassential, Factory Blocks, Cloud Glass (see the harness table) and MVS, whose 784 worldgen
-files are carried but not yet read by the game. Of the 8, 7 are MIT and one LGPL; nothing is
-published.
+Glassential, Factory Blocks, Cloud Glass, Chipped (see the harness table) and MVS, whose
+structures now generate (see step 4). Of the 9, 7 are MIT, one LGPL and Chipped is under the
+Terrarium License; nothing is published.
 
 ## Measuring "10x"
 
@@ -582,8 +658,9 @@ vanilla's 35,723; the per-state tables are the next thing to measure), while the
 inside its 2 GB heap. Caveats, so none of this is a "10x" claim yet: other sessions and CI
 runners kept the machine's load average between 30 and 56 on 14 threads, so the confidence
 intervals are as wide as the means (`perf_bench.py --table`); Horizon's frames are paced near
-the display's 144 Hz at 8 chunks; Horizon's title time includes building the content overlay on
-a first start (about 5 s, cached afterwards); and the pack runs 1.21.1 against Horizon's 26.3.
+the display's 144 Hz at 8 chunks; Horizon's title time includes building the content overlay
+(about 5 s for six mods; it was rebuilt on every start then, and is kept for later starts now);
+and the pack runs 1.21.1 against Horizon's 26.3.
 A quiet rerun with more games is the next measurement.
 
 **Where the RAM goes (2026-10-17).** RSS overstates it on macOS. `ps` counts pages the allocator
@@ -620,8 +697,46 @@ indexes ids by a hash checked against the states: -22 MB live for vanilla, -124 
 ATM10's, -30 MB and -140 MB of footprint. The startup peaks are what is left. Each step parses
 its per-state tables whole: as JSON trees, or as NBT trees of 300-600 MB each for ATM10
 (`block-properties.nbt`, the collision, support, occlusion and movement tables). The peak
-reaches 3.9 GB during worldgen loading, and the footprint stays near the peak. Typed, streaming
-readers for those tables are the next cut.
+reaches 3.9 GB during worldgen loading, and the footprint stays near the peak.
+
+The NBT tables now stream: the readers check each state's identity as it is read, and no
+`states` tree is built (#753). That tree was about 240 MB for each table. With the carried
+ATM10 mods (153,511 states), the peak of each step falls by about 210 MB:
+
+| step | before MB | after MB |
+|---|---:|---:|
+| light | 911 | 699 |
+| collision | 945 | 733 |
+| motion | 1,427 | 1,215 |
+| worldgen, uncached | 3,000 | 2,788 |
+
+The fluid tables no longer decode the 211 MB `gameplay-facts.json` a second time (#754). The
+content root is kept between starts (#756). What is left at startup:
+
+- `facts.json` went through a JSON tree, then an NBT tree, in both the registry and the assets
+  step. It now streams (#825): at ATM10's size (214,338 states) each step's peak fell from
+  816 MB to 153 MB (registry) and 235 MB (assets), and the RSS after the assets step from
+  1,344 MB to 442 MB;
+- on a first start, the content-root build and `Behaviours`' decode of `gameplay-facts.json`
+  (cached afterwards in the behaviour snapshot).
+
+**Against NeoForge, same 40 mods (2026-10-17).** The 40 data-tier mods carried from ATM10 (the
+42 without Regions Unexplored and MO Structures, whose libraries are only on CurseForge),
+against their jars on NeoForge 21.1.259 with `-Xmx2G`. `perf_bench.py --port-work`, RD 8, one
+game each, load average 80-125 on 14 threads; `--warm` measures a later start:
+
+| game | title / world s | RSS steady / peak MB | footprint steady / peak MB |
+|---|---|---|---|
+| Horizon before #756 (every start) | 81.1 / 102.8 | 4,008 / 4,164 | 2,368 / 2,554 |
+| Horizon, first start | 105.2 / 128.8 | 3,795 / 3,993 | 2,306 / 2,560 |
+| **Horizon, later starts** | **21.6 / 33.7** | **2,629 / 2,935** | **2,445 / 2,731** |
+| NeoForge + 40 mods | 53.2 / 119.9 | 3,099 / 3,203 | 3,304 / 3,381 |
+
+On later starts, Horizon uses 15 % less RSS and 26 % less footprint than NeoForge with the
+same mods. It reaches the title 2.5x sooner and the world 3.6x sooner, and its flights ran at
+93-233 FPS against NeoForge's 27-62. The first start is slower than NeoForge's to the title,
+because it builds the content root once. One game per row on a loaded machine is not a
+benchmark; a quiet rerun with repeats is still to do.
 
 ## The working version for 2026-10-23
 
@@ -648,11 +763,9 @@ In scope (each is a PR or a small stack):
 6. **Measured:** load time, RAM and FPS of that pack on NeoForge 1.21.1 against Horizon, with
    the full ATM10 on NeoForge as the reference row.
 
-Out of scope for that date, and next in order: worldgen carry-over (the 30 or so structure and biome mods;
-the first one looked at, Moog's Voyager Structures, declares all 130 structures and 116 structure
-sets with MoogsStructureLib's own `generic_jigsaw_structure` and `advanced_random_spread` types and
-NeoForge's `c:` biome tags, so its carry needs a mapping to vanilla's jigsaw and random spread
-types plus the oracle's biome tags, not only bundle merging),
+Out of scope for that date, and next in order: the rest of worldgen carry-over (mods'
+structures, sets, pools and features generate now, see step 4; mod biomes, noise and density
+functions, and the structure types written in Java such as YUNG's and Formations', do not yet),
 behaviour callbacks and server events (0.3), block entities, menus, capabilities and net
 (0.4), the first agent-ported logic-tier mod as the pilot of step 5, then machines. Porting all
 of ATM10 is a campaign. Each step publishes its coverage number; we make no claim beyond what

@@ -480,6 +480,33 @@ impl ChunkEncoder {
         w.data
     }
 
+    /// ClientboundLightUpdatePacket for the light sections over `changed` (a
+    /// bit per section of the column, `sectionLightChanged`), as vanilla's
+    /// `ClientboundLightUpdatePacketData` writes them, with both kinds of
+    /// each section (Horizon's light engine doesn't tell them apart; the
+    /// client keeps the same light either way). A section changed as its
+    /// last block went (light dimming around a removed block) is sent too:
+    /// a client not tracking the block would otherwise keep its old light.
+    pub fn light_update(&self, chunk: &Chunk, changed: u32) -> Vec<u8> {
+        let first = self.sections.start;
+        let lights: Vec<(usize, SectionLight)> = self
+            .light_sections(chunk, u64::MAX)
+            .into_iter()
+            .filter(|&(b, _)| {
+                // Light section b holds the column's section first + b - 1.
+                (1..=self.sections.len()).contains(&b) && changed >> (first + b - 1) & 1 != 0
+            })
+            .collect();
+        horizon_protocol::packets::play::Clientbound::LightUpdate(
+            horizon_protocol::packets::play::LightUpdate {
+                x: chunk.x,
+                z: chunk.z,
+                light: light_data_of(&lights, self.sky),
+            },
+        )
+        .encode()
+    }
+
     pub fn encode(
         &self,
         chunk: &Chunk,

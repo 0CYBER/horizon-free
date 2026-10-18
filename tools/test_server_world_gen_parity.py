@@ -10,7 +10,10 @@ to the preset's classic ones) and `generate-structures`.
 Each case starts vanilla's server and Horizon's (`horizon-client --dedicated --nogui`) in a new folder, waits
 for `Done` and stops them. Compared exactly: the world's `data/minecraft/world_gen_settings.dat`, tag types
 included, and the warnings and errors logged while the world's settings are read (the `Worker-Main` lines;
-the worker's number is left out).
+the worker's number is left out). In a world without structures (`generate-structures=false`), also what
+`locate structure` answers on the console for a village and a mineshaft (ChunkGenerator.findNearestMapStructure
+finds none) and how many of the saved chunks hold structure starts or references (none:
+ChunkStatusTasks.generateStructureStarts does nothing).
 
 Horizon generates the normal and flat presets only: `large_biomes`, `amplified`, `single_biome_surface` and
 `debug_all_block_states` aren't tested.
@@ -23,6 +26,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 try:
     from . import anvil_dump, lab, test_rust_parity as base
@@ -60,6 +64,32 @@ CASES = {
     'unknown': {'level-type': 'Some Type', 'level-seed': '42'},
 }
 WORKER = re.compile(r'\[Worker-Main-\d+/(WARN|ERROR)\]: (.*)')
+LOCATE = ['locate structure #minecraft:village', 'locate structure minecraft:mineshaft']
+REPLY = re.compile(r'\]: (?:System chat: )?((?:Could not find|The nearest|Unknown|Incorrect).*)')
+
+
+def console_reply(server, command, timeout=300):
+    """The first command reply the console logs after `command`."""
+    start = len(server.lines)
+    server.console(command)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for line in server.lines[start:]:
+            if m := REPLY.search(line):
+                return m.group(1)
+        time.sleep(0.2)
+    raise AssertionError(f'no reply to {command!r} in {timeout} s:\n' + '\n'.join(server.lines[-20:]))
+
+
+def structure_chunks(world):
+    """How many saved overworld chunks hold structure starts, and how many references."""
+    starts = references = 0
+    for region in sorted((world / 'region').glob('*.mca')):
+        for chunk in anvil_dump.region_chunks(region).values():
+            structures = anvil_dump.plain(chunk, True).get('structures', {})
+            starts += bool(structures.get('starts'))
+            references += bool(structures.get('References'))
+    return f'chunks with structure starts: {starts}, with references: {references}'
 
 
 def escape(value):
@@ -77,11 +107,16 @@ def run_case(label, command, build, case):
                                                  encoding='iso-8859-1')
     (directory / 'eula.txt').write_text('eula=true\n')
     server = Server(command, directory, f'{label}-{case}')
+    replies = []
     try:
         server.wait_for(r'Done \(')
+        if CASES[case].get('generate-structures') == 'false':
+            replies = [f'{c}: {console_reply(server, c)}' for c in LOCATE]
     finally:
         server.stop()
-    out = [f'# {case}']
+    out = [f'# {case}', *replies]
+    if replies:
+        out.append(structure_chunks(directory / 'world'))
     out += [f'{m.group(1)}: {m.group(2)}' for l in server.lines if (m := WORKER.search(l))]
     settings = anvil_dump.plain(anvil_dump.read_dat(directory / 'world/data/minecraft/world_gen_settings.dat'),
                                 True, typed=True)
@@ -121,7 +156,8 @@ def main():
         java=subprocess.check_output(['java', '--version'], text=True).splitlines()[0],
         cases=list(CASES), lines=len(vanilla), output_sha256=lab.digest(build / 'horizon.txt', 'sha256'),
         scope='a new dedicated-server world: level-type (flat, normal, unknown), a flat world\'s '
-              'generator-settings, generate-structures, as world_gen_settings.dat and the lines logged.'))
+              'generator-settings, generate-structures, as world_gen_settings.dat and the lines logged; without '
+              'structures, locate structure\'s replies and the saved chunks\' structure starts and references.'))
     print(f'server world gen: {len(CASES)} cases, {len(vanilla)} lines identical')
 
 

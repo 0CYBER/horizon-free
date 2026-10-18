@@ -15,24 +15,18 @@ use horizon_world::{
     entity_obstruction::EntityIdentity,
     fluid::{FluidKind, FluidState},
     liquid_collision::LiquidCollisionWorld,
-    nbt::{self, Limits},
     powder_snow_collision::{PowderSnowEntity, PowderSnowWorld},
-    registry::BlockRegistry,
+    registry::{BlockRegistry, BlockTableFile},
     world_movement::{
         CollisionCheckRequest, EntityMovementWorld, MovementRequest, no_world_collision,
         resolve_world_movement,
     },
 };
-use std::{fs, io, path::Path, sync::Arc};
+use std::{io, path::Path, sync::Arc};
 
 pub fn load<'r>(root: &Path, registry: &'r BlockRegistry) -> Result<BlockCollisionRegistry<'r>> {
-    let data = nbt::read_named(
-        &fs::read(root.join("cached-collision.nbt"))?,
-        Limits::tables(),
-    )?
-    .0
-    .tag;
-    let cached = CachedCollisionRegistry::from_nbt(&data, registry)?;
+    let file = BlockTableFile::open(&root.join("cached-collision.nbt"), registry)?;
+    let cached = CachedCollisionRegistry::from_table(file.table("collision")?)?;
     if !cached.has_canonical_identities() {
         return Err("scene collisions require canonical shape identities".into());
     }
@@ -138,11 +132,24 @@ impl SceneCollisions<'_, '_> {
         max_step: f32,
         on_ground: bool,
     ) -> Result<Vec3> {
+        self.resolve_with_context(bounds, movement, max_step, on_ground, self.context(bounds))
+    }
+    /// Resolve movement with the entity's captured collision context. Most
+    /// callers only need the position context; entities such as falling blocks
+    /// also affect contextual block shapes (for example powder snow).
+    pub fn resolve_with_context(
+        &mut self,
+        bounds: Aabb,
+        movement: Vec3,
+        max_step: f32,
+        on_ground: bool,
+        context: CollisionContext<'_>,
+    ) -> Result<Vec3> {
         Ok(resolve_world_movement(
             self,
             MovementRequest {
                 entity: EntityIdentity(0),
-                context: self.context(bounds),
+                context,
                 bounds,
                 movement,
                 max_step,

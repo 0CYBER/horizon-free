@@ -165,14 +165,20 @@ impl Game<'_> {
         }
         self.broadcast_to_admins(message);
     }
-    /// CommandSourceStack.broadcastToAdmins, for a guest's command on a
-    /// dedicated server (`sendSuccess` with `broadcast`): `[name: message]`,
-    /// gray and italic, for the other operators when `send_command_feedback`
-    /// and the console when `log_admin_commands`. Queued while the guest acts;
-    /// `send_admin_feedback` sends it.
-    fn broadcast_to_admins(&mut self, message: Text) {
-        if self.lan_acting.is_none()
-            || self.options.dedicated.is_none()
+    /// CommandSourceStack.broadcastToAdmins (`sendSuccess` with `broadcast`)
+    /// for a guest's command, the host's in a world open to LAN and the
+    /// dedicated server console's when `broadcast-console-to-ops` is on:
+    /// `[name: message]`, gray and italic, for the other operators when
+    /// `send_command_feedback`, and for a player's command on a dedicated
+    /// server the console when `log_admin_commands`. Queued while the
+    /// command runs; `send_admin_feedback` sends it.
+    pub(super) fn broadcast_to_admins(&mut self, message: Text) {
+        let informs = match self.console_broadcast {
+            Some(broadcast) => broadcast,
+            // While a guest acts the host's LanHost is out of `self.lan`.
+            None => self.lan_acting.is_some() || self.lan.is_some(),
+        };
+        if !informs
             || message
                 .translation_key()
                 .is_some_and(|k| admin::QUIET.contains(&k))
@@ -180,19 +186,45 @@ impl Game<'_> {
             return;
         }
         let ops = self.ui.rules.bool("send_command_feedback");
-        let console = self.ui.rules.bool("log_admin_commands");
+        // MinecraftServer.sendSystemMessage, unless the server is the source.
+        let console = self.console_broadcast.is_none()
+            && self.lan_acting.is_some()
+            && self.options.dedicated.is_some()
+            && self.ui.rules.bool("log_admin_commands");
         if !ops && !console {
             return;
         }
-        // getDisplayName: the entity the command runs as (`execute as`).
-        let who = self
-            .command_source
-            .and_then(|s| s.entity)
-            .unwrap_or(Target::Player);
-        let line = Text::translate("chat.type.admin", &[self.target_name(who), message])
+        // getDisplayName: the entity the command runs as (`execute as`), or
+        // the server's own source, "Server".
+        let who = match self.command_source.and_then(|s| s.entity) {
+            Some(entity) => self.target_name(entity),
+            None if self.console_broadcast.is_some() => Text::literal("Server".to_owned()),
+            None => self.player_display_name(),
+        };
+        let line = Text::translate("chat.type.admin", &[who, message])
             .with_color(text::GRAY)
             .italic();
         self.admin_feedback.push((line, ops, console));
+    }
+    /// Player.getDisplayName: the name (team-formatted), suggesting a
+    /// `/tell`, showing the player on hover, inserting the name.
+    fn player_display_name(&self) -> Text {
+        let name = self.acting_player_name().to_owned();
+        let Some(uuid) = self.lan_acting_uuid else {
+            return self.target_name(Target::Player);
+        };
+        self.target_name(Target::Player).with_component_fields(vec![
+            (
+                "click_event".into(),
+                serde_json::json!({"action": "suggest_command", "command": format!("/tell {name} ")}),
+            ),
+            (
+                "hover_event".into(),
+                serde_json::json!({"action": "show_entity", "id": "minecraft:player",
+                    "uuid": horizon_protocol::crypto::uuid_string(uuid), "name": name}),
+            ),
+            ("insertion".into(), name.into()),
+        ])
     }
     fn source_position(&self) -> [f64; 3] {
         if let Some(s) = &self.command_source {
@@ -1124,7 +1156,23 @@ impl Game<'_> {
                 (-(dy.atan2(horizontal).to_degrees())) as f32,
             ]);
         }
+        // `execute in` another dimension: a server's player moves to that
+        // level (ServerPlayer.teleport into another level), after the command.
+        let level = self
+            .command_source
+            .and_then(|s| s.level)
+            .filter(|d| *d != self.dim && self.options.dedicated.is_some());
         for &t in &targets {
+            if let (Some(dim), Target::Player, Some(conn)) = (level, t, self.lan_acting) {
+                self.level_teleports
+                    .push(super::server_travel::LevelTeleport {
+                        conn,
+                        dim,
+                        at: pos,
+                        rotation,
+                    });
+                continue;
+            }
             self.teleport_to(t, pos, rotation);
         }
         let [x, y, z] = pos.map(|v| Text::literal(format_double(v)));
@@ -1453,7 +1501,9 @@ impl Game<'_> {
                     return Err(err("commands.summon.failed", &[]));
                 }
                 "experience_orb" => {
+                    self.next_entity += 1;
                     self.orbs.push(horizon_client::entities::ExperienceOrb {
+                        id: self.next_entity,
                         position: Vec3::new(pos[0], pos[1], pos[2]),
                         previous: Vec3::new(pos[0], pos[1], pos[2]),
                         velocity: Vec3::new(0.0, 0.0, 0.0),
@@ -1479,7 +1529,13 @@ impl Game<'_> {
                     self.carts.push(cart);
                     name = Text::translate(&format!("entity.minecraft.{k}"), &[]);
                 }
-                _ => return Err(err("commands.summon.failed", &[])),
+                // SummonCommand.createEntity: any other type from an empty compound.
+                _ => {
+                    let Some(target) = self.summon_with_nbt(&kind, pos, "{}")? else {
+                        return Err(err("commands.summon.failed", &[]));
+                    };
+                    name = self.target_name(target);
+                }
             }
         }
         self.feedback(Text::translate("commands.summon.success", &[name]));

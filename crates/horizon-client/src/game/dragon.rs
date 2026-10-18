@@ -74,6 +74,8 @@ impl Respawn {
 }
 #[derive(Clone, Debug)]
 pub(super) struct Crystal {
+    /// The entity id a server tracks it by (0 until it is tracked).
+    pub id: u32,
     pub position: Vec3,
     pub show_bottom: bool,
     /// EndCrystal.time (the bob and spin), starting random.
@@ -553,6 +555,7 @@ impl Game<'_> {
             }
             let time = self.world.random.next_int_bound(100_000).unwrap_or(0);
             self.crystals.push(Crystal {
+                id: 0,
                 position: at,
                 show_bottom: true,
                 time,
@@ -2301,6 +2304,7 @@ impl Crystal {
     pub(super) fn from_nbt(tag: &Tag, time: i32) -> Option<Self> {
         let (position, _, _) = horizon_client::entity_nbt::boat_from_nbt(tag)?;
         Some(Self {
+            id: 0,
             position,
             show_bottom: !matches!(tag.get("ShowBottom"), Some(Tag::Byte(0))),
             time,
@@ -2403,6 +2407,7 @@ impl Game<'_> {
         }
         let time = self.world.random.next_int_bound(100_000).unwrap_or(0);
         self.crystals.push(Crystal {
+            id: 0,
             position: Vec3::new(x + 0.5, y, z + 0.5),
             show_bottom: false,
             time,
@@ -2665,6 +2670,7 @@ impl Game<'_> {
             .retain(|c| c.position.distance_squared(at) > 0.01);
         let time = self.world.random.next_int_bound(100_000).unwrap_or(0);
         self.crystals.push(Crystal {
+            id: 0,
             position: at,
             show_bottom: true,
             time,

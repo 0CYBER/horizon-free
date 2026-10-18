@@ -783,6 +783,10 @@ impl Game<'_> {
         status["lod"]["sampled_target_tiles"] = sampled.into();
         status["pending_uploads"] = self.pending_uploads.len().into();
         status["physical_keys"] = json!(physical_keys);
+        // Boats, minecarts, armor stands, item frames and paintings.
+        status["objects"] = json!(self.objects_status());
+        // Primed TNT, falling blocks, projectiles, tridents and end crystals.
+        status["projectiles"] = json!(self.projectiles_status());
         status
     }
 }

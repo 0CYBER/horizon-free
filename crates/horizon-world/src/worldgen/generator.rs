@@ -2093,6 +2093,18 @@ impl OverworldGenerator {
     ) -> Result<Self, GeneratorError> {
         Self::build(data, seed, preset, dimension, true)
     }
+    /// A dimension of a world preset, with or without structures (the
+    /// world's `generate_structures`: without, no starts, terrain adaptation,
+    /// structure pieces or structure locating).
+    pub fn for_world(
+        data: Arc<GeneratorData>,
+        seed: i64,
+        preset: &str,
+        dimension: &str,
+        structures: bool,
+    ) -> Result<Self, GeneratorError> {
+        Self::build(data, seed, preset, dimension, structures)
+    }
     fn build(
         data: Arc<GeneratorData>,
         seed: i64,

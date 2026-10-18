@@ -176,7 +176,13 @@ impl Game<'_> {
                             self.dropped.push(e);
                         }
                     }
-                    "minecraft:experience_orb" => self.orbs.extend(entity_nbt::orbs_from_nbt(&tag)),
+                    "minecraft:experience_orb" => {
+                        for mut orb in entity_nbt::orbs_from_nbt(&tag) {
+                            self.next_entity += 1;
+                            orb.id = self.next_entity;
+                            self.orbs.push(orb);
+                        }
+                    }
                     "minecraft:arrow" => {
                         if let Some((mut p, in_block)) = entity_nbt::arrow_from_nbt(
                             &tag,
@@ -196,6 +202,7 @@ impl Game<'_> {
                         {
                             let (no_gravity, drop_item) = entity_nbt::falling_block_flags(&tag);
                             self.falling.push(FallingBlock {
+                                id: 0,
                                 state,
                                 // DATA_START_POS is not persisted by vanilla.
                                 start_pos: horizon_core::position::BlockPos::default(),
@@ -211,6 +218,23 @@ impl Game<'_> {
                                     self.res.facts.get(state).name.ends_with("anvil"),
                                 ),
                                 saved: uuid.map(|u| Box::new((u, tag.clone()))),
+                            });
+                        }
+                    }
+                    // PrimedTnt.readAdditionalSaveData: its fuse (80 when absent) and motion.
+                    "minecraft:tnt" => {
+                        if let Some(position) = entity_nbt::position(&tag) {
+                            let fuse = match tag.get("fuse") {
+                                Some(Tag::Short(f)) => i32::from(*f),
+                                _ => 80,
+                            };
+                            self.tnts.push(super::tnt::PrimedTnt {
+                                id: 0,
+                                position,
+                                previous: position,
+                                velocity: entity_nbt::motion(&tag),
+                                fuse,
+                                on_ground: matches!(tag.get("OnGround"), Some(Tag::Byte(1))),
                             });
                         }
                     }

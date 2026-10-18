@@ -65,17 +65,9 @@ impl LightTables {
     }
     /// Full tables with the vanilla occlusion shapes from `occlusion.nbt`.
     pub fn load(root: &Path, registry: &BlockRegistry, facts: &BlockFacts) -> crate::Result<Self> {
-        use horizon_world::{
-            collision::CachedCollisionRegistry,
-            nbt::{self, Limits},
-        };
-        let data = nbt::read_named(
-            &std::fs::read(root.join("occlusion.nbt"))?,
-            Limits::tables(),
-        )?
-        .0
-        .tag;
-        let occlusion = CachedCollisionRegistry::from_nbt(&data, registry)?;
+        use horizon_world::{collision::CachedCollisionRegistry, registry::BlockTableFile};
+        let file = BlockTableFile::open(&root.join("occlusion.nbt"), registry)?;
+        let occlusion = CachedCollisionRegistry::from_table(file.table("occlusion")?)?;
         let mut tables = Self::new(facts);
         let block = VoxelShape::block();
         let mut shapes: Vec<VoxelShape> = vec![VoxelShape::empty(), block.clone()];
@@ -385,6 +377,81 @@ pub fn apply_relighting(chunk: &mut Chunk, lights: Vec<Light>) -> Vec<(i32, i32,
         if changed.len() > before {
             Arc::make_mut(section).light = light;
         }
+    }
+    changed
+}
+
+/// `DataLayer.get`: the nibble at index `i` (`y << 8 | z << 4 | x`), low first.
+#[inline]
+fn nibble(layer: &[u8], i: usize) -> u8 {
+    (layer[i >> 1] >> ((i & 1) * 4)) & 15
+}
+
+/// A column's light as vanilla stores it, two DataLayers per section (sky,
+/// block; `layers[i]` for section `i`, `None` where no layer is stored), into
+/// the sections' packed light, which then needs no light job. A missing sky
+/// layer repeats the bottom layer of the nearest stored one above it, and
+/// `above` (per `z << 4 | x`) above the highest
+/// (`SkyLightSectionStorage.getLightValue`); a missing block layer is dark.
+pub fn light_from_layers<L: AsRef<[u8]>>(
+    chunk: &mut Chunk,
+    layers: &[(Option<L>, Option<L>)],
+    mut above: [u8; 256],
+    sky_light: bool,
+) {
+    for (si, (sky, block)) in layers.iter().enumerate().take(SECTIONS).rev() {
+        let sky = sky.as_ref().filter(|_| sky_light);
+        let section = Arc::make_mut(&mut chunk.sections[si]);
+        if sky.is_none() && block.is_none() && above.iter().all(|&v| v == above[0]) {
+            section.light = Light::Uniform(above[0] << 4);
+            section.compact();
+            continue;
+        }
+        let mut data = Box::new([0u8; 4096]);
+        for (i, packed) in data.iter_mut().enumerate() {
+            let s = sky.map_or(above[i & 255], |a| nibble(a.as_ref(), i));
+            let b = block.as_ref().map_or(0, |a| nibble(a.as_ref(), i));
+            *packed = s << 4 | b;
+        }
+        for (i, a) in above.iter_mut().enumerate() {
+            *a = data[i] >> 4;
+        }
+        section.light = Light::Full(data);
+        section.compact();
+    }
+    chunk.lit = true;
+    chunk.light_loaded = true;
+}
+
+/// A light update's layers (`LevelLightEngine.queueSectionData`): each one
+/// given replaces that kind of light in its section, the other kind stays.
+/// Returns the sections whose light changed.
+pub fn update_light_layers<L: AsRef<[u8]>>(
+    chunk: &mut Chunk,
+    layers: &[(Option<L>, Option<L>)],
+    sky_light: bool,
+) -> Vec<usize> {
+    let mut changed = Vec::new();
+    for (si, (sky, block)) in layers.iter().enumerate().take(SECTIONS) {
+        let sky = sky.as_ref().filter(|_| sky_light);
+        if sky.is_none() && block.is_none() {
+            continue;
+        }
+        let old = &chunk.sections[si].light;
+        let mut data = Box::new([0u8; 4096]);
+        for (i, packed) in data.iter_mut().enumerate() {
+            let was = old.get(i);
+            let s = sky.map_or(was >> 4, |a| nibble(a.as_ref(), i));
+            let b = block.as_ref().map_or(was & 15, |a| nibble(a.as_ref(), i));
+            *packed = s << 4 | b;
+        }
+        if (0..4096).all(|i| old.get(i) == data[i]) {
+            continue;
+        }
+        let section = Arc::make_mut(&mut chunk.sections[si]);
+        section.light = Light::Full(data);
+        section.compact();
+        changed.push(si);
     }
     changed
 }
@@ -815,6 +882,44 @@ mod tests {
             .filter(|(old, new)| **old != Arc::as_ptr(new))
             .count();
         assert!(copied <= 3, "{copied} sections copied");
+    }
+
+    #[test]
+    fn stored_layers_fill_the_column_as_vanilla_reads_them() {
+        // Section 10's sky layer is 7 on its bottom row and 3 above; no
+        // layers anywhere else; a block layer of 5 in section 2.
+        let mut sky = vec![0x33u8; 2048];
+        sky[..128].fill(0x77);
+        let mut layers: Vec<(Option<Vec<u8>>, Option<Vec<u8>>)> = vec![(None, None); SECTIONS];
+        layers[10].0 = Some(sky);
+        layers[2].1 = Some(vec![0x55; 2048]);
+        let mut chunk = Chunk::empty(0, 0);
+        light_from_layers(&mut chunk, &layers, [15; 256], true);
+        let at = |c: &Chunk, si: usize, i: usize| c.sections[si].light(i);
+        assert!(chunk.lit && chunk.light_loaded);
+        assert!(
+            matches!(chunk.sections[11].light, Light::Uniform(0xF0)),
+            "above: open sky"
+        );
+        assert_eq!((at(&chunk, 10, 0), at(&chunk, 10, 4095)), (0x70, 0x30));
+        // Below, each section repeats the bottom row of the stored one above.
+        assert!(matches!(chunk.sections[9].light, Light::Uniform(0x70)));
+        assert_eq!(at(&chunk, 2, 100), 0x75, "block light only where stored");
+        assert!(matches!(chunk.sections[0].light, Light::Uniform(0x70)));
+
+        // A light update replaces one kind of light in the sections it names.
+        let mut update: Vec<(Option<Vec<u8>>, Option<Vec<u8>>)> = vec![(None, None); SECTIONS];
+        update[2].1 = Some(vec![0; 2048]);
+        update[3].0 = Some(vec![0x77; 2048]);
+        let changed = update_light_layers(&mut chunk, &update, true);
+        assert_eq!(changed, vec![2]);
+        assert!(matches!(chunk.sections[2].light, Light::Uniform(0x70)));
+        update[3].0 = Some(vec![0xFF; 2048]);
+        assert_eq!(
+            update_light_layers(&mut chunk, &update, false),
+            Vec::<usize>::new(),
+            "no sky storage"
+        );
     }
 
     #[test]
