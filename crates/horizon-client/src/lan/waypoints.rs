@@ -160,7 +160,7 @@ struct Tick<'a> {
     out: Vec<(u32, C)>,
 }
 
-impl Tick<'_> {
+impl<'a> Tick<'a> {
     fn send(
         &mut self,
         receiver: u128,
@@ -172,16 +172,8 @@ impl Tick<'_> {
         let Some(conn) = self.players.get(&receiver).and_then(|p| p.conn) else {
             return;
         };
-        self.out.push((
-            conn,
-            C::TrackedWaypoint(TrackedWaypoint {
-                operation,
-                id: WaypointId::Uuid(source),
-                style: icon.style.clone(),
-                color: icon.color,
-                target,
-            }),
-        ));
+        self.out
+            .push((conn, waypoint(source, operation, icon, target)));
     }
     fn connect(&mut self, receiver: u128, source: u128, c: &Connection) {
         let target = match c.kind {
@@ -230,11 +222,13 @@ impl Tick<'_> {
         let d = [0, 1, 2].map(|k| receiver.position[k] - source.position[k]);
         horizon_core::geometry::trig::atan2(d[0], -d[2]) as f32
     }
+    /// The source and the receiver, if both are in the level this tick.
+    fn pair(&self, source: u128, receiver: u128) -> Option<(&'a Player, &'a Player)> {
+        Some((*self.players.get(&source)?, *self.players.get(&receiver)?))
+    }
     /// `LivingEntity.makeWaypointConnectionWith`.
-    fn make(&self, source: u128, receiver: u128) -> Option<Connection> {
-        let (s, r) = (self.players.get(&source)?, self.players.get(&receiver)?);
-        if s.first_tick || self.fresh.contains(&source) || source == receiver || self.ignores(s, r)
-        {
+    fn make(&self, (s, r): (&Player, &Player)) -> Option<Connection> {
+        if s.first_tick || self.fresh.contains(&s.uuid) || s.uuid == r.uuid || self.ignores(s, r) {
             return None;
         }
         // Waypoint.Icon.cloneAndAssignStyle: the icon's colour, else the team's.
@@ -244,7 +238,7 @@ impl Tick<'_> {
         }
         let kind = if Self::really_far(s, r) {
             Kind::Azimuth(Self::azimuth(s, r))
-        } else if !self.chunk_visible(s.chunk(), receiver) {
+        } else if !self.chunk_visible(s.chunk(), r.uuid) {
             Kind::Chunk(s.chunk())
         } else {
             Kind::Block(s.block())
@@ -252,10 +246,8 @@ impl Tick<'_> {
         Some(Connection { kind, icon })
     }
     /// `Connection.isBroken` for each kind.
-    fn broken(&self, c: &Connection, source: u128, receiver: u128) -> bool {
-        let (Some(s), Some(r)) = (self.players.get(&source), self.players.get(&receiver)) else {
-            return true;
-        };
+    fn broken(&self, c: &Connection, (s, r): (&Player, &Player)) -> bool {
+        let receiver = r.uuid;
         match c.kind {
             Kind::Block(last) => {
                 let now = s.block();
@@ -274,10 +266,7 @@ impl Tick<'_> {
         }
     }
     /// `Connection.update`: the packet when the waypoint moved.
-    fn update(&mut self, c: &mut Connection, source: u128, receiver: u128) {
-        let (Some(s), Some(r)) = (self.players.get(&source), self.players.get(&receiver)) else {
-            return;
-        };
+    fn update(&mut self, c: &mut Connection, (s, r): (&Player, &Player)) {
         let target = match &mut c.kind {
             Kind::Block(last) => {
                 let now = s.block();
@@ -304,24 +293,26 @@ impl Tick<'_> {
                 WaypointTarget::Azimuth(now)
             }
         };
-        self.send(
-            receiver,
-            source,
-            waypoint_operation::UPDATE,
-            &c.icon,
-            target,
-        );
+        if let Some(conn) = r.conn {
+            self.out.push((
+                conn,
+                waypoint(s.uuid, waypoint_operation::UPDATE, &c.icon, target),
+            ));
+        }
     }
 }
 
+fn waypoint(source: u128, operation: i32, icon: &Icon, target: WaypointTarget) -> C {
+    C::TrackedWaypoint(TrackedWaypoint {
+        operation,
+        id: WaypointId::Uuid(source),
+        style: icon.style.clone(),
+        color: icon.color,
+        target,
+    })
+}
+
 impl Waypoints {
-    fn connection(&mut self, receiver: u128, source: u128) -> Option<&mut Connection> {
-        self.connections
-            .get_mut(&receiver)?
-            .iter_mut()
-            .find(|(s, _)| *s == source)
-            .map(|(_, c)| c)
-    }
     fn put(&mut self, receiver: u128, source: u128, c: Connection) {
         let row = self.connections.entry(receiver).or_default();
         match row.iter_mut().find(|(s, _)| *s == source) {
@@ -340,7 +331,7 @@ impl Waypoints {
         if receiver == source || !t.enabled {
             return;
         }
-        match t.make(source, receiver) {
+        match t.pair(source, receiver).and_then(|pair| t.make(pair)) {
             Some(c) => {
                 t.connect(receiver, source, &c);
                 self.put(receiver, source, c);
@@ -352,23 +343,28 @@ impl Waypoints {
             }
         }
     }
-    /// `updateConnection`, on the connection in its place.
-    fn update_connection(&mut self, t: &mut Tick, receiver: u128, source: u128) {
+    /// The receiver's connection to the source updated in its place
+    /// (`updateConnection`), or made if it has none (`createConnection`).
+    fn update_or_create(&mut self, t: &mut Tick, receiver: u128, source: u128) {
         if receiver == source || !t.enabled {
             return;
         }
         let Some(row) = self.connections.get_mut(&receiver) else {
-            return;
+            return self.create_connection(t, receiver, source);
         };
         let Some(i) = row.iter().position(|(s, _)| *s == source) else {
-            return;
+            return self.create_connection(t, receiver, source);
         };
         let c = &mut row[i].1;
-        if !t.broken(c, source, receiver) {
-            t.update(c, source, receiver);
+        // A connection to a player who isn't in the level is broken.
+        let pair = t.pair(source, receiver);
+        if let Some(pair) = pair
+            && !t.broken(c, pair)
+        {
+            t.update(c, pair);
             return;
         }
-        match t.make(source, receiver) {
+        match pair.and_then(|pair| t.make(pair)) {
             Some(new) => {
                 t.connect(receiver, source, &new);
                 *c = new;
@@ -377,14 +373,6 @@ impl Waypoints {
                 t.disconnect(receiver, source);
                 row.remove(i);
             }
-        }
-    }
-    /// The receiver's connection to the source updated, or made if it has none.
-    fn update_or_create(&mut self, t: &mut Tick, receiver: u128, source: u128) {
-        if self.connection(receiver, source).is_some() {
-            self.update_connection(t, receiver, source);
-        } else {
-            self.create_connection(t, receiver, source);
         }
     }
     /// `trackWaypoint`.
