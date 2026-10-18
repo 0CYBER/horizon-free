@@ -683,7 +683,7 @@ impl Game<'_> {
                 self.ticks = self.ticks.max(1);
             }
             // MinecraftServer.tickServer: while paused only the connections run.
-            self.tick_server(paused)?;
+            self.tick_server_timed(paused)?;
             if idle_timeout > 0 {
                 self.kick_idle(idle_timeout);
             }
