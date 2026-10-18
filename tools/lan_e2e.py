@@ -454,6 +454,9 @@ def check_hazards(host, guest, out):
     # A fresh life: full health, so no regeneration eats food while the guest runs.
     guest('command', command='kill @s')
     guest.wait(20)
+    # ServerPlayer.doTick sends the dead player's health of 0 too.
+    died = {'screen': guest('state').get('screen'), 'health': remote(guest)['health']}
+    assert died == {'screen': 'dead', 'health': 0.0}, f'the guest was killed: {died}'
     guest.raw('respawn')
     guest.wait(40)
     # Sprint-jumping down a stone lane: ServerPlayer.jumpFromGround and checkMovementStatistics.
@@ -506,7 +509,7 @@ def check_hazards(host, guest, out):
     assert spent > 1.0, f'no hunger from moving: {hunger} ({spent:.2f} spent)'
     for name, (before, after) in hurt.items():
         assert after < before, f'{name} never hurt the guest: health {before} -> {after} (all: {hurt})'
-    return {'hunger': hunger, **hurt}
+    return {'died': died, 'hunger': hunger, **hurt}
 
 
 def check_pvp(host, guest, out):
