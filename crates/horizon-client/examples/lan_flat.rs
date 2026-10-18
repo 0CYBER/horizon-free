@@ -101,6 +101,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         sprinting: false,
         equipment: Default::default(),
         health: 20.0,
+        attributes: Vec::new(),
+        living_flags: 0,
     };
     loop {
         world.game_time += 1;
@@ -128,7 +130,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         eprintln!("[lan] {packet:?}");
                     }
                 }
-                HostEvent::Chat(line) | HostEvent::Warn(line) => println!("{line}"),
+                HostEvent::Chat { line, .. } | HostEvent::Warn(line) | HostEvent::Error(line) => {
+                    println!("{line}")
+                }
                 HostEvent::Left(_) => {}
             }
         }

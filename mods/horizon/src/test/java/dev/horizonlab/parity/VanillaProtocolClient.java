@@ -113,6 +113,8 @@ public final class VanillaProtocolClient {
     private ProtocolInfo<?> inbound;
     private ProtocolInfo<?> outbound;
     private String state;
+    /** With a fifth argument {@code entities}: the entity transcript mode (EntityTranscript). */
+    private EntityTranscript entities;
 
     public static void main(String[] args) throws Exception {
         ParityData.init();
@@ -121,6 +123,7 @@ public final class VanillaProtocolClient {
         String name = args[2];
         Path output = Path.of(args[3]);
         VanillaProtocolClient client = new VanillaProtocolClient();
+        if (args.length > 4 && args[4].equals("entities")) client.entities = new EntityTranscript();
         try {
             client.status(host, port);
             client.join(host, port, name);
@@ -405,6 +408,18 @@ public final class VanillaProtocolClient {
         play();
     }
 
+    /** The entity mode's step, and how long it records the entities for (ms). */
+    private static final int ENTITIES = 1000;
+    private static final long ENTITY_WAIT = 20_000;
+
+    static int moveEntityId(net.minecraft.network.protocol.game.ClientboundMoveEntityPacket p) {
+        return (int) field(p, net.minecraft.network.protocol.game.ClientboundMoveEntityPacket.class, "entityId");
+    }
+
+    static int rotateHeadId(net.minecraft.network.protocol.game.ClientboundRotateHeadPacket p) {
+        return (int) field(p, p.getClass(), "entityId");
+    }
+
     private static final String[] REPLIES = {"random value 7..7", "random value x", "trigger nope"};
 
     private void play() throws Exception {
@@ -461,6 +476,7 @@ public final class VanillaProtocolClient {
             if (r != null) {
                 Packet<?> packet = r.packet;
                 counts.merge(r.type, 1, Integer::sum);
+                if (entities != null && !entities.acceptSelf(packet) && step >= ENTITIES) entities.accept(packet);
                 if (r.type.equals("minecraft:chunk_batch_start")) ordered = false;
                 if (respawning && !respawned) {
                     String line = respawnLine(r);
@@ -581,8 +597,20 @@ public final class VanillaProtocolClient {
                     commandTree(p);
                 }
             }
+            if (entities != null && loaded && lastChunk > 0 && now - lastChunk > 3000 && step == 0) {
+                // Entity mode: the harness's console summons the scene once it reads this
+                // line; everything tracked from then on is recorded until the client leaves.
+                record("play-chunks", String.valueOf(chunks.size()));
+                send(new ServerboundChatPacket("summon the entities", Instant.now(), 0L, Optional.empty(),
+                    new LastSeenMessages.Update(0, new BitSet(), (byte) 0)));
+                step = ENTITIES;
+                stepAt = now;
+            } else if (step == ENTITIES && now - stepAt > ENTITY_WAIT) {
+                for (String line : entities.lines()) record("play-entities", line);
+                return;
+            }
             // Once the chunks stop coming: chat, then /list, then leave.
-            if (loaded && lastChunk > 0 && now - lastChunk > 3000 && step == 0) {
+            if (entities == null && loaded && lastChunk > 0 && now - lastChunk > 3000 && step == 0) {
                 record("play-chunks", chunks.size() + " " + chunks);
                 BLOCK_ENTITIES.forEach((k, v) -> record("play-block-entities", k + " " + v));
                 // Which light layers exist depends on the neighbouring
@@ -910,8 +938,12 @@ public final class VanillaProtocolClient {
     }
 
     private static Object field(Object owner, String name) {
+        return field(owner, owner.getClass(), name);
+    }
+
+    private static Object field(Object owner, Class<?> declaring, String name) {
         try {
-            var f = owner.getClass().getDeclaredField(name);
+            var f = declaring.getDeclaredField(name);
             f.setAccessible(true);
             return f.get(owner);
         } catch (ReflectiveOperationException e) {

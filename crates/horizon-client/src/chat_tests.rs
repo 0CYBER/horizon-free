@@ -230,3 +230,58 @@ fn mod_commands_are_coloured_and_complete_like_vanilla_ones() {
     screen.key(&m, &c, &[], winit::keyboard::KeyCode::Tab, false, false);
     assert_eq!(screen.value(), "/coords");
 }
+
+#[test]
+fn ask_server_nodes_wait_for_the_servers_completions() {
+    // ClientSuggestionProvider.customSuggestion: an `ask_server` node at the
+    // cursor sends the command so far, and the list is done with the reply.
+    let font = font();
+    let m = Measure(&font);
+    let registries = Registries {
+        permission: 4,
+        ..Registries::default()
+    };
+    let mut d = crate::command::vanilla::game_dispatcher().clone();
+    let child = |d: &crate::command::Dispatcher, n: usize, name: &str| {
+        d.nodes[n]
+            .children
+            .iter()
+            .copied()
+            .find(|&c| d.nodes[c].name() == name)
+            .expect(name)
+    };
+    let id = child(&d, child(&d, child(&d, 0, "bossbar"), "get"), "id");
+    d.nodes[id].suggests = Some(crate::command::Suggests::AskServer);
+    let c = Commands {
+        dispatcher: &d,
+        registries: &registries,
+    };
+    let tab = |screen: &mut ChatScreen| {
+        screen.key(&m, &c, &[], winit::keyboard::KeyCode::Tab, false, false);
+    };
+    let mut screen = ChatScreen::new(&m, &c, "", 0, 640, 360);
+    screen.type_text(&m, &c, "/bossbar get pt");
+    let (request, sent) = screen.take_request().expect("the server is asked");
+    assert_eq!(sent, "/bossbar get pt");
+    assert_eq!(screen.take_request(), None);
+    // Nothing to complete until the reply.
+    tab(&mut screen);
+    assert_eq!(screen.value(), "/bossbar get pt");
+    // A reply to an older request is dropped; the range is in UTF-16 units.
+    let reply = |text: &str| vec![(text.to_owned(), None)];
+    screen.server_suggestions(&m, &c, request - 1, (13, 2), reply("pt6:old"));
+    tab(&mut screen);
+    assert_eq!(screen.value(), "/bossbar get pt");
+    screen.server_suggestions(&m, &c, request, (13, 2), reply("pt6:check"));
+    tab(&mut screen);
+    assert_eq!(screen.value(), "/bossbar get pt6:check");
+    // Without the server's provider the local list is done at once.
+    let local = crate::command::vanilla::game_dispatcher();
+    let c = Commands {
+        dispatcher: local,
+        registries: &registries,
+    };
+    let mut screen = ChatScreen::new(&m, &c, "", 0, 640, 360);
+    screen.type_text(&m, &c, "/bossbar get pt");
+    assert_eq!(screen.take_request(), None);
+}

@@ -144,10 +144,12 @@ fn main() -> Result<()> {
     let hz = flag("--hz", 240.0);
 
     let assets = Arc::new(Assets::load(&root)?);
+    let render = Arc::new(assets.reload(&root)?);
     let facts = BlockFacts::load(&root, assets.registry)?;
     let biomes = Arc::new(Biomes::load(&root)?);
     let tables = Arc::new(MeshTables::new(
         &assets,
+        &render,
         &facts,
         models::load_visibility(&root, assets.registry)?,
     )?);
@@ -160,6 +162,7 @@ fn main() -> Result<()> {
     )?);
     let context = Arc::new(WorkerContext {
         assets,
+        render: render.clone(),
         tables,
         biomes,
         light,

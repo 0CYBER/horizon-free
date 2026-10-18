@@ -1,5 +1,7 @@
-//! Anvil region reading and export to a new region. Existing files are never
-//! overwritten. Use a separate directory for offline edits and copied .mcc data.
+//! Anvil region reading, export to a new region, and in-place chunk writes
+//! as vanilla's `RegionFile` makes them (a file opened with `open_writable`).
+//! Exports never overwrite a file: use a separate directory for offline
+//! edits and copied .mcc data.
 use crate::{
     compression::{Compression, invalid},
     nbt::{self, Limits, NamedTag},
@@ -54,6 +56,9 @@ pub struct RegionFile {
     position: ChunkPos,
     offsets: [u32; 1024],
     timestamps: [u32; 1024],
+    /// The sectors in use (`RegionBitmap`): the header's two and every
+    /// chunk's.
+    used: Vec<bool>,
 }
 
 pub fn position_from_path(path: &Path) -> io::Result<ChunkPos> {
@@ -94,6 +99,12 @@ fn position(region: ChunkPos, index: usize) -> ChunkPos {
 fn external_path(directory: &Path, chunk: ChunkPos) -> PathBuf {
     directory.join(format!("c.{}.{}.mcc", chunk.x, chunk.z))
 }
+fn remove_if_exists(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
+    }
+}
 
 impl RegionFile {
     pub fn position(&self) -> ChunkPos {
@@ -101,8 +112,25 @@ impl RegionFile {
     }
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = path.as_ref().to_owned();
+        let file = File::open(&path)?;
+        Self::from_file(path, file)
+    }
+
+    /// Open for reading and in-place writes (`write`, `clear`), creating an
+    /// empty region with `create`.
+    pub fn open_writable(path: impl AsRef<Path>, create: bool) -> io::Result<Self> {
+        let path = path.as_ref().to_owned();
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(create)
+            .truncate(false)
+            .open(&path)?;
+        Self::from_file(path, file)
+    }
+
+    fn from_file(path: PathBuf, mut file: File) -> io::Result<Self> {
         let position = position_from_path(&path)?;
-        let mut file = File::open(&path)?;
         let len = file.metadata()?.len();
         // RegionFile's constructor: a short header (an empty or truncated file)
         // reads as far as it goes, the rest stays zero (no chunks).
@@ -134,13 +162,140 @@ impl RegionFile {
                 offsets[i] = 0;
             }
         }
-        Ok(Self {
+        let mut region = Self {
             file,
             path,
             position,
             offsets,
             timestamps,
-        })
+            used: Vec::new(),
+        };
+        region.force(0, 2);
+        for offset in offsets.into_iter().filter(|&o| o != 0) {
+            region.force((offset >> 8) as usize, (offset & 255) as usize);
+        }
+        Ok(region)
+    }
+
+    /// `RegionBitmap.force`.
+    fn force(&mut self, start: usize, count: usize) {
+        if self.used.len() < start + count {
+            self.used.resize(start + count, false);
+        }
+        self.used[start..start + count].fill(true);
+    }
+    /// `RegionBitmap.free`.
+    fn free(&mut self, start: usize, count: usize) {
+        let end = (start + count).min(self.used.len());
+        if start < end {
+            self.used[start..end].fill(false);
+        }
+    }
+    /// `RegionBitmap.allocate`: the first run of free sectors long enough
+    /// (the end of the file is free).
+    fn allocate(&mut self, count: usize) -> usize {
+        let mut current = 0;
+        loop {
+            let start = (current..self.used.len())
+                .find(|&s| !self.used[s])
+                .unwrap_or(self.used.len());
+            let end = (start..self.used.len()).find(|&s| self.used[s]);
+            if end.is_none_or(|end| end - start >= count) {
+                self.force(start, count);
+                return start;
+            }
+            current = end.unwrap_or(start);
+        }
+    }
+
+    /// `RegionFile.write`: the chunk goes to the first free run of sectors
+    /// that holds it (an oversized one, 256 sectors or more, to its external
+    /// `c.X.Z.mcc` file with a one-sector stub), the header points to it,
+    /// and only then are its old sectors freed. The other chunks stay where
+    /// they are. A chunk's last sector is padded with zeros.
+    pub fn write(&mut self, chunk: ChunkPos, record: &ChunkRecord) -> io::Result<()> {
+        let i = slot(self.position, chunk)?;
+        if record.compressed.len() > MAX_COMPRESSED {
+            return Err(invalid("compressed chunk limit exceeded"));
+        }
+        let required = (record.compressed.len() + 5).div_ceil(SECTOR);
+        let external = required >= 256;
+        let sectors = if external { 1 } else { required };
+        let start = self.allocate(sectors);
+        if start + sectors > 0x100_0000 {
+            self.free(start, sectors);
+            return Err(invalid("region sector address limit exceeded"));
+        }
+        let directory = self.path.parent().unwrap_or(Path::new(".")).to_owned();
+        let external_file = external_path(&directory, chunk);
+        let mut data = Vec::with_capacity(sectors * SECTOR);
+        if external {
+            let temporary = directory.join(format!(".c.{}.{}.mcc.tmp", chunk.x, chunk.z));
+            let written = File::create(&temporary)
+                .and_then(|mut f| f.write_all(&record.compressed))
+                .and_then(|_| fs::rename(&temporary, &external_file));
+            if let Err(e) = written {
+                let _ = fs::remove_file(&temporary);
+                self.free(start, sectors);
+                return Err(e);
+            }
+            data.extend_from_slice(&1u32.to_be_bytes());
+            data.push(record.compression as u8 | 128);
+        } else {
+            data.extend_from_slice(&(record.compressed.len() as u32 + 1).to_be_bytes());
+            data.push(record.compression as u8);
+            data.extend_from_slice(&record.compressed);
+        }
+        data.resize(sectors * SECTOR, 0);
+        let written = self
+            .file
+            .seek(SeekFrom::Start((start * SECTOR) as u64))
+            .and_then(|_| self.file.write_all(&data));
+        if let Err(e) = written {
+            self.free(start, sectors);
+            return Err(e);
+        }
+        let old = self.offsets[i];
+        self.offsets[i] = (start as u32) << 8 | sectors as u32;
+        self.timestamps[i] = record.timestamp;
+        self.write_header_entry(i)?;
+        if !external {
+            remove_if_exists(&external_file)?;
+        }
+        if old != 0 {
+            self.free((old >> 8) as usize, (old & 255) as usize);
+        }
+        Ok(())
+    }
+
+    /// `RegionFile.clear`: the chunk is gone; `timestamp` marks when.
+    /// Returns whether the region held it.
+    pub fn clear(&mut self, chunk: ChunkPos, timestamp: u32) -> io::Result<bool> {
+        let i = slot(self.position, chunk)?;
+        let old = self.offsets[i];
+        if old == 0 {
+            return Ok(false);
+        }
+        self.offsets[i] = 0;
+        self.timestamps[i] = timestamp;
+        self.write_header_entry(i)?;
+        let directory = self.path.parent().unwrap_or(Path::new("."));
+        remove_if_exists(&external_path(directory, chunk))?;
+        self.free((old >> 8) as usize, (old & 255) as usize);
+        Ok(true)
+    }
+
+    /// Flush the writes to the disk.
+    pub fn sync(&self) -> io::Result<()> {
+        self.file.sync_data()
+    }
+
+    /// The header's offset and timestamp of slot `i`.
+    fn write_header_entry(&mut self, i: usize) -> io::Result<()> {
+        self.file.seek(SeekFrom::Start((i * 4) as u64))?;
+        self.file.write_all(&self.offsets[i].to_be_bytes())?;
+        self.file.seek(SeekFrom::Start((SECTOR + i * 4) as u64))?;
+        self.file.write_all(&self.timestamps[i].to_be_bytes())
     }
 
     pub fn chunks(&self) -> impl Iterator<Item = (ChunkPos, u32)> + '_ {

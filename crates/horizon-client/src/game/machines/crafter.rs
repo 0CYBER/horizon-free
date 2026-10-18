@@ -56,43 +56,32 @@ impl Game<'_> {
             _ => None,
         }
     }
-    /// `CrafterBlockEntity.serverTick` for every crafter, and the powered
-    /// flag following the block state.
-    pub(in crate::game) fn tick_crafters(&mut self) {
-        let positions: Vec<Pos> = self
-            .world
-            .block_entities
-            .iter()
-            .filter(|(_, e)| matches!(e, BlockEntity::Crafter(_)))
-            .map(|(p, _)| *p)
-            .collect();
-        let mut positions = positions;
-        positions.sort_unstable();
-        for pos in positions {
-            let state = self.world.block(pos.0, pos.1, pos.2);
-            let triggered = self.containers().prop(state, "triggered") == Some("true");
-            let mut finished = false;
-            if let Some(BlockEntity::Crafter(c)) = self.world.block_entities.get_mut(&pos) {
-                // CrafterBlock.neighborChanged sets the flag with the state; a
-                // loaded crafter keeps its saved flag until then.
-                if c.state_triggered.is_some_and(|t| t != triggered) {
-                    c.triggered = triggered;
-                }
-                c.state_triggered = Some(triggered);
-                let remaining = c.crafting_ticks - 1;
-                if remaining >= 0 {
-                    c.crafting_ticks = remaining;
-                    finished = remaining == 0;
-                }
+    /// `CrafterBlockEntity.serverTick` of the crafter at `pos`, and the
+    /// powered flag following the block state.
+    pub(in crate::game) fn tick_crafter(&mut self, pos: Pos) {
+        let state = self.world.block(pos.0, pos.1, pos.2);
+        let triggered = self.containers().prop(state, "triggered") == Some("true");
+        let mut finished = false;
+        if let Some(BlockEntity::Crafter(c)) = self.world.block_entities.get_mut(&pos) {
+            // CrafterBlock.neighborChanged sets the flag with the state; a
+            // loaded crafter keeps its saved flag until then.
+            if c.state_triggered.is_some_and(|t| t != triggered) {
+                c.triggered = triggered;
             }
-            if finished {
-                self.set_bool_prop(
-                    pos,
-                    "crafting",
-                    false,
-                    horizon_world::level::flags::UPDATE_ALL,
-                );
+            c.state_triggered = Some(triggered);
+            let remaining = c.crafting_ticks - 1;
+            if remaining >= 0 {
+                c.crafting_ticks = remaining;
+                finished = remaining == 0;
             }
+        }
+        if finished {
+            self.set_bool_prop(
+                pos,
+                "crafting",
+                false,
+                horizon_world::level::flags::UPDATE_ALL,
+            );
         }
     }
     /// `CrafterBlock.dispenseFrom` (the scheduled tick after a redstone pulse).
@@ -105,7 +94,7 @@ impl Game<'_> {
         // RecipeCache.get: the first crafting recipe that matches, assembled.
         let found = self
             .res
-            .recipes
+            .recipes()
             .find(&grid, 3)
             .map(|(name, result)| (name.to_owned(), result))
             .filter(|(_, result)| result.count > 0);
@@ -131,7 +120,7 @@ impl Game<'_> {
             horizon_world::level::flags::UPDATE_CLIENTS,
         );
         // The remainders come from the grid as it was before anything moved.
-        let remainders = self.res.recipes.remainders(&recipe, &grid, 3);
+        let remainders = self.res.recipes().remainders(&recipe, &grid, 3);
         self.crafter_eject(key, facing, result, &recipe);
         for rest in remainders.into_iter().flatten() {
             self.crafter_eject(key, facing, rest, &recipe);
@@ -213,7 +202,7 @@ impl Game<'_> {
     pub(in crate::game) fn crafter_result(&self) -> Option<ItemStack> {
         let key = self.container?;
         let c = self.crafter_at(key)?;
-        self.res.recipes.craft(&c.items, 3)
+        self.res.recipes().craft(&c.items, 3)
     }
     fn crafter_open(&self) -> bool {
         matches!(self.container_kind(), Some(BlockEntity::Crafter(_)))
@@ -254,7 +243,7 @@ impl Game<'_> {
         // The background goes first, then the labels, then the slot decorations.
         let (background, rest) = draws.split_at(2.min(draws.len()));
         self.paint_screen(batch, ox, oy, background, true);
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let grey = rgba(64, 64, 64, 255);
         let title = self.container_title(self.translate("container.crafter", "Crafter"));
         let tw = HudBatch::text_width(atlas, &title);

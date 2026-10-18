@@ -12,6 +12,8 @@ use horizon_world::level::flags as level_flags;
 
 #[derive(Clone, Debug)]
 pub(super) struct PrimedTnt {
+    /// The entity id a server tracks it by (0 until it is tracked).
+    pub id: u32,
     pub position: Vec3,
     pub previous: Vec3,
     pub velocity: Vec3,
@@ -140,6 +142,7 @@ impl Game<'_> {
             f64::from(pos.z) + 0.5,
         );
         self.tnts.push(PrimedTnt {
+            id: 0,
             position,
             previous: position,
             velocity: Vec3::new(-rot.sin() * 0.02, f64::from(0.2f32), -rot.cos() * 0.02),
@@ -159,7 +162,7 @@ impl Game<'_> {
                 &self.world,
                 self.collision,
                 &self.pack.assets,
-                &self.res.facts,
+                self.res.facts(),
             )?;
             if t.fuse <= 0 {
                 let center = [
@@ -186,7 +189,7 @@ impl Game<'_> {
             return Ok(false);
         };
         let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-        if &*self.res.facts.get(state).name != "minecraft:tnt" {
+        if &*self.res.facts().get(state).name != "minecraft:tnt" {
             return Ok(false);
         }
         let pos = BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]);
@@ -216,7 +219,7 @@ impl Game<'_> {
         // Face sprites from the block model: up, down, north, south, west, east.
         let Ok(models) = self
             .pack
-            .assets
+            .render
             .model_catalog
             .collect(state, BlockPos::new(0, 0, 0))
         else {
@@ -238,10 +241,27 @@ impl Game<'_> {
                     .pack
                     .layer_names
                     .get(&face.layer)
-                    .and_then(|name| self.atlas.sprites.get(name).copied());
+                    .and_then(|name| self.gui.atlas.sprites.get(name).copied());
             }
         }
+        let range = super::entity_culling::default_range(
+            glam::DVec3::splat(PrimedTnt::SIZE),
+            self.settings.entity_distance,
+        );
         for t in &self.tnts {
+            // EntityRenderer.shouldRender.
+            if !self.standing_entity_in_view(
+                camera,
+                super::entity_culling::at(t.previous),
+                super::entity_culling::at(t.position),
+                alpha,
+                PrimedTnt::SIZE,
+                PrimedTnt::SIZE,
+                range,
+                0.0,
+            ) {
+                continue;
+            }
             let fuse = t.fuse as f32 - alpha as f32 + 1.0;
             let scale = if fuse < 10.0 {
                 let g = (1.0 - fuse / 10.0).clamp(0.0, 1.0);
@@ -467,9 +487,10 @@ mod tests {
             return;
         }
         let assets = horizon_client::assets::Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let facts = horizon_client::blocks::BlockFacts::load(&root, assets.registry).unwrap();
         let collision = horizon_client::collisions::load(&root, assets.registry).unwrap();
-        let mut world = horizon_client::world::World::test_scene(&assets, 3).unwrap();
+        let mut world = horizon_client::world::World::test_scene(&assets, &render, 3).unwrap();
         let stone = assets.registry.default_state("minecraft:stone").unwrap();
         let water = assets.registry.default_state("minecraft:water").unwrap();
         let mut state = assets.registry.state(water).unwrap().clone();
@@ -484,6 +505,7 @@ mod tests {
         world.set(21, 4, 20, flowing).unwrap();
         let at = Vec3::new(20.5, 4.0, 20.5);
         let mut tnt = PrimedTnt {
+            id: 0,
             position: at,
             previous: at,
             velocity: Vec3::ZERO,

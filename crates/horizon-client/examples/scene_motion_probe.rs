@@ -243,13 +243,14 @@ fn main() -> Result<()> {
     let root = PathBuf::from(&args[0]);
     let dir = PathBuf::from(&args[1]);
     let assets = Assets::load(&root)?;
-    let mut scene = World::test_scene(&assets, 1)?;
+    let render = assets.reload(&root)?;
+    let mut scene = World::test_scene(&assets, &render, 1)?;
     let binding = collisions::load(&root, assets.registry)?;
     let resources = MotionResources::load(&root, &assets)?;
     fs::write(
         dir.join("scene.json"),
         serde_json::to_vec(
-            &serde_json::json!({"radius":1,"resident_chunks":scene.chunks.len(),"model_gallery":assets.model_gallery}),
+            &serde_json::json!({"radius":1,"resident_chunks":scene.chunks.len(),"model_gallery":render.model_gallery}),
         )?,
     )?;
     if args[2] == "--describe" {

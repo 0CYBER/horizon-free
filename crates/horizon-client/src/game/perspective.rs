@@ -266,7 +266,7 @@ impl Game<'_> {
                 binding: self.collision,
                 subject: None,
             },
-            facts: &self.res.facts,
+            facts: self.res.facts(),
             context,
         };
         view.align_with_entity(&entity, partial, kind, |from, to| {
@@ -296,7 +296,7 @@ impl Game<'_> {
             return;
         };
         if self.player_model.is_none() {
-            let Some(kind) = self.res.player_type.clone() else {
+            let Some(kind) = self.res.player_type().clone() else {
                 return;
             };
             self.player_model = Some(Mob::new(0, kind, p.position, self.yaw));
@@ -430,7 +430,7 @@ impl Game<'_> {
             m.position.z.floor() as i32,
         );
         let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         horizon_client::mobs::render::render_with(
             m,
@@ -438,7 +438,7 @@ impl Game<'_> {
             camera,
             &lookup,
             packed,
-            &self.res.mob_data,
+            self.res.mob_data(),
             &self.player_armor_layers(),
             out,
         );
@@ -484,7 +484,7 @@ impl Game<'_> {
         m.position.y += 0.125 * f64::from(u8::from(m.extra.crouching));
         m.previous = m.position;
         let camera = glam::DVec3::new(m.position.x, m.position.y, m.position.z);
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         let mut verts = Vec::new();
         horizon_client::mobs::render::render_with(
@@ -493,7 +493,7 @@ impl Game<'_> {
             camera,
             &lookup,
             240 | 240 << 8,
-            &self.res.mob_data,
+            self.res.mob_data(),
             &self.player_armor_layers(),
             &mut verts,
         );
@@ -546,7 +546,7 @@ impl Game<'_> {
     ) {
         let Some(asset) = self.armor[1]
             .as_ref()
-            .and_then(|s| self.res.items.get(&s.item))
+            .and_then(|s| self.res.items().get(&s.item))
             .and_then(|i| i.equip_asset.as_ref())
         else {
             return;
@@ -555,9 +555,10 @@ impl Game<'_> {
         let Some((texture, _)) = assets.equipment.get(asset).and_then(|k| k.get("wings")) else {
             return;
         };
-        let (Some(model), Some(rect)) =
-            (assets.player.get("elytra"), self.atlas.sprites.get(texture))
-        else {
+        let (Some(model), Some(rect)) = (
+            assets.player.get("elytra"),
+            self.gui.atlas.sprites.get(texture),
+        ) else {
             return;
         };
         let base = horizon_client::mobs::render::base_transform(m, partial, camera)

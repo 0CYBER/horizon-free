@@ -63,7 +63,7 @@ impl Game<'_> {
     /// pot without), or None when no pot is there.
     fn pot_tag(&mut self, pos: [i32; 3]) -> Option<Tag> {
         let state = self.world.block(pos[0], pos[1], pos[2]);
-        if &*self.res.facts.get(state).name != "minecraft:decorated_pot" {
+        if &*self.res.facts().get(state).name != "minecraft:decorated_pot" {
             return None;
         }
         let mut tag = spill::saved_entity(&self.world, pos).unwrap_or_else(|| {

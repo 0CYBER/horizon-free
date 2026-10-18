@@ -147,7 +147,7 @@ impl Game<'_> {
         variant: &str,
         origin: [f64; 3],
     ) -> Vec<MerchantOffer> {
-        let Some(sequence) = self.res.stations.trades.sequence(set) else {
+        let Some(sequence) = self.res.stations().trades.sequence(set) else {
             return Vec::new();
         };
         let mut random = self.rand_sequences.lend(&sequence, self.level.seed);
@@ -160,15 +160,15 @@ impl Game<'_> {
             next_id: std::cell::Cell::new(next_map),
         };
         let ctx = TradeContext {
-            items: &self.res.items,
-            enchantments: &self.res.stations.enchantments,
+            items: self.res.items(),
+            enchantments: &self.res.stations().enchantments,
             variant,
             origin,
             maps: Some(&maps),
         };
         let offers = self
             .res
-            .stations
+            .stations()
             .trades
             .offers_from_set(&ctx, set, &mut random);
         let made = maps.made.into_inner();
@@ -205,7 +205,7 @@ impl Game<'_> {
                 let profession = PROFESSIONS[m.extra.variant2 as usize % PROFESSIONS.len()];
                 let level = i32::from(m.extra.variant3.max(1));
                 let set = merchant::Trades::set_for(profession, level);
-                if self.res.stations.trades.sets.contains_key(&set) {
+                if self.res.stations().trades.sets.contains_key(&set) {
                     self.offers_from_set(&set, &variant, origin)
                 } else {
                     Vec::new()
@@ -284,7 +284,7 @@ impl Game<'_> {
             session.reputation = self.villager_reputation(id);
             session.hero = self.hero_amplifier();
             for seq in merchant::Session::sequences_needed(
-                &self.res.stations.trades,
+                &self.res.stations().trades,
                 &session.profession,
                 level,
             ) {
@@ -547,8 +547,8 @@ impl Game<'_> {
             m.focused,
         );
         let offers = m.session.offers.clone();
-        let costs: Vec<ItemStack> = offers.iter().map(|o| o.cost_a(&self.res.items)).collect();
-        let atlas = &self.atlas;
+        let costs: Vec<ItemStack> = offers.iter().map(|o| o.cost_a(self.res.items())).collect();
+        let atlas = &self.gui.atlas;
         batch.fill(
             atlas,
             0.0,
@@ -563,7 +563,7 @@ impl Game<'_> {
             r.v1 = r.v0 + 166.0 * dv;
             batch.rect_uv(ox + SHIFT, oy, 276.0, 166.0, r, u32::MAX);
         }
-        let e = &self.res.stations.enchantments;
+        let e = &self.res.stations().enchantments;
         let tr = |k: &str, f: &str| e.translate(k).unwrap_or(f).to_owned();
         let name = custom.unwrap_or_else(|| {
             if progress {
@@ -687,7 +687,7 @@ impl Game<'_> {
             } else {
                 "gui/sprites/widget/button"
             };
-            batch.sprite_scaled(&self.atlas, sprite, bx, by, 88.0, 20.0, u32::MAX);
+            batch.sprite_scaled(&self.gui.atlas, sprite, bx, by, 88.0, 20.0, u32::MAX);
             let y = oy + 16.0 + 1.0 + 20.0 * row as f32 + 2.0;
             let base = offer.base_cost_a.stack.clone();
             let cost_a = costs[index].clone();
@@ -705,7 +705,7 @@ impl Game<'_> {
                     x,
                     y,
                 );
-                let atlas = &self.atlas;
+                let atlas = &self.gui.atlas;
                 let t = base.count.to_string();
                 batch.text(
                     atlas,
@@ -740,7 +740,7 @@ impl Game<'_> {
                 "trade_arrow"
             };
             batch.sprite(
-                &self.atlas,
+                &self.gui.atlas,
                 &format!("gui/sprites/container/villager/{arrow}"),
                 ox + SHIFT + 60.0,
                 y + 3.0,
@@ -770,7 +770,7 @@ impl Game<'_> {
         if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
             let (sx, sy) = self.slot_position(slot);
             batch.fill(
-                &self.atlas,
+                &self.gui.atlas,
                 ox + sx,
                 oy + sy,
                 16.0,
@@ -794,7 +794,7 @@ impl Game<'_> {
         } else if deprecated {
             let text = self
                 .res
-                .stations
+                .stations()
                 .enchantments
                 .translate("merchant.deprecated")
                 .unwrap_or("Villagers restock up to two times per day.")

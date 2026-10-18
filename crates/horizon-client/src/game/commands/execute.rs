@@ -26,6 +26,9 @@ pub(in crate::game) struct Source {
     /// The level this command source uses. Horizon has only this dimension's
     /// chunks loaded in the single-player client.
     pub dimension: Dim,
+    /// The dimension `execute in` named, if any: a server teleports its
+    /// players there (`TeleportCommand` into the source's level).
+    pub level: Option<super::super::Dim>,
     /// The command block whose output this source is
     /// (`BaseCommandBlock.CloseableCommandBlockSource`).
     pub block: Option<(i32, i32, i32)>,
@@ -70,13 +73,15 @@ impl Game<'_> {
     /// The source a command typed by the player starts from.
     pub(in crate::game) fn player_source(&self) -> Source {
         Source {
-            entity: Some(Target::Player),
+            // The server console has no entity (CommandSourceStack of the server).
+            entity: self.player.is_some().then_some(Target::Player),
             pos: self.source_position(),
             rot: self.source_rotation(),
             eyes: false,
             silent: false,
             store: None,
             dimension: self.dim,
+            level: None,
             block: None,
         }
     }
@@ -84,18 +89,22 @@ impl Game<'_> {
     pub(in crate::game) fn server_source(&self) -> Source {
         Source {
             entity: None,
-            pos: self.spawn.map_or([0.0, 64.0, 0.0], |s| [s.x, s.y, s.z]),
+            pos: self.server_position(),
             rot: [0.0, 0.0],
             eyes: false,
             silent: true,
             store: None,
             dimension: self.dim,
+            level: None,
             block: None,
         }
     }
     pub(super) fn target_rotation(&self, t: Target) -> [f32; 2] {
         match t {
             Target::Player => [self.yaw, self.pitch],
+            Target::Guest(conn) => self
+                .command_guest(conn)
+                .map_or([0.0; 2], |g| [g.yaw, g.pitch]),
             Target::Mob(id) => self
                 .mobs
                 .iter()
@@ -130,6 +139,7 @@ impl Game<'_> {
                 .player
                 .as_ref()
                 .map_or(1.62, |p| f64::from(p.dimensions.eye_height)),
+            Target::Guest(conn) => self.command_guest(conn).map_or(1.62, |g| g.eye_height()),
             Target::Mob(id) => self
                 .mobs
                 .iter()
@@ -441,6 +451,7 @@ impl Game<'_> {
                         pos: self.target_position(t)?,
                         rot: self.target_rotation(t),
                         dimension: self.dim,
+                        level: None,
                         ..s
                     })
                 })
@@ -548,6 +559,7 @@ impl Game<'_> {
                 vec![Source {
                     pos: [s.pos[0] * scale, s.pos[1], s.pos[2] * scale],
                     dimension,
+                    level: Some(super::super::Dim::from_id(dim)),
                     ..s
                 }]
             }
@@ -630,7 +642,7 @@ impl Game<'_> {
             })
             .collect()
     }
-    fn target_with_uuid(&self, uuid: [i32; 4]) -> Option<Target> {
+    pub(super) fn target_with_uuid(&self, uuid: [i32; 4]) -> Option<Target> {
         if Some(uuid) == self.level.player_uuid {
             return Some(Target::Player);
         }
@@ -653,7 +665,7 @@ impl Game<'_> {
             if state == self.world.air {
                 continue;
             }
-            let facts = self.res.facts.get(state);
+            let facts = self.res.facts().get(state);
             let blocks = facts.legacy_solid || facts.fluid != horizon_client::blocks::Fluid::None;
             let leaves = self
                 .pack
@@ -947,7 +959,7 @@ impl Game<'_> {
         let chunk = self.world.chunks.get(&(p[0] >> 4, p[2] >> 4))?;
         Some(
             self.res
-                .biomes
+                .biomes()
                 .get(chunk.biome(p[0], p[1], p[2]))
                 .name
                 .clone(),
@@ -970,7 +982,7 @@ impl Game<'_> {
             .resources
             .join(format!("data/{ns}/tags/worldgen/biome/{path}.json"));
         let Ok(bytes) = std::fs::read(file) else {
-            return self.res.mob_data.biome_has(tag, biome);
+            return self.res.mob_data().biome_has(tag, biome);
         };
         let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
         v["values"].as_array().is_some_and(|a| {

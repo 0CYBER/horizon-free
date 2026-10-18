@@ -94,7 +94,7 @@ impl Game<'_> {
         for x in slo[0].floor() as i32..=shi[0].floor() as i32 {
             for y in slo[1].floor() as i32..=shi[1].floor() as i32 {
                 for z in slo[2].floor() as i32..=shi[2].floor() as i32 {
-                    let f = self.res.facts.get(self.world.block(x, y, z));
+                    let f = self.res.facts().get(self.world.block(x, y, z));
                     if !(f.legacy_solid || f.has_class("DiodeBlock")) {
                         return false;
                     }
@@ -249,12 +249,21 @@ impl Game<'_> {
     /// PaintingRenderer: the variant on the front, the back texture behind and
     /// on the edges.
     pub(super) fn painting_geometry(&self, camera: glam::DVec3, out: &mut Vec<Vertex>) {
-        let sprites = &self.atlas.sprites;
+        let sprites = &self.gui.atlas.sprites;
         let Some(back) = sprites.get("painting/back").copied() else {
             return;
         };
         for p in &self.paintings {
             let entity_start = out.len();
+            // EntityRenderer.shouldRender: the default range and its box,
+            // measured from the box's centre (HangingEntity's position).
+            let (lo, hi) = p.bounds();
+            let (lo, hi) = (glam::DVec3::from(lo), glam::DVec3::from(hi));
+            let range =
+                super::entity_culling::default_range(hi - lo, self.settings.entity_distance);
+            if !self.entity_in_view(camera, (lo + hi) / 2.0, range, lo, hi) {
+                continue;
+            }
             let Some(v) = self.painting_variants.get(&p.variant) else {
                 continue;
             };

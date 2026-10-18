@@ -2,11 +2,10 @@
 //! collision shapes. Replacement with an item/fluid context is separate behavior.
 use crate::{
     DATA_VERSION,
-    chunk::BlockState,
     collision::CachedCollisionRegistry,
     compression::invalid,
     nbt::Tag,
-    registry::{BlockRegistry, BlockStateId},
+    registry::{BlockRegistry, BlockStateId, BlockTable},
 };
 use horizon_core::geometry::{Direction, ShapeError, ShapeOp, VoxelShape};
 use std::{
@@ -80,15 +79,18 @@ impl BlockProperty {
 #[derive(Clone, Debug)]
 pub struct BoundBlockProperty {
     states: Arc<[u8]>,
-    property: BlockProperty,
+    mask: u8,
 }
 impl BoundBlockProperty {
     pub fn contains(&self, id: BlockStateId) -> bool {
         self.states
             .get(id.0 as usize)
-            .is_some_and(|flags| flags & self.property.mask() != 0)
+            .is_some_and(|flags| flags & self.mask != 0)
     }
 }
+/// The per-state flag of the block definition's `canOcclude`, past the
+/// [`BlockProperty`] bits.
+const CAN_OCCLUDE: u8 = 16;
 
 /// Immutable FULL face-occlusion results, independent of support/collision.
 #[derive(Clone, Debug)]
@@ -112,20 +114,24 @@ pub struct BlockPropertiesRegistry<'r> {
 }
 impl<'r> BlockPropertiesRegistry<'r> {
     pub fn from_nbt(tag: &Tag, collisions: &CachedCollisionRegistry<'r>) -> io::Result<Self> {
+        Self::from_table(
+            BlockTable::check(tag, collisions.registry(), "block property")?,
+            collisions,
+        )
+    }
+    pub fn from_table(
+        table: BlockTable<'_, '_>,
+        collisions: &CachedCollisionRegistry<'r>,
+    ) -> io::Result<Self> {
         let registry = collisions.registry();
+        if !std::ptr::eq(table.registry(), registry) {
+            return Err(invalid(
+                "block properties and collisions use other registries",
+            ));
+        }
+        let tag = table.tag();
         if tag.get("DataVersion") != Some(&Tag::Int(DATA_VERSION)) {
             return Err(invalid("block properties DataVersion mismatch"));
-        }
-        let Some(Tag::List(states)) = tag.get("states") else {
-            return Err(invalid("missing block property state identities"));
-        };
-        if states.len() != registry.len() {
-            return Err(invalid("block property registry size mismatch"));
-        }
-        for (id, state) in states.iter().enumerate() {
-            if registry.state(BlockStateId(id as u32)) != Some(&BlockState::from_nbt(state)?) {
-                return Err(invalid("block property state identities differ"));
-            }
         }
         let Some(Tag::Compound(blocks)) = tag.get("blocks") else {
             return Err(invalid("missing block definition properties"));
@@ -150,10 +156,8 @@ impl<'r> BlockPropertiesRegistry<'r> {
                 },
             );
         }
-        let occlusion = CachedCollisionRegistry::from_nbt(
-            tag.get("occlusion")
-                .ok_or_else(|| invalid("missing block occlusion shapes"))?,
-            registry,
+        let occlusion = CachedCollisionRegistry::from_table(
+            table.nested("occlusion", "block occlusion shapes")?,
         )?;
         let mut result = Vec::with_capacity(registry.len());
         let mut faces = Vec::with_capacity(registry.len());
@@ -194,7 +198,12 @@ impl<'r> BlockPropertiesRegistry<'r> {
                                     .ok_or_else(|| invalid("missing block occlusion shape"))?,
                             )
                             .map_err(|error| invalid(error.to_string()))?,
-                    ) << 3),
+                    ) << 3)
+                    | if properties.can_occlude {
+                        CAN_OCCLUDE
+                    } else {
+                        0
+                    },
             );
         }
         Ok(Self {
@@ -224,7 +233,14 @@ impl<'r> BlockPropertiesRegistry<'r> {
     pub fn bind(&self, property: BlockProperty) -> BoundBlockProperty {
         BoundBlockProperty {
             states: Arc::clone(&self.states),
-            property,
+            mask: property.mask(),
+        }
+    }
+    /// The states whose block definition can occlude (BlockState.canOcclude).
+    pub fn bind_can_occlude(&self) -> BoundBlockProperty {
+        BoundBlockProperty {
+            states: Arc::clone(&self.states),
+            mask: CAN_OCCLUDE,
         }
     }
 }

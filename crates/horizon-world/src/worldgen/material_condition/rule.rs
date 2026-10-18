@@ -70,6 +70,7 @@ impl From<horizon_core::density::SampleError> for MaterialRuleError {
 }
 
 pub(super) enum CompiledRule<R: RandomSource> {
+    Empty,
     Block(BlockStateId),
     OreVein {
         blocks: [BlockStateId; 3],
@@ -127,7 +128,12 @@ impl<R: RandomSource> CompiledRule<R> {
                 // whether the predicate will match any subsequent position.
                 let condition = Compiled::compile(if_true, root, context, depth + 1)?;
                 let rule = Box::new(Self::compile(*then_run, root, context, depth + 1, nodes)?);
-                Self::Condition { condition, rule }
+                // Compile both sides first: binding and errors must retain their order.
+                match condition.constant_result() {
+                    Some(false) => Self::Empty,
+                    Some(true) => *rule,
+                    None => Self::Condition { condition, rule },
+                }
             }
             MaterialRule::Sequence(mut children) => {
                 if children.len() == 1 {
@@ -135,9 +141,16 @@ impl<R: RandomSource> CompiledRule<R> {
                 }
                 let mut result = Vec::with_capacity(children.len());
                 for child in children {
-                    result.push(Self::compile(child, root, context, depth + 1, nodes)?);
+                    let child = Self::compile(child, root, context, depth + 1, nodes)?;
+                    if !matches!(child, Self::Empty) {
+                        result.push(child);
+                    }
                 }
-                Self::Sequence(result)
+                match result.len() {
+                    0 => Self::Empty,
+                    1 => result.pop().unwrap(),
+                    _ => Self::Sequence(result),
+                }
             }
         })
     }
@@ -147,6 +160,7 @@ impl<R: RandomSource> CompiledRule<R> {
         context: &mut Context<S>,
     ) -> Result<Option<BlockStateId>, MaterialRuleError> {
         match self {
+            Self::Empty => Ok(None),
             Self::Block(block) => Ok(Some(*block)),
             Self::OreVein {
                 blocks,

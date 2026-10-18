@@ -65,6 +65,8 @@ pub(super) struct Portals {
     arrivals: Vec<Arrival>,
     loaded: bool,
     dirty: bool,
+    /// Per-chunk portal palette masks, kept across ticks (portal_sections).
+    pub(super) sections: horizon_client::portal_sections::PortalSections,
 }
 
 fn rotate_y(v: Vec3, degrees: f32) -> Vec3 {
@@ -112,7 +114,7 @@ impl Game<'_> {
             Dim::Nether
         };
         let state = self.world.block(entry.x, entry.y, entry.z);
-        let b = &self.res.behaviours;
+        let b = self.res.behaviours();
         let (entry_x_axis, offset) = match b.portal_axis(state) {
             Some(x_axis) => {
                 let area = largest_rectangle_around(
@@ -150,7 +152,7 @@ impl Game<'_> {
     /// (the points of interest `PortalForcer` searches): loaded chunks as
     /// they are, the others as saved; chunks never generated have none.
     fn portal_blocks(&self, center: BlockPos, radius: i32) -> Vec<BlockPos> {
-        let b = &self.res.behaviours;
+        let b = self.res.behaviours();
         let chunk_radius = radius.div_euclid(16) + 1;
         let (cx, cz) = (center.x >> 4, center.z >> 4);
         let mut out = Vec::new();
@@ -161,7 +163,7 @@ impl Game<'_> {
                     Some(c) => &**c,
                     None => match self
                         .save
-                        .load(x, z, self.pack.assets.registry, &self.res.biomes)
+                        .load(x, z, self.pack.assets.registry, self.res.biomes())
                     {
                         Some(c) => {
                             saved = c;
@@ -211,7 +213,7 @@ impl Game<'_> {
         );
         if let Some(found) = found {
             let state = self.world.block(found.x, found.y, found.z);
-            let x_axis = self.res.behaviours.portal_axis(state).unwrap_or(true);
+            let x_axis = self.res.behaviours().portal_axis(state).unwrap_or(true);
             return Some(largest_rectangle_around(
                 found,
                 if x_axis { Axis::X } else { Axis::Z },
@@ -232,7 +234,7 @@ impl Game<'_> {
     /// `NetherPortalBlock.createDimensionTransition`: the arrival position
     /// and the yaw turned by.
     pub(super) fn arrival(&self, plan: &Plan, exit: FoundRectangle) -> (Vec3, f32) {
-        let b = &self.res.behaviours;
+        let b = self.res.behaviours();
         let corner = exit.min_corner;
         let exit_x_axis = b
             .portal_axis(self.world.block(corner.x, corner.y, corner.z))
@@ -499,13 +501,14 @@ impl Game<'_> {
             .filter(|m| self.mob_can_use_portal(m))
             .map(|m| (m.id, m.position, m.width(), m.height()))
             .collect();
-        let mut portal_sections = horizon_client::fast_hash::FxHashMap::default();
+        let mut portal_sections = std::mem::take(&mut self.portals.sections);
         for (id, to, width, height) in items.into_iter().chain(mobs) {
             let from = self.portals.before.get(&id).copied().unwrap_or(to);
             if let Some(pos) = self.swept_portal(from, to, width, height, &mut portal_sections) {
                 inside.push((id, pos));
             }
         }
+        self.portals.sections = portal_sections;
         for (id, pos) in inside {
             self.portals
                 .entities
@@ -522,7 +525,7 @@ impl Game<'_> {
         to: Vec3,
         width: f32,
         height: f32,
-        portal_sections: &mut horizon_client::fast_hash::FxHashMap<(i32, i32, i32), bool>,
+        portal_sections: &mut horizon_client::portal_sections::PortalSections,
     ) -> Option<BlockPos> {
         let half = f64::from(width) / 2.0;
         let bounds = horizon_core::geometry::Aabb::new(
@@ -550,7 +553,7 @@ impl Game<'_> {
             |p, _| {
                 if self
                     .res
-                    .behaviours
+                    .behaviours()
                     .portal_axis(self.world.block(p.x, p.y, p.z))
                     .is_some()
                 {
@@ -563,12 +566,13 @@ impl Game<'_> {
         found
     }
     /// Whether a section `reach` touches has a nether portal state in its
-    /// palette: without one, no block there is a portal. Answers are kept
-    /// per section for the tick; a box over many sections is not checked.
+    /// palette: without one, no block there is a portal. Palette answers are
+    /// kept per chunk across ticks (`portal_sections`); a box over many
+    /// sections is not checked.
     fn may_hold_portal(
         &self,
         reach: horizon_core::geometry::Aabb,
-        seen: &mut horizon_client::fast_hash::FxHashMap<(i32, i32, i32), bool>,
+        sections: &mut horizon_client::portal_sections::PortalSections,
     ) -> bool {
         use horizon_client::chunk::{MIN_Y, SECTIONS};
         let (min, max) = (reach.min_position(), reach.max_position());
@@ -589,23 +593,21 @@ impl Game<'_> {
         if count > 64 {
             return true;
         }
-        let behaviours = &self.res.behaviours;
+        let mut y_mask = 0u32;
+        for sy in y0..=y1 {
+            y_mask |= 1 << sy;
+        }
+        let behaviours = self.res.behaviours();
         let chunks = &self.world.chunks;
         (x0..=x1).any(|cx| {
             (z0..=z1).any(|cz| {
-                (y0..=y1).any(|sy| {
-                    *seen.entry((cx, sy, cz)).or_insert_with(|| {
-                        chunks
-                            .get(&(cx, cz))
-                            .and_then(|c| c.sections.get(sy as usize))
-                            .is_some_and(|s| {
-                                s.blocks.maybe_has(|v| {
-                                    behaviours
-                                        .portal_axis(horizon_world::registry::BlockStateId(v))
-                                        .is_some()
-                                })
-                            })
-                    })
+                chunks.get(&(cx, cz)).is_some_and(|chunk| {
+                    sections.get((cx, cz), chunk, |v| {
+                        behaviours
+                            .portal_axis(horizon_world::registry::BlockStateId(v))
+                            .is_some()
+                    }) & y_mask
+                        != 0
                 })
             })
         })

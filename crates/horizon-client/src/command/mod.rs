@@ -312,6 +312,9 @@ pub enum Suggests {
     /// ScoreboardCommand.suggestTriggers: trigger objectives some of the
     /// parsed `targets` have no score in, or a locked one.
     EnableTriggers,
+    /// SuggestionProviders.ASK_SERVER: the server completes the node
+    /// (ClientSuggestionProvider.customSuggestion); nothing locally.
+    AskServer,
 }
 impl Node {
     pub fn name(&self) -> &str {
@@ -691,7 +694,7 @@ impl Suggests {
             Suggests::Triggers => {
                 builder.suggest_matching(reg.trigger_objectives.iter().map(String::as_str))
             }
-            Suggests::Nothing => {}
+            Suggests::Nothing | Suggests::AskServer => {}
         }
     }
 }
@@ -955,7 +958,8 @@ impl Dispatcher {
         cursor: usize,
         reg: &Registries,
     ) -> (Range, Vec<Suggestion>) {
-        self.suggestions_within(parse, cursor, reg, u8::MAX)
+        let (range, list, _) = self.suggestions_within(parse, cursor, reg, u8::MAX);
+        (range, list)
     }
     /// The suggestions the player's chat shows: the client's tree only holds
     /// the nodes the player may use (Commands.sendCommands prunes by canUse).
@@ -965,6 +969,18 @@ impl Dispatcher {
         cursor: usize,
         reg: &Registries,
     ) -> (Range, Vec<Suggestion>) {
+        let (range, list, _) = self.suggestions_within(parse, cursor, reg, reg.permission);
+        (range, list)
+    }
+    /// [`Self::client_suggestions`], and whether a node at the cursor asks
+    /// the server (`ask_server`): its completions come with the server's
+    /// reply, to be merged with these.
+    pub fn client_suggestions_asking(
+        &self,
+        parse: &ParseResults,
+        cursor: usize,
+        reg: &Registries,
+    ) -> (Range, Vec<Suggestion>, bool) {
         self.suggestions_within(parse, cursor, reg, reg.permission)
     }
     fn suggestions_within(
@@ -973,15 +989,17 @@ impl Dispatcher {
         cursor: usize,
         reg: &Registries,
         permission: u8,
-    ) -> (Range, Vec<Suggestion>) {
+    ) -> (Range, Vec<Suggestion>, bool) {
         let (parent, start, context) = parse.context.suggestion_context(cursor);
         let start = start.min(cursor);
         let truncated = &parse.input[..cursor.min(parse.input.len())];
         let mut all = Vec::new();
+        let mut ask = false;
         for &child in &self.nodes[parent].children {
             if self.nodes[child].permission > permission {
                 continue;
             }
+            ask |= matches!(self.nodes[child].suggests, Some(Suggests::AskServer));
             let mut builder = SuggestionsBuilder::new(truncated, start);
             match &self.nodes[child].kind {
                 NodeKind::Literal(l) => {
@@ -997,7 +1015,8 @@ impl Dispatcher {
             }
             all.extend(builder.out);
         }
-        merge_suggestions(truncated, all)
+        let (range, list) = merge_suggestions(truncated, all);
+        (range, list, ask)
     }
     fn smart_usage_of(&self, node: usize, optional: bool, deep: bool, level: u8) -> Option<String> {
         let n = &self.nodes[node];

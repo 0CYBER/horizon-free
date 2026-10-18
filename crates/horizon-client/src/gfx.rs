@@ -24,7 +24,7 @@ const CRUMBLING_BLEND: wgpu::BlendState = wgpu::BlendState {
 };
 /// `TerrainVertex` for `vs_terrain`: position, UV, layer, light, colour.
 const TERRAIN_ATTRIBUTES: [wgpu::VertexAttribute; 5] =
-    wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x2,2=>Uint16,4=>Uint8x2,3=>Unorm8x4];
+    wgpu::vertex_attr_array![0=>Float32x3,1=>Uint16x2,2=>Uint16,4=>Uint8x2,3=>Unorm8x4];
 
 /// entity.wgsl after the OverlayTexture constants it reads.
 fn entity_shader() -> String {
@@ -58,6 +58,7 @@ pub fn outline_vertices(edges: &[[f64; 6]], camera: glam::DVec3) -> Vec<[f32; 6]
 }
 
 mod arena;
+mod cull;
 mod flat;
 mod java_stages;
 mod occlusion;
@@ -68,6 +69,12 @@ mod timing;
 pub mod translucency;
 pub(crate) mod upload;
 mod world_post;
+
+/// A new value for `Renderer::block_entity_revision`.
+fn next_block_entity_revision() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -107,6 +114,12 @@ struct SectionGpu {
 }
 /// Line segments the hit outline can hold.
 const MAX_OUTLINE_EDGES: u64 = 256;
+/// Staging buffer size for section meshes: a frame of uploads while
+/// exploring fits in a few.
+const SECTION_UPLOAD_CHUNK: u64 = 4 << 20;
+/// Section copies are submitted early past this many staged bytes, which
+/// bounds the staging memory frames that are not drawn can hold.
+const SECTION_COPY_LIMIT: u64 = 64 << 20;
 pub struct Frame<'a> {
     pub camera: DVec3,
     pub yaw: f32,
@@ -258,6 +271,9 @@ pub struct Renderer {
     flat: Option<flat::Flat>,
     /// `flat` draws this frame's sections (off: the per-section draws).
     flat_on: bool,
+    /// Occlusion culling of solid section draws, where multi-draw is native.
+    cull: Option<cull::Cull>,
+    cull_on: bool,
     sky: wgpu::RenderPipeline,
     dark_disc: wgpu::RenderPipeline,
     lines: wgpu::RenderPipeline,
@@ -319,6 +335,13 @@ pub struct Renderer {
     lightmap_sampler: wgpu::Sampler,
     animations: AnimatedSprites,
     uploads: upload::Uploads,
+    /// Section meshes are staged through their own belt into
+    /// `section_copies`, which the next frame records its commands after:
+    /// `Queue::write_buffer` would make a staging buffer per write.
+    section_uploads: upload::Uploads,
+    section_copies: Option<wgpu::CommandEncoder>,
+    /// Bytes staged in `section_copies`.
+    section_copy_bytes: u64,
     /// Whether `lightmap` holds `lightmap_pixels` yet.
     lightmap_uploaded: bool,
     sprite_minimum_size: u32,
@@ -346,8 +369,14 @@ pub struct Renderer {
     draws: Vec<[u32; 5]>,
     /// Vertex arena page and optional sorted index arena page of each draw.
     draw_pages: Vec<(u32, Option<u32>)>,
+    /// Solid draws left to occlusion culling's phase 2, while the list is
+    /// built, and their pages.
+    phase2_draws: Vec<[u32; 5]>,
+    phase2_pages: Vec<(u32, Option<u32>)>,
     /// Block-entity blocks per meshed section (world position, state id).
     block_entities: HashMap<SectionKey, Vec<([i32; 3], u32)>>,
+    /// Changes whenever `block_entities` does (unique across renderers).
+    block_entity_revision: u64,
     /// VisGraph face connectivity per meshed section (cave culling).
     occlusion: occlusion::Occlusion,
     /// Resolution scale and FXAA (Horizon settings).
@@ -633,6 +662,7 @@ impl Renderer {
                         // Mappable primary buffers: section pages that no
                         // longer fit in video memory go to system memory.
                         required_features: timing::GpuTimer::features(&adapter)
+                            | cull::Cull::features(&adapter)
                             | (adapter.features()
                                 & (wgpu::Features::INDIRECT_FIRST_INSTANCE
                                     | wgpu::Features::MAPPABLE_PRIMARY_BUFFERS)),
@@ -1079,7 +1109,9 @@ impl Renderer {
         let instances = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Section origins"),
             size: instance_capacity * 16,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::VERTEX
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
         let outline = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1724,8 +1756,18 @@ impl Renderer {
         let multi_draw = device
             .features()
             .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE);
+        // HORIZON_GPU_CULL=0 turns occlusion culling off, `all` culls every
+        // frame however little it hides (A/B checks).
+        let cull_env = std::env::var("HORIZON_GPU_CULL");
+        let cull = (cull_env.as_deref() != Ok("0") && cull::Cull::supported(&adapter, &device))
+            .then(|| {
+                let mut cull = cull::Cull::new(&device, config.format.remove_srgb_suffix());
+                cull.always = cull_env.as_deref() == Ok("all");
+                cull
+            });
         let world_post = world_post::Post::new(&device, config.format.remove_srgb_suffix());
         let uploads = upload::Uploads::new(&device);
+        let section_uploads = upload::Uploads::with_chunk(&device, SECTION_UPLOAD_CHUNK);
         let panorama = panorama::Panorama::new(
             &device,
             &queue,
@@ -1750,6 +1792,8 @@ impl Renderer {
             solid,
             translucent,
             flat_on: flat.is_some(),
+            cull_on: cull.is_some(),
+            cull,
             flat,
             sky,
             dark_disc,
@@ -1800,6 +1844,9 @@ impl Renderer {
             lightmap_sampler,
             animations: AnimatedSprites::new(animations, sprite_size, sprite_mips),
             uploads,
+            section_uploads,
+            section_copies: None,
+            section_copy_bytes: 0,
             lightmap_uploaded: false,
             sprite_minimum_size,
             indices,
@@ -1820,7 +1867,10 @@ impl Renderer {
             origins: Vec::new(),
             draws: Vec::new(),
             draw_pages: Vec::new(),
+            phase2_draws: Vec::new(),
+            phase2_pages: Vec::new(),
             block_entities: HashMap::new(),
+            block_entity_revision: next_block_entity_revision(),
             occlusion: occlusion::Occlusion::new(crate::chunk::HEIGHT / 16),
             world_post,
             pack: None,
@@ -1972,18 +2022,50 @@ impl Renderer {
         self.flat_on = on;
         Ok(())
     }
+    /// Whether solid sections are occlusion culled (`cull`).
+    pub fn section_cull(&self) -> bool {
+        self.cull_on
+    }
+    /// Switches occlusion culling, for A/B checks.
+    pub fn set_section_cull(&mut self, on: bool) -> Result<()> {
+        if on && self.cull.is_none() {
+            return Err("occlusion culling is off on this device".into());
+        }
+        self.cull_on = on;
+        Ok(())
+    }
+    /// Of the boxes occlusion culling's last test read back drew, how many
+    /// it did not see and how many it drew, and the share of solid indices
+    /// it hid.
+    pub fn culled_sections(&self) -> Option<([usize; 2], f32)> {
+        self.cull
+            .as_ref()
+            .filter(|_| self.cull_on)
+            .map(|c| c.hidden)
+    }
     pub fn section_count(&self) -> usize {
         self.sections.len()
     }
     pub fn has_section(&self, key: SectionKey) -> bool {
         self.sections.contains(key)
     }
+    /// Bring the cave culling graph up to date for `camera` without waiting:
+    /// a search this starts runs on its worker while the frame is prepared,
+    /// and `render` takes it if it has finished.
+    pub fn start_occlusion(&mut self, camera: DVec3, distance: f32) {
+        self.occlusion
+            .update(camera_section(camera), (distance / 16.0) as i32 + 2);
+    }
     pub fn upload(&mut self, key: SectionKey, mesh: &SectionMesh) {
         self.occlusion.set(key, mesh.visibility);
-        if mesh.block_entities.is_empty() {
-            self.block_entities.remove(&key);
+        let changed = if mesh.block_entities.is_empty() {
+            self.block_entities.remove(&key).is_some()
         } else {
-            self.block_entities.insert(key, mesh.block_entities.clone());
+            let old = self.block_entities.insert(key, mesh.block_entities.clone());
+            old.as_deref() != Some(&mesh.block_entities[..])
+        };
+        if changed {
+            self.block_entity_revision = next_block_entity_revision();
         }
         let solid = (mesh.solid.len() / 4) as u32;
         let translucent = (mesh.translucent.len() / 4) as u32;
@@ -1997,14 +2079,20 @@ impl Renderer {
             self.indices = Self::quad_indices(&self.device, self.index_quads);
         }
         let vertices = (mesh.solid.len() + mesh.translucent.len()) as u64;
+        let encoder = self.section_copies.get_or_insert_with(|| {
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Section uploads"),
+                })
+        });
         // With video and system memory both full, the section is not drawn.
-        let Some((page, start)) = self.arena.alloc(&self.device, &self.queue, vertices) else {
+        let Some((page, start)) = self.arena.alloc(&self.device, encoder, vertices) else {
             return;
         };
         let sorted_indices = if translucent > 0 {
             let indices =
                 self.sorted_indices
-                    .alloc(&self.device, &self.queue, u64::from(translucent) * 6);
+                    .alloc(&self.device, encoder, u64::from(translucent) * 6);
             if indices.is_none() {
                 self.arena.release(page, start, vertices);
                 return;
@@ -2013,21 +2101,34 @@ impl Renderer {
         } else {
             None
         };
-        let flat_id = self
-            .flat
-            .as_mut()
-            .map(|f| f.add(&self.device, &self.queue, page, start, vertices));
+        let flat_id = self.flat.as_mut().map(|f| {
+            f.add(
+                &self.device,
+                encoder,
+                &mut self.section_uploads,
+                page,
+                start,
+                vertices,
+            )
+        });
         let stride = std::mem::size_of::<TerrainVertex>() as u64;
         for (offset, part) in [(0, &mesh.solid), (mesh.solid.len(), &mesh.translucent)] {
             if !part.is_empty() {
                 let bytes: &[u8] = bytemuck::cast_slice(part);
                 self.uploaded_bytes += bytes.len() as u64;
-                self.queue.write_buffer(
+                self.section_copy_bytes += bytes.len() as u64;
+                self.section_uploads.buffer(
+                    encoder,
                     self.arena.buffer(page),
                     (start + offset as u64) * stride,
                     bytes,
                 );
             }
+        }
+        if self.section_copy_bytes >= SECTION_COPY_LIMIT
+            && let Some(copies) = self.take_section_copies()
+        {
+            self.queue.submit([copies]);
         }
         self.sections.insert(
             key,
@@ -2050,11 +2151,26 @@ impl Renderer {
             },
         );
     }
+    /// The section copies recorded since the last submission, closed.
+    fn take_section_copies(&mut self) -> Option<wgpu::CommandBuffer> {
+        let encoder = self.section_copies.take()?;
+        self.section_copy_bytes = 0;
+        self.section_uploads.finish(&encoder);
+        Some(encoder.finish())
+    }
     /// Draws `count` section draws from `first` with the arena and section
     /// origins bound: one indirect multi-draw, or a loop without it.
     /// Consecutive draws in one arena page share a vertex buffer binding,
     /// keeping the list's order (translucent sections go back to front).
-    fn draw_sections(&self, pass: &mut wgpu::RenderPass<'_>, first: u32, count: u32) {
+    /// `indirect` holds the list's draws from `base`.
+    fn draw_sections(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        indirect: &wgpu::Buffer,
+        base: u32,
+        first: u32,
+        count: u32,
+    ) {
         let (mut i, end) = (first as usize, (first + count) as usize);
         while i < end {
             let (page, index_page) = self.draw_pages[i];
@@ -2066,7 +2182,8 @@ impl Renderer {
             let indices = index_page.map_or(&self.indices, |p| self.sorted_indices.buffer(p));
             pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
             if self.multi_draw {
-                pass.multi_draw_indexed_indirect(&self.indirect, i as u64 * 20, run as u32);
+                let offset = (i - base as usize) as u64 * 20;
+                pass.multi_draw_indexed_indirect(indirect, offset, run as u32);
             } else {
                 for d in &self.draws[i..i + run] {
                     pass.draw_indexed(d[2]..d[2] + d[0], d[3] as i32, d[4]..d[4] + 1);
@@ -2092,8 +2209,13 @@ impl Renderer {
     pub fn block_entities(&self) -> impl Iterator<Item = &([i32; 3], u32)> {
         self.block_entities.values().flatten()
     }
+    /// A value that changes whenever `block_entities` gives something else.
+    pub fn block_entity_revision(&self) -> u64 {
+        self.block_entity_revision
+    }
     pub fn clear_sections(&mut self) {
         self.block_entities.clear();
+        self.block_entity_revision = next_block_entity_revision();
         self.sections.clear();
         self.arena.clear();
         if let Some(flat) = &mut self.flat {
@@ -2104,7 +2226,9 @@ impl Renderer {
         self.occlusion.clear();
     }
     pub fn remove(&mut self, key: SectionKey) {
-        self.block_entities.remove(&key);
+        if self.block_entities.remove(&key).is_some() {
+            self.block_entity_revision = next_block_entity_revision();
+        }
         self.occlusion.remove(key);
         self.release_section(key);
     }
@@ -2279,6 +2403,14 @@ impl Renderer {
         );
     }
     pub fn render(&mut self, frame: &Frame) -> Result<bool> {
+        let rendered = self.draw_frame(frame);
+        // A frame that was not drawn still submits the section copies.
+        if let Some(copies) = self.take_section_copies() {
+            self.queue.submit([copies]);
+        }
+        rendered
+    }
+    fn draw_frame(&mut self, frame: &Frame) -> Result<bool> {
         self.arena.trim();
         self.sorted_indices.trim();
         if let Some(flat) = &mut self.flat {
@@ -2316,14 +2448,21 @@ impl Renderer {
             Some(f) => f.texture.clone(),
             None => self.offscreen.clone().ok_or("no offscreen target")?,
         };
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Horizon frame"),
-            });
+        // One command buffer for the frame, after the section copies staged
+        // since the last one: Metal commits every command buffer wgpu-core
+        // makes (one per run of copies and two per pass) on its own.
+        let section_copies = self.section_copies.take();
+        let has_section_copies = section_copies.is_some();
+        let mut encoder = section_copies.unwrap_or_else(|| {
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Horizon frame"),
+                })
+        });
         if self.animated_textures {
             self.animate(&mut encoder, frame.ticks);
-            self.hud.animate_fire(&self.queue, frame.ticks);
+            self.hud
+                .animate_fire(&mut self.uploads, &mut encoder, frame.ticks);
         }
         self.update_lightmap(
             &mut encoder,
@@ -2466,17 +2605,10 @@ impl Renderer {
             planes: frustum(view_proj),
         };
         let camera = frame.camera;
-        let camera_section = (
-            (camera.x.floor() as i32) >> 4,
-            (camera.y.floor() as i32 - crate::chunk::MIN_Y) >> 4,
-            (camera.z.floor() as i32) >> 4,
-        );
+        let camera_section = camera_section(camera);
         let culling = !frame.title && frame.cave_culling;
         if culling {
-            let radius = (frame.distance / 16.0) as i32 + 2;
-            crate::spans::time("occlusion", || {
-                self.occlusion.update(camera_section, radius)
-            });
+            crate::spans::time("occlusion", || self.start_occlusion(camera, frame.distance));
         }
         let reachable = &self.occlusion;
         let mut visible = std::mem::take(&mut self.visible);
@@ -2496,7 +2628,9 @@ impl Renderer {
             self.instances = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Section origins"),
                 size: self.instance_capacity * 16,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                usage: wgpu::BufferUsages::VERTEX
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::STORAGE,
                 mapped_at_creation: false,
             });
         }
@@ -2525,15 +2659,48 @@ impl Renderer {
         let eye = (frame.bob * crate::camera::view_matrix(frame.yaw, frame.pitch))
             .inverse()
             .transform_point3(Vec3::ZERO);
+        // Occlusion culling leaves the sections its last result did not see
+        // to phase 2, after the others, with instance counts of 0.
+        let mut cull = self
+            .cull
+            .as_mut()
+            .filter(|_| {
+                self.cull_on
+                    && !frame.title
+                    && self.multi_draw
+                    && !(self.flat_on && self.flat.is_some())
+            })
+            .and_then(|cull| cull.begin(&self.device).then_some(cull));
+        self.phase2_draws.clear();
+        self.phase2_pages.clear();
         for (i, v) in visible.iter().enumerate() {
             let s = self.sections.get(v.slot);
+            let first_phase = cull.as_ref().is_none_or(|c| c.first(v.slot));
+            let (draws, pages) = if first_phase {
+                (&mut self.draws, &mut self.draw_pages)
+            } else {
+                (&mut self.phase2_draws, &mut self.phase2_pages)
+            };
+            let start = draws.len();
+            let instances = u32::from(first_phase);
+            let mut indices = 0;
             // Only the solid groups that can face the eye.
             s.faces.ranges(eye - Vec3::from(v.origin), |first, quads| {
                 let first = s.start + u64::from(first) * 4;
-                self.draws.push([quads * 6, 1, 0, first as u32, i as u32]);
-                self.draw_pages.push((s.page, None));
+                draws.push([quads * 6, instances, 0, first as u32, i as u32]);
+                pages.push((s.page, None));
+                indices += quads * 6;
             });
+            match &mut cull {
+                Some(c) if first_phase => c.drawn(i, v.slot, indices),
+                Some(c) => c.deferred(i, v.slot, start, draws.len() - start, indices),
+                None => {}
+            }
         }
+        let phase1_draws = self.draws.len() as u32;
+        self.draws.extend_from_slice(&self.phase2_draws);
+        self.draw_pages.extend_from_slice(&self.phase2_pages);
+        let culling = cull.is_some();
         let solid_draws = self.draws.len() as u32;
         // LevelRenderer: nearby sections each frame, plus a rotating eighth
         // (at least 15) of the visible list. Cached views avoid needless sorts.
@@ -2583,6 +2750,7 @@ impl Renderer {
             (0..self.draws.len())
                 .filter(|&i| {
                     i == 0
+                        || i == phase1_draws as usize
                         || i == solid_draws as usize
                         || self.draw_pages[i] != self.draw_pages[i - 1]
                 })
@@ -2590,48 +2758,6 @@ impl Renderer {
         } else {
             self.draws.len()
         };
-        let flat_frame = match &mut self.flat {
-            Some(flat)
-                if self.flat_on && !self.draws.is_empty() && self.draws.len() >= flat.min_draws =>
-            {
-                let sections = &self.sections;
-                let sorted = &self.sorted_indices;
-                crate::spans::time("flatten", || {
-                    flat.prepare(
-                        &self.device,
-                        &mut encoder,
-                        &mut self.uploads,
-                        &self.draws,
-                        &self.draw_pages,
-                        solid_draws as usize,
-                        visible
-                            .iter()
-                            .filter_map(|v| sections.get(v.slot).flat_id.map(|id| (id, v.origin))),
-                        |page| sorted.buffer(page).clone(),
-                    )
-                })
-            }
-            _ => false,
-        };
-        if flat_frame {
-            self.section_draw_calls = self.flat.as_ref().map_or(0, |f| f.calls.len());
-        } else if self.multi_draw && !self.draws.is_empty() {
-            if self.draws.len() as u64 > self.indirect_capacity {
-                self.indirect_capacity = (self.draws.len() as u64).next_power_of_two();
-                self.indirect = self.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("Section draws"),
-                    size: self.indirect_capacity * 20,
-                    usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                });
-            }
-            self.uploads.buffer(
-                &mut encoder,
-                &self.indirect,
-                0,
-                bytemuck::cast_slice(&self.draws),
-            );
-        }
         let debug_depth = frame.debug_lines.len() as u32;
         let debug_top = frame.debug_lines_on_top.len() as u32;
         let crosshair = frame.debug_crosshair.len() as u32;
@@ -2768,6 +2894,87 @@ impl Renderer {
                 bytemuck::bytes_of(&uniform),
             );
         }
+        // Every upload before the frame's first pass: a pass ends wgpu-core's
+        // command buffer, so copies between passes would need one more.
+        if !frame.screen.is_empty() {
+            let vertices: Vec<crate::screen_effects::ScreenVertex> =
+                frame.screen.iter().flat_map(|q| q.vertices).collect();
+            if vertices.len() as u64 > self.screen_capacity {
+                self.screen_capacity = (vertices.len() as u64).next_power_of_two();
+                self.screen_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Screen effect vertices"),
+                    size: self.screen_capacity
+                        * std::mem::size_of::<crate::screen_effects::ScreenVertex>() as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+            }
+            self.uploads.buffer(
+                &mut encoder,
+                &self.screen_buffer,
+                0,
+                bytemuck::cast_slice(&vertices),
+            );
+        }
+        self.hud.prepare(
+            &self.device,
+            &mut self.uploads,
+            &mut encoder,
+            frame.hud,
+            [self.config.width, self.config.height],
+        );
+        let flat_frame = match &mut self.flat {
+            Some(flat)
+                if self.flat_on && !self.draws.is_empty() && self.draws.len() >= flat.min_draws =>
+            {
+                let sections = &self.sections;
+                let sorted = &self.sorted_indices;
+                crate::spans::time("flatten", || {
+                    flat.prepare(
+                        &self.device,
+                        &mut encoder,
+                        &mut self.uploads,
+                        &self.draws,
+                        &self.draw_pages,
+                        solid_draws as usize,
+                        visible
+                            .iter()
+                            .filter_map(|v| sections.get(v.slot).flat_id.map(|id| (id, v.origin))),
+                        |page| sorted.buffer(page).clone(),
+                    )
+                })
+            }
+            _ => false,
+        };
+        if flat_frame {
+            self.section_draw_calls = self.flat.as_ref().map_or(0, |f| f.calls.len());
+        } else if self.multi_draw && !self.draws.is_empty() {
+            if self.draws.len() as u64 > self.indirect_capacity {
+                self.indirect_capacity = (self.draws.len() as u64).next_power_of_two();
+                self.indirect = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Section draws"),
+                    size: self.indirect_capacity * 20,
+                    usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+            }
+            self.uploads.buffer(
+                &mut encoder,
+                &self.indirect,
+                0,
+                bytemuck::cast_slice(&self.draws),
+            );
+            if culling && let Some(cull) = &mut self.cull {
+                cull.upload(
+                    &self.device,
+                    &mut self.uploads,
+                    &mut encoder,
+                    &self.draws[phase1_draws as usize..solid_draws as usize],
+                    &self.instances,
+                    &self.globals,
+                );
+            }
+        }
         let view_target = target_texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.config.format.remove_srgb_suffix()),
             ..Default::default()
@@ -2784,6 +2991,7 @@ impl Renderer {
             Some((color, depth)) => (color, depth),
             None => (&view_target, &self.depth),
         };
+        let cull = self.cull.as_ref().filter(|_| culling && solid_draws > 0);
         {
             let attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: world_view,
@@ -2812,8 +3020,9 @@ impl Renderer {
                     view: world_depth,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(0.0),
-                        // A shader pack reads the world's depth.
-                        store: if pack {
+                        // A shader pack reads the world's depth, and
+                        // phase 2 of occlusion culling draws over it.
+                        store: if pack || cull.is_some() {
                             wgpu::StoreOp::Store
                         } else {
                             wgpu::StoreOp::Discard
@@ -2863,7 +3072,59 @@ impl Renderer {
                     pass.set_pipeline(&self.solid);
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                     pass.set_vertex_buffer(1, self.instances.slice(..));
-                    self.draw_sections(&mut pass, 0, solid_draws);
+                    match cull {
+                        Some(cull) => {
+                            // Phase 1 and the boxes against its depth, then
+                            // what they found in sight, in a pass that loads
+                            // both targets (it reads the test's results).
+                            self.draw_sections(&mut pass, &self.indirect, 0, 0, phase1_draws);
+                            cull.test(&mut pass);
+                            drop(pass);
+                            let attachments = [Some(wgpu::RenderPassColorAttachment {
+                                view: world_view,
+                                resolve_target: None,
+                                depth_slice: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })];
+                            pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("Horizon world, after culling"),
+                                color_attachments: &attachments,
+                                depth_stencil_attachment: Some(
+                                    wgpu::RenderPassDepthStencilAttachment {
+                                        view: world_depth,
+                                        depth_ops: Some(wgpu::Operations {
+                                            load: wgpu::LoadOp::Load,
+                                            store: if pack {
+                                                wgpu::StoreOp::Store
+                                            } else {
+                                                wgpu::StoreOp::Discard
+                                            },
+                                        }),
+                                        stencil_ops: None,
+                                    },
+                                ),
+                                ..Default::default()
+                            });
+                            pass.set_bind_group(0, &self.group, &[]);
+                            pass.set_pipeline(&self.solid);
+                            pass.set_index_buffer(
+                                self.indices.slice(..),
+                                wgpu::IndexFormat::Uint32,
+                            );
+                            pass.set_vertex_buffer(1, self.instances.slice(..));
+                            self.draw_sections(
+                                &mut pass,
+                                &cull.phase2,
+                                phase1_draws,
+                                phase1_draws,
+                                solid_draws - phase1_draws,
+                            );
+                        }
+                        None => self.draw_sections(&mut pass, &self.indirect, 0, 0, solid_draws),
+                    }
                 }
             }
             if entity_quads > 0 {
@@ -2915,7 +3176,13 @@ impl Renderer {
                     pass.set_pipeline(&self.translucent);
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                     pass.set_vertex_buffer(1, self.instances.slice(..));
-                    self.draw_sections(&mut pass, solid_draws, translucent_draws);
+                    self.draw_sections(
+                        &mut pass,
+                        &self.indirect,
+                        0,
+                        solid_draws,
+                        translucent_draws,
+                    );
                 }
             }
             // LevelRenderer.executeClassicTransparency: translucent targets'
@@ -3031,24 +3298,6 @@ impl Renderer {
             );
         }
         if !frame.screen.is_empty() {
-            let vertices: Vec<crate::screen_effects::ScreenVertex> =
-                frame.screen.iter().flat_map(|q| q.vertices).collect();
-            if vertices.len() as u64 > self.screen_capacity {
-                self.screen_capacity = (vertices.len() as u64).next_power_of_two();
-                self.screen_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("Screen effect vertices"),
-                    size: self.screen_capacity
-                        * std::mem::size_of::<crate::screen_effects::ScreenVertex>() as u64,
-                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                });
-            }
-            self.uploads.buffer(
-                &mut encoder,
-                &self.screen_buffer,
-                0,
-                bytemuck::cast_slice(&vertices),
-            );
             let attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: &view_target,
                 resolve_target: None,
@@ -3141,15 +3390,15 @@ impl Renderer {
                 );
         }
         self.hud.draw(
-            &self.device,
-            &self.queue,
-            &mut self.uploads,
             &mut encoder,
             &view_target,
             &self.depth,
             frame.hud,
             [self.config.width, self.config.height],
         );
+        if culling && let Some(cull) = &mut self.cull {
+            cull.end(&self.device, &mut encoder);
+        }
         if let Some(timer) = &mut self.gpu_timer {
             timer.end(&mut encoder);
         }
@@ -3158,8 +3407,15 @@ impl Renderer {
             .take()
             .map(|path| (path, self.copy_frame(&mut encoder, &target_texture)));
         self.uploads.finish(&encoder);
+        if has_section_copies {
+            self.section_copy_bytes = 0;
+            self.section_uploads.finish(&encoder);
+        }
         let commands = crate::spans::time("encode", || encoder.finish());
         let submission = crate::spans::time("submit", || self.queue.submit([commands]));
+        if let Some(cull) = &mut self.cull {
+            cull.submitted();
+        }
         if let Some(timer) = &mut self.gpu_timer {
             timer.submitted();
             timer.collect(&self.device, &mut self.gpu_times);
@@ -3363,6 +3619,15 @@ enum Pack {
     Java(java_stages::JavaStages),
 }
 
+/// The section the camera is in.
+fn camera_section(camera: DVec3) -> SectionKey {
+    (
+        (camera.x.floor() as i32) >> 4,
+        (camera.y.floor() as i32 - crate::chunk::MIN_Y) >> 4,
+        (camera.z.floor() as i32) >> 4,
+    )
+}
+
 fn world_projection(fov_degrees: f32, aspect: f32, far: f32) -> Mat4 {
     Mat4::perspective_rh(fov_degrees.to_radians(), aspect, far, 0.05)
 }
@@ -3437,7 +3702,7 @@ mod tests {
                 (3, offset_of!(TerrainVertex, color)),
             ]
         );
-        assert_eq!(std::mem::size_of::<TerrainVertex>(), 28);
+        assert_eq!(std::mem::size_of::<TerrainVertex>(), 24);
     }
     #[test]
     fn cracks_multiply_instead_of_covering_the_block() {

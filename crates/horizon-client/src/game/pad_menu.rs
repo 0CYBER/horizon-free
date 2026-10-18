@@ -939,7 +939,7 @@ impl Game<'_> {
         } else if self.screen == Screen::Options {
             let result = match text {
                 Some(t) => {
-                    self.ui.options.type_text(&self.atlas, t);
+                    self.ui.options.type_text(&self.gui.atlas, t);
                     Ok(())
                 }
                 None => self.options_key(key.expect("a key"), None),
@@ -983,7 +983,7 @@ impl Game<'_> {
                 .focus
                 .is_some_and(|f| f.center().1 > batch.height / 2.0)
                 || self.screen == Screen::Chat;
-            let mut ui = horizon_client::ui_theme::Ui::new(&self.atlas, batch, self.cursor);
+            let mut ui = horizon_client::ui_theme::Ui::new(&self.gui.atlas, batch, self.cursor);
             keyboard.draw(&mut ui, at_top, self.ui.options.pad_style);
             ui.finish();
             return;
@@ -998,7 +998,7 @@ impl Game<'_> {
             return;
         }
         // An arrow, outlined, pointing up-left at (x, y).
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let (x, y) = (x.floor(), y.floor());
         const ROWS: [u8; 10] = [1, 2, 3, 4, 5, 6, 7, 4, 2, 1];
         for (i, &w) in ROWS.iter().enumerate() {
@@ -1043,7 +1043,7 @@ impl Game<'_> {
             };
         if horizon {
             use horizon_client::ui_theme::{self as theme, Ui, color};
-            let mut ui = Ui::new(&self.atlas, batch, self.cursor);
+            let mut ui = Ui::new(&self.gui.atlas, batch, self.cursor);
             let k = ui.batch.scale / ui.density;
             let (x, y, w, h) = (x * k, y * k, w * k, h * k);
             let radius = match focus.kind {
@@ -1066,7 +1066,7 @@ impl Game<'_> {
             return;
         }
         if matches!(focus.kind, Kind::Row | Kind::Field) {
-            let atlas = &self.atlas;
+            let atlas = &self.gui.atlas;
             let white = rgba(255, 255, 255, 255);
             batch.fill(atlas, x, y, w, 1.0, white);
             batch.fill(atlas, x, y + h - 1.0, w, 1.0, white);

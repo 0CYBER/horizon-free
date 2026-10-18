@@ -5,7 +5,7 @@
 use crate::fast_hash::{FxHashMap, FxHashSet};
 use crate::{
     chunk::{Chunk, SECTIONS},
-    light::{LightTables, apply_lighting, apply_relighting, light_chunk},
+    light::{LightChanges, LightTables, apply_lighting, apply_relighting, light_chunk},
     mesher::{MeshTables, Mesher, Region, SectionMesh, borrow},
     world::World,
 };
@@ -200,8 +200,10 @@ pub struct Streaming {
     /// Chunks come from a server (`insert_remote`/`forget`): nothing is
     /// generated and columns are only unloaded when the server says so.
     pub remote: bool,
-    /// More areas to keep loaded (centre chunk, radius), e.g. around guests
-    /// of a world open to the network. They are generated and kept but not meshed.
+    /// More areas to keep loaded (centre chunk, radius), e.g. around the
+    /// players of a server. Each is a square, like vanilla's ticket levels:
+    /// chunks finish out to `radius + 1` (Chebyshev) and generation reaches
+    /// past that as around the player. They are generated and kept but not meshed.
     pub extra: Vec<((i32, i32), i32)>,
     /// Mesh the sections for drawing (false on a server thread).
     pub mesh: bool,
@@ -333,6 +335,7 @@ impl GenerationScan {
 }
 pub struct WorkerContext {
     pub assets: Arc<crate::assets::Assets>,
+    pub render: Arc<crate::assets::RenderAssets>,
     pub tables: Arc<MeshTables>,
     pub biomes: Arc<crate::biome::Biomes>,
     pub light: Arc<LightTables>,
@@ -422,6 +425,7 @@ impl Streaming {
                                         cutout_leaves: settings.cutout_leaves,
                                         cull_leaves: settings.cull_leaves,
                                         assets: &context.assets,
+                                        render: &context.render,
                                         tables: &context.tables,
                                         biomes: &context.biomes,
                                         visibility,
@@ -500,16 +504,38 @@ impl Streaming {
             }
         }
     }
-    /// A column received from a server: store it and relight it and its neighbours.
+    /// A column received from a server, with the light it sent
+    /// (`ClientPacketListener.handleLevelChunkWithLight`): nothing is
+    /// relit, and it and its neighbours remesh (`enableChunkLight`).
     pub fn insert_remote(&mut self, world: &mut World, chunk: Chunk) {
         let key = (chunk.x, chunk.z);
-        self.lit.remove(&key);
         self.lighting.remove(&key);
+        self.light_snapshots.remove(&key);
         world.chunks.insert(key, Arc::new(chunk));
+        self.lit.insert(key);
         self.generated_total += 1;
         for dz in -1..=1 {
             for dx in -1..=1 {
-                world.dirty_light.insert((key.0 + dx, key.1 + dz));
+                for sy in 0..SECTIONS as i32 {
+                    world.dirty_sections.insert((key.0 + dx, sy, key.1 + dz));
+                }
+            }
+        }
+    }
+    /// A server's light update for a resident column: the sections whose
+    /// light changed and their neighbours remesh
+    /// (`setSectionDirtyWithNeighbors`).
+    pub fn light_updated(world: &mut World, x: i32, z: i32, sections: &[usize]) {
+        for &sy in sections {
+            for dz in -1..=1 {
+                for dy in -1..=1 {
+                    for dx in -1..=1 {
+                        let s = sy as i32 + dy;
+                        if (0..SECTIONS as i32).contains(&s) {
+                            world.dirty_sections.insert((x + dx, s, z + dz));
+                        }
+                    }
+                }
             }
         }
     }
@@ -520,7 +546,7 @@ impl Streaming {
         self.lighting.remove(&(x, z));
         self.meshing.retain(|k, _| (k.0, k.2) != (x, z));
         self.waiting.retain(|k| (k.0, k.2) != (x, z));
-        world.dirty_sections.retain(|k| (k.0, k.2) != (x, z));
+        world.dirty_sections.take_column(x, z);
         world.chunks.remove(&(x, z))
     }
     fn submit(&mut self, priority: i64, job: Job) {
@@ -589,7 +615,7 @@ impl Streaming {
         }
         world
             .block_entities
-            .extend(std::mem::take(&mut chunk.block_entities));
+            .load_chunk(std::mem::take(&mut chunk.block_entities));
         world
             .block_names
             .extend(std::mem::take(&mut chunk.block_names));
@@ -724,12 +750,12 @@ impl Streaming {
                         // only around the light that changed, as vanilla's light
                         // updates dirty only their sections (#270).
                         let first = self.lit.insert((x, z));
-                        let changed = if first {
+                        let mut changed = LightChanges::default();
+                        if first {
                             apply_lighting(chunk, sections);
-                            Vec::new()
                         } else {
-                            apply_relighting(chunk, sections)
-                        };
+                            apply_relighting(chunk, sections, &mut changed);
+                        }
                         chunk.lit = true;
                         if first {
                             for dz in -1..=1 {
@@ -785,23 +811,22 @@ impl Streaming {
             let far: HashSet<(i32, i32)> = far.iter().copied().collect();
             self.meshing.retain(|k, _| !far.contains(&(k.0, k.2)));
             self.waiting.retain(|k| !far.contains(&(k.0, k.2)));
-            world.dirty_sections.retain(|k| !far.contains(&(k.0, k.2)));
+            world
+                .dirty_sections
+                .retain_columns(|x, z| !far.contains(&(x, z)));
         }
         // Drop far proto chunks that are not checked out.
-        let areas: Vec<((i32, i32), i64)> =
-            std::iter::once((self.center, i64::from(self.radius + 4)))
-                .chain(self.extra.iter().map(|&(c, r)| (c, i64::from(r + 4))))
-                .collect();
-        let forced = &self.forced;
+        let (center, r4) = (self.center, i64::from(self.radius + 4));
+        let ranges = self.ranges();
         let far: Vec<(i32, i32)> = self
             .protos
             .iter()
             .filter(|&(&(x, z), p)| {
                 p.is_some()
-                    && !areas.iter().any(|&((cx, cz), r4)| {
-                        i64::from(x - cx).pow(2) + i64::from(z - cz).pow(2) <= r4 * r4
-                    })
-                    && !forced
+                    && i64::from(x - center.0).pow(2) + i64::from(z - center.1).pow(2) > r4 * r4
+                    && !ranges.in_extra(x, z, 4)
+                    && !ranges
+                        .forced
                         .iter()
                         .any(|f| (x - f.0).abs() <= 3 && (z - f.1).abs() <= 3)
             })
@@ -1004,66 +1029,63 @@ impl Streaming {
                 !back
             });
         }
-        let dirty: Vec<_> = world.dirty_sections.iter().copied().collect();
-        let mut columns: FxHashMap<(i32, i32), Option<Box<Region>>> = FxHashMap::default();
-        let mut ready_columns: FxHashMap<(i32, i32), bool> = FxHashMap::default();
-        for (x, sy, z) in dirty {
+        // Column by column: the checks below hold for all of a column's
+        // sections, and columns waiting for light cost one look per frame.
+        let columns: Vec<_> = world.dirty_sections.columns().collect();
+        for ((x, z), sections) in columns {
             if !world.chunks.contains_key(&(x, z)) {
-                world.dirty_sections.remove(&(x, sy, z));
+                world.dirty_sections.take_column(x, z);
                 continue;
             }
             if !self.ranges().in_view(x, z) {
-                world.dirty_sections.remove(&(x, sy, z));
-                self.waiting.insert((x, sy, z));
+                world.dirty_sections.take_column(x, z);
+                for sy in section_indexes(sections) {
+                    self.waiting.insert((x, sy, z));
+                }
                 continue;
             }
-            // Once per column: the 3x3 check would otherwise repeat for each
-            // of its sections every frame. A neighbour being lit dirties this
-            // column again when its light job finishes (new chunks relight
-            // their eight neighbours), so wait for it rather than mesh once
-            // per neighbour. Columns still in `dirty_light` here can't be lit
-            // yet (a neighbour of theirs is missing): waiting for them could
-            // last until the player comes back.
-            let (lit, lighting) = (&self.lit, &self.lighting);
-            let ready = *ready_columns.entry((x, z)).or_insert_with(|| {
-                (-1..=1).all(|dz| {
-                    (-1..=1).all(|dx| {
-                        let n = (x + dx, z + dz);
-                        lit.contains(&n) && !lighting.contains_key(&n)
-                    })
+            // A neighbour being lit dirties this column again when its light
+            // job finishes (new chunks relight their eight neighbours), so
+            // wait for it rather than mesh once per neighbour. Columns still
+            // in `dirty_light` here can't be lit yet (a neighbour of theirs is
+            // missing): waiting for them could last until the player comes
+            // back.
+            let ready = (-1..=1).all(|dz| {
+                (-1..=1).all(|dx| {
+                    let n = (x + dx, z + dz);
+                    self.lit.contains(&n) && !self.lighting.contains_key(&n)
                 })
             });
             if !ready {
                 continue;
             }
-            let region = columns
-                .entry((x, z))
-                .or_insert_with(|| Self::region(world, x, z));
-            let Some(region) = region.clone() else {
+            let Some(region) = Self::region(world, x, z) else {
                 continue;
             };
-            world.dirty_sections.remove(&(x, sy, z));
-            let first = self.meshed.insert((x, z));
-            self.sequence += 1;
-            self.meshing.insert((x, sy, z), self.sequence);
-            self.submit(
-                self.distance(x, z) * 4 + if first { 2 } else { 0 },
-                Job::Mesh(
-                    x,
-                    sy,
-                    z,
-                    region,
-                    self.sequence,
-                    MeshSettings {
-                        nether: self.nether_shading,
-                        zoom: self.biome_zoom,
-                        blend_radius: self.biome_blend,
-                        smooth_lighting: self.smooth_lighting,
-                        cutout_leaves: self.cutout_leaves,
-                        cull_leaves: self.cull_leaves,
-                    },
-                ),
-            );
+            world.dirty_sections.take_column(x, z);
+            for sy in section_indexes(sections) {
+                let first = self.meshed.insert((x, z));
+                self.sequence += 1;
+                self.meshing.insert((x, sy, z), self.sequence);
+                self.submit(
+                    self.distance(x, z) * 4 + if first { 2 } else { 0 },
+                    Job::Mesh(
+                        x,
+                        sy,
+                        z,
+                        region.clone(),
+                        self.sequence,
+                        MeshSettings {
+                            nether: self.nether_shading,
+                            zoom: self.biome_zoom,
+                            blend_radius: self.biome_blend,
+                            smooth_lighting: self.smooth_lighting,
+                            cutout_leaves: self.cutout_leaves,
+                            cull_leaves: self.cull_leaves,
+                        },
+                    ),
+                );
+            }
         }
         (uploads, removed)
     }
@@ -1104,12 +1126,14 @@ impl Streaming {
         if positions.is_empty() {
             return;
         }
-        let changed = crate::light::relight(
+        let mut changed = LightChanges::default();
+        crate::light::relight(
             &mut world.chunks,
             &self.light_tables,
             self.sky_light,
             &positions,
             false,
+            &mut changed,
         );
         Self::mark_light_changes(world, &changed);
         if !self.light_snapshots.is_empty() {
@@ -1131,12 +1155,14 @@ impl Streaming {
             .map(|(_, p)| *p)
             .collect();
         if !positions.is_empty() {
-            let changed = crate::light::relight(
+            let mut changed = LightChanges::default();
+            crate::light::relight(
                 &mut world.chunks,
                 &self.light_tables,
                 self.sky_light,
                 &positions,
                 true,
+                &mut changed,
             );
             Self::mark_light_changes(world, &changed);
         }
@@ -1148,26 +1174,15 @@ impl Streaming {
     }
     /// Sections whose meshes sample a changed light value (faces and corners
     /// read light from neighbouring blocks).
-    fn mark_light_changes(world: &mut World, changed: &[(i32, i32, i32)]) {
-        let mut last = None;
-        for &(x, y, z) in changed {
-            for dz in -1..=1 {
-                for dy in -1..=1 {
-                    for dx in -1..=1 {
-                        let s = (
-                            (y + dy - crate::chunk::MIN_Y) >> 4,
-                            (x + dx) >> 4,
-                            (z + dz) >> 4,
-                        );
-                        if last == Some(s) || !(0..SECTIONS as i32).contains(&s.0) {
-                            continue;
-                        }
-                        last = Some(s);
-                        world.dirty_sections.insert((s.1, s.0, s.2));
-                    }
-                }
+    fn mark_light_changes(world: &mut World, changed: &LightChanges) {
+        if let Some(log) = &mut world.light_log {
+            for (x, sy, z) in changed.sections() {
+                *log.entry((x, z)).or_default() |= 1 << sy;
             }
         }
+        changed.dirty_sections(|section| {
+            world.dirty_sections.insert(section);
+        });
     }
     fn ranges(&self) -> Ranges<'_> {
         Ranges {
@@ -1277,21 +1292,21 @@ impl Ranges<'_> {
     /// circles, so a fixed margin alone misses the corners of those squares
     /// (render distance 2 never finished the chunks next to the player).
     fn near_finished(&self, x: i32, z: i32, reach: i32) -> bool {
-        let near = |c: (i32, i32), radius: i32| {
-            let gap = |d: i32| i64::from((d.abs() - reach).max(0));
-            let (dx, dz) = (gap(x - c.0), gap(z - c.1));
-            let r = i64::from(radius + 1);
-            dx * dx + dz * dz <= r * r
-        };
-        near(self.center, self.radius) || self.extra.iter().any(|&(c, r)| near(c, r))
+        let gap = |d: i32| i64::from((d.abs() - reach).max(0));
+        let (dx, dz) = (gap(x - self.center.0), gap(z - self.center.1));
+        let r = i64::from(self.radius + 1);
+        // The extra areas are squares: their finished square grown by `reach`.
+        dx * dx + dz * dz <= r * r || self.in_extra(x, z, 1 + reach)
     }
     fn in_range(&self, x: i32, z: i32, margin: i32) -> bool {
-        self.in_main_range(x, z, margin)
-            || self.extra.iter().any(|&(c, radius)| {
-                let r = i64::from(radius + margin);
-                let (dx, dz) = (i64::from(x - c.0), i64::from(z - c.1));
-                dx * dx + dz * dz <= r * r
-            })
+        self.in_main_range(x, z, margin) || self.in_extra(x, z, margin)
+    }
+    /// Within `margin` of an extra area's square (Chebyshev distance, as
+    /// vanilla's ticket levels spread).
+    fn in_extra(&self, x: i32, z: i32, margin: i32) -> bool {
+        self.extra
+            .iter()
+            .any(|&(c, radius)| (x - c.0).abs().max((z - c.1).abs()) <= radius + margin)
     }
     /// The columns meshed for drawing: those vanilla draws around the
     /// player (`in_view_distance`), and forced ones.
@@ -1328,6 +1343,16 @@ impl Drop for Streaming {
             let _ = t.join();
         }
     }
+}
+/// The section indexes set in a column's bits, lowest first.
+fn section_indexes(mut bits: u32) -> impl Iterator<Item = i32> {
+    std::iter::from_fn(move || {
+        (bits != 0).then(|| {
+            let sy = bits.trailing_zeros() as i32;
+            bits &= bits - 1;
+            sy
+        })
+    })
 }
 #[cfg(test)]
 mod tests {
@@ -1771,6 +1796,60 @@ mod tests {
                             assert!(
                                 !r.unloaded(x, z, decorates),
                                 "radius {radius} (decorates: {decorates}): ({x}, {z}) is kept then unloaded"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A server player's area (`lan_update_streaming`: the server view
+    /// distance + 1) finishes vanilla's FULL square: PLAYER_LOADING tickets at
+    /// level 31 out to the view distance, FULL (33) two chunks past it. Every
+    /// chunk the player tracks has its 3x3 neighbourhood finished, so it can
+    /// be lit and sent, and generation reaches vanilla's FEATURES (34) and
+    /// TERRAIN (35) rings.
+    #[test]
+    fn server_player_areas_finish_vanillas_full_square() {
+        let forced = HashSet::new();
+        for view in 2..=32 {
+            let extra = [((40, -9), view + 1)];
+            let r = Ranges {
+                // The window's own area, far away.
+                center: (-400, 300),
+                radius: 2,
+                extra: &extra,
+                forced: &forced,
+            };
+            let level = |x: i32, z: i32| 31 + ((x - 40).abs().max((z + 9).abs()) - view).max(0);
+            for x in 40 - view - 8..=40 + view + 8 {
+                for z in -9 - view - 8..=-9 + view + 8 {
+                    assert_eq!(
+                        r.in_range(x, z, 1),
+                        level(x, z) <= 33,
+                        "view {view}: ({x}, {z})"
+                    );
+                    assert_eq!(
+                        r.requested(x, z, true),
+                        level(x, z) <= 35,
+                        "view {view}: ({x}, {z})"
+                    );
+                    assert_eq!(
+                        r.unloaded(x, z, true),
+                        level(x, z) > 35,
+                        "view {view}: ({x}, {z})"
+                    );
+                    // ChunkTrackingView.contains, at any view distance the player may ask for.
+                    let tracked = |v: i64| {
+                        let gap = |d: i32| i64::from(((d).abs() - 2).max(0));
+                        gap(x - 40).pow(2) + gap(z + 9).pow(2) < v * v
+                    };
+                    if tracked(i64::from(view)) {
+                        for (dx, dz) in (-1..=1).flat_map(|dx| (-1..=1).map(move |dz| (dx, dz))) {
+                            assert!(
+                                r.in_range(x + dx, z + dz, 1),
+                                "view {view}: ({x}, {z}) tracked, not lit"
                             );
                         }
                     }

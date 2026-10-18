@@ -37,6 +37,12 @@ pub struct Guest {
     pub last_action_tick: u64,
     /// The next ClientboundPlayerChatPacket.globalIndex for this connection.
     pub chat_index: i32,
+    /// Secure chat (ServerGamePacketListenerImpl): the player's message
+    /// chain, keyed once it sends a chat session; the messages its
+    /// acknowledgements cover; the signatures its client caches.
+    pub chain: horizon_protocol::secure_chat::Chain,
+    pub last_seen: horizon_protocol::secure_chat::LastSeenValidator,
+    pub signatures: horizon_protocol::secure_chat::SignatureCache,
     /// The hub tick the player was placed on: chunks go out from the tick
     /// after next, behind the first doTick's packets, as vanilla's do.
     pub placed_at: u64,
@@ -69,6 +75,17 @@ pub struct Guest {
     pub fall_flying: bool,
     pub flying: bool,
     pub sleeping: bool,
+    /// `LivingEntity.DATA_LIVING_ENTITY_FLAGS`: 1 while using an item, 2 if
+    /// it is in the off hand.
+    pub living_flags: i8,
+    /// The bed (its head) the player sleeps in (`LivingEntity.getSleepingPos`),
+    /// `Player.sleepCounter`, and the bed last told to the player itself.
+    pub bed: Option<[i32; 3]>,
+    pub sleep_timer: u32,
+    pub sent_bed: Option<[i32; 3]>,
+    /// Where the player respawns (a bed's spot; `ServerPlayer.respawnConfig`),
+    /// None for the world spawn.
+    pub spawn: Option<[f64; 3]>,
     /// Pending ClientboundPlayerPositionPacket id; movement is ignored until
     /// the client accepts it (ServerGamePacketListenerImpl.awaitingPositionFromClient).
     pub awaiting_teleport: Option<(i32, [f64; 3])>,
@@ -85,6 +102,9 @@ pub struct Guest {
     /// A position move arrived since the client's last ClientTickEnd
     /// (receivedPositionThisTick): a second one is a protocol error.
     pub position_this_tick: bool,
+    /// It accepted a move since the last entity range checks
+    /// (ServerChunkCache.move), which then check all of its pairs again.
+    pub moved: bool,
     /// The client finished loading terrain (ServerboundPlayerLoadedPacket).
     pub loaded: bool,
     // Chunks.
@@ -129,7 +149,8 @@ pub struct Guest {
     /// What the client believes the inventory menu holds (for change detection).
     pub menu_sent: Vec<Option<ItemStack>>,
     pub menu_state: i32,
-    pub sent_health: Option<(f32, i32, f32)>,
+    /// `lastSentHealth`, `lastSentFood` and `lastFoodSaturationZero`.
+    pub sent_health: Option<(f32, i32, bool)>,
     pub sent_xp: Option<(f32, i32, i32)>,
     /// Where the player last died (Player.lastDeathLocation), sent with the respawn.
     pub last_death: Option<[i32; 3]>,
@@ -179,6 +200,9 @@ impl Guest {
             address: j.address,
             last_action_tick: 0,
             chat_index: 0,
+            chain: Default::default(),
+            last_seen: Default::default(),
+            signatures: Default::default(),
             placed_at: 0,
             center_sent: None,
             left_reason: String::new(),
@@ -204,6 +228,11 @@ impl Guest {
             fall_flying: false,
             flying: false,
             sleeping: false,
+            living_flags: 0,
+            bed: None,
+            sleep_timer: 0,
+            sent_bed: None,
+            spawn: None,
             awaiting_teleport: None,
             teleport_counter: 0,
             teleport_tick: 0,
@@ -211,6 +240,7 @@ impl Guest {
             received_moves: 0,
             known_moves: 0,
             position_this_tick: false,
+            moved: false,
             loaded: false,
             center: None,
             sent_chunks: Default::default(),

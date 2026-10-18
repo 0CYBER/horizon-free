@@ -22,6 +22,17 @@ pub(super) struct Trip {
     end: bool,
     /// The Nether portal plan, whose exit is found or built on arrival.
     plan: Option<Plan>,
+    /// Sent by a command: the player is already where it goes.
+    placed: bool,
+}
+
+/// `TeleportCommand` into another level for a server's player: where, and
+/// the rotation it sets (none keeps the player's).
+pub(super) struct LevelTeleport {
+    pub conn: u32,
+    pub dim: Dim,
+    pub at: [f64; 3],
+    pub rotation: Option<[f32; 2]>,
 }
 
 /// A player's box: Player's standing dimensions.
@@ -177,7 +188,8 @@ impl Game<'_> {
         };
         let at = [destination.x, destination.y, destination.z];
         let ctx = self.server_ctx();
-        host.hub.change_level(i, at, yaw, &ctx);
+        // TeleportTransition.PLAY_PORTAL_SOUND.
+        host.hub.change_level(i, at, yaw, None, true, &ctx);
         self.as_guest(host, conn, |g| g.trigger_dimension(source, target));
         self.server_trips.push(Trip {
             conn,
@@ -185,6 +197,7 @@ impl Game<'_> {
             target: destination,
             end,
             plan,
+            placed: false,
         });
         if let Err(e) = self.enter_level(Some(host), source) {
             log::error!("could not reopen {}: {e}", source.id());
@@ -214,6 +227,9 @@ impl Game<'_> {
                 continue;
             }
             let trip = self.server_trips.remove(k);
+            if trip.placed {
+                continue;
+            }
             self.resolve_arrivals();
             let yaw = host.hub.guests[i].yaw;
             let (position, yaw) = if trip.end {
@@ -248,9 +264,47 @@ impl Game<'_> {
         }
     }
 
+    /// The players the command just run sends to another level
+    /// (`ServerPlayer.teleport` from TeleportCommand): a Respawn packet
+    /// keeping all data and the teleport, with no portal sound. The server
+    /// leaves the body alone until the level has loaded around it.
+    pub(super) fn run_level_teleports(&mut self, host: &mut LanHost) {
+        for t in std::mem::take(&mut self.level_teleports) {
+            let Some(i) = host.hub.guests.iter().position(|g| g.conn == t.conn) else {
+                continue;
+            };
+            let source = self.dim;
+            if let Err(e) = self.enter_level(Some(host), t.dim) {
+                log::error!("could not open {}: {e}", t.dim.id());
+                continue;
+            }
+            let g = &mut host.hub.guests[i];
+            let [yaw, pitch] = t.rotation.unwrap_or([g.yaw, g.pitch]);
+            // A new body there: no fall distance or motion carried over.
+            g.motion = None;
+            let ctx = self.server_ctx();
+            host.hub
+                .change_level(i, t.at, yaw, Some(pitch), false, &ctx);
+            self.as_guest(host, t.conn, |g| g.trigger_dimension(source, t.dim));
+            self.server_trips.retain(|trip| !trip.is(t.conn));
+            self.server_trips.push(Trip {
+                conn: t.conn,
+                dim: t.dim,
+                target: Vec3::new(t.at[0], t.at[1], t.at[2]),
+                end: false,
+                plan: None,
+                placed: true,
+            });
+            if let Err(e) = self.enter_level(Some(host), source) {
+                log::error!("could not reopen {}: {e}", source.id());
+            }
+        }
+    }
+
     /// The hub's view of the server for packets sent outside its own tick.
     pub(super) fn server_ctx(&mut self) -> TickCtx<'_> {
         let spawn = self.spawn.map_or([0.5, 80.0, 0.5], |s| [s.x, s.y, s.z]);
+        let clock_rate = self.network_clock_rate();
         TickCtx {
             world: &mut self.world,
             host: None,
@@ -259,11 +313,7 @@ impl Game<'_> {
             spawn,
             difficulty: i32::from(self.ui.difficulty),
             difficulty_locked: self.level.difficulty_locked,
-            clock_rate: if self.ui.rules.bool("advance_time") {
-                self.ui.clock.rate
-            } else {
-                0.0
-            },
+            clock_rate,
             tick_rate: self.clock.rate(),
             tick_frozen: self.clock.frozen(),
             collision: Some(self.collision),

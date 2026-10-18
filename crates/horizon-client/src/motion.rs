@@ -31,8 +31,7 @@ use horizon_world::{
     movement_restitution::{self, RestitutionInput, RestitutionWorld},
     movement_statistics::{self, MovementStat, MovementStatisticsWorld},
     movement_support::{self, MovementLocation},
-    nbt::{self, Limits},
-    registry::BlockStateId,
+    registry::{BlockStateId, BlockTableFile},
     world_movement::{self, MovementRequest},
     worldgen::tags::TagDefinitions,
 };
@@ -57,17 +56,27 @@ pub struct MotionResources {
     pub fluids: FluidResources,
 }
 impl MotionResources {
+    /// [`Self::load_with_facts`] with the block facts decoded here.
     pub fn load(root: &Path, assets: &Assets) -> Result<Self> {
+        Self::load_with_facts(
+            root,
+            assets,
+            &crate::blocks::BlockFacts::load(root, assets.registry)?,
+        )
+    }
+    /// The motion tables, with the block facts the game already decoded
+    /// (decoding `gameplay-facts.json` again costs a second or more and, with
+    /// a big modpack, hundreds of megabytes while it runs).
+    pub fn load_with_facts(
+        root: &Path,
+        assets: &Assets,
+        facts: &crate::blocks::BlockFacts,
+    ) -> Result<Self> {
         let attributes = Arc::new(Catalog::from_json(&serde_json::from_slice(&fs::read(
             root.join("attributes.json"),
         )?)?)?);
-        let data = nbt::read_named(
-            &fs::read(root.join("movement-properties.nbt"))?,
-            Limits::tables(),
-        )?
-        .0
-        .tag;
-        let properties = MovementProperties::from_nbt(&data, assets.registry)?;
+        let file = BlockTableFile::open(&root.join("movement-properties.nbt"), assets.registry)?;
+        let properties = MovementProperties::from_table(file.table("movement")?)?;
         let bundle: BTreeMap<String, String> =
             serde_json::from_slice(&fs::read(root.join("block-tags.json"))?)?;
         let mut definitions = TagDefinitions::default();
@@ -91,7 +100,7 @@ impl MotionResources {
         Ok(Self {
             landing: crate::landing::load(root, &properties)?,
             health: crate::health::HealthResources::load(root)?,
-            fluids: FluidResources::load(root, assets)?,
+            fluids: FluidResources::new(assets, facts)?,
             attributes,
             blocks: properties.bind(&MovementTags {
                 fences: tag("minecraft:fences")?,
@@ -309,6 +318,7 @@ impl PlayerMotion {
             self.set_health(level.health, false)?;
             self.health.food.food = level.food;
             self.health.food.saturation = level.saturation;
+            self.flying = level.flying;
         }
         Ok(())
     }
@@ -639,7 +649,8 @@ impl MotionWorld<'_, '_, '_> {
             entities: self.entities,
         }
     }
-    pub(crate) fn no_player_collision(&mut self, bounds: Aabb) -> Result<bool> {
+    /// `Level.noCollision(player, bounds)`: blocks and the host's entity boxes.
+    pub fn no_player_collision(&mut self, bounds: Aabb) -> Result<bool> {
         let context = self.context();
         Ok(world_movement::no_world_collision(
             &mut self.movement_collisions(),
@@ -2048,9 +2059,10 @@ mod tests {
             return;
         }
         let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let binding = crate::collisions::load(&root, assets.registry).unwrap();
         let resources = MotionResources::load(&root, &assets).unwrap();
-        let mut scene = World::test_scene(&assets, 1).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 1).unwrap();
         let entities = [Aabb::new(
             Vec3::new(10.0, 80.0, 10.0),
             Vec3::new(14.0, 84.0, 14.0),
@@ -2118,10 +2130,11 @@ mod tests {
             return;
         }
         let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let binding = crate::collisions::load(&root, assets.registry).unwrap();
         let resources = MotionResources::load(&root, &assets).unwrap();
         let run = |name: &str, spectator: bool| {
-            let mut scene = World::test_scene(&assets, 2).unwrap();
+            let mut scene = World::test_scene(&assets, &render, 2).unwrap();
             let state = assets.registry.default_state(name).unwrap();
             for x in 19..=23 {
                 for y in 10..=17 {
@@ -2357,10 +2370,11 @@ mod tests {
             return;
         }
         let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let binding = crate::collisions::load(&root, assets.registry).unwrap();
         let resources = MotionResources::load(&root, &assets).unwrap();
         for wet in [false, true] {
-            let mut scene = World::test_scene(&assets, 2).unwrap();
+            let mut scene = World::test_scene(&assets, &render, 2).unwrap();
             if wet {
                 let water = assets.registry.default_state("minecraft:water").unwrap();
                 for x in 19..=21 {
@@ -2403,9 +2417,10 @@ mod tests {
             return;
         }
         let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let binding = crate::collisions::load(&root, assets.registry).unwrap();
         let resources = MotionResources::load(&root, &assets).unwrap();
-        let mut scene = World::test_scene(&assets, 3).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 3).unwrap();
         let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
         let water = assets.registry.default_state("minecraft:water").unwrap();
         for x in 19..=21 {
@@ -2610,6 +2625,7 @@ mod tests {
             food: 11,
             saturation: 2.25,
             player_extra: Some(extra),
+            flying: true,
             ..Default::default()
         };
         let mut pending = true;
@@ -2617,6 +2633,7 @@ mod tests {
             .load_saved_state_once(&mut pending, &level)
             .unwrap();
         assert_eq!((w.player.fire_ticks, w.player.air), (160, 8));
+        assert!(w.player.flying);
         assert_eq!(
             (
                 w.player.health.health(),
@@ -2628,6 +2645,7 @@ mod tests {
         let mut respawn = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
         respawn.load_saved_state_once(&mut pending, &level).unwrap();
         assert_eq!((respawn.fire_ticks, respawn.air), (-20, 300));
+        assert!(!respawn.flying);
         assert_eq!(
             (respawn.health.health(), respawn.health.food.food),
             (20.0, 20)
@@ -2654,9 +2672,10 @@ mod tests {
             return;
         }
         let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let binding = crate::collisions::load(&root, assets.registry).unwrap();
         let resources = MotionResources::load(&root, &assets).unwrap();
-        let mut scene = World::test_scene(&assets, 3).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 3).unwrap();
         let water = assets.registry.default_state("minecraft:water").unwrap();
         for y in 4..=6 {
             scene.set(20, y, 20, water).unwrap();
@@ -2726,10 +2745,11 @@ mod tests {
             return;
         }
         let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let binding = crate::collisions::load(&root, assets.registry).unwrap();
         let resources = MotionResources::load(&root, &assets).unwrap();
         for name in ["minecraft:lava", "minecraft:water"] {
-            let mut scene = World::test_scene(&assets, 3).unwrap();
+            let mut scene = World::test_scene(&assets, &render, 3).unwrap();
             let fluid = assets.registry.default_state(name).unwrap();
             scene.set(20, 4, 20, fluid).unwrap();
             let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
@@ -2777,9 +2797,10 @@ mod tests {
             return;
         }
         let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let binding = crate::collisions::load(&root, assets.registry).unwrap();
         let resources = MotionResources::load(&root, &assets).unwrap();
-        let mut scene = World::test_scene(&assets, 3).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 3).unwrap();
         let water = assets.registry.default_state("minecraft:water").unwrap();
         scene.set(20, 4, 20, water).unwrap();
         scene.set(20, 5, 20, water).unwrap();
@@ -2846,10 +2867,11 @@ mod tests {
             return;
         }
         let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let binding = crate::collisions::load(&root, assets.registry).unwrap();
         let resources = MotionResources::load(&root, &assets).unwrap();
         for (water_level, lava_level, ground_jump) in [(0, 6, true), (6, 0, false)] {
-            let mut scene = World::test_scene(&assets, 3).unwrap();
+            let mut scene = World::test_scene(&assets, &render, 3).unwrap();
             for (name, level, x) in [
                 ("minecraft:water", water_level, 20),
                 ("minecraft:lava", lava_level, 21),
@@ -2894,7 +2916,8 @@ mod tests {
             return;
         }
         let assets = Assets::load(&root).unwrap();
-        let mut scene = World::test_scene(&assets, 3).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 3).unwrap();
         let binding = crate::collisions::load(&root, assets.registry).unwrap();
         let resources = MotionResources::load(&root, &assets).unwrap();
         let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();

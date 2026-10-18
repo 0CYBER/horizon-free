@@ -2,7 +2,7 @@
 //! paddling controls, collisions, riding (`positionRider`, `clampRotation`,
 //! dismounting), `BoatItem` placement, `VehicleEntity.hurtServer` breaking,
 //! saving and `AbstractBoatRenderer` with animated paddles.
-use super::{Game, Keys, view_vector};
+use super::{Game, Keys, entity_culling::at, view_vector};
 use horizon_client::{
     blocks::Fluid,
     collisions::SceneCollisions,
@@ -180,11 +180,11 @@ impl BoatModels {
 }
 impl Game<'_> {
     fn fluid_height(&self, x: i32, y: i32, z: i32) -> Option<(f32, bool)> {
-        let f = self.res.facts.get(self.world.block(x, y, z));
+        let f = self.res.facts().get(self.world.block(x, y, z));
         if f.fluid != Fluid::Water {
             return None;
         }
-        let above = self.res.facts.get(self.world.block(x, y + 1, z));
+        let above = self.res.facts().get(self.world.block(x, y + 1, z));
         // FluidState.getHeight: 1 under the same fluid, else amount / 9.
         let height = if above.fluid == Fluid::Water {
             1.0
@@ -277,7 +277,7 @@ impl Game<'_> {
                     && f64::from(x + 1) > lo.x
                     && f64::from(z) < hi.z
                     && f64::from(z + 1) > lo.z;
-                let f = self.res.facts.get(self.world.block(x, y0, z));
+                let f = self.res.facts().get(self.world.block(x, y0, z));
                 if inside && (f.full_collision || f.legacy_solid) && !f.has_class("LilyPadBlock") {
                     friction += f.friction;
                     count += 1;
@@ -495,8 +495,8 @@ impl Game<'_> {
         );
         let top = b.bounds().max_position().y;
         let (bx, by, bz) = (x.floor() as i32, top.floor() as i32, z.floor() as i32);
-        let below = self.res.facts.get(self.world.block(bx, by - 1, bz));
-        let here = self.res.facts.get(self.world.block(bx, by, bz));
+        let below = self.res.facts().get(self.world.block(bx, by - 1, bz));
+        let here = self.res.facts().get(self.world.block(bx, by, bz));
         let target = if below.fluid != Fluid::Water
             && !here.full_collision
             && (below.full_collision || below.legacy_solid)
@@ -700,8 +700,19 @@ impl Game<'_> {
     /// AbstractBoatRenderer.
     pub(super) fn boat_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
         let a = alpha as f32;
+        let range = super::entity_culling::default_range(
+            glam::DVec3::new(WIDTH, HEIGHT, WIDTH),
+            self.settings.entity_distance,
+        );
         for b in &self.boats {
             let entity_start = out.len();
+            // EntityRenderer.shouldRender.
+            let (previous, position) = (at(b.previous), at(b.position));
+            if !self.standing_entity_in_view(
+                camera, previous, position, alpha, WIDTH, HEIGHT, range, 0.0,
+            ) {
+                continue;
+            }
             let models = if b.chest {
                 &self.boat_models.chest_models
             } else {
@@ -712,6 +723,7 @@ impl Game<'_> {
             };
             let folder = if b.chest { "chest_boat" } else { "boat" };
             let Some(uv) = self
+                .gui
                 .atlas
                 .sprites
                 .get(&format!("entity/{folder}/{}", b.wood))

@@ -88,6 +88,28 @@ impl PackedStorage {
         Ok(((self.words[word] >> shift) & self.mask) as u32)
     }
 
+    /// Reads `index` without a bounds check. Callers use this once they hold a
+    /// slice length or a section index they have already validated.
+    /// `index` must be less than `len`.
+    pub fn read(&self, index: usize) -> u32 {
+        debug_assert!(index < self.len);
+        let word = index / self.per_word;
+        let shift = (index % self.per_word) * usize::from(self.bits);
+        ((self.words[word] >> shift) & self.mask) as u32
+    }
+
+    /// Writes `value` at `index` without revalidating either. `index` must be
+    /// less than `len` and `value` must fit `bits`, which holds for a section
+    /// palette index from the same container. Returns the previous value.
+    pub fn write(&mut self, index: usize, value: u32) -> u32 {
+        debug_assert!(index < self.len && u64::from(value) <= self.mask);
+        let word = index / self.per_word;
+        let shift = (index % self.per_word) * usize::from(self.bits);
+        let old = ((self.words[word] >> shift) & self.mask) as u32;
+        self.words[word] = (self.words[word] & !(self.mask << shift)) | (u64::from(value) << shift);
+        old
+    }
+
     /// Validation fails before mutation. Writes accept nonnegative Java ints;
     /// imported 32-bit words may still decode to any u32 bit pattern.
     pub fn set(&mut self, index: usize, value: u32) -> Result<u32, StorageError> {

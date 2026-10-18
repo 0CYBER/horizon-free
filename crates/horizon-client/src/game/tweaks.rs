@@ -70,15 +70,7 @@ impl Game<'_> {
     /// One ordinary click on a game slot. False when nothing took it.
     pub(super) fn tweak_click(&mut self, slot: usize, button: i32, input: Input) -> bool {
         if self.remote.is_some() {
-            let ordinal = match input {
-                Input::Pickup => 0,
-                Input::QuickMove => 1,
-                Input::Swap => 2,
-                Input::Clone => 3,
-                Input::Throw => 4,
-                Input::QuickCraft => 5,
-                Input::PickupAll => 6,
-            };
+            let ordinal = super::remote::input_ordinal(input);
             return self.remote_slot_click(slot, button as i8, ordinal);
         }
         if !self.menu_click(Some(slot), button, input) {
@@ -331,7 +323,7 @@ impl Game<'_> {
     /// The sort buttons: a bordered square with three bars, lighter under
     /// the cursor.
     pub(super) fn draw_sort_buttons(&self, batch: &mut HudBatch, ox: f32, oy: f32) {
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         for ((x, y), _) in self.sort_buttons() {
             let (x, y) = (ox + x, oy + y);
             let (cx, cy) = self.cursor;

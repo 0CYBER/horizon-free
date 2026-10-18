@@ -262,11 +262,12 @@ impl Flat {
         }
     }
     /// A section uploaded to `vertices` vertices from `start` of `page`: its
-    /// id, which its blocks now name.
+    /// id, which its blocks now name (written through `uploads` in `encoder`).
     pub fn add(
         &mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        uploads: &mut super::upload::Uploads,
         page: u32,
         start: u64,
         vertices: u64,
@@ -290,7 +291,12 @@ impl Flat {
         });
         let first = start / GRAIN;
         let ids = vec![id; vertices.div_ceil(GRAIN) as usize];
-        queue.write_buffer(&table.blocks, first * 4, bytemuck::cast_slice(&ids));
+        uploads.buffer(
+            encoder,
+            &table.blocks,
+            first * 4,
+            bytemuck::cast_slice(&ids),
+        );
         id
     }
     pub fn remove(&mut self, id: u32) {
