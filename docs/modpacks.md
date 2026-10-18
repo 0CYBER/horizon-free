@@ -447,9 +447,15 @@ Two cases the oracle fills in:
     written in). YUNG's Better Dungeons and Better Desert Temples turn a spawner or a
     placeholder block (gravel, bone block, yellow wool...) into a spawner of a fixed mob: that
     is vanilla's `rule` processor with an `append_static` block entity. Moog's vanilla loot
-    swap acts only when a "replace vanilla" preset is on, and they ship off. 119 of the 1,427
-    processors are carried; 1,308 are still taken out (blocks swapped, aged or propped up,
-    Moog's trial spawner and vault configs, YUNG's chest caps).
+    swap acts only when a "replace vanilla" preset is on, and they ship off. Moog's trial
+    spawner and vault processors keep the block and change its block entity: one `rule` per
+    block state, with the game's `horizon:edit` modifier, which takes out the state the
+    template was saved with (a vault saved with `state_updating_resumes_at` far in the future
+    never opens; a spawner's saved `spawn_data` blocks its own mobs) and merges in the
+    spawner's normal and ominous configs (by id: the carry upgrades `trial_spawner/` files'
+    mobs to 26.3's `equipment`) or the vault's loot table and key. 125 of the 1,427
+    processors are carried; 1,302 are still taken out (blocks swapped, aged or propped up,
+    YUNG's chest caps).
     In the 128×128-chunk square (seed 1234), every spawner of a mod structure now has its mob:
     in the Overworld 83 Better Dungeons spawners held the template's placeholder pig and 17 of
     Moog's were empty (763 spawners with a mob, up from 628); in the Nether the 52 empty ones

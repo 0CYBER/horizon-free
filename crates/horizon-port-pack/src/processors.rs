@@ -236,9 +236,175 @@ fn as_data(kind: &str, p: &Value, data: &ProcessorData) -> Option<Vec<Value>> {
             }
             Vec::new()
         }
+        "moogs_structures:trial_spawner_randomizing_processor" => {
+            // The configs by id: 26.3 reads them from `trial_spawner/`, the
+            // folder Moog's loads them from.
+            let mut nbt = json!({"normal_config": p["normal_config"].as_str()?});
+            if let Some(ominous) = p["ominous_config"].as_str() {
+                nbt["ominous_config"] = ominous.into();
+            }
+            // The state the template was saved with goes.
+            let saved = [
+                "server_data",
+                "shared_data",
+                "spawn_data",
+                "cooldown_end_at_tick",
+                "next_mob_spawns_at",
+            ];
+            vec![same_state_rule(&TRIAL_SPAWNER_STATES, &saved, |_| {
+                nbt.clone()
+            })]
+        }
+        "moogs_structures:vault_randomizing_processor" => {
+            let normal = p["loot_table"].as_str()?;
+            let config = |ominous: bool| {
+                let (table, key) = match ominous {
+                    true => (
+                        p["ominous_loot_table"].as_str().unwrap_or(normal),
+                        p["ominous_key_item"]
+                            .as_str()
+                            .unwrap_or("minecraft:ominous_trial_key"),
+                    ),
+                    false => (
+                        normal,
+                        p["key_item"].as_str().unwrap_or("minecraft:trial_key"),
+                    ),
+                };
+                // Merged into the vault's config, as the mod puts both in.
+                json!({"config": {"loot_table": table, "key_item": {"id": key, "count": 1}}})
+            };
+            vec![same_state_rule(
+                &VAULT_STATES,
+                &["server_data", "shared_data"],
+                |s| config(s.get("ominous") == Some(&"true")),
+            )]
+        }
         _ if ns == "betterdungeons" || ns == "betterdeserttemples" => vec![yung_spawner(kind, p)?],
         _ => return None,
     })
+}
+
+/// A block's states, as (block, [(property, values)]).
+type States = (
+    &'static str,
+    &'static [(&'static str, &'static [&'static str])],
+);
+const TRIAL_SPAWNER_STATES: States = (
+    "minecraft:trial_spawner",
+    &[
+        (
+            "trial_spawner_state",
+            &[
+                "inactive",
+                "waiting_for_players",
+                "active",
+                "waiting_for_reward_ejection",
+                "ejecting_reward",
+                "cooldown",
+            ],
+        ),
+        ("ominous", &["false", "true"]),
+    ],
+);
+const VAULT_STATES: States = (
+    "minecraft:vault",
+    &[
+        ("facing", &["north", "south", "west", "east"]),
+        (
+            "vault_state",
+            &["inactive", "active", "unlocking", "ejecting"],
+        ),
+        ("ominous", &["false", "true"]),
+    ],
+);
+
+/// Moog's trial spawner and vault processors keep the block, take keys out
+/// of its block entity and set others. As vanilla's `rule`: one rule per
+/// state of the block, matching it and writing it back, with the game's
+/// `horizon:edit` modifier taking out `remove` and merging `nbt(state)` in.
+fn same_state_rule(
+    states: &States,
+    remove: &[&str],
+    nbt: impl Fn(&BTreeMap<&str, &str>) -> Value,
+) -> Value {
+    let (block, properties) = states;
+    let mut all = vec![BTreeMap::new()];
+    for (key, values) in properties.iter() {
+        all = all
+            .into_iter()
+            .flat_map(|s| {
+                values.iter().map(move |v| {
+                    let mut s = s.clone();
+                    s.insert(*key, *v);
+                    s
+                })
+            })
+            .collect();
+    }
+    let rules: Vec<Value> = all
+        .iter()
+        .map(|s| {
+            let state = json!({"id": block, "properties": s});
+            json!({
+                "input_predicate": {"predicate_type": "minecraft:blockstate_match", "block_state": state},
+                "location_predicate": {"predicate_type": "minecraft:always_true"},
+                "output_state": state,
+                "block_entity_modifier": {"type": "horizon:edit", "remove": remove, "data": nbt(s)},
+            })
+        })
+        .collect();
+    json!({"processor_type": "minecraft:rule", "rules": rules})
+}
+
+/// An entity's NBT in 26.3's shape, in place: 1.21.1's `ArmorItems` (feet
+/// to head), `HandItems` (main hand, off hand) and their drop chances become
+/// `equipment` and `drop_chances` by slot; empty items and the default drop
+/// chance (0.085) are left out, as 26.3 saves them. Whether it changed.
+pub fn upgrade_entity(entity: &mut Value) -> bool {
+    let Some(o) = entity.as_object_mut() else {
+        return false;
+    };
+    const ARMOR: [&str; 4] = ["feet", "legs", "chest", "head"];
+    const HANDS: [&str; 2] = ["mainhand", "offhand"];
+    let mut changed = false;
+    for (items, chances, slots) in [
+        ("ArmorItems", "ArmorDropChances", &ARMOR[..]),
+        ("HandItems", "HandDropChances", &HANDS[..]),
+    ] {
+        if let Some(Value::Array(list)) = o.remove(items) {
+            changed = true;
+            for (slot, item) in slots.iter().zip(list) {
+                if item.get("id").is_some() {
+                    let equipment = o.entry("equipment").or_insert_with(|| json!({}));
+                    equipment[*slot] = item;
+                }
+            }
+        }
+        if let Some(Value::Array(list)) = o.remove(chances) {
+            changed = true;
+            for (slot, chance) in slots.iter().zip(list) {
+                if chance.as_f64().is_some_and(|c| (c - 0.085).abs() > 1e-6) {
+                    let drop = o.entry("drop_chances").or_insert_with(|| json!({}));
+                    drop[*slot] = chance;
+                }
+            }
+        }
+    }
+    changed
+}
+
+/// A 1.21.1 trial spawner config (`trial_spawner/`) in 26.3's shape, in
+/// place: its mobs' NBT ([`upgrade_entity`]). Whether it changed.
+pub fn upgrade_trial_spawner(config: &mut Value) -> bool {
+    let mut changed = false;
+    for p in config["spawn_potentials"]
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+    {
+        changed |= upgrade_entity(&mut p["data"]["entity"]);
+    }
+    changed
 }
 
 /// [`as_data`]'s `horizon:spawner_mobs` for the mods' spawner randomizing
@@ -544,6 +710,67 @@ mod tests {
         assert_eq!(wither["drop_chances"]["feet"], 0.0);
         assert_eq!(p[3]["processor_type"], "betterdungeons:candle_processor");
         assert_eq!(carried.values().sum::<usize>(), 3);
+    }
+
+    #[test]
+    fn trial_spawners_and_vaults_drop_their_saved_state() {
+        let mut list = json!({"processors": [
+            {"processor_type": "moogs_structures:trial_spawner_randomizing_processor",
+             "normal_config": "mns:arena/normal", "ominous_config": "mns:arena/ominous"},
+            {"processor_type": "moogs_structures:vault_randomizing_processor",
+             "loot_table": "mns:vaults/main", "ominous_loot_table": "mns:vaults/ominous"}]});
+        let mut carried = BTreeMap::new();
+        assert!(carry("processor_list", &mut list, &data(), &mut carried));
+        let p = list["processors"].as_array().unwrap();
+        let rules = |i: usize| p[i]["rules"].as_array().unwrap().clone();
+        // Every state of the block: 6 x 2 trial spawners, 4 x 4 x 2 vaults.
+        assert_eq!((rules(0).len(), rules(1).len()), (12, 32));
+        let spawner = &rules(0)[0];
+        assert_eq!(
+            spawner["input_predicate"]["block_state"],
+            spawner["output_state"]
+        );
+        assert_eq!(
+            spawner["block_entity_modifier"],
+            json!({"type": "horizon:edit",
+                   "remove": ["server_data", "shared_data", "spawn_data",
+                              "cooldown_end_at_tick", "next_mob_spawns_at"],
+                   "data": {"normal_config": "mns:arena/normal",
+                            "ominous_config": "mns:arena/ominous"}})
+        );
+        for rule in rules(1) {
+            let ominous = rule["output_state"]["properties"]["ominous"] == "true";
+            let (table, key) = match ominous {
+                true => ("mns:vaults/ominous", "minecraft:ominous_trial_key"),
+                false => ("mns:vaults/main", "minecraft:trial_key"),
+            };
+            assert_eq!(
+                rule["block_entity_modifier"],
+                json!({"type": "horizon:edit", "remove": ["server_data", "shared_data"],
+                       "data": {"config": {"loot_table": table,
+                                           "key_item": {"id": key, "count": 1}}}})
+            );
+        }
+        assert_eq!(carried.len(), 2);
+    }
+
+    #[test]
+    fn trial_spawner_mobs_take_26_3s_equipment() {
+        let mut config = json!({"spawn_potentials": [{"weight": 1, "data": {"entity": {
+            "id": "minecraft:skeleton",
+            "ArmorItems": [{}, {}, {}, {"id": "minecraft:iron_helmet", "count": 1}],
+            "ArmorDropChances": [0.085, 0.085, 0.085, 0.0],
+            "HandItems": [{"id": "minecraft:bow", "count": 1}, {}],
+            "HandDropChances": [0.085, 0.085]}}}]});
+        assert!(upgrade_trial_spawner(&mut config));
+        assert_eq!(
+            config["spawn_potentials"][0]["data"]["entity"],
+            json!({"id": "minecraft:skeleton",
+                   "equipment": {"head": {"id": "minecraft:iron_helmet", "count": 1},
+                                 "mainhand": {"id": "minecraft:bow", "count": 1}},
+                   "drop_chances": {"head": 0.0}})
+        );
+        assert!(!upgrade_trial_spawner(&mut config));
     }
 
     #[test]
