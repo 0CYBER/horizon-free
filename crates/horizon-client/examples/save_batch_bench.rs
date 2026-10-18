@@ -66,7 +66,6 @@ fn fixture(per_chunk: usize) -> (Vec<Arc<Chunk>>, Entities, Names) {
     for s in &mut template.sections[..8] {
         Arc::make_mut(s).blocks = PalettedContainer::new(block_strategy(), 1);
     }
-    template.heights = Arc::new([64; 256]);
     for i in 0..256 {
         let x = i % 16 - 8;
         let z = i / 16 - 8;
