@@ -1556,6 +1556,7 @@ dependencies = [
 name = "horizon-server"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "horizon-bench",
  "horizon-server-files",
  "libc",
