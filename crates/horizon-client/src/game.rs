@@ -9979,6 +9979,10 @@ impl ApplicationHandler for Game<'_> {
                     self.pause = self.pauses_game();
                     if let Some(server) = &self.integrated {
                         server.set_paused(self.pause);
+                        server.set_distances(
+                            self.settings.render_distance,
+                            self.settings.simulation_distance,
+                        );
                     }
                     self.clock.end_frame(self.pause);
                     let finished = self

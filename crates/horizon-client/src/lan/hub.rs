@@ -299,6 +299,22 @@ impl Hub {
             g.sender.send(body.clone());
         }
     }
+    /// PlayerList.setViewDistance: every player is told the new radius,
+    /// and each one's chunks follow it, up to what they asked for
+    /// (ChunkMap.getPlayerViewDistance).
+    pub fn set_view_distance(&mut self, distance: i32) {
+        self.config.view_distance = distance;
+        self.broadcast(&C::SetChunkCacheRadius(play::Distance { distance }));
+        for g in &mut self.guests {
+            g.view_distance = i32::from(g.info.view_distance).clamp(2, distance);
+            g.center = None;
+        }
+    }
+    /// PlayerList.setSimulationDistance.
+    pub fn set_simulation_distance(&mut self, distance: i32) {
+        self.config.simulation_distance = distance;
+        self.broadcast(&C::SetSimulationDistance(play::Distance { distance }));
+    }
     /// Whether a guest is placed in the level in place (`config.dimension`).
     pub fn here(&self, g: &Guest) -> bool {
         g.placed && g.dimension == self.config.dimension

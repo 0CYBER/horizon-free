@@ -23,6 +23,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              opens as 9x6 with the right half first;
 - feedback:  the guest's command feedback names the guest and shows the numbers;
 - effects:   a beacon's power reaches every player in range, the host and the guest;
+- distance:  (--server-thread) the server follows the host's render distance, past vanilla's 32 too
+             (IntegratedServer.tickServer), and the guest's chunks follow the server's (#804)
 - portals:   (--server-thread) the server holds a level per dimension: the guest goes to the Nether
              through a portal while the host stays, then the host goes to the End while the guest is in
              the Nether, and both come back.
@@ -79,7 +81,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'titles', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'push', 'eat', 'xp', 'objects', 'projectiles', 'effects', 'portals']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'titles', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'push', 'eat', 'xp', 'objects', 'projectiles', 'effects', 'portals', 'distance']
 
 
 class Game:
@@ -192,7 +194,7 @@ def check_armour(host, guest, out):
     face_each_other(host, guest)
     host.shot(out, 'armour')
     guest.shot(out, 'armour')
-    seen = host.raw('lan', 'status')['guests'][0].get('model_armor')
+    seen = lan_guest(host).get('model_armor')
     assert seen == [None, 'minecraft:diamond_chestplate', 'minecraft:diamond_leggings', None], \
         f'the host draws the guest in {seen}'
     host_gear = [e for e in remote(guest).get('player_equipment', [])]
@@ -355,6 +357,33 @@ def nether_portal(game, x, y, z):
     game('command', command=f'fill {x} {y} {z} {x + 1} {y + 2} {z} minecraft:nether_portal[axis=x]')
 
 
+def lan_guest(host):
+    """The guest's entry in the host's `lan status` (on the server thread the owner is listed too)."""
+    guests = host.raw('lan', 'status')['guests']
+    return next(g for g in guests if g['name'] == GUEST_NAME)
+
+def check_distance(host, guest, out):
+    """IntegratedServer.tickServer: the server takes the host's render distance as its view distance
+    (past 32, which Horizon's options allow) and sends it to every player (SetChunkCacheRadius)."""
+    if not SERVER_THREAD:
+        return 'skipped (needs --server-thread)'
+    seen = {}
+    try:
+        for distance in (48, 6):
+            host.raw('render-distance', distance)
+            # The pause screen doesn't hold the server here: it follows on its next tick.
+            host.wait(20)
+            guest.wait(20)
+            seen[distance] = (host('status').get('render_distance'), guest('status').get('render_distance'))
+    finally:
+        host.raw('render-distance', 12)
+    # A client streams out to min(its render distance, the server's view distance + 1).
+    assert seen[48][0] == 48, f'the host at 48 streams {seen[48][0]} chunks out (all: {seen})'
+    assert seen[6][0] == 6, f'the host at 6 streams {seen[6][0]} chunks out (all: {seen})'
+    assert seen[6][1] == 7, f'the guest streams {seen[6][1]} with the server at 6 (all: {seen})'
+    return seen
+
+
 def check_portals(host, guest, out):
     if not SERVER_THREAD:
         return 'skipped (needs --server-thread)'
@@ -470,14 +499,14 @@ def check_hazards(host, guest, out):
     guest.wait(10)
     x, y, z = pos_of(guest)
     guest.raw('look-at', f'{x + 60:.2f}', f'{y + 1.6:.2f}', f'{z:.2f}')
-    food = host.raw('lan', 'status')['guests'][0]['food']
+    food = lan_guest(host)['food']
     for k in ('w', 'ctrl', 'space'):
         guest.raw('key', k, 'down')
     guest.wait(160)
     for k in ('space', 'ctrl', 'w'):
         guest.raw('key', k, 'up')
     guest.wait(10)
-    fed = host.raw('lan', 'status')['guests'][0]['food']
+    fed = lan_guest(host)['food']
     hunger = {'before': food, 'after': fed}
     hurt = {}
     hx, hy, hz = (int(v // 1) for v in pos_of(host))
@@ -865,7 +894,7 @@ def changed_pixels(a, b):
 def sneaking_on_host(host, want, ticks=40):
     """Whether the host sees the guest crouching, once it matches `want` or after `ticks`."""
     for _ in range(ticks // 5):
-        sneaking = host.raw('lan', 'status')['guests'][0]['sneaking']
+        sneaking = lan_guest(host)['sneaking']
         if sneaking == want:
             return sneaking
         host.wait(5)
@@ -988,7 +1017,7 @@ def check_sleep(host, guest, out):
     guest.raw('interact', *guest_bed)
     guest.wait(10)
     asleep = {'guest': guest('state').get('sleeping'), 'host': host('state').get('sleeping'),
-              'server': host.raw('lan', 'status')['guests'][0].get('sleeping')}
+              'server': lan_guest(host).get('sleeping')}
     guest.shot(out, 'sleep-guest')
     # Alone in bed: still night 120 ticks later (everyone must sleep).
     guest.wait(120)
@@ -1178,7 +1207,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'containers': check_containers, 'feedback': check_feedback, 'titles': check_titles,
              'commands': check_commands,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,
-             'effects': check_effects, 'portals': check_portals, 'clicks': check_clicks,
+             'effects': check_effects, 'portals': check_portals, 'distance': check_distance, 'clicks': check_clicks,
              'sleep': check_sleep, 'push': check_push, 'eat': check_eat,
              'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles}
 
