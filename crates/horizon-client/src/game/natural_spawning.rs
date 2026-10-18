@@ -198,10 +198,14 @@ impl NaturalLevel for GameLevel<'_, '_> {
     fn spawn_mobs(&self) -> bool {
         self.game.ui.rules.bool("spawn_mobs")
     }
-    /// Scanned down the column: sections of air alone are skipped (air counts
-    /// for no heightmap), and an unloaded column reads as air.
+    /// WORLD_SURFACE (every spawn attempt's) is the chunk's kept heightmap.
+    /// The others are scanned down the column: sections of air alone are
+    /// skipped (air counts for no heightmap). An unloaded column reads as air.
     fn heightmap(&self, kind: Heightmap, x: i32, z: i32) -> i32 {
         let world = self.w.world;
+        if kind == Heightmap::WorldSurface {
+            return self.w.world_surface(x, z);
+        }
         world
             .chunks
             .get(&(x >> 4, z >> 4))

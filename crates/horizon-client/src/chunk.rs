@@ -3,7 +3,7 @@
 //! (copy-on-write through `Arc::make_mut`).
 use horizon_core::paletted::{PalettedContainer, Strategy};
 use horizon_world::registry::BlockStateId;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 pub const MIN_Y: i32 = -64;
 pub const HEIGHT: i32 = 384;
@@ -43,6 +43,10 @@ impl Light {
             Self::Full(a) => a[i],
         }
     }
+}
+#[inline]
+fn column(x: i32, z: i32) -> usize {
+    ((z & 15) << 4 | (x & 15)) as usize
 }
 #[inline]
 pub fn index(x: i32, y: i32, z: i32) -> usize {
@@ -118,8 +122,10 @@ pub struct Chunk {
     pub x: i32,
     pub z: i32,
     pub sections: Vec<Arc<Section>>,
-    /// Highest non-air, light-blocking-or-fluid Y per column (MOTION_BLOCKING-like), for rain/sky.
-    pub heights: Arc<[i16; 256]>,
+    /// `Heightmap.Types.WORLD_SURFACE` per column (`z << 4 | x`): one above
+    /// the highest non-air block, or `MIN_Y`. Built on the first read; a
+    /// `set` that can move a column's surface drops it.
+    surface: OnceLock<Box<[i16; 256]>>,
     pub lit: bool,
     /// Light read from a save with `isLightOn`: no light job is needed.
     pub light_loaded: bool,
@@ -148,7 +154,7 @@ impl Chunk {
             sections: (0..SECTIONS)
                 .map(|_| Arc::new(Section::default()))
                 .collect(),
-            heights: Arc::new([MIN_Y as i16; 256]),
+            surface: OnceLock::new(),
             lit: false,
             light_loaded: false,
             fresh: false,
@@ -190,7 +196,52 @@ impl Chunk {
         if !(0..SECTIONS as i32).contains(&s) {
             return v;
         }
-        Arc::make_mut(&mut self.sections[s as usize]).set(index(x, y, z), v)
+        let previous = Arc::make_mut(&mut self.sections[s as usize]).set(index(x, y, z), v);
+        // `Heightmap.update`: a write two or more below the surface can't
+        // move it. Any other change rebuilds the map on the next read.
+        if previous != v
+            && let Some(surface) = self.surface.get()
+            && y >= i32::from(surface[column(x, z)]) - 1
+        {
+            self.surface = OnceLock::new();
+        }
+        previous
+    }
+    /// `getHeight(Heightmap.Types.WORLD_SURFACE, x, z)` (`x`, `z` within the
+    /// chunk): one above the highest block that isn't `air`, or `MIN_Y`.
+    /// Sections must change only through `set` once this has been read.
+    pub fn world_surface(&self, x: i32, z: i32, air: impl Fn(u32) -> bool) -> i32 {
+        let surface = self.surface.get_or_init(|| self.prime_surface(air));
+        i32::from(surface[column(x, z)])
+    }
+    /// `Heightmap.primeHeightmaps` for WORLD_SURFACE: each section from the
+    /// top, skipping those of one air state, until every column is found.
+    fn prime_surface(&self, air: impl Fn(u32) -> bool) -> Box<[i16; 256]> {
+        let mut surface = Box::new([MIN_Y as i16; 256]);
+        let mut found = [false; 256];
+        let mut left = 256;
+        let mut values = [0u32; 4096];
+        for (s, section) in self.sections.iter().enumerate().rev() {
+            if left == 0 {
+                break;
+            }
+            if section.blocks.uniform().is_some_and(&air) {
+                continue;
+            }
+            section.unpack(&mut values);
+            let base = MIN_Y + s as i32 * 16;
+            for i in 0..256 {
+                if found[i] {
+                    continue;
+                }
+                if let Some(dy) = (0..16).rev().find(|&dy| !air(values[dy << 8 | i])) {
+                    surface[i] = (base + dy as i32 + 1) as i16;
+                    found[i] = true;
+                    left -= 1;
+                }
+            }
+        }
+        surface
     }
     #[inline]
     pub fn light(&self, x: i32, y: i32, z: i32) -> u8 {
@@ -260,5 +311,51 @@ mod tests {
             Some(150)
         );
         assert_eq!(Chunk::empty(0, 0).highest(air, |_| unreachable!()), None);
+    }
+    /// The kept WORLD_SURFACE heights match a scan of every column after
+    /// each of a few thousand writes (air, cave air, stone, whole sections).
+    #[test]
+    fn world_surface_follows_writes() {
+        let (air, cave_air, stone) = (0, 7, 1);
+        let is_air = |v: u32| v == air || v == cave_air;
+        let scan = |c: &Chunk, x: i32, z: i32| {
+            (MIN_Y..MIN_Y + HEIGHT)
+                .rev()
+                .find(|&y| !is_air(c.get(x, y, z)))
+                .map_or(MIN_Y, |y| y + 1)
+        };
+        let mut chunk = Chunk::empty(0, 0);
+        assert_eq!(chunk.world_surface(5, 5, is_air), MIN_Y);
+        for y in MIN_Y..MIN_Y + 70 {
+            for i in 0..256 {
+                chunk.set(i & 15, y, i >> 4, stone);
+            }
+        }
+        for i in 0..4096 {
+            Arc::make_mut(&mut chunk.sections[8]).set(i, cave_air);
+        }
+        let mut random = horizon_core::random::LegacyRandom::new(9);
+        use horizon_core::random::RandomSource;
+        for step in 0..4000 {
+            let x = random.next_int_bound(16).unwrap();
+            let z = random.next_int_bound(16).unwrap();
+            let y = MIN_Y + 40 + random.next_int_bound(120).unwrap();
+            let v = [air, cave_air, stone][random.next_int_bound(3).unwrap() as usize];
+            chunk.set(x, y, z, v);
+            if step % 7 == 0 {
+                for i in 0..256 {
+                    assert_eq!(
+                        chunk.world_surface(i & 15, i >> 4, is_air),
+                        scan(&chunk, i & 15, i >> 4)
+                    );
+                }
+            }
+        }
+        // Out-of-range writes and unchanged states keep the map.
+        let before = chunk.world_surface(3, 3, is_air);
+        chunk.set(3, MIN_Y + HEIGHT, 3, stone);
+        chunk.set(3, before - 1, 3, chunk.get(3, before - 1, 3));
+        assert!(chunk.surface.get().is_some());
+        assert_eq!(chunk.world_surface(3, 3, |_| unreachable!()), before);
     }
 }
