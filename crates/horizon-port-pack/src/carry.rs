@@ -205,6 +205,29 @@ pub fn upgrade_recipe(recipe: &mut Value) -> bool {
     true
 }
 
+/// Block and item ids vanilla renamed after 1.21.1, as its datafixers
+/// rename them in worlds (DataVersion 4541: the chain became the iron chain
+/// when copper chains came in). A data file naming the old id fails to load
+/// in 26.3: a recipe, a loot entry, a processor's block match.
+const RENAMED_IDS: [(&str, &str); 1] = [("minecraft:chain", "minecraft:iron_chain")];
+
+/// Every string of a data file that is a renamed id ([`RENAMED_IDS`]) set to
+/// the new one, in place; whether any was.
+pub fn renamed_ids(v: &mut Value) -> bool {
+    match v {
+        Value::String(s) => match RENAMED_IDS.iter().find(|(old, _)| s == old) {
+            Some((_, new)) => {
+                *s = (*new).to_owned();
+                true
+            }
+            None => false,
+        },
+        Value::Array(a) => a.iter_mut().fold(false, |c, x| renamed_ids(x) | c),
+        Value::Object(o) => o.values_mut().fold(false, |c, x| renamed_ids(x) | c),
+        _ => false,
+    }
+}
+
 /// A 1.21.1 loot table in 26.3's shape, in place: `conditions` lists become
 /// one `condition` (`all_of` for several), `functions` become `modifier`,
 /// and conditions and functions name their kind in `type`. A tool match on
@@ -410,11 +433,15 @@ pub fn carry(
             {
                 if let Ok(mut recipe) = serde_json::from_slice::<Value>(&bytes) {
                     tags_used(&recipe, &mut convention);
-                    if upgrade_recipe(&mut recipe) {
+                    let renamed = renamed_ids(&mut recipe);
+                    let upgraded = upgrade_recipe(&mut recipe);
+                    if upgraded {
                         report.recipes_upgraded += 1;
-                        bytes = serde_json::to_vec_pretty(&recipe).unwrap_or(bytes);
                     } else {
                         report.recipes_kept.push(file.to_owned());
+                    }
+                    if upgraded || renamed {
+                        bytes = serde_json::to_vec_pretty(&recipe).unwrap_or(bytes);
                     }
                 }
             } else if let Some(kind) = rel
@@ -433,6 +460,10 @@ pub fn carry(
                         &mut v,
                         &processor_data,
                         &mut types.processors_carried,
+                    ) | crate::processors::rule_tests(
+                        kind,
+                        &mut v,
+                        &mut types.rule_tests_carried,
                     );
                     let mut changed =
                         crate::worldgen::upgrade(kind, &mut v, types, &set_tags) || carried;
@@ -463,6 +494,7 @@ pub fn carry(
                         &processor_data,
                         &mut types.processors_carried,
                     );
+                    crate::processors::rule_tests(kind, &mut added, &mut types.rule_tests_carried);
                     crate::worldgen::upgrade(kind, &mut added, types, &set_tags);
                     let to = format!(
                         "data/{id}/worldgen/{kind}/{}/{path}",
@@ -472,6 +504,16 @@ pub fn carry(
                         &inside.join(to),
                         &serde_json::to_vec_pretty(&added).unwrap_or_default(),
                     )?;
+                }
+            } else if rel.starts_with("trial_spawner/")
+                && name.starts_with("data/")
+                && name.ends_with(".json")
+            {
+                // Trial spawner configs (Moog's arenas): their mobs' NBT.
+                if let Ok(mut config) = serde_json::from_slice::<Value>(&bytes)
+                    && crate::processors::upgrade_trial_spawner(&mut config)
+                {
+                    bytes = serde_json::to_vec_pretty(&config).unwrap_or(bytes);
                 }
             } else if rel.starts_with("tags/worldgen/biome/") && name.starts_with("data/") {
                 if let Ok(v) = serde_json::from_slice::<Value>(&bytes) {
@@ -487,6 +529,7 @@ pub fn carry(
                 if let Ok(mut table) = serde_json::from_slice::<Value>(&bytes) {
                     let before = table.clone();
                     upgrade_loot(&mut table);
+                    renamed_ids(&mut table);
                     if table != before {
                         report.loot_tables_upgraded += 1;
                         bytes = serde_json::to_vec_pretty(&table).unwrap_or(bytes);
@@ -807,6 +850,27 @@ mod tests {
         let mut new = glass.clone();
         upgrade_loot(&mut new);
         assert_eq!(new, glass);
+    }
+
+    #[test]
+    fn renames_ids_vanilla_renamed() {
+        let mut recipe = json!({"type": "minecraft:crafting_shaped", "pattern": ["c"],
+            "key": {"c": {"item": "minecraft:chain"}}, "result": {"id": "m:sign", "count": 1}});
+        assert!(renamed_ids(&mut recipe));
+        assert_eq!(recipe["key"]["c"]["item"], "minecraft:iron_chain");
+        let mut rule = json!({"input_predicate": {"predicate_type": "minecraft:block_match",
+            "block": "minecraft:chain"}, "output_state": {"id": "minecraft:chain",
+            "properties": {"axis": "y"}}});
+        assert!(renamed_ids(&mut rule));
+        assert_eq!(rule["input_predicate"]["block"], "minecraft:iron_chain");
+        assert_eq!(rule["output_state"]["id"], "minecraft:iron_chain");
+        // Only whole ids: other blocks and mods' own chains stay.
+        let mut other = json!([
+            "minecraft:chain_command_block",
+            "m:chain",
+            "minecraft:iron_chain"
+        ]);
+        assert!(!renamed_ids(&mut other));
     }
 
     #[test]

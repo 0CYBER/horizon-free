@@ -447,14 +447,42 @@ Two cases the oracle fills in:
     written in). YUNG's Better Dungeons and Better Desert Temples turn a spawner or a
     placeholder block (gravel, bone block, yellow wool...) into a spawner of a fixed mob: that
     is vanilla's `rule` processor with an `append_static` block entity. Moog's vanilla loot
-    swap acts only when a "replace vanilla" preset is on, and they ship off. 119 of the 1,427
-    processors are carried; 1,308 are still taken out (blocks swapped, aged or propped up,
-    Moog's trial spawner and vault configs, YUNG's chest caps).
+    swap acts only when a "replace vanilla" preset is on, and they ship off. Moog's trial
+    spawner and vault processors keep the block and change its block entity: one `rule` per
+    block state, with the game's `horizon:edit` modifier, which takes out the state the
+    template was saved with (a vault saved with `state_updating_resumes_at` far in the future
+    never opens; a spawner's saved `spawn_data` blocks its own mobs) and merges in the
+    spawner's normal and ominous configs (by id: the carry upgrades `trial_spawner/` files'
+    mobs to 26.3's `equipment`) or the vault's loot table and key. Better Desert Temples'
+    placeholder blocks (orange, red and white glass, blue and yellow concrete, red wool,
+    polished diorite, blank pots) become what its processors make of them: the fixed swaps as
+    vanilla's `rule`, the random ones (suspicious sand, sand and sandstone, upside-down stairs,
+    cobwebs, sherds on the pots) as the game's `horizon:pick`, on the same `nextFloat` as the
+    mod. Better Dungeons' small dungeons keep one chest and each other one with a fifth's
+    chance, two at most (the game's `horizon:count_cap`, counted per placement as the mod's
+    DungeonContext is): 12 chests in five small dungeons at seed 1234 become 6.
+    Lithostitched's `block_swap` (137 lists, all in ChoiceTheorem's Overhauled Village) is the
+    game's `horizon:block_swap`: the same map, with Block.withPropertiesOf's properties kept;
+    a target block the game does not have (most of them are Nature's Spirit's and Croptopia's)
+    leaves the block as it is, as the mod does. 273 of the 1,427 processors are carried; 1,154
+    are still taken out (Formations' biome replacements, Repurposed's pillars and fluid fixes,
+    Lithostitched's reference, condition and apply_random, blocks aged or propped up).
     In the 128×128-chunk square (seed 1234), every spawner of a mod structure now has its mob:
     in the Overworld 83 Better Dungeons spawners held the template's placeholder pig and 17 of
     Moog's were empty (763 spawners with a mob, up from 628); in the Nether the 52 empty ones
     in Moog's Nether Structures are filled (162, up from 110). Chests are unchanged: 2,777
     and 1,405 with a loot table.
+  - **Rule tests** written in Java. Repurposed Structures' mineshafts and Nether monument test
+    blocks with three of the mod's own rule tests inside vanilla `rule` processors: what a
+    block is made of (solid, liquid, air, with rails and chains), a chance over the distance
+    from the template's origin along one axis, and a world height range. The game runs them
+    as `horizon:matter_phase`, `horizon:piece_origin_axis_aligned_linear_pos` and
+    `horizon:y_value` with the mod's fields, and carry renames them (213 in 75 lists).
+  - **Renamed ids.** 26.3 calls 1.21.1's chain the iron chain (its datafixers rename it in
+    worlds). Carry renames it in recipes, loot tables and worldgen files (112 files in 5 mods:
+    Repurposed's mineshafts, Better Dungeons' processors, Regions Unexplored's hanging sign
+    recipes...), which otherwise fail to load in 26.3. With both, the 5 Nether mineshaft pools load: 47 of
+    Repurposed's Nether mineshafts in the 128×128-chunk square (seed 1234), under the lava sea.
   - **Big templates** (#838). Vanilla reads structure templates with no limit on their tag
     count; Horizon now does too (`nbt::Limits::templates`). Seven of ATM10's 8,962 carried
     templates are past the old 1,000,000-tag cap: YUNG's monument start, four When Dungeons

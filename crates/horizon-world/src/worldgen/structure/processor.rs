@@ -49,6 +49,22 @@ enum PosRule {
         max_dist: i32,
         axis: Option<usize>,
     },
+    /// `horizon:piece_origin_axis_aligned_linear_pos`: Repurposed Structures'
+    /// PieceOriginAxisAlignedLinearPosRuleTest, vanilla's axis-aligned chance
+    /// over the block's distance from the template's origin along one axis.
+    PieceOrigin {
+        min_chance: f32,
+        max_chance: f32,
+        min_dist: i32,
+        max_dist: i32,
+        axis: usize,
+    },
+    /// `horizon:y_value`: Repurposed Structures' YValuePosRuleTest, the
+    /// block's world height in `min_y_value..=max_y_value`.
+    YValue {
+        min: i32,
+        max: i32,
+    },
 }
 #[derive(Clone, Debug)]
 enum Modifier {
@@ -56,6 +72,14 @@ enum Modifier {
     Clear,
     AppendLoot(String),
     AppendStatic(Compound),
+    /// `horizon:edit`: `remove`'s keys taken out of the block entity, then
+    /// `data` merged in as append_static does. The data form of the mods'
+    /// processors that copy a block entity and change parts of it (Moog's
+    /// trial spawners and vaults drop their saved state).
+    Edit {
+        remove: Vec<String>,
+        data: Compound,
+    },
 }
 impl PosRule {
     /// A rule's `position_predicate` (always true when missing). Types are
@@ -83,8 +107,96 @@ impl PosRule {
                     }
                 }),
             },
+            "horizon:piece_origin_axis_aligned_linear_pos" => {
+                let int = |key| p.get(key).and_then(Value::as_i64).unwrap_or(0) as i32;
+                let (min_dist, max_dist) = (int("min_dist"), int("max_dist"));
+                if min_dist >= max_dist {
+                    return Err(DecodeError::Field("position predicate distance range"));
+                }
+                Self::PieceOrigin {
+                    min_chance: p.get("min_chance").and_then(Value::as_f64).unwrap_or(0.) as f32,
+                    max_chance: p.get("max_chance").and_then(Value::as_f64).unwrap_or(0.) as f32,
+                    min_dist,
+                    max_dist,
+                    axis: match p.get("axis").map(|a| a.as_str()) {
+                        Some(Some("x")) => 0,
+                        None | Some(Some("y")) => 1,
+                        Some(Some("z")) => 2,
+                        _ => return Err(DecodeError::Field("position predicate axis")),
+                    },
+                }
+            }
+            "horizon:y_value" => {
+                let int = |key| {
+                    p.get(key)
+                        .and_then(Value::as_i64)
+                        .map(|v| v as i32)
+                        .ok_or(DecodeError::Field("position predicate y value"))
+                };
+                let (min, max) = (int("min_y_value")?, int("max_y_value")?);
+                if min > max {
+                    return Err(DecodeError::Field("position predicate y range"));
+                }
+                Self::YValue { min, max }
+            }
             _ => return Err(DecodeError::Field("position predicate")),
         })
+    }
+    /// PosRuleTest.test for a block at `world`, `relative` in its template,
+    /// in a piece placed at `reference`.
+    fn test(
+        &self,
+        relative: [i32; 3],
+        world: [i32; 3],
+        reference: [i32; 3],
+        random: &mut impl RandomSource,
+    ) -> bool {
+        match *self {
+            Self::Always => true,
+            Self::Linear {
+                min_chance,
+                max_chance,
+                min_dist,
+                max_dist,
+                axis,
+            } => {
+                let dist = match axis {
+                    None => (0..3).map(|i| (world[i] - reference[i]).abs()).sum::<i32>(),
+                    Some(a) => ((world[a] - reference[a]) as f32).abs() as i32,
+                };
+                random.next_float()
+                    <= clamped_chance(min_chance, max_chance, min_dist, max_dist, dist)
+            }
+            Self::PieceOrigin {
+                min_chance,
+                max_chance,
+                min_dist,
+                max_dist,
+                axis,
+            } => {
+                let dist = (relative[axis] as f32).abs() as i32;
+                random.next_float()
+                    <= clamped_chance(min_chance, max_chance, min_dist, max_dist, dist)
+            }
+            Self::YValue { min, max } => (min..=max).contains(&world[1]),
+        }
+    }
+}
+/// Mth.clampedLerp(min_chance, max_chance, Mth.inverseLerp(dist, min_dist, max_dist)).
+fn clamped_chance(
+    min_chance: f32,
+    max_chance: f32,
+    min_dist: i32,
+    max_dist: i32,
+    dist: i32,
+) -> f32 {
+    let t = (dist - min_dist) as f32 / (max_dist - min_dist) as f32;
+    if t < 0. {
+        min_chance
+    } else if t > 1. {
+        max_chance
+    } else {
+        min_chance + t * (max_chance - min_chance)
     }
 }
 impl Modifier {
@@ -104,9 +216,43 @@ impl Modifier {
                     Tag::Compound(c) => Self::AppendStatic(c),
                     _ => Self::AppendStatic(Compound::new()),
                 },
+                "horizon:edit" => Self::Edit {
+                    remove: m["remove"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(|k| k.as_str().map(str::to_owned))
+                        .collect::<Option<_>>()
+                        .ok_or(DecodeError::Field("block entity modifier keys"))?,
+                    data: match json_to_nbt(&m["data"]) {
+                        Tag::Compound(c) => c,
+                        _ => Compound::new(),
+                    },
+                },
                 _ => return Err(DecodeError::Field("block entity modifier")),
             },
         )
+    }
+}
+/// A block entity with `remove`'s keys taken out and `data` merged in
+/// (append_static is the one with nothing to remove).
+fn edited(nbt: Option<&Compound>, remove: &[String], data: &Compound) -> Compound {
+    let mut nbt = nbt.cloned().unwrap_or_default();
+    for key in remove {
+        nbt.remove(&JavaString::from(key.as_str()));
+    }
+    merge(&mut nbt, data);
+    nbt
+}
+/// CompoundTag.merge: compounds in both are merged, anything else replaced.
+fn merge(into: &mut Compound, other: &Compound) {
+    for (key, value) in other {
+        match (into.get_mut(key), value) {
+            (Some(Tag::Compound(mine)), Tag::Compound(theirs)) => merge(mine, theirs),
+            _ => {
+                into.insert(key.clone(), value.clone());
+            }
+        }
     }
 }
 #[derive(Clone, Debug)]
@@ -140,6 +286,11 @@ pub enum Processor {
     LavaSubmerged,
     BlackstoneReplace,
     SpawnerMobs(Box<SpawnerMobs>),
+    Pick(Box<Pick>),
+    CountCap(Box<CountCap>),
+    /// `horizon:block_swap` (Lithostitched's `block_swap`): blocks by name
+    /// become others, keeping the properties both have.
+    BlockSwap(std::collections::BTreeMap<String, String>),
 }
 #[derive(Clone, Debug, Default)]
 pub struct ProcessorList(pub Vec<Processor>);
@@ -155,6 +306,196 @@ const SPAWNER_FIELDS: [(&str, &str, i16); 7] = [
     ("required_player_range", "RequiredPlayerRange", 16),
     ("spawn_range", "SpawnRange", 4),
 ];
+
+/// `horizon:pick`, which `horizon-port-pack` writes for the mods' processors
+/// that turn a placeholder block into one of several (YUNG's, written in
+/// Java): a block of `block` takes the first of `picks` whose `below` is past
+/// one `settings.getRandom(pos).nextFloat()`, else `default` (no float is
+/// drawn when there are no picks; with no default the block stays).
+#[derive(Clone, Debug)]
+pub struct Pick {
+    block: String,
+    picks: Vec<(f32, Outcome)>,
+    default: Option<Outcome>,
+}
+#[derive(Clone, Debug)]
+struct Outcome {
+    /// The state, or one of them by `nextInt(len)` (Util.getRandom), drawn
+    /// after the pick.
+    states: Vec<BlockStateId>,
+    /// The new block entity; the block's own stays when missing.
+    nbt: Option<Compound>,
+    /// Keys set to lists of `count` strings, each the first of `values`
+    /// whose bound is past a new `nextFloat`, else `default` (pot sherds).
+    lists: Vec<PickedList>,
+}
+#[derive(Clone, Debug)]
+struct PickedList {
+    key: String,
+    count: usize,
+    values: Vec<(f32, String)>,
+    default: String,
+}
+fn below(v: &Value) -> Result<f32, DecodeError> {
+    v["below"]
+        .as_f64()
+        .map(|b| b as f32)
+        .ok_or(DecodeError::Field("pick bound"))
+}
+impl Pick {
+    fn decode(
+        value: &Value,
+        state: impl Fn(&Value) -> Result<BlockStateId, DecodeError>,
+    ) -> Result<Self, DecodeError> {
+        let outcome = |v: &Value| -> Result<Outcome, DecodeError> {
+            let states = match v.get("states") {
+                Some(list) => list
+                    .as_array()
+                    .ok_or(DecodeError::Field("pick states"))?
+                    .iter()
+                    .map(&state)
+                    .collect::<Result<Vec<_>, _>>()?,
+                None => vec![state(&v["state"])?],
+            };
+            if states.is_empty() {
+                return Err(DecodeError::Field("pick states"));
+            }
+            let nbt = match v.get("nbt").map(json_to_nbt) {
+                Some(Tag::Compound(c)) => Some(c),
+                Some(_) => return Err(DecodeError::Field("pick nbt")),
+                None => None,
+            };
+            let text = |v: &Value| {
+                v.as_str()
+                    .map(str::to_owned)
+                    .ok_or(DecodeError::Field("pick list"))
+            };
+            let lists = v["lists"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|l| {
+                    Ok(PickedList {
+                        key: text(&l["key"])?,
+                        count: l["count"].as_u64().ok_or(DecodeError::Field("pick list"))? as usize,
+                        values: l["values"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .map(|e| Ok((below(e)?, text(&e["value"])?)))
+                            .collect::<Result<_, DecodeError>>()?,
+                        default: text(&l["default"])?,
+                    })
+                })
+                .collect::<Result<_, DecodeError>>()?;
+            Ok(Outcome { states, nbt, lists })
+        };
+        Ok(Self {
+            block: value["block"]
+                .as_str()
+                .map(|b| super::super::tags::identifier(b).map(|i| i.to_string()))
+                .ok_or(DecodeError::Field("pick block"))??,
+            picks: value["picks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|p| Ok((below(p)?, outcome(p)?)))
+                .collect::<Result<_, DecodeError>>()?,
+            default: value.get("default").map(outcome).transpose()?,
+        })
+    }
+    fn apply(&self, info: BlockInfo, random: &mut dyn ProcessorRandom) -> BlockInfo {
+        let outcome = match self.picks.is_empty() {
+            true => self.default.as_ref(),
+            false => {
+                let f = random.float();
+                self.picks
+                    .iter()
+                    .find(|(b, _)| f < *b)
+                    .map(|(_, o)| o)
+                    .or(self.default.as_ref())
+            }
+        };
+        let Some(outcome) = outcome else {
+            return info;
+        };
+        let state = match outcome.states.as_slice() {
+            [one] => *one,
+            many => many[random.int(many.len() as i32) as usize],
+        };
+        let mut nbt = outcome.nbt.clone().or(info.nbt);
+        for list in &outcome.lists {
+            let values = (0..list.count)
+                .map(|_| {
+                    let f = random.float();
+                    let v = list
+                        .values
+                        .iter()
+                        .find(|(b, _)| f < *b)
+                        .map_or(&list.default, |(_, v)| v);
+                    Tag::String(v.as_str().into())
+                })
+                .collect();
+            nbt.get_or_insert_with(Compound::new)
+                .insert(list.key.as_str().into(), Tag::List(values));
+        }
+        BlockInfo {
+            pos: info.pos,
+            state,
+            nbt,
+        }
+    }
+}
+
+/// `horizon:count_cap`, which `horizon-port-pack` writes for Better
+/// Dungeons' chest processor (Java in the mod): of the `blocks` one
+/// placement meets, the first `min` stay, the rest each stay when
+/// `settings.getRandom(pos).nextFloat() <= chance` until `max` have, and the
+/// others become `replacement`. The count is the placement's (the mod's
+/// DungeonContext, set up per StructureTemplate.placeInWorld: one chunk of
+/// the piece), shared by every such processor in it.
+#[derive(Clone, Debug)]
+pub struct CountCap {
+    blocks: BTreeSet<String>,
+    min: u32,
+    max: u32,
+    chance: f32,
+    replacement: BlockStateId,
+}
+impl CountCap {
+    fn decode(
+        value: &Value,
+        state: impl Fn(&Value) -> Result<BlockStateId, DecodeError>,
+    ) -> Result<Self, DecodeError> {
+        let count = |key: &'static str| {
+            value[key]
+                .as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or(DecodeError::Field(key))
+        };
+        Ok(Self {
+            blocks: value["blocks"]
+                .as_array()
+                .ok_or(DecodeError::Field("blocks"))?
+                .iter()
+                .map(|b| {
+                    let b = b.as_str().ok_or(DecodeError::Field("blocks"))?;
+                    Ok(super::super::tags::identifier(b)?.to_string())
+                })
+                .collect::<Result<_, DecodeError>>()?,
+            min: count("min")?,
+            max: count("max")?,
+            chance: float(value, "chance")?,
+            replacement: state(&value["replacement"])?,
+        })
+    }
+    /// Whether a counted block stays, counting it if so.
+    fn keeps(&self, counted: &mut u32, roll: impl FnOnce() -> f32) -> bool {
+        let keep = *counted < self.min || (*counted < self.max && roll() <= self.chance);
+        *counted += u32::from(keep);
+        keep
+    }
+}
 
 /// `horizon:spawner_mobs`, which `horizon-port-pack` writes for the spawner
 /// randomizing processors of Moog's Structure Lib and Repurposed Structures
@@ -387,6 +728,22 @@ impl Processor {
                     None => Ok(resources.registry.default_state("minecraft:air").unwrap()),
                 })?))
             }
+            "horizon:pick" => Self::Pick(Box::new(Pick::decode(value, state)?)),
+            "horizon:block_swap" => Self::BlockSwap(
+                value["blocks"]
+                    .as_object()
+                    .ok_or(DecodeError::Field("blocks"))?
+                    .iter()
+                    .map(|(from, to)| {
+                        let to = to.as_str().ok_or(DecodeError::Field("blocks"))?;
+                        Ok((
+                            super::super::tags::identifier(from)?.to_string(),
+                            super::super::tags::identifier(to)?.to_string(),
+                        ))
+                    })
+                    .collect::<Result<_, DecodeError>>()?,
+            ),
+            "horizon:count_cap" => Self::CountCap(Box::new(CountCap::decode(value, state)?)),
             _ => return Err(DecodeError::Field("structure processor type")),
         })
     }
@@ -440,6 +797,8 @@ pub struct PlaceSettings<'a> {
     /// StructurePlaceSettings.ignoreEntities / finalizeEntities.
     pub ignore_entities: bool,
     pub finalize_entities: bool,
+    /// The blocks `horizon:count_cap` kept in this placement.
+    counted: u32,
 }
 impl<'a> PlaceSettings<'a> {
     pub fn new(rotation: Rotation) -> Self {
@@ -454,6 +813,7 @@ impl<'a> PlaceSettings<'a> {
             known_shape: false,
             ignore_entities: false,
             finalize_entities: false,
+            counted: 0,
         }
     }
     pub fn with_processors(mut self, list: &'a ProcessorList) -> Self {
@@ -473,6 +833,30 @@ impl<'a> PlaceSettings<'a> {
             )))),
         }
     }
+}
+
+/// Block.withPropertiesOf: `block`'s default state with each property of
+/// `from` it has too (by name, when the value is one of its own). None for
+/// a block the registry does not know (the mod keeps the block then).
+fn with_properties_of(
+    registry: &crate::registry::BlockRegistry,
+    block: &str,
+    from: BlockStateId,
+) -> Option<BlockStateId> {
+    let default = registry.default_state(block)?;
+    let mut state = registry.state(default)?.clone();
+    for (key, value) in &registry.state(from)?.properties {
+        if let Some(own) = state.properties.get(key)
+            && own != value
+        {
+            let mut changed = state.clone();
+            changed.properties.insert(key.clone(), value.clone());
+            if registry.id(&changed).is_some() {
+                state = changed;
+            }
+        }
+    }
+    registry.id(&state)
 }
 
 /// BlackstoneReplaceProcessor's block map.
@@ -589,42 +973,9 @@ fn process_block<W: PlacementContext>(
                 if !rule.location.test(located, info.pos, &mut random) {
                     continue;
                 }
-                let position_ok = match &rule.position {
-                    PosRule::Always => true,
-                    PosRule::Linear {
-                        min_chance,
-                        max_chance,
-                        min_dist,
-                        max_dist,
-                        axis,
-                    } => {
-                        let dist = match axis {
-                            None => (0..3)
-                                .map(|i| (info.pos[i] - reference[i]).abs())
-                                .sum::<i32>(),
-                            Some(a) => {
-                                let d: [f32; 3] = std::array::from_fn(|i| {
-                                    if i == *a {
-                                        ((info.pos[i] - reference[i]) as f32).abs()
-                                    } else {
-                                        0.
-                                    }
-                                });
-                                (d[0] + d[1] + d[2]) as i32
-                            }
-                        };
-                        let roll = random.next_float();
-                        let t = (dist - min_dist) as f32 / (max_dist - min_dist) as f32;
-                        let chance = if t < 0. {
-                            *min_chance
-                        } else if t > 1. {
-                            *max_chance
-                        } else {
-                            min_chance + t * (max_chance - min_chance)
-                        };
-                        roll <= chance
-                    }
-                };
+                let position_ok = rule
+                    .position
+                    .test(relative, info.pos, reference, &mut random);
                 if !position_ok {
                     continue;
                 }
@@ -637,10 +988,9 @@ fn process_block<W: PlacementContext>(
                         nbt.insert("LootTableSeed".into(), Tag::Long(random.next_long()));
                         Some(nbt)
                     }
-                    Modifier::AppendStatic(data) => {
-                        let mut nbt = info.nbt.clone().unwrap_or_default();
-                        nbt.extend(data.clone());
-                        Some(nbt)
+                    Modifier::AppendStatic(data) => Some(edited(info.nbt.as_ref(), &[], data)),
+                    Modifier::Edit { remove, data } => {
+                        Some(edited(info.nbt.as_ref(), remove, data))
                     }
                 };
                 return Ok(Some(BlockInfo {
@@ -652,6 +1002,36 @@ fn process_block<W: PlacementContext>(
             Some(info)
         }
         Processor::Capped { .. } => Some(info),
+        Processor::BlockSwap(blocks) => {
+            let swapped = blocks
+                .get(name(info.state))
+                .and_then(|to| with_properties_of(registry, to, info.state));
+            Some(match swapped {
+                Some(state) => BlockInfo { state, ..info },
+                None => info,
+            })
+        }
+        Processor::CountCap(cap) => match cap.blocks.contains(name(info.state)) {
+            true => {
+                let pos = info.pos;
+                let mut counted = settings.counted;
+                let keep = cap.keeps(&mut counted, || settings.with_random(pos, |r| r.float()));
+                settings.counted = counted;
+                Some(match keep {
+                    true => info,
+                    false => BlockInfo {
+                        pos,
+                        state: cap.replacement,
+                        nbt: None,
+                    },
+                })
+            }
+            false => Some(info),
+        },
+        Processor::Pick(pick) => match name(info.state) == pick.block {
+            true => Some(settings.with_random(info.pos, |r| pick.apply(info, r))),
+            false => Some(info),
+        },
         Processor::SpawnerMobs(spawner) => {
             if name(info.state) != "minecraft:spawner" {
                 return Ok(Some(info));
@@ -769,6 +1149,7 @@ fn process_infos<W: PlacementContext>(
     reference: [i32; 3],
     settings: &mut PlaceSettings<'_>,
 ) -> Result<Vec<BlockInfo>, PlacementQueryError> {
+    settings.counted = 0;
     let whole = settings
         .processors
         .iter()
@@ -1251,6 +1632,42 @@ mod tests {
     }
 
     #[test]
+    fn repurposed_position_rules() {
+        let decode = |v: Value| PosRule::decode(Some(&v));
+        // Over 3..4 blocks from the template's origin along y, 0 to 1.
+        let rule = decode(
+            json!({"predicate_type": "horizon:piece_origin_axis_aligned_linear_pos",
+            "axis": "y", "min_chance": 0, "max_chance": 1, "min_dist": 3, "max_dist": 4}),
+        )
+        .unwrap();
+        let mut random = LegacyRandom::new(1);
+        let world = [100, 64, -100];
+        // At or under min_dist the chance is 0, a roll of 0 aside; past max_dist it is 1.
+        assert!(!rule.test([9, 2, 9], world, world, &mut random));
+        assert!(rule.test([0, -5, 0], world, world, &mut random));
+        // The world position and the piece's do not count.
+        assert!(rule.test([0, 4, 0], [0, 0, 0], [50, 50, 50], &mut random));
+        // Repurposed refuses an empty distance range and an unknown axis.
+        for bad in [
+            json!({"predicate_type": "horizon:piece_origin_axis_aligned_linear_pos"}),
+            json!({"predicate_type": "horizon:piece_origin_axis_aligned_linear_pos",
+                "min_dist": 0, "max_dist": 1, "axis": "w"}),
+            json!({"predicate_type": "horizon:y_value", "min_y_value": 5, "max_y_value": 4}),
+            json!({"predicate_type": "horizon:y_value", "min_y_value": 5}),
+        ] {
+            assert!(decode(bad.clone()).is_err(), "{bad}");
+        }
+        let y = decode(
+            json!({"predicate_type": "horizon:y_value", "min_y_value": 0, "max_y_value": 31}),
+        )
+        .unwrap();
+        assert!(y.test([0; 3], [7, 31, 7], [0; 3], &mut random));
+        assert!(y.test([0, 99, 0], [7, 0, 7], [0; 3], &mut random));
+        assert!(!y.test([0; 3], [7, 32, 7], [0; 3], &mut random));
+        assert!(!y.test([0; 3], [7, -1, 7], [0; 3], &mut random));
+    }
+
+    #[test]
     fn rule_parts_read_ids_without_a_namespace() {
         // CTOV writes "always_true"; vanilla reads it as minecraft:always_true.
         for kind in ["always_true", "minecraft:always_true"] {
@@ -1281,5 +1698,207 @@ mod tests {
             Ok(Modifier::Clear)
         ));
         assert!(Modifier::decode(Some(&json!({"type": ""}))).is_err());
+    }
+
+    #[test]
+    fn block_entity_edits_merge_deep_and_drop_keys() {
+        let nbt = |v: Value| match json_to_nbt(&v) {
+            Tag::Compound(c) => c,
+            _ => unreachable!(),
+        };
+        let vault = nbt(json!({"id": "minecraft:vault",
+            "config": {"loot_table": "x:old", "key_item": {"id": "minecraft:trial_key"}},
+            "server_data": {"state_updating_resumes_at": 533162741}}));
+        // append_static merges compounds the way CompoundTag.merge does.
+        let Ok(Modifier::AppendStatic(data)) = Modifier::decode(Some(&json!({
+            "type": "append_static", "data": {"config": {"loot_table": "x:new"}}})))
+        else {
+            panic!("append_static")
+        };
+        let merged = edited(Some(&vault), &[], &data);
+        assert_eq!(
+            merged,
+            nbt(json!({"id": "minecraft:vault",
+            "config": {"loot_table": "x:new", "key_item": {"id": "minecraft:trial_key"}},
+            "server_data": {"state_updating_resumes_at": 533162741}}))
+        );
+        let Ok(Modifier::Edit { remove, data }) = Modifier::decode(Some(&json!({
+            "type": "horizon:edit", "remove": ["server_data"],
+            "data": {"config": {"loot_table": "x:new"}}})))
+        else {
+            panic!("horizon:edit")
+        };
+        assert_eq!(
+            edited(Some(&vault), &remove, &data),
+            nbt(json!({"id": "minecraft:vault",
+                "config": {"loot_table": "x:new", "key_item": {"id": "minecraft:trial_key"}}}))
+        );
+        assert_eq!(
+            edited(None, &remove, &data),
+            nbt(json!({"config": {"loot_table": "x:new"}}))
+        );
+        let bad = json!({"type": "horizon:edit", "remove": [1], "data": {}});
+        assert!(Modifier::decode(Some(&bad)).is_err());
+    }
+
+    /// Scripted draws: floats in turn, then ints.
+    struct Draws(Vec<f32>, Vec<i32>);
+    impl ProcessorRandom for Draws {
+        fn float(&mut self) -> f32 {
+            self.0.remove(0)
+        }
+        fn int(&mut self, bound: i32) -> i32 {
+            let i = self.1.remove(0);
+            assert!(i < bound);
+            i
+        }
+        fn long(&mut self) -> i64 {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn picks_follow_yungs_cascade() {
+        // States by name: sand 1, sandstone 2, the four stairs 10..13.
+        let id = |v: &Value| {
+            Ok(BlockStateId(match v["Name"].as_str() {
+                Some("minecraft:sand") => 1,
+                Some("minecraft:sandstone") => 2,
+                Some("minecraft:suspicious_sand") => 3,
+                _ => {
+                    10 + ["north", "east", "south", "west"]
+                        .iter()
+                        .position(|f| v["Properties"]["facing"] == *f)
+                        .unwrap_or(9) as u32
+                }
+            }))
+        };
+        let stairs: Vec<Value> = ["north", "east", "south", "west"]
+            .iter()
+            .map(|f| json!({"Name": "minecraft:sandstone_stairs", "Properties": {"facing": f}}))
+            .collect();
+        let pick = Pick::decode(
+            &json!({"block": "red_stained_glass", "picks": [
+                {"below": 0.01, "state": {"Name": "minecraft:suspicious_sand"},
+                 "nbt": {"LootTable": "minecraft:archaeology/desert_pyramid"}},
+                {"below": 0.3, "state": {"Name": "minecraft:sand"}},
+                {"below": 0.75, "state": {"Name": "minecraft:sandstone"}}],
+                "default": {"states": stairs}}),
+            id,
+        )
+        .unwrap();
+        assert_eq!(pick.block, "minecraft:red_stained_glass");
+        let glass = || BlockInfo {
+            pos: [1, 2, 3],
+            state: BlockStateId(0),
+            nbt: Some(Compound::new()),
+        };
+        let run = |f: f32, i: Vec<i32>| pick.apply(glass(), &mut Draws(vec![f], i));
+        let sus = run(0.005, vec![]);
+        assert_eq!(sus.state, BlockStateId(3));
+        assert!(
+            sus.nbt
+                .unwrap()
+                .contains_key(&JavaString::from("LootTable"))
+        );
+        assert_eq!(run(0.01, vec![]).state, BlockStateId(1));
+        assert_eq!(run(0.2999, vec![]).nbt, Some(Compound::new()));
+        assert_eq!(run(0.3, vec![]).state, BlockStateId(2));
+        // The stairs' facing: Plane.HORIZONTAL[nextInt(4)] after the pick.
+        assert_eq!(run(0.75, vec![2]).state, BlockStateId(12));
+        assert_eq!(run(0.99, vec![1]).state, BlockStateId(11));
+
+        let pot = Pick::decode(
+            &json!({"block": "minecraft:decorated_pot", "default": {
+                "state": {"Name": "minecraft:sand"},
+                "lists": [{"key": "sherds", "count": 4, "default": "minecraft:brick",
+                           "values": [{"below": 0.05, "value": "minecraft:archer_pottery_sherd"},
+                                      {"below": 0.1, "value": "minecraft:miner_pottery_sherd"}]}]}}),
+            id,
+        )
+        .unwrap();
+        // No picks: no float for them; one float per sherd.
+        let out = pot.apply(
+            BlockInfo {
+                nbt: None,
+                ..glass()
+            },
+            &mut Draws(vec![0.5, 0.01, 0.07, 0.1], vec![]),
+        );
+        let Some(Tag::List(sherds)) = out.nbt.unwrap().get(&JavaString::from("sherds")).cloned()
+        else {
+            panic!("sherds")
+        };
+        let names: Vec<String> = sherds
+            .iter()
+            .map(|t| match t {
+                Tag::String(s) => s.to_string_lossy(),
+                _ => String::new(),
+            })
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "minecraft:brick",
+                "minecraft:archer_pottery_sherd",
+                "minecraft:miner_pottery_sherd",
+                "minecraft:brick"
+            ]
+        );
+        assert!(Pick::decode(&json!({"block": "a", "default": {"states": []}}), id).is_err());
+    }
+
+    #[test]
+    fn count_caps_keep_the_first_then_some() {
+        let cap = CountCap::decode(
+            &json!({"blocks": ["chest", "minecraft:trapped_chest"], "min": 1, "max": 2,
+                    "chance": 0.2, "replacement": {"id": "minecraft:cave_air"}}),
+            |_| Ok(BlockStateId(5)),
+        )
+        .unwrap();
+        assert!(cap.blocks.contains("minecraft:chest"));
+        let mut counted = 0;
+        // The first stays without a roll.
+        assert!(cap.keeps(&mut counted, || unreachable!()));
+        // Then each stays on nextFloat <= 0.2, until two have.
+        assert!(!cap.keeps(&mut counted, || 0.21));
+        assert!(cap.keeps(&mut counted, || 0.2));
+        assert!(!cap.keeps(&mut counted, || unreachable!()));
+        assert_eq!(counted, 2);
+        assert!(
+            CountCap::decode(&json!({"blocks": [], "min": -1}), |_| Ok(BlockStateId(5))).is_err()
+        );
+    }
+
+    #[test]
+    fn block_swaps_keep_the_properties_both_blocks_have() {
+        let row = |name: &str, props: Value| json!([name, false, false, "", {"id": name, "properties": props}]);
+        let facts = json!({"defaults": {"a:log": 1, "a:stairs": 4, "a:stone": 6},
+            "states": [
+                row("a:log", json!({"axis": "x"})), row("a:log", json!({"axis": "y"})),
+                row("a:stairs", json!({"facing": "east", "half": "top"})),
+                row("a:stairs", json!({"facing": "east", "half": "bottom"})),
+                row("a:stairs", json!({"facing": "north", "half": "bottom"})),
+                row("a:stairs", json!({"facing": "north", "half": "top"})),
+                ["a:stone", false, false, "", "a:stone"]]});
+        let registry =
+            crate::registry::BlockRegistry::from_facts_json(facts.to_string().as_bytes()).unwrap();
+        // facing and half carried over; the default where `from` has none.
+        assert_eq!(
+            with_properties_of(&registry, "a:stairs", BlockStateId(2)),
+            Some(BlockStateId(2))
+        );
+        assert_eq!(
+            with_properties_of(&registry, "a:stairs", BlockStateId(0)),
+            Some(BlockStateId(4))
+        );
+        assert_eq!(
+            with_properties_of(&registry, "a:stone", BlockStateId(5)),
+            Some(BlockStateId(6))
+        );
+        assert_eq!(
+            with_properties_of(&registry, "a:missing", BlockStateId(0)),
+            None
+        );
     }
 }

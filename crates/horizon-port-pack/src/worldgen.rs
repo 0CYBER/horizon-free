@@ -42,6 +42,9 @@ const REPURPOSED_CHECKED: [(&str, &str); 3] = [
     ),
     ("repurposed_structures:stronghold_end", "stronghold_end"),
 ];
+/// Repurposed Structures' mineshaft: its generic jigsaw laid out under the
+/// terrain (`"layout": "mineshaft"` in `horizon:piece_limited`).
+const REPURPOSED_MINESHAFT: &str = "repurposed_structures:generic_mineshaft";
 /// Layout rules the piece-limited assembler keeps (`horizon:piece_limited`).
 const PIECE_LIMITED_RULES: [&str; 4] = [
     "y_allowance",
@@ -94,14 +97,17 @@ const START_RULES: [(&str, &str); 3] = [
 ];
 /// The jigsaws' rules on laying out pieces, which vanilla's jigsaw has no
 /// place for.
-const LAYOUT_RULES: [&str; 6] = [
+const LAYOUT_RULES: [&str; 5] = [
     "y_allowance",
     "burying_type",
     "use_bounding_box_hack",
     "pools_that_ignore_boundaries",
     "enhanced_terrain_adaptation",
-    "vertical_distance_from_start_piece",
 ];
+/// Fields of older versions the mods' codecs no longer read: their own
+/// structures ignore them, and so does carry. Repurposed's jungle fortress
+/// and End stronghold still write `vertical_distance_from_start_piece`.
+const DEAD_FIELDS: [&str; 1] = ["vertical_distance_from_start_piece"];
 /// Pool elements that are vanilla's with extra fields: (mod type, vanilla type).
 const ELEMENTS: [(&str, &str); 3] = [
     (
@@ -131,6 +137,9 @@ pub struct Upgrade {
     /// Processors written in Java carried as data the game runs
     /// ([`crate::processors`]), by type.
     pub processors_carried: BTreeMap<String, usize>,
+    /// Rule tests written in Java carried as the game's own
+    /// ([`crate::processors::rule_tests`]), by type.
+    pub rule_tests_carried: BTreeMap<String, usize>,
     /// Entries added to other structure sets and template pools
     /// (`horizon:add_to`), by the set or pool they join.
     pub added_to: BTreeMap<String, usize>,
@@ -345,10 +354,11 @@ pub fn upgrade(
 ) -> bool {
     let states = block_states(v);
     report.block_states += usize::from(states);
+    let renamed = crate::carry::renamed_ids(v);
     let dropped = crate::processors::each_list(kind, v, &mut |list| {
         drop_java_processors(list, &mut report.processors_dropped)
     });
-    upgrade_types(kind, v, report, set_tags) || states || dropped
+    upgrade_types(kind, v, report, set_tags) || states || dropped || renamed
 }
 
 /// Takes the processors written in Java (any type outside `minecraft:` and
@@ -414,15 +424,19 @@ fn upgrade_types(
     let mut unsupported = |t: &str| *report.unsupported.entry(t.to_owned()).or_default() += 1;
     let changed = match kind {
         "structure" => match v["type"].as_str() {
-            Some("yungsapi:yung_jigsaw") => {
+            // Better Dungeons' small Nether dungeon is YUNG's jigsaw behind a
+            // config switch that ships on.
+            Some("yungsapi:yung_jigsaw" | "betterdungeons:small_nether_dungeon") => {
                 yung_structure(v, lost);
                 true
             }
             Some(t)
                 if JIGSAWS.contains(&t)
                     || NETHER_JIGSAWS.contains(&t)
+                    || t == REPURPOSED_MINESHAFT
                     || REPURPOSED_CHECKED.iter().any(|(r, _)| *r == t) =>
             {
+                let mineshaft = t == REPURPOSED_MINESHAFT;
                 let check = REPURPOSED_CHECKED.iter().find(|(r, _)| *r == t);
                 let check = check.map(|(_, c)| *c);
                 let library = match t.split_once(':').map(|(ns, _)| ns) {
@@ -435,7 +449,10 @@ fn upgrade_types(
                 } else {
                     "lowest"
                 };
-                let limited = library.map(|l| piece_limited(v, l));
+                let mut limited = library.map(|l| piece_limited(v, l));
+                if let Some(limited) = limited.as_mut().filter(|_| mineshaft) {
+                    limited["layout"] = "mineshaft".into();
+                }
                 start_checks(v, liquid, lost, limited.is_some());
                 if let Some(check) = check {
                     if !v["horizon:start_checks"].is_object() {
@@ -645,6 +662,9 @@ fn start_checks(v: &mut Value, liquid: &str, lost: &mut BTreeMap<String, usize>,
         if let Some(n) = o.get("y_allowance").and_then(|y| y.get(from)) {
             checks.insert(to.into(), n.clone());
         }
+    }
+    for field in DEAD_FIELDS {
+        o.remove(field);
     }
     for rule in LAYOUT_RULES {
         let kept = limited && PIECE_LIMITED_RULES.contains(&rule);
@@ -1101,11 +1121,13 @@ mod tests {
             assert!(moogs.get(gone).is_none(), "{gone}");
         }
         assert_eq!(moogs["size"], 7);
-        // Repurposed Structures reads the block above the bottom.
+        // Repurposed Structures reads the block above the bottom. Its jungle
+        // fortress's vertical distance is a field its code no longer reads.
         let mut rs = json!({"type": "repurposed_structures:generic_jigsaw_structure",
-            "cannot_spawn_in_liquid": true});
+            "cannot_spawn_in_liquid": true, "vertical_distance_from_start_piece": 35});
         assert!(upgrade("structure", &mut rs, &mut report, &NO_TAGS));
         assert_eq!(rs["horizon:start_checks"], json!({"liquid": "lowest"}));
+        assert!(rs.get("vertical_distance_from_start_piece").is_none());
         // Repurposed's own checks: the Nether city, Nether shipwrecks, the End stronghold.
         for (t, check) in [
             ("city_nether_structure", "city_nether"),
@@ -1182,6 +1204,19 @@ mod tests {
         for gone in ["max_y", "x_offset_in_chunk", "enhanced_terrain_adaptation"] {
             assert!(s.get(gone).is_none(), "{gone}");
         }
+        // Better Dungeons' small Nether dungeon is the same jigsaw.
+        let mut nether = json!({"type": "betterdungeons:small_nether_dungeon",
+            "start_pool": "betterdungeons:small_nether_dungeon", "size": 10,
+            "start_jigsaw_name": "betterdungeons:small_nether_dungeon_anchor",
+            "max_distance_from_center": 80, "liquid_settings": "ignore_waterlogging"});
+        assert!(upgrade("structure", &mut nether, &mut report, &NO_TAGS));
+        assert_eq!(nether["type"], "minecraft:jigsaw");
+        assert_eq!(nether["horizon:yungsapi"], json!({}));
+        assert_eq!(
+            nether["start_jigsaw_name"],
+            "betterdungeons:small_nether_dungeon_anchor"
+        );
+        assert!(report.unsupported.is_empty());
         let mut pool = json!({"elements": [{"weight": 3, "element": {
             "element_type": "yungsapi:yung_single_element", "location": "y:room",
             "processors": "minecraft:empty", "projection": "rigid",
@@ -1345,6 +1380,17 @@ mod tests {
             moogs["horizon:piece_limited"],
             json!({"library": "moogs", "burying": "average_land"})
         );
+        // Repurposed's mineshaft is laid out under the terrain.
+        let mut mineshaft = json!({"type": "repurposed_structures:generic_mineshaft",
+            "start_pool": "rs:mineshafts/birch/start_pool", "size": 9,
+            "liquid_settings": "ignore_waterlogging"});
+        assert!(upgrade("structure", &mut mineshaft, &mut report, &NO_TAGS));
+        assert_eq!(mineshaft["type"], "minecraft:jigsaw");
+        assert_eq!(
+            mineshaft["horizon:piece_limited"],
+            json!({"library": "repurposed", "layout": "mineshaft"})
+        );
+        assert_eq!(mineshaft["liquid_settings"], "ignore_waterlogging");
         // Lithostitched's jigsaw is vanilla's: no key.
         let mut litho = json!({"type": "lithostitched:jigsaw"});
         assert!(upgrade("structure", &mut litho, &mut report, &NO_TAGS));
