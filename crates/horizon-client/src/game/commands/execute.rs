@@ -26,6 +26,9 @@ pub(in crate::game) struct Source {
     /// `execute in` another dimension than the one Horizon has loaded: none
     /// of its chunks are loaded.
     pub elsewhere: bool,
+    /// The dimension `execute in` named, if any: a server teleports its
+    /// players there (`TeleportCommand` into the source's level).
+    pub level: Option<super::super::Dim>,
     /// The command block whose output this source is
     /// (`BaseCommandBlock.CloseableCommandBlockSource`).
     pub block: Option<(i32, i32, i32)>,
@@ -77,6 +80,7 @@ impl Game<'_> {
             silent: false,
             store: None,
             elsewhere: false,
+            level: None,
             block: None,
         }
     }
@@ -90,6 +94,7 @@ impl Game<'_> {
             silent: true,
             store: None,
             elsewhere: false,
+            level: None,
             block: None,
         }
     }
@@ -441,6 +446,7 @@ impl Game<'_> {
                         pos: self.target_position(t)?,
                         rot: self.target_rotation(t),
                         elsewhere: false,
+                        level: None,
                         ..s
                     })
                 })
@@ -544,6 +550,7 @@ impl Game<'_> {
                 }
                 vec![Source {
                     elsewhere: dim != self.dim.id(),
+                    level: Some(super::super::Dim::from_id(dim)),
                     ..s
                 }]
             }

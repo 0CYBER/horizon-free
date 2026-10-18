@@ -121,7 +121,7 @@ fn ticket_hash(x: i32, z: i32) -> u64 {
 /// The chunks decorated around a player at `center`, in vanilla's order.
 pub fn vanilla_order(center: (i32, i32), radius: i32) -> Vec<(i32, i32)> {
     use std::cmp::Reverse;
-    use std::collections::{BinaryHeap, HashSet, VecDeque};
+    use std::collections::{BinaryHeap, VecDeque};
     let mut tickets: Vec<(i32, i32)> = (-radius..=radius)
         .flat_map(|dx| (-radius..=radius).map(move |dz| (center.0 + dx, center.1 + dz)))
         .collect();
@@ -133,35 +133,45 @@ pub fn vanilla_order(center: (i32, i32), radius: i32) -> Vec<(i32, i32)> {
         )
     });
     let mut tickets: VecDeque<_> = tickets.into();
+    // Every chunk this touches lies within `half` of the centre: tickets
+    // reach `LIGHT_LEVEL - TICKET_LEVEL` further, and FULL tasks decorate
+    // one more ring. Dense grids over that square replace hash maps.
+    let reach = LIGHT_LEVEL - TICKET_LEVEL;
+    let half = radius.max(0) + reach + 1;
+    let side = (2 * half + 1) as usize;
+    let cell = |(x, z): (i32, i32)| {
+        ((x - center.0 + half) as usize) * side + (z - center.1 + half) as usize
+    };
     let mut active: Vec<(i32, i32)> = Vec::new();
-    // Queued task per chunk (level, sequence); stale heap entries are skipped.
-    let mut queued: HashMap<(i32, i32), (i32, u64)> = HashMap::new();
+    // Queued task per chunk (level, sequence), `NONE` when there is none;
+    // stale heap entries are skipped.
+    const NONE: (i32, u64) = (i32::MAX, 0);
+    let mut queued = vec![NONE; side * side];
     let mut heap = BinaryHeap::new();
     let mut sequence = 0u64;
-    let mut full = HashSet::new();
-    let mut seen = HashSet::new();
+    let mut full = vec![false; side * side];
+    let mut seen = vec![false; side * side];
     let mut order = Vec::new();
     // Each ticket lowers the levels around it to 31 + its Chebyshev distance.
-    let mut levels: HashMap<(i32, i32), i32> = HashMap::new();
+    let mut levels = vec![i32::MAX; side * side];
     let mut add = |ticket: (i32, i32),
                    active: &mut Vec<(i32, i32)>,
-                   queued: &mut HashMap<(i32, i32), (i32, u64)>,
+                   queued: &mut [(i32, u64)],
                    heap: &mut BinaryHeap<Reverse<(i32, u64, (i32, i32))>>,
-                   full: &HashSet<(i32, i32)>| {
+                   full: &[bool]| {
         active.push(ticket);
-        let reach = LIGHT_LEVEL - TICKET_LEVEL;
         for x in ticket.0 - reach..=ticket.0 + reach {
             for z in ticket.1 - reach..=ticket.1 + reach {
                 let own = TICKET_LEVEL + (x - ticket.0).abs().max((z - ticket.1).abs());
-                let l = levels.entry((x, z)).or_insert(i32::MAX);
-                *l = (*l).min(own);
-                let l = *l;
-                if full.contains(&(x, z)) {
+                let i = cell((x, z));
+                levels[i] = levels[i].min(own);
+                let l = levels[i];
+                if full[i] {
                     continue;
                 }
-                if queued.get(&(x, z)).is_none_or(|&(old, _)| l < old) {
+                if l < queued[i].0 {
                     sequence += 1;
-                    queued.insert((x, z), (l, sequence));
+                    queued[i] = (l, sequence);
                     heap.push(Reverse((l, sequence, (x, z))));
                 }
             }
@@ -173,24 +183,25 @@ pub fn vanilla_order(center: (i32, i32), radius: i32) -> Vec<(i32, i32)> {
         }
     }
     while let Some(Reverse((l, s, chunk))) = heap.pop() {
-        if queued.get(&chunk) != Some(&(l, s)) {
+        let i = cell(chunk);
+        if queued[i] != (l, s) {
             continue;
         }
-        queued.remove(&chunk);
+        queued[i] = NONE;
         let r = i32::from(l <= FULL_LEVEL);
         for x in chunk.0 - r..=chunk.0 + r {
             for z in chunk.1 - r..=chunk.1 + r {
-                if seen.insert((x, z)) {
+                let seen = &mut seen[cell((x, z))];
+                if !*seen {
+                    *seen = true;
                     order.push((x, z));
                 }
             }
         }
         if l <= FULL_LEVEL {
-            full.insert(chunk);
+            full[i] = true;
         }
-        active.retain(|t| {
-            !(-2..=2).all(|dx| (-2..=2).all(|dz| full.contains(&(t.0 + dx, t.1 + dz))))
-        });
+        active.retain(|t| !(-2..=2).all(|dx| (-2..=2).all(|dz| full[cell((t.0 + dx, t.1 + dz))])));
         while active.len() < TICKETS_IN_FLIGHT {
             let Some(t) = tickets.pop_front() else { break };
             add(t, &mut active, &mut queued, &mut heap, &full);
@@ -202,6 +213,106 @@ pub fn vanilla_order(center: (i32, i32), radius: i32) -> Vec<(i32, i32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The hash map version this module had before its dense grids.
+    fn hashed_order(center: (i32, i32), radius: i32) -> Vec<(i32, i32)> {
+        use std::cmp::Reverse;
+        use std::collections::{BinaryHeap, HashSet, VecDeque};
+        let mut tickets: Vec<(i32, i32)> = (-radius..=radius)
+            .flat_map(|dx| (-radius..=radius).map(move |dz| (center.0 + dx, center.1 + dz)))
+            .collect();
+        // A fastutil open hash set iterates its slots from the last to the first.
+        tickets.sort_by_key(|&(x, z)| {
+            (
+                (x - center.0).abs().max((z - center.1).abs()),
+                Reverse(ticket_hash(x, z) & (TICKET_SET_CAPACITY - 1)),
+            )
+        });
+        let mut tickets: VecDeque<_> = tickets.into();
+        let mut active: Vec<(i32, i32)> = Vec::new();
+        // Queued task per chunk (level, sequence); stale heap entries are skipped.
+        let mut queued: HashMap<(i32, i32), (i32, u64)> = HashMap::new();
+        let mut heap = BinaryHeap::new();
+        let mut sequence = 0u64;
+        let mut full = HashSet::new();
+        let mut seen = HashSet::new();
+        let mut order = Vec::new();
+        // Each ticket lowers the levels around it to 31 + its Chebyshev distance.
+        let mut levels: HashMap<(i32, i32), i32> = HashMap::new();
+        let mut add = |ticket: (i32, i32),
+                       active: &mut Vec<(i32, i32)>,
+                       queued: &mut HashMap<(i32, i32), (i32, u64)>,
+                       heap: &mut BinaryHeap<Reverse<(i32, u64, (i32, i32))>>,
+                       full: &HashSet<(i32, i32)>| {
+            active.push(ticket);
+            let reach = LIGHT_LEVEL - TICKET_LEVEL;
+            for x in ticket.0 - reach..=ticket.0 + reach {
+                for z in ticket.1 - reach..=ticket.1 + reach {
+                    let own = TICKET_LEVEL + (x - ticket.0).abs().max((z - ticket.1).abs());
+                    let l = levels.entry((x, z)).or_insert(i32::MAX);
+                    *l = (*l).min(own);
+                    let l = *l;
+                    if full.contains(&(x, z)) {
+                        continue;
+                    }
+                    if queued.get(&(x, z)).is_none_or(|&(old, _)| l < old) {
+                        sequence += 1;
+                        queued.insert((x, z), (l, sequence));
+                        heap.push(Reverse((l, sequence, (x, z))));
+                    }
+                }
+            }
+        };
+        for _ in 0..TICKETS_IN_FLIGHT {
+            if let Some(t) = tickets.pop_front() {
+                add(t, &mut active, &mut queued, &mut heap, &full);
+            }
+        }
+        while let Some(Reverse((l, s, chunk))) = heap.pop() {
+            if queued.get(&chunk) != Some(&(l, s)) {
+                continue;
+            }
+            queued.remove(&chunk);
+            let r = i32::from(l <= FULL_LEVEL);
+            for x in chunk.0 - r..=chunk.0 + r {
+                for z in chunk.1 - r..=chunk.1 + r {
+                    if seen.insert((x, z)) {
+                        order.push((x, z));
+                    }
+                }
+            }
+            if l <= FULL_LEVEL {
+                full.insert(chunk);
+            }
+            active.retain(|t| {
+                !(-2..=2).all(|dx| (-2..=2).all(|dz| full.contains(&(t.0 + dx, t.1 + dz))))
+            });
+            while active.len() < TICKETS_IN_FLIGHT {
+                let Some(t) = tickets.pop_front() else { break };
+                add(t, &mut active, &mut queued, &mut heap, &full);
+            }
+        }
+        order
+    }
+
+    #[test]
+    fn dense_grids_keep_the_hashed_order() {
+        for (center, radius) in [
+            ((0, 0), -1),
+            ((0, 0), 0),
+            ((0, 0), 1),
+            ((12, -15), 8),
+            ((-30_000, 29_999), 5),
+            ((7, 3), 12),
+            ((-61, 1234), 32),
+        ] {
+            assert_eq!(
+                vanilla_order(center, radius),
+                hashed_order(center, radius),
+                "{center:?} radius {radius}"
+            );
+        }
+    }
 
     #[test]
     fn first_wave_matches_vanilla() {

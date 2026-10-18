@@ -25,6 +25,9 @@ pub struct Report {
     pub unreadable: BTreeMap<String, String>,
     pub recipes_upgraded: usize,
     pub loot_tables_upgraded: usize,
+    /// Blocks whose jar has no loot table but drop themselves in the oracle:
+    /// the mod registers that table in code, and carry-over writes it.
+    pub loot_tables_added: usize,
     /// Worldgen and structure files (`data/<id>/worldgen/`, `structure/`).
     pub worldgen: usize,
     /// Recipes left as they were: custom types, NeoForge conditions.
@@ -44,6 +47,11 @@ pub struct Report {
     pub items_unknown: BTreeMap<String, String>,
     /// Convention (`c:`) tags the recipes use, filled in from the oracle.
     pub convention_tags: usize,
+    /// Structure, placement and pool element types rewritten as vanilla's,
+    /// and those left as they are.
+    pub worldgen_types: crate::worldgen::Upgrade,
+    /// The loader's convention biome tags the structures name, carried.
+    pub convention_biome_tags: usize,
 }
 
 /// Vanilla blocks by their sorted property names.
@@ -323,13 +331,17 @@ fn unreadable(name: &str, bytes: &mut Vec<u8>) -> Option<String> {
 
 /// Carries `jar` over into `out/carry/`. With the oracle's `facts`, blocks
 /// and items are the ones the mod registers, with the templates and numbers
-/// the facts give; `allowed` says which vanilla blocks the game has.
+/// the facts give; `allowed` says which vanilla blocks the game has;
+/// `loaded` which mods are ported along, for the conditions of the mod's
+/// worldgen modifiers.
 pub fn carry(
     jar: &Path,
     info: &JarInfo,
     out: &Path,
     facts: Option<&Facts>,
     allowed: &dyn Fn(&str) -> bool,
+    loaded: &dyn Fn(&str) -> bool,
+    conventions: &BTreeMap<String, Value>,
 ) -> Result<Report, String> {
     let id = &info.mod_id;
     if id.is_empty()
@@ -351,6 +363,10 @@ pub fn carry(
     let mut blockstates: BTreeMap<String, Value> = BTreeMap::new();
     let mut item_models = BTreeSet::new();
     let mut convention = BTreeSet::new();
+    let mut block_loot = BTreeSet::new();
+    let mut biome_conventions = BTreeSet::new();
+    let set_tags = crate::worldgen::structure_set_tags(&mut zip);
+    let piece_counts = crate::worldgen::piece_counts(&mut zip);
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
         let name = entry.name().to_owned();
@@ -400,7 +416,64 @@ pub fn carry(
                         report.recipes_kept.push(file.to_owned());
                     }
                 }
+            } else if let Some(kind) = rel
+                .strip_prefix("worldgen/")
+                .and_then(|r| r.split_once('/'))
+                .map(|(kind, _)| kind)
+                .filter(|_| name.starts_with("data/") && name.ends_with(".json"))
+            {
+                if let Ok(mut v) = serde_json::from_slice::<Value>(&bytes) {
+                    if kind == "structure" {
+                        crate::worldgen::convention_tags(&v["biomes"], &mut biome_conventions);
+                    }
+                    let mut changed = crate::worldgen::upgrade(
+                        kind,
+                        &mut v,
+                        &mut report.worldgen_types,
+                        &set_tags,
+                    );
+                    if kind == "structure" {
+                        let path = rel.trim_start_matches("worldgen/structure/");
+                        let structure = format!("{id}:{}", path.trim_end_matches(".json"));
+                        changed |= crate::worldgen::disables(&structure, &mut v);
+                        changed |=
+                            crate::worldgen::add_piece_counts(&structure, &mut v, &piece_counts);
+                    }
+                    if changed {
+                        bytes = serde_json::to_vec_pretty(&v).unwrap_or(bytes);
+                    }
+                }
+            } else if let Some(path) = rel
+                .strip_prefix("lithostitched/worldgen_modifier/")
+                .filter(|_| name.starts_with("data/") && name.ends_with(".json"))
+            {
+                // Additions to other sets and pools, as files the game merges.
+                let modifier = serde_json::from_slice::<Value>(&bytes).ok();
+                let types = &mut report.worldgen_types;
+                if let Some((kind, mut added)) =
+                    modifier.and_then(|v| crate::worldgen::modifier(&v, loaded, types))
+                {
+                    crate::worldgen::upgrade(kind, &mut added, types, &set_tags);
+                    let to = format!(
+                        "data/{id}/worldgen/{kind}/{}/{path}",
+                        crate::worldgen::ADDED
+                    );
+                    write(
+                        &inside.join(to),
+                        &serde_json::to_vec_pretty(&added).unwrap_or_default(),
+                    )?;
+                }
+            } else if rel.starts_with("tags/worldgen/biome/") && name.starts_with("data/") {
+                if let Ok(v) = serde_json::from_slice::<Value>(&bytes) {
+                    crate::worldgen::convention_tags(&v, &mut biome_conventions);
+                }
             } else if rel.starts_with("loot_table/") && name.starts_with("data/") {
+                if let Some(b) = rel
+                    .strip_prefix("loot_table/blocks/")
+                    .and_then(|b| b.strip_suffix(".json"))
+                {
+                    block_loot.insert(b.to_owned());
+                }
                 if let Ok(mut table) = serde_json::from_slice::<Value>(&bytes) {
                     let before = table.clone();
                     upgrade_loot(&mut table);
@@ -425,6 +498,35 @@ pub fn carry(
         }
         write(&dest, &bytes)?;
     }
+    // Entries the mod adds to other structure sets in Java code, for the
+    // structures it has.
+    for (file, set, entries) in crate::worldgen::code_set_entries(id) {
+        let entries: Vec<Value> = entries
+            .into_iter()
+            .filter(|(s, _)| {
+                s.split_once(':').is_some_and(|(ns, path)| {
+                    inside
+                        .join(format!("data/{ns}/worldgen/structure/{path}.json"))
+                        .exists()
+                })
+            })
+            .map(|(structure, weight)| json!({"structure": structure, "weight": weight}))
+            .collect();
+        if entries.is_empty() {
+            continue;
+        }
+        let added = &mut report.worldgen_types.added_to;
+        *added.entry(set.to_owned()).or_default() += entries.len();
+        let to = format!(
+            "data/{id}/worldgen/structure_set/{}/{file}.json",
+            crate::worldgen::ADDED
+        );
+        let v = json!({"horizon:add_to": set, "structures": entries});
+        write(
+            &inside.join(to),
+            &serde_json::to_vec_pretty(&v).unwrap_or_default(),
+        )?;
+    }
     // 1.21.4 moved item models behind `items/<name>.json` definitions.
     for m in &item_models {
         let def = inside.join(format!("assets/{id}/items/{m}.json"));
@@ -433,6 +535,18 @@ pub fn carry(
                 json!({"model": {"type": "minecraft:model", "model": format!("{id}:item/{m}")}});
             write(&def, &serde_json::to_vec_pretty(&model).unwrap_or_default())?;
             report.item_definitions_added += 1;
+        }
+    }
+    // The loader's convention biome tags the structures and their tags name
+    // (NeoForge's `c:is_plains`...): the game has no loader, so they come along.
+    for tag in crate::worldgen::with_included(&biome_conventions, conventions) {
+        let file = inside.join(format!("data/c/tags/worldgen/biome/{tag}.json"));
+        if !file.exists() {
+            write(
+                &file,
+                &serde_json::to_vec_pretty(&conventions[&tag]).unwrap_or_default(),
+            )?;
+            report.convention_biome_tags += 1;
         }
     }
     let decl = inside.join(format!("data/{id}/horizon"));
@@ -470,6 +584,34 @@ pub fn carry(
                     .push(format!("its item is {}", block.item));
             } else {
                 declared.insert(full.clone());
+                let drop = (!block_loot.contains(b))
+                    .then(|| block.drops_itself(full))
+                    .flatten();
+                if let Some(drop) = drop {
+                    let mut entry = json!({"type": "minecraft:item", "name": full});
+                    if let crate::oracle::SelfDrop::When(property, value) = drop {
+                        entry["condition"] = json!({
+                            "type": "minecraft:match_block",
+                            "blocks": full,
+                            "state": {property: value}
+                        });
+                    }
+                    let table = json!({
+                        "type": "minecraft:block",
+                        "pools": [{
+                            "condition": {"type": "minecraft:survives_explosion"},
+                            "entries": [entry],
+                            "rolls": 1
+                        }],
+                        "random_sequence": format!("{id}:blocks/{b}")
+                    });
+                    let file = inside.join(format!("data/{id}/loot_table/blocks/{b}.json"));
+                    write(
+                        &file,
+                        &serde_json::to_vec_pretty(&table).unwrap_or_default(),
+                    )?;
+                    report.loot_tables_added += 1;
+                }
             }
             write_decl("block", b, &v)?;
             report.blocks.insert(b.to_owned(), choice.template);
@@ -755,6 +897,14 @@ mod tests {
                 r#"{"values": ["gem:gem_block"]}"#,
             ),
             ("data/c/tags/item/gems.json", r#"{"values": ["gem:gem"]}"#),
+            (
+                "data/gem/lithostitched/worldgen_modifier/houses.json",
+                r#"{"type": "lithostitched:add_template_pool_elements",
+                    "template_pools": "minecraft:village/plains/houses",
+                    "elements": [{"weight": 2, "element": {"element_type": "minecraft:single_pool_element",
+                    "location": "gem:hut", "projection": "rigid",
+                    "processors": {"processors": [{"processor_type": "lithostitched:block_swap"}]}}}]}"#,
+            ),
             // What the game would refuse: vanilla skips these files alone.
             ("assets/gem/lang/ry_UA.json", r#"{"item.gem.gem": "Gem"}"#),
             ("data/gem/tags/item/empty.json", ""),
@@ -781,8 +931,17 @@ mod tests {
         );
         assert_eq!(info.census.classes, 1);
         let out = dir.join("work/mods/gem");
-        let report = carry(&jar, &info, &out, None, &|_| true).unwrap();
-        assert_eq!(report.copied, 13);
+        let report = carry(
+            &jar,
+            &info,
+            &out,
+            None,
+            &|_| true,
+            &|_| true,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(report.copied, 14);
         let unreadable: Vec<&str> = report.unreadable.keys().map(String::as_str).collect();
         assert_eq!(
             unreadable,
@@ -815,6 +974,25 @@ mod tests {
         )
         .unwrap();
         assert_eq!(recipe["key"]["#"], "gem:gem");
+        // A lithostitched pool addition, as a file the game merges, upgraded
+        // as the mod's own pools are.
+        let added: Value = serde_json::from_slice(
+            &fs::read(carried.join("data/gem/worldgen/template_pool/horizon_added/houses.json"))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            added["horizon:add_to"],
+            json!(["minecraft:village/plains/houses"])
+        );
+        assert_eq!(
+            added["elements"][0]["element"]["processors"],
+            json!({"processors": []})
+        );
+        assert_eq!(
+            report.worldgen_types.added_to["minecraft:village/plains/houses"],
+            1
+        );
 
         // Horizon's own reader accepts it: blocks and items declared, files fenced.
         let package = horizon_mods::Package::read(&carried).unwrap();

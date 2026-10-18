@@ -110,6 +110,16 @@ pub const OMINOUS_LAYERS: [(&str, &str); 8] = [
     ("circle", "light_gray"),
     ("border", "black"),
 ];
+
+/// The raid captain banner's default tooltip setting, stored by vanilla as a
+/// component but represented by `StackData::ominous_banner` in Horizon.
+fn ominous_tooltip_display() -> Tag {
+    Tag::compound([(
+        "hidden_components",
+        Tag::List(vec![Tag::String("minecraft:banner_patterns".into())]),
+    )])
+}
+
 /// `WrittenBookContent` with the pages as plain text.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct WrittenBook {
@@ -610,13 +620,9 @@ pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
                 "minecraft:banner_patterns",
                 Tag::List(OMINOUS_LAYERS.iter().map(|(p, c)| layer(p, c)).collect()),
             ));
-            entries.push((
-                "minecraft:tooltip_display",
-                Tag::compound([(
-                    "hidden_components",
-                    Tag::List(vec![Tag::String("minecraft:banner_patterns".into())]),
-                )]),
-            ));
+            if d.other("minecraft:tooltip_display").is_none() {
+                entries.push(("minecraft:tooltip_display", ominous_tooltip_display()));
+            }
             entries.push((
                 "minecraft:item_name",
                 Tag::compound([(
@@ -793,10 +799,8 @@ pub fn decode_components(components: Option<&Tag>) -> (u32, Option<Box<StackData
         for (k, v) in map {
             let key = k.to_string_lossy();
             let ominous_part = data.ominous_banner
-                && matches!(
-                    key.as_str(),
-                    "minecraft:item_name" | "minecraft:rarity" | "minecraft:tooltip_display"
-                );
+                && (matches!(key.as_str(), "minecraft:item_name" | "minecraft:rarity")
+                    || (key == "minecraft:tooltip_display" && v == &ominous_tooltip_display()));
             if !MODELLED.contains(&key.as_str()) && !ominous_part {
                 data.other.push((key, v.clone()));
             }
@@ -882,7 +886,19 @@ mod tests {
         let tag = encode_components(&banner).unwrap();
         assert!(tag.get("minecraft:banner_patterns").is_some());
         let (_, back) = decode_components(Some(&tag));
-        assert!(back.unwrap().ominous_banner);
+        let back = back.unwrap();
+        assert!(back.ominous_banner);
+        assert!(back.other("minecraft:tooltip_display").is_none());
+
+        banner.data_mut().set_other(
+            "minecraft:tooltip_display",
+            Some(Tag::Compound(Default::default())),
+        );
+        let (_, custom_display) = decode_components(encode_components(&banner).as_ref());
+        assert_eq!(
+            custom_display.unwrap().other("minecraft:tooltip_display"),
+            Some(&Tag::Compound(Default::default()))
+        );
         let mut bottle = ItemStack::new("minecraft:ominous_bottle", 1);
         bottle.data_mut().ominous_amplifier = Some(3);
         let (_, back) = decode_components(encode_components(&bottle).as_ref());

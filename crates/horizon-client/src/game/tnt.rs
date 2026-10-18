@@ -12,6 +12,8 @@ use horizon_world::level::flags as level_flags;
 
 #[derive(Clone, Debug)]
 pub(super) struct PrimedTnt {
+    /// The entity id a server tracks it by (0 until it is tracked).
+    pub id: u32,
     pub position: Vec3,
     pub previous: Vec3,
     pub velocity: Vec3,
@@ -140,6 +142,7 @@ impl Game<'_> {
             f64::from(pos.z) + 0.5,
         );
         self.tnts.push(PrimedTnt {
+            id: 0,
             position,
             previous: position,
             velocity: Vec3::new(-rot.sin() * 0.02, f64::from(0.2f32), -rot.cos() * 0.02),
@@ -241,7 +244,24 @@ impl Game<'_> {
                     .and_then(|name| self.gui.atlas.sprites.get(name).copied());
             }
         }
+        let range = super::entity_culling::default_range(
+            glam::DVec3::splat(PrimedTnt::SIZE),
+            self.settings.entity_distance,
+        );
         for t in &self.tnts {
+            // EntityRenderer.shouldRender.
+            if !self.standing_entity_in_view(
+                camera,
+                super::entity_culling::at(t.previous),
+                super::entity_culling::at(t.position),
+                alpha,
+                PrimedTnt::SIZE,
+                PrimedTnt::SIZE,
+                range,
+                0.0,
+            ) {
+                continue;
+            }
             let fuse = t.fuse as f32 - alpha as f32 + 1.0;
             let scale = if fuse < 10.0 {
                 let g = (1.0 - fuse / 10.0).clamp(0.0, 1.0);
@@ -485,6 +505,7 @@ mod tests {
         world.set(21, 4, 20, flowing).unwrap();
         let at = Vec3::new(20.5, 4.0, 20.5);
         let mut tnt = PrimedTnt {
+            id: 0,
             position: at,
             previous: at,
             velocity: Vec3::ZERO,

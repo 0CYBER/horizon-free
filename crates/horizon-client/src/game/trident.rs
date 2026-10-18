@@ -15,19 +15,47 @@ use horizon_core::{
 };
 
 pub(super) struct ThrownTrident {
-    stack: ItemStack,
-    position: Vec3,
+    /// The entity id a server tracks it by (0 until it is tracked).
+    pub id: u32,
+    pub(super) stack: ItemStack,
+    pub(super) position: Vec3,
     previous: Vec3,
-    velocity: Vec3,
-    yaw: f32,
-    pitch: f32,
-    in_ground: bool,
+    pub(super) velocity: Vec3,
+    pub(super) yaw: f32,
+    pub(super) pitch: f32,
+    pub(super) in_ground: bool,
     in_ground_time: u32,
     dealt_damage: bool,
-    loyalty: u32,
-    no_physics: bool,
+    pub(super) loyalty: u32,
+    pub(super) no_physics: bool,
     returning: u32,
     creative_only: bool,
+}
+impl ThrownTrident {
+    /// A trident a server sent (`handleAddEntity`): placed and moved by it.
+    pub(super) fn remote(id: u32, position: Vec3, yaw: f32, pitch: f32) -> Self {
+        Self {
+            id,
+            stack: ItemStack::new("minecraft:trident", 1),
+            position,
+            previous: position,
+            velocity: Vec3::ZERO,
+            yaw,
+            pitch,
+            in_ground: false,
+            in_ground_time: 0,
+            dealt_damage: false,
+            loyalty: 0,
+            no_physics: false,
+            returning: 0,
+            creative_only: false,
+        }
+    }
+    /// One tick of a server's client: the previous position, then `step`.
+    pub(super) fn remote_step(&mut self, step: impl FnOnce(Vec3) -> Vec3) {
+        self.previous = self.position;
+        self.position = step(self.position);
+    }
 }
 const HALF: f64 = 0.25;
 fn bounds(p: Vec3) -> Aabb {
@@ -163,6 +191,7 @@ impl Game<'_> {
             on_ground,
         );
         self.tridents.push(ThrownTrident {
+            id: 0,
             loyalty: thrown.enchantment_level("minecraft:loyalty"),
             stack: thrown,
             position: start,
@@ -351,7 +380,26 @@ impl Game<'_> {
         else {
             return;
         };
+        // AbstractArrow.shouldRenderAtSqrDistance: ten times the default.
+        let range = 10.0
+            * super::entity_culling::default_range(
+                glam::DVec3::splat(2.0 * HALF),
+                self.settings.entity_distance,
+            );
         for t in &self.tridents {
+            // EntityRenderer.shouldRender; ThrownTridentRenderer grows the box by 1.5.
+            if !self.standing_entity_in_view(
+                camera,
+                super::entity_culling::at(t.previous),
+                super::entity_culling::at(t.position),
+                alpha,
+                2.0 * HALF,
+                2.0 * HALF,
+                range,
+                1.5,
+            ) {
+                continue;
+            }
             let p = glam::DVec3::new(
                 t.previous.x + (t.position.x - t.previous.x) * alpha,
                 t.previous.y + (t.position.y - t.previous.y) * alpha,

@@ -86,7 +86,7 @@ impl Game<'_> {
                 Target::Player => {
                     let mut instance = EffectInstance::new(effect.id, duration, amplifier);
                     instance.visible = particles;
-                    self.potions.effects.add(instance)
+                    self.add_player_effect(instance)
                 }
                 Target::Mob(id) => match self.mobs.iter_mut().find(|m| m.id == id) {
                     Some(m) => {
@@ -134,11 +134,13 @@ impl Game<'_> {
                 (Target::Player, None) => {
                     let any = !self.potions.effects.list.is_empty();
                     self.potions.effects.clear();
+                    self.apply_effect_status();
                     any
                 }
                 (Target::Player, Some(e)) => {
                     let before = self.potions.effects.list.len();
                     self.potions.effects.list.retain(|x| x.id != e.id);
+                    self.apply_effect_status();
                     self.potions.effects.list.len() != before
                 }
                 (Target::Mob(id), e) => match self.mobs.iter_mut().find(|m| m.id == id) {

@@ -418,6 +418,32 @@ impl Game<'_> {
             if a.invisible {
                 continue;
             }
+            // ArmorStand.shouldRenderAtSqrDistance: 256 times the box's mean
+            // edge (4 for a marker's empty box), whatever the entity distance.
+            // LivingEntityRenderer grows the culling box by 0.5 for a dragon head.
+            let (width, height) = match (a.marker, a.small) {
+                (true, _) => (0.0, 0.0),
+                (false, true) => (0.25, 0.9875),
+                (false, false) => (0.5, 1.975),
+            };
+            let edge = (width + height + width) / 3.0 * 4.0;
+            let range = if edge == 0.0 { 4.0 } else { edge } * 64.0;
+            let dragon = a.equipment[5]
+                .as_ref()
+                .is_some_and(|i| &*i.item == "minecraft:dragon_head");
+            let position = super::entity_culling::at(a.position);
+            if !self.standing_entity_in_view(
+                camera,
+                position,
+                position,
+                alpha,
+                width,
+                height,
+                range,
+                if dragon { 0.5 } else { 0.0 },
+            ) {
+                continue;
+            }
             let Some(model) = (if a.small { &assets.small } else { &assets.main }) else {
                 continue;
             };

@@ -386,6 +386,12 @@ impl PlayerEffects {
                     4.0,
                     "add_value",
                 )),
+                "absorption" => Some((
+                    "minecraft:max_absorption",
+                    "minecraft:effect.absorption",
+                    4.0,
+                    "add_value",
+                )),
                 "luck" => Some(("minecraft:luck", "minecraft:effect.luck", 1.0, "add_value")),
                 "unluck" => Some((
                     "minecraft:luck",
@@ -537,5 +543,30 @@ mod tests {
         fx.add(EffectInstance::new("haste", 100, 1));
         assert!((fx.mining_speed_factor() - 1.4).abs() < 1e-6);
         assert_eq!(fx.modifiers().len(), 1);
+    }
+
+    #[test]
+    fn absorption_modifier_scales_with_amplifier() {
+        let mut fx = PlayerEffects::default();
+        fx.add(EffectInstance::new("absorption", 2400, 0));
+        assert_eq!(
+            fx.modifiers(),
+            vec![(
+                "minecraft:max_absorption",
+                "minecraft:effect.absorption",
+                4.0,
+                "add_value",
+            )]
+        );
+        fx.add(EffectInstance::new("absorption", 2400, 3));
+        assert_eq!(
+            fx.modifiers(),
+            vec![(
+                "minecraft:max_absorption",
+                "minecraft:effect.absorption",
+                16.0,
+                "add_value",
+            )]
+        );
     }
 }

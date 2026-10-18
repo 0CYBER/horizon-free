@@ -372,7 +372,7 @@ impl Game<'_> {
                 .hub
                 .guests
                 .iter()
-                .find(|g| g.conn == conn)
+                .find(|g| g.conn == conn && host.hub.here(g))
                 .map(|g| uuid_words(g.uuid))
             else {
                 continue;

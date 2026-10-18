@@ -2,7 +2,7 @@
 //! paddling controls, collisions, riding (`positionRider`, `clampRotation`,
 //! dismounting), `BoatItem` placement, `VehicleEntity.hurtServer` breaking,
 //! saving and `AbstractBoatRenderer` with animated paddles.
-use super::{Game, Keys, view_vector};
+use super::{Game, Keys, entity_culling::at, view_vector};
 use horizon_client::{
     blocks::Fluid,
     collisions::SceneCollisions,
@@ -700,8 +700,19 @@ impl Game<'_> {
     /// AbstractBoatRenderer.
     pub(super) fn boat_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
         let a = alpha as f32;
+        let range = super::entity_culling::default_range(
+            glam::DVec3::new(WIDTH, HEIGHT, WIDTH),
+            self.settings.entity_distance,
+        );
         for b in &self.boats {
             let entity_start = out.len();
+            // EntityRenderer.shouldRender.
+            let (previous, position) = (at(b.previous), at(b.position));
+            if !self.standing_entity_in_view(
+                camera, previous, position, alpha, WIDTH, HEIGHT, range, 0.0,
+            ) {
+                continue;
+            }
             let models = if b.chest {
                 &self.boat_models.chest_models
             } else {

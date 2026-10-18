@@ -87,48 +87,37 @@ impl Game<'_> {
         let facing = beehive::facing_step(props.get("facing").map(String::as_str));
         Some((honey, facing))
     }
-    /// `BeehiveBlockEntity.serverTick` for every hive, after an emergency
-    /// exit for those with fire beside them (`BeehiveBlock.updateShape`).
-    pub(super) fn tick_beehives(&mut self) {
-        let mut keys: Vec<(i32, i32, i32)> = self
-            .world
-            .block_entities
-            .iter()
-            .filter(|(_, e)| matches!(e, BlockEntity::Beehive(_)))
-            .map(|(k, _)| *k)
-            .collect();
-        keys.sort_unstable();
-        for key in keys {
-            let at = [key.0, key.1, key.2];
-            let Some((honey, facing)) = self.hive_state(at) else {
-                continue;
-            };
-            let Some(BlockEntity::Beehive(mut hive)) = self.world.block_entities.remove(&key)
-            else {
-                continue;
-            };
-            let fire = [
-                [1, 0, 0],
-                [-1, 0, 0],
-                [0, 1, 0],
-                [0, -1, 0],
-                [0, 0, 1],
-                [0, 0, -1],
-            ]
-            .iter()
-            .any(|d| {
-                let state = self.world.block(at[0] + d[0], at[1] + d[1], at[2] + d[2]);
-                &*self.res.facts().get(state).name == "minecraft:fire"
-            });
-            let mut host = GameHive { game: self };
-            if fire && !hive.bees.is_empty() {
-                hive.release_all(at, facing, honey, Release::Emergency, &mut host);
-            }
-            hive.server_tick(at, facing, honey, &mut host);
-            self.world
-                .block_entities
-                .insert(key, BlockEntity::Beehive(hive));
+    /// `BeehiveBlockEntity.serverTick` of the hive at `key`, after an
+    /// emergency exit if fire is beside it (`BeehiveBlock.updateShape`).
+    pub(super) fn tick_beehive(&mut self, key: (i32, i32, i32)) {
+        let at = [key.0, key.1, key.2];
+        let Some((honey, facing)) = self.hive_state(at) else {
+            return;
+        };
+        let Some(BlockEntity::Beehive(mut hive)) = self.world.block_entities.take(&key) else {
+            return;
+        };
+        let fire = [
+            [1, 0, 0],
+            [-1, 0, 0],
+            [0, 1, 0],
+            [0, -1, 0],
+            [0, 0, 1],
+            [0, 0, -1],
+        ]
+        .iter()
+        .any(|d| {
+            let state = self.world.block(at[0] + d[0], at[1] + d[1], at[2] + d[2]);
+            &*self.res.facts().get(state).name == "minecraft:fire"
+        });
+        let mut host = GameHive { game: self };
+        if fire && !hive.bees.is_empty() {
+            hive.release_all(at, facing, honey, Release::Emergency, &mut host);
         }
+        hive.server_tick(at, facing, honey, &mut host);
+        self.world
+            .block_entities
+            .put(key, BlockEntity::Beehive(hive));
     }
     /// `BeehiveBlockEntity.addOccupant` for a bee its `BeeEnterHiveGoal`
     /// sent in: off its lead, its tag stored, the bee gone.
@@ -152,13 +141,13 @@ impl Game<'_> {
         self.mobs[i].extra.mount = None;
         let tag = self.mob_tree_nbt(i);
         let flower = bee::get(&self.mobs[i]).and_then(|b| b.flower);
-        let Some(BlockEntity::Beehive(mut hive)) = self.world.block_entities.remove(&key) else {
+        let Some(BlockEntity::Beehive(mut hive)) = self.world.block_entities.take(&key) else {
             return;
         };
         let stored = hive.add_occupant(at, tag, flower, &mut GameHive { game: self });
         self.world
             .block_entities
-            .insert(key, BlockEntity::Beehive(hive));
+            .put(key, BlockEntity::Beehive(hive));
         if stored && let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
             m.removed = true;
         }
@@ -166,13 +155,13 @@ impl Game<'_> {
     /// `BeehiveBlockEntity.emptyAllLivingFromHive` with no player about.
     pub(super) fn empty_hive(&mut self, at: [i32; 3], facing: [i32; 2], status: Release) {
         let key = (at[0], at[1], at[2]);
-        let Some(BlockEntity::Beehive(mut hive)) = self.world.block_entities.remove(&key) else {
+        let Some(BlockEntity::Beehive(mut hive)) = self.world.block_entities.take(&key) else {
             return;
         };
         hive.release_all(at, facing, None, status, &mut GameHive { game: self });
         self.world
             .block_entities
-            .insert(key, BlockEntity::Beehive(hive));
+            .put(key, BlockEntity::Beehive(hive));
     }
     /// `BeehiveBlock.playerDestroy` without silk touch: the bees come out
     /// angry at the player unless smoke calms them, then

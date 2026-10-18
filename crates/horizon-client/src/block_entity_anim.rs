@@ -12,11 +12,11 @@
 //! (blocks, entities, game time) as closures, so the parity fixture can drive
 //! them with scripted inputs (`tools/test_block_entity_anim_parity.py`).
 use crate::block_entity_render::BlockAnim;
+use crate::fast_hash::FxHashMap;
 use horizon_core::{
     geometry::trig::{self, Mth},
     random::{LegacyRandom, RandomSource},
 };
-use std::collections::HashMap;
 
 /// `Direction` names by `get3DDataValue`.
 pub const DIRECTIONS: [&str; 6] = ["down", "up", "north", "south", "west", "east"];
@@ -832,38 +832,44 @@ pub fn ticker(name: &str, prop: impl Fn(&str) -> Option<String>) -> Option<Ticke
 /// The animated block entities of a level, by position.
 #[derive(Clone, Debug)]
 pub struct BlockEntityAnims {
-    pub chests: HashMap<[i32; 3], ChestLid>,
-    pub books: HashMap<[i32; 3], EnchantingBook>,
+    pub chests: FxHashMap<[i32; 3], ChestLid>,
+    pub books: FxHashMap<[i32; 3], EnchantingBook>,
     /// `EnchantingTableBlockEntity.RANDOM`, shared by every table.
     pub book_random: LegacyRandom,
-    pub shulkers: HashMap<[i32; 3], Shulker>,
-    pub bells: HashMap<[i32; 3], Bell>,
-    pub conduits: HashMap<[i32; 3], Conduit>,
-    pub skulls: HashMap<[i32; 3], Skull>,
-    pub pots: HashMap<[i32; 3], PotWobble>,
-    pub gateways: HashMap<[i32; 3], EndGateway>,
+    pub shulkers: FxHashMap<[i32; 3], Shulker>,
+    pub bells: FxHashMap<[i32; 3], Bell>,
+    pub conduits: FxHashMap<[i32; 3], Conduit>,
+    pub skulls: FxHashMap<[i32; 3], Skull>,
+    pub pots: FxHashMap<[i32; 3], PotWobble>,
+    pub gateways: FxHashMap<[i32; 3], EndGateway>,
     /// The integrated server's copies of the gateways (`portalTick`).
-    pub gateway_servers: HashMap<[i32; 3], EndGateway>,
+    pub gateway_servers: FxHashMap<[i32; 3], EndGateway>,
     /// The client level's random (conduit particles).
     pub random: LegacyRandom,
     /// [`Ticker`] by block state id (see [`BlockEntityAnims::classify`]).
     pub kinds: Vec<Option<Ticker>>,
+    /// The drawn block entities with a ticker, sorted by position, and the
+    /// renderer's block entity revision they were read at.
+    pub present: Vec<([i32; 3], Ticker)>,
+    pub present_revision: Option<u64>,
 }
 impl Default for BlockEntityAnims {
     fn default() -> Self {
         Self {
-            chests: HashMap::new(),
-            books: HashMap::new(),
+            chests: FxHashMap::default(),
+            books: FxHashMap::default(),
             book_random: LegacyRandom::new(0x626f6f6b),
-            shulkers: HashMap::new(),
-            bells: HashMap::new(),
-            conduits: HashMap::new(),
-            skulls: HashMap::new(),
-            pots: HashMap::new(),
-            gateways: HashMap::new(),
-            gateway_servers: HashMap::new(),
+            shulkers: FxHashMap::default(),
+            bells: FxHashMap::default(),
+            conduits: FxHashMap::default(),
+            skulls: FxHashMap::default(),
+            pots: FxHashMap::default(),
+            gateways: FxHashMap::default(),
+            gateway_servers: FxHashMap::default(),
             random: LegacyRandom::new(0x6c6576656c),
             kinds: Vec::new(),
+            present: Vec::new(),
+            present_revision: None,
         }
     }
 }
@@ -877,15 +883,20 @@ impl BlockEntityAnims {
                     .and_then(|s| ticker(&s.name, |k| s.properties.get(k).cloned()))
             })
             .collect();
+        self.present_revision = None;
     }
     /// The ticker of a block state.
     pub fn ticker(&self, state: u32) -> Option<Ticker> {
         self.kinds.get(state as usize).copied().flatten()
     }
     /// Drops the state of block entities that are gone or changed kind:
-    /// `present` maps the loaded block entities to their tickers.
-    pub fn retain_present(&mut self, present: &HashMap<[i32; 3], Ticker>) {
-        let is = |p: &[i32; 3], f: fn(&Ticker) -> bool| present.get(p).is_some_and(f);
+    /// `present` holds the loaded block entities' tickers, sorted by position.
+    pub fn retain_present(&mut self, present: &[([i32; 3], Ticker)]) {
+        let is = |p: &[i32; 3], f: fn(&Ticker) -> bool| {
+            present
+                .binary_search_by_key(p, |(q, _)| *q)
+                .is_ok_and(|i| f(&present[i].1))
+        };
         self.chests.retain(|p, _| is(p, |t| *t == Ticker::Lid));
         self.books.retain(|p, _| is(p, |t| *t == Ticker::Book));
         self.shulkers

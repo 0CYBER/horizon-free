@@ -23,6 +23,10 @@ impl<'a> Reader<'a> {
     pub fn position(&self) -> usize {
         self.pos
     }
+    /// The bytes read since `start` (a `position()`).
+    pub fn since(&self, start: usize) -> &'a [u8] {
+        &self.data[start.min(self.pos)..self.pos]
+    }
     pub fn rest(&mut self) -> &'a [u8] {
         let rest = &self.data[self.pos..];
         self.pos = self.data.len();
@@ -302,6 +306,16 @@ pub struct Bytes;
 impl Codec<Vec<u8>> for Bytes {
     fn read(r: &mut Reader) -> Result<Vec<u8>> {
         r.byte_array(r.remaining())
+    }
+    fn write(v: &Vec<u8>, w: &mut Writer) {
+        w.byte_array(v)
+    }
+}
+/// ByteBufCodecs.byteArray(N): VarInt-prefixed bytes, at most N.
+pub struct BytesN<const N: usize>;
+impl<const N: usize> Codec<Vec<u8>> for BytesN<N> {
+    fn read(r: &mut Reader) -> Result<Vec<u8>> {
+        r.byte_array(N)
     }
     fn write(v: &Vec<u8>, w: &mut Writer) {
         w.byte_array(v)

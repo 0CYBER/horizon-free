@@ -2,8 +2,11 @@
 //! a frame binds it once and draws every section with indirect multi-draw.
 use std::collections::BTreeMap;
 
-/// Ranges are rounded up to this many vertices to limit fragmentation.
-const GRAIN: u64 = 256;
+/// Ranges are rounded up to this many vertices to limit fragmentation, and
+/// start at multiples of it (`flat` names sections by these blocks).
+pub const GRAIN: u64 = 256;
+/// The largest page, in bytes.
+pub const PAGE_BYTES: u64 = 256 << 20;
 
 /// Free vertex ranges: start -> length, never adjacent.
 #[derive(Debug, PartialEq)]
@@ -65,8 +68,14 @@ impl Arena {
     pub fn new(device: &wgpu::Device, stride: u64, capacity: u64) -> Self {
         Self::with_usage(device, stride, capacity, wgpu::BufferUsages::VERTEX)
     }
-    pub fn indices(device: &wgpu::Device, capacity: u64) -> Self {
-        Self::with_usage(device, 4, capacity, wgpu::BufferUsages::INDEX)
+    /// Sorted translucent indices; `storage` when compute passes read them.
+    pub fn indices(device: &wgpu::Device, capacity: u64, storage: bool) -> Self {
+        let usage = if storage {
+            wgpu::BufferUsages::INDEX | wgpu::BufferUsages::STORAGE
+        } else {
+            wgpu::BufferUsages::INDEX
+        };
+        Self::with_usage(device, 4, capacity, usage)
     }
     fn with_usage(
         device: &wgpu::Device,
@@ -75,7 +84,7 @@ impl Arena {
         usage: wgpu::BufferUsages,
     ) -> Self {
         // 256 MiB pages, or less where the device's buffers are smaller.
-        let bytes = device.limits().max_buffer_size.min(256 << 20);
+        let bytes = device.limits().max_buffer_size.min(PAGE_BYTES);
         let page_limit = (bytes / stride) / GRAIN * GRAIN;
         let capacity = capacity.next_multiple_of(GRAIN).min(page_limit);
         Self {
@@ -132,6 +141,13 @@ impl Arena {
     pub fn bytes(&self) -> u64 {
         self.pages.iter().flatten().map(|p| p.capacity).sum::<u64>() * self.stride
     }
+    /// The most vertices a page holds.
+    pub fn page_vertices(&self) -> u64 {
+        self.page_limit
+    }
+    pub fn has_page(&self, page: u32) -> bool {
+        self.pages.get(page as usize).is_some_and(Option::is_some)
+    }
     pub fn buffer(&self, page: u32) -> &wgpu::Buffer {
         &self.pages[page as usize]
             .as_ref()
@@ -139,12 +155,14 @@ impl Arena {
             .buffer
     }
     /// A range of `vertices`: (page, first vertex). Grows the newest page
-    /// (copying its contents on the GPU) or starts a new one when nothing
-    /// free is large enough; `None` when no memory is left for it.
+    /// (copying its contents on the GPU, in `encoder`) or starts a new one
+    /// when nothing free is large enough; `None` when no memory is left for
+    /// it. Writes to the arena belong in `encoder` too, so that those
+    /// recorded before a grow reach the grown page.
     pub fn alloc(
         &mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
         vertices: u64,
     ) -> Option<(u32, u64)> {
         let len = Self::span(vertices).min(self.page_limit);
@@ -162,7 +180,7 @@ impl Arena {
             let current = page.capacity;
             let grown = (current * 2).max(current + len).min(self.page_limit);
             if (grown - current >= len || grown == self.page_limit)
-                && self.grow(device, queue, last, grown)
+                && self.grow(device, encoder, last, grown)
                 && let Some(start) = self.pages[last].as_mut().unwrap().free.take(len)
             {
                 return Some((last as u32, start));
@@ -212,7 +230,7 @@ impl Arena {
     fn grow(
         &mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
         page: usize,
         capacity: u64,
     ) -> bool {
@@ -221,12 +239,8 @@ impl Arena {
             return false;
         };
         let old = self.pages[page].as_mut().expect("live arena page");
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Grow section arena"),
-        });
+        // Copies recorded for the old buffer run before this one.
         encoder.copy_buffer_to_buffer(&old.buffer, 0, &buffer, 0, old.capacity * self.stride);
-        // Writes queued for the old buffer run before this copy.
-        queue.submit([encoder.finish()]);
         let previous = old.capacity;
         old.buffer = buffer;
         old.capacity = capacity;
@@ -288,6 +302,50 @@ mod tests {
         .ok()
     }
 
+    /// `Arena::alloc`, with the copies of a grow submitted at once.
+    fn alloc(
+        arena: &mut Arena,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        vertices: u64,
+    ) -> Option<(u32, u64)> {
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let range = arena.alloc(device, &mut encoder, vertices);
+        queue.submit([encoder.finish()]);
+        range
+    }
+
+    #[test]
+    fn writes_recorded_before_a_grow_reach_the_grown_page() {
+        let Some((device, queue)) = device() else {
+            eprintln!("no GPU adapter: skipped");
+            return;
+        };
+        let mut arena = Arena::indices(&device, GRAIN, false);
+        let mut uploads = super::super::upload::Uploads::new(&device);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let (page, start) = arena.alloc(&device, &mut encoder, GRAIN).unwrap();
+        uploads.buffer(
+            &mut encoder,
+            arena.buffer(page),
+            start * 4,
+            &7u32.to_le_bytes(),
+        );
+        // The page is full: the next range grows it, in the same encoder.
+        let (grown, next) = arena.alloc(&device, &mut encoder, GRAIN).unwrap();
+        assert_eq!(grown, page);
+        uploads.buffer(
+            &mut encoder,
+            arena.buffer(grown),
+            next * 4,
+            &9u32.to_le_bytes(),
+        );
+        uploads.finish(&encoder);
+        queue.submit([encoder.finish()]);
+        assert_eq!(read(&device, &queue, arena.buffer(page), start * 4), 7);
+        assert_eq!(read(&device, &queue, arena.buffer(page), next * 4), 9);
+    }
+
     #[test]
     fn empty_pages_are_reclaimed_without_moving_live_ranges() {
         let Some((device, queue)) = device() else {
@@ -297,9 +355,9 @@ mod tests {
         let mut arena = Arena::new(&device, 4, GRAIN);
         arena.page_limit = 2 * GRAIN;
         assert_eq!(arena.bytes(), 0);
-        let (first, a) = arena.alloc(&device, &queue, GRAIN).unwrap();
-        let (_, b) = arena.alloc(&device, &queue, GRAIN).unwrap();
-        let (live, c) = arena.alloc(&device, &queue, 2 * GRAIN).unwrap();
+        let (first, a) = alloc(&mut arena, &device, &queue, GRAIN).unwrap();
+        let (_, b) = alloc(&mut arena, &device, &queue, GRAIN).unwrap();
+        let (live, c) = alloc(&mut arena, &device, &queue, 2 * GRAIN).unwrap();
         let buffer = arena.buffer(live).clone();
         let data = [1u8, 2, 3, 4];
         queue.write_buffer(&buffer, c * 4, &data);
@@ -311,7 +369,7 @@ mod tests {
         arena.trim();
         assert_eq!(arena.bytes(), 2 * GRAIN * 4);
         assert_eq!(arena.buffer(live), &buffer);
-        let (reused, d) = arena.alloc(&device, &queue, GRAIN).unwrap();
+        let (reused, d) = alloc(&mut arena, &device, &queue, GRAIN).unwrap();
         assert_eq!(reused, first);
 
         let (tx, rx) = std::sync::mpsc::channel();
@@ -338,13 +396,13 @@ mod tests {
         };
         for mut arena in [
             Arena::new(&device, 28, GRAIN),
-            Arena::indices(&device, GRAIN),
+            Arena::indices(&device, GRAIN, false),
         ] {
-            arena.alloc(&device, &queue, GRAIN).unwrap();
+            alloc(&mut arena, &device, &queue, GRAIN).unwrap();
             assert_eq!(arena.bytes(), arena.stride * GRAIN);
             arena.clear();
             assert_eq!(arena.bytes(), 0);
-            assert_eq!(arena.alloc(&device, &queue, GRAIN), Some((0, 0)));
+            assert_eq!(alloc(&mut arena, &device, &queue, GRAIN), Some((0, 0)));
             assert_eq!(arena.bytes(), arena.stride * GRAIN);
         }
     }
@@ -397,13 +455,13 @@ mod tests {
         {
             return;
         }
-        let mut arena = Arena::indices(&device, GRAIN);
-        let (page, start) = arena.alloc(&device, &queue, GRAIN).unwrap();
+        let mut arena = Arena::indices(&device, GRAIN, false);
+        let (page, start) = alloc(&mut arena, &device, &queue, GRAIN).unwrap();
         queue.write_buffer(arena.buffer(page), start * 4, &7u32.to_le_bytes());
         arena.video_memory_full = true;
         // The full page can't grow in video memory: it moves to system
         // memory with its contents, and new ranges come from there.
-        let (grown, next) = arena.alloc(&device, &queue, GRAIN).unwrap();
+        let (grown, next) = alloc(&mut arena, &device, &queue, GRAIN).unwrap();
         assert!(arena.spilled);
         assert_eq!(grown, page);
         assert!(
@@ -422,14 +480,14 @@ mod tests {
         let Some((device, queue)) = device() else {
             return;
         };
-        let mut arena = Arena::indices(&device, GRAIN);
-        arena.alloc(&device, &queue, GRAIN).unwrap();
+        let mut arena = Arena::indices(&device, GRAIN, false);
+        alloc(&mut arena, &device, &queue, GRAIN).unwrap();
         arena.video_memory_full = true;
         // Without mappable primary buffers nothing can spill: the request
         // fails, and the arena keeps what it has.
-        assert_eq!(arena.alloc(&device, &queue, GRAIN), None);
+        assert_eq!(alloc(&mut arena, &device, &queue, GRAIN), None);
         assert_eq!(arena.bytes(), GRAIN * 4);
         arena.release(0, 0, GRAIN);
-        assert_eq!(arena.alloc(&device, &queue, GRAIN), Some((0, 0)));
+        assert_eq!(alloc(&mut arena, &device, &queue, GRAIN), Some((0, 0)));
     }
 }

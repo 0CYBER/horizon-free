@@ -213,7 +213,7 @@ impl Game<'_> {
         owner.is_local_player = true;
         owner.is_view_entity = true;
         if let (Some((slot, ticks)), Some(stack)) = (self.using, stack)
-            && self.inventory.get(slot).and_then(Option::as_ref) == Some(stack)
+            && self.stack_in(slot) == Some(stack)
         {
             let view = item_render::stack_view(stack);
             let duration = use_duration(&self.pack.item_renderer.models.components(&view));

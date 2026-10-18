@@ -173,6 +173,16 @@ impl Game<'_> {
                 .chain(super::pad::HELP)
                 .collect::<Vec<_>>() }))),
             "setblock" | "fill" | "particle" | "signedit" => self.render_command(&words),
+            "section-draws" => {
+                let r = self.renderer.as_mut().ok_or("no renderer")?;
+                match words.get(1).copied() {
+                    None => {}
+                    Some("flat") => r.set_flat_draws(true)?,
+                    Some("indirect") => r.set_flat_draws(false)?,
+                    Some(other) => return Err(format!("unknown section draw mode {other}").into()),
+                }
+                Ok(Some(json!({ "ok": true, "flat": r.flat_draws() })))
+            }
             "sculk" => Ok(Some(self.sculk_command(&words)?)),
             "status" => Ok(Some(self.control_status())),
             "pad" => Ok(Some(self.pad_command(&words)?)),
@@ -606,18 +616,6 @@ impl Game<'_> {
 
     fn control_key_down(&mut self, key: KeyCode) -> Result<()> {
         self.physical_keys.insert(key);
-        // A server's chat input takes the keys first, as remote_chat_key does.
-        if self.remote_chat_open() {
-            use winit::keyboard::NamedKey;
-            let named = match key {
-                KeyCode::Escape => Some(NamedKey::Escape),
-                KeyCode::Enter | KeyCode::NumpadEnter => Some(NamedKey::Enter),
-                KeyCode::Backspace => Some(NamedKey::Backspace),
-                _ => None,
-            };
-            self.remote_chat_input(named, None);
-            return Ok(());
-        }
         if self.screen == Screen::Chat {
             self.chat_key_code(key, None);
             return Ok(());
@@ -684,6 +682,8 @@ impl Game<'_> {
                 "size": [r.config.width, r.config.height],
                 "present_mode": format!("{:?}", r.config.present_mode),
                 "drawn_sections": r.drawn_sections,
+                "section_draws": r.section_draws,
+                "section_draw_calls": r.section_draw_calls,
                 "uploaded_bytes": r.uploaded_bytes,
                 "resident_sections": r.resident_sections(),
                 "arena_bytes": arena_bytes,
@@ -758,6 +758,10 @@ impl Game<'_> {
                 .map(|e| self.shown_name_tags(glam::DVec3::from_array(e))),
         });
         status["physical_keys"] = json!(physical_keys);
+        // Boats, minecarts, armor stands, item frames and paintings.
+        status["objects"] = json!(self.objects_status());
+        // Primed TNT, falling blocks, projectiles, tridents and end crystals.
+        status["projectiles"] = json!(self.projectiles_status());
         status
     }
 }

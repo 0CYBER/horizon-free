@@ -4,7 +4,13 @@
 //! take time run as a task advanced every frame and reply when they finish or
 //! time out, so `horizon-ctl break 10 64 3` returns what the block dropped.
 use super::{Game, Screen};
-use horizon_client::{Result, block_entity_anim::Ticker, items::ItemStack, widgets};
+use horizon_client::{
+    Result,
+    block_entity_anim::Ticker,
+    chunk::{MIN_Y, SECTIONS},
+    items::ItemStack,
+    widgets,
+};
 use horizon_core::geometry::Vec3;
 use horizon_world::registry::BlockStateId;
 use serde_json::{Value, json};
@@ -27,6 +33,7 @@ pub(super) const HELP: &[&str] = &[
     "entities [RADIUS] [TYPE]       mobs, dropped items and orbs near the player, nearest first",
     "block X Y Z                    the block state at a position",
     "blocks X1 Y1 Z1 X2 Y2 Z2       the non-air blocks of a box (at most 32768 blocks)",
+    "light X1 Y1 Z1 X2 Y2 Z2        the stored sky and block light of a box (at most 32768 blocks)",
     "find-block BLOCK [RADIUS]      the nearest loaded blocks of a kind (default radius 32)",
     "inventory                      hotbar, main inventory, armor, offhand and carried stack",
     "screen                         the open screen or menu, its slots and its buttons",
@@ -466,9 +473,16 @@ impl Game<'_> {
             }),
             "dimension": self.dim.id(),
             "gamemode": format!("{:?}", self.mode).to_lowercase(),
+            // The bed (its head) the player sleeps in.
+            "sleeping": self.sleeping,
+            // The item in use: its slot and for how many ticks.
+            "using": self.using.map(|(slot, ticks)| json!({ "slot": slot, "ticks": ticks })),
             "time": { "day_time": self.world.day_time, "day": self.world.day_time.div_euclid(24000), "time_of_day": self.world.day_time.rem_euclid(24000) },
             "weather": { "raining": self.world.weather.raining, "thundering": self.world.weather.thundering },
             "paused": self.pause,
+            // Mouse movement turns the camera (`apply_mouse_look`): the real
+            // pointer is grabbed, or an agent's `mouse-move` stands in for it.
+            "pointer_grabbed": self.captured || self.agent_pointer,
             "player": player,
             "selected": self.selected + 1,
             "held": self.held().map(|s| self.stack_value(s)),
@@ -613,6 +627,9 @@ impl Game<'_> {
             "screen": self.screen_label(),
             "buttons": buttons,
         });
+        if let Some(chat) = &self.ui.chat_screen {
+            v["chat_input"] = json!(chat.input.value);
+        }
         if self.title.is_some() {
             v["menu"] = self.title_value();
         }
@@ -631,6 +648,15 @@ impl Game<'_> {
             v["craft_size"] = json!(self.craft_size);
             v["station"] = json!(self.station.as_ref().map(|s| format!("{:?}", s.kind)));
             v["container"] = json!(self.container);
+            // The recipe book's buttons (GUI pixels): the book button, then
+            // the recipe buttons of the page, page arrows, filter and tabs.
+            let book = self.recipe_book_targets();
+            if !book.is_empty() {
+                v["recipe_book"] = json!({
+                    "targets": book.iter().map(|t| t.rect).collect::<Vec<_>>(),
+                    "known": self.recipe_book_known(),
+                });
+            }
             v["slot_ids"] = json!(
                 "0-8 hotbar, 9-35 inventory, 100+ crafting grid (row-major), 200 crafting result, 300+ container, 500-503 armor, 504 offhand, 600+ station"
             );
@@ -954,6 +980,35 @@ impl Game<'_> {
                     }
                 }
                 ok(json!({ "from": lo, "to": hi, "counts": census, "blocks": list }))
+            }
+            "light" => {
+                self.need_world()?;
+                let (p, q) = (a.block_pos(0)?, a.block_pos(3)?);
+                let lo = [0, 1, 2].map(|i| p[i].min(q[i]));
+                let hi = [0, 1, 2].map(|i| p[i].max(q[i]));
+                let volume: i64 = (0..3).map(|i| i64::from(hi[i] - lo[i] + 1)).product();
+                if volume > 32768 {
+                    return Err(format!("{volume} blocks; at most 32768 per request").into());
+                }
+                // One hex digit per block, x fastest, then z, then y; `.`
+                // outside the loaded chunks.
+                let (mut sky, mut block) = (String::new(), String::new());
+                for y in lo[1]..=hi[1] {
+                    for z in lo[2]..=hi[2] {
+                        for x in lo[0]..=hi[0] {
+                            let packed = self
+                                .world
+                                .chunks
+                                .get(&(x >> 4, z >> 4))
+                                .filter(|_| (MIN_Y..MIN_Y + SECTIONS as i32 * 16).contains(&y))
+                                .map(|c| c.light(x & 15, y, z & 15));
+                            let digit = |v: u8| char::from_digit(u32::from(v), 16).unwrap_or('.');
+                            sky.push(packed.map_or('.', |v| digit(v >> 4)));
+                            block.push(packed.map_or('.', |v| digit(v & 15)));
+                        }
+                    }
+                }
+                ok(json!({ "from": lo, "to": hi, "sky": sky, "block": block }))
             }
             "find-block" => {
                 self.need_world()?;

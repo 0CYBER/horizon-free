@@ -24,7 +24,7 @@ const CRUMBLING_BLEND: wgpu::BlendState = wgpu::BlendState {
 };
 /// `TerrainVertex` for `vs_terrain`: position, UV, layer, light, colour.
 const TERRAIN_ATTRIBUTES: [wgpu::VertexAttribute; 5] =
-    wgpu::vertex_attr_array![0=>Float32x3,1=>Float32x2,2=>Uint16,4=>Uint8x2,3=>Unorm8x4];
+    wgpu::vertex_attr_array![0=>Float32x3,1=>Uint16x2,2=>Uint16,4=>Uint8x2,3=>Unorm8x4];
 
 /// entity.wgsl after the OverlayTexture constants it reads.
 fn entity_shader() -> String {
@@ -58,6 +58,7 @@ pub fn outline_vertices(edges: &[[f64; 6]], camera: glam::DVec3) -> Vec<[f32; 6]
 }
 
 mod arena;
+mod flat;
 mod java_stages;
 mod occlusion;
 mod pack_stages;
@@ -67,6 +68,12 @@ mod timing;
 pub mod translucency;
 pub(crate) mod upload;
 mod world_post;
+
+/// A new value for `Renderer::block_entity_revision`.
+fn next_block_entity_revision() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -101,9 +108,17 @@ struct SectionGpu {
     faces: crate::mesher::FaceGroups,
     sort: translucency::SortState,
     sorted_indices: Option<(u32, u64)>,
+    /// Its id for flat draws (`flat::Flat::add`), when they are on.
+    flat_id: Option<u32>,
 }
 /// Line segments the hit outline can hold.
 const MAX_OUTLINE_EDGES: u64 = 256;
+/// Staging buffer size for section meshes: a frame of uploads while
+/// exploring fits in a few.
+const SECTION_UPLOAD_CHUNK: u64 = 4 << 20;
+/// Section copies are submitted early past this many staged bytes, which
+/// bounds the staging memory frames that are not drawn can hold.
+const SECTION_COPY_LIMIT: u64 = 64 << 20;
 pub struct Frame<'a> {
     pub camera: DVec3,
     pub yaw: f32,
@@ -251,6 +266,10 @@ pub struct Renderer {
     pub config: wgpu::SurfaceConfiguration,
     solid: wgpu::RenderPipeline,
     translucent: wgpu::RenderPipeline,
+    /// Flat section draws (`flat`), where multi-draw is emulated.
+    flat: Option<flat::Flat>,
+    /// `flat` draws this frame's sections (off: the per-section draws).
+    flat_on: bool,
     sky: wgpu::RenderPipeline,
     dark_disc: wgpu::RenderPipeline,
     lines: wgpu::RenderPipeline,
@@ -312,6 +331,13 @@ pub struct Renderer {
     lightmap_sampler: wgpu::Sampler,
     animations: AnimatedSprites,
     uploads: upload::Uploads,
+    /// Section meshes are staged through their own belt into
+    /// `section_copies`, which the next submission runs ahead of the frame:
+    /// `Queue::write_buffer` would make a staging buffer per write.
+    section_uploads: upload::Uploads,
+    section_copies: Option<wgpu::CommandEncoder>,
+    /// Bytes staged in `section_copies`.
+    section_copy_bytes: u64,
     /// Whether `lightmap` holds `lightmap_pixels` yet.
     lightmap_uploaded: bool,
     sprite_minimum_size: u32,
@@ -341,6 +367,8 @@ pub struct Renderer {
     draw_pages: Vec<(u32, Option<u32>)>,
     /// Block-entity blocks per meshed section (world position, state id).
     block_entities: HashMap<SectionKey, Vec<([i32; 3], u32)>>,
+    /// Changes whenever `block_entities` does (unique across renderers).
+    block_entity_revision: u64,
     /// VisGraph face connectivity per meshed section (cave culling).
     occlusion: occlusion::Occlusion,
     /// Resolution scale and FXAA (Horizon settings).
@@ -355,6 +383,10 @@ pub struct Renderer {
     pub info: wgpu::AdapterInfo,
     pub suspended: bool,
     pub drawn_sections: usize,
+    /// Last frame's section draws (face ranges and translucent sections),
+    /// and the draw calls the backend issued for them.
+    pub section_draws: usize,
+    pub section_draw_calls: usize,
     pub uploaded_bytes: u64,
     started: Instant,
     /// Write the next presented frame to this PNG path (control socket).
@@ -785,18 +817,19 @@ impl Renderer {
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &debug_line_attributes,
         })];
-        let pipeline = |label: &str,
-                        vertex: &str,
-                        fragment: &str,
-                        buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
-                        topology: wgpu::PrimitiveTopology,
-                        cull: Option<wgpu::Face>,
-                        depth_write: bool,
-                        depth_test: bool,
-                        blend: Option<wgpu::BlendState>| {
+        let pipeline_in = |layout: &wgpu::PipelineLayout,
+                           label: &str,
+                           vertex: &str,
+                           fragment: &str,
+                           buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
+                           topology: wgpu::PrimitiveTopology,
+                           cull: Option<wgpu::Face>,
+                           depth_write: bool,
+                           depth_test: bool,
+                           blend: Option<wgpu::BlendState>| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
-                layout: Some(&layout),
+                layout: Some(layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
                     entry_point: Some(vertex),
@@ -836,6 +869,28 @@ impl Renderer {
                 multiview_mask: None,
                 cache: None,
             })
+        };
+        let pipeline = |label: &str,
+                        vertex: &str,
+                        fragment: &str,
+                        buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
+                        topology: wgpu::PrimitiveTopology,
+                        cull: Option<wgpu::Face>,
+                        depth_write: bool,
+                        depth_test: bool,
+                        blend: Option<wgpu::BlendState>| {
+            pipeline_in(
+                &layout,
+                label,
+                vertex,
+                fragment,
+                buffers,
+                topology,
+                cull,
+                depth_write,
+                depth_test,
+                blend,
+            )
         };
         let tri = wgpu::PrimitiveTopology::TriangleList;
         let solid = pipeline(
@@ -1653,7 +1708,34 @@ impl Renderer {
             std::mem::size_of::<TerrainVertex>() as u64,
             1 << 20,
         );
-        let sorted_indices = arena::Arena::indices(&device, 1 << 16);
+        // Sections as one index list per frame where multi-draw is emulated.
+        let flat = flat::wanted(&adapter, &device).then(|| {
+            let buffers = [Some(wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<TerrainVertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &TERRAIN_ATTRIBUTES,
+            })];
+            flat::Flat::new(
+                &device,
+                &bindings,
+                arena.page_vertices(),
+                |layout, label, fragment, blend| {
+                    pipeline_in(
+                        layout,
+                        label,
+                        "vs_terrain_flat",
+                        fragment,
+                        &buffers,
+                        tri,
+                        Some(wgpu::Face::Back),
+                        true,
+                        true,
+                        blend,
+                    )
+                },
+            )
+        });
+        let sorted_indices = arena::Arena::indices(&device, 1 << 16, flat.is_some());
         let indirect = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Section draws"),
             size: 1024 * 20,
@@ -1665,6 +1747,7 @@ impl Renderer {
             .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE);
         let world_post = world_post::Post::new(&device, config.format.remove_srgb_suffix());
         let uploads = upload::Uploads::new(&device);
+        let section_uploads = upload::Uploads::with_chunk(&device, SECTION_UPLOAD_CHUNK);
         let panorama = panorama::Panorama::new(
             &device,
             &queue,
@@ -1688,6 +1771,8 @@ impl Renderer {
             config,
             solid,
             translucent,
+            flat_on: flat.is_some(),
+            flat,
             sky,
             dark_disc,
             lines,
@@ -1737,6 +1822,9 @@ impl Renderer {
             lightmap_sampler,
             animations: AnimatedSprites::new(animations, sprite_size, sprite_mips),
             uploads,
+            section_uploads,
+            section_copies: None,
+            section_copy_bytes: 0,
             lightmap_uploaded: false,
             sprite_minimum_size,
             indices,
@@ -1758,6 +1846,7 @@ impl Renderer {
             draws: Vec::new(),
             draw_pages: Vec::new(),
             block_entities: HashMap::new(),
+            block_entity_revision: next_block_entity_revision(),
             occlusion: occlusion::Occlusion::new(crate::chunk::HEIGHT / 16),
             world_post,
             pack: None,
@@ -1767,6 +1856,8 @@ impl Renderer {
             info,
             suspended: size.width == 0 || size.height == 0,
             drawn_sections: 0,
+            section_draws: 0,
+            section_draw_calls: 0,
             uploaded_bytes: 0,
             started: Instant::now(),
             screenshot: None,
@@ -1847,30 +1938,12 @@ impl Renderer {
             })
             .create_view(&Default::default())
     }
-    /// VSync on: tear-free presentation (Mailbox, else Fifo); off: Immediate when available.
-    /// VSync, unless Horizon's present-mode setting names a supported mode.
+    /// VSync on presents with Fifo, capped to the display's refresh rate in a
+    /// window and in fullscreen alike; Horizon's present-mode setting applies
+    /// only with VSync off (`window::chosen_present_mode`).
     pub fn set_present_mode(&mut self, vsync: bool, mode: crate::graphics::PresentMode) {
         use crate::graphics::PresentMode as P;
-        let wanted = match mode {
-            P::Auto => None,
-            P::Fifo => Some(wgpu::PresentMode::Fifo),
-            P::Mailbox => Some(wgpu::PresentMode::Mailbox),
-            P::Immediate => Some(wgpu::PresentMode::Immediate),
-        };
-        match wanted.filter(|m| self.present_modes.contains(m)) {
-            Some(m) => {
-                if self.config.present_mode != m
-                    && let Some(surface) = &self.surface
-                {
-                    self.config.present_mode = m;
-                    surface.configure(&self.device, &self.config);
-                }
-            }
-            None => self.set_vsync(vsync),
-        }
-    }
-    pub fn set_vsync(&mut self, vsync: bool) {
-        use crate::window::{PresentMode, vsync_present_mode};
+        use crate::window::{PresentMode, chosen_present_mode};
         let supported: Vec<PresentMode> = self
             .present_modes
             .iter()
@@ -1881,8 +1954,13 @@ impl Renderer {
                 _ => None,
             })
             .collect();
-        // GpuSurface.PresentMode.getSupportedVsyncMode.
-        let mode = match vsync_present_mode(&supported, vsync) {
+        let setting = match mode {
+            P::Auto => None,
+            P::Fifo => Some(PresentMode::Fifo),
+            P::Mailbox => Some(PresentMode::Mailbox),
+            P::Immediate => Some(PresentMode::Immediate),
+        };
+        let mode = match chosen_present_mode(&supported, vsync, setting) {
             Some(PresentMode::Mailbox) => wgpu::PresentMode::Mailbox,
             Some(PresentMode::Immediate) => wgpu::PresentMode::Immediate,
             _ => wgpu::PresentMode::Fifo,
@@ -1908,18 +1986,41 @@ impl Renderer {
         }
         self.depth = Self::depth(&self.device, &self.config);
     }
+    /// Whether sections are drawn as one index list per frame (`flat`).
+    pub fn flat_draws(&self) -> bool {
+        self.flat_on
+    }
+    /// Switches between flat and per-section draws, for A/B checks.
+    pub fn set_flat_draws(&mut self, on: bool) -> Result<()> {
+        if on && self.flat.is_none() {
+            return Err("flat section draws are off on this device".into());
+        }
+        self.flat_on = on;
+        Ok(())
+    }
     pub fn section_count(&self) -> usize {
         self.sections.len()
     }
     pub fn has_section(&self, key: SectionKey) -> bool {
         self.sections.contains(key)
     }
+    /// Bring the cave culling graph up to date for `camera` without waiting:
+    /// a search this starts runs on its worker while the frame is prepared,
+    /// and `render` takes it if it has finished.
+    pub fn start_occlusion(&mut self, camera: DVec3, distance: f32) {
+        self.occlusion
+            .update(camera_section(camera), (distance / 16.0) as i32 + 2);
+    }
     pub fn upload(&mut self, key: SectionKey, mesh: &SectionMesh) {
         self.occlusion.set(key, mesh.visibility);
-        if mesh.block_entities.is_empty() {
-            self.block_entities.remove(&key);
+        let changed = if mesh.block_entities.is_empty() {
+            self.block_entities.remove(&key).is_some()
         } else {
-            self.block_entities.insert(key, mesh.block_entities.clone());
+            let old = self.block_entities.insert(key, mesh.block_entities.clone());
+            old.as_deref() != Some(&mesh.block_entities[..])
+        };
+        if changed {
+            self.block_entity_revision = next_block_entity_revision();
         }
         let solid = (mesh.solid.len() / 4) as u32;
         let translucent = (mesh.translucent.len() / 4) as u32;
@@ -1933,14 +2034,20 @@ impl Renderer {
             self.indices = Self::quad_indices(&self.device, self.index_quads);
         }
         let vertices = (mesh.solid.len() + mesh.translucent.len()) as u64;
+        let encoder = self.section_copies.get_or_insert_with(|| {
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Section uploads"),
+                })
+        });
         // With video and system memory both full, the section is not drawn.
-        let Some((page, start)) = self.arena.alloc(&self.device, &self.queue, vertices) else {
+        let Some((page, start)) = self.arena.alloc(&self.device, encoder, vertices) else {
             return;
         };
         let sorted_indices = if translucent > 0 {
             let indices =
                 self.sorted_indices
-                    .alloc(&self.device, &self.queue, u64::from(translucent) * 6);
+                    .alloc(&self.device, encoder, u64::from(translucent) * 6);
             if indices.is_none() {
                 self.arena.release(page, start, vertices);
                 return;
@@ -1949,17 +2056,34 @@ impl Renderer {
         } else {
             None
         };
+        let flat_id = self.flat.as_mut().map(|f| {
+            f.add(
+                &self.device,
+                encoder,
+                &mut self.section_uploads,
+                page,
+                start,
+                vertices,
+            )
+        });
         let stride = std::mem::size_of::<TerrainVertex>() as u64;
         for (offset, part) in [(0, &mesh.solid), (mesh.solid.len(), &mesh.translucent)] {
             if !part.is_empty() {
                 let bytes: &[u8] = bytemuck::cast_slice(part);
                 self.uploaded_bytes += bytes.len() as u64;
-                self.queue.write_buffer(
+                self.section_copy_bytes += bytes.len() as u64;
+                self.section_uploads.buffer(
+                    encoder,
                     self.arena.buffer(page),
                     (start + offset as u64) * stride,
                     bytes,
                 );
             }
+        }
+        if self.section_copy_bytes >= SECTION_COPY_LIMIT
+            && let Some(copies) = self.take_section_copies()
+        {
+            self.queue.submit([copies]);
         }
         self.sections.insert(
             key,
@@ -1978,8 +2102,16 @@ impl Renderer {
                         .collect(),
                 ),
                 sorted_indices,
+                flat_id,
             },
         );
+    }
+    /// The section copies recorded since the last submission, closed.
+    fn take_section_copies(&mut self) -> Option<wgpu::CommandBuffer> {
+        let encoder = self.section_copies.take()?;
+        self.section_copy_bytes = 0;
+        self.section_uploads.finish(&encoder);
+        Some(encoder.finish())
     }
     /// Draws `count` section draws from `first` with the arena and section
     /// origins bound: one indirect multi-draw, or a loop without it.
@@ -2008,6 +2140,9 @@ impl Renderer {
     }
     fn release_section(&mut self, key: SectionKey) {
         if let Some(s) = self.sections.remove(key) {
+            if let (Some(flat), Some(id)) = (&mut self.flat, s.flat_id) {
+                flat.remove(id);
+            }
             if let Some((page, start)) = s.sorted_indices {
                 self.sorted_indices
                     .release(page, start, u64::from(s.translucent) * 6);
@@ -2020,16 +2155,26 @@ impl Renderer {
     pub fn block_entities(&self) -> impl Iterator<Item = &([i32; 3], u32)> {
         self.block_entities.values().flatten()
     }
+    /// A value that changes whenever `block_entities` gives something else.
+    pub fn block_entity_revision(&self) -> u64 {
+        self.block_entity_revision
+    }
     pub fn clear_sections(&mut self) {
         self.block_entities.clear();
+        self.block_entity_revision = next_block_entity_revision();
         self.sections.clear();
         self.arena.clear();
+        if let Some(flat) = &mut self.flat {
+            flat.clear();
+        }
         self.sorted_indices.clear();
         self.translucency_cursor = 0;
         self.occlusion.clear();
     }
     pub fn remove(&mut self, key: SectionKey) {
-        self.block_entities.remove(&key);
+        if self.block_entities.remove(&key).is_some() {
+            self.block_entity_revision = next_block_entity_revision();
+        }
         self.occlusion.remove(key);
         self.release_section(key);
     }
@@ -2204,8 +2349,19 @@ impl Renderer {
         );
     }
     pub fn render(&mut self, frame: &Frame) -> Result<bool> {
+        let rendered = self.draw_frame(frame);
+        // A frame that was not drawn still submits the section copies.
+        if let Some(copies) = self.take_section_copies() {
+            self.queue.submit([copies]);
+        }
+        rendered
+    }
+    fn draw_frame(&mut self, frame: &Frame) -> Result<bool> {
         self.arena.trim();
         self.sorted_indices.trim();
+        if let Some(flat) = &mut self.flat {
+            flat.trim(|page| self.arena.has_page(page));
+        }
         if self.suspended {
             return Ok(false);
         }
@@ -2388,26 +2544,23 @@ impl Renderer {
             planes: frustum(view_proj),
         };
         let camera = frame.camera;
-        let camera_section = (
-            (camera.x.floor() as i32) >> 4,
-            (camera.y.floor() as i32 - crate::chunk::MIN_Y) >> 4,
-            (camera.z.floor() as i32) >> 4,
-        );
+        let camera_section = camera_section(camera);
         let culling = !frame.title && frame.cave_culling;
         if culling {
-            let radius = (frame.distance / 16.0) as i32 + 2;
-            self.occlusion.update(camera_section, radius);
+            crate::spans::time("occlusion", || self.start_occlusion(camera, frame.distance));
         }
         let reachable = &self.occlusion;
         let mut visible = std::mem::take(&mut self.visible);
         visible.clear();
-        self.sections.visible(
-            camera,
-            (frame.distance / 16.0) as i32,
-            &view,
-            |k| !culling || reachable.contains(k),
-            &mut visible,
-        );
+        crate::spans::time("visibility", || {
+            self.sections.visible(
+                camera,
+                (frame.distance / 16.0) as i32,
+                &view,
+                |k| !culling || reachable.contains(k),
+                &mut visible,
+            )
+        });
         self.drawn_sections = visible.len();
         if visible.len() as u64 > self.instance_capacity {
             self.instance_capacity = (visible.len() as u64).next_power_of_two();
@@ -2495,7 +2648,45 @@ impl Renderer {
         }
         self.translucency_cursor += budget;
         let translucent_draws = self.draws.len() as u32 - solid_draws;
-        if self.multi_draw && !self.draws.is_empty() {
+        self.section_draws = self.draws.len();
+        // Metal replays a multi-draw as one draw call per entry.
+        self.section_draw_calls = if self.multi_draw && self.info.backend != wgpu::Backend::Metal {
+            (0..self.draws.len())
+                .filter(|&i| {
+                    i == 0
+                        || i == solid_draws as usize
+                        || self.draw_pages[i] != self.draw_pages[i - 1]
+                })
+                .count()
+        } else {
+            self.draws.len()
+        };
+        let flat_frame = match &mut self.flat {
+            Some(flat)
+                if self.flat_on && !self.draws.is_empty() && self.draws.len() >= flat.min_draws =>
+            {
+                let sections = &self.sections;
+                let sorted = &self.sorted_indices;
+                crate::spans::time("flatten", || {
+                    flat.prepare(
+                        &self.device,
+                        &mut encoder,
+                        &mut self.uploads,
+                        &self.draws,
+                        &self.draw_pages,
+                        solid_draws as usize,
+                        visible
+                            .iter()
+                            .filter_map(|v| sections.get(v.slot).flat_id.map(|id| (id, v.origin))),
+                        |page| sorted.buffer(page).clone(),
+                    )
+                })
+            }
+            _ => false,
+        };
+        if flat_frame {
+            self.section_draw_calls = self.flat.as_ref().map_or(0, |f| f.calls.len());
+        } else if self.multi_draw && !self.draws.is_empty() {
             if self.draws.len() as u64 > self.indirect_capacity {
                 self.indirect_capacity = (self.draws.len() as u64).next_power_of_two();
                 self.indirect = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -2730,10 +2921,22 @@ impl Renderer {
                     pass.draw(0..3, 0..1);
                 }
             }
-            pass.set_pipeline(&self.solid);
-            pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
-            pass.set_vertex_buffer(1, self.instances.slice(..));
-            self.draw_sections(&mut pass, 0, solid_draws);
+            match self.flat.as_ref().filter(|_| flat_frame) {
+                Some(flat) => {
+                    pass.set_pipeline(&flat.solid);
+                    flat.draw(&mut pass, &flat.calls[..flat.solid_calls], |p| {
+                        self.arena.buffer(p)
+                    });
+                    pass.set_bind_group(0, &self.group, &[]);
+                    pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                }
+                None => {
+                    pass.set_pipeline(&self.solid);
+                    pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.set_vertex_buffer(1, self.instances.slice(..));
+                    self.draw_sections(&mut pass, 0, solid_draws);
+                }
+            }
             if entity_quads > 0 {
                 pass.set_pipeline(&self.entity_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
@@ -2770,10 +2973,22 @@ impl Renderer {
                 pass.set_vertex_buffer(0, self.debug_line_buffer.slice(..));
                 pass.draw(0..4, debug_depth..debug_depth + debug_top);
             }
-            pass.set_pipeline(&self.translucent);
-            pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
-            pass.set_vertex_buffer(1, self.instances.slice(..));
-            self.draw_sections(&mut pass, solid_draws, translucent_draws);
+            match self.flat.as_ref().filter(|_| flat_frame) {
+                Some(flat) => {
+                    pass.set_pipeline(&flat.translucent);
+                    flat.draw(&mut pass, &flat.calls[flat.solid_calls..], |p| {
+                        self.arena.buffer(p)
+                    });
+                    pass.set_bind_group(0, &self.group, &[]);
+                    pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                }
+                None => {
+                    pass.set_pipeline(&self.translucent);
+                    pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.set_vertex_buffer(1, self.instances.slice(..));
+                    self.draw_sections(&mut pass, solid_draws, translucent_draws);
+                }
+            }
             // LevelRenderer.executeClassicTransparency: translucent targets'
             // outlines follow terrain, so its blending cannot wash them out.
             if outline_edges > 0 && frame.outline_after_terrain {
@@ -3014,7 +3229,12 @@ impl Renderer {
             .take()
             .map(|path| (path, self.copy_frame(&mut encoder, &target_texture)));
         self.uploads.finish(&encoder);
-        let submission = self.queue.submit([encoder.finish()]);
+        let commands = crate::spans::time("encode", || encoder.finish());
+        // The section copies run first: this frame draws what they write.
+        let copies = self.take_section_copies();
+        let submission = crate::spans::time("submit", || {
+            self.queue.submit(copies.into_iter().chain([commands]))
+        });
         if let Some(timer) = &mut self.gpu_timer {
             timer.submitted();
             timer.collect(&self.device, &mut self.gpu_times);
@@ -3218,6 +3438,15 @@ enum Pack {
     Java(java_stages::JavaStages),
 }
 
+/// The section the camera is in.
+fn camera_section(camera: DVec3) -> SectionKey {
+    (
+        (camera.x.floor() as i32) >> 4,
+        (camera.y.floor() as i32 - crate::chunk::MIN_Y) >> 4,
+        (camera.z.floor() as i32) >> 4,
+    )
+}
+
 fn world_projection(fov_degrees: f32, aspect: f32, far: f32) -> Mat4 {
     Mat4::perspective_rh(fov_degrees.to_radians(), aspect, far, 0.05)
 }
@@ -3292,7 +3521,7 @@ mod tests {
                 (3, offset_of!(TerrainVertex, color)),
             ]
         );
-        assert_eq!(std::mem::size_of::<TerrainVertex>(), 28);
+        assert_eq!(std::mem::size_of::<TerrainVertex>(), 24);
     }
     #[test]
     fn cracks_multiply_instead_of_covering_the_block() {

@@ -68,9 +68,15 @@ pub fn apply(guest: &mut Guest, level: &Level) {
     guest.xp_total = level.xp_total;
     guest.effects = crate::effects::PlayerEffects::from_saved(&level.active_effects);
     guest.game_mode = level.mode();
+    guest.flying = level.flying;
     guest.selected = (level.selected_slot.max(0) as usize).min(8);
+    guest.spawn = level.spawn.map(|s| [s[0] + 0.5, s[1], s[2] + 0.5]);
     guest.saved = level.player_extra.clone();
     guest.recipe_book = level.recipe_book.clone();
+    guest.dimension = match level.dimension.as_str() {
+        d @ ("minecraft:the_nether" | "minecraft:the_end") => d.to_owned(),
+        _ => "minecraft:overworld".to_owned(),
+    };
     if level.ender_items.len() == 27 {
         guest.ender_items = level.ender_items.clone();
     }
@@ -100,7 +106,6 @@ pub fn apply(guest: &mut Guest, level: &Level) {
 pub fn save(guest: &Guest, world: &Path) {
     let mut level = Level {
         player_uuid: Some(uuid_ints(guest.uuid)),
-        dimension: "minecraft:overworld".into(),
         ..Level::default()
     };
     store(guest, &mut level);
@@ -114,6 +119,7 @@ pub fn save(guest: &Guest, world: &Path) {
 /// Put a guest's state in `level`'s player fields.
 pub fn store(guest: &Guest, level: &mut Level) {
     level.position = Some(guest.position);
+    level.dimension = guest.dimension.clone();
     level.rotation = [guest.yaw, guest.pitch];
     level.health = guest.health;
     level.food = guest.food;
@@ -124,7 +130,9 @@ pub fn store(guest: &Guest, level: &mut Level) {
     level.active_effects = guest.effects.saved();
     level.game_mode = guest.game_mode;
     level.creative = guest.game_mode == 1;
+    level.flying = guest.flying;
     level.selected_slot = guest.selected as i32;
+    level.spawn = guest.spawn.map(|s| [s[0] - 0.5, s[1], s[2] - 0.5]);
     level.on_ground = guest.on_ground;
     level.player_extra = guest.saved.clone();
     level.recipe_book = guest.recipe_book.clone();

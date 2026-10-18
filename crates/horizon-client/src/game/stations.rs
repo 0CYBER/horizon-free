@@ -1892,17 +1892,27 @@ impl Game<'_> {
         } else {
             self.pack.names.item(&stack.item)
         };
-        let mut lines = vec![(name, color)];
+        let display = horizon_client::item_tooltip::TooltipDisplay::for_stack(stack);
+        let mut lines = Vec::new();
+        if display.name_visible(self.screen == Screen::Creative) {
+            lines.push((name, color));
+        }
         let translate = |k: &str| e.translate(k).map(str::to_owned);
         // ItemContainerContents.addToTooltip.
         let hover_name = |s: &ItemStack| {
             s.custom_name()
                 .map_or_else(|| self.pack.names.item(&s.item), str::to_owned)
         };
-        for line in horizon_client::item_tooltip::container_lines(stack, &hover_name, &translate) {
-            lines.push((line, u32::MAX));
+        if display.shows("minecraft:container") {
+            for line in
+                horizon_client::item_tooltip::container_lines(stack, &hover_name, &translate)
+            {
+                lines.push((line, u32::MAX));
+            }
         }
-        if stack.item.ends_with("potion") || &*stack.item == "minecraft:tipped_arrow" {
+        if display.shows("minecraft:potion_contents")
+            && (stack.item.ends_with("potion") || &*stack.item == "minecraft:tipped_arrow")
+        {
             let scale = match &*stack.item {
                 "minecraft:lingering_potion" => 0.25,
                 "minecraft:tipped_arrow" => 0.125,
@@ -1919,7 +1929,9 @@ impl Game<'_> {
                 lines.push((line, c));
             }
         }
-        if let Some((material, pattern)) = stack.data().and_then(|d| d.trim.clone()) {
+        if display.shows("minecraft:trim")
+            && let Some((material, pattern)) = stack.data().and_then(|d| d.trim.clone())
+        {
             lines.push((
                 e.translate("item.minecraft.smithing_template.upgrade")
                     .unwrap_or("Upgrade:")
@@ -1936,30 +1948,44 @@ impl Game<'_> {
             lines.push((format!(" {p}"), rgba(170, 170, 170, 255)));
             lines.push((format!(" {m}"), rgba(170, 170, 170, 255)));
         }
-        for (text, curse) in e
-            .tooltip(stack.stored_enchantments())
-            .into_iter()
-            .chain(e.tooltip(stack.enchantments()))
-        {
-            lines.push((
-                text,
-                if curse {
-                    rgba(255, 85, 85, 255)
-                } else {
-                    rgba(170, 170, 170, 255)
-                },
-            ));
+        if display.shows("minecraft:stored_enchantments") {
+            for (text, curse) in e.tooltip(stack.stored_enchantments()) {
+                lines.push((
+                    text,
+                    if curse {
+                        rgba(255, 85, 85, 255)
+                    } else {
+                        rgba(170, 170, 170, 255)
+                    },
+                ));
+            }
+        }
+        if display.shows("minecraft:enchantments") {
+            for (text, curse) in e.tooltip(stack.enchantments()) {
+                lines.push((
+                    text,
+                    if curse {
+                        rgba(255, 85, 85, 255)
+                    } else {
+                        rgba(170, 170, 170, 255)
+                    },
+                ));
+            }
         }
         // BannerPatternLayers.addToTooltip: up to six layer names.
-        for layer in horizon_client::banner::tooltip_layers(stack).iter().take(6) {
-            let key = self.res.stations().banners.layer_key(layer);
-            lines.push((self.translate(&key, &key), rgba(170, 170, 170, 255)));
+        if display.shows("minecraft:banner_patterns") {
+            for layer in horizon_client::banner::tooltip_layers(stack).iter().take(6) {
+                let key = self.res.stations().banners.layer_key(layer);
+                lines.push((self.translate(&key, &key), rgba(170, 170, 170, 255)));
+            }
         }
         // Spawner.appendHoverText: what a spawner or trial spawner item spawns.
-        if matches!(
-            &*stack.item,
-            "minecraft:spawner" | "minecraft:trial_spawner"
-        ) {
+        if display.shows("minecraft:block_entity_data")
+            && matches!(
+                &*stack.item,
+                "minecraft:spawner" | "minecraft:trial_spawner"
+            )
+        {
             let gray = rgba(170, 170, 170, 255);
             match block_entity_item::spawner_entity(stack) {
                 Some(id) => {
@@ -1976,7 +2002,9 @@ impl Game<'_> {
                 }
             }
         }
-        if let Some(info) = self.res.items().get(&stack.item) {
+        if display.shows("minecraft:attribute_modifiers")
+            && let Some(info) = self.res.items().get(&stack.item)
+        {
             let base = |name: &str, default| {
                 self.player
                     .as_ref()
@@ -2004,7 +2032,8 @@ impl Game<'_> {
                 &translate,
             ));
         }
-        if let Some(info) = self.res.items().get(&stack.item)
+        if display.shows("minecraft:damage")
+            && let Some(info) = self.res.items().get(&stack.item)
             && info.max_damage > 0
             && stack.damage > 0
             && self.options_advanced_tooltips()
@@ -2151,22 +2180,22 @@ impl Game<'_> {
 
     // ---------------------------------------------------------------- brewing stand
 
-    /// Ticks every brewing stand (`BrewingStandBlockEntity.serverTick`).
-    pub(super) fn tick_brewing_stands(&mut self) -> horizon_client::Result<()> {
-        let mut changes = Vec::new();
-        for (pos, entity) in self.world.block_entities.iter_mut() {
-            if let BlockEntity::Brewing(b) = entity {
-                let out = b.tick(
-                    &self.res.stations().brewing,
-                    self.res.items(),
-                    self.res.providers(),
-                );
-                if out != brewing::BrewTick::default() {
-                    changes.push((*pos, out));
-                }
-            }
-        }
-        for ((x, y, z), out) in changes {
+    /// `BrewingStandBlockEntity.serverTick` of the brewing stand at `pos`, in
+    /// its place among the level's block entity tickers.
+    pub(super) fn tick_brewing_stand(
+        &mut self,
+        pos: (i32, i32, i32),
+    ) -> horizon_client::Result<()> {
+        let Some(BlockEntity::Brewing(b)) = self.world.block_entities.get_mut(&pos) else {
+            return Ok(());
+        };
+        let out = b.tick(
+            &self.res.stations().brewing,
+            self.res.items(),
+            self.res.providers(),
+        );
+        if out != brewing::BrewTick::default() {
+            let (x, y, z) = pos;
             self.world.modified.insert((x >> 4, z >> 4));
             if out.brewed {
                 self.play_at("minecraft:block.brewing_stand.brew", [x, y, z], 1.0, 1.0);

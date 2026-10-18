@@ -734,6 +734,7 @@ enum Act {
     /// Back to Horizon's own menus (Horizon only, see `list_rows`).
     HorizonMenus,
     ToggleMod(usize),
+    OpenModFolder,
 }
 enum WKind {
     Button {
@@ -780,6 +781,7 @@ pub enum Event {
     /// The pack selection changed (reload resources).
     Packs(Vec<String>),
     OpenPackFolder,
+    OpenModFolder,
 }
 /// `SliderableValueSet.applyValueImmediately`: these apply 600 ms after
 /// the last change (`OptionInstanceSliderButton.delayedApplyAt`).
@@ -806,7 +808,8 @@ pub struct OptionsUi {
     /// when it last moved: the handle follows the pointer while the option
     /// keeps its stepped value, then snaps to it (`resetValue`).
     slider_value: Option<(Opt, f32, Instant)>,
-    scrollbar_drag_y: Option<f32>,
+    /// The pointer's last y while a Classic or Horizon scrollbar is held.
+    pub(crate) scrollbar_drag_y: Option<f32>,
     /// Horizon style: the selected sidebar section, the one last drawn and
     /// the rows' scroll in dp (`options_horizon`).
     pub section: usize,
@@ -823,6 +826,7 @@ pub struct OptionsUi {
     pub languages: Vec<LanguageInfo>,
     language_choice: Option<String>,
     language_search: ui::EditBox,
+    pub(crate) settings_search: ui::EditBox,
     /// Packs: the packs found and the selection the screen opens with.
     pub pack_infos: Vec<crate::pack_screen::PackInfo>,
     pub pack_selection: Vec<String>,
@@ -841,6 +845,8 @@ impl Default for OptionsUi {
     fn default() -> Self {
         let mut search = ui::EditBox::new(0.0, 0.0, 200.0, 15.0);
         search.max_length = 32;
+        let mut settings_search = ui::EditBox::new(0.0, 0.0, 200.0, 15.0);
+        settings_search.focused = false;
         Self {
             stack: vec![Page::Main],
             scroll: 0.0,
@@ -857,6 +863,7 @@ impl Default for OptionsUi {
             languages: Vec::new(),
             language_choice: None,
             language_search: search,
+            settings_search,
             pack_infos: Vec::new(),
             pack_selection: Vec::new(),
             pack_screen: None,
@@ -918,6 +925,13 @@ fn pairs(opts: &[Opt]) -> Vec<Row> {
         .collect()
 }
 impl OptionsUi {
+    fn settings_search_active(&self) -> bool {
+        self.settings_search.focused
+            && (matches!(self.page(), Page::Video | Page::Controls | Page::KeyBinds)
+                || (crate::ui_theme::horizon()
+                    && self.page() == Page::Main
+                    && crate::options_horizon::searchable_section(self.section)))
+    }
     pub fn page(&self) -> Page {
         *self.stack.last().unwrap_or(&Page::Main)
     }
@@ -945,6 +959,10 @@ impl OptionsUi {
         self.stack.push(page);
         self.scroll = 0.0;
         self.scrollbar_drag_y = None;
+        if matches!(page, Page::Video | Page::Controls | Page::KeyBinds) {
+            self.settings_search.set_value("");
+            self.settings_search.focused = false;
+        }
         if page == Page::Language {
             self.language_choice = None;
             self.language_search.set_value("");
@@ -992,6 +1010,33 @@ impl OptionsUi {
                 Page::Language => 118.0,
                 _ => 163.0,
             }
+    }
+    fn filter_option_rows(&self, rows: Vec<Row>) -> Vec<Row> {
+        let query = self.settings_search.value.to_lowercase();
+        if query.is_empty() {
+            return rows;
+        }
+        rows.into_iter()
+            .flat_map(|row| match row {
+                Row::Big(opt) if lang::get(opt.caption()).to_lowercase().contains(&query) => {
+                    vec![Row::Big(opt)]
+                }
+                Row::Pair(a, b) => {
+                    let matches =
+                        |opt: Opt| lang::get(opt.caption()).to_lowercase().contains(&query);
+                    pairs(
+                        &[Some(a), b]
+                            .into_iter()
+                            .flatten()
+                            .filter(|opt| matches(*opt))
+                            .collect::<Vec<_>>(),
+                    )
+                }
+                // Keep navigation available and omit section headers with no visible options.
+                Row::Buttons(a, b) => vec![Row::Buttons(a, b)],
+                _ => Vec::new(),
+            })
+            .collect()
     }
     fn list_rows(&self, s: &Settings) -> Vec<Row> {
         match self.page() {
@@ -1080,7 +1125,7 @@ impl OptionsUi {
                     Opt::AttackIndicator,
                     Opt::ChunkFade,
                 ]));
-                rows
+                self.filter_option_rows(rows)
             }
             Page::Sound => {
                 let mut rows = vec![Row::Big(Opt::Volume(0))];
@@ -1122,7 +1167,7 @@ impl OptionsUi {
                     ),
                     None,
                 ));
-                rows
+                self.filter_option_rows(rows)
             }
             Page::Controller => {
                 let mut rows = vec![Row::Buttons(
@@ -1227,6 +1272,10 @@ impl OptionsUi {
         let mut out = Vec::new();
         let page = self.page();
         let cx = (w / 2.0).floor();
+        if matches!(page, Page::Video | Page::Controls | Page::KeyBinds) {
+            self.settings_search.x = cx - 100.0;
+            self.settings_search.y = 17.0;
+        }
         let done = |y: f32| button(cx - 100.0, y, 200.0, tr("gui.done"), Act::Done);
         // (list top, list bottom, content height)
         let (mut top, mut bottom, mut content) = (33.0, h - 33.0, 0.0);
@@ -1276,9 +1325,10 @@ impl OptionsUi {
                 bottom = 0.0;
             }
             Page::KeyBinds => {
+                top = 38.0;
                 out.push(Widget {
                     x: 0.0,
-                    y: 12.0,
+                    y: 4.0,
                     w,
                     h: 9.0,
                     kind: WKind::Text {
@@ -1290,6 +1340,10 @@ impl OptionsUi {
                 });
                 let mut mappings: Vec<(&str, &str)> =
                     MAPPINGS.iter().map(|(n, _, c)| (*n, *c)).collect();
+                let query = self.settings_search.value.to_lowercase();
+                mappings.retain(|(name, _)| {
+                    query.is_empty() || lang::get(name).to_lowercase().contains(&query)
+                });
                 mappings.sort_by(|a, b| {
                     let ca = CATEGORIES.iter().position(|c| *c == a.1).unwrap_or(99);
                     let cb = CATEGORIES.iter().position(|c| *c == b.1).unwrap_or(99);
@@ -1558,9 +1612,16 @@ impl OptionsUi {
             // Drawn by `pack_screen`.
             Page::Packs => {}
             _ => {
+                if matches!(page, Page::Video | Page::Controls) {
+                    top = 38.0;
+                }
                 out.push(Widget {
                     x: 0.0,
-                    y: 12.0,
+                    y: if matches!(page, Page::Video | Page::Controls) {
+                        4.0
+                    } else {
+                        12.0
+                    },
                     w,
                     h: 9.0,
                     kind: WKind::Text {
@@ -1625,7 +1686,18 @@ impl OptionsUi {
                 }
                 content = y + self.scroll - top + 2.0;
                 out[list_start..].iter_mut().for_each(|w| w.list = true);
-                out.push(done(h - 27.0));
+                if page == Page::Mods {
+                    out.push(button(
+                        cx - 154.0,
+                        h - 27.0,
+                        150.0,
+                        Text::literal("Open Mod Folder"),
+                        Act::OpenModFolder,
+                    ));
+                    out.push(button(cx + 4.0, h - 27.0, 150.0, tr("gui.done"), Act::Done));
+                } else {
+                    out.push(done(h - 27.0));
+                }
             }
         }
         // Layout may change the offset (language centering), or the list may
@@ -1881,6 +1953,23 @@ impl OptionsUi {
             }
             self.language_search = search;
         }
+        if matches!(self.page(), Page::Video | Page::Controls | Page::KeyBinds) {
+            let mut search = self.settings_search.clone();
+            search.draw(batch, atlas, None);
+            if search.value.is_empty() && !search.focused {
+                batch.text_styled(
+                    atlas,
+                    &Text::literal("Search settings...")
+                        .with_color(text::GRAY)
+                        .italic(),
+                    search.text_x(),
+                    search.text_y(),
+                    u32::MAX,
+                    true,
+                );
+            }
+            self.settings_search = search;
+        }
         if let Some(lines) = tooltip {
             ui::tooltip(batch, atlas, &lines, cursor);
         }
@@ -1964,6 +2053,16 @@ impl OptionsUi {
         }
         let (widgets, top, bottom, content) = self.layout(s, size.0, size.1);
         let mut events = Vec::new();
+        if !drag && matches!(self.page(), Page::Video | Page::Controls | Page::KeyBinds) {
+            let search = &mut self.settings_search;
+            search.focused = ui::hovered((x, y), search.x, search.y, search.width, search.height);
+            if search.focused {
+                search.click(atlas, x, false, false);
+                self.scroll = 0.0;
+                events.push(Event::ButtonClick);
+                return events;
+            }
+        }
         if drag {
             if let Some(previous_y) = self.scrollbar_drag_y {
                 if let Some((_, thumb)) = ui::scrollbar_thumb(top, bottom, content, self.scroll) {
@@ -2077,6 +2176,7 @@ impl OptionsUi {
                             s.mods.toggle(i);
                             events.push(Event::Changed);
                         }
+                        Act::OpenModFolder => events.push(Event::OpenModFolder),
                         Act::None => {}
                     }
                 }
@@ -2238,6 +2338,9 @@ impl OptionsUi {
         if self.page() == Page::Language {
             self.language_search.insert_text(text);
             self.scroll = 0.0;
+        } else if self.settings_search_active() {
+            self.settings_search.insert_text(text);
+            self.scroll = 0.0;
         }
     }
     /// Ctrl+A/C/V/X in the language or pack search box; false when neither
@@ -2259,6 +2362,12 @@ impl OptionsUi {
         }
         if self.page() == Page::Language {
             if self.language_search.shortcut(shortcut, clipboard) {
+                self.scroll = 0.0;
+            }
+            return true;
+        }
+        if self.settings_search_active() {
+            if self.settings_search.shortcut(shortcut, clipboard) {
                 self.scroll = 0.0;
             }
             return true;
@@ -2343,6 +2452,16 @@ impl OptionsUi {
                 let typed: String = t.chars().filter(|c| !c.is_control()).collect();
                 if !typed.is_empty() {
                     self.language_search.insert_text(&typed);
+                }
+            }
+            self.scroll = 0.0;
+        } else if self.settings_search_active() {
+            if !self.settings_search.key(key, false, false)
+                && let Some(t) = text
+            {
+                let typed: String = t.chars().filter(|c| !c.is_control()).collect();
+                if !typed.is_empty() {
+                    self.settings_search.insert_text(&typed);
                 }
             }
             self.scroll = 0.0;
@@ -2449,6 +2568,31 @@ mod tests {
         assert!(empty.iter().any(|w| {
             matches!(&w.kind, WKind::Text { text, .. } if text.plain().contains(".hmod"))
         }));
+        let open_folder = empty
+            .iter()
+            .find(|w| {
+                matches!(
+                    &w.kind,
+                    WKind::Button {
+                        act: Act::OpenModFolder,
+                        ..
+                    }
+                )
+            })
+            .expect("Mods page has an Open Mod Folder button");
+        assert_eq!(
+            ui.click(
+                &mut s,
+                &atlas,
+                open_folder.x + 1.0,
+                open_folder.y + 1.0,
+                size,
+                [480, 240],
+                false,
+                false,
+            ),
+            vec![Event::ButtonClick, Event::OpenModFolder]
+        );
         for (id, dev) in [("normal", false), ("dev", true), ("", false)] {
             s.mods.installed.push(crate::mod_list::Installed {
                 id: id.into(),

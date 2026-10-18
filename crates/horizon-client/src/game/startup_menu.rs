@@ -368,6 +368,11 @@ impl Loading {
                     let _ = std::fs::create_dir_all(&dir);
                     packs::open_folder(&dir);
                 }
+                Event::OpenModFolder => {
+                    let dir = Game::options_path().with_file_name(horizon_client::mod_list::DIR);
+                    let _ = std::fs::create_dir_all(&dir);
+                    packs::open_folder(&dir);
+                }
                 Event::ButtonClick => {}
             }
         }

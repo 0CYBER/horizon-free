@@ -342,9 +342,7 @@ fn status_and_join() {
                 C::PlayerInfoUpdate(u) => {
                     info |= u.entries.iter().any(|e| e.name.as_deref() == Some("Host"));
                 }
-                C::Unknown(id, _) if id == horizon_protocol::ids::play::clientbound::COMMANDS => {
-                    commands = true
-                }
+                C::Commands(_) => commands = true,
                 C::LevelChunkWithLight(l) => {
                     chunks += 1;
                     let sections = l.chunk.sections(24, 16, 7).map_err(|e| e.to_string())?;
@@ -424,6 +422,7 @@ fn guests_see_each_other_and_the_world_entities() {
         data: 0,
         meta: Vec::new(),
         equipment: Vec::new(),
+        precise: false,
     };
     let first = thread::spawn(move || {
         let mut bot = connect(port, "Alex", false)?;

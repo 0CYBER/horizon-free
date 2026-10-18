@@ -686,6 +686,8 @@ pub struct Extra {
     pub legs: Option<Arc<str>>,
     pub feet: Option<Arc<str>>,
     pub using_item: i32,
+    pub using_off_hand: bool,
+    pub blocking: bool,
     pub fall_flying: bool,
     pub fall_fly_ticks: i32,
     pub main_hand_left: bool,
@@ -1398,6 +1400,9 @@ pub struct PlayerView {
     /// The mobs on the player's team (`isAlliedTo`): combat targeting
     /// leaves the player alone.
     pub allies: std::sync::Arc<std::collections::HashSet<u32>>,
+    /// A LAN guest: its own client moves it, and touching mobs push it there
+    /// (`EntitySelector.pushableBy` on the client).
+    pub remote: bool,
 }
 pub struct MobWorld<'a> {
     pub world: &'a World,

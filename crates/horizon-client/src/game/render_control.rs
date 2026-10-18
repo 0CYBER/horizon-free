@@ -11,6 +11,7 @@ pub const HELP: &[&str] = &[
     "fill X1 Y1 Z1 X2 Y2 Z2 STATE   fill a box with a block state without updates",
     "particle NAME X Y Z [DX DY DZ] [COUNT]  spawn particles (vanilla /particle spread)",
     "signedit X Y Z [front|back]    open the sign editor for the sign at X Y Z",
+    "section-draws [flat|indirect]  how terrain sections are drawn (A/B checks); replies the mode",
 ];
 
 impl Game<'_> {
@@ -126,7 +127,7 @@ impl Game<'_> {
                 let entity = horizon_client::containers::BlockEntity::for_block(&name)
                     .filter(|e| matches!(e, horizon_client::containers::BlockEntity::Sign(_)))
                     .ok_or("no sign there")?;
-                self.world.block_entities.entry(key).or_insert(entity);
+                self.world.block_entities.get_or_insert_with(key, || entity);
                 self.open_sign_editor(key, words.get(4) != Some(&"back"));
                 Ok(Some(json!({ "ok": true })))
             }

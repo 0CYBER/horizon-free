@@ -63,6 +63,8 @@ pub enum ProjectileKind {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct Projectile {
+    /// The entity id a server tracks it by (0 until it is tracked).
+    pub id: u32,
     pub kind: ProjectileKind,
     pub owner: Option<Who>,
     pub position: Vec3,
@@ -128,6 +130,7 @@ impl Projectile {
     pub fn new(kind: ProjectileKind, position: Vec3, owner: Option<Who>) -> Self {
         let kind_is_arrow = matches!(kind, ProjectileKind::Arrow { .. });
         Self {
+            id: 0,
             kind,
             owner,
             position,

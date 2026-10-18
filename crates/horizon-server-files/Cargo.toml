@@ -12,6 +12,8 @@ horizon-protocol = { path = "../horizon-protocol" }
 horizon-world = { path = "../horizon-world" }
 log = "0.4"
 # Online mode: finding accounts by name (the services' profiles endpoint).
+# Secure chat: the services' public keys arrive base64-encoded.
+base64 = "0.22"
 ureq = { version = "2", default-features = false, features = ["tls"] }
 
 [lints]

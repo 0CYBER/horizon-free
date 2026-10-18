@@ -228,7 +228,7 @@ impl Game<'_> {
         }
         let (lasting, now) = PlayerEffects::potion_effects(stack.potion(), 1.0);
         for e in lasting {
-            self.potions.effects.add(e);
+            self.add_player_effect(e);
         }
         for a in now {
             self.apply_effect_action(a);
@@ -249,7 +249,7 @@ impl Game<'_> {
         }
         true
     }
-    fn apply_effect_action(&mut self, action: EffectAction) {
+    pub(super) fn apply_effect_action(&mut self, action: EffectAction) {
         let creative = self.creative;
         let rules = self.world.health_rules;
         let Some(p) = self.player.as_mut() else {
@@ -329,9 +329,24 @@ impl Game<'_> {
         }
         self.apply_effect_status();
     }
+    /// Add an active effect to the player and update attributes / absorption.
+    pub(super) fn add_player_effect(&mut self, effect: EffectInstance) -> bool {
+        let id = effect.id;
+        let amp = effect.amplifier;
+        let changed = self.potions.effects.add(effect);
+        self.apply_effect_status();
+        if id == "absorption"
+            && let Some(p) = self.player.as_mut()
+        {
+            let target = 4.0 * (amp + 1) as f32;
+            let current = p.health.absorption();
+            let _ = p.set_health(current.max(target), true);
+        }
+        changed
+    }
     /// The effects' attribute modifiers, armor protection and status flags
     /// on `self.player`.
-    fn apply_effect_status(&mut self) {
+    pub(super) fn apply_effect_status(&mut self) {
         let modifiers = self.potions.effects.modifiers();
         if modifiers != self.potions.applied
             && let Some(p) = self.player.as_mut()
@@ -343,6 +358,12 @@ impl Game<'_> {
                 let _ = p.set_modifier(attr, id, *amount, op, true);
             }
             self.potions.applied = modifiers;
+        }
+        if let Some(p) = self.player.as_mut()
+            && self.potions.effects.amplifier("absorption").is_none()
+            && p.health.absorption() > 0.0
+        {
+            let _ = p.set_health(0.0, true);
         }
         // EnchantmentHelper.getDamageProtection per damage type, recomputed on armor change.
         let armor: Vec<Option<ItemStack>> = self.armor.to_vec();
@@ -467,6 +488,41 @@ impl Game<'_> {
             self.splash(&stack, at);
         }
     }
+    /// A splash potion's effects on the player in place, by their distance.
+    fn splash_on_player(
+        &mut self,
+        effects: &'static [(&'static str, i32, i32)],
+        at: Vec3,
+        scale: f64,
+    ) {
+        if let Some(p) = self.player.as_ref() {
+            let center = Vec3::new(
+                p.position.x,
+                p.position.y + f64::from(p.dimensions.height) / 2.0,
+                p.position.z,
+            );
+            let d2 =
+                (center.x - at.x).powi(2) + (center.y - at.y).powi(2) + (center.z - at.z).powi(2);
+            if d2 < 16.0 && (center.y - at.y).abs() <= 2.0 + f64::from(p.dimensions.height) {
+                let intensity = 1.0 - d2.sqrt() / 4.0;
+                for (id, duration, amp) in effects {
+                    let instant = brewing::effect(id).is_some_and(|e| e.instant);
+                    if instant {
+                        if let Some(a) = horizon_client::effects::instant(id, *amp, intensity) {
+                            self.apply_effect_action(a);
+                        }
+                    } else {
+                        let d = (intensity * f64::from(*duration) * scale + 0.5) as i32;
+                        if d > 20
+                            && let Some(e) = brewing::effect(id)
+                        {
+                            self.add_player_effect(EffectInstance::new(e.id, d, *amp));
+                        }
+                    }
+                }
+            }
+        }
+    }
     /// `ThrownSplashPotion.onHitAsPotion` (lingering clouds apply as a weaker splash).
     fn splash(&mut self, stack: &ItemStack, at: Vec3) {
         if &*stack.item == "minecraft:experience_bottle" {
@@ -527,34 +583,9 @@ impl Game<'_> {
         let Some(def) = stack.potion().and_then(brewing::potion) else {
             return;
         };
-        // The player.
-        if let Some(p) = self.player.as_ref() {
-            let center = Vec3::new(
-                p.position.x,
-                p.position.y + f64::from(p.dimensions.height) / 2.0,
-                p.position.z,
-            );
-            let d2 =
-                (center.x - at.x).powi(2) + (center.y - at.y).powi(2) + (center.z - at.z).powi(2);
-            if d2 < 16.0 && (center.y - at.y).abs() <= 2.0 + f64::from(p.dimensions.height) {
-                let intensity = 1.0 - d2.sqrt() / 4.0;
-                for (id, duration, amp) in def.effects {
-                    let instant = brewing::effect(id).is_some_and(|e| e.instant);
-                    if instant {
-                        if let Some(a) = horizon_client::effects::instant(id, *amp, intensity) {
-                            self.apply_effect_action(a);
-                        }
-                    } else {
-                        let d = (intensity * f64::from(*duration) * scale + 0.5) as i32;
-                        if d > 20
-                            && let Some(e) = brewing::effect(id)
-                        {
-                            self.potions.effects.add(EffectInstance::new(e.id, d, *amp));
-                        }
-                    }
-                }
-            }
-        }
+        // Every player in range (`ThrownSplashPotion.applySplash` over
+        // `LivingEntity`s, the players among them).
+        self.for_each_player(|g| g.splash_on_player(def.effects, at, scale));
         // Mobs take the instant effects (undead invert healing and harming).
         let undead = &self.res.stations().enchantments.entity_tags;
         let mut hits = Vec::new();

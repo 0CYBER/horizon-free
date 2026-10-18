@@ -49,3 +49,64 @@ impl Game<'_> {
         }
     }
 }
+
+/// Entity.shouldRenderAtSqrDistance's default range: 64 times the bounding
+/// box's mean edge, scaled by the entity distance option.
+pub(super) fn default_range(size: glam::DVec3, view_scale: f32) -> f64 {
+    let edge = (size.x + size.y + size.z) / 3.0;
+    let edge = if edge.is_nan() { 1.0 } else { edge };
+    edge * 64.0 * f64::from(view_scale)
+}
+
+impl Game<'_> {
+    /// EntityRenderer.shouldRender: the entity within `range` blocks of the
+    /// camera, measured from its current `position`, and its culling box
+    /// (`lo`..`hi`, interpolated, in world space) grown by 0.5 in the view.
+    pub(super) fn entity_in_view(
+        &self,
+        camera: glam::DVec3,
+        position: glam::DVec3,
+        range: f64,
+        lo: glam::DVec3,
+        hi: glam::DVec3,
+    ) -> bool {
+        if (position - camera).length_squared() >= range * range {
+            return false;
+        }
+        self.view_frustum.as_ref().is_none_or(|view| {
+            view.intersects(
+                (lo - camera - glam::DVec3::splat(0.5)).as_vec3(),
+                (hi - camera + glam::DVec3::splat(0.5)).as_vec3(),
+            )
+        })
+    }
+}
+
+/// An entity's position as a `DVec3`.
+pub(super) fn at(p: horizon_core::geometry::Vec3) -> glam::DVec3 {
+    glam::DVec3::new(p.x, p.y, p.z)
+}
+
+impl Game<'_> {
+    /// `entity_in_view` for an entity whose box stands on its position,
+    /// `width` wide and `height` tall, interpolated by `alpha` and grown by
+    /// `grow` (a renderer's getBoundingBoxForCulling).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn standing_entity_in_view(
+        &self,
+        camera: glam::DVec3,
+        previous: glam::DVec3,
+        position: glam::DVec3,
+        alpha: f64,
+        width: f64,
+        height: f64,
+        range: f64,
+        grow: f64,
+    ) -> bool {
+        let p = previous.lerp(position, alpha);
+        let half = glam::DVec3::new(width / 2.0 + grow, grow, width / 2.0 + grow);
+        let lo = p - half;
+        let hi = p + glam::DVec3::new(half.x, height + grow, half.z);
+        self.entity_in_view(camera, position, range, lo, hi)
+    }
+}

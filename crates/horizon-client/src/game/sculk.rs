@@ -6,13 +6,14 @@
 use super::{Game, Result};
 use horizon_client::{
     containers::BlockEntity,
+    fast_hash::{FxHashMap, FxHashSet},
     mobs::{Mob, Species, Who, warden},
     particles::{ParticleOptions, ParticleType},
     sculk::{self, Context, Info, SculkEntity, SculkKind, WardenSpawnTracker},
 };
 use horizon_core::{geometry::Direction, position::BlockPos, random::RandomSource};
 use horizon_world::registry::BlockStateId;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use winit::keyboard::KeyCode;
 
 pub const HELP: &[&str] = &[
@@ -70,8 +71,9 @@ pub(super) struct SculkState {
     /// The sculk block entities in the order they were added.
     index: Index,
     pub known: HashSet<(i32, i32)>,
-    steps: HashMap<Who, Steps>,
-    damaged: HashMap<u32, i64>,
+    // Keyed by mob ids the server gives out: the fast hasher is safe.
+    steps: FxHashMap<Who, Steps>,
+    damaged: FxHashMap<u32, i64>,
     last_health: Option<f32>,
     /// The darkness effect's blend factor, previous and current tick.
     darkness: (f32, f32),
@@ -79,6 +81,15 @@ pub(super) struct SculkState {
     pub actor: Option<Who>,
     ticks: u32,
     pub tracker_loaded: bool,
+}
+
+impl SculkState {
+    /// Exchange the level-held parts (its sculk block entities and the
+    /// chunks scanned for them) with another level's (game/levels.rs).
+    pub(super) fn swap_level(&mut self, other: &mut Self) {
+        std::mem::swap(&mut self.index, &mut other.index);
+        std::mem::swap(&mut self.known, &mut other.known);
+    }
 }
 /// An insertion-ordered set of block positions (`Level.blockEntityTickers`
 /// keeps the order block entities were added in).
@@ -1168,6 +1179,9 @@ impl Game<'_> {
 
     /// `Warden.applyDarknessAround` / `MobEffectUtil.addEffectToPlayersAround`.
     pub(super) fn apply_darkness(&mut self, at: [f64; 3], radius: f64) {
+        self.for_each_player(|g| g.darkness_on_player(at, radius));
+    }
+    fn darkness_on_player(&mut self, at: [f64; 3], radius: f64) {
         if self.creative || self.spectator() {
             return;
         }
@@ -1516,7 +1530,7 @@ impl Game<'_> {
                 }
             }
         }
-        let alive: HashSet<u32> = self.mobs.iter().map(|m| m.id).collect();
+        let alive: FxHashSet<u32> = self.mobs.iter().map(|m| m.id).collect();
         self.sculk.damaged.retain(|id, _| alive.contains(id));
         self.sculk.steps.retain(|who, _| match who {
             Who::Player => true,

@@ -365,13 +365,6 @@ impl Game<'_> {
             self.close_book();
             return Ok(());
         }
-        if let Some(remote) = self.remote.as_mut()
-            && remote.chat_input.is_some()
-        {
-            remote.chat_input = None;
-            self.capture(true);
-            return Ok(());
-        }
         self.key_pressed(KeyCode::Escape)
     }
 

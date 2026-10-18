@@ -305,6 +305,13 @@ impl Game<'_> {
         let (position, flying) = (p.position, p.flying || p.fall_flying);
         let (fall_flying, fly_ticks, velocity) = (p.fall_flying, p.fall_fly_ticks, p.velocity);
         let using = self.using.map(|(_, ticks)| ticks as i32 + 1).unwrap_or(0);
+        let using_off_hand = self
+            .using
+            .is_some_and(|(slot, _)| slot == super::shield::OFFHAND_SLOT);
+        let blocking = self
+            .using
+            .and_then(|(slot, _)| self.stack_in(slot))
+            .is_some_and(|stack| self.blocks_attacks(stack).is_some());
         let charged = self.inventory[self.selected]
             .as_ref()
             .is_some_and(|s| s.data().is_some_and(|d| !d.charged.is_empty()));
@@ -328,7 +335,7 @@ impl Game<'_> {
             .map(|s| s.item.clone());
         let off = self.offhand.as_ref().map(|s| s.item.clone());
         let riding = self.riding.is_some();
-        let hurt = p.health.hurt.hurt_time;
+        let hurt = p.health.hurt_animation_time;
         let Some(m) = self.player_model.as_mut() else {
             return;
         };
@@ -384,6 +391,8 @@ impl Game<'_> {
         m.extra.fall_fly_ticks = fly_ticks;
         m.extra.main_hand_left = self.settings.main_hand_left;
         m.extra.using_item = using;
+        m.extra.using_off_hand = using_off_hand;
+        m.extra.blocking = blocking;
         m.extra.charged = charged;
         m.extra.ints[5] = charge_duration;
         m.extra.elytra.tick(fall_flying, crouching, velocity);

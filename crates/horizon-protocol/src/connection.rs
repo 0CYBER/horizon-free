@@ -289,7 +289,12 @@ impl ConnReader {
 impl ConnWriter {
     /// Send one packet body (VarInt id + payload).
     pub fn send(&mut self, body: &[u8]) -> Result<()> {
-        let mut framed = frame::encode(body, self.threshold)?;
+        self.send_contents(&frame::contents(body, self.threshold)?)
+    }
+    /// Send a frame whose contents [`frame::contents`] made with this
+    /// writer's threshold.
+    pub fn send_contents(&mut self, contents: &[u8]) -> Result<()> {
+        let mut framed = frame::prefixed(contents);
         if let Some(c) = &mut self.encrypt {
             c.encrypt(&mut framed);
         }
