@@ -20,7 +20,8 @@ use super::{
 };
 use horizon_client::{
     Result, block_entity_anim::BlockEntityAnims, random_tick_sections::RandomTickSections,
-    save::SaveDir, streaming::Streaming, tick_chunk_membership::TickChunkMembership, world::World,
+    save::SaveDir, streaming::Streaming, tick_chunk_membership::TickChunkMembership,
+    ticket_levels::ChunkTickets, world::World,
 };
 use horizon_world::level::{LevelEvent, Ticks};
 use std::{collections::HashMap, sync::Arc, time::Instant};
@@ -37,6 +38,7 @@ pub(super) struct Parked {
     save: Arc<SaveDir>,
     block_ticks: Ticks,
     tick_chunks: TickChunkMembership,
+    tickets: ChunkTickets,
     random_tick_sections: RandomTickSections,
     level_events: Vec<LevelEvent>,
     falling: Vec<FallingBlock>,
@@ -113,6 +115,7 @@ impl Game<'_> {
             save,
             block_ticks: Ticks::new(self.level.seed as i32),
             tick_chunks: Default::default(),
+            tickets: Default::default(),
             random_tick_sections: Default::default(),
             level_events: Vec::new(),
             falling: Vec::new(),
@@ -159,6 +162,7 @@ impl Game<'_> {
         swap(&mut self.save, &mut p.save);
         swap(&mut self.block_ticks, &mut p.block_ticks);
         swap(&mut self.tick_chunks, &mut p.tick_chunks);
+        swap(&mut self.tickets, &mut p.tickets);
         swap(&mut self.random_tick_sections, &mut p.random_tick_sections);
         swap(&mut self.level_events, &mut p.level_events);
         swap(&mut self.falling, &mut p.falling);

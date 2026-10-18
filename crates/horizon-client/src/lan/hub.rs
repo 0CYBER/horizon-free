@@ -1012,6 +1012,12 @@ impl Hub {
             }
         }
         if !self.guests.iter().any(|g| self.here(g)) {
+            // ServerTickRateManager broadcasts a change to the players there
+            // are; one who joins later is sent the state as it is then
+            // (`updateJoiningPlayer`).
+            if !self.guests.iter().any(|g| g.placed) {
+                self.ticking = (ctx.tick_rate, ctx.tick_frozen);
+            }
             if !self
                 .guests
                 .iter()

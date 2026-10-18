@@ -49,6 +49,22 @@ enum PosRule {
         max_dist: i32,
         axis: Option<usize>,
     },
+    /// `horizon:piece_origin_axis_aligned_linear_pos`: Repurposed Structures'
+    /// PieceOriginAxisAlignedLinearPosRuleTest, vanilla's axis-aligned chance
+    /// over the block's distance from the template's origin along one axis.
+    PieceOrigin {
+        min_chance: f32,
+        max_chance: f32,
+        min_dist: i32,
+        max_dist: i32,
+        axis: usize,
+    },
+    /// `horizon:y_value`: Repurposed Structures' YValuePosRuleTest, the
+    /// block's world height in `min_y_value..=max_y_value`.
+    YValue {
+        min: i32,
+        max: i32,
+    },
 }
 #[derive(Clone, Debug)]
 enum Modifier {
@@ -91,8 +107,96 @@ impl PosRule {
                     }
                 }),
             },
+            "horizon:piece_origin_axis_aligned_linear_pos" => {
+                let int = |key| p.get(key).and_then(Value::as_i64).unwrap_or(0) as i32;
+                let (min_dist, max_dist) = (int("min_dist"), int("max_dist"));
+                if min_dist >= max_dist {
+                    return Err(DecodeError::Field("position predicate distance range"));
+                }
+                Self::PieceOrigin {
+                    min_chance: p.get("min_chance").and_then(Value::as_f64).unwrap_or(0.) as f32,
+                    max_chance: p.get("max_chance").and_then(Value::as_f64).unwrap_or(0.) as f32,
+                    min_dist,
+                    max_dist,
+                    axis: match p.get("axis").map(|a| a.as_str()) {
+                        Some(Some("x")) => 0,
+                        None | Some(Some("y")) => 1,
+                        Some(Some("z")) => 2,
+                        _ => return Err(DecodeError::Field("position predicate axis")),
+                    },
+                }
+            }
+            "horizon:y_value" => {
+                let int = |key| {
+                    p.get(key)
+                        .and_then(Value::as_i64)
+                        .map(|v| v as i32)
+                        .ok_or(DecodeError::Field("position predicate y value"))
+                };
+                let (min, max) = (int("min_y_value")?, int("max_y_value")?);
+                if min > max {
+                    return Err(DecodeError::Field("position predicate y range"));
+                }
+                Self::YValue { min, max }
+            }
             _ => return Err(DecodeError::Field("position predicate")),
         })
+    }
+    /// PosRuleTest.test for a block at `world`, `relative` in its template,
+    /// in a piece placed at `reference`.
+    fn test(
+        &self,
+        relative: [i32; 3],
+        world: [i32; 3],
+        reference: [i32; 3],
+        random: &mut impl RandomSource,
+    ) -> bool {
+        match *self {
+            Self::Always => true,
+            Self::Linear {
+                min_chance,
+                max_chance,
+                min_dist,
+                max_dist,
+                axis,
+            } => {
+                let dist = match axis {
+                    None => (0..3).map(|i| (world[i] - reference[i]).abs()).sum::<i32>(),
+                    Some(a) => ((world[a] - reference[a]) as f32).abs() as i32,
+                };
+                random.next_float()
+                    <= clamped_chance(min_chance, max_chance, min_dist, max_dist, dist)
+            }
+            Self::PieceOrigin {
+                min_chance,
+                max_chance,
+                min_dist,
+                max_dist,
+                axis,
+            } => {
+                let dist = (relative[axis] as f32).abs() as i32;
+                random.next_float()
+                    <= clamped_chance(min_chance, max_chance, min_dist, max_dist, dist)
+            }
+            Self::YValue { min, max } => (min..=max).contains(&world[1]),
+        }
+    }
+}
+/// Mth.clampedLerp(min_chance, max_chance, Mth.inverseLerp(dist, min_dist, max_dist)).
+fn clamped_chance(
+    min_chance: f32,
+    max_chance: f32,
+    min_dist: i32,
+    max_dist: i32,
+    dist: i32,
+) -> f32 {
+    let t = (dist - min_dist) as f32 / (max_dist - min_dist) as f32;
+    if t < 0. {
+        min_chance
+    } else if t > 1. {
+        max_chance
+    } else {
+        min_chance + t * (max_chance - min_chance)
     }
 }
 impl Modifier {
@@ -869,42 +973,9 @@ fn process_block<W: PlacementContext>(
                 if !rule.location.test(located, info.pos, &mut random) {
                     continue;
                 }
-                let position_ok = match &rule.position {
-                    PosRule::Always => true,
-                    PosRule::Linear {
-                        min_chance,
-                        max_chance,
-                        min_dist,
-                        max_dist,
-                        axis,
-                    } => {
-                        let dist = match axis {
-                            None => (0..3)
-                                .map(|i| (info.pos[i] - reference[i]).abs())
-                                .sum::<i32>(),
-                            Some(a) => {
-                                let d: [f32; 3] = std::array::from_fn(|i| {
-                                    if i == *a {
-                                        ((info.pos[i] - reference[i]) as f32).abs()
-                                    } else {
-                                        0.
-                                    }
-                                });
-                                (d[0] + d[1] + d[2]) as i32
-                            }
-                        };
-                        let roll = random.next_float();
-                        let t = (dist - min_dist) as f32 / (max_dist - min_dist) as f32;
-                        let chance = if t < 0. {
-                            *min_chance
-                        } else if t > 1. {
-                            *max_chance
-                        } else {
-                            min_chance + t * (max_chance - min_chance)
-                        };
-                        roll <= chance
-                    }
-                };
+                let position_ok = rule
+                    .position
+                    .test(relative, info.pos, reference, &mut random);
                 if !position_ok {
                     continue;
                 }
@@ -1558,6 +1629,42 @@ mod tests {
     fn spawner_mobs_refuse_a_mob_without_an_id() {
         let bad = json!({"mobs": [{"entity": {}, "weight": 1}]});
         assert!(SpawnerMobs::decode(&bad, |_| Ok(BlockStateId(0))).is_err());
+    }
+
+    #[test]
+    fn repurposed_position_rules() {
+        let decode = |v: Value| PosRule::decode(Some(&v));
+        // Over 3..4 blocks from the template's origin along y, 0 to 1.
+        let rule = decode(
+            json!({"predicate_type": "horizon:piece_origin_axis_aligned_linear_pos",
+            "axis": "y", "min_chance": 0, "max_chance": 1, "min_dist": 3, "max_dist": 4}),
+        )
+        .unwrap();
+        let mut random = LegacyRandom::new(1);
+        let world = [100, 64, -100];
+        // At or under min_dist the chance is 0, a roll of 0 aside; past max_dist it is 1.
+        assert!(!rule.test([9, 2, 9], world, world, &mut random));
+        assert!(rule.test([0, -5, 0], world, world, &mut random));
+        // The world position and the piece's do not count.
+        assert!(rule.test([0, 4, 0], [0, 0, 0], [50, 50, 50], &mut random));
+        // Repurposed refuses an empty distance range and an unknown axis.
+        for bad in [
+            json!({"predicate_type": "horizon:piece_origin_axis_aligned_linear_pos"}),
+            json!({"predicate_type": "horizon:piece_origin_axis_aligned_linear_pos",
+                "min_dist": 0, "max_dist": 1, "axis": "w"}),
+            json!({"predicate_type": "horizon:y_value", "min_y_value": 5, "max_y_value": 4}),
+            json!({"predicate_type": "horizon:y_value", "min_y_value": 5}),
+        ] {
+            assert!(decode(bad.clone()).is_err(), "{bad}");
+        }
+        let y = decode(
+            json!({"predicate_type": "horizon:y_value", "min_y_value": 0, "max_y_value": 31}),
+        )
+        .unwrap();
+        assert!(y.test([0; 3], [7, 31, 7], [0; 3], &mut random));
+        assert!(y.test([0, 99, 0], [7, 0, 7], [0; 3], &mut random));
+        assert!(!y.test([0; 3], [7, 32, 7], [0; 3], &mut random));
+        assert!(!y.test([0; 3], [7, -1, 7], [0; 3], &mut random));
     }
 
     #[test]

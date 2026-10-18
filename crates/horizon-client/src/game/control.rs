@@ -197,6 +197,16 @@ impl Game<'_> {
                 }
                 Ok(Some(json!({ "ok": true, "flat": r.flat_draws() })))
             }
+            "section-cull" => {
+                let r = self.renderer.as_mut().ok_or("no renderer")?;
+                match words.get(1).copied() {
+                    None => {}
+                    Some("on") => r.set_section_cull(true)?,
+                    Some("off") => r.set_section_cull(false)?,
+                    Some(other) => return Err(format!("unknown section cull mode {other}").into()),
+                }
+                Ok(Some(json!({ "ok": true, "cull": r.section_cull() })))
+            }
             "sculk" => Ok(Some(self.sculk_command(&words)?)),
             "status" => Ok(Some(self.control_status())),
             "pad" => Ok(Some(self.pad_command(&words)?)),
@@ -714,6 +724,7 @@ impl Game<'_> {
                 "drawn_sections": r.drawn_sections,
                 "section_draws": r.section_draws,
                 "section_draw_calls": r.section_draw_calls,
+                "culled_sections": r.culled_sections(),
                 "uploaded_bytes": r.uploaded_bytes,
                 "resident_sections": r.resident_sections(),
                 "arena_bytes": arena_bytes,
