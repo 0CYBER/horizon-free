@@ -75,6 +75,9 @@ pub struct Guest {
     pub fall_flying: bool,
     pub flying: bool,
     pub sleeping: bool,
+    /// `LivingEntity.DATA_LIVING_ENTITY_FLAGS`: 1 while using an item, 2 if
+    /// it is in the off hand.
+    pub living_flags: i8,
     /// The bed (its head) the player sleeps in (`LivingEntity.getSleepingPos`),
     /// `Player.sleepCounter`, and the bed last told to the player itself.
     pub bed: Option<[i32; 3]>,
@@ -222,6 +225,7 @@ impl Guest {
             fall_flying: false,
             flying: false,
             sleeping: false,
+            living_flags: 0,
             bed: None,
             sleep_timer: 0,
             sent_bed: None,

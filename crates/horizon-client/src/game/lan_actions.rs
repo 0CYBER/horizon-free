@@ -60,6 +60,13 @@ pub(super) struct GuestPlay {
     xp_delay: u32,
 }
 
+impl GuestPlay {
+    /// The item in use: its slot and for how many ticks.
+    pub(super) fn using(&self) -> Option<(usize, u32)> {
+        self.using
+    }
+}
+
 struct ItemRules<'a>(&'a horizon_client::items::Items);
 impl Rules for ItemRules<'_> {
     fn max_stack(&self, item: &str) -> u32 {
@@ -1616,6 +1623,15 @@ impl Game<'_> {
             }
             let source = horizon_client::settings::sound_source(&name) as i32;
             host.hub.sound(&name, at, volume, pitch, source, None);
+        }
+    }
+
+    /// The guests' items in use, for the players around (`LivingEntity.startUsingItem`
+    /// and `stopUsingItem` set DATA_LIVING_ENTITY_FLAGS).
+    pub(super) fn lan_living_flags(&mut self, host: &mut LanHost) {
+        for g in &mut host.hub.guests {
+            let using = host.play.get(&g.conn).and_then(GuestPlay::using);
+            g.living_flags = super::lan::living_flags(using);
         }
     }
 

@@ -80,6 +80,8 @@ pub struct HostState {
     pub sprinting: bool,
     pub equipment: [Option<ItemStack>; 6],
     pub health: f32,
+    /// `LivingEntity.DATA_LIVING_ENTITY_FLAGS` (the item in use).
+    pub living_flags: i8,
 }
 
 /// Everything the hub needs from the game for one tick.
@@ -1375,6 +1377,7 @@ impl Hub {
         rot: (f32, f32, f32),
         on_ground: bool,
         flags: (bool, bool, bool, bool),
+        living_flags: i8,
         skin: u8,
         health: f32,
         equipment: Vec<(u8, Option<horizon_protocol::item::Stack>)>,
@@ -1406,6 +1409,9 @@ impl Hub {
         if pose != 0 {
             meta.push((6, serializer::POSE, Value::Id(pose)));
         }
+        // Always there: the trackers send the entries that changed, and an
+        // item no longer in use is a change back to 0.
+        meta.push((8, serializer::BYTE, Value::Byte(living_flags)));
         if (health - 1.0).abs() > f32::EPSILON && health != 20.0 {
             meta.push((9, serializer::FLOAT, Value::Float(health)));
         }
@@ -1469,6 +1475,7 @@ impl Hub {
                 (h.yaw, h.pitch, h.head_yaw),
                 h.on_ground,
                 (h.sneaking, h.sprinting, false, false),
+                h.living_flags,
                 0x7F,
                 h.health,
                 equipment,
@@ -1498,6 +1505,7 @@ impl Hub {
                     (g.yaw, g.pitch, g.head_yaw),
                     g.on_ground,
                     (g.sneaking, g.sprinting, g.fall_flying, g.sleeping),
+                    g.living_flags,
                     g.info.model_customisation,
                     g.health,
                     equipment,

@@ -1478,6 +1478,25 @@ impl Game<'_> {
                         }
                     }
                 }
+                // LivingEntity.onSyncedDataUpdated(DATA_LIVING_ENTITY_FLAGS):
+                // another player starts using the item in a hand (eating, a
+                // bow drawn, a shield up), or stops.
+                let other = self
+                    .remote
+                    .as_ref()
+                    .is_some_and(|r| r.level_players.contains_key(&p.id) && r.entity_id != p.id);
+                if other && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
+                    for (index, _, value) in &p.values {
+                        if let (8, Value::Byte(flags)) = (index, value) {
+                            m.extra.using_off_hand = flags & 2 != 0;
+                            if flags & 1 == 0 {
+                                m.extra.using_item = 0;
+                            } else if m.extra.using_item == 0 {
+                                m.extra.using_item = 1;
+                            }
+                        }
+                    }
+                }
                 // LivingEntity.onSyncedDataUpdated(SLEEPING_POS_ID): this
                 // player lies down in the bed, or gets up.
                 if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) {
@@ -2597,6 +2616,7 @@ impl Game<'_> {
         let mut lerps = std::mem::take(&mut r.lerps);
         let head_lerps = &mut r.head_lerps;
         let players = &r.level_players;
+        let mut using = Vec::new();
         for m in &mut self.mobs {
             let player = players.contains_key(&(m.id as i32));
             if !running && !player {
@@ -2645,6 +2665,28 @@ impl Game<'_> {
                 m.head_yaw += wrap_degrees(*yaw - m.head_yaw) / *steps as f32;
                 *steps -= 1;
             }
+            // LivingEntity.updatingUsingItem for another player: the ticks the
+            // item has been used before this one.
+            if player && m.extra.using_item > 0 {
+                let item = if m.extra.using_off_hand {
+                    m.extra.off_hand.clone()
+                } else {
+                    m.extra.main_hand.clone()
+                };
+                if let Some(item) = item {
+                    let eye = if m.extra.crouching { 1.27 } else { 1.62 };
+                    let at = [m.position.x, m.position.y, m.position.z];
+                    using.push((
+                        item,
+                        m.extra.using_item as u32 - 1,
+                        at,
+                        eye,
+                        m.head_pitch,
+                        m.yaw,
+                    ));
+                }
+                m.extra.using_item += 1;
+            }
             // LivingEntity.tick's tickHeadTurn: a mob's BodyRotationControl,
             // a player's body following its walk and look.
             if player {
@@ -2692,6 +2734,9 @@ impl Game<'_> {
             }
         }
         head_lerps.retain(|_, (_, steps)| *steps > 0);
+        for (item, ticks, at, eye, pitch, yaw) in using {
+            self.remote_player_eating(&item, ticks, at, eye, pitch, yaw);
+        }
         if running {
             // Boats, minecarts, armor stands, projectiles and the rest
             // interpolate like mobs.
@@ -2715,6 +2760,44 @@ impl Game<'_> {
             for (id, l) in lerps {
                 r.lerps.entry(id).or_insert(l);
             }
+        }
+    }
+    /// `Consumable.onConsumeTick` for another player eating: the crumbs at
+    /// their mouth every 4 ticks once 21.875% of the 32 ticks have passed
+    /// (`shouldEmitParticlesAndSounds`; the sounds come from the server).
+    fn remote_player_eating(
+        &mut self,
+        item: &str,
+        ticks: u32,
+        at: [f64; 3],
+        eye: f64,
+        pitch: f32,
+        yaw: f32,
+    ) {
+        let food = self
+            .res
+            .items
+            .get(item)
+            .is_some_and(|i| i.consumable && i.food.is_some());
+        let duration = 32;
+        let remaining = duration - ticks.min(duration);
+        if !food || duration - remaining <= (duration as f32 * 0.21875) as u32 || remaining % 4 != 0
+        {
+            return;
+        }
+        let options = self.item_particle(&ItemStack::new(item, 1));
+        let mut spawned = Vec::new();
+        horizon_client::particles::item_use_particles(
+            &mut self.world.random,
+            pitch,
+            yaw,
+            at,
+            at[1] + eye,
+            5,
+            |p, v| spawned.push((p, v)),
+        );
+        for (p, v) in spawned {
+            self.particles.add(&options, p, v);
         }
     }
     /// LocalPlayer.sendPosition plus input, sprint and held-slot updates.
@@ -3728,6 +3811,7 @@ impl Game<'_> {
                     let armor = [&e.head, &e.chest, &e.legs, &e.feet].map(|s| s.as_deref());
                     serde_json::json!({
                         "id": m.id,
+                        "using": m.extra.using_item,
                         "armor": armor,
                         "main_hand": e.main_hand.as_deref(),
                         "off_hand": e.off_hand.as_deref(),

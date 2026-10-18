@@ -43,6 +43,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              pushes it, as in vanilla), not ever faster across the ground.
 - eat:       holding right click with bread, the guest's own screen plays the eating (the item in use
              counts up) and the server eats one loaf and feeds the guest.
+- eating:    each side sees the other player eat: the item in use (LivingEntity's flags) on the
+             player it draws, and no longer once the bread is eaten (#803);
 - xp:        experience orbs 4 blocks away fly to the guest, show on the guest's screen and give the
              guest their points (not the host).
 - objects:   boats, minecarts, armor stands, item frames and paintings the host summons reach the
@@ -84,7 +86,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'titles', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'push', 'eat', 'xp', 'objects', 'projectiles', 'light', 'effects', 'portals', 'distance']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'titles', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'light', 'effects', 'portals', 'distance']
 
 
 class Game:
@@ -1095,6 +1097,42 @@ def check_eat(host, guest, out):
     return detail
 
 
+def check_eating(host, guest, out):
+    for g in (host, guest):
+        g('command', command='gamemode survival')
+        g('command', command='clear @s')
+        # Hungry: Player.canEat.
+        g('command', command='effect give @s minecraft:hunger 3 255')
+    host.wait(70)
+    for g in (host, guest):
+        g('command', command='effect clear @s')
+        g('command', command='give @s minecraft:bread 2')
+    host.wait(5)
+    face_each_other(host, guest)
+
+    def using(game):
+        # On its server thread the host's window is a client of its server too.
+        if game is host and not SERVER_THREAD:
+            return lan_guest(host).get('model_using') or 0
+        return max((e.get('using') or 0 for e in remote(game).get('player_equipment', [])), default=0)
+    seen = {}
+    for name, eater, watcher in (('host eats', host, guest), ('guest eats', guest, host)):
+        eater.raw('select', 'minecraft:bread')
+        hold = threading.Thread(target=eater.raw, args=('use-item', '--hold', 2.2))
+        hold.start()
+        samples = []
+        for _ in range(4):
+            time.sleep(0.3)
+            samples.append(using(watcher))
+        watcher.shot(out, 'eating-' + name.replace(' ', '-'))
+        hold.join()
+        eater.wait(10)
+        seen[name] = {'during': samples, 'after': using(watcher)}
+    for name, s in seen.items():
+        assert sum(1 for u in s['during'] if u > 0) >= 3 and s['after'] == 0, f'{name}: {seen}'
+    return seen
+
+
 def check_xp(host, guest, out):
     for g in (host, guest):
         g('command', command='gamemode survival')
@@ -1276,7 +1314,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'commands': check_commands,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,
              'effects': check_effects, 'portals': check_portals, 'distance': check_distance, 'clicks': check_clicks,
-             'sleep': check_sleep, 'push': check_push, 'eat': check_eat,
+             'sleep': check_sleep, 'push': check_push, 'eat': check_eat, 'eating': check_eating,
              'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles,
              'light': check_light}
 

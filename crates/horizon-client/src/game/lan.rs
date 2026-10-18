@@ -2,7 +2,7 @@
 //! server threads and the play-state hub, feeds it the world's entities each
 //! tick and turns what the guests do into gameplay. A world that is not open
 //! costs one `Option` check per tick.
-use super::Game;
+use super::{Game, shield::OFFHAND_SLOT};
 use horizon_client::{
     Result,
     items::ItemStack,
@@ -395,6 +395,8 @@ impl Game<'_> {
                         [&m.extra.head, &m.extra.chest, &m.extra.legs, &m.extra.feet]
                             .map(|s| s.as_deref())
                     }),
+                    // For how many ticks the host draws this guest using an item.
+                    "model_using": h.models.get(&g.conn).map(|m| m.extra.using_item),
                 })).collect::<Vec<_>>(),
             }),
             _ => json!({ "open": false }),
@@ -722,6 +724,7 @@ impl Game<'_> {
             sprinting: p.sprinting,
             equipment,
             health: p.health.health(),
+            living_flags: living_flags(self.using),
         })
     }
 
@@ -924,6 +927,7 @@ impl Game<'_> {
         }
         self.lan_flush_effects(&mut host);
         self.tick_guests(&mut host);
+        self.lan_living_flags(&mut host);
         self.tick_server_travel(&mut host);
         self.lan_swings(&mut host);
         self.lan_update_streaming(&host);
@@ -1158,6 +1162,11 @@ impl Game<'_> {
                 .each_ref()
                 .map(|s| s.as_ref().map(|s| s.item.clone()));
             m.extra.crouching = g.sneaking;
+            // LivingEntity.onSyncedDataUpdated(DATA_LIVING_ENTITY_FLAGS): the
+            // item in use and its hand (the arm poses of a bow, a shield...).
+            let using = host.play.get(&g.conn).and_then(|p| p.using());
+            m.extra.using_item = using.map_or(0, |(_, ticks)| ticks as i32 + 1);
+            m.extra.using_off_hand = using.is_some_and(|(slot, _)| slot == OFFHAND_SLOT);
         }
     }
 
@@ -1225,4 +1234,10 @@ impl Game<'_> {
             _ => {}
         }
     }
+}
+
+/// `LivingEntity.DATA_LIVING_ENTITY_FLAGS` for an item in use: 1, and 2 when
+/// it is the off hand's.
+pub(super) fn living_flags(using: Option<(usize, u32)>) -> i8 {
+    using.map_or(0, |(slot, _)| if slot == OFFHAND_SLOT { 3 } else { 1 })
 }

@@ -181,6 +181,7 @@ impl Server {
             sprinting: false,
             equipment: Default::default(),
             health: 20.0,
+            living_flags: 0,
         };
         let mut ctx = TickCtx {
             world: &mut self.world,
