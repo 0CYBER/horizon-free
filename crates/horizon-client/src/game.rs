@@ -510,6 +510,9 @@ impl EntityObstructionWorld for PlayerObstruction {
     }
 }
 impl LevelAccess for GameLevel<'_> {
+    fn world_surface(&self, x: i32, z: i32) -> i32 {
+        self.world.world_surface(x, z, |s| self.facts.is_air(s))
+    }
     fn precipitation(&self, pos: BlockPos) -> Option<horizon_world::level::Precipitation> {
         self.behaviours.precipitation_info(self, pos)
     }
