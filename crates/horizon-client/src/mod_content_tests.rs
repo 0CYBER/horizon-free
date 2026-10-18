@@ -576,6 +576,18 @@ fn content_root_carries_a_structure_mod() {
             "data/huts/tags/worldgen/biome/has_hut.json",
             r##"{"values": ["#minecraft:is_overworld", "#c:is_plains", "othermod:glade", "minecraft:plains"]}"##,
         ),
+        // Additions to vanilla's set and pool; a target nobody defines is skipped.
+        (
+            "data/huts/worldgen/structure_set/added/villages.json",
+            r#"{"horizon:add_to": "minecraft:villages",
+                "structures": [{"structure": "huts:hut", "weight": 3}]}"#,
+        ),
+        (
+            "data/huts/worldgen/template_pool/added/houses.json",
+            r#"{"horizon:add_to": ["othermod:houses", "minecraft:village/plains/houses"],
+                "elements": [{"weight": 2, "element": {"element_type": "minecraft:single_pool_element",
+                "location": "huts:hut", "projection": "rigid", "processors": "minecraft:empty"}}]}"#,
+        ),
     ];
     for (name, text) in files {
         let path = dir.join(name);
@@ -601,6 +613,37 @@ fn content_root_carries_a_structure_mod() {
         hut["values"],
         serde_json::json!(["#minecraft:is_overworld", "minecraft:plains"])
     );
+    // The additions join vanilla's entries at the end and are no set or pool
+    // of their own.
+    let bundle = |name: &str, base: &Path| -> BTreeMap<String, String> {
+        serde_json::from_slice(&fs::read(base.join("worldgen").join(name)).unwrap()).unwrap()
+    };
+    for (name, id, list, added) in [
+        (
+            "structure_sets.json",
+            "minecraft:villages",
+            "structures",
+            serde_json::json!({"structure": "huts:hut", "weight": 3}),
+        ),
+        (
+            "template_pools.json",
+            "minecraft:village/plains/houses",
+            "elements",
+            serde_json::json!({"weight": 2, "element": {"element_type": "minecraft:single_pool_element",
+                "location": "huts:hut", "projection": "rigid", "processors": "minecraft:empty"}}),
+        ),
+    ] {
+        let (ours, vanilla) = (bundle(name, &root), bundle(name, &base));
+        let entries = |text: &str| -> Vec<serde_json::Value> {
+            let v: serde_json::Value = serde_json::from_str(text).unwrap();
+            v[list].as_array().unwrap().clone()
+        };
+        let mut expected = entries(&vanilla[id]);
+        expected.push(added);
+        assert_eq!(entries(&ours[id]), expected, "{id}");
+        assert!(!ours.keys().any(|k| k.starts_with("huts:added/")), "{name}");
+        assert!(!ours.contains_key("othermod:houses"));
+    }
 
     let assets = Assets::load(&root).unwrap();
     let biomes = crate::biome::Biomes::load(&root).unwrap();

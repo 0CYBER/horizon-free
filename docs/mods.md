@@ -287,6 +287,22 @@ its row. The game reads this content into its block and item tables
 nobody registers (a block a port left out, another mod's item) is dropped,
 so the rest of the tag still loads; vanilla would drop the whole tag.
 
+A mod adds to structure sets and template pools that are not its own
+(vanilla's villages, another mod's houses) with a set or pool file in its own
+namespace holding `horizon:add_to`, a key vanilla data never has. Its entries
+are appended to each set or pool named, after every mod's own files, in mod
+and file order; the file is no set or pool itself. A name nobody defines is
+skipped.
+
+```json
+{ "horizon:add_to": "minecraft:villages",
+  "structures": [ { "structure": "mymod:village_beach", "weight": 10 } ] }
+```
+
+A pool addition holds `"elements"` as a pool does. This is what lithostitched's
+`add_structure_set_entries` and `add_template_pool_elements` modifiers do on
+NeoForge and Fabric, and `horizon-port-pack carry` writes them from those.
+
 ## Versions and compatibility
 
 - The API is the WIT package `horizon:mods@0.1.0`. New functions and
