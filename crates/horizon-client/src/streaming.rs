@@ -544,7 +544,7 @@ impl Streaming {
         self.lighting.remove(&(x, z));
         self.meshing.retain(|k, _| (k.0, k.2) != (x, z));
         self.waiting.retain(|k| (k.0, k.2) != (x, z));
-        world.dirty_sections.retain(|k| (k.0, k.2) != (x, z));
+        world.dirty_sections.take_column(x, z);
         world.chunks.remove(&(x, z))
     }
     fn submit(&mut self, priority: i64, job: Job) {
@@ -809,7 +809,9 @@ impl Streaming {
             let far: HashSet<(i32, i32)> = far.iter().copied().collect();
             self.meshing.retain(|k, _| !far.contains(&(k.0, k.2)));
             self.waiting.retain(|k| !far.contains(&(k.0, k.2)));
-            world.dirty_sections.retain(|k| !far.contains(&(k.0, k.2)));
+            world
+                .dirty_sections
+                .retain_columns(|x, z| !far.contains(&(x, z)));
         }
         // Drop far proto chunks that are not checked out.
         let (center, r4) = (self.center, i64::from(self.radius + 4));
@@ -1025,66 +1027,63 @@ impl Streaming {
                 !back
             });
         }
-        let dirty: Vec<_> = world.dirty_sections.iter().copied().collect();
-        let mut columns: FxHashMap<(i32, i32), Option<Box<Region>>> = FxHashMap::default();
-        let mut ready_columns: FxHashMap<(i32, i32), bool> = FxHashMap::default();
-        for (x, sy, z) in dirty {
+        // Column by column: the checks below hold for all of a column's
+        // sections, and columns waiting for light cost one look per frame.
+        let columns: Vec<_> = world.dirty_sections.columns().collect();
+        for ((x, z), sections) in columns {
             if !world.chunks.contains_key(&(x, z)) {
-                world.dirty_sections.remove(&(x, sy, z));
+                world.dirty_sections.take_column(x, z);
                 continue;
             }
             if !self.ranges().in_view(x, z) {
-                world.dirty_sections.remove(&(x, sy, z));
-                self.waiting.insert((x, sy, z));
+                world.dirty_sections.take_column(x, z);
+                for sy in section_indexes(sections) {
+                    self.waiting.insert((x, sy, z));
+                }
                 continue;
             }
-            // Once per column: the 3x3 check would otherwise repeat for each
-            // of its sections every frame. A neighbour being lit dirties this
-            // column again when its light job finishes (new chunks relight
-            // their eight neighbours), so wait for it rather than mesh once
-            // per neighbour. Columns still in `dirty_light` here can't be lit
-            // yet (a neighbour of theirs is missing): waiting for them could
-            // last until the player comes back.
-            let (lit, lighting) = (&self.lit, &self.lighting);
-            let ready = *ready_columns.entry((x, z)).or_insert_with(|| {
-                (-1..=1).all(|dz| {
-                    (-1..=1).all(|dx| {
-                        let n = (x + dx, z + dz);
-                        lit.contains(&n) && !lighting.contains_key(&n)
-                    })
+            // A neighbour being lit dirties this column again when its light
+            // job finishes (new chunks relight their eight neighbours), so
+            // wait for it rather than mesh once per neighbour. Columns still
+            // in `dirty_light` here can't be lit yet (a neighbour of theirs is
+            // missing): waiting for them could last until the player comes
+            // back.
+            let ready = (-1..=1).all(|dz| {
+                (-1..=1).all(|dx| {
+                    let n = (x + dx, z + dz);
+                    self.lit.contains(&n) && !self.lighting.contains_key(&n)
                 })
             });
             if !ready {
                 continue;
             }
-            let region = columns
-                .entry((x, z))
-                .or_insert_with(|| Self::region(world, x, z));
-            let Some(region) = region.clone() else {
+            let Some(region) = Self::region(world, x, z) else {
                 continue;
             };
-            world.dirty_sections.remove(&(x, sy, z));
-            let first = self.meshed.insert((x, z));
-            self.sequence += 1;
-            self.meshing.insert((x, sy, z), self.sequence);
-            self.submit(
-                self.distance(x, z) * 4 + if first { 2 } else { 0 },
-                Job::Mesh(
-                    x,
-                    sy,
-                    z,
-                    region,
-                    self.sequence,
-                    MeshSettings {
-                        nether: self.nether_shading,
-                        zoom: self.biome_zoom,
-                        blend_radius: self.biome_blend,
-                        smooth_lighting: self.smooth_lighting,
-                        cutout_leaves: self.cutout_leaves,
-                        cull_leaves: self.cull_leaves,
-                    },
-                ),
-            );
+            world.dirty_sections.take_column(x, z);
+            for sy in section_indexes(sections) {
+                let first = self.meshed.insert((x, z));
+                self.sequence += 1;
+                self.meshing.insert((x, sy, z), self.sequence);
+                self.submit(
+                    self.distance(x, z) * 4 + if first { 2 } else { 0 },
+                    Job::Mesh(
+                        x,
+                        sy,
+                        z,
+                        region.clone(),
+                        self.sequence,
+                        MeshSettings {
+                            nether: self.nether_shading,
+                            zoom: self.biome_zoom,
+                            blend_radius: self.biome_blend,
+                            smooth_lighting: self.smooth_lighting,
+                            cutout_leaves: self.cutout_leaves,
+                            cull_leaves: self.cull_leaves,
+                        },
+                    ),
+                );
+            }
         }
         (uploads, removed)
     }
@@ -1342,6 +1341,16 @@ impl Drop for Streaming {
             let _ = t.join();
         }
     }
+}
+/// The section indexes set in a column's bits, lowest first.
+fn section_indexes(mut bits: u32) -> impl Iterator<Item = i32> {
+    std::iter::from_fn(move || {
+        (bits != 0).then(|| {
+            let sy = bits.trailing_zeros() as i32;
+            bits &= bits - 1;
+            sy
+        })
+    })
 }
 #[cfg(test)]
 mod tests {
