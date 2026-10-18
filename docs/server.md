@@ -74,9 +74,13 @@ not tick cost, so it is in scope here (see section 9).
   headless client built from vanilla's own codecs, pings and joins Horizon's server and vanilla's from the
   same world copy. It compares every login, configuration and play packet up to the first chunk batch, the
   chunk bytes, chat, `/list`, failing commands, the console lines and the files left behind. Result on main:
-  see "Harnesses on main" below. The real vanilla GUI client (`tools/vanilla_client.py`) could not be run
-  here: the tool only knows Linux natives, and the Mac mini's session was locked, which stalls the client's
-  rendering. It runs on the desktop under vscreen.
+  see "Harnesses on main" below.
+- **The real vanilla 26.3 client** (`tools/vanilla_client.py`, from the owner's own files, dev-only) joins
+  too. On 2026-10-18 it joined the server build of the game (`horizon-engine`, section 3) on the Mac mini:
+  `python3 tools/vanilla_client.py --name Vanilla --join localhost:PORT`. It logged in, drew the terrain
+  around spawn and stayed connected for four minutes, with no warning or error on the server. The tool
+  runs on Linux under vscreen and on macOS from the logged-in screen session, even a locked one, with vsync
+  off.
 
 ### What fails or is missing
 
