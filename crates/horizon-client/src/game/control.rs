@@ -349,6 +349,14 @@ impl Game<'_> {
                     .get(&item)
                     .ok_or_else(|| format!("unknown item {item}"))?;
                 let count: u32 = words.get(2).map_or(Ok(1), |c| c.parse())?;
+                // Single player's inventory is its server thread's player's.
+                if let Some(server) = &self.integrated {
+                    let command = format!("give @s {item} {count}");
+                    server
+                        .call(move |g| g.owner_console_command(&command))
+                        .ok_or("the integrated server stopped")?;
+                    return Ok(Some(json!({ "ok": true, "given": count })));
+                }
                 let max = info.max_stack;
                 let mut given = 0;
                 // Stop once the inventory is full.
@@ -379,7 +387,14 @@ impl Game<'_> {
                 ok()
             }
             "time" => {
-                self.world.day_time = arg(1)?.parse()?;
+                let time: i64 = arg(1)?.parse()?;
+                self.world.day_time = time;
+                // Single player's clock is its server thread's.
+                if let Some(server) = &self.integrated {
+                    server
+                        .call(move |g| g.world.day_time = time)
+                        .ok_or("the integrated server stopped")?;
+                }
                 ok()
             }
             "summon" => {
