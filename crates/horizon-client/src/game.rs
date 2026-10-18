@@ -1842,6 +1842,7 @@ impl Game<'_> {
         }
         for &key in self.tick_chunks.removed() {
             self.random_tick_sections.remove(&key);
+            self.portals.sections.remove(&key);
             self.block_ticks
                 .remove_chunk(horizon_core::position::ChunkPos::new(key.0, key.1));
         }
