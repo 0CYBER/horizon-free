@@ -11,9 +11,7 @@ use horizon_client::{
     Result,
     lan::{LoginGate, NetConfig, NetLog, OnlineMode, hub::HubConfig},
     server::{
-        eula,
-        java_properties::now_millis,
-        profiles,
+        eula, profiles,
         properties::{GAME_MODES, ServerProperties, SystemEntropy},
         user_cache::UserCache,
         user_lists::{
@@ -84,18 +82,16 @@ fn log_from(thread: &str, level: &str, message: &str) {
         "ERROR" => ::log::Level::Error,
         _ => ::log::Level::Info,
     };
-    horizon_client::logging::write_only(file_level, message);
+    horizon_client::logging::write_as(thread, file_level, message);
     CAPTURE.with_borrow_mut(|lines| {
         if let Some(lines) = lines {
             lines.push(message.to_owned());
         }
     });
-    let secs = now_millis().div_euclid(1000).rem_euclid(86_400);
+    // Log4j's %d{HH:mm:ss}: the local time, as in logs/latest.log.
     println!(
-        "[{:02}:{:02}:{:02}] [{thread}/{level}]: {message}",
-        secs / 3600,
-        secs / 60 % 60,
-        secs % 60
+        "[{}] [{thread}/{level}]: {message}",
+        chrono::Local::now().format("%H:%M:%S")
     );
 }
 
