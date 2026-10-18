@@ -1,6 +1,7 @@
-//! Structure mods' worldgen, carried over: the structure, placement and pool
-//! element types of the common structure libraries rewritten as vanilla's,
-//! and the loader's convention biome tags (`c:`) the structures name.
+//! Structure mods' worldgen, carried over: block and fluid states in 26.3's
+//! shape, the structure, placement and pool element types of the common
+//! structure libraries rewritten as vanilla's, and the loader's convention
+//! biome tags (`c:`) the structures name.
 //!
 //! The libraries' types add rules on top of vanilla's (a structure that may
 //! not start in liquid, a minimum distance from the world origin, a count
@@ -44,6 +45,8 @@ const ELEMENTS: [(&str, &str); 3] = [
 pub struct Upgrade {
     /// Files rewritten to vanilla types.
     pub mapped: usize,
+    /// Files whose block and fluid states were written in 26.3's shape.
+    pub block_states: usize,
     /// Types left as they are (Horizon skips what it cannot run), by type.
     pub unsupported: BTreeMap<String, usize>,
 }
@@ -51,6 +54,41 @@ pub struct Upgrade {
 /// Rewrites one `data/<ns>/worldgen/<kind>/...` file in place; whether it
 /// changed.
 pub fn upgrade(kind: &str, v: &mut Value, report: &mut Upgrade) -> bool {
+    let states = block_states(v);
+    report.block_states += usize::from(states);
+    upgrade_types(kind, v, report) || states
+}
+
+/// 1.21.1 writes a block or fluid state as `{"Name": ..., "Properties":
+/// {...}}`; 26.3's codec reads `{"id": ..., "properties": {...}}` and
+/// refuses the old shape, which fails the processor list, feature or pool
+/// holding it. Whether anything changed.
+fn block_states(v: &mut Value) -> bool {
+    match v {
+        Value::Object(o) => {
+            let state = o.get("Name").is_some_and(Value::is_string)
+                && o.keys().all(|k| k == "Name" || k == "Properties");
+            if state {
+                if let Some(name) = o.remove("Name") {
+                    o.insert("id".into(), name);
+                }
+                if let Some(properties) = o.remove("Properties") {
+                    o.insert("properties".into(), properties);
+                }
+                return true;
+            }
+            o.values_mut()
+                .fold(false, |changed, x| block_states(x) | changed)
+        }
+        Value::Array(a) => a
+            .iter_mut()
+            .fold(false, |changed, x| block_states(x) | changed),
+        _ => false,
+    }
+}
+
+/// The library types of one file rewritten as vanilla's; whether it changed.
+fn upgrade_types(kind: &str, v: &mut Value, report: &mut Upgrade) -> bool {
     let mut unsupported = |t: &str| *report.unsupported.entry(t.to_owned()).or_default() += 1;
     let changed = match kind {
         "structure" => match v["type"].as_str() {
@@ -223,6 +261,7 @@ mod tests {
             "minecraft:empty_pool_element"
         );
         assert_eq!(report.mapped, 3);
+        assert_eq!(report.block_states, 0);
         assert_eq!(
             report.unsupported,
             BTreeMap::from([
@@ -233,6 +272,28 @@ mod tests {
                 ("yungsapi:yung_single_element".into(), 1),
             ])
         );
+    }
+
+    #[test]
+    fn writes_block_states_in_26_3_shape() {
+        let mut report = Upgrade::default();
+        let mut list = json!({"processors": [{"processor_type": "minecraft:rule", "rules": [{
+            "input_predicate": {"predicate_type": "minecraft:always_true"},
+            "output_state": {"Name": "minecraft:oak_stairs", "Properties": {"facing": "east"}}}]}]});
+        assert!(upgrade("processor_list", &mut list, &mut report));
+        assert_eq!(
+            list["processors"][0]["rules"][0]["output_state"],
+            json!({"id": "minecraft:oak_stairs", "properties": {"facing": "east"}})
+        );
+        let mut spring = json!({"type": "minecraft:spring_feature", "config": {
+            "state": {"Name": "minecraft:water"}, "valid_blocks": ["minecraft:stone"]}});
+        assert!(upgrade("configured_feature", &mut spring, &mut report));
+        assert_eq!(spring["config"]["state"], json!({"id": "minecraft:water"}));
+        // An object with other keys is not a state; a 26.3 state is left as it is.
+        let mut other = json!({"Name": "x", "weight": 1, "state": {"id": "minecraft:stone"}});
+        assert!(!upgrade("configured_feature", &mut other, &mut report));
+        assert_eq!(report.block_states, 2);
+        assert_eq!(report.mapped, 0);
     }
 
     #[test]
