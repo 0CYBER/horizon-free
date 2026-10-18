@@ -21,7 +21,10 @@ Also checked, with vanilla's messages:
 - a token the session service rejects ("Failed to log in: Invalid session");
 - a join the session service forgets (the server: "Failed to verify username!");
 - no account at all (the client refuses before joining);
-- a verified player the whitelist refuses.
+- a verified player the whitelist refuses;
+- `whitelist add` in online mode: a player who joined before is known by name
+  and let in; another name is looked up through the services' profile lookup,
+  and one with no account is refused ("That player does not exist").
 
 Horizon's dedicated server then runs the same steps in online mode
 (`HORIZON_API_DISCOVERY` points it at the mock too): it must give the client
@@ -100,6 +103,14 @@ class Services:
                 query = dict(urllib.parse.parse_qsl(url.query))
                 if url.path == '/minecraft/client':
                     return self.reply(200, services.discovery())
+                if url.path.startswith('/users/profiles/minecraft/'):
+                    # profiles/getByName: the account with that name, ignoring case.
+                    name = urllib.parse.unquote(url.path.rsplit('/', 1)[1])
+                    with services.lock:
+                        services.log.append(('lookup', name))
+                    if name.lower() == PLAYER.lower():
+                        return self.reply(200, {'id': PLAYER_UUID, 'name': PLAYER})
+                    return self.reply(404, {'error': 'NOT_FOUND', 'errorMessage': f'Couldn\'t find any profile with name {name}'})
                 if url.path == '/session/minecraft/hasJoined':
                     with services.lock:
                         ok = services.joined.get(query.get('username')) == query.get('serverId')
@@ -107,11 +118,15 @@ class Services:
                     if ok:
                         return self.reply(200, {'id': PLAYER_UUID, 'name': query['username'], 'properties': []})
                     return self.reply(204)
+                with services.lock:
+                    services.log.append(('unknown', url.path))
                 self.reply(404, {'error': 'NotFound', 'path': url.path})
 
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))) or b'{}')
                 if self.path != '/session/minecraft/join':
+                    with services.lock:
+                        services.log.append(('unknown', self.path))
                     return self.reply(404, {'error': 'NotFound'})
                 token, profile, server_id = body.get('accessToken'), body.get('selectedProfile'), body.get('serverId')
                 accepted = token in (GOOD, FORGET) and profile == PLAYER_UUID
@@ -135,7 +150,8 @@ class Services:
             'session': endpoints(join='/session/minecraft/join', verify='/session/minecraft/hasJoined',
                                  getProfileById='/session/minecraft/profile/{profileId}'),
             'player': {'endpoints': {}},
-            'profiles': {'endpoints': {'getTexture': {'validUris': [self.url + '/texture/{textureId}']}}},
+            'profiles': {'endpoints': {'getTexture': {'validUris': [self.url + '/texture/{textureId}']},
+                                       'getByName': {'uri': self.url + '/users/profiles/minecraft/{name}'}}},
             'telemetry': {'endpoints': {}},
         }}
 
@@ -189,8 +205,19 @@ def player_lines(lines):
     return out
 
 
+def wait_after(server, mark, pattern, timeout=30):
+    """A line matching `pattern` among those the server printed after `mark`."""
+    regex = re.compile(pattern)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if any(regex.search(l) for l in server.lines[mark:]):
+            return
+        time.sleep(0.2)
+    raise AssertionError(f'no {pattern!r} after line {mark} of {server.log_path.name}')
+
+
 def run_side(label, command, binary, build, services, discovery):
-    """The five logins against one server; its checks and its log about the player."""
+    """The six logins against one server; its checks and its log about the player."""
     port = free_port()
     directory = build / label
     shutil.rmtree(directory, ignore_errors=True)
@@ -261,6 +288,24 @@ def run_side(label, command, binary, build, services, discovery):
         check('not whitelisted: client message', got['error'], 'disconnected: You are not white-listed on this server!')
         check('not whitelisted: verified first', [(e[0], e[3]) for e in services.take_log()],
               [('join', True), ('verify', True)])
+
+        # 6. Whitelisted by name: the server knows the player from their first join (its name cache), so it
+        #    asks the services nothing, and lets them in.
+        mark = len(server.lines)
+        server.console('whitelist add tester')
+        wait_after(server, mark, r'Added Tester to the whitelist')
+        check('whitelist add: known player, no lookup', services.take_log(), [])
+        got = run_client(binary, build, port, f'{label}-whitelisted', GOOD, discovery)
+        wait_after(server, mark, r'Tester left the game')
+        check('whitelisted: connected throughout', got['error'], None)
+        services.take_log()
+        # A name nobody joined with: the server looks the account up, and there is none.
+        mark = len(server.lines)
+        server.console('whitelist add Nobody')
+        wait_after(server, mark, r'That player does not exist')
+        check('whitelist add: lookup failure logged',
+              any("Couldn't find profile with name: nobody" in l for l in server.lines[mark:]), True)
+        check('whitelist add: no such account', services.take_log(), [('lookup', 'nobody')])
         time.sleep(1)
     finally:
         server.stop()
@@ -310,7 +355,7 @@ def main():
         java=subprocess.check_output(['java', '--version'], text=True).splitlines()[0], checks=len(checks),
         scope='Online-mode login against vanilla\'s dedicated server and Horizon\'s, with a mock session service: '
               'server hash, RSA key packet, AES/CFB8, session join and verify, play; rejected token, forgotten '
-              'join, no account, whitelist; the servers\' log lines about the player.'))
+              'join, no account, whitelist, whitelist add by account name; the servers\' log lines about the player.'))
     print(f'online mode: {len(checks)} checks ok')
 
 

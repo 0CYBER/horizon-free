@@ -65,17 +65,9 @@ impl LightTables {
     }
     /// Full tables with the vanilla occlusion shapes from `occlusion.nbt`.
     pub fn load(root: &Path, registry: &BlockRegistry, facts: &BlockFacts) -> crate::Result<Self> {
-        use horizon_world::{
-            collision::CachedCollisionRegistry,
-            nbt::{self, Limits},
-        };
-        let data = nbt::read_named(
-            &std::fs::read(root.join("occlusion.nbt"))?,
-            Limits::tables(),
-        )?
-        .0
-        .tag;
-        let occlusion = CachedCollisionRegistry::from_nbt(&data, registry)?;
+        use horizon_world::{collision::CachedCollisionRegistry, registry::BlockTableFile};
+        let file = BlockTableFile::open(&root.join("occlusion.nbt"), registry)?;
+        let occlusion = CachedCollisionRegistry::from_table(file.table("occlusion")?)?;
         let mut tables = Self::new(facts);
         let block = VoxelShape::block();
         let mut shapes: Vec<VoxelShape> = vec![VoxelShape::empty(), block.clone()];
@@ -165,14 +157,14 @@ impl LightTables {
     fn edge_occluded(&self, top: usize, bottom: usize) -> bool {
         self.cells[bottom].dampening != 0 || self.blocked(top, bottom, Direction::Down as usize)
     }
-    pub fn emission(&self, state: u16) -> u8 {
+    pub fn emission(&self, state: u32) -> u8 {
         self.cells[state as usize].emission
     }
-    pub fn dampening(&self, state: u16) -> u8 {
+    pub fn dampening(&self, state: u32) -> u8 {
         self.cells[state as usize].dampening
     }
     /// Whether a state change can change light (`hasDifferentLightProperties`).
-    pub fn differs(&self, old: u16, new: u16) -> bool {
+    pub fn differs(&self, old: u32, new: u32) -> bool {
         let (a, b) = (&self.cells[old as usize], &self.cells[new as usize]);
         old != new
             && (a.dampening != b.dampening || a.emission != b.emission || a.shaped || b.shaped)
@@ -211,12 +203,12 @@ pub fn light_chunk(
     // up to 14 blocks into it (sky light there is always 15).
     let h = ((top_section + 1) * 16).min(HEIGHT as usize);
     let at = |x: usize, y: usize, z: usize| (y * W + z) * W + x;
-    let mut states = vec![0u16; W * W * h];
+    let mut states = vec![0u32; W * W * h];
     let mut sky = vec![0u8; W * W * h];
     let mut block = vec![0u8; W * W * h];
     let mut queue = VecDeque::new();
     let mut sky_queue = VecDeque::new();
-    let mut ids = Box::new([0u16; 4096]);
+    let mut ids = Box::new([0u32; 4096]);
     for (dz, row) in region.iter().enumerate() {
         for (dx, chunk) in row.iter().enumerate() {
             let Some(chunk) = chunk else { continue };
@@ -391,13 +383,13 @@ pub fn apply_relighting(chunk: &mut Chunk, lights: Vec<Light>) -> Vec<(i32, i32,
 
 /// Resident chunks the incremental relighter reads and writes.
 pub trait LightWorld {
-    fn state(&self, x: i32, y: i32, z: i32) -> Option<u16>;
+    fn state(&self, x: i32, y: i32, z: i32) -> Option<u32>;
     /// Packed light (sky << 4 | block), None outside loaded chunks.
     fn light(&self, x: i32, y: i32, z: i32) -> Option<u8>;
     fn set_light(&mut self, x: i32, y: i32, z: i32, packed: u8);
 }
 impl<S: std::hash::BuildHasher> LightWorld for HashMap<(i32, i32), Arc<Chunk>, S> {
-    fn state(&self, x: i32, y: i32, z: i32) -> Option<u16> {
+    fn state(&self, x: i32, y: i32, z: i32) -> Option<u32> {
         if !(MIN_Y..MIN_Y + HEIGHT).contains(&y) {
             return None;
         }
@@ -611,10 +603,10 @@ fn relight_layer(
 mod tests {
     use super::*;
 
-    const AIR: u16 = 0;
-    const STONE: u16 = 1;
-    const TORCH: u16 = 2;
-    const SLAB: u16 = 3;
+    const AIR: u32 = 0;
+    const STONE: u32 = 1;
+    const TORCH: u32 = 2;
+    const SLAB: u32 = 3;
     /// Air, stone, torch and a bottom slab (full bottom face, half sides,
     /// empty top), with a third face shape for the half sides.
     fn tables() -> LightTables {
@@ -889,7 +881,7 @@ mod tests {
         for (si, s) in fixture.sections.iter_mut().enumerate() {
             let section = Arc::make_mut(s);
             for i in 0..4096 {
-                section.set(i, ((i + si) % 16) as u16);
+                section.set(i, ((i + si) % 16) as u32);
             }
             for i in 0..64 {
                 section.biomes.set(i, (i % 4) as u32);

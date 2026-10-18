@@ -1,0 +1,144 @@
+//! `Level.tickBlockEntities` for the block entities ticked together here
+//! (hoppers, crafters, jukeboxes, beacons, creaking hearts, spawners, trial
+//! spawners, vaults, beehives and furnaces): only those whose state has a
+//! ticker, in vanilla's list order (`horizon_client::block_entities`), in
+//! chunks that tick blocks. Sculk, brewing stands and pistons tick in their
+//! own passes.
+use super::Game;
+use horizon_client::{
+    Result,
+    block_entities::{Pos, Ticking},
+    containers::{BlockEntity, FurnaceKind, HOPPER_SLOTS},
+};
+use horizon_world::registry::BlockStateId;
+
+impl Game<'_> {
+    pub(super) fn tick_block_entities(&mut self) -> Result<()> {
+        self.tick_mount_menu();
+        self.load_entity_types();
+        if !self.world.block_entities.has_states() {
+            let states = self.ticking_states();
+            self.world.block_entities.set_states(states);
+        }
+        self.forget_gone_hoppers();
+        let ticking = self.block_ticking_area();
+        let mut spawners = Vec::new();
+        let mut trial_spawners = Vec::new();
+        for slot in self.world.block_entity_tickers() {
+            let pos = slot.0;
+            // Ticks before this one can remove it (`TickingBlockEntity.isRemoved`).
+            if !self.world.block_entities.is_live(slot)
+                || !ticking(pos.0, pos.2)
+                || !self.border.contains(f64::from(pos.0), f64::from(pos.2))
+            {
+                continue;
+            }
+            match self.world.block_entities.get(&pos) {
+                Some(BlockEntity::Chest(items)) if items.len() == HOPPER_SLOTS => {
+                    self.tick_hopper(pos)
+                }
+                Some(BlockEntity::Crafter(_)) => self.tick_crafter(pos),
+                Some(BlockEntity::Jukebox(_)) => self.tick_jukebox(pos),
+                Some(BlockEntity::Beacon(_)) => self.tick_beacon_at(pos),
+                Some(BlockEntity::CreakingHeart(_)) => self.tick_creaking_heart(pos)?,
+                Some(BlockEntity::Spawner(_)) => {
+                    self.tick_spawner(pos)?;
+                    spawners.push(pos);
+                }
+                Some(BlockEntity::TrialSpawner(_)) => {
+                    self.tick_trial_spawner(pos)?;
+                    trial_spawners.push(pos);
+                }
+                Some(BlockEntity::Vault(_)) => self.tick_vault(pos)?,
+                Some(BlockEntity::Beehive(_)) => self.tick_beehive(pos),
+                Some(BlockEntity::Furnace(_)) => self.tick_furnace(pos)?,
+                _ => {}
+            }
+        }
+        self.update_song_volumes();
+        self.scan_for_hearts();
+        // The client ticks (particles, sounds, the turning mob) are for a
+        // window; a dedicated or integrated server has none.
+        if self.options.dedicated.is_none() {
+            self.client_tick_spawners(&spawners);
+            for key in trial_spawners {
+                self.client_tick_trial_spawner(key);
+            }
+        }
+        Ok(())
+    }
+    /// `BlockState.getTicker` of every state, for the block entities ticked
+    /// here. A creaking heart keeps its slot while uprooted (see
+    /// `tick_creaking_heart`).
+    fn ticking_states(&self) -> Vec<Ticking> {
+        let registry = self.pack.assets.registry;
+        (0..registry.len())
+            .map(|i| {
+                let state = BlockStateId(i as u32);
+                let name: &str = &self.res.facts.get(state).name;
+                match name {
+                    "minecraft:hopper"
+                    | "minecraft:crafter"
+                    | "minecraft:beacon"
+                    | "minecraft:creaking_heart"
+                    | "minecraft:spawner"
+                    | "minecraft:trial_spawner"
+                    | "minecraft:vault"
+                    | "minecraft:beehive"
+                    | "minecraft:bee_nest" => Ticking::Yes,
+                    "minecraft:jukebox" => {
+                        let record = registry
+                            .state(state)
+                            .and_then(|s| s.properties.get("has_record"))
+                            .is_some_and(|v| v == "true");
+                        if record { Ticking::Yes } else { Ticking::Idle }
+                    }
+                    n if FurnaceKind::from_block(n).is_some() => Ticking::Yes,
+                    _ => Ticking::No,
+                }
+            })
+            .collect()
+    }
+    /// `ServerLevel.shouldTickBlocksAt`: chunks within the simulation
+    /// distance plus one (`DistanceManager.inBlockTickingRange`, Chebyshev
+    /// in chunks) of the player or a guest. With nobody there, a dedicated
+    /// server ticks none; the game alone (no player yet, headless fixtures)
+    /// ticks every chunk.
+    fn block_ticking_area(&self) -> impl Fn(i32, i32) -> bool + use<> {
+        let d = self.settings.simulation_distance.max(2) + 1;
+        let mut centres: Vec<(i32, i32)> = self.streaming.extra.iter().map(|&(c, _)| c).collect();
+        if let Some(p) = &self.player {
+            centres.push((
+                (p.position.x.floor() as i32) >> 4,
+                (p.position.z.floor() as i32) >> 4,
+            ));
+        }
+        let everywhere = centres.is_empty() && self.options.dedicated.is_none();
+        move |x, z| {
+            everywhere
+                || centres
+                    .iter()
+                    .any(|&(cx, cz)| ((x >> 4) - cx).abs().max(((z >> 4) - cz).abs()) <= d)
+        }
+    }
+    /// `AbstractFurnaceBlockEntity.serverTick` of the furnace at `pos`, and
+    /// its block's `lit` following it.
+    fn tick_furnace(&mut self, pos: Pos) -> Result<()> {
+        let Some(BlockEntity::Furnace(f)) = self.world.block_entities.get_mut(&pos) else {
+            return Ok(());
+        };
+        let Some(lit) = f.tick(&self.res.recipes, &self.res.items, &self.res.providers) else {
+            return Ok(());
+        };
+        let state = self.world.block(pos.0, pos.1, pos.2);
+        if let Some(mut s) = self.pack.assets.registry.state(state).cloned()
+            && s.properties.contains_key("lit")
+        {
+            s.properties.insert("lit".into(), lit.to_string());
+            if let Ok(id) = self.pack.assets.registry.resolve(&s) {
+                self.world.set(pos.0, pos.1, pos.2, id)?;
+            }
+        }
+        Ok(())
+    }
+}

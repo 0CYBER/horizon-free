@@ -45,7 +45,7 @@ impl Game<'_> {
             .as_ref()
             .is_some_and(|t| t.contains(id))
     }
-    fn load_entity_types(&mut self) {
+    pub(super) fn load_entity_types(&mut self) {
         if self.spawners.entity_types.is_some() {
             return;
         }
@@ -63,32 +63,27 @@ impl Game<'_> {
             .unwrap_or_default();
         self.spawners.entity_types = Some(types);
     }
-    /// Every spawner's server tick, then its client tick.
-    pub(super) fn tick_spawners(&mut self) -> Result<()> {
-        self.load_entity_types();
-        let keys: Vec<Pos> = self
-            .world
-            .block_entities
-            .iter()
-            .filter(|(_, e)| matches!(e, BlockEntity::Spawner(_)))
-            .map(|(k, _)| *k)
-            .collect();
-        for key in &keys {
-            let state = self.world.block(key.0, key.1, key.2);
-            if &*self.res.facts.get(state).name != "minecraft:spawner" {
-                continue;
-            }
-            let Some(BlockEntity::Spawner(mut spawner)) = self.world.block_entities.remove(key)
-            else {
-                continue;
-            };
-            let result = self.server_tick_spawner(*key, &mut spawner);
-            self.world
-                .block_entities
-                .insert(*key, BlockEntity::Spawner(spawner));
-            result?;
+    /// The server tick of the spawner at `key`, if its block is still a
+    /// spawner. Its client tick comes after every block entity's
+    /// (`client_tick_spawners`).
+    pub(super) fn tick_spawner(&mut self, key: Pos) -> Result<()> {
+        let state = self.world.block(key.0, key.1, key.2);
+        if &*self.res.facts.get(state).name != "minecraft:spawner" {
+            return Ok(());
         }
-        for key in keys {
+        let Some(BlockEntity::Spawner(mut spawner)) = self.world.block_entities.take(&key) else {
+            return Ok(());
+        };
+        let result = self.server_tick_spawner(key, &mut spawner);
+        self.world
+            .block_entities
+            .put(key, BlockEntity::Spawner(spawner));
+        result
+    }
+    /// The client ticks of these spawners, then the shown mobs of spawners
+    /// that are gone go.
+    pub(super) fn client_tick_spawners(&mut self, keys: &[Pos]) {
+        for &key in keys {
             self.client_tick_spawner(key);
         }
         let entities = &self.world.block_entities;
@@ -98,7 +93,6 @@ impl Game<'_> {
                 Some(BlockEntity::Spawner(_) | BlockEntity::TrialSpawner(_))
             )
         });
-        Ok(())
     }
     fn server_tick_spawner(&mut self, key: Pos, spawner: &mut Spawner) -> Result<()> {
         let pos = [key.0, key.1, key.2];
@@ -427,6 +421,15 @@ impl Game<'_> {
                 * glam::Mat4::from_scale(glam::Vec3::splat(scale));
             let light = self.world.light(key.0, key.1, key.2);
             let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
+            if mob.species() == horizon_client::mobs::Species::SulfurCube {
+                self.sulfur_cube_body_geometry(
+                    mob,
+                    alpha as f32,
+                    horizon_client::mobs::render::base_transform_at(mob, alpha as f32, origin),
+                    packed,
+                    out,
+                );
+            }
             horizon_client::mobs::render::render_posed(
                 mob,
                 alpha as f32,

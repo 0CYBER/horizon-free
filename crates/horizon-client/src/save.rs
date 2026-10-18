@@ -16,7 +16,7 @@
 use crate::{
     Result,
     biome::Biomes,
-    chunk::{BIOME_STRATEGY, BLOCK_STRATEGY, Chunk, Light, MIN_Y, SECTIONS},
+    chunk::{BIOME_STRATEGY, Chunk, Light, MIN_Y, SECTIONS, block_strategy},
     streaming::ChunkGenerator,
 };
 use horizon_core::{
@@ -238,7 +238,7 @@ pub struct SaveTables {
     default_state: Vec<bool>,
     block_entity: Vec<bool>,
     heightmaps: crate::assets::Properties,
-    air: u16,
+    air: u32,
 }
 impl SaveTables {
     pub fn new(assets: &crate::assets::Assets) -> Self {
@@ -266,9 +266,7 @@ impl SaveTables {
             default_state,
             block_entity: Vec::new(),
             heightmaps: assets.properties.clone(),
-            air: registry
-                .default_state("minecraft:air")
-                .map_or(0, |s| s.0 as u16),
+            air: registry.default_state("minecraft:air").map_or(0, |s| s.0),
         }
     }
     /// Which states carry a block entity (`BlockFacts`), to drop entries for
@@ -1035,8 +1033,8 @@ fn decode_column(
             }
         }
     }
-    let air = registry.default_state("minecraft:air")?.0 as u16;
-    let mut cache: HashMap<String, u16> = HashMap::new();
+    let air = registry.default_state("minecraft:air")?.0;
+    let mut cache: HashMap<String, u32> = HashMap::new();
     let Some(Tag::List(sections)) = tag.get("sections") else {
         return Some(chunk);
     };
@@ -1051,7 +1049,7 @@ fn decode_column(
         if let Some(states) = section.get("block_states")
             && let Some(Tag::List(palette)) = states.get("palette")
         {
-            let ids: Vec<u16> = palette
+            let palette: Vec<u32> = palette
                 .iter()
                 .map(|p| {
                     let state = BlockState::from_nbt(p).ok();
@@ -1074,7 +1072,7 @@ fn decode_column(
                                     registry.id(&full).or(Some(default))
                                 })
                             })
-                            .map_or(air, |id| id.0 as u16)
+                            .map_or(air, |id| id.0)
                     })
                 })
                 .collect();
@@ -1085,9 +1083,8 @@ fn decode_column(
                 }
                 _ => None,
             };
-            let palette: Vec<u32> = ids.iter().map(|&id| u32::from(id)).collect();
             if let Ok(blocks) =
-                PalettedContainer::from_packed(BLOCK_STRATEGY, palette, data.as_deref())
+                PalettedContainer::from_packed(block_strategy(), palette, data.as_deref())
             {
                 target.blocks = blocks;
             }
@@ -1980,10 +1977,43 @@ impl Default for WorldGen {
 }
 /// Writes a new world's `world_gen_settings` (seed, options and dimensions).
 pub fn write_world_gen_settings(dir: &Path, seed: i64, options: WorldGen) -> Result<()> {
+    write_world_gen_settings_with(dir, seed, options, None)
+}
+/// [`write_world_gen_settings`] with a flat overworld's own generator
+/// settings (FlatLevelGeneratorSettings, as `flatgen::settings_from_json`
+/// reads them) instead of the Superflat preset's classic layers.
+pub fn write_world_gen_settings_with(
+    dir: &Path,
+    seed: i64,
+    options: WorldGen,
+    flat_settings: Option<Tag>,
+) -> Result<()> {
     fs::create_dir_all(dir)?;
     // worldgen/world_preset/flat.json's overworld: the classic flat layers.
     let layer = |block: &str, height: i32| {
         Tag::compound([("block", string(block)), ("height", Tag::Int(height))])
+    };
+    let classic = || {
+        Tag::compound([
+            ("biome", string("minecraft:plains")),
+            ("features", Tag::Byte(0)),
+            ("lakes", Tag::Byte(0)),
+            (
+                "layers",
+                Tag::List(vec![
+                    layer("minecraft:bedrock", 1),
+                    layer("minecraft:dirt", 2),
+                    layer("minecraft:grass_block", 1),
+                ]),
+            ),
+            (
+                "structure_overrides",
+                Tag::List(vec![
+                    string("minecraft:strongholds"),
+                    string("minecraft:villages"),
+                ]),
+            ),
+        ])
     };
     let flat = Tag::compound([
         ("type", string("minecraft:overworld")),
@@ -1991,29 +2021,7 @@ pub fn write_world_gen_settings(dir: &Path, seed: i64, options: WorldGen) -> Res
             "generator",
             Tag::compound([
                 ("type", string("minecraft:flat")),
-                (
-                    "settings",
-                    Tag::compound([
-                        ("biome", string("minecraft:plains")),
-                        ("features", Tag::Byte(0)),
-                        ("lakes", Tag::Byte(0)),
-                        (
-                            "layers",
-                            Tag::List(vec![
-                                layer("minecraft:bedrock", 1),
-                                layer("minecraft:dirt", 2),
-                                layer("minecraft:grass_block", 1),
-                            ]),
-                        ),
-                        (
-                            "structure_overrides",
-                            Tag::List(vec![
-                                string("minecraft:strongholds"),
-                                string("minecraft:villages"),
-                            ]),
-                        ),
-                    ]),
-                ),
+                ("settings", flat_settings.unwrap_or_else(classic)),
             ]),
         ),
     ]);
@@ -2138,11 +2146,25 @@ pub struct Level {
     pub on_ground: bool,
     pub food_exhaustion: f32,
     pub food_tick_timer: i32,
+    /// Abilities.flying: whether creative/spectator flight is active.
+    pub flying: bool,
     /// The player compound as loaded, for fields Horizon does not model
     /// (ender chest, effects, abilities, recipe book, attributes, ...).
     pub player_extra: Option<Tag>,
 }
 impl Level {
+    /// Initialize the offline single-player identity before saving or dropping items.
+    pub fn ensure_player_uuid(&mut self) -> [i32; 4] {
+        *self.player_uuid.get_or_insert_with(|| {
+            let u = horizon_protocol::crypto::offline_uuid("Player");
+            [
+                (u >> 96) as u32 as i32,
+                (u >> 64) as u32 as i32,
+                (u >> 32) as u32 as i32,
+                u as u32 as i32,
+            ]
+        })
+    }
     pub fn game_rule(&self, name: &str) -> i32 {
         self.game_rules
             .get(name)
@@ -2289,6 +2311,10 @@ impl Level {
             self.creative = mode == 1;
             self.game_mode = mode as i32;
         }
+        self.flying = p
+            .get("abilities")
+            .and_then(|a| number(a.get("flying")))
+            .is_some_and(|v| v != 0);
         if let Some(d) = text(p.get("Dimension")) {
             self.dimension = d;
         }
@@ -2420,7 +2446,9 @@ impl Level {
         }
         if spectator {
             put(&mut abilities, "flying", Tag::Byte(1));
-        } else if !creative {
+        } else if creative {
+            put(&mut abilities, "flying", Tag::Byte(i8::from(self.flying)));
+        } else {
             put(&mut abilities, "flying", Tag::Byte(0));
         }
         if let Tag::Compound(map) = &mut abilities {
@@ -2600,17 +2628,7 @@ impl Level {
                 map.remove(&JavaString::from(key));
             }
         }
-        // A new world's player has the offline profile id of its name
-        // (UUIDUtil.createOfflinePlayerUUID), as in an offline single-player game.
-        let uuid = *self.player_uuid.get_or_insert_with(|| {
-            let u = horizon_protocol::crypto::offline_uuid("Player");
-            [
-                (u >> 96) as u32 as i32,
-                (u >> 64) as u32 as i32,
-                (u >> 32) as u32 as i32,
-                u as u32 as i32,
-            ]
-        });
+        let uuid = self.ensure_player_uuid();
         // A new world's first spawn point is its world spawn.
         if self.world_spawn.is_none() {
             self.world_spawn = self.spawn.map(|s| {
@@ -3143,6 +3161,7 @@ mod tests {
             world_spawn: Some([8, 64, 8]),
             spawn: Some([20.0, 70.0, 20.0]),
             difficulty_locked: true,
+            flying: true,
             ..Level::default()
         };
         level.weather.raining = true;
@@ -3154,6 +3173,7 @@ mod tests {
         assert_eq!(back.seed, -42);
         assert_eq!((back.time, back.day_time), (1234, 25000));
         assert!(back.creative);
+        assert!(back.flying);
         assert_eq!(back.position, Some([1.5, 70.0, -3.25]));
         assert_eq!(back.rotation, [90.0, 10.0]);
         assert_eq!((back.health, back.food, back.saturation), (17.0, 15, 2.5));
@@ -3207,6 +3227,17 @@ mod tests {
             third.ender_items[3].as_ref().map(|s| (&*s.item, s.count)),
             Some(("minecraft:diamond", 2))
         );
+        // A dead player's empty inventory replaces the previously loaded items.
+        let mut dead = third;
+        dead.health = 0.0;
+        dead.inventory.clear();
+        dead.inventory_components.clear();
+        dead.write(&dir).unwrap();
+        let dead = Level::read(&dir).unwrap();
+        assert_eq!(dead.health, 0.0);
+        assert!(dead.inventory.is_empty());
+        assert!(dead.inventory_components.is_empty());
+        assert!(dead.player_extra.unwrap().get("equipment").is_none());
         assert!(dir.join("data/minecraft/world_gen_settings.dat").exists());
         let _ = fs::remove_dir_all(&dir);
     }
@@ -3224,5 +3255,34 @@ mod tests {
         level.player_extra = Some(loaded);
         level.active_effects.clear();
         assert!(level.player_tag().get("active_effects").is_none());
+    }
+
+    #[test]
+    fn creative_flight_status_persists_in_save_and_resets_for_survival() {
+        let mut level = Level {
+            creative: true,
+            flying: true,
+            ..Level::default()
+        };
+        let tag = level.player_tag();
+        let flying_byte = tag
+            .get("abilities")
+            .and_then(|a| number(a.get("flying")))
+            .unwrap_or(0);
+        assert_eq!(flying_byte, 1);
+
+        let mut loaded = Level::default();
+        loaded.read_player(&tag);
+        assert!(loaded.flying);
+
+        // Survival mode resets flying ability to 0 in save.
+        level.creative = false;
+        level.game_mode = 0;
+        let tag_survival = level.player_tag();
+        let flying_survival = tag_survival
+            .get("abilities")
+            .and_then(|a| number(a.get("flying")))
+            .unwrap_or(0);
+        assert_eq!(flying_survival, 0);
     }
 }

@@ -39,6 +39,25 @@ pub struct ToolRule {
     pub speed: Option<f32>,
     pub correct: Option<bool>,
 }
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConsumeEffectSpec {
+    pub id: String,
+    pub duration: i32,
+    pub amplifier: i32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ConsumeEffect {
+    ApplyEffects {
+        effects: Vec<ConsumeEffectSpec>,
+        probability: f32,
+    },
+    ClearAllEffects,
+    RemoveEffects(Vec<String>),
+    TeleportRandomly,
+    PlaySound(String),
+}
+
 #[derive(Clone, Debug)]
 pub struct ItemInfo {
     pub fire_resistant: bool,
@@ -49,7 +68,9 @@ pub struct ItemInfo {
     pub tool: Vec<ToolRule>,
     pub tool_default_speed: f32,
     pub food: Option<(u32, f32)>,
+    pub can_always_eat: bool,
     pub consumable: bool,
+    pub consume_effects: Vec<ConsumeEffect>,
     pub model: String,
     /// Main-hand `attack_damage` / `attack_speed` modifier amounts.
     pub attack_damage: f32,
@@ -421,6 +442,79 @@ impl Items {
                     f["saturation"].as_f64().unwrap_or(0.0) as f32,
                 )
             });
+            let can_always_eat = c
+                .get("minecraft:food")
+                .and_then(|f| f.get("can_always_eat"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let mut consume_effects = Vec::new();
+            if let Some(effects) = c
+                .get("minecraft:consumable")
+                .and_then(|cons| cons.get("on_consume_effects"))
+                .and_then(|e| e.as_array())
+            {
+                for effect in effects {
+                    match effect.get("type").and_then(|t| t.as_str()) {
+                        Some("minecraft:apply_effects") => {
+                            let probability = effect
+                                .get("probability")
+                                .and_then(|p| p.as_f64())
+                                .map_or(1.0, |p| p as f32);
+                            let mut specs = Vec::new();
+                            if let Some(list) = effect.get("effects").and_then(|l| l.as_array()) {
+                                for e in list {
+                                    if let Some(id) = e.get("id").and_then(|i| i.as_str()) {
+                                        let duration =
+                                            e.get("duration").and_then(|d| d.as_i64()).unwrap_or(0)
+                                                as i32;
+                                        let amplifier = e
+                                            .get("amplifier")
+                                            .and_then(|a| a.as_i64())
+                                            .unwrap_or(0)
+                                            as i32;
+                                        specs.push(ConsumeEffectSpec {
+                                            id: id.to_string(),
+                                            duration,
+                                            amplifier,
+                                        });
+                                    }
+                                }
+                            }
+                            consume_effects.push(ConsumeEffect::ApplyEffects {
+                                effects: specs,
+                                probability,
+                            });
+                        }
+                        Some("minecraft:clear_all_effects") => {
+                            consume_effects.push(ConsumeEffect::ClearAllEffects);
+                        }
+                        Some("minecraft:remove_effects") => {
+                            let mut targets = Vec::new();
+                            if let Some(eff) = effect.get("effects") {
+                                if let Some(s) = eff.as_str() {
+                                    targets.push(s.to_string());
+                                } else if let Some(arr) = eff.as_array() {
+                                    for item in arr {
+                                        if let Some(s) = item.as_str() {
+                                            targets.push(s.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                            consume_effects.push(ConsumeEffect::RemoveEffects(targets));
+                        }
+                        Some("minecraft:teleport_randomly") => {
+                            consume_effects.push(ConsumeEffect::TeleportRandomly);
+                        }
+                        Some("minecraft:play_sound") => {
+                            if let Some(sound) = effect.get("sound").and_then(|s| s.as_str()) {
+                                consume_effects.push(ConsumeEffect::PlaySound(sound.to_string()));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
             items.insert(
                 id.clone(),
                 ItemInfo {
@@ -435,7 +529,9 @@ impl Items {
                         .as_f64()
                         .unwrap_or(1.0) as f32,
                     food,
+                    can_always_eat,
                     consumable: c.get("minecraft:consumable").is_some(),
+                    consume_effects,
                     model: c["minecraft:item_model"]
                         .as_str()
                         .unwrap_or(name)
@@ -1495,6 +1591,34 @@ mod tests {
                 .evaluate(&leaves, &mut random)
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn always_edible_and_consume_effects_loaded() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client/26.3");
+        if !root.join("items.json").exists() {
+            return;
+        }
+        let assets = crate::assets::Assets::load(&root).unwrap();
+        let facts = crate::blocks::BlockFacts::load(&root, assets.registry).unwrap();
+        let items = Items::load(&root, assets.registry, &facts).unwrap();
+
+        let apple = items.get("minecraft:golden_apple").expect("golden apple");
+        assert!(apple.can_always_eat);
+        assert!(apple.food.is_some());
+        assert!(!apple.consume_effects.is_empty());
+
+        let enchanted = items
+            .get("minecraft:enchanted_golden_apple")
+            .expect("enchanted golden apple");
+        assert!(enchanted.can_always_eat);
+        assert!(enchanted.food.is_some());
+        assert!(!enchanted.consume_effects.is_empty());
+
+        let beef = items.get("minecraft:cooked_beef").expect("cooked beef");
+        assert!(!beef.can_always_eat);
+        assert!(beef.food.is_some());
     }
 }
 

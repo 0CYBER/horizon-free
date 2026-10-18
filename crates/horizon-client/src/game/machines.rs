@@ -7,7 +7,7 @@ use super::Game;
 mod crafter;
 use horizon_client::{
     Result,
-    containers::BlockEntity,
+    containers::{BlockEntity, HOPPER_SLOTS},
     items::{ItemStack, Items},
     world::World,
 };
@@ -497,36 +497,35 @@ impl Game<'_> {
             }
         }
     }
-    /// Every hopper's `pushItemsTick`, in a stable position order.
-    pub(super) fn tick_hoppers(&mut self) -> Result<()> {
+    /// `HopperBlockEntity.pushItemsTick` of the hopper at `pos`, if its block
+    /// is still a hopper (`BlockEntityType.isValid`).
+    pub(super) fn tick_hopper(&mut self, pos: Pos) {
         let hopper = self
-            .pack
-            .assets
-            .registry
-            .default_state("minecraft:hopper")
-            .map(|s| self.res.facts.get(s).name.clone());
-        let Some(hopper) = hopper else { return Ok(()) };
-        let mut positions: Vec<Pos> = self
-            .world
-            .block_entities
-            .keys()
-            .copied()
-            .filter(|p| self.res.facts.get(self.world.block(p.0, p.1, p.2)).name == hopper)
-            .collect();
-        positions.sort_unstable();
-        self.hoppers
-            .retain(|p, _| positions.binary_search(p).is_ok());
-        let time = self.world.game_time;
-        for pos in positions {
-            let state = self.hoppers.entry(pos).or_default();
-            state.cooldown -= 1;
-            state.ticked = time;
-            if state.cooldown <= 0 {
-                state.cooldown = 0;
-                self.hopper_try_move_items(pos);
-            }
+            .res
+            .facts
+            .get(self.world.block(pos.0, pos.1, pos.2))
+            .name
+            .as_ref()
+            == "minecraft:hopper";
+        if !hopper {
+            self.hoppers.remove(&pos);
+            return;
         }
-        Ok(())
+        let time = self.world.game_time;
+        let state = self.hoppers.entry(pos).or_default();
+        state.cooldown -= 1;
+        state.ticked = time;
+        if state.cooldown <= 0 {
+            state.cooldown = 0;
+            self.hopper_try_move_items(pos);
+        }
+    }
+    /// Drops the cooldowns of hoppers whose block entity is gone.
+    pub(super) fn forget_gone_hoppers(&mut self) {
+        let entities = &self.world.block_entities;
+        self.hoppers.retain(|p, _| {
+            matches!(entities.get(p), Some(BlockEntity::Chest(items)) if items.len() == HOPPER_SLOTS)
+        });
     }
     /// `HopperBlockEntity.tryMoveItems` with `suckInItems`.
     pub(super) fn hopper_try_move_items(&mut self, pos: Pos) {

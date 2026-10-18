@@ -92,7 +92,7 @@ impl Game<'_> {
             .hub
             .guests
             .iter()
-            .filter(|g| g.placed && g.loaded && !g.dead)
+            .filter(|g| host.hub.here(g) && g.loaded && !g.dead)
             .map(|g| {
                 let moved = [0, 1, 2].map(|k| g.position[k] - g.previous_position[k]);
                 (g.conn, g.uuid, moved)
@@ -107,6 +107,7 @@ impl Game<'_> {
                 v.velocity = Vec3::new(moved[0], moved[1], moved[2]);
                 v.uuid = horizon_client::lan::playerdata::uuid_ints(uuid);
                 v.allies = Default::default();
+                v.remote = true;
                 views.push((conn, v));
             }
         }
@@ -138,7 +139,7 @@ impl Game<'_> {
         host.hub
             .guests
             .iter()
-            .filter(|g| g.placed && g.loaded && !g.dead && !g.spectator())
+            .filter(|g| host.hub.here(g) && g.loaded && !g.dead && !g.spectator())
             .map(|g| (Who::Mob(g.entity_id as u32), guest_bounds(g)))
             .collect()
     }
@@ -209,9 +210,12 @@ pub(super) struct Present {
 impl Game<'_> {
     /// Every guest in the world (`ServerLevel.getPlayers` past the host).
     pub(super) fn lan_present(&self) -> Vec<Present> {
-        let guests = self.lan.iter().flat_map(|h| &h.hub.guests);
+        let guests = self
+            .lan
+            .iter()
+            .flat_map(|h| h.hub.guests.iter().filter(|g| h.hub.here(g)));
         guests
-            .filter(|g| g.placed && g.loaded)
+            .filter(|g| g.loaded)
             .map(|g| {
                 let [x, y, z] = g.position;
                 Present {
@@ -271,6 +275,7 @@ mod tests {
             hero: false,
             uuid: [0; 4],
             allies: Default::default(),
+            remote: false,
         }
     }
 

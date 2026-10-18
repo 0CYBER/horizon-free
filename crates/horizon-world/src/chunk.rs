@@ -442,54 +442,58 @@ impl<'r> BlockSection<'r> {
         if index >= 4096 {
             return Err(invalid("section index out of bounds"));
         }
-        let id = self.storage.as_ref().map_or(0, |s| s.get(index).unwrap());
+        let id = self.storage.as_ref().map_or(0, |s| s.read(index));
         Ok(self.palette[id as usize])
     }
     pub fn set(&mut self, index: usize, state: BlockStateId) -> io::Result<BlockStateId> {
-        let old = self.get(index)?;
+        if index >= 4096 {
+            return Err(invalid("section index out of bounds"));
+        }
         if state.0 as usize >= self.registry.len() {
             return Err(invalid("state ID outside registry"));
         }
+        // The slot at `index` is the old state's id, so no palette lookup is
+        // needed for it; only the new state has to be resolved.
+        let old_id = self.storage.as_ref().map_or(0, |s| s.read(index));
+        let old = self.palette[old_id as usize];
         if old == state {
             return Ok(old);
         }
-        let old_id = self.local_ids[&old];
-        if self.counts[old_id as usize] == 1 && !self.local_ids.contains_key(&state) {
-            // Replacing the last occurrence can reuse its slot without repacking.
-            self.palette[old_id as usize] = state;
-            self.local_ids.remove(&old);
-            self.local_ids.insert(state, old_id);
-            return Ok(old);
-        }
-        let id = if let Some(id) = self.local_ids.get(&state) {
-            *id
-        } else if let Some(id) = self.free.pop() {
-            self.palette[id as usize] = state;
-            self.local_ids.insert(state, id);
-            id
-        } else {
-            let id = self.palette.len() as u32;
-            let next_bits = bits_for_palette(self.palette.len() + 1, 4);
-            if next_bits != self.bits() {
-                let mut storage =
-                    PackedStorage::new(next_bits, 4096).map_err(|e| invalid(e.to_string()))?;
-                if let Some(old) = &self.storage {
-                    for i in 0..4096 {
-                        storage.set(i, old.get(i).unwrap()).unwrap();
-                    }
-                }
-                self.storage = Some(storage);
+        let id = match self.local_ids.get(&state) {
+            Some(&id) => id,
+            None if self.counts[old_id as usize] == 1 => {
+                // Replacing the last occurrence can reuse its slot without repacking.
+                self.palette[old_id as usize] = state;
+                self.local_ids.remove(&old);
+                self.local_ids.insert(state, old_id);
+                return Ok(old);
             }
-            self.palette.push(state);
-            self.counts.push(0);
-            self.local_ids.insert(state, id);
-            id
+            None => {
+                if let Some(id) = self.free.pop() {
+                    self.palette[id as usize] = state;
+                    self.local_ids.insert(state, id);
+                    id
+                } else {
+                    let id = self.palette.len() as u32;
+                    let next_bits = bits_for_palette(self.palette.len() + 1, 4);
+                    if next_bits != self.bits() {
+                        let mut storage = PackedStorage::new(next_bits, 4096)
+                            .map_err(|e| invalid(e.to_string()))?;
+                        if let Some(old) = &self.storage {
+                            for i in 0..4096 {
+                                storage.write(i, old.read(i));
+                            }
+                        }
+                        self.storage = Some(storage);
+                    }
+                    self.palette.push(state);
+                    self.counts.push(0);
+                    self.local_ids.insert(state, id);
+                    id
+                }
+            }
         };
-        self.storage
-            .as_mut()
-            .unwrap()
-            .set(index, id)
-            .map_err(|e| invalid(e.to_string()))?;
+        self.storage.as_mut().unwrap().write(index, id);
         self.counts[old_id as usize] -= 1;
         self.counts[id as usize] += 1;
         if self.counts[old_id as usize] == 0 {
@@ -584,5 +588,272 @@ mod tests {
         };
         map.insert(key("data"), Tag::LongArray(vec![-1; 256]));
         assert!(PalettedContainer::from_nbt(&tag, 4096, 4).is_err());
+    }
+
+    /// The pre-optimization `get`, kept to compare against in the benchmark.
+    fn baseline_get(section: &BlockSection<'_>, index: usize) -> io::Result<BlockStateId> {
+        if index >= 4096 {
+            return Err(invalid("section index out of bounds"));
+        }
+        let id = section
+            .storage
+            .as_ref()
+            .map_or(0, |s| s.get(index).unwrap());
+        Ok(section.palette[id as usize])
+    }
+    /// The pre-optimization `set`, kept to compare against in the benchmark.
+    fn baseline_set(
+        section: &mut BlockSection<'_>,
+        index: usize,
+        state: BlockStateId,
+    ) -> io::Result<BlockStateId> {
+        let old = baseline_get(section, index)?;
+        if state.0 as usize >= section.registry.len() {
+            return Err(invalid("state ID outside registry"));
+        }
+        if old == state {
+            return Ok(old);
+        }
+        let old_id = section.local_ids[&old];
+        if section.counts[old_id as usize] == 1 && !section.local_ids.contains_key(&state) {
+            section.palette[old_id as usize] = state;
+            section.local_ids.remove(&old);
+            section.local_ids.insert(state, old_id);
+            return Ok(old);
+        }
+        let id = if let Some(id) = section.local_ids.get(&state) {
+            *id
+        } else if let Some(id) = section.free.pop() {
+            section.palette[id as usize] = state;
+            section.local_ids.insert(state, id);
+            id
+        } else {
+            let id = section.palette.len() as u32;
+            let next_bits = bits_for_palette(section.palette.len() + 1, 4);
+            if next_bits != section.bits() {
+                let mut storage =
+                    PackedStorage::new(next_bits, 4096).map_err(|e| invalid(e.to_string()))?;
+                if let Some(old) = &section.storage {
+                    for i in 0..4096 {
+                        storage.set(i, old.get(i).unwrap()).unwrap();
+                    }
+                }
+                section.storage = Some(storage);
+            }
+            section.palette.push(state);
+            section.counts.push(0);
+            section.local_ids.insert(state, id);
+            id
+        };
+        section
+            .storage
+            .as_mut()
+            .unwrap()
+            .set(index, id)
+            .map_err(|e| invalid(e.to_string()))?;
+        section.counts[old_id as usize] -= 1;
+        section.counts[id as usize] += 1;
+        if section.counts[old_id as usize] == 0 {
+            section.local_ids.remove(&old);
+            section.free.push(old_id);
+        }
+        if section.counts[id as usize] == 4096 {
+            section.palette = vec![state];
+            section.local_ids = local_ids(state);
+            section.counts = vec![4096];
+            section.free.clear();
+            section.storage = None;
+        }
+        Ok(old)
+    }
+
+    fn benchmark_registry(states: usize) -> BlockRegistry {
+        let list: Vec<Tag> = (0..states)
+            .map(|i| {
+                Tag::compound([("id", Tag::String(format!("minecraft:b{i}").as_str().into()))])
+            })
+            .collect();
+        let defaults: BTreeMap<_, _> = (0..states)
+            .map(|i| {
+                (
+                    JavaString::from(format!("minecraft:b{i}").as_str()),
+                    Tag::Int(i as i32),
+                )
+            })
+            .collect();
+        let tag = Tag::compound([
+            ("DataVersion", Tag::Int(crate::DATA_VERSION)),
+            ("states", Tag::List(list)),
+            ("defaults", Tag::Compound(defaults)),
+        ]);
+        BlockRegistry::from_nbt(&tag).unwrap()
+    }
+
+    /// The optimized `set`/`get` must agree with the pre-optimization ones on
+    /// every field, across growth, collapse and reclaimed palette slots.
+    #[test]
+    fn set_matches_baseline_under_random_edits() {
+        let registry = benchmark_registry(64);
+        for &(distinct, seed) in &[(1u64, 1u64), (2, 2), (16, 3), (17, 4), (24, 5), (64, 6)] {
+            let mut base = BlockSection::uniform(BlockStateId(0), &registry).unwrap();
+            let mut fast = BlockSection::uniform(BlockStateId(0), &registry).unwrap();
+            let mut rng = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
+            let mut next = || {
+                rng ^= rng << 13;
+                rng ^= rng >> 7;
+                rng ^= rng << 17;
+                rng
+            };
+            for step in 0..50_000u32 {
+                if step % 5_000 == 4_999 {
+                    let value = (next() % distinct) as u32;
+                    for index in 0..4096 {
+                        assert_eq!(
+                            baseline_set(&mut base, index, BlockStateId(value)).unwrap(),
+                            fast.set(index, BlockStateId(value)).unwrap()
+                        );
+                    }
+                } else {
+                    let index = (next() % 4096) as usize;
+                    let value = (next() % distinct) as u32;
+                    assert_eq!(
+                        baseline_set(&mut base, index, BlockStateId(value)).unwrap(),
+                        fast.set(index, BlockStateId(value)).unwrap()
+                    );
+                }
+                assert_eq!(base.bits(), fast.bits());
+            }
+            assert_eq!(base.palette, fast.palette);
+            assert_eq!(base.counts, fast.counts);
+            assert_eq!(base.free, fast.free);
+            assert_eq!(base.local_ids, fast.local_ids);
+            for index in 0..4096 {
+                assert_eq!(
+                    baseline_get(&base, index).unwrap(),
+                    fast.get(index).unwrap(),
+                    "distinct {distinct} index {index}"
+                );
+            }
+            assert_eq!(base.to_nbt().unwrap(), fast.to_nbt().unwrap());
+        }
+    }
+
+    /// `set` and `get` against the pre-optimization implementations, on the same
+    /// edit stream. The result is checked before timing; 51 measured rounds
+    /// alternate order and report the median and best nanosecond-per-operation.
+    #[test]
+    #[ignore = "microbenchmark; run with --ignored --nocapture"]
+    fn benchmark_section_get_set() {
+        use std::{hint::black_box, time::Instant};
+        const OPS: usize = 50_000;
+        const ROUNDS: u32 = 51;
+        let registry = benchmark_registry(32);
+        let mut rng = 0x1234_5678_9abc_def1u64;
+        let mut next = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            rng
+        };
+        let ops: Vec<(usize, u32)> = (0..OPS)
+            .map(|_| ((next() % 4096) as usize, (next() % 24) as u32))
+            .collect();
+        let make = || BlockSection::uniform(BlockStateId(0), &registry).unwrap();
+
+        let mut base = make();
+        let mut fast = make();
+        for &(index, value) in &ops {
+            assert_eq!(
+                baseline_set(&mut base, index, BlockStateId(value)).unwrap(),
+                fast.set(index, BlockStateId(value)).unwrap()
+            );
+        }
+        assert_eq!(base.bits(), fast.bits());
+        assert_eq!(base.palette, fast.palette);
+        assert_eq!(base.counts, fast.counts);
+        assert_eq!(base.free, fast.free);
+        assert_eq!(base.to_nbt().unwrap(), fast.to_nbt().unwrap());
+        for i in 0..4096 {
+            assert_eq!(baseline_get(&base, i).unwrap(), fast.get(i).unwrap());
+        }
+
+        let mut times = [Vec::new(), Vec::new()];
+        for round in 0..ROUNDS {
+            for optimized in [round % 2 == 0, round % 2 != 0] {
+                let mut section = make();
+                let started = Instant::now();
+                for &(index, value) in &ops {
+                    if optimized {
+                        section
+                            .set(black_box(index), black_box(BlockStateId(value)))
+                            .unwrap();
+                    } else {
+                        baseline_set(
+                            &mut section,
+                            black_box(index),
+                            black_box(BlockStateId(value)),
+                        )
+                        .unwrap();
+                    }
+                }
+                black_box(&section);
+                if round > 0 {
+                    times[usize::from(optimized)]
+                        .push(started.elapsed().as_secs_f64() * 1e9 / OPS as f64);
+                }
+            }
+        }
+        for values in &mut times {
+            values.sort_by(f64::total_cmp);
+        }
+        let median = |v: &[f64]| v[v.len() / 2];
+        println!(
+            "section set median: baseline {:.3} ns/op optimized {:.3} ns/op speedup {:.3}x",
+            median(&times[0]),
+            median(&times[1]),
+            median(&times[0]) / median(&times[1])
+        );
+        println!(
+            "section set best:   baseline {:.3} ns/op optimized {:.3} ns/op speedup {:.3}x",
+            times[0][0],
+            times[1][0],
+            times[0][0] / times[1][0]
+        );
+
+        let mut get_times = [Vec::new(), Vec::new()];
+        for round in 0..ROUNDS {
+            for optimized in [round % 2 == 0, round % 2 != 0] {
+                let started = Instant::now();
+                let mut acc = 0u32;
+                for &(index, _) in &ops {
+                    let state = if optimized {
+                        fast.get(black_box(index)).unwrap()
+                    } else {
+                        baseline_get(&base, black_box(index)).unwrap()
+                    };
+                    acc ^= state.0;
+                }
+                black_box(acc);
+                if round > 0 {
+                    get_times[usize::from(optimized)]
+                        .push(started.elapsed().as_secs_f64() * 1e9 / OPS as f64);
+                }
+            }
+        }
+        for values in &mut get_times {
+            values.sort_by(f64::total_cmp);
+        }
+        println!(
+            "section get median: baseline {:.3} ns/op optimized {:.3} ns/op speedup {:.3}x",
+            median(&get_times[0]),
+            median(&get_times[1]),
+            median(&get_times[0]) / median(&get_times[1])
+        );
+        println!(
+            "section get best:   baseline {:.3} ns/op optimized {:.3} ns/op speedup {:.3}x",
+            get_times[0][0],
+            get_times[1][0],
+            get_times[0][0] / get_times[1][0]
+        );
     }
 }

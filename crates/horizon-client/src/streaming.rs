@@ -200,8 +200,10 @@ pub struct Streaming {
     /// Chunks come from a server (`insert_remote`/`forget`): nothing is
     /// generated and columns are only unloaded when the server says so.
     pub remote: bool,
-    /// More areas to keep loaded (centre chunk, radius), e.g. around guests
-    /// of a world open to the network. They are generated and kept but not meshed.
+    /// More areas to keep loaded (centre chunk, radius), e.g. around the
+    /// players of a server. Each is a square, like vanilla's ticket levels:
+    /// chunks finish out to `radius + 1` (Chebyshev) and generation reaches
+    /// past that as around the player. They are generated and kept but not meshed.
     pub extra: Vec<((i32, i32), i32)>,
     /// Mesh the sections for drawing (false on a server thread).
     pub mesh: bool,
@@ -264,25 +266,34 @@ impl GenerationScan {
         }
         {
             let mut wanted = Vec::new();
-            let areas: Vec<((i32, i32), i32)> =
-                std::iter::once((input.ranges.center, input.ranges.radius))
-                    .chain(input.ranges.extra.iter().copied())
-                    .collect();
-            for (center, radius) in areas {
+            // Each area's square of columns, as one run per row. Players'
+            // areas overlap (a server's players often stand together), so
+            // the runs of a row are merged and each column is looked at once.
+            let mut runs: Vec<(i32, i32, i32)> = Vec::new();
+            for (center, radius) in std::iter::once((input.ranges.center, input.ranges.radius))
+                .chain(input.ranges.extra.iter().copied())
+            {
                 let r = radius + margin.max(reach + 1);
-                for dz in -r..=r {
-                    for dx in -r..=r {
-                        let (x, z) = (center.0 + dx, center.1 + dz);
-                        if !input.ranges.requested(x, z, input.decorates)
-                            || input.world.chunks.contains_key(&(x, z))
-                            || input.generating.contains(&(x, z))
-                            || input.protos.contains_key(&(x, z))
-                            || input.finishing.contains(&(x, z))
-                        {
-                            continue;
-                        }
-                        wanted.push((input.ranges.distance(x, z), x, z));
+                runs.extend((center.1 - r..=center.1 + r).map(|z| (z, center.0 - r, center.0 + r)));
+            }
+            runs.sort_unstable();
+            let mut runs = runs.into_iter().peekable();
+            while let Some((z, x0, mut x1)) = runs.next() {
+                while let Some((_, _, next_x1)) =
+                    runs.next_if(|&(nz, nx0, _)| nz == z && nx0 <= x1.saturating_add(1))
+                {
+                    x1 = x1.max(next_x1);
+                }
+                for x in x0..=x1 {
+                    if !input.ranges.requested(x, z, input.decorates)
+                        || input.world.chunks.contains_key(&(x, z))
+                        || input.generating.contains(&(x, z))
+                        || input.protos.contains_key(&(x, z))
+                        || input.finishing.contains(&(x, z))
+                    {
+                        continue;
                     }
+                    wanted.push((input.ranges.distance(x, z), x, z));
                 }
             }
             // Forced chunks and their generation neighbourhood.
@@ -580,7 +591,7 @@ impl Streaming {
         }
         world
             .block_entities
-            .extend(std::mem::take(&mut chunk.block_entities));
+            .load_chunk(std::mem::take(&mut chunk.block_entities));
         world
             .block_names
             .extend(std::mem::take(&mut chunk.block_names));
@@ -779,20 +790,17 @@ impl Streaming {
             world.dirty_sections.retain(|k| !far.contains(&(k.0, k.2)));
         }
         // Drop far proto chunks that are not checked out.
-        let areas: Vec<((i32, i32), i64)> =
-            std::iter::once((self.center, i64::from(self.radius + 4)))
-                .chain(self.extra.iter().map(|&(c, r)| (c, i64::from(r + 4))))
-                .collect();
-        let forced = &self.forced;
+        let (center, r4) = (self.center, i64::from(self.radius + 4));
+        let ranges = self.ranges();
         let far: Vec<(i32, i32)> = self
             .protos
             .iter()
             .filter(|&(&(x, z), p)| {
                 p.is_some()
-                    && !areas.iter().any(|&((cx, cz), r4)| {
-                        i64::from(x - cx).pow(2) + i64::from(z - cz).pow(2) <= r4 * r4
-                    })
-                    && !forced
+                    && i64::from(x - center.0).pow(2) + i64::from(z - center.1).pow(2) > r4 * r4
+                    && !ranges.in_extra(x, z, 4)
+                    && !ranges
+                        .forced
                         .iter()
                         .any(|f| (x - f.0).abs() <= 3 && (z - f.1).abs() <= 3)
             })
@@ -1268,21 +1276,21 @@ impl Ranges<'_> {
     /// circles, so a fixed margin alone misses the corners of those squares
     /// (render distance 2 never finished the chunks next to the player).
     fn near_finished(&self, x: i32, z: i32, reach: i32) -> bool {
-        let near = |c: (i32, i32), radius: i32| {
-            let gap = |d: i32| i64::from((d.abs() - reach).max(0));
-            let (dx, dz) = (gap(x - c.0), gap(z - c.1));
-            let r = i64::from(radius + 1);
-            dx * dx + dz * dz <= r * r
-        };
-        near(self.center, self.radius) || self.extra.iter().any(|&(c, r)| near(c, r))
+        let gap = |d: i32| i64::from((d.abs() - reach).max(0));
+        let (dx, dz) = (gap(x - self.center.0), gap(z - self.center.1));
+        let r = i64::from(self.radius + 1);
+        // The extra areas are squares: their finished square grown by `reach`.
+        dx * dx + dz * dz <= r * r || self.in_extra(x, z, 1 + reach)
     }
     fn in_range(&self, x: i32, z: i32, margin: i32) -> bool {
-        self.in_main_range(x, z, margin)
-            || self.extra.iter().any(|&(c, radius)| {
-                let r = i64::from(radius + margin);
-                let (dx, dz) = (i64::from(x - c.0), i64::from(z - c.1));
-                dx * dx + dz * dz <= r * r
-            })
+        self.in_main_range(x, z, margin) || self.in_extra(x, z, margin)
+    }
+    /// Within `margin` of an extra area's square (Chebyshev distance, as
+    /// vanilla's ticket levels spread).
+    fn in_extra(&self, x: i32, z: i32, margin: i32) -> bool {
+        self.extra
+            .iter()
+            .any(|&(c, radius)| (x - c.0).abs().max((z - c.1).abs()) <= radius + margin)
     }
     /// The columns meshed for drawing: those vanilla draws around the
     /// player (`in_view_distance`), and forced ones.
@@ -1570,6 +1578,38 @@ mod tests {
     }
 
     #[test]
+    fn generation_scan_looks_at_overlapping_areas_once() {
+        // A server's players: many areas around one spot, some apart, one
+        // touching another only at a corner, and part of the land present.
+        for decorates in [false, true] {
+            let mut f = GenerationFixture::new(10, decorates);
+            for i in 0..40 {
+                f.extra.push(((i % 7 - 3, i / 7 - 3), 19));
+            }
+            f.extra.push(((200, -150), 19));
+            f.extra.push(((243, -107), 19));
+            f.extra.push(((-60, 5), 4));
+            f.forced.insert((90, 90));
+            let chunk = Arc::new(Chunk::empty(0, 0));
+            for x in -40i32..40 {
+                for z in -40i32..40 {
+                    match (x * 7 + z * 13).rem_euclid(5) {
+                        0 => drop(f.world.chunks.insert((x, z), chunk.clone())),
+                        1 => drop(f.protos.insert((x, z), None)),
+                        2 if x % 3 == 0 => drop(f.generating.insert((x, z))),
+                        _ => {}
+                    }
+                }
+            }
+            assert!(baseline_candidates(f.input(), usize::MAX).len() > 1000);
+            for capacity in [usize::MAX, f.generating.len() + 7] {
+                let mut gate = GenerationScan::default();
+                assert!(f.assert_same(&mut gate, capacity));
+            }
+        }
+    }
+
+    #[test]
     #[ignore = "reproducible actual generation scheduler benchmark; run with --ignored --nocapture"]
     fn generation_scan_benchmark() {
         use std::{hint::black_box, time::Instant};
@@ -1730,6 +1770,60 @@ mod tests {
                             assert!(
                                 !r.unloaded(x, z, decorates),
                                 "radius {radius} (decorates: {decorates}): ({x}, {z}) is kept then unloaded"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A server player's area (`lan_update_streaming`: the server view
+    /// distance + 1) finishes vanilla's FULL square: PLAYER_LOADING tickets at
+    /// level 31 out to the view distance, FULL (33) two chunks past it. Every
+    /// chunk the player tracks has its 3x3 neighbourhood finished, so it can
+    /// be lit and sent, and generation reaches vanilla's FEATURES (34) and
+    /// TERRAIN (35) rings.
+    #[test]
+    fn server_player_areas_finish_vanillas_full_square() {
+        let forced = HashSet::new();
+        for view in 2..=32 {
+            let extra = [((40, -9), view + 1)];
+            let r = Ranges {
+                // The window's own area, far away.
+                center: (-400, 300),
+                radius: 2,
+                extra: &extra,
+                forced: &forced,
+            };
+            let level = |x: i32, z: i32| 31 + ((x - 40).abs().max((z + 9).abs()) - view).max(0);
+            for x in 40 - view - 8..=40 + view + 8 {
+                for z in -9 - view - 8..=-9 + view + 8 {
+                    assert_eq!(
+                        r.in_range(x, z, 1),
+                        level(x, z) <= 33,
+                        "view {view}: ({x}, {z})"
+                    );
+                    assert_eq!(
+                        r.requested(x, z, true),
+                        level(x, z) <= 35,
+                        "view {view}: ({x}, {z})"
+                    );
+                    assert_eq!(
+                        r.unloaded(x, z, true),
+                        level(x, z) > 35,
+                        "view {view}: ({x}, {z})"
+                    );
+                    // ChunkTrackingView.contains, at any view distance the player may ask for.
+                    let tracked = |v: i64| {
+                        let gap = |d: i32| i64::from(((d).abs() - 2).max(0));
+                        gap(x - 40).pow(2) + gap(z + 9).pow(2) < v * v
+                    };
+                    if tracked(i64::from(view)) {
+                        for (dx, dz) in (-1..=1).flat_map(|dx| (-1..=1).map(move |dz| (dx, dz))) {
+                            assert!(
+                                r.in_range(x + dx, z + dz, 1),
+                                "view {view}: ({x}, {z}) tracked, not lit"
                             );
                         }
                     }

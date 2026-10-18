@@ -57,6 +57,19 @@ impl VanillaTerrain {
         seed: i64,
         dimension: &str,
     ) -> crate::Result<Self> {
+        Self::for_world(dir, registry, biomes, seed, dimension, true)
+    }
+    /// A dimension of a world whose `generate_structures` is `structures`
+    /// (`ChunkGenerator.createStructures` and `findNearestMapStructure` do
+    /// nothing without).
+    pub fn for_world(
+        dir: &Path,
+        registry: &'static BlockRegistry,
+        biomes: &Biomes,
+        seed: i64,
+        dimension: &str,
+        structures: bool,
+    ) -> crate::Result<Self> {
         let data: Arc<GeneratorData> = shared_data(dir, registry)?;
         let biome_map = data
             .biome_names()
@@ -64,7 +77,7 @@ impl VanillaTerrain {
             .map(|name| biomes.id(name))
             .collect();
         let generator =
-            OverworldGenerator::for_dimension(data, seed, "minecraft:normal", dimension)?;
+            OverworldGenerator::for_world(data, seed, "minecraft:normal", dimension, structures)?;
         let unsupported = generator.unsupported_features();
         if !unsupported.is_empty() {
             log::warn!(
@@ -119,7 +132,7 @@ impl VanillaTerrain {
             chunk.terrain.min_y().max(MIN_Y),
             (chunk.terrain.min_y() + chunk.terrain.height()).min(MIN_Y + HEIGHT),
         );
-        let mut values = Box::new([0u16; 4096]);
+        let mut values = Box::new([0u32; 4096]);
         for si in 0..SECTIONS as i32 {
             let base = MIN_Y + si * 16;
             if base + 16 <= lo || base >= hi {
@@ -130,7 +143,7 @@ impl VanillaTerrain {
             for y in base.max(lo)..(base + 16).min(hi) {
                 for z in 0..16 {
                     for x in 0..16 {
-                        let id = chunk.block(bx + x, y, bz + z).0 as u16;
+                        let id = chunk.block(bx + x, y, bz + z).0;
                         values[((y & 15) << 8 | z << 4 | x) as usize] = id;
                         any |= id != 0;
                     }

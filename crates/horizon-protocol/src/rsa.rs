@@ -3,8 +3,10 @@
 //! and challenge (Crypt.encryptUsingKey, Java's "RSA" cipher =
 //! RSA/ECB/PKCS1Padding), and on the server's side the key pair it makes at
 //! startup (Crypt.generateKeyPair: 1024 bits) and the decryption
-//! (Crypt.decryptUsingKey). Modular exponentiation uses Montgomery
-//! multiplication on 32-bit limbs; RSA moduli are always odd.
+//! (Crypt.decryptUsingKey); and the PKCS#1 v1.5 signature checks of secure
+//! chat (SHA256withRSA for messages, SHA1withRSA for the services' profile
+//! key signatures). Modular exponentiation uses Montgomery multiplication on
+//! 32-bit limbs; RSA moduli are always odd.
 use crate::{Error, Result};
 
 /// A non-negative integer, little-endian 32-bit limbs.
@@ -288,6 +290,63 @@ impl RsaPublicKey {
         }
         block[k - message.len()..].copy_from_slice(message);
         Ok(self.apply(&block, &self.exponent))
+    }
+}
+
+/// The digest a PKCS#1 v1.5 signature covers: Java's `SHA1withRSA` and
+/// `SHA256withRSA`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SignatureHash {
+    Sha1,
+    Sha256,
+}
+
+impl SignatureHash {
+    /// The DER DigestInfo before the digest (RFC 8017 9.2, note 1).
+    fn prefix(self) -> &'static [u8] {
+        match self {
+            Self::Sha1 => &[
+                0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e, 0x03, 0x02, 0x1a, 0x05, 0x00, 0x04,
+                0x14,
+            ],
+            Self::Sha256 => &[
+                0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02,
+                0x01, 0x05, 0x00, 0x04, 0x20,
+            ],
+        }
+    }
+    fn digest(self, message: &[u8]) -> Vec<u8> {
+        use sha1::Digest;
+        match self {
+            Self::Sha1 => sha1::Sha1::digest(message).to_vec(),
+            Self::Sha256 => sha2::Sha256::digest(message).to_vec(),
+        }
+    }
+}
+
+impl RsaPublicKey {
+    /// `Signature.verify` for RSASSA-PKCS1-v1_5 (RFC 8017 8.2.2): the
+    /// signature is exactly the modulus' length and below it, and opens to
+    /// `00 01 FF.. 00 DigestInfo`. Anything else is a failed check, as
+    /// SignatureValidator reports Java's exceptions.
+    pub fn verify(&self, hash: SignatureHash, message: &[u8], signature: &[u8]) -> bool {
+        let k = self.size();
+        // Equal lengths compare as big-endian numbers.
+        if signature.len() != k || signature >= self.modulus.as_slice() {
+            return false;
+        }
+        let (prefix, digest) = (hash.prefix(), hash.digest(message));
+        let t = prefix.len() + digest.len();
+        if k < t + 11 {
+            return false;
+        }
+        let mut expected = vec![0xff; k];
+        expected[0] = 0;
+        expected[1] = 1;
+        expected[k - t - 1] = 0;
+        expected[k - t..k - digest.len()].copy_from_slice(prefix);
+        expected[k - digest.len()..].copy_from_slice(&digest);
+        self.apply(signature, &self.exponent) == expected
     }
 }
 
@@ -604,5 +663,34 @@ pub(crate) mod tests {
         assert!(block.ends_with(&hex(
             "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
         )));
+        let signature = hex(TEST_SIG_HELLO);
+        assert!(key.verify(SignatureHash::Sha256, b"hello", &signature));
+        assert!(!key.verify(SignatureHash::Sha256, b"hellO", &signature));
+        assert!(!key.verify(SignatureHash::Sha1, b"hello", &signature));
+        let mut flipped = signature.clone();
+        flipped[40] ^= 1;
+        assert!(!key.verify(SignatureHash::Sha256, b"hello", &flipped));
+        assert!(!key.verify(SignatureHash::Sha256, b"hello", &signature[1..]));
+        assert!(!key.verify(SignatureHash::Sha256, b"hello", &key.modulus));
+    }
+
+    /// Signatures made here with the private exponent (EMSA-PKCS1-v1_5 by
+    /// hand) check out for both digests.
+    #[test]
+    fn verifies_both_digests() {
+        let key = RsaPublicKey::from_der(&hex(TEST_SPKI)).unwrap();
+        for hash in [SignatureHash::Sha1, SignatureHash::Sha256] {
+            let (prefix, digest) = (hash.prefix(), hash.digest(b"payload"));
+            let mut block = vec![0xff; 128];
+            block[0] = 0;
+            block[1] = 1;
+            let t = prefix.len() + digest.len();
+            block[127 - t] = 0;
+            block[128 - t..128 - digest.len()].copy_from_slice(prefix);
+            block[128 - digest.len()..].copy_from_slice(&digest);
+            let signature = key.apply(&block, &hex(TEST_D));
+            assert!(key.verify(hash, b"payload", &signature));
+            assert!(!key.verify(hash, b"payloaD", &signature));
+        }
     }
 }

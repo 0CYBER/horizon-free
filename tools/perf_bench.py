@@ -44,6 +44,7 @@ import json
 import math
 import os
 import platform
+import re
 import shutil
 import socket
 import statistics
@@ -185,19 +186,35 @@ def summary(values):
     return {"n": n, "mean": rnd(mean), "stdev": sd, "min": rnd(min(values)), "max": rnd(max(values)), "ci95": ci}
 
 
+def phys_footprint(pid):
+    """macOS: the bytes the kernel charges the process (`footprint`), without
+    the freed pages the allocator marked reusable, which `ps` still counts as
+    resident until memory runs short. None elsewhere."""
+    if sys.platform != "darwin":
+        return None
+    out = subprocess.run(["footprint", "-f", "bytes", str(pid)], capture_output=True, text=True)
+    m = re.search(r"phys_footprint:\s*(\d+)", out.stdout)
+    return int(m.group(1)) if m else None
+
+
 class Sampler(threading.Thread):
     """Samples a process's resident memory every quarter second (ps, so the
-    same reading for every game and OS)."""
+    same reading for every game and OS) and, on macOS, its physical footprint
+    every two seconds."""
 
     def __init__(self, pid):
         super().__init__(daemon=True)
-        self.pid, self.samples, self.stop = pid, [], threading.Event()
+        self.pid, self.samples, self.footprints, self.stop = pid, [], [], threading.Event()
 
     def run(self):
+        tick = 0
         while not self.stop.is_set():
             out = subprocess.run(["ps", "-o", "rss=", "-p", str(self.pid)], capture_output=True, text=True)
             if out.stdout.strip():
                 self.samples.append((time.time(), int(out.stdout.split()[0]) * 1024))
+            if tick % 8 == 0 and (fp := phys_footprint(self.pid)) is not None:
+                self.footprints.append((time.time(), fp))
+            tick += 1
             self.stop.wait(0.25)
 
     def summary(self, windows):
@@ -205,11 +222,16 @@ class Sampler(threading.Thread):
         if not self.samples:
             return {}
         during = [rss for t, rss in self.samples if any(a <= t <= b for a, b in windows)]
-        return {
+        out = {
             "rss_peak_mb": max(rss for _, rss in self.samples) / 2**20,
             "rss_steady_mb": statistics.median(during) / 2**20 if during else None,
             "rss_samples": len(self.samples),
         }
+        if self.footprints:
+            steady = [fp for t, fp in self.footprints if any(a <= t <= b for a, b in windows)]
+            out["footprint_peak_mb"] = max(fp for _, fp in self.footprints) / 2**20
+            out["footprint_steady_mb"] = statistics.median(steady) / 2**20 if steady else None
+        return out
 
 
 def nvidia_memory_mb(pid):
@@ -342,6 +364,20 @@ def run_horizon(args, distance):
     for carry in dev_mods(args):
         command += ["--dev-mod", str(carry)]
     env = dict(os.environ, HORIZON_NO_AUDIO="1")
+    if args.warm:
+        # A first start to the title screen builds what later starts reuse (the content-mod
+        # root, the block behaviour snapshot). It is not measured: players see it once.
+        with (WORK / f"horizon-rd{distance}-warm.log").open("w") as log:
+            proc = subprocess.Popen(command, cwd=game_dir, env=env, stdout=log, stderr=subprocess.STDOUT)
+            try:
+                poll(Control(sock), lambda s: s.get("screen") == "title", 600)
+                try:
+                    Control(sock)("quit", timeout=60)
+                except (OSError, ValueError, RuntimeError):
+                    pass
+            finally:
+                stop(proc)
+                sock.unlink(missing_ok=True)
     log = (WORK / f"horizon-rd{distance}.log").open("w")
     started = time.time()
     proc = subprocess.Popen(command, cwd=game_dir, env=env, stdout=log, stderr=subprocess.STDOUT)
@@ -685,6 +721,8 @@ def report(args, distance, runs, app):
         metric(f"memory.{name}.gpu_mb", [s.get("gpu_mb") for s in scenes])
     metric("memory.rss_peak_mb", [r["memory"].get("rss_peak_mb") for r in runs])
     metric("memory.rss_steady_mb", [r["memory"].get("rss_steady_mb") for r in runs])
+    metric("memory.footprint_peak_mb", [r["memory"].get("footprint_peak_mb") for r in runs])
+    metric("memory.footprint_steady_mb", [r["memory"].get("footprint_steady_mb") for r in runs])
     return {"format": REPORT_FORMAT, "version": REPORT_VERSION, "kind": "game",
             "created": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "app": app, "hardware": hw, "conditions": conditions, "metrics": metrics, "frames": entries,
@@ -711,7 +749,7 @@ def table(labels):
                 cells.append(" / ".join(cell(m.get(f"fps.{scene}.{k}")) for k in ("avg_fps", "low_1pct_fps", "low_01pct_fps")))
             print(f"| {d} | {scene} | " + " | ".join(cells) + " |")
     print()
-    print("| RD | " + " | ".join(f"{l}: title / world s, mean scene load s, RSS steady / peak MB, load avg" for l in labels) + " |")
+    print("| RD | " + " | ".join(f"{l}: title / world s, mean scene load s, RSS steady / peak MB, footprint steady / peak MB, load avg" for l in labels) + " |")
     print("| --- |" + " --- |" * len(labels))
     for d in distances:
         cells = []
@@ -726,7 +764,9 @@ def table(labels):
             mb = lambda k: f"{m[k]['mean']:.0f}" if k in m else "–"
             cells.append(f"{sec('startup.title_ms')} / {sec('startup.world_ms')}, "
                          f"{statistics.mean(loads) / 1000 if loads else 0:.1f}, "
-                         f"{mb('memory.rss_steady_mb')} / {mb('memory.rss_peak_mb')}, {r['conditions'].get('load_avg_1m')}")
+                         f"{mb('memory.rss_steady_mb')} / {mb('memory.rss_peak_mb')}, "
+                         f"{mb('memory.footprint_steady_mb')} / {mb('memory.footprint_peak_mb')}, "
+                         f"{r['conditions'].get('load_avg_1m')}")
         print(f"| {d} | " + " | ".join(cells) + " |")
 
 
@@ -748,6 +788,8 @@ def main():
     p.add_argument("--build", default=str(ROOT / "target/release"))
     p.add_argument("--repeats", type=int, default=3, help="games per render distance; the report gives means and 95%% CIs")
     p.add_argument("--port-work", help="horizon: also load the mods carried over in this horizon-port-pack work folder")
+    p.add_argument("--warm", action="store_true",
+                   help="horizon: measure a later start, after one start to the title screen built the caches")
     p.add_argument("--mod-jars", help="neoforge: the mod jars to load (the user's own; never committed)")
     p.add_argument("--deps", help="neoforge: their required libraries")
     p.add_argument("--table", nargs="+", metavar="LABEL", help="print markdown tables of saved runs, and exit")

@@ -88,8 +88,7 @@ impl Game<'_> {
             || self.book.is_some()
             || (self.screen == Screen::Creative && self.creative_screen.tab().search)
             || self.recipe_search_focused()
-            || self.station_typing()
-            || self.remote_chat_open();
+            || self.station_typing();
         // Container screens use Escape, the inventory key and the hotbar and
         // drop keys first; any other screen closes on Escape.
         let screen_key = match self.screen {

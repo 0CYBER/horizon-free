@@ -119,6 +119,7 @@ pub fn carry(
             .ok()
     });
     let allowed = |b: &str| vanilla.as_ref().is_none_or(|v| v.contains(b));
+    let conventions = crate::worldgen::loader_biome_tags(work);
     let mut done = 0;
     for r in &records {
         let chosen = if only.is_empty() {
@@ -154,16 +155,18 @@ pub fn carry(
             &work.join("mods").join(&r.key),
             facts.as_ref().filter(seen),
             &allowed,
+            &conventions,
         ) {
             Ok(report) => {
                 done += 1;
                 log(format!(
-                    "{}: {} files, {} recipes upgraded ({} kept), {} loot tables upgraded, {} item definitions added, {} blocks ({} left out, {} with differences), {} items ({} left out), {} convention tags, {} outside",
+                    "{}: {} files, {} recipes upgraded ({} kept), {} loot tables upgraded ({} added), {} item definitions added, {} blocks ({} left out, {} with differences), {} items ({} left out), {} convention tags, {} outside",
                     r.key,
                     report.copied,
                     report.recipes_upgraded,
                     report.recipes_kept.len(),
                     report.loot_tables_upgraded,
+                    report.loot_tables_added,
                     report.item_definitions_added,
                     report.blocks.len(),
                     report.blocks_unknown.len(),

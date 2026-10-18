@@ -2,11 +2,10 @@
 //! collision shapes. Replacement with an item/fluid context is separate behavior.
 use crate::{
     DATA_VERSION,
-    chunk::BlockState,
     collision::CachedCollisionRegistry,
     compression::invalid,
     nbt::Tag,
-    registry::{BlockRegistry, BlockStateId},
+    registry::{BlockRegistry, BlockStateId, BlockTable},
 };
 use horizon_core::geometry::{Direction, ShapeError, ShapeOp, VoxelShape};
 use std::{
@@ -112,20 +111,24 @@ pub struct BlockPropertiesRegistry<'r> {
 }
 impl<'r> BlockPropertiesRegistry<'r> {
     pub fn from_nbt(tag: &Tag, collisions: &CachedCollisionRegistry<'r>) -> io::Result<Self> {
+        Self::from_table(
+            BlockTable::check(tag, collisions.registry(), "block property")?,
+            collisions,
+        )
+    }
+    pub fn from_table(
+        table: BlockTable<'_, '_>,
+        collisions: &CachedCollisionRegistry<'r>,
+    ) -> io::Result<Self> {
         let registry = collisions.registry();
+        if !std::ptr::eq(table.registry(), registry) {
+            return Err(invalid(
+                "block properties and collisions use other registries",
+            ));
+        }
+        let tag = table.tag();
         if tag.get("DataVersion") != Some(&Tag::Int(DATA_VERSION)) {
             return Err(invalid("block properties DataVersion mismatch"));
-        }
-        let Some(Tag::List(states)) = tag.get("states") else {
-            return Err(invalid("missing block property state identities"));
-        };
-        if states.len() != registry.len() {
-            return Err(invalid("block property registry size mismatch"));
-        }
-        for (id, state) in states.iter().enumerate() {
-            if registry.state(BlockStateId(id as u32)) != Some(&BlockState::from_nbt(state)?) {
-                return Err(invalid("block property state identities differ"));
-            }
         }
         let Some(Tag::Compound(blocks)) = tag.get("blocks") else {
             return Err(invalid("missing block definition properties"));
@@ -150,10 +153,8 @@ impl<'r> BlockPropertiesRegistry<'r> {
                 },
             );
         }
-        let occlusion = CachedCollisionRegistry::from_nbt(
-            tag.get("occlusion")
-                .ok_or_else(|| invalid("missing block occlusion shapes"))?,
-            registry,
+        let occlusion = CachedCollisionRegistry::from_table(
+            table.nested("occlusion", "block occlusion shapes")?,
         )?;
         let mut result = Vec::with_capacity(registry.len());
         let mut faces = Vec::with_capacity(registry.len());

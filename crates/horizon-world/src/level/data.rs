@@ -8,8 +8,7 @@ use crate::{
     collision::CachedCollisionRegistry,
     compression::invalid,
     fluid::{FluidBlockBindings, FluidKind, FluidState},
-    nbt::{self, Limits},
-    registry::{BlockRegistry, BlockStateId},
+    registry::{BlockRegistry, BlockStateId, BlockTableFile},
     worldgen::tags::TagDefinitions,
 };
 use horizon_core::geometry::{Aabb, Direction, ShapeOp, Vec3, VoxelShape};
@@ -614,45 +613,9 @@ fn set_type(value: &Value, cache: &mut HashMap<String, Arc<str>>) -> Option<SetT
 }
 
 /// Build the block-state registry from the resources' `facts.json` (the
-/// same source the native client uses).
+/// same source the native client uses), streamed.
 pub fn load_registry(root: &Path) -> io::Result<BlockRegistry> {
-    use crate::{DATA_VERSION, nbt::Tag};
-    fn tag(value: &Value) -> io::Result<Tag> {
-        Ok(match value {
-            Value::String(value) => Tag::String(value.as_str().into()),
-            Value::Number(value) => Tag::Int(
-                value
-                    .as_i64()
-                    .and_then(|v| i32::try_from(v).ok())
-                    .ok_or_else(|| fail("invalid registry number"))?,
-            ),
-            Value::Array(values) => Tag::List(values.iter().map(tag).collect::<io::Result<_>>()?),
-            Value::Object(values) => Tag::Compound(
-                values
-                    .iter()
-                    .map(|(name, value)| Ok((name.as_str().into(), tag(value)?)))
-                    .collect::<io::Result<_>>()?,
-            ),
-            _ => return Err(fail("unsupported registry value")),
-        })
-    }
-    let facts = read_json(&root.join("facts.json"))?;
-    let states = facts["states"]
-        .as_array()
-        .ok_or_else(|| fail("missing registry state facts"))?;
-    BlockRegistry::from_nbt(&Tag::compound([
-        ("DataVersion", Tag::Int(DATA_VERSION)),
-        (
-            "states",
-            Tag::List(
-                states
-                    .iter()
-                    .map(|state| tag(&state[4]))
-                    .collect::<io::Result<_>>()?,
-            ),
-        ),
-        ("defaults", tag(&facts["defaults"])?),
-    ]))
+    BlockRegistry::from_facts_json(File::open(root.join("facts.json"))?)
 }
 
 pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviours> {
@@ -787,14 +750,8 @@ fn build_with_gameplay<G: GameplayStateSource>(
     };
 
     // Collision shapes.
-    let collision_tag = nbt::read_named(
-        &fs::read(root.join("cached-collision.nbt"))?,
-        Limits::default(),
-    )
-    .map_err(|e| invalid(e.to_string()))?
-    .0
-    .tag;
-    let cached = CachedCollisionRegistry::from_nbt(&collision_tag, registry)?;
+    let collision_file = BlockTableFile::open(&root.join("cached-collision.nbt"), registry)?;
+    let cached = CachedCollisionRegistry::from_table(collision_file.table("collision")?)?;
     let mut shapes: Vec<VoxelShape> = Vec::new();
     let mut shape_ids = Vec::with_capacity(table.state_count());
     for id in 0..table.state_count() {

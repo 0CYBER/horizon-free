@@ -43,7 +43,13 @@ Windows): `versions/<tag>/`, `server-jars/`, `server/` and `settings.json`.
 
 - **Settings**: install new Horizon versions automatically (on unless you turn it off; the
   selected version only moves to the new one if you were on the newest), the opening animation,
-  the game's menu style, and the launcher's own version and update state.
+  the game's menu style, the game's extra command-line arguments, and the launcher's own version
+  and update state.
+- **Game arguments**: extra arguments added to the game's command line (for example
+  `--server-thread`), one line where quotes group a word with spaces. They are appended after the
+  launcher's own arguments, kept as `game_args` in `settings.json`, and apply the next time the
+  game starts. `horizon-launcher game-args "<line>"` sets them too, and `play --arg <ARG>` passes
+  one for a single run.
 - **Menu style**: Horizon's own menus or Classic (vanilla's screens). Classic has no way back
   inside the game, so the launcher is where you return to Horizon's. It is the `menuStyle:` line
   of `horizon.txt` in the game's home folder (`HORIZON_HOME`, else `horizon` in the data
@@ -81,11 +87,12 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher install <tag|latest>
     horizon-launcher remove <tag>
     horizon-launcher prepare [--minecraft <dir>] [--version <tag>]
-    horizon-launcher play [--version <tag>]
+    horizon-launcher play [--version <tag>] [--arg <ARG>]...   start the client; --arg passes an extra argument through (repeatable)
     horizon-launcher server [--dir <dir>] [--version <tag>] [--accept-eula]
     horizon-launcher notes [<tag>]                  patch notes as plain text
     horizon-launcher links                          the Discord, sponsor and website links
     horizon-launcher menu-style [horizon|classic]   show or set the game's menu style
+    horizon-launcher game-args [<line>]             show or set the extra arguments the game starts with
     horizon-launcher update [--check]               Horizon and the launcher
     horizon-launcher logs [--lines N] [--crash]     the end of the game's log, or its newest crash report
     horizon-launcher account [list]                 the Microsoft accounts signed in (* = plays)
@@ -107,7 +114,7 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher data benchmark <report.json>   upload a benchmark report, printed first
 
 `--json` prints JSON where there is something to report (`versions`, `install`, `notes`,
-`next`, `links`, `menu-style`, `update --check`, `logs`, `account`, `benchmark`, `data`, `modpack`). Errors go to stderr with exit code 1. `server` runs in the terminal,
+`next`, `links`, `menu-style`, `game-args`, `update --check`, `logs`, `account`, `benchmark`, `data`, `modpack`). Errors go to stderr with exit code 1. `server` runs in the terminal,
 so lines you type reach its console. `HORIZON_LAUNCHER_HOME` replaces the data folder (for
 scripts and tests).
 

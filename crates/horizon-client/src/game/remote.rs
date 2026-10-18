@@ -9,20 +9,26 @@
 use super::{Dim, Game, Mining, Screen};
 use horizon_client::{
     Result,
-    chunk::{BIOME_STRATEGY, BLOCK_STRATEGY, Chunk, Light, MIN_Y, SECTIONS, Section},
+    chunk::{BIOME_STRATEGY, Chunk, Light, MIN_Y, SECTIONS, Section, block_strategy},
     containers::{BlockEntity, Furnace, FurnaceKind},
-    entities::{Experience, ItemEntity},
+    entities::{Experience, ExperienceOrb, ItemEntity},
     hud::{HudBatch, rgba},
     items::ItemStack,
-    mobs::{Mob, MobType},
+    menu::Input,
+    mobs::{Mob, MobType, Who},
     motion::{MotionWorld, PlayerMotion},
     net::{Event, Session},
     save::SaveDir,
     sprint::Keys,
     streaming::{ChunkGenerator, Proto, Streaming},
+    tab_list::SPECTATOR,
     world::World,
 };
-use horizon_core::{geometry::Vec3, paletted::PalettedContainer, random::RandomSource};
+use horizon_core::{
+    geometry::Vec3,
+    paletted::{PalettedContainer, Strategy},
+    random::RandomSource,
+};
 use horizon_protocol::{
     entity_data::{ITEM_ENTITY_ITEM, Value},
     item::{Hashed, Stack},
@@ -34,12 +40,14 @@ use horizon_protocol::{
     text::{Language, format_java, plain},
 };
 use horizon_world::{nbt::Tag, registry::BlockStateId};
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 use winit::{event::MouseButton, keyboard::KeyCode};
+
+/// A text component the server sent, for the HUD.
+fn remote_text(tag: &Tag) -> horizon_client::text::Text {
+    use horizon_client::scoreboard::{comp_text, tag_to_json};
+    comp_text(&tag_to_json(tag))
+}
 
 /// Streaming needs a generator; a server world never generates.
 struct NoTerrain;
@@ -61,8 +69,11 @@ struct Tracked {
 }
 /// Smooth an entity toward a new position over three ticks (InterpolationHandler).
 #[derive(Clone, Copy)]
+/// `LinearInterpolationHandler`'s target: a position and rotation (yRot,
+/// xRot) reached in `steps` ticks.
 struct Lerp {
     target: [f64; 3],
+    rotation: Option<(f32, f32)>,
     steps: u32,
 }
 
@@ -71,7 +82,7 @@ pub(super) struct Remote {
     pub brand: String,
     builtin: Arc<Builtin>,
     lang: Arc<Language>,
-    registries: Arc<Dynamic>,
+    pub(super) registries: Arc<Dynamic>,
     joined: bool,
     status: String,
     entity_id: i32,
@@ -89,6 +100,8 @@ pub(super) struct Remote {
     was_sprinting: bool,
     carried: Option<usize>,
     loaded_sent: bool,
+    /// The view distance last sent in ClientInformation.
+    sent_view: i8,
     /// BlockStatePredictionHandler: blocks changed ahead of the server (a predicted break),
     /// with the sequence of the last action that changed them and the state the server
     /// last said they have. Until the server acknowledges that sequence its block updates
@@ -102,13 +115,15 @@ pub(super) struct Remote {
     use_target: Option<[i32; 3]>,
     entities: HashMap<i32, Tracked>,
     lerps: HashMap<i32, Lerp>,
+    /// `LivingEntity.lerpHeadTo`: the head yaw and the ticks left to reach it.
+    head_lerps: HashMap<i32, (f32, u32)>,
     /// Item entities waiting for their item data.
     pending_items: HashMap<i32, [f64; 3]>,
     health: (f32, i32, f32),
     game_mode: i32,
     pub chat: Vec<(String, Instant)>,
-    pub chat_input: Option<String>,
-    action_bar: Option<(String, Instant)>,
+    /// The server's command tree (ClientboundCommandsPacket).
+    pub commands: Option<horizon_client::command::Dispatcher>,
     players: HashMap<u128, String>,
     /// `ClientPacketListener.playerInfoMap` as player-list entries, and
     /// which of them are listed.
@@ -196,7 +211,7 @@ impl Game<'_> {
             .and_then(|p| Builtin::load(&p).ok())
             .ok_or("Resources are incomplete: registries.json is missing or invalid. Click \"Prepare again\" in the launcher (or run horizon-prepare), then try again.")?;
         let lang = Arc::new(horizon_client::net::load_language(&root));
-        let view = self.settings.render_distance.clamp(2, 32) as i8;
+        let view = client_view_distance(self.settings.render_distance);
         if local.is_none() {
             horizon_client::crash::set_detail(
                 "Server",
@@ -233,6 +248,8 @@ impl Game<'_> {
         self.player = None;
         self.spawn = None;
         self.mobs.clear();
+        self.clear_remote_objects();
+        self.clear_remote_projectiles();
         self.creatures.projectiles.clear();
         self.dropped.clear();
         self.particles.clear();
@@ -281,6 +298,7 @@ impl Game<'_> {
             was_sprinting: false,
             carried: None,
             loaded_sent: false,
+            sent_view: view,
             predictions: HashMap::new(),
             menu: None,
             menu_title: None,
@@ -288,12 +306,12 @@ impl Game<'_> {
             use_target: None,
             entities: HashMap::new(),
             lerps: HashMap::new(),
+            head_lerps: HashMap::new(),
             pending_items: HashMap::new(),
             health: (20.0, 20, 5.0),
             game_mode: 0,
             chat: Vec::new(),
-            chat_input: None,
-            action_bar: None,
+            commands: None,
             players: HashMap::new(),
             tab_players: HashMap::new(),
             skin_textures: HashMap::new(),
@@ -350,6 +368,8 @@ impl Game<'_> {
         self.world = World::new(self.res.facts.air, 0);
         self.player = None;
         self.mobs.clear();
+        self.clear_remote_objects();
+        self.clear_remote_projectiles();
         self.dropped.clear();
         self.particles.clear();
         self.pickups.clear();
@@ -432,7 +452,7 @@ impl Game<'_> {
             .and_then(|i| i.id(name))
             .unwrap_or(0)
     }
-    fn to_stack(&self, s: &Option<Stack>) -> Option<ItemStack> {
+    pub(super) fn to_stack(&self, s: &Option<Stack>) -> Option<ItemStack> {
         let s = s.as_ref()?;
         let mut out = ItemStack {
             item: self.item_name(s.item),
@@ -470,6 +490,20 @@ impl Game<'_> {
         }
     }
 
+    /// The names in the server's player list, sorted.
+    pub(super) fn remote_online_names(&self) -> Option<Vec<String>> {
+        let r = self.remote.as_ref()?;
+        let mut names: Vec<String> = r.players.values().cloned().collect();
+        names.sort();
+        Some(names)
+    }
+    /// The open menu's window id (0: the inventory).
+    pub(super) fn remote_menu_id(&self) -> i32 {
+        self.remote
+            .as_ref()
+            .and_then(|r| r.menu.as_ref())
+            .map_or(0, |m| m.0)
+    }
     /// The server's last `n` chat lines, newest first.
     pub(super) fn remote_chat(&self, n: usize) -> Option<Vec<String>> {
         let r = self.remote.as_ref()?;
@@ -531,7 +565,57 @@ impl Game<'_> {
                 break;
             }
         }
+        self.send_suggestion_request();
         Ok(())
+    }
+    /// ClientSuggestionProvider.customSuggestion: the chat's completion
+    /// request for an `ask_server` node goes to the server.
+    fn send_suggestion_request(&mut self) {
+        if self.remote.is_none() {
+            return;
+        }
+        let Some((id, command)) = self.ui.chat_screen.as_mut().and_then(|s| s.take_request())
+        else {
+            return;
+        };
+        let mut w = horizon_protocol::buf::Writer::new();
+        w.varint(id);
+        w.string(&command);
+        self.send(S::Unknown(
+            horizon_protocol::ids::play::serverbound::COMMAND_SUGGESTION,
+            w.data,
+        ));
+    }
+    /// ClientboundCommandSuggestionsPacket: id, range start and length, then
+    /// each suggestion's text and optional tooltip.
+    fn handle_command_suggestions(&mut self, data: &[u8]) {
+        let lang = self
+            .remote
+            .as_ref()
+            .map(|r| r.lang.clone())
+            .unwrap_or_default();
+        let mut r = horizon_protocol::buf::Reader::new(data);
+        let decoded = (|| {
+            let id = r.varint()?;
+            let start = r.varint()?;
+            let length = r.varint()?;
+            let n = r.count(usize::MAX)?;
+            let mut list = Vec::with_capacity(n.min(1000));
+            for _ in 0..n {
+                let text = r.string(32767)?;
+                let tooltip = if r.bool()? {
+                    Some(plain(&r.nbt()?, &lang))
+                } else {
+                    None
+                };
+                list.push((text, tooltip));
+            }
+            horizon_protocol::Result::Ok((id, start, length, list))
+        })();
+        if let Ok((id, start, length, list)) = decoded {
+            let range = (start.max(0) as usize, length.max(0) as usize);
+            self.chat_server_suggestions(id, range, list);
+        }
     }
     fn set_registries(&mut self, registries: Arc<Dynamic>) {
         let biomes: Vec<u16> = registries
@@ -581,12 +665,15 @@ impl Game<'_> {
             self.world.day_time = day;
             self.world.weather = weather;
             self.mobs.clear();
+            self.clear_remote_objects();
+            self.clear_remote_projectiles();
             self.dropped.clear();
             self.particles.clear();
             self.pickups.clear();
             if let Some(r) = self.remote.as_mut() {
                 r.entities.clear();
                 r.lerps.clear();
+                r.head_lerps.clear();
                 r.pending_items.clear();
                 // A new ClientLevel: a new chunk storage, centred on 0, 0.
                 r.chunk_center = (0, 0);
@@ -633,11 +720,31 @@ impl Game<'_> {
             if !(0..SECTIONS as i32).contains(&target) {
                 continue;
             }
-            let strategy = BLOCK_STRATEGY;
+            // A global section is as wide as the server's registry: 16 bits
+            // from a vanilla server, wider from a Horizon host with the same
+            // content mods. Read it at that width, then widen it to ours.
+            let ours = block_strategy();
+            let strategy = if ours.wire_has_palette(s.states.bits) {
+                ours
+            } else {
+                Strategy::blocks(s.states.bits)
+            };
             let palette = s.states.palette.iter().map(|&p| p as u32).collect();
             let words = s.states.data.iter().map(|&w| w as u64).collect();
-            let blocks = PalettedContainer::from_wire(strategy, s.states.bits, palette, words)
+            let mut blocks = PalettedContainer::from_wire(strategy, s.states.bits, palette, words)
                 .map_err(|e| e.to_string())?;
+            if strategy.global_bits != ours.global_bits {
+                let mut values = [0u32; 4096];
+                blocks.unpack(&mut values);
+                // Ids past our registry (a host with mods we lack) read as air.
+                let limit = 1u64 << ours.global_bits;
+                for v in &mut values {
+                    if u64::from(*v) >= limit {
+                        *v = 0;
+                    }
+                }
+                blocks = PalettedContainer::from_values(ours, &values);
+            }
             let mut section = Section {
                 blocks,
                 biomes: PalettedContainer::from_values(BIOME_STRATEGY, &cells),
@@ -760,6 +867,7 @@ impl Game<'_> {
             0 => {
                 if me {
                     self.sleeping = None;
+                    self.sleep_timer = 100;
                 }
                 return;
             }
@@ -868,17 +976,33 @@ impl Game<'_> {
             }
         }
     }
-    fn spawn_entity(&mut self, id: i32, kind: &str, position: [f64; 3], yaw: f32, head: f32) {
+    /// `recreateFromPacket`: yRot and xRot from the packet, the body and head
+    /// both at its head yaw (LivingEntity).
+    fn spawn_entity(&mut self, id: i32, kind: &str, position: [f64; 3], rotation: [f32; 3]) {
+        let [yaw, pitch, head] = rotation;
         let at = Vec3::new(position[0], position[1], position[2]);
         let mob_type = if kind == "minecraft:player" {
             self.remote.as_ref().and_then(|r| r.player_type.clone())
         } else {
             self.res.mob_types.get(kind).cloned()
         };
+        if kind == "minecraft:experience_orb" {
+            // Its value (ExperienceOrb.DATA_VALUE) follows in SetEntityData.
+            self.orbs.retain(|o| o.id != id as u32);
+            self.orbs.push(ExperienceOrb {
+                id: id as u32,
+                position: at,
+                previous: at,
+                velocity: Vec3::ZERO,
+                value: 1,
+                age: 0,
+                on_ground: false,
+            });
+        }
         if let Some(t) = mob_type {
             let mut mob = Mob::new(id as u32, t, at, head);
-            mob.body_yaw = yaw;
-            mob.previous_body_yaw = yaw;
+            (mob.yaw, mob.previous_yaw) = (yaw, yaw);
+            (mob.head_pitch, mob.previous_head_pitch) = (pitch, pitch);
             mob.persistent = true;
             self.mobs.retain(|m| m.id != id as u32);
             self.mobs.push(mob);
@@ -903,14 +1027,21 @@ impl Game<'_> {
         rotation: Option<(f32, f32)>,
         on_ground: bool,
     ) {
+        let mob = self.mobs.iter_mut().find(|m| m.id == id as u32);
         if let Some(r) = self.remote.as_mut() {
             if let Some(t) = r.entities.get_mut(&id) {
                 t.position = position;
             }
+            // AbstractInterpolationHandler.interpolateTo: without a rotation,
+            // the one it was heading for (or has).
+            let rotation = rotation
+                .or_else(|| r.lerps.get(&id).and_then(|l| l.rotation))
+                .or_else(|| mob.as_ref().map(|m| (m.yaw, m.head_pitch)));
             r.lerps.insert(
                 id,
                 Lerp {
                     target: position,
+                    rotation,
                     steps: 3,
                 },
             );
@@ -918,20 +1049,22 @@ impl Game<'_> {
                 *p = position;
             }
         }
-        if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id as u32) {
+        if let Some(m) = mob {
             m.on_ground = on_ground;
-            if let Some((yaw, pitch)) = rotation {
-                m.body_yaw = yaw;
-                m.head_pitch = pitch;
-            }
         }
+        self.turn_remote_object(id, rotation.map(|(yaw, _)| yaw), on_ground);
+        self.turn_remote_projectile(id, rotation);
     }
     fn remove_entity(&mut self, id: i32) {
         self.mobs.retain(|m| m.id != id as u32);
+        self.orbs.retain(|o| o.id != id as u32);
         self.dropped.retain(|d| d.id != id as u32);
+        self.remove_remote_object(id as u32);
+        self.remove_remote_projectile(id as u32);
         if let Some(r) = self.remote.as_mut() {
             r.entities.remove(&id);
             r.lerps.remove(&id);
+            r.head_lerps.remove(&id);
             r.pending_items.remove(&id);
         }
     }
@@ -1023,10 +1156,12 @@ impl Game<'_> {
                 self.streaming.radius =
                     self.settings.render_distance.min(p.chunk_radius + 1).max(2);
                 self.enter_remote_dimension(&p.spawn, false);
+                let view = client_view_distance(self.settings.render_distance);
+                if let Some(r) = self.remote.as_mut() {
+                    r.sent_view = view;
+                }
                 self.send(S::ClientInformation(
-                    horizon_protocol::packets::configuration::ClientInformation::new(
-                        self.settings.render_distance.clamp(2, 32) as i8,
-                    ),
+                    horizon_protocol::packets::configuration::ClientInformation::new(view),
                 ));
             }
             C::Respawn(p) => {
@@ -1181,8 +1316,8 @@ impl Game<'_> {
                             .map(str::to_owned)
                     })
                     .unwrap_or_default();
-                let yaw = horizon_protocol::buf::unpack_degrees(p.yaw);
-                let head = horizon_protocol::buf::unpack_degrees(p.head_yaw);
+                let rotation =
+                    [p.yaw, p.pitch, p.head_yaw].map(horizon_protocol::buf::unpack_degrees);
                 if let Some(r) = self.remote.as_mut() {
                     if kind == "minecraft:player" {
                         r.level_players.insert(p.id, p.uuid);
@@ -1190,7 +1325,17 @@ impl Game<'_> {
                         r.level_players.remove(&p.id);
                     }
                 }
-                self.spawn_entity(p.id, &kind, p.position, yaw, head);
+                self.spawn_entity(p.id, &kind, p.position, rotation);
+                if !self.spawn_remote_object(p.id, &kind, p.position, rotation[0], p.data) {
+                    self.spawn_remote_projectile(
+                        p.id,
+                        &kind,
+                        p.position,
+                        (rotation[0], rotation[1]),
+                        p.velocity,
+                        p.data,
+                    );
+                }
             }
             C::RemoveEntities(p) => {
                 for id in p.ids {
@@ -1241,9 +1386,11 @@ impl Game<'_> {
                 ];
                 self.move_entity(p.id, position, Some((p.yaw, p.pitch)), p.on_ground);
             }
+            // ClientPacketListener.handleRotateMob: lerpHeadTo(yHeadRot, 3).
             C::RotateHead(p) => {
-                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
-                    m.yaw = horizon_protocol::buf::unpack_degrees(p.head_yaw);
+                if let Some(r) = self.remote.as_mut() {
+                    let yaw = horizon_protocol::buf::unpack_degrees(p.head_yaw);
+                    r.head_lerps.insert(p.id, (yaw, 3));
                 }
             }
             C::SetEntityData(p) => {
@@ -1271,17 +1418,39 @@ impl Game<'_> {
                         }
                     }
                 }
+                // LivingEntity.onSyncedDataUpdated(SLEEPING_POS_ID): this
+                // player lies down in the bed, or gets up.
+                if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) {
+                    for (index, _, value) in &p.values {
+                        if let (14, Value::OptPos(bed)) = (index, value) {
+                            if bed.is_some() && self.sleeping.is_none() {
+                                self.sleep_timer = 0;
+                            }
+                            self.sleeping = *bed;
+                        }
+                    }
+                }
                 for (index, _, value) in &p.values {
                     if *index == ITEM_ENTITY_ITEM
                         && let Value::Item(stack) = value
                     {
                         self.remote_item_data(p.id, stack);
                     }
+                    // ExperienceOrb.DATA_VALUE (the icon's size).
+                    if *index == 8
+                        && let Value::Int(v) = value
+                        && let Some(o) = self.orbs.iter_mut().find(|o| o.id == p.id as u32)
+                    {
+                        o.value = (*v).max(0) as u32;
+                    }
                 }
+                self.remote_object_data(p.id, &p.values);
+                self.remote_projectile_data(p.id, &p.values);
             }
             // ClientPacketListener.handleSetEquipment: what a mob or another
             // player holds and wears (EquipmentSlot ordinals).
             C::SetEquipment(p) => {
+                self.remote_object_equipment(p.id, &p.slots);
                 let items: Vec<(u8, Option<Arc<str>>)> = p
                     .slots
                     .iter()
@@ -1303,10 +1472,13 @@ impl Game<'_> {
                 }
             }
             C::TakeItemEntity(p) => {
-                if self
-                    .remote
-                    .as_ref()
-                    .is_some_and(|r| r.entity_id == p.player)
+                // An orb's sound comes from the server, at the orb.
+                let orb = self.orbs.iter().any(|o| o.id == p.item as u32);
+                if !orb
+                    && self
+                        .remote
+                        .as_ref()
+                        .is_some_and(|r| r.entity_id == p.player)
                     && let Some(eye) = self.eye_position()
                 {
                     let pitch = ((self.world.random.next_float() - self.world.random.next_float())
@@ -1317,17 +1489,20 @@ impl Game<'_> {
                         .play("minecraft:entity.item.pickup", Some(eye), 0.2, pitch);
                 }
                 // ItemPickupParticle toward the collector (this player, another one or a mob).
+                let collector = if self
+                    .remote
+                    .as_ref()
+                    .is_some_and(|r| r.entity_id == p.player)
+                {
+                    super::pickups::Collector::Player
+                } else {
+                    super::pickups::Collector::Mob(p.player as u32)
+                };
                 if let Some(item) = self.dropped.iter().find(|d| d.id == p.item as u32).cloned() {
-                    let collector = if self
-                        .remote
-                        .as_ref()
-                        .is_some_and(|r| r.entity_id == p.player)
-                    {
-                        super::pickups::Collector::Player
-                    } else {
-                        super::pickups::Collector::Mob(p.player as u32)
-                    };
                     self.add_pickup(super::pickups::Taken::Item(Box::new(item)), collector);
+                } else if let Some(orb) = self.orbs.iter().find(|o| o.id == p.item as u32).cloned()
+                {
+                    self.add_pickup(super::pickups::Taken::Orb(Box::new(orb)), collector);
                 }
                 self.remove_entity(p.item);
             }
@@ -1439,6 +1614,21 @@ impl Game<'_> {
                 }
             }
             C::GameEvent(p) => match p.event {
+                // GUARDIAN_ELDER_EFFECT: the apparition, and the curse sound
+                // unless the elder guardian is silent.
+                10 => {
+                    self.creatures.elder_apparition = super::mob_blocks::APPARITION_TICKS;
+                    if p.param == 1.0
+                        && let Some(at) = self.player.as_ref().map(|m| m.position)
+                    {
+                        self.audio.play(
+                            "minecraft:entity.elder_guardian.curse",
+                            Some([at.x, at.y, at.z]),
+                            1.0,
+                            1.0,
+                        );
+                    }
+                }
                 1 => {
                     self.world.weather.raining = true;
                     self.world.weather.rain_level = (0.0, 0.0);
@@ -1517,12 +1707,30 @@ impl Game<'_> {
                 }
             }
             C::OpenScreen(p) => self.remote_open_screen(p),
+            C::RecipeBookAdd(p) => self.remote_recipe_book_add(p),
+            C::RecipeBookRemove(p) => self.remote_recipe_book_remove(p),
+            C::RecipeBookSettings(p) => self.remote_recipe_book_settings(p),
+            C::PlaceGhostRecipe(p) => self.remote_ghost_recipe(p),
             C::MerchantOffers(p) => self.remote_merchant_offers(p),
             C::ContainerClose(_) => {
                 if self.screen == Screen::Inventory {
                     self.remote_close_local();
                     self.screen = Screen::Playing;
                     self.capture(true);
+                }
+            }
+            C::Unknown(id, data)
+                if id == horizon_protocol::ids::play::clientbound::COMMAND_SUGGESTIONS =>
+            {
+                self.handle_command_suggestions(&data);
+            }
+            C::Commands(p) => {
+                let tree = horizon_client::command::network::from_packet(
+                    &p,
+                    horizon_client::command::vanilla::dispatcher(),
+                );
+                if let Some(r) = self.remote.as_mut() {
+                    r.commands = Some(tree);
                 }
             }
             C::SystemChat(p) => {
@@ -1534,10 +1742,9 @@ impl Game<'_> {
                         .map(|r| r.lang.clone())
                         .unwrap_or_default(),
                 );
+                // ChatListener.handleOverlay.
                 if p.overlay {
-                    if let Some(r) = self.remote.as_mut() {
-                        r.action_bar = Some((text, Instant::now()));
-                    }
+                    self.titles.set_overlay(remote_text(&p.content), false);
                 } else {
                     self.chat_line(text);
                 }
@@ -1768,15 +1975,16 @@ impl Game<'_> {
                     self.stats.values.entry(ty).or_default().insert(key, count);
                 }
             }
-            C::SetActionBarText(p) | C::SetTitleText(p) => {
-                let lang = self
-                    .remote
-                    .as_ref()
-                    .map(|r| r.lang.clone())
-                    .unwrap_or_default();
-                let text = plain(&p.text, &lang);
-                if let Some(r) = self.remote.as_mut() {
-                    r.action_bar = Some((text, Instant::now()));
+            // ClientPacketListener.setActionBarText, setTitleText,
+            // setSubtitleText, setTitlesAnimation and handleTitlesClear.
+            C::SetActionBarText(p) => self.titles.set_overlay(remote_text(&p.text), false),
+            C::SetTitleText(p) => self.titles.set_title(remote_text(&p.text)),
+            C::SetSubtitleText(p) => self.titles.set_subtitle(remote_text(&p.text)),
+            C::SetTitlesAnimation(p) => self.titles.set_times(p.fade_in, p.stay, p.fade_out),
+            C::ClearTitles(p) => {
+                self.titles.clear();
+                if p.value {
+                    self.titles.reset_times();
                 }
             }
             _ => {}
@@ -2001,6 +2209,7 @@ impl Game<'_> {
         self.dropped.push(ItemEntity {
             health: 5,
             fire_ticks: 0,
+            thrower: None,
             id: id as u32,
             stack,
             position: at,
@@ -2099,6 +2308,17 @@ impl Game<'_> {
     /// One client tick while connected (Minecraft.tick with a ClientLevel).
     pub(super) fn tick_remote(&mut self) -> Result<()> {
         self.ticks += 1;
+        // Options.broadcastOptions: a changed render distance is sent again.
+        let view = client_view_distance(self.settings.render_distance);
+        if let Some(r) = self.remote.as_mut()
+            && r.joined
+            && r.sent_view != view
+        {
+            r.sent_view = view;
+            self.send(S::ClientInformation(
+                horizon_protocol::packets::configuration::ClientInformation::new(view),
+            ));
+        }
         // Minecraft.tick: TickRateManager.tick; ClientLevel.tick advances
         // the time only while the level runs normally.
         let running = self.clock.world_runs();
@@ -2124,7 +2344,12 @@ impl Game<'_> {
         self.tick_hand();
         self.tick_particles();
         self.tick_client_effects();
+        // Player.tick's sleep counter (the darkening and the wake-up fade).
+        self.sleep_timer = super::tick_sleep_timer(self.sleep_timer, self.sleeping.is_some());
+        // Gui.tick: the titles, the action bar and the held item's name.
+        self.tick_hud();
         let ghast_collisions = self.happy_ghast_player_collisions();
+        let pushed = self.remote_pushes();
         let Some(player) = self.player.as_mut() else {
             return Ok(());
         };
@@ -2147,8 +2372,7 @@ impl Game<'_> {
         let Some(player) = self.player.as_mut() else {
             return Ok(());
         };
-        let chatting = self.remote.as_ref().is_some_and(|r| r.chat_input.is_some());
-        let playing = self.screen == Screen::Playing && !chatting;
+        let playing = self.screen == Screen::Playing;
         let held = |k| playing && self.keys.contains(&k);
         let keys = Keys {
             forward: held(KeyCode::KeyW),
@@ -2176,7 +2400,16 @@ impl Game<'_> {
         );
         player.yaw = self.yaw;
         let dead = self.screen == Screen::Dead;
-        if !dead {
+        // LivingEntity.isImmobile: a sleeper lies still in the bed.
+        if let Some(head) = self.sleeping {
+            player.position = Vec3::new(
+                f64::from(head[0]) + 0.5,
+                f64::from(head[1]) + 0.5625,
+                f64::from(head[2]) + 0.5,
+            );
+            player.velocity = Vec3::ZERO;
+        } else if !dead {
+            player.velocity = player.velocity.add_vector(pushed);
             MotionWorld {
                 entities: &ghast_collisions,
                 player,
@@ -2220,14 +2453,80 @@ impl Game<'_> {
         self.tick_player_model();
         if !dead {
             self.remote_mining();
-            if self.right && self.use_delay == 0 && playing {
+            // Minecraft.handleKeybinds: no new use while an item is in use.
+            if self.right && self.use_delay == 0 && playing && self.using.is_none() {
                 self.remote_use();
                 self.use_delay = 4;
             }
+            self.remote_tick_using();
         }
         self.remote_send_state(input);
         self.send(S::ClientTickEnd(Empty));
         Ok(())
+    }
+    /// The local player's share of every touching entity's
+    /// `LivingEntity.pushEntities`: on a client `EntitySelector.pushableBy`
+    /// lets entities push only the local player, so the server never sends
+    /// these pushes. `doPush(player)` is `player.push(entity)`.
+    fn remote_pushes(&self) -> Vec3 {
+        let (Some(p), Some(r)) = (self.player.as_ref(), self.remote.as_ref()) else {
+            return Vec3::ZERO;
+        };
+        // LivingEntity.isPushable: alive, no spectator, off ladders.
+        let feet = [
+            p.position.x.floor() as i32,
+            p.position.y.floor() as i32,
+            p.position.z.floor() as i32,
+        ];
+        if self.screen == Screen::Dead
+            || p.spectator
+            || self.block_in_tag("minecraft:climbable", &self.block_name(feet))
+        {
+            return Vec3::ZERO;
+        }
+        let bounds = p.bounds();
+        let teams = self.mob_teams();
+        let mut push = Vec3::ZERO;
+        for m in &self.mobs {
+            let spectator = r
+                .level_players
+                .get(&(m.id as i32))
+                .and_then(|uuid| r.tab_players.get(uuid))
+                .is_some_and(|t| t.game_mode == SPECTATOR);
+            // Bats never push; a spectator has no physics; passengers of the
+            // same vehicle never push each other.
+            if !m.alive()
+                || spectator
+                || m.species() == horizon_client::mobs::Species::Bat
+                || self
+                    .riding
+                    .is_some_and(|v| v == m.id || m.extra.mount == Some(v))
+                || !m.bounds().intersects(bounds)
+                || !horizon_client::scoreboard::pushable_by(
+                    teams.of(Who::Mob(m.id)),
+                    teams.of(Who::Player),
+                    true,
+                )
+            {
+                continue;
+            }
+            // Entity.push(Entity), `this` the player.
+            let (mut xa, mut za) = (m.position.x - p.position.x, m.position.z - p.position.z);
+            let mut dd = xa.abs().max(za.abs());
+            if dd < f64::from(0.01_f32) {
+                continue;
+            }
+            dd = dd.sqrt();
+            xa /= dd;
+            za /= dd;
+            let pow = (1.0 / dd).min(1.0);
+            xa *= pow;
+            za *= pow;
+            xa *= f64::from(0.05_f32);
+            za *= f64::from(0.05_f32);
+            push = Vec3::new(push.x - xa, push.y, push.z - za);
+        }
+        push
     }
     /// ClientLevel.tickEntities; a frozen level only ticks the players
     /// (`TickRateManager.isEntityFrozen`).
@@ -2236,14 +2535,18 @@ impl Game<'_> {
             return;
         };
         let mut lerps = std::mem::take(&mut r.lerps);
+        let head_lerps = &mut r.head_lerps;
         let players = &r.level_players;
         for m in &mut self.mobs {
-            if !running && !players.contains_key(&(m.id as i32)) {
+            let player = players.contains_key(&(m.id as i32));
+            if !running && !player {
                 continue;
             }
             m.previous = m.position;
             m.previous_yaw = m.yaw;
             m.previous_body_yaw = m.body_yaw;
+            m.previous_head_yaw = m.head_yaw;
+            m.previous_head_pitch = m.head_pitch;
             m.previous_limb_speed = m.limb_speed;
             m.age += 1;
             if m.species() == horizon_client::mobs::Species::Rabbit {
@@ -2258,6 +2561,7 @@ impl Game<'_> {
             if !m.alive() {
                 m.death_time += 1;
             }
+            // Entity.commonTick: LinearInterpolationHandler.interpolate.
             if let Some(l) = lerps.get_mut(&(m.id as i32))
                 && l.steps > 0
             {
@@ -2267,7 +2571,26 @@ impl Game<'_> {
                     m.position.y + (l.target[1] - m.position.y) / n,
                     m.position.z + (l.target[2] - m.position.z) / n,
                 );
+                if let Some((yaw, pitch)) = l.rotation {
+                    let alpha = 1.0 / l.steps as f32;
+                    m.yaw += wrap_degrees(yaw - m.yaw) * alpha;
+                    m.head_pitch += (pitch - m.head_pitch) * alpha;
+                }
                 l.steps -= 1;
+            }
+            // LivingEntity.aiStep: the head's own interpolation.
+            if let Some((yaw, steps)) = head_lerps.get_mut(&(m.id as i32))
+                && *steps > 0
+            {
+                m.head_yaw += wrap_degrees(*yaw - m.head_yaw) / *steps as f32;
+                *steps -= 1;
+            }
+            // LivingEntity.tick's tickHeadTurn: a mob's BodyRotationControl,
+            // a player's body following its walk and look.
+            if player {
+                remote_player_head_turn(m);
+            } else if m.alive() {
+                m.body_rotation_tick();
             }
             // WalkAnimationState.update from the horizontal distance moved.
             let (dx, dz) = (m.position.x - m.previous.x, m.position.z - m.previous.z);
@@ -2276,6 +2599,21 @@ impl Game<'_> {
             m.limb_position += m.limb_speed;
             if m.species() == horizon_client::mobs::Species::Rabbit {
                 horizon_client::mobs::rabbit::post_tick(m);
+            }
+        }
+        for o in self.orbs.iter_mut().filter(|_| running) {
+            o.previous = o.position;
+            o.age += 1;
+            if let Some(l) = lerps.get_mut(&(o.id as i32))
+                && l.steps > 0
+            {
+                let n = f64::from(l.steps);
+                o.position = Vec3::new(
+                    o.position.x + (l.target[0] - o.position.x) / n,
+                    o.position.y + (l.target[1] - o.position.y) / n,
+                    o.position.z + (l.target[2] - o.position.z) / n,
+                );
+                l.steps -= 1;
             }
         }
         for d in self.dropped.iter_mut().filter(|_| running) {
@@ -2292,6 +2630,25 @@ impl Game<'_> {
                 );
                 l.steps -= 1;
             }
+        }
+        head_lerps.retain(|_, (_, steps)| *steps > 0);
+        if running {
+            // Boats, minecarts, armor stands, projectiles and the rest
+            // interpolate like mobs.
+            let mut step = |id: u32, at: Vec3| match lerps.get_mut(&(id as i32)) {
+                Some(l) if l.steps > 0 => {
+                    let n = f64::from(l.steps);
+                    l.steps -= 1;
+                    Vec3::new(
+                        at.x + (l.target[0] - at.x) / n,
+                        at.y + (l.target[1] - at.y) / n,
+                        at.z + (l.target[2] - at.z) / n,
+                    )
+                }
+                _ => at,
+            };
+            self.tick_remote_objects(&mut step);
+            self.tick_remote_projectiles(&mut step);
         }
         lerps.retain(|_, l| l.steps > 0);
         if let Some(r) = self.remote.as_mut() {
@@ -2418,8 +2775,7 @@ impl Game<'_> {
         if r.destroy_delay > 0 {
             r.destroy_delay -= 1;
         }
-        let chatting = r.chat_input.is_some();
-        if !self.left || self.screen != Screen::Playing || chatting {
+        if !self.left || self.screen != Screen::Playing {
             self.stop_remote_mining();
             self.mining = None;
             return;
@@ -2602,8 +2958,16 @@ impl Game<'_> {
                 location: [0.0, 1.0, 0.0],
                 secondary: sneaking,
             }));
-            self.swing_arm();
-            return;
+            // Player.interactOn: another player passes, and the held item is
+            // used instead (Minecraft.startUseItem).
+            let player = self
+                .remote
+                .as_ref()
+                .is_some_and(|r| r.level_players.contains_key(&id));
+            if !player {
+                self.swing_arm();
+                return;
+            }
         }
         if let Some(hit) = self.pick() {
             let seq = self.next_sequence();
@@ -2636,7 +3000,7 @@ impl Game<'_> {
                 return;
             }
         }
-        if self.held().is_some() {
+        if let Some(held) = self.held().cloned() {
             let seq = self.next_sequence();
             self.send(S::UseItem(play::UseItem {
                 hand: 0,
@@ -2644,11 +3008,49 @@ impl Game<'_> {
                 yaw: self.yaw,
                 pitch: self.pitch,
             }));
+            // MultiPlayerGameMode.useItem runs the use here too: food starts
+            // being eaten (Consumable.startConsuming).
+            if let Some(info) = self.res.items.get(&held.item).cloned() {
+                self.start_eating(&info);
+            }
+        }
+    }
+    /// `LivingEntity.updatingUsingItem` for food on a server client: the
+    /// eating animation and its crumbs. The server eats it and sends the
+    /// stack, the hunger and the sounds.
+    fn remote_tick_using(&mut self) {
+        let Some((slot, ticks)) = self.using else {
+            return;
+        };
+        let stack = self.stack_in(slot).cloned();
+        let food = stack
+            .as_ref()
+            .and_then(|s| self.res.items.get(&s.item))
+            .is_some_and(|i| i.consumable && i.food.is_some());
+        let (Some(stack), true) = (stack, food) else {
+            self.using = None;
+            return;
+        };
+        if !self.right || slot != self.selected || self.screen != Screen::Playing {
+            self.using = None;
+            return;
+        }
+        // Consumable.shouldEmitParticlesAndSounds, as in tick_used_item.
+        let duration = 32;
+        let remaining = duration - ticks.min(duration);
+        if duration - remaining > (duration as f32 * 0.21875) as u32 && remaining % 4 == 0 {
+            self.eat_particles(&stack, 5);
+        }
+        if ticks + 1 >= duration {
+            self.using = None;
+            self.eat_particles(&stack, 16);
+        } else {
+            self.using = Some((slot, ticks + 1));
         }
     }
     /// Left click: attack the targeted entity (MultiPlayerGameMode.attack).
     pub(super) fn remote_mouse(&mut self, button: MouseButton, pressed: bool) -> Result<()> {
-        if self.remote.as_ref().is_some_and(|r| r.chat_input.is_some()) {
+        if self.screen == Screen::Chat {
             return Ok(());
         }
         match button {
@@ -2707,14 +3109,8 @@ impl Game<'_> {
         }
         match key {
             KeyCode::KeyT | KeyCode::Slash | KeyCode::Enter => {
-                let text = if key == KeyCode::Slash { "/" } else { "" };
-                if let Some(r) = self.remote.as_mut() {
-                    r.chat_input = Some(text.to_owned());
-                }
-                self.keys.clear();
-                self.left = false;
-                self.right = false;
-                self.capture(false);
+                // ChatScreen, over the server's command tree.
+                self.open_chat(if key == KeyCode::Slash { "/" } else { "" });
                 Ok(true)
             }
             KeyCode::KeyQ => {
@@ -2749,84 +3145,6 @@ impl Game<'_> {
                 Ok(true)
             }
             _ => Ok(false),
-        }
-    }
-    pub(super) fn remote_chat_open(&self) -> bool {
-        self.remote.as_ref().is_some_and(|r| r.chat_input.is_some())
-    }
-    /// ChatScreen: typing, Enter to send, Escape to cancel.
-    pub(super) fn remote_chat_key(&mut self, event: &winit::event::KeyEvent) {
-        use winit::keyboard::Key;
-        if event.state != winit::event::ElementState::Pressed {
-            return;
-        }
-        let shortcut = self.edit_shortcut(event);
-        let Some(r) = self.remote.as_mut() else {
-            return;
-        };
-        let Some(input) = r.chat_input.as_mut() else {
-            return;
-        };
-        // ChatScreen's input: an EditBox of 256.
-        const INPUT: horizon_client::clipboard::FieldId = ("remote.chat", 0);
-        if let Some(shortcut) = shortcut {
-            Self::append_shortcut(
-                &mut self.text_selection,
-                &mut self.clipboard,
-                INPUT,
-                input,
-                shortcut,
-                256,
-            );
-            return;
-        }
-        // Logical keys: the text, not the scancode, decides (layouts, virtual keyboards).
-        let named = match &event.logical_key {
-            Key::Named(n) => Some(*n),
-            _ => None,
-        };
-        self.remote_chat_input(named, event.text.as_deref());
-    }
-    /// A named key or typed text in the chat input (the keyboard, or a
-    /// controller's on-screen keyboard).
-    pub(super) fn remote_chat_input(
-        &mut self,
-        named: Option<winit::keyboard::NamedKey>,
-        text: Option<&str>,
-    ) {
-        use winit::keyboard::NamedKey;
-        const INPUT: horizon_client::clipboard::FieldId = ("remote.chat", 0);
-        let Some(r) = self.remote.as_mut() else {
-            return;
-        };
-        let Some(input) = r.chat_input.as_mut() else {
-            return;
-        };
-        match named {
-            Some(NamedKey::Escape) => {
-                r.chat_input = None;
-                self.capture(true);
-            }
-            Some(NamedKey::Backspace) => {
-                if !self.text_selection.take(INPUT, input) {
-                    input.pop();
-                }
-            }
-            Some(NamedKey::Enter) => {
-                let message = r.chat_input.take().unwrap_or_default();
-                self.send_chat(&message);
-                self.capture(true);
-            }
-            _ => {
-                if let Some(text) = text {
-                    self.text_selection.take(INPUT, input);
-                    for c in text.chars().filter(|c| !c.is_control()) {
-                        if input.chars().count() < 256 {
-                            input.push(c);
-                        }
-                    }
-                }
-            }
         }
     }
     /// ClientPacketListener.sendChat / sendCommand (unsigned).
@@ -2880,17 +3198,108 @@ impl Game<'_> {
         let Some(internal) = self.slot_at(&batch, self.cursor.0, self.cursor.1) else {
             return;
         };
-        let input = if self.has_shift_down() { 1 } else { 0 };
-        self.remote_slot_click(internal, i8::from(right), input);
+        let input = if self.has_shift_down() {
+            Input::QuickMove
+        } else {
+            Input::Pickup
+        };
+        self.remote_menu_ops(&[(Some(internal), i32::from(right), input)]);
+    }
+    /// The server's open menu: its window id and menu type (0, "inventory"
+    /// when none is open).
+    fn remote_menu(&self) -> (i32, String) {
+        match self.remote.as_ref().and_then(|r| r.menu.clone()) {
+            Some((id, name)) => (id, name),
+            None => (0, "inventory".to_owned()),
+        }
+    }
+    /// `MultiPlayerGameMode.handleContainerInput` for each click of `ops` on
+    /// the server's open menu (a quick craft drag is several): the verified
+    /// menu engine predicts them on this client's copy, then each goes out as
+    /// a `ContainerClick` with the slots it changed and the carried stack
+    /// after it; the server corrects anything it sees differently. A menu the
+    /// engine doesn't model sends the clicks unpredicted. False when a click's
+    /// slot isn't one of the menu's.
+    pub(super) fn remote_menu_ops(&mut self, ops: &[(Option<usize>, i32, Input)]) -> bool {
+        let (container, menu) = self.remote_menu();
+        let mut clicks = Vec::with_capacity(ops.len());
+        for &(slot, button, input) in ops {
+            let slot = match slot {
+                None => -999,
+                Some(internal) => {
+                    match (0..64).find(|&s| Self::menu_slot(&menu, s) == Some(internal)) {
+                        Some(s) => s as i16,
+                        None => return false,
+                    }
+                }
+            };
+            clicks.push((slot, button, input));
+        }
+        // Unpredicted: nothing changed, the carried stack as it is.
+        let mut sent: Vec<Predicted> = clicks
+            .iter()
+            .map(|&(slot, button, input)| (slot, button, input, Vec::new(), self.carried.clone()))
+            .collect();
+        // The engine's slot indices are the menu's own, as on the network.
+        self.menu_session(|m, env, _| {
+            let mut predicted = Vec::with_capacity(clicks.len());
+            for &(slot, button, input) in &clicks {
+                let before = menu_items(m);
+                if m.click(env, i32::from(slot), button, input).is_err() {
+                    // The server throws on it too: nothing is predicted.
+                    return Some(false);
+                }
+                let changed = changed_slots(&before, m);
+                predicted.push((slot, button, input, changed, m.carried.clone()));
+            }
+            sent = predicted;
+            Some(true)
+        });
+        self.send_clicks(container, sent);
+        true
+    }
+    /// A Shift double click on a server (`AbstractContainerScreen.mouseReleased`):
+    /// a predicted QUICK_MOVE for every slot the engine moves, each sent.
+    pub(super) fn remote_quick_move_all(&mut self, slot: usize, moved: &ItemStack) {
+        let (container, _) = self.remote_menu();
+        let mut sent: Vec<Predicted> = Vec::new();
+        self.menu_session(|m, env, to_menu| {
+            let clicked = to_menu(slot)?;
+            let mut before = menu_items(m);
+            let mut each = |m: &horizon_client::menu::Menu, t: usize| {
+                let changed = changed_slots(&before, m);
+                sent.push((t as i16, 0, Input::QuickMove, changed, m.carried.clone()));
+                before = menu_items(m);
+            };
+            Some(
+                m.quick_move_all_each(env, clicked, moved, &mut each)
+                    .is_ok(),
+            )
+        });
+        self.send_clicks(container, sent);
+    }
+    fn send_clicks(&mut self, container: i32, clicks: Vec<Predicted>) {
+        let state = self.remote.as_ref().map_or(0, |r| r.state_id);
+        let hashed = |g: &Self, s: &Option<ItemStack>| g.to_network(s).map(|s| Hashed::of(&s));
+        for (slot, button, input, changed, carried) in clicks {
+            let changed = changed.iter().map(|(i, s)| (*i, hashed(self, s))).collect();
+            let carried = hashed(self, &carried);
+            self.send(S::ContainerClick(play::ContainerClick {
+                container,
+                state,
+                slot,
+                button: button as i8,
+                input: input_ordinal(input),
+                changed,
+                carried,
+            }));
+        }
     }
     /// A `ContainerClick` on game slot `internal` of the server's open menu
     /// (`input` is the ContainerInput ordinal). False when the menu has no
     /// such slot.
     pub(super) fn remote_slot_click(&mut self, internal: usize, button: i8, input: i32) -> bool {
-        let (container, menu) = match self.remote.as_ref().and_then(|r| r.menu.clone()) {
-            Some((id, name)) => (id, name),
-            None => (0, "inventory".to_owned()),
-        };
+        let (container, menu) = self.remote_menu();
         let slot = (0..64).find(|&s| Self::menu_slot(&menu, s) == Some(internal));
         let Some(slot) = slot else { return false };
         let carried = self.to_network(&self.carried).map(|s| Hashed::of(&s));
@@ -3134,6 +3543,15 @@ impl Game<'_> {
             .ok()?;
         Some((rows, r.menu_title.clone().unwrap_or_default()))
     }
+    /// ServerboundPlayerCommandPacket STOP_SLEEPING.
+    pub(super) fn remote_stop_sleeping(&mut self) {
+        let id = self.remote.as_ref().map_or(0, |r| r.entity_id);
+        self.send(S::PlayerCommand(play::PlayerCommand {
+            id,
+            action: 0,
+            data: 0,
+        }));
+    }
     pub(super) fn remote_respawn(&mut self) {
         self.send(S::ClientCommand(play::ClientCommand { action: 0 }));
     }
@@ -3171,11 +3589,11 @@ impl Game<'_> {
         let Some(r) = &self.remote else { return };
         let atlas = &self.atlas;
         let (w, h) = (batch.width, batch.height);
-        let open = r.chat_input.is_some();
+        let open = self.screen == Screen::Chat;
         let now = Instant::now();
         let mut y = h - 48.0;
         // Container screens cover the chat (vanilla draws them over the HUD).
-        let shown = if matches!(self.screen, Screen::Playing | Screen::Dead) {
+        let shown = if matches!(self.screen, Screen::Playing | Screen::Dead | Screen::Chat) {
             if open { 20 } else { 10 }
         } else {
             0
@@ -3202,22 +3620,6 @@ impl Game<'_> {
             );
             batch.text(atlas, text, 4.0, y, rgba(255, 255, 255, a), true);
             y -= 9.0;
-        }
-        if let Some(input) = &r.chat_input {
-            batch.fill(atlas, 2.0, h - 14.0, w - 4.0, 12.0, rgba(0, 0, 0, 128));
-            let blink = (self.started.elapsed().as_millis() / 300).is_multiple_of(2);
-            let shown = if blink {
-                format!("{input}_")
-            } else {
-                input.clone()
-            };
-            batch.text(atlas, &shown, 4.0, h - 12.0, rgba(224, 224, 224, 255), true);
-        }
-        if let Some((text, at)) = &r.action_bar
-            && now.duration_since(*at) < Duration::from_secs(3)
-        {
-            let tw = HudBatch::text_width(atlas, text);
-            batch.text(atlas, text, (w - tw) / 2.0, h - 68.0, u32::MAX, true);
         }
         if self.screen == Screen::Dead
             && let Some(message) = &r.death_message
@@ -3286,6 +3688,87 @@ impl Game<'_> {
             "chat": r.chat.iter().rev().take(10).rev().map(|(t, _)| t.clone()).collect::<Vec<_>>(),
         }))
     }
+}
+
+/// `Mth.wrapDegrees`.
+fn wrap_degrees(a: f32) -> f32 {
+    let a = a % 360.0;
+    if a >= 180.0 {
+        a - 360.0
+    } else if a < -180.0 {
+        a + 360.0
+    } else {
+        a
+    }
+}
+
+/// `LivingEntity.tick`'s body target and `tickHeadTurn` for another player:
+/// the body turns toward where it walks (backwards when walking back), or to
+/// the look while the arm swings, and stays within 50 degrees of the look.
+fn remote_player_head_turn(m: &mut Mob) {
+    let (dx, dz) = (m.position.x - m.previous.x, m.position.z - m.previous.z);
+    let mut target = m.body_yaw;
+    if (dx * dx + dz * dz) as f32 > 0.002_500_000_2 {
+        let walk = (dz.atan2(dx) as f32).to_degrees() - 90.0;
+        let facing = (wrap_degrees(m.yaw) - walk).abs();
+        target = if 95.0 < facing && facing < 265.0 {
+            walk - 180.0
+        } else {
+            walk
+        };
+    }
+    if m.anim.attack_anim > 0.0 {
+        target = m.yaw;
+    }
+    m.body_yaw += wrap_degrees(target - m.body_yaw) * 0.3;
+    let head = wrap_degrees(m.yaw - m.body_yaw);
+    if head.abs() > 50.0 {
+        m.body_yaw += head - head.signum() * 50.0;
+    }
+}
+
+/// A click sent to a server: its slot, button and input, the slots it
+/// changed and the carried stack after it.
+type Predicted = (
+    i16,
+    i32,
+    Input,
+    Vec<(i16, Option<ItemStack>)>,
+    Option<ItemStack>,
+);
+
+fn menu_items(m: &horizon_client::menu::Menu) -> Vec<Option<ItemStack>> {
+    (0..m.slot_count()).map(|i| m.slot(i).cloned()).collect()
+}
+
+/// The slots whose stack is no longer `before`'s (`ItemStack.matches`).
+fn changed_slots(
+    before: &[Option<ItemStack>],
+    m: &horizon_client::menu::Menu,
+) -> Vec<(i16, Option<ItemStack>)> {
+    (0..m.slot_count())
+        .filter(|&i| m.slot(i) != before.get(i).and_then(Option::as_ref))
+        .map(|i| (i as i16, m.slot(i).cloned()))
+        .collect()
+}
+
+/// ServerboundContainerClickPacket's `ContainerInput` ordinal.
+pub(super) fn input_ordinal(input: Input) -> i32 {
+    match input {
+        Input::Pickup => 0,
+        Input::QuickMove => 1,
+        Input::Swap => 2,
+        Input::Clone => 3,
+        Input::Throw => 4,
+        Input::QuickCraft => 5,
+        Input::PickupAll => 6,
+    }
+}
+
+/// The view distance a client asks for: its render distance, which Horizon
+/// lets go past vanilla's 32 (a vanilla server still caps it at its own).
+fn client_view_distance(render_distance: i32) -> i8 {
+    render_distance.clamp(2, i32::from(i8::MAX)) as i8
 }
 
 #[cfg(test)]

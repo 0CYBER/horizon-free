@@ -257,20 +257,36 @@ impl Game<'_> {
         out: &mut Vec<Vertex>,
     ) {
         // ItemInHandLayer submits with OverlayTexture.NO_OVERLAY: no hurt tint.
-        for (item, left) in [(&mob.extra.main_hand, false), (&mob.extra.off_hand, true)] {
+        for (item, off_hand) in [(&mob.extra.main_hand, false), (&mob.extra.off_hand, true)] {
             let Some(item) = item else { continue };
+            let left = off_hand != mob.extra.main_hand_left;
             let Some(t) =
                 render::held_item_transform(mob, alpha as f32, camera, &self.res.mob_data, left)
             else {
                 continue;
             };
-            let slot = if left {
+            let slot = if off_hand {
                 horizon_client::mobs::gear::OFF
             } else {
                 horizon_client::mobs::gear::MAIN
             };
-            let mut stack = ItemStack::new(item, 1);
-            if horizon_client::mobs::gear::enchanted(mob, slot) {
+            let local_player = self
+                .player_model
+                .as_ref()
+                .is_some_and(|p| p.id == mob.id && p.kind.id == mob.kind.id);
+            let mut stack = if local_player {
+                let Some(stack) = self.stack_in(if off_hand {
+                    super::shield::OFFHAND_SLOT
+                } else {
+                    self.selected
+                }) else {
+                    continue;
+                };
+                stack.clone()
+            } else {
+                ItemStack::new(item, 1)
+            };
+            if !local_player && horizon_client::mobs::gear::enchanted(mob, slot) {
                 // The gear's enchantments are not tracked, only that it has some.
                 stack.enchant("minecraft:unbreaking", 1);
             }
@@ -284,12 +300,13 @@ impl Game<'_> {
             );
             // The local player's rod while its hook is out.
             owner.fishing_cast_with_this_item = self.cast_rod().is_some()
-                && self.main_hand_rod() != left
+                && self.main_hand_rod() != off_hand
                 && self
                     .player_model
                     .as_ref()
                     .is_some_and(|p| std::ptr::eq(p, mob));
-            if !left && mob.extra.using_item > 0 {
+            owner.main_arm_left = mob.extra.main_hand_left;
+            if off_hand == mob.extra.using_off_hand && mob.extra.using_item > 0 {
                 owner.using_this_item = true;
                 owner.use_duration = 72_000;
                 owner.use_item_remaining_ticks = 72_000 - mob.extra.using_item;

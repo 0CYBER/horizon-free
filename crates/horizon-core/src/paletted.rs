@@ -391,17 +391,24 @@ impl PalettedContainer {
         assert_eq!(out.len(), self.strategy.entries());
         match &self.palette {
             Palette::Single(value) => out.fill(*value),
-            palette => {
+            Palette::List(list) => {
                 let bits = usize::from(self.bits);
                 let per = 64 / bits;
                 let m = mask(self.bits);
                 for (chunk, &word) in out.chunks_mut(per).zip(&self.words) {
                     for (slot, cell) in chunk.iter_mut().enumerate() {
-                        let id = ((word >> (slot * bits)) & m) as u32;
-                        *cell = match palette {
-                            Palette::List(list) => list[id as usize],
-                            _ => id,
-                        };
+                        let id = ((word >> (slot * bits)) & m) as usize;
+                        *cell = list[id];
+                    }
+                }
+            }
+            Palette::Global => {
+                let bits = usize::from(self.bits);
+                let per = 64 / bits;
+                let m = mask(self.bits);
+                for (chunk, &word) in out.chunks_mut(per).zip(&self.words) {
+                    for (slot, cell) in chunk.iter_mut().enumerate() {
+                        *cell = ((word >> (slot * bits)) & m) as u32;
                     }
                 }
             }
@@ -412,17 +419,24 @@ impl PalettedContainer {
         debug_assert_eq!(self.strategy.entries(), 4096);
         match &self.palette {
             Palette::Single(value) => out.fill(*value as u16),
-            palette => {
+            Palette::List(list) => {
                 let bits = usize::from(self.bits);
                 let per = 64 / bits;
                 let m = mask(self.bits);
                 for (chunk, &word) in out.chunks_mut(per).zip(&self.words) {
                     for (slot, cell) in chunk.iter_mut().enumerate() {
                         let id = ((word >> (slot * bits)) & m) as usize;
-                        *cell = match palette {
-                            Palette::List(list) => list[id] as u16,
-                            _ => id as u16,
-                        };
+                        *cell = list[id] as u16;
+                    }
+                }
+            }
+            Palette::Global => {
+                let bits = usize::from(self.bits);
+                let per = 64 / bits;
+                let m = mask(self.bits);
+                for (chunk, &word) in out.chunks_mut(per).zip(&self.words) {
+                    for (slot, cell) in chunk.iter_mut().enumerate() {
+                        *cell = ((word >> (slot * bits)) & m) as u16;
                     }
                 }
             }
@@ -736,6 +750,82 @@ mod tests {
             for i in 0..4096usize {
                 assert_eq!(locate(bits, i).0, i / per, "bits {bits} index {i}");
             }
+        }
+    }
+
+    /// The pre-optimization `unpack`, kept to compare against in the benchmark.
+    fn baseline_unpack(c: &PalettedContainer, out: &mut [u32]) {
+        match &c.palette {
+            Palette::Single(value) => out.fill(*value),
+            palette => {
+                let bits = usize::from(c.bits);
+                let per = 64 / bits;
+                let m = mask(c.bits);
+                for (chunk, &word) in out.chunks_mut(per).zip(&c.words) {
+                    for (slot, cell) in chunk.iter_mut().enumerate() {
+                        let id = ((word >> (slot * bits)) & m) as u32;
+                        *cell = match palette {
+                            Palette::List(list) => list[id as usize],
+                            _ => id,
+                        };
+                    }
+                }
+            }
+        }
+    }
+
+    /// `unpack` against the pre-optimization implementation, for a list palette
+    /// and the global palette. The result is checked before timing; 25 measured
+    /// rounds alternate order and report the median and best microsecond-per-call.
+    #[test]
+    #[ignore = "microbenchmark; run with --ignored --nocapture"]
+    fn benchmark_unpack() {
+        use std::{hint::black_box, time::Instant};
+        let values: Vec<u32> = (0..4096).map(|i| (i % 12) as u32).collect();
+        let list = PalettedContainer::from_values(BLOCKS, &values);
+        let global = PalettedContainer::from_values(
+            BLOCKS,
+            &(0..4096).map(|i| (i * 3) as u32).collect::<Vec<_>>(),
+        );
+        for (name, container) in [("list", &list), ("global", &global)] {
+            let mut expected = vec![0u32; 4096];
+            baseline_unpack(container, &mut expected);
+            let mut out = vec![0u32; 4096];
+            container.unpack(&mut out);
+            assert_eq!(expected, out, "unpack {name} differs");
+            let mut times = [Vec::new(), Vec::new()];
+            for round in 0..25 {
+                for optimized in [round % 2 == 0, round % 2 != 0] {
+                    let started = Instant::now();
+                    for _ in 0..2000 {
+                        if optimized {
+                            container.unpack(black_box(&mut out));
+                        } else {
+                            baseline_unpack(black_box(container), black_box(&mut out));
+                        }
+                    }
+                    if round > 0 {
+                        times[usize::from(optimized)]
+                            .push(started.elapsed().as_secs_f64() * 1e6 / 2000.0);
+                    }
+                }
+            }
+            for values in &mut times {
+                values.sort_by(f64::total_cmp);
+            }
+            let median = |v: &[f64]| v[v.len() / 2];
+            println!(
+                "unpack {name} median: baseline {:.3} us optimized {:.3} us speedup {:.3}x",
+                median(&times[0]),
+                median(&times[1]),
+                median(&times[0]) / median(&times[1])
+            );
+            println!(
+                "unpack {name} best:   baseline {:.3} us optimized {:.3} us speedup {:.3}x",
+                times[0][0],
+                times[1][0],
+                times[0][0] / times[1][0]
+            );
         }
     }
 }

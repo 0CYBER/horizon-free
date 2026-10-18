@@ -190,7 +190,7 @@ impl Opt {
         let unit = |v: f32, lo: f32, hi: f32| Kind::Slider(((v - lo) / (hi - lo)).clamp(0.0, 1.0));
         match self {
             Opt::Fov => unit(s.fov, 30.0, 110.0),
-            Opt::RenderDistance => unit(s.render_distance as f32, 2.0, 32.0),
+            Opt::RenderDistance => unit(s.render_distance as f32, 2.0, 64.0),
             Opt::SimulationDistance => unit(s.simulation_distance as f32, 5.0, 32.0),
             Opt::Sensitivity => Kind::Slider(s.sensitivity),
             Opt::WheelSensitivity => unit(s.mouse_wheel_sensitivity, 0.01, 10.0),
@@ -484,7 +484,7 @@ impl Opt {
         let step = |lo: f32, hi: f32| (lo + v * (hi - lo)).round();
         match self {
             Opt::Fov => s.fov = step(30.0, 110.0),
-            Opt::RenderDistance => s.render_distance = step(2.0, 32.0) as i32,
+            Opt::RenderDistance => s.render_distance = step(2.0, 64.0) as i32,
             Opt::SimulationDistance => s.simulation_distance = step(5.0, 32.0) as i32,
             Opt::Sensitivity => s.sensitivity = v,
             Opt::WheelSensitivity => s.mouse_wheel_sensitivity = 0.01 + v * 9.99,
@@ -734,6 +734,7 @@ enum Act {
     /// Back to Horizon's own menus (Horizon only, see `list_rows`).
     HorizonMenus,
     ToggleMod(usize),
+    OpenModFolder,
 }
 enum WKind {
     Button {
@@ -780,6 +781,7 @@ pub enum Event {
     /// The pack selection changed (reload resources).
     Packs(Vec<String>),
     OpenPackFolder,
+    OpenModFolder,
 }
 /// `SliderableValueSet.applyValueImmediately`: these apply 600 ms after
 /// the last change (`OptionInstanceSliderButton.delayedApplyAt`).
@@ -806,7 +808,8 @@ pub struct OptionsUi {
     /// when it last moved: the handle follows the pointer while the option
     /// keeps its stepped value, then snaps to it (`resetValue`).
     slider_value: Option<(Opt, f32, Instant)>,
-    scrollbar_drag_y: Option<f32>,
+    /// The pointer's last y while a Classic or Horizon scrollbar is held.
+    pub(crate) scrollbar_drag_y: Option<f32>,
     /// Horizon style: the selected sidebar section, the one last drawn and
     /// the rows' scroll in dp (`options_horizon`).
     pub section: usize,
@@ -1683,7 +1686,18 @@ impl OptionsUi {
                 }
                 content = y + self.scroll - top + 2.0;
                 out[list_start..].iter_mut().for_each(|w| w.list = true);
-                out.push(done(h - 27.0));
+                if page == Page::Mods {
+                    out.push(button(
+                        cx - 154.0,
+                        h - 27.0,
+                        150.0,
+                        Text::literal("Open Mod Folder"),
+                        Act::OpenModFolder,
+                    ));
+                    out.push(button(cx + 4.0, h - 27.0, 150.0, tr("gui.done"), Act::Done));
+                } else {
+                    out.push(done(h - 27.0));
+                }
             }
         }
         // Layout may change the offset (language centering), or the list may
@@ -2162,6 +2176,7 @@ impl OptionsUi {
                             s.mods.toggle(i);
                             events.push(Event::Changed);
                         }
+                        Act::OpenModFolder => events.push(Event::OpenModFolder),
                         Act::None => {}
                     }
                 }
@@ -2460,6 +2475,25 @@ mod tests {
     use super::*;
     use crate::ui_theme::{MenuStyle, set_style, style};
 
+    #[test]
+    fn render_distance_slider_round_trips_through_extended_options_range() {
+        let mut s = Settings::default();
+        for (position, distance) in [(0.0, 2), (0.5, 33), (1.0, 64)] {
+            set_slider(Opt::RenderDistance, &mut s, position);
+            assert_eq!(s.render_distance, distance);
+            let reloaded = Settings::parse(&s.serialize());
+            assert_eq!(reloaded.render_distance, distance);
+            assert_eq!(
+                Opt::RenderDistance.slider_position(&reloaded),
+                Some(position)
+            );
+        }
+        let mut file = crate::options_file::OptionsFile::default();
+        file.set_text("renderDistance", "64").unwrap();
+        assert!(file.set_text("renderDistance", "65").is_err());
+        assert!(file.set_text("renderDistance", "1").is_err());
+        assert_eq!(file.int("renderDistance"), 64);
+    }
     fn atlas() -> HudAtlas {
         HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets")).unwrap()
     }
@@ -2534,6 +2568,31 @@ mod tests {
         assert!(empty.iter().any(|w| {
             matches!(&w.kind, WKind::Text { text, .. } if text.plain().contains(".hmod"))
         }));
+        let open_folder = empty
+            .iter()
+            .find(|w| {
+                matches!(
+                    &w.kind,
+                    WKind::Button {
+                        act: Act::OpenModFolder,
+                        ..
+                    }
+                )
+            })
+            .expect("Mods page has an Open Mod Folder button");
+        assert_eq!(
+            ui.click(
+                &mut s,
+                &atlas,
+                open_folder.x + 1.0,
+                open_folder.y + 1.0,
+                size,
+                [480, 240],
+                false,
+                false,
+            ),
+            vec![Event::ButtonClick, Event::OpenModFolder]
+        );
         for (id, dev) in [("normal", false), ("dev", true), ("", false)] {
             s.mods.installed.push(crate::mod_list::Installed {
                 id: id.into(),

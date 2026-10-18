@@ -33,6 +33,12 @@ The dedicated server is the game itself, run headless:
   `whitelist on|off|list|reload|add|remove`, `ban`, `ban-ip`, `pardon`, `pardon-ip`, `banlist`, `kick` and
   `say` behave as in `DedicatedServer`. Every other command goes to the game's own dispatcher as the server
   (permission level 4). The log follows vanilla's Log4j pattern, in `logs/latest.log` and on stdout.
+- **Player names.** `usercache.json` in the universe folder works as vanilla's `CachedUserNameToIdResolver`.
+  Players are added when they join and kept for a month, and the file keeps the 1000 most recently used,
+  newest first. The console finds a player by name in it, in any case. A name it doesn't hold is asked of the
+  profile service (`getByName`). If the service doesn't know the name, an offline server uses the offline
+  player of the lower-case name; an online server answers "That player does not exist".
+  `tools/test_user_cache_parity.py` checks this against vanilla, with a mock profile service.
 
 ### Measured (2026-10-16, Mac mini M4 Pro, main at bd8dff20, release build)
 
@@ -76,7 +82,8 @@ not tick cost, so it is in scope here (see section 9).
 
 | Area | Status |
 |---|---|
-| `online-mode=true` | **Works** (ServerLoginPacketListenerImpl): a 1024-bit RSA key pair at start ("Generating keypair"), the encryption request, the shared secret and challenge, AES/CFB8, and the session service's `hasJoined` check (with the address when `prevent-proxy-connections` is on), with vanilla's log lines and messages. `test_online_mode_parity.py` runs the same logins against vanilla's server and Horizon's with a mock session service. Not yet: secure chat (chat is unsigned, as on a server that doesn't enforce it). |
+| `online-mode=true` | **Works** (ServerLoginPacketListenerImpl): a 1024-bit RSA key pair at start ("Generating keypair"), the encryption request, the shared secret and challenge, AES/CFB8, and the session service's `hasJoined` check (with the address when `prevent-proxy-connections` is on), with vanilla's log lines and messages. `test_online_mode_parity.py` runs the same logins against vanilla's server and Horizon's with a mock session service. |
+| Secure chat | **Works** (`SignedMessageChain`, `LastSeenMessagesValidator`, `MessageSignatureCache`): the chat session update and its profile key, checked against the services' `playerCertificateKeys`; signed chat, `say`, `me` and `msg`, relayed with their signatures and last-seen lists; `enforce-secure-profile` (with `online-mode`) refuses unsigned chat; and vanilla's log lines (`[Not Secure]`, the decoder's warnings, the kicks). Offline servers and players without a chat session chat unsigned, as on vanilla. `test_secure_chat_parity.py` runs the same signed and unsigned players against vanilla's server and Horizon's, with test keys and a mock services server. |
 | Nether and End | **Players can't change dimension.** The engine keeps one dimension loaded (`Game::enter_dimension` moves only the local single-player player), and the hub serves one `dimension` to everyone. |
 | Refused logins | Logged as vanilla does: `Disconnecting <name> (/address): <reason>`, then `<name> (/address) lost connection: <reason>`, and the session errors (`Username '<name>' tried to join with an invalid session`, `Couldn't verify username because servers are unavailable`). |
 | Gameplay for remote players | The LAN guest leftovers apply: an item used on a block is used twice, the recipe book doesn't work, status effects don't apply to guests, arrows don't record their owner, team friendly fire is ignored (#484). Block desync and short freezes are reported on a same-machine server (#500). |
@@ -84,7 +91,7 @@ not tick cost, so it is in scope here (see section 9).
 | Management | Only stdin. There is no service, no backups, no status beyond `list`, no restart after a crash, and a server can't be managed while it runs in the background. |
 | Packaging | The server is the full game client. Resources come from `horizon-prepare`, which needs a JDK and the official launcher's client install, both awkward on a headless VPS. |
 | Tick times | The dedicated loop never recorded its tick times in the game clock (only the windowed loop did), so `/tick query` on a dedicated server reported 0 ms. Fixed in PR 2b, which the benchmark needs (section 9). |
-| Scale | Not measured with more than one player. The tick is single-threaded, and each remote player costs the hub one tracking and chunk-sending pass. |
+| Scale | Measured against vanilla on equal work (section 9, `benchmarks/server-equal-work-2026-10-17/`): 20 TPS up to 50 bots, 9 to 11 TPS at 100, where vanilla's watchdog stops it. Horizon is ahead with few players and when exploring; with 25 to 50 players near spawn vanilla's tick is shorter. |
 
 ### Harnesses on main
 
@@ -457,8 +464,22 @@ reproducible by anyone, and show the same gameplay on both sides.
   - Vanilla's chunk sending yields under load.
   - Horizon sent each nearby `walk` bot 1.5–4 times as many chunks.
 
-  Horizon sent 2–4 times the chunks per second in every multi-bot run. The next run equalises the work
-  (slower `explore`, a `walk`-only pass) on a quiet machine before anything is published.
+  Horizon sent 2–4 times the chunks per second in every multi-bot run.
+- **Equal-work run (2026-10-17,** `benchmarks/server-equal-work-2026-10-17/`, on the ThinkPad with the bots
+  on the Mac mini). Horizon now checks moves and paces chunks as vanilla does (#586), the bots wait for the
+  chunk they stand in, an `--explore-speed` pass keeps both servers at the same rate, and vanilla runs with
+  `gamerule locator_bar false` (Horizon has no locator bar yet). Results:
+  - Memory: Horizon's RSS is 1.9 to 2.6 times smaller in every run (vanilla's heap is fixed at 4 GB).
+  - Walking near spawn: Horizon's tick is shorter with 1 and 10 bots (5.5 against 18.3 ms, 11.5 against
+    16.8), and longer with 25 and 50 (20.7 against 16.0, 31.4 against 20.5). Both keep 20 TPS up to 50.
+  - Exploring at the same rate: Horizon's tick is about half of vanilla's (13.5 against 29.2 ms at 10 bots,
+    20.2 against 37.0 at 25).
+  - At 100 bots: vanilla's watchdog stops it in every pass; Horizon runs at 9 to 11 TPS.
+
+  Two server costs were found and fixed on the way: every chunk section was encoded once per player (#623),
+  and every packet woke its connection's writer thread (#649). Together they took the 50-bot walking tick
+  from 281 ms to 31 ms. At 25 walking bots most of what remains is the engine's streaming and block entity
+  ticks, both of which grow with players (the README has the profile).
 - **Ownership.** perf-server-1 owns making the tick faster. This work only measures it, files what it finds,
   and fixes startup, RAM and packaging.
 
@@ -487,7 +508,6 @@ machine, then published in `benchmarks/`; and item 5.
 
 **Out (next):**
 
-- secure chat on the server (online mode itself works);
 - the Nether and End for remote players;
 - the headless engine and its RAM win;
 - a server-only prepare without a JDK;

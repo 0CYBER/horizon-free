@@ -2,14 +2,13 @@ use crate::Result;
 use horizon_world::{
     DATA_VERSION,
     heightmap::HeightmapState,
-    nbt::Tag,
     registry::{BlockRegistry, BlockStateId},
     worldgen::{tags::TagDefinitions, terrain::TerrainBlockStates},
 };
 use serde_json::Value;
 use std::{
     collections::BTreeSet,
-    fs::{self, File},
+    fs::File,
     io::{self, BufReader},
     path::Path,
     sync::Arc,
@@ -74,24 +73,6 @@ pub struct Assets {
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
-fn tag(value: &Value) -> Result<Tag> {
-    Ok(match value {
-        Value::String(value) => Tag::String(value.as_str().into()),
-        Value::Number(value) => Tag::Int(i32::try_from(
-            value
-                .as_i64()
-                .ok_or_else(|| invalid("invalid registry number"))?,
-        )?),
-        Value::Array(values) => Tag::List(values.iter().map(tag).collect::<Result<_>>()?),
-        Value::Object(values) => Tag::Compound(
-            values
-                .iter()
-                .map(|(name, value)| Ok((name.as_str().into(), tag(value)?)))
-                .collect::<Result<_>>()?,
-        ),
-        _ => return Err(invalid("unsupported registry value").into()),
-    })
-}
 impl Assets {
     pub fn load(root: &Path) -> Result<Self> {
         let manifest: Value = serde_json::from_reader(BufReader::new(File::open(
@@ -100,23 +81,8 @@ impl Assets {
         if manifest["data_version"].as_i64() != Some(i64::from(DATA_VERSION)) {
             return Err(invalid("resources do not match Horizon's pinned data version").into());
         }
-        let facts: Value = serde_json::from_slice(&fs::read(root.join("facts.json"))?)?;
-        let states = facts["states"]
-            .as_array()
-            .ok_or_else(|| invalid("missing registry state facts"))?;
-        let registry = BlockRegistry::from_nbt(&Tag::compound([
-            ("DataVersion", Tag::Int(DATA_VERSION)),
-            (
-                "states",
-                Tag::List(
-                    states
-                        .iter()
-                        .map(|state| tag(&state[4]))
-                        .collect::<Result<_>>()?,
-                ),
-            ),
-            ("defaults", tag(&facts["defaults"])?),
-        ]))?;
+        let (registry, flags) =
+            BlockRegistry::from_facts_json_with_flags(File::open(root.join("facts.json"))?)?;
         let bundle: Value =
             serde_json::from_reader(BufReader::new(File::open(root.join("block-tags.json"))?))?;
         let mut definitions = TagDefinitions::default();
@@ -132,7 +98,7 @@ impl Assets {
             )?;
         }
         let built =
-            definitions.build(|name, _| facts["defaults"].get(name).map(|_| name.to_owned()))?;
+            definitions.build(|name, _| registry.default_state(name).map(|_| name.to_owned()))?;
         if !built.missing.is_empty() {
             return Err(invalid("unresolved block tags").into());
         }
@@ -158,27 +124,20 @@ impl Assets {
             .cloned()
             .collect();
         let properties = Properties(Arc::new(
-            states
+            flags
                 .iter()
-                .map(|state| {
+                .enumerate()
+                .map(|(i, &(air, fluid))| {
+                    let name = &registry
+                        .state(BlockStateId(i as u32))
+                        .ok_or_else(|| invalid("missing registry state"))?
+                        .name;
                     Ok(StateFacts {
-                        air: state[1]
-                            .as_bool()
-                            .ok_or_else(|| invalid("missing air fact"))?,
-                        fluid: state[2]
-                            .as_bool()
-                            .ok_or_else(|| invalid("missing fluid fact"))?,
-                        air_block: state[0].as_str() == Some("minecraft:air"),
-                        motion: motion.contains(
-                            state[0]
-                                .as_str()
-                                .ok_or_else(|| invalid("missing state name"))?,
-                        ),
-                        no_leaves: no_leaves.contains(
-                            state[0]
-                                .as_str()
-                                .ok_or_else(|| invalid("missing state name"))?,
-                        ),
+                        air,
+                        fluid,
+                        air_block: name == "minecraft:air",
+                        motion: motion.contains(name.as_str()),
+                        no_leaves: no_leaves.contains(name.as_str()),
                     })
                 })
                 .collect::<Result<_>>()?,
@@ -189,6 +148,9 @@ impl Assets {
                 .default_state(&format!("minecraft:{name}"))
                 .ok_or_else(|| invalid("missing test-scene material"))?;
         }
+        // Chunks hold every state of this registry: content mods can take it
+        // past vanilla's 16-bit global palette.
+        crate::chunk::set_block_states(registry.len());
         let registry: &'static BlockRegistry = Box::leak(Box::new(registry));
         Self::with_models(
             root,

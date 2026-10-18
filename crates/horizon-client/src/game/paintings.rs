@@ -255,6 +255,15 @@ impl Game<'_> {
         };
         for p in &self.paintings {
             let entity_start = out.len();
+            // EntityRenderer.shouldRender: the default range and its box,
+            // measured from the box's centre (HangingEntity's position).
+            let (lo, hi) = p.bounds();
+            let (lo, hi) = (glam::DVec3::from(lo), glam::DVec3::from(hi));
+            let range =
+                super::entity_culling::default_range(hi - lo, self.settings.entity_distance);
+            if !self.entity_in_view(camera, (lo + hi) / 2.0, range, lo, hi) {
+                continue;
+            }
             let Some(v) = self.painting_variants.get(&p.variant) else {
                 continue;
             };

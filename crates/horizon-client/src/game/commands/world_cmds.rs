@@ -1,7 +1,6 @@
 //! `/recipe`, `/damage`, `/rotate`, `/swing`, `/playsound`, `/stopsound`,
 //! `/particle`, `/attribute`, `/ride` and `/spreadplayers`.
 use super::{Arg, Context, Game, R, Target, err};
-use crate::game::chat::PLAYER_NAME;
 use horizon_client::{
     mobs::{Damage, DamageKind, Who},
     scoreboard_cmd::{Holder, Tracker},
@@ -313,7 +312,7 @@ impl Game<'_> {
                 (pos, volume)
             };
             self.audio.play_on(source, &sound, Some(at), v, pitch);
-            tracker.mark(&holder(Text::literal(PLAYER_NAME)));
+            tracker.mark(&holder(Text::literal(self.acting_player_name())));
         }
         let name = Text::literal(sound.clone());
         let (message, total) = tracker.message(

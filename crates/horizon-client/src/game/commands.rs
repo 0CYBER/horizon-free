@@ -1,5 +1,6 @@
 //! Command execution (the `execute` side of each vanilla command class):
 //! entity selectors resolved against the game, vanilla feedback and errors.
+mod admin;
 pub(super) mod compute;
 mod data;
 mod effects;
@@ -160,8 +161,70 @@ impl Game<'_> {
             return;
         }
         if self.ui.rules.bool("send_command_feedback") {
-            self.system_message(message);
+            self.system_message(message.clone());
         }
+        self.broadcast_to_admins(message);
+    }
+    /// CommandSourceStack.broadcastToAdmins (`sendSuccess` with `broadcast`)
+    /// for a guest's command, the host's in a world open to LAN and the
+    /// dedicated server console's when `broadcast-console-to-ops` is on:
+    /// `[name: message]`, gray and italic, for the other operators when
+    /// `send_command_feedback`, and for a player's command on a dedicated
+    /// server the console when `log_admin_commands`. Queued while the
+    /// command runs; `send_admin_feedback` sends it.
+    pub(super) fn broadcast_to_admins(&mut self, message: Text) {
+        let informs = match self.console_broadcast {
+            Some(broadcast) => broadcast,
+            // While a guest acts the host's LanHost is out of `self.lan`.
+            None => self.lan_acting.is_some() || self.lan.is_some(),
+        };
+        if !informs
+            || message
+                .translation_key()
+                .is_some_and(|k| admin::QUIET.contains(&k))
+        {
+            return;
+        }
+        let ops = self.ui.rules.bool("send_command_feedback");
+        // MinecraftServer.sendSystemMessage, unless the server is the source.
+        let console = self.console_broadcast.is_none()
+            && self.lan_acting.is_some()
+            && self.options.dedicated.is_some()
+            && self.ui.rules.bool("log_admin_commands");
+        if !ops && !console {
+            return;
+        }
+        // getDisplayName: the entity the command runs as (`execute as`), or
+        // the server's own source, "Server".
+        let who = match self.command_source.and_then(|s| s.entity) {
+            Some(entity) => self.target_name(entity),
+            None if self.console_broadcast.is_some() => Text::literal("Server".to_owned()),
+            None => self.player_display_name(),
+        };
+        let line = Text::translate("chat.type.admin", &[who, message])
+            .with_color(text::GRAY)
+            .italic();
+        self.admin_feedback.push((line, ops, console));
+    }
+    /// Player.getDisplayName: the name (team-formatted), suggesting a
+    /// `/tell`, showing the player on hover, inserting the name.
+    fn player_display_name(&self) -> Text {
+        let name = self.acting_player_name().to_owned();
+        let Some(uuid) = self.lan_acting_uuid else {
+            return self.target_name(Target::Player);
+        };
+        self.target_name(Target::Player).with_component_fields(vec![
+            (
+                "click_event".into(),
+                serde_json::json!({"action": "suggest_command", "command": format!("/tell {name} ")}),
+            ),
+            (
+                "hover_event".into(),
+                serde_json::json!({"action": "show_entity", "id": "minecraft:player",
+                    "uuid": horizon_protocol::crypto::uuid_string(uuid), "name": name}),
+            ),
+            ("insertion".into(), name.into()),
+        ])
     }
     fn source_position(&self) -> [f64; 3] {
         if let Some(s) = &self.command_source {
@@ -321,12 +384,16 @@ impl Game<'_> {
                 .map_or_else(String::new, |o| o.kind.clone()),
         }
     }
+    /// The name of the player the game acts for: a guest's own while their
+    /// command or action runs (`Player.getName`).
+    pub(super) fn acting_player_name(&self) -> &str {
+        self.lan_acting_name.as_deref().unwrap_or(PLAYER_NAME)
+    }
     /// Entity.getDisplayName.
     pub(super) fn target_name(&self, t: Target) -> Text {
         match t {
             Target::Player => {
-                // A guest's commands name the guest.
-                let name = self.lan_acting_name.as_deref().unwrap_or(PLAYER_NAME);
+                let name = self.acting_player_name();
                 match self.score.board.players_team(name) {
                     // PlayerTeam.formatNameForTeam.
                     Some(team) => team.formatted_name(Text::literal(name)),
@@ -767,7 +834,7 @@ impl Game<'_> {
                 }
                 self.feedback(Text::translate(
                     "commands.gamemode.success.other",
-                    &[Text::literal(PLAYER_NAME), mode_name],
+                    &[Text::literal(self.acting_player_name()), mode_name],
                 ));
             }
         }
@@ -922,7 +989,7 @@ impl Game<'_> {
                 &[
                     Text::literal(count.to_string()),
                     name,
-                    Text::literal(PLAYER_NAME),
+                    Text::literal(self.acting_player_name()),
                 ],
             )
         } else {
@@ -1089,7 +1156,23 @@ impl Game<'_> {
                 (-(dy.atan2(horizontal).to_degrees())) as f32,
             ]);
         }
+        // `execute in` another dimension: a server's player moves to that
+        // level (ServerPlayer.teleport into another level), after the command.
+        let level = self
+            .command_source
+            .and_then(|s| s.level)
+            .filter(|d| *d != self.dim && self.options.dedicated.is_some());
         for &t in &targets {
+            if let (Some(dim), Target::Player, Some(conn)) = (level, t, self.lan_acting) {
+                self.level_teleports
+                    .push(super::server_travel::LevelTeleport {
+                        conn,
+                        dim,
+                        at: pos,
+                        rotation,
+                    });
+                continue;
+            }
             self.teleport_to(t, pos, rotation);
         }
         let [x, y, z] = pos.map(|v| Text::literal(format_double(v)));
@@ -1418,7 +1501,9 @@ impl Game<'_> {
                     return Err(err("commands.summon.failed", &[]));
                 }
                 "experience_orb" => {
+                    self.next_entity += 1;
                     self.orbs.push(horizon_client::entities::ExperienceOrb {
+                        id: self.next_entity,
                         position: Vec3::new(pos[0], pos[1], pos[2]),
                         previous: Vec3::new(pos[0], pos[1], pos[2]),
                         velocity: Vec3::new(0.0, 0.0, 0.0),
@@ -1444,7 +1529,13 @@ impl Game<'_> {
                     self.carts.push(cart);
                     name = Text::translate(&format!("entity.minecraft.{k}"), &[]);
                 }
-                _ => return Err(err("commands.summon.failed", &[])),
+                // SummonCommand.createEntity: any other type from an empty compound.
+                _ => {
+                    let Some(target) = self.summon_with_nbt(&kind, pos, "{}")? else {
+                        return Err(err("commands.summon.failed", &[]));
+                    };
+                    name = self.target_name(target);
+                }
             }
         }
         self.feedback(Text::translate("commands.summon.success", &[name]));
@@ -1794,7 +1885,7 @@ impl Game<'_> {
             ),
             _ => None,
         };
-        let player = Text::literal(PLAYER_NAME);
+        let player = Text::literal(self.acting_player_name());
         let players = targets.len();
         if let (Some(i), Some(Arg::Str(criterion))) = (index, ctx.get("criterion")) {
             let a = &tree.list[i];
@@ -1904,7 +1995,10 @@ impl Game<'_> {
             };
             self.system_message(Text::translate(
                 &format!("commands.experience.query.{unit}"),
-                &[Text::literal(PLAYER_NAME), Text::literal(value.to_string())],
+                &[
+                    Text::literal(self.acting_player_name()),
+                    Text::literal(value.to_string()),
+                ],
             ));
             return Ok(value);
         }
@@ -1941,7 +2035,7 @@ impl Game<'_> {
             &key,
             &[
                 Text::literal(amount.to_string()),
-                Text::literal(PLAYER_NAME),
+                Text::literal(self.acting_player_name()),
             ],
         ));
         Ok(targets.len() as i32)
@@ -2248,7 +2342,7 @@ impl Game<'_> {
             return Err(if targets.len() == 1 {
                 CommandError::new(Text::translate(
                     "clear.failed.single",
-                    &[Text::literal(PLAYER_NAME)],
+                    &[Text::literal(self.acting_player_name())],
                 ))
             } else {
                 err("clear.failed.multiple", &[&targets.len()])
@@ -2259,7 +2353,7 @@ impl Game<'_> {
             &format!("commands.clear.{kind}.single"),
             &[
                 Text::literal(removed.to_string()),
-                Text::literal(PLAYER_NAME),
+                Text::literal(self.acting_player_name()),
             ],
         ));
         Ok(removed)
@@ -2312,7 +2406,7 @@ impl Game<'_> {
         };
         let from = self.source_position().map(|v| v.floor() as i32);
         const RANGE: i32 = 256;
-        let mut cache: std::collections::HashMap<u16, Option<&'static str>> =
+        let mut cache: std::collections::HashMap<u32, Option<&'static str>> =
             std::collections::HashMap::new();
         let mut best: Option<(i64, [i32; 3], &'static str)> = None;
         let (cx0, cz0) = ((from[0] - RANGE) >> 4, (from[2] - RANGE) >> 4);
@@ -2323,15 +2417,12 @@ impl Game<'_> {
                     continue;
                 };
                 for (i, section) in chunk.sections.iter().enumerate() {
-                    let mut wanted_state = |v: u32| {
-                        let state = v as u16;
+                    let mut wanted_state = |state: u32| {
                         cache
                             .entry(state)
                             .or_insert_with(|| {
-                                self.poi_type(horizon_world::registry::BlockStateId(u32::from(
-                                    state,
-                                )))
-                                .filter(|t| wanted.iter().any(|w| w == t))
+                                self.poi_type(horizon_world::registry::BlockStateId(state))
+                                    .filter(|t| wanted.iter().any(|w| w == t))
                             })
                             .is_some()
                     };
@@ -2513,7 +2604,7 @@ impl Game<'_> {
         let name = match self.command_source.map(|s| s.entity) {
             Some(Some(t)) => self.target_name(t),
             Some(None) => Text::literal("Server"),
-            None => Text::literal(PLAYER_NAME),
+            None => Text::literal(self.acting_player_name()),
         };
         let line = match id {
             "say" => Text::translate("chat.type.announcement", &[name, message]),
@@ -2523,14 +2614,14 @@ impl Game<'_> {
                 // Whispering to yourself: the incoming and outgoing lines.
                 let out = Text::translate(
                     "commands.message.display.outgoing",
-                    &[Text::literal(PLAYER_NAME), message.clone()],
+                    &[Text::literal(self.acting_player_name()), message.clone()],
                 )
                 .with_color(text::GRAY)
                 .italic();
                 self.system_message(out);
                 Text::translate(
                     "commands.message.display.incoming",
-                    &[Text::literal(PLAYER_NAME), message],
+                    &[Text::literal(self.acting_player_name()), message],
                 )
                 .with_color(text::GRAY)
                 .italic()

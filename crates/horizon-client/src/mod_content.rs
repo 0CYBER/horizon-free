@@ -323,7 +323,7 @@ impl<'a> Plan<'a> {
             }
             let list: Vec<String> = by_mod.iter().map(|(m, n)| format!("{m} {n}")).collect();
             return Err(format!(
-                "{next} block states, more than the {MAX_STATES} chunks can hold ({} in the game; \
+                "{next} block states, more than the {MAX_STATES} a world can hold ({} in the game; \
                  the mods: {})",
                 names.len(),
                 list.join(", ")
@@ -644,9 +644,11 @@ const NBT_TABLES: [&str; 6] = [
 /// In a root built here: the content mods' ids, the namespaces loaders
 /// read besides `minecraft`.
 const MARKER: &str = "horizon-mod-content.json";
-/// Block states a world can hold: chunk sections store a state in 16 bits
-/// (crate::chunk). Mods past it are refused, not wrapped onto other blocks.
-pub const MAX_STATES: u32 = 1 << 16;
+/// Block states a world can hold. Chunk sections widen their global palette
+/// past vanilla's 16 bits to fit the registry (crate::chunk::set_block_states);
+/// this caps it at 20 bits, about 29 times vanilla's 35,723 states. Mods past
+/// it are refused, not wrapped onto other blocks.
+pub const MAX_STATES: u32 = 1 << 20;
 
 /// The content mods' namespaces in a root built by [`build`]; none in any
 /// other root, so vanilla's loaders read exactly what they did.
@@ -672,6 +674,28 @@ pub fn tag_namespaces(root: &Path) -> Vec<String> {
 
 /// Bundles of block tag files (tag id → the tag file's text).
 const TAG_BUNDLES: [&str; 2] = ["block-tags.json", "worldgen/block_tags.json"];
+/// The worldgen loader's bundle of biome tags.
+const BIOME_TAGS: &str = "worldgen/biome_tags.json";
+/// Worldgen registries a content mod may add to, and the bundle the
+/// worldgen loader reads each from (id → the file's text): what structure
+/// mods hold. Biomes, noise and density functions change the terrain and
+/// are not read from mods.
+const WORLDGEN_BUNDLES: [(&str, &str); 6] = [
+    ("structure", "worldgen/structures.json"),
+    ("structure_set", "worldgen/structure_sets.json"),
+    ("template_pool", "worldgen/template_pools.json"),
+    ("processor_list", "worldgen/processor_lists.json"),
+    ("configured_feature", "worldgen/features.json"),
+    ("placed_feature", "worldgen/placed_features.json"),
+];
+
+/// A mod file that adds to a worldgen bundle: (bundle, id).
+fn worldgen_entry(file: &str) -> Option<(&'static str, String)> {
+    let (ns, rest) = file.strip_prefix("data/")?.split_once("/worldgen/")?;
+    let (kind, path) = rest.split_once('/')?;
+    let (_, bundle) = WORLDGEN_BUNDLES.iter().find(|(k, _)| *k == kind)?;
+    Some((bundle, format!("{ns}:{}", path.strip_suffix(".json")?)))
+}
 
 /// The overlay being written: `out` mirrors `base` through links, and a
 /// directory becomes real only when something inside it is written.
@@ -771,6 +795,9 @@ fn merge_tag(text: Option<&str>, more: &[J], what: &str) -> Result<String> {
 struct Known {
     blocks: std::collections::BTreeSet<String>,
     items: std::collections::BTreeSet<String>,
+    /// The worldgen loader's biomes and biome tags.
+    biomes: std::collections::BTreeSet<String>,
+    biome_tags: std::collections::BTreeSet<String>,
     /// `data/<ns>/tags/<kind>/<path>.json` files the mods add.
     tag_files: std::collections::BTreeSet<String>,
 }
@@ -784,14 +811,27 @@ impl Known {
             items.extend(o.into_iter().map(|(k, _)| k));
         }
         items.extend(plan.items.iter().map(|i| i.rename.to.clone()));
+        let keys = |name: &str| -> Result<std::collections::BTreeSet<String>> {
+            Ok(match base.join(name).exists() {
+                true => match read_json(&base.join(name))? {
+                    J::Obj(o) => o.into_iter().map(|(k, _)| k).collect(),
+                    _ => Default::default(),
+                },
+                false => Default::default(),
+            })
+        };
         Ok(Known {
             blocks,
             items,
+            biomes: keys("worldgen/biomes.json")?,
+            biome_tags: keys(BIOME_TAGS)?,
             tag_files: tags.keys().cloned().collect(),
         })
     }
     /// Whether tag `file` keeps entry `v`: a known id or an existing tag,
-    /// for block and item tags (other registries are kept as they are).
+    /// for block, item and biome tags (other registries are kept as they
+    /// are). The worldgen loader refuses a biome tag naming what it lacks
+    /// (another mod's biomes, a loader's tags), so those entries go.
     fn keeps(&self, file: &str, v: &J) -> bool {
         let id = match v {
             J::Str(s) => s.as_str(),
@@ -801,23 +841,32 @@ impl Known {
             },
             _ => return true,
         };
-        let Some(kind) = file
+        let Some(rest) = file
             .strip_prefix("data/")
             .and_then(|r| r.split_once("/tags/"))
-            .and_then(|(_, rest)| Some(rest.split_once('/')?.0))
+            .map(|(_, rest)| rest)
         else {
             return true;
+        };
+        let kind = match rest.strip_prefix("worldgen/biome/") {
+            Some(_) => "worldgen/biome",
+            None => rest.split_once('/').map_or("", |(k, _)| k),
         };
         let ids = match kind {
             "block" => &self.blocks,
             "item" => &self.items,
+            "worldgen/biome" => &self.biomes,
             _ => return true,
         };
         match id.strip_prefix('#') {
             Some(tag) => {
                 let (tns, path) = tag.split_once(':').unwrap_or(("minecraft", tag));
                 let rel = format!("data/{tns}/tags/{kind}/{path}.json");
-                self.tag_files.contains(&rel) || tns == "minecraft"
+                self.tag_files.contains(&rel)
+                    || match kind {
+                        "worldgen/biome" => self.biome_tags.contains(&format!("{tns}:{path}")),
+                        _ => tns == "minecraft",
+                    }
             }
             None => ids.contains(id),
         }
@@ -854,6 +903,7 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<()> {
     }
     // Mod files, and every tag addition gathered per tag file.
     let mut tags: BTreeMap<String, Vec<J>> = BTreeMap::new();
+    let mut worldgen: BTreeMap<&str, Vec<(String, String)>> = BTreeMap::new();
     for m in mods {
         let declarations = format!("data/{}/horizon/", m.id);
         for file in &m.content.files {
@@ -876,6 +926,18 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<()> {
                     .extend(values.iter().cloned());
             } else if !file.starts_with(&declarations) {
                 overlay.write(file, &bytes)?;
+                if let Some((bundle, id)) = worldgen_entry(file) {
+                    let text = String::from_utf8(bytes).map_err(|e| format!("{file}: {e}"))?;
+                    worldgen.entry(bundle).or_default().push((id, text));
+                } else if let Some(template) = file
+                    .strip_prefix("data/")
+                    .and_then(|r| r.split_once("/structure/"))
+                    .filter(|(_, path)| path.ends_with(".nbt"))
+                {
+                    // The worldgen loader's templates: worldgen/structure/<ns>/<path>.nbt.
+                    let (ns, path) = template;
+                    overlay.write(&format!("worldgen/structure/{ns}/{path}"), &bytes)?;
+                }
             }
         }
     }
@@ -919,6 +981,38 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<()> {
     for (name, doc) in &bundles {
         overlay.write(name, &serde_json::to_vec(doc)?)?;
     }
+    // Biome tags, merged into the worldgen loader's bundle as block tags are.
+    let biome_tags: Vec<(String, &Vec<J>)> = tags
+        .iter()
+        .filter_map(|(file, values)| {
+            let (ns, path) = file
+                .strip_prefix("data/")?
+                .split_once("/tags/worldgen/biome/")?;
+            Some((format!("{ns}:{}", path.strip_suffix(".json")?), values))
+        })
+        .collect();
+    if !biome_tags.is_empty() && base.join(BIOME_TAGS).exists() {
+        let mut doc = read_json(&base.join(BIOME_TAGS))?;
+        for (id, values) in biome_tags {
+            let text = match doc.get(&id) {
+                Some(J::Str(t)) => Some(t.clone()),
+                _ => None,
+            };
+            doc.set(&id, J::Str(merge_tag(text.as_deref(), values, BIOME_TAGS)?));
+        }
+        overlay.write(BIOME_TAGS, &serde_json::to_vec(&doc)?)?;
+    }
+    // Structures and the pools, sets, processors and features they use.
+    for (bundle, entries) in &worldgen {
+        if !base.join(bundle).exists() {
+            continue;
+        }
+        let mut doc = read_json(&base.join(bundle))?;
+        for (id, text) in entries {
+            doc.set(id, J::Str(text.clone()));
+        }
+        overlay.write(bundle, &serde_json::to_vec(&doc)?)?;
+    }
     // A block without its own blockstate looks like its template, so every
     // state still has a model.
     for m in mods {
@@ -941,13 +1035,73 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<()> {
 
 /// The root to load: `base` itself with no content, else the mods' overlay
 /// over it, built in `cache/mod-content`.
+///
+/// The root is built once and kept: later starts with the same build, base
+/// and mod files reuse it. With ATM10's carried mods a build takes about
+/// 25 s and peaks above 3 GB, more than everything the game keeps.
 pub fn resource_root(base: &Path, mods: &[ContentMod], cache: &Path) -> Result<PathBuf> {
     if mods.iter().all(|m| m.content.is_empty()) {
         return Ok(base.to_owned());
     }
     let out = cache.join("mod-content");
+    let stamp = stamp(base, mods)?;
+    if fs::read(out.join(STAMP)).is_ok_and(|s| s == stamp.as_bytes()) {
+        return Ok(out);
+    }
     build(base, mods, &out)?;
+    fs::write(out.join(STAMP), stamp)?;
     Ok(out)
+}
+
+/// In a root built by [`resource_root`]: what it was built from.
+const STAMP: &str = "horizon-mod-content.stamp";
+
+/// What a content root is built from: this build of the game, the base's
+/// manifest and the tables [`build`] rewrites, and every file of every mod
+/// in order. Files count by size and modification time, as build tools do.
+fn stamp(base: &Path, mods: &[ContentMod]) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let meta = |path: &Path| -> Result<String> {
+        let m = fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let modified = m
+            .modified()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        Ok(format!(
+            "{} {} {}",
+            path.display(),
+            m.len(),
+            modified.as_nanos()
+        ))
+    };
+    let mut parts = vec!["horizon mod content 1".to_owned()];
+    parts.push(meta(&std::env::current_exe()?)?);
+    let base = std::path::absolute(base)?;
+    parts.push(
+        String::from_utf8_lossy(&fs::read(base.join("horizon-resources.json"))?).into_owned(),
+    );
+    for name in JSON_TABLES.iter().chain(&NBT_TABLES).chain(&TAG_BUNDLES) {
+        if base.join(name).exists() {
+            parts.push(meta(&base.join(name))?);
+        }
+    }
+    for m in mods {
+        parts.push(m.id.clone());
+        let source = m.content.source();
+        if source.is_dir() {
+            for file in &m.content.files {
+                parts.push(meta(&source.join(file))?);
+            }
+        } else {
+            parts.push(meta(source)?);
+        }
+    }
+    let mut hasher = Sha256::new();
+    for part in &parts {
+        hasher.update((part.len() as u64).to_le_bytes());
+        hasher.update(part.as_bytes());
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 #[cfg(test)]

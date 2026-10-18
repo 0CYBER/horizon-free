@@ -21,12 +21,13 @@ pub struct World {
     pub dirty_light: crate::fast_hash::FxHashSet<(i32, i32)>,
     /// Edits on lit chunks (position, old state, new state), relit
     /// incrementally by streaming.
-    pub light_edits: Vec<((i32, i32, i32), u16, u16)>,
+    pub light_edits: Vec<((i32, i32, i32), u32, u32)>,
     /// Saved entities of chunks that just loaded, spawned by the game.
     pub loaded_entities: Vec<((i32, i32), Vec<horizon_world::nbt::Tag>)>,
     /// Chunks changed since the last save.
     pub modified: HashSet<(i32, i32)>,
-    pub block_entities: HashMap<(i32, i32, i32), crate::containers::BlockEntity>,
+    /// Block entities, and the order they tick in.
+    pub block_entities: crate::block_entities::BlockEntities,
     /// Each chest's `ContainerOpenersCounter`: opener count and largest
     /// interaction range.
     pub chest_openers: HashMap<(i32, i32, i32), (i32, f64)>,
@@ -36,7 +37,7 @@ pub struct World {
     /// blocks, which need a block entity).
     pub watched: Vec<bool>,
     /// Writes of watched states: position, previous and new state.
-    pub watched_writes: Vec<((i32, i32, i32), u16, u16)>,
+    pub watched_writes: Vec<((i32, i32, i32), u32, u32)>,
     /// `ChunkAccess.inhabitedTime` of resident chunks: ticks a player spent
     /// within spawning range (local difficulty).
     pub inhabited: HashMap<(i32, i32), i64>,
@@ -122,7 +123,7 @@ impl World {
             light_edits: Vec::new(),
             loaded_entities: Vec::new(),
             modified: HashSet::new(),
-            block_entities: HashMap::new(),
+            block_entities: Default::default(),
             chest_openers: HashMap::new(),
             block_names: HashMap::new(),
             watched: Vec::new(),
@@ -198,12 +199,13 @@ impl World {
         if y < MIN_Y || y >= MIN_Y + (SECTIONS as i32) * 16 {
             return Err("write outside world height".into());
         }
-        let previous = Arc::make_mut(chunk).set(x & 15, y, z & 15, state.0 as u16);
-        if u32::from(previous) != state.0 {
-            let watches = |id: u16| self.watched.get(usize::from(id)).copied().unwrap_or(false);
-            if watches(previous) || watches(state.0 as u16) {
-                self.watched_writes
-                    .push(((x, y, z), previous, state.0 as u16));
+        let previous = Arc::make_mut(chunk).set(x & 15, y, z & 15, state.0);
+        if previous != state.0 {
+            self.block_entities
+                .state_changed((x, y, z), previous, state.0);
+            let watches = |id: u32| self.watched.get(id as usize).copied().unwrap_or(false);
+            if watches(previous) || watches(state.0) {
+                self.watched_writes.push(((x, y, z), previous, state.0));
             }
             self.revision = self.revision.wrapping_add(1);
             if let Some(log) = &mut self.block_log {
@@ -225,7 +227,7 @@ impl World {
             }
             let _ = sy;
             if self.chunks.get(&(x >> 4, z >> 4)).is_some_and(|c| c.lit) {
-                self.light_edits.push(((x, y, z), previous, state.0 as u16));
+                self.light_edits.push(((x, y, z), previous, state.0));
             } else {
                 for dz in -1..=1 {
                     for dx in -1..=1 {
@@ -240,6 +242,16 @@ impl World {
         self.chunks
             .get(&(x >> 4, z >> 4))
             .map_or(self.air, |chunk| chunk.block(x & 15, y, z & 15))
+    }
+    /// The block entities to tick this tick, in order (`BlockEntities::tickers`).
+    pub fn block_entity_tickers(&mut self) -> Vec<(crate::block_entities::Pos, u32)> {
+        let (chunks, air) = (&self.chunks, self.air);
+        self.block_entities.tickers(|(x, y, z)| {
+            chunks
+                .get(&(x >> 4, z >> 4))
+                .map_or(air, |chunk| chunk.block(x & 15, y, z & 15))
+                .0
+        })
     }
     pub fn light(&self, x: i32, y: i32, z: i32) -> u8 {
         self.chunks

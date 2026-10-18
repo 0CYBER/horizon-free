@@ -28,7 +28,7 @@ use std::{
     path::Path,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicI32, AtomicU16, AtomicU32, Ordering},
         mpsc::{Receiver, Sender, channel, sync_channel},
     },
     thread::JoinHandle,
@@ -45,6 +45,10 @@ struct Flags {
     /// while it is not.
     published: AtomicU16,
     smoothed_tick_ms: AtomicU32,
+    /// `options.renderDistance` and `options.simulationDistance`, which the
+    /// server follows while it runs (IntegratedServer.tickServer).
+    render_distance: AtomicI32,
+    simulation_distance: AtomicI32,
 }
 
 /// Work the window hands its server thread (`MinecraftServer.execute`).
@@ -65,6 +69,13 @@ impl Integrated {
     /// `IntegratedServer.tickServer` skips the world while the game is paused.
     pub fn set_paused(&self, paused: bool) {
         self.flags.paused.store(paused, Ordering::Relaxed);
+    }
+    /// The window's render and simulation distances, for the server to follow.
+    pub fn set_distances(&self, render: i32, simulation: i32) {
+        self.flags.render_distance.store(render, Ordering::Relaxed);
+        self.flags
+            .simulation_distance
+            .store(simulation, Ordering::Relaxed);
     }
     /// `IntegratedServer.getPort` while `isPublished`.
     pub fn published(&self) -> Option<u16> {
@@ -192,6 +203,12 @@ impl Game<'_> {
         options.dev_mods.clear();
         let (res, pack, settings) = (self.res.clone(), self.pack.clone(), self.settings.clone());
         let flags = Arc::new(Flags::default());
+        flags
+            .render_distance
+            .store(settings.render_distance, Ordering::Relaxed);
+        flags
+            .simulation_distance
+            .store(settings.simulation_distance, Ordering::Relaxed);
         let (ready_tx, ready) = channel();
         let (tasks, server_tasks) = channel();
         let server_flags = flags.clone();
@@ -249,7 +266,9 @@ impl Game<'_> {
             launch.create.as_ref(),
         )?;
         let saved = Box::new(self.level.clone());
-        let view_distance = self.settings.render_distance.clamp(2, 32);
+        // Math.max(2, options.renderDistance): past vanilla's 32 when the
+        // window's render distance is (Horizon's options go to 64).
+        let view_distance = self.settings.render_distance.max(2);
         let config = HubConfig {
             default_game_mode: self.level.mode(),
             // Only the owner until it is opened to the LAN.
@@ -257,7 +276,7 @@ impl Game<'_> {
             force_game_mode: false,
             hardcore: self.level.hardcore,
             view_distance,
-            simulation_distance: self.settings.simulation_distance.clamp(2, 32),
+            simulation_distance: self.settings.simulation_distance.max(2),
             dimension: self.dim.id().to_owned(),
             seed: self.level.seed,
             max_players: MAX_PLAYERS,
@@ -314,14 +333,13 @@ impl Game<'_> {
         let mut next = Instant::now();
         while !flags.stop.load(Ordering::Relaxed) {
             self.run_tasks();
-            self.update_dedicated_streaming();
-            self.update_world();
             if flags.paused.load(Ordering::Relaxed) {
                 // Only the connections run.
-                self.tick_lan();
+                self.tick_server(true)?;
             } else {
+                self.follow_distances(&flags);
                 let started = Instant::now();
-                self.tick()?;
+                self.tick_server(false)?;
                 self.debug_charts.log_tick(started, started.elapsed());
                 flags.smoothed_tick_ms.store(
                     self.debug_charts.smoothed_tick_ms.to_bits(),
@@ -440,6 +458,28 @@ impl Game<'_> {
     }
     /// Publish or unpublish for real, once the hub is in its place (a
     /// player's `/publish` runs while it is out).
+    /// IntegratedServer.tickServer: the server follows the window's render
+    /// and simulation distances when they change.
+    fn follow_distances(&mut self, flags: &Flags) {
+        let Some(host) = self.lan.as_mut() else {
+            return;
+        };
+        let view = flags.render_distance.load(Ordering::Relaxed).max(2);
+        let old = host.hub.config.view_distance;
+        if view != old {
+            log::info!("Changing view distance to {view}, from {old}");
+            host.hub.set_view_distance(view);
+            self.settings.render_distance = view;
+        }
+        let simulation = flags.simulation_distance.load(Ordering::Relaxed).max(2);
+        let old = host.hub.config.simulation_distance;
+        if simulation != old {
+            log::info!("Changing simulation distance to {simulation}, from {old}");
+            host.hub.set_simulation_distance(simulation);
+            self.settings.simulation_distance = simulation;
+        }
+    }
+
     fn apply_publish(&mut self) {
         if self.lan.is_none() {
             return;

@@ -45,6 +45,9 @@ pub struct Furnace {
     pub cooking_total: i32,
     pub speed: f32,
 }
+/// A hopper's slots: the only plain container with five.
+pub const HOPPER_SLOTS: usize = 5;
+
 #[derive(Clone, Debug)]
 pub enum BlockEntity {
     Chest(Vec<Option<ItemStack>>),
@@ -242,7 +245,7 @@ impl BlockEntity {
         let size = match name {
             "minecraft:chest" | "minecraft:trapped_chest" | "minecraft:barrel" => 27,
             n if n.ends_with("copper_chest") => 27,
-            "minecraft:hopper" => 5,
+            "minecraft:hopper" => HOPPER_SLOTS,
             "minecraft:dispenser" | "minecraft:dropper" => 9,
             n if n.ends_with("shulker_box") => 27,
             _ => return None,
@@ -270,7 +273,7 @@ impl BlockEntity {
     pub fn id(&self) -> &'static str {
         match self {
             Self::Chest(items) => match items.len() {
-                5 => "minecraft:hopper",
+                HOPPER_SLOTS => "minecraft:hopper",
                 9 => "minecraft:dispenser",
                 _ => "minecraft:chest",
             },

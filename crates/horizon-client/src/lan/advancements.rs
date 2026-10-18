@@ -144,6 +144,13 @@ impl ServerAdvancements {
     ) -> Option<Vec<u8>> {
         let n = self.tree.list.len();
         let first = visible.len() != n;
+        // flushDirty does nothing unless it is the first packet or progress
+        // changed: visibility follows progress alone, and every grant and
+        // revoke is in `changed`. This skips walking the whole tree for
+        // every player every tick.
+        if !first && changed.is_empty() {
+            return None;
+        }
         let now = self
             .tree
             .visible(&self.kids, |i| progress.done(&self.tree.list[i]));
@@ -280,6 +287,20 @@ impl ServerAdvancements {
             })
             .collect();
         book_add(entries, true)
+    }
+
+    /// The recipe's display for ClientboundPlaceGhostRecipePacket (the
+    /// recipes the book lists).
+    pub fn ghost_display(
+        &self,
+        id: &str,
+        sync: &SyncData,
+    ) -> Option<horizon_protocol::packets::recipes::RecipeDisplay> {
+        let bytes = self.book_entries(id, sync, 0).into_iter().next()?;
+        let mut r = horizon_protocol::buf::Reader::new(&bytes);
+        horizon_protocol::packets::recipes::RecipeBookEntry::read(&mut r)
+            .ok()
+            .map(|e| e.display)
     }
 
     /// ClientboundRecipeBookAddPacket.Entry for each display of a recipe:

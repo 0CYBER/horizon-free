@@ -13,7 +13,9 @@ use horizon_client::{
     server::{
         eula,
         java_properties::now_millis,
+        profiles,
         properties::{GAME_MODES, ServerProperties, SystemEntropy},
+        user_cache::UserCache,
         user_lists::{
             BanEntry, BanList, IpBanList, NameAndId, OpEntry, OpList, WhiteEntry, WhiteList,
             format_date,
@@ -57,6 +59,18 @@ struct Setup {
     started: Instant,
 }
 static SETUP: OnceLock<Mutex<Option<Setup>>> = OnceLock::new();
+/// usercache.json (Services.nameToIdCache): used by the server thread only.
+static USER_CACHE: Mutex<Option<UserCache>> = Mutex::new(None);
+
+/// PlayerList.placeNewPlayer: a player who joined is cached (and the file saved).
+pub(super) fn player_joined(id: u128, name: &str) {
+    if let Some(cache) = USER_CACHE.lock().unwrap().as_mut() {
+        cache.add(NameAndId {
+            id,
+            name: name.to_owned(),
+        });
+    }
+}
 
 /// Log4j's console pattern: `[HH:mm:ss] [thread/LEVEL]: message`.
 pub(super) fn log(level: &str, message: &str) {
@@ -276,6 +290,78 @@ impl Lists {
     }
 }
 
+/// The world presets of 26.3's `worldgen/world_preset`.
+const WORLD_PRESETS: [&str; 6] = [
+    "minecraft:normal",
+    "minecraft:flat",
+    "minecraft:large_biomes",
+    "minecraft:amplified",
+    "minecraft:single_biome_surface",
+    "minecraft:debug_all_block_states",
+];
+
+/// Identifier.tryParse: `namespace:path`, or a path in `minecraft`.
+fn parse_identifier(text: &str) -> Option<String> {
+    let (namespace, path) = text.split_once(':').unwrap_or(("minecraft", text));
+    let valid = |s: &str, extra: &[char]| {
+        s.chars()
+            .all(|c| matches!(c, 'a'..='z' | '0'..='9' | '_' | '.' | '-') || extra.contains(&c))
+    };
+    (valid(namespace, &[]) && valid(path, &['/'])).then(|| format!("{namespace}:{path}"))
+}
+
+impl Game<'_> {
+    /// DedicatedServerProperties.createDimensions for a world that doesn't
+    /// exist yet: `level-type`'s preset, a flat world's `generator-settings`
+    /// and `generate-structures`, written before the world opens so that
+    /// streaming reads them. Horizon generates the normal and flat presets.
+    fn write_world_gen(&self, dir: &std::path::Path, props: &ServerProperties) -> Result<()> {
+        let level_type = &props.level_type;
+        let preset = parse_identifier(level_type)
+            .filter(|id| WORLD_PRESETS.contains(&id.as_str()))
+            .unwrap_or_else(|| {
+                log_from(
+                    "Worker-Main-1",
+                    "WARN",
+                    &format!(
+                        "Failed to parse level-type {level_type}, defaulting to minecraft:normal"
+                    ),
+                );
+                "minecraft:normal".to_owned()
+            });
+        let flat = preset == "minecraft:flat";
+        if !flat && preset != "minecraft:normal" {
+            log_from(
+                "Worker-Main-1",
+                "WARN",
+                &format!(
+                    "Horizon doesn't generate the {preset} world preset yet: using minecraft:normal"
+                ),
+            );
+        }
+        let settings = if flat {
+            let biomes = &self.res.biomes;
+            let (settings, errors) = horizon_client::flatgen::settings_from_json(
+                &props.generator_settings,
+                |b| self.pack.assets.registry.default_state(b).is_some(),
+                |b| biomes.get(biomes.id(b)).name == b,
+            );
+            for e in errors {
+                log_from("Worker-Main-1", "ERROR", &e);
+            }
+            settings
+        } else {
+            None
+        };
+        let options = horizon_client::save::WorldGen {
+            flat,
+            structures: props.generate_structures,
+            bonus_chest: false,
+        };
+        horizon_client::save::write_world_gen_settings_with(dir, props.seed, options, settings)
+    }
+}
+
 /// PlayerList.BAN_DATE_FORMAT ("yyyy-MM-dd 'at' HH:mm:ss z"), in UTC.
 fn ban_date(millis: i64) -> String {
     let s = format_date(millis);
@@ -316,7 +402,31 @@ struct ServerState {
     /// When the last passes of the loop ended, for the tick rate horizon-server shows.
     ticks: std::collections::VecDeque<Instant>,
     paused: bool,
+    /// `broadcast-console-to-ops`.
+    broadcast_console: bool,
 }
+
+/// The dedicated-only commands' replies vanilla sends with `broadcast`
+/// (`sendSuccess(..., true)`): the operators hear of them.
+const BROADCAST: &[&str] = &[
+    "commands.ban.success",
+    "commands.banip.info",
+    "commands.banip.success",
+    "commands.deop.success",
+    "commands.kick.success",
+    "commands.op.success",
+    "commands.pardon.success",
+    "commands.pardonip.success",
+    "commands.save.disabled",
+    "commands.save.enabled",
+    "commands.save.success",
+    "commands.stop.stopping",
+    "commands.whitelist.add.success",
+    "commands.whitelist.disabled",
+    "commands.whitelist.enabled",
+    "commands.whitelist.reloaded",
+    "commands.whitelist.remove.success",
+];
 
 impl Game<'_> {
     /// DedicatedServer.initServer and MinecraftServer.runServer.
@@ -331,6 +441,13 @@ impl Game<'_> {
             .get()
             .and_then(|m| m.lock().unwrap().take())
             .ok_or("dedicated server not prepared")?;
+        // Main's WorldLoader: a new world's dimensions come from
+        // server.properties before the server starts.
+        let world_dir = std::env::current_dir()?.join(&universe).join(&level_name);
+        let new_world = !world_dir.join("level.dat").exists();
+        if new_world {
+            self.write_world_gen(&world_dir, &props)?;
+        }
         // The console thread starts first, as in initServer.
         let (tx, console) = mpsc::channel();
         std::thread::Builder::new()
@@ -348,6 +465,26 @@ impl Game<'_> {
                     line.clear();
                 }
             })?;
+        // Main: Services.create loads the universe's usercache.json.
+        let (mut cache, warnings) = UserCache::load(universe.join("usercache.json"));
+        for warning in warnings {
+            log_from("main", "WARN", &warning);
+        }
+        // DedicatedServer.initServer: names nobody has resolve offline only without authentication.
+        cache.resolve_offline_users = !props.online_mode;
+        *USER_CACHE.lock().unwrap() = Some(cache);
+        // Services.create: the services' public keys, fetched in the
+        // background (they check players' chat keys).
+        let secure_chat = Arc::new(horizon_client::lan::SecureChat::new(
+            props.enforce_secure_profile && props.online_mode,
+            || {
+                let discovery = profiles::discovery_url();
+                profiles::fetch_profile_key_keys(&discovery).unwrap_or_else(|e| {
+                    ::log::error!("{e}");
+                    Vec::new()
+                })
+            },
+        ));
         log("INFO", "Starting minecraft server version 26.3");
         log("INFO", "Loading properties");
         let game_mode = props.game_mode;
@@ -403,9 +540,7 @@ impl Game<'_> {
         lists.enforce_whitelist = props.enforce_whitelist;
         let lists = Arc::new(Mutex::new(lists));
         log("INFO", &format!("Preparing level \"{level_name}\""));
-        let world_dir = std::env::current_dir()?.join(&universe).join(&level_name);
         let folder = world_dir.to_string_lossy().into_owned();
-        let new_world = !world_dir.join("level.dat").exists();
         self.open_world(
             &folder,
             Some(&level_name),
@@ -448,8 +583,7 @@ impl Game<'_> {
             enable_status: props.enable_status,
             hide_online_players: props.hide_online_players,
             favicon,
-            // DedicatedServer.enforceSecureProfile needs online mode.
-            enforces_secure_chat: false,
+            secure_chat: Some(secure_chat),
             accepts_transfers: props.accepts_transfers,
             announce: false,
             listen: true,
@@ -513,6 +647,7 @@ impl Game<'_> {
             empty_ticks: 0,
             ticks: Default::default(),
             paused: false,
+            broadcast_console: props.broadcast_console_to_ops,
         };
         let pause_after = props.pause_when_empty_seconds * 20;
         let idle_timeout = props.player_idle_timeout;
@@ -520,7 +655,7 @@ impl Game<'_> {
         while !state.stop {
             let tick_start = Instant::now();
             while let Ok(line) = state.console.try_recv() {
-                self.console_command(&mut state, &line);
+                self.console_line(&mut state, &line);
             }
             self.poll_server_control(&mut state);
             let players = self.lan.as_ref().map_or(0, |h| h.hub.guests.len());
@@ -543,18 +678,12 @@ impl Game<'_> {
                 );
                 self.save_game()?;
             }
-            self.update_dedicated_streaming();
-            self.update_world();
-            if paused {
-                // MinecraftServer.tickServer: only the connections run.
-                self.tick_lan();
-            } else {
-                if !state.autosave {
-                    // `save-off`: the periodic save inside the tick is skipped.
-                    self.ticks = self.ticks.max(1);
-                }
-                self.tick()?;
+            if !paused && !state.autosave {
+                // `save-off`: the periodic save inside the tick is skipped.
+                self.ticks = self.ticks.max(1);
             }
+            // MinecraftServer.tickServer: while paused only the connections run.
+            self.tick_server(paused)?;
             if idle_timeout > 0 {
                 self.kick_idle(idle_timeout);
             }
@@ -595,7 +724,13 @@ impl Game<'_> {
         let center = self
             .lan
             .as_ref()
-            .and_then(|h| h.hub.guests.iter().find(|g| g.placed).map(|g| g.chunk()))
+            .and_then(|h| {
+                h.hub
+                    .guests
+                    .iter()
+                    .find(|g| h.hub.here(g))
+                    .map(|g| g.chunk())
+            })
             .or_else(|| {
                 self.spawn
                     .map(|s| ((s.x.floor() as i32) >> 4, (s.z.floor() as i32) >> 4))
@@ -641,28 +776,63 @@ impl Game<'_> {
         host.hub.resend_commands();
     }
 
-    /// A known player by name: online first, else the offline profile.
-    fn resolve(&self, name: &str) -> NameAndId {
-        self.lan
-            .as_ref()
-            .and_then(|h| {
-                h.hub
-                    .guests
-                    .iter()
-                    .find(|g| g.name.eq_ignore_ascii_case(name))
-            })
-            .map_or_else(
-                || NameAndId::offline(name),
-                |g| NameAndId {
-                    id: g.uuid,
-                    name: g.name.clone(),
-                },
-            )
+    /// A player on the server, by name.
+    fn online_player(&self, name: &str) -> Option<NameAndId> {
+        let hub = &self.lan.as_ref()?.hub;
+        let g = hub
+            .guests
+            .iter()
+            .find(|g| g.name.eq_ignore_ascii_case(name))?;
+        Some(NameAndId {
+            id: g.uuid,
+            name: g.name.clone(),
+        })
     }
 
-    /// MinecraftServer.sendSystemMessage: what the console is told.
-    fn console_reply(&self, text: Text) {
+    /// GameProfileArgument for a name: the user cache, else the profile
+    /// service, else (offline) the offline player. None, told to the console:
+    /// no such player.
+    fn resolve(&self, name: &str) -> Option<NameAndId> {
+        let found = USER_CACHE.lock().unwrap().as_mut().and_then(|cache| {
+            cache.get_by_name(name, |lower| {
+                let found = profiles::find_by_name(&profiles::discovery_url(), lower);
+                if found.is_none() {
+                    log("WARN", &format!("Couldn't find profile with name: {lower}"));
+                }
+                found
+            })
+        });
+        if found.is_none() {
+            let unknown = Text::translate("argument.player.unknown", &[]);
+            log("INFO", &format!("System chat: {}", unknown.plain()));
+        }
+        found
+    }
+
+    /// MinecraftServer.sendSystemMessage: what the console is told; while
+    /// the console runs a command, the replies vanilla broadcasts go to the
+    /// operators too.
+    fn console_reply(&mut self, text: Text) {
         log("INFO", &format!("System chat: {}", text.plain()));
+        if self.console_broadcast.is_some()
+            && text
+                .translation_key()
+                .is_some_and(|k| BROADCAST.contains(&k))
+        {
+            self.broadcast_to_admins(text);
+        }
+    }
+
+    /// One console line, then the operators' share of its feedback.
+    fn console_line(&mut self, state: &mut ServerState, line: &str) {
+        self.console_broadcast = Some(state.broadcast_console);
+        self.console_command(state, line);
+        self.console_broadcast = None;
+        if let Some(mut host) = self.lan.take() {
+            self.send_admin_feedback(&mut host, None);
+            self.lan = Some(host);
+        }
+        self.admin_feedback.clear();
     }
 
     /// DedicatedServer.handleConsoleInputs: one console line, run as the
@@ -740,7 +910,9 @@ impl Game<'_> {
                 ));
             }
             "op" | "deop" if !rest.is_empty() => {
-                let user = self.resolve(rest[0]);
+                let Some(user) = self.resolve(rest[0]) else {
+                    return;
+                };
                 let level = 4;
                 let changed = {
                     let mut l = state.lists.lock().unwrap();
@@ -770,7 +942,9 @@ impl Game<'_> {
             }
             "whitelist" => self.console_whitelist(state, &rest),
             "ban" if !rest.is_empty() => {
-                let user = self.resolve(rest[0]);
+                let Some(user) = self.resolve(rest[0]) else {
+                    return;
+                };
                 let reason = (rest.len() > 1).then(|| rest[1..].join(" "));
                 let added = state.lists.lock().unwrap().bans.add(BanEntry::new(
                     user.clone(),
@@ -860,7 +1034,9 @@ impl Game<'_> {
                 }
             }
             "pardon" if !rest.is_empty() => {
-                let user = self.resolve(rest[0]);
+                let Some(user) = self.resolve(rest[0]) else {
+                    return;
+                };
                 let removed = state.lists.lock().unwrap().bans.remove(&user);
                 let key = if removed {
                     "commands.pardon.success"
@@ -926,15 +1102,10 @@ impl Game<'_> {
                 }
             }
             "kick" if !rest.is_empty() => {
-                let user = self.resolve(rest[0]);
-                let online = self
-                    .lan
-                    .as_ref()
-                    .is_some_and(|h| h.hub.guests.iter().any(|g| g.uuid == user.id));
-                if !online {
+                let Some(user) = self.online_player(rest[0]) else {
                     self.console_reply(Text::translate("argument.entity.notfound.player", &[]));
                     return;
-                }
+                };
                 let reason = if rest.len() > 1 {
                     Tag::String(JavaString::from(rest[1..].join(" ").as_str()))
                 } else {
@@ -1014,7 +1185,9 @@ impl Game<'_> {
                 self.console_reply(Text::translate("commands.whitelist.reloaded", &[]));
             }
             ["add", name] | ["remove", name] => {
-                let user = self.resolve(name);
+                let Some(user) = self.resolve(name) else {
+                    return;
+                };
                 let mut l = state.lists.lock().unwrap();
                 let (ok, key) = if rest[0] == "add" {
                     if l.white.contains(&user) {

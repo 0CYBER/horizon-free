@@ -110,7 +110,7 @@ fn sprite(name: &str) -> String {
 impl Game<'_> {
     /// The book the open screen has, if any.
     fn active_book(&self) -> Option<BookType> {
-        if self.screen != Screen::Inventory || self.remote.is_some() || self.station.is_some() {
+        if self.screen != Screen::Inventory || self.station.is_some() {
             return None;
         }
         if self.mount_active() {
@@ -262,6 +262,33 @@ impl Game<'_> {
     /// The items the book counts (`RecipeBookComponent.updateStackedContents`):
     /// the inventory and the menu's crafting slots, as the menu engine counts them.
     fn book_available(&mut self, _book: BookType) -> Stacked {
+        if self.remote.is_some() {
+            // A server's menu: the slots it last sent, counted the same way.
+            use horizon_client::menu::{Env, Kind, Menu};
+            let table = self.craft_size == 3;
+            let grid: Vec<_> = (0..self.craft_size * self.craft_size)
+                .map(|k| self.slot_mut(100 + k).clone())
+                .collect();
+            let mut menu = Menu::new(if table {
+                Kind::Crafting
+            } else {
+                Kind::Inventory
+            });
+            let env = Env {
+                items: &self.res.items,
+                recipes: &self.res.recipes,
+                brewing: &self.res.stations.brewing,
+                banners: &self.res.stations.banners,
+                trade: None,
+            };
+            for i in 0..36 {
+                menu.set_player_item(i, self.inventory[i].clone());
+            }
+            for (k, stack) in grid.into_iter().enumerate() {
+                menu.set_slot(&env, 1 + k, stack);
+            }
+            return menu.stacked_contents(&env);
+        }
         let mut out = Stacked::default();
         let stock = &mut out;
         self.menu_session(|menu, env, _| {
@@ -274,6 +301,10 @@ impl Game<'_> {
     /// replacing batch (vanilla's server iterates an identity hash set; this
     /// one goes in id order), then each unlock and removal.
     fn sync_client_book(&mut self) {
+        // On a server the book is the server's packets' (remote_recipe_book_*).
+        if self.remote.is_some() {
+            return;
+        }
         let known = &self.level.recipe_book.recipes;
         let index = &self.res.stations.recipe_index;
         let ui = &mut self.recipe_ui;
@@ -660,6 +691,10 @@ impl Game<'_> {
         }
         false
     }
+    /// How many displays the client's book holds.
+    pub(super) fn recipe_book_known(&self) -> usize {
+        self.recipe_ui.client.displays().len()
+    }
     /// The recipe book's buttons a controller can focus: the book button,
     /// recipes, page arrows, the craftable filter and the tabs (GUI pixels;
     /// the search box registers itself as a field).
@@ -800,6 +835,18 @@ impl Game<'_> {
         else {
             return;
         };
+        if self.remote.is_some() {
+            // The server places it and answers with the slots, or a ghost.
+            let container = self.remote_menu_id();
+            self.send(horizon_protocol::packets::play::Serverbound::PlaceRecipe(
+                horizon_protocol::packets::recipes::PlaceRecipe {
+                    container,
+                    recipe: entry.display_id,
+                    use_max,
+                },
+            ));
+            return;
+        }
         let creative = self.creative;
         let mut post = None;
         let answer = &mut post;
@@ -825,6 +872,80 @@ impl Game<'_> {
         if let Some(key) = self.container {
             self.world.modified.insert((key.0 >> 4, key.2 >> 4));
             self.container_changed(key);
+        }
+    }
+
+    // ---- a server's recipe book ----
+
+    /// ClientboundRecipeBookAddPacket (`ClientRecipeBook.add`): the
+    /// displays join the book, highlighted when new, and the recipes whose
+    /// entries ask for it show the toast.
+    pub(super) fn remote_recipe_book_add(
+        &mut self,
+        p: horizon_protocol::packets::recipes::RecipeBookAdd,
+    ) {
+        let ui = &mut self.recipe_ui;
+        if p.replace {
+            ui.client.clear();
+        }
+        let mut toast = Vec::new();
+        for e in &p.entries {
+            ui.client.add(e.id);
+            if e.flags & 2 != 0 {
+                ui.client.highlight.insert(e.id);
+            }
+            if e.flags & 1 != 0
+                && let Some(id) = self.res.stations.recipe_index.recipe_of_display(e.id)
+                && !toast.iter().any(|t| t == id)
+            {
+                toast.push(id.to_owned());
+            }
+        }
+        // A local world opened later syncs its book from scratch.
+        ui.client_known = None;
+        ui.client_version += 1;
+        self.recipe_toast(&toast);
+    }
+    /// ClientboundRecipeBookRemovePacket.
+    pub(super) fn remote_recipe_book_remove(
+        &mut self,
+        p: horizon_protocol::packets::recipes::RecipeBookRemove,
+    ) {
+        for id in p.ids {
+            self.recipe_ui.client.remove(id);
+        }
+        self.recipe_ui.client_version += 1;
+    }
+    /// ClientboundRecipeBookSettingsPacket: each book's open and filter flags.
+    pub(super) fn remote_recipe_book_settings(
+        &mut self,
+        p: horizon_protocol::packets::recipes::RecipeBookSettings,
+    ) {
+        for (i, (open, filtering)) in p.books.into_iter().enumerate() {
+            self.level.recipe_book.open[i] = open;
+            self.level.recipe_book.filtering[i] = filtering;
+        }
+    }
+    /// ClientboundPlaceGhostRecipePacket: the recipe last placed, faded into
+    /// the open menu's grid.
+    pub(super) fn remote_ghost_recipe(
+        &mut self,
+        p: horizon_protocol::packets::recipes::PlaceGhostRecipe,
+    ) {
+        let open = self.remote_menu_id();
+        let Some(book_type) = self.active_book() else {
+            return;
+        };
+        if p.container != open {
+            return;
+        }
+        let entry = self.recipe_ui.last_placed.as_ref().and_then(|id| {
+            let book = self.recipe_ui.book.as_ref()?;
+            book.entry(id).cloned()
+        });
+        if let Some(entry) = entry {
+            self.recipe_ui.ghost.clear();
+            self.fill_ghost(book_type, &entry);
         }
     }
 

@@ -300,6 +300,14 @@ enum Kind<R: RandomSource> {
     Not(Box<Compiled<R>>),
 }
 impl<R: RandomSource> Compiled<R> {
+    fn constant_result(&self) -> Option<bool> {
+        match &self.kind {
+            Kind::Constant(value) => Some(*value),
+            Kind::Not(child) => child.constant_result().map(|value| !value),
+            _ => None,
+        }
+    }
+
     fn compile<S: MaterialSurfaceQueries>(
         condition: MaterialCondition,
         root: &R::Positional,

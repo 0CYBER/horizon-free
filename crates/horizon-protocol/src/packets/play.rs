@@ -2,9 +2,9 @@
 use crate::{
     Error, Result,
     buf::{
-        Bool, Byte, ChunkPos, Codec, Double, Float, Ident, Int, List, Long, LpVec3, Nbt, Opt,
-        OptVarInt, Pos, Reader, SectionPos, Short, Str, StrN, UByte, Uuid, VarInt, VarLong, Vec3d,
-        Writer,
+        Bool, Byte, BytesN, ChunkPos, Codec, Double, Float, Ident, Int, List, Long, LpVec3, Nbt,
+        Opt, OptVarInt, Pos, Reader, SectionPos, Short, Str, StrN, UByte, Uuid, VarInt, VarLong,
+        Vec3d, Writer,
     },
     chunk::{ChunkData, LightData},
     entity_data::{EntityData, Value},
@@ -567,6 +567,10 @@ packet!(PlayerPosition {
     pitch: f32 => Float,
     relatives: i32 => Int,
 });
+packet!(
+    /// ClientboundProjectilePowerPacket: an AbstractHurtingProjectile's accelerationPower.
+    ProjectilePower { id: i32 => VarInt, power: f64 => Double }
+);
 packet!(PlayerRotation { yaw: f32 => Float, relative_yaw: bool => Bool, pitch: f32 => Float, relative_pitch: bool => Bool });
 packet!(RemoveEntities { ids: Vec<i32> => List<VarInt> });
 packet!(Respawn { spawn: SpawnInfo => SpawnInfo, keep: i8 => Byte });
@@ -590,6 +594,10 @@ packet!(SetCursorItem { item: Option<Stack> => Slot });
 packet!(SetDefaultSpawnPosition { pos: GlobalPos => GlobalPos, yaw: f32 => Float, pitch: f32 => Float });
 packet!(SetEntityData { id: i32 => VarInt, values: Vec<(u8, i32, Value)> => EntityData });
 packet!(SetEntityMotion { id: i32 => VarInt, velocity: [f64; 3] => LpVec3 });
+packet!(
+    /// ClientboundSetPassengersPacket: a vehicle and every entity riding it.
+    SetPassengers { vehicle: i32 => VarInt, passengers: Vec<i32> => List<VarInt> }
+);
 /// ClientboundSetEquipmentPacket: (EquipmentSlot ordinal, stack) pairs.
 pub struct Equipment;
 impl Codec<Vec<(u8, Option<Stack>)>> for Equipment {
@@ -901,6 +909,177 @@ pub struct CommandNode {
     /// Custom suggestion provider (`minecraft:ask_server`).
     pub suggestions: Option<String>,
 }
+/// The `minecraft:command_argument_type` registry of 26.3 in id order
+/// (ArgumentTypeInfos.bootstrap).
+pub const ARGUMENT_TYPES: &[&str] = &[
+    "brigadier:bool",
+    "brigadier:float",
+    "brigadier:double",
+    "brigadier:integer",
+    "brigadier:long",
+    "brigadier:string",
+    "minecraft:entity",
+    "minecraft:game_profile",
+    "minecraft:block_pos",
+    "minecraft:column_pos",
+    "minecraft:vec3",
+    "minecraft:vec2",
+    "minecraft:block_state",
+    "minecraft:block_predicate",
+    "minecraft:item_stack",
+    "minecraft:item_predicate",
+    "minecraft:team_color",
+    "minecraft:hex_color",
+    "minecraft:component",
+    "minecraft:style",
+    "minecraft:message",
+    "minecraft:nbt_compound_tag",
+    "minecraft:nbt_tag",
+    "minecraft:nbt_path",
+    "minecraft:objective",
+    "minecraft:objective_criteria",
+    "minecraft:operation",
+    "minecraft:particle",
+    "minecraft:angle",
+    "minecraft:rotation",
+    "minecraft:scoreboard_slot",
+    "minecraft:score_holder",
+    "minecraft:swizzle",
+    "minecraft:team",
+    "minecraft:item_slot",
+    "minecraft:item_slots",
+    "minecraft:resource_location",
+    "minecraft:function",
+    "minecraft:entity_anchor",
+    "minecraft:int_range",
+    "minecraft:float_range",
+    "minecraft:dimension",
+    "minecraft:gamemode",
+    "minecraft:time",
+    "minecraft:resource_or_tag",
+    "minecraft:resource_or_tag_key",
+    "minecraft:resource",
+    "minecraft:resource_key",
+    "minecraft:resource_selector",
+    "minecraft:template_mirror",
+    "minecraft:template_rotation",
+    "minecraft:heightmap",
+    "minecraft:loot_table",
+    "minecraft:loot_predicate",
+    "minecraft:loot_modifier",
+    "minecraft:context_float_provider",
+    "minecraft:context_int_provider",
+    "minecraft:slot_source",
+    "minecraft:dialog",
+    "minecraft:feature",
+    "minecraft:swing_animation",
+    "minecraft:uuid",
+];
+
+/// The properties of an argument parser (`ArgumentTypeInfo.Template`) as
+/// one of the 26.3 parsers decoded from the network.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ArgumentProperties {
+    None,
+    Integer {
+        min: Option<i32>,
+        max: Option<i32>,
+    },
+    Long {
+        min: Option<i64>,
+        max: Option<i64>,
+    },
+    Float {
+        min: Option<f32>,
+        max: Option<f32>,
+    },
+    Double {
+        min: Option<f64>,
+        max: Option<f64>,
+    },
+    /// StringArgumentType.StringType: 0 word, 1 phrase, 2 greedy.
+    String(i32),
+    Entity {
+        single: bool,
+        players_only: bool,
+    },
+    ScoreHolder {
+        multiple: bool,
+    },
+    Time {
+        min: i32,
+    },
+    /// The resource arguments' registry.
+    Registry(String),
+}
+
+impl ArgumentProperties {
+    /// ArgumentTypeInfo.deserializeFromNetwork for parser `id`.
+    pub fn read(r: &mut Reader, id: i32) -> Result<Self> {
+        let name = usize::try_from(id)
+            .ok()
+            .and_then(|i| ARGUMENT_TYPES.get(i))
+            .ok_or_else(|| crate::Error::new(format!("unknown argument type {id}")))?;
+        let flagged = |r: &mut Reader| -> Result<(bool, bool)> {
+            let f = r.u8()?;
+            Ok((f & 1 != 0, f & 2 != 0))
+        };
+        Ok(match *name {
+            "brigadier:integer" => {
+                let (min, max) = flagged(r)?;
+                let min = if min { Some(r.i32()?) } else { None };
+                let max = if max { Some(r.i32()?) } else { None };
+                Self::Integer { min, max }
+            }
+            "brigadier:long" => {
+                let (min, max) = flagged(r)?;
+                let min = if min { Some(r.i64()?) } else { None };
+                let max = if max { Some(r.i64()?) } else { None };
+                Self::Long { min, max }
+            }
+            "brigadier:float" => {
+                let (min, max) = flagged(r)?;
+                let min = if min { Some(r.f32()?) } else { None };
+                let max = if max { Some(r.f32()?) } else { None };
+                Self::Float { min, max }
+            }
+            "brigadier:double" => {
+                let (min, max) = flagged(r)?;
+                let min = if min { Some(r.f64()?) } else { None };
+                let max = if max { Some(r.f64()?) } else { None };
+                Self::Double { min, max }
+            }
+            "brigadier:string" => Self::String(r.varint()?),
+            "minecraft:entity" => {
+                let f = r.u8()?;
+                Self::Entity {
+                    single: f & 1 != 0,
+                    players_only: f & 2 != 0,
+                }
+            }
+            "minecraft:score_holder" => Self::ScoreHolder {
+                multiple: r.u8()? & 1 != 0,
+            },
+            "minecraft:time" => Self::Time { min: r.i32()? },
+            "minecraft:resource"
+            | "minecraft:resource_key"
+            | "minecraft:resource_or_tag"
+            | "minecraft:resource_or_tag_key"
+            | "minecraft:resource_selector" => Self::Registry(r.string(32767)?),
+            _ => Self::None,
+        })
+    }
+    /// Decodes a node's raw `parser` bytes.
+    pub fn decode(id: i32, bytes: &[u8]) -> Result<Self> {
+        Self::read(&mut Reader::new(bytes), id)
+    }
+}
+
+/// Reads past an argument node's parser properties.
+fn read_argument_properties(r: &mut Reader, id: i32) -> Result<()> {
+    ArgumentProperties::read(r, id).map(|_| ())
+}
+
 /// The command tree: nodes and the index of the root.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Commands {
@@ -926,11 +1105,14 @@ impl Codec<Commands> for Commands {
                 name = r.string(32767)?;
             }
             if kind == 2 {
-                // Properties are parser specific; only the property-less parsers
-                // can be skipped without a table, so keep the rest of the packet.
-                return Err(crate::Error::new("argument nodes are not decoded"));
+                let id = r.varint()?;
+                let start = r.position();
+                read_argument_properties(r, id)?;
+                parser = Some((id, r.since(start).to_vec()));
+                if flags & 16 != 0 {
+                    suggestions = Some(r.string(32767)?);
+                }
             }
-            let _ = (&mut parser, &mut suggestions);
             nodes.push(CommandNode {
                 kind,
                 executable: flags & 4 != 0,
@@ -1189,6 +1371,10 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     ChunkBatchStart(Empty) = CHUNK_BATCH_START,
     ClearTitles(Bool1) = CLEAR_TITLES,
     Commands(Commands) = COMMANDS,
+    RecipeBookAdd(super::recipes::RecipeBookAdd) = RECIPE_BOOK_ADD,
+    RecipeBookRemove(super::recipes::RecipeBookRemove) = RECIPE_BOOK_REMOVE,
+    RecipeBookSettings(super::recipes::RecipeBookSettings) = RECIPE_BOOK_SETTINGS,
+    PlaceGhostRecipe(super::recipes::PlaceGhostRecipe) = PLACE_GHOST_RECIPE,
     ContainerClose(ContainerClose) = CONTAINER_CLOSE,
     ContainerSetContent(ContainerSetContent) = CONTAINER_SET_CONTENT,
     ContainerSetData(ContainerSetData) = CONTAINER_SET_DATA,
@@ -1248,6 +1434,8 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     SetHealth(SetHealth) = SET_HEALTH,
     SetHeldSlot(SetHeldSlot) = SET_HELD_SLOT,
     SetObjective(SetObjective) = SET_OBJECTIVE,
+    SetPassengers(SetPassengers) = SET_PASSENGERS,
+    ProjectilePower(ProjectilePower) = PROJECTILE_POWER,
     SetPlayerInventory(SetPlayerInventory) = SET_PLAYER_INVENTORY,
     SetPlayerTeam(SetPlayerTeam) = SET_PLAYER_TEAM,
     SetScore(SetScore) = SET_SCORE,
@@ -1269,11 +1457,125 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     UpdateAdvancements(UpdateAdvancements) = UPDATE_ADVANCEMENTS,
     UpdateMobEffect(UpdateMobEffect) = UPDATE_MOB_EFFECT,
     UpdateTags(UpdateTags) = UPDATE_TAGS,
+    TrackedWaypoint(TrackedWaypoint) = WAYPOINT,
 });
 packet!(
     /// ClientboundClearTitlesPacket: whether to also reset the timings.
     Bool1 { value: bool => Bool }
 );
+
+/// ClientboundTrackedWaypointPacket.Operation, by ordinal.
+pub mod waypoint_operation {
+    pub const TRACK: i32 = 0;
+    pub const UNTRACK: i32 = 1;
+    pub const UPDATE: i32 = 2;
+}
+
+/// TrackedWaypoint's identifier: `Either<UUID, String>`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum WaypointId {
+    Uuid(u128),
+    Name(String),
+}
+
+/// What a TrackedWaypoint points at (its `Type` and contents).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum WaypointTarget {
+    /// `TrackedWaypoint.empty`: an untracked waypoint.
+    Empty,
+    /// A block position (`Vec3iWaypoint`).
+    Block([i32; 3]),
+    /// A chunk (`ChunkWaypoint`).
+    Chunk([i32; 2]),
+    /// An angle in radians (`AzimuthWaypoint`).
+    Azimuth(f32),
+}
+
+/// ClientboundTrackedWaypointPacket: the locator bar's waypoints.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TrackedWaypoint {
+    /// `waypoint_operation`.
+    pub operation: i32,
+    pub id: WaypointId,
+    /// Waypoint.Icon: the style (a `waypoint_style_asset` key) and an RGB colour.
+    pub style: String,
+    pub color: Option<i32>,
+    pub target: WaypointTarget,
+}
+
+impl Codec<TrackedWaypoint> for TrackedWaypoint {
+    fn read(r: &mut Reader) -> Result<TrackedWaypoint> {
+        let operation = r.varint()?;
+        if !(0..=2).contains(&operation) {
+            return Err(Error::new(format!("waypoint operation {operation}")));
+        }
+        let id = if r.bool()? {
+            WaypointId::Uuid(r.uuid()?)
+        } else {
+            WaypointId::Name(r.string(32767)?)
+        };
+        let style = Ident::read(r)?;
+        // ByteBufCodecs.RGB_COLOR: three bytes, read back as an opaque ARGB colour.
+        let color = if r.bool()? {
+            let [red, green, blue] = [r.u8()?, r.u8()?, r.u8()?].map(i32::from);
+            Some(-16_777_216 | red << 16 | green << 8 | blue)
+        } else {
+            None
+        };
+        let target = match r.varint()? {
+            0 => WaypointTarget::Empty,
+            1 => WaypointTarget::Block([r.varint()?, r.varint()?, r.varint()?]),
+            2 => WaypointTarget::Chunk([r.varint()?, r.varint()?]),
+            3 => WaypointTarget::Azimuth(r.f32()?),
+            other => return Err(Error::new(format!("waypoint type {other}"))),
+        };
+        Ok(TrackedWaypoint {
+            operation,
+            id,
+            style,
+            color,
+            target,
+        })
+    }
+    fn write(v: &TrackedWaypoint, w: &mut Writer) {
+        w.varint(v.operation);
+        match &v.id {
+            WaypointId::Uuid(uuid) => {
+                w.bool(true);
+                w.uuid(*uuid);
+            }
+            WaypointId::Name(name) => {
+                w.bool(false);
+                w.string(name);
+            }
+        }
+        w.string(&v.style);
+        w.bool(v.color.is_some());
+        if let Some(color) = v.color {
+            for shift in [16, 8, 0] {
+                w.u8((color >> shift) as u8);
+            }
+        }
+        match v.target {
+            WaypointTarget::Empty => w.varint(0),
+            WaypointTarget::Block([x, y, z]) => {
+                w.varint(1);
+                w.varint(x);
+                w.varint(y);
+                w.varint(z);
+            }
+            WaypointTarget::Chunk([x, z]) => {
+                w.varint(2);
+                w.varint(x);
+                w.varint(z);
+            }
+            WaypointTarget::Azimuth(angle) => {
+                w.varint(3);
+                w.f32(angle);
+            }
+        }
+    }
+}
 
 // ---- serverbound -------------------------------------------------------
 
@@ -1302,6 +1604,42 @@ packet!(Chat {
     last_seen: LastSeenUpdate => LastSeenUpdate,
 });
 packet!(ChatCommand { command: String => Str });
+packet!(ChatAck { offset: i32 => VarInt });
+/// ArgumentSignatures: each signed argument's name (at most 16 chars) and
+/// signature, at most 8.
+pub struct ArgumentSignatures;
+impl Codec<Vec<(String, Vec<u8>)>> for ArgumentSignatures {
+    fn read(r: &mut Reader) -> Result<Vec<(String, Vec<u8>)>> {
+        let n = r.count(8)?;
+        (0..n)
+            .map(|_| Ok((r.string(16)?, r.bytes(256)?.to_vec())))
+            .collect()
+    }
+    fn write(v: &Vec<(String, Vec<u8>)>, w: &mut Writer) {
+        w.varint(v.len() as i32);
+        for (name, signature) in v {
+            w.string(name);
+            w.bytes(signature);
+        }
+    }
+}
+packet!(ChatCommandSigned {
+    command: String => Str,
+    timestamp: i64 => Long,
+    salt: i64 => Long,
+    arguments: Vec<(String, Vec<u8>)> => ArgumentSignatures,
+    last_seen: LastSeenUpdate => LastSeenUpdate,
+});
+packet!(
+    /// RemoteChatSession.Data: the session id, then ProfilePublicKey.Data
+    /// (expiry in epoch milliseconds, X.509 key, the services' signature).
+    ChatSessionUpdate {
+        session: u128 => Uuid,
+        expires_at: i64 => Long,
+        key: Vec<u8> => BytesN<512>,
+        key_signature: Vec<u8> => BytesN<4096>,
+    }
+);
 packet!(ChangeDifficultyRequest { difficulty: i32 => VarInt });
 packet!(LockDifficulty { locked: bool => Bool });
 packet!(SetGameRule { entries: Vec<GameRuleEntry> => List<GameRuleEntry> });
@@ -1395,7 +1733,11 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     Attack(Attack) = ATTACK,
     ChangeGameMode(ChangeGameMode) = CHANGE_GAME_MODE,
     Chat(Chat) = CHAT,
+    ChatAck(ChatAck) = CHAT_ACK,
     ChatCommand(ChatCommand) = CHAT_COMMAND,
+    ChatCommandSigned(ChatCommandSigned) = CHAT_COMMAND_SIGNED,
+    ChatSessionUpdate(ChatSessionUpdate) = CHAT_SESSION_UPDATE,
+    PlaceRecipe(super::recipes::PlaceRecipe) = PLACE_RECIPE,
     ChunkBatchReceived(ChunkBatchReceived) = CHUNK_BATCH_RECEIVED,
     ClientCommand(ClientCommand) = CLIENT_COMMAND,
     ClientInformation(ClientInformation) = CLIENT_INFORMATION,
@@ -1486,6 +1828,42 @@ mod tests {
             }),
             portal_cooldown: 0,
             sea_level: 63,
+        }
+    }
+
+    #[test]
+    fn tracked_waypoint_bytes() {
+        // TRACK, a UUID, the default style, red (#FF5555), a block position.
+        let track = Clientbound::TrackedWaypoint(TrackedWaypoint {
+            operation: waypoint_operation::TRACK,
+            id: WaypointId::Uuid(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10),
+            style: "minecraft:default".into(),
+            color: Some(0xFFFF_5555_u32 as i32),
+            target: WaypointTarget::Block([1, -2, 300]),
+        });
+        let mut expected = vec![141, 1, 0, 1];
+        expected.extend(1..=16u8);
+        expected.push(17);
+        expected.extend(b"minecraft:default");
+        expected.extend([
+            1, 0xFF, 0x55, 0x55, 1, 1, 0xFE, 0xFF, 0xFF, 0xFF, 0x0F, 0xAC, 0x02,
+        ]);
+        assert_eq!(track.encode(), expected);
+        assert_eq!(Clientbound::decode(141, &expected[2..]).unwrap(), track);
+        for target in [
+            WaypointTarget::Empty,
+            WaypointTarget::Chunk([-3, 4]),
+            WaypointTarget::Azimuth(-1.25),
+        ] {
+            let packet = Clientbound::TrackedWaypoint(TrackedWaypoint {
+                operation: waypoint_operation::UPDATE,
+                id: WaypointId::Name("spawn".into()),
+                style: "minecraft:bowtie".into(),
+                color: None,
+                target,
+            });
+            let bytes = packet.encode();
+            assert_eq!(Clientbound::decode(141, &bytes[2..]).unwrap(), packet);
         }
     }
 
@@ -1723,6 +2101,11 @@ mod tests {
                 id: 2,
                 velocity: [0.0; 3],
             }),
+            Clientbound::SetPassengers(SetPassengers {
+                vehicle: 2,
+                passengers: vec![3, 300],
+            }),
+            Clientbound::ProjectilePower(ProjectilePower { id: 4, power: 0.1 }),
             Clientbound::SetEquipment(SetEquipment {
                 id: 2,
                 slots: vec![(0, None), (5, Some(Stack::new(1, 1)))],
@@ -1839,6 +2222,24 @@ mod tests {
             }),
             Serverbound::ChatCommand(ChatCommand {
                 command: "time set day".into(),
+            }),
+            Serverbound::ChatAck(ChatAck { offset: 3 }),
+            Serverbound::ChatCommandSigned(ChatCommandSigned {
+                command: "say hi".into(),
+                timestamp: 1_700_000_000_000,
+                salt: -5,
+                arguments: vec![("message".into(), vec![9; 256])],
+                last_seen: LastSeenUpdate {
+                    offset: 1,
+                    acknowledged: [1, 0, 8],
+                    checksum: -3,
+                },
+            }),
+            Serverbound::ChatSessionUpdate(ChatSessionUpdate {
+                session: 0x1234,
+                expires_at: 1_800_000_000_000,
+                key: vec![0x30; 294],
+                key_signature: vec![7; 512],
             }),
             Serverbound::ChunkBatchReceived(ChunkBatchReceived {
                 chunks_per_tick: 9.5,

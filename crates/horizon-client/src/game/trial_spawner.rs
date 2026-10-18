@@ -106,34 +106,21 @@ impl TrialSpawnerLevel for GameLevel<'_, '_> {
 }
 
 impl Game<'_> {
-    /// Every trial spawner's server tick.
-    pub(super) fn tick_trial_spawners(&mut self) -> Result<()> {
-        let keys: Vec<Pos> = self
-            .world
+    /// The server tick of the trial spawner at `key`. Its client tick comes
+    /// after every block entity's.
+    pub(super) fn tick_trial_spawner(&mut self, key: Pos) -> Result<()> {
+        let Some((current, ominous)) = self.trial_spawner_block(key) else {
+            return Ok(());
+        };
+        let Some(BlockEntity::TrialSpawner(mut spawner)) = self.world.block_entities.take(&key)
+        else {
+            return Ok(());
+        };
+        let result = self.server_tick_trial_spawner(key, &mut spawner, current, ominous);
+        self.world
             .block_entities
-            .iter()
-            .filter(|(_, e)| matches!(e, BlockEntity::TrialSpawner(_)))
-            .map(|(k, _)| *k)
-            .collect();
-        for &key in &keys {
-            let Some((current, ominous)) = self.trial_spawner_block(key) else {
-                continue;
-            };
-            let Some(BlockEntity::TrialSpawner(mut spawner)) =
-                self.world.block_entities.remove(&key)
-            else {
-                continue;
-            };
-            let result = self.server_tick_trial_spawner(key, &mut spawner, current, ominous);
-            self.world
-                .block_entities
-                .insert(key, BlockEntity::TrialSpawner(spawner));
-            result?;
-        }
-        for key in keys {
-            self.client_tick_trial_spawner(key);
-        }
-        Ok(())
+            .put(key, BlockEntity::TrialSpawner(spawner));
+        result
     }
     /// The trial spawner block at `key`: its state and ominous flag.
     pub(super) fn trial_spawner_block(&self, key: Pos) -> Option<(TrialState, bool)> {

@@ -1539,6 +1539,7 @@ dependencies = [
  "horizon-world",
  "serde_json",
  "sha1",
+ "sha2",
 ]
 
 [[package]]
@@ -1569,10 +1570,12 @@ dependencies = [
 name = "horizon-server-files"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "horizon-core",
  "horizon-protocol",
  "horizon-world",
  "log",
+ "ureq",
 ]
 
 [[package]]
