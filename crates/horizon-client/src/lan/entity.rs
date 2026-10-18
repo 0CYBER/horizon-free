@@ -436,22 +436,32 @@ pub struct Viewer<'a> {
     pub out: &'a mut Vec<Vec<u8>>,
 }
 
-/// TrackedEntity.updatePlayer: within the type's range (capped by the view
-/// distance) horizontally, in a chunk the client has.
-fn sees(
-    position: [f64; 3],
-    view_distance: i32,
-    chunks: &crate::fast_hash::FxHashSet<(i32, i32)>,
-    e: &EntityState,
+/// One entity as this tick's range checks read it: where it is
+/// horizontally, its id, its type's tracking range in chunks and the chunk
+/// it is in (an index into the tick's chunks).
+#[derive(Clone, Copy)]
+struct Probe {
+    x: f64,
+    z: f64,
+    id: i32,
     range: i32,
-) -> bool {
-    let range = f64::from(range.min(view_distance) * 16);
-    let (dx, dz) = (position[0] - e.position[0], position[2] - e.position[2]);
-    let chunk = (
-        (e.position[0].floor() as i32) >> 4,
-        (e.position[2].floor() as i32) >> 4,
-    );
-    dx * dx + dz * dz <= range * range && chunks.contains(&chunk)
+    chunk: u32,
+}
+
+/// TrackedEntity.updatePlayer: within the type's range (capped by the view
+/// distance) horizontally, in a chunk the client has. `held` remembers for
+/// each of the tick's chunks whether the client has it (0: not looked up
+/// yet, 1: no, 2: yes), so each chunk is looked up once per client.
+fn sees(v: &Viewer, p: &Probe, chunks: &[(i32, i32)], held: &mut [u8]) -> bool {
+    let range = f64::from(p.range.min(v.view_distance) * 16);
+    let (dx, dz) = (v.position[0] - p.x, v.position[2] - p.z);
+    dx * dx + dz * dz <= range * range && {
+        let held = &mut held[p.chunk as usize];
+        if *held == 0 {
+            *held = 1 + u8::from(v.chunks.contains(&chunks[p.chunk as usize]));
+        }
+        *held == 2
+    }
 }
 
 /// One level's tracked entities (ChunkMap.entityMap).
@@ -460,10 +470,17 @@ pub struct Entities {
     states: crate::fast_hash::FxHashMap<i32, ServerEntity>,
     /// The level tick, stamped on every entity still in the level.
     tick: u32,
-    /// This tick's tracking range of each entity, and what each client
-    /// makes of each entity ([`SEES`], [`TRACKS`]), kept between ticks.
-    ranges: Vec<i32>,
+    /// This tick's entities as the range checks read them, the chunks they
+    /// are in (and each one's index), whether the client being checked has
+    /// each chunk, and what each client makes of each entity ([`SEES`],
+    /// [`TRACKS`]), kept between ticks.
+    probes: Vec<Probe>,
+    chunks: Vec<(i32, i32)>,
+    chunk_index: crate::fast_hash::FxHashMap<(i32, i32), u32>,
+    held: Vec<u8>,
     flags: Vec<Vec<u8>>,
+    /// Whether a client starts tracking each entity this tick.
+    pairs: Vec<bool>,
     /// One entity's packets and their bodies, kept between entities.
     packets: Vec<play::Clientbound>,
     bodies: Vec<Vec<u8>>,
@@ -501,7 +518,9 @@ impl Entities {
     ) {
         self.tick = self.tick.wrapping_add(1);
         let now = self.tick;
-        self.ranges.clear();
+        self.probes.clear();
+        self.chunks.clear();
+        self.chunk_index.clear();
         for (index, e) in entities.iter().enumerate() {
             let s = self
                 .states
@@ -509,19 +528,40 @@ impl Entities {
                 .or_insert_with(|| ServerEntity::new(e, kind(&e.kind), riding));
             s.seen = now;
             s.index = index;
-            self.ranges.push(s.range);
+            let at = (
+                (e.position[0].floor() as i32) >> 4,
+                (e.position[2].floor() as i32) >> 4,
+            );
+            let next = self.chunks.len() as u32;
+            let chunk = *self.chunk_index.entry(at).or_insert(next);
+            if chunk == next {
+                self.chunks.push(at);
+            }
+            self.probes.push(Probe {
+                x: e.position[0],
+                z: e.position[2],
+                id: e.id,
+                range: s.range,
+                chunk,
+            });
         }
         self.flags.resize_with(viewers.len(), Vec::new);
+        self.pairs.clear();
+        self.pairs.resize(entities.len(), false);
         for (v, flags) in viewers.iter_mut().zip(&mut self.flags) {
             flags.clear();
+            self.held.clear();
+            self.held.resize(self.chunks.len(), 0);
+            let (chunks, held, pairs) = (&self.chunks, &mut self.held, &mut self.pairs);
             let mut kept = 0;
-            flags.extend(entities.iter().zip(&self.ranges).map(|(e, &range)| {
-                if e.id == v.entity_id || !sees(v.position, v.view_distance, v.chunks, e, range) {
+            flags.extend(self.probes.iter().zip(pairs.iter_mut()).map(|(p, pairs)| {
+                if p.id == v.entity_id || !sees(v, p, chunks, held) {
                     0
-                } else if v.tracker.seen.contains(&e.id) {
+                } else if v.tracker.seen.contains(&p.id) {
                     kept += 1;
                     SEES | TRACKS
                 } else {
+                    *pairs = true;
                     SEES
                 }
             }));
@@ -553,6 +593,10 @@ impl Entities {
                 s.send_changes(e, riding, &mut self.packets);
             }
             s.added = false;
+            // Nothing to send: no changes, and nobody starts tracking it.
+            if self.packets.is_empty() && !self.pairs[index] {
+                continue;
+            }
             let mut encoded = false;
             let mut pairing: Option<Vec<Vec<u8>>> = None;
             for (v, flags) in viewers.iter_mut().zip(&self.flags) {
@@ -827,5 +871,35 @@ mod tests {
         assert!(!c.trackers[0].is_tracking(7) && !c.trackers[1].is_tracking(7));
         assert_eq!(c.out[0].first(), Some(&removed));
         assert_eq!(level.len(), 1);
+    }
+
+    #[test]
+    fn entities_in_chunks_a_client_lacks_wait_for_them() {
+        let mut level = Entities::default();
+        let mut c = Clients::new();
+        // Two zombies in range in chunk (4, 0), which the clients don't have
+        // yet, and one in chunk (0, 0).
+        let mut far = state(70.0);
+        let mut near = state(66.0);
+        near.id = 8;
+        let mut home = state(1.0);
+        home.id = 9;
+        c.tick(&mut level, &[&far, &near, &home]);
+        for t in &c.trackers {
+            assert!(!t.is_tracking(7) && !t.is_tracking(8) && t.is_tracking(9));
+        }
+        // The chunk arrives: both are paired, in order.
+        c.chunks.insert((4, 0));
+        c.tick(&mut level, &[&far, &near, &home]);
+        for t in &c.trackers {
+            assert!(t.is_tracking(7) && t.is_tracking(8) && t.is_tracking(9));
+        }
+        // One walks back into chunk (3, 0) and the other out of range.
+        far.position[0] = 200.0;
+        near.position[0] = 60.0;
+        c.tick(&mut level, &[&far, &near, &home]);
+        for t in &c.trackers {
+            assert!(!t.is_tracking(7) && t.is_tracking(8) && t.is_tracking(9));
+        }
     }
 }
