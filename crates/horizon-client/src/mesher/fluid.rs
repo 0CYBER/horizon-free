@@ -306,13 +306,7 @@ pub(super) fn tesselate(
     };
     let mut quad =
         |v: [([f32; 3], [f32; 2]); 4], layer: u16, color: u32, light: u16, back: bool| {
-            let vertex = |(pos, uv): ([f32; 3], [f32; 2])| TerrainVertex {
-                pos,
-                uv,
-                layer,
-                color,
-                light,
-            };
+            let vertex = |(pos, uv)| TerrainVertex::new(pos, uv, layer, color, light);
             target.extend(v.map(vertex));
             if back {
                 target.extend([v[0], v[3], v[2], v[1]].map(vertex));
