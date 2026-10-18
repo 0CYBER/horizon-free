@@ -458,8 +458,11 @@ Two cases the oracle fills in:
     polished diorite, blank pots) become what its processors make of them: the fixed swaps as
     vanilla's `rule`, the random ones (suspicious sand, sand and sandstone, upside-down stairs,
     cobwebs, sherds on the pots) as the game's `horizon:pick`, on the same `nextFloat` as the
-    mod. 133 of the 1,427 processors are carried; 1,294 are still taken out (blocks swapped,
-    aged or propped up, YUNG's chest caps).
+    mod. Better Dungeons' small dungeons keep one chest and each other one with a fifth's
+    chance, two at most (the game's `horizon:count_cap`, counted per placement as the mod's
+    DungeonContext is): 12 chests in five small dungeons at seed 1234 become 6.
+    136 of the 1,427 processors are carried; 1,291 are still taken out (blocks swapped, aged
+    or propped up).
     In the 128×128-chunk square (seed 1234), every spawner of a mod structure now has its mob:
     in the Overworld 83 Better Dungeons spawners held the template's placeholder pig and 17 of
     Moog's were empty (763 spawners with a mob, up from 628); in the Nether the 52 empty ones

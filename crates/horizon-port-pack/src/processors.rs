@@ -241,6 +241,14 @@ fn as_data(kind: &str, p: &Value, data: &ProcessorData) -> Option<Vec<Value>> {
         {
             vec![processor]
         }
+        "betterdungeons:small_dungeon_chest_processor" => {
+            // Its config's defaults: one chest at least, two at most, a
+            // fifth of the others kept until then; ChestBlock covers both.
+            vec![json!({"processor_type": "horizon:count_cap",
+                "blocks": ["minecraft:chest", "minecraft:trapped_chest"],
+                "min": 1, "max": 2, "chance": 0.2f32 as f64,
+                "replacement": block("minecraft:cave_air")})]
+        }
         _ if ns == "betterdungeons" || ns == "betterdeserttemples" => vec![yung_spawner(kind, p)?],
         _ => return None,
     })
@@ -872,5 +880,20 @@ mod tests {
             "betterdeserttemples:quartz_pillar_processor"
         );
         assert_eq!(carried.values().sum::<usize>(), 4);
+    }
+
+    #[test]
+    fn small_dungeon_chests_are_capped() {
+        let mut list = json!({"processors": [
+            {"processor_type": "betterdungeons:small_dungeon_chest_processor"}]});
+        let mut carried = BTreeMap::new();
+        assert!(carry("processor_list", &mut list, &data(), &mut carried));
+        let cap = &list["processors"][0];
+        assert_eq!(cap["processor_type"], "horizon:count_cap");
+        assert_eq!(
+            (cap["min"].as_u64(), cap["max"].as_u64()),
+            (Some(1), Some(2))
+        );
+        assert_eq!(cap["replacement"], json!({"id": "minecraft:cave_air"}));
     }
 }
