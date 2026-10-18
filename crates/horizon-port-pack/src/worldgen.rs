@@ -97,14 +97,17 @@ const START_RULES: [(&str, &str); 3] = [
 ];
 /// The jigsaws' rules on laying out pieces, which vanilla's jigsaw has no
 /// place for.
-const LAYOUT_RULES: [&str; 6] = [
+const LAYOUT_RULES: [&str; 5] = [
     "y_allowance",
     "burying_type",
     "use_bounding_box_hack",
     "pools_that_ignore_boundaries",
     "enhanced_terrain_adaptation",
-    "vertical_distance_from_start_piece",
 ];
+/// Fields of older versions the mods' codecs no longer read: their own
+/// structures ignore them, and so does carry. Repurposed's jungle fortress
+/// and End stronghold still write `vertical_distance_from_start_piece`.
+const DEAD_FIELDS: [&str; 1] = ["vertical_distance_from_start_piece"];
 /// Pool elements that are vanilla's with extra fields: (mod type, vanilla type).
 const ELEMENTS: [(&str, &str); 3] = [
     (
@@ -660,6 +663,9 @@ fn start_checks(v: &mut Value, liquid: &str, lost: &mut BTreeMap<String, usize>,
             checks.insert(to.into(), n.clone());
         }
     }
+    for field in DEAD_FIELDS {
+        o.remove(field);
+    }
     for rule in LAYOUT_RULES {
         let kept = limited && PIECE_LIMITED_RULES.contains(&rule);
         if o.remove(rule).is_some_and(|r| r != Value::Bool(false)) && !kept {
@@ -1115,11 +1121,13 @@ mod tests {
             assert!(moogs.get(gone).is_none(), "{gone}");
         }
         assert_eq!(moogs["size"], 7);
-        // Repurposed Structures reads the block above the bottom.
+        // Repurposed Structures reads the block above the bottom. Its jungle
+        // fortress's vertical distance is a field its code no longer reads.
         let mut rs = json!({"type": "repurposed_structures:generic_jigsaw_structure",
-            "cannot_spawn_in_liquid": true});
+            "cannot_spawn_in_liquid": true, "vertical_distance_from_start_piece": 35});
         assert!(upgrade("structure", &mut rs, &mut report, &NO_TAGS));
         assert_eq!(rs["horizon:start_checks"], json!({"liquid": "lowest"}));
+        assert!(rs.get("vertical_distance_from_start_piece").is_none());
         // Repurposed's own checks: the Nether city, Nether shipwrecks, the End stronghold.
         for (t, check) in [
             ("city_nether_structure", "city_nether"),
