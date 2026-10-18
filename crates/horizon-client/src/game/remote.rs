@@ -1490,6 +1490,20 @@ impl Game<'_> {
                         }
                     }
                 }
+                // Entity.DATA_SHARED_FLAGS_ID's crouching bit: another
+                // player's crouch (their model and Entity.isDiscrete's name tag).
+                if self
+                    .remote
+                    .as_ref()
+                    .is_some_and(|r| r.level_players.contains_key(&p.id))
+                    && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
+                {
+                    for (index, _, value) in &p.values {
+                        if let (0, Value::Byte(flags)) = (index, value) {
+                            m.extra.crouching = flags & 2 != 0;
+                        }
+                    }
+                }
                 for (index, _, value) in &p.values {
                     if *index == ITEM_ENTITY_ITEM
                         && let Value::Item(stack) = value
