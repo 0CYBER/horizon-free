@@ -288,6 +288,11 @@ impl Game<'_> {
         if hit == Some(0) && self.remote.is_none() {
             let keep = self.ui.rules.bool("keep_inventory") || self.spectator();
             self.experience.respawn(keep);
+            // The guests are sent the respawned host as a new entity, not the dead body.
+            if let Some(host) = self.lan.as_mut() {
+                let id = host.host_entity;
+                host.hub.respawned(id);
+            }
             // Autosaves keep a login position; death must resolve the respawn point instead.
             self.level.position = None;
         }
