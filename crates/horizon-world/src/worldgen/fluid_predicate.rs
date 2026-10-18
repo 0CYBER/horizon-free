@@ -45,6 +45,9 @@ impl FluidPredicateBindings {
         self.tags = resolved;
         Ok(self)
     }
+    pub(crate) fn table(&self) -> &Arc<FluidStateTable> {
+        &self.table
+    }
     pub fn state(&self, block: BlockStateId) -> Option<crate::fluid::FluidState> {
         self.table.get(block)
     }
