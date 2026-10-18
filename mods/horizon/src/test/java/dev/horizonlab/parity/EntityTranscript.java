@@ -10,6 +10,7 @@ import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientboundAddEntityPacket;
 import net.minecraft.network.protocol.game.ClientboundEntityPositionSyncPacket;
 import net.minecraft.network.protocol.game.ClientboundMoveEntityPacket;
+import net.minecraft.network.protocol.game.ClientboundProjectilePowerPacket;
 import net.minecraft.network.protocol.game.ClientboundRemoveEntitiesPacket;
 import net.minecraft.network.protocol.game.ClientboundRotateHeadPacket;
 import net.minecraft.network.protocol.game.ClientboundSetEntityDataPacket;
@@ -47,6 +48,7 @@ final class EntityTranscript {
         float headRot;
         boolean onGround;
         String motion;
+        String power = "";
         boolean removed;
 
         Tracked(ClientboundAddEntityPacket p) {
@@ -91,6 +93,7 @@ final class EntityTranscript {
             case ClientboundEntityPositionSyncPacket p -> byId.get(p.id());
             case ClientboundSetEntityMotionPacket p -> byId.get(p.id());
             case ClientboundTeleportEntityPacket p -> byId.get(p.id());
+            case ClientboundProjectilePowerPacket p -> byId.get(p.getId());
             case ClientboundMoveEntityPacket p -> byId.get(VanillaProtocolClient.moveEntityId(p));
             case ClientboundRotateHeadPacket p -> byId.get(VanillaProtocolClient.rotateHeadId(p));
             default -> null;
@@ -131,6 +134,7 @@ final class EntityTranscript {
                 t.onGround = p.onGround();
             }
             case ClientboundRotateHeadPacket p -> t.headRot = p.getYHeadRot();
+            case ClientboundProjectilePowerPacket p -> t.power = " power " + p.getAccelerationPower();
             default -> {
             }
         }
@@ -152,7 +156,7 @@ final class EntityTranscript {
             for (int id : t.passengers) riders.add(names.getOrDefault(id, "player or unknown"));
             out.add("entity " + t.name + " | add " + t.add + " | pairing " + t.pairing + " | data " + t.data + " | equipment " + t.equipment
                 + " | attributes " + t.attributes + " | passengers " + riders + " | now " + t.codec.getBase() + " rot " + t.xRot + ","
-                + t.yRot + " head " + t.headRot + " ground " + t.onGround + " motion " + t.motion + (t.removed ? " | removed" : ""));
+                + t.yRot + " head " + t.headRot + " ground " + t.onGround + " motion " + t.motion + t.power + (t.removed ? " | removed" : ""));
         }
         out.sort(null);
         return out;

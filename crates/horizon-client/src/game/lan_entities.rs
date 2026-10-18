@@ -37,6 +37,7 @@ fn state(id: u32, kind: &str, position: [f64; 3], yaw: f32, on_ground: bool) -> 
         data: 0,
         meta: Vec::new(),
         equipment: Vec::new(),
+        precise: false,
     }
 }
 
@@ -101,7 +102,12 @@ impl Game<'_> {
 
     /// Boats, minecarts, armor stands, item frames, paintings and the
     /// entities kept unsimulated, as guests track them.
-    pub(super) fn lan_object_states(&self, hub: &mut Hub, out: &mut Vec<EntityState>) {
+    pub(super) fn lan_object_states(
+        &self,
+        host_entity: Option<i32>,
+        hub: &mut Hub,
+        out: &mut Vec<EntityState>,
+    ) {
         for b in &self.boats {
             let p = b.position;
             let mut e = state(b.id, &b.entity_type(), [p.x, p.y, p.z], b.yaw, b.on_ground);
@@ -225,6 +231,7 @@ impl Game<'_> {
             }
             out.push(e);
         }
+        self.lan_projectile_states(host_entity, hub, out);
         for o in &self.others {
             let p = o.position;
             let mut e = state(o.id, &o.kind, [p.x, p.y, p.z], o.yaw, false);
@@ -233,6 +240,189 @@ impl Game<'_> {
             out.push(e);
         }
     }
+}
+
+impl Game<'_> {
+    /// Gives the entities Horizon keeps without an id one (`Entity.id`, from
+    /// the same counter as the rest) before they are first tracked.
+    pub(super) fn lan_assign_ids(&mut self) {
+        let next = &mut self.next_entity;
+        let mut give = |id: &mut u32| {
+            if *id == 0 {
+                *next += 1;
+                *id = *next;
+            }
+        };
+        self.tnts.iter_mut().for_each(|t| give(&mut t.id));
+        self.falling.iter_mut().for_each(|f| give(&mut f.id));
+        self.creatures
+            .projectiles
+            .iter_mut()
+            .for_each(|p| give(&mut p.id));
+        self.tridents.iter_mut().for_each(|t| give(&mut t.id));
+        self.rockets.iter_mut().for_each(|r| give(&mut r.id));
+        self.crystals.iter_mut().for_each(|c| give(&mut c.id));
+    }
+
+    /// Primed TNT, falling blocks, projectiles, tridents, firework rockets and
+    /// end crystals, as guests track them.
+    fn lan_projectile_states(
+        &self,
+        host_entity: Option<i32>,
+        hub: &mut Hub,
+        out: &mut Vec<EntityState>,
+    ) {
+        let owner = |who: Option<horizon_client::mobs::Who>| match who {
+            Some(horizon_client::mobs::Who::Mob(id)) => id as i32,
+            Some(horizon_client::mobs::Who::Player) => host_entity.unwrap_or(0),
+            None => 0,
+        };
+        let at = |p: horizon_core::geometry::Vec3| [p.x, p.y, p.z];
+        for t in self.tnts.iter().filter(|t| t.id != 0) {
+            let mut e = state(t.id, "minecraft:tnt", at(t.position), 0.0, t.on_ground);
+            e.velocity = at(t.velocity);
+            // PrimedTnt.DATA_FUSE_ID, 80 by default; requiresPrecisePosition
+            // while it touches a block.
+            if t.fuse != 80 {
+                e.meta.push((8, serializer::INT, Value::Int(t.fuse)));
+            }
+            e.precise = t.on_ground;
+            out.push(e);
+        }
+        for f in self.falling.iter().filter(|f| f.id != 0) {
+            let mut e = state(f.id, "minecraft:falling_block", at(f.position), 0.0, false);
+            e.velocity = at(f.velocity);
+            // getAddEntityPacket: the block state; DATA_START_POS.
+            e.data = f.state.0 as i32;
+            if f.no_gravity {
+                e.meta.push((5, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            let start = [f.start_pos.x, f.start_pos.y, f.start_pos.z];
+            if start != [0; 3] {
+                e.meta.push((8, serializer::BLOCK_POS, Value::Pos(start)));
+            }
+            out.push(e);
+        }
+        for p in self.creatures.projectiles.iter().filter(|p| p.id != 0) {
+            use horizon_client::projectiles::ProjectileKind as K;
+            let kind = match &p.kind {
+                K::Arrow { .. } => "minecraft:arrow",
+                K::Snowball => "minecraft:snowball",
+                K::Egg => "minecraft:egg",
+                K::EnderPearl => "minecraft:ender_pearl",
+                K::SmallFireball => "minecraft:small_fireball",
+                K::LargeFireball { .. } => "minecraft:fireball",
+                K::LlamaSpit => "minecraft:llama_spit",
+                K::WindCharge => "minecraft:wind_charge",
+                K::BreezeWindCharge => "minecraft:breeze_wind_charge",
+                K::ShulkerBullet { .. } => "minecraft:shulker_bullet",
+                K::WitherSkull { .. } => "minecraft:wither_skull",
+                K::Potion { .. } => "minecraft:splash_potion",
+            };
+            let mut e = state(p.id, kind, at(p.position), p.yaw, false);
+            e.pitch = p.pitch;
+            e.velocity = at(p.velocity);
+            e.data = owner(p.owner);
+            match &p.kind {
+                K::Arrow { critical, .. } => {
+                    let a = p.arrow.as_deref();
+                    e.meta.extend(arrow_meta(
+                        *critical,
+                        a.is_some_and(|a| a.no_physics),
+                        a.map_or(0, |a| a.pierce),
+                        a.is_some_and(|a| a.in_ground) || p.stuck,
+                    ));
+                }
+                // WitherSkull.DATA_DANGEROUS.
+                K::WitherSkull { dangerous: true } => {
+                    e.meta.push((8, serializer::BOOLEAN, Value::Bool(true)));
+                }
+                _ => {}
+            }
+            out.push(e);
+        }
+        for t in self.tridents.iter().filter(|t| t.id != 0) {
+            let mut e = state(t.id, "minecraft:trident", at(t.position), t.yaw, false);
+            e.pitch = t.pitch;
+            e.velocity = at(t.velocity);
+            e.meta = arrow_meta(false, t.no_physics, 0, t.in_ground);
+            // ThrownTrident.ID_LOYALTY and ID_FOIL.
+            if t.loyalty != 0 {
+                e.meta
+                    .push((11, serializer::BYTE, Value::Byte(t.loyalty as i8)));
+            }
+            if t.stack.has_any_enchantments() {
+                e.meta.push((12, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            out.push(e);
+        }
+        for r in self.rockets.iter().filter(|r| r.id != 0) {
+            let mut e = state(
+                r.id,
+                "minecraft:firework_rocket",
+                at(r.position),
+                0.0,
+                false,
+            );
+            e.velocity = at(r.velocity);
+            // DATA_ID_FIREWORKS_ITEM once set from a stack, DATA_ATTACHED_TO_TARGET,
+            // DATA_SHOT_AT_ANGLE.
+            let plain = &*r.item.item == "minecraft:firework_rocket"
+                && r.item.count == 1
+                && r.item.extra.is_none();
+            if !plain {
+                e.meta.push((
+                    8,
+                    serializer::ITEM_STACK,
+                    Value::Item(hub.stack(&Some(r.item.clone()))),
+                ));
+            }
+            if r.attached
+                && let Some(host) = host_entity
+            {
+                e.meta
+                    .push((9, serializer::OPTIONAL_UNSIGNED_INT, Value::Id(host + 1)));
+            }
+            if r.angled {
+                e.meta.push((10, serializer::BOOLEAN, Value::Bool(true)));
+            }
+            out.push(e);
+        }
+        for c in self.crystals.iter().filter(|c| c.id != 0) {
+            let mut e = state(c.id, "minecraft:end_crystal", at(c.position), 0.0, false);
+            // EndCrystal.DATA_BEAM_TARGET and DATA_SHOW_BOTTOM (true by default).
+            if c.beam.is_some() {
+                e.meta
+                    .push((8, serializer::OPTIONAL_BLOCK_POS, Value::OptPos(c.beam)));
+            }
+            if !c.show_bottom {
+                e.meta.push((9, serializer::BOOLEAN, Value::Bool(false)));
+            }
+            out.push(e);
+        }
+    }
+}
+
+/// `AbstractArrow`'s ID_FLAGS (critical 1, no physics 2), PIERCE_LEVEL and
+/// IN_GROUND, when they differ from the defaults.
+fn arrow_meta(
+    critical: bool,
+    no_physics: bool,
+    pierce: u8,
+    in_ground: bool,
+) -> Vec<(u8, i32, Value)> {
+    let mut meta = Vec::new();
+    let flags = i8::from(critical) | i8::from(no_physics) << 1;
+    if flags != 0 {
+        meta.push((8, serializer::BYTE, Value::Byte(flags)));
+    }
+    if pierce != 0 {
+        meta.push((9, serializer::BYTE, Value::Byte(pierce as i8)));
+    }
+    if in_ground {
+        meta.push((10, serializer::BOOLEAN, Value::Bool(true)));
+    }
+    meta
 }
 
 #[cfg(test)]
