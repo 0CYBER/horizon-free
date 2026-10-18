@@ -76,6 +76,8 @@ pub fn run(dir: &Path) -> Result<(), String> {
     let config = Config::load(dir)?;
     let program = engine::program(&config, dir)?;
     let resources = engine::resources(&config, dir, Some(&program))?;
+    // A game the system can't load would only crash again at every restart: say why at once.
+    engine::check_starts(&program)?;
     let _lock = lock(dir)?;
     let shared = Shared::new(dir);
     let _endpoint = api::start(shared.clone())?;
