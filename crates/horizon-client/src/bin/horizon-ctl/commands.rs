@@ -343,7 +343,7 @@ pub const COMMANDS: &[Cmd] = &[
     cmd!("bench", Scripting, "bench SECONDS", "reset frame stats, wait, reply with the summary", "", ["horizon-ctl bench 10"], &[], mcp: false, local: false),
     cmd!("stats", Scripting, "stats [reset]", "frame-time summary since the last reset", "", ["horizon-ctl stats"], &[], mcp: false, local: false),
     cmd!("fly", Scripting, "fly X1 Y1 Z1 X2 Y2 Z2 SECONDS [PITCH [raw]]", "fly the camera along a line, then reply with the frame summary",
-        "With raw, the reply also lists every frame time in milliseconds (frame_ms).",
+        "The reply's tick_ms and tick_ms_max are the world's smoothed tick time over the flight (the server thread's when single player runs on one). With raw, the reply also lists every frame time in milliseconds (frame_ms).",
         ["horizon-ctl fly 0 100 0 500 100 0 20"], &[], mcp: false, local: false),
 ];
 

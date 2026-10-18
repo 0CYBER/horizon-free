@@ -54,12 +54,23 @@ pub struct Flight {
     /// Reply with every frame time too (`fly ... PITCH raw`).
     raw: bool,
     reply: Sender<String>,
+    /// The world's smoothed tick time each frame (the F3 server line): the
+    /// server thread's when single player runs on one.
+    tick_ms: Vec<f32>,
 }
 
 impl Game<'_> {
     /// Move the camera along the running flight; reply when it ends.
     pub(super) fn advance_flight(&mut self) {
-        let Some(flight) = &self.flight else { return };
+        let tick_ms = self
+            .integrated
+            .as_ref()
+            .map_or(self.debug_charts.smoothed_tick_ms, |s| s.smoothed_tick_ms());
+        let Some(flight) = self.flight.as_mut() else {
+            return;
+        };
+        flight.tick_ms.push(tick_ms);
+        let flight = &*flight;
         let t = (flight.started.elapsed().as_secs_f64() / flight.seconds).min(1.0);
         let (a, b) = (flight.from, flight.to);
         let d = [b.x - a.x, b.y - a.y, b.z - a.z];
@@ -79,6 +90,9 @@ impl Game<'_> {
             && let Some(flight) = self.flight.take()
         {
             let mut summary = self.frame_stats.summary();
+            let n = flight.tick_ms.len().max(1) as f32;
+            summary["tick_ms"] = (flight.tick_ms.iter().sum::<f32>() / n).into();
+            summary["tick_ms_max"] = flight.tick_ms.iter().copied().fold(0.0, f32::max).into();
             if flight.raw {
                 summary["frame_ms"] = self.frame_stats.frame_millis().into();
                 summary["cpu_ms"] = self.frame_stats.cpu_millis().into();
@@ -527,6 +541,7 @@ impl Game<'_> {
                     seconds: n(7)?.max(0.1),
                     raw: words.get(9) == Some(&"raw"),
                     reply: reply.clone(),
+                    tick_ms: Vec::new(),
                 });
                 Ok(None)
             }
