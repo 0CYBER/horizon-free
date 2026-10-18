@@ -12,6 +12,7 @@ pub const HELP: &[&str] = &[
     "particle NAME X Y Z [DX DY DZ] [COUNT]  spawn particles (vanilla /particle spread)",
     "signedit X Y Z [front|back]    open the sign editor for the sign at X Y Z",
     "section-draws [flat|indirect]  how terrain sections are drawn (A/B checks); replies the mode",
+    "section-cull [on|off]          occlusion culling of solid sections (A/B checks); replies the mode",
 ];
 
 impl Game<'_> {
