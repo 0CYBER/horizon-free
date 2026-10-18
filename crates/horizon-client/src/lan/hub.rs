@@ -2144,6 +2144,18 @@ impl Hub {
             .map(str::to_owned)
     }
 
+    /// ServerLevel.removePlayerImmediately, then addRespawnedPlayer: the other players
+    /// lose the dead player's entity (ServerEntity.removePairing) and are sent the
+    /// respawned one as a new entity at the next tick. Their clients would otherwise keep
+    /// the dead body, lying down, wherever the player goes.
+    pub fn respawned(&mut self, id: i32) {
+        for g in &mut self.guests {
+            if g.entity_id != id && g.tracker.forget(id) {
+                g.send(&C::RemoveEntities(play::RemoveEntities { ids: vec![id] }));
+            }
+        }
+    }
+
     /// PlayerList.respawn: back to `at` with a fresh start. The vanilla client waits on its
     /// level loading screen from the Respawn packet until the level info's "level chunks load
     /// start" event and the chunk under the player, so the packets follow vanilla's order.
@@ -2170,6 +2182,9 @@ impl Hub {
         g.tracker.clear();
         g.sent_chunks.clear();
         g.chunk_queue.clear();
+        let id = g.entity_id;
+        self.respawned(id);
+        let g = &mut self.guests[i];
         // ServerPlayer.restoreFrom: the game mode again (onUpdateAbilities).
         g.send(&C::PlayerAbilities(play::PlayerAbilities {
             flags: g.ability_flags(),

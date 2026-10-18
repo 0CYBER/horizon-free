@@ -19,6 +19,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - hazards:   a guest in survival gets hungry sprint-jumping and is hurt by lava, a block at the eyes,
              drowning and the void (then respawns);
 - pvp:       the guest and the host hit each other with a sword; with the pvp game rule off, nothing;
+- respawn:   a player killed is drawn dead by the other side, and alive again once it respawns (the
+             respawned player is a new entity to the others); the host dies, and on the server thread
+             the guest too;
 - containers: the guest's ender chest holds the guest's items, not the host's, and a double chest
              opens as 9x6 with the right half first;
 - feedback:  the guest's command feedback names the guest and shows the numbers;
@@ -84,7 +87,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'containers', 'feedback', 'titles', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'push', 'eat', 'xp', 'objects', 'projectiles', 'light', 'effects', 'portals', 'distance']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'respawn', 'containers', 'feedback', 'titles', 'commands', 'recipes', 'trials', 'clicks', 'sleep', 'push', 'eat', 'xp', 'objects', 'projectiles', 'light', 'effects', 'portals', 'distance']
 
 
 class Game:
@@ -573,6 +576,45 @@ def check_pvp(host, guest, out):
     assert hits['host hits guest'][1] < hits['host hits guest'][0], f'the host did not hurt the guest: {hits}'
     assert hits['pvp off'][1] == hits['pvp off'][0], f'pvp off still hurts: {hits}'
     return hits
+
+
+def dead_players(game, want, ticks=60):
+    """The other players `game`'s client draws dead, once that is `want` (empty or not) or after `ticks`."""
+    for _ in range(ticks // 5):
+        dead = remote(game)['dead_players']
+        if bool(dead) == want:
+            return dead
+        game.wait(5)
+    return dead
+
+
+def check_respawn(host, guest, out):
+    # ServerLevel.removePlayerImmediately and addRespawnedPlayer: a respawned player is removed
+    # from the other players and paired again as a new entity, so their clients drop the body.
+    # The host window only has a client's view of the guest on the server thread.
+    for g in (host, guest):
+        back_to_game(g)
+    results = {}
+    sides = [('host', host, guest)] + ([('guest', guest, host)] if SERVER_THREAD else [])
+    for name, dying, watching in sides:
+        face_each_other(host, guest)
+        dying('command', command='kill @s')
+        dying.wait(30)
+        dead = dead_players(watching, True)
+        watching.shot(out, f'respawn-{name}-dead')
+        dying.raw('respawn')
+        dying.wait(40)
+        back_to_game(dying)
+        # Back within tracking range of the other player, wherever the respawn point is.
+        x, y, z = pos_of(dying)
+        watching('command', command=f'tp @s {x + 3:.2f} {y:.2f} {z:.2f}')
+        watching.wait(40)
+        alive = dead_players(watching, False)
+        watching.shot(out, f'respawn-{name}-alive')
+        results[name] = {'dead': dead, 'after_respawn': alive}
+        assert dead, f'the {name} was not drawn dead: {results}'
+        assert not alive, f'the {name} still lies dead after respawning: {results}'
+    return results
 
 
 def container_items(game):
@@ -1272,6 +1314,7 @@ def check_light(host, guest, out):
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
              'chest': check_chest, 'crafting': check_crafting, 'sign': check_sign, 'damage': check_damage,
              'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
+             'respawn': check_respawn,
              'containers': check_containers, 'feedback': check_feedback, 'titles': check_titles,
              'commands': check_commands,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,

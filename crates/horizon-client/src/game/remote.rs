@@ -3773,6 +3773,13 @@ impl Game<'_> {
                 .filter(|t| t.kind == "minecraft:player")
                 .map(|t| t.position)
                 .collect::<Vec<_>>(),
+            // The other players this client draws dead (lying down, after EntityEvent DEATH).
+            "dead_players": self
+                .mobs
+                .iter()
+                .filter(|m| r.level_players.contains_key(&(m.id as i32)) && !m.alive())
+                .map(|m| m.id)
+                .collect::<Vec<_>>(),
             // The player's own model exists (third person and the inventory draw it).
             "player_model": self.player_model.is_some(),
             "health": r.health.0,

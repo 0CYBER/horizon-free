@@ -469,6 +469,11 @@ impl Tracker {
     pub fn clear(&mut self) {
         self.seen.clear();
     }
+    /// Stop tracking `id` without a packet: the caller removes it from the
+    /// client, and the next tick pairs it again if it is still in range.
+    pub fn forget(&mut self, id: i32) -> bool {
+        self.seen.remove(&id)
+    }
     pub fn len(&self) -> usize {
         self.seen.len()
     }
@@ -1020,5 +1025,29 @@ mod tests {
         for t in &c.trackers {
             assert!(!t.is_tracking(7) && t.is_tracking(8) && t.is_tracking(9));
         }
+    }
+
+    #[test]
+    fn a_forgotten_entity_is_paired_again_at_the_next_tick() {
+        // A respawned player: the hub removes it from the other clients and
+        // forgets it, and the next tick pairs it again as a new entity.
+        let mut level = Entities::default();
+        let mut c = Clients::new();
+        let mut player = state(0.0);
+        player.id = 1;
+        player.kind = "minecraft:player".into();
+        c.tick(&mut level, &[&player]);
+        c.tick(&mut level, &[&player]);
+        assert!(c.trackers[1].forget(1));
+        assert!(!c.trackers[1].forget(1));
+        c.tick(&mut level, &[&player]);
+        assert!(c.trackers[1].is_tracking(1));
+        let paired = c.out[1]
+            .first()
+            .and_then(|p| play::Clientbound::decode(i32::from(p[0]), &p[1..]).ok());
+        assert!(
+            matches!(paired, Some(play::Clientbound::AddEntity(ref a)) if a.id == 1),
+            "{paired:?}"
+        );
     }
 }
