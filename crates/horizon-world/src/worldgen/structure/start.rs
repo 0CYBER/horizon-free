@@ -97,6 +97,9 @@ pub struct StructureDef {
     pub biomes: BTreeSet<BiomeId>,
     pub step: usize,
     pub terrain: TerrainAdjustment,
+    /// Another loaded structure turns this one's type off
+    /// (`"horizon:disables"`): it never starts.
+    pub disabled: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Reduction {
@@ -137,6 +140,107 @@ pub struct StructureSet {
     /// (`"horizon:exclusion_zone"`: `other_sets`, `chunk_count`).
     min_distance: Option<i64>,
     avoid: Option<(Vec<String>, i32)>,
+    /// `"horizon:ring_sections"`: starts only in odd rings around the origin.
+    rings: Option<RingSections>,
+    /// `"horizon:avoid_biomes"`: no start with one of these biomes near.
+    avoid_biomes: Option<AvoidBiomes>,
+}
+
+/// YUNG's Better Strongholds' placement (BetterStrongholdsPlacement
+/// .isPlacementChunk): the world is cut into rings `thickness` chunks wide,
+/// the first one starting `distance_to_first_ring` chunks out; a start is
+/// placed only in the odd ones, and in none past `max_section`.
+///
+/// ```json
+/// "horizon:ring_sections": {"distance_to_first_ring": 80, "thickness": 96, "max_section": 5}
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RingSections {
+    first: i32,
+    thickness: i32,
+    max: Option<i32>,
+}
+impl RingSections {
+    fn decode(v: &Value) -> Self {
+        let int = |k: &str| v[k].as_i64().map(|n| n as i32);
+        Self {
+            first: int("distance_to_first_ring").unwrap_or(0),
+            thickness: int("thickness").unwrap_or(1).max(1),
+            max: int("max_section"),
+        }
+    }
+    fn allows(&self, x: i32, z: i32) -> bool {
+        // Java int arithmetic: the squares wrap past 46,340 chunks, and the
+        // square root of a negative int is NaN, which casts to 0.
+        let squared = x.wrapping_mul(x).wrapping_add(z.wrapping_mul(z));
+        let distance = f64::from(squared).sqrt() as i32;
+        let section = distance.wrapping_add(self.thickness - self.first) / self.thickness;
+        !self.max.is_some_and(|max| section > max) && section % 2 == 1
+    }
+}
+
+/// YUNG's Better Desert and Jungle Temples' placement: no start when a
+/// biome of the set is found around the chunk's middle block at height `y`
+/// (BiomeSource.findBiomeHorizontal with `radius` blocks and `step` quarts
+/// between samples, closest first).
+///
+/// ```json
+/// "horizon:avoid_biomes": {"biomes": ["#minecraft:is_river", "#minecraft:is_ocean"],
+///   "radius": 48, "step": 2, "y": 120}
+/// ```
+#[derive(Debug)]
+struct AvoidBiomes {
+    biomes: BTreeSet<BiomeId>,
+    radius: i32,
+    step: i32,
+    y: i32,
+}
+impl AvoidBiomes {
+    fn decode(
+        v: &Value,
+        biome_set: &dyn Fn(&Value) -> Result<BTreeSet<BiomeId>, DecodeError>,
+    ) -> Result<Self, DecodeError> {
+        let mut biomes = BTreeSet::new();
+        match &v["biomes"] {
+            Value::Array(list) => {
+                for entry in list {
+                    biomes.extend(biome_set(entry)?);
+                }
+            }
+            other => biomes = biome_set(other)?,
+        }
+        let int = |k: &str, default: i32| v[k].as_i64().map_or(default, |n| n as i32);
+        Ok(Self {
+            biomes,
+            radius: int("radius", 0),
+            step: int("step", 1).max(1),
+            y: int("y", 0),
+        })
+    }
+    fn near(&self, chunk: ChunkPos, mut biome: impl FnMut([i32; 3]) -> BiomeId) -> bool {
+        // ChunkPos.getMiddleBlockPosition, then QuartPos.fromBlock.
+        let (cx, cz) = ((chunk.x * 16 + 8) >> 2, (chunk.z * 16 + 8) >> 2);
+        let (radius, y) = (self.radius >> 2, self.y >> 2);
+        let mut r = 0;
+        while r <= radius {
+            let mut dz = -r;
+            while dz <= r {
+                let z_edge = dz.abs() == r;
+                let mut dx = -r;
+                while dx <= r {
+                    if (z_edge || dx.abs() == r)
+                        && self.biomes.contains(&biome([cx + dx, y, cz + dz]))
+                    {
+                        return true;
+                    }
+                    dx += self.step;
+                }
+                dz += self.step;
+            }
+            r += self.step;
+        }
+        false
+    }
 }
 
 fn heightmap(name: &str) -> Option<HeightmapType> {
@@ -182,8 +286,19 @@ impl StructureRegistry {
         biome_set: &dyn Fn(&Value) -> Result<BTreeSet<BiomeId>, DecodeError>,
     ) -> Result<Self, DecodeError> {
         let mut defs = Vec::new();
+        let (mut types, mut disables) = (Vec::new(), BTreeSet::new());
         for (name, json) in structures {
             let v: Value = serde_json::from_str(json)?;
+            types.push(v["type"].as_str().unwrap_or_default().to_owned());
+            // YUNG's mods turn their vanilla counterparts off (the
+            // DisableVanilla*Mixin on ChunkGenerator.tryGenerateStructure).
+            disables.extend(
+                v["horizon:disables"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|t| Some(t.as_str()?.to_owned())),
+            );
             let kind = match v["type"].as_str().unwrap_or_default() {
                 "minecraft:jigsaw" => StructureKind::Jigsaw(JigsawDef {
                     start_pool: v["start_pool"].as_str().unwrap_or_default().to_owned(),
@@ -251,7 +366,11 @@ impl StructureRegistry {
                     .position(|s| Some(*s) == v["step"].as_str())
                     .unwrap_or(4),
                 terrain: terrain(v["terrain_adaptation"].as_str()),
+                disabled: false,
             });
+        }
+        for (def, kind) in defs.iter_mut().zip(&types) {
+            def.disabled = disables.contains(kind);
         }
         let index = |name: &str| defs.iter().position(|d| d.name == name);
         let mut out = Vec::new();
@@ -314,6 +433,11 @@ impl StructureRegistry {
                         z["chunk_count"].as_i64().unwrap_or(0) as i32,
                     )
                 }),
+                rings: p.get("horizon:ring_sections").map(RingSections::decode),
+                avoid_biomes: p
+                    .get("horizon:avoid_biomes")
+                    .map(|a| AvoidBiomes::decode(a, biome_set))
+                    .transpose()?,
             });
         }
         Ok(Self {
@@ -418,6 +542,9 @@ impl StructureRegistry {
             Placement::Unsupported => false,
         };
         if !placed {
+            return false;
+        }
+        if set.rings.as_ref().is_some_and(|r| !r.allows(x, z)) {
             return false;
         }
         // AdvancedRandomSpread.isPlacementChunk, in blocks from the chunk's corner.
@@ -591,6 +718,16 @@ pub fn create_starts(
         if !registry.is_structure_chunk(set, seed, chunk.x, chunk.z, rings) {
             continue;
         }
+        // Part of the set's placement in YUNG's mods; checked here, where the
+        // biome source is at hand, so another set's exclusion zone naming
+        // this one does not see it.
+        if set
+            .avoid_biomes
+            .as_ref()
+            .is_some_and(|a| a.near(chunk, |q| context.noise_biome(q)))
+        {
+            continue;
+        }
         if set.structures.len() == 1 {
             if let Some(start) = try_generate(
                 registry,
@@ -640,6 +777,9 @@ fn try_generate(
     chunk: ChunkPos,
 ) -> Option<StructureStart> {
     let def = &registry.structures[structure];
+    if def.disabled {
+        return None;
+    }
     context.set_valid_biomes(&def.biomes);
     let seed = context.seed();
     let mut random = WorldgenRandom::new(LegacyRandom::new(0));
@@ -1113,4 +1253,107 @@ pub fn place_in_chunk<W: FeatureWorld + PlacementContext, R: RandomSource + 'sta
         p.after_place(&mut context, &boxes)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn registry(structures: &[(&str, Value)], sets: &[(&str, Value)]) -> StructureRegistry {
+        let text = |l: &[(&str, Value)]| {
+            l.iter()
+                .map(|(k, v)| ((*k).to_owned(), v.to_string()))
+                .collect::<BTreeMap<_, _>>()
+        };
+        // Biome tags: `#t:one` is biome 1, `#t:two` biome 2.
+        StructureRegistry::new(&text(structures), &text(sets), BTreeMap::new(), &|v| {
+            Ok(match v.as_str() {
+                Some("#t:one") => BTreeSet::from([BiomeId(1)]),
+                Some("#t:two") => BTreeSet::from([BiomeId(2)]),
+                _ => BTreeSet::new(),
+            })
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn a_structure_turns_its_vanilla_counterpart_off() {
+        let r = registry(
+            &[
+                (
+                    "minecraft:pyramid",
+                    json!({"type": "minecraft:desert_pyramid"}),
+                ),
+                ("minecraft:igloo", json!({"type": "minecraft:igloo"})),
+                (
+                    "yung:temple",
+                    json!({"type": "minecraft:swamp_hut", "horizon:disables": ["minecraft:desert_pyramid"]}),
+                ),
+            ],
+            &[],
+        );
+        let disabled: Vec<_> = r
+            .structures
+            .iter()
+            .map(|d| (d.name.as_str(), d.disabled))
+            .collect();
+        assert_eq!(
+            disabled,
+            [
+                ("minecraft:igloo", false),
+                ("minecraft:pyramid", true),
+                ("yung:temple", false)
+            ]
+        );
+    }
+
+    #[test]
+    fn ring_sections_keep_the_odd_rings() {
+        let rings = RingSections::decode(
+            &json!({"distance_to_first_ring": 80, "thickness": 96, "max_section": 3}),
+        );
+        // (d + 16) / 96: 0 inside 80 chunks, 1 to 175, 2 to 271, 3 to 367.
+        assert!(!rings.allows(79, 0));
+        assert!(rings.allows(80, 0));
+        assert!(rings.allows(0, -175));
+        assert!(!rings.allows(176, 0));
+        assert!(rings.allows(272, 0));
+        assert!(!rings.allows(464, 0), "section 5 is past max_section 3");
+        // Java's int square wraps: 50,000² + 0 is negative, its root NaN, 0.
+        assert!(!rings.allows(50_000, 0));
+        let open = RingSections::decode(&json!({"distance_to_first_ring": 80, "thickness": 96}));
+        assert!(open.allows(464, 0));
+    }
+
+    #[test]
+    fn avoid_biomes_samples_around_the_middle_block() {
+        let r = registry(
+            &[],
+            &[(
+                "yung:temples",
+                json!({"structures": [], "placement": {"type": "minecraft:random_spread",
+                    "spacing": 24, "separation": 8, "salt": 1,
+                    "horizon:avoid_biomes": {"biomes": ["#t:one", "#t:two"],
+                        "radius": 48, "step": 2, "y": 120}}}),
+            )],
+        );
+        let avoid = r.sets[0].avoid_biomes.as_ref().unwrap();
+        assert_eq!(avoid.biomes, BTreeSet::from([BiomeId(1), BiomeId(2)]));
+        // Chunk (1, -1): middle block (24, 120, -8), quart (6, 30, -2).
+        let mut asked = Vec::new();
+        assert!(!avoid.near(ChunkPos::new(1, -1), |q| {
+            asked.push(q);
+            BiomeId(0)
+        }));
+        assert_eq!(asked[0], [6, 30, -2]);
+        // Every even offset within 12 quarts, once: 13 x 13.
+        assert_eq!(asked.len(), 169);
+        assert!(asked.contains(&[6 - 12, 30, -2 + 12]));
+        assert!(!asked.contains(&[7, 30, -2]));
+        // An ocean on the edge of the square is found.
+        assert!(avoid.near(ChunkPos::new(1, -1), |q| {
+            BiomeId(if q == [18, 30, 10] { 2 } else { 0 })
+        }));
+    }
 }
