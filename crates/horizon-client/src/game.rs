@@ -9740,12 +9740,18 @@ impl Game<'_> {
         }
         if let Some(renderer) = self.renderer.as_mut() {
             let g = &self.settings.horizon;
-            // Even unlimited count/byte settings must yield during a join's
-            // upload burst; draining it all blocked input/rendering for seconds.
-            horizon_client::spans::time("upload", || {
+            let budgeted = g.chunk_updates > 0 || g.upload_budget_kib > 0;
+            if !budgeted && self.pending_uploads.is_empty() {
+                horizon_client::spans::time("upload", || {
+                    for (key, mesh) in uploads {
+                        renderer.upload(key, &mesh);
+                    }
+                });
+            } else {
                 // Horizon's chunk-update and upload budgets: the nearest
                 // sections go first, the rest wait for later frames; a newer
-                // mesh of a waiting section replaces it.
+                // mesh of a waiting section replaces it, and sections of
+                // chunks no longer loaded are dropped.
                 let pending = &mut self.pending_uploads;
                 let fresh: horizon_client::fast_hash::FxHashSet<(i32, i32, i32)> =
                     uploads.iter().map(|(k, _)| *k).collect();
@@ -9759,18 +9765,20 @@ impl Game<'_> {
                 let centre = self.streaming.center;
                 let far = |k: &(i32, i32, i32)| (k.0 - centre.0).pow(2) + (k.2 - centre.1).pow(2);
                 pending.sort_unstable_by_key(|(k, _)| std::cmp::Reverse(far(k)));
-                let (limit, budget) = (
-                    g.chunk_updates as usize,
-                    u64::from(g.upload_budget_kib) * 1024,
-                );
+                let (limit, budget) = if budgeted {
+                    (
+                        g.chunk_updates as usize,
+                        u64::from(g.upload_budget_kib) * 1024,
+                    )
+                } else {
+                    (0, 0)
+                };
                 let (mut count, mut bytes) = (0, 0u64);
-                let upload_started = Instant::now();
                 while let Some((_, mesh)) = pending.last() {
                     let size = ((mesh.solid.len() + mesh.translucent.len())
                         * std::mem::size_of::<horizon_client::mesher::TerrainVertex>())
                         as u64;
-                    if (count > 0 && upload_started.elapsed() >= Duration::from_millis(4))
-                        || (limit > 0 && count >= limit)
+                    if (limit > 0 && count >= limit)
                         || (budget > 0 && bytes > 0 && bytes + size > budget)
                     {
                         break;
@@ -9780,7 +9788,7 @@ impl Game<'_> {
                     count += 1;
                     bytes += size;
                 }
-            });
+            }
             for c in unloaded {
                 for sy in 0..(HEIGHT / 16) {
                     renderer.remove((c.x, sy, c.z));
