@@ -377,6 +377,7 @@ impl Game<'_> {
     }
     pub(super) fn mob_world_base<'s>(&'s self, others: &'s [Seen]) -> MobWorld<'s> {
         let (rain, thunder) = self.world.weather.levels(1.0);
+        let player = self.player_view();
         MobWorld {
             world: &self.world,
             registry: self.pack.assets.registry,
@@ -384,7 +385,8 @@ impl Game<'_> {
             movement: &self.motion.blocks,
             collision: self.collision,
             data: self.res.mob_data(),
-            player: self.player_view(),
+            nearest_player: player.as_ref().filter(|p| !p.spectator).map(|p| p.position),
+            player,
             others,
             others_grid: None,
             daylight: self.dim != Dim::Nether && self.sky_darken() < 4,
@@ -429,25 +431,6 @@ impl Game<'_> {
         };
         spawning::LocalDifficulty::new(base, self.world.day_time, inhabited, moon)
     }
-    /// `ServerChunkCache.tickSpawningChunk`: chunks whose centre is within
-    /// 128 blocks of the player gain inhabited time.
-    fn tick_inhabited(&mut self) {
-        let Some(p) = self.player.as_ref().map(|p| p.position) else {
-            return;
-        };
-        let (pcx, pcz) = (p.x.floor() as i32 >> 4, p.z.floor() as i32 >> 4);
-        for dx in -8..=8 {
-            for dz in -8..=8 {
-                let key = (pcx + dx, pcz + dz);
-                let (cx, cz) = (f64::from(key.0 * 16 + 8), f64::from(key.1 * 16 + 8));
-                if (cx - p.x).powi(2) + (cz - p.z).powi(2) < 128.0 * 128.0
-                    && self.world.chunks.contains_key(&key)
-                {
-                    *self.world.inhabited.entry(key).or_insert(0) += 1;
-                }
-            }
-        }
-    }
     /// Advance every mob one tick, then apply their events.
     pub(super) fn tick_creatures(&mut self) -> Result<()> {
         self.attack_ticks = self.attack_ticks.saturating_add(1);
@@ -464,7 +447,6 @@ impl Game<'_> {
             }
             self.spawn_generation_creatures(key.0, key.1);
         }
-        self.tick_inhabited();
         self.tick_leads();
         self.spawn_natural();
         // ServerChunkCache.tickChunks: the custom spawners tick only with spawn_mobs.
@@ -505,6 +487,7 @@ impl Game<'_> {
         let ticking = self.entity_ticking_area();
         // With guests on, each mob sees its nearest player (game/lan_mobs.rs).
         let guests = self.lan_guest_views();
+        let players = self.level_players();
         let mut bindings = match self.lan.as_mut() {
             Some(host) if !guests.is_empty() => std::mem::take(&mut host.mob_players),
             _ => Default::default(),
@@ -523,6 +506,13 @@ impl Game<'_> {
                 let mut w = self.mob_world_base(&snapshot);
                 w.others_grid = Some(&grid);
                 let m = &mut mobs[i];
+                w.nearest_player = super::natural_spawning::nearest_player(
+                    &players,
+                    m.position.x,
+                    m.position.y,
+                    m.position.z,
+                )
+                .map(|p| p.position);
                 let seen_guest = if guests.is_empty() {
                     None
                 } else {

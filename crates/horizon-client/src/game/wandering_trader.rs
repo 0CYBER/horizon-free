@@ -6,7 +6,7 @@ use horizon_client::{
     mobs::{Species, leash::Holder, spawning, trader},
     save::{read_dat, write_dat},
 };
-use horizon_core::random::RandomSource;
+use horizon_core::{geometry::Vec3, random::RandomSource};
 use horizon_world::nbt::Tag;
 
 const TICK_DELAY: i32 = 1200;
@@ -83,10 +83,7 @@ impl Game<'_> {
     }
     /// `WanderingTraderSpawner.tick`.
     pub(super) fn tick_wandering_trader(&mut self) {
-        if self.dim != Dim::Overworld
-            || self.player.is_none()
-            || !self.ui.rules.bool("spawn_wandering_traders")
-        {
+        if self.dim != Dim::Overworld || !self.ui.rules.bool("spawn_wandering_traders") {
             return;
         }
         self.load_trader_data();
@@ -110,9 +107,23 @@ impl Game<'_> {
     }
     /// `WanderingTraderSpawner.spawn`.
     fn spawn_trader(&mut self) -> bool {
-        let Some(p) = self.player.as_ref().map(|p| p.position) else {
+        // ServerLevel.getRandomPlayer: one of the living players, drawn
+        // from the level random.
+        let alive: Vec<Vec3> = self
+            .level_players()
+            .into_iter()
+            .filter(|p| p.alive)
+            .map(|p| p.position)
+            .collect();
+        if alive.is_empty() {
             return true;
-        };
+        }
+        let pick = self
+            .world
+            .random
+            .next_int_bound(alive.len() as i32)
+            .unwrap_or(0);
+        let p = alive[pick as usize];
         if self.world.random.next_int_bound(10).unwrap_or(1) != 0 {
             return false;
         }

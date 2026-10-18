@@ -24,14 +24,18 @@ pub(super) struct Bolt {
     converted: Vec<u32>,
 }
 impl Game<'_> {
-    /// One `tickThunder` roll per loaded chunk.
+    /// `ServerChunkCache.tickSpawningChunk`: one `tickThunder` roll per
+    /// spawning chunk (within 128 blocks of a player) that is in entity
+    /// ticking range.
     pub(super) fn tick_thunder(&mut self) {
         // isRaining (rain level > 0.2) and isThundering (> 0.9, sky light, no ceiling).
         let (rain, thunder) = self.world.weather.levels(1.0);
         if rain <= 0.2 || thunder <= 0.9 || self.dim != super::Dim::Overworld {
             return;
         }
-        let chunks: Vec<(i32, i32)> = self.world.chunks.keys().copied().collect();
+        let (_, mut chunks) = self.spawning_chunks(&self.level_players());
+        let levels = self.tickets.levels();
+        chunks.retain(|&(x, z)| levels.random_ticking(x, z));
         for (cx, cz) in chunks {
             if self.world.random.next_int_bound(100_000).unwrap_or(1) != 0 {
                 continue;
