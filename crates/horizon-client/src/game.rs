@@ -990,6 +990,8 @@ struct Game<'a> {
     /// A server's players on their way to another level, each waiting for
     /// the destination to load around them.
     server_trips: Vec<server_travel::Trip>,
+    /// Players a command sends to another level, once it has run.
+    level_teleports: Vec<server_travel::LevelTeleport>,
     /// A server's levels other than the one in place (game/levels.rs).
     levels: levels::Levels,
     /// Which pass of a server tick runs (`tick_server`): the first one reads
@@ -10292,6 +10294,7 @@ impl<'a> Game<'a> {
             world_root: PathBuf::new(),
             travelling: None,
             server_trips: Vec::new(),
+            level_teleports: Vec::new(),
             levels: Default::default(),
             level_pass: Default::default(),
             portals: Default::default(),

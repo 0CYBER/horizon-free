@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""Players in different dimensions on a dedicated server, against vanilla's, seen by vanilla clients.
+
+A vanilla dedicated server and Horizon's (`horizon-client --dedicated --nogui`) each serve a copy of one flat
+world vanilla generated first, with Alice and Bob as operators in creative. LocatorBarClient joins them both
+(players made of vanilla's protocol code) and records, step by step, the other players each is sent and loses
+(ClientboundAddEntityPacket, ClientboundRemoveEntitiesPacket) and the dimensions it respawns into
+(ClientboundRespawnPacket), with the locator bar's waypoints, while they change dimensions (ServerPlayer.teleport
+through `execute in ... run tp`, and an End portal): Bob goes to the Nether and back, Alice to the End, Bob
+follows her there, both come back to the Overworld, then Bob steps into an End portal and comes back. Between
+the steps each client sends its position (the reminder a still client sends every second). Each player's lines in each step are compared exactly.
+"""
+import os
+from pathlib import Path
+import platform
+import shutil
+import subprocess
+import sys
+import time
+
+try:
+    from . import lab, test_rust_parity as base
+    from .test_dedicated_server_parity import Server
+    from .test_locator_bar_parity import generate_world, server_dir
+except ImportError:
+    import lab
+    import test_rust_parity as base
+    from test_dedicated_server_parity import Server
+    from test_locator_bar_parity import generate_world, server_dir
+
+NAME = 'server-dimension-players-parity'
+NETHER, END, OVERWORLD = 'minecraft:the_nether', 'minecraft:the_end', 'minecraft:overworld'
+# (label, what the players do).
+SCRIPT = [
+    ('bob-nether', [f'cmd Bob execute in {NETHER} run tp @s 0.5 100 0.5']),
+    ('bob-back', [f'cmd Bob execute in {OVERWORLD} run tp @s 2.5 100 0.5']),
+    ('alice-end', [f'cmd Alice execute in {END} run tp @s 0.5 100 0.5']),
+    ('bob-end', [f'cmd Bob execute in {END} run tp @s 2.5 100 0.5']),
+    ('alice-back', [f'cmd Alice execute in {OVERWORLD} run tp @s 0.5 100 0.5']),
+    ('bob-back-again', [f'cmd Bob execute in {OVERWORLD} run tp @s 2.5 100 0.5']),
+    # Through an End portal (Entity.handlePortal), and back by command.
+    ('bob-portal', ['cmd Bob setblock 2 101 3 minecraft:end_portal', 'cmd Bob tp @s 2.5 101 3.5']),
+    ('bob-portal-back', [f'cmd Bob execute in {OVERWORLD} run tp @s 2.5 100 0.5']),
+]
+STEP_SECONDS = 5.0
+
+
+def run_side(label, server_command, client_command, build, world):
+    directory = build / label
+    port = server_dir(directory, world)
+    out = build / f'{label}.txt'
+    out.unlink(missing_ok=True)
+    server = Server(server_command, directory, label)
+    try:
+        server.wait_for(r'Done \(')
+        with (build / f'{label}-client.log').open('w') as log:
+            client = subprocess.Popen([*map(str, client_command), '127.0.0.1', str(port), str(out)],
+                                      cwd=lab.ROOT, stdin=subprocess.PIPE, stdout=log, stderr=subprocess.STDOUT,
+                                      text=True)
+
+            def tell(line):
+                client.stdin.write(line + '\n')
+                client.stdin.flush()
+            try:
+                tell('players on')
+                tell('step joins')
+                for name, x in (('Alice', 0.5), ('Bob', 2.5)):
+                    tell(f'join {name}')
+                    server.wait_for(rf'{name} joined the game', timeout=120)
+                    tell(f'fly {name} on')
+                    tell(f'cmd {name} tp @s {x} 100 0.5')
+                time.sleep(STEP_SECONDS)
+                for step, actions in SCRIPT:
+                    tell(f'step {step}')
+                    for action in actions:
+                        tell(action)
+                    # Standing still, a client still sends its position every 20 ticks
+                    # (LocalPlayer.sendPosition): the server then tracks to it what it has sent the
+                    # chunks of since (ChunkMap.move).
+                    time.sleep(STEP_SECONDS / 2)
+                    tell('still Alice')
+                    tell('still Bob')
+                    time.sleep(STEP_SECONDS / 2)
+                tell('end')
+                client.wait(timeout=60)
+            finally:
+                if client.poll() is None:
+                    client.kill()
+    finally:
+        server.stop()
+    if not out.exists():
+        raise AssertionError(f'{label}: the client wrote no transcript (see {build}/{label}-client.log)')
+    return out.read_text(encoding='utf-8').splitlines()
+
+
+def shown(lines):
+    """Each player's adds, removes and respawns, without the waypoints (the locator bar harness has those)."""
+    return [l for l in lines if l.split(' ', 2)[2:3] and l.split(' ', 2)[2].split(' ')[0] in ('add', 'remove', 'respawn')]
+
+
+def main():
+    lock, jars, libraries = base.verify_artifacts()
+    build = lab.LOCAL / NAME
+    build.mkdir(parents=True, exist_ok=True)
+    report = build / 'report.json'
+    report.unlink(missing_ok=True)
+    oracle = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/LocatorBarClient.java'
+    classes = build / 'classes'
+    shutil.rmtree(classes, ignore_errors=True)
+    classes.mkdir()
+    dependencies = os.pathsep.join(map(str, [jars['server'], *libraries]))
+    subprocess.run(['javac', '--release', str(lock['minecraft']['java_major']), '-proc:none', '-nowarn', '-sourcepath',
+                    lab.ROOT / 'mods/horizon/src/test/java', '-cp', dependencies, '-d', classes, oracle],
+                   cwd=lab.ROOT, check=True, capture_output=True)
+    subprocess.run(['cargo', 'build', '--release', '-p', 'horizon-client', '--bin', 'horizon-client'], cwd=lab.ROOT,
+                   check=True, capture_output=True)
+    import json
+    metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'],
+                                                  cwd=lab.ROOT, text=True))
+    binary = Path(metadata['target_directory']) / 'release' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
+    vanilla_server = ['java', '-Xmx2g', '-Duser.timezone=UTC', '-cp', dependencies, 'net.minecraft.server.Main', 'nogui']
+    horizon_server = [binary, '--resources', lab.LOCAL / 'horizon-client/26.3', '--dedicated', '--nogui']
+    client = ['java', '-Xmx1g', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.LocatorBarClient']
+
+    world = generate_world(vanilla_server, build)
+    vanilla_all = run_side('vanilla', vanilla_server, client, build, world)
+    horizon_all = run_side('horizon', horizon_server, client, build, world)
+    errors = [l for l in vanilla_all + horizon_all if ' error ' in f' {l} ' or 'disconnected' in l]
+    vanilla, horizon = shown(vanilla_all), shown(horizon_all)
+    if errors or vanilla != horizon:
+        import difflib
+        diff = '\n'.join(difflib.unified_diff(vanilla, horizon, 'vanilla', 'horizon', n=1, lineterm=''))
+        raise AssertionError(f'{len(errors)} errors, transcripts differ (see {build}/vanilla.txt and horizon.txt):\n'
+                             + '\n'.join(errors[:10]) + '\n' + diff[:6000])
+    if sum(' respawn ' in l for l in vanilla) < 6:
+        raise AssertionError(f'vanilla sent too few respawns: the script did not run (see {build})')
+    lab.write_json(report, dict(
+        schema=1, minecraft=lock['minecraft']['version'], platform=platform.platform(),
+        java=subprocess.check_output(['java', '--version'], text=True).splitlines()[0],
+        lines=len(vanilla), output_sha256=lab.digest(build / 'horizon.txt', 'sha256'),
+        scope='Two players on a dedicated server changing dimensions (Nether, End, back): the other players each '
+              'is sent and loses, and the dimensions it respawns into.'))
+    print(f'server dimension players: {len(vanilla)} lines identical')
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except AssertionError as error:
+        sys.exit(f'{NAME}: {error}')

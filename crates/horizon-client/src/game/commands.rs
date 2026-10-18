@@ -1124,7 +1124,23 @@ impl Game<'_> {
                 (-(dy.atan2(horizontal).to_degrees())) as f32,
             ]);
         }
+        // `execute in` another dimension: a server's player moves to that
+        // level (ServerPlayer.teleport into another level), after the command.
+        let level = self
+            .command_source
+            .and_then(|s| s.level)
+            .filter(|d| *d != self.dim && self.options.dedicated.is_some());
         for &t in &targets {
+            if let (Some(dim), Target::Player, Some(conn)) = (level, t, self.lan_acting) {
+                self.level_teleports
+                    .push(super::server_travel::LevelTeleport {
+                        conn,
+                        dim,
+                        at: pos,
+                        rotation,
+                    });
+                continue;
+            }
             self.teleport_to(t, pos, rotation);
         }
         let [x, y, z] = pos.map(|v| Text::literal(format_double(v)));

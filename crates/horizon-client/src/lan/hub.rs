@@ -2201,7 +2201,15 @@ impl Hub {
     /// names (`set_dimension`): ClientboundRespawnPacket keeping all data,
     /// then vanilla's packet order. Nothing tracked in the old level is
     /// removed one by one: the client drops its whole level.
-    pub fn change_level(&mut self, i: usize, at: [f64; 3], yaw: f32, ctx: &TickCtx) {
+    pub fn change_level(
+        &mut self,
+        i: usize,
+        at: [f64; 3],
+        yaw: f32,
+        pitch: Option<f32>,
+        portal_sound: bool,
+        ctx: &TickCtx,
+    ) {
         let mode = self.guests[i].game_mode;
         let info = self.spawn_info(mode);
         self.close_container_for(i);
@@ -2212,6 +2220,9 @@ impl Hub {
         g.chunk_queue.clear();
         g.center = None;
         g.yaw = yaw;
+        if let Some(pitch) = pitch {
+            g.pitch = pitch;
+        }
         g.position = at;
         g.previous_position = at;
         g.send(&C::Respawn(play::Respawn {
@@ -2243,12 +2254,14 @@ impl Hub {
         // ServerPlayer.sendPostEffects.
         g.send(&raw(ids::POST_EFFECTS, vec![0]));
         // TeleportTransition.PLAY_PORTAL_SOUND.
-        g.send(&C::LevelEvent(play::LevelEvent {
-            kind: 1032,
-            pos: [0, 0, 0],
-            data: 0,
-            global: false,
-        }));
+        if portal_sound {
+            g.send(&C::LevelEvent(play::LevelEvent {
+                kind: 1032,
+                pos: [0, 0, 0],
+                data: 0,
+                global: false,
+            }));
+        }
         // lastSentExp, lastSentHealth and lastSentFood.
         g.sent_health = None;
         g.sent_xp = None;
