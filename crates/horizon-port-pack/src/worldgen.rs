@@ -421,7 +421,9 @@ fn upgrade_types(
     let mut unsupported = |t: &str| *report.unsupported.entry(t.to_owned()).or_default() += 1;
     let changed = match kind {
         "structure" => match v["type"].as_str() {
-            Some("yungsapi:yung_jigsaw") => {
+            // Better Dungeons' small Nether dungeon is YUNG's jigsaw behind a
+            // config switch that ships on.
+            Some("yungsapi:yung_jigsaw" | "betterdungeons:small_nether_dungeon") => {
                 yung_structure(v, lost);
                 true
             }
@@ -1194,6 +1196,19 @@ mod tests {
         for gone in ["max_y", "x_offset_in_chunk", "enhanced_terrain_adaptation"] {
             assert!(s.get(gone).is_none(), "{gone}");
         }
+        // Better Dungeons' small Nether dungeon is the same jigsaw.
+        let mut nether = json!({"type": "betterdungeons:small_nether_dungeon",
+            "start_pool": "betterdungeons:small_nether_dungeon", "size": 10,
+            "start_jigsaw_name": "betterdungeons:small_nether_dungeon_anchor",
+            "max_distance_from_center": 80, "liquid_settings": "ignore_waterlogging"});
+        assert!(upgrade("structure", &mut nether, &mut report, &NO_TAGS));
+        assert_eq!(nether["type"], "minecraft:jigsaw");
+        assert_eq!(nether["horizon:yungsapi"], json!({}));
+        assert_eq!(
+            nether["start_jigsaw_name"],
+            "betterdungeons:small_nether_dungeon_anchor"
+        );
+        assert!(report.unsupported.is_empty());
         let mut pool = json!({"elements": [{"weight": 3, "element": {
             "element_type": "yungsapi:yung_single_element", "location": "y:room",
             "processors": "minecraft:empty", "projection": "rigid",
