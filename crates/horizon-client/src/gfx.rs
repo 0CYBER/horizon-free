@@ -69,6 +69,12 @@ pub mod translucency;
 pub(crate) mod upload;
 mod world_post;
 
+/// A new value for `Renderer::block_entity_revision`.
+fn next_block_entity_revision() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Globals {
@@ -348,6 +354,8 @@ pub struct Renderer {
     draw_pages: Vec<(u32, Option<u32>)>,
     /// Block-entity blocks per meshed section (world position, state id).
     block_entities: HashMap<SectionKey, Vec<([i32; 3], u32)>>,
+    /// Changes whenever `block_entities` does (unique across renderers).
+    block_entity_revision: u64,
     /// VisGraph face connectivity per meshed section (cave culling).
     occlusion: occlusion::Occlusion,
     /// Resolution scale and FXAA (Horizon settings).
@@ -1821,6 +1829,7 @@ impl Renderer {
             draws: Vec::new(),
             draw_pages: Vec::new(),
             block_entities: HashMap::new(),
+            block_entity_revision: next_block_entity_revision(),
             occlusion: occlusion::Occlusion::new(crate::chunk::HEIGHT / 16),
             world_post,
             pack: None,
@@ -1987,10 +1996,14 @@ impl Renderer {
     }
     pub fn upload(&mut self, key: SectionKey, mesh: &SectionMesh) {
         self.occlusion.set(key, mesh.visibility);
-        if mesh.block_entities.is_empty() {
-            self.block_entities.remove(&key);
+        let changed = if mesh.block_entities.is_empty() {
+            self.block_entities.remove(&key).is_some()
         } else {
-            self.block_entities.insert(key, mesh.block_entities.clone());
+            let old = self.block_entities.insert(key, mesh.block_entities.clone());
+            old.as_deref() != Some(&mesh.block_entities[..])
+        };
+        if changed {
+            self.block_entity_revision = next_block_entity_revision();
         }
         let solid = (mesh.solid.len() / 4) as u32;
         let translucent = (mesh.translucent.len() / 4) as u32;
@@ -2099,8 +2112,13 @@ impl Renderer {
     pub fn block_entities(&self) -> impl Iterator<Item = &([i32; 3], u32)> {
         self.block_entities.values().flatten()
     }
+    /// A value that changes whenever `block_entities` gives something else.
+    pub fn block_entity_revision(&self) -> u64 {
+        self.block_entity_revision
+    }
     pub fn clear_sections(&mut self) {
         self.block_entities.clear();
+        self.block_entity_revision = next_block_entity_revision();
         self.sections.clear();
         self.arena.clear();
         if let Some(flat) = &mut self.flat {
@@ -2111,7 +2129,9 @@ impl Renderer {
         self.occlusion.clear();
     }
     pub fn remove(&mut self, key: SectionKey) {
-        self.block_entities.remove(&key);
+        if self.block_entities.remove(&key).is_some() {
+            self.block_entity_revision = next_block_entity_revision();
+        }
         self.occlusion.remove(key);
         self.release_section(key);
     }
