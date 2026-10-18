@@ -332,7 +332,7 @@ pub struct Renderer {
     animations: AnimatedSprites,
     uploads: upload::Uploads,
     /// Section meshes are staged through their own belt into
-    /// `section_copies`, which the next submission runs ahead of the frame:
+    /// `section_copies`, which the next frame records its commands after:
     /// `Queue::write_buffer` would make a staging buffer per write.
     section_uploads: upload::Uploads,
     section_copies: Option<wgpu::CommandEncoder>,
@@ -2394,14 +2394,21 @@ impl Renderer {
             Some(f) => f.texture.clone(),
             None => self.offscreen.clone().ok_or("no offscreen target")?,
         };
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Horizon frame"),
-            });
+        // One command buffer for the frame, after the section copies staged
+        // since the last one: Metal commits every command buffer wgpu-core
+        // makes (one per run of copies and two per pass) on its own.
+        let section_copies = self.section_copies.take();
+        let has_section_copies = section_copies.is_some();
+        let mut encoder = section_copies.unwrap_or_else(|| {
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Horizon frame"),
+                })
+        });
         if self.animated_textures {
             self.animate(&mut encoder, frame.ticks);
-            self.hud.animate_fire(&self.queue, frame.ticks);
+            self.hud
+                .animate_fire(&mut self.uploads, &mut encoder, frame.ticks);
         }
         self.update_lightmap(
             &mut encoder,
@@ -2661,48 +2668,6 @@ impl Renderer {
         } else {
             self.draws.len()
         };
-        let flat_frame = match &mut self.flat {
-            Some(flat)
-                if self.flat_on && !self.draws.is_empty() && self.draws.len() >= flat.min_draws =>
-            {
-                let sections = &self.sections;
-                let sorted = &self.sorted_indices;
-                crate::spans::time("flatten", || {
-                    flat.prepare(
-                        &self.device,
-                        &mut encoder,
-                        &mut self.uploads,
-                        &self.draws,
-                        &self.draw_pages,
-                        solid_draws as usize,
-                        visible
-                            .iter()
-                            .filter_map(|v| sections.get(v.slot).flat_id.map(|id| (id, v.origin))),
-                        |page| sorted.buffer(page).clone(),
-                    )
-                })
-            }
-            _ => false,
-        };
-        if flat_frame {
-            self.section_draw_calls = self.flat.as_ref().map_or(0, |f| f.calls.len());
-        } else if self.multi_draw && !self.draws.is_empty() {
-            if self.draws.len() as u64 > self.indirect_capacity {
-                self.indirect_capacity = (self.draws.len() as u64).next_power_of_two();
-                self.indirect = self.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("Section draws"),
-                    size: self.indirect_capacity * 20,
-                    usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                });
-            }
-            self.uploads.buffer(
-                &mut encoder,
-                &self.indirect,
-                0,
-                bytemuck::cast_slice(&self.draws),
-            );
-        }
         let debug_depth = frame.debug_lines.len() as u32;
         let debug_top = frame.debug_lines_on_top.len() as u32;
         let crosshair = frame.debug_crosshair.len() as u32;
@@ -2837,6 +2802,77 @@ impl Renderer {
                 &self.border_uniform,
                 0,
                 bytemuck::bytes_of(&uniform),
+            );
+        }
+        // Every upload before the frame's first pass: a pass ends wgpu-core's
+        // command buffer, so copies between passes would need one more.
+        if !frame.screen.is_empty() {
+            let vertices: Vec<crate::screen_effects::ScreenVertex> =
+                frame.screen.iter().flat_map(|q| q.vertices).collect();
+            if vertices.len() as u64 > self.screen_capacity {
+                self.screen_capacity = (vertices.len() as u64).next_power_of_two();
+                self.screen_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Screen effect vertices"),
+                    size: self.screen_capacity
+                        * std::mem::size_of::<crate::screen_effects::ScreenVertex>() as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+            }
+            self.uploads.buffer(
+                &mut encoder,
+                &self.screen_buffer,
+                0,
+                bytemuck::cast_slice(&vertices),
+            );
+        }
+        self.hud.prepare(
+            &self.device,
+            &mut self.uploads,
+            &mut encoder,
+            frame.hud,
+            [self.config.width, self.config.height],
+        );
+        let flat_frame = match &mut self.flat {
+            Some(flat)
+                if self.flat_on && !self.draws.is_empty() && self.draws.len() >= flat.min_draws =>
+            {
+                let sections = &self.sections;
+                let sorted = &self.sorted_indices;
+                crate::spans::time("flatten", || {
+                    flat.prepare(
+                        &self.device,
+                        &mut encoder,
+                        &mut self.uploads,
+                        &self.draws,
+                        &self.draw_pages,
+                        solid_draws as usize,
+                        visible
+                            .iter()
+                            .filter_map(|v| sections.get(v.slot).flat_id.map(|id| (id, v.origin))),
+                        |page| sorted.buffer(page).clone(),
+                    )
+                })
+            }
+            _ => false,
+        };
+        if flat_frame {
+            self.section_draw_calls = self.flat.as_ref().map_or(0, |f| f.calls.len());
+        } else if self.multi_draw && !self.draws.is_empty() {
+            if self.draws.len() as u64 > self.indirect_capacity {
+                self.indirect_capacity = (self.draws.len() as u64).next_power_of_two();
+                self.indirect = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Section draws"),
+                    size: self.indirect_capacity * 20,
+                    usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+            }
+            self.uploads.buffer(
+                &mut encoder,
+                &self.indirect,
+                0,
+                bytemuck::cast_slice(&self.draws),
             );
         }
         let view_target = target_texture.create_view(&wgpu::TextureViewDescriptor {
@@ -3102,24 +3138,6 @@ impl Renderer {
             );
         }
         if !frame.screen.is_empty() {
-            let vertices: Vec<crate::screen_effects::ScreenVertex> =
-                frame.screen.iter().flat_map(|q| q.vertices).collect();
-            if vertices.len() as u64 > self.screen_capacity {
-                self.screen_capacity = (vertices.len() as u64).next_power_of_two();
-                self.screen_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("Screen effect vertices"),
-                    size: self.screen_capacity
-                        * std::mem::size_of::<crate::screen_effects::ScreenVertex>() as u64,
-                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                });
-            }
-            self.uploads.buffer(
-                &mut encoder,
-                &self.screen_buffer,
-                0,
-                bytemuck::cast_slice(&vertices),
-            );
             let attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: &view_target,
                 resolve_target: None,
@@ -3212,9 +3230,6 @@ impl Renderer {
                 );
         }
         self.hud.draw(
-            &self.device,
-            &self.queue,
-            &mut self.uploads,
             &mut encoder,
             &view_target,
             &self.depth,
@@ -3229,12 +3244,12 @@ impl Renderer {
             .take()
             .map(|path| (path, self.copy_frame(&mut encoder, &target_texture)));
         self.uploads.finish(&encoder);
+        if has_section_copies {
+            self.section_copy_bytes = 0;
+            self.section_uploads.finish(&encoder);
+        }
         let commands = crate::spans::time("encode", || encoder.finish());
-        // The section copies run first: this frame draws what they write.
-        let copies = self.take_section_copies();
-        let submission = crate::spans::time("submit", || {
-            self.queue.submit(copies.into_iter().chain([commands]))
-        });
+        let submission = crate::spans::time("submit", || self.queue.submit([commands]));
         if let Some(timer) = &mut self.gpu_timer {
             timer.submitted();
             timer.collect(&self.device, &mut self.gpu_times);
