@@ -477,6 +477,8 @@ impl Game<'_> {
             "sleeping": self.sleeping,
             // The item in use: its slot and for how many ticks.
             "using": self.using.map(|(slot, ticks)| json!({ "slot": slot, "ticks": ticks })),
+            // The arm swings started (LivingEntity.swing).
+            "swings": self.swings_started,
             "time": { "day_time": self.world.day_time, "day": self.world.day_time.div_euclid(24000), "time_of_day": self.world.day_time.rem_euclid(24000) },
             "weather": { "raining": self.world.weather.raining, "thundering": self.world.weather.thundering },
             "paused": self.pause,

@@ -42,6 +42,8 @@ pub(super) struct LanHost {
     pub hub: Hub,
     pub settings: LanSettings,
     pub host_entity: i32,
+    /// The host's swings the guests were told of (`Game::swings_started`).
+    pub host_swings: u32,
     pub host_uuid: u128,
     /// The host's profile name (the account's, or the offline name).
     pub host_name: String,
@@ -398,6 +400,8 @@ impl Game<'_> {
                         [&m.extra.head, &m.extra.chest, &m.extra.legs, &m.extra.feet]
                             .map(|s| s.as_deref())
                     }),
+                    // The host draws this guest's arm swinging.
+                    "model_swinging": h.models.get(&g.conn).map(|m| m.ai.swinging),
                 })).collect::<Vec<_>>(),
             }),
             _ => json!({ "open": false }),
@@ -512,6 +516,7 @@ impl Game<'_> {
             hub,
             settings: LanSettings { port, ..settings },
             host_entity,
+            host_swings: self.swings_started,
             host_uuid,
             host_name: self.options.player_name(),
             models: HashMap::new(),
@@ -1198,6 +1203,9 @@ impl Game<'_> {
                 .each_ref()
                 .map(|s| s.as_ref().map(|s| s.item.clone()));
             m.extra.crouching = g.sneaking;
+            // LivingEntity.updateSwingTime: the arm swing lan_swings started.
+            m.anim.attack_anim_o = m.anim.attack_anim;
+            horizon_client::mobs::ai::tick_swing(m);
         }
     }
 

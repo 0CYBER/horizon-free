@@ -429,7 +429,7 @@ pub fn tick(
     true
 }
 /// LivingEntity.updateSwingTime (6-tick swing duration).
-fn tick_swing(m: &mut Mob) {
+pub fn tick_swing(m: &mut Mob) {
     if m.ai.swinging {
         m.ai.swing_time += 1;
         if m.ai.swing_time >= 6 {
