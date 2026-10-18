@@ -56,6 +56,14 @@ enum Modifier {
     Clear,
     AppendLoot(String),
     AppendStatic(Compound),
+    /// `horizon:edit`: `remove`'s keys taken out of the block entity, then
+    /// `data` merged in as append_static does. The data form of the mods'
+    /// processors that copy a block entity and change parts of it (Moog's
+    /// trial spawners and vaults drop their saved state).
+    Edit {
+        remove: Vec<String>,
+        data: Compound,
+    },
 }
 impl PosRule {
     /// A rule's `position_predicate` (always true when missing). Types are
@@ -104,9 +112,43 @@ impl Modifier {
                     Tag::Compound(c) => Self::AppendStatic(c),
                     _ => Self::AppendStatic(Compound::new()),
                 },
+                "horizon:edit" => Self::Edit {
+                    remove: m["remove"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(|k| k.as_str().map(str::to_owned))
+                        .collect::<Option<_>>()
+                        .ok_or(DecodeError::Field("block entity modifier keys"))?,
+                    data: match json_to_nbt(&m["data"]) {
+                        Tag::Compound(c) => c,
+                        _ => Compound::new(),
+                    },
+                },
                 _ => return Err(DecodeError::Field("block entity modifier")),
             },
         )
+    }
+}
+/// A block entity with `remove`'s keys taken out and `data` merged in
+/// (append_static is the one with nothing to remove).
+fn edited(nbt: Option<&Compound>, remove: &[String], data: &Compound) -> Compound {
+    let mut nbt = nbt.cloned().unwrap_or_default();
+    for key in remove {
+        nbt.remove(&JavaString::from(key.as_str()));
+    }
+    merge(&mut nbt, data);
+    nbt
+}
+/// CompoundTag.merge: compounds in both are merged, anything else replaced.
+fn merge(into: &mut Compound, other: &Compound) {
+    for (key, value) in other {
+        match (into.get_mut(key), value) {
+            (Some(Tag::Compound(mine)), Tag::Compound(theirs)) => merge(mine, theirs),
+            _ => {
+                into.insert(key.clone(), value.clone());
+            }
+        }
     }
 }
 #[derive(Clone, Debug)]
@@ -637,10 +679,9 @@ fn process_block<W: PlacementContext>(
                         nbt.insert("LootTableSeed".into(), Tag::Long(random.next_long()));
                         Some(nbt)
                     }
-                    Modifier::AppendStatic(data) => {
-                        let mut nbt = info.nbt.clone().unwrap_or_default();
-                        nbt.extend(data.clone());
-                        Some(nbt)
+                    Modifier::AppendStatic(data) => Some(edited(info.nbt.as_ref(), &[], data)),
+                    Modifier::Edit { remove, data } => {
+                        Some(edited(info.nbt.as_ref(), remove, data))
                     }
                 };
                 return Ok(Some(BlockInfo {
@@ -1281,5 +1322,46 @@ mod tests {
             Ok(Modifier::Clear)
         ));
         assert!(Modifier::decode(Some(&json!({"type": ""}))).is_err());
+    }
+
+    #[test]
+    fn block_entity_edits_merge_deep_and_drop_keys() {
+        let nbt = |v: Value| match json_to_nbt(&v) {
+            Tag::Compound(c) => c,
+            _ => unreachable!(),
+        };
+        let vault = nbt(json!({"id": "minecraft:vault",
+            "config": {"loot_table": "x:old", "key_item": {"id": "minecraft:trial_key"}},
+            "server_data": {"state_updating_resumes_at": 533162741}}));
+        // append_static merges compounds the way CompoundTag.merge does.
+        let Ok(Modifier::AppendStatic(data)) = Modifier::decode(Some(&json!({
+            "type": "append_static", "data": {"config": {"loot_table": "x:new"}}})))
+        else {
+            panic!("append_static")
+        };
+        let merged = edited(Some(&vault), &[], &data);
+        assert_eq!(
+            merged,
+            nbt(json!({"id": "minecraft:vault",
+            "config": {"loot_table": "x:new", "key_item": {"id": "minecraft:trial_key"}},
+            "server_data": {"state_updating_resumes_at": 533162741}}))
+        );
+        let Ok(Modifier::Edit { remove, data }) = Modifier::decode(Some(&json!({
+            "type": "horizon:edit", "remove": ["server_data"],
+            "data": {"config": {"loot_table": "x:new"}}})))
+        else {
+            panic!("horizon:edit")
+        };
+        assert_eq!(
+            edited(Some(&vault), &remove, &data),
+            nbt(json!({"id": "minecraft:vault",
+                "config": {"loot_table": "x:new", "key_item": {"id": "minecraft:trial_key"}}}))
+        );
+        assert_eq!(
+            edited(None, &remove, &data),
+            nbt(json!({"config": {"loot_table": "x:new"}}))
+        );
+        let bad = json!({"type": "horizon:edit", "remove": [1], "data": {}});
+        assert!(Modifier::decode(Some(&bad)).is_err());
     }
 }

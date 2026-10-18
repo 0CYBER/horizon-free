@@ -473,6 +473,16 @@ pub fn carry(
                         &serde_json::to_vec_pretty(&added).unwrap_or_default(),
                     )?;
                 }
+            } else if rel.starts_with("trial_spawner/")
+                && name.starts_with("data/")
+                && name.ends_with(".json")
+            {
+                // Trial spawner configs (Moog's arenas): their mobs' NBT.
+                if let Ok(mut config) = serde_json::from_slice::<Value>(&bytes)
+                    && crate::processors::upgrade_trial_spawner(&mut config)
+                {
+                    bytes = serde_json::to_vec_pretty(&config).unwrap_or(bytes);
+                }
             } else if rel.starts_with("tags/worldgen/biome/") && name.starts_with("data/") {
                 if let Ok(v) = serde_json::from_slice::<Value>(&bytes) {
                     crate::worldgen::convention_tags(&v, &mut biome_conventions);
