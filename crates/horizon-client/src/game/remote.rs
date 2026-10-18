@@ -271,6 +271,7 @@ impl Game<'_> {
             total: 0,
         };
         self.ui.registries.permission = 0;
+        self.ui.chat.clear();
         self.screen = Screen::Playing;
         self.title = None;
         self.dim = Dim::Overworld;
@@ -485,6 +486,13 @@ impl Game<'_> {
     }
     pub(super) fn chat_line(&mut self, text: String) {
         log::info!("[chat] {text}");
+        self.ui.chat.add(
+            &self.atlas,
+            horizon_client::text::Text::literal(text.clone()),
+            None,
+            self.ticks,
+            self.screen == Screen::Chat,
+        );
         if let Some(r) = self.remote.as_mut() {
             r.chat.push((text, Instant::now()));
             if r.chat.len() > 100 {
@@ -3644,43 +3652,11 @@ impl Game<'_> {
         let _ = r.joined;
         true
     }
-    /// Chat (ChatComponent), the chat input line and the action bar.
+    /// The server's death message; chat uses the shared ChatComponent.
     pub(super) fn remote_hud(&self, batch: &mut HudBatch) {
         let Some(r) = &self.remote else { return };
         let atlas = &self.atlas;
-        let (w, h) = (batch.width, batch.height);
-        let open = self.screen == Screen::Chat;
-        let now = Instant::now();
-        let mut y = h - 48.0;
-        // Container screens cover the chat (vanilla draws them over the HUD).
-        let shown = if matches!(self.screen, Screen::Playing | Screen::Dead | Screen::Chat) {
-            if open { 20 } else { 10 }
-        } else {
-            0
-        };
-        for (text, at) in r.chat.iter().rev().take(shown) {
-            let age = now.duration_since(*at);
-            // Lines fade out after ten seconds unless the chat is open.
-            let alpha = if open {
-                1.0
-            } else {
-                (1.0 - (age.as_secs_f32() - 9.0).max(0.0)).clamp(0.0, 1.0)
-            };
-            if alpha <= 0.0 {
-                break;
-            }
-            let a = (alpha * 255.0) as u8;
-            batch.fill(
-                atlas,
-                2.0,
-                y - 1.0,
-                320.0,
-                9.0,
-                rgba(0, 0, 0, (alpha * 128.0) as u8),
-            );
-            batch.text(atlas, text, 4.0, y, rgba(255, 255, 255, a), true);
-            y -= 9.0;
-        }
+        let w = batch.width;
         if self.screen == Screen::Dead
             && let Some(message) = &r.death_message
         {
