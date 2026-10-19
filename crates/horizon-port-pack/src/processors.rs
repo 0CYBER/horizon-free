@@ -202,6 +202,7 @@ fn pillar_type(kind: &str) -> Option<&'static str> {
         "repurposed_structures:bottom_pillar_processor" => "horizon:bottom_pillar",
         "repurposed_structures:close_off_fluid_sources_processor"
         | "moogs_structures:close_off_fluid_sources_processor" => "horizon:close_off_fluid_sources",
+        "repurposed_structures:close_off_air_sources_processor" => "horizon:close_off_air_sources",
         "betterfortresses:pillar_processor" | "betterjungletemples:pillar_processor" => {
             "horizon:yung_pillar"
         }
@@ -1584,6 +1585,8 @@ mod tests {
                    "pillar_processor_list": "minecraft:empty"}),
             json!({"processor_type": "moogs_structures:close_off_fluid_sources_processor",
                    "weighted_list_of_replacement_blocks": [{"block": "minecraft:stone", "weight": 1}]}),
+            json!({"processor_type": "repurposed_structures:close_off_air_sources_processor",
+                   "weighted_list_of_replacement_blocks": [{"block": "minecraft:prismarine", "weight": 1}]}),
             json!({"processor_type": "betterfortresses:pillar_processor",
                    "target_block": {"Name": "minecraft:orange_terracotta"},
                    "target_block_output": {"defaultBlockState": {"Name": "minecraft:red_nether_bricks"}, "entries": []},
@@ -1604,6 +1607,7 @@ mod tests {
                 "minecraft:block_rot",
                 "horizon:bottom_pillar",
                 "horizon:close_off_fluid_sources",
+                "horizon:close_off_air_sources",
                 "horizon:yung_pillar",
                 "horizon:stair_pillar"
             ]
@@ -1618,7 +1622,11 @@ mod tests {
         );
         assert_eq!(inner[1]["processor_type"], "minecraft:block_rot");
         assert!(p[2].get("pillar_processor_list").is_none());
-        assert_eq!(p[5]["pillar"], "minecraft:red_nether_bricks");
+        assert_eq!(
+            p[4]["weighted_list_of_replacement_blocks"],
+            json!([{"block": "minecraft:prismarine", "weight": 1}])
+        );
+        assert_eq!(p[6]["pillar"], "minecraft:red_nether_bricks");
         assert_eq!(carried["repurposed_structures:pillar_processor"], 2);
         assert_eq!(carried["betterfortresses:stair_pillar_processor"], 1);
     }

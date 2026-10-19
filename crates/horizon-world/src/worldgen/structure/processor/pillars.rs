@@ -5,6 +5,9 @@
 //!   block (or the template's bottom layer) down to the ground;
 //! - `horizon:close_off_fluid_sources`: their fluid fix, which walls off the
 //!   water and lava sources around a structure's open blocks;
+//! - `horizon:close_off_air_sources`: Repurposed Structures' opposite fix,
+//!   which walls off the air and other liquids around a structure's fluids
+//!   (its ocean mineshafts);
 //! - `horizon:yung_pillar` and `horizon:stair_pillar`: YUNG's pillar
 //!   processor (Better Fortresses, Better Jungle Temples) and Better
 //!   Fortresses' stair supports.
@@ -64,6 +67,8 @@ pub struct Blocks {
     /// Cobweb and bamboo sapling, which never block motion.
     no_motion: BTreeSet<BlockStateId>,
     structure_void: BTreeSet<BlockStateId>,
+    /// Water and lava blocks (LiquidBlock), at every level.
+    liquid_blocks: BTreeSet<BlockStateId>,
 }
 impl Blocks {
     fn decode(bindings: &FeatureBlockBindings<'_>) -> Result<Self, DecodeError> {
@@ -89,6 +94,7 @@ impl Blocks {
             unbreakable: block_set(&UNBREAKABLE),
             no_motion: block_set(&["minecraft:cobweb", "minecraft:bamboo_sapling"]),
             structure_void: block_set(&["minecraft:structure_void"]),
+            liquid_blocks: block_set(&["minecraft:water", "minecraft:lava"]),
         })
     }
     fn air(&self, state: BlockStateId) -> bool {
@@ -96,9 +102,13 @@ impl Blocks {
     }
     /// `!getFluidState().isEmpty()`.
     fn fluid(&self, state: BlockStateId) -> bool {
+        self.fluid_kind(state) != FluidKind::Empty
+    }
+    /// `getFluidState().getType()`: flowing and still fluids are two.
+    fn fluid_kind(&self, state: BlockStateId) -> FluidKind {
         self.fluids
             .get(state)
-            .is_some_and(|f| f.kind() != FluidKind::Empty)
+            .map_or(FluidKind::Empty, |f| f.kind())
     }
     /// What a pillar goes through: blocks that cannot occlude, and when
     /// forced every block that can be broken.
@@ -471,24 +481,7 @@ impl CloseOffFluidSources {
         resources: &StructureResources,
         bindings: &FeatureBlockBindings<'_>,
     ) -> Result<Self, DecodeError> {
-        let replacements = v["weighted_list_of_replacement_blocks"]
-            .as_array()
-            .ok_or(DecodeError::Field("weighted_list_of_replacement_blocks"))?
-            .iter()
-            .map(|e| {
-                let name = e["block"].as_str().ok_or(DecodeError::Field("block"))?;
-                let name = crate::worldgen::tags::identifier(name)?;
-                let state = resources
-                    .registry
-                    .default_state(&name)
-                    .ok_or_else(|| DecodeError::Registry(format!("unknown block {name}")))?;
-                let weight = e["weight"].as_i64().ok_or(DecodeError::Field("weight"))?;
-                Ok((state, weight as i32))
-            })
-            .collect::<Result<Vec<_>, DecodeError>>()?;
-        if replacements.is_empty() {
-            return Err(DecodeError::Field("weighted_list_of_replacement_blocks"));
-        }
+        let replacements = weighted_blocks(v, resources)?;
         Ok(Self {
             replacements,
             ignore_down: v["ignore_down"].as_bool().unwrap_or(false),
@@ -527,6 +520,90 @@ impl CloseOffFluidSources {
         }
         Ok(Some(info))
     }
+}
+
+/// `horizon:close_off_air_sources`: Repurposed Structures'
+/// CloseOffAirSourcesProcessor. Around each template block holding a fluid,
+/// the world's air beside it, and liquid blocks of another fluid (flowing and
+/// still count as two), become a block drawn by weight (none drawn for a
+/// single block), so the water of its ocean mineshafts does not pour into
+/// caves. Neighbours in other chunks are written too, as the mod writes
+/// their sections.
+#[derive(Clone, Debug)]
+pub struct CloseOffAirSources {
+    replacements: Vec<(BlockStateId, i32)>,
+    blocks: Blocks,
+}
+impl CloseOffAirSources {
+    pub(super) fn decode(
+        v: &Value,
+        resources: &StructureResources,
+        bindings: &FeatureBlockBindings<'_>,
+    ) -> Result<Self, DecodeError> {
+        Ok(Self {
+            replacements: weighted_blocks(v, resources)?,
+            blocks: Blocks::decode(bindings)?,
+        })
+    }
+    pub(super) fn process<W: PlacementContext>(
+        &self,
+        world: &mut W,
+        info: BlockInfo,
+        settings: &mut PlaceSettings<'_>,
+    ) -> ProcessResult {
+        let fluid = self.blocks.fluid_kind(info.state);
+        if outside_chunk(settings, info.pos) || fluid == FluidKind::Empty {
+            return Ok(Some(info));
+        }
+        // Direction.values(): down, up, north, south, west, east.
+        for d in Direction::ALL {
+            let at = add(info.pos, d);
+            if world.outside_build_height(at[1])? {
+                continue;
+            }
+            let Some(beside) = world.section_block(at)? else {
+                continue;
+            };
+            let other_liquid = self.blocks.liquid_blocks.contains(&beside)
+                && self.blocks.fluid_kind(beside) != fluid;
+            if self.blocks.air(beside) || other_liquid {
+                // One block draws nothing: the settings' random is shared.
+                let block = match self.replacements.as_slice() {
+                    [(only, _)] => *only,
+                    _ => settings.with_random(info.pos, |random| pick(&self.replacements, random)),
+                };
+                world.set_section_block(at, block)?;
+            }
+        }
+        Ok(Some(info))
+    }
+}
+
+/// `weighted_list_of_replacement_blocks`: blocks by name with their weight,
+/// at least one.
+fn weighted_blocks(
+    v: &Value,
+    resources: &StructureResources,
+) -> Result<Vec<(BlockStateId, i32)>, DecodeError> {
+    let replacements = v["weighted_list_of_replacement_blocks"]
+        .as_array()
+        .ok_or(DecodeError::Field("weighted_list_of_replacement_blocks"))?
+        .iter()
+        .map(|e| {
+            let name = e["block"].as_str().ok_or(DecodeError::Field("block"))?;
+            let name = crate::worldgen::tags::identifier(name)?;
+            let state = resources
+                .registry
+                .default_state(&name)
+                .ok_or_else(|| DecodeError::Registry(format!("unknown block {name}")))?;
+            let weight = e["weight"].as_i64().ok_or(DecodeError::Field("weight"))?;
+            Ok((state, weight as i32))
+        })
+        .collect::<Result<Vec<_>, DecodeError>>()?;
+    if replacements.is_empty() {
+        return Err(DecodeError::Field("weighted_list_of_replacement_blocks"));
+    }
+    Ok(replacements)
 }
 
 /// GeneralUtils.getRandomEntry: `nextFloat() * total` less each weight in
