@@ -268,10 +268,16 @@ impl NaturalLevel for World<'_> {
         self.biome_info(x, y, z)
             .map_or(0.1, |b| b.creature_probability)
     }
-    fn structures_at(&self, x: i32, y: i32, z: i32) -> Vec<StructureAt> {
+    fn structures_at(
+        &self,
+        x: i32,
+        y: i32,
+        z: i32,
+        wanted: &dyn Fn(&str) -> bool,
+    ) -> Vec<StructureAt> {
         let (cx, cz) = (x >> 4, z >> 4);
         let mut out: Vec<StructureAt> = Vec::new();
-        for start in &self.starts {
+        for start in self.starts.iter().filter(|s| wanted(&s.id)) {
             let b = start.bounds.0;
             // Referenced: the start's box reaches the chunk's columns.
             if b[3] < cx * 16 || b[0] > cx * 16 + 15 || b[5] < cz * 16 || b[2] > cz * 16 + 15 {

@@ -170,9 +170,15 @@ impl NaturalLevel for GameLevel<'_, '_> {
     fn creature_probability(&self, x: i32, y: i32, z: i32) -> f32 {
         self.biome(x, y, z).map_or(0.1, |b| b.creature_probability)
     }
-    fn structures_at(&self, x: i32, y: i32, z: i32) -> Vec<StructureAt> {
+    fn structures_at(
+        &self,
+        x: i32,
+        y: i32,
+        z: i32,
+        wanted: &dyn Fn(&str) -> bool,
+    ) -> Vec<StructureAt> {
         self.game
-            .structures_reaching([x, y, z])
+            .structures_reaching_where([x, y, z], wanted)
             .into_iter()
             .map(|(id, in_piece)| StructureAt {
                 id,

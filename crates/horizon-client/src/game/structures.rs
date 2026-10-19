@@ -7,6 +7,15 @@ impl Game<'_> {
     /// Structures reaching `pos`: (id, inside a piece). `getStructureAt`
     /// tests the start's whole box, `getStructureWithPieceAt` a piece's.
     pub(super) fn structures_reaching(&self, pos: [i32; 3]) -> Vec<(String, bool)> {
+        self.structures_reaching_where(pos, &|_| true)
+    }
+    /// The same, for the structures whose id `wanted` takes: the others'
+    /// starts aren't looked up.
+    pub(super) fn structures_reaching_where(
+        &self,
+        pos: [i32; 3],
+        wanted: &dyn Fn(&str) -> bool,
+    ) -> Vec<(String, bool)> {
         let Some(chunk) = self.world.chunks.get(&(pos[0] >> 4, pos[2] >> 4)) else {
             return Vec::new();
         };
@@ -18,6 +27,9 @@ impl Game<'_> {
         };
         let mut out: Vec<(String, bool)> = Vec::new();
         for (id, (sx, sz)) in &chunk.structure_refs {
+            if !wanted(id) {
+                continue;
+            }
             for start in locator.starts_at(*sx, *sz) {
                 if *start.name != **id || !start.bounding_box.is_inside(pos) {
                     continue;
