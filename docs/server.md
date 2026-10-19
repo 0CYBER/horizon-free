@@ -289,6 +289,9 @@ restart_on_crash = true
 [backups]
 every = "6h"                 # automatic backups while the server runs: 30m, 6h, 1d...; "0" turns them off
 keep = 12                    # automatic backups kept (backups made by hand are never deleted)
+
+[updates]
+keep = 1                     # other releases kept by updates, besides the one in use and the one rollback goes to
 ```
 
 This is the file `init` writes today (PR 4 adds `[panel] bind = "127.0.0.1:8130"` and `allow_public =
@@ -419,8 +422,11 @@ runtime or new dependency. Server-sent events can replace the polling later if a
   and kept as it is). The supervisor keeps running as it was: the new `horizon-server` itself takes over
   the next time the server starts (`stop` and `start`, or the service's restart). A stopped server is
   switched and its new game checked to load; it starts on the new release next time. One install serves
-  every server folder on the machine, so each one runs the new release from its next start. Old releases
-  stay in `<dir>/releases/` until they are deleted by hand (keep `current` and `previous`).
+  every server folder on the machine, so each one runs the new release from its next start. Once the new
+  game is up (or a stopped server is switched), old releases are deleted from `<dir>/releases/`: the one in
+  use, the one `previous` names (where `rollback` goes), the one the running `horizon-server` itself came
+  from, and the `updates.keep` newest of the others (1 by default) stay. A release that can't be deleted (a
+  program still running from it on Windows) is left for the next update.
 
 ## 8. Control API and MCP
 

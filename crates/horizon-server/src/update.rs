@@ -120,6 +120,73 @@ impl Install {
         }
         .map_err(|e| format!("{}: {e}", file.display()))
     }
+
+    /// Deletes old releases after a successful update: it keeps the one `current` points at, the one
+    /// `previous` names (where `rollback` goes), the one this program runs from, and the `keep` newest of
+    /// the others. Returns the releases deleted, and what couldn't be (a program still running from it on
+    /// Windows), which stays for the next update to try again.
+    pub fn prune(&self, keep: u32) -> (Vec<String>, Vec<String>) {
+        let releases = self.root.join("releases");
+        let running = std::env::current_exe()
+            .ok()
+            .and_then(|e| std::fs::canonicalize(e).ok());
+        let Some(current) = self.current() else {
+            // `current` points nowhere: nothing is known to be safe to delete.
+            return (Vec::new(), Vec::new());
+        };
+        let previous = self.previous();
+        let mut others: Vec<String> = std::fs::read_dir(&releases)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            // `.<tag>.unpacking` is an update in progress.
+            .filter(|tag| {
+                !tag.starts_with('.') && *tag != current && previous.as_deref() != Some(tag)
+            })
+            .filter(|tag| {
+                let dir = std::fs::canonicalize(releases.join(tag)).ok();
+                !running
+                    .as_ref()
+                    .zip(dir)
+                    .is_some_and(|(exe, dir)| exe.starts_with(dir))
+            })
+            .collect();
+        // Newest first; names that aren't release tags (archives installed by hand) by name.
+        others.sort_by(|a, b| {
+            if newer(a, b) {
+                std::cmp::Ordering::Less
+            } else if newer(b, a) {
+                std::cmp::Ordering::Greater
+            } else {
+                b.cmp(a)
+            }
+        });
+        let (mut removed, mut failed) = (Vec::new(), Vec::new());
+        for tag in others.into_iter().skip(keep as usize) {
+            match std::fs::remove_dir_all(releases.join(&tag)) {
+                Ok(()) => removed.push(tag),
+                Err(e) => failed.push(format!("{tag} ({e})")),
+            }
+        }
+        (removed, failed)
+    }
+}
+
+/// What [`Install::prune`] did, for the log: empty when it deleted nothing.
+pub fn pruned(removed: &[String], failed: &[String]) -> String {
+    let mut parts = Vec::new();
+    if !removed.is_empty() {
+        parts.push(format!("Deleted old releases: {}", removed.join(", ")));
+    }
+    if !failed.is_empty() {
+        parts.push(format!(
+            "Couldn't delete old releases: {}",
+            failed.join(", ")
+        ));
+    }
+    parts.join(". ")
 }
 
 /// Makes `link` point at the folder `target`, replacing what it pointed at.
@@ -582,6 +649,11 @@ fn switch_stopped(dir: &Path, install: &Install, tag: &str) -> Result<(), String
             ""
         }
     );
+    let (removed, failed) = install.prune(config.updates.keep);
+    let pruned = pruned(&removed, &failed);
+    if !pruned.is_empty() {
+        println!("{pruned}.");
+    }
     Ok(())
 }
 
@@ -698,6 +770,59 @@ mod tests {
                 .contains("no horizon-server")
         );
         assert_eq!(install.current().as_deref(), Some("v1"));
+        std::fs::remove_dir_all(&install.root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pruning_keeps_current_previous_and_the_newest_others() {
+        let tags = [
+            "v2026.10.19",
+            "v2026.10.1",
+            "v2026.10.2",
+            "v2026.10.10",
+            "v2026.10.18.3",
+            "local",
+        ];
+        let install = installed("prune", &tags);
+        // After a rollback `previous` can be any release, even the oldest.
+        std::fs::write(install.root.join("previous"), "v2026.10.1\n").unwrap();
+        std::fs::create_dir_all(install.root.join("releases/.v2026.10.20.unpacking")).unwrap();
+        std::fs::write(install.root.join("releases/notes.txt"), "").unwrap();
+        let left = || {
+            let mut names: Vec<String> = std::fs::read_dir(install.root.join("releases"))
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        };
+        let (removed, failed) = install.prune(1);
+        assert_eq!(removed, ["v2026.10.10", "v2026.10.2", "local"]);
+        assert!(failed.is_empty());
+        assert_eq!(
+            left(),
+            [
+                ".v2026.10.20.unpacking",
+                "notes.txt",
+                "v2026.10.1",
+                "v2026.10.18.3",
+                "v2026.10.19"
+            ]
+        );
+        assert_eq!(
+            pruned(&removed, &failed),
+            "Deleted old releases: v2026.10.10, v2026.10.2, local"
+        );
+        // Nothing more to delete at the same count; none at all kept besides current and previous.
+        assert_eq!(install.prune(1), (Vec::new(), Vec::new()));
+        assert_eq!(install.prune(0).0, ["v2026.10.18.3"]);
+        assert_eq!(install.current().as_deref(), Some("v2026.10.19"));
+        assert_eq!(install.previous().as_deref(), Some("v2026.10.1"));
+        // Without a `current` nothing is deleted.
+        std::fs::remove_file(install.root.join("current")).unwrap();
+        assert_eq!(install.prune(0), (Vec::new(), Vec::new()));
+        assert!(install.release("v2026.10.19").is_dir());
         std::fs::remove_dir_all(&install.root).unwrap();
     }
 
