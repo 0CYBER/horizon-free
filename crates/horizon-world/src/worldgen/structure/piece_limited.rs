@@ -1027,6 +1027,7 @@ mod tests {
             waterlogging: None,
             yung: None,
             enhanced_terrain: None,
+            ground_level: 1,
         });
         let piece = || PoolPiece {
             bounding_box: BoundingBox::new([0; 3], [4; 3]),
