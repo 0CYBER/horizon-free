@@ -80,6 +80,8 @@ struct Watch {
     backup: String,
     timeout: Duration,
     deadline: Instant,
+    /// `updates.keep`: the other releases kept once the game is up.
+    keep: u32,
 }
 
 pub fn run(dir: &Path) -> Result<(), String> {
@@ -315,7 +317,22 @@ fn switch(
         backup,
         timeout,
         deadline: Instant::now() + timeout,
+        keep: config.updates.keep,
     })
+}
+
+/// The game is up on the release switched to: the update is done, and the old releases beyond the ones
+/// kept are deleted.
+fn came_up(shared: &Shared, w: &Watch) {
+    let mut message = format!("Now on {} (was {}): the game is up", w.to, w.from);
+    if let Some(install) = &shared.install {
+        let (removed, failed) = install.prune(w.keep);
+        let pruned = update::pruned(&removed, &failed);
+        if !pruned.is_empty() {
+            message = format!("{message}. {pruned}");
+        }
+    }
+    shared.finish_update(true, message);
 }
 
 /// Undoes a switch whose game never came up: `current` back on the release before, and the world as it
@@ -576,10 +593,7 @@ fn supervise(
     loop {
         if let Some(w) = watch.as_ref() {
             if up(shared) {
-                shared.finish_update(
-                    true,
-                    format!("Now on {} (was {}): the game is up", w.to, w.from),
-                );
+                came_up(shared, w);
                 *watch = None;
             } else if Instant::now() > w.deadline && stopping.is_none() {
                 note(
@@ -745,6 +759,29 @@ mod tests {
             std::fs::read_to_string(Path::new(kept).join("level.dat")).unwrap(),
             "after"
         );
+        std::fs::remove_dir_all(&install.root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_game_that_comes_up_ends_the_update_and_prunes_old_releases() {
+        let (shared, dir) = installed("prune", &[("v1", 0), ("v2", 0), ("v3", 0)]);
+        let install = shared.install.clone().unwrap();
+        let mut config = Config::default();
+        config.updates.keep = 0;
+        let watch = switch(&shared, &dir, &config, "v3", Duration::from_secs(60)).unwrap();
+        came_up(&shared, &watch);
+        assert_eq!(install.current().as_deref(), Some("v3"));
+        // The release before stays for `rollback`; the other one goes.
+        assert_eq!(install.previous().as_deref(), Some("v1"));
+        assert!(!install.release("v2").exists());
+        let update = shared.update.lock().unwrap();
+        assert!(update.ok && update.busy.is_none() && update.finished == 1);
+        assert_eq!(
+            update.last.as_deref(),
+            Some("Now on v3 (was v1): the game is up. Deleted old releases: v2")
+        );
+        drop(update);
         std::fs::remove_dir_all(&install.root).unwrap();
     }
 
