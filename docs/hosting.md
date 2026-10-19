@@ -309,8 +309,8 @@ short:
 - **Start:** ready in 8 to 9 s, against 15 s for vanilla, 17 s for Fabric and 19 to 22 s for Paper.
 - **CPU:** from 10 players up, the least of the four (1.4 cores at 50, against Paper's 2.1 and Fabric's 2.4).
 - **Average tick:** Paper's is shorter at every count (10.3 against 13.7 ms with one player, 46.9 against
-  47.8 with 50), and Fabric + Lithium's with 1 and 10 players. Horizon's is shorter than vanilla's (equal with 10), and
-  than Fabric's from 25 players up.
+  47.8 with 50), and Fabric + Lithium's with 1 and 10 players. Horizon's is shorter than vanilla's (equal
+  with 10), and than Fabric's from 25 players up.
 - **Slow ticks:** from 10 players up, Horizon's slowest ticks (99th percentile) are the shortest of the
   four (73 ms with 50, against 110 for Paper and 174 for Fabric).
 - **50 players:** Horizon and Paper keep 20 TPS, Fabric + Lithium drops to 17, and vanilla's watchdog
