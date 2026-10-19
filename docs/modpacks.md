@@ -496,7 +496,11 @@ Two cases the oracle fills in:
     in the Overworld 83 Better Dungeons spawners held the template's placeholder pig and 17 of
     Moog's were empty (763 spawners with a mob, up from 628); in the Nether the 52 empty ones
     in Moog's Nether Structures are filled (162, up from 110). Chests are unchanged: 2,777
-    and 1,405 with a loot table.
+    and 1,405 with a loot table. The game read loot tables from `data/minecraft/` only, so every one of
+    those chests naming a mod's table opened empty; it now reads every namespace, and an
+    integer field written as a float (`"rolls": {"min": 3.0, ...}`, as Towns and Towers
+    writes them) counts as vanilla's int codecs count it. Of the 675 chest and other
+    non-block tables in ATM10's carried mods, 534 now fill a chest (seed 1; none before).
   - **Rule tests** written in Java. Repurposed Structures' mineshafts and Nether monument test
     blocks with three of the mod's own rule tests inside vanilla `rule` processors: what a
     block is made of (solid, liquid, air, with rails and chains), a chance over the distance
