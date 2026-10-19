@@ -6,16 +6,25 @@ there is no separate development channel.
 
 ## Pull request checks
 
-The `checks` workflow (`.github/workflows/ci.yml`) runs two jobs on every pull request:
+The `checks` workflow (`.github/workflows/ci.yml`) runs two jobs on every pull request (opened, pushed to or
+reopened; labels never start it):
 
 | Job | Runs on | What | Time |
 | --- | --- | --- | --- |
 | `verify` | GitHub `ubuntu-latest` | Public-tree check, Python tests, rustfmt, clippy with warnings denied, Rust tests. Dependencies and the workspace build come from a cache saved by main's runs | ~4 min cold, less warm |
-| `parity` | The Mac mini's runner (`ludovics-mac-mini`, label `horizon-game`) | The vanilla harnesses the change can affect (`tools/parity.py --changed <base>`) | seconds when nothing is affected; minutes per affected harness |
+| `parity / parity` | The Mac mini's runner (`ludovics-mac-mini`, label `horizon-game`) | The vanilla harnesses the change can affect (`tools/parity.py --changed <base>`) | seconds when nothing is affected; minutes per affected harness |
 
 Pushes to main run `verify` only; the nightly audit covers main's harnesses.
 
+`verify` is the check main requires, so it has no condition and runs in every run of `checks`: GitHub counts a
+*skipped* required check as passed, and labels used to start runs whose `verify` was skipped, which let
+auto-merge merge before the real `verify` finished. A pull request that changes no Rust (docs, tools) runs only its
+quick steps and finishes in seconds.
+
 ### The parity job
+
+The job is `.github/workflows/parity.yml`, a reusable workflow: `checks` calls it for pull requests from this
+repository, `run-parity.yml` for a fork's pull request a maintainer labels `run-parity`.
 
 Horizon never downloads the game, so harnesses that compare with vanilla run only where the maintainer's own
 copy is: the Mac mini. Its runner runs as the maintainer's account and keeps its checkout between runs
@@ -64,11 +73,11 @@ parallel, and main's own `checks` run catches the rare semantic conflict.
 `parity` becomes required once it has run green on pull requests for a while (a week without a false failure):
 
 ```sh
-gh api -X POST repos/ludovic111/horizon/branches/main/protection/required_status_checks/contexts -f 'contexts[]=parity'
+gh api -X POST repos/ludovic111/horizon/branches/main/protection/required_status_checks/contexts -f 'contexts[]=parity / parity'
 ```
 
-A skipped `parity` (a fork without the label, a run started by a label) counts as passed, so requiring it never
-blocks a fork's pull request; the maintainer decides whether to run it.
+A skipped `parity` (a fork's pull request without the label) counts as passed, so requiring it never blocks a
+fork's pull request; the maintainer decides whether to run it.
 
 ## Game releases
 
