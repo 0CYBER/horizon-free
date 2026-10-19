@@ -143,6 +143,8 @@ pub(super) struct Servers {
     confirm_restore: Option<String>,
     service: Option<bool>,
     update: Option<Value>,
+    /// `update --check` is under way.
+    checking: bool,
     pvp: Option<bool>,
     texts: HashMap<Field, String>,
     focus: HashMap<Field, FocusHandle>,
@@ -151,6 +153,8 @@ pub(super) struct Servers {
     focus_soon: Option<Field>,
     /// A suggested value shown selected: the first key typed replaces it.
     selected: Option<Field>,
+    /// A field whose value was refused, and why: shown under it until it's edited.
+    invalid: Option<(Field, &'static str)>,
     copied: Option<Instant>,
     faces: HashMap<String, Option<Vec<[u8; 4]>>>,
     tx: Sender<Event>,
@@ -186,12 +190,14 @@ impl Servers {
             confirm_restore: None,
             service: None,
             update: None,
+            checking: false,
             pvp: None,
             texts: HashMap::new(),
             focus: HashMap::new(),
             focused: None,
             focus_soon: None,
             selected: None,
+            invalid: None,
             copied: None,
             faces: HashMap::new(),
             tx,
@@ -388,6 +394,7 @@ impl Launcher {
         s.restart_needed.clear();
         s.texts.remove(&Field::Motd);
         s.texts.remove(&Field::Port);
+        s.invalid = None;
         s.polled = None;
         self.load_details();
     }
@@ -546,10 +553,13 @@ impl Launcher {
                 }
             }
             Event::Pvp(on) => s.pvp = on,
-            Event::UpdateCheck(result) => match result {
-                Ok(v) => s.update = Some(v),
-                Err(p) => s.problem = Some(p),
-            },
+            Event::UpdateCheck(result) => {
+                s.checking = false;
+                match result {
+                    Ok(v) => s.update = Some(v),
+                    Err(p) => s.problem = Some(p),
+                }
+            }
             Event::Failed(e) => s.problem = Some(Problem::plain(e)),
         }
     }
@@ -803,6 +813,7 @@ impl Launcher {
         let handle = self.focus_handle(f, cx);
         let focused = self.servers.focused == Some(f);
         let selected = focused && self.servers.selected == Some(f);
+        let invalid = self.servers.invalid.is_some_and(|(g, _)| g == f);
         let value = self.servers.value(f).to_string();
         let shown: String = {
             let chars: Vec<char> = value.chars().collect();
@@ -823,7 +834,13 @@ impl Launcher {
             .overflow_hidden()
             .rounded(px(theme::RADIUS))
             .border_1()
-            .border_color(if focused { t.accent } else { t.rule })
+            .border_color(if invalid {
+                t.danger
+            } else if focused {
+                t.accent
+            } else {
+                t.rule
+            })
             .bg(t.surface)
             .text_size(px(theme::UI.px))
             .cursor_text()
@@ -851,6 +868,9 @@ impl Launcher {
             .on_key_down(cx.listener(move |this, ev: &KeyDownEvent, window, cx| {
                 let k = &ev.keystroke;
                 let command = k.modifiers.control || k.modifiers.platform;
+                if k.key != "enter" && this.servers.invalid.is_some_and(|(g, _)| g == f) {
+                    this.servers.invalid = None;
+                }
                 // A suggested value is selected: typing or pasting replaces it, Backspace clears it.
                 if this.servers.selected.take() == Some(f)
                     && (k.key == "backspace"
@@ -938,8 +958,9 @@ impl Launcher {
         match self.servers.value(Field::Port).trim().parse::<u16>() {
             Ok(port) if port >= 1024 => self.set_setting("server.port", port.to_string()),
             _ => {
-                self.servers.problem = Some(Problem::plain(
-                    "Use a port number from 1024 to 65535 (25565 is Minecraft's own).",
+                self.servers.invalid = Some((
+                    Field::Port,
+                    "Use a number from 1024 to 65535 (25565 is Minecraft's own).",
                 ))
             }
         }
@@ -950,7 +971,8 @@ impl Launcher {
         let valid = (3..=16).contains(&name.len())
             && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
         if !valid {
-            self.servers.problem = Some(Problem::plain(
+            self.servers.invalid = Some((
+                Field::AddPlayer,
                 "A Minecraft name has 3 to 16 letters, digits or underscores.",
             ));
             return;
@@ -1885,6 +1907,10 @@ impl Launcher {
                         ),
                 )
                 .child(add)
+                .children(self.servers.invalid.and_then(|(f, e)| {
+                    (f == Field::AddPlayer)
+                        .then(|| text(theme::CAPTION).text_color(t.danger).child(e))
+                }))
                 .child(allowed),
         );
 
@@ -1931,6 +1957,17 @@ impl Launcher {
 
     /// A row of the settings form: a name, one line on it, and its control.
     fn setting_row(&self, name: &str, about: String, control: AnyElement) -> Div {
+        self.setting_row_checked(name, about, None, control)
+    }
+
+    /// A setting row whose text gives way to `error` when the value was refused.
+    fn setting_row_checked(
+        &self,
+        name: &str,
+        about: String,
+        error: Option<&'static str>,
+        control: AnyElement,
+    ) -> Div {
         let t = self.theme;
         div()
             .flex()
@@ -1948,7 +1985,10 @@ impl Launcher {
                     .min_w_0()
                     .gap(px(2.))
                     .child(text(theme::UI).text_color(t.ink).child(name.to_string()))
-                    .child(text(theme::CAPTION).text_color(t.muted).child(about)),
+                    .child(match error {
+                        Some(e) => text(theme::CAPTION).text_color(t.danger).child(e),
+                        None => text(theme::CAPTION).text_color(t.muted).child(about),
+                    }),
             )
             .child(control)
     }
@@ -2136,13 +2176,18 @@ impl Launcher {
                 format!("How far from players crops grow and mobs move, in chunks. {later}"),
                 self.stepper("server.simulation_distance", 2..=32, cx),
             ))
-            .child(self.setting_row(
-                "Port",
-                format!(
+            .child(
+                self.setting_row_checked(
+                    "Port",
+                    format!(
                     "1024 to 65535. Friends type it after the address unless it's 25565. {later}"
                 ),
-                port,
-            ))
+                    self.servers
+                        .invalid
+                        .and_then(|(f, e)| (f == Field::Port).then_some(e)),
+                    port,
+                ),
+            )
             .child(self.setting_row(
                 "Check Minecraft accounts",
                 if accounts {
@@ -2242,9 +2287,13 @@ impl Launcher {
                     disabled(b)
                 }
             }
+            None if self.servers.checking => {
+                disabled(button("update-check", "Checking…", Kind::Secondary, &t))
+            }
             None => button("update-check", "Check for updates", Kind::Secondary, &t).on_click(
                 cx.listener(|this, _: &ClickEvent, _, cx| {
                     if let Some(dir) = this.servers.open.clone() {
+                        this.servers.checking = true;
                         let tx = this.servers.tx.clone();
                         std::thread::spawn(move || {
                             let result = servers::run(&dir, &["update", "--check", "--json"])
@@ -2310,6 +2359,10 @@ impl Launcher {
             let (when, kind) = backup_label(&b);
             let confirming = self.servers.confirm_restore.as_deref() == Some(b.name.as_str());
             let name = b.name.clone();
+            let restored = format!(
+                "The world is back as it was on {when}. The one it replaced is in the backups \
+                 folder."
+            );
             let restore = button(
                 SharedString::from(format!("restore-{i}")),
                 if confirming {
@@ -2328,10 +2381,13 @@ impl Launcher {
                 restore.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     if this.servers.confirm_restore.as_ref() == Some(&name) {
                         this.servers.confirm_restore = None;
-                        this.server_command(
-                            "Restoring",
-                            vec!["restore".into(), name.clone(), "--yes".into()],
-                        );
+                        if let Some(dir) = this.servers.open.clone() {
+                            let (name, restored) = (name.clone(), restored.clone());
+                            this.server_job("Restoring", move |log| {
+                                servers::run_streamed(&dir, &["restore", &name, "--yes"], log)
+                                    .map(|_| restored)
+                            });
+                        }
                     } else {
                         this.servers.confirm_restore = Some(name.clone());
                     }
