@@ -20,8 +20,18 @@ fn exe(name: &str) -> String {
     format!("{name}{}", std::env::consts::EXE_SUFFIX)
 }
 
-/// The game program: `engine.path`, else one installed beside `horizon-server`, else one on the PATH.
+/// The game program: `engine.path`, else one installed beside `horizon-server` (in the release in use when
+/// it was installed by the installers), else one on the PATH.
 pub fn program(config: &Config, dir: &Path) -> Result<PathBuf, String> {
+    program_in(config, dir, crate::update::Install::find().as_ref())
+}
+
+/// [`program`], for the install `install`.
+pub fn program_in(
+    config: &Config,
+    dir: &Path,
+    install: Option<&crate::update::Install>,
+) -> Result<PathBuf, String> {
     if !config.engine.path.is_empty() {
         let path = dir.join(&config.engine.path);
         return path
@@ -29,9 +39,12 @@ pub fn program(config: &Config, dir: &Path) -> Result<PathBuf, String> {
             .then_some(path)
             .ok_or_else(|| format!("engine.path {} is not a file", config.engine.path));
     }
-    let beside = std::env::current_exe()
-        .ok()
-        .and_then(|e| e.parent().map(Path::to_path_buf));
+    // Installed: the release `current` points at now, so a switch applies at the next start.
+    let beside = install.map(crate::update::Install::programs).or_else(|| {
+        std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(Path::to_path_buf))
+    });
     let path_dirs = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
         .unwrap_or_default();
