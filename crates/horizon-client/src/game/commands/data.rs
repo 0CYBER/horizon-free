@@ -666,13 +666,20 @@ impl Game<'_> {
     /// Spawn an entity from its compound (`EntityType.loadEntityRecursive`);
     /// returns what was created.
     pub(super) fn spawn_entity_from_nbt(&mut self, tag: Tag) -> Option<Target> {
-        let before = self.next_entity;
         let key = {
             let p = entity_nbt::position(&tag)?;
             ((p.x.floor() as i32) >> 4, (p.z.floor() as i32) >> 4)
         };
+        // Only this stack spawns now: the entities of chunks that finished
+        // loading wait for the level's entity tick, as in vanilla
+        // (PersistentEntitySectionManager.processPendingLoads), and must not
+        // take the ids counted as this stack's.
+        let mut waiting = std::mem::take(&mut self.world.loaded_entities);
+        let before = self.next_entity;
         self.world.loaded_entities.push((key, vec![tag]));
         self.spawn_loaded_entities();
+        waiting.append(&mut self.world.loaded_entities);
+        self.world.loaded_entities = waiting;
         if self.next_entity == before {
             return None;
         }
