@@ -541,6 +541,20 @@ reproducible by anyone, and show the same gameplay on both sides.
   - Horizon's RSS was 4.1 to 4.9 times smaller (1.03 GB at 50).
   - Served in full, vanilla's walking bots got 5400 to 6100 chunks each, against 640 to 1100 in the first
     run. That is why vanilla held 50 bots there and not here.
+- **Four servers, equal work (2026-10-19,** `benchmarks/server-four-way-2026-10-19/`). The same load
+  against vanilla, Paper (build 205, its defaults except the connection throttle, which refused bots that
+  share an address) and vanilla on Fabric with Lithium. Horizon was release v2026.10.19, which spawns mobs
+  and ticks blocks around every player as vanilla does (#950, #931), so it now does vanilla's work away
+  from spawn too. Results, on the ThinkPad (the desktop didn't wake):
+  - The work was equal on all four at every count (chunks a second within 4 %).
+  - Horizon's RSS was 3.8 to 4.8 times smaller (0.72 to 1.11 GB). It started in 8.2 to 8.5 s, against
+    14.7 to 22.4 s for the Java servers. From 10 bots up it used the least CPU.
+  - Average tick: Paper was ahead of Horizon at every count (10.3 against 13.7 ms at 1 bot, 28.3 against
+    30.9 at 25, 46.9 against 47.8 at 50). Fabric + Lithium was ahead at 1 and 10 bots (12.5 and 20.2
+    against 13.7 and 22.9), behind at 25, and fell to 17.2 TPS at 50. Vanilla was slowest, and its
+    watchdog stopped it at 50.
+  - Horizon's P99 was the lowest from 10 bots up (73 ms at 50, against Paper's 110 and Fabric's 174), and
+    its worst single P99 the lowest at every count.
 - **Ownership.** perf-server-1 owns making the tick faster. This work only measures it, files what it finds,
   and fixes startup, RAM and packaging.
 
@@ -574,7 +588,6 @@ machine, then published in `benchmarks/`; and item 5.
 - the headless engine and its RAM win;
 - a server-only prepare without a JDK;
 - a Windows service, hot reload, modpacks in the panel;
-- Paper and Fabric + Lithium in the benchmark;
 
 Online mode works, so a public server can check accounts. An offline server should still run only on a
 LAN, a tailnet, or behind a whitelist.

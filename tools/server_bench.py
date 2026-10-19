@@ -26,6 +26,15 @@ than 10 % apart isn't a fair comparison of its tick times.
 The vanilla side runs the pinned server jar from tools/lab.py prepare (your own copy). It needs Java 25. The
 Horizon side runs target/release/horizon-server with the engine beside it; build both first:
     cargo build --release -p horizon-client --bin horizon-client -p horizon-server -p horizon-bots
+
+Two more Java servers, both dev-only downloads into .local/server-bench/jars (never committed or shipped):
+- `paper`: Paper's newest build for the pinned version, from PaperMC's download API, checked against the
+  SHA-256 it publishes, with Paper's own defaults except `connection-throttle` (off: the bots all join from
+  one address). Paperclip patches the pinned server jar (your copy, put in
+  its cache so nothing is fetched from Mojang).
+- `fabric`: the pinned vanilla server on the pinned Fabric loader (packs/fabric.lock.json) with Lithium from
+  packs/mods.lock.json (and Fabric API only if Lithium asks for it), checked against the lock's SHA-512.
+Both run with the same heap as vanilla (`--heap`).
 """
 
 import argparse
@@ -42,11 +51,14 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
+import zipfile
 
 try:
-    from . import lab, test_rust_parity as base
+    from . import lab, runtime, test_rust_parity as base
 except ImportError:
     import lab
+    import runtime
     import test_rust_parity as base
 
 ROOT = lab.ROOT
@@ -159,8 +171,43 @@ class Server:
         self.log.close()
 
 
+# The line every server logs once it is up: vanilla, Fabric and Horizon `[time] [Server thread/INFO]: Done (`,
+# Paper `[time INFO]: Done (`.
+DONE = r'INFO\]: Done \('
 TICK_AVERAGE = re.compile(r'Average time per tick: ([0-9.]+) ?ms')
 TICK_PERCENTILES = re.compile(r'P50: ([0-9.]+) ?ms P95: ([0-9.]+) ?ms P99: ([0-9.]+) ?ms')
+
+
+# The newest Paper build for the pinned version, from PaperMC's download API (dev-only, never committed).
+PAPER_API = 'https://fill.papermc.io/v3/projects/paper/versions/{version}/builds/latest'
+JARS = lab.LOCAL / 'server-bench/jars'
+
+
+def paper_jar():
+    """Paper's newest build for the pinned version, downloaded once and checked against its SHA-256."""
+    lock, _ = lab.config()
+    version = lock['minecraft']['version']
+    request = urllib.request.Request(PAPER_API.format(version=version),
+                                     headers={'User-Agent': 'horizon-server-bench (github.com/ludovic111/horizon)'})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        build = json.load(response)
+    download = build['downloads']['server:default']
+    jar = runtime.fetch(download['url'], JARS / download['name'], download['checksums']['sha256'], 'sha256')
+    return jar, build['id']
+
+
+def fabric_mods():
+    """Lithium from packs/mods.lock.json, plus Fabric API if Lithium depends on it (checked, cached)."""
+    lock = json.loads((ROOT / 'packs/mods.lock.json').read_text())
+    def fetch(name):
+        project = lock['projects'][name]
+        return runtime.fetch(project['url'], JARS / project['filename'], project['hashes']['sha512'], 'sha512')
+    jars = [fetch('lithium')]
+    with zipfile.ZipFile(jars[0]) as archive:
+        depends = json.loads(archive.read('fabric.mod.json')).get('depends', {})
+    if any(d == 'fabric-api' or d.startswith('fabric-') and d != 'fabricloader' for d in depends):
+        jars.append(fetch('fabric-api'))
+    return jars, {'fabric_loader': lock['fabric_loader'], 'lithium': lock['projects']['lithium']['version']}
 
 
 def tick_query(server):
@@ -182,11 +229,38 @@ def tick_query(server):
 
 
 def server_command(kind, directory, args):
+    java = ['java', f'-Xms{args.heap}', f'-Xmx{args.heap}', '-Duser.timezone=UTC']
     if kind == 'vanilla':
         _, jars, libraries = base.verify_artifacts()
         classpath = os.pathsep.join(map(str, [jars['server'], *libraries]))
-        return ['java', f'-Xms{args.heap}', f'-Xmx{args.heap}', '-Duser.timezone=UTC', '-cp', classpath,
-                'net.minecraft.server.Main', 'nogui']
+        return [*java, '-cp', classpath, 'net.minecraft.server.Main', 'nogui']
+    if kind == 'paper':
+        lock, jars, _ = base.verify_artifacts()
+        jar, _ = paper_jar()
+        # Paperclip's cache, libraries and patched jar are shared by every run; the pinned server jar (your
+        # copy) seeds its cache, so it never downloads Mojang's.
+        shared = lab.LOCAL / 'server-bench/paper-shared'
+        cache = shared / 'cache'
+        cache.mkdir(parents=True, exist_ok=True)
+        mojang = cache / f'mojang_{lock["minecraft"]["version"]}.jar'
+        if not mojang.exists():
+            shutil.copyfile(jars['server'].parent / 'server.jar', mojang)
+        for name in ('cache', 'libraries', 'versions'):
+            (shared / name).mkdir(exist_ok=True)
+            (directory / name).symlink_to(shared / name, target_is_directory=True)
+        # Paper refuses a second login from one address within 4 s (bukkit.yml's connection-throttle), and
+        # every bot comes from the same one. Off, as on vanilla; Paper fills in the rest of the file.
+        (directory / 'bukkit.yml').write_text('settings:\n  connection-throttle: -1\n')
+        return [*java, '-jar', jar, '--nogui']
+    if kind == 'fabric':
+        _, jars, libraries = base.verify_artifacts()
+        mods = directory / 'mods'
+        mods.mkdir()
+        for jar in fabric_mods()[0]:
+            shutil.copyfile(jar, mods / jar.name)
+        classpath = os.pathsep.join(map(str, [jars['server'], *libraries, *runtime.fabric_libraries()]))
+        return [*java, '-Dfabric.log.disableAnsi=true', '-cp', classpath,
+                'net.fabricmc.loader.impl.launch.knot.KnotServer', 'nogui']
     server = BIN / f'horizon-server{EXE}'
     subprocess.run([server, '--dir', directory, 'import', directory / 'server.properties'], check=True,
                    capture_output=True)
@@ -219,7 +293,7 @@ def run_once(kind, bots, behaviour, args, out):
     server = Server(command, directory, out / f'{name}.log')
     result = {'server': kind, 'bots': bots, 'behaviour': behaviour}
     try:
-        server.wait_for(r'/INFO\]: Done \(', 600)
+        server.wait_for(DONE, 600)
         result['start_seconds'] = round(time.time() - started, 2)
         # Every bot appears on the world spawn itself, not spread around it, so both servers see the same paths.
         server.console('gamerule respawn_radius 0')
@@ -340,9 +414,19 @@ def work(runs):
     return rows
 
 
+def versions(kinds):
+    """The Paper build and the Fabric loader and Lithium versions that ran, for the report."""
+    out = {}
+    if 'paper' in kinds:
+        out['paper_build'] = paper_jar()[1]
+    if 'fabric' in kinds:
+        out.update(fabric_mods()[1])
+    return out
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
-    parser.add_argument('--servers', default='horizon,vanilla')
+    parser.add_argument('--servers', default='horizon,vanilla', help='horizon, vanilla, paper, fabric (Lithium)')
     parser.add_argument('--bots', default='1,10,25,50')
     parser.add_argument('--behaviour', default='walk,explore', help='one pass per behaviour (comma-separated)')
     parser.add_argument('--join-every', type=float, default=1.0)
@@ -355,7 +439,7 @@ def main():
     parser.add_argument('--gamerule', default='',
                         help="more game rules for both servers, 'name=value,...' (locator_bar=false: Horizon has "
                              "no locator bar yet)")
-    parser.add_argument('--heap', default='4g', help='the Java heap, -Xms and -Xmx (vanilla)')
+    parser.add_argument('--heap', default='4g', help='the Java heap, -Xms and -Xmx (vanilla, Paper, Fabric)')
     parser.add_argument('--out', type=Path, default=None, help='the report (JSON)')
     parser.add_argument('--nice', type=int, default=0, help='run the servers under nice -n N')
     parser.add_argument('--bots-via', default='', help="a command prefix to run the bots elsewhere ('ssh host')")
@@ -378,6 +462,7 @@ def main():
         'machine': {'system': platform.system(), 'machine': platform.machine(), 'cpus': os.cpu_count()},
         'commit': subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=ROOT, capture_output=True, text=True).stdout.strip(),
         'java': subprocess.run(['java', '--version'], capture_output=True, text=True).stdout.splitlines()[:1],
+        'versions': versions(args.servers.split(',')),
         'settings': {**vars(args), 'out': str(args.out), 'properties': PROPERTIES},
         'runs': runs,
         'work': work(runs),
