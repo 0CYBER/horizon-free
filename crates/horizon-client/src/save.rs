@@ -16,7 +16,7 @@
 use crate::{
     Result,
     biome::Biomes,
-    chunk::{BIOME_STRATEGY, Chunk, Light, MIN_Y, SECTIONS, block_strategy},
+    chunk::{BIOME_STRATEGY, Chunk, Light, MIN_Y, SECTIONS, Section, block_strategy},
     streaming::ChunkGenerator,
 };
 use horizon_core::{
@@ -267,6 +267,18 @@ impl SaveTables {
             block_entity: Vec::new(),
             heightmaps: assets.properties.clone(),
             air: registry.default_state("minecraft:air").map_or(0, |s| s.0),
+        }
+    }
+    /// Tables with only the heightmaps' state facts, for tests.
+    #[cfg(test)]
+    pub(crate) fn for_heightmaps(heightmaps: crate::assets::Properties) -> Self {
+        Self {
+            block_names: Vec::new(),
+            block_ids: HashMap::new(),
+            default_state: Vec::new(),
+            block_entity: Vec::new(),
+            heightmaps,
+            air: 0,
         }
     }
     /// Which states carry a block entity (`BlockFacts`), to drop entries for
@@ -673,8 +685,9 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
     Some((pos, entity))
 }
 
+/// A column's sections as `Heightmap.primeHeightmaps` reads them.
 struct HeightmapView<'a> {
-    chunk: &'a Chunk,
+    sections: &'a [Arc<Section>],
     tables: &'a SaveTables,
 }
 impl HeightmapChunk for HeightmapView<'_> {
@@ -687,7 +700,6 @@ impl HeightmapChunk for HeightmapView<'_> {
     }
     fn highest_section_y(&self) -> i32 {
         let top = self
-            .chunk
             .sections
             .iter()
             .rposition(|s| !s.is_uniform(self.tables.air))
@@ -695,9 +707,12 @@ impl HeightmapChunk for HeightmapView<'_> {
         MIN_Y + top as i32 * 16
     }
     fn block_state(&self, x: i32, y: i32, z: i32) -> Self::State {
-        self.tables
-            .heightmaps
-            .heightmap_state(self.chunk.block(x, y, z))
+        // Chunk.get: no block outside the sections.
+        let state = usize::try_from((y - MIN_Y) >> 4)
+            .ok()
+            .and_then(|s| self.sections.get(s))
+            .map_or(0, |s| s.get(crate::chunk::index(x, y, z)));
+        self.tables.heightmaps.heightmap_state(BlockStateId(state))
     }
 }
 /// Heightmaps kept after world generation (`ChunkStatus.FULL.heightmapsAfter`).
@@ -712,7 +727,10 @@ fn heightmaps(chunk: &Chunk, tables: &SaveTables) -> Tag {
         .iter()
         .filter_map(|k| Heightmap::new(*k, MIN_Y, SECTIONS as i32 * 16).ok())
         .collect();
-    let view = HeightmapView { chunk, tables };
+    let view = HeightmapView {
+        sections: &chunk.sections,
+        tables,
+    };
     let mut refs: Vec<&mut Heightmap> = maps.iter_mut().collect();
     if Heightmap::prime(&view, &mut refs).is_err() {
         return Tag::Compound(Compound::new());
@@ -728,11 +746,12 @@ fn heightmaps(chunk: &Chunk, tables: &SaveTables) -> Tag {
 /// sendToClient: WORLD_SURFACE, MOTION_BLOCKING, MOTION_BLOCKING_NO_LEAVES),
 /// as (network id, packed longs) in Heightmap.Types order.
 pub fn client_heightmaps(chunk: &Chunk, tables: &SaveTables) -> Vec<(i32, Vec<i64>)> {
-    client_heightmaps_in(chunk, tables, MIN_Y, SECTIONS as i32 * 16)
+    client_heightmaps_in(&chunk.sections, tables, MIN_Y, SECTIONS as i32 * 16)
 }
-/// The client heightmaps of a level from `min_y`, `height` blocks high.
+/// The client heightmaps of a column's sections, in a level from `min_y`,
+/// `height` blocks high.
 pub fn client_heightmaps_in(
-    chunk: &Chunk,
+    sections: &[Arc<Section>],
     tables: &SaveTables,
     min_y: i32,
     height: i32,
@@ -746,7 +765,7 @@ pub fn client_heightmaps_in(
         .iter()
         .filter_map(|(id, k)| Heightmap::new(*k, min_y, height).ok().map(|m| (*id, m)))
         .collect();
-    let view = HeightmapView { chunk, tables };
+    let view = HeightmapView { sections, tables };
     let mut refs: Vec<&mut Heightmap> = maps.iter_mut().map(|(_, m)| m).collect();
     if Heightmap::prime(&view, &mut refs).is_err() {
         return Vec::new();

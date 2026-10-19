@@ -42,6 +42,26 @@ impl HeightmapState for StateFacts {
 }
 #[derive(Clone)]
 pub struct Properties(Arc<Vec<StateFacts>>);
+#[cfg(test)]
+impl Properties {
+    /// Heightmap facts for tests, per state: (air, has a fluid, blocks
+    /// motion, blocks motion but is not leaves). State 0 is minecraft:air.
+    pub(crate) fn for_tests(states: &[(bool, bool, bool, bool)]) -> Self {
+        Self(Arc::new(
+            states
+                .iter()
+                .enumerate()
+                .map(|(i, &(air, fluid, motion, no_leaves))| StateFacts {
+                    air,
+                    fluid,
+                    air_block: i == 0,
+                    motion,
+                    no_leaves,
+                })
+                .collect(),
+        ))
+    }
+}
 impl TerrainBlockStates for Properties {
     type State = StateFacts;
     fn heightmap_state(&self, id: BlockStateId) -> StateFacts {
