@@ -515,6 +515,12 @@ Two cases the oracle fills in:
     integer field written as a float (`"rolls": {"min": 3.0, ...}`, as Towns and Towers
     writes them) counts as vanilla's int codecs count it. Of the 675 chest and other
     non-block tables in ATM10's carried mods, 534 now fill a chest (seed 1; none before).
+    Repurposed's structure voids keep the world's block, as vanilla's `minecraft:block_ignore`
+    does (its 82 lists: mineshafts, the ocean and swamp villages, the ocean and taiga temples,
+    the jungle pyramid's hidden room). Before, the game placed them like any template block:
+    around the ocean mineshaft at chunk (-18, -54), seed 1234, 974 structure voids took the
+    place of 464 prismarine blocks of its walls, 225 of water (dry holes in the sea), 279 of
+    air and cave air and 6 rails and walls.
   - **Rule tests** written in Java. Repurposed Structures' mineshafts and Nether monument test
     blocks with three of the mod's own rule tests inside vanilla `rule` processors: what a
     block is made of (solid, liquid, air, with rails and chains), a chance over the distance

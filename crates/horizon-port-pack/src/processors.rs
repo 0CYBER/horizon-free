@@ -453,6 +453,11 @@ fn referenced(lists: &Value, data: &ProcessorData) -> Option<Vec<Value>> {
 fn as_data(kind: &str, p: &Value, data: &ProcessorData) -> Option<Vec<Value>> {
     let (ns, _) = kind.split_once(':')?;
     Some(match kind {
+        // Its structure voids keep the world's block, as vanilla's
+        // block_ignore does (the templates hold them; vanilla places them).
+        "repurposed_structures:structure_void_processor" => vec![json!({
+            "processor_type": "minecraft:block_ignore",
+            "blocks": ["minecraft:structure_void"]})],
         "moogs_structures:spawner_randomizing_processor" => {
             let mobs = p["weighted_entities"]
                 .as_array()?
@@ -1564,6 +1569,25 @@ mod tests {
             "minecraft:prismarine_bricks"
         );
         assert_eq!(p[13]["keep_properties"], true);
+    }
+
+    #[test]
+    fn repurposed_structure_voids_keep_the_world() {
+        let mut list = json!({"processors": [
+            {"processor_type": "repurposed_structures:structure_void_processor"}]});
+        let mut carried = BTreeMap::new();
+        assert!(carry(
+            "processor_list",
+            &mut list,
+            &ProcessorData::default(),
+            &mut carried
+        ));
+        assert_eq!(
+            list["processors"],
+            json!([{"processor_type": "minecraft:block_ignore",
+                "blocks": ["minecraft:structure_void"]}])
+        );
+        assert_eq!(carried["repurposed_structures:structure_void_processor"], 1);
     }
 
     #[test]
