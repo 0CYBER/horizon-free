@@ -10,6 +10,9 @@
 //!   processor with an `append_static` block entity.
 //! - Moog's vanilla loot swap only acts when its mod's "replace vanilla"
 //!   preset is on; one that ships off is a no-op and is taken out.
+//! - Lithostitched's `reference` runs other processor lists in turn: their
+//!   processors are written in its place (Choice Theorem's Overhauled
+//!   Villages builds most of its lists so).
 //!
 //! What is not here is taken out of its list later and counted
 //! (`worldgen::upgrade`). The entity NBT is written in 26.3's shape (an
@@ -29,6 +32,8 @@ pub struct ProcessorData {
     /// Moog's "replace vanilla" presets that are on by default:
     /// `(mod id, vanilla_key)`.
     pub replace_vanilla: BTreeSet<(String, String)>,
+    /// The mod's processor lists by id, for Lithostitched's references.
+    pub lists: BTreeMap<String, Value>,
 }
 
 impl ProcessorData {
@@ -47,7 +52,8 @@ impl ProcessorData {
                 continue;
             };
             let spawners = rest.strip_prefix("rs_spawners/");
-            if spawners.is_none() && rest != "moogs_structures/replace_vanilla" {
+            let list = rest.strip_prefix("worldgen/processor_list/");
+            if spawners.is_none() && list.is_none() && rest != "moogs_structures/replace_vanilla" {
                 continue;
             }
             let mut text = String::new();
@@ -58,6 +64,10 @@ impl ProcessorData {
             else {
                 continue;
             };
+            if let Some(path) = list {
+                out.lists.insert(format!("{ns}:{path}"), v);
+                continue;
+            }
             if let Some(path) = spawners {
                 let mobs = v["mobs"]
                     .as_array()
@@ -133,8 +143,10 @@ pub fn carry(
             return false;
         };
         let mut changed = false;
-        let mut out = Vec::with_capacity(list.len());
-        for p in list.drain(..) {
+        let expanded = references(std::mem::take(list), data, carried, 0);
+        changed |= expanded.1;
+        let mut out = Vec::with_capacity(expanded.0.len());
+        for p in expanded.0 {
             let kind = p["processor_type"].as_str().unwrap_or_default().to_owned();
             match as_data(&kind, &p, data) {
                 Some(replacement) => {
@@ -191,6 +203,60 @@ pub fn rule_tests(kind: &str, v: &mut Value, carried: &mut BTreeMap<String, usiz
         }
     }
     each_list(kind, v, &mut |list| rename(list, carried))
+}
+
+/// Lithostitched's references in a list, each replaced by the processors of
+/// the lists it names, in order (references in them too, to a depth of 8).
+/// One naming a tag or a list the mod does not have stays, to be dropped.
+/// Whether any was replaced.
+fn references(
+    list: Vec<Value>,
+    data: &ProcessorData,
+    carried: &mut BTreeMap<String, usize>,
+    depth: usize,
+) -> (Vec<Value>, bool) {
+    let mut out = Vec::with_capacity(list.len());
+    let mut changed = false;
+    for p in list {
+        let named = (p["processor_type"] == "lithostitched:reference" && depth < 8)
+            .then(|| referenced(&p["processor_lists"], data))
+            .flatten();
+        match named {
+            Some(inner) => {
+                *carried.entry("lithostitched:reference".into()).or_default() += 1;
+                out.extend(references(inner, data, carried, depth + 1).0);
+                changed = true;
+            }
+            None => out.push(p),
+        }
+    }
+    (out, changed)
+}
+
+/// The processors of the lists a reference names: an id, an inline list, or
+/// a list of either.
+fn referenced(lists: &Value, data: &ProcessorData) -> Option<Vec<Value>> {
+    let one = |l: &Value| -> Option<Vec<Value>> {
+        let mut list = match l {
+            Value::String(id) if !id.starts_with('#') => {
+                let id = if id.contains(':') {
+                    id.clone()
+                } else {
+                    format!("minecraft:{id}")
+                };
+                data.lists.get(&id)?.clone()
+            }
+            Value::Object(_) | Value::Array(_) => l.clone(),
+            _ => return None,
+        };
+        processors(&mut list).map(std::mem::take)
+    };
+    match lists {
+        // A bare list of processors is one inline list; else a list of lists.
+        Value::Array(a) if a.iter().any(|x| x.get("processor_type").is_some()) => Some(a.clone()),
+        Value::Array(a) => Some(a.iter().map(one).collect::<Option<Vec<_>>>()?.concat()),
+        other => one(other),
+    }
 }
 
 /// The data form of a Java processor: the processors to put in its place
@@ -961,6 +1027,36 @@ mod tests {
         );
         // A map that is not one stays Java (dropped later).
         assert_eq!(p[1]["processor_type"], "lithostitched:block_swap");
+    }
+
+    #[test]
+    fn lithostitched_references_are_written_in() {
+        let mut data = data();
+        let gravity = json!({"processor_type": "minecraft:gravity", "heightmap": "WORLD_SURFACE_WG", "offset": 0});
+        data.lists
+            .insert("v:road".into(), json!({"processors": [gravity.clone()]}));
+        data.lists.insert(
+            "v:house".into(),
+            json!({"processors": [
+                {"processor_type": "lithostitched:reference", "processor_lists": "v:road"},
+                {"processor_type": "lithostitched:block_swap", "blocks": {"minecraft:dirt": "minecraft:grass_block"}}]}),
+        );
+        let mut list = json!({"processors": [
+            {"processor_type": "lithostitched:reference", "processor_lists": ["v:house", "v:road"]},
+            {"processor_type": "lithostitched:reference", "processor_lists": "#v:roads"},
+            {"processor_type": "lithostitched:reference", "processor_lists": ["v:nowhere"]}]});
+        let mut carried = BTreeMap::new();
+        assert!(carry("processor_list", &mut list, &data, &mut carried));
+        let p = list["processors"].as_array().unwrap();
+        // House (its own reference to road first, then its swap), then road;
+        // the swap inside is carried too.
+        assert_eq!(p[0], gravity);
+        assert_eq!(p[1]["processor_type"], "horizon:block_swap");
+        assert_eq!(p[2], gravity);
+        // A tag or a list the mod lacks stays, to be dropped.
+        assert_eq!(p[3]["processor_lists"], "#v:roads");
+        assert_eq!(p[4]["processor_lists"], json!(["v:nowhere"]));
+        assert_eq!(carried["lithostitched:reference"], 2);
     }
 
     #[test]
