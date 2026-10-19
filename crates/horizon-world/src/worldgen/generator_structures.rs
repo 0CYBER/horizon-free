@@ -2,7 +2,7 @@
 use super::{
     biome::BiomeId,
     block_feature::FeatureBlockBindings,
-    generator::{GeneratorData, GeneratorError},
+    generator::{ChunkWork, GeneratorData, GeneratorError},
     structure::{
         StructureResources,
         start::{
@@ -31,6 +31,7 @@ pub(super) struct StructureState {
     /// Structure indices of each decoration step, in registry order.
     pub(super) by_step: Vec<Vec<usize>>,
     starts: StartCache,
+    start_work: ChunkWork,
     /// Concentric ring positions, computed on first use and shared with
     /// later generators of the same seed and dimension.
     rings: Arc<OnceLock<Rings>>,
@@ -215,6 +216,7 @@ impl StructureState {
             possible_sets,
             by_step,
             starts: StartCache::new(),
+            start_work: ChunkWork::new(),
             rings,
             ring_work: OnceLock::new(),
         }))
@@ -246,6 +248,8 @@ impl StructureState {
     /// Drop the cached starts, so that later chunks build fresh pieces (the
     /// pieces keep per-start placement state such as a shipwreck's height).
     pub(super) fn forget_starts(&self) {
+        // As before, a build already in flight can publish after this clear.
+        // Do not wait for work locks or retain initialized entries here.
         self.starts.clear();
     }
     /// The (cached) structure starts owned by a chunk.
@@ -257,7 +261,14 @@ impl StructureState {
         if let Some(found) = self.starts.get((chunk.x, chunk.z)) {
             return found;
         }
+        // Ring searches enlist other workers and wait for them: never hold a
+        // chunk-work lock while helping, even when this chunk has no starts.
         let rings = self.rings(context);
+        let work = self.start_work.at((chunk.x, chunk.z));
+        let _work = work.lock().unwrap();
+        if let Some(found) = self.starts.get((chunk.x, chunk.z)) {
+            return found;
+        }
         let starts: Starts = Arc::new(
             create_starts(
                 &self.registry,

@@ -1018,8 +1018,10 @@ pub fn despawn_check(m: &mut Mob, w: &MobWorld) -> bool {
 /// Mob.checkDespawn, before the tick (players are the only despawn
 /// reference). Returns false when the mob is discarded.
 fn check_despawn(m: &mut Mob, w: &MobWorld) -> bool {
-    let Some(p) = &w.player else { return true };
-    let d = m.distance_sqr(p.position);
+    let Some(p) = w.nearest_player else {
+        return true;
+    };
+    let d = m.distance_sqr(p);
     // requiresCustomPersistence: raiders in a raid, a tame nautilus, a sulfur
     // cube holding a block or let out of a bucket.
     let persistent = m.persistent

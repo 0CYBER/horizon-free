@@ -2,7 +2,8 @@
 
 Each group is a list of operations: `cmd` runs a command as the player and
 records its messages and results (`record: false` runs setup silently),
-`tick` advances the game and `settle` loads the terrain around the player.
+`tick` advances the game, `settle` loads the terrain and entities around the
+player and `portal` sends the player through the nether portal it stands in.
 Everything happens high above the terrain (y 200 and up, where both worlds
 are air) after the world's entities are removed, so the results do not
 depend on world generation.
@@ -413,6 +414,27 @@ def execute():
         cmd('/execute if dimension minecraft:overworld run say dimension restored'),
         cmd('/data get entity @s Pos'),
         *setup('/gamemode creative'),
+    ]
+
+
+def levels():
+    """A nether portal round trip: on the way back the Overworld's entities (the
+    pig left by `entities`) are found and a summon names what it summoned."""
+    return [
+        *setup('/fill 2 231 12 5 236 12 minecraft:obsidian', '/fill 3 232 12 4 235 12 minecraft:nether_portal[axis=x]',
+               '/tp @s 3.5 232 12.5 0 0'),
+        {'op': 'portal'},
+        {'op': 'settle'},
+        cmd('/execute if dimension minecraft:the_nether run say through the portal'),
+        {'op': 'portal'},
+        {'op': 'settle'},
+        cmd('/execute if dimension minecraft:overworld run say back through the portal'),
+        cmd('/data get entity @s Pos'),
+        cmd('/data get entity @s Rotation'),
+        cmd('/execute if entity @e[type=minecraft:pig]'),
+        cmd('/summon minecraft:armor_stand 4.5 210 4.5 {NoGravity:1b,Tags:["lv"],CustomName:"Back"}'),
+        *setup('/kill @e[tag=lv]', '/fill 2 231 12 5 236 12 minecraft:air', '/tp @s 8.5 230 8.5 0 0'),
+        {'op': 'settle'},
     ]
 
 
@@ -940,6 +962,7 @@ def groups():
         ('entities', entities()),
         ('scores, teams and bossbars', scores()),
         ('execute', execute()),
+        ('levels', levels()),
         ('items and loot', items_and_loot()),
         ('world', world_misc()),
         ('progression', progression()),

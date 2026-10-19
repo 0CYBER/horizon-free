@@ -510,6 +510,9 @@ impl EntityObstructionWorld for PlayerObstruction {
     }
 }
 impl LevelAccess for GameLevel<'_> {
+    fn world_surface(&self, x: i32, z: i32) -> i32 {
+        self.world.world_surface(x, z, |s| self.facts.is_air(s))
+    }
     fn precipitation(&self, pos: BlockPos) -> Option<horizon_world::level::Precipitation> {
         self.behaviours.precipitation_info(self, pos)
     }
@@ -2594,7 +2597,12 @@ impl Game<'_> {
         let mut dropped = Vec::new();
         let mut collision_error = None;
         let entity_drops = self.ui.rules.bool("entity_drops");
+        // ServerLevel.tick: only entities in entity-ticking chunks tick.
+        let ticking = self.entity_ticking_area();
         falling.retain_mut(|f| {
+            if !ticking(f.position.x.floor() as i32, f.position.z.floor() as i32) {
+                return true;
+            }
             let original = f.clone();
             f.previous = f.position;
             f.age = f.age.wrapping_add(1);
@@ -9925,15 +9933,25 @@ impl ApplicationHandler for Game<'_> {
                         && self.sleeping.is_none()
                         && self.player.is_some()
                         && !self.extras_scroll(d)
-                        && let Some((wheel, _)) =
+                        && let Some((wheel, (_, vertical_steps))) =
                             self.mouse
                                 .on_scroll(raw_x, raw_y, discrete, wheel_sensitivity)
                     {
-                        self.selected = horizon_client::mouse::ScrollWheelHandler::next_selection(
-                            f64::from(wheel),
-                            self.selected as i32,
-                            9,
-                        ) as usize;
+                        if self.spectator() {
+                            if let Some(player) = &mut self.player {
+                                player.flying_speed = horizon_client::mouse::spectator_flying_speed(
+                                    player.flying_speed,
+                                    vertical_steps,
+                                );
+                            }
+                        } else {
+                            self.selected =
+                                horizon_client::mouse::ScrollWheelHandler::next_selection(
+                                    f64::from(wheel),
+                                    self.selected as i32,
+                                    9,
+                                ) as usize;
+                        }
                     }
                     if self.screen == Screen::Chat && d != 0.0 {
                         self.chat_scroll(d);

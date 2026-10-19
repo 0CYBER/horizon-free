@@ -635,6 +635,7 @@ struct Pipeline<R: RandomSource> {
     picker: GlobalFluidPicker,
     zoom: BiomeZoom,
     biome_cache: BiomeCache,
+    biome_work: ChunkWork,
     carver_cache: Mutex<HashMap<(i32, i32), BiomeId>>,
     pub(super) decoration: Option<super::generator_decoration::Decoration>,
     pub(super) structures: Option<super::generator_structures::StructureState>,
@@ -643,6 +644,30 @@ struct Pipeline<R: RandomSource> {
     spawn_position: std::sync::OnceLock<[i32; 2]>,
 }
 const CACHE_LIMIT: usize = 16384;
+/// Coordinates only equal missing neighbour keys. Weak entries retain no
+/// computed values across eviction or explicit invalidation. Only one work
+/// lock may be held at a time; finish shared prerequisites before acquiring it.
+pub(super) struct ChunkWork(Mutex<HashMap<(i32, i32), std::sync::Weak<Mutex<()>>>>);
+impl ChunkWork {
+    pub(super) fn new() -> Self {
+        Self(Mutex::new(HashMap::new()))
+    }
+    pub(super) fn at(&self, key: (i32, i32)) -> Arc<Mutex<()>> {
+        let mut work = self.0.lock().unwrap();
+        if let Some(lock) = work.get(&key).and_then(std::sync::Weak::upgrade) {
+            return lock;
+        }
+        if work.len() >= 4096 {
+            // Keep every active builder/waiter on its original lock, including
+            // when the result cache was cleared while it was in flight.
+            work.retain(|_, lock| lock.strong_count() > 0);
+        }
+        let lock = Arc::new(Mutex::new(()));
+        work.insert(key, Arc::downgrade(&lock));
+        lock
+    }
+}
+
 type BiomeCache = Mutex<HashMap<(i32, i32), Arc<BiomeChunk<BiomeId>>>>;
 
 fn state(registry: &BlockRegistry, raw: &Value) -> Result<BlockStateId, GeneratorError> {
@@ -834,6 +859,7 @@ where
             extensions,
             picker,
             biome_cache: Mutex::new(HashMap::new()),
+            biome_work: ChunkWork::new(),
             carver_cache: Mutex::new(HashMap::new()),
             decoration: None,
             structures: None,
@@ -867,6 +893,11 @@ where
         worker: &mut WorkerState,
         pos: ChunkPos,
     ) -> Result<Arc<BiomeChunk<BiomeId>>, GeneratorError> {
+        if let Some(chunk) = self.biome_cache.lock().unwrap().get(&(pos.x, pos.z)) {
+            return Ok(chunk.clone());
+        }
+        let work = self.biome_work.at((pos.x, pos.z));
+        let _work = work.lock().unwrap();
         if let Some(chunk) = self.biome_cache.lock().unwrap().get(&(pos.x, pos.z)) {
             return Ok(chunk.clone());
         }
@@ -906,7 +937,15 @@ where
         Ok(chunk)
     }
     fn carver_biome(&self, worker: &mut WorkerState, origin: ChunkPos) -> Result<BiomeId, String> {
-        if let Some(id) = self.carver_cache.lock().unwrap().get(&(origin.x, origin.z)) {
+        let key = (origin.x, origin.z);
+        if let Some(id) = worker.carver_biomes.get(&key) {
+            return Ok(*id);
+        }
+        if worker.carver_biomes.len() >= 4096 {
+            worker.carver_biomes.clear();
+        }
+        if let Some(id) = self.carver_cache.lock().unwrap().get(&key) {
+            worker.carver_biomes.insert(key, *id);
             return Ok(*id);
         }
         let mut resolver = self.source.resolver(
@@ -926,13 +965,27 @@ where
         if cache.len() >= CACHE_LIMIT * 4 {
             cache.clear();
         }
-        cache.insert((origin.x, origin.z), id);
+        cache.insert(key, id);
+        worker.carver_biomes.insert(key, id);
         Ok(id)
     }
     fn generate(
         &self,
         worker: &mut WorkerState,
         pos: ChunkPos,
+    ) -> Result<ProtoChunk, GeneratorError> {
+        let mut context = std::mem::take(&mut worker.terrain_context);
+        let result = self.generate_with_context(worker, pos, &mut context);
+        // Release chunk-specific bindings and caches even after a sampling error.
+        context.reset();
+        worker.terrain_context = context;
+        result
+    }
+    fn generate_with_context(
+        &self,
+        worker: &mut WorkerState,
+        pos: ChunkPos,
+        context: &mut SamplerContext,
     ) -> Result<ProtoChunk, GeneratorError> {
         let data = &self.data;
         let (min, height, sea) = (
@@ -985,13 +1038,12 @@ where
             ),
             None => Vec::new(),
         };
-        let mut context = SamplerContext::cached();
         if let Some(beard) = self
             .structures
             .as_ref()
             .and_then(|s| s.beardifier(&references, pos))
         {
-            context = context.with_world_fields(
+            *context = std::mem::take(context).with_world_fields(
                 horizon_core::density::WorldFields::default().with_field(
                     horizon_core::density::WorldField::Beardifier,
                     Arc::new(beard),
@@ -1016,7 +1068,7 @@ where
                         .fork_positional(),
                     RegistryAquiferBlockStates::new(data.registry).map_err(stage("aquifer"))?,
                     volume,
-                    &mut context,
+                    context,
                 )
                 .map_err(stage("aquifer"))?,
             ),
@@ -1030,7 +1082,7 @@ where
             &mut chunk,
             volume,
             self.router.get(RouterField::FinalDensity).as_ref(),
-            &mut context,
+            context,
             aquifer.as_mut(),
             self.settings.default_block,
         )
@@ -1051,7 +1103,7 @@ where
                     possible: Some(possible),
                 },
                 preliminary_surface: self.preliminary.clone(),
-                density_context: &mut context,
+                density_context: context,
                 write_min_y: min,
                 write_max_y: min + height - 1,
             },
@@ -1086,7 +1138,7 @@ where
                         possible: None,
                     },
                     preliminary_surface: self.preliminary.clone(),
-                    density_context: &mut context,
+                    density_context: context,
                 },
                 aquifer.as_mut(),
                 &data.carving_blocks,
@@ -1391,8 +1443,12 @@ pub struct StageTimings {
 /// thread-local caches and never change results.
 pub(super) struct WorkerState {
     pub(super) temperatures: Vec<BiomeTemperature>,
+    terrain_context: SamplerContext,
     biome_context: SamplerContext,
     carver_context: SamplerContext,
+    /// Seed/dimension-bound lookups avoid the shared mutex for overlapping
+    /// carver neighborhoods. Bounded independently of the shared cache.
+    carver_biomes: HashMap<(i32, i32), BiomeId>,
     timings: StageTimings,
     heights: HashMap<(i32, i32, u8), i32>,
     /// Decorate with structure pieces only (for structure parity checks).
@@ -1866,8 +1922,10 @@ impl OverworldGenerator {
                     .iter()
                     .map(|s| BiomeTemperature::new(*s))
                     .collect(),
+                terrain_context: SamplerContext::cached(),
                 biome_context: SamplerContext::cached(),
                 carver_context: SamplerContext::default(),
+                carver_biomes: HashMap::new(),
                 timings: StageTimings::default(),
                 structures_only: false,
                 heights: HashMap::new(),
@@ -1947,6 +2005,57 @@ impl GeneratorWorker {
 mod tests {
     use super::*;
 
+    #[test]
+    fn local_carver_cache_is_worker_owned_and_eviction_preserves_terrain() {
+        let root = std::env::var_os("HORIZON_RESOURCES")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3")
+            });
+        if !root.join("worldgen/world_presets.json").exists() {
+            eprintln!("skipping: no worldgen bundle at {}", root.display());
+            return;
+        }
+        let registry = Box::leak(Box::new(
+            crate::level::data::load_registry(&root).expect("registry"),
+        ));
+        let data = GeneratorData::load(&root.join("worldgen"), registry).unwrap();
+        let generator = OverworldGenerator::new(data.clone(), 12345).unwrap();
+        let mut first = generator.worker();
+        let mut second = generator.worker();
+        let pos = ChunkPos::new(0, 0);
+        let before = first.generate_proto(pos).unwrap();
+        assert!(!first.state.carver_biomes.is_empty());
+        assert!(second.state.carver_biomes.is_empty());
+        second.generate_proto(pos).unwrap();
+        assert_eq!(first.state.carver_biomes, second.state.carver_biomes);
+        let expected = first.state.carver_biomes.clone();
+        first.state.carver_biomes.clear();
+        // Fill unrelated origins to force eviction on the next local miss.
+        for x in 0..4096 {
+            first.state.carver_biomes.insert((x, 100_000), BiomeId(0));
+        }
+        let after = first.generate_proto(pos).unwrap();
+        assert_eq!(first.state.carver_biomes, expected);
+        for y in -64..320 {
+            for z in 0..16 {
+                for x in 0..16 {
+                    assert_eq!(before.block(x, y, z), after.block(x, y, z));
+                    assert_eq!(before.biome_id_at(x, y, z), after.biome_id_at(x, y, z));
+                }
+            }
+        }
+        assert!(
+            OverworldGenerator::new(data, -1)
+                .unwrap()
+                .worker()
+                .state
+                .carver_biomes
+                .is_empty()
+        );
+        assert_eq!(second.state.carver_biomes, expected);
+    }
+
     /// Generators of one seed and dimension share their ring positions;
     /// another seed or generator gets its own, and old entries go.
     #[test]
@@ -2012,5 +2121,122 @@ mod tests {
             quantize_parameter_report(r#"{"biomes":[{"parameters":{"temperature":"x"}}]}"#)
                 .is_err()
         );
+    }
+    #[test]
+    fn neighbour_work_cleanup_keeps_active_keys_and_releases_idle_keys() {
+        let work = ChunkWork::new();
+        let first = work.at((0, 0));
+        let held = first.lock().unwrap();
+        let same = work.at((0, 0));
+        assert!(Arc::ptr_eq(&first, &same));
+        assert!(!Arc::ptr_eq(&first, &work.at((1, 0))));
+        // Sweep many expired weak entries while a builder and a prospective
+        // waiter retain their key. Cleanup must not split their coordination.
+        for x in 1..8192 {
+            drop(work.at((x, 1)));
+        }
+        assert!(work.0.lock().unwrap().len() <= 4096);
+        assert!(Arc::ptr_eq(&same, &work.at((0, 0))));
+        let weak = Arc::downgrade(&first);
+        drop(held);
+        drop((first, same));
+        assert!(weak.upgrade().is_none());
+        let next = work.at((0, 0));
+        assert_eq!(Arc::strong_count(&next), 1);
+    }
+
+    /// Equal concurrent misses share one biome volume and the same mutable
+    /// structure pieces. Exercise cold ring startup before work coordination,
+    /// then cache eviction and explicit start invalidation with old Arcs alive.
+    #[test]
+    fn concurrent_neighbours_share_results_and_survive_invalidation() {
+        let root = std::env::var_os("HORIZON_RESOURCES")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3")
+            });
+        if !root.join("worldgen/world_presets.json").exists() {
+            eprintln!("skipping: no worldgen bundle at {}", root.display());
+            return;
+        }
+        let registry = Box::leak(Box::new(
+            crate::level::data::load_registry(&root).expect("registry"),
+        ));
+        let data = GeneratorData::load(&root.join("worldgen"), registry).expect("worldgen data");
+        let preset: Value = serde_json::from_str(&data.world_presets["minecraft:normal"]).unwrap();
+        let generator_json = &preset["dimensions"]["minecraft:overworld"]["generator"];
+        let settings: Value =
+            serde_json::from_str(&data.settings[generator_json["settings"].as_str().unwrap()])
+                .unwrap();
+        let pipeline = Arc::new(
+            Pipeline::new(
+                data,
+                12345,
+                XoroshiroRandom::new(12345),
+                generator_json,
+                &settings,
+                true,
+                Some((-64, 384)),
+            )
+            .expect("pipeline"),
+        );
+        let generator = OverworldGenerator {
+            pipeline: pipeline.clone(),
+        };
+        let barrier = std::sync::Barrier::new(6);
+        let pos = ChunkPos::new(11, -11); // ancient city for this seed
+        let results = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..6)
+                .map(|_| {
+                    scope.spawn(|| {
+                        let mut worker = generator.worker();
+                        barrier.wait();
+                        let biomes = pipeline.biome_chunk(&mut worker.state, pos).unwrap();
+                        let starts = pipeline.structure_starts(&mut worker.state, pos);
+                        (biomes, starts)
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        let (biomes, starts) = &results[0];
+        assert!(!starts.is_empty(), "fixture must exercise shared pieces");
+        for (b, s) in &results[1..] {
+            assert!(Arc::ptr_eq(biomes, b));
+            assert_eq!(starts.len(), s.len());
+            for (first, other) in starts.iter().zip(s) {
+                assert!(Arc::ptr_eq(first, other));
+            }
+        }
+        // Force the existing whole-cache biome eviction threshold.
+        {
+            let mut cache = pipeline.biome_cache.lock().unwrap();
+            cache.clear();
+            for x in 0..CACHE_LIMIT as i32 {
+                cache.insert((x, 10000), biomes.clone());
+            }
+        }
+        let mut worker = generator.worker();
+        let rebuilt = pipeline.biome_chunk(&mut worker.state, pos).unwrap();
+        assert!(!Arc::ptr_eq(biomes, &rebuilt));
+        assert_eq!(pipeline.biome_cache.lock().unwrap().len(), 1);
+        for section in 0..24 {
+            assert_eq!(biomes.section(section), rebuilt.section(section));
+        }
+        worker.forget_structure_starts();
+        let fresh = worker.structure_starts(pos);
+        assert_eq!(starts.len(), fresh.len());
+        for (old, new) in starts.iter().zip(&fresh) {
+            assert!(!Arc::ptr_eq(old, new));
+            assert_eq!(old.name, new.name);
+            assert_eq!(old.bounding_box, new.bounding_box);
+        }
+        let again = worker.structure_starts(pos);
+        for (first, hit) in fresh.iter().zip(&again) {
+            assert!(Arc::ptr_eq(first, hit));
+        }
     }
 }

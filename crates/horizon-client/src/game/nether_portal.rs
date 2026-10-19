@@ -298,6 +298,12 @@ impl Game<'_> {
         else {
             return Ok(());
         };
+        self.player_through_nether_portal(entry)
+    }
+    /// `Entity.handlePortal` once the player's portal process at `entry`
+    /// finished: `NetherPortalBlock.getPortalDestination`, then
+    /// `teleportToPortalDestination` (`isAllowedToEnterPortal`).
+    pub(super) fn player_through_nether_portal(&mut self, entry: BlockPos) -> Result<()> {
         let Some(p) = self.player.as_ref() else {
             return Ok(());
         };

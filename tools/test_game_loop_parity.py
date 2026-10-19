@@ -120,8 +120,15 @@ def scroll_cases(rng):
             x = rng.choice([0.0, 0.0, 0.0, 1.0, -1.0, 0.25, -0.25, 0.4, 2.0, 5.5, -7.0, rng.uniform(-3, 3)])
             y = rng.choice([0.0, 1.0, -1.0, 1.0, -1.0, 0.1, -0.3, 0.5, -0.5, 2.0, -3.0, 120.0, rng.uniform(-3, 3)])
             ops.append([dbits(x), dbits(y)])
-        yield dict(t='scroll', discrete=rng.random() < 0.4, sens=dbits(rng.choice([1.0, 0.01, 10.0, 0.5, 2.0, 3.1622776601683795])),
-                   slot=rng.randrange(9), ops=ops)
+        case = dict(t='scroll', discrete=rng.random() < 0.4, sens=dbits(rng.choice([1.0, 0.01, 10.0, 0.5, 2.0, 3.1622776601683795])),
+                    slot=rng.randrange(9), ops=ops)
+        yield case
+        yield dict(case, spectator=True)
+    # Bounds, recovery from each bound, fractional accumulation, and horizontal-only input.
+    yield dict(t='scroll', discrete=False, sens=dbits(1.0), slot=4, spectator=True,
+               ops=[[dbits(x), dbits(y)] for x, y in
+                    [(0, 100), (0, -1), (0, -100), (0, 1), (0, .4), (0, .7),
+                     (0, -.4), (0, -.7), (5, 0), (-5, 0)]])
 
 
 def key_cases(rng):
@@ -152,7 +159,7 @@ def main():
              'Window.calculateScale/setGuiScale and MouseHandler scaled positions, FramerateLimitTracker throttle reasons and '
              'limits (not the focus-lost exclusive-fullscreen branch, which reads SDL), MouseHandler.onMove/turnPlayer with '
              'sensitivity, cinematic smoothing, scoping and inversion, Entity.turn clamps, onScroll with ScrollWheelHandler '
-             'accumulation, discrete scrolling and hotbar selection, and ToggleKeyMapping/KeyMapping down, click and '
+             'accumulation, discrete scrolling, hotbar selection and spectator flight speed, and ToggleKeyMapping/KeyMapping down, click and '
              'screen-release state. The frame clock source (Blaze3D.getTime, System.nanoTime) is injected, so sleeping in '
              'FramerateLimiter and vsync present-mode selection are covered by Rust unit tests only.')
     harness.differential(

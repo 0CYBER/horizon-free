@@ -443,8 +443,13 @@ impl Game<'_> {
     }
     /// Every boat but the ridden one (which ticks with its rider).
     pub(super) fn tick_boats(&mut self) {
+        // ServerLevel.tick: only entities in entity-ticking chunks tick.
+        let ticking = self.entity_ticking_area();
         for i in 0..self.boats.len() {
-            if Some(self.boats[i].id) == self.riding {
+            let p = self.boats[i].position;
+            if Some(self.boats[i].id) == self.riding
+                || !ticking(p.x.floor() as i32, p.z.floor() as i32)
+            {
                 continue;
             }
             let b = self.boats[i].clone();

@@ -222,6 +222,7 @@ public final class VanillaCommandExecOracle {
                         }
                     }
                     case "settle" -> settle();
+                    case "portal" -> portal();
                     default -> throw new IllegalArgumentException(line);
                 }
             }
@@ -278,6 +279,23 @@ public final class VanillaCommandExecOracle {
         }
 
         /** Force-load the chunks around the player (Horizon waits for its streamed terrain). */
+        /**
+         * Entity.handlePortal once the player's portal process finished in the
+         * nether portal it stands in (the oracle does not tick the player).
+         */
+        void portal() {
+            ServerLevel level = player.level();
+            net.minecraft.core.BlockPos entry = player.blockPosition();
+            if (!level.getBlockState(entry).is(net.minecraft.world.level.block.Blocks.NETHER_PORTAL)) {
+                throw new IllegalStateException("portal: the player is not in a nether portal");
+            }
+            var block = (net.minecraft.world.level.block.NetherPortalBlock) net.minecraft.world.level.block.Blocks.NETHER_PORTAL;
+            var transition = block.getPortalDestination(level, player, entry);
+            if (transition != null) {
+                player.teleportToPortalDestination(level, transition);
+            }
+        }
+
         void settle() {
             ServerLevel level = player.level();
             int cx = player.chunkPosition().x(), cz = player.chunkPosition().z();
