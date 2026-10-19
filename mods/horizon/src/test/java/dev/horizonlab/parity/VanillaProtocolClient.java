@@ -464,6 +464,11 @@ public final class VanillaProtocolClient {
         int furnaceState = 0;
         // Snowballs the server spawned since the last right click.
         int snowballs = 0;
+        // The player's own id, and what the ender pearl it throws does to it.
+        int playerId = -1;
+        boolean pearl = false;
+        int pearlTeleports = 0;
+        float pearlHealth = -1;
         // The villager the server's console summoned beside the spawn.
         int villager = -1;
         net.minecraft.world.phys.Vec3 villagerAt = null;
@@ -499,13 +504,20 @@ public final class VanillaProtocolClient {
                         loadStart = true;
                     }
                 }
+                if (packet instanceof net.minecraft.network.protocol.game.ClientboundLoginPacket p) playerId = p.playerId();
+                // The first health after the pearl: the hurt (regeneration follows each server's ticks).
+                if (pearl && pearlHealth < 0 && packet instanceof net.minecraft.network.protocol.game.ClientboundSetHealthPacket p) {
+                    pearlHealth = p.getHealth();
+                }
                 if (packet instanceof ClientboundKeepAlivePacket p) {
                     send(new ServerboundKeepAlivePacket(p.getId()));
                 } else if (packet instanceof ClientboundPingPacket p) {
                     send(new ServerboundPongPacket(p.getId()));
                 } else if (packet instanceof ClientboundPlayerPositionPacket p) {
                     position = PositionMoveRotation.calculateAbsolute(position, p.change(), p.relatives());
-                    record("play-move", text(position.position()) + " " + position.yRot() + " " + position.xRot());
+                    // Where a pearl lands follows its random inaccuracy: only counted.
+                    if (pearl) pearlTeleports++;
+                    else record("play-move", text(position.position()) + " " + position.yRot() + " " + position.xRot());
                     if (respawning) respawnAt = position;
                     send(new ServerboundAcceptTeleportationPacket(p.id(), position.position().x, position.position().y, position.position().z,
                         position.yRot(), position.xRot()));
@@ -566,6 +578,8 @@ public final class VanillaProtocolClient {
                 } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundAddEntityPacket p
                     && p.getType() == net.minecraft.world.entity.EntityTypes.SNOWBALL) {
                     snowballs++;
+                    // Projectile.getAddEntityPacket: its owner's id.
+                    record("play-use", "snowball owner is the player: " + (p.getData() == playerId));
                 } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundAddEntityPacket p
                     && p.getType() == net.minecraft.world.entity.EntityTypes.VILLAGER) {
                     villager = p.getId();
@@ -745,6 +759,21 @@ public final class VanillaProtocolClient {
                 stepAt = now;
             } else if (step == 16 + REPLIES.length && now - stepAt > 2000) {
                 record("play-use", "off hand on a block: " + snowballs + " snowball(s)");
+                // An ender pearl thrown at its feet (no endermite: ThrownEnderpearl spawns one 5% of the time).
+                send(new ServerboundChatCommandPacket("gamerule spawn_monsters false"));
+                send(new ServerboundChatCommandPacket("item replace entity @s weapon.offhand with minecraft:air"));
+                send(new ServerboundChatCommandPacket("item replace entity @s weapon.mainhand with minecraft:ender_pearl"));
+                step++;
+                stepAt = now;
+            } else if (step == 17 + REPLIES.length && now - stepAt > 1500) {
+                pearl = true;
+                send(new net.minecraft.network.protocol.game.ServerboundUseItemPacket(net.minecraft.world.InteractionHand.MAIN_HAND, 7,
+                    position.yRot(), 90.0F));
+                step++;
+                stepAt = now;
+            } else if (step == 18 + REPLIES.length && now - stepAt > 2500) {
+                // ThrownEnderpearl.onHit: the thrower is teleported and takes 5 damage.
+                record("play-pearl", "teleported " + pearlTeleports + " time(s), health " + pearlHealth);
                 return;
             }
         }

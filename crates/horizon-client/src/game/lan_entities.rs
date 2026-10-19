@@ -324,7 +324,11 @@ impl Game<'_> {
             let mut e = state(p.id, kind, at(p.position), p.yaw, false);
             e.pitch = p.pitch;
             e.velocity = at(p.velocity);
-            e.data = owner(p.owner);
+            // Projectile.getAddEntityPacket: the owner's id.
+            e.data = match p.guest.and_then(|conn| hub.guest(conn)) {
+                Some(g) => g.entity_id,
+                None => owner(p.owner),
+            };
             match &p.kind {
                 K::Arrow { critical, .. } => {
                     let a = p.arrow.as_deref();
