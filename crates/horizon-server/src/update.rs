@@ -505,15 +505,30 @@ fn switch_to(dir: &Path, install: &Install, tag: &str, timeout: Duration) -> Res
         std::thread::sleep(Duration::from_millis(500));
         let status = client.call("GET", "/api/v1/status", None)?;
         if finished(&status) > before {
-            println!();
             let update = &status["update"];
             let last = update["last"].as_str().unwrap_or_default().to_owned();
-            return if update["ok"] == true {
-                println!("{last}");
-                Ok(())
+            if update["ok"] == true {
+                println!("\n{last}");
+                return Ok(());
+            }
+            // Rolled back (or stayed): say so once the game is up again on the release it went back to.
+            let mut phase = status["phase"].as_str().unwrap_or_default().to_owned();
+            let until = Instant::now() + crate::api::UPDATE_TIMEOUT;
+            while phase != "running" && phase != "stopping" && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(500));
+                print!(".");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+                phase = client.call("GET", "/api/v1/status", None)?["phase"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned();
+            }
+            println!();
+            return Err(if phase == "running" {
+                format!("{last}. The game is up again.")
             } else {
-                Err(last)
-            };
+                last
+            });
         }
         if Instant::now() > deadline {
             println!();
