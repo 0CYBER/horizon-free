@@ -110,7 +110,7 @@ impl Game<'_> {
             return false;
         }
         let s = f.step();
-        let behind = self.res.facts.get(self.world.block(
+        let behind = self.res.facts().get(self.world.block(
             f.pos[0] - s[0],
             f.pos[1] - s[1],
             f.pos[2] - s[2],
@@ -282,8 +282,15 @@ impl Game<'_> {
     }
     /// BlockAttachedEntity.tick for frames.
     pub(super) fn tick_item_frames(&mut self) {
+        // ServerLevel.tick: only entities in entity-ticking chunks tick.
+        let ticking = self.entity_ticking_area();
         let mut i = 0;
         while i < self.item_frames.len() {
+            let at = center(&self.item_frames[i]);
+            if !ticking(at[0].floor() as i32, at[2].floor() as i32) {
+                i += 1;
+                continue;
+            }
             self.item_frames[i].check_interval += 1;
             if self.item_frames[i].check_interval >= 100 {
                 self.item_frames[i].check_interval = 0;
@@ -301,12 +308,30 @@ impl Game<'_> {
     }
     /// ItemFrameRenderer: the frame model, then the item half size on its face.
     pub(super) fn frame_geometry(&mut self, camera: glam::DVec3, out: &mut Vec<Vertex>) {
-        let sprites = &self.atlas.sprites;
+        let sprites = &self.gui.atlas.sprites;
         let mut maps: Vec<(i32, glam::Mat4, u32)> = Vec::new();
         let mut items: Vec<(ItemStack, u32, glam::Mat4, u8)> = Vec::new();
+        // ItemFrame.shouldRenderAtSqrDistance: 1024 blocks at 100%.
+        let range = 16.0 * 64.0 * f64::from(self.settings.entity_distance);
         for f in &self.item_frames {
             let entity_start = out.len();
             let map = f.item.as_ref().and_then(super::maps::map_id);
+            // EntityRenderer.shouldRender: its box (a block wide with a map),
+            // measured from the box's centre.
+            let (lo, hi) = f.bounds();
+            let (mut lo, mut hi) = (glam::DVec3::from(lo), glam::DVec3::from(hi));
+            if map.is_some() {
+                let s = f.step();
+                for i in 0..3 {
+                    if s[i] == 0 {
+                        let c = (lo[i] + hi[i]) / 2.0;
+                        (lo[i], hi[i]) = (c - 0.5, c + 0.5);
+                    }
+                }
+            }
+            if !self.entity_in_view(camera, (lo + hi) / 2.0, range, lo, hi) {
+                continue;
+            }
             let s = f.step();
             // Pose: to the block centre, then X/Y rotation by facing.
             let (x_rot, y_rot) = if s[1] == 0 {

@@ -60,6 +60,10 @@ pub struct State {
     pub sound: Value,
     pub outline: Value,
     pub collision: Value,
+    /// What breaking the state drops, per tool (`hand`, `diamond_pickaxe`,
+    /// `shears`, `silk_touch_pickaxe`...): item id → count.
+    #[serde(default)]
+    pub drops: BTreeMap<String, BTreeMap<String, u32>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -76,6 +80,23 @@ pub struct Item {
 const VANILLA_PACKAGE: &str = "net.minecraft.";
 
 /// A state key with its properties sorted, so keys compare across blocks.
+/// Which states of a block drop the block itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelfDrop {
+    /// Every state: `dropSelf`.
+    Always,
+    /// Only the states where this property has this value.
+    When(String, String),
+}
+
+/// A state key's `property=value` pairs.
+fn pairs(key: &str) -> BTreeSet<(String, String)> {
+    key.split(',')
+        .filter_map(|p| p.split_once('='))
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect()
+}
+
 pub fn state_key(key: &str) -> String {
     let mut parts: Vec<&str> = key.split(',').filter(|p| !p.is_empty()).collect();
     parts.sort_unstable();
@@ -95,6 +116,45 @@ impl Block {
         self.class
             .first()
             .is_some_and(|c| !c.starts_with(VANILLA_PACKAGE))
+    }
+    /// Every state drops one `item` (the block's own) with every tool, except
+    /// where the state needs a tool and gets none: vanilla's `dropSelf`. Or
+    /// only the states where one property has one value do, and the others
+    /// drop nothing with any tool: a door's lower half (`createDoorTable`).
+    /// Mods often register these tables in code, so their jar has no file.
+    pub fn drops_itself(&self, item: &str) -> Option<SelfDrop> {
+        let one = BTreeMap::from([(item.to_owned(), 1)]);
+        let (mut dropping, mut nothing) = (Vec::new(), Vec::new());
+        for (key, state) in &self.states {
+            if state.drops.is_empty() {
+                continue;
+            }
+            let mut drops = false;
+            let mut short = false;
+            for got in state.drops.values() {
+                if *got == one {
+                    drops = true;
+                } else if got.is_empty() {
+                    short = true;
+                } else {
+                    return None;
+                }
+            }
+            match (drops, short) {
+                (true, true) if !state.requires_tool => return None,
+                (true, _) => dropping.push(pairs(key)),
+                (false, _) => nothing.push(pairs(key)),
+            }
+        }
+        let (first, rest) = dropping.split_first()?;
+        if nothing.is_empty() {
+            return Some(SelfDrop::Always);
+        }
+        first
+            .iter()
+            .filter(|pair| rest.iter().all(|s| s.contains(*pair)))
+            .find(|pair| nothing.iter().all(|s| !s.contains(*pair)))
+            .map(|(p, v)| SelfDrop::When(p.clone(), v.clone()))
     }
     fn default_state(&self) -> Option<&State> {
         self.states
@@ -371,6 +431,65 @@ mod tests {
             .unwrap();
         assert_eq!(tile.template, "minecraft:stone");
         assert_eq!(tile.differences[0], "sounds: no vanilla block has them");
+    }
+
+    #[test]
+    fn drops_itself_is_vanillas_drop_self() {
+        let cube = json!([[0, 0, 0, 1, 1, 1]]);
+        let with = |requires_tool: bool, drops: Value| {
+            let mut s = state(1.5, "stone", cube.clone());
+            s["requires_tool"] = json!(requires_tool);
+            s["drops"] = drops;
+            let b: Block = serde_json::from_value(block(&[], json!({}), json!({"": s}))).unwrap();
+            b.drops_itself("m:tile")
+        };
+        let me = json!({"m:tile": 1});
+        let always = Some(SelfDrop::Always);
+        assert_eq!(with(false, json!({"hand": me, "shears": me})), always);
+        // A state that needs a tool drops nothing by hand, as dropSelf does.
+        assert_eq!(
+            with(true, json!({"hand": {}, "diamond_pickaxe": me})),
+            always
+        );
+        assert_eq!(
+            with(false, json!({"hand": {}, "diamond_pickaxe": me})),
+            None
+        );
+        // Two of itself (a double slab), or something else, is not dropSelf.
+        assert_eq!(with(false, json!({"hand": {"m:tile": 2}})), None);
+        assert_eq!(with(false, json!({"hand": {"m:other": 1}})), None);
+        assert_eq!(with(false, json!({})), None);
+    }
+
+    #[test]
+    fn a_door_drops_from_its_lower_half() {
+        let cube = json!([[0, 0, 0, 1, 1, 1]]);
+        let me = json!({"hand": {"m:door": 1}, "shears": {"m:door": 1}});
+        let none = json!({"hand": {}, "shears": {}});
+        let door = |upper: &Value| {
+            let mut states = serde_json::Map::new();
+            for (key, drops) in [
+                ("half=lower,open=false", &me),
+                ("half=lower,open=true", &me),
+                ("half=upper,open=false", upper),
+                ("half=upper,open=true", upper),
+            ] {
+                let mut s = state(3.0, "wood", cube.clone());
+                s["drops"] = drops.clone();
+                states.insert(key.to_owned(), s);
+            }
+            let props = json!({"half": ["upper", "lower"], "open": ["true", "false"]});
+            let b: Block =
+                serde_json::from_value(block(&[], props, Value::Object(states))).unwrap();
+            b.drops_itself("m:door")
+        };
+        assert_eq!(
+            door(&none),
+            Some(SelfDrop::When("half".to_owned(), "lower".to_owned()))
+        );
+        assert_eq!(door(&me), Some(SelfDrop::Always));
+        // Something else from the upper half: not a door table.
+        assert_eq!(door(&json!({"hand": {"m:other": 1}})), None);
     }
 
     #[test]

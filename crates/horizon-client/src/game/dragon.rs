@@ -74,6 +74,8 @@ impl Respawn {
 }
 #[derive(Clone, Debug)]
 pub(super) struct Crystal {
+    /// The entity id a server tracks it by (0 until it is tracked).
+    pub id: u32,
     pub position: Vec3,
     pub show_bottom: bool,
     /// EndCrystal.time (the bob and spin), starting random.
@@ -445,9 +447,9 @@ impl Game<'_> {
     }
     fn end_portal_active(&self) -> bool {
         (0..256).any(|y| {
-            &*self.res.facts.get(self.world.block(0, y, 0)).name == "minecraft:bedrock"
+            &*self.res.facts().get(self.world.block(0, y, 0)).name == "minecraft:bedrock"
                 && (-3..=3).any(|d| {
-                    &*self.res.facts.get(self.world.block(d, y, 0)).name == "minecraft:end_portal"
+                    &*self.res.facts().get(self.world.block(d, y, 0)).name == "minecraft:end_portal"
                 })
         })
     }
@@ -553,6 +555,7 @@ impl Game<'_> {
             }
             let time = self.world.random.next_int_bound(100_000).unwrap_or(0);
             self.crystals.push(Crystal {
+                id: 0,
                 position: at,
                 show_bottom: true,
                 time,
@@ -588,7 +591,7 @@ impl Game<'_> {
             let p = self.crystals[i].position;
             let b = [p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32];
             if let Some(fire) = fire
-                && self.res.facts.is_air(self.world.block(b[0], b[1], b[2]))
+                && self.res.facts().is_air(self.world.block(b[0], b[1], b[2]))
                 && self.world.loaded(b[0], b[2])
             {
                 let _ = self.level_set(b, fire);
@@ -761,7 +764,7 @@ impl Game<'_> {
         let held = self.held().cloned();
         let modifiers = held
             .as_ref()
-            .and_then(|h| self.res.items.get(&h.item))
+            .and_then(|h| self.res.items().get(&h.item))
             .map(|i| (i.attack_damage, i.attack_speed))
             .unwrap_or((0.0, 0.0));
         let speed = (4.0 + modifiers.1).max(0.1);
@@ -810,7 +813,7 @@ impl Game<'_> {
         (0..256)
             .rev()
             .find(|&y| {
-                let f = self.res.facts.get(self.world.block(x, y, z));
+                let f = self.res.facts().get(self.world.block(x, y, z));
                 (f.full_collision
                     || f.legacy_solid
                     || f.fluid != horizon_client::blocks::Fluid::None)
@@ -1254,7 +1257,7 @@ impl Game<'_> {
                     let (x, z) = (head.x + look.x * 2.5, head.z + look.y * 2.5);
                     let mut y = head.y + 0.5;
                     while y > 0.0
-                        && self.res.facts.is_air(self.world.block(
+                        && self.res.facts().is_air(self.world.block(
                             x.floor() as i32,
                             y.floor() as i32,
                             z.floor() as i32,
@@ -1591,7 +1594,7 @@ impl Game<'_> {
             return;
         };
         let boxes = [d.part_box(0), d.part_box(1), d.part_box(2)];
-        let tags = &self.res.items.block_tags;
+        let tags = &self.res.items().block_tags;
         let transparent = tags
             .get("minecraft:dragon_transparent")
             .cloned()
@@ -1607,8 +1610,8 @@ impl Game<'_> {
                 for y in lo.y.floor() as i32..=hi.y.floor() as i32 {
                     for z in lo.z.floor() as i32..=hi.z.floor() as i32 {
                         let state = self.world.block(x, y, z);
-                        let name = &self.res.facts.get(state).name;
-                        if self.res.facts.is_air(state) || transparent.contains(&**name) {
+                        let name = &self.res.facts().get(state).name;
+                        if self.res.facts().is_air(state) || transparent.contains(&**name) {
                             continue;
                         }
                         if griefing && !immune.contains(&**name) {
@@ -1710,7 +1713,7 @@ impl Game<'_> {
             let y = (0..256)
                 .rev()
                 .find(|&y| {
-                    let f = self.res.facts.get(self.world.block(0, y, 0));
+                    let f = self.res.facts().get(self.world.block(0, y, 0));
                     f.full_collision || f.legacy_solid
                 })
                 .map_or(64, |y| y + 1);
@@ -1764,7 +1767,7 @@ impl Game<'_> {
                     next.y.floor() as i32,
                     next.z.floor() as i32,
                 ];
-                let f = self.res.facts.get(self.world.block(p[0], p[1], p[2]));
+                let f = self.res.facts().get(self.world.block(p[0], p[1], p[2]));
                 f.full_collision || f.legacy_solid
             };
             let hit_player = player.is_some_and(|pb| {
@@ -1866,9 +1869,9 @@ impl Game<'_> {
             batch.width as i32,
             batch.height as i32,
             &bars,
-            &self.atlas.font,
+            &self.gui.atlas.font,
         );
-        hud_layout::paint(batch, &self.atlas, &draws);
+        hud_layout::paint(batch, &self.gui.atlas, &draws);
     }
     /// The dragon fight's boss bar shows (`EnderDragonFight.dragonEvent`,
     /// with `setCreateWorldFog`).
@@ -1906,7 +1909,13 @@ impl Game<'_> {
             return;
         };
         let a = alpha as f32;
-        let sprite = |n: &str| self.atlas.sprites.get(n).map(|r| [r.u0, r.v0, r.u1, r.v1]);
+        let sprite = |n: &str| {
+            self.gui
+                .atlas
+                .sprites
+                .get(n)
+                .map(|r| [r.u0, r.v0, r.u1, r.v1])
+        };
         let (Some(skin), Some(eyes)) = (
             sprite("entity/enderdragon/dragon"),
             sprite("entity/enderdragon/dragon_eyes"),
@@ -2072,7 +2081,7 @@ impl Game<'_> {
     }
     /// `submitRays`: the death rays from a fixed seed, fading in white to magenta.
     fn dragon_rays(&self, base: glam::Mat4, t: f32, out: &mut Vec<Vertex>) {
-        let white = self.atlas.font.white();
+        let white = self.gui.atlas.font.white();
         let uv = [white.u0, white.v0];
         let over = if t > 0.8 {
             ((t - 0.8) / 0.2).min(1.0)
@@ -2128,6 +2137,7 @@ impl Game<'_> {
         out: &mut Vec<Vertex>,
     ) {
         let Some(s) = self
+            .gui
             .atlas
             .sprites
             .get("entity/end_crystal/end_crystal_beam")
@@ -2189,6 +2199,7 @@ impl Game<'_> {
         out: &mut Vec<Vertex>,
     ) {
         let Some(s) = self
+            .gui
             .atlas
             .sprites
             .get("entity/enderdragon/dragon_fireball")
@@ -2301,6 +2312,7 @@ impl Crystal {
     pub(super) fn from_nbt(tag: &Tag, time: i32) -> Option<Self> {
         let (position, _, _) = horizon_client::entity_nbt::boat_from_nbt(tag)?;
         Some(Self {
+            id: 0,
             position,
             show_bottom: !matches!(tag.get("ShowBottom"), Some(Tag::Byte(0))),
             time,
@@ -2377,7 +2389,7 @@ impl Game<'_> {
         }
         let name = self
             .res
-            .facts
+            .facts()
             .get(self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]))
             .name
             .clone();
@@ -2387,7 +2399,7 @@ impl Game<'_> {
         let above = [hit.pos[0], hit.pos[1] + 1, hit.pos[2]];
         if !self
             .res
-            .facts
+            .facts()
             .is_air(self.world.block(above[0], above[1], above[2]))
         {
             return false;
@@ -2403,6 +2415,7 @@ impl Game<'_> {
         }
         let time = self.world.random.next_int_bound(100_000).unwrap_or(0);
         self.crystals.push(Crystal {
+            id: 0,
             position: Vec3::new(x + 0.5, y, z + 0.5),
             show_bottom: false,
             time,
@@ -2507,7 +2520,7 @@ impl Game<'_> {
     }
     fn block_name_at(&self, p: [i32; 3]) -> std::sync::Arc<str> {
         self.res
-            .facts
+            .facts()
             .get(self.world.block(p[0], p[1], p[2]))
             .name
             .clone()
@@ -2609,7 +2622,7 @@ impl Game<'_> {
         for y in h - 10..=h + 10 {
             for z in cz - 10..=cz + 10 {
                 for x in cx - 10..=cx + 10 {
-                    if !self.res.facts.is_air(self.world.block(x, y, z)) {
+                    if !self.res.facts().is_air(self.world.block(x, y, z)) {
                         let _ = self.level_set([x, y, z], air);
                     }
                 }
@@ -2631,7 +2644,7 @@ impl Game<'_> {
                         if &*self.block_name_at([x, y, z]) != "minecraft:obsidian" {
                             let _ = self.set_state_named([x, y, z], "minecraft:obsidian", &[]);
                         }
-                    } else if y > 65 && !self.res.facts.is_air(self.world.block(x, y, z)) {
+                    } else if y > 65 && !self.res.facts().is_air(self.world.block(x, y, z)) {
                         let _ = self.level_set([x, y, z], air);
                     }
                 }
@@ -2665,6 +2678,7 @@ impl Game<'_> {
             .retain(|c| c.position.distance_squared(at) > 0.01);
         let time = self.world.random.next_int_bound(100_000).unwrap_or(0);
         self.crystals.push(Crystal {
+            id: 0,
             position: at,
             show_bottom: true,
             time,

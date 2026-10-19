@@ -356,7 +356,8 @@ impl Game<'_> {
                 eyes: false,
                 silent: false,
                 store: None,
-                elsewhere: false,
+                dimension: self.dim,
+                level: None,
                 block: Some(pos),
             };
             // performPrefixedCommand: a leading slash is allowed.
@@ -458,7 +459,7 @@ impl Game<'_> {
             self.close_command_block();
             return;
         }
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let (w, h) = (batch.width, batch.height);
         let mid = (w / 2.0).floor();
         ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
@@ -598,13 +599,13 @@ impl Game<'_> {
         if let Ok(id) = registry.resolve(&wanted)
             && wanted != *current
         {
-            let entity = self.world.block_entities.remove(&pos);
+            let entity = self.world.block_entities.take(&pos);
             let at = BlockPos::new(pos.0, pos.1, pos.2);
             self.with_level(|b, level, ticks| {
                 b.set_block(level, ticks, at, id, flags::UPDATE_CLIENTS)
             });
             if let Some(entity) = entity {
-                self.world.block_entities.insert(pos, entity);
+                self.world.block_entities.put(pos, entity);
             }
             let _ = self.process_level_events();
         }

@@ -114,7 +114,7 @@ impl Game<'_> {
         let location = if let Some(c) = p.last_climbable {
             let name = self
                 .res
-                .facts
+                .facts()
                 .get(self.world.block(c.x, c.y, c.z))
                 .name
                 .clone();
@@ -127,7 +127,7 @@ impl Game<'_> {
                 _ => "other_climbable",
             })
         } else {
-            let f = self.res.facts.get(self.world.block(
+            let f = self.res.facts().get(self.world.block(
                 p.position.x.floor() as i32,
                 (p.position.y + 0.1).floor() as i32,
                 p.position.z.floor() as i32,

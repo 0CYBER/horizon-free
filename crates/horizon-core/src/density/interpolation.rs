@@ -172,6 +172,18 @@ impl DensitySampler for InterpolatedSampler {
         volume: DensityVolume,
     ) -> Result<(), SampleError> {
         check_buffer(output, volume)?;
+        if context.sparse {
+            if (0..3).all(|i| {
+                volume.steps()[i] % self.cell_size[i] == 0
+                    && volume.minimum()[i].rem_euclid(self.cell_size[i]) == 0
+            }) {
+                return self.input.sample_volume(context, output, volume);
+            }
+            return visit(volume, |index, position| {
+                output[index] = self.sample_value(context, position)?;
+                Ok(())
+            });
+        }
         if (0..3).all(|i| {
             (volume.steps()[i] == self.cell_size[i] || volume.sizes()[i] == 1)
                 && volume.minimum()[i].rem_euclid(self.cell_size[i]) == 0

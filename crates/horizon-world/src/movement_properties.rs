@@ -1,11 +1,10 @@
 //! Registry-bound block movement coefficients, identities and reloadable tags.
 use crate::{
     DATA_VERSION,
-    chunk::BlockState,
     compression::invalid,
     movement_support::MovementBlockWorld,
     nbt::Tag,
-    registry::{BlockRegistry, BlockStateId},
+    registry::{BlockRegistry, BlockStateId, BlockTable},
 };
 use horizon_core::position::BlockPos;
 use std::{
@@ -55,19 +54,12 @@ impl<'r> MovementProperties<'r> {
     }
 
     pub fn from_nbt(tag: &Tag, registry: &'r BlockRegistry) -> io::Result<Self> {
+        Self::from_table(BlockTable::check(tag, registry, "movement")?)
+    }
+    pub fn from_table(table: BlockTable<'_, 'r>) -> io::Result<Self> {
+        let (tag, registry) = (table.tag(), table.registry());
         if tag.get("DataVersion") != Some(&Tag::Int(DATA_VERSION)) {
             return Err(invalid("movement properties DataVersion mismatch"));
-        }
-        let Some(Tag::List(states)) = tag.get("states") else {
-            return Err(invalid("missing movement state identities"));
-        };
-        if states.len() != registry.len() {
-            return Err(invalid("movement registry size mismatch"));
-        }
-        for (id, state) in states.iter().enumerate() {
-            if registry.state(BlockStateId(id as u32)) != Some(&BlockState::from_nbt(state)?) {
-                return Err(invalid("movement state identities differ"));
-            }
         }
         let Some(Tag::Compound(blocks)) = tag.get("blocks") else {
             return Err(invalid("missing movement definitions"));

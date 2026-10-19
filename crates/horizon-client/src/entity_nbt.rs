@@ -840,9 +840,12 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         m.species(),
         crate::mobs::Species::Slime | crate::mobs::Species::MagmaCube
     ) {
-        let health = m.health;
+        // AbstractCubeMob.readAdditionalSaveData: the size's attributes, then
+        // the saved health, the max health when there is none.
         crate::mobs::cube::set_size(&mut m, number(tag.get("Size")).unwrap_or(0) as i32 + 1);
-        m.health = health;
+        if let Some(h) = float(tag.get("Health")) {
+            m.health = h as f32;
+        }
         m.extra.flag2 = flag(tag, "wasOnGround");
     }
     // Zombie, Piglin and Zoglin.readAdditionalSaveData: IsBaby (the baby
@@ -943,6 +946,7 @@ pub fn orbs_from_nbt(tag: &Tag) -> Vec<ExperienceOrb> {
     };
     let count = number(tag.get("Count")).unwrap_or(1).clamp(1, 64) as usize;
     let orb = ExperienceOrb {
+        id: 0,
         position,
         previous: position,
         velocity: motion(tag),
@@ -1587,6 +1591,7 @@ mod tests {
     #[test]
     fn orbs_expand_their_count() {
         let o = ExperienceOrb {
+            id: 0,
             position: Vec3::new(1.0, 2.0, 3.0),
             previous: Vec3::ZERO,
             velocity: Vec3::ZERO,

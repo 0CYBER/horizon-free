@@ -237,7 +237,7 @@ impl Game<'_> {
         let shows = vault.display_item.is_some();
         self.world
             .block_entities
-            .insert(key, BlockEntity::Vault(vault));
+            .put(key, BlockEntity::Vault(vault));
         let pos = [key.0, key.1, key.2];
         if self.world.game_time % 20 == 0 {
             self.vault_connection_particles(pos);

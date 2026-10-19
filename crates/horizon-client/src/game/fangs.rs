@@ -108,6 +108,7 @@ impl Game<'_> {
             return;
         };
         let Some(r) = self
+            .gui
             .atlas
             .sprites
             .get("entity/illager/evoker_fangs")

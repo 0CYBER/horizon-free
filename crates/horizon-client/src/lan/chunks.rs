@@ -15,7 +15,13 @@ use horizon_protocol::{
     registry::{Builtin, ceil_log2},
 };
 use horizon_world::nbt::Tag;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 const NON_AIR: u8 = 1;
 const FLUID: u8 = 2;
@@ -83,12 +89,10 @@ pub fn block_entity_type(name: &str) -> Option<&'static str> {
 
 /// Per-state facts and registry ids for encoding chunks.
 pub struct ChunkEncoder {
-    flags: Vec<u8>,
+    /// What encoding a section needs, shared with the warm-up threads.
+    coder: Arc<SectionCoder>,
     /// Block entity type id per state (-1 for none).
     entity_types: Vec<i16>,
-    /// Network biome id per internal biome index.
-    pub biome_ids: Vec<i32>,
-    biome_bits: u8,
     /// The block registry id of each state's block, for BlockEvent.
     pub block_ids: Vec<i32>,
     /// The save's tables, for the heightmaps.
@@ -104,6 +108,14 @@ pub struct ChunkEncoder {
     sky: bool,
 }
 
+/// Per-state flags and biome ids: all a section's encoding reads.
+struct SectionCoder {
+    flags: Vec<u8>,
+    /// Network biome id per internal biome index.
+    biome_ids: Vec<i32>,
+    biome_bits: u8,
+}
+
 /// A column's client heightmaps, valid while it holds the same sections.
 struct Heights {
     sections: Vec<std::sync::Weak<Section>>,
@@ -112,6 +124,44 @@ struct Heights {
 
 /// Heightmap type ids with their packed long arrays.
 type ColumnHeightmaps = Arc<Vec<(i32, Vec<i64>)>>;
+
+/// A column's cached heightmaps, while it holds the sections they were made
+/// from.
+fn cached_heights(
+    heights: &HashMap<(i32, i32), Heights>,
+    chunk: &Chunk,
+) -> Option<ColumnHeightmaps> {
+    let h = heights.get(&(chunk.x, chunk.z))?;
+    let same = h.sections.len() == chunk.sections.len()
+        && h.sections
+            .iter()
+            .zip(&chunk.sections)
+            .all(|(w, s)| std::ptr::eq(w.as_ptr(), Arc::as_ptr(s)));
+    same.then(|| h.maps.clone())
+}
+
+/// Cache a column's heightmaps with the sections they were made from,
+/// dropping the columns whose sections are gone once there are many.
+fn keep_heights(
+    heights: &mut HashMap<(i32, i32), Heights>,
+    key: (i32, i32),
+    sections: &[Arc<Section>],
+    maps: &ColumnHeightmaps,
+) {
+    if heights.len() >= CACHE_SWEEP / 4 {
+        heights.retain(|_, h| h.sections.iter().all(|w| w.strong_count() > 0));
+        if heights.len() >= CACHE_SWEEP / 8 {
+            heights.clear();
+        }
+    }
+    heights.insert(
+        key,
+        Heights {
+            sections: sections.iter().map(Arc::downgrade).collect(),
+            maps: maps.clone(),
+        },
+    );
+}
 
 /// What a resident section gives the wire, kept while the section is
 /// unchanged. Resident sections are immutable behind `Arc` (edits go through
@@ -170,179 +220,13 @@ impl Layers {
     }
 }
 
-/// Sections kept before the ones no longer resident are dropped.
-const CACHE_SWEEP: usize = 1 << 15;
-impl ChunkEncoder {
-    /// `biome_names`: the internal biome list in order; `biome_registry`:
-    /// the synchronized biome entries in network order.
-    pub fn new(
-        states: impl IntoIterator<Item = (Arc<str>, bool)>,
-        builtin: &Builtin,
-        biome_names: &[String],
-        biome_registry: &[String],
-    ) -> Self {
-        let types = builtin.get("minecraft:block_entity_type");
-        let blocks = builtin.get("minecraft:block");
-        let mut flags = Vec::new();
-        let mut entity_types = Vec::new();
-        let mut block_ids = Vec::new();
-        for (name, has_fluid) in states {
-            let air = matches!(
-                &*name,
-                "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
-            );
-            let mut f = 0u8;
-            if !air {
-                f |= NON_AIR;
-                if has_fluid {
-                    f |= FLUID;
-                }
-            }
-            let t = block_entity_type(&name)
-                .and_then(|t| types.and_then(|ids| ids.id(t)))
-                .map_or(-1, |v| v as i16);
-            if t >= 0 {
-                f |= ENTITY;
-            }
-            flags.push(f);
-            entity_types.push(t);
-            block_ids.push(blocks.and_then(|b| b.id(&name)).unwrap_or(0));
-        }
-        let biome_ids = biome_names
-            .iter()
-            .map(|n| {
-                biome_registry
-                    .iter()
-                    .position(|b| b == n)
-                    .map_or(0, |i| i as i32)
-            })
-            .collect();
-        Self {
-            flags,
-            entity_types,
-            biome_ids,
-            biome_bits: ceil_log2(biome_registry.len()),
-            block_ids,
-            tables: None,
-            cache: Default::default(),
-            heights: Default::default(),
-            sections: 0..SECTIONS,
-            sky: true,
-        }
-    }
-
-    /// The client heightmaps (Heightmap.prime over the column), from the
-    /// cache while the column's sections are unchanged.
-    fn heightmaps(&self, chunk: &Chunk, tables: &crate::save::SaveTables) -> ColumnHeightmaps {
-        let same = |h: &Heights| {
-            h.sections.len() == chunk.sections.len()
-                && h.sections
-                    .iter()
-                    .zip(&chunk.sections)
-                    .all(|(w, s)| std::ptr::eq(w.as_ptr(), Arc::as_ptr(s)))
-        };
-        let mut heights = self.heights.lock().unwrap();
-        if let Some(h) = heights.get(&(chunk.x, chunk.z))
-            && same(h)
-        {
-            return h.maps.clone();
-        }
-        if heights.len() >= CACHE_SWEEP / 4 {
-            heights.retain(|_, h| h.sections.iter().all(|w| w.strong_count() > 0));
-            if heights.len() >= CACHE_SWEEP / 8 {
-                heights.clear();
-            }
-        }
-        let min_y = MIN_Y + 16 * self.sections.start as i32;
-        let height = 16 * self.sections.len() as i32;
-        let maps = Arc::new(crate::save::client_heightmaps_in(
-            chunk, tables, min_y, height,
-        ));
-        heights.insert(
-            (chunk.x, chunk.z),
-            Heights {
-                sections: chunk.sections.iter().map(Arc::downgrade).collect(),
-                maps: maps.clone(),
-            },
-        );
-        maps
-    }
-
-    /// The cached entry for a section, made with `non_air` when missing.
-    fn cached<T>(&self, section: &Arc<Section>, read: impl FnOnce(&mut Encoded) -> T) -> T {
-        read(self.entry(&mut self.cache.lock().unwrap(), section))
-    }
-
-    /// A section's entry in the locked cache, made with `non_air` when missing.
-    fn entry<'a>(
-        &self,
-        cache: &'a mut FxHashMap<usize, Encoded>,
-        section: &Arc<Section>,
-    ) -> &'a mut Encoded {
-        if cache.len() >= CACHE_SWEEP {
-            cache.retain(|_, e| e.section.strong_count() > 0);
-            if cache.len() >= CACHE_SWEEP / 2 {
-                cache.clear();
-            }
-        }
-        cache
-            .entry(Arc::as_ptr(section) as usize)
-            .or_insert_with(|| Encoded {
-                section: Arc::downgrade(section),
-                non_air: self.non_air(section),
-                wire: None,
-                light: None,
-            })
-    }
-
-    /// LevelChunkSection.hasOnlyAir, negated.
-    fn non_air(&self, section: &Section) -> bool {
-        let non_air = |v: u32| self.flags.get(v as usize).copied().unwrap_or(0) & NON_AIR != 0;
-        // The palette first: most sections are all air, or one block.
-        if !section.blocks.maybe_has(non_air) {
-            false
-        } else if let Some(v) = section.blocks.uniform() {
-            non_air(v)
-        } else {
-            // Stops at the first block, usually near the bottom.
-            (0..BLOCKS).any(|i| non_air(section.blocks.get(i)))
-        }
-    }
-
-    /// A section on the wire, from the cache or encoded now.
-    fn section_wire(&self, section: &Arc<Section>) -> (Arc<[u8]>, Entities) {
-        if let Some(wire) = self.cached(section, |e| e.wire.clone()) {
-            return wire;
-        }
+impl SectionCoder {
+    /// LevelChunkSection.write, and its block entity blocks.
+    fn wire(&self, section: &Section) -> (Arc<[u8]>, Entities) {
         let (encoded, entities) = self.section(section);
         let mut w = horizon_protocol::buf::Writer::new();
         encoded.write(&mut w);
-        let wire: (Arc<[u8]>, Entities) = (w.data.into(), entities.into());
-        self.cached(section, |e| e.wire = Some(wire.clone()));
-        wire
-    }
-    /// Encode for a level of `min_y` and `height` (multiples of 16 within
-    /// the column), with or without sky light.
-    pub fn set_dimension(&mut self, min_y: i32, height: i32, sky: bool) {
-        let lo = usize::try_from((min_y - MIN_Y) >> 4)
-            .unwrap_or(0)
-            .min(SECTIONS);
-        let n = usize::try_from(height >> 4).unwrap_or(SECTIONS);
-        self.sections = lo..(lo + n).min(SECTIONS);
-        self.sky = sky;
-        // The heightmaps depend on the level's height.
-        self.heights.get_mut().unwrap().clear();
-    }
-    pub fn entity_type(&self, state: u32) -> Option<i32> {
-        self.entity_types
-            .get(state as usize)
-            .filter(|t| **t >= 0)
-            .map(|t| i32::from(*t))
-    }
-    pub fn is_air(&self, state: u32) -> bool {
-        self.flags
-            .get(state as usize)
-            .is_none_or(|f| f & NON_AIR == 0)
+        (w.data.into(), entities.into())
     }
 
     fn section(&self, section: &Section) -> (horizon_protocol::chunk::Section, Vec<(u16, u32)>) {
@@ -404,6 +288,259 @@ impl ChunkEncoder {
             entities,
         )
     }
+}
+
+/// Sections kept before the ones no longer resident are dropped.
+const CACHE_SWEEP: usize = 1 << 15;
+
+/// Uncached sections below which a batch is encoded on the tick's thread
+/// alone: waking the warm-up threads costs more than a few sections.
+const WARM_MIN: usize = 16;
+
+/// The work a batch needs, each piece taken by whichever thread is free
+/// first: the heightmaps of its columns not cached yet, then its sections
+/// not cached yet, and what each gave (a section: its wire bytes and, with
+/// varying light, its layers).
+struct Warm {
+    coder: Arc<SectionCoder>,
+    /// The heightmaps' tables and the level's (min_y, height).
+    heightmaps: Option<(Arc<crate::save::SaveTables>, i32, i32)>,
+    columns: Vec<((i32, i32), Vec<Arc<Section>>)>,
+    heights: Vec<OnceLock<ColumnHeightmaps>>,
+    sections: Vec<Arc<Section>>,
+    next: AtomicUsize,
+    done: Vec<OnceLock<Warmed>>,
+}
+type Warmed = ((Arc<[u8]>, Entities), Option<Arc<Layers>>);
+impl Warm {
+    /// Take work until none is left.
+    fn run(&self) {
+        loop {
+            let i = self.next.fetch_add(1, Ordering::Relaxed);
+            if let Some((_, sections)) = self.columns.get(i) {
+                if let Some((tables, min_y, height)) = &self.heightmaps {
+                    let maps = crate::save::client_heightmaps_in(sections, tables, *min_y, *height);
+                    let _ = self.heights[i].set(Arc::new(maps));
+                }
+                continue;
+            }
+            let i = i - self.columns.len();
+            let Some(s) = self.sections.get(i) else {
+                return;
+            };
+            let light = matches!(s.light, Light::Full(_)).then(|| Arc::new(Layers::of(&s.light)));
+            let _ = self.done[i].set((self.coder.wire(s), light));
+        }
+    }
+}
+
+/// The warm-up threads (one per core besides the tick's) and the job they
+/// take: its number, and the job while it has sections left to take.
+struct WarmPool {
+    job: std::sync::Mutex<(u64, Option<Arc<Warm>>)>,
+    ready: std::sync::Condvar,
+}
+
+/// The warm-up threads, started the first time; none on a single core or
+/// when no thread could start.
+fn warm_pool() -> Option<&'static WarmPool> {
+    static POOL: OnceLock<Option<Arc<WarmPool>>> = OnceLock::new();
+    POOL.get_or_init(|| {
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get()) - 1;
+        let pool = Arc::new(WarmPool {
+            job: Default::default(),
+            ready: Default::default(),
+        });
+        let started = (0..threads)
+            .filter(|i| {
+                let pool = pool.clone();
+                std::thread::Builder::new()
+                    .name(format!("horizon-chunk-encode-{i}"))
+                    .spawn(move || {
+                        let mut done = 0;
+                        loop {
+                            let job = {
+                                let mut slot = pool.job.lock().unwrap();
+                                while slot.0 == done {
+                                    slot = pool.ready.wait(slot).unwrap();
+                                }
+                                done = slot.0;
+                                slot.1.clone()
+                            };
+                            if let Some(job) = job {
+                                job.run();
+                            }
+                        }
+                    })
+                    .is_ok()
+            })
+            .count();
+        (started > 0).then_some(pool)
+    })
+    .as_deref()
+}
+impl ChunkEncoder {
+    /// `biome_names`: the internal biome list in order; `biome_registry`:
+    /// the synchronized biome entries in network order.
+    pub fn new(
+        states: impl IntoIterator<Item = (Arc<str>, bool)>,
+        builtin: &Builtin,
+        biome_names: &[String],
+        biome_registry: &[String],
+    ) -> Self {
+        let types = builtin.get("minecraft:block_entity_type");
+        let blocks = builtin.get("minecraft:block");
+        let mut flags = Vec::new();
+        let mut entity_types = Vec::new();
+        let mut block_ids = Vec::new();
+        for (name, has_fluid) in states {
+            let air = matches!(
+                &*name,
+                "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
+            );
+            let mut f = 0u8;
+            if !air {
+                f |= NON_AIR;
+                if has_fluid {
+                    f |= FLUID;
+                }
+            }
+            let t = block_entity_type(&name)
+                .and_then(|t| types.and_then(|ids| ids.id(t)))
+                .map_or(-1, |v| v as i16);
+            if t >= 0 {
+                f |= ENTITY;
+            }
+            flags.push(f);
+            entity_types.push(t);
+            block_ids.push(blocks.and_then(|b| b.id(&name)).unwrap_or(0));
+        }
+        let biome_ids = biome_names
+            .iter()
+            .map(|n| {
+                biome_registry
+                    .iter()
+                    .position(|b| b == n)
+                    .map_or(0, |i| i as i32)
+            })
+            .collect();
+        Self {
+            coder: Arc::new(SectionCoder {
+                flags,
+                biome_ids,
+                biome_bits: ceil_log2(biome_registry.len()),
+            }),
+            entity_types,
+            block_ids,
+            tables: None,
+            cache: Default::default(),
+            heights: Default::default(),
+            sections: 0..SECTIONS,
+            sky: true,
+        }
+    }
+
+    /// The client heightmaps (Heightmap.prime over the column), from the
+    /// cache while the column's sections are unchanged.
+    fn heightmaps(&self, chunk: &Chunk, tables: &crate::save::SaveTables) -> ColumnHeightmaps {
+        let mut heights = self.heights.lock().unwrap();
+        if let Some(maps) = cached_heights(&heights, chunk) {
+            return maps;
+        }
+        let (min_y, height) = self.level();
+        let maps = Arc::new(crate::save::client_heightmaps_in(
+            &chunk.sections,
+            tables,
+            min_y,
+            height,
+        ));
+        keep_heights(&mut heights, (chunk.x, chunk.z), &chunk.sections, &maps);
+        maps
+    }
+
+    /// The level's min_y and height (`DimensionType`), the heightmaps' range.
+    fn level(&self) -> (i32, i32) {
+        (
+            MIN_Y + 16 * self.sections.start as i32,
+            16 * self.sections.len() as i32,
+        )
+    }
+
+    /// The cached entry for a section, made with `non_air` when missing.
+    fn cached<T>(&self, section: &Arc<Section>, read: impl FnOnce(&mut Encoded) -> T) -> T {
+        read(self.entry(&mut self.cache.lock().unwrap(), section))
+    }
+
+    /// A section's entry in the locked cache, made with `non_air` when missing.
+    fn entry<'a>(
+        &self,
+        cache: &'a mut FxHashMap<usize, Encoded>,
+        section: &Arc<Section>,
+    ) -> &'a mut Encoded {
+        if cache.len() >= CACHE_SWEEP {
+            cache.retain(|_, e| e.section.strong_count() > 0);
+            if cache.len() >= CACHE_SWEEP / 2 {
+                cache.clear();
+            }
+        }
+        cache
+            .entry(Arc::as_ptr(section) as usize)
+            .or_insert_with(|| Encoded {
+                section: Arc::downgrade(section),
+                non_air: self.non_air(section),
+                wire: None,
+                light: None,
+            })
+    }
+
+    /// LevelChunkSection.hasOnlyAir, negated.
+    fn non_air(&self, section: &Section) -> bool {
+        let non_air =
+            |v: u32| self.coder.flags.get(v as usize).copied().unwrap_or(0) & NON_AIR != 0;
+        // The palette first: most sections are all air, or one block.
+        if !section.blocks.maybe_has(non_air) {
+            false
+        } else if let Some(v) = section.blocks.uniform() {
+            non_air(v)
+        } else {
+            // Stops at the first block, usually near the bottom.
+            (0..BLOCKS).any(|i| non_air(section.blocks.get(i)))
+        }
+    }
+
+    /// A section on the wire, from the cache or encoded now.
+    fn section_wire(&self, section: &Arc<Section>) -> (Arc<[u8]>, Entities) {
+        if let Some(wire) = self.cached(section, |e| e.wire.clone()) {
+            return wire;
+        }
+        let wire = self.coder.wire(section);
+        self.cached(section, |e| e.wire = Some(wire.clone()));
+        wire
+    }
+    /// Encode for a level of `min_y` and `height` (multiples of 16 within
+    /// the column), with or without sky light.
+    pub fn set_dimension(&mut self, min_y: i32, height: i32, sky: bool) {
+        let lo = usize::try_from((min_y - MIN_Y) >> 4)
+            .unwrap_or(0)
+            .min(SECTIONS);
+        let n = usize::try_from(height >> 4).unwrap_or(SECTIONS);
+        self.sections = lo..(lo + n).min(SECTIONS);
+        self.sky = sky;
+        // The heightmaps depend on the level's height.
+        self.heights.get_mut().unwrap().clear();
+    }
+    pub fn entity_type(&self, state: u32) -> Option<i32> {
+        self.entity_types
+            .get(state as usize)
+            .filter(|t| **t >= 0)
+            .map(|t| i32::from(*t))
+    }
+    pub fn is_air(&self, state: u32) -> bool {
+        self.coder
+            .flags
+            .get(state as usize)
+            .is_none_or(|f| f & NON_AIR == 0)
+    }
 
     /// The chunk column with its light and block entities.
     /// The non-air sections of a column as bits (LevelChunkSection.hasOnlyAir).
@@ -442,6 +579,104 @@ impl ChunkEncoder {
         self.body(chunk, &world.block_entities, self.around(chunk, world))
     }
 
+    /// Make what these columns need and is not cached yet (their heightmaps
+    /// and sections) before their bodies are made, shared out to the warm-up
+    /// threads: a batch of new terrain costs mostly its sections' first
+    /// encoding. This thread takes work too until none is left, then caches
+    /// what is done; it never waits for the other threads (they keep their
+    /// results to themselves until then), and what one of them is still on
+    /// is made again by `body_in`, the same.
+    pub fn warm(&self, columns: &[&Chunk]) {
+        let Some(job) = self.job(columns) else {
+            return;
+        };
+        let Some(pool) = warm_pool() else {
+            return;
+        };
+        let job = Arc::new(job);
+        {
+            let mut slot = pool.job.lock().unwrap();
+            slot.0 += 1;
+            slot.1 = Some(job.clone());
+        }
+        pool.ready.notify_all();
+        job.run();
+        // Everything is claimed: the job leaves the slot.
+        {
+            let mut slot = pool.job.lock().unwrap();
+            if slot.1.as_ref().is_some_and(|j| Arc::ptr_eq(j, &job)) {
+                slot.1 = None;
+            }
+        }
+        self.keep(&job);
+    }
+
+    /// The work `warm` shares out: the heightmaps of the columns and the
+    /// sections not cached yet; none when there is too little to wake the
+    /// warm-up threads for.
+    fn job(&self, columns: &[&Chunk]) -> Option<Warm> {
+        let stale: Vec<((i32, i32), Vec<Arc<Section>>)> = match &self.tables {
+            Some(_) => {
+                let heights = self.heights.lock().unwrap();
+                let mut seen = crate::fast_hash::FxHashSet::default();
+                columns
+                    .iter()
+                    .filter(|c| seen.insert((c.x, c.z)) && cached_heights(&heights, c).is_none())
+                    .map(|c| ((c.x, c.z), c.sections.clone()))
+                    .collect()
+            }
+            None => Vec::new(),
+        };
+        let sections: Vec<Arc<Section>> = {
+            let cache = self.cache.lock().unwrap();
+            columns
+                .iter()
+                .flat_map(|c| &c.sections[self.sections.clone()])
+                .filter(|s| {
+                    cache
+                        .get(&(Arc::as_ptr(s) as usize))
+                        .is_none_or(|e| e.wire.is_none())
+                })
+                .cloned()
+                .collect()
+        };
+        if sections.len() + stale.len() < WARM_MIN {
+            return None;
+        }
+        let (min_y, height) = self.level();
+        Some(Warm {
+            coder: self.coder.clone(),
+            heightmaps: self.tables.clone().map(|t| (t, min_y, height)),
+            heights: stale.iter().map(|_| OnceLock::new()).collect(),
+            columns: stale,
+            done: sections.iter().map(|_| OnceLock::new()).collect(),
+            sections,
+            next: AtomicUsize::new(0),
+        })
+    }
+
+    /// Cache what a job's threads have finished.
+    fn keep(&self, job: &Warm) {
+        {
+            let mut heights = self.heights.lock().unwrap();
+            for ((key, sections), done) in job.columns.iter().zip(&job.heights) {
+                if let Some(maps) = done.get() {
+                    keep_heights(&mut heights, *key, sections, maps);
+                }
+            }
+        }
+        let mut cache = self.cache.lock().unwrap();
+        for (s, done) in job.sections.iter().zip(&job.done) {
+            if let Some((wire, light)) = done.get() {
+                let e = self.entry(&mut cache, s);
+                e.wire = Some(wire.clone());
+                if light.is_some() {
+                    e.light = light.clone();
+                }
+            }
+        }
+    }
+
     fn body(
         &self,
         chunk: &Chunk,
@@ -478,6 +713,33 @@ impl ChunkEncoder {
         w.bytes(&tags.data);
         write_light(&lights, self.sky, &mut w);
         w.data
+    }
+
+    /// ClientboundLightUpdatePacket for the light sections over `changed` (a
+    /// bit per section of the column, `sectionLightChanged`), as vanilla's
+    /// `ClientboundLightUpdatePacketData` writes them, with both kinds of
+    /// each section (Horizon's light engine doesn't tell them apart; the
+    /// client keeps the same light either way). A section changed as its
+    /// last block went (light dimming around a removed block) is sent too:
+    /// a client not tracking the block would otherwise keep its old light.
+    pub fn light_update(&self, chunk: &Chunk, changed: u32) -> Vec<u8> {
+        let first = self.sections.start;
+        let lights: Vec<(usize, SectionLight)> = self
+            .light_sections(chunk, u64::MAX)
+            .into_iter()
+            .filter(|&(b, _)| {
+                // Light section b holds the column's section first + b - 1.
+                (1..=self.sections.len()).contains(&b) && changed >> (first + b - 1) & 1 != 0
+            })
+            .collect();
+        horizon_protocol::packets::play::Clientbound::LightUpdate(
+            horizon_protocol::packets::play::LightUpdate {
+                x: chunk.x,
+                z: chunk.z,
+                light: light_data_of(&lights, self.sky),
+            },
+        )
+        .encode()
     }
 
     pub fn encode(
@@ -903,7 +1165,7 @@ mod tests {
     /// The bytes on the wire for a section, encoded afresh.
     fn fresh(encoder: &ChunkEncoder, section: &Section) -> Vec<u8> {
         let mut w = horizon_protocol::buf::Writer::new();
-        encoder.section(section).0.write(&mut w);
+        encoder.coder.section(section).0.write(&mut w);
         w.data
     }
 
@@ -1048,6 +1310,88 @@ mod tests {
             encoder.body(&chunk, &entities, u64::MAX),
             packet(&encoder, u64::MAX)
         );
+    }
+
+    /// Columns whose sections and heightmaps the warm-up threads made give
+    /// the bytes each gives on its own, also with a column twice and its
+    /// neighbours' sections deciding the light layers.
+    #[test]
+    fn warmed_columns_give_the_same_bodies() {
+        let builtin = Builtin::parse(
+            r#"{"minecraft:block_entity_type": {"entries": {
+                "minecraft:sign": {"protocol_id": 7}}}}"#,
+        )
+        .unwrap();
+        let states = [
+            "minecraft:air",
+            "minecraft:stone",
+            "minecraft:water",
+            "minecraft:oak_sign",
+        ]
+        .map(|n| (Arc::<str>::from(n), n.ends_with("water")));
+        let mut world = crate::world::World::new(horizon_world::registry::BlockStateId(0), 0);
+        for x in -2..2 {
+            for z in -2..2 {
+                let mut chunk = Chunk::empty(x, z);
+                let n = (x * 7 + z * 13).rem_euclid(17);
+                for i in 0..40 + n * 30 {
+                    let (bx, bz) = ((i * 5 + n) % 16, (i * 11) % 16);
+                    chunk.set(bx, MIN_Y + (i * 37 + n * 50) % 384, bz, 1 + (i % 3) as u32);
+                }
+                let mut light = Box::new([0u8; 4096]);
+                for (i, v) in light.iter_mut().enumerate() {
+                    *v = (i * 31 + n as usize) as u8;
+                }
+                Arc::make_mut(&mut chunk.sections[(n % 24) as usize]).light = Light::Full(light);
+                world.block_entities.insert(
+                    (x * 16 + 2, 70, z * 16 + 3),
+                    BlockEntity::Sign(crate::signs::SignData::default()),
+                );
+                chunk.set(2, 70, 3, 3);
+                world.chunks.insert((x, z), Arc::new(chunk));
+            }
+        }
+        let mut keys: Vec<(i32, i32)> =
+            (-2..2).flat_map(|x| (-2..2).map(move |z| (x, z))).collect();
+        keys.push(keys[5]);
+        let chunks: Vec<&Chunk> = keys
+            .iter()
+            .map(|k| &**world.chunks.get(k).unwrap())
+            .collect();
+        // (air, fluid, blocks motion, blocks motion and is not leaves) per state.
+        let tables = Arc::new(crate::save::SaveTables::for_heightmaps(
+            crate::assets::Properties::for_tests(&[
+                (true, false, false, false),
+                (false, false, true, true),
+                (false, true, true, true),
+                (false, false, false, false),
+            ]),
+        ));
+        let mut alone = ChunkEncoder::new(states.clone(), &builtin, &[], &[]);
+        alone.tables = Some(tables.clone());
+        let expected: Vec<Vec<u8>> = chunks.iter().map(|c| alone.body_in(c, &world)).collect();
+        let mut warmed = ChunkEncoder::new(states.clone(), &builtin, &[], &[]);
+        warmed.tables = Some(tables);
+        let bodies = |encoder: &ChunkEncoder| -> Vec<Vec<u8>> {
+            chunks.iter().map(|c| encoder.body_in(c, &world)).collect()
+        };
+        assert!(chunks.len() * SECTIONS >= WARM_MIN);
+        warmed.warm(&chunks);
+        assert_eq!(bodies(&warmed), expected);
+        // Run on this thread alone, the job makes every column's heightmaps
+        // (once for the column there twice) and sections.
+        let mut cold = ChunkEncoder::new(states, &builtin, &[], &[]);
+        cold.tables = alone.tables.clone();
+        let job = cold.job(&chunks).unwrap();
+        assert_eq!((job.columns.len(), job.sections.len()), (16, 17 * SECTIONS));
+        job.run();
+        cold.keep(&job);
+        assert_eq!(cold.heights.lock().unwrap().len(), 16);
+        assert_eq!(bodies(&cold), expected);
+        // Again, from the cache, with nothing left to warm.
+        warmed.warm(&chunks);
+        assert_eq!(bodies(&warmed), expected);
+        warmed.warm(&[]);
     }
 
     #[test]

@@ -20,22 +20,50 @@ pub(super) struct Stats {
     /// Statistic changes (type, key, amount; `None` = reset) for the
     /// scoreboard criteria to follow.
     pub(super) events: Vec<(String, String, Option<i32>)>,
-    /// Changed since the client was last sent them (`StatsCounter`'s dirty set).
-    pub(super) dirty: BTreeSet<(String, String)>,
+    /// Changed since the client was last sent them (`StatsCounter`'s dirty
+    /// set), by type.
+    dirty: BTreeMap<String, BTreeSet<String>>,
 }
+
+/// `minecraft:` and `name`, given to `f` from the stack when short: some
+/// counters go up every tick for every player, and they are found without
+/// a string made for each.
+fn namespaced<T>(name: &str, f: impl FnOnce(&str) -> T) -> T {
+    const NAMESPACE: &str = "minecraft:";
+    let mut buf = [0u8; 96];
+    let len = NAMESPACE.len() + name.len();
+    if len > buf.len() {
+        return f(&format!("{NAMESPACE}{name}"));
+    }
+    buf[..NAMESPACE.len()].copy_from_slice(NAMESPACE.as_bytes());
+    buf[NAMESPACE.len()..len].copy_from_slice(name.as_bytes());
+    // Two strings one after the other are one.
+    f(std::str::from_utf8(&buf[..len]).unwrap_or_default())
+}
+
+/// The map under `key`, made when missing, found without an owned key
+/// when there.
+fn entry<'a, V: Default>(map: &'a mut BTreeMap<String, V>, key: &str) -> &'a mut V {
+    if !map.contains_key(key) {
+        map.insert(key.to_owned(), V::default());
+    }
+    map.get_mut(key).expect("just inserted")
+}
+
 impl Stats {
     pub(super) fn add(&mut self, ty: &str, key: &str, n: i32) {
-        let v = self
-            .values
-            .entry(format!("minecraft:{ty}"))
-            .or_default()
-            .entry(key.to_owned())
-            .or_insert(0);
-        *v = v.saturating_add(n);
-        self.events
-            .push((format!("minecraft:{ty}"), key.to_owned(), Some(n)));
-        self.dirty
-            .insert((format!("minecraft:{ty}"), key.to_owned()));
+        namespaced(ty, |ty| {
+            let v = entry(entry(&mut self.values, ty), key);
+            *v = v.saturating_add(n);
+            self.events.push((ty.to_owned(), key.to_owned(), Some(n)));
+            self.mark_dirty(ty, key);
+        });
+    }
+    fn mark_dirty(&mut self, ty: &str, key: &str) {
+        let keys = entry(&mut self.dirty, ty);
+        if !keys.contains(key) {
+            keys.insert(key.to_owned());
+        }
     }
     pub(super) fn get(&self, ty: &str, key: &str) -> i32 {
         self.values
@@ -48,20 +76,19 @@ impl Stats {
         if let Some(m) = self.values.get_mut(&format!("minecraft:{ty}")) {
             m.insert(key.to_owned(), 0);
         }
-        self.dirty
-            .insert((format!("minecraft:{ty}"), key.to_owned()));
+        self.mark_dirty(&format!("minecraft:{ty}"), key);
         self.events
             .push((format!("minecraft:{ty}"), key.to_owned(), None));
     }
     pub(super) fn custom(&mut self, key: &str, n: i32) {
-        self.add("custom", &format!("minecraft:{key}"), n);
+        namespaced(key, |key| self.add("custom", key, n));
     }
     /// `ServerStatsCounter.markAllDirty`: everything goes out on the next request.
     pub(super) fn mark_all_dirty(&mut self) {
         self.dirty = self
             .values
             .iter()
-            .flat_map(|(ty, m)| m.keys().map(|k| (ty.clone(), k.clone())))
+            .map(|(ty, m)| (ty.clone(), m.keys().cloned().collect()))
             .collect();
     }
     /// `ServerStatsCounter.sendStats`' entries: the dirty statistics and
@@ -69,6 +96,7 @@ impl Stats {
     pub(super) fn take_dirty(&mut self) -> Vec<(String, String, i32)> {
         std::mem::take(&mut self.dirty)
             .into_iter()
+            .flat_map(|(ty, keys)| keys.into_iter().map(move |key| (ty.clone(), key)))
             .map(|(ty, key)| {
                 let v = self.values.get(&ty).and_then(|m| m.get(&key)).copied();
                 (ty, key, v.unwrap_or(0))
@@ -216,14 +244,14 @@ impl Game<'_> {
             p.position.y.floor() as i32,
             p.position.z.floor() as i32,
         ];
-        let eye_in_water = self.res.facts.get(self.world.block(
+        let eye_in_water = self.res.facts().get(self.world.block(
             feet[0],
             (p.position.y + f64::from(p.dimensions.eye_height)).floor() as i32,
             feet[2],
         ));
         let in_water = self
             .res
-            .facts
+            .facts()
             .get(self.world.block(feet[0], feet[1], feet[2]))
             .fluid
             == horizon_client::blocks::Fluid::Water;
@@ -317,7 +345,11 @@ impl Game<'_> {
             pos[1] + 20 + r.next_int_bound(15).unwrap_or(0),
             pos[2] - 10 + r.next_int_bound(21).unwrap_or(10),
         ];
-        if !self.res.facts.is_air(self.world.block(at[0], at[1], at[2])) {
+        if !self
+            .res
+            .facts()
+            .is_air(self.world.block(at[0], at[1], at[2]))
+        {
             return;
         }
         let group = 1 + self.world.random.next_int_bound(3).unwrap_or(0);
@@ -335,8 +367,59 @@ impl Game<'_> {
     }
     fn can_see_sky(&self, pos: [i32; 3]) -> bool {
         (pos[1] + 1..pos[1] + 256).all(|y| {
-            let f = self.res.facts.get(self.world.block(pos[0], y, pos[2]));
+            let f = self.res.facts().get(self.world.block(pos[0], y, pos[2]));
             !f.full_collision && f.fluid == horizon_client::blocks::Fluid::None
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn counters_events_and_dirty_entries() {
+        let mut s = Stats::default();
+        s.custom("play_time", 1);
+        s.custom("play_time", 1);
+        s.add("mined", "minecraft:stone", 2);
+        s.custom(&"x".repeat(100), 3);
+        assert_eq!(s.get("custom", "minecraft:play_time"), 2);
+        assert_eq!(s.get("mined", "minecraft:stone"), 2);
+        assert_eq!(
+            s.get("custom", &format!("minecraft:{}", "x".repeat(100))),
+            3
+        );
+        assert_eq!(s.events.len(), 4);
+        assert_eq!(
+            s.events[1],
+            (
+                "minecraft:custom".into(),
+                "minecraft:play_time".into(),
+                Some(1)
+            )
+        );
+        let long = format!("minecraft:{}", "x".repeat(100));
+        let sent = |v: &[(&str, &str, i32)]| -> Vec<(String, String, i32)> {
+            v.iter()
+                .map(|&(t, k, n)| (t.to_owned(), k.to_owned(), n))
+                .collect()
+        };
+        assert_eq!(
+            s.take_dirty(),
+            sent(&[
+                ("minecraft:custom", "minecraft:play_time", 2),
+                ("minecraft:custom", &long, 3),
+                ("minecraft:mined", "minecraft:stone", 2),
+            ])
+        );
+        assert!(s.take_dirty().is_empty());
+        s.reset("mined", "minecraft:stone");
+        assert_eq!(
+            s.take_dirty(),
+            sent(&[("minecraft:mined", "minecraft:stone", 0)])
+        );
+        s.mark_all_dirty();
+        assert_eq!(s.take_dirty().len(), 3);
     }
 }

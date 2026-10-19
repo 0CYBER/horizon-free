@@ -429,7 +429,7 @@ pub fn tick(
     true
 }
 /// LivingEntity.updateSwingTime (6-tick swing duration).
-fn tick_swing(m: &mut Mob) {
+pub fn tick_swing(m: &mut Mob) {
     if m.ai.swinging {
         m.ai.swing_time += 1;
         if m.ai.swing_time >= 6 {
@@ -822,10 +822,14 @@ fn push_entities(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
         za *= pow;
         xa *= f64::from(0.05_f32);
         za *= f64::from(0.05_f32);
-        events.push(MobEvent::Push {
-            target: who,
-            velocity: [-xa, 0.0, -za],
-        });
+        // A guest's server-side push never reaches its client (ServerPlayer
+        // motion is synced only when hurt): its client pushes it itself.
+        if who != Who::Player || w.player.as_ref().is_none_or(|p| !p.remote) {
+            events.push(MobEvent::Push {
+                target: who,
+                velocity: [-xa, 0.0, -za],
+            });
+        }
         if self_pushable {
             m.velocity = Vec3::new(m.velocity.x + xa, m.velocity.y, m.velocity.z + za);
         }
@@ -1014,22 +1018,21 @@ pub fn despawn_check(m: &mut Mob, w: &MobWorld) -> bool {
 /// Mob.checkDespawn, before the tick (players are the only despawn
 /// reference). Returns false when the mob is discarded.
 fn check_despawn(m: &mut Mob, w: &MobWorld) -> bool {
-    let Some(p) = &w.player else { return true };
-    let d = m.distance_sqr(p.position);
+    let Some(p) = w.nearest_player else {
+        return true;
+    };
+    let d = m.distance_sqr(p);
     // requiresCustomPersistence: raiders in a raid, a tame nautilus, a sulfur
     // cube holding a block or let out of a bucket.
     let persistent = m.persistent
         || super::nautilus::is_nautilus(m.species()) && m.extra.tame
         || m.species() == Species::SulfurCube
             && (super::sulfur_cube::has_body(m) || m.extra.scratch[3] != 0);
-    // removeWhenFarAway: animals, wardens, allays, patrols and raiders,
-    // zombie villagers being cured and ridden mobs stay; the wither's
-    // checkDespawn never removes it for distance.
+    // removeWhenFarAway: animals, villagers, golems, patrols and raiders,
+    // zombie villagers being cured and ridden mobs stay.
     let creature = m.kind.category == "creature";
-    let removable = !(matches!(
-        m.species(),
-        Species::Warden | Species::Allay | Species::Wither
-    ) || creature && m.kind.flags.animal && !m.extra.jockey
+    let removable = !(never_removed_when_far(m.species())
+        || creature && m.kind.flags.animal && !m.extra.jockey
         || super::raider::keeps_alive(m, d)
         || super::zombie_villager::keeps_alive(m)
         || super::riders::keeps_alive(m));
@@ -1054,6 +1057,24 @@ fn check_despawn(m: &mut Mob, w: &MobWorld) -> bool {
         m.ai.no_action_time = 0;
     }
     true
+}
+/// The types whose `removeWhenFarAway` is always false (`Villager`,
+/// `WanderingTrader`, `AbstractGolem`: iron, snow and copper golems and
+/// shulkers; `Allay`, `Warden`), and the wither, whose `checkDespawn` never
+/// removes it for distance.
+fn never_removed_when_far(s: Species) -> bool {
+    matches!(
+        s,
+        Species::Villager
+            | Species::WanderingTrader
+            | Species::IronGolem
+            | Species::SnowGolem
+            | Species::CopperGolem
+            | Species::Shulker
+            | Species::Allay
+            | Species::Warden
+            | Species::Wither
+    )
 }
 /// Movement speed bonus multiplier (baby zombies are 50% faster, etc.).
 pub fn speed_bonus(m: &Mob) -> f64 {
@@ -1573,5 +1594,27 @@ mod bucket_axolotl_tests {
     #[test]
     fn bucket_axolotl_uses_aquatic_not_generic_land_ai() {
         assert_eq!(family(Species::Axolotl), Family::Aquatic);
+    }
+}
+#[cfg(test)]
+mod despawn_tests {
+    use super::*;
+    /// Village villagers are placed without PersistenceRequired (unlike the
+    /// village's iron golem), so they must never despawn for distance.
+    #[test]
+    fn villagers_traders_and_golems_never_despawn_for_distance() {
+        for s in [
+            Species::Villager,
+            Species::WanderingTrader,
+            Species::IronGolem,
+            Species::SnowGolem,
+            Species::CopperGolem,
+            Species::Shulker,
+        ] {
+            assert!(never_removed_when_far(s), "{s:?}");
+        }
+        for s in [Species::Zombie, Species::ZombieVillager, Species::Pillager] {
+            assert!(!never_removed_when_far(s), "{s:?}");
+        }
     }
 }

@@ -110,7 +110,7 @@ impl Game<'_> {
         let mut next_entity = self.next_entity;
         let mut random = self.world.random.clone();
         let spawning = self.spawning_monsters();
-        let creaking = self.res.mob_types.get("minecraft:creaking").cloned();
+        let creaking = self.res.mob_types().get("minecraft:creaking").cloned();
         let player_uuid = self.level.player_uuid;
         let snapshot: Vec<_> = mobs.iter().map(|m| seen(m, player_uuid)).collect();
         let mut events = Vec::new();
@@ -164,7 +164,7 @@ impl Game<'_> {
             return;
         }
         let key = (home[0], home[1], home[2]);
-        let Some(BlockEntity::CreakingHeart(mut heart)) = self.world.block_entities.remove(&key)
+        let Some(BlockEntity::CreakingHeart(mut heart)) = self.world.block_entities.take(&key)
         else {
             return;
         };
@@ -173,7 +173,7 @@ impl Game<'_> {
         });
         self.world
             .block_entities
-            .insert(key, BlockEntity::CreakingHeart(heart));
+            .put(key, BlockEntity::CreakingHeart(heart));
     }
     /// `Creaking.tearDown`: the crumble particles.
     pub(super) fn creaking_tear_down(&mut self, center: [f64; 3], spread: [f64; 3]) {
@@ -220,7 +220,13 @@ impl Game<'_> {
     /// death and a natural heart drops experience.
     pub(super) fn creaking_heart_broken(&mut self, pos: [i32; 3]) {
         let key = (pos[0], pos[1], pos[2]);
-        let Some(BlockEntity::CreakingHeart(mut heart)) = self.world.block_entities.remove(&key)
+        if !matches!(
+            self.world.block_entities.get(&key),
+            Some(BlockEntity::CreakingHeart(_))
+        ) {
+            return;
+        }
+        let Some(BlockEntity::CreakingHeart(mut heart)) = self.world.block_entities.take(&key)
         else {
             return;
         };
@@ -248,43 +254,35 @@ impl Game<'_> {
         }
         self.world
             .block_entities
-            .insert(key, BlockEntity::CreakingHeart(heart));
+            .put(key, BlockEntity::CreakingHeart(heart));
     }
-    /// `CreakingHeartBlockEntity.serverTick` for every heart.
-    pub(super) fn tick_creaking_hearts(&mut self) -> Result<()> {
-        let keys: Vec<Pos> = self
-            .world
-            .block_entities
-            .iter()
-            .filter(|(_, e)| matches!(e, BlockEntity::CreakingHeart(_)))
-            .map(|(k, _)| *k)
-            .collect();
-        for key in keys {
-            let Some(BlockEntity::CreakingHeart(mut heart)) =
-                self.world.block_entities.remove(&key)
-            else {
-                continue;
-            };
-            let state = self.world.block(key.0, key.1, key.2);
-            if &*self.res.facts.get(state).name != "minecraft:creaking_heart" {
-                // The block is gone: preRemoveSideEffects.
-                self.with_heart(key, &mut heart, |h, _, _, host, out| {
-                    creaking_heart::remove_protector(h, host, false, out);
-                })?;
-                continue;
-            }
-            // getTicker: none once uprooted.
-            if self.heart_state_name(state) != "uprooted" {
-                let pos = [key.0, key.1, key.2];
-                self.with_heart(key, &mut heart, |h, w, lr, host, out| {
-                    creaking_heart::server_tick(h, pos, w, lr, host, out);
-                })?;
-            }
-            self.world
-                .block_entities
-                .insert(key, BlockEntity::CreakingHeart(heart));
+    /// `CreakingHeartBlockEntity.serverTick` of the heart at `key`. Its slot
+    /// stays while uprooted, so that a heart whose block went away is still
+    /// found here and lets go of its protector.
+    pub(super) fn tick_creaking_heart(&mut self, key: Pos) -> Result<()> {
+        let Some(BlockEntity::CreakingHeart(mut heart)) = self.world.block_entities.take(&key)
+        else {
+            return Ok(());
+        };
+        let state = self.world.block(key.0, key.1, key.2);
+        if &*self.res.facts().get(state).name != "minecraft:creaking_heart" {
+            // The block is gone: preRemoveSideEffects.
+            self.world.block_entities.forget(&key);
+            self.with_heart(key, &mut heart, |h, _, _, host, out| {
+                creaking_heart::remove_protector(h, host, false, out);
+            })?;
+            return Ok(());
         }
-        self.scan_for_hearts();
+        // getTicker: none once uprooted.
+        if self.heart_state_name(state) != "uprooted" {
+            let pos = [key.0, key.1, key.2];
+            self.with_heart(key, &mut heart, |h, w, lr, host, out| {
+                creaking_heart::server_tick(h, pos, w, lr, host, out);
+            })?;
+        }
+        self.world
+            .block_entities
+            .put(key, BlockEntity::CreakingHeart(heart));
         Ok(())
     }
     /// `ServerLevel.isSpawningMonsters`.
@@ -295,7 +293,7 @@ impl Game<'_> {
     }
     /// Hearts that came with generated or loaded chunks get their block
     /// entity (`newBlockEntity`) the first time their chunk is seen.
-    fn scan_for_hearts(&mut self) {
+    pub(super) fn scan_for_hearts(&mut self) {
         let Some(heart) = self
             .pack
             .assets
@@ -319,7 +317,7 @@ impl Game<'_> {
             if self.creaking.hearts.is_empty() {
                 self.creaking.hearts = self
                     .res
-                    .facts
+                    .facts()
                     .states
                     .iter()
                     .map(|f| &*f.name == "minecraft:creaking_heart")
@@ -327,13 +325,16 @@ impl Game<'_> {
             }
             let hearts = &self.creaking.hearts;
             let _ = heart;
+            let is_heart = |id: u32| hearts.get(id as usize).copied().unwrap_or(false);
             for (si, section) in chunk.sections.iter().enumerate() {
-                if section.is_uniform(0) {
+                // Only a section whose palette holds a heart state can have
+                // one: the others are skipped without reading their 4,096 blocks.
+                if !section.blocks.maybe_has(is_heart) {
                     continue;
                 }
                 for i in 0..4096 {
                     let id = section.get(i);
-                    if !hearts.get(id as usize).copied().unwrap_or(false) {
+                    if !is_heart(id) {
                         continue;
                     }
                     let (lx, lz, ly) = ((i & 15) as i32, ((i >> 4) & 15) as i32, (i >> 8) as i32);
@@ -344,8 +345,7 @@ impl Game<'_> {
                     );
                     self.world
                         .block_entities
-                        .entry(pos)
-                        .or_insert_with(|| BlockEntity::CreakingHeart(Box::default()));
+                        .get_or_insert_with(pos, || BlockEntity::CreakingHeart(Box::default()));
                 }
             }
         }

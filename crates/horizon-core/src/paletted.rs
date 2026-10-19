@@ -151,33 +151,85 @@ fn write(words: &mut [u64], bits: u8, i: usize, value: u32) {
     let (word, shift) = locate(bits, i);
     words[word] = (words[word] & !(mask(bits) << shift)) | (u64::from(value) << shift);
 }
+/// Values below this are looked up in a table indexed by value once a
+/// palette outgrows the scan: every block state and biome id of 26.3.
+const DENSE_VALUES: u32 = 1 << 16;
+thread_local! {
+    /// `palette_ids`' table: 1 + the id of each value seen, 0 for the others.
+    /// Only the entries of the palette being built are set, and they are
+    /// cleared again before it returns.
+    static DENSE_IDS: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+}
 /// The distinct `values` in first-occurrence order and each value's index in
-/// them. Up to 16 distinct values a scan finds them faster than hashing.
+/// them. A run of one value (most of a section) is matched once, a scan finds
+/// up to 16 distinct values faster than any lookup, and past that a table
+/// indexed by value finds them without hashing.
 fn palette_ids(values: &[u32]) -> (Vec<u32>, Vec<u32>) {
     let mut palette: Vec<u32> = Vec::new();
-    let mut small = true;
-    let mut lookup: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
     let mut ids = Vec::with_capacity(values.len());
-    for &value in values {
-        let id = if small {
-            match palette.iter().position(|&v| v == value) {
+    let mut last: Option<(u32, u32)> = None;
+    let mut rest = values;
+    while let Some((&value, tail)) = rest.split_first() {
+        let id = match last {
+            Some((v, id)) if v == value => id,
+            _ if palette.len() > 16 => break,
+            _ => match palette.iter().position(|&v| v == value) {
                 Some(id) => id as u32,
                 None => {
                     palette.push(value);
-                    if palette.len() > 16 {
-                        small = false;
-                        lookup.extend(palette.iter().enumerate().map(|(i, &v)| (v, i as u32)));
-                    }
                     palette.len() as u32 - 1
                 }
+            },
+        };
+        last = Some((value, id));
+        ids.push(id);
+        rest = tail;
+    }
+    if rest.is_empty() {
+        return (palette, ids);
+    }
+    if palette.iter().chain(rest).all(|&v| v < DENSE_VALUES) {
+        DENSE_IDS.with(|table| {
+            let mut table = table.borrow_mut();
+            for (id, &v) in palette.iter().enumerate() {
+                let v = v as usize;
+                if table.len() <= v {
+                    table.resize(v + 1, 0);
+                }
+                table[v] = id as u32 + 1;
             }
-        } else {
-            *lookup.entry(value).or_insert_with(|| {
+            for &value in rest {
+                let v = value as usize;
+                if table.len() <= v {
+                    table.resize(v + 1, 0);
+                }
+                let id = match table[v] {
+                    0 => {
+                        palette.push(value);
+                        table[v] = palette.len() as u32;
+                        palette.len() as u32 - 1
+                    }
+                    slot => slot - 1,
+                };
+                ids.push(id);
+            }
+            for &v in &palette {
+                table[v as usize] = 0;
+            }
+        });
+    } else {
+        let mut lookup: std::collections::HashMap<u32, u32> = palette
+            .iter()
+            .enumerate()
+            .map(|(i, &v)| (v, i as u32))
+            .collect();
+        for &value in rest {
+            let id = *lookup.entry(value).or_insert_with(|| {
                 palette.push(value);
                 palette.len() as u32 - 1
-            })
-        };
-        ids.push(id);
+            });
+            ids.push(id);
+        }
     }
     (palette, ids)
 }
@@ -391,17 +443,24 @@ impl PalettedContainer {
         assert_eq!(out.len(), self.strategy.entries());
         match &self.palette {
             Palette::Single(value) => out.fill(*value),
-            palette => {
+            Palette::List(list) => {
                 let bits = usize::from(self.bits);
                 let per = 64 / bits;
                 let m = mask(self.bits);
                 for (chunk, &word) in out.chunks_mut(per).zip(&self.words) {
                     for (slot, cell) in chunk.iter_mut().enumerate() {
-                        let id = ((word >> (slot * bits)) & m) as u32;
-                        *cell = match palette {
-                            Palette::List(list) => list[id as usize],
-                            _ => id,
-                        };
+                        let id = ((word >> (slot * bits)) & m) as usize;
+                        *cell = list[id];
+                    }
+                }
+            }
+            Palette::Global => {
+                let bits = usize::from(self.bits);
+                let per = 64 / bits;
+                let m = mask(self.bits);
+                for (chunk, &word) in out.chunks_mut(per).zip(&self.words) {
+                    for (slot, cell) in chunk.iter_mut().enumerate() {
+                        *cell = ((word >> (slot * bits)) & m) as u32;
                     }
                 }
             }
@@ -412,17 +471,24 @@ impl PalettedContainer {
         debug_assert_eq!(self.strategy.entries(), 4096);
         match &self.palette {
             Palette::Single(value) => out.fill(*value as u16),
-            palette => {
+            Palette::List(list) => {
                 let bits = usize::from(self.bits);
                 let per = 64 / bits;
                 let m = mask(self.bits);
                 for (chunk, &word) in out.chunks_mut(per).zip(&self.words) {
                     for (slot, cell) in chunk.iter_mut().enumerate() {
                         let id = ((word >> (slot * bits)) & m) as usize;
-                        *cell = match palette {
-                            Palette::List(list) => list[id] as u16,
-                            _ => id as u16,
-                        };
+                        *cell = list[id] as u16;
+                    }
+                }
+            }
+            Palette::Global => {
+                let bits = usize::from(self.bits);
+                let per = 64 / bits;
+                let m = mask(self.bits);
+                for (chunk, &word) in out.chunks_mut(per).zip(&self.words) {
+                    for (slot, cell) in chunk.iter_mut().enumerate() {
+                        *cell = ((word >> (slot * bits)) & m) as u16;
                     }
                 }
             }
@@ -736,6 +802,213 @@ mod tests {
             for i in 0..4096usize {
                 assert_eq!(locate(bits, i).0, i / per, "bits {bits} index {i}");
             }
+        }
+    }
+
+    /// The pre-optimization `unpack`, kept to compare against in the benchmark.
+    fn baseline_unpack(c: &PalettedContainer, out: &mut [u32]) {
+        match &c.palette {
+            Palette::Single(value) => out.fill(*value),
+            palette => {
+                let bits = usize::from(c.bits);
+                let per = 64 / bits;
+                let m = mask(c.bits);
+                for (chunk, &word) in out.chunks_mut(per).zip(&c.words) {
+                    for (slot, cell) in chunk.iter_mut().enumerate() {
+                        let id = ((word >> (slot * bits)) & m) as u32;
+                        *cell = match palette {
+                            Palette::List(list) => list[id as usize],
+                            _ => id,
+                        };
+                    }
+                }
+            }
+        }
+    }
+
+    /// `unpack` against the pre-optimization implementation, for a list palette
+    /// and the global palette. The result is checked before timing; 25 measured
+    /// rounds alternate order and report the median and best microsecond-per-call.
+    #[test]
+    #[ignore = "microbenchmark; run with --ignored --nocapture"]
+    fn benchmark_unpack() {
+        use std::{hint::black_box, time::Instant};
+        let values: Vec<u32> = (0..4096).map(|i| (i % 12) as u32).collect();
+        let list = PalettedContainer::from_values(BLOCKS, &values);
+        let global = PalettedContainer::from_values(
+            BLOCKS,
+            &(0..4096).map(|i| (i * 3) as u32).collect::<Vec<_>>(),
+        );
+        for (name, container) in [("list", &list), ("global", &global)] {
+            let mut expected = vec![0u32; 4096];
+            baseline_unpack(container, &mut expected);
+            let mut out = vec![0u32; 4096];
+            container.unpack(&mut out);
+            assert_eq!(expected, out, "unpack {name} differs");
+            let mut times = [Vec::new(), Vec::new()];
+            for round in 0..25 {
+                for optimized in [round % 2 == 0, round % 2 != 0] {
+                    let started = Instant::now();
+                    for _ in 0..2000 {
+                        if optimized {
+                            container.unpack(black_box(&mut out));
+                        } else {
+                            baseline_unpack(black_box(container), black_box(&mut out));
+                        }
+                    }
+                    if round > 0 {
+                        times[usize::from(optimized)]
+                            .push(started.elapsed().as_secs_f64() * 1e6 / 2000.0);
+                    }
+                }
+            }
+            for values in &mut times {
+                values.sort_by(f64::total_cmp);
+            }
+            let median = |v: &[f64]| v[v.len() / 2];
+            println!(
+                "unpack {name} median: baseline {:.3} us optimized {:.3} us speedup {:.3}x",
+                median(&times[0]),
+                median(&times[1]),
+                median(&times[0]) / median(&times[1])
+            );
+            println!(
+                "unpack {name} best:   baseline {:.3} us optimized {:.3} us speedup {:.3}x",
+                times[0][0],
+                times[1][0],
+                times[0][0] / times[1][0]
+            );
+        }
+    }
+
+    /// The pre-optimization `palette_ids` (scan, then a SipHash map), kept to
+    /// compare against.
+    fn baseline_palette_ids(values: &[u32]) -> (Vec<u32>, Vec<u32>) {
+        let mut palette: Vec<u32> = Vec::new();
+        let mut small = true;
+        let mut lookup: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+        let mut ids = Vec::with_capacity(values.len());
+        for &value in values {
+            let id = if small {
+                match palette.iter().position(|&v| v == value) {
+                    Some(id) => id as u32,
+                    None => {
+                        palette.push(value);
+                        if palette.len() > 16 {
+                            small = false;
+                            lookup.extend(palette.iter().enumerate().map(|(i, &v)| (v, i as u32)));
+                        }
+                        palette.len() as u32 - 1
+                    }
+                }
+            } else {
+                *lookup.entry(value).or_insert_with(|| {
+                    palette.push(value);
+                    palette.len() as u32 - 1
+                })
+            };
+            ids.push(id);
+        }
+        (palette, ids)
+    }
+    /// Sections like the ones saved: stone, ores and caves under dirt, grass
+    /// and air; a mixed surface (plants, leaves, logs) in short runs; a
+    /// global palette; ids past the table; and biomes.
+    fn palette_cases() -> Vec<(&'static str, Vec<u32>)> {
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let mut terrain = Vec::with_capacity(4096);
+        for i in 0..4096u32 {
+            let y = i >> 8;
+            let r = rng(&mut state);
+            terrain.push(match y {
+                0..=8 if r % 40 == 0 => 2000 + (r >> 8) as u32 % 6,
+                0..=8 if r % 13 == 0 => 0,
+                0..=8 => 1,
+                9..=10 => 10,
+                11 => 9,
+                _ => 0,
+            });
+        }
+        let mut surface = Vec::with_capacity(4096);
+        while surface.len() < 4096 {
+            let r = rng(&mut state);
+            let run = 1 + (r % 8) as usize;
+            let v = 100 + ((r >> 8) % 24) as u32 * 37;
+            surface.extend(std::iter::repeat_n(v, run.min(4096 - surface.len())));
+        }
+        let global: Vec<u32> = (0..4096)
+            .map(|_| (rng(&mut state) % 600) as u32 * 41)
+            .collect();
+        let large: Vec<u32> = (0..4096)
+            .map(|i| {
+                if i % 3 == 0 {
+                    70_000 + (rng(&mut state) % 40) as u32
+                } else {
+                    i as u32 % 20
+                }
+            })
+            .collect();
+        let biomes: Vec<u32> = (0..64).map(|i| [3, 3, 3, 7, 7, 12][i % 6]).collect();
+        vec![
+            ("terrain", terrain),
+            ("surface", surface),
+            ("global", global),
+            ("large ids", large),
+            ("biomes", biomes),
+            ("single", vec![5; 4096]),
+            ("seventeen", (0..4096).map(|i| (i % 17) as u32).collect()),
+        ]
+    }
+    #[test]
+    fn palette_ids_match_first_occurrence_order() {
+        for (name, values) in palette_cases() {
+            assert_eq!(
+                palette_ids(&values),
+                baseline_palette_ids(&values),
+                "{name}"
+            );
+            // The table is left clean for the next section.
+            assert_eq!(
+                palette_ids(&values),
+                baseline_palette_ids(&values),
+                "{name} again"
+            );
+        }
+        DENSE_IDS.with(|t| assert!(t.borrow().iter().all(|&slot| slot == 0)));
+    }
+    /// `palette_ids` against the pre-optimization implementation over the
+    /// cases above. 25 measured rounds alternate order and report the median
+    /// microseconds per call.
+    #[test]
+    #[ignore = "microbenchmark; run with --ignored --nocapture"]
+    fn benchmark_palette_ids() {
+        use std::{hint::black_box, time::Instant};
+        for (name, values) in palette_cases() {
+            let mut times = [Vec::new(), Vec::new()];
+            for round in 0..25 {
+                for optimized in [round % 2 == 0, round % 2 != 0] {
+                    let started = Instant::now();
+                    for _ in 0..500 {
+                        if optimized {
+                            black_box(palette_ids(black_box(&values)));
+                        } else {
+                            black_box(baseline_palette_ids(black_box(&values)));
+                        }
+                    }
+                    if round > 0 {
+                        times[usize::from(optimized)]
+                            .push(started.elapsed().as_secs_f64() * 1e6 / 500.0);
+                    }
+                }
+            }
+            for t in &mut times {
+                t.sort_by(f64::total_cmp);
+            }
+            let (base, new) = (times[0][times[0].len() / 2], times[1][times[1].len() / 2]);
+            println!(
+                "palette_ids {name}: baseline {base:.2} us, new {new:.2} us, {:.2}x",
+                base / new
+            );
         }
     }
 }

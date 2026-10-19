@@ -40,14 +40,16 @@ impl Behaviours {
             BiomePrecipitation::Rain
         }
     }
-    /// `getHeightmapPos(MOTION_BLOCKING, pos)`.
+    /// `getHeightmapPos(MOTION_BLOCKING, pos)`, scanning down from the
+    /// world surface (air neither blocks motion nor holds a fluid).
     pub fn motion_blocking_top<L: LevelAccess + ?Sized>(
         &self,
         level: &L,
         pos: BlockPos,
     ) -> BlockPos {
         let blocks = self.tag("minecraft:blocks_motion_in_heightmap");
-        for y in (level.min_y()..level.max_y()).rev() {
+        let top = level.world_surface(pos.x, pos.z).min(level.max_y());
+        for y in (level.min_y()..top).rev() {
             let state = level.block_state(BlockPos::new(pos.x, y, pos.z));
             let fluid = self.fluid(state).kind() != FluidKind::Empty;
             if fluid || blocks.is_some_and(|t| t.contains(self.block(state))) {

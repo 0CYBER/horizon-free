@@ -42,6 +42,11 @@ impl Default for FaceGroups {
 }
 
 impl FaceGroups {
+    /// Group arbitrary-sized terrain quads, including distant LOD tiles.
+    pub fn group(solid: &mut Vec<TerrainVertex>) -> Self {
+        group(solid)
+    }
+
     /// Whether group `g` can hold a front-facing quad for an eye at `eye`,
     /// relative to the section's minimum corner.
     pub fn visible(&self, g: usize, eye: Vec3) -> bool {
@@ -175,13 +180,7 @@ mod tests {
     use super::*;
 
     fn vertex(pos: [f32; 3], layer: u16) -> TerrainVertex {
-        TerrainVertex {
-            pos,
-            uv: [0.0; 2],
-            layer,
-            light: 0,
-            color: 0,
-        }
+        TerrainVertex::new(pos, [0.0; 2], layer, 0, 0)
     }
     /// A unit quad in the plane `axis = plane`, wound to face `sign`, tagged
     /// with `layer` so tests can follow it.

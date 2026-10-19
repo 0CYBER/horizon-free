@@ -13,7 +13,6 @@ use horizon_client::{
 };
 use horizon_core::geometry::{Aabb, Vec3};
 use horizon_world::nbt::Tag;
-use std::collections::HashMap;
 
 /// The handle of the local player among a bell's gathered entities.
 const PLAYER: u64 = u64::MAX;
@@ -174,18 +173,27 @@ impl Game<'_> {
         let Some(r) = &self.renderer else {
             return;
         };
-        let present: HashMap<[i32; 3], Ticker> = r
-            .block_entities()
-            .filter_map(|(p, s)| Some((*p, self.be_anims.ticker(*s)?)))
-            .collect();
-        self.be_anims.retain_present(&present);
+        // Sorted by position: the order they tick in, and a quick lookup.
+        // Read again only when the drawn block entities changed.
+        let revision = r.block_entity_revision();
+        if self.be_anims.present_revision != Some(revision) {
+            let mut present: Vec<([i32; 3], Ticker)> = r
+                .block_entities()
+                .filter_map(|(p, s)| Some((*p, self.be_anims.ticker(*s)?)))
+                .collect();
+            present.sort_unstable_by_key(|(p, _)| *p);
+            self.be_anims.retain_present(&present);
+            self.be_anims.present = present;
+            self.be_anims.present_revision = Some(revision);
+        }
+        let positions = std::mem::take(&mut self.be_anims.present);
         let players: Vec<[f64; 3]> = match &self.player {
             Some(p) if !self.spectator() => vec![[p.position.x, p.position.y, p.position.z]],
             _ => Vec::new(),
         };
         let raiders = self
             .res
-            .stations
+            .stations()
             .enchantments
             .entity_tags
             .get("minecraft:raiders")
@@ -193,14 +201,12 @@ impl Game<'_> {
             .unwrap_or_default();
         let frames = self
             .res
-            .items
+            .items()
             .block_tags
             .get("minecraft:conduit_effect_block")
             .cloned()
             .unwrap_or_default();
-        let mut positions: Vec<([i32; 3], Ticker)> = present.into_iter().collect();
-        positions.sort_unstable_by_key(|(p, _)| *p);
-        for (pos, ticker) in positions {
+        for &(pos, ticker) in &positions {
             match ticker {
                 Ticker::Lid => self.be_anims.chests.entry(pos).or_default().tick(),
                 Ticker::Book => {
@@ -279,7 +285,7 @@ impl Game<'_> {
                 }
                 Ticker::Conduit => {
                     let world = &self.world;
-                    let facts = &self.res.facts;
+                    let facts = self.res.facts();
                     let registry = self.pack.assets.registry;
                     let is_water = |p: [i32; 3]| {
                         facts.get(world.block(p[0], p[1], p[2])).fluid
@@ -322,6 +328,7 @@ impl Game<'_> {
                 }
             }
         }
+        self.be_anims.present = positions;
     }
     /// `EndGatewayBlock.entityInside` on the server: whether the gateway at
     /// `pos` let the entity in (`triggerCooldown`, with its block event).
@@ -365,7 +372,7 @@ impl Game<'_> {
     /// pot's saved `sherds` (back, left, right, front).
     pub(super) fn block_anim(&self, pos: [i32; 3], partial: f32) -> BlockAnim {
         let state = self.world.block(pos[0], pos[1], pos[2]);
-        let sherds = if &*self.res.facts.get(state).name == "minecraft:decorated_pot" {
+        let sherds = if &*self.res.facts().get(state).name == "minecraft:decorated_pot" {
             let sherds = self.saved_tag(pos).and_then(|t| t.get("sherds"));
             ["back", "left", "right", "front"].map(|side| match sherds.and_then(|s| s.get(side)) {
                 // An item id, or the item stack the processed templates hold.

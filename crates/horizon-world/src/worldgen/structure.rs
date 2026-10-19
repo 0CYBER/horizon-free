@@ -10,13 +10,16 @@ pub mod mineshaft;
 pub mod monument;
 pub mod nether_fossil;
 pub mod ocean_ruin;
+pub mod piece_limited;
 pub mod processor;
 pub mod ruined_portal;
 pub mod simple;
 pub mod start;
+pub mod start_checks;
 pub mod stronghold;
 pub mod template;
 pub mod temple;
+pub mod yung;
 
 use crate::{
     nbt::{self, Limits},
@@ -341,11 +344,7 @@ impl StructureResources {
             flate2::read::GzDecoder::new(bytes.as_slice())
                 .read_to_end(&mut raw)
                 .ok()?;
-            let limits = Limits {
-                max_bytes: 1 << 28,
-                ..Limits::default()
-            };
-            let tag = nbt::read_named(&raw, limits).ok()?.0.tag;
+            let tag = nbt::read_named(&raw, Limits::templates()).ok()?.0.tag;
             Some(Arc::new(StructureTemplate::from_nbt(
                 &tag,
                 self.registry,

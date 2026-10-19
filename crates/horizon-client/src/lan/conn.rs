@@ -174,6 +174,19 @@ impl PlayerSender {
             self.deliver(Out::Packet(body));
         }
     }
+    /// Several packets in order, as [`Self::send`] each: under one lock
+    /// while the tick holds them.
+    pub fn send_many(&self, bodies: impl IntoIterator<Item = Vec<u8>>) {
+        if !HOLDING.get() {
+            bodies.into_iter().for_each(|body| self.send(body));
+            return;
+        }
+        let mut held = self.held();
+        for body in bodies {
+            self.pending.fetch_add(body.len(), Ordering::Relaxed);
+            held.push(body);
+        }
+    }
     /// Hand the held packets to the writer thread.
     pub fn flush(&self) {
         let held = std::mem::take(&mut *self.held());

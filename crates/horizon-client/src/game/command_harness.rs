@@ -4,7 +4,8 @@
 //! command as the player (Commands.performPrefixedCommand) and records every
 //! system message it produced, as styled spans, with the results reported to
 //! the player's `CommandResultCallback`; `tick` advances the game; `settle`
-//! waits until the terrain around the player is loaded.
+//! waits until the terrain and entities around the player are loaded;
+//! `portal` sends the player through the nether portal it stands in.
 use super::Game;
 use horizon_client::{Result, text::Text};
 use serde_json::{Value, json};
@@ -40,6 +41,19 @@ pub(super) fn spans(text: &Text) -> Value {
 }
 
 impl Game<'_> {
+    /// The player's portal process finished in the nether portal it stands
+    /// in (the oracle's player is not ticked, so neither is the wait).
+    fn harness_portal(&mut self) -> Result<()> {
+        let Some(p) = &self.player else {
+            return Err("command harness: portal without a player".into());
+        };
+        let entry = horizon_core::position::BlockPos::containing(p.position);
+        let block = self.world.block(entry.x, entry.y, entry.z);
+        if &*self.res.facts().get(block).name != "minecraft:nether_portal" {
+            return Err("command harness: the player is not in a nether portal".into());
+        }
+        self.player_through_nether_portal(entry)
+    }
     /// Load terrain until the player stands in lit chunks.
     fn harness_settle(&mut self, deadline: Instant) -> Result<()> {
         loop {
@@ -51,6 +65,10 @@ impl Game<'_> {
                     (p.position.z.floor() as i32) >> 4,
                 );
                 if (-1..=1).all(|dz| (-1..=1).all(|dx| self.streaming.is_lit(cx + dx, cz + dz))) {
+                    // The oracle's settle also waits for the entities saved
+                    // in those chunks (areEntitiesActuallyLoadedAndTicking):
+                    // after a dimension change they come back from the save.
+                    self.spawn_loaded_entities();
                     return Ok(());
                 }
             }
@@ -130,6 +148,7 @@ impl Game<'_> {
                     }
                 }
                 "settle" => self.harness_settle(deadline)?,
+                "portal" => self.harness_portal()?,
                 other => return Err(format!("command harness: unknown op {other}").into()),
             }
         }

@@ -75,6 +75,70 @@ fn external_threshold_negative_coordinates_and_timestamps_roundtrip() {
 }
 
 #[test]
+fn in_place_writes_reuse_freed_sectors_and_keep_other_chunks() {
+    let dir = Directory::new();
+    let (a, b, c) = (
+        ChunkPos::new(-32, 0),
+        ChunkPos::new(-31, 0),
+        ChunkPos::new(-1, 31),
+    );
+    let mut region = RegionFile::open_writable(dir.region(), true).unwrap();
+    // RegionBitmap: a at sectors 2..4, b at 4.
+    region.write(a, &record(2 * 4096 - 5)).unwrap();
+    region.write(b, &record(100)).unwrap();
+    let sectors = |path: &Path| fs::metadata(path).unwrap().len() / 4096;
+    assert_eq!(sectors(&dir.region()), 5);
+    // a grows: it moves past b, and its two old sectors are free again.
+    region.write(a, &record(3 * 4096 - 5)).unwrap();
+    assert_eq!(sectors(&dir.region()), 8);
+    // c fits in a's old sectors; then an oversized c goes to its .mcc file
+    // (a one-sector stub, at the end: sector 8) and back inline (sector 2).
+    region.write(c, &record(2 * 4096 - 5)).unwrap();
+    assert_eq!(sectors(&dir.region()), 8);
+    region.write(c, &record(256 * 4096)).unwrap();
+    assert!(dir.0.join("c.-1.31.mcc").exists());
+    region.write(c, &record(10)).unwrap();
+    assert!(!dir.0.join("c.-1.31.mcc").exists());
+    assert!(region.clear(b, 7).unwrap());
+    assert!(!region.clear(b, 7).unwrap());
+    region.sync().unwrap();
+    drop(region);
+    let mut reader = RegionFile::open(dir.region()).unwrap();
+    assert_eq!(reader.chunks().map(|(p, _)| p).collect::<Vec<_>>(), [a, c]);
+    assert_eq!(
+        reader.read(a).unwrap().unwrap().compressed,
+        record(3 * 4096 - 5).compressed
+    );
+    assert_eq!(
+        reader.read(c).unwrap().unwrap().compressed,
+        record(10).compressed
+    );
+    assert!(reader.read(b).unwrap().is_none());
+    // Reopened, the bitmap holds the chunks' sectors: new chunks take the
+    // first free runs (sectors 3 and 4), not theirs.
+    let mut region = RegionFile::open_writable(dir.region(), false).unwrap();
+    region.write(b, &record(4096 - 5)).unwrap();
+    region
+        .write(ChunkPos::new(-30, 0), &record(4096 - 5))
+        .unwrap();
+    drop(region);
+    let mut reader = RegionFile::open(dir.region()).unwrap();
+    assert_eq!(
+        reader.read(a).unwrap().unwrap().compressed,
+        record(3 * 4096 - 5).compressed
+    );
+    assert_eq!(
+        reader.read(c).unwrap().unwrap().compressed,
+        record(10).compressed
+    );
+    assert_eq!(
+        reader.read(b).unwrap().unwrap().compressed,
+        record(4096 - 5).compressed
+    );
+    assert_eq!(sectors(&dir.region()), 9);
+}
+
+#[test]
 fn failed_writer_cannot_commit_and_removes_its_own_external_files() {
     let dir = Directory::new();
     let mut writer = RegionWriter::create(dir.region()).unwrap();
@@ -205,4 +269,58 @@ fn chunk_storage_edit_preserves_unknown_fields_and_other_blocks() {
     assert_eq!(sections[0].get("unknown"), Some(&Tag::Long(99)));
     let record = ChunkRecord::from_nbt(&root, Compression::Lz4, 17, Limits::default()).unwrap();
     assert_eq!(record.nbt(Limits::default()).unwrap(), root);
+}
+
+/// Saving one chunk into a full region: the whole file rewritten (every
+/// chunk read and written again, then the new file published), against
+/// vanilla's in-place write. Run with --ignored --nocapture.
+#[test]
+#[ignore = "microbenchmark; run with --ignored --nocapture"]
+fn benchmark_saving_into_a_full_region() {
+    let dir = Directory::new();
+    let chunks: Vec<ChunkPos> = (0..1024)
+        .map(|i| ChunkPos::new(-32 + i % 32, i / 32))
+        .collect();
+    // About what a compressed overworld chunk weighs: two sectors.
+    let saved = record(6000);
+    let mut region = RegionFile::open_writable(dir.region(), true).unwrap();
+    for &c in &chunks {
+        region.write(c, &saved).unwrap();
+    }
+    region.sync().unwrap();
+    drop(region);
+    let rounds = 100;
+    let start = std::time::Instant::now();
+    for round in 0..rounds {
+        let changed = chunks[round * 7 % 1024];
+        let mut existing = RegionFile::open(dir.region()).unwrap();
+        let mut records = Vec::new();
+        for (p, _) in existing.chunks().collect::<Vec<_>>() {
+            let r = if p == changed {
+                saved.clone()
+            } else {
+                existing.read(p).unwrap().unwrap()
+            };
+            records.push((p, r));
+        }
+        let staging = dir.0.join("staging");
+        fs::create_dir_all(&staging).unwrap();
+        let temporary = staging.join("r.-1.0.mca");
+        let _ = fs::remove_file(&temporary);
+        let mut writer = RegionWriter::create(&temporary).unwrap();
+        for (p, r) in &records {
+            writer.write(*p, r).unwrap();
+        }
+        writer.finish().unwrap();
+        fs::rename(&temporary, dir.region()).unwrap();
+    }
+    let rewrite = start.elapsed() / rounds as u32;
+    let mut region = RegionFile::open_writable(dir.region(), false).unwrap();
+    let start = std::time::Instant::now();
+    for round in 0..rounds {
+        region.write(chunks[round * 7 % 1024], &saved).unwrap();
+        region.sync().unwrap();
+    }
+    let in_place = start.elapsed() / rounds as u32;
+    println!("one chunk into a full region: rewrite {rewrite:?}, in place {in_place:?}");
 }

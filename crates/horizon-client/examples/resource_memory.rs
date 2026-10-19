@@ -94,12 +94,13 @@ fn main() -> Result<()> {
     drop(registry);
     step("registry dropped");
     let assets = Assets::load(&root)?;
+    let render = assets.reload(&root)?;
     step("assets");
     println!(
         "  sprites: {} layers of {}px, {:.0} MB of pixels",
-        assets.texture_layers,
-        assets.sprite_size,
-        assets.pixels.len() as f64 / MB
+        render.texture_layers,
+        render.sprite_size,
+        render.pixels.len() as f64 / MB
     );
     // The game decodes gameplay facts once for both tables (BlockFacts::load_pair).
     let (facts, behaviours) = BlockFacts::load_pair(&root, assets.registry)?;
@@ -114,28 +115,15 @@ fn main() -> Result<()> {
     step("light tables");
     let tables = MeshTables::new(
         &assets,
+        &render,
         &facts,
         models::load_visibility(&root, assets.registry)?,
     )?;
     step("mesh tables");
     let collision = collisions::load(&root, assets.registry)?;
     step("collision");
-    let motion = MotionResources::load(&root, &assets)?;
+    let motion = MotionResources::load_with_facts(&root, &assets, &facts)?;
     step("motion");
-    for name in [
-        "worldgen/blocks/block-properties.nbt",
-        "worldgen/blocks/cached-collision.nbt",
-        "worldgen/blocks/cached-support.nbt",
-        "cached-collision.nbt",
-        "occlusion.nbt",
-        "movement-properties.nbt",
-    ] {
-        let bytes = std::fs::read(root.join(name))?;
-        let tree = horizon_world::nbt::read_named(&bytes, horizon_world::nbt::Limits::tables())?;
-        step(&format!("  tree of {name}"));
-        drop((tree, bytes));
-        step("  dropped");
-    }
     let terrain = VanillaTerrain::new(&root.join("worldgen"), assets.registry, &biomes, 1234)?;
     step("worldgen");
     println!(

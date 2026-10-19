@@ -10,7 +10,7 @@
 //! player joins as a network player, and the server side of a network player
 //! does not do everything single player does yet.
 use super::{
-    Game, Options, PackResources, Resources,
+    Game, Options, PackResources, Resources, UiResources,
     lan::{LanSettings, Owner},
 };
 use horizon_client::{
@@ -28,7 +28,7 @@ use std::{
     path::Path,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicI32, AtomicU16, AtomicU32, Ordering},
         mpsc::{Receiver, Sender, channel, sync_channel},
     },
     thread::JoinHandle,
@@ -45,6 +45,10 @@ struct Flags {
     /// while it is not.
     published: AtomicU16,
     smoothed_tick_ms: AtomicU32,
+    /// `options.renderDistance` and `options.simulationDistance`, which the
+    /// server follows while it runs (IntegratedServer.tickServer).
+    render_distance: AtomicI32,
+    simulation_distance: AtomicI32,
 }
 
 /// Work the window hands its server thread (`MinecraftServer.execute`).
@@ -65,6 +69,13 @@ impl Integrated {
     /// `IntegratedServer.tickServer` skips the world while the game is paused.
     pub fn set_paused(&self, paused: bool) {
         self.flags.paused.store(paused, Ordering::Relaxed);
+    }
+    /// The window's render and simulation distances, for the server to follow.
+    pub fn set_distances(&self, render: i32, simulation: i32) {
+        self.flags.render_distance.store(render, Ordering::Relaxed);
+        self.flags
+            .simulation_distance
+            .store(simulation, Ordering::Relaxed);
     }
     /// `IntegratedServer.getPort` while `isPublished`.
     pub fn published(&self) -> Option<u16> {
@@ -190,14 +201,23 @@ impl Game<'_> {
         options.server = None;
         options.world = None;
         options.dev_mods.clear();
+        self.join_world_rest()?;
         let (res, pack, settings) = (self.res.clone(), self.pack.clone(), self.settings.clone());
         let flags = Arc::new(Flags::default());
+        flags
+            .render_distance
+            .store(settings.render_distance, Ordering::Relaxed);
+        flags
+            .simulation_distance
+            .store(settings.simulation_distance, Ordering::Relaxed);
         let (ready_tx, ready) = channel();
         let (tasks, server_tasks) = channel();
         let server_flags = flags.clone();
         let thread = std::thread::Builder::new()
             .name("Server thread".into())
             .spawn(move || {
+                // MinecraftServer.spin's Thread.setPriority(8).
+                horizon_threads::favour_current();
                 let result = serve(
                     &res,
                     pack,
@@ -249,7 +269,9 @@ impl Game<'_> {
             launch.create.as_ref(),
         )?;
         let saved = Box::new(self.level.clone());
-        let view_distance = self.settings.render_distance.clamp(2, 32);
+        // Math.max(2, options.renderDistance): past vanilla's 32 when the
+        // window's render distance is (Horizon's options go to 64).
+        let view_distance = self.settings.render_distance.max(2);
         let config = HubConfig {
             default_game_mode: self.level.mode(),
             // Only the owner until it is opened to the LAN.
@@ -257,7 +279,7 @@ impl Game<'_> {
             force_game_mode: false,
             hardcore: self.level.hardcore,
             view_distance,
-            simulation_distance: self.settings.simulation_distance.clamp(2, 32),
+            simulation_distance: self.settings.simulation_distance.max(2),
             dimension: self.dim.id().to_owned(),
             seed: self.level.seed,
             max_players: MAX_PLAYERS,
@@ -297,6 +319,7 @@ impl Game<'_> {
             // The owner is an operator when the world allows commands
             // (`IntegratedPlayerList`, `MinecraftServer.getProfilePermissions`).
             host.hub.ops.insert(owner, if commands { 4 } else { 0 });
+            host.hub.singleplayer_owner = Some(owner);
             host.owner = Some(Owner {
                 uuid: owner,
                 saved: Some(saved),
@@ -316,10 +339,11 @@ impl Game<'_> {
             self.run_tasks();
             if flags.paused.load(Ordering::Relaxed) {
                 // Only the connections run.
-                self.tick_server(true)?;
+                self.tick_server_timed(true)?;
             } else {
+                self.follow_distances(&flags);
                 let started = Instant::now();
-                self.tick_server(false)?;
+                self.tick_server_timed(false)?;
                 self.debug_charts.log_tick(started, started.elapsed());
                 flags.smoothed_tick_ms.store(
                     self.debug_charts.smoothed_tick_ms.to_bits(),
@@ -389,6 +413,60 @@ impl Game<'_> {
     pub(super) fn serving(&self) -> bool {
         self.serving.is_some()
     }
+    /// The window's agent runs a command as single player's console does
+    /// (`as_console`, as without a server thread): as the world's owner, in
+    /// the owner's level, at the owner permission level. The feedback goes to
+    /// the owner's chat and is returned.
+    pub(super) fn owner_console_command(&mut self, command: &str) -> Vec<String> {
+        let Some(owner) = self.serving.as_ref().map(|s| s.owner) else {
+            return Vec::new();
+        };
+        let Some(mut host) = self.lan.take() else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        if let Some(g) = host.hub.guests.iter().find(|g| g.uuid == owner && g.placed) {
+            let conn = g.conn;
+            // Commands.performCommand runs in the player's level.
+            let (back, theirs) = (self.dim, super::Dim::from_id(&g.dimension));
+            let entered = theirs == back || self.enter_level(Some(&mut host), theirs).is_ok();
+            if entered {
+                let command = command.trim_start_matches('/').to_owned();
+                let lines = self.as_guest(&mut host, conn, |g| {
+                    g.as_console(|g| {
+                        g.chat_capture = Some(Vec::new());
+                        g.run_command(&command);
+                        g.chat_capture.take().unwrap_or_default()
+                    })
+                });
+                // A teleport into another level happens before its feedback is sent.
+                self.run_level_teleports(&mut host);
+                for line in lines.unwrap_or_default() {
+                    out.push(line.plain());
+                    host.hub.send_to(
+                        conn,
+                        &horizon_protocol::packets::play::Clientbound::SystemChat(
+                            horizon_protocol::packets::play::SystemChat {
+                                content: horizon_client::lan::data::component_nbt(
+                                    &line.component(),
+                                ),
+                                overlay: false,
+                            },
+                        ),
+                    );
+                }
+                self.send_admin_feedback(&mut host, Some(conn));
+            }
+            if theirs != back
+                && let Err(e) = self.enter_level(Some(&mut host), back)
+            {
+                log::error!("could not reopen {}: {e}", back.id());
+            }
+        }
+        self.lan = Some(host);
+        out
+    }
+
     /// The window's requests, between two ticks.
     fn run_tasks(&mut self) {
         let tasks: Vec<Task> = match &self.serving {
@@ -438,6 +516,28 @@ impl Game<'_> {
     }
     /// Publish or unpublish for real, once the hub is in its place (a
     /// player's `/publish` runs while it is out).
+    /// IntegratedServer.tickServer: the server follows the window's render
+    /// and simulation distances when they change.
+    fn follow_distances(&mut self, flags: &Flags) {
+        let Some(host) = self.lan.as_mut() else {
+            return;
+        };
+        let view = flags.render_distance.load(Ordering::Relaxed).max(2);
+        let old = host.hub.config.view_distance;
+        if view != old {
+            log::info!("Changing view distance to {view}, from {old}");
+            host.hub.set_view_distance(view);
+            self.settings.render_distance = view;
+        }
+        let simulation = flags.simulation_distance.load(Ordering::Relaxed).max(2);
+        let old = host.hub.config.simulation_distance;
+        if simulation != old {
+            log::info!("Changing simulation distance to {simulation}, from {old}");
+            host.hub.set_simulation_distance(simulation);
+            self.settings.simulation_distance = simulation;
+        }
+    }
+
     fn apply_publish(&mut self) {
         if self.lan.is_none() {
             return;
@@ -552,7 +652,14 @@ fn serve(
 ) -> Result<()> {
     // It draws nothing: only the font, which books and chat measure with.
     let atlas = HudAtlas::fonts(&options.resources)?;
+    let gui = UiResources {
+        atlas,
+        panorama: Arc::new(horizon_client::gfx::panorama::Faces {
+            size: 1,
+            pixels: [0u8; 4].repeat(6),
+        }),
+    };
     let audio = Audio::silent(&options.resources);
-    let mut server = Game::new(res, pack, atlas, options, settings, audio)?;
+    let mut server = Game::new(res, pack, gui, options, settings, audio)?;
     server.run_integrated(launch, flags, tasks, ready)
 }

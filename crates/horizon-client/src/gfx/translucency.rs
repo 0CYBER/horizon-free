@@ -47,6 +47,25 @@ impl SortState {
         self.last.is_some()
     }
 
+    /// Large tiles cannot use the section viewpoint shortcut: the camera may
+    /// cross a quad's plane while remaining on the same side of the first 16³.
+    pub fn update_lod<'a>(
+        &mut self,
+        camera: [f64; 3],
+        origin: [i32; 3],
+        sorter: &'a mut Sorter,
+    ) -> Option<&'a [u32]> {
+        let block = camera.map(|v| v.floor() as i32);
+        if self.last.is_some_and(|(last, _)| last == block) {
+            return None;
+        }
+        self.last = Some((block, [0; 3]));
+        Some(sorter.sort(
+            &self.centers,
+            std::array::from_fn(|i| (camera[i] - f64::from(origin[i])) as f32),
+        ))
+    }
+
     /// TranslucencyPointOfView and ResortTransparencyTask: diagonal views keep
     /// their ordering until the point of view changes; aligned views also
     /// resort on crossing a block boundary. Sub-block movement needs no upload.
@@ -114,6 +133,30 @@ mod tests {
             state
                 .update([-29_999_998.9, -63.1, 30_000_000.9], origin, &mut sorter)
                 .is_some()
+        );
+    }
+    #[test]
+    fn large_tiles_resort_inside_the_same_section_viewpoint() {
+        let mut state = SortState::new(vec![[32.0, 0.0, 0.0], [96.0, 0.0, 0.0]]);
+        let mut sorter = Sorter::default();
+        assert_eq!(
+            state
+                .update_lod([48.0, 20.0, 20.0], [0; 3], &mut sorter)
+                .unwrap()[0],
+            4
+        );
+        assert!(
+            state
+                .update_lod([48.5, 20.0, 20.0], [0; 3], &mut sorter)
+                .is_none()
+        );
+        // Both views have positive x/y/z signs relative to the first section,
+        // so the section-sized shortcut would incorrectly keep the old order.
+        assert_eq!(
+            state
+                .update_lod([80.0, 20.0, 20.0], [0; 3], &mut sorter)
+                .unwrap()[0],
+            0
         );
     }
 }

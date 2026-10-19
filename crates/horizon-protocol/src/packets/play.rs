@@ -2,9 +2,9 @@
 use crate::{
     Error, Result,
     buf::{
-        Bool, Byte, ChunkPos, Codec, Double, Float, Ident, Int, List, Long, LpVec3, Nbt, Opt,
-        OptVarInt, Pos, Reader, SectionPos, Short, Str, StrN, UByte, Uuid, VarInt, VarLong, Vec3d,
-        Writer,
+        Bool, Byte, BytesN, ChunkPos, Codec, Double, Float, Ident, Int, List, Long, LpVec3, Nbt,
+        Opt, OptVarInt, Pos, Reader, SectionPos, Short, Str, StrN, UByte, Uuid, VarInt, VarLong,
+        Vec3d, Writer,
     },
     chunk::{ChunkData, LightData},
     entity_data::{EntityData, Value},
@@ -244,6 +244,18 @@ packet!(EntityPositionSync { id: i32 => VarInt, path: PositionPath => PositionPa
 packet!(ForgetLevelChunk { pos: [i32; 2] => ChunkPos });
 packet!(GameEvent { event: u8 => UByte, param: f32 => Float });
 packet!(HurtAnimation { id: i32 => VarInt, yaw: f32 => Float });
+packet!(
+    /// ClientboundDamageEventPacket: the hurt entity, the damage type's
+    /// registry id, the causing and the direct entity (none: -1 on the wire's
+    /// id + 1) and the source's position.
+    DamageEvent {
+        id: i32 => VarInt,
+        source_type: i32 => VarInt,
+        cause: Option<i32> => OptVarInt,
+        direct: Option<i32> => OptVarInt,
+        position: Option<[f64; 3]> => Opt<Vec3d>,
+    }
+);
 packet!(LevelChunkWithLight { x: i32 => Int, z: i32 => Int, chunk: ChunkData => ChunkData, light: LightData => LightData });
 packet!(LevelEvent { kind: i32 => Int, pos: [i32; 3] => Pos, data: i32 => Int, global: bool => Bool });
 packet!(LightUpdate { x: i32 => VarInt, z: i32 => VarInt, light: LightData => LightData });
@@ -567,6 +579,10 @@ packet!(PlayerPosition {
     pitch: f32 => Float,
     relatives: i32 => Int,
 });
+packet!(
+    /// ClientboundProjectilePowerPacket: an AbstractHurtingProjectile's accelerationPower.
+    ProjectilePower { id: i32 => VarInt, power: f64 => Double }
+);
 packet!(PlayerRotation { yaw: f32 => Float, relative_yaw: bool => Bool, pitch: f32 => Float, relative_pitch: bool => Bool });
 packet!(RemoveEntities { ids: Vec<i32> => List<VarInt> });
 packet!(Respawn { spawn: SpawnInfo => SpawnInfo, keep: i8 => Byte });
@@ -590,6 +606,10 @@ packet!(SetCursorItem { item: Option<Stack> => Slot });
 packet!(SetDefaultSpawnPosition { pos: GlobalPos => GlobalPos, yaw: f32 => Float, pitch: f32 => Float });
 packet!(SetEntityData { id: i32 => VarInt, values: Vec<(u8, i32, Value)> => EntityData });
 packet!(SetEntityMotion { id: i32 => VarInt, velocity: [f64; 3] => LpVec3 });
+packet!(
+    /// ClientboundSetPassengersPacket: a vehicle and every entity riding it.
+    SetPassengers { vehicle: i32 => VarInt, passengers: Vec<i32> => List<VarInt> }
+);
 /// ClientboundSetEquipmentPacket: (EquipmentSlot ordinal, stack) pairs.
 pub struct Equipment;
 impl Codec<Vec<(u8, Option<Stack>)>> for Equipment {
@@ -873,6 +893,24 @@ packet!(
     UpdateMobEffect { id: i32 => VarInt, effect: i32 => VarInt, amplifier: i32 => VarInt, duration: i32 => VarInt, flags: i8 => Byte }
 );
 packet!(RemoveMobEffect { id: i32 => VarInt, effect: i32 => VarInt });
+packet!(
+    /// AttributeModifier.STREAM_CODEC: id, amount and operation (0 add_value,
+    /// 1 add_multiplied_base, 2 add_multiplied_total).
+    AttributeModifier { id: String => Ident, amount: f64 => Double, operation: i32 => VarInt }
+);
+packet!(
+    /// ClientboundUpdateAttributesPacket.AttributeSnapshot: the attribute's
+    /// registry id, its base value and every modifier.
+    AttributeSnapshot {
+        attribute: i32 => VarInt,
+        base: f64 => Double,
+        modifiers: Vec<AttributeModifier> => List<AttributeModifier>,
+    }
+);
+packet!(
+    /// ClientboundUpdateAttributesPacket: an entity's synced attribute instances.
+    UpdateAttributes { id: i32 => VarInt, values: Vec<AttributeSnapshot> => List<AttributeSnapshot> }
+);
 packet!(
     /// ClientboundSwingAnimationPacket: hand (0 main, 1 off) and the swing
     /// type (0 none, 1 whack, 2 stab) with its duration in ticks.
@@ -1380,6 +1418,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     GameEvent(GameEvent) = GAME_EVENT,
     GameRuleValues(GameRuleValues) = GAME_RULE_VALUES,
     HurtAnimation(HurtAnimation) = HURT_ANIMATION,
+    DamageEvent(DamageEvent) = DAMAGE_EVENT,
     KeepAlive(KeepAlive) = KEEP_ALIVE,
     InitializeBorder(InitializeBorder) = INITIALIZE_BORDER,
     LevelChunkWithLight(LevelChunkWithLight) = LEVEL_CHUNK_WITH_LIGHT,
@@ -1426,6 +1465,8 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     SetHealth(SetHealth) = SET_HEALTH,
     SetHeldSlot(SetHeldSlot) = SET_HELD_SLOT,
     SetObjective(SetObjective) = SET_OBJECTIVE,
+    SetPassengers(SetPassengers) = SET_PASSENGERS,
+    ProjectilePower(ProjectilePower) = PROJECTILE_POWER,
     SetPlayerInventory(SetPlayerInventory) = SET_PLAYER_INVENTORY,
     SetPlayerTeam(SetPlayerTeam) = SET_PLAYER_TEAM,
     SetScore(SetScore) = SET_SCORE,
@@ -1445,6 +1486,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     TickingState(TickingState) = TICKING_STATE,
     TickingStep(TickingStep) = TICKING_STEP,
     UpdateAdvancements(UpdateAdvancements) = UPDATE_ADVANCEMENTS,
+    UpdateAttributes(UpdateAttributes) = UPDATE_ATTRIBUTES,
     UpdateMobEffect(UpdateMobEffect) = UPDATE_MOB_EFFECT,
     UpdateTags(UpdateTags) = UPDATE_TAGS,
     TrackedWaypoint(TrackedWaypoint) = WAYPOINT,
@@ -1594,6 +1636,42 @@ packet!(Chat {
     last_seen: LastSeenUpdate => LastSeenUpdate,
 });
 packet!(ChatCommand { command: String => Str });
+packet!(ChatAck { offset: i32 => VarInt });
+/// ArgumentSignatures: each signed argument's name (at most 16 chars) and
+/// signature, at most 8.
+pub struct ArgumentSignatures;
+impl Codec<Vec<(String, Vec<u8>)>> for ArgumentSignatures {
+    fn read(r: &mut Reader) -> Result<Vec<(String, Vec<u8>)>> {
+        let n = r.count(8)?;
+        (0..n)
+            .map(|_| Ok((r.string(16)?, r.bytes(256)?.to_vec())))
+            .collect()
+    }
+    fn write(v: &Vec<(String, Vec<u8>)>, w: &mut Writer) {
+        w.varint(v.len() as i32);
+        for (name, signature) in v {
+            w.string(name);
+            w.bytes(signature);
+        }
+    }
+}
+packet!(ChatCommandSigned {
+    command: String => Str,
+    timestamp: i64 => Long,
+    salt: i64 => Long,
+    arguments: Vec<(String, Vec<u8>)> => ArgumentSignatures,
+    last_seen: LastSeenUpdate => LastSeenUpdate,
+});
+packet!(
+    /// RemoteChatSession.Data: the session id, then ProfilePublicKey.Data
+    /// (expiry in epoch milliseconds, X.509 key, the services' signature).
+    ChatSessionUpdate {
+        session: u128 => Uuid,
+        expires_at: i64 => Long,
+        key: Vec<u8> => BytesN<512>,
+        key_signature: Vec<u8> => BytesN<4096>,
+    }
+);
 packet!(ChangeDifficultyRequest { difficulty: i32 => VarInt });
 packet!(LockDifficulty { locked: bool => Bool });
 packet!(SetGameRule { entries: Vec<GameRuleEntry> => List<GameRuleEntry> });
@@ -1687,7 +1765,10 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     Attack(Attack) = ATTACK,
     ChangeGameMode(ChangeGameMode) = CHANGE_GAME_MODE,
     Chat(Chat) = CHAT,
+    ChatAck(ChatAck) = CHAT_ACK,
     ChatCommand(ChatCommand) = CHAT_COMMAND,
+    ChatCommandSigned(ChatCommandSigned) = CHAT_COMMAND_SIGNED,
+    ChatSessionUpdate(ChatSessionUpdate) = CHAT_SESSION_UPDATE,
     PlaceRecipe(super::recipes::PlaceRecipe) = PLACE_RECIPE,
     ChunkBatchReceived(ChunkBatchReceived) = CHUNK_BATCH_RECEIVED,
     ClientCommand(ClientCommand) = CLIENT_COMMAND,
@@ -2052,9 +2133,33 @@ mod tests {
                 id: 2,
                 velocity: [0.0; 3],
             }),
+            Clientbound::SetPassengers(SetPassengers {
+                vehicle: 2,
+                passengers: vec![3, 300],
+            }),
+            Clientbound::ProjectilePower(ProjectilePower { id: 4, power: 0.1 }),
             Clientbound::SetEquipment(SetEquipment {
                 id: 2,
                 slots: vec![(0, None), (5, Some(Stack::new(1, 1)))],
+            }),
+            Clientbound::UpdateAttributes(UpdateAttributes {
+                id: 2,
+                values: vec![AttributeSnapshot {
+                    attribute: 26,
+                    base: 0.23,
+                    modifiers: vec![AttributeModifier {
+                        id: "minecraft:baby".into(),
+                        amount: 0.5,
+                        operation: 1,
+                    }],
+                }],
+            }),
+            Clientbound::DamageEvent(DamageEvent {
+                id: 7,
+                source_type: 31,
+                cause: Some(0),
+                direct: None,
+                position: Some([1.5, -2.0, 3.25]),
             }),
             Clientbound::SetHealth(SetHealth {
                 health: 17.5,
@@ -2169,6 +2274,24 @@ mod tests {
             Serverbound::ChatCommand(ChatCommand {
                 command: "time set day".into(),
             }),
+            Serverbound::ChatAck(ChatAck { offset: 3 }),
+            Serverbound::ChatCommandSigned(ChatCommandSigned {
+                command: "say hi".into(),
+                timestamp: 1_700_000_000_000,
+                salt: -5,
+                arguments: vec![("message".into(), vec![9; 256])],
+                last_seen: LastSeenUpdate {
+                    offset: 1,
+                    acknowledged: [1, 0, 8],
+                    checksum: -3,
+                },
+            }),
+            Serverbound::ChatSessionUpdate(ChatSessionUpdate {
+                session: 0x1234,
+                expires_at: 1_800_000_000_000,
+                key: vec![0x30; 294],
+                key_signature: vec![7; 512],
+            }),
             Serverbound::ChunkBatchReceived(ChunkBatchReceived {
                 chunks_per_tick: 9.5,
             }),
@@ -2274,5 +2397,32 @@ mod tests {
             Clientbound::Unknown(crate::ids::play::clientbound::BOSS_EVENT, vec![1, 2, 3])
         );
         assert_eq!(p.encode()[1..], [1, 2, 3]);
+    }
+
+    #[test]
+    fn update_attributes_encode_like_vanilla() {
+        let p = Clientbound::UpdateAttributes(UpdateAttributes {
+            id: 5,
+            values: vec![AttributeSnapshot {
+                attribute: 1,
+                base: 0.0,
+                modifiers: vec![AttributeModifier {
+                    id: "minecraft:armor.helmet".into(),
+                    amount: 3.0,
+                    operation: 0,
+                }],
+            }],
+        });
+        let body = p.encode();
+        // The packet id (134) is a two-byte VarInt.
+        let mut expected = vec![134, 1, 5, 1, 1];
+        expected.extend(0.0f64.to_be_bytes());
+        expected.extend([1, 22]);
+        expected.extend(b"minecraft:armor.helmet");
+        expected.extend(3.0f64.to_be_bytes());
+        expected.push(0);
+        assert_eq!(body, expected);
+        assert_eq!(crate::ids::play::clientbound::UPDATE_ATTRIBUTES, 134);
+        assert_eq!(Clientbound::decode(134, &body[2..]).unwrap(), p);
     }
 }

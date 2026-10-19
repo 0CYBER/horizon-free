@@ -170,13 +170,15 @@ fn chunks_left_behind_keep_their_decoration() {
         return;
     };
     let assets = Arc::new(Assets::load(&root).unwrap());
+    let render = Arc::new(assets.reload(&root).unwrap());
     let facts = BlockFacts::load(&root, assets.registry).unwrap();
     let visibility = models::load_visibility(&root, assets.registry).unwrap();
     let context = Arc::new(WorkerContext {
-        tables: Arc::new(MeshTables::new(&assets, &facts, visibility).unwrap()),
+        tables: Arc::new(MeshTables::new(&assets, &render, &facts, visibility).unwrap()),
         light: Arc::new(LightTables::load(&root, assets.registry, &facts).unwrap()),
         biomes: Arc::new(Biomes::load(&root).unwrap()),
         assets,
+        render: render.clone(),
     });
     let generator = Arc::new(Recorder::default());
     let mut session = Session::new(generator.clone(), context.clone());

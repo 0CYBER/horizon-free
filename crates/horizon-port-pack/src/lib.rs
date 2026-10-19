@@ -14,4 +14,6 @@ pub mod jar;
 pub mod modrinth;
 pub mod oracle;
 pub mod pipeline;
+pub mod processors;
 pub mod report;
+pub mod worldgen;

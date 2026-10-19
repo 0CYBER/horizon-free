@@ -1,7 +1,8 @@
 //! Multiplayer session: a network thread that connects to a server, logs in,
 //! runs the configuration phase and then forwards decoded play packets to the
-//! game thread. Keep-alives and pings are answered on the network thread like
-//! vanilla's connection handlers so a busy frame never times the client out.
+//! game thread. Keep-alives are answered on the network thread; pings wait for
+//! the game thread, like ClientCommonPacketListenerImpl.handlePing, so a pong
+//! cannot overtake an earlier world update or teleport acknowledgement.
 //! Online-mode servers need the Microsoft account the launcher signed in
 //! (crate::auth): the login joins the server through the session service and
 //! encrypts the connection (ClientHandshakePacketListenerImpl.handleHello).
@@ -382,8 +383,17 @@ fn run(
         uuid: profile.uuid,
         name: profile.name,
     });
+    receive_play(&mut reader, shared_writer, lang, send)
+}
+
+fn receive_play(
+    reader: &mut ConnReader,
+    shared_writer: &Mutex<Option<ConnWriter>>,
+    lang: &Language,
+    send: &Sender<Event>,
+) -> Result<String, String> {
     loop {
-        let (id, payload) = reader.recv().map_err(e)?;
+        let (id, payload) = reader.recv().map_err(|e| e.to_string())?;
         let packet = match play::Clientbound::decode(id, &payload) {
             Ok(p) => p,
             Err(err) => {
@@ -404,7 +414,6 @@ fn run(
         };
         match packet {
             play::Clientbound::KeepAlive(k) => reply(play::Serverbound::KeepAlive(k)),
-            play::Clientbound::Ping(p) => reply(play::Serverbound::Pong(p)),
             play::Clientbound::BundleDelimiter(_) => {}
             play::Clientbound::ResourcePackPush(p) => {
                 // Declined: Horizon has no server resource packs.
@@ -415,7 +424,7 @@ fn run(
             }
             play::Clientbound::StartConfiguration(_) => {
                 reply(play::Serverbound::ConfigurationAcknowledged(Empty));
-                let registries = configure(&mut reader, shared_writer, lang, send)?;
+                let registries = configure(reader, shared_writer, lang, send)?;
                 let _ = send.send(Event::Reconfigured(Arc::new(registries)));
             }
             play::Clientbound::Disconnect(d) => return Ok(plain(&d.reason, lang)),
@@ -584,6 +593,50 @@ pub fn ping(address: &str, timeout: Duration) -> Result<(serde_json::Value, u128
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pings_wait_behind_teleports_but_keepalives_do_not_wait_for_the_game() {
+        let (client, server) = horizon_protocol::connection::Pipe::pair();
+        let (mut reader, writer) = Connection::local(client).split();
+        let writer = Arc::new(Mutex::new(Some(writer)));
+        let (send, events) = channel();
+        let thread_writer = writer.clone();
+        let thread = std::thread::spawn(move || {
+            receive_play(&mut reader, &thread_writer, &Language::new(), &send)
+        });
+        let mut server = Connection::local(server);
+        let teleport = play::Clientbound::PlayerPosition(play::PlayerPosition {
+            teleport: 42,
+            position: [10.0, 64.0, 10.0],
+            delta: [0.0; 3],
+            yaw: 90.0,
+            pitch: 0.0,
+            relatives: 0,
+        });
+        server.send(&teleport.encode()).unwrap();
+        server
+            .send(&play::Clientbound::Ping(cfg::Ping { id: 7 }).encode())
+            .unwrap();
+        // A reply to this proves the receive loop has passed the ping. The
+        // old implementation instead replies with Pong before this keepalive.
+        server
+            .send(&play::Clientbound::KeepAlive(cfg::KeepAlive { id: 9 }).encode())
+            .unwrap();
+        let (id, body) = server.recv().unwrap();
+        assert_eq!(
+            play::Serverbound::decode(id, &body).unwrap(),
+            play::Serverbound::KeepAlive(cfg::KeepAlive { id: 9 })
+        );
+        let timeout = Duration::from_secs(5);
+        assert!(
+            matches!(events.recv_timeout(timeout).unwrap(), Event::Packet(p) if *p == teleport)
+        );
+        assert!(
+            matches!(events.recv_timeout(timeout).unwrap(), Event::Packet(p) if *p == play::Clientbound::Ping(cfg::Ping { id: 7 }))
+        );
+        writer.lock().unwrap().take().unwrap().shutdown();
+        assert!(thread.join().unwrap().is_err());
+    }
 
     #[test]
     fn server_brand_payload_is_decoded_and_invalid_or_unrelated_payloads_are_ignored() {

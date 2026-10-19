@@ -18,18 +18,28 @@ except ImportError:
 
 def corpus(facts):
     def bits(v):return struct.pack('>d',float(v)).hex()
-    def row(state,delta=(1,-0.08,0),step=0.6,grounded=True,context=2,offset=0,fail=-1,extra=(),entities=(),border=None):
+    def row(state,delta=(1,-0.08,0),step=0.6,grounded=True,context=2,offset=0,fail=-1,extra=(),entities=(),border=None,box=None):
         blocks=[[x+offset,-1,z,facts['defaults']['minecraft:stone']] for x in range(-2,4) for z in range(-2,3)]
         blocks.append([offset,0,0,state]);blocks.extend(extra)
         return dict(chunks=[[x,z] for x in range((offset>>4)-1,(offset>>4)+2) for z in range(-1,2)],
                     blocks=blocks,context=context,y=bits(0),entities=[0,0],fail=fail,limit=100000,suffocating=False,
-                    box=list(map(bits,[-0.6+offset,0,0.2,-0.2+offset,1.8,0.8])),
+                    box=list(map(bits,box if box is not None else [-0.6+offset,0,0.2,-0.2+offset,1.8,0.8])),
                     movement=dict(delta=list(map(bits,delta)),step=bits(step),grounded=grounded,
                                   entities=[list(map(bits,b)) for b in entities],border=None if border is None else list(map(bits,border))))
     states=facts['states']
     for state in range(len(states)):
         yield row(state,context=state%4)
     defaults=facts['defaults']
+    falling_surfaces=[('minecraft:stone_slab',0.5),('minecraft:oak_stairs',1.0),('minecraft:snow',0.125),
+                      ('minecraft:oak_fence',1.5),('minecraft:iron_bars',1.0),('minecraft:soul_sand',0.875),
+                      ('minecraft:farmland',0.9375)]
+    for block_id,top in falling_surfaces:
+        state=defaults[block_id]
+        size=struct.unpack('>f',struct.pack('>f',0.98))[0]
+        half=size/2
+        bottom=top+0.1
+        box=[0.5-half,bottom,0.5-half,0.5+half,bottom+size,0.5+half]
+        yield row(state,delta=(0,-0.25,0),step=0,grounded=False,context=2,box=box)
     obstacles=[i for i,s in enumerate(states) if s['id'] in ['minecraft:oak_stairs','minecraft:stone_slab',
                'minecraft:snow','minecraft:scaffolding','minecraft:powder_snow','minecraft:water',
                'minecraft:shulker_box','minecraft:moving_piston','minecraft:piston','minecraft:soul_sand',
@@ -114,7 +124,7 @@ def main():
               'definition_counts':dict(collections.Counter(definitions.values())),
               'native_chunk_storage':'ProtoChunk', 'rust_chunk_storage':'TerrainChunk', 'fixtures':count, 'sources_sha256':tested, 'fixtures_sha256':fixtures,
               'rust_output_sha256':lab.digest(build/'rust.txt', 'sha256'), 'references':references,
-              'scope':'Actual native Entity.collide executes initial collision and step-up decisions over BlockCollisions, registered block shapes and resident ProtoChunk sections. Rust combines owned/fallible step resolution with registry-bound TerrainChunk scanning. All registered states are used as obstacles, plus step heights, falling/grounded motion, zero and underflow motion, partial blocks, fluids, dynamic blocks, ceilings, chunk boundaries and query failures. Entity collider lists and world-border proximity/shape are controlled inputs; query order and reuse, shape collection and resulting displacement are compared. Contexts are deliberately supplied empty/position/placement snapshots in both worlds. This does not establish entity broad-phase selection, actual world-border proximity, travel/gravity/velocity or grounded side effects, experimental minecarts or a playable game.'}
+              'scope':'Actual native Entity.collide executes initial collision and step-up decisions over BlockCollisions, registered block shapes and resident ProtoChunk sections. Rust combines owned/fallible step resolution with registry-bound TerrainChunk scanning. All registered states are used as obstacles, plus step heights, falling/grounded motion, zero and underflow motion, partial blocks including exact falling-block-sized boxes over slabs, stairs, snow, fences, iron bars, soul sand and farmland, fluids, dynamic blocks, ceilings, chunk boundaries and query failures. Entity collider lists and world-border proximity/shape are controlled inputs; query order and reuse, shape collection and resulting displacement are compared. Contexts are deliberately supplied empty/position/placement snapshots in both worlds. This does not establish entity broad-phase selection, actual world-border proximity, travel/gravity/velocity or grounded side effects, experimental minecarts or a playable game.'}
     lab.write_json(report_path, report);print(f'Scoped world movement parity passed: {report_path}', flush=True)
 
 

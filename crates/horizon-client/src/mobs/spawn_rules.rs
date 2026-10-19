@@ -589,11 +589,7 @@ impl SpawnLevel for super::MobWorld<'_> {
         self.sea_level
     }
     fn world_surface(&self, x: i32, z: i32) -> i32 {
-        let top = crate::chunk::MIN_Y + crate::chunk::HEIGHT;
-        (crate::chunk::MIN_Y..top)
-            .rev()
-            .find(|&y| !self.facts.is_air(self.world.block(x, y, z)))
-            .map_or(crate::chunk::MIN_Y, |y| y + 1)
+        self.world.world_surface(x, z, |id| self.facts.is_air(id))
     }
     fn peaceful(&self) -> bool {
         self.difficulty.effective == 0.0

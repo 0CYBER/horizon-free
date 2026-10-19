@@ -106,7 +106,7 @@ impl adv::World for View<'_, '_> {
             .map(|c| {
                 self.0
                     .res
-                    .biomes
+                    .biomes()
                     .get(c.biome(p[0], p[1], p[2]))
                     .name
                     .clone()
@@ -118,7 +118,7 @@ impl adv::World for View<'_, '_> {
     }
     fn block(&self, p: [i32; 3]) -> (String, BTreeMap<String, String>) {
         let state = self.0.world.block(p[0], p[1], p[2]);
-        let name = self.0.res.facts.get(state).name.to_string();
+        let name = self.0.res.facts().get(state).name.to_string();
         let props = self
             .0
             .pack
@@ -138,7 +138,7 @@ impl adv::World for View<'_, '_> {
         match self
             .0
             .res
-            .facts
+            .facts()
             .get(self.0.world.block(p[0], p[1], p[2]))
             .fluid
         {
@@ -152,7 +152,7 @@ impl adv::World for View<'_, '_> {
             !self
                 .0
                 .res
-                .facts
+                .facts()
                 .get(self.0.world.block(p[0], y, p[2]))
                 .full_collision
         })
@@ -165,19 +165,19 @@ impl adv::World for View<'_, '_> {
         (1..=5).any(|d| {
             self.0
                 .res
-                .facts
+                .facts()
                 .get(self.0.world.block(p[0], p[1] - d, p[2]))
                 .name
                 .ends_with("campfire")
         })
     }
     fn in_tag(&self, registry: &str, tag: &str, id: &str) -> bool {
-        let items = &self.0.res.items;
+        let items = &self.0.res.items();
         match registry {
             "item" => items.item_tags.get(tag).is_some_and(|t| t.contains(id)),
             "block" => items.block_tags.get(tag).is_some_and(|t| t.contains(id)),
-            "entity_type" => self.0.res.mob_data.entity_has(tag, id),
-            "worldgen/biome" => self.0.res.mob_data.biome_has(tag, id),
+            "entity_type" => self.0.res.mob_data().entity_has(tag, id),
+            "worldgen/biome" => self.0.res.mob_data().biome_has(tag, id),
             _ => false,
         }
     }
@@ -408,6 +408,9 @@ impl Game<'_> {
                 }
             }
         }
+        if hits.is_empty() {
+            return;
+        }
         let date = now_text();
         for (ai, ci) in hits {
             let a = &tree.list[ai];
@@ -454,17 +457,17 @@ impl Game<'_> {
             .rewards
             .recipes
             .iter()
-            .filter(|r| self.res.stations.recipe_index.contains(r))
+            .filter(|r| self.res.stations().recipe_index.contains(r))
             .cloned()
             .collect();
         let (_, unlocked) = self
             .level
             .recipe_book
-            .add_recipes(&self.res.stations.recipe_index, &rewards);
+            .add_recipes(&self.res.stations().recipe_index, &rewards);
         for table in &a.rewards.loot {
             let items = self
                 .res
-                .items
+                .items()
                 .loot_table(table, false, None, &mut self.world.random);
             for s in items {
                 if let Some(rest) = self.give(s)
@@ -497,10 +500,13 @@ impl Game<'_> {
                 // PlayerList.broadcastSystemMessage: everyone hears of a
                 // network player's advancement.
                 match self.lan_acting_name.clone() {
-                    Some(player) => self
-                        .adv
-                        .announced
-                        .push(Text::translate(key, &[Text::literal(&player), name])),
+                    // Player.getDisplayName.
+                    Some(_) => {
+                        let player = self.target_name(super::commands::Target::Player);
+                        self.adv
+                            .announced
+                            .push(Text::translate(key, &[player, name]));
+                    }
                     None => self.system_message(Text::translate(
                         key,
                         &[Text::literal(super::chat::PLAYER_NAME), name],
@@ -549,7 +555,7 @@ impl Game<'_> {
             .filter_map(|s| s.as_ref())
             .filter(|s| {
                 self.res
-                    .items
+                    .items()
                     .get(&s.item)
                     .is_some_and(|i| s.count >= i.max_stack)
             })
@@ -790,11 +796,11 @@ impl Game<'_> {
         if let Some((station, item)) = recipe {
             // RecipeToast: black description under a purple title, the
             // station at 0.6 scale in the corner over the cycling result.
-            let atlas = &self.atlas;
+            let atlas = &self.gui.atlas;
             batch.sprite(atlas, "gui/sprites/toast/recipe", x, 0.0);
             let title = self.translate("recipe.toast.title", "New Recipe(s) Unlocked!");
             let description = self.translate("recipe.toast.description", "Check your recipe book");
-            let atlas = &self.atlas;
+            let atlas = &self.gui.atlas;
             batch.text(atlas, &title, x + 30.0, 7.0, 0xFF50_0050, false);
             batch.text(atlas, &description, x + 30.0, 18.0, 0xFF00_0000, false);
             let start = batch.vertices.len();
@@ -803,7 +809,7 @@ impl Game<'_> {
             self.draw_item_model(batch, &item, x + 8.0, 8.0);
             return;
         }
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         batch.sprite(atlas, "gui/sprites/toast/advancement", x, 0.0);
         let (key, color) = match frame {
             Frame::Task => ("advancements.toast.task", 0xFF00_FFFF),
@@ -832,18 +838,25 @@ pub(super) fn adv_name(a: &adv::Advancement) -> Text {
         Frame::Challenge => text::DARK_PURPLE,
         _ => text::GREEN,
     };
-    let tooltip = text_of(&d.title)
-        .with_color(color)
+    // Advancement.decorateName: the title in the frame's colour (styles
+    // merged into it), a new line and the description.
+    let coloured = text_of(&d.title).with_color(color);
+    let mut component = coloured.component();
+    if let Some(o) = component.as_object_mut() {
+        o.insert(
+            "extra".into(),
+            serde_json::json!(["\n", text_of(&d.description).component()]),
+        );
+    }
+    let tooltip = coloured
         .append("\n")
-        .append(text_of(&d.description));
+        .append(text_of(&d.description))
+        .with_component(component);
     let title = text_of(&d.title).with_style(&Style {
         hover: Some(Box::new(tooltip)),
         ..Style::default()
     });
-    Text::literal("[")
-        .append(title)
-        .append("]")
-        .with_color(color)
+    Text::translate("chat.square_brackets", &[title]).with_color(color)
 }
 impl Game<'_> {
     /// `AdvancementCommands.Action.GRANT` on one advancement (or one of

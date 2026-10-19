@@ -258,7 +258,7 @@ A `shaders/` folder of GLSL programs, named by where Iris (and OptiFine before i
 | Custom textures, `noisetex` | easy | image loads |
 | Custom uniforms (`uniform.*` expressions) | medium | a small expression evaluator per frame |
 | Compute (`.csh`), `image2D` load/store | medium | wgpu has compute; storage formats are more limited than OpenGL's |
-| Distant Horizons, Voxy hooks, `DH_*` | not planned | Horizon has no LOD terrain yet |
+| Distant Horizons, Voxy hooks, `DH_*` | not planned | Horizon's native LOD terrain shares world colour/depth; it does not expose these mods' APIs |
 
 Order: preprocessor and legaliser until the three test packs parse; then `composite`/`final`/`deferred` with the
 uniforms; then `gbuffers_terrain`, `gbuffers_water` and `gbuffers_skybasic`/`skytextured` (the packs' look comes

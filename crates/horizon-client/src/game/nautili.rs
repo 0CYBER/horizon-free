@@ -11,7 +11,7 @@ use horizon_core::random::RandomSource;
 impl Game<'_> {
     fn item_tagged(&self, tag: &str, item: &str) -> bool {
         self.res
-            .items
+            .items()
             .item_tags
             .get(tag)
             .is_some_and(|t| t.contains(item))
@@ -43,7 +43,7 @@ impl Game<'_> {
         }
         let taming: Vec<String> = self
             .res
-            .items
+            .items()
             .item_tags
             .get("minecraft:nautilus_taming_items")
             .map(|t| t.iter().cloned().collect())

@@ -55,13 +55,15 @@ fn columns_loaded_past_the_render_distance_mesh_when_they_come_in_range() {
         return;
     };
     let assets = Arc::new(Assets::load(&root).unwrap());
+    let render = Arc::new(assets.reload(&root).unwrap());
     let facts = BlockFacts::load(&root, assets.registry).unwrap();
     let visibility = models::load_visibility(&root, assets.registry).unwrap();
     let context = Arc::new(WorkerContext {
-        tables: Arc::new(MeshTables::new(&assets, &facts, visibility).unwrap()),
+        tables: Arc::new(MeshTables::new(&assets, &render, &facts, visibility).unwrap()),
         light: Arc::new(LightTables::load(&root, assets.registry, &facts).unwrap()),
         biomes: Arc::new(Biomes::load(&root).unwrap()),
         assets,
+        render: render.clone(),
     });
     let mut streaming = Streaming::new(Arc::new(Saved), context, 3);
     streaming.radius = 4;
@@ -135,13 +137,15 @@ fn relit_columns_keep_every_mesh_current() {
         return;
     };
     let assets = Arc::new(Assets::load(&root).unwrap());
+    let render = Arc::new(assets.reload(&root).unwrap());
     let facts = BlockFacts::load(&root, assets.registry).unwrap();
     let visibility = models::load_visibility(&root, assets.registry).unwrap();
     let context = Arc::new(WorkerContext {
-        tables: Arc::new(MeshTables::new(&assets, &facts, visibility).unwrap()),
+        tables: Arc::new(MeshTables::new(&assets, &render, &facts, visibility).unwrap()),
         light: Arc::new(LightTables::load(&root, assets.registry, &facts).unwrap()),
         biomes: Arc::new(Biomes::load(&root).unwrap()),
         assets: assets.clone(),
+        render: render.clone(),
     });
     let state = |name: &str| assets.registry.default_state(name).unwrap().0;
     let (stone, glowstone, torch) = (
@@ -149,8 +153,9 @@ fn relit_columns_keep_every_mesh_current() {
         state("minecraft:glowstone"),
         state("minecraft:torch"),
     );
-    // Columns from a server, one of them never sent: its neighbours stay
-    // unlit, next to lit columns within the render distance.
+    // Columns from a server, one of them not sent yet. They keep the light
+    // the server sent (#824, as vanilla's `enableChunkLight`), so its
+    // neighbours are lit too.
     let mut streaming = Streaming::new(Arc::new(Saved), context.clone(), 3);
     streaming.radius = 4;
     streaming.remote = true;
@@ -176,7 +181,7 @@ fn relit_columns_keep_every_mesh_current() {
         }
     };
     settle(&mut streaming, &mut world);
-    assert!(!streaming.is_lit(1, 0) && streaming.is_lit(0, 0));
+    assert!(streaming.is_lit(1, 0) && streaming.is_lit(0, 0));
     // Open the roof and put torches in the cave on a ring two blocks inside
     // the unlit (1, 0): its lit neighbours are relit, and their meshes change
     // only through light (no edit is next to them).
@@ -210,6 +215,7 @@ fn relit_columns_keep_every_mesh_current() {
             cutout_leaves: true,
             cull_leaves: false,
             assets: &context.assets,
+            render: &context.render,
             tables: &context.tables,
             biomes: &context.biomes,
             visibility: context.tables.visibility.clone(),

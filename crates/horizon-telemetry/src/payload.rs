@@ -179,6 +179,10 @@ pub struct Perf {
     /// From start to the title screen.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub to_title_ms: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to_core_ms: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to_rest_ms: Option<u32>,
     /// From choosing a world to playing in it, the first time this session.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub to_world_ms: Option<u32>,
