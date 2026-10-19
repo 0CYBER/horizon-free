@@ -9,8 +9,14 @@
 //! - `horizon:keep_world_block`: blocks of `blocks` take the block the world
 //!   holds there (its StructureVoidProcessor, which, unlike vanilla's
 //!   structure void, lets the next processors see that block).
+//!
+//! And from Repurposed Structures':
+//! - `horizon:waterlog_in_world_water`: a block that can be waterlogged is
+//!   where the world holds water and is dry where it does not (its
+//!   WaterlogWhenReplacingWaterProcessor).
 use super::{PlaceSettings, ProcessResult, pillars::outside_chunk};
 use crate::{
+    fluid::{FluidKind, FluidState},
     registry::{BlockRegistry, BlockStateId},
     worldgen::{DecodeError, placement::PlacementContext, structure::BlockInfo},
 };
@@ -127,6 +133,45 @@ impl KeepWorldBlock {
     }
 }
 
+/// `horizon:waterlog_in_world_water`: WaterlogWhenReplacingWaterProcessor.
+/// In the chunk being generated, a block that can be waterlogged takes
+/// `waterlogged` from the world's fluid there (water, still or flowing, or a
+/// waterlogged block), so a template's wet block placed on land is dry; a
+/// block placed in water gets a block tick, as the mod schedules one.
+pub struct WaterlogInWorldWater;
+impl WaterlogInWorldWater {
+    pub(super) fn process<W: PlacementContext>(
+        world: &mut W,
+        registry: &BlockRegistry,
+        info: BlockInfo,
+        settings: &PlaceSettings<'_>,
+    ) -> ProcessResult {
+        let Some(state) = registry.state(info.state) else {
+            return Ok(Some(info));
+        };
+        if !state.properties.contains_key("waterlogged") || outside_chunk(settings, info.pos) {
+            return Ok(Some(info));
+        }
+        let here = world.block_state(info.pos)?;
+        let water = registry
+            .state(here)
+            .and_then(|s| FluidState::from_block(s).ok())
+            .is_some_and(|f| f.kind().same_family(FluidKind::Water));
+        // The mod's height check (min to max build height) holds for every
+        // block of the chunk.
+        if water && world.inside_build_height(info.pos)? {
+            world.schedule_block_tick(info.pos, info.state, 0)?;
+        }
+        let mut set = state.clone();
+        set.properties
+            .insert("waterlogged".into(), water.to_string());
+        Ok(Some(BlockInfo {
+            state: registry.id(&set).unwrap_or(info.state),
+            ..info
+        }))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,6 +189,7 @@ mod tests {
     struct Sea {
         world: BlockStateId,
         marked: Vec<[i32; 3]>,
+        ticks: Vec<([i32; 3], BlockStateId)>,
     }
     impl PlacementContext for Sea {
         fn generation(&self) -> WorldGenerationContext {
@@ -164,6 +210,19 @@ mod tests {
         }
         fn block_state(&mut self, _: [i32; 3]) -> Result<BlockStateId, PlacementQueryError> {
             Ok(self.world)
+        }
+        fn max_y(&mut self) -> Result<i32, PlacementQueryError> {
+            Ok(319)
+        }
+        fn schedule_block_tick(
+            &mut self,
+            pos: [i32; 3],
+            block: BlockStateId,
+            delay: i32,
+        ) -> Result<(), PlacementQueryError> {
+            assert_eq!(delay, 0);
+            self.ticks.push((pos, block));
+            Ok(())
         }
     }
 
@@ -205,6 +264,7 @@ mod tests {
         let mut sea = Sea {
             world: BlockStateId(6),
             marked: vec![],
+            ticks: vec![],
         };
         let state = |i: BlockInfo, sea: &mut Sea| flood.process(sea, i).unwrap().unwrap().state;
         assert_eq!(state(info(0, [0, 62, 0]), &mut sea), BlockStateId(2));
@@ -219,6 +279,7 @@ mod tests {
         let mut sea = Sea {
             world: BlockStateId(6),
             marked: vec![],
+            ticks: vec![],
         };
         let settings = chunk(-16, 0);
         let mut run = |i: BlockInfo| {
@@ -251,6 +312,7 @@ mod tests {
         let mut sea = Sea {
             world: BlockStateId(1),
             marked: vec![],
+            ticks: vec![],
         };
         let settings = chunk(0, 0);
         let mut run = |i: BlockInfo| {
@@ -263,5 +325,35 @@ mod tests {
         assert_eq!(run(info(6, [3, 40, 3])), BlockStateId(6));
         assert_eq!(run(info(5, [16, 40, 3])), BlockStateId(5));
         assert!(KeepWorldBlock::decode(&json!({})).is_err());
+    }
+
+    #[test]
+    fn blocks_take_waterlogged_from_the_worlds_water() {
+        let registry = registry();
+        let settings = chunk(0, 0);
+        let mut sea = Sea {
+            world: BlockStateId(2),
+            marked: vec![],
+            ticks: vec![],
+        };
+        let run = |sea: &mut Sea, i: BlockInfo| {
+            WaterlogInWorldWater::process(sea, &registry, i, &settings)
+                .unwrap()
+                .unwrap()
+                .state
+        };
+        // In water: wet, with a block tick (any height: the world decides).
+        assert_eq!(run(&mut sea, info(3, [3, 80, 3])), BlockStateId(4));
+        assert_eq!(sea.ticks, vec![([3, 80, 3], BlockStateId(3))]);
+        // A waterlogged block in the world counts as water.
+        sea.world = BlockStateId(4);
+        assert_eq!(run(&mut sea, info(3, [3, 40, 3])), BlockStateId(4));
+        // On land: a wet template block is dry, and no tick.
+        sea.world = BlockStateId(6);
+        assert_eq!(run(&mut sea, info(4, [3, 40, 3])), BlockStateId(3));
+        assert_eq!(sea.ticks.len(), 2);
+        // Blocks that cannot be waterlogged, and other chunks, are left.
+        assert_eq!(run(&mut sea, info(6, [3, 40, 3])), BlockStateId(6));
+        assert_eq!(run(&mut sea, info(4, [16, 40, 3])), BlockStateId(4));
     }
 }
