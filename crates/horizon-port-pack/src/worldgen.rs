@@ -97,13 +97,16 @@ const START_RULES: [(&str, &str); 3] = [
 ];
 /// The jigsaws' rules on laying out pieces, which vanilla's jigsaw has no
 /// place for.
-const LAYOUT_RULES: [&str; 5] = [
+const LAYOUT_RULES: [&str; 4] = [
     "y_allowance",
     "burying_type",
     "use_bounding_box_hack",
     "pools_that_ignore_boundaries",
-    "enhanced_terrain_adaptation",
 ];
+/// The libraries' terrain kernel field, the game's
+/// `horizon:enhanced_terrain_adaptation` (docs/mods.md).
+const ENHANCED_TERRAIN: &str = "enhanced_terrain_adaptation";
+const HORIZON_ENHANCED_TERRAIN: &str = "horizon:enhanced_terrain_adaptation";
 /// Fields of older versions the mods' codecs no longer read: their own
 /// structures ignore them, and so does carry. Repurposed's jungle fortress
 /// and End stronghold still write `vertical_distance_from_start_piece`.
@@ -476,6 +479,22 @@ fn upgrade_types(
                     limited["layout"] = "mineshaft".into();
                 }
                 start_checks(v, liquid, lost, limited.is_some());
+                if library == Some("moogs") {
+                    // GenericJigsawStructure's adaptation, NONE by default;
+                    // its pieces may still have their own.
+                    let own = v.as_object_mut().and_then(|o| o.remove(ENHANCED_TERRAIN));
+                    let none = serde_json::json!({"kernel_size": 0, "kernel_distance": 0,
+                        "top": "none", "bottom": "none"});
+                    let mut kernel = own.and_then(|a| moogs_terrain(&a, lost)).unwrap_or(none);
+                    kernel["rigid_junctions"] = false.into();
+                    v[HORIZON_ENHANCED_TERRAIN] = kernel;
+                } else if v
+                    .as_object_mut()
+                    .and_then(|o| o.remove(ENHANCED_TERRAIN))
+                    .is_some()
+                {
+                    *lost.entry(ENHANCED_TERRAIN.into()).or_default() += 1;
+                }
                 if let Some(check) = check {
                     if !v["horizon:start_checks"].is_object() {
                         v["horizon:start_checks"] = Value::Object(Default::default());
@@ -533,6 +552,14 @@ fn upgrade_types(
                     continue;
                 };
                 if let Some((_, to)) = ELEMENTS.iter().find(|(from, _)| *from == t) {
+                    if t.starts_with("moogs_structures:") {
+                        let own = element
+                            .as_object_mut()
+                            .and_then(|o| o.remove(ENHANCED_TERRAIN));
+                        if let Some(kernel) = own.and_then(|a| moogs_terrain(&a, lost)) {
+                            element[HORIZON_ENHANCED_TERRAIN] = kernel;
+                        }
+                    }
                     element["element_type"] = (*to).into();
                     changed = true;
                 } else if t == "yungsapi:yung_single_element" {
@@ -552,8 +579,9 @@ fn upgrade_types(
 
 /// YUNG's API's jigsaw as vanilla's, laid out by its own assembler in the
 /// game (`horizon:yungsapi`, `horizon_world::worldgen::structure::yung`):
-/// the heights pieces stay within move under the key. Its terrain
-/// adaptation and a start offset in the chunk are lost.
+/// the heights pieces stay within move under the key, its terrain
+/// adaptation under `horizon:enhanced_terrain_adaptation`. A start offset in
+/// the chunk is lost.
 fn yung_structure(v: &mut Value, lost: &mut BTreeMap<String, usize>) {
     let Some(o) = v.as_object_mut() else {
         return;
@@ -565,14 +593,13 @@ fn yung_structure(v: &mut Value, lost: &mut BTreeMap<String, usize>) {
             rules.insert(key.into(), y);
         }
     }
-    let none = |a: &Value| a["type"] == "yungsapi:none";
-    if o.remove("enhanced_terrain_adaptation")
-        .is_some_and(|a| !none(&a))
-    {
-        *lost
-            .entry("enhanced_terrain_adaptation".into())
-            .or_default() += 1;
-    }
+    // YungJigsawStructure's adaptation (NONE by default): every piece's
+    // junctions, and the start's box grown by its radius.
+    let own = o.remove(ENHANCED_TERRAIN);
+    let mut kernel = yung_terrain(own.as_ref().unwrap_or(&Value::Null), lost);
+    kernel["rigid_junctions"] = true.into();
+    kernel["inflate"] = true.into();
+    o.insert(HORIZON_ENHANCED_TERRAIN.into(), kernel);
     for key in ["x_offset_in_chunk", "z_offset_in_chunk"] {
         if o.remove(key).is_some_and(|n| n != 0) {
             *lost.entry(key.into()).or_default() += 1;
@@ -583,8 +610,9 @@ fn yung_structure(v: &mut Value, lost: &mut BTreeMap<String, usize>) {
 
 /// YUNG's single pool element as vanilla's, its rules under
 /// `horizon:yungsapi`: name and `max_count`, depth range, priority,
-/// `ignore_bounds` and its condition. Its terrain adaptation, dead-end pool
-/// and modifiers are lost.
+/// `ignore_bounds` and its condition; its terrain adaptation under
+/// `horizon:enhanced_terrain_adaptation`. Its dead-end pool and modifiers
+/// are lost.
 fn yung_element(element: &mut Value, lost: &mut BTreeMap<String, usize>) {
     let Some(o) = element.as_object_mut() else {
         return;
@@ -609,7 +637,11 @@ fn yung_element(element: &mut Value, lost: &mut BTreeMap<String, usize>) {
     if let Some(c) = o.remove("condition") {
         rules.insert("condition".into(), yung_condition(&c, lost));
     }
-    for key in ["enhanced_terrain_adaptation", "deadend_pool", "modifiers"] {
+    // A piece's own adaptation, NONE included, replaces its structure's.
+    if let Some(a) = o.remove(ENHANCED_TERRAIN) {
+        o.insert(HORIZON_ENHANCED_TERRAIN.into(), yung_terrain(&a, lost));
+    }
+    for key in ["deadend_pool", "modifiers"] {
         let empty =
             |x: &Value| x.as_array().is_some_and(Vec::is_empty) || x["type"] == "yungsapi:none";
         if o.remove(key).is_some_and(|x| !empty(&x)) {
@@ -617,6 +649,62 @@ fn yung_element(element: &mut Value, lost: &mut BTreeMap<String, usize>) {
         }
     }
     o.insert("horizon:yungsapi".into(), rules.into());
+}
+
+/// YUNG's API's terrain adaptation as the game's kernel: its two presets
+/// spelled out, NONE (also the default) as size 0. An aquifer override
+/// (none of ATM10's) is lost.
+fn yung_terrain(a: &Value, lost: &mut BTreeMap<String, usize>) -> Value {
+    let kernel = |size: i32, distance: i32, top: &str, bottom: &str| {
+        serde_json::json!({"kernel_size": size, "kernel_distance": distance,
+            "top": top, "bottom": bottom})
+    };
+    match a["type"].as_str() {
+        Some("yungsapi:carved_top_no_beard_large") => kernel(24, 16, "carve", "none"),
+        Some("yungsapi:carved_top_no_beard_small") => kernel(12, 6, "carve", "none"),
+        Some("yungsapi:custom") => {
+            let mut out = serde_json::Map::new();
+            for key in [
+                "kernel_size",
+                "kernel_distance",
+                "top",
+                "bottom",
+                "bottom_offset",
+                "padding",
+            ] {
+                if let Some(x) = a.get(key) {
+                    out.insert(key.into(), x.clone());
+                }
+            }
+            if a.get("aquifer_override")
+                .is_some_and(|x| x["type"] != "yungsapi:none")
+            {
+                *lost.entry("yungsapi aquifer_override".into()).or_default() += 1;
+            }
+            moogs_terrain(&out.into(), lost).unwrap_or_else(|| kernel(0, 0, "none", "none"))
+        }
+        None | Some("yungsapi:none") => kernel(0, 0, "none", "none"),
+        Some(other) => {
+            *lost
+                .entry(format!("yungsapi terrain adaptation {other}"))
+                .or_default() += 1;
+            kernel(0, 0, "none", "none")
+        }
+    }
+}
+
+/// MoogsStructureLib's terrain adaptation: already the game's shape (with
+/// its band), when it has the fields the game needs (else it is lost, as
+/// the library's codec would refuse it).
+fn moogs_terrain(a: &Value, lost: &mut BTreeMap<String, usize>) -> Option<Value> {
+    let ok = ["kernel_size", "kernel_distance"]
+        .iter()
+        .all(|k| a[k].is_u64())
+        && ["top", "bottom"].iter().all(|k| a[k].is_string());
+    if !ok {
+        *lost.entry(ENHANCED_TERRAIN.into()).or_default() += 1;
+    }
+    ok.then(|| a.clone())
 }
 
 /// One of YUNG's structure conditions in the game's terms. `mod_loaded`
@@ -1095,7 +1183,9 @@ mod tests {
                 .is_none()
         );
         let mut pool = json!({"elements": [
-            {"weight": 1, "element": {"element_type": "moogs_structures:versioned_single_pool_element", "location": "m:x"}},
+            {"weight": 1, "element": {"element_type": "moogs_structures:versioned_single_pool_element", "location": "m:x",
+                "enhanced_terrain_adaptation": {"kernel_size": 16, "kernel_distance": 8, "top": "carve",
+                    "bottom": "carve", "band": {"bottom": 17, "top": 23}}}},
             {"weight": 1, "element": {"element_type": "minecraft:list_pool_element", "elements": [
                 {"element_type": "empty_pool_element"}]}},
             {"weight": 1, "element": {"element_type": "somelib:element"}}
@@ -1104,6 +1194,11 @@ mod tests {
         assert_eq!(
             pool["elements"][0]["element"]["element_type"],
             "minecraft:single_pool_element"
+        );
+        // Its own terrain kernel, band and all, under the game's key.
+        assert_eq!(
+            pool["elements"][0]["element"]["horizon:enhanced_terrain_adaptation"]["band"],
+            json!({"bottom": 17, "top": 23})
         );
         assert_eq!(
             pool["elements"][1]["element"]["elements"][0]["element_type"],
@@ -1143,6 +1238,22 @@ mod tests {
             assert!(moogs.get(gone).is_none(), "{gone}");
         }
         assert_eq!(moogs["size"], 7);
+        // GenericJigsawStructure's terrain kernel, NONE when it has none.
+        assert_eq!(
+            moogs["horizon:enhanced_terrain_adaptation"],
+            json!({"kernel_size": 0, "kernel_distance": 0, "top": "none", "bottom": "none",
+                "rigid_junctions": false})
+        );
+        let mut fortress = json!({"type": "moogs_structures:moogs_structures_generic_nether_jigsaw_structure",
+            "size": 7, "enhanced_terrain_adaptation": {"kernel_size": 16, "kernel_distance": 8,
+                "top": "carve", "bottom": "carve", "band": {"bottom": 17, "top": 23,
+                "piece_heights": [24, 25, 27]}}});
+        assert!(upgrade("structure", &mut fortress, &mut report, &NO_TAGS));
+        assert_eq!(
+            fortress["horizon:enhanced_terrain_adaptation"]["band"]["piece_heights"],
+            json!([24, 25, 27])
+        );
+        assert!(fortress.get("enhanced_terrain_adaptation").is_none());
         // Repurposed Structures reads the block above the bottom. Its jungle
         // fortress's vertical distance is a field its code no longer reads.
         let mut rs = json!({"type": "repurposed_structures:generic_jigsaw_structure",
@@ -1219,10 +1330,16 @@ mod tests {
         let mut report = Upgrade::default();
         let mut s = json!({"type": "yungsapi:yung_jigsaw", "start_pool": "y:start", "size": 20,
             "max_y": 60, "x_offset_in_chunk": 0, "max_distance_from_center": 80,
-            "enhanced_terrain_adaptation": {"type": "yungsapi:custom", "kernel_size": 24}});
+            "enhanced_terrain_adaptation": {"type": "yungsapi:custom", "kernel_size": 24,
+                "kernel_distance": 24, "top": "carve", "bottom": "none"}});
         assert!(upgrade("structure", &mut s, &mut report, &NO_TAGS));
         assert_eq!(s["type"], "minecraft:jigsaw");
         assert_eq!(s["horizon:yungsapi"], json!({"max_y": 60}));
+        assert_eq!(
+            s["horizon:enhanced_terrain_adaptation"],
+            json!({"kernel_size": 24, "kernel_distance": 24, "top": "carve", "bottom": "none",
+                "rigid_junctions": true, "inflate": true})
+        );
         for gone in ["max_y", "x_offset_in_chunk", "enhanced_terrain_adaptation"] {
             assert!(s.get(gone).is_none(), "{gone}");
         }
@@ -1235,6 +1352,11 @@ mod tests {
         assert_eq!(nether["type"], "minecraft:jigsaw");
         assert_eq!(nether["horizon:yungsapi"], json!({}));
         assert_eq!(
+            nether["horizon:enhanced_terrain_adaptation"],
+            json!({"kernel_size": 0, "kernel_distance": 0, "top": "none", "bottom": "none",
+                "rigid_junctions": true, "inflate": true})
+        );
+        assert_eq!(
             nether["start_jigsaw_name"],
             "betterdungeons:small_nether_dungeon_anchor"
         );
@@ -1244,6 +1366,7 @@ mod tests {
             "processors": "minecraft:empty", "projection": "rigid",
             "name": "room", "max_count": 2, "min_required_depth": 1, "is_priority": true,
             "ignore_bounds": false, "deadend_pool": "y:end",
+            "enhanced_terrain_adaptation": {"type": "yungsapi:carved_top_no_beard_small"},
             "condition": {"type": "yungsapi:all_of", "conditions": [
                 {"type": "yungsapi:piece_in_horizontal_direction", "pieces": ["yungsapi:all"],
                     "range": 5, "rotation": "none"},
@@ -1263,9 +1386,12 @@ mod tests {
         );
         assert!(e.get("deadend_pool").is_none());
         assert_eq!(
+            e["horizon:enhanced_terrain_adaptation"],
+            json!({"kernel_size": 12, "kernel_distance": 6, "top": "carve", "bottom": "none"})
+        );
+        assert_eq!(
             report.rules_lost,
             BTreeMap::from([
-                ("enhanced_terrain_adaptation".into(), 1),
                 ("yungsapi condition yungsapi:biome".into(), 1),
                 ("yungsapi deadend_pool".into(), 1),
             ])
