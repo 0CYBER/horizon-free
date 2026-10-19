@@ -58,6 +58,12 @@ ureq = { version = "2", default-features = false, features = ["tls"] }
 # The server thread's CPU time per tick (`HORIZON_SPIKES`, spans.rs).
 rustix = { version = "1", default-features = false, features = ["std", "time"] }
 
+[target.'cfg(windows)'.dependencies]
+# DirectX 12, where Vulkan has no adapter or device, or by choice (`graphicsApi`, graphics.rs).
+# Shaders compile with FXC (d3dcompiler_47.dll, part of Windows), or DXC when dxcompiler.dll is
+# on the PATH.
+wgpu = { version = "30.0.1", default-features = false, features = ["dx12"] }
+
 [target.'cfg(windows)'.build-dependencies]
 # The icon resource in the .exe (build.rs).
 winresource = "0.1"
@@ -74,3 +80,7 @@ rng-trace = ["horizon-core/rng-trace"]
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# Every WGSL shader translated as wgpu's DirectX 12 backend does (gfx.rs tests).
+naga = { version = "30.0.1", features = ["wgsl-in", "hlsl-out"] }

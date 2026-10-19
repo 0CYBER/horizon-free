@@ -4,6 +4,7 @@
 use crate::{
     Result,
     environment::Sky,
+    graphics::GraphicsApi,
     hud::{HudBatch, HudRenderer},
     mesher::{SectionMesh, TerrainVertex, Vertex},
     sprites::SpriteAnimation,
@@ -556,23 +557,187 @@ fn mip_chain(
 /// bounds by construction: index counts within `indices`, vertices within
 /// the section's arena range, first instances below the origins written that
 /// frame. Debug builds keep validating them; `WGPU_VALIDATION_INDIRECT_CALL=1`
-/// turns it back on.
-fn instance_descriptor() -> wgpu::InstanceDescriptor {
+/// turns it back on. DirectX 12 keeps it too: there wgpu-core's validation
+/// pass is also what passes each draw's first instance to shaders reading
+/// `instance_index`, and DirectX 12 is the fallback, where working matters
+/// more than CPU time.
+fn instance_descriptor(backends: wgpu::Backends) -> wgpu::InstanceDescriptor {
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-    if !cfg!(debug_assertions) {
+    descriptor.backends = backends.with_env();
+    let dx12 = cfg!(windows) && descriptor.backends.contains(wgpu::Backends::DX12);
+    if !cfg!(debug_assertions) && !dx12 {
         descriptor
             .flags
             .remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
     }
     descriptor.with_env()
 }
+/// The backends to open a device on, each tried in turn until one gives a
+/// device. `api` is the player's choice (`GraphicsApi::with_env` applied);
+/// `wgpu_backend`: whether `WGPU_BACKEND` is set, which picks the backends
+/// itself. Only Windows has two: Auto tries Vulkan, then DirectX 12 when
+/// Vulkan has no adapter (no Vulkan driver) or no device. A native crash in
+/// the driver can't be caught in the game; the launcher switches the setting
+/// to DirectX 12 after one at the renderer's start (#746).
+fn backend_order(api: GraphicsApi, windows: bool, wgpu_backend: bool) -> Vec<wgpu::Backends> {
+    if !windows || wgpu_backend {
+        return vec![wgpu::Backends::default()];
+    }
+    match api {
+        GraphicsApi::Auto => vec![wgpu::Backends::VULKAN, wgpu::Backends::DX12],
+        GraphicsApi::Vulkan => vec![wgpu::Backends::VULKAN],
+        GraphicsApi::Dx12 => vec![wgpu::Backends::DX12],
+    }
+}
+fn backends_name(backends: wgpu::Backends) -> &'static str {
+    match backends {
+        wgpu::Backends::VULKAN => "Vulkan",
+        wgpu::Backends::DX12 => "DirectX 12",
+        _ => "graphics",
+    }
+}
+/// A device and what it came from.
+struct Opened {
+    instance: wgpu::Instance,
+    surface: Option<wgpu::Surface<'static>>,
+    adapter: wgpu::Adapter,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+}
+/// Logs the adapter and records it for telemetry and crash reports.
+fn describe_adapter(adapter: &wgpu::Adapter) {
+    let info = adapter.get_info();
+    log::info!(
+        "Horizon renderer: {} ({:?}, {:?})",
+        info.name,
+        info.backend,
+        info.device_type
+    );
+    crate::telemetry::set_gpu(
+        &info.name,
+        format!("{} {}", info.driver, info.driver_info)
+            .trim()
+            .to_owned(),
+        format!("{:?}", info.backend),
+    );
+    crate::crash::set_detail(
+        "Graphics Adapter",
+        format!(
+            "{} ({:?}, {:?}), driver {} {}",
+            info.name, info.backend, info.device_type, info.driver, info.driver_info
+        ),
+    );
+}
+/// Whether an adapter's texture arrays hold the block textures Horizon puts
+/// in one array.
+fn check_layers(limits: &wgpu::Limits, layers: u32) -> Result<()> {
+    let needed = layers.min(sprite_split());
+    if limits.max_texture_array_layers < needed {
+        return Err(format!(
+            "GPU supports {} texture layers; {needed} required",
+            limits.max_texture_array_layers
+        )
+        .into());
+    }
+    Ok(())
+}
+/// Opens a device on the first of `backend_order`'s backends that gives one.
+/// Offscreen rendering needs no surface, so it can use a GPU the window's
+/// display cannot present from (a headless compositor).
+async fn open_device(
+    window: &Arc<Window>,
+    offscreen: bool,
+    api: GraphicsApi,
+    layers: u32,
+) -> Result<Opened> {
+    let order = backend_order(
+        api.with_env(),
+        cfg!(windows),
+        std::env::var_os("WGPU_BACKEND").is_some(),
+    );
+    let mut failures = Vec::new();
+    for (attempt, backends) in order.iter().copied().enumerate() {
+        let name = backends_name(backends);
+        if attempt > 0 {
+            log::warn!("Horizon renderer: trying {name} ({})", failures.join("; "));
+        }
+        let instance = wgpu::Instance::new(instance_descriptor(backends));
+        let surface = if offscreen {
+            None
+        } else {
+            Some(instance.create_surface(window.clone())?)
+        };
+        let adapter = match instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: surface.as_ref(),
+                force_fallback_adapter: false,
+                ..Default::default()
+            })
+            .await
+        {
+            Ok(adapter) => adapter,
+            Err(e) => {
+                failures.push(format!("{name}: {e}"));
+                continue;
+            }
+        };
+        describe_adapter(&adapter);
+        let info = adapter.get_info();
+        let limits = adapter.limits();
+        if let Err(e) = check_layers(&limits, layers) {
+            failures.push(format!("{name}: {e}"));
+            continue;
+        }
+        // Mappable primary buffers: section pages that no longer fit in
+        // video memory go to system memory.
+        let features = timing::GpuTimer::features(&adapter)
+            | cull::Cull::features(&adapter)
+            | (adapter.features()
+                & (wgpu::Features::INDIRECT_FIRST_INSTANCE
+                    | wgpu::Features::MAPPABLE_PRIMARY_BUFFERS));
+        let driver = format!("{} {}", info.driver, info.driver_info);
+        startup_step(format_args!(
+            "requesting the device (driver {}) with features [{features}] and the adapter's \
+             limits (buffers up to {} bytes, storage bindings up to {} bytes, {} texture layers)",
+            match driver.trim() {
+                "" => "unnamed",
+                driver => driver,
+            },
+            limits.max_buffer_size,
+            limits.max_storage_buffer_binding_size,
+            limits.max_texture_array_layers,
+        ));
+        match adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("Horizon device"),
+                required_features: features,
+                required_limits: limits,
+                ..Default::default()
+            })
+            .await
+        {
+            Ok((device, queue)) => {
+                return Ok(Opened {
+                    instance,
+                    surface,
+                    adapter,
+                    device,
+                    queue,
+                });
+            }
+            Err(e) => failures.push(format!("{name} device: {e}")),
+        }
+    }
+    Err(format!("{NO_GPU_DRIVER} ({})", failures.join("; ")).into())
+}
 /// What to tell a player whose system offers no usable graphics adapter.
 /// Vulkan is loaded at run time (the game links no graphics library), so a
 /// missing driver shows here rather than as a missing-DLL dialog.
 #[cfg(target_os = "windows")]
-const NO_GPU_DRIVER: &str = "No Vulkan graphics driver found: Horizon needs a GPU driver with Vulkan \
-     (vulkan-1.dll comes with it). Install the latest driver for your NVIDIA, AMD or Intel GPU \
-     and start the game again";
+const NO_GPU_DRIVER: &str = "No graphics driver with Vulkan or DirectX 12 found: Horizon needs a GPU \
+     driver with one of them. Install the latest driver for your NVIDIA, AMD or Intel GPU and \
+     start the game again";
 #[cfg(target_os = "macos")]
 const NO_GPU_DRIVER: &str = "No Metal graphics device found";
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -628,54 +793,8 @@ impl Renderer {
         forcefield: (&[u8], u32),
         panorama_faces: &panorama::Faces,
         previous: Option<&Self>,
+        api: GraphicsApi,
     ) -> Result<Self> {
-        // Reload resources on the same device; replacing live Vulkan devices
-        // can invalidate the driver's swapchain state on the same window.
-        let instance = previous.map_or_else(
-            || wgpu::Instance::new(instance_descriptor()),
-            |renderer| renderer.instance.clone(),
-        );
-        // Offscreen rendering needs no surface, so it can use a GPU the
-        // window's display cannot present from (a headless compositor).
-        let surface = if offscreen {
-            None
-        } else {
-            Some(instance.create_surface(window.clone())?)
-        };
-        let adapter = match previous {
-            Some(renderer) => renderer.adapter.clone(),
-            None => instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    compatible_surface: surface.as_ref(),
-                    force_fallback_adapter: false,
-                    ..Default::default()
-                })
-                .await
-                .map_err(|e| format!("{NO_GPU_DRIVER} ({e})"))?,
-        };
-        let info = adapter.get_info();
-        log::info!(
-            "Horizon renderer: {} ({:?}, {:?})",
-            info.name,
-            info.backend,
-            info.device_type
-        );
-        crate::telemetry::set_gpu(
-            &info.name,
-            format!("{} {}", info.driver, info.driver_info)
-                .trim()
-                .to_owned(),
-            format!("{:?}", info.backend),
-        );
-        crate::crash::set_detail(
-            "Graphics Adapter",
-            format!(
-                "{} ({:?}, {:?}), driver {} {}",
-                info.name, info.backend, info.device_type, info.driver, info.driver_info
-            ),
-        );
-        let limits = adapter.limits();
         let split = sprite_split();
         if layers > split * SPRITE_ARRAYS {
             return Err(format!(
@@ -684,46 +803,34 @@ impl Renderer {
             )
             .into());
         }
-        if limits.max_texture_array_layers < layers.min(split) {
-            return Err(format!(
-                "GPU supports {} texture layers; {} required",
-                limits.max_texture_array_layers,
-                layers.min(split)
-            )
-            .into());
-        }
-        let (device, queue) = match previous {
-            Some(renderer) => (renderer.device.clone(), renderer.queue.clone()),
-            None => {
-                // Mappable primary buffers: section pages that no longer fit
-                // in video memory go to system memory.
-                let features = timing::GpuTimer::features(&adapter)
-                    | cull::Cull::features(&adapter)
-                    | (adapter.features()
-                        & (wgpu::Features::INDIRECT_FIRST_INSTANCE
-                            | wgpu::Features::MAPPABLE_PRIMARY_BUFFERS));
-                let driver = format!("{} {}", info.driver, info.driver_info);
-                startup_step(format_args!(
-                    "requesting the device (driver {}) with features [{features}] and the adapter's \
-                     limits (buffers up to {} bytes, storage bindings up to {} bytes, {} texture layers)",
-                    match driver.trim() {
-                        "" => "unnamed",
-                        driver => driver,
+        let Opened {
+            instance,
+            surface,
+            adapter,
+            device,
+            queue,
+        } = match previous {
+            // Reload resources on the same device; replacing live Vulkan
+            // devices can invalidate the driver's swapchain state on the same
+            // window.
+            Some(renderer) => {
+                describe_adapter(&renderer.adapter);
+                check_layers(&renderer.adapter.limits(), layers)?;
+                Opened {
+                    surface: if offscreen {
+                        None
+                    } else {
+                        Some(renderer.instance.create_surface(window.clone())?)
                     },
-                    limits.max_buffer_size,
-                    limits.max_storage_buffer_binding_size,
-                    limits.max_texture_array_layers,
-                ));
-                adapter
-                    .request_device(&wgpu::DeviceDescriptor {
-                        label: Some("Horizon device"),
-                        required_features: features,
-                        required_limits: limits.clone(),
-                        ..Default::default()
-                    })
-                    .await?
+                    instance: renderer.instance.clone(),
+                    adapter: renderer.adapter.clone(),
+                    device: renderer.device.clone(),
+                    queue: renderer.queue.clone(),
+                }
             }
+            None => open_device(&window, offscreen, api, layers).await?,
         };
+        let info = adapter.get_info();
         let size = window.inner_size();
         let (config, present_modes) = if let Some(surface) = &surface {
             let mut config = surface
@@ -3875,6 +3982,84 @@ mod tests {
         );
     }
     #[test]
+    fn windows_tries_vulkan_then_directx_12() {
+        use super::{GraphicsApi, backend_order};
+        use wgpu::Backends;
+        assert_eq!(
+            backend_order(GraphicsApi::Auto, true, false),
+            [Backends::VULKAN, Backends::DX12]
+        );
+        assert_eq!(
+            backend_order(GraphicsApi::Vulkan, true, false),
+            [Backends::VULKAN]
+        );
+        assert_eq!(
+            backend_order(GraphicsApi::Dx12, true, false),
+            [Backends::DX12]
+        );
+        // WGPU_BACKEND picks the backends itself; other systems have one.
+        for api in GraphicsApi::ALL {
+            assert_eq!(backend_order(api, true, true), [Backends::default()]);
+            assert_eq!(backend_order(api, false, false), [Backends::default()]);
+        }
+    }
+    /// Every WGSL shader file translates to HLSL as wgpu's DirectX 12 backend
+    /// writes it for FXC (shader model 5.1), entry point by entry point.
+    #[test]
+    fn shaders_translate_to_hlsl_for_directx_12() {
+        fn wgsl_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    wgsl_files(&path, out);
+                } else if path.extension().is_some_and(|e| e == "wgsl") {
+                    out.push(path);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        wgsl_files(
+            std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src")),
+            &mut files,
+        );
+        assert!(files.len() >= 10, "{files:?}");
+        for path in files {
+            let text = std::fs::read_to_string(&path).unwrap();
+            // entity.wgsl comes after the overlay's constants (entity_shader).
+            let module = naga::front::wgsl::parse_str(&text)
+                .or_else(|_| {
+                    naga::front::wgsl::parse_str(&(crate::overlay::wgsl_constants() + &text))
+                })
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            let info = naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("{}: {e:?}", path.display()));
+            for entry in &module.entry_points {
+                let (module, info) = naga::back::pipeline_constants::process_overrides(
+                    &module,
+                    &info,
+                    Some((entry.stage, &entry.name)),
+                    &Default::default(),
+                )
+                .unwrap();
+                let mut hlsl = String::new();
+                naga::back::hlsl::Writer::new(
+                    &mut hlsl,
+                    &naga::back::hlsl::Options::default(),
+                    &naga::back::hlsl::PipelineOptions {
+                        entry_point: Some((entry.stage, entry.name.clone())),
+                    },
+                )
+                .write(&module, &info, None)
+                .unwrap_or_else(|e| panic!("{} {}: {e}", path.display(), entry.name));
+                assert!(!hlsl.is_empty());
+            }
+        }
+    }
+    #[test]
     fn entity_shader_validates_with_its_overlay_constants() {
         let module = naga::front::wgsl::parse_str(&super::entity_shader()).unwrap();
         naga::valid::Validator::new(
@@ -3934,12 +4119,20 @@ mod tests {
         assert_eq!(super::outline_width(3840), 5.0);
     }
     #[test]
-    fn indirect_draws_are_validated_only_in_debug_builds() {
-        if std::env::var_os("WGPU_VALIDATION_INDIRECT_CALL").is_none() {
-            let flags = super::instance_descriptor().flags;
+    fn indirect_draws_are_validated_only_in_debug_builds_and_on_directx_12() {
+        let validated = |backends| {
+            super::instance_descriptor(backends)
+                .flags
+                .contains(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL)
+        };
+        if std::env::var_os("WGPU_VALIDATION_INDIRECT_CALL").is_none()
+            && std::env::var_os("WGPU_BACKEND").is_none()
+        {
+            assert_eq!(validated(wgpu::Backends::default()), cfg!(debug_assertions));
+            assert_eq!(validated(wgpu::Backends::VULKAN), cfg!(debug_assertions));
             assert_eq!(
-                flags.contains(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL),
-                cfg!(debug_assertions)
+                validated(wgpu::Backends::DX12),
+                cfg!(debug_assertions) || cfg!(windows)
             );
         }
     }

@@ -2,7 +2,7 @@
 //! they show, in what groups, with what description and cost, and their
 //! input. How they look comes from `graphics_style`.
 use crate::{
-    graphics::{Overlay, Pacing, PresentMode, Preset},
+    graphics::{GraphicsApi, Overlay, Pacing, PresentMode, Preset},
     graphics_style::{Cost, STYLE},
     hud::{HudAtlas, HudBatch},
     options_ui::Opt,
@@ -39,6 +39,7 @@ pub enum H {
     Antialiasing,
     BatteryMode,
     ShaderPack,
+    GraphicsApi,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,7 +106,7 @@ pub fn rows(level: Level) -> Vec<Row> {
         None,
         "Sets the options below together. Changing one makes it Custom.",
     );
-    match level {
+    let mut rows = match level {
         Level::Simple => vec![preset, render, lod, fov, fps, vsync, gui],
         Level::Advanced => vec![
             Row::Header("Rendering"),
@@ -256,6 +257,11 @@ pub fn rows(level: Level) -> Vec<Row> {
                 "Threads that generate, light and mesh chunks. Next start.",
             ),
             h(
+                H::GraphicsApi,
+                None,
+                "Vulkan, or DirectX 12 where Vulkan fails. Next start.",
+            ),
+            h(
                 H::UploadBudget,
                 Low,
                 "Mesh data sent to the GPU per frame. Lower is smoother while loading.",
@@ -267,7 +273,14 @@ pub fn rows(level: Level) -> Vec<Row> {
                 "Frame rate and frame times over the game, with a graph.",
             ),
         ],
+    };
+    // Only Windows has more than one graphics API.
+    if !cfg!(windows) {
+        rows.retain(
+            |row| !matches!(row, Row::Setting(s) if s.item == Item::Horizon(H::GraphicsApi)),
+        );
     }
+    rows
 }
 
 const UPLOAD_STEPS: [u32; 8] = [0, 256, 512, 1024, 2048, 4096, 8192, 16384];
@@ -353,6 +366,7 @@ impl H {
             H::ResolutionScale => labelled("Resolution Scale", format!("{}%", g.resolution_scale)),
             H::Antialiasing => labelled("Anti-aliasing", if g.fxaa { "FXAA" } else { "Off" }),
             H::BatteryMode => labelled("Battery Mode", on_off(g.battery)),
+            H::GraphicsApi => labelled("Graphics API", g.api.label()),
             H::ShaderPack => match g.shader_pack.as_str() {
                 "" => labelled("Shader Pack", "Off"),
                 id => labelled("Shader Pack", id),
@@ -407,6 +421,7 @@ impl H {
             H::PresentMode => g.present_mode = step(&PresentMode::ALL, g.present_mode, back),
             H::Antialiasing => g.fxaa = !g.fxaa,
             H::BatteryMode => g.battery = !g.battery,
+            H::GraphicsApi => g.api = step(&GraphicsApi::ALL, g.api, back),
             H::ShaderPack => {
                 // Off, then every pack in shaderpacks/ by folder name.
                 let dir = std::env::current_dir()
@@ -515,6 +530,7 @@ impl Item {
                     | H::Workers
                     | H::BatteryMode
                     | H::ShaderPack
+                    | H::GraphicsApi
             ) | Item::Vanilla(
                 Opt::GuiScale
                     | Opt::Fullscreen
