@@ -27,9 +27,13 @@
 	header @assets Cache-Control "public, max-age=31536000, immutable"
 	@media path /media/* /fonts/* /og.png /favicon* /apple-touch-icon.png
 	header @media Cache-Control "public, max-age=604800"
+	# The server guide became a section of the documentation.
+	redir /server /docs/hosting permanent
+	redir /server.html /docs/hosting permanent
 	rewrite /privacy /privacy.html
-	rewrite /server /server.html
-	@pages path / /index.html /404.html /privacy.html /server.html
+	@doc path_regexp doc ^/docs/([a-z-]+)$
+	rewrite @doc /docs/{re.doc.1}.html
+	@pages path / /index.html /404.html /privacy.html /docs /docs/* /sitemap.xml
 	header @pages Cache-Control "no-cache"
 	@legal path /LEGAL.md /fonts/*.txt
 	header @legal Content-Type "text/plain; charset=utf-8"

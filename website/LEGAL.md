@@ -64,10 +64,19 @@ shown as screenshots of the game, as the
 fan websites about the game, with the disclaimer they require. The site offers no game
 files: players need their own legally obtained copy of Minecraft: Java Edition.
 
+### The launcher's Servers page
+
+| Files in `public/media/docs/` | Source | What it shows |
+| --- | --- | --- |
+| `servers-create.webp`, `servers-dashboard.webp`, `servers-invite.webp`, `servers-backups.webp` | Screenshots of the Horizon launcher's Servers page (a debug build on Linux, with made-up addresses, names and `@example.com` emails), converted to WebP | The Create a server dialog, a running server, a Tailscale invitation, the Backups tab |
+
+They show only Horizon's own interface (MIT) and a default player head.
+
 ## Text
 
 The parity table is generated from Horizon's README, and the patch notes
-come from Horizon's GitHub releases: Horizon's own text, MIT.
+come from Horizon's GitHub releases: Horizon's own text, MIT. The documentation
+(`docs/*.md` in this folder, served under `/docs`) is Horizon's own text, MIT.
 
 ## Contributors
 
