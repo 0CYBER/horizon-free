@@ -54,6 +54,13 @@ impl<'r> FeatureBlockBindings<'r> {
     pub fn registry(&self) -> &'r BlockRegistry {
         self.registry
     }
+    /// BlockState.isSolid (legacy solidity), when block properties are bound.
+    pub(crate) fn solid(&self) -> Result<BoundBlockProperty, DecodeError> {
+        self.physical_properties
+            .as_ref()
+            .map(|p| p[0].clone())
+            .ok_or(DecodeError::Field("block properties"))
+    }
 
     /// Bind provider resources and precompiled placement operations to this registry.
     pub fn with_state_providers(

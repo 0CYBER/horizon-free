@@ -22,6 +22,7 @@ use serde_json::Value;
 use std::{collections::BTreeSet, sync::Arc};
 
 mod lithostitched;
+mod pillars;
 
 /// The draws processors make from StructurePlaceSettings' random.
 pub trait ProcessorRandom {
@@ -301,6 +302,20 @@ pub enum Processor {
     Condition(Box<lithostitched::Conditional>),
     /// `horizon:set_block` (Lithostitched's `set_block`).
     SetBlock(Box<lithostitched::SetBlock>),
+    /// `horizon:pillar` (Repurposed Structures' and Moog's pillars): a
+    /// trigger block starts a column down to the ground.
+    Pillar(Box<pillars::Pillar>),
+    /// `horizon:bottom_pillar` (Repurposed Structures'): the bottom layer
+    /// continues down to the ground.
+    BottomPillar(Box<pillars::BottomPillar>),
+    /// `horizon:close_off_fluid_sources` (Repurposed Structures' and Moog's):
+    /// fluid sources beside open blocks are walled off.
+    CloseOffFluidSources(Box<pillars::CloseOffFluidSources>),
+    /// `horizon:yung_pillar` (YUNG's pillars: Better Fortresses, Better
+    /// Jungle Temples).
+    YungPillar(Box<pillars::YungPillar>),
+    /// `horizon:stair_pillar` (Better Fortresses' stair supports).
+    StairPillar(Box<pillars::StairPillar>),
 }
 #[derive(Clone, Debug, Default)]
 pub struct ProcessorList(pub Vec<Processor>);
@@ -760,6 +775,21 @@ impl Processor {
             "horizon:set_block" => {
                 Self::SetBlock(Box::new(lithostitched::SetBlock::decode(value, state)?))
             }
+            "horizon:pillar" => Self::Pillar(Box::new(pillars::Pillar::decode(
+                value, resources, bindings, state,
+            )?)),
+            "horizon:bottom_pillar" => Self::BottomPillar(Box::new(pillars::BottomPillar::decode(
+                value, resources, bindings,
+            )?)),
+            "horizon:close_off_fluid_sources" => Self::CloseOffFluidSources(Box::new(
+                pillars::CloseOffFluidSources::decode(value, resources, bindings)?,
+            )),
+            "horizon:yung_pillar" => Self::YungPillar(Box::new(pillars::YungPillar::decode(
+                value, bindings, state,
+            )?)),
+            "horizon:stair_pillar" => Self::StairPillar(Box::new(pillars::StairPillar::decode(
+                value, resources, bindings,
+            )?)),
             "horizon:condition" => Self::Condition(Box::new(lithostitched::Conditional::decode(
                 value, resources, bindings,
             )?)),
@@ -773,6 +803,23 @@ impl Processor {
 impl ProcessorList {
     /// A processor list holder: a registry name, `{"processors": [...]}` or a list.
     pub fn decode(
+        json: &str,
+        resources: &StructureResources,
+        bindings: &FeatureBlockBindings<'_>,
+    ) -> Result<Self, DecodeError> {
+        // Lists name lists (a pillar's, Lithostitched's): a cycle of names
+        // is refused rather than followed.
+        thread_local!(static DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) });
+        let depth = DEPTH.get();
+        if depth >= 16 {
+            return Err(DecodeError::Field("processor lists nest too deep"));
+        }
+        DEPTH.set(depth + 1);
+        let decoded = Self::decode_at(json, resources, bindings);
+        DEPTH.set(depth);
+        decoded
+    }
+    fn decode_at(
         json: &str,
         resources: &StructureResources,
         bindings: &FeatureBlockBindings<'_>,
@@ -1109,6 +1156,13 @@ fn process_block<W: PlacementContext>(
                 list, world, resources, position, reference, relative, info, settings,
             );
         }
+        Processor::Pillar(p) => return p.process(world, resources, position, info, settings),
+        Processor::BottomPillar(p) => {
+            return p.process(world, resources, position, relative, info, settings);
+        }
+        Processor::CloseOffFluidSources(p) => return p.process(world, info, settings),
+        Processor::YungPillar(p) => return p.process(world, resources, info, settings),
+        Processor::StairPillar(p) => return p.process(world, resources, info, settings),
         Processor::Pick(pick) => match name(info.state) == pick.block {
             true => Some(settings.with_random(info.pos, |r| pick.apply(info, r))),
             false => Some(info),
