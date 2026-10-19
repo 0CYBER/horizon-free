@@ -10,13 +10,18 @@ Every game release goes out as a beta (a GitHub pre-release). A beta is due for 
 - it is newer than the stable release (GitHub's "latest", which launchers and servers install by default),
 - it has been out PROMOTE_AFTER (6 hours) without trouble; a promotion by hand (--tag) skips the wait,
 - its release smoke test passed: release.yml attaches smoke-test.json only after the Mac mini ran the game,
-- and no issue labelled release-blocker covers it. A blocker covers the betas from the version it names onwards
-  (every beta when it names none), published while it is open; one closed as completed keeps covering the betas
-  published before it closed (they still have the bug), one closed as not planned covers nothing.
+- and no issue labelled release-blocker covers it. An open blocker holds every beta; one closed as completed keeps
+  holding the betas published before it closed (they still have the bug); one closed as not planned holds nothing.
+  Only people who can triage the repository can add the label, and the issue's text is never read: whoever wrote
+  the issue could edit it afterwards, so it can't decide which betas go out.
 
 The newest due beta is promoted: marked stable and latest, with notes covering everything since the previous
 stable release (tools/release_train.py notes --stable). Older betas stay betas: the stable one contains them.
-Issue text is only searched for version numbers; it never changes what this does beyond blocking.
+Nothing older than the current stable release is ever promoted, even with --force: GitHub's "latest" is what
+horizon-server update and install.sh download, and it only moves forward.
+
+When the oldest beta newer than the stable release has waited STALL_AFTER (24 hours), promotion has stalled
+(blocked, smoke tests not running, the schedule off): an issue says so, and is closed once a beta is promoted.
 """
 
 import argparse
@@ -34,17 +39,14 @@ REPO = os.environ.get("GITHUB_REPOSITORY", "ludovic111/horizon")
 PROMOTE_AFTER = dt.timedelta(hours=6)
 SMOKE_ASSET = "smoke-test.json"
 BLOCKER = "release-blocker"
+STALL_AFTER = dt.timedelta(hours=24)
+STALLED = "Promotion to stable has stalled"
 GAME_TAG = re.compile(r"v\d{4}\.\d{2}\.\d{2}(?:\.\d+)?")
-# A version as people write it in an issue: with or without the v, a day's counter padded or not.
-MENTION = re.compile(r"(?<![\w.])v?(\d{4})\.(\d{1,2})\.(\d{1,2})(?:\.(\d+))?(?!\w)")
 
 
 def tag_key(tag):
-    """A game tag's numbers, four of them (v2026.10.19 is (2026, 10, 19, 0)), so tags and mentions compare."""
-    return padded(tuple(int(part) for part in re.findall(r"\d+", tag)))
-
-
-def padded(version):
+    """A game tag's numbers, four of them (v2026.10.19 is (2026, 10, 19, 0)), so tags compare."""
+    version = tuple(int(part) for part in re.findall(r"\d+", tag))
     return version + (0,) * (4 - len(version))
 
 
@@ -52,23 +54,12 @@ def parse_time(text):
     return dt.datetime.fromisoformat(text.replace("Z", "+00:00")) if text else None
 
 
-def mentioned_versions(text):
-    """The game versions an issue names, as tag keys ((2026, 10, 19, 3) for v2026.10.19.03)."""
-    return {padded(tuple(int(part) for part in match.groups() if part is not None)) for match in MENTION.finditer(text or "")}
-
-
 def covers(blocker, release):
-    """Whether a release-blocker issue holds this beta back."""
-    if blocker.get("state") == "closed":
-        closed = parse_time(blocker.get("closed_at"))
-        if blocker.get("state_reason") != "completed" or not closed:
-            return False
-        if parse_time(release["published_at"]) >= closed:
-            return False
-    versions = mentioned_versions(f"{blocker.get('title', '')}\n{blocker.get('body') or ''}")
-    if not versions:
+    """Whether a release-blocker issue holds this beta back. Only its state and dates count, never its text."""
+    if blocker.get("state") != "closed":
         return True
-    return any(tag_key(release["tag_name"]) >= version for version in versions)
+    closed = parse_time(blocker.get("closed_at"))
+    return blocker.get("state_reason") == "completed" and bool(closed) and parse_time(release["published_at"]) < closed
 
 
 def stable(releases):
@@ -107,7 +98,8 @@ def choose(releases, blockers, now, tag=None, force=False):
             return None, f"no published game release is tagged {tag}"
         reasons = reasons_against(release, current, blockers, now, by_hand=True)
         if force:
-            reasons = [r for r in reasons if r == "it is already stable"]
+            # Even forced, "latest" only moves forward: horizon-server update and install.sh follow it.
+            reasons = [r for r in reasons if r == "it is already stable" or r.startswith("it is not newer")]
         if reasons:
             return None, f"{tag} stays a beta: " + "; ".join(reasons)
         return release, f"{tag} promoted by hand" + (" with force" if force else "")
@@ -120,6 +112,35 @@ def choose(releases, blockers, now, tag=None, force=False):
                             "and no release-blocker covers it"
         held.append(f"{release['tag_name']}: " + "; ".join(reasons))
     return None, "no beta is due" + (" (" + " / ".join(held[:3]) + ")" if held else "")
+
+
+def stalled(releases, now):
+    """(the oldest beta newer than the stable release, how long it has waited) once that is STALL_AFTER, else None."""
+    games = [r for r in releases if not r["draft"] and GAME_TAG.fullmatch(r["tag_name"])]
+    current = stable(games)
+    waiting = [r for r in games if r["prerelease"] and (not current or tag_key(r["tag_name"]) > tag_key(current["tag_name"]))]
+    if not waiting:
+        return None
+    oldest = min(waiting, key=lambda r: parse_time(r["published_at"]))
+    age = now - parse_time(oldest["published_at"])
+    return (oldest, age) if age >= STALL_AFTER else None
+
+
+def stall_issue(releases, stall, reason):
+    """The title and body of the issue saying promotion has stalled."""
+    oldest, age = stall
+    current = stable([r for r in releases if not r["draft"] and GAME_TAG.fullmatch(r["tag_name"])])
+    hours = int(age.total_seconds() // 3600)
+    body = (f"Opened by .github/workflows/promote.yml, not by a person.\n\n"
+            f"No beta has become stable for {hours} hours: {oldest['tag_name']} has waited since "
+            f"{oldest['published_at']}, and launchers, servers and install.sh still get "
+            f"{current['tag_name'] if current else 'no stable release'}.\n\n"
+            f"The last check said: {reason}\n\n"
+            "Usual causes: an open `release-blocker` issue (it holds every beta until it is closed), the Mac mini's "
+            "release smoke test not running (no smoke-test.json on the betas), or the promote workflow disabled. "
+            "To promote a beta by hand: `gh workflow run promote -f tag=<tag>` (add `-f force=true` to skip the "
+            "smoke test and blockers). This issue closes itself once a beta is promoted.")
+    return f"{STALLED}: {oldest['tag_name']} has waited {hours} h", body
 
 
 def gh(*arguments, capture=True):
@@ -166,7 +187,24 @@ def main():
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
             summary.write(f"### {line}\n")
+    report_stall(releases, release, reason, now, args.dry_run)
     return 1 if args.tag and not release else 0
+
+
+def report_stall(releases, promoted, reason, now, dry_run):
+    """Opens the stalled-promotion issue when one is due and none is open; closes it after a promotion."""
+    open_issues = [issue for issue in gh_pages(f"repos/{REPO}/issues?state=open&per_page=100")
+                   if "pull_request" not in issue and issue["title"].startswith(STALLED)]
+    stall = None if promoted else stalled(releases, now)
+    if stall and not open_issues:
+        title, body = stall_issue(releases, stall, reason)
+        print(("Would open: " if dry_run else "Opening: ") + title)
+        if not dry_run:
+            gh("issue", "create", "--repo", REPO, "--title", title, "--body", body)
+    if promoted and not dry_run:
+        for issue in open_issues:
+            gh("issue", "close", str(issue["number"]), "--repo", REPO, "--comment",
+               f"{promoted['tag_name']} is stable now (promote.yml).")
 
 
 if __name__ == "__main__":

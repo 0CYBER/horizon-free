@@ -135,7 +135,7 @@ commits) since the last **published** game release:
 | `skip-release` | Doesn't trigger a release and isn't listed in the notes |
 | `run-parity` | Runs the parity job once on a fork's pull request |
 | `parity-regression` | Opened by the nightly audit for a harness that fails on main |
-| `release-blocker` | On an issue: holds the beta it names, and every later one, back from stable ([Channels](#channels)) |
+| `release-blocker` | On an issue: holds every beta back from stable while it is open ([Channels](#channels)) |
 
 Pull requests without `feature` are listed under **Fixed**. Titles are written for players, since they become
 the notes.
@@ -182,10 +182,17 @@ beta that
 - passed its release smoke test: the macOS build attaches `smoke-test.json` (the offscreen game run's report) only
   when the game drew a world on the Mac mini, so a release built while `MAC_RUNNER` sends macOS to GitHub waits
   for a hand,
-- and isn't covered by an issue labelled `release-blocker`. A blocker covers the beta whose version it names
-  (`v2026.10.19.03` or `2026.10.19.3`, title or body) and every later one, or every beta when it names none,
-  while it is open; closed as completed it still covers the betas published before it closed (they have the
-  bug), closed as not planned it covers nothing. Issue text is only searched for versions.
+- and isn't covered by an issue labelled `release-blocker`. An open blocker holds every beta; closed as completed
+  it still holds the betas published before it closed (they have the bug); closed as not planned it holds
+  nothing. Only the label and the issue's state count, never its text: whoever opened the issue can edit the
+  text after a maintainer labels it, so it can't pick which betas go out.
+
+Nothing older than the stable release is ever promoted, not even with `force`: GitHub's latest release is what
+`horizon-server update` and `install.sh` download, so it only moves forward.
+
+When the oldest beta newer than the stable release has waited 24 hours, promote.yml opens an issue titled
+"Promotion to stable has stalled" with the reason from the last check (a blocker left open, smoke tests not
+running). It closes itself after the next promotion.
 
 Promoting marks the beta stable and latest and rewrites its notes to list everything since the previous stable
 release (`release_train.py notes --stable`), so players who skipped the betas see all of it. Older betas stay
@@ -264,7 +271,7 @@ A bad release is withdrawn by turning it back into a draft:
 gh release edit v2026.10.15.01 --draft
 ```
 
-A beta that is not promoted yet needs no rollback: label an issue naming it `release-blocker`. For a stable
+A beta that is not promoted yet needs no rollback: label an issue about it `release-blocker`. For a stable
 release: launchers list only published releases, so the previous version becomes the newest one again, launchers that
 didn't install the bad one won't, and players who did can pick the previous version in the launcher's version
 list (`launcher/src/backend.rs` tests `withdrawn_release_is_never_offered`). The tag stays, so the next release

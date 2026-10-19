@@ -5,7 +5,10 @@ name: promote
 #   gh workflow run promote -f tag=v2026.10.19.03               # that beta now, without the wait
 #   gh workflow run promote -f tag=v2026.10.19.03 -f force=true  # even blocked or without its smoke test
 #   gh workflow run promote -f dry_run=true                      # say what would be promoted
-# Holding a beta back: open (or label) an issue release-blocker that names its version; naming none holds them all.
+# Holding betas back: label an issue release-blocker. While it is open it holds every beta; closed as completed it
+# still holds the betas published before it closed. The issue's text is never read (its author could edit it).
+# When the oldest waiting beta is 24 hours old, an issue "Promotion to stable has stalled" says so; it closes itself
+# after the next promotion.
 on:
   schedule:
     - cron: '13,43 * * * *'
@@ -25,7 +28,7 @@ on:
         default: false
 permissions:
   contents: write
-  issues: read
+  issues: write
 concurrency:
   group: promote
   cancel-in-progress: false
@@ -38,6 +41,8 @@ jobs:
         with:
           # The notes of a promoted release cover every pull request since the last stable one.
           fetch-depth: 0
+          # gh uses GH_TOKEN below; nothing needs git credentials on disk.
+          persist-credentials: false
       - name: Promote
         env:
           GH_TOKEN: ${{ github.token }}

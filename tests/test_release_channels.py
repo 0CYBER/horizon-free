@@ -55,26 +55,43 @@ class ReleaseChannelTests(unittest.TestCase):
         older = release("v2026.10.18.03", 40)
         self.assertIsNone(channels.choose([STABLE, older], [], NOW)[0])
 
-    def test_a_blocker_holds_the_version_it_names_and_every_later_beta(self):
+    def test_an_open_blocker_holds_every_beta_whatever_its_text_says(self):
         releases = [STABLE, release("v2026.10.19", 12), release("v2026.10.19.01", 10), release("v2026.10.19.02", 8)]
-        chosen, _ = channels.choose(releases, [blocker(7, "Chests empty", "Since v2026.10.19.01 the chests…")], NOW)
-        self.assertEqual(chosen["tag_name"], "v2026.10.19")
-
-    def test_a_blocker_naming_no_version_holds_every_beta(self):
-        releases = [STABLE, release("v2026.10.19", 12)]
-        self.assertIsNone(channels.choose(releases, [blocker(8, "Something is badly wrong")], NOW)[0])
+        # The issue's author can edit its text after it is labelled: naming a later version must not free a beta.
+        for text in ("Something is badly wrong", "Only in v2099.01.01", "Since v2026.10.19.01 the chests…"):
+            chosen, why = channels.choose(releases, [blocker(7, text, body=text)], NOW)
+            self.assertIsNone(chosen, text)
+            self.assertIn("release-blocker #7", why)
 
     def test_a_fixed_blocker_still_holds_the_betas_published_before_the_fix(self):
-        fixed = blocker(9, "Crash in v2026.10.19", state="closed", reason="completed", closed_hours_ago=7.5)
+        fixed = blocker(9, "Crash", state="closed", reason="completed", closed_hours_ago=7.5)
         releases = [STABLE, release("v2026.10.19", 12), release("v2026.10.19.01", 7)]
         self.assertEqual(channels.choose(releases, [fixed], NOW)[0]["tag_name"], "v2026.10.19.01")
         self.assertIsNone(channels.choose(releases[:2], [fixed], NOW)[0])
-        not_planned = blocker(10, "Crash in v2026.10.19", state="closed", reason="not_planned", closed_hours_ago=1)
+        not_planned = blocker(10, "Crash", state="closed", reason="not_planned", closed_hours_ago=1)
         self.assertEqual(channels.choose(releases[:2], [not_planned], NOW)[0]["tag_name"], "v2026.10.19")
 
-    def test_versions_people_write_in_issues(self):
-        found = channels.mentioned_versions("v2026.10.19.03, 2026.10.18 and 2026.10.19.3; not Minecraft 1.21.10 or 26.3")
-        self.assertEqual(found, {(2026, 10, 19, 3), (2026, 10, 18, 0)})
+    def test_force_never_moves_latest_backwards(self):
+        # horizon-server update and install.sh download GitHub's latest: an older beta must never become it.
+        older = release("v2026.10.18.03", 40, smoke=False)
+        chosen, why = channels.choose([STABLE, older], [blocker(3, "x")], NOW, tag="v2026.10.18.03", force=True)
+        self.assertIsNone(chosen)
+        self.assertIn("not newer than the stable v2026.10.18.04", why)
+        same = release("v2026.10.18.04", 30, prerelease=False)
+        self.assertIsNone(channels.choose([same], [], NOW, tag="v2026.10.18.04", force=True)[0])
+
+    def test_a_stall_is_reported_once_the_oldest_waiting_beta_is_a_day_old(self):
+        self.assertIsNone(channels.stalled([STABLE, release("v2026.10.19", 23), release("v2026.10.19.01", 2)], NOW))
+        releases = [STABLE, release("v2026.10.19", 25), release("v2026.10.19.01", 2)]
+        oldest, age = channels.stalled(releases, NOW)
+        self.assertEqual(oldest["tag_name"], "v2026.10.19")
+        title, body = channels.stall_issue(releases, (oldest, age), "no beta is due (release-blocker #4)")
+        self.assertEqual(title, "Promotion to stable has stalled: v2026.10.19 has waited 25 h")
+        self.assertIn("v2026.10.18.04", body)
+        self.assertIn("release-blocker #4", body)
+        # Betas older than the stable release are contained in it: they aren't waiting.
+        self.assertIsNone(channels.stalled([STABLE, release("v2026.10.18.03", 40)], NOW))
+        self.assertIsNone(channels.stalled([STABLE], NOW))
 
     def test_beta_notes_say_so_and_stable_notes_do_not(self):
         pr = {"number": 1, "title": "Fix a thing", "labels": [], "paths": ["crates/x.rs"], "issues": [], "author": "ludovic111"}
