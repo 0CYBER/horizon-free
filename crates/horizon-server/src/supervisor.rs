@@ -264,7 +264,13 @@ fn switch(
     to: &str,
     timeout: Duration,
 ) -> Option<Watch> {
-    let install = shared.install.as_ref()?;
+    let Some(install) = shared.install.as_ref() else {
+        shared.finish_update(
+            false,
+            "Not updated: this horizon-server wasn't installed".into(),
+        );
+        return None;
+    };
     let Some(from) = install.current() else {
         shared.finish_update(false, "Not updated: `current` points at no release".into());
         return None;
