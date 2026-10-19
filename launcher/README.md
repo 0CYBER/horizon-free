@@ -105,6 +105,12 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher modpack port <pack> [--from <dir>] [--version <tag>]   get the jars and carry them over
     horizon-launcher modpack play <pack> [--version <tag>]                 play it as its own profile
     horizon-launcher modpack remove <pack>
+    horizon-launcher servers [list]                 the servers hosted from the launcher, and whether they run
+    horizon-launcher servers create [--name N] [--seed S | --copy-world DIR] [--mode M] [--difficulty D]
+                     [--max-players N] [--open] [--check-accounts] [--player NAME]... --accept-eula
+    horizon-launcher servers set-up [--version <tag>]   copy a prepared version's programs and game files for servers
+    horizon-launcher servers run <server> -- <horizon-server command>   for example: servers run "My server" -- start
+    horizon-launcher servers forget <server>        take it off the list (its folder stays)
     horizon-launcher benchmark [--repeats N]        measure the launcher (see Performance log)
     horizon-launcher data [status]                  what data collection is allowed, the install ID, what waits
     horizon-launcher data allow|deny <kinds|all>    performance, crashes, bugs, benchmarks
