@@ -1002,6 +1002,9 @@ struct Game<'a> {
     screen_fx: horizon_client::screen_effects::ScreenEffects,
     world: World,
     streaming: Streaming,
+    lod: Option<horizon_client::lod::Lod>,
+    lod_source_attempted: bool,
+    lod_observe: horizon_client::fast_hash::FxHashSet<(i32, i32)>,
     options: Options,
     player: Option<PlayerMotion>,
     spawn: Option<Vec3>,
@@ -6881,6 +6884,8 @@ impl Game<'_> {
         self.using = None;
         self.screen = Screen::Playing;
         self.title = None;
+        self.clear_lod();
+        self.pending_uploads.clear();
         if let Some(r) = self.renderer.as_mut() {
             r.clear_sections();
         }
@@ -7035,6 +7040,8 @@ impl Game<'_> {
         self.pickups.clear();
         self.orbs.clear();
         self.mining = None;
+        self.clear_lod();
+        self.pending_uploads.clear();
         if let Some(r) = self.renderer.as_mut() {
             r.clear_sections();
         }
@@ -7213,6 +7220,8 @@ impl Game<'_> {
         self.sleep_timer = 0;
         self.clear_entities();
         self.screen = Screen::Playing;
+        self.clear_lod();
+        self.pending_uploads.clear();
         if let Some(r) = self.renderer.as_mut() {
             r.clear_sections();
         }
@@ -9158,9 +9167,10 @@ impl Game<'_> {
         } else {
             self.bob_matrix(alpha as f32)
         };
-        let distance = (self.streaming.radius * 16) as f32;
+        let terrain_distance = self.terrain_distance();
+        let distance = (terrain_distance * 16) as f32;
         let depth_far =
-            horizon_client::camera::depth_far(self.streaming.radius, self.settings.cloud_range);
+            horizon_client::camera::depth_far(terrain_distance, self.settings.cloud_range);
         self.view_frustum = self
             .renderer
             .as_ref()
@@ -9237,6 +9247,7 @@ impl Game<'_> {
             bob,
             sky,
             distance,
+            detail_distance: (self.streaming.radius * 16) as f32,
             depth_far,
             underwater,
             title: title && !live,
@@ -9248,7 +9259,13 @@ impl Game<'_> {
             fog: Some({
                 let mut fog = self.frame_fog(camera, &sky, biome);
                 // Horizon's fog setting: no distance fog (fluids keep theirs).
-                if !self.settings.horizon.fog && !underwater && fog.environmental_end >= distance {
+                if !self.settings.horizon.fog
+                    && !underwater
+                    && self.darkness_fog().is_none()
+                    && !self.dragon_bar_shown()
+                    && self.potions.effects.get("blindness").is_none()
+                    && fog.environmental_end >= (self.streaming.radius * 16) as f32
+                {
                     (fog.render_distance_start, fog.render_distance_end) = (1e9, 2e9);
                     (fog.environmental_start, fog.environmental_end) = (1e9, 2e9);
                 }
@@ -9416,7 +9433,7 @@ impl Game<'_> {
         );
         // Camera.depthFar, as the renderer's far plane.
         let depth_far =
-            horizon_client::camera::depth_far(self.streaming.radius, self.settings.cloud_range);
+            horizon_client::camera::depth_far(self.terrain_distance(), self.settings.cloud_range);
         if !self
             .border_renderer
             .prepare(&self.border_state, camera, distance, depth_far)
@@ -9623,9 +9640,61 @@ impl Game<'_> {
         }
         Ok(())
     }
+    /// Only enabled LOD worlds extend the renderer's range, never simulation.
+    fn terrain_distance(&self) -> i32 {
+        if self.lod.is_some() {
+            self.streaming
+                .radius
+                .max(self.settings.horizon.lod_distance.min(1024) as i32)
+        } else {
+            self.streaming.radius
+        }
+    }
+    fn clear_lod(&mut self) {
+        self.lod = None;
+        self.lod_source_attempted = false;
+        self.lod_observe.clear();
+        if let Some(renderer) = &mut self.renderer {
+            renderer.clear_lods();
+        }
+    }
+    fn prepare_lod(&mut self) {
+        let enabled = self.settings.horizon.lod_distance > 0
+            && self.renderer.is_some()
+            && self.player.is_some()
+            && self.title.is_none()
+            && (self.remote.is_none() || self.integrated.is_some());
+        if !enabled {
+            if self.lod.is_some() || self.lod_source_attempted {
+                self.clear_lod();
+            }
+            return;
+        }
+        if self.lod_source_attempted {
+            return;
+        }
+        self.lod_source_attempted = true;
+        let source = match &self.integrated {
+            Some(server) => server.call(|game| game.streaming.lod_source()),
+            None => Some(self.streaming.lod_source()),
+        };
+        if let Some(source) = source {
+            self.lod = Some(horizon_client::lod::Lod::new(
+                source,
+                self.pack.context.clone(),
+            ));
+            self.lod_observe.extend(self.world.chunks.keys().copied());
+        }
+    }
     fn update_world(&mut self) {
         if let Err(e) = self.poll_remote() {
             log::warn!("Horizon: {e}");
+        }
+        self.prepare_lod();
+        if self.lod.is_some() {
+            for &((x, _, z), _, _) in &self.world.light_edits {
+                self.lod_observe.insert((x >> 4, z >> 4));
+            }
         }
         if let Some(p) = &self.player {
             self.streaming.center = (
@@ -9635,6 +9704,23 @@ impl Game<'_> {
         }
         let (uploads, unloaded) =
             horizon_client::spans::time("streaming", || self.streaming.update(&mut self.world));
+        if let Some(lod) = &mut self.lod {
+            self.lod_observe
+                .extend(uploads.iter().map(|(key, _)| (key.0, key.2)));
+            for chunk in &unloaded {
+                horizon_client::spans::time("lod_observe", || lod.observe(chunk, self.res.facts()));
+                self.lod_observe.remove(&(chunk.x, chunk.z));
+            }
+            let observe: Vec<_> = self.lod_observe.iter().copied().take(2).collect();
+            for key in observe {
+                self.lod_observe.remove(&key);
+                if let Some(chunk) = self.world.chunks.get(&key) {
+                    horizon_client::spans::time("lod_observe", || {
+                        lod.observe(chunk, self.res.facts())
+                    });
+                }
+            }
+        }
         let dirty: Vec<_> = unloaded
             .iter()
             .filter(|c| self.world.modified.remove(&(c.x, c.z)))
@@ -9672,14 +9758,18 @@ impl Game<'_> {
             } else {
                 // Horizon's chunk-update and upload budgets: the nearest
                 // sections go first, the rest wait for later frames; a newer
-                // mesh of a waiting section replaces it.
+                // mesh of a waiting section replaces it, and sections of
+                // chunks no longer loaded are dropped.
                 let pending = &mut self.pending_uploads;
                 let fresh: horizon_client::fast_hash::FxHashSet<(i32, i32, i32)> =
                     uploads.iter().map(|(k, _)| *k).collect();
-                let gone: horizon_client::fast_hash::FxHashSet<(i32, i32)> =
-                    unloaded.iter().map(|c| (c.x, c.z)).collect();
-                pending.retain(|(k, _)| !fresh.contains(k) && !gone.contains(&(k.0, k.2)));
-                pending.extend(uploads);
+                let chunks = &self.world.chunks;
+                pending.retain(|(k, _)| !fresh.contains(k) && chunks.contains_key(&(k.0, k.2)));
+                pending.extend(
+                    uploads
+                        .into_iter()
+                        .filter(|(k, _)| chunks.contains_key(&(k.0, k.2))),
+                );
                 let centre = self.streaming.center;
                 let far = |k: &(i32, i32, i32)| (k.0 - centre.0).pow(2) + (k.2 - centre.1).pow(2);
                 pending.sort_unstable_by_key(|(k, _)| std::cmp::Reverse(far(k)));
@@ -9693,7 +9783,9 @@ impl Game<'_> {
                 };
                 let (mut count, mut bytes) = (0, 0u64);
                 while let Some((_, mesh)) = pending.last() {
-                    let size = ((mesh.solid.len() + mesh.translucent.len()) * 32) as u64;
+                    let size = ((mesh.solid.len() + mesh.translucent.len())
+                        * std::mem::size_of::<horizon_client::mesher::TerrainVertex>())
+                        as u64;
                     if (limit > 0 && count >= limit)
                         || (budget > 0 && bytes > 0 && bytes + size > budget)
                     {
@@ -9708,6 +9800,33 @@ impl Game<'_> {
             for c in unloaded {
                 for sy in 0..(HEIGHT / 16) {
                     renderer.remove((c.x, sy, c.z));
+                }
+            }
+            if let (Some(lod), Some(player)) = (&mut self.lod, &self.player) {
+                let covered = renderer
+                    .lod_detail_columns()
+                    .filter(|&(x, z)| {
+                        horizon_client::streaming::in_view_distance(
+                            self.streaming.center,
+                            self.streaming.radius,
+                            x,
+                            z,
+                        )
+                    })
+                    .collect();
+                for (key, mesh) in horizon_client::spans::time("lod_update", || {
+                    lod.update(
+                        [player.position.x, player.position.y, player.position.z],
+                        self.yaw,
+                        self.streaming.radius,
+                        self.settings.horizon.lod_distance,
+                        covered,
+                    )
+                }) {
+                    horizon_client::spans::time("lod_upload", || renderer.upload_lod(key, &mesh));
+                }
+                for key in lod.removed() {
+                    renderer.remove_lod(key);
                 }
             }
         }
@@ -10607,6 +10726,9 @@ impl<'a> Game<'a> {
             screen_fx: Default::default(),
             world,
             streaming,
+            lod: None,
+            lod_source_attempted: false,
+            lod_observe: Default::default(),
             options,
             player: None,
             spawn: None,
@@ -11426,6 +11548,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         bob: glam::Mat4::IDENTITY,
         sky: horizon_client::environment::Sky::default(),
         distance: 12.0,
+        detail_distance: 12.0,
         depth_far: 1000.0,
         underwater: false,
         cave_culling: false,

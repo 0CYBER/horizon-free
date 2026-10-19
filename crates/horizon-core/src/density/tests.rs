@@ -501,6 +501,28 @@ fn grid_interpolation_uses_child_bulk_corners_and_preserves_aligned_delegation()
         .unwrap();
     assert!(output.iter().all(|v| v.to_bits() == (-0.0_f32).to_bits()));
     assert_eq!(traced.volumes.lock().unwrap()[1], volume);
+    let distant = DensityVolume::new([16, 49, 16], [-8192, -64, -8192], [1024, 8, 1024]).unwrap();
+    let mut output = vec![19.; distant.size()];
+    sampler
+        .sample_volume(&mut SamplerContext::sparse(), &mut output, distant)
+        .unwrap();
+    assert_eq!(
+        traced.volumes.lock().unwrap()[2],
+        distant,
+        "far samples must not expand to a block-resolution bounding box"
+    );
+    let unaligned = DensityVolume::new([2; 3], [-5, -9, -7], [1024, 8, 1024]).unwrap();
+    let mut output = [19.; 8];
+    sampler
+        .sample_volume(&mut SamplerContext::sparse(), &mut output, unaligned)
+        .unwrap();
+    assert!(output.iter().all(|&v| v == 0.));
+    assert!(
+        traced.volumes.lock().unwrap()[3..]
+            .iter()
+            .all(|v| v.size() == 8),
+        "unaligned far points use bounded corner queries"
+    );
     assert!(InterpolatedSampler::new(traced.clone(), 0, 8).is_err());
     assert!(InterpolatedSampler::new(traced, 4, -1).is_err());
 }

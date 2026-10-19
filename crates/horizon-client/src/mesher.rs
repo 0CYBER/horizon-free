@@ -64,11 +64,25 @@ pub struct TerrainVertex {
 }
 /// Fixed-point steps per unit of `TerrainVertex` UVs, which span `[0, 2)`.
 pub const UV_STEPS: f32 = 32768.0;
+/// Fixed-point steps per block of distant-terrain UVs (`TerrainVertex::tiled`),
+/// which span `[0, 2048)`: merged faces repeat their sprite once per block.
+pub const TILED_UV_STEPS: f32 = 32.0;
 impl TerrainVertex {
     pub fn new(pos: [f32; 3], uv: [f32; 2], layer: u16, color: u32, light: u16) -> Self {
         Self {
             pos,
             uv: uv.map(|v| (v * UV_STEPS).round().clamp(0.0, f32::from(u16::MAX)) as u16),
+            layer,
+            light,
+            color,
+        }
+    }
+    /// A vertex of a merged distant-terrain face, its UV in blocks from the
+    /// face's corner. Drawn with an instance UV scale of `1 / TILED_UV_STEPS`.
+    pub fn tiled(pos: [f32; 3], uv: [f32; 2], layer: u16, color: u32, light: u16) -> Self {
+        Self {
+            pos,
+            uv: uv.map(|v| (v * TILED_UV_STEPS).round().clamp(0.0, f32::from(u16::MAX)) as u16),
             layer,
             light,
             color,

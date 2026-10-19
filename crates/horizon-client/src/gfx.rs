@@ -61,6 +61,7 @@ mod arena;
 mod cull;
 mod flat;
 mod java_stages;
+mod lod;
 mod occlusion;
 mod pack_stages;
 pub mod panorama;
@@ -70,6 +71,16 @@ pub mod translucency;
 pub(crate) mod upload;
 mod world_post;
 
+/// A section's instance: its camera-relative origin and, in `w`, the step of
+/// its fixed-point UVs (`terrain.wgsl`'s `terrain_uv`).
+fn section_instance(origin: [f32; 3]) -> [f32; 4] {
+    [
+        origin[0],
+        origin[1],
+        origin[2],
+        1.0 / crate::mesher::UV_STEPS,
+    ]
+}
 /// A new value for `Renderer::block_entity_revision`.
 fn next_block_entity_revision() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -131,6 +142,8 @@ pub struct Frame<'a> {
     pub sky: Sky,
     /// Render distance in blocks (fog end).
     pub distance: f32,
+    /// Full-detail terrain distance in blocks; distant LODs bypass the cave graph.
+    pub detail_distance: f32,
     /// `Camera.depthFar`: the far plane (`crate::camera::depth_far`).
     pub depth_far: f32,
     pub underwater: bool,
@@ -352,6 +365,8 @@ pub struct Renderer {
     outline: wgpu::Buffer,
     depth: wgpu::TextureView,
     sections: resident::Resident<SectionGpu>,
+    lods: HashMap<crate::lod::TileKey, lod::Tile>,
+    detail_columns: HashMap<(i32, i32), u32>,
     arena: arena::Arena,
     sorted_indices: arena::Arena,
     translucent_sorter: translucency::Sorter,
@@ -363,6 +378,8 @@ pub struct Renderer {
     pub multi_draw: bool,
     /// Per-frame scratch, kept to avoid allocating every frame.
     visible: Vec<resident::Visible>,
+    visible_lods: Vec<lod::Visible>,
+    translucent_draws: Vec<(u64, usize, [u32; 5], (u32, Option<u32>))>,
     origins: Vec<[f32; 4]>,
     /// `DrawIndexedIndirectArgs` words: index count, instance count, first
     /// index, base vertex, first instance.
@@ -570,6 +587,7 @@ impl Renderer {
         let vertices: u64 = self
             .sections
             .values()
+            .chain(self.lods.values().map(|tile| &tile.mesh))
             .map(|s| u64::from(s.solid + s.translucent) * 4)
             .sum();
         [self.arena.bytes(), vertices * stride]
@@ -1856,6 +1874,8 @@ impl Renderer {
             outline,
             depth,
             sections: resident::Resident::default(),
+            lods: HashMap::new(),
+            detail_columns: HashMap::new(),
             arena,
             sorted_indices,
             translucent_sorter: translucency::Sorter::default(),
@@ -1864,6 +1884,8 @@ impl Renderer {
             indirect_capacity: 1024,
             multi_draw,
             visible: Vec::new(),
+            visible_lods: Vec::new(),
+            translucent_draws: Vec::new(),
             origins: Vec::new(),
             draws: Vec::new(),
             draw_pages: Vec::new(),
@@ -2067,11 +2089,22 @@ impl Renderer {
         if changed {
             self.block_entity_revision = next_block_entity_revision();
         }
+        self.release_section(key);
+        let section = self.upload_mesh(mesh);
+        if section.is_some() || (mesh.solid.is_empty() && mesh.translucent.is_empty()) {
+            *self.detail_columns.entry((key.0, key.2)).or_default() |= 1 << key.1;
+        } else if let Some(mask) = self.detail_columns.get_mut(&(key.0, key.2)) {
+            *mask &= !(1 << key.1);
+        }
+        if let Some(section) = section {
+            self.sections.insert(key, section);
+        }
+    }
+    fn upload_mesh(&mut self, mesh: &SectionMesh) -> Option<SectionGpu> {
         let solid = (mesh.solid.len() / 4) as u32;
         let translucent = (mesh.translucent.len() / 4) as u32;
-        self.release_section(key);
         if solid + translucent == 0 {
-            return;
+            return None;
         }
         let max = solid.max(translucent);
         if max > self.index_quads {
@@ -2086,16 +2119,14 @@ impl Renderer {
                 })
         });
         // With video and system memory both full, the section is not drawn.
-        let Some((page, start)) = self.arena.alloc(&self.device, encoder, vertices) else {
-            return;
-        };
+        let (page, start) = self.arena.alloc(&self.device, encoder, vertices)?;
         let sorted_indices = if translucent > 0 {
             let indices =
                 self.sorted_indices
                     .alloc(&self.device, encoder, u64::from(translucent) * 6);
             if indices.is_none() {
                 self.arena.release(page, start, vertices);
-                return;
+                return None;
             }
             indices
         } else {
@@ -2130,26 +2161,23 @@ impl Renderer {
         {
             self.queue.submit([copies]);
         }
-        self.sections.insert(
-            key,
-            SectionGpu {
-                page,
-                start,
-                solid,
-                translucent,
-                faces: mesh.faces,
-                sort: translucency::SortState::new(
-                    mesh.translucent
-                        .as_chunks::<4>()
-                        .0
-                        .iter()
-                        .map(|q| translucency::quad_center(q[0].pos, q[2].pos))
-                        .collect(),
-                ),
-                sorted_indices,
-                flat_id,
-            },
-        );
+        Some(SectionGpu {
+            page,
+            start,
+            solid,
+            translucent,
+            faces: mesh.faces,
+            sort: translucency::SortState::new(
+                mesh.translucent
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|q| translucency::quad_center(q[0].pos, q[2].pos))
+                    .collect(),
+            ),
+            sorted_indices,
+            flat_id,
+        })
     }
     /// The section copies recorded since the last submission, closed.
     fn take_section_copies(&mut self) -> Option<wgpu::CommandBuffer> {
@@ -2194,16 +2222,19 @@ impl Renderer {
     }
     fn release_section(&mut self, key: SectionKey) {
         if let Some(s) = self.sections.remove(key) {
-            if let (Some(flat), Some(id)) = (&mut self.flat, s.flat_id) {
-                flat.remove(id);
-            }
-            if let Some((page, start)) = s.sorted_indices {
-                self.sorted_indices
-                    .release(page, start, u64::from(s.translucent) * 6);
-            }
-            self.arena
-                .release(s.page, s.start, u64::from(s.solid + s.translucent) * 4);
+            self.release_mesh(s);
         }
+    }
+    fn release_mesh(&mut self, s: SectionGpu) {
+        if let (Some(flat), Some(id)) = (&mut self.flat, s.flat_id) {
+            flat.remove(id);
+        }
+        if let Some((page, start)) = s.sorted_indices {
+            self.sorted_indices
+                .release(page, start, u64::from(s.translucent) * 6);
+        }
+        self.arena
+            .release(s.page, s.start, u64::from(s.solid + s.translucent) * 4);
     }
     /// Block-entity blocks of every meshed section (see `SectionMesh::block_entities`).
     pub fn block_entities(&self) -> impl Iterator<Item = &([i32; 3], u32)> {
@@ -2217,6 +2248,8 @@ impl Renderer {
         self.block_entities.clear();
         self.block_entity_revision = next_block_entity_revision();
         self.sections.clear();
+        self.lods.clear();
+        self.detail_columns.clear();
         self.arena.clear();
         if let Some(flat) = &mut self.flat {
             flat.clear();
@@ -2225,7 +2258,19 @@ impl Renderer {
         self.translucency_cursor = 0;
         self.occlusion.clear();
     }
+    pub fn lod_detail_columns(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
+        let complete = (1u32 << (crate::chunk::HEIGHT / 16)) - 1;
+        self.detail_columns
+            .iter()
+            .filter_map(move |(&column, &mask)| (mask == complete).then_some(column))
+    }
     pub fn remove(&mut self, key: SectionKey) {
+        if let Some(mask) = self.detail_columns.get_mut(&(key.0, key.2)) {
+            *mask &= !(1 << key.1);
+            if *mask == 0 {
+                self.detail_columns.remove(&(key.0, key.2));
+            }
+        }
         if self.block_entities.remove(&key).is_some() {
             self.block_entity_revision = next_block_entity_revision();
         }
@@ -2608,7 +2653,9 @@ impl Renderer {
         let camera_section = camera_section(camera);
         let culling = !frame.title && frame.cave_culling;
         if culling {
-            crate::spans::time("occlusion", || self.start_occlusion(camera, frame.distance));
+            crate::spans::time("occlusion", || {
+                self.start_occlusion(camera, frame.detail_distance)
+            });
         }
         let reachable = &self.occlusion;
         let mut visible = std::mem::take(&mut self.visible);
@@ -2616,15 +2663,27 @@ impl Renderer {
         crate::spans::time("visibility", || {
             self.sections.visible(
                 camera,
-                (frame.distance / 16.0) as i32,
+                (frame.detail_distance / 16.0) as i32,
                 &view,
                 |k| !culling || reachable.contains(k),
                 &mut visible,
             )
         });
-        self.drawn_sections = visible.len();
-        if visible.len() as u64 > self.instance_capacity {
-            self.instance_capacity = (visible.len() as u64).next_power_of_two();
+        let mut visible_lods = std::mem::take(&mut self.visible_lods);
+        visible_lods.clear();
+        if frame.title {
+            visible.clear();
+        } else {
+            visible_lods.extend(
+                self.lods
+                    .iter()
+                    .filter_map(|(&key, tile)| tile.visible(key, camera, frame.distance, &view)),
+            );
+            visible_lods.sort_unstable_by_key(|v| (v.distance, v.key));
+        }
+        self.drawn_sections = visible.len() + visible_lods.len();
+        if self.drawn_sections as u64 > self.instance_capacity {
+            self.instance_capacity = (self.drawn_sections as u64).next_power_of_two();
             self.instances = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Section origins"),
                 size: self.instance_capacity * 16,
@@ -2638,7 +2697,8 @@ impl Renderer {
         self.origins.extend(
             visible
                 .iter()
-                .map(|v| [v.origin[0], v.origin[1], v.origin[2], 0.0]),
+                .map(|v| section_instance(v.origin))
+                .chain(visible_lods.iter().map(|v| lod::instance(v.origin))),
         );
         if !self.origins.is_empty() {
             self.uploads.buffer(
@@ -2647,9 +2707,6 @@ impl Renderer {
                 0,
                 bytemuck::cast_slice(&self.origins),
             );
-        }
-        if frame.title {
-            visible.clear();
         }
         // Solid sections front to back, then translucent ones back to front,
         // as one list of indirect draws over the section arena.
@@ -2697,6 +2754,16 @@ impl Renderer {
                 None => {}
             }
         }
+        // Distant terrain tiles are never occlusion tested: phase 1.
+        for (i, v) in visible_lods.iter().enumerate() {
+            let s = &self.lods[&v.key].mesh;
+            s.faces.ranges(eye - Vec3::from(v.origin), |first, quads| {
+                let first = s.start + u64::from(first) * 4;
+                self.draws
+                    .push([quads * 6, 1, 0, first as u32, (visible.len() + i) as u32]);
+                self.draw_pages.push((s.page, None));
+            });
+        }
         let phase1_draws = self.draws.len() as u32;
         self.draws.extend_from_slice(&self.phase2_draws);
         self.draw_pages.extend_from_slice(&self.phase2_pages);
@@ -2704,7 +2771,8 @@ impl Renderer {
         let solid_draws = self.draws.len() as u32;
         // LevelRenderer: nearby sections each frame, plus a rotating eighth
         // (at least 15) of the visible list. Cached views avoid needless sorts.
-        let count = visible.len();
+        self.translucent_draws.clear();
+        let count = visible.len() + visible_lods.len();
         let budget = (count / 8).max(15).min(count);
         self.translucency_cursor %= count.max(1);
         for (i, v) in visible.iter().enumerate().rev() {
@@ -2732,15 +2800,66 @@ impl Renderer {
                     );
                 }
                 let first = s.start + u64::from(s.solid) * 4;
-                self.draws.push([
-                    s.translucent * 6,
-                    1,
-                    index_start as u32,
-                    first as u32,
-                    i as u32,
-                ]);
-                self.draw_pages.push((s.page, Some(index_page)));
+                self.translucent_draws.push((
+                    v.distance,
+                    i,
+                    [
+                        s.translucent * 6,
+                        1,
+                        index_start as u32,
+                        first as u32,
+                        i as u32,
+                    ],
+                    (s.page, Some(index_page)),
+                ));
             }
+        }
+        // Sections went back to front (`visible` is sorted by distance, then
+        // key): tiles' water only needs sorting in when there is some.
+        let section_translucent = self.translucent_draws.len();
+        for (i, v) in visible_lods.iter().enumerate() {
+            let instance = visible.len() + i;
+            let tile = self.lods.get_mut(&v.key).expect("visible resident tile");
+            let s = &mut tile.mesh;
+            if let Some((index_page, index_start)) = s.sorted_indices {
+                let scheduled = (instance + count - self.translucency_cursor) % count < budget;
+                if (!s.sort.is_sorted() || scheduled)
+                    && let Some(indices) = s.sort.update_lod(
+                        camera.to_array(),
+                        v.key.origin(),
+                        &mut self.translucent_sorter,
+                    )
+                {
+                    self.uploads.buffer(
+                        &mut encoder,
+                        self.sorted_indices.buffer(index_page),
+                        index_start * 4,
+                        bytemuck::cast_slice(indices),
+                    );
+                }
+                let first = s.start + u64::from(s.solid) * 4;
+                self.translucent_draws.push((
+                    v.distance,
+                    instance,
+                    [
+                        s.translucent * 6,
+                        1,
+                        index_start as u32,
+                        first as u32,
+                        instance as u32,
+                    ],
+                    (s.page, Some(index_page)),
+                ));
+            }
+        }
+        // Near water and distant water share one back-to-front draw order.
+        if self.translucent_draws.len() > section_translucent {
+            self.translucent_draws
+                .sort_unstable_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+        }
+        for &(_, _, draw, pages) in &self.translucent_draws {
+            self.draws.push(draw);
+            self.draw_pages.push(pages);
         }
         self.translucency_cursor += budget;
         let translucent_draws = self.draws.len() as u32 - solid_draws;
@@ -2928,6 +3047,7 @@ impl Renderer {
                 if self.flat_on && !self.draws.is_empty() && self.draws.len() >= flat.min_draws =>
             {
                 let sections = &self.sections;
+                let lods = &self.lods;
                 let sorted = &self.sorted_indices;
                 crate::spans::time("flatten", || {
                     flat.prepare(
@@ -2939,7 +3059,14 @@ impl Renderer {
                         solid_draws as usize,
                         visible
                             .iter()
-                            .filter_map(|v| sections.get(v.slot).flat_id.map(|id| (id, v.origin))),
+                            .filter_map(|v| {
+                                let id = sections.get(v.slot).flat_id?;
+                                Some((id, section_instance(v.origin)))
+                            })
+                            .chain(visible_lods.iter().filter_map(|v| {
+                                let id = lods[&v.key].mesh.flat_id?;
+                                Some((id, lod::instance(v.origin)))
+                            })),
                         |page| sorted.buffer(page).clone(),
                     )
                 })
@@ -3453,6 +3580,7 @@ impl Renderer {
         self.last_encode = started.elapsed().saturating_sub(self.last_wait);
         let _ = self.started;
         self.visible = visible;
+        self.visible_lods = visible_lods;
         Ok(true)
     }
 }

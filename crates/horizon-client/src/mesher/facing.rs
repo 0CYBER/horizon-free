@@ -42,6 +42,11 @@ impl Default for FaceGroups {
 }
 
 impl FaceGroups {
+    /// Group arbitrary-sized terrain quads, including distant LOD tiles.
+    pub fn group(solid: &mut Vec<TerrainVertex>) -> Self {
+        group(solid)
+    }
+
     /// Whether group `g` can hold a front-facing quad for an eye at `eye`,
     /// relative to the section's minimum corner.
     pub fn visible(&self, g: usize, eye: Vec3) -> bool {

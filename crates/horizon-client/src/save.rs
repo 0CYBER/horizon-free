@@ -29,7 +29,7 @@ use horizon_world::{
     chunk::BlockState,
     chunk_status::ChunkStatus,
     compression::Compression,
-    heightmap::{Heightmap, HeightmapChunk, HeightmapType},
+    heightmap::{Heightmap, HeightmapChunk, HeightmapState, HeightmapType},
     nbt::{self, Compound, JavaString, Limits, NamedTag, Tag},
     region::{ChunkRecord, RegionFile},
     registry::{BlockRegistry, BlockStateId},
@@ -2833,10 +2833,361 @@ pub struct Persistent<G> {
     pub registry: Arc<crate::assets::Assets>,
     pub biomes: Arc<Biomes>,
 }
+type LodSurfaces = Arc<[crate::lod::Column; 256]>;
+struct SavedLodSampler<G: ChunkGenerator> {
+    generator: Arc<Persistent<G>>,
+    inner: Box<dyn crate::streaming::LodSampler>,
+    cache: std::collections::VecDeque<((i32, i32), Option<LodSurfaces>)>,
+    details: Vec<crate::streaming::LodDetail>,
+}
+impl<G: ChunkGenerator> SavedLodSampler<G> {
+    fn saved_columns(&mut self, key: (i32, i32)) -> Option<LodSurfaces> {
+        let cached = match self.cache.iter().position(|(at, _)| *at == key) {
+            Some(index) => self.cache.remove(index).unwrap(),
+            None => (
+                key,
+                self.generator.save.lod_surfaces(
+                    key.0,
+                    key.1,
+                    &self.generator.registry,
+                    &self.generator.biomes,
+                ),
+            ),
+        };
+        let columns = cached.1.clone();
+        self.cache.push_front(cached);
+        self.cache.truncate(128);
+        columns
+    }
+}
+impl<G: ChunkGenerator> crate::streaming::LodSampler for SavedLodSampler<G> {
+    fn fork(&self) -> Option<Box<dyn crate::streaming::LodSampler>> {
+        Some(Box::new(Self {
+            generator: self.generator.clone(),
+            inner: self.inner.fork()?,
+            cache: Default::default(),
+            details: Vec::new(),
+        }))
+    }
+    fn request_detail(&mut self, chunks: &[(i32, i32)], center: [i32; 2]) {
+        let mut missing = Vec::new();
+        for &key in chunks {
+            if let Some(columns) = self.saved_columns(key) {
+                self.details.push((key, columns));
+            } else {
+                missing.push(key);
+            }
+        }
+        self.inner.request_detail(&missing, center);
+    }
+    fn drain_details(&mut self) -> Vec<crate::streaming::LodDetail> {
+        let mut details = std::mem::take(&mut self.details);
+        for (key, generated) in self.inner.drain_details() {
+            // A generation batch also returns neighbouring, unrequested chunks.
+            // Their saved builds must take precedence too.
+            details.push((key, self.saved_columns(key).unwrap_or(generated)));
+        }
+        details
+    }
+    fn grid(&mut self, x: i32, z: i32, stride: i32, side: usize) -> Vec<crate::lod::Column> {
+        let mut columns = self.inner.grid(x, z, stride, side);
+        if stride <= 16 {
+            for (index, column) in columns.iter_mut().enumerate() {
+                let (wx, wz) = (
+                    x + (index % side) as i32 * stride,
+                    z + (index / side) as i32 * stride,
+                );
+                if let Some(saved) = self.saved_columns((wx >> 4, wz >> 4)) {
+                    *column = crate::lod::Column::reduced(
+                        &saved,
+                        (wx & 15) as usize,
+                        (wz & 15) as usize,
+                        stride as usize,
+                    );
+                }
+            }
+        }
+        columns
+    }
+    fn sample(&mut self, x: i32, z: i32) -> Option<crate::lod::Surface> {
+        self.column(x, z).surface
+    }
+    fn column(&mut self, x: i32, z: i32) -> crate::lod::Column {
+        self.reduced_column(x, z, 1)
+    }
+    fn reduced_column(&mut self, x: i32, z: i32, width: i32) -> crate::lod::Column {
+        if width <= 16
+            && let Some(columns) = self.saved_columns((x >> 4, z >> 4))
+        {
+            return crate::lod::Column::reduced(
+                &columns,
+                (x & 15) as usize,
+                (z & 15) as usize,
+                width as usize,
+            );
+        }
+        self.inner.reduced_column(x, z, width)
+    }
+}
+
+/// Read one palette index without expanding the other entries in the section.
+fn lod_palette_index(
+    container: &Tag,
+    index: usize,
+    entries: usize,
+    minimum_bits: u32,
+) -> Option<usize> {
+    let Tag::List(palette) = container.get("palette")? else {
+        return None;
+    };
+    if palette.is_empty() || palette.len() > entries || index >= entries {
+        return None;
+    }
+    if palette.len() == 1 {
+        return Some(0);
+    }
+    let bits = (usize::BITS - (palette.len() - 1).leading_zeros()).max(minimum_bits);
+    let per_word = 64 / bits as usize;
+    let Tag::LongArray(data) = container.get("data")? else {
+        return None;
+    };
+    if data.len() != entries.div_ceil(per_word) {
+        return None;
+    }
+    let value = ((data[index / per_word] as u64 >> ((index % per_word) * bits as usize))
+        & ((1 << bits) - 1)) as usize;
+    (value < palette.len()).then_some(value)
+}
+fn lod_light_layers(sections: &[(i32, &Tag)], sky_light: bool) -> Box<[u8]> {
+    let mut layers = [(None, None); SECTIONS];
+    for &(y, section) in sections {
+        let layer = |name: &str| match section.get(name) {
+            Some(Tag::ByteArray(data)) if data.len() == 2048 => Some(&data[..]),
+            _ => None,
+        };
+        layers[(y - (MIN_Y >> 4)) as usize] = (
+            if sky_light { layer("SkyLight") } else { None },
+            layer("BlockLight"),
+        );
+    }
+    let mut light = vec![0u8; SECTIONS * 4096].into_boxed_slice();
+    let mut above = [if sky_light { 15u8 } else { 0 }; 256];
+    let nibble = |data: &[u8], index: usize| (data[index / 2] >> ((index & 1) * 4)) & 15;
+    for si in (0..SECTIONS).rev() {
+        let (sky, block) = layers[si];
+        let section = &mut light[si * 4096..(si + 1) * 4096];
+        for (index, value) in section.iter_mut().enumerate() {
+            *value = sky.map_or(above[index & 255], |data| nibble(data, index)) << 4
+                | block.map_or(0, |data| nibble(data, index));
+        }
+        // Missing sky layers inherit the bottom layer above, as load_light does.
+        for (index, value) in above.iter_mut().enumerate() {
+            *value = section[index] >> 4;
+        }
+    }
+    light
+}
+fn lod_face_light(light: &[u8], x: usize, y: usize, z: usize) -> u16 {
+    let index = y * 256 + z * 16 + x;
+    let mut sky = light[index] >> 4;
+    let mut block = light[index] & 15;
+    for (valid, index) in [
+        (x > 0, index.wrapping_sub(1)),
+        (x < 15, index + 1),
+        (z > 0, index.wrapping_sub(16)),
+        (z < 15, index + 16),
+        (y > 0, index.wrapping_sub(256)),
+        (y + 1 < SECTIONS * 16, index + 256),
+    ] {
+        if valid {
+            sky = sky.max(light[index] >> 4);
+            block = block.max(light[index] & 15);
+        }
+    }
+    u16::from(sky) << 4 | u16::from(block) << 12
+}
+fn decode_lod_surfaces(
+    root: &NamedTag,
+    assets: &crate::assets::Assets,
+    biomes: &Biomes,
+    sky_light: bool,
+) -> Option<LodSurfaces> {
+    let Tag::List(sections) = root.tag.get("sections")? else {
+        return None;
+    };
+    let mut sections: Vec<_> = sections
+        .iter()
+        .filter_map(|section| {
+            let y = number(section.get("Y"))? as i32;
+            (MIN_Y >> 4..(MIN_Y >> 4) + SECTIONS as i32)
+                .contains(&y)
+                .then_some((y, section))
+        })
+        .collect();
+    sections.sort_unstable_by_key(|(y, _)| std::cmp::Reverse(*y));
+    let mut columns: Box<[crate::lod::Column; 256]> =
+        Box::new(std::array::from_fn(|_| crate::lod::Column {
+            surface: None,
+            spans: Vec::new(),
+        }));
+    let mut water = [None; 256];
+    let light = lod_light_layers(&sections, sky_light);
+    let mut states = BTreeMap::new();
+    for (section_y, section) in sections {
+        if let Some(blocks) = section.get("block_states") {
+            let Tag::List(palette) = blocks.get("palette")? else {
+                return None;
+            };
+            // Resolve each state once per palette, rather than parsing NBT for every block.
+            let palette: Vec<_> = palette
+                .iter()
+                .map(|entry| {
+                    let descriptor = BlockState::from_nbt(entry).ok()?;
+                    let state = *states.entry(descriptor.clone()).or_insert_with(|| {
+                        assets
+                            .registry
+                            .id(&descriptor)
+                            .or_else(|| assets.registry.default_state(&descriptor.name))
+                    });
+                    Some(state.map(|state| {
+                        let properties = assets.properties.heightmap_state(state);
+                        let fluid = matches!(
+                            descriptor.name.as_str(),
+                            "minecraft:water" | "minecraft:lava"
+                        );
+                        (state, fluid, properties.blocks_motion_in_heightmap())
+                    }))
+                })
+                .collect::<Option<_>>()?;
+            let biome_palette: Vec<_> = section
+                .get("biomes")
+                .and_then(|container| match container.get("palette")? {
+                    Tag::List(palette) => Some(palette),
+                    _ => None,
+                })
+                .into_iter()
+                .flatten()
+                .map(|entry| match entry {
+                    Tag::String(name) => biomes.id(&name.to_string_lossy()),
+                    _ => 0,
+                })
+                .collect();
+            for z in 0..16 {
+                for x in 0..16 {
+                    let cell = z * 16 + x;
+                    let column = &mut columns[cell];
+                    for y in (0..16).rev() {
+                        let index = y * 256 + cell;
+                        let palette_index = lod_palette_index(blocks, index, 4096, 4)?;
+                        let Some((state, fluid, solid)) = palette[palette_index] else {
+                            continue;
+                        };
+                        if !solid && !fluid {
+                            continue;
+                        }
+                        let biome = section
+                            .get("biomes")
+                            .and_then(|container| {
+                                lod_palette_index(
+                                    container,
+                                    (y / 4) * 16 + (z / 4) * 4 + x / 4,
+                                    64,
+                                    1,
+                                )
+                            })
+                            .and_then(|index| biome_palette.get(index))
+                            .copied()
+                            .unwrap_or(0);
+                        let height = section_y * 16 + y as i32 + 1;
+                        if column.surface.is_none() {
+                            if fluid {
+                                water[cell].get_or_insert((height, state));
+                            } else {
+                                column.surface = Some(crate::lod::Surface {
+                                    height,
+                                    state,
+                                    water: water[cell],
+                                    biome,
+                                });
+                            }
+                        }
+                        let light = lod_face_light(&light, x, (height - 1 - MIN_Y) as usize, z);
+                        let min = (height - 1) as i16;
+                        let max = height as i16;
+                        if let Some(previous) = column.spans.last_mut()
+                            && previous.min == max
+                            && (previous.state, previous.biome, previous.light)
+                                == (state, biome, light)
+                        {
+                            previous.min = min;
+                        } else {
+                            column.spans.push(crate::lod::Span {
+                                min,
+                                max,
+                                state,
+                                biome,
+                                light,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for column in &mut *columns {
+        column.spans.reverse();
+    }
+    Some(Arc::from(columns))
+}
+
+impl SaveDir {
+    fn lod_surfaces(
+        &self,
+        x: i32,
+        z: i32,
+        assets: &crate::assets::Assets,
+        biomes: &Biomes,
+    ) -> Option<LodSurfaces> {
+        let pending = self
+            .pending
+            .lock()
+            .ok()?
+            .get(&(false, x, z))
+            .map(|(_, record)| record.clone());
+        let root = if let Some(record) = pending {
+            record.tag().map(|tag| (*tag).clone())?
+        } else {
+            // Far-only reads must not populate the gameplay region cache across the whole view.
+            let mut region = RegionFile::open(self.region_path("region", x >> 5, z >> 5)).ok()?;
+            region
+                .read(ChunkPos::new(x, z))
+                .ok()??
+                .nbt(Limits::default())
+                .ok()?
+        };
+        // Proto saves may still be missing decoration from their neighbors.
+        if text(root.tag.get("Status"))
+            .is_some_and(|status| status != "minecraft:full" && status != "full")
+        {
+            return None;
+        }
+        decode_lod_surfaces(&root, assets, biomes, self.sky_light)
+    }
+}
+
 impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
     type Worker = G::Worker;
     fn worker(&self) -> G::Worker {
         self.inner.worker()
+    }
+    fn lod_sampler(self: Arc<Self>) -> Box<dyn crate::streaming::LodSampler> {
+        let inner = ChunkGenerator::lod_sampler(self.inner.clone());
+        Box::new(SavedLodSampler {
+            generator: self,
+            inner,
+            cache: Default::default(),
+            details: Vec::new(),
+        })
     }
     fn load(&self, x: i32, z: i32) -> Option<Chunk> {
         self.save
@@ -2848,6 +3199,10 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
         }
         chunk.entities = self.save.load_entities(x, z);
         Some(chunk)
+    }
+    fn lod_surface(&self, worker: &mut G::Worker, x: i32, z: i32) -> Option<crate::lod::Surface> {
+        // Resident/visited summaries override this procedural fallback in the LOD cache.
+        self.inner.lod_surface(worker, x, z)
     }
     fn prepare_loaded(&self, worker: &mut G::Worker, chunk: &Chunk) {
         self.inner.prepare_loaded(worker, chunk);
@@ -2907,6 +3262,209 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn saved_far_surface_reads_builds_and_water_without_gameplay_chunks() {
+        let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let assets = crate::assets::Assets::load(&root).expect("assets");
+        let biomes = Biomes::load(&root).expect("biomes");
+        let stone = assets.registry.default_state("minecraft:stone").unwrap();
+        let water = assets.registry.default_state("minecraft:water").unwrap();
+        let sand = assets.registry.default_state("minecraft:sand").unwrap();
+        let dirt = assets.registry.default_state("minecraft:dirt").unwrap();
+        let leaves = assets
+            .registry
+            .default_state("minecraft:oak_leaves")
+            .unwrap();
+        let mut chunk = Chunk::empty(-2, 3);
+        chunk.set(0, 109, 0, stone.0);
+        chunk.set(3, 121, 5, stone.0);
+        chunk.set(3, 122, 5, stone.0);
+        chunk.set(3, 120, 5, dirt.0);
+        chunk.set(3, 119, 5, dirt.0);
+        chunk.set(3, 115, 5, stone.0);
+        chunk.set(11, 125, 11, stone.0);
+        chunk.set(14, 127, 14, stone.0);
+        chunk.set(14, 112, 14, stone.0);
+        for y in 95..98 {
+            chunk.set(2, y, 6, stone.0);
+        }
+        chunk.lit = true;
+        let mut cave_light = Box::new([0x03; 4096]);
+        cave_light[crate::chunk::index(12, 125, 11)] = 0xa7;
+        Arc::make_mut(&mut chunk.sections[((121 - MIN_Y) >> 4) as usize]).light =
+            Light::Full(cave_light);
+        chunk.set(7, 90, 9, sand.0);
+        chunk.set(7, 98, 9, leaves.0);
+        let forest = biomes.id("minecraft:forest");
+        chunk.set_biome_cell(7 / 4, (98 - MIN_Y) / 4, 9 / 4, forest);
+        chunk.set(4, 54, 4, sand.0);
+        for y in 55..64 {
+            chunk.set(4, y, 4, water.0);
+        }
+        let mut saved = encode(&chunk, assets.registry, &biomes);
+        put(
+            &mut saved.tag,
+            "block_entities",
+            Tag::String("not decoded by far sampling".into()),
+        );
+        let dir = std::env::temp_dir().join(format!("horizon-lod-save-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let save = SaveDir::new(dir.clone());
+        save.write_records("region", vec![((-2, 3), Some(saved))], true)
+            .unwrap();
+        let reopened = SaveDir::new(dir.clone());
+        let surfaces = reopened
+            .lod_surfaces(-2, 3, &assets, &biomes)
+            .expect("saved summary");
+        assert_eq!(surfaces[0].surface.unwrap().height, 110);
+        assert_eq!(surfaces[0].surface.unwrap().state, stone);
+        let narrow_build = surfaces[5 * 16 + 3].surface.unwrap();
+        assert_eq!((narrow_build.height, narrow_build.state), (123, stone));
+        assert!(
+            surfaces[5 * 16 + 2].surface.is_none(),
+            "adjacent columns stay distinct"
+        );
+        let strata = &surfaces[5 * 16 + 3].spans;
+        assert_eq!(
+            strata
+                .iter()
+                .map(|span| (span.min, span.max, span.state))
+                .collect::<Vec<_>>(),
+            vec![(115, 116, stone), (119, 121, dirt), (121, 123, stone)]
+        );
+        assert!(
+            strata.iter().all(|span| span.light == 0x3000),
+            "saved cave darkness and block light survive"
+        );
+        assert_eq!(
+            surfaces[11 * 16 + 11].spans[0].light,
+            0x70a0,
+            "neighbor face light uses separate sky/block channels"
+        );
+        let boundaries = &surfaces[14 * 16 + 14].spans;
+        assert_eq!(boundaries.len(), 2);
+        assert!(
+            boundaries.iter().all(|span| span.light == 0x30f0),
+            "face light crosses section boundaries above and below"
+        );
+        let across_sections = &surfaces[6 * 16 + 2].spans;
+        assert_eq!(across_sections.len(), 1);
+        assert_eq!((across_sections[0].min, across_sections[0].max), (95, 98));
+        let canopy = surfaces[9 * 16 + 7].surface.unwrap();
+        assert_eq!(
+            (canopy.height, canopy.state, canopy.biome),
+            (99, leaves, forest)
+        );
+        let underwater = surfaces[4 * 16 + 4].surface.unwrap();
+        assert_eq!((underwater.height, underwater.state), (55, sand));
+        assert_eq!(underwater.water, Some((64, water)));
+        assert!(surfaces[15].surface.is_none(), "saved void stays empty");
+        assert!(
+            reopened.regions.lock().unwrap().is_empty(),
+            "far reads do not grow gameplay region cache"
+        );
+        let mut proto = encode(&chunk, assets.registry, &biomes);
+        put(
+            &mut proto.tag,
+            "Status",
+            string(ChunkStatus::Terrain.name()),
+        );
+        put(&mut proto.tag, "xPos", Tag::Int(-3));
+        save.write_records("region", vec![((-3, 3), Some(proto))], true)
+            .unwrap();
+        assert!(
+            reopened.lod_surfaces(-3, 3, &assets, &biomes).is_none(),
+            "unfinished proto saves must not suppress complete decoration"
+        );
+        let mut nether = SaveDir::new(dir.clone());
+        nether.sky_light = false;
+        let dark = nether.lod_surfaces(-2, 3, &assets, &biomes).unwrap();
+        assert!(
+            dark.iter()
+                .flat_map(|c| &c.spans)
+                .all(|s| s.light & 0xf0 == 0),
+            "no invented skylight in Nether saves"
+        );
+        struct SavedOnly(Vec<crate::streaming::LodDetail>);
+        impl crate::streaming::LodSampler for SavedOnly {
+            fn sample(&mut self, _: i32, _: i32) -> Option<crate::lod::Surface> {
+                panic!("saved data must win")
+            }
+            fn request_detail(&mut self, chunks: &[(i32, i32)], _: [i32; 2]) {
+                assert!(
+                    chunks.is_empty(),
+                    "saved builds must not request speculative generation"
+                );
+            }
+            fn drain_details(&mut self) -> Vec<crate::streaming::LodDetail> {
+                std::mem::take(&mut self.0)
+            }
+        }
+        let inner = Arc::new(crate::testgen::TestTerrain::new(assets.registry, &biomes).unwrap());
+        let generator = Arc::new(Persistent {
+            inner,
+            save: Arc::new(reopened),
+            registry: Arc::new(assets),
+            biomes: Arc::new(biomes),
+        });
+        let mut sampler = SavedLodSampler {
+            generator,
+            inner: Box::new(SavedOnly(Vec::new())),
+            cache: Default::default(),
+            details: Vec::new(),
+        };
+        use crate::streaming::LodSampler;
+        sampler.request_detail(&[(-2, 3)], [-32, 48]);
+        let details = sampler.drain_details();
+        assert_eq!(details.len(), 1);
+        assert_eq!(&details[0].1[..], &surfaces[..]);
+        sampler.cache.clear();
+        let generated: LodSurfaces =
+            Arc::new(std::array::from_fn(|_| crate::lod::Column::default()));
+        sampler.inner = Box::new(SavedOnly(vec![
+            ((-2, 3), generated.clone()),
+            ((-9, 9), generated.clone()),
+        ]));
+        let details = sampler.drain_details();
+        assert_eq!(
+            &details[0].1[..],
+            &surfaces[..],
+            "unrequested batch neighbours must preserve saved builds"
+        );
+        assert!(Arc::ptr_eq(&details[1].1, &generated));
+        sampler.inner =
+            crate::streaming::ChunkGenerator::lod_sampler(sampler.generator.inner.clone());
+        let grid = sampler.grid(-32, 48, 2, 16);
+        for z in 0..8 {
+            for x in 0..8 {
+                assert_eq!(
+                    grid[z * 16 + x],
+                    crate::lod::Column::reduced(&surfaces, x * 2, z * 2, 2),
+                    "saved builds must override a batched direct grid"
+                );
+            }
+        }
+        drop((save, sampler, nether));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn saved_far_surface_rejects_invalid_packed_palettes() {
+        let mut states = Tag::compound([
+            ("palette", Tag::List(vec![Tag::Byte(0), Tag::Byte(1)])),
+            ("data", Tag::LongArray(vec![0; 256])),
+        ]);
+        assert_eq!(lod_palette_index(&states, 4095, 4096, 4), Some(0));
+        assert_eq!(lod_palette_index(&states, 4096, 4096, 4), None);
+        put(&mut states, "data", Tag::LongArray(vec![15; 256]));
+        assert_eq!(lod_palette_index(&states, 0, 4096, 4), None);
+        put(&mut states, "data", Tag::LongArray(vec![0; 255]));
+        assert_eq!(lod_palette_index(&states, 0, 4096, 4), None);
+    }
+
     #[test]
     fn save_batch_preserves_order_coordinates_and_ownership() {
         use crate::containers::BlockEntity;
