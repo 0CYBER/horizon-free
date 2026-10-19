@@ -249,7 +249,8 @@ bundled so the type is the same on every platform.
 
 ## Screenshots
 
-![Server](docs/server.png)
+![Servers](docs/servers.png)
+![Friends over the internet](docs/servers-tailscale.png)
 ![Modpacks](docs/modpacks.png)
 ![Versions](docs/versions.png)
 ![Patch notes](docs/patch-notes.png)
