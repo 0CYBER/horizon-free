@@ -106,6 +106,7 @@ mod persist;
 mod perspective;
 mod pickups;
 mod piglins;
+mod player_equip;
 mod postprocess;
 mod potions;
 mod powder_snow;
@@ -5233,6 +5234,9 @@ impl Game<'_> {
             .collect();
         let carried = self.carried.clone();
         let creative = self.creative;
+        // CreativeModeInventoryScreen clicks the menu itself and sends every
+        // changed slot, which the server sets by player.
+        let equipment_before = (self.screen == Screen::Creative).then(|| self.player_equipment());
         let station_menu = self.station.as_ref().map(|s| {
             (
                 s.loom.selected.map_or(-1, |i| i as i32),
@@ -5324,6 +5328,7 @@ impl Game<'_> {
         let dropped = std::mem::take(&mut menu.dropped);
         let sounds = std::mem::take(&mut menu.sounds);
         let crafted = std::mem::take(&mut menu.crafted);
+        let equipped = std::mem::take(&mut menu.equipped);
         for (i, stack) in after.into_iter().enumerate() {
             if let Some(g) = game_of[i] {
                 *self.slot_mut(g) = stack;
@@ -5365,6 +5370,14 @@ impl Game<'_> {
         {
             // AbstractFurnaceBlockEntity.setItem: only a new input restarts cooking.
             f.input_clicked(self.res.recipes(), before[0].clone());
+        }
+        match equipment_before {
+            Some(before) => self.player_equipment_changed(&before),
+            None => {
+                for (slot, stack) in equipped {
+                    self.player_equipped(slot, stack.as_ref());
+                }
+            }
         }
         self.apply_equipment();
         true
@@ -8878,10 +8891,12 @@ impl Game<'_> {
         if self.creative_inventory_open() {
             if Self::creative_trash_hovered(&batch, self.cursor) {
                 if self.has_shift_down() {
+                    let before = self.player_equipment();
                     self.inventory.fill(None);
                     self.armor.fill(None);
                     self.offhand = None;
                     self.craft_grid[..4].fill(None);
+                    self.player_equipment_changed(&before);
                     self.apply_equipment();
                 } else {
                     self.carried = None;
@@ -9593,7 +9608,12 @@ impl Game<'_> {
                 }
             }
             KeyCode::KeyF if self.screen == Screen::Playing => {
+                // handlePlayerAction SWAP_ITEM_WITH_OFFHAND: setItemInHand for
+                // the off hand, then the main hand.
                 std::mem::swap(&mut self.offhand, &mut self.inventory[self.selected]);
+                let (offhand, main) = (self.offhand.clone(), self.inventory[self.selected].clone());
+                self.player_on_equip("offhand", main.as_ref(), offhand.as_ref());
+                self.player_on_equip("mainhand", offhand.as_ref(), main.as_ref());
                 self.using = None;
             }
             KeyCode::KeyQ if self.screen == Screen::Playing => {

@@ -796,9 +796,15 @@ impl Game<'_> {
         // LivingEntity.canEquipWithDispenser: alive, the slot usable, the
         // item's allowed entities, the slot empty and the dispenser rule.
         let target = self.targets_at(front).into_iter().find(|t| match *t {
-            Target::Player => slot
-                .armor_index()
-                .is_some_and(|i| allows("minecraft:player") && self.armor[i].is_none()),
+            // Player.canUseSlot: every slot; the armour and the off hand are
+            // the ones an equippable item can reach.
+            Target::Player => {
+                allows("minecraft:player")
+                    && match slot {
+                        Slot::OffHand => self.offhand.is_none(),
+                        _ => slot.armor_index().is_some_and(|i| self.armor[i].is_none()),
+                    }
+            }
             Target::Stand(i) => slot.stand_index().is_some_and(|s| {
                 allows("minecraft:armor_stand") && self.armor_stands[i].equipment[s].is_none()
             }),
@@ -818,11 +824,20 @@ impl Game<'_> {
         // setItemSlot: onEquipItem plays the equip sound and the equip event.
         let (at, sound) = match target {
             Target::Player => {
-                if let Some(i) = slot.armor_index() {
-                    self.armor[i] = Some(one);
-                }
+                // Player.setItemSlot: onEquipItem plays the sound and the event.
+                let name = match slot.armor_index() {
+                    Some(i) => {
+                        self.armor[i] = Some(one.clone());
+                        ["head", "chest", "legs", "feet"][i]
+                    }
+                    None => {
+                        self.offhand = Some(one.clone());
+                        "offhand"
+                    }
+                };
+                self.player_equipped(name, Some(&one));
                 self.apply_equipment();
-                (self.player_view().map(|v| v.position), sound)
+                return true;
             }
             Target::Stand(i) => {
                 let stand = &mut self.armor_stands[i];
@@ -849,9 +864,8 @@ impl Game<'_> {
                 self.audio.play(&sound, Some([at.x, at.y, at.z]), 1.0, 1.0);
             }
             let who = match target {
-                Target::Player => Some(horizon_client::mobs::Who::Player),
                 Target::Mob(i) => Some(horizon_client::mobs::Who::Mob(self.mobs[i].id)),
-                Target::Stand(_) => None,
+                Target::Player | Target::Stand(_) => None,
             };
             let ctx = self.who_context(who, None);
             self.post_game_event("minecraft:equip", [at.x, at.y, at.z], ctx);

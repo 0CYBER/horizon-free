@@ -35,6 +35,8 @@ public final class VanillaMenuOracle {
     static java.lang.reflect.Method allocate;
     static RecipeManager recipes;
     static final List<String> drops = new ArrayList<>();
+    /** onEquipItem calls that change the item (its sound and game event): slot and new stack. */
+    static final List<String> equips = new ArrayList<>();
     /** The block entity behind a "crafter_be" menu (slot state packets go to it). */
     static net.minecraft.world.level.block.entity.CrafterBlockEntity crafter;
 
@@ -105,7 +107,9 @@ public final class VanillaMenuOracle {
         @Override public EntityType<?> getType() { return net.minecraft.world.entity.EntityTypes.PLAYER; }
         @Override public net.minecraft.core.Holder<EntityType<?>> typeHolder() { return net.minecraft.world.entity.EntityTypes.PLAYER.builtInRegistryHolder(); }
         @Override public boolean canUseSlot(EquipmentSlot slot) { return true; }
-        @Override public void onEquipItem(EquipmentSlot slot, ItemStack old, ItemStack now) { }
+        @Override public void onEquipItem(EquipmentSlot slot, ItemStack old, ItemStack now) {
+            if (!ItemStack.isSameItemSameComponents(old, now)) equips.add(slot.getName() + ":" + ParityData.canon(now));
+        }
         @Override public boolean hasDisconnected() { return false; }
         @Override public ItemEntity drop(ItemStack stack, boolean thrown, net.minecraft.util.Prediction p) {
             if (!stack.isEmpty()) drops.add(ParityData.canon(stack));
@@ -190,6 +194,7 @@ public final class VanillaMenuOracle {
         out.append(" |");
         for (DataSlot d : data) out.append(' ').append(d.get());
         out.append(" | ").append(String.join(";", drops));
+        out.append(" | ").append(String.join(";", equips));
         return out.toString();
     }
 
@@ -207,6 +212,7 @@ public final class VanillaMenuOracle {
                 var f = JsonParser.parseString(line).getAsJsonObject();
                 try {
                     drops.clear();
+                    equips.clear();
                     var world = make(World.class);
                     world.server = make(Server.class);
                     var player = make(FakePlayer.class);
@@ -228,6 +234,7 @@ public final class VanillaMenuOracle {
                     var dataJson = f.getAsJsonArray("data");
                     for (int i = 0; i < dataJson.size(); i++) menu.setData(i, dataJson.get(i).getAsInt());
                     drops.clear();
+                    equips.clear();
                     out.println("init " + state(menu, inv));
                     for (var opJson : f.getAsJsonArray("ops")) {
                         var op = opJson.getAsJsonArray();

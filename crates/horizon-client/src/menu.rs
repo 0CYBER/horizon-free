@@ -177,6 +177,9 @@ pub struct Menu {
     pub sounds: Vec<&'static str>,
     /// Recipes whose result was taken (`awardUsedRecipes`), for the caller.
     pub crafted: Vec<String>,
+    /// `LivingEntity.onEquipItem` calls that change the item: the
+    /// `EquipmentSlot` name and the new stack, in order, for the caller.
+    pub equipped: Vec<(&'static str, Option<ItemStack>)>,
     /// The merchant a merchant menu trades with.
     pub merchant: Option<Box<crate::merchant::Session>>,
 }
@@ -398,6 +401,7 @@ impl Menu {
             loom_patterns: Vec::new(),
             sounds: Vec::new(),
             crafted: Vec::new(),
+            equipped: Vec::new(),
             merchant: None,
         }
     }
@@ -699,6 +703,47 @@ impl Menu {
         self.slot_changed(env, s);
     }
 
+    /// `Slot.setByPlayer(stack)`: the slot's item is the previous one.
+    fn set_by_player(&mut self, env: &Env, s: usize, stack: Option<ItemStack>) {
+        let previous = self.slot(s).cloned();
+        self.set_by_player_from(env, s, stack, previous.as_ref());
+    }
+
+    /// `Slot.setByPlayer(stack, previous)`: `ArmorSlot` and the inventory
+    /// menu's off-hand slot first call the owner's `onEquipItem`, which acts
+    /// only when the item changes (`isSameItemSameComponents`).
+    fn set_by_player_from(
+        &mut self,
+        env: &Env,
+        s: usize,
+        mut stack: Option<ItemStack>,
+        previous: Option<&ItemStack>,
+    ) {
+        tidy(&mut stack);
+        if let Some(slot) = self.equipment_slot(s) {
+            let same = match (previous.filter(|p| p.count > 0), stack.as_ref()) {
+                (None, None) => true,
+                (Some(a), Some(b)) => a.same_item_same_components(b),
+                _ => false,
+            };
+            if !same {
+                self.equipped.push((slot, stack.clone()));
+            }
+        }
+        self.put(env, s, stack);
+    }
+
+    /// The `EquipmentSlot` of an `ArmorSlot` or of `InventoryMenu`'s off-hand
+    /// slot (the only menu slot over inventory slot 40).
+    fn equipment_slot(&self, s: usize) -> Option<&'static str> {
+        let slot = self.slots[s];
+        match slot.role {
+            Role::Armor(eq) => Some(["feet", "legs", "chest", "head"][eq]),
+            _ if slot.container == PLAYER && slot.index == OFFHAND => Some("offhand"),
+            _ => None,
+        }
+    }
+
     /// `Slot.remove`: the container's `removeItem`.
     fn remove(&mut self, env: &Env, s: usize, amount: u32) -> Option<ItemStack> {
         let slot = self.slots[s];
@@ -832,7 +877,7 @@ impl Menu {
         }
         let result = self.remove(env, s, amount.min(max_amount))?;
         if self.slot(s).is_none() {
-            self.put(env, s, None);
+            self.set_by_player_from(env, s, None, Some(&result));
         }
         Some(result)
     }
@@ -872,12 +917,12 @@ impl Menu {
         match self.slot(s).cloned() {
             None => {
                 let part = split(stack, transferable);
-                self.put(env, s, Some(part));
+                self.set_by_player(env, s, Some(part));
             }
             Some(mut current) if current.same_item_same_components(stack) => {
                 stack.count -= transferable;
                 current.count += transferable;
-                self.put(env, s, Some(current));
+                self.set_by_player(env, s, Some(current));
             }
             Some(_) => {}
         }
@@ -1033,7 +1078,7 @@ impl Menu {
                 if !self.has_item(dest) && self.may_place(env, dest, stack) {
                     let max = self.slot_max(env, dest, stack);
                     let part = split(stack, stack.count.min(max));
-                    self.put(env, dest, Some(part));
+                    self.set_by_player(env, dest, Some(part));
                     changed = true;
                     break;
                 }
@@ -1312,7 +1357,8 @@ impl Menu {
         let slot = self.slots[index];
         if stack.count == 0 {
             self.containers[slot.container][slot.index] = None;
-            self.put(env, index, None);
+            // InventoryMenu: setByPlayer(EMPTY, clicked).
+            self.set_by_player_from(env, index, None, Some(&clicked));
         } else {
             self.containers[slot.container][slot.index] = Some(stack.clone());
             self.slot_changed(env, index);
@@ -1418,7 +1464,7 @@ impl Menu {
                             remaining -= i64::from(new_count) - i64::from(have);
                             let mut placed = source.clone();
                             placed.count = new_count;
-                            self.put(env, s, Some(placed));
+                            self.set_by_player(env, s, Some(placed));
                         }
                     }
                     source.count = remaining.max(0) as u32;
@@ -1578,7 +1624,7 @@ impl Menu {
                             tidy(&mut self.carried);
                         } else if carried.count <= self.slot_max(env, s, &carried) {
                             self.carried = Some(clicked);
-                            self.put(env, s, Some(carried));
+                            self.set_by_player(env, s, Some(carried));
                         } else {
                             self.carried = Some(carried);
                         }
@@ -1612,7 +1658,7 @@ impl Menu {
             (None, Some(taken)) => {
                 if self.may_pickup(env, target) {
                     self.containers[PLAYER][inv_slot] = Some(taken.clone());
-                    self.put(env, target, None);
+                    self.set_by_player(env, target, None);
                     self.on_take(env, target);
                 }
             }
@@ -1622,10 +1668,10 @@ impl Menu {
                     if source.count > max {
                         let part = split(&mut source, max);
                         self.containers[PLAYER][inv_slot] = Some(source);
-                        self.put(env, target, Some(part));
+                        self.set_by_player(env, target, Some(part));
                     } else {
                         self.containers[PLAYER][inv_slot] = None;
-                        self.put(env, target, Some(source));
+                        self.set_by_player(env, target, Some(source));
                     }
                 }
             }
@@ -1635,14 +1681,14 @@ impl Menu {
                     if source.count > max {
                         let part = split(&mut source, max);
                         self.containers[PLAYER][inv_slot] = Some(source);
-                        self.put(env, target, Some(part));
+                        self.set_by_player(env, target, Some(part));
                         self.on_take(env, target);
                         if !self.inventory_add(env, &mut taken) {
                             self.drop_stack(&taken);
                         }
                     } else {
                         self.containers[PLAYER][inv_slot] = Some(taken);
-                        self.put(env, target, Some(source));
+                        self.set_by_player(env, target, Some(source));
                         self.on_take(env, target);
                     }
                 }
@@ -1986,6 +2032,47 @@ pub(crate) mod tests {
         let mut menu = Menu::new(kind);
         menu.creative = true;
         test(&env, &mut menu);
+    }
+
+    /// `onEquipItem` runs from the armour and off-hand slots' `setByPlayer`
+    /// when the item changes: never from `Inventory.setItem` (a swap's source).
+    #[test]
+    fn armour_and_off_hand_slots_report_what_is_equipped() {
+        with_menu(Kind::Inventory, |env, menu| {
+            menu.creative = false;
+            let name = |e: &[(&str, Option<ItemStack>)]| {
+                e.iter()
+                    .map(|(slot, s)| format!("{slot}:{}", s.as_ref().map_or("-", |s| &*s.item)))
+                    .collect::<Vec<_>>()
+            };
+            // A shift-click puts the helmet on (InventoryMenu.quickMoveStack).
+            menu.set_slot(env, 9, stack("iron_helmet", 1));
+            menu.click(env, 9, 0, Input::QuickMove).unwrap();
+            assert_eq!(name(&menu.equipped), ["head:minecraft:iron_helmet"]);
+            // Taking it off; the same helmet back on is a change both ways.
+            menu.equipped.clear();
+            menu.click(env, 5, 0, Input::Pickup).unwrap();
+            menu.click(env, 5, 0, Input::Pickup).unwrap();
+            assert_eq!(
+                name(&menu.equipped),
+                ["head:-", "head:minecraft:iron_helmet"]
+            );
+            // F over a hotbar slot: the shield reaches the off hand by
+            // Inventory.setItem, so nothing; a number key onto the off-hand
+            // slot sets it by player.
+            menu.equipped.clear();
+            menu.set_slot(env, 36, stack("shield", 1));
+            menu.click(env, 36, 40, Input::Swap).unwrap();
+            assert_eq!(menu.slot(45).map(|s| &*s.item), Some("minecraft:shield"));
+            assert!(menu.equipped.is_empty());
+            menu.click(env, 45, 1, Input::Swap).unwrap();
+            assert_eq!(name(&menu.equipped), ["offhand:-"]);
+            // Other menus have no equipment slots.
+            let mut chest = Menu::new(Kind::Chest(1));
+            chest.set_slot(env, 0, stack("iron_helmet", 1));
+            chest.click(env, 0, 0, Input::QuickMove).unwrap();
+            assert!(chest.equipped.is_empty());
+        });
     }
 
     #[test]
