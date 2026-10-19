@@ -700,26 +700,39 @@ impl Game<'_> {
     pub(super) fn tick_sculk_blocks(&mut self) -> Result<()> {
         self.sculk_prepare();
         self.sculk_sync_index();
-        let keys: Vec<(i32, i32, i32)> = self.sculk.index.iter().copied().collect();
-        for key in keys {
-            let ticking = self.chunk_ticks(key.0 >> 4, key.2 >> 4);
-            if !ticking {
-                continue;
-            }
-            self.tick_sculk_block(key)?;
+        // `ServerLevel.shouldTickBlocksAt` in a block-ticking chunk, from
+        // every player's tickets (`update_chunk_tickets`), once the chunk is
+        // lit: asked once per chunk, as the sensors share few chunks. Nothing
+        // a sculk tick does loads, unloads or lights a chunk or moves a ticket.
+        let levels = self.tickets.levels();
+        let chunks = &self.world.chunks;
+        let mut ticking = FxHashMap::<(i32, i32), bool>::default();
+        let mut ticks = |cx: i32, cz: i32| {
+            *ticking.entry((cx, cz)).or_insert_with(|| {
+                levels.block_ticking(cx, cz) && chunks.get(&(cx, cz)).is_some_and(|c| c.lit)
+            })
+        };
+        // The ticking ones in the index's order, with whether the chunks
+        // around them tick too.
+        let due: Vec<((i32, i32, i32), bool)> = self
+            .sculk
+            .index
+            .iter()
+            .filter_map(|&key| {
+                let (cx, cz) = (key.0 >> 4, key.2 >> 4);
+                ticks(cx, cz).then(|| {
+                    let adjacent = (-1..=1).all(|dx| (-1..=1).all(|dz| ticks(cx + dx, cz + dz)));
+                    (key, adjacent)
+                })
+            })
+            .collect();
+        for (key, adjacent) in due {
+            self.tick_sculk_block(key, adjacent)?;
         }
         Ok(())
     }
-    /// `ServerLevel.shouldTickBlocksAt` in a block-ticking chunk, from every
-    /// player's tickets (`update_chunk_tickets`), once the chunk is lit.
-    fn chunk_ticks(&self, cx: i32, cz: i32) -> bool {
-        self.tickets.levels().block_ticking(cx, cz)
-            && self.world.chunks.get(&(cx, cz)).is_some_and(|c| c.lit)
-    }
-    fn tick_sculk_block(&mut self, key: (i32, i32, i32)) -> Result<()> {
+    fn tick_sculk_block(&mut self, key: (i32, i32, i32), adjacent: bool) -> Result<()> {
         let time = self.world.game_time;
-        let adjacent = (-1..=1)
-            .all(|dx| (-1..=1).all(|dz| self.chunk_ticks((key.0 >> 4) + dx, (key.2 >> 4) + dz)));
         let Some(entity) = self.sculk_entity(key) else {
             self.sculk.index.remove(&key);
             return Ok(());
