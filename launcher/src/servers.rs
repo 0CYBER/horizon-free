@@ -710,6 +710,20 @@ pub fn names(dir: &Path, file: &str) -> Vec<String> {
         .collect()
 }
 
+/// A list file's names with their UUIDs (empty when the file has none).
+pub fn entries(dir: &Path, file: &str) -> Vec<(String, String)> {
+    fs::read_to_string(dir.join(file))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Vec<Value>>(&t).ok())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|e| {
+            let name = e["name"].as_str()?.to_string();
+            Some((name, e["uuid"].as_str().unwrap_or_default().to_string()))
+        })
+        .collect()
+}
+
 /// A backup, as `horizon-server backups --json` lists it.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct Backup {

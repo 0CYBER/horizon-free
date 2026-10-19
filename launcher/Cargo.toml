@@ -32,6 +32,9 @@ horizon-port-pack = { path = "../crates/horizon-port-pack" }
 horizon-telemetry = { path = "../crates/horizon-telemetry" }
 # The session file's random name.
 getrandom = "0.3"
+# Players' heads on the Servers page, from the default skins in the player's own game files (already
+# in the lockfile through gpui).
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 # Microsoft account secrets in the OS keychain: the Secret Service on Linux through oo7 (the same
 # build gpui uses), Keychain and Credential Manager through keyring.

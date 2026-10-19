@@ -8,6 +8,7 @@ mod markdown;
 mod mcp;
 mod modpacks_page;
 mod perf;
+mod servers_page;
 mod theme;
 
 use gpui::{
@@ -21,6 +22,7 @@ use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Upda
 use horizon_launcher::telemetry;
 use std::borrow::Cow;
 use std::collections::VecDeque;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -31,15 +33,17 @@ enum Page {
     Play,
     Versions,
     Modpacks,
+    Servers,
     Notes,
     Settings,
 }
 
 impl Page {
-    const ALL: [(Page, &'static str); 5] = [
+    const ALL: [(Page, &'static str); 6] = [
         (Page::Play, "Play"),
         (Page::Versions, "Versions"),
         (Page::Modpacks, "Modpacks"),
+        (Page::Servers, "Servers"),
         (Page::Notes, "Patch notes"),
         (Page::Settings, "Settings"),
     ];
@@ -85,12 +89,6 @@ fn ease_out_cubic(x: f32) -> f32 {
 /// How often the launcher looks for new releases while it is open.
 const CHECK_EVERY: Duration = Duration::from_secs(4 * 3600);
 
-#[derive(Clone, Copy, PartialEq)]
-enum Mode {
-    Client,
-    Server,
-}
-
 enum Load<T> {
     Loading,
     Ready(T),
@@ -113,7 +111,6 @@ struct Launcher {
     update_install: Option<(String, bool)>,
     /// The install bar's previous and current fraction, so it moves rather than jumps.
     bar: (f32, f32),
-    mode: Mode,
     releases: Load<Vec<Release>>,
     installed: Vec<String>,
     installing: Option<(String, f32)>,
@@ -134,7 +131,10 @@ struct Launcher {
     /// The folder the running game keeps its settings in: the game home, or a modpack's.
     client_home: Option<std::path::PathBuf>,
     crash: Option<Crash>,
-    server: Option<Running>,
+    /// The Servers page (`servers_page.rs`).
+    servers: servers_page::Servers,
+    /// The window's own focus, so Tab reaches the controls when nothing else has the keyboard.
+    root_focus: FocusHandle,
     /// Microsoft accounts (accounts.json), the sign-in under way and what it last showed.
     accounts: Accounts,
     sign_in: Option<SignIn>,
@@ -142,11 +142,6 @@ struct Launcher {
     keychain: bool,
     /// The game is waiting for its session (a token renewal) before it starts.
     starting_client: Option<String>,
-    server_log: VecDeque<String>,
-    server_error: Option<String>,
-    input: String,
-    input_focused: bool,
-    focus: FocusHandle,
     /// Join a friend: the code typed on the Play page, and the one the game
     /// starting now joins.
     friend_code: String,
@@ -157,7 +152,6 @@ struct Launcher {
     args_input: String,
     args_focused: bool,
     args_focus: FocusHandle,
-    console_scroll: ScrollHandle,
     /// Opt-in data collection: the player's answer and Settings' section (`collection`).
     collection: collection::Collection,
     tx: Sender<Msg>,
@@ -203,9 +197,6 @@ impl Launcher {
         if settings.minecraft_dir.is_none() {
             settings.minecraft_dir = backend::default_minecraft_dir();
         }
-        if settings.server_dir.is_none() {
-            settings.server_dir = Some(backend::data_dir().join("server"));
-        }
         // Release builds on Linux keep their entry in the applications menu up to date (a moved
         // binary changes it); `HORIZON_LAUNCHER_DESKTOP_ENTRY=1` does it in a development build.
         if cfg!(target_os = "linux")
@@ -244,7 +235,6 @@ impl Launcher {
             self_update: SelfUpdate::Idle,
             update_install: None,
             bar: (0., 0.),
-            mode: Mode::Client,
             releases: Load::Loading,
             installed,
             installing: None,
@@ -265,22 +255,17 @@ impl Launcher {
             client_started: None,
             client_home: None,
             crash: None,
-            server: None,
+            servers: servers_page::Servers::new(),
+            root_focus: cx.focus_handle(),
             accounts: Accounts::load(),
             sign_in: None,
             sign_in_state: None,
             keychain: true,
             starting_client: None,
-            server_log: VecDeque::new(),
-            server_error: None,
-            input: String::new(),
-            input_focused: false,
-            focus: cx.focus_handle(),
             friend_code: String::new(),
             friend_focused: false,
             friend_focus: cx.focus_handle(),
             joining: None,
-            console_scroll: ScrollHandle::new(),
             collection: collection::Collection::load(),
             tx,
             rx,
@@ -529,17 +514,13 @@ impl Launcher {
                                 .record_since("launcher.play_to_game_frame_ms", pressed);
                         }
                     }
-                    let log = if job == Job::Server {
-                        &mut self.server_log
-                    } else {
-                        &mut self.prepare_log
-                    };
-                    log.push_back(line);
-                    if log.len() > LOG_LINES {
-                        log.pop_front();
-                    }
-                    if job == Job::Server {
-                        self.console_scroll.scroll_to_bottom();
+                    // The MCP server keeps its own server's log; the launcher's are the preparer's
+                    // and the game's.
+                    if job != Job::Server {
+                        self.prepare_log.push_back(line);
+                        if self.prepare_log.len() > LOG_LINES {
+                            self.prepare_log.pop_front();
+                        }
                     }
                 }
                 Msg::Exit(job, result) => {
@@ -599,27 +580,12 @@ impl Launcher {
                                 });
                             }
                         }
-                        Job::Server => {
-                            self.server = None;
-                            let old = self
-                                .server_log
-                                .iter()
-                                .any(|l| l.contains("unknown option --dedicated"));
-                            self.server_error = error.map(|e| {
-                                if old {
-                                    "This version has no dedicated server. Pick a newer one."
-                                        .to_string()
-                                } else {
-                                    let tail =
-                                        self.server_log.iter().rev().find(|l| !l.trim().is_empty());
-                                    tail.map_or(e.clone(), |t| format!("{e}: {t}"))
-                                }
-                            });
-                        }
+                        Job::Server => {}
                     }
                 }
             }
         }
+        changed |= self.servers_tick();
         if let Some(sign_in) = &self.sign_in {
             let state = sign_in.state();
             let changed_state = format!("{state:?}") != format!("{:?}", self.sign_in_state);
@@ -744,38 +710,11 @@ impl Launcher {
         let Some(tag) = self.selected().cloned() else {
             return;
         };
-        match self.mode {
-            Mode::Client => {
-                if self.client.is_some() || self.starting_client.is_some() {
-                    return;
-                }
-                self.starting_pack = None;
-                self.start_client(tag);
-            }
-            Mode::Server => {
-                if let Some(server) = &mut self.server {
-                    server.send("stop");
-                    return;
-                }
-                let Some(folder) = self.settings.server_dir.clone() else {
-                    return;
-                };
-                if let Err(e) = std::fs::create_dir_all(&folder) {
-                    self.server_error = Some(e.to_string());
-                    return;
-                }
-                self.server_error = None;
-                self.server_log.clear();
-                match backend::spawn(
-                    Job::Server,
-                    backend::server_command(&tag, &folder),
-                    self.tx.clone(),
-                ) {
-                    Ok(r) => self.server = Some(r),
-                    Err(e) => self.server_error = Some(e),
-                }
-            }
+        if self.client.is_some() || self.starting_client.is_some() {
+            return;
         }
+        self.starting_pack = None;
+        self.start_client(tag);
     }
 
     /// Starts the game: the session first (a network round trip when the token needs
@@ -810,7 +749,7 @@ impl Launcher {
         });
     }
 
-    fn choose_folder(&mut self, server: bool, cx: &mut Context<Self>) {
+    fn choose_folder(&mut self, cx: &mut Context<Self>) {
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
@@ -821,11 +760,7 @@ impl Launcher {
             if let Ok(Ok(Some(mut paths))) = paths.await {
                 if let Some(path) = paths.pop() {
                     let _ = this.update(cx, |this, cx| {
-                        if server {
-                            this.settings.server_dir = Some(path);
-                        } else {
-                            this.settings.minecraft_dir = Some(path);
-                        }
+                        this.settings.minecraft_dir = Some(path);
                         this.settings.save();
                         cx.notify();
                     });
@@ -833,18 +768,6 @@ impl Launcher {
             }
         })
         .detach();
-    }
-
-    fn submit_command(&mut self) {
-        let line = std::mem::take(&mut self.input);
-        if line.trim().is_empty() {
-            return;
-        }
-        if let Some(server) = &mut self.server {
-            server.send(line.trim_start_matches('/'));
-            self.server_log.push_back(format!("> {line}"));
-            self.console_scroll.scroll_to_bottom();
-        }
     }
 }
 
@@ -978,6 +901,28 @@ fn mark(size: f32, t: &Theme) -> Div {
         )
 }
 
+/// The last thing the player did was press Tab: focused controls show a ring (a click focuses them
+/// too, without one).
+static KEYBOARD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Makes a control reachable with Tab, pressed with Enter or Space, with a ring when the keyboard
+/// put it in focus.
+fn keyboard(el: Stateful<Div>, t: &Theme) -> Stateful<Div> {
+    let ring = t.accent;
+    el.tab_index(0).focus(move |s| {
+        if KEYBOARD.load(Ordering::Relaxed) {
+            s.shadow(vec![gpui::BoxShadow {
+                color: ring,
+                offset: gpui::point(px(0.), px(0.)),
+                blur_radius: px(0.),
+                spread_radius: px(2.),
+            }])
+        } else {
+            s
+        }
+    })
+}
+
 fn button(
     id: impl Into<SharedString>,
     label: impl Into<SharedString>,
@@ -1006,7 +951,7 @@ fn button(
         .cursor_pointer()
         .child(hover_layer(&id, hover, theme::RADIUS_PILL, 0.))
         .child(div().relative().child(label.into()));
-    let base = track_hover(base, id);
+    let base = keyboard(track_hover(base, id), &t);
     match kind {
         Kind::Primary => base
             .bg(t.accent)
@@ -1025,8 +970,7 @@ fn button(
 
 /// An on/off switch whose knob slides.
 fn switch(id: &'static str, on: bool, t: &Theme) -> Stateful<Div> {
-    div()
-        .id(id)
+    keyboard(div().id(id), t)
         .relative()
         .flex_none()
         .w(px(36.))
@@ -1069,8 +1013,7 @@ fn segments<T: Copy + PartialEq + 'static>(
         .children(options.iter().map(|&(value, label)| {
             let active = current == value;
             let pick = on_pick.clone();
-            div()
-                .id(SharedString::from(format!("{id}-{label}")))
+            keyboard(div().id(SharedString::from(format!("{id}-{label}"))), &t)
                 .flex()
                 .items_center()
                 .h(px(theme::SEGMENT))
@@ -1089,7 +1032,7 @@ fn segments<T: Copy + PartialEq + 'static>(
 }
 
 fn disabled(b: Stateful<Div>) -> Stateful<Div> {
-    b.opacity(theme::DISABLED).cursor_default()
+    b.opacity(theme::DISABLED).cursor_default().tab_stop(false)
 }
 
 /// A page's title in display type and one line on what it is for.
@@ -1309,22 +1252,6 @@ impl Launcher {
             .child(links)
     }
 
-    fn segmented(&self, cx: &mut Context<Self>) -> Stateful<Div> {
-        let this = cx.entity().downgrade();
-        segments(
-            "mode",
-            &[(Mode::Client, "Client"), (Mode::Server, "Server")],
-            self.mode,
-            &self.theme,
-            move |mode, _, cx| {
-                let _ = this.update(cx, |this, cx| {
-                    this.mode = mode;
-                    cx.notify();
-                });
-            },
-        )
-    }
-
     fn picker(&self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let label = self
@@ -1443,36 +1370,14 @@ impl Launcher {
         let prepared = backend::is_prepared(&tag);
         let version = backend::game_version(&tag);
         let hero = self.hero(&tag, &version, prepared, cx);
-        let running = match self.mode {
-            Mode::Client => self.client.is_some() || self.starting_client.is_some(),
-            Mode::Server => self.server.is_some(),
-        };
-        let play_label = match (self.mode, running) {
-            (Mode::Client, false) => "Play",
-            (Mode::Client, true) => "Running",
-            (Mode::Server, false) => "Start server",
-            (Mode::Server, true) => "Stop server",
-        };
-        let kind = if self.mode == Mode::Server && running {
-            Kind::Secondary
-        } else {
-            Kind::Primary
-        };
-        let mut play = button("play", play_label, kind, &t)
+        let running = self.client.is_some() || self.starting_client.is_some();
+        let play_label = if running { "Running" } else { "Play" };
+        let mut play = button("play", play_label, Kind::Primary, &t)
             .min_w(px(132.))
             .h(px(theme::CONTROL_LARGE))
             .px(px(28.))
             .text_size(px(theme::UI.px));
-        let eula = self
-            .settings
-            .server_dir
-            .as_ref()
-            .is_some_and(|d| backend::eula_agreed(d));
-        if !prepared
-            || self.preparing
-            || (self.mode == Mode::Client && running)
-            || (self.mode == Mode::Server && !eula)
-        {
+        if !prepared || self.preparing || running {
             play = disabled(play);
         } else {
             play = play.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -1485,7 +1390,14 @@ impl Launcher {
             .flex()
             .items_center()
             .justify_between()
-            .child(self.segmented(cx))
+            .child(
+                button("host", "Host a server", Kind::Ghost, &t).on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
+                        this.go(Page::Servers);
+                        cx.notify();
+                    },
+                )),
+            )
             .child(
                 div()
                     .flex()
@@ -1533,33 +1445,30 @@ impl Launcher {
                     .into_any_element()
             },
         );
-        let mut rows =
-            div()
-                .flex()
-                .flex_col()
-                .border_t_1()
-                .border_color(t.rule)
-                .child(index_row(
-                    1,
-                    "Resources",
-                    Some(div().child(resources_value).into_any_element()),
-                    Some(prepare.into_any_element()),
-                    &t,
-                ))
-                .child(index_row(
-                    2,
-                    "Minecraft folder",
-                    Some(minecraft),
-                    Some(
-                        button("choose-mc", "Choose…", Kind::Ghost, &t)
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.choose_folder(false, cx)
-                            }))
-                            .into_any_element(),
-                    ),
-                    &t,
-                ));
-        if self.mode == Mode::Client {
+        let mut rows = div()
+            .flex()
+            .flex_col()
+            .border_t_1()
+            .border_color(t.rule)
+            .child(index_row(
+                1,
+                "Resources",
+                Some(div().child(resources_value).into_any_element()),
+                Some(prepare.into_any_element()),
+                &t,
+            ))
+            .child(index_row(
+                2,
+                "Minecraft folder",
+                Some(minecraft),
+                Some(
+                    button("choose-mc", "Choose…", Kind::Ghost, &t)
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.choose_folder(cx)))
+                        .into_any_element(),
+                ),
+                &t,
+            ));
+        {
             let who = match self.accounts.selected() {
                 Some(a) => format!("{} (Microsoft account)", a.name),
                 None => "Offline: online servers need a Microsoft account.".to_string(),
@@ -1577,62 +1486,6 @@ impl Launcher {
                         }))
                         .into_any_element(),
                 ),
-                &t,
-            ));
-        }
-        if self.mode == Mode::Server {
-            let folder = self
-                .settings
-                .server_dir
-                .as_deref()
-                .map(short)
-                .unwrap_or_default();
-            rows = rows.child(index_row(
-                3,
-                "Server folder",
-                Some(
-                    div()
-                        .font_family(theme::MONO)
-                        .child(folder)
-                        .into_any_element(),
-                ),
-                Some(
-                    button("choose-server", "Choose…", Kind::Ghost, &t)
-                        .on_click(
-                            cx.listener(|this, _: &ClickEvent, _, cx| this.choose_folder(true, cx)),
-                        )
-                        .into_any_element(),
-                ),
-                &t,
-            ));
-            let value = if eula {
-                "Agreed"
-            } else {
-                "Running a server needs your agreement to the Minecraft EULA."
-            };
-            let mut actions = div().flex().gap(px(4.)).child(
-                button("eula-read", "Read", Kind::Ghost, &t).on_click(cx.listener(
-                    |_, _: &ClickEvent, _, cx| cx.open_url("https://aka.ms/MinecraftEULA"),
-                )),
-            );
-            if !eula {
-                actions =
-                    actions.child(button("eula-agree", "Agree", Kind::Secondary, &t).on_click(
-                        cx.listener(|this, _: &ClickEvent, _, cx| {
-                            if let Some(dir) = &this.settings.server_dir {
-                                if let Err(e) = backend::agree_eula(dir) {
-                                    this.server_error = Some(e);
-                                }
-                            }
-                            cx.notify();
-                        }),
-                    ));
-            }
-            rows = rows.child(index_row(
-                4,
-                "Minecraft EULA",
-                Some(div().child(value).into_any_element()),
-                Some(actions.into_any_element()),
                 &t,
             ));
         }
@@ -1668,18 +1521,11 @@ impl Launcher {
         if let Some(e) = self.prepare_error.clone() {
             page = page.child(notice(e, &t));
         }
-        if self.mode == Mode::Client {
-            if let Some(e) = self.client_error.clone() {
-                page = page.child(notice(e, &t));
-            }
-            if let Some(crash) = self.crash.clone() {
-                page = page.child(self.crash_notice(crash, cx));
-            }
-        } else {
-            if let Some(e) = self.server_error.clone() {
-                page = page.child(notice(e, &t));
-            }
-            page = page.child(self.console(cx));
+        if let Some(e) = self.client_error.clone() {
+            page = page.child(notice(e, &t));
+        }
+        if let Some(crash) = self.crash.clone() {
+            page = page.child(self.crash_notice(crash, cx));
         }
         // The signature: the name, huge and faint, at the foot of the page.
         page.child(
@@ -1819,11 +1665,7 @@ impl Launcher {
                 .and_then(|r| backend::notes_summary(&r.body)),
             _ => None,
         };
-        let title = if self.mode == Mode::Server {
-            "Horizon server"
-        } else {
-            "Horizon"
-        };
+        let title = "Horizon";
         let mut hero =
             div()
                 .flex()
@@ -2449,8 +2291,7 @@ impl Launcher {
     }
 
     fn join_friend(&mut self) {
-        if self.mode != Mode::Client || horizon_friends::invite::parse(&self.friend_code).is_none()
-        {
+        if horizon_friends::invite::parse(&self.friend_code).is_none() {
             return;
         }
         self.joining = Some(self.friend_code.clone());
@@ -2458,121 +2299,6 @@ impl Launcher {
         if self.starting_client.is_none() {
             self.joining = None;
         }
-    }
-
-    fn console(&self, cx: &mut Context<Self>) -> Div {
-        let t = self.theme;
-        let running = self.server.is_some();
-        let focused = self.input_focused;
-        let lines = self.server_log.iter().map(|l| div().child(l.clone()));
-        let log = div()
-            .id("console")
-            .h(px(260.))
-            .px(px(20.))
-            .py(px(12.))
-            .overflow_y_scroll()
-            .track_scroll(&self.console_scroll)
-            .font_family(theme::MONO)
-            .text_size(px(theme::CAPTION.px))
-            .line_height(px(19.))
-            .text_color(t.ink_soft)
-            .when(self.server_log.is_empty(), |d| {
-                d.child(div().text_color(t.muted).child(if running {
-                    "Starting…"
-                } else {
-                    "The server's output shows here."
-                }))
-            })
-            .children(lines);
-        let input = div()
-            .id("command")
-            .track_focus(&self.focus)
-            .flex()
-            .items_center()
-            .h(px(theme::FIELD + 8.))
-            .px(px(20.))
-            .border_t_1()
-            .border_color(t.rule)
-            .font_family(theme::MONO)
-            .text_size(px(theme::CAPTION.px))
-            .cursor_text()
-            .child(div().text_color(t.accent).mr(px(10.)).child("›"))
-            .child(if self.input.is_empty() && !focused {
-                div().text_color(t.muted).child(if running {
-                    "Type a command, e.g. list"
-                } else {
-                    "Start the server to send commands"
-                })
-            } else {
-                div().text_color(t.ink).child(self.input.clone())
-            })
-            .when(focused, |d| d.child(div().w(px(1.)).h(px(14.)).bg(t.ink)))
-            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                window.focus(&this.focus);
-                cx.notify();
-            }))
-            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| {
-                let k = &ev.keystroke;
-                match k.key.as_str() {
-                    "enter" => this.submit_command(),
-                    "backspace" => {
-                        this.input.pop();
-                    }
-                    _ if !k.modifiers.control && !k.modifiers.platform => {
-                        if let Some(ch) = &k.key_char {
-                            this.input.push_str(ch);
-                        }
-                    }
-                    _ => return,
-                }
-                cx.stop_propagation();
-                cx.notify();
-            }));
-        plate(&t)
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .h(px(44.))
-                    .px(px(20.))
-                    .border_b_1()
-                    .border_color(t.rule)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(10.))
-                            .child(div().size(px(6.)).rounded_full().bg(if running {
-                                t.success
-                            } else {
-                                t.muted
-                            }))
-                            .child(
-                                caps(if running { "Running" } else { "Stopped" })
-                                    .text_color(t.muted),
-                            ),
-                    )
-                    .when(running, |d| {
-                        d.child(
-                            button("kill", "Force stop", Kind::Ghost, &t)
-                                .h(px(26.))
-                                .px(px(10.))
-                                .text_size(px(theme::CAPTION.px))
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    if let Some(s) = &this.server {
-                                        s.kill();
-                                    }
-                                    cx.notify();
-                                })),
-                        )
-                    }),
-            )
-            .child(log)
-            .child(input)
     }
 
     fn versions_page(&mut self, cx: &mut Context<Self>) -> Div {
@@ -2925,13 +2651,14 @@ impl Render for Launcher {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = self.theme;
         self.perf.frame();
-        self.input_focused = self.focus.is_focused(window);
+        self.servers.note_focus(window);
         self.friend_focused = self.friend_focus.is_focused(window);
         self.args_focused = self.args_focus.is_focused(window);
         let content = match self.page {
             Page::Play => self.play_page(cx),
             Page::Versions => self.versions_page(cx),
             Page::Modpacks => self.modpacks_page(cx),
+            Page::Servers => self.servers_page(cx),
             Page::Notes => self.notes_page(cx),
             Page::Settings => self.settings_page(cx),
         };
@@ -2950,7 +2677,30 @@ impl Render for Launcher {
             );
         let (reveal, held) = self.opening_phase(window);
         let ui = ease_out_cubic((reveal - 0.3) / 0.7);
+        if self.opening.is_none() && window.focused(cx).is_none() {
+            window.focus(&self.root_focus);
+        }
         let mut root = div()
+            .id("root")
+            .track_focus(&self.root_focus)
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                let k = &ev.keystroke;
+                match k.key.as_str() {
+                    "tab" => {
+                        KEYBOARD.store(true, Ordering::Relaxed);
+                        if k.modifiers.shift {
+                            window.focus_prev();
+                        } else {
+                            window.focus_next();
+                        }
+                    }
+                    "escape" if this.servers_escape() => {}
+                    _ => return,
+                }
+                cx.stop_propagation();
+                cx.notify();
+            }))
+            .capture_any_mouse_down(|_, _, _| KEYBOARD.store(false, Ordering::Relaxed))
             .relative()
             .flex()
             .flex_col()
@@ -2986,6 +2736,11 @@ impl Render for Launcher {
                     )
                     .child(self.footer(cx)),
             );
+        if self.page == Page::Servers {
+            if let Some(dialog) = self.create_dialog(cx) {
+                root = root.child(dialog);
+            }
+        }
         if self.asking_consent() {
             root = root.child(self.consent_screen(cx));
         }
@@ -3107,6 +2862,7 @@ fn main() {
         )
         .expect("window");
         cx.on_window_closed(|cx| {
+            servers_page::stop_on_quit();
             telemetry::send_before_exit();
             cx.quit()
         })
