@@ -9644,12 +9644,17 @@ impl Game<'_> {
         }
         Ok(())
     }
+    /// LOD Distance as far terrain uses it (`Graphics::lod_distance_on`).
+    fn lod_distance(&self) -> u32 {
+        match &self.renderer {
+            Some(renderer) => self.settings.horizon.lod_distance_on(&renderer.info),
+            None => self.settings.horizon.lod_distance.min(1024),
+        }
+    }
     /// Only enabled LOD worlds extend the renderer's range, never simulation.
     fn terrain_distance(&self) -> i32 {
         if self.lod.is_some() {
-            self.streaming
-                .radius
-                .max(self.settings.horizon.lod_distance.min(1024) as i32)
+            self.streaming.radius.max(self.lod_distance() as i32)
         } else {
             self.streaming.radius
         }
@@ -9822,6 +9827,8 @@ impl Game<'_> {
                 }
             }
             if let (Some(lod), Some(player)) = (&mut self.lod, &self.player) {
+                let lod_distance = self.settings.horizon.lod_distance_on(&renderer.info);
+                lod.set_near_loading(self.streaming.busy());
                 // The covered columns change only with the complete ones and
                 // the render area: rebuilt then, not every frame.
                 let at = (
@@ -9845,7 +9852,7 @@ impl Game<'_> {
                         [player.position.x, player.position.y, player.position.z],
                         self.yaw,
                         self.streaming.radius,
-                        self.settings.horizon.lod_distance,
+                        lod_distance,
                         covered,
                     )
                 });
