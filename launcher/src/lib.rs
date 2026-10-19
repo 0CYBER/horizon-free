@@ -7,4 +7,5 @@ pub mod modpacks;
 pub mod mojang;
 pub mod servers;
 pub mod sources;
+pub mod tailscale;
 pub mod telemetry;

@@ -30,10 +30,12 @@ pub(super) enum Field {
     AddPlayer,
     Motd,
     Port,
+    Token,
+    Email,
 }
 
 impl Field {
-    const ALL: [Field; 7] = [
+    const ALL: [Field; 9] = [
         Field::Name,
         Field::Seed,
         Field::Players,
@@ -41,6 +43,8 @@ impl Field {
         Field::AddPlayer,
         Field::Motd,
         Field::Port,
+        Field::Token,
+        Field::Email,
     ];
 }
 
@@ -76,7 +80,7 @@ const DIFFICULTIES: [(&str, &str); 4] = [
 pub(super) enum Event {
     Polled {
         dir: PathBuf,
-        status: Status,
+        status: Box<Status>,
         logs: Option<(u64, Vec<String>)>,
     },
     Statuses(Vec<(PathBuf, Status)>),
@@ -192,11 +196,11 @@ impl Servers {
         }
     }
 
-    fn text(&mut self, f: Field) -> &mut String {
+    pub(super) fn text(&mut self, f: Field) -> &mut String {
         self.texts.entry(f).or_default()
     }
 
-    fn value(&self, f: Field) -> &str {
+    pub(super) fn value(&self, f: Field) -> &str {
         self.texts.get(&f).map_or("", String::as_str)
     }
 
@@ -384,7 +388,10 @@ impl Launcher {
 
     /// Called with the launcher's other work: what the background sent, and the next status poll.
     pub(super) fn servers_tick(&mut self) -> bool {
-        let mut changed = false;
+        let overview = self.page == Page::Servers
+            && self.servers.open.is_some()
+            && self.servers.tab == Tab::Overview;
+        let mut changed = self.internet_tick(overview);
         while let Ok(event) = self.servers.rx.try_recv() {
             changed = true;
             self.servers_event(event);
@@ -417,7 +424,11 @@ impl Launcher {
                         .and_then(|a| a.status())
                         .unwrap_or_else(Status::stopped);
                     let logs = api.and_then(|a| a.logs(since));
-                    let _ = tx.send(Event::Polled { dir, status, logs });
+                    let _ = tx.send(Event::Polled {
+                        dir,
+                        status: Box::new(status),
+                        logs,
+                    });
                 });
             }
             None => {
@@ -463,7 +474,7 @@ impl Launcher {
                     s.log_next = next;
                 }
                 let read_pvp = status.phase == "running" && s.pvp.is_none();
-                s.statuses.insert(dir, status);
+                s.statuses.insert(dir, *status);
                 if read_pvp {
                     self.read_pvp();
                 }
@@ -774,7 +785,7 @@ impl Launcher {
     }
 
     /// A one-line text field: typing, paste, Backspace, Enter to confirm, Escape, Tab to the next.
-    fn field(
+    pub(super) fn field(
         &mut self,
         f: Field,
         placeholder: &'static str,
@@ -787,7 +798,11 @@ impl Launcher {
         let value = self.servers.value(f).to_string();
         let shown: String = {
             let chars: Vec<char> = value.chars().collect();
-            chars[chars.len().saturating_sub(60)..].iter().collect()
+            if f == Field::Token {
+                "•".repeat(chars.len().min(40))
+            } else {
+                chars[chars.len().saturating_sub(60)..].iter().collect()
+            }
         };
         div()
             .id(SharedString::from(format!("field-{f:?}")))
@@ -883,6 +898,8 @@ impl Launcher {
                 }
             }
             Field::Port => self.save_port(),
+            Field::Token => self.save_token(),
+            Field::Email => self.invite_friend(),
         }
     }
 
@@ -1526,7 +1543,8 @@ impl Launcher {
                     .child(row),
             );
         }
-        tab.child(self.server_console(status.running(), cx))
+        tab.child(self.internet_panel(port as u16, cx))
+            .child(self.server_console(status.running(), cx))
     }
 
     fn server_console(&mut self, running: bool, cx: &mut Context<Self>) -> Div {
