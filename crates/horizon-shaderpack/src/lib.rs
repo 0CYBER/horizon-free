@@ -12,6 +12,7 @@ pub mod preprocess;
 pub mod properties;
 pub mod source;
 pub mod translate;
+pub mod uniforms;
 
 use include::{IncludeGraph, Inlined};
 use options::{Annotated, OptionSet, OptionValues};

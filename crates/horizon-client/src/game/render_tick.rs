@@ -121,6 +121,11 @@ impl Game<'_> {
         };
         let at = [camera.x, camera.y, camera.z];
         let day = self.world.day_time;
+        let has_sky_light = self.dim == Dim::Overworld;
+        // CommonUniforms.getEyeBrightness: the camera entity's eye block.
+        let eye = self.eye_position().unwrap_or(at).map(|v| v.floor() as i32);
+        let light = self.world.light(eye[0], eye[1], eye[2]);
+        let eye_light = [light & 15, if has_sky_light { light >> 4 } else { 0 }];
         horizon_client::gfx::ShaderInputs {
             rain,
             thunder,
@@ -135,10 +140,11 @@ impl Game<'_> {
                 Dim::Nether => -1,
                 Dim::End => 1,
             },
-            has_sky_light: self.dim == Dim::Overworld,
+            has_sky_light,
             moon_phase: day.div_euclid(24_000).rem_euclid(8) as u8,
             day_fraction: (day.rem_euclid(24_000) as f32 + partial_tick) / 24_000.0,
             partial_tick,
+            eye_light,
         }
     }
     /// `SkyRenderer.shouldRenderDarkDisc`: eye below the horizon (y 63) and not under water.

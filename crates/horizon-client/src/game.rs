@@ -6628,12 +6628,25 @@ impl Game<'_> {
         self.tick_player_model();
         Ok(())
     }
+    /// What the loaded Java shader pack changes in this dimension's vanilla
+    /// sky (`sunPathRotation`, `clouds`, `sun`, `moon`); `None` without one.
+    fn java_sky(&self) -> Option<(f32, horizon_shaderpack::properties::SkyDirectives)> {
+        self.shader_packs.java_sky(match self.dim {
+            Dim::Overworld => 0,
+            Dim::Nether => -1,
+            Dim::End => 1,
+        })
+    }
     /// SkyRenderer.renderSunMoonAndStars: bodies on a frame rotated Y -90 then X by angle.
+    /// A Java pack's `sunPathRotation` tilts it about Z in between, and its
+    /// `sun = false` / `moon = false` leave those out, as Iris does.
     fn celestial_geometry(&self, sky: &horizon_client::environment::Sky) -> Vec<Vertex> {
         let mut out = Vec::new();
         let atlas = &self.gui.atlas;
+        let (tilt, keep) = self.java_sky().unwrap_or_default();
         let frame = |angle: f32| {
             glam::Mat4::from_rotation_y((-90.0f32).to_radians())
+                * glam::Mat4::from_rotation_z(tilt.to_radians())
                 * glam::Mat4::from_rotation_x(angle.to_radians())
         };
         let mut body = |name: &str, angle: f32, size: f32, color: u32| {
@@ -6655,12 +6668,14 @@ impl Game<'_> {
                 });
             }
         };
-        body(
-            "environment/celestial/sun",
-            sky.sun_angle,
-            30.0,
-            0xFFFF_FFFF,
-        );
+        if keep.sun {
+            body(
+                "environment/celestial/sun",
+                sky.sun_angle,
+                30.0,
+                0xFFFF_FFFF,
+            );
+        }
         let phases = [
             "full_moon",
             "waning_gibbous",
@@ -6672,12 +6687,14 @@ impl Game<'_> {
             "waxing_gibbous",
         ];
         let phase = phases[(self.world.day_time / 24000).rem_euclid(8) as usize];
-        body(
-            &format!("environment/celestial/moon/{phase}"),
-            sky.moon_angle,
-            20.0,
-            0xFFFF_FFFF,
-        );
+        if keep.moon {
+            body(
+                &format!("environment/celestial/moon/{phase}"),
+                sky.moon_angle,
+                20.0,
+                0xFFFF_FFFF,
+            );
+        }
         if sky.star_brightness > 0.0 {
             let b = (sky.star_brightness.clamp(0.0, 1.0) * 255.0) as u32;
             let color = b << 24 | b << 16 | b << 8 | b;
@@ -9244,6 +9261,18 @@ impl Game<'_> {
                 entities.extend(dragon);
             }
         }
+        // A Java pack's `clouds` replaces the cloud option (`renderClouds`:
+        // "false", "fast", "true"), as Iris overrides `getCloudsType`.
+        let clouds_mode = {
+            use horizon_shaderpack::properties::CloudSetting;
+            match self.java_sky().and_then(|(_, sky)| sky.clouds) {
+                Some(CloudSetting::Off) => "false",
+                Some(CloudSetting::Fast) => "fast",
+                Some(CloudSetting::Fancy) => "true",
+                None => self.settings.clouds.as_str(),
+            }
+            .to_owned()
+        };
         let celestial = if title && !live {
             Vec::new()
         } else if self.dim == Dim::Overworld
@@ -9330,7 +9359,7 @@ impl Game<'_> {
             hud: &hud,
             clouds: ((!title || live)
                 && self.dim == Dim::Overworld
-                && horizon_client::clouds::visible(&self.settings.clouds, sky.cloud_color[3]))
+                && horizon_client::clouds::visible(&clouds_mode, sky.cloud_color[3]))
             .then(|| self.gui.atlas.sprites.get("horizon/white"))
             .flatten()
             .map(|white| horizon_client::clouds::Input {
@@ -9340,7 +9369,7 @@ impl Game<'_> {
                 time: self.world.game_time,
                 partial_tick: alpha,
                 range: self.settings.cloud_range,
-                fast: self.settings.clouds == "fast",
+                fast: clouds_mode == "fast",
                 color: sky.cloud_color,
             }),
             entities: &entities,

@@ -326,6 +326,14 @@ fn real_packs_properties() {
         }
         println!("  unknown screen options: {unknown:?}");
         assert!(unknown.len() <= 2, "{unknown:?}");
+        // Every custom uniform parses.
+        let uniforms = properties.custom_uniforms();
+        println!(
+            "  custom uniforms: {:?}, sky {:?}",
+            uniforms.problems,
+            properties.sky()
+        );
+        assert!(uniforms.problems.is_empty(), "{:?}", uniforms.problems);
     }
 }
 
