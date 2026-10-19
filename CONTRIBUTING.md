@@ -66,6 +66,7 @@ your change can affect. Without the vanilla data on your machine it lists those 
   `release-now` is for crash fixes that shouldn't wait. pr_ready suggests one.
 
 Every merge to main is released automatically ([release flow](docs/release-flow.md)), so main always stays playable.
+How agents, checks, releases and signed updates keep this safe: [security](docs/security.md).
 
 ## Parity checks on forks
 
