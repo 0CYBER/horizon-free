@@ -554,11 +554,13 @@ def check_hazards(host, guest, out):
             guest('command', command=f'tp @s {x + 0.5} -140 {z + 0.5}')
         hurt[name] = (before, first_hurt(guest, before, ticks))
         guest.shot(out, f'hazards-{name}')
+        # The host tidies up: the void can kill the guest before this, the server drops a dead
+        # guest's packets (lan_guest_packet), and the box left standing suffocated it in pvp.
         # Water puts the lava's fire out.
-        guest('command', command=f'fill {x} {y} {z} {x} {y + 1} {z} minecraft:water')
+        host('command', command=f'fill {x} {y} {z} {x} {y + 1} {z} minecraft:water')
         guest.wait(5)
-        guest('command', command=f'fill {x - 1} {y - 1} {z - 1} {x + 1} {y + 2} {z + 1} minecraft:air')
-        guest('command', command=f'fill {x - 1} {y - 1} {z - 1} {x + 1} {y - 1} {z + 1} minecraft:stone')
+        host('command', command=f'fill {x - 1} {y - 1} {z - 1} {x + 1} {y + 2} {z + 1} minecraft:air')
+        host('command', command=f'fill {x - 1} {y - 1} {z - 1} {x + 1} {y - 1} {z + 1} minecraft:stone')
     guest.wait(20)
     if remote(guest)['health'] <= 0:
         guest.raw('respawn')
