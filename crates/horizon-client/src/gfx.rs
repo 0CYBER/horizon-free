@@ -72,6 +72,8 @@ pub mod translucency;
 pub(crate) mod upload;
 mod world_post;
 
+/// A column whose every section has its mesh (`Renderer::lod_detail_columns`).
+const COMPLETE_COLUMN: u32 = (1 << (crate::chunk::HEIGHT / 16)) - 1;
 /// A section's instance: its camera-relative origin and, in `w`, the step of
 /// its fixed-point UVs (`terrain.wgsl`'s `terrain_uv`).
 fn section_instance(origin: [f32; 3]) -> [f32; 4] {
@@ -373,7 +375,17 @@ pub struct Renderer {
     depth: wgpu::TextureView,
     sections: resident::Resident<SectionGpu>,
     lods: HashMap<crate::lod::TileKey, lod::Tile>,
+    /// The chunk columns the resident tiles leave out (`Lod::take_cutout`):
+    /// their sections are drawn even past the render distance, so terrain
+    /// leaving it never opens a hole before the tiles fill it in.
+    lod_cutout: crate::fast_hash::FxHashSet<(i32, i32)>,
+    /// Removed sections of `lod_cutout` columns, released once tiles cover them.
+    lod_retiring: crate::fast_hash::FxHashSet<SectionKey>,
+    /// Finished tile meshes `upload_lods` has yet to upload.
+    lod_pending: Option<lod::Pending>,
     detail_columns: HashMap<(i32, i32), u32>,
+    /// Bumped whenever a column becomes or stops being complete.
+    detail_revision: u64,
     arena: arena::Arena,
     sorted_indices: arena::Arena,
     translucent_sorter: translucency::Sorter,
@@ -2041,7 +2053,11 @@ impl Renderer {
             depth,
             sections: resident::Resident::default(),
             lods: HashMap::new(),
+            lod_cutout: Default::default(),
+            lod_retiring: Default::default(),
+            lod_pending: None,
             detail_columns: HashMap::new(),
+            detail_revision: 0,
             arena,
             sorted_indices,
             translucent_sorter: translucency::Sorter::default(),
@@ -2255,13 +2271,15 @@ impl Renderer {
         if changed {
             self.block_entity_revision = next_block_entity_revision();
         }
+        if !self.lod_retiring.is_empty() {
+            self.lod_retiring.remove(&key);
+        }
         self.release_section(key);
         let section = self.upload_mesh(mesh);
-        if section.is_some() || (mesh.solid.is_empty() && mesh.translucent.is_empty()) {
-            *self.detail_columns.entry((key.0, key.2)).or_default() |= 1 << key.1;
-        } else if let Some(mask) = self.detail_columns.get_mut(&(key.0, key.2)) {
-            *mask &= !(1 << key.1);
-        }
+        self.set_detail(
+            key,
+            section.is_some() || (mesh.solid.is_empty() && mesh.translucent.is_empty()),
+        );
         if let Some(section) = section {
             self.sections.insert(key, section);
         }
@@ -2415,7 +2433,11 @@ impl Renderer {
         self.block_entity_revision = next_block_entity_revision();
         self.sections.clear();
         self.lods.clear();
+        self.lod_cutout.clear();
+        self.lod_retiring.clear();
+        self.lod_pending = None;
         self.detail_columns.clear();
+        self.detail_revision += 1;
         self.arena.clear();
         if let Some(flat) = &mut self.flat {
             flat.clear();
@@ -2425,23 +2447,44 @@ impl Renderer {
         self.occlusion.clear();
     }
     pub fn lod_detail_columns(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
-        let complete = (1u32 << (crate::chunk::HEIGHT / 16)) - 1;
         self.detail_columns
             .iter()
-            .filter_map(move |(&column, &mask)| (mask == complete).then_some(column))
+            .filter_map(move |(&column, &mask)| (mask == COMPLETE_COLUMN).then_some(column))
+    }
+    /// Changes whenever `lod_detail_columns` does.
+    pub fn lod_detail_revision(&self) -> u64 {
+        self.detail_revision
+    }
+    /// Whether the section at `key` has its mesh, for `lod_detail_columns`.
+    fn set_detail(&mut self, key: SectionKey, meshed: bool) {
+        let column = (key.0, key.2);
+        let mask = self.detail_columns.get(&column).copied().unwrap_or(0);
+        let next = if meshed {
+            mask | 1 << key.1
+        } else {
+            mask & !(1 << key.1)
+        };
+        if (mask == COMPLETE_COLUMN) != (next == COMPLETE_COLUMN) {
+            self.detail_revision += 1;
+        }
+        if next == 0 {
+            self.detail_columns.remove(&column);
+        } else {
+            self.detail_columns.insert(column, next);
+        }
     }
     pub fn remove(&mut self, key: SectionKey) {
-        if let Some(mask) = self.detail_columns.get_mut(&(key.0, key.2)) {
-            *mask &= !(1 << key.1);
-            if *mask == 0 {
-                self.detail_columns.remove(&(key.0, key.2));
-            }
-        }
+        self.set_detail(key, false);
         if self.block_entities.remove(&key).is_some() {
             self.block_entity_revision = next_block_entity_revision();
         }
         self.occlusion.remove(key);
-        self.release_section(key);
+        if !self.lod_cutout.is_empty() && self.lod_cutout.contains(&(key.0, key.2)) {
+            // Distant tiles still leave its column out: drawn until they don't.
+            self.lod_retiring.insert(key);
+        } else {
+            self.release_section(key);
+        }
     }
     /// Run `pack`'s stages over the world from now on (`None`: no pack, the
     /// vanilla frame). On error the previous pack stays.
@@ -2829,6 +2872,7 @@ impl Renderer {
             });
         }
         let reachable = &self.occlusion;
+        let cutout = &self.lod_cutout;
         let mut visible = std::mem::take(&mut self.visible);
         visible.clear();
         crate::spans::time("visibility", || {
@@ -2837,6 +2881,7 @@ impl Renderer {
                 (frame.detail_distance / 16.0) as i32,
                 &view,
                 |k| !culling || reachable.contains(k),
+                |x, z| !cutout.is_empty() && cutout.contains(&(x, z)),
                 &mut visible,
             )
         });

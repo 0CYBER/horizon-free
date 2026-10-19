@@ -641,8 +641,8 @@ const NBT_TABLES: [&str; 6] = [
     "worldgen/blocks/cached-support.nbt",
     "worldgen/blocks/cached-collision.nbt",
 ];
-/// In a root built here: the content mods' ids, the namespaces loaders
-/// read besides `minecraft`.
+/// In a root built here: the namespaces the content mods own (their ids and
+/// listed namespaces), which loaders read besides `minecraft`.
 const MARKER: &str = "horizon-mod-content.json";
 /// Block states a world can hold. Chunk sections widen their global palette
 /// past vanilla's 16 bits to fit the registry (crate::chunk::set_block_states);
@@ -947,6 +947,18 @@ impl Known {
 
 /// Builds the content root for `mods` over `base` in `out`.
 pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<()> {
+    // Two mods owning one namespace would mix their files.
+    for (i, a) in mods.iter().enumerate() {
+        for b in &mods[..i] {
+            let (b, a) = (
+                (b.id.as_str(), b.content.namespaces.as_slice()),
+                (a.id.as_str(), a.content.namespaces.as_slice()),
+            );
+            if let Some(e) = horizon_mods::content::clash(b, a) {
+                return Err(e.into());
+            }
+        }
+    }
     // The overlay links to the base: a relative base would leave them dangling.
     let base = &std::path::absolute(base)?;
     let plan = Plan::new(base, mods)?;
@@ -1110,9 +1122,12 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<()> {
             overlay.write(&own, &fs::read(&vanilla)?)?;
         }
     }
-    let mut ids: Vec<&str> = mods.iter().map(|m| m.id.as_str()).collect();
-    ids.sort();
-    overlay.write(MARKER, &serde_json::to_vec(&ids)?)?;
+    let mut namespaces: Vec<&str> = mods
+        .iter()
+        .flat_map(|m| m.content.namespaces.iter().map(String::as_str))
+        .collect();
+    namespaces.sort();
+    overlay.write(MARKER, &serde_json::to_vec(&namespaces)?)?;
     Ok(())
 }
 

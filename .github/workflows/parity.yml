@@ -1,0 +1,48 @@
+name: parity
+# The vanilla harnesses a pull request's changes can affect, on the Mac mini's runner, which holds the maintainer's
+# own Minecraft files (Horizon never downloads the game). Called by ci.yml for pull requests from this repository
+# and by run-parity.yml when a maintainer labels a fork's pull request run-parity. See docs/release-flow.md.
+on:
+  workflow_call:
+    inputs:
+      base:
+        description: The pull request's base commit (the harnesses its changes since then can affect)
+        type: string
+        required: true
+      head:
+        description: The commit to check out and test
+        type: string
+        required: true
+permissions:
+  contents: read
+jobs:
+  parity:
+    runs-on: [self-hosted, horizon-game]
+    timeout-minutes: 120  # a change to core crates reruns ~300 harnesses: ~60-90 min on the Mac mini
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The commit the event names: a fork's later pushes need another run-parity label.
+          ref: ${{ inputs.head }}
+          fetch-depth: 0
+          persist-credentials: false
+          # Keeps .local/ (parity state, probe builds, oracle results) and target/ between runs.
+          clean: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Tools from the runner
+        run: bash tools/ci/runner-env.sh
+      - name: Vanilla data, and resources prepared by this preparer
+        run: bash tools/ci/vanilla-data.sh
+      - name: The harnesses this change can affect
+        env:
+          PARITY_HOSTS: ''
+          BASE_SHA: ${{ inputs.base }}
+        run: python3 tools/parity.py --changed "$BASE_SHA" --timeout 2400  # world_spawn takes ~1480 s on a busy runner
+      - name: Logs of the failed harnesses
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parity-logs
+          path: .local/parity-runner/logs/
+          if-no-files-found: ignore
+          retention-days: 3

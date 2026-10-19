@@ -236,6 +236,10 @@ How the game loads them, without touching vanilla's path:
   so the same mod set gives the same ids. Saves store block names, so ids never reach the disk.
 - Loaders that read only `data/minecraft/` (recipes, loot, tags) read every namespace, as
   vanilla does. With no mods there is only `minecraft`, so nothing changes.
+- **Namespaces.** A mod's files go under its id, and under the namespaces its manifest lists
+  when its Java original ships them so (`namespaces = ["kaisyn", "towns_and_towers"]` for Towns
+  and Towers, mod id `t_and_t`; docs/mods.md). No namespace has two owners: a mod whose id or
+  listed namespace another mod that is on already owns is left out, with both named in the log.
 - The overlay is built on the first start with a set of mods and kept for later starts. A stamp
   (`horizon-mod-content.stamp`) hashes the game executable, the base tables and every mod file's
   size and mtime. Adding, removing or editing a mod, or a new build of Horizon, rebuilds it. For
@@ -496,13 +500,28 @@ Two cases the oracle fills in:
     in the Overworld 83 Better Dungeons spawners held the template's placeholder pig and 17 of
     Moog's were empty (763 spawners with a mob, up from 628); in the Nether the 52 empty ones
     in Moog's Nether Structures are filled (162, up from 110). Chests are unchanged: 2,777
-    and 1,405 with a loot table.
+    and 1,405 with a loot table. The game read loot tables from `data/minecraft/` only, so every one of
+    those chests naming a mod's table opened empty; it now reads every namespace, and an
+    integer field written as a float (`"rolls": {"min": 3.0, ...}`, as Towns and Towers
+    writes them) counts as vanilla's int codecs count it. Of the 675 chest and other
+    non-block tables in ATM10's carried mods, 534 now fill a chest (seed 1; none before).
   - **Rule tests** written in Java. Repurposed Structures' mineshafts and Nether monument test
     blocks with three of the mod's own rule tests inside vanilla `rule` processors: what a
     block is made of (solid, liquid, air, with rails and chains), a chance over the distance
     from the template's origin along one axis, and a world height range. The game runs them
     as `horizon:matter_phase`, `horizon:piece_origin_axis_aligned_linear_pos` and
     `horizon:y_value` with the mod's fields, and carry renames them (213 in 75 lists).
+  - **Namespaces besides the mod id.** Towns and Towers (mod id `t_and_t`) ships all 60 of its
+    structures under `kaisyn` and `towns_and_towers`, which carry used to leave in `outside/`.
+    Carry now claims a namespace for the mod when the mod's own files (its id's, its tag
+    additions and the namespaces already claimed) name ids in it, and no mod of the pack has
+    it as its id; it lists them in the manifest's `namespaces` (docs/mods.md). Files for mods
+    it supports (CTOV's `wares` and `monobank`, YUNG's `morevillagers` tags) and configs of
+    pack mods (`cristellib`) stay outside: of ATM10's 42 jars only T&T claims any. A tag of a
+    mod's own namespace that `replace`s is carried as an addition (no pack before it defines
+    it). In the 128×128-chunk square T&T has 7 starts at seed 1234 (its ocean wreckages, an
+    ocean village and outpost) and 7 at seed 2 (forest and snowy taiga villages, snowy
+    outposts), from none.
   - **Renamed ids.** 26.3 calls 1.21.1's chain the iron chain (its datafixers rename it in
     worlds). Carry renames it in recipes, loot tables and worldgen files (112 files in 5 mods:
     Repurposed's mineshafts, Better Dungeons' processors, Regions Unexplored's hanging sign
@@ -561,10 +580,8 @@ Two cases the oracle fills in:
   (unchanged), and no pool that fails to decode (65 before #816 in the 64×64 centre).
   - 1,061 files were mapped (MVS 413, MNS 210, MSS 157, MES 110, Repurposed Structures 104,
     ChoiceTheorem's Overhauled Village 66), and 103 convention biome tags written.
-  - When Dungeons Arise and Structory use vanilla's types already. Towns and Towers does too,
-    but its 1,198 worldgen files sit under the `kaisyn` and `towns_and_towers` namespaces, not
-    its mod id `t_and_t`, and a mod's content may only use its own namespace (docs/mods.md), so
-    carry leaves them out and its 60 structures are missing.
+  - When Dungeons Arise, Structory and Towns and Towers use vanilla's types already (T&T's
+    namespaces are carried since the namespaces rule above).
   - Still lost, written in Java:
     - Formations' pieced structure (1, its one jigsaw-like type);
     - Repurposed's mineshafts, mansions and monuments, Better Mineshafts and two Better

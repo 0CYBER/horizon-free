@@ -156,6 +156,26 @@ pub enum Overlay {
     Graph,
 }
 
+/// The farthest LOD Distance, in chunks, on integrated GPUs other than
+/// Apple's: they share the CPU's memory bandwidth, and past it far terrain
+/// costs them more frame time than it is worth.
+pub const INTEGRATED_LOD_DISTANCE: u32 = 128;
+/// Whether `INTEGRATED_LOD_DISTANCE` applies to this adapter. Apple's GPUs
+/// are integrated too, with memory and bandwidth enough for every distance.
+pub fn lod_capped(info: &wgpu::AdapterInfo) -> bool {
+    info.device_type == wgpu::DeviceType::IntegratedGpu && !info.name.starts_with("Apple")
+}
+impl Graphics {
+    /// `lod_distance` as far terrain uses it on this adapter.
+    pub fn lod_distance_on(&self, info: &wgpu::AdapterInfo) -> u32 {
+        let distance = self.lod_distance.min(1024);
+        if lod_capped(info) {
+            distance.min(INTEGRATED_LOD_DISTANCE)
+        } else {
+            distance
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq)]
 pub struct Graphics {
     pub preset: Preset,
@@ -415,6 +435,46 @@ mod tests {
         assert_eq!(
             Graphics::parse("workers:abc\nsky:maybe\ncullLeaves:maybe\nentityCulling:maybe\n"),
             Graphics::default()
+        );
+    }
+
+    #[test]
+    fn integrated_gpus_other_than_apple_cap_the_lod_distance() {
+        let adapter = |name: &str, device_type| wgpu::AdapterInfo {
+            name: name.into(),
+            vendor: 0,
+            device: 0,
+            device_type,
+            device_pci_bus_id: String::new(),
+            driver: String::new(),
+            driver_info: String::new(),
+            backend: wgpu::Backend::Vulkan,
+            subgroup_min_size: 0,
+            subgroup_max_size: 0,
+            transient_saves_memory: None,
+            limit_bucket: None,
+        };
+        let hd620 = adapter(
+            "Intel(R) HD Graphics 620 (KBL GT2)",
+            wgpu::DeviceType::IntegratedGpu,
+        );
+        let m4 = adapter("Apple M4 Pro", wgpu::DeviceType::IntegratedGpu);
+        let discrete = adapter("NVIDIA GeForce RTX 4070", wgpu::DeviceType::DiscreteGpu);
+        for (distance, capped) in [(0, 0), (64, 64), (128, 128), (256, 128), (1024, 128)] {
+            let g = Graphics {
+                lod_distance: distance,
+                ..Graphics::default()
+            };
+            assert_eq!(g.lod_distance_on(&hd620), capped);
+            assert_eq!(g.lod_distance_on(&m4), distance);
+            assert_eq!(g.lod_distance_on(&discrete), distance);
+        }
+        assert!(
+            crate::graphics_ui::rows(crate::graphics_ui::Level::Simple)
+                .iter()
+                .any(|row| matches!(row, crate::graphics_ui::Row::Setting(s)
+                    if s.text.contains(&format!("{INTEGRATED_LOD_DISTANCE} chunks")))),
+            "the LOD Distance description names the cap"
         );
     }
 

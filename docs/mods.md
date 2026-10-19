@@ -276,10 +276,30 @@ blocks and items by declaring them in `data/<id>/horizon/block/*.json` and
   "item": true }
 ```
 
-The fence: files go in the mod's own namespace (`assets/<id>/`,
-`data/<id>/`), plus additions to vanilla tags (`data/minecraft/tags/`) and
-to the convention tags NeoForge and Fabric mods share (`data/c/tags/`).
-Templates and `sounds` name vanilla blocks; unknown keys are refused. Paths
+The fence: files go in the mod's own namespaces (`assets/<id>/`,
+`data/<id>/`, and those its manifest lists), plus additions to vanilla tags
+(`data/minecraft/tags/`) and to the convention tags NeoForge and Fabric mods
+share (`data/c/tags/`).
+Templates and `sounds` name vanilla blocks; unknown keys are refused.
+
+Some Java mods ship their files under other names than their mod id (Towns
+and Towers, mod id `t_and_t`, under `kaisyn` and `towns_and_towers`). A
+content mod lists those in its manifest:
+
+```toml
+id = "t_and_t"
+api = "0.2"
+capabilities = ["registries"]
+namespaces = ["kaisyn", "towns_and_towers"]
+```
+
+A listed namespace is the mod's as its id is: its `assets/` and `data/`
+files load, and the game reads its tags, recipes, names and loot. Blocks and
+items are still declared under `data/<id>/horizon/` only. `minecraft`, `c`
+and `horizon` cannot be listed. Two mods that are on may not own the same
+namespace (one's id or listed namespace being the other's): the game keeps
+the first in load order and leaves the other's content out, with
+"mods A and B both use the namespace N; turn one of them off" in the log. Paths
 use vanilla's resource characters, at most 65,536 files, 16 MiB each and
 512 MiB in all. A mod whose content is refused stays off, with the reason on
 its row. The game reads this content into its block and item tables

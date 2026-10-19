@@ -1015,6 +1015,10 @@ struct Game<'a> {
     lod: Option<horizon_client::lod::Lod>,
     lod_source_attempted: bool,
     lod_observe: horizon_client::fast_hash::FxHashSet<(i32, i32)>,
+    /// The detail revision, centre and radius `Lod::update` last had covered for.
+    lod_covered_at: Option<(u64, (i32, i32), i32)>,
+    /// Unloaded columns `Lod::observe` has yet to summarise.
+    lod_unloaded: std::collections::VecDeque<Arc<horizon_client::chunk::Chunk>>,
     options: Options,
     player: Option<PlayerMotion>,
     spawn: Option<Vec3>,
@@ -9724,12 +9728,17 @@ impl Game<'_> {
         }
         Ok(())
     }
+    /// LOD Distance as far terrain uses it (`Graphics::lod_distance_on`).
+    fn lod_distance(&self) -> u32 {
+        match &self.renderer {
+            Some(renderer) => self.settings.horizon.lod_distance_on(&renderer.info),
+            None => self.settings.horizon.lod_distance.min(1024),
+        }
+    }
     /// Only enabled LOD worlds extend the renderer's range, never simulation.
     fn terrain_distance(&self) -> i32 {
         if self.lod.is_some() {
-            self.streaming
-                .radius
-                .max(self.settings.horizon.lod_distance.min(1024) as i32)
+            self.streaming.radius.max(self.lod_distance() as i32)
         } else {
             self.streaming.radius
         }
@@ -9738,6 +9747,8 @@ impl Game<'_> {
         self.lod = None;
         self.lod_source_attempted = false;
         self.lod_observe.clear();
+        self.lod_covered_at = None;
+        self.lod_unloaded.clear();
         if let Some(renderer) = &mut self.renderer {
             renderer.clear_lods();
         }
@@ -9792,17 +9803,30 @@ impl Game<'_> {
             self.lod_observe
                 .extend(uploads.iter().map(|(key, _)| (key.0, key.2)));
             for chunk in &unloaded {
-                horizon_client::spans::time("lod_observe", || lod.observe(chunk, self.res.facts()));
                 self.lod_observe.remove(&(chunk.x, chunk.z));
             }
-            let observe: Vec<_> = self.lod_observe.iter().copied().take(2).collect();
-            for key in observe {
-                self.lod_observe.remove(&key);
-                if let Some(chunk) = self.world.chunks.get(&key) {
-                    horizon_client::spans::time("lod_observe", || {
-                        lod.observe(chunk, self.res.facts())
-                    });
-                }
+            // Unloaded columns first (their summaries are all that remains),
+            // then resident ones: at least one a frame, more within about a
+            // millisecond. Moving fast unloads dozens in one frame.
+            self.lod_unloaded.extend(unloaded.iter().cloned());
+            let start = std::time::Instant::now();
+            let mut observed = 0;
+            while observed < 1 || start.elapsed() < std::time::Duration::from_millis(1) {
+                let chunk = if let Some(chunk) = self.lod_unloaded.pop_front() {
+                    chunk
+                } else if let Some(&key) = self.lod_observe.iter().next() {
+                    self.lod_observe.remove(&key);
+                    match self.world.chunks.get(&key) {
+                        Some(chunk) => chunk.clone(),
+                        None => continue,
+                    }
+                } else {
+                    break;
+                };
+                horizon_client::spans::time("lod_observe", || {
+                    lod.observe(&chunk, self.res.facts())
+                });
+                observed += 1;
             }
         }
         let dirty: Vec<_> = unloaded
@@ -9887,31 +9911,41 @@ impl Game<'_> {
                 }
             }
             if let (Some(lod), Some(player)) = (&mut self.lod, &self.player) {
-                let covered = renderer
-                    .lod_detail_columns()
-                    .filter(|&(x, z)| {
-                        horizon_client::streaming::in_view_distance(
-                            self.streaming.center,
-                            self.streaming.radius,
-                            x,
-                            z,
-                        )
+                let lod_distance = self.settings.horizon.lod_distance_on(&renderer.info);
+                lod.set_near_loading(self.streaming.busy());
+                // The covered columns change only with the complete ones and
+                // the render area: rebuilt then, not every frame.
+                let at = (
+                    renderer.lod_detail_revision(),
+                    self.streaming.center,
+                    self.streaming.radius,
+                );
+                let covered = (self.lod_covered_at != Some(at)).then(|| {
+                    self.lod_covered_at = Some(at);
+                    horizon_client::spans::time("lod_covered_set", || {
+                        renderer
+                            .lod_detail_columns()
+                            .filter(|&(x, z)| {
+                                horizon_client::streaming::in_view_distance(at.1, at.2, x, z)
+                            })
+                            .collect()
                     })
-                    .collect();
-                for (key, mesh) in horizon_client::spans::time("lod_update", || {
+                });
+                let meshes = horizon_client::spans::time("lod_update", || {
                     lod.update(
                         [player.position.x, player.position.y, player.position.z],
                         self.yaw,
                         self.streaming.radius,
-                        self.settings.horizon.lod_distance,
+                        lod_distance,
                         covered,
                     )
-                }) {
-                    horizon_client::spans::time("lod_upload", || renderer.upload_lod(key, &mesh));
-                }
-                for key in lod.removed() {
-                    renderer.remove_lod(key);
-                }
+                });
+                renderer.queue_lods(meshes, lod.removed(), lod.take_cutout());
+                // A finished job can hold hundreds of tiles: spread them
+                // over frames rather than stall one.
+                horizon_client::spans::time("lod_upload", || {
+                    renderer.upload_lods(std::time::Duration::from_millis(2))
+                });
             }
         }
     }
@@ -10813,6 +10847,8 @@ impl<'a> Game<'a> {
             lod: None,
             lod_source_attempted: false,
             lod_observe: Default::default(),
+            lod_covered_at: None,
+            lod_unloaded: Default::default(),
             options,
             player: None,
             spawn: None,

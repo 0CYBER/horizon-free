@@ -16,6 +16,9 @@ use std::{
 #[derive(Debug, Default, Serialize)]
 pub struct Report {
     pub copied: usize,
+    /// Namespaces besides the mod id its content owns ([`extra_namespaces`]),
+    /// listed in the manifest's `namespaces`.
+    pub namespaces: Vec<String>,
     /// Files outside what a content mod may hold (other namespaces, vanilla
     /// data other than tags), kept in `outside/` for review.
     pub outside: Vec<String>,
@@ -52,6 +55,14 @@ pub struct Report {
     pub worldgen_types: crate::worldgen::Upgrade,
     /// The loader's convention biome tags the structures name, carried.
     pub convention_biome_tags: usize,
+}
+
+/// The pack around a mod being carried.
+pub struct Pack<'a> {
+    /// The mods ported along, for the conditions of worldgen modifiers.
+    pub loaded: &'a dyn Fn(&str) -> bool,
+    /// Every mod of the pack by id, ported or not: their namespaces are theirs.
+    pub mods: &'a dyn Fn(&str) -> bool,
 }
 
 /// Vanilla blocks by their sorted property names.
@@ -312,18 +323,99 @@ fn named_tool_condition(predicate: &Value) -> Option<&'static str> {
     }
 }
 
-/// Where a jar entry goes: `Some(true)` inside the content mod (its own
-/// namespace, additions to vanilla and convention tags), `Some(false)`
-/// to `outside/`, `None` not carried (code, metadata).
-fn place(name: &str, id: &str) -> Option<bool> {
+/// A jar entry's root (`assets` or `data`), namespace and the rest, for
+/// the files a content mod may carry.
+fn split(name: &str) -> Option<(&str, &str, &str)> {
     let mut parts = name.splitn(3, '/');
     let (root, ns, rest) = (parts.next()?, parts.next()?, parts.next()?);
-    if !(root == "assets" || root == "data") || rest.is_empty() || name.ends_with('/') {
-        return None;
+    let carried = (root == "assets" || root == "data") && !rest.is_empty() && !name.ends_with('/');
+    carried.then_some((root, ns, rest))
+}
+
+/// Additions to vanilla and convention tags, which every mod may hold.
+fn shared_tag(root: &str, ns: &str, rest: &str) -> bool {
+    root == "data" && (ns == "minecraft" || ns == "c") && rest.starts_with("tags/")
+}
+
+/// Where a jar entry goes: `Some(true)` inside the content mod (its own
+/// namespaces, additions to vanilla and convention tags), `Some(false)`
+/// to `outside/`, `None` not carried (code, metadata).
+fn place(name: &str, owned: &[&str]) -> Option<bool> {
+    let (root, ns, rest) = split(name)?;
+    Some(owned.contains(&ns) || shared_tag(root, ns, rest))
+}
+
+/// Namespaces no carried mod claims: vanilla's, the convention tags', the
+/// game's own and the loaders'.
+const NOT_CLAIMED: [&str; 6] = ["minecraft", "c", "horizon", "forge", "neoforge", "fabric"];
+
+/// The namespaces besides `id` a mod's content owns. Some mods ship their
+/// files under other names than their id (Towns and Towers, `t_and_t`,
+/// under `kaisyn` and `towns_and_towers`); others ship files for mods they
+/// support (`wares`, `morevillagers`) or configure (`cristellib`). A
+/// namespace is the mod's when its own files (its id's, its tag additions
+/// and the namespaces already claimed) name ids in it, and no mod of the
+/// pack (`pack_mod`) has it as its id.
+fn extra_namespaces(
+    zip: &mut zip::ZipArchive<fs::File>,
+    id: &str,
+    pack_mod: &dyn Fn(&str) -> bool,
+) -> Vec<String> {
+    let mut candidates = BTreeSet::new();
+    for name in zip.file_names() {
+        if let Some((_, ns, _)) = split(name)
+            && ns != id
+            && !NOT_CLAIMED.contains(&ns)
+            && !pack_mod(ns)
+        {
+            candidates.insert(ns.to_owned());
+        }
     }
-    let shared_tags =
-        root == "data" && (ns == "minecraft" || ns == "c") && rest.starts_with("tags/");
-    Some(ns == id || shared_tags)
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    // The JSON files that could be the mod's, by namespace ("" for tag additions).
+    let mut texts: Vec<(String, Vec<u8>)> = Vec::new();
+    for i in 0..zip.len() {
+        let Ok(mut entry) = zip.by_index(i) else {
+            continue;
+        };
+        let Some((root, ns, rest)) = split(entry.name()) else {
+            continue;
+        };
+        let ns = match () {
+            _ if shared_tag(root, ns, rest) => String::new(),
+            _ if ns == id || candidates.contains(ns) => ns.to_owned(),
+            _ => continue,
+        };
+        let mut bytes = Vec::new();
+        if entry.name().ends_with(".json") && entry.read_to_end(&mut bytes).is_ok() {
+            texts.push((ns, bytes));
+        }
+    }
+    let mut owned: BTreeSet<String> = [String::new(), id.to_owned()].into();
+    let mut claimed = Vec::new();
+    loop {
+        let named = candidates.iter().find(|ns| {
+            let (id, tag) = (format!("\"{ns}:"), format!("\"#{ns}:"));
+            texts.iter().any(|(owner, text)| {
+                owned.contains(owner)
+                    && (contains(text, id.as_bytes()) || contains(text, tag.as_bytes()))
+            })
+        });
+        let Some(ns) = named.cloned() else {
+            break;
+        };
+        candidates.remove(&ns);
+        owned.insert(ns.clone());
+        claimed.push(ns);
+    }
+    claimed.sort();
+    claimed
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
 }
 
 /// Why the game would refuse a file of the mod's own content, if it would.
@@ -341,7 +433,7 @@ fn unreadable(name: &str, bytes: &mut Vec<u8>) -> Option<String> {
     if bytes.starts_with(b"\xEF\xBB\xBF") {
         bytes.drain(..3);
     }
-    let value: Value = match serde_json::from_slice(bytes) {
+    let mut value: Value = match serde_json::from_slice(bytes) {
         Ok(v) => v,
         // Minecraft reads data files with Gson's lenient reader, which skips
         // comments: YUNG's pools have them. The carry is plain JSON.
@@ -356,6 +448,13 @@ fn unreadable(name: &str, bytes: &mut Vec<u8>) -> Option<String> {
     let shared_tag = name.starts_with("data/minecraft/tags/") || name.starts_with("data/c/tags/");
     if shared_tag && value.get("replace").and_then(Value::as_bool) == Some(true) {
         return Some("replaces a shared tag; a content mod may only add to it".into());
+    }
+    // A tag of the mod's own that replaces: no pack before it defines the
+    // tag, so it is the same tag added to (Towns and Towers' biome tags).
+    let own_tag = name.starts_with("data/") && name.contains("/tags/");
+    if own_tag && let Some(o) = value.as_object_mut().filter(|o| o.contains_key("replace")) {
+        o.remove("replace");
+        *bytes = serde_json::to_vec_pretty(&value).expect("a parsed value serializes");
     }
     None
 }
@@ -410,17 +509,17 @@ fn without_comments(bytes: &[u8]) -> Vec<u8> {
 /// Carries `jar` over into `out/carry/`. With the oracle's `facts`, blocks
 /// and items are the ones the mod registers, with the templates and numbers
 /// the facts give; `allowed` says which vanilla blocks the game has;
-/// `loaded` which mods are ported along, for the conditions of the mod's
-/// worldgen modifiers.
+/// `pack` which mods the pack holds and ports along.
 pub fn carry(
     jar: &Path,
     info: &JarInfo,
     out: &Path,
     facts: Option<&Facts>,
     allowed: &dyn Fn(&str) -> bool,
-    loaded: &dyn Fn(&str) -> bool,
+    pack: &Pack,
     conventions: &BTreeMap<String, Value>,
 ) -> Result<Report, String> {
+    let loaded = pack.loaded;
     let id = &info.mod_id;
     if id.is_empty()
         || id.len() > 64
@@ -446,10 +545,14 @@ pub fn carry(
     let set_tags = crate::worldgen::structure_set_tags(&mut zip);
     let piece_counts = crate::worldgen::piece_counts(&mut zip);
     let processor_data = crate::processors::ProcessorData::read(&mut zip);
+    report.namespaces = extra_namespaces(&mut zip, id, pack.mods);
+    let owned: Vec<&str> = std::iter::once(id.as_str())
+        .chain(report.namespaces.iter().map(String::as_str))
+        .collect();
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
         let name = entry.name().to_owned();
-        let Some(keep) = place(&name, id) else {
+        let Some(keep) = place(&name, &owned) else {
             continue;
         };
         if name.split('/').any(|p| p == ".." || p.is_empty()) {
@@ -476,7 +579,13 @@ pub fn carry(
             outside.join(&name)
         };
         if keep {
-            let rel = name.split_once(&format!("/{id}/")).map_or("", |(_, r)| r);
+            // The path in one of the mod's own namespaces; "" for tag additions.
+            let (ns, rel) = match split(&name) {
+                Some((_, ns, rest)) if owned.contains(&ns) => (ns, rest),
+                _ => ("", ""),
+            };
+            // Blocks and items are declared under the mod id only.
+            let own = ns == id;
             if name.starts_with("data/")
                 && (rel.starts_with("worldgen/") || rel.starts_with("structure/"))
             {
@@ -524,7 +633,7 @@ pub fn carry(
                         crate::worldgen::upgrade(kind, &mut v, types, &set_tags) || carried;
                     if kind == "structure" {
                         let path = rel.trim_start_matches("worldgen/structure/");
-                        let structure = format!("{id}:{}", path.trim_end_matches(".json"));
+                        let structure = format!("{ns}:{}", path.trim_end_matches(".json"));
                         changed |= crate::worldgen::disables(&structure, &mut v);
                         changed |=
                             crate::worldgen::add_piece_counts(&structure, &mut v, &piece_counts);
@@ -578,6 +687,7 @@ pub fn carry(
                 if let Some(b) = rel
                     .strip_prefix("loot_table/blocks/")
                     .and_then(|b| b.strip_suffix(".json"))
+                    .filter(|_| own)
                 {
                     block_loot.insert(b.to_owned());
                 }
@@ -593,6 +703,7 @@ pub fn carry(
             } else if let Some(b) = rel
                 .strip_prefix("blockstates/")
                 .and_then(|b| b.strip_suffix(".json"))
+                .filter(|_| own)
             {
                 if let Ok(v) = serde_json::from_slice(&bytes) {
                     blockstates.insert(b.to_owned(), v);
@@ -600,6 +711,7 @@ pub fn carry(
             } else if let Some(m) = rel
                 .strip_prefix("models/item/")
                 .and_then(|m| m.strip_suffix(".json"))
+                .filter(|_| own)
             {
                 item_models.insert(m.to_owned());
             }
@@ -799,7 +911,7 @@ pub fn carry(
     }
     let q = |s: &str| toml::Value::String(s.to_owned()).to_string();
     let name = if info.name.is_empty() { id } else { &info.name };
-    let manifest = format!(
+    let mut manifest = format!(
         "# Carried over from {jar} by horizon-port-pack, for local use only.\n# Licence: {license}\nid = {}\nname = {}\nversion = {}\napi = \"0.2\"\nside = \"both\"\ncapabilities = [\"registries\"]\n",
         q(id),
         q(name),
@@ -811,6 +923,10 @@ pub fn carry(
             &info.license
         },
     );
+    if !report.namespaces.is_empty() {
+        let list: Vec<String> = report.namespaces.iter().map(|n| q(n)).collect();
+        manifest.push_str(&format!("namespaces = [{}]\n", list.join(", ")));
+    }
     write(&inside.join("horizon-mod.toml"), manifest.as_bytes())?;
     write(
         &out.join("carry-report.json"),
@@ -1096,7 +1212,10 @@ mod tests {
             &out,
             None,
             &|_| true,
-            &|_| true,
+            &Pack {
+                loaded: &|_| true,
+                mods: &|_| false,
+            },
             &BTreeMap::new(),
         )
         .unwrap();
@@ -1160,6 +1279,95 @@ mod tests {
         assert_eq!(blocks, ["gem:gem_block", "gem:gem_door"]);
         assert_eq!(content.items.len(), 1);
         assert_eq!(content.items[0].id, "gem:gem");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A mod shipping its files under other names than its id: the
+    /// namespaces its own files name are its, compat files for other mods
+    /// and a pack mod's namespace stay outside.
+    #[test]
+    fn claims_the_namespaces_its_files_name() {
+        let dir = std::env::temp_dir().join(format!("horizon-port-pack-ns-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let jar = dir.join("towers-1.0.jar");
+        let mut zip = zip::ZipWriter::new(fs::File::create(&jar).unwrap());
+        let files: &[(&str, &str)] = &[
+            (
+                "META-INF/neoforge.mods.toml",
+                "license = \"MIT\"\n[[mods]]\nmodId = \"towers\"\nversion = \"1.0\"\n",
+            ),
+            // Its tag addition names its structure; the structure names its pool.
+            (
+                "data/minecraft/tags/worldgen/structure/village.json",
+                r#"{"values": ["towers_wg:tower"]}"#,
+            ),
+            (
+                "data/towers_wg/worldgen/structure/tower.json",
+                r#"{"type": "minecraft:jigsaw", "start_pool": "kaisyn:tower/start"}"#,
+            ),
+            ("data/kaisyn/structure/tower.nbt", "nbt"),
+            (
+                "data/towers_wg/tags/worldgen/biome/has_tower.json",
+                r#"{"replace": true, "values": ["minecraft:plains"]}"#,
+            ),
+            (
+                "assets/kaisyn/blockstates/brick.json",
+                r#"{"variants": {}}"#,
+            ),
+            // Compat for a mod outside the pack, named by nothing of its own.
+            ("data/wares/loot_table/crate.json", r#"{"pools": []}"#),
+            // A pack mod's config naming the mod's sets, and a loader's file.
+            (
+                "data/cristel/config/towers.json",
+                r#"{"sets": ["towers_wg:towns"]}"#,
+            ),
+            (
+                "data/neoforge/loot_modifiers/global.json",
+                r#"{"entries": ["towers_wg:x"]}"#,
+            ),
+        ];
+        for (name, text) in files {
+            zip.start_file(*name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(text.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap();
+        let info = crate::jar::read(&jar).unwrap();
+        let out = dir.join("work/mods/towers");
+        let pack = Pack {
+            loaded: &|_| true,
+            mods: &|m| m == "cristel",
+        };
+        let report = carry(&jar, &info, &out, None, &|_| true, &pack, &BTreeMap::new()).unwrap();
+        assert_eq!(report.namespaces, ["kaisyn", "towers_wg"]);
+        assert_eq!(report.worldgen, 2);
+        assert_eq!(
+            report.outside,
+            [
+                "data/wares/loot_table/crate.json",
+                "data/cristel/config/towers.json",
+                "data/neoforge/loot_modifiers/global.json",
+            ]
+        );
+        // No block is declared from another namespace's blockstate.
+        assert!(report.blocks.is_empty());
+        let carried = out.join("carry");
+        let package = horizon_mods::Package::read(&carried).unwrap();
+        assert_eq!(package.manifest.namespaces, ["kaisyn", "towers_wg"]);
+        let content = horizon_mods::Content::read(&carried, &package.manifest).unwrap();
+        assert!(
+            content
+                .files
+                .contains(&"data/kaisyn/structure/tower.nbt".to_owned())
+        );
+        assert!(content.blocks.is_empty());
+        // Its own tag that replaces is the same tag added to.
+        let tag: Value = serde_json::from_slice(
+            &fs::read(carried.join("data/towers_wg/tags/worldgen/biome/has_tower.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(tag, json!({"values": ["minecraft:plains"]}));
         fs::remove_dir_all(&dir).unwrap();
     }
 }

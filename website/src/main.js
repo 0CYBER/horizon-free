@@ -102,7 +102,7 @@ async function setUpDownload() {
 const isGame = (tag) => /^v\d{4}\.\d{1,2}\.\d{1,2}/.test(tag);
 
 async function setUpNotes() {
-  const list = (await releases).filter((r) => isGame(r.tag_name));
+  const list = (await releases).filter((r) => isGame(r.tag_name) && !r.prerelease);
   if (list.length) document.getElementById("releases").innerHTML = releasesHtml(list.slice(0, 3));
 }
 

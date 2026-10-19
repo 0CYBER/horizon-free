@@ -1,8 +1,46 @@
 //! Far meshes share the terrain arena and passes, with their actual bounds
 //! rather than the 16³ boxes used by the near-section residency walk.
 use super::{Frustum, Renderer, SectionGpu};
-use crate::{lod::TileKey, mesher::SectionMesh};
+use crate::{
+    fast_hash::{FxHashMap, FxHashSet},
+    lod::TileKey,
+    mesher::SectionMesh,
+};
 use glam::{DVec3, Vec3};
+use std::time::{Duration, Instant};
+
+/// Finished tile meshes not uploaded yet, the tiles they replace (removed
+/// once every mesh is in) and the columns they leave out.
+#[derive(Default)]
+pub(super) struct Pending {
+    meshes: FxHashMap<TileKey, SectionMesh>,
+    removed: FxHashSet<TileKey>,
+    cutout: Option<FxHashSet<(i32, i32)>>,
+}
+
+impl Pending {
+    /// Takes in the next job, with the same result as applying both in
+    /// turn: newer meshes replace waiting ones, tiles meshed again are not
+    /// removed, and tiles removed now drop their waiting meshes.
+    fn add(
+        &mut self,
+        meshes: Vec<(TileKey, SectionMesh)>,
+        removed: Vec<TileKey>,
+        cutout: Option<FxHashSet<(i32, i32)>>,
+    ) {
+        for (key, mesh) in meshes {
+            self.removed.remove(&key);
+            self.meshes.insert(key, mesh);
+        }
+        for key in removed {
+            self.meshes.remove(&key);
+            self.removed.insert(key);
+        }
+        if cutout.is_some() {
+            self.cutout = cutout;
+        }
+    }
+}
 
 pub(super) struct Tile {
     pub mesh: SectionGpu,
@@ -101,8 +139,66 @@ impl Renderer {
     }
 
     pub fn clear_lods(&mut self) {
+        self.lod_pending = None;
         for (_, tile) in std::mem::take(&mut self.lods) {
             self.release_mesh(tile.mesh);
+        }
+        self.set_lod_cutout(Default::default());
+    }
+
+    /// Queues a finished mesh job (`Lod::update`, `Lod::removed`,
+    /// `Lod::take_cutout`) for `upload_lods`, joining one still uploading
+    /// (`Pending::add`).
+    pub fn queue_lods(
+        &mut self,
+        meshes: Vec<(TileKey, SectionMesh)>,
+        removed: Vec<TileKey>,
+        cutout: Option<FxHashSet<(i32, i32)>>,
+    ) {
+        if meshes.is_empty() && removed.is_empty() && cutout.is_none() {
+            return;
+        }
+        self.lod_pending
+            .get_or_insert_default()
+            .add(meshes, removed, cutout);
+    }
+
+    /// Uploads queued tile meshes for about `budget` (at least one), then,
+    /// once all are in, retires the tiles they replace.
+    pub fn upload_lods(&mut self, budget: Duration) {
+        let start = Instant::now();
+        while let Some(pending) = &mut self.lod_pending {
+            let Some(&key) = pending.meshes.keys().next() else {
+                let pending = self.lod_pending.take().expect("pending tiles");
+                for key in pending.removed {
+                    self.remove_lod(key);
+                }
+                if let Some(cutout) = pending.cutout {
+                    self.set_lod_cutout(cutout);
+                }
+                return;
+            };
+            let mesh = pending.meshes.remove(&key).expect("pending tile");
+            self.upload_lod(key, &mesh);
+            if start.elapsed() >= budget {
+                return;
+            }
+        }
+    }
+
+    /// The chunk columns the resident tiles now leave out (`Lod::take_cutout`).
+    /// Removed sections they no longer leave out are released.
+    pub fn set_lod_cutout(&mut self, cutout: crate::fast_hash::FxHashSet<(i32, i32)>) {
+        self.lod_cutout = cutout;
+        let released: Vec<_> = self
+            .lod_retiring
+            .iter()
+            .copied()
+            .filter(|key| !self.lod_cutout.contains(&(key.0, key.2)))
+            .collect();
+        for key in released {
+            self.lod_retiring.remove(&key);
+            self.release_section(key);
         }
     }
 }
@@ -111,6 +207,29 @@ impl Renderer {
 mod tests {
     use super::*;
     use crate::mesher::TerrainVertex;
+
+    #[test]
+    fn joined_jobs_apply_as_if_in_turn() {
+        let key = |x| TileKey { x, z: 0, level: 0 };
+        let mut pending = Pending::default();
+        // The first job meshes 1 and 2 and retires 3 and 4.
+        pending.add(
+            vec![
+                (key(1), SectionMesh::default()),
+                (key(2), SectionMesh::default()),
+            ],
+            vec![key(3), key(4)],
+            Some([(0, 0)].into_iter().collect()),
+        );
+        // The second meshes 3 again and retires 2.
+        pending.add(vec![(key(3), SectionMesh::default())], vec![key(2)], None);
+        let mut meshes: Vec<_> = pending.meshes.keys().map(|k| k.x).collect();
+        meshes.sort_unstable();
+        let mut removed: Vec<_> = pending.removed.iter().map(|k| k.x).collect();
+        removed.sort_unstable();
+        assert_eq!((meshes, removed), (vec![1, 3], vec![2, 4]));
+        assert!(pending.cutout.is_some_and(|c| c.contains(&(0, 0))));
+    }
 
     #[test]
     fn large_tile_bounds_include_water_and_do_not_cull_by_origin() {

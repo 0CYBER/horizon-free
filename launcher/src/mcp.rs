@@ -95,7 +95,7 @@ impl Session {
                 {
                     out["releases"] = backend::releases()?
                         .iter()
-                        .map(|r| json!({ "tag": r.tag, "name": r.name, "date": r.date, "available_here": r.asset.is_some() }))
+                        .map(|r| json!({ "tag": r.tag, "name": r.name, "date": r.date, "channel": if r.beta { "beta" } else { "stable" }, "available_here": r.asset.is_some() }))
                         .collect();
                 }
                 Ok(serde_json::to_string_pretty(&out).unwrap())

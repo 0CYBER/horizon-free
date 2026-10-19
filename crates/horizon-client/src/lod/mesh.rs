@@ -302,8 +302,34 @@ fn mesh_columns_with_edges(
         count += neighbors[side].len();
         start
     });
-    let prepared: Vec<Vec<Segment<'_>>> = columns
+    let stride = key.size() / CELLS as i32;
+    let [ox, _, oz] = key.origin();
+    // A cell meets full-detail or finer terrain: it is meshed in smaller steps.
+    let cell_step = |x: usize, z: usize| {
+        let (wx, wz) = (ox + x as i32 * stride, oz + z as i32 * stride);
+        let overlaps = covered_bounds.is_some_and(|[x0, z0, x1, z1]| {
+            wx < x1 && wx + stride > x0 && wz < z1 && wz + stride > z0
+        });
+        let mut step = if overlaps { stride.min(16) } else { stride };
+        for other in finer {
+            let [x, _, z] = other.origin();
+            if wx < x + other.size() && x < wx + stride && wz < z + other.size() && z < wz + stride
+            {
+                step = step.min(other.size());
+            }
+        }
+        step
+    };
+    let filled = fill_buried_gaps(
+        columns,
+        neighbors,
+        stride,
+        |x, z| cell_step(x, z) == stride,
+        |span| material(span, Direction::Up).fluid != 0,
+    );
+    let prepared: Vec<Vec<Segment<'_>>> = filled
         .iter()
+        .map(|column| &**column)
         .chain(neighbors.iter().flatten().map(|edge| &edge.column))
         .map(|column| {
             let materials: Vec<_> = column
@@ -342,8 +368,6 @@ fn mesh_columns_with_edges(
         })
         .collect();
     let mut faces = Faces::new();
-    let stride = key.size() / CELLS as i32;
-    let [ox, _, oz] = key.origin();
     let finer_keys: FxHashSet<_> = finer.iter().copied().collect();
     let mut finer_levels: Vec<_> = finer.iter().map(|key| key.level).collect();
     finer_levels.sort_unstable();
@@ -362,21 +386,9 @@ fn mesh_columns_with_edges(
     for z in 0..CELLS {
         for x in 0..CELLS {
             let (wx, wz) = (ox + x as i32 * stride, oz + z as i32 * stride);
-            let overlaps = covered_bounds.is_some_and(|[x0, z0, x1, z1]| {
-                wx < x1 && wx + stride > x0 && wz < z1 && wz + stride > z0
-            });
-            let mut step = if overlaps { stride.min(16) } else { stride };
-            for other in finer {
-                let [x, _, z] = other.origin();
-                if wx < x + other.size()
-                    && x < wx + stride
-                    && wz < z + other.size()
-                    && z < wz + stride
-                {
-                    step = step.min(other.size());
-                }
-            }
+            let step = cell_step(x, z);
             let column = &prepared[z * CELLS + x];
+            let own_sky = column.last().map_or(0, |top| top.span.light & 0xff);
             for dz in (0..stride).step_by(step as usize) {
                 for dx in (0..stride).step_by(step as usize) {
                     if is_covered(wx + dx, wz + dz) {
@@ -462,10 +474,21 @@ fn mesh_columns_with_edges(
                             // Near meshes may have culled against the real neighbor.
                             // Keep a finite seal where their full-detail area begins.
                             if is_covered(nw[0], nw[1]) {
-                                add_side(&mut faces, direction, plane, u0, u1, segment, &[], side);
+                                add_side(
+                                    &mut faces,
+                                    direction,
+                                    plane,
+                                    u0,
+                                    u1,
+                                    segment,
+                                    &[],
+                                    side,
+                                    own_sky,
+                                );
                             } else if !edge {
                                 add_side(
                                     &mut faces, direction, plane, u0, u1, segment, column, side,
+                                    own_sky,
                                 );
                             } else if (0..CELLS as i32).contains(&nx)
                                 && (0..CELLS as i32).contains(&nz)
@@ -479,6 +502,7 @@ fn mesh_columns_with_edges(
                                     segment,
                                     &prepared[nz as usize * CELLS + nx as usize],
                                     side,
+                                    own_sky,
                                 );
                             } else {
                                 let edge_side = match direction {
@@ -498,6 +522,7 @@ fn mesh_columns_with_edges(
                                         segment,
                                         &[],
                                         side,
+                                        own_sky,
                                     );
                                 }
                                 // A coarse face can meet several finer columns.
@@ -515,6 +540,7 @@ fn mesh_columns_with_edges(
                                             segment,
                                             &prepared[edge_offsets[edge_side] + i],
                                             side,
+                                            own_sky,
                                         );
                                     }
                                 }
@@ -621,6 +647,107 @@ mod refinement_tests {
     }
 }
 
+/// The tile's columns with the gaps no neighbour's open air reaches filled
+/// with the material below them, or the fluid above them (kelp and seagrass
+/// leave gaps in water): a cave seen from nowhere adds no faces. A
+/// gap is open when a neighbouring column's top lies below the gap's top, so
+/// that column's open air looks into it. Unknown neighbours, and cells that
+/// `whole` rejects (they meet full-detail or finer terrain), count as open;
+/// those cells keep their gaps.
+fn fill_buried_gaps<'a>(
+    columns: &'a [Column],
+    neighbors: &[Vec<EdgeColumn>; 4],
+    stride: i32,
+    whole: impl Fn(usize, usize) -> bool,
+    mut fluid: impl FnMut(&Span) -> bool,
+) -> Vec<std::borrow::Cow<'a, Column>> {
+    use std::borrow::Cow;
+    let top = |column: &Column| {
+        column
+            .spans
+            .iter()
+            .rev()
+            .find(|span| span.min < span.max)
+            .map_or(i16::MIN, |span| span.max)
+    };
+    let tops: Vec<_> = (0..CELLS * CELLS)
+        .map(|i| {
+            if whole(i % CELLS, i / CELLS) {
+                top(&columns[i])
+            } else {
+                i16::MIN
+            }
+        })
+        .collect();
+    let edge = |side: usize, cell: usize| {
+        let (start, end) = (cell as i32 * stride, (cell as i32 + 1) * stride);
+        neighbors[side]
+            .iter()
+            .filter(|edge| edge.start < end && start < edge.end)
+            .map(|edge| top(&edge.column))
+            .min()
+            .unwrap_or(i16::MIN)
+    };
+    columns
+        .iter()
+        .enumerate()
+        .map(|(i, column)| {
+            let (x, z) = (i % CELLS, i / CELLS);
+            if column.spans.len() < 2 || !whole(x, z) {
+                return Cow::Borrowed(column);
+            }
+            let open = [
+                if x > 0 { tops[i - 1] } else { edge(0, z) },
+                if x + 1 < CELLS {
+                    tops[i + 1]
+                } else {
+                    edge(1, z)
+                },
+                if z > 0 { tops[i - CELLS] } else { edge(2, x) },
+                if z + 1 < CELLS {
+                    tops[i + CELLS]
+                } else {
+                    edge(3, x)
+                },
+            ]
+            .into_iter()
+            .min()
+            .unwrap_or(i16::MIN);
+            let buried = |below: &Span, above: &Span| below.max < above.min && above.min <= open;
+            if !column
+                .spans
+                .windows(2)
+                .any(|pair| buried(&pair[0], &pair[1]))
+            {
+                return Cow::Borrowed(column);
+            }
+            let mut filled = Column {
+                surface: column.surface,
+                spans: Vec::with_capacity(column.spans.len()),
+            };
+            for &span in &column.spans {
+                let mut span = span;
+                if let Some(below) = filled.spans.last_mut()
+                    && buried(below, &span)
+                {
+                    if fluid(&span) {
+                        span.min = below.max;
+                    } else {
+                        below.max = span.min;
+                    }
+                }
+                filled.push(span);
+            }
+            Cow::Owned(filled)
+        })
+        .collect()
+}
+
+/// Adds the parts of `segment`'s side not hidden by `neighbor`, the column
+/// it faces. Parts above the neighbour's top face open air: reduced columns
+/// and the seals at full-detail edges expose sides that were buried (their
+/// recorded light is a cave's or none), so those take at least the sky light
+/// over the top of the neighbour (or of this column, with no neighbour).
 fn add_side(
     faces: &mut Faces,
     direction: Direction,
@@ -630,7 +757,23 @@ fn add_side(
     segment: &Segment<'_>,
     neighbor: &[Segment<'_>],
     side: Material,
+    own_sky: u16,
 ) {
+    let (open, sky) = neighbor.last().map_or((f32::NEG_INFINITY, own_sky), |top| {
+        (f32::from(top.span.max), top.span.light & 0xff)
+    });
+    let mut add = |v0: f32, v1: f32| {
+        let mut lit = side;
+        for paint in lit.faces.iter_mut().flatten() {
+            paint.light = (paint.light & 0xff00) | (paint.light & 0xff).max(sky);
+        }
+        let split = open.clamp(v0, v1);
+        for (v0, v1, material) in [(v0, split, side), (split, v1, lit)] {
+            if v0 < v1 {
+                add_face(faces, direction, plane, Rect { u0, v0, u1, v1 }, material);
+            }
+        }
+    };
     let mut floor = segment.min;
     for next in neighbor {
         if next.max <= floor
@@ -640,18 +783,7 @@ fn add_side(
             continue;
         }
         if floor < next.min {
-            add_face(
-                faces,
-                direction,
-                plane,
-                Rect {
-                    u0,
-                    v0: floor,
-                    u1,
-                    v1: next.min.min(segment.max),
-                },
-                side,
-            );
+            add(floor, next.min.min(segment.max));
         }
         floor = floor.max(next.max);
         if floor >= segment.max {
@@ -659,18 +791,7 @@ fn add_side(
         }
     }
     if floor < segment.max {
-        add_face(
-            faces,
-            direction,
-            plane,
-            Rect {
-                u0,
-                v0: floor,
-                u1,
-                v1: segment.max,
-            },
-            side,
-        );
+        add(floor, segment.max);
     }
 }
 
@@ -958,6 +1079,88 @@ mod tests {
                 .fold(f32::NEG_INFINITY, f32::max),
             7.0
         );
+    }
+    #[test]
+    fn exposed_buried_sides_take_the_sky_light_over_their_neighbor() {
+        let mut columns = columns();
+        let dark = |min, max| Span {
+            light: 0,
+            ..span(min, max, 1)
+        };
+        // A reduced column whose lower blocks were buried (no light), next to
+        // a lower column, and to one with a cave below its top.
+        columns[0].spans = vec![dark(0, 9), span(9, 10, 1)];
+        columns[1].spans = vec![span(0, 4, 1)];
+        columns[CELLS].spans = vec![span(0, 2, 1), span(6, 12, 1)];
+        let mesh = mesh(&columns);
+        let quads = mesh.solid.as_chunks::<4>().0;
+        let bounds = |q: &[TerrainVertex; 4]| {
+            let ys = q.iter().map(|v| v.pos[1]);
+            (
+                ys.clone().fold(f32::INFINITY, f32::min),
+                ys.fold(0.0, f32::max),
+            )
+        };
+        // Over the lower neighbour: open air, lit like its top.
+        let open: Vec<_> = quads
+            .iter()
+            .filter(|q| q.iter().all(|v| v.pos[0] == 1.0 && v.pos[2] <= 1.0) && normal(q).x > 0.0)
+            .collect();
+        assert_eq!(open.len(), 1);
+        assert_eq!(bounds(open[0]), (4.0, 10.0));
+        assert!(open[0].iter().all(|v| v.light == 240));
+        // Into the cave: its recorded light.
+        let cave: Vec<_> = quads
+            .iter()
+            .filter(|q| q.iter().all(|v| v.pos[2] == 1.0 && v.pos[0] <= 1.0) && normal(q).z > 0.0)
+            .collect();
+        assert_eq!(cave.len(), 1);
+        assert_eq!(bounds(cave[0]), (2.0, 6.0));
+        assert!(cave[0].iter().all(|v| v.light == 0));
+    }
+    #[test]
+    fn caves_no_neighbor_sees_into_add_no_faces() {
+        let mut columns = columns();
+        for column in &mut columns {
+            column.spans = vec![span(0, 20, 1)];
+        }
+        let cave = 5 * CELLS + 5;
+        columns[cave].spans = vec![span(0, 8, 1), span(12, 20, 1)];
+        let at = |mesh: &SectionMesh, y: f32| {
+            mesh.solid
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .filter(|q| q.iter().all(|v| v.pos[1] == y))
+                .count()
+        };
+        // Closed on every side: filled, no floor or ceiling.
+        let closed = mesh(&columns);
+        assert_eq!((at(&closed, 8.0), at(&closed, 12.0)), (0, 0));
+        assert!(
+            closed
+                .solid
+                .iter()
+                .all(|v| v.pos[1] == 0.0 || v.pos[1] == 20.0)
+        );
+        // A lower neighbour's open air looks in: the cave stays.
+        columns[cave + 1].spans = vec![span(0, 10, 1)];
+        let open = mesh(&columns);
+        assert_eq!((at(&open, 8.0), at(&open, 12.0)), (1, 1));
+        // Kelp leaves a gap in water: water fills it, without inner faces.
+        for column in &mut columns {
+            column.spans = vec![span(0, 5, 1), span(5, 10, 2)];
+        }
+        columns[cave].spans = vec![span(0, 5, 1), span(5, 7, 2), span(8, 10, 2)];
+        let water = mesh(&columns);
+        assert!(
+            water
+                .translucent
+                .iter()
+                .all(|v| v.pos[1] != 7.0 && v.pos[1] != 8.0)
+        );
+        let uniform = mesh(&vec![columns[0].clone(); CELLS * CELLS]);
+        assert_eq!(water.translucent.len(), uniform.translucent.len());
     }
     #[test]
     fn greedy_faces_preserve_material_and_light_boundaries() {
