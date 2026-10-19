@@ -29,7 +29,8 @@ Horizon side runs target/release/horizon-server with the engine beside it; build
 
 Two more Java servers, both dev-only downloads into .local/server-bench/jars (never committed or shipped):
 - `paper`: Paper's newest build for the pinned version, from PaperMC's download API, checked against the
-  SHA-256 it publishes, with Paper's own defaults. Paperclip patches the pinned server jar (your copy, put in
+  SHA-256 it publishes, with Paper's own defaults except `connection-throttle` (off: the bots all join from
+  one address). Paperclip patches the pinned server jar (your copy, put in
   its cache so nothing is fetched from Mojang).
 - `fabric`: the pinned vanilla server on the pinned Fabric loader (packs/fabric.lock.json) with Lithium from
   packs/mods.lock.json (and Fabric API only if Lithium asks for it), checked against the lock's SHA-512.
@@ -247,6 +248,9 @@ def server_command(kind, directory, args):
         for name in ('cache', 'libraries', 'versions'):
             (shared / name).mkdir(exist_ok=True)
             (directory / name).symlink_to(shared / name, target_is_directory=True)
+        # Paper refuses a second login from one address within 4 s (bukkit.yml's connection-throttle), and
+        # every bot comes from the same one. Off, as on vanilla; Paper fills in the rest of the file.
+        (directory / 'bukkit.yml').write_text('settings:\n  connection-throttle: -1\n')
         return [*java, '-jar', jar, '--nogui']
     if kind == 'fabric':
         _, jars, libraries = base.verify_artifacts()
