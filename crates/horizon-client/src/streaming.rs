@@ -1314,6 +1314,30 @@ impl Streaming {
         }
         self.written.clear();
     }
+    /// Finish generation for a closing world without waiting on the event
+    /// loop. No new generation is scheduled while the save screen is shown.
+    /// Proto snapshots are checked out to workers before chunk writes, just as
+    /// in `save(true)`, so older generation cannot overwrite the final chunks.
+    pub fn poll_save(&mut self, world: &mut World) -> bool {
+        let started = std::time::Instant::now();
+        while let Ok(done) = self.results.try_recv() {
+            match done {
+                Done::Decorated(x, z, region) => self.receive_decorated(x, z, region),
+                Done::Generated(chunk) => self.receive_generated(chunk, world),
+                Done::Saved(protos) => self.receive_saved(protos),
+                other => self.deferred.push(other),
+            }
+            if started.elapsed() >= std::time::Duration::from_millis(2) {
+                return false;
+            }
+        }
+        if self.decorating > 0 || !self.finishing.is_empty() || self.saving > 0 {
+            return false;
+        }
+        let written: Vec<_> = self.written.drain().collect();
+        self.save_checked_out(written);
+        self.saving == 0
+    }
     fn in_range(&self, x: i32, z: i32, margin: i32) -> bool {
         self.ranges().in_range(x, z, margin)
     }

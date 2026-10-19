@@ -361,6 +361,9 @@ impl Game<'_> {
 
     /// Disconnect and return to the multiplayer screen (DisconnectedScreen).
     pub(super) fn leave_server(&mut self, reason: Option<String>) -> Result<()> {
+        if reason.is_none() && self.integrated.as_ref().is_some_and(|s| !s.stopped()) {
+            return self.begin_closing_save(false);
+        }
         self.finish_perf();
         if reason.is_none() {
             // Leaving on purpose: nothing for auto-reconnect to retry.
@@ -372,7 +375,7 @@ impl Game<'_> {
         // Single player's server thread saves the world before the title shows.
         let single_player = match self.integrated.take() {
             Some(server) => {
-                server.stop();
+                server.stop()?;
                 true
             }
             None => false,

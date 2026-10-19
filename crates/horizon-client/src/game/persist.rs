@@ -559,7 +559,7 @@ impl Game<'_> {
     /// The entity NBT of every simulated entity in `keys`, plus the unknown
     /// entities kept for them. With `remove`, the entities leave the world
     /// (their chunks unload).
-    fn entity_chunks(
+    pub(super) fn entity_chunks(
         &mut self,
         keys: &HashSet<(i32, i32)>,
         remove: bool,
@@ -858,6 +858,14 @@ impl Game<'_> {
         self.spawn_loaded_entities();
         let keys: HashSet<(i32, i32)> = self.world.chunks.keys().copied().collect();
         let chunks = self.entity_chunks(&keys, false);
+        self.prune_entity_memory();
+        if wait {
+            self.save.save_entities(chunks)
+        } else {
+            self.save.save_entities_later(chunks)
+        }
+    }
+    pub(super) fn prune_entity_memory(&mut self) {
         // Forget entities that no longer exist.
         let alive: HashSet<u32> = self
             .mobs
@@ -873,11 +881,6 @@ impl Game<'_> {
             .collect();
         self.persist.uuids.retain(|id, _| alive.contains(id));
         self.persist.raw.retain(|id, _| alive.contains(id));
-        if wait {
-            self.save.save_entities(chunks)
-        } else {
-            self.save.save_entities_later(chunks)
-        }
     }
     /// Save and remove the entities of chunks that unloaded.
     pub(super) fn unload_entities(&mut self, unloaded: &[Arc<Chunk>]) {

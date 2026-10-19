@@ -87,7 +87,7 @@ fn main() -> Result<()> {
         let _ = save.tables.set(tables.clone());
         let started = Instant::now();
         save.save_later(&chunks, registry, &biomes)?;
-        save.flush();
+        save.flush().unwrap();
         times[2].push(started.elapsed().as_secs_f64());
         drop(save);
 

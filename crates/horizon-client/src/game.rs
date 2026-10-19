@@ -118,6 +118,7 @@ mod remote_projectiles;
 mod render_control;
 mod render_tick;
 mod respawn_anchor;
+mod saving;
 mod scoreboard;
 mod screens;
 mod sculk;
@@ -1366,6 +1367,7 @@ struct Game<'a> {
     text_selection: horizon_client::clipboard::AppendSelection,
     /// The world was saved for the application ending (`save_for_exit`).
     saved_for_exit: bool,
+    pending_save: Option<saving::ClosingSave>,
     /// The block a guest is acting on (game/lan_actions.rs).
     forced_hit: Option<Hit>,
     /// The part of a right click a guest's packet asks for (game/lan_actions.rs).
@@ -7240,13 +7242,21 @@ impl Game<'_> {
     }
 
     pub(super) fn save_for_exit(&mut self) -> Result<()> {
+        // Native application termination can bypass CloseRequested. Finish any
+        // save screen synchronously here, before the process can go away.
+        while self.pending_save.is_some() {
+            self.poll_closing_save()?;
+            if self.pending_save.is_some() {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
         if self.title.is_some() || self.saved_for_exit {
             return Ok(());
         }
-        self.saved_for_exit = true;
         if let Some(server) = self.integrated.take() {
             // The server thread saves the world.
-            server.stop();
+            server.stop()?;
+            self.saved_for_exit = true;
             return Ok(());
         }
         self.close_container();
@@ -7254,9 +7264,14 @@ impl Game<'_> {
             self.stats.custom("leave_game", 1);
         }
         self.lan_close(false);
-        self.save_game()
+        self.save_game()?;
+        self.saved_for_exit = true;
+        Ok(())
     }
     fn close_world(&mut self) -> Result<()> {
+        self.begin_closing_save(false)
+    }
+    fn finish_close_world(&mut self) -> Result<()> {
         self.ambience.clear(&mut self.audio);
         // updateLevelInEngines(null): every sound stops; the music manager
         // lets go of its track.
@@ -7265,13 +7280,7 @@ impl Game<'_> {
         if self.remote.is_some() {
             return self.leave_server(None);
         }
-        self.finish_perf();
-        self.stats.custom("leave_game", 1);
-        self.save_game()?;
-        self.lan_close(false);
-        // Closing the level storage: once the last writes are on disk the
-        // session lock goes, so the title can delete or back up this world.
-        self.save.flush();
+        // The save screen has finished every write before releasing storage.
         self.session_lock = None;
         horizon_client::crash::clear_detail("World");
         self.debug_charts.reset();
@@ -9037,6 +9046,9 @@ impl Game<'_> {
         }
         self.save_level(wait)?;
         self.save_parked_levels(wait)?;
+        self.save_game_metadata()
+    }
+    fn save_game_metadata(&mut self) -> Result<()> {
         self.save_maps();
         self.save_random_sequences();
         self.save_fight();
@@ -9062,11 +9074,12 @@ impl Game<'_> {
         let chunks = self.with_entities(keys.iter().filter_map(|k| self.world.chunks.get(k)));
         self.save
             .save_later(&chunks, self.pack.assets.registry, self.res.biomes())?;
-        if wait {
-            self.save.flush();
-        }
-        self.save_entities(wait)?;
+        // Prepare entities while the chunk writer runs, then use one barrier.
+        self.save_entities(false)?;
         self.save_raids();
+        if wait {
+            self.save.flush()?;
+        }
         Ok(())
     }
     fn render(&mut self) -> Result<bool> {
@@ -10079,11 +10092,36 @@ impl ApplicationHandler for Game<'_> {
         {
             return;
         }
+        if self.pending_save.is_some() {
+            match event {
+                WindowEvent::CloseRequested => {
+                    self.pending_save.as_mut().unwrap().quit = true;
+                }
+                WindowEvent::Focused(focused) => {
+                    self.focused = focused;
+                    if !focused {
+                        self.capture(false);
+                    }
+                }
+                WindowEvent::Resized(size) => {
+                    if let Some(r) = &mut self.renderer {
+                        r.resize(size.width, size.height);
+                    }
+                }
+                WindowEvent::RedrawRequested => {
+                    if let Err(error) = self.render_closing_save() {
+                        self.error = Some(error);
+                        event_loop.exit();
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
         let result: Result<()> = (|| {
             match event {
                 WindowEvent::CloseRequested => {
-                    self.save_for_exit()?;
-                    event_loop.exit();
+                    self.begin_closing_save(true)?;
                 }
                 WindowEvent::Resized(size) => {
                     if let Some(r) = &mut self.renderer {
@@ -10724,7 +10762,8 @@ impl ApplicationHandler for Game<'_> {
         }
     }
     fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
-        if self.captured
+        if self.pending_save.is_none()
+            && self.captured
             && self.focused
             && self.screen == Screen::Playing
             && let DeviceEvent::MouseMotion { delta: (x, y) } = event
@@ -10735,12 +10774,34 @@ impl ApplicationHandler for Game<'_> {
         }
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.pending_save.is_some() {
+            match self.poll_closing_save() {
+                Ok(true) => event_loop.exit(),
+                Ok(false) => {
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                    // Yield between polls even when disk I/O is slow.
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(
+                        Instant::now() + Duration::from_millis(4),
+                    ));
+                }
+                Err(error) => {
+                    self.error = Some(error);
+                    event_loop.exit();
+                }
+            }
+            return;
+        }
         if let Err(error) = self.resume_world_entry() {
             self.error = Some(error);
             event_loop.exit();
             return;
         }
         self.poll_control(event_loop);
+        if self.pending_save.is_some() {
+            return;
+        }
         self.poll_pads(event_loop);
         if self.options.frames.is_some() && self.started.elapsed() > self.options.timeout {
             self.error = Some("frame-limited run timed out".into());
@@ -11087,6 +11148,7 @@ impl<'a> Game<'a> {
             clipboard: Default::default(),
             text_selection: Default::default(),
             saved_for_exit: false,
+            pending_save: None,
             forced_hit: None,
             guest_use: None,
             lan_events: Vec::new(),

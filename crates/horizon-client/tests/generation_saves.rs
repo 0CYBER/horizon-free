@@ -155,7 +155,11 @@ impl Session {
         self.streaming.save(&mut self.world, false);
     }
     fn save(&mut self) {
-        self.streaming.save(&mut self.world, true);
+        let deadline = Instant::now() + Duration::from_secs(120);
+        while !self.streaming.poll_save(&mut self.world) {
+            assert!(Instant::now() < deadline, "incremental save never finished");
+            thread::sleep(Duration::from_millis(1));
+        }
         for key in std::mem::take(&mut self.world.modified) {
             if let Some(chunk) = self.world.chunks.get(&key) {
                 self.generator.save_chunk(chunk);
@@ -269,7 +273,7 @@ fn saved_proto_chunks_restore_exactly() {
     generator.decorate(&mut worker, &mut region);
     assert!(generator.is_decorated(&region[4]));
     generator.save_protos(&region.iter().collect::<Vec<_>>());
-    save.flush();
+    save.flush().unwrap();
     let restored: Vec<Proto> = keys
         .iter()
         .map(|&(x, z)| generator.proto(&mut worker, x, z))
