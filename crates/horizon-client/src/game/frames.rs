@@ -282,8 +282,15 @@ impl Game<'_> {
     }
     /// BlockAttachedEntity.tick for frames.
     pub(super) fn tick_item_frames(&mut self) {
+        // ServerLevel.tick: only entities in entity-ticking chunks tick.
+        let ticking = self.entity_ticking_area();
         let mut i = 0;
         while i < self.item_frames.len() {
+            let at = center(&self.item_frames[i]);
+            if !ticking(at[0].floor() as i32, at[2].floor() as i32) {
+                i += 1;
+                continue;
+            }
             self.item_frames[i].check_interval += 1;
             if self.item_frames[i].check_interval >= 100 {
                 self.item_frames[i].check_interval = 0;
