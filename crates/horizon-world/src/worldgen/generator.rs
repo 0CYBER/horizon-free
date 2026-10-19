@@ -920,7 +920,15 @@ where
         Ok(chunk)
     }
     fn carver_biome(&self, worker: &mut WorkerState, origin: ChunkPos) -> Result<BiomeId, String> {
-        if let Some(id) = self.carver_cache.lock().unwrap().get(&(origin.x, origin.z)) {
+        let key = (origin.x, origin.z);
+        if let Some(id) = worker.carver_biomes.get(&key) {
+            return Ok(*id);
+        }
+        if worker.carver_biomes.len() >= 4096 {
+            worker.carver_biomes.clear();
+        }
+        if let Some(id) = self.carver_cache.lock().unwrap().get(&key) {
+            worker.carver_biomes.insert(key, *id);
             return Ok(*id);
         }
         let mut resolver = self.source.resolver(
@@ -940,7 +948,8 @@ where
         if cache.len() >= CACHE_LIMIT * 4 {
             cache.clear();
         }
-        cache.insert((origin.x, origin.z), id);
+        cache.insert(key, id);
+        worker.carver_biomes.insert(key, id);
         Ok(id)
     }
     fn generate(
@@ -1407,6 +1416,9 @@ pub(super) struct WorkerState {
     pub(super) temperatures: Vec<BiomeTemperature>,
     biome_context: SamplerContext,
     carver_context: SamplerContext,
+    /// Seed/dimension-bound lookups avoid the shared mutex for overlapping
+    /// carver neighborhoods. Bounded independently of the shared cache.
+    carver_biomes: HashMap<(i32, i32), BiomeId>,
     timings: StageTimings,
     heights: HashMap<(i32, i32, u8), i32>,
     /// Decorate with structure pieces only (for structure parity checks).
@@ -2197,6 +2209,7 @@ impl OverworldGenerator {
                     .collect(),
                 biome_context: SamplerContext::cached(),
                 carver_context: SamplerContext::default(),
+                carver_biomes: HashMap::new(),
                 timings: StageTimings::default(),
                 structures_only: false,
                 heights: HashMap::new(),
@@ -2414,6 +2427,57 @@ mod tests {
             surface.is_none() && spans.is_empty(),
             "direct sampling retains End void"
         );
+    }
+
+    #[test]
+    fn local_carver_cache_is_worker_owned_and_eviction_preserves_terrain() {
+        let root = std::env::var_os("HORIZON_RESOURCES")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3")
+            });
+        if !root.join("worldgen/world_presets.json").exists() {
+            eprintln!("skipping: no worldgen bundle at {}", root.display());
+            return;
+        }
+        let registry = Box::leak(Box::new(
+            crate::level::data::load_registry(&root).expect("registry"),
+        ));
+        let data = GeneratorData::load(&root.join("worldgen"), registry).unwrap();
+        let generator = OverworldGenerator::new(data.clone(), 12345).unwrap();
+        let mut first = generator.worker();
+        let mut second = generator.worker();
+        let pos = ChunkPos::new(0, 0);
+        let before = first.generate_proto(pos).unwrap();
+        assert!(!first.state.carver_biomes.is_empty());
+        assert!(second.state.carver_biomes.is_empty());
+        second.generate_proto(pos).unwrap();
+        assert_eq!(first.state.carver_biomes, second.state.carver_biomes);
+        let expected = first.state.carver_biomes.clone();
+        first.state.carver_biomes.clear();
+        // Fill unrelated origins to force eviction on the next local miss.
+        for x in 0..4096 {
+            first.state.carver_biomes.insert((x, 100_000), BiomeId(0));
+        }
+        let after = first.generate_proto(pos).unwrap();
+        assert_eq!(first.state.carver_biomes, expected);
+        for y in -64..320 {
+            for z in 0..16 {
+                for x in 0..16 {
+                    assert_eq!(before.block(x, y, z), after.block(x, y, z));
+                    assert_eq!(before.biome_id_at(x, y, z), after.biome_id_at(x, y, z));
+                }
+            }
+        }
+        assert!(
+            OverworldGenerator::new(data, -1)
+                .unwrap()
+                .worker()
+                .state
+                .carver_biomes
+                .is_empty()
+        );
+        assert_eq!(second.state.carver_biomes, expected);
     }
 
     /// Generators of one seed and dimension share their ring positions;

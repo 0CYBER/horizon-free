@@ -408,6 +408,9 @@ impl Game<'_> {
                 }
             }
         }
+        if hits.is_empty() {
+            return;
+        }
         let date = now_text();
         for (ai, ci) in hits {
             let a = &tree.list[ai];
