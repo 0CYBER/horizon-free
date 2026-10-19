@@ -114,7 +114,8 @@ const parityHeadline = matching === body.length ? "Every subsystem matches vanil
 
 const isGame = (tag) => /^v\d{4}\.\d{1,2}\.\d{1,2}/.test(tag);
 const isLauncher = (tag) => tag.startsWith("launcher-v");
-const game = releases.filter((r) => isGame(r.tag_name)).slice(0, 3);
+// Stable releases only: betas become stable 6 hours later (docs/release-flow.md, "Channels").
+const game = releases.filter((r) => isGame(r.tag_name) && !r.prerelease).slice(0, 3);
 const launcher = releases.find((r) => isLauncher(r.tag_name) && !r.prerelease);
 
 // --- The page --------------------------------------------------------------------------

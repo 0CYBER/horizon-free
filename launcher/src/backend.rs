@@ -31,6 +31,8 @@ pub struct Release {
     pub body: String,
     pub date: String,
     pub asset: Option<(String, u64)>,
+    /// A beta: a game release not promoted to stable yet (a GitHub pre-release, docs/release-flow.md).
+    pub beta: bool,
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -169,6 +171,7 @@ fn parse_releases(
                 .take(10)
                 .collect(),
             asset: found,
+            beta: r["prerelease"].as_bool().unwrap_or(false),
         });
     }
     out.sort_by(|a, b| compare_versions(&b.tag, &a.tag));
@@ -245,6 +248,16 @@ fn newest_launcher_tags(refs: &serde_json::Value) -> Vec<String> {
 /// The newest Horizon release that has a build for this platform.
 pub fn latest(releases: &[Release]) -> Option<&Release> {
     releases.iter().find(|r| r.asset.is_some())
+}
+
+/// The releases a launcher installs by itself: stable ones, and betas too when the player turned
+/// "Beta builds" on in Settings.
+pub fn channel(releases: &[Release], beta: bool) -> Vec<Release> {
+    releases
+        .iter()
+        .filter(|r| beta || !r.beta)
+        .cloned()
+        .collect()
 }
 
 /// The community, sponsor and website links, from `launcher/links.json` on main, so they can change
@@ -1462,10 +1475,17 @@ pub fn launcher_update(releases: &[Release]) -> Option<Release> {
 pub fn releases_and_updates(
     on_releases: impl FnOnce(Result<Vec<Release>, String>),
 ) -> Result<Updates, String> {
-    releases_and_updates_with(release_list, installed, launcher_releases_in, on_releases)
+    releases_and_updates_with(
+        Settings::load().beta_builds,
+        release_list,
+        installed,
+        launcher_releases_in,
+        on_releases,
+    )
 }
 
 fn releases_and_updates_with(
+    beta: bool,
     load: impl FnOnce() -> Result<serde_json::Value, String>,
     installed: impl FnOnce() -> Vec<String>,
     launchers: impl FnOnce(&serde_json::Value) -> Vec<Release>,
@@ -1479,7 +1499,7 @@ fn releases_and_updates_with(
         }
     };
     let releases = parse_releases(&list, ASSET, is_game_tag);
-    let horizon = horizon_update(&releases, &installed());
+    let horizon = horizon_update(&channel(&releases, beta), &installed());
     on_releases(Ok(releases));
     Ok(Updates {
         horizon,
@@ -1501,12 +1521,16 @@ pub fn select_after_update(selected: Option<&str>, installed_before: &[String]) 
     }
 }
 
-/// Installs `tag` (or the newest release with "latest"), then updates the selection as
+/// Installs `tag` (or with "latest" the newest release of the player's channel), then updates the selection as
 /// `select_after_update` says when `as_update`, or always selects it otherwise.
 pub fn install_tag(tag: &str, as_update: bool, progress: impl Fn(f32)) -> Result<String, String> {
     let releases = releases()?;
     let release = if tag == "latest" {
-        latest(&releases).ok_or("No release has a build for this platform yet.")?
+        let beta = Settings::load().beta_builds;
+        releases
+            .iter()
+            .find(|r| r.asset.is_some() && (beta || !r.beta))
+            .ok_or("No release has a build for this platform yet.")?
     } else {
         releases
             .iter()
@@ -1926,6 +1950,9 @@ pub struct Settings {
     /// default. Appended after the launcher's own arguments, so they can add to or override them.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub game_args: String,
+    /// Whether new versions include betas (releases not promoted to stable yet). Off by default.
+    #[serde(default)]
+    pub beta_builds: bool,
 }
 
 impl Settings {
@@ -2117,6 +2144,36 @@ mod tests {
         assert_eq!(offered(&["v2026.10.15.1", "v2026.10.14"]), None);
     }
 
+    /// Betas (GitHub pre-releases) install by themselves only with "Beta builds" on; the stable
+    /// channel waits for promote.yml (docs/release-flow.md, "Channels").
+    #[test]
+    fn updates_follow_the_stable_channel_unless_betas_are_on() {
+        let asset = ASSET.unwrap_or("horizon-linux-x86_64.tar.gz");
+        let list = serde_json::json!([
+            {"tag_name": "v2026.10.19.02", "prerelease": true, "assets": [{"name": asset, "browser_download_url": "b", "size": 1}]},
+            {"tag_name": "v2026.10.19.01", "assets": [{"name": asset, "browser_download_url": "s", "size": 1}]},
+        ]);
+        let releases = parse_releases(&list, Some(asset), is_game_tag);
+        assert_eq!(
+            releases.iter().map(|r| r.beta).collect::<Vec<_>>(),
+            [true, false]
+        );
+        let offered = |beta: bool, installed: &[&str]| {
+            let installed: Vec<String> = installed.iter().map(|t| t.to_string()).collect();
+            horizon_update(&channel(&releases, beta), &installed).map(|r| r.tag)
+        };
+        assert_eq!(offered(false, &[]), Some("v2026.10.19.01".into()));
+        assert_eq!(
+            offered(true, &["v2026.10.19.01"]),
+            Some("v2026.10.19.02".into())
+        );
+        assert_eq!(offered(false, &["v2026.10.19.01"]), None);
+        // A beta installed earlier is never "updated" to an older stable build.
+        assert_eq!(offered(false, &["v2026.10.19.02"]), None);
+        assert!(!Settings::parse("{}").beta_builds);
+        assert!(Settings::parse(r#"{"beta_builds": true}"#).beta_builds);
+    }
+
     #[test]
     fn the_version_is_the_one_the_release_workflow_injects() {
         assert_eq!(version_or(Some("0.4.2")), "0.4.2");
@@ -2135,6 +2192,7 @@ mod tests {
             body: String::new(),
             date: String::new(),
             asset: Some(("u".into(), 1)),
+            beta: false,
         };
         assert!(launcher_update(&[r(format!("{LAUNCHER_TAG_PREFIX}{VERSION}"))]).is_none());
         assert_eq!(
@@ -2176,6 +2234,7 @@ mod tests {
             body: String::new(),
             date: String::new(),
             asset: Some(("u".into(), 1)),
+            beta: false,
         };
         let releases = [r("v2026.10.13"), r("v2026.10.12")];
         assert_eq!(
