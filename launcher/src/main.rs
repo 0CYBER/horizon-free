@@ -918,8 +918,9 @@ fn keyboard(el: Stateful<Div>, t: &Theme) -> Stateful<Div> {
             s.shadow(vec![gpui::BoxShadow {
                 color: ring,
                 offset: gpui::point(px(0.), px(0.)),
-                blur_radius: px(0.),
-                spread_radius: px(2.),
+                // GPUI draws nothing for a shadow without blur: a half-pixel keeps it crisp.
+                blur_radius: px(0.5),
+                spread_radius: px(2.5),
             }])
         } else {
             s
