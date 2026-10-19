@@ -1,0 +1,90 @@
+{
+  "kind": "horizon-server-benchmark",
+  "date": "2026-10-19T06:03:34+00:00",
+  "machine": {
+    "system": "Linux",
+    "machine": "x86_64",
+    "cpus": 4
+  },
+  "commit": "38505a07b5334f3ea2c467efb4a00e5557f910f8",
+  "java": [
+    "openjdk 25.0.4.1 2026-08-18"
+  ],
+  "versions": {
+    "paper_build": 205
+  },
+  "settings": {
+    "servers": "paper",
+    "bots": "10",
+    "behaviour": "mixed",
+    "join_every": 1.0,
+    "warmup": 300,
+    "seconds": 300,
+    "seed": 12345,
+    "explore_speed": 0.8,
+    "gamerule": "",
+    "heap": "4g",
+    "out": "/home/ludovic/sh10/out/mixed-equal-paper-10.json",
+    "nice": 19,
+    "bots_via": "ssh macmini",
+    "bots_bin": "/Users/ludovicmarie/code/horizon/.claude/worktrees/sh10-bench/target/release/horizon-bots",
+    "connect": "the ThinkPad's tailnet address",
+    "properties": {
+      "level-seed": "12345",
+      "view-distance": "10",
+      "simulation-distance": "10",
+      "online-mode": "false",
+      "white-list": "false",
+      "gamemode": "creative",
+      "force-gamemode": "true",
+      "spawn-protection": "0",
+      "max-players": "200",
+      "difficulty": "easy",
+      "sync-chunk-writes": "true"
+    }
+  },
+  "runs": [
+    {
+      "server": "paper",
+      "bots": 10,
+      "behaviour": "mixed",
+      "start_seconds": 20.48,
+      "mspt": {
+        "average": 20.64,
+        "p50": 18.1,
+        "p95": 35.94,
+        "p99": 56.29
+      },
+      "mspt_worst_p99": 166.9,
+      "tps": 20.0,
+      "rss_mb": {
+        "mean": 4069.94,
+        "max": 4080.2
+      },
+      "cpu_percent": 73.56,
+      "chunks_per_second": 60.76,
+      "unique_per_second": 1.85,
+      "forgotten_per_second": 60.96,
+      "waited_ticks_per_second": 0.0,
+      "chunks_total": 40348,
+      "chunks_per_bot": {
+        "walk": 6176.67,
+        "explore": 1171.0,
+        "idle": 473.0
+      },
+      "unique_chunks_per_bot": {
+        "walk": 701.0,
+        "explore": 1091.5,
+        "idle": 473.0
+      },
+      "resent": 0,
+      "pulled_back": 3974,
+      "moved_too_quickly": 7,
+      "moved_wrongly": 0,
+      "bots_joined": 10,
+      "bots_failed": [],
+      "tick_queries": 59
+    }
+  ],
+  "work": []
+}
