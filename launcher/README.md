@@ -17,8 +17,7 @@ The opening, then Play ([clip](docs/opening.webm)):
 - **Play**: prepares resources as `PLAY.txt` describes (your launcher's 26.3 install, the
   26.3 server jar from that version's own json, and Java 25) and copies its sounds from your
   launcher's asset store (`horizon-prepare sounds`; a launcher install without them only
-  leaves the game silent), then starts the client, or a
-  server (`--dedicated --nogui`) in a folder you choose, with a live console. Preparing is
+  leaves the game silent), then starts the client. Preparing is
   horizon-prepare: linked into the launcher, used in-process when a version ships the same
   preparer sources, else that version's own `horizon-prepare`; versions released before it
   still prepare with their Python script and need Python 3.10+. Before importing,
@@ -35,11 +34,42 @@ The opening, then Play ([clip](docs/opening.webm)):
   **Play** starts the game as the pack's own profile (`ports/<pack>/home/` in the game's home:
   its own saves and options) with those mods. Nothing is uploaded or shared: mod jars and ports
   stay on this computer.
+- **Servers**: host a world for friends with buttons. **Create a server** asks for a name, a world
+  (a new one, with an optional seed, or a copy of one of your single-player worlds), the game mode,
+  difficulty, most players, who can join (friends only, the default, or anyone with the address)
+  and your agreement to the Minecraft EULA; Create alone gives a friends-only survival world with
+  you as its operator. Each server then has **Start**, **Stop** and **Restart**, its state (also
+  when it crashed and was restarted), players online with their heads, TPS, MSPT and RAM, the
+  address friends on your network type with **Copy**, a console that takes commands, **Open the
+  web panel**, and four tabs: **Overview**; **Players** (online players with Make operator, Kick
+  and Ban; who may join, with Friends only, Let in and Remove; Unban); **Settings** (the message
+  in the server list, game mode, difficulty, PvP, most players, view and simulation distance,
+  port, account checks, **Run in the background and at login**); **Backups** (Back up now, the
+  list with dates and sizes, Restore with a confirmation, Back up automatically, and **Updates**:
+  Check for updates, Update now with its automatic rollback, and how many older versions to
+  keep). Changes the running game can take apply at once, the others say "Restart to apply".
+  Everything goes through `horizon-server` itself ([docs/hosting.md](../docs/hosting.md)):
+  the launcher copies a prepared version's programs and game files into `server-runtime/` laid
+  out as `install.sh` does, runs `horizon-server init`, `config`, `start`, `backup`, `restore`,
+  `update` and `service` there, and talks to a running server through its control API. Problems
+  are said in plain words, with a button when there's a fix (another port, the game files, the
+  EULA).
+  **Friends over the internet** (on Overview) uses Tailscale: it says whether Tailscale is
+  installed and signed in (with Install, Sign in and Check again; signing in is always yours, in
+  Tailscale's own app or page), shows this computer's Tailscale name and address with **Copy**,
+  and invites a friend to this one computer: in the admin console, or here with an access token
+  you make there (kept in the system keychain), which also lists invitations with Withdraw /
+  Stop sharing and offers **Limit them to Minecraft**: when your tailnet has Tailscale's default
+  access controls, one click changes them so friends you share with reach only the server's
+  port (Remove the limit undoes it); custom access controls are never rewritten, the page gives
+  the rule to add instead. Horizon never turns on Funnel.
 - **Patch notes**: each release's notes, newest first, with a link to GitHub Sponsors. Quiet "Discord" and "Website" links sit in the footer.
 
 Data lives in the platform's data directory (`~/.local/share/horizon-launcher` on Linux,
 `~/Library/Application Support/horizon-launcher` on macOS, `%APPDATA%\horizon-launcher` on
-Windows): `versions/<tag>/`, `server-jars/`, `server/` and `settings.json`.
+Windows): `versions/<tag>/`, `server-jars/`, `server/`, `settings.json`, and for the Servers
+page `servers.json` (the list), `servers/<name>/` (the servers created there) and
+`server-runtime/` (the programs and game files they run).
 
 - **Settings**: install new Horizon versions automatically (on unless you turn it off; the
   selected version only moves to the new one if you were on the newest), the opening animation,
