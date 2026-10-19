@@ -28,16 +28,15 @@ is not a measured pause total. Use JFR root pause events for pause analysis.
 The streaming reader is checked against the JDK's event exporter with both
 default-GC and ZGC fixtures in CI on Windows, Linux and ARM macOS.
 
-Developer demo and server launchers accept `--gc default`, `--gc g1` or `--gc zgc`.
+The developer demo launcher accepts `--gc default`, `--gc g1` or `--gc zgc`.
 For example:
 
 ```sh
 python3 tools/runtime.py demo --instance .local/runtime/collector-test --heap 6G --gc zgc --compact-headers
-python3 tools/server.py run --heap 4G --gc zgc
 python3 tools/test_jfr.py --gc zgc
 ```
 
-Prepare demo mods/worlds before comparing. The server retains its EULA requirement.
+Prepare demo mods/worlds before comparing.
 Options affect only the launched process; they do not change global Java settings.
 The collector and compact-header experiments can be tested independently.
 

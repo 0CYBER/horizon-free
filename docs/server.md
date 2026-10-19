@@ -7,8 +7,9 @@ should beat vanilla, Paper and Fabric + Lithium on TPS/MSPT, RAM, CPU, chunk gen
 Gameplay stays vanilla: there are no Paper-style rule changes unless the owner turns one on.
 
 This page covers what the server does today (measured), the design of `horizon-server`, and what ships for the
-first working version (2026-10-23). It replaces the Java/Fabric starter (`docs/server-quickstart.txt`,
-`tools/server.py`), which goes once the benchmark below exists.
+first working version (2026-10-23). It replaced the Java/Fabric starter (`docs/server-quickstart.txt`,
+`tools/server.py`, retired on 2026-10-19). The owner's guide is docs/hosting.md, also at
+https://playhorizon.dev/server.
 
 ## 1. Today
 
@@ -556,8 +557,6 @@ machine, then published in `benchmarks/`; and item 5.
 - updates and rollback (the design is above; they ship right after);
 - a Windows service, hot reload, modpacks in the panel;
 - Paper and Fabric + Lithium in the benchmark;
-- the website's "host a server" page;
-- retiring `tools/server.py` and `docs/server-quickstart.txt` (once the benchmark replaces them).
 
 Online mode works, so a public server can check accounts. An offline server should still run only on a
 LAN, a tailnet, or behind a whitelist.
