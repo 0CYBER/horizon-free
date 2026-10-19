@@ -462,6 +462,8 @@ public final class VanillaProtocolClient {
         net.minecraft.core.BlockPos furnace = null;
         int furnaceWindow = -1;
         int furnaceState = 0;
+        // Snowballs the server spawned since the last right click.
+        int snowballs = 0;
         // The villager the server's console summoned beside the spawn.
         int villager = -1;
         net.minecraft.world.phys.Vec3 villagerAt = null;
@@ -561,6 +563,9 @@ public final class VanillaProtocolClient {
                         + p.chatType().targetName().map(VanillaProtocolClient::json));
                 } else if (packet instanceof ClientboundDisguisedChatPacket p && step > 0 && step < 5 + REPLIES.length) {
                     record("play-chat", "disguised " + json(p.message()) + " " + p.chatType().chatType().getRegisteredName());
+                } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundAddEntityPacket p
+                    && p.getType() == net.minecraft.world.entity.EntityTypes.SNOWBALL) {
+                    snowballs++;
                 } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundAddEntityPacket p
                     && p.getType() == net.minecraft.world.entity.EntityTypes.VILLAGER) {
                     villager = p.getId();
@@ -709,6 +714,37 @@ public final class VanillaProtocolClient {
             } else if (step == 11 + REPLIES.length && now - stepAt > 1500) {
                 send(new net.minecraft.network.protocol.game.ServerboundContainerClosePacket(furnaceWindow));
                 record("play-furnace", "closed");
+                step++;
+                stepAt = now;
+            } else if (step == 12 + REPLIES.length && now - stepAt > 1500) {
+                // Once the furnace is closed on the server too: the slot change isn't the furnace menu's.
+                send(new ServerboundChatCommandPacket("item replace entity @s weapon.mainhand with minecraft:snowball 16"));
+                step++;
+                stepAt = now;
+            } else if (step == 13 + REPLIES.length && now - stepAt > 1500) {
+                // A right click on the ground with a snowball, as the 26.3 client sends it
+                // (Minecraft.startUseItem): the block's part, which passes, then the item's.
+                useOn(respawnAt, net.minecraft.world.InteractionHand.MAIN_HAND, 2);
+                use(position, net.minecraft.world.InteractionHand.MAIN_HAND, 3);
+                snowballs = 0;
+                step++;
+                stepAt = now;
+            } else if (step == 14 + REPLIES.length && now - stepAt > 2000) {
+                record("play-use", "main hand on a block: " + snowballs + " snowball(s)");
+                send(new ServerboundChatCommandPacket("item replace entity @s weapon.mainhand with minecraft:air"));
+                send(new ServerboundChatCommandPacket("item replace entity @s weapon.offhand with minecraft:snowball 16"));
+                step++;
+                stepAt = now;
+            } else if (step == 15 + REPLIES.length && now - stepAt > 1500) {
+                // An empty main hand: its block part only (no item to use), then the off hand's two.
+                useOn(respawnAt, net.minecraft.world.InteractionHand.MAIN_HAND, 4);
+                useOn(respawnAt, net.minecraft.world.InteractionHand.OFF_HAND, 5);
+                use(position, net.minecraft.world.InteractionHand.OFF_HAND, 6);
+                snowballs = 0;
+                step++;
+                stepAt = now;
+            } else if (step == 16 + REPLIES.length && now - stepAt > 2000) {
+                record("play-use", "off hand on a block: " + snowballs + " snowball(s)");
                 return;
             }
         }
@@ -732,6 +768,19 @@ public final class VanillaProtocolClient {
      */
     private static String runLine(String type, int run) {
         return type + (run > 1 && !type.equals("minecraft:remove_entities") ? " x" + run : "");
+    }
+
+    /** ServerboundUseItemOnPacket on the top of the block under the player. */
+    private void useOn(PositionMoveRotation at, net.minecraft.world.InteractionHand hand, int sequence) throws Exception {
+        net.minecraft.core.BlockPos ground = net.minecraft.core.BlockPos.containing(at.position()).below();
+        send(new net.minecraft.network.protocol.game.ServerboundUseItemOnPacket(hand,
+            new net.minecraft.world.phys.BlockHitResult(net.minecraft.world.phys.Vec3.atCenterOf(ground).add(0.0, 0.5, 0.0),
+                net.minecraft.core.Direction.UP, ground, false), sequence));
+    }
+
+    /** ServerboundUseItemPacket, looking where the player looks. */
+    private void use(PositionMoveRotation at, net.minecraft.world.InteractionHand hand, int sequence) throws Exception {
+        send(new net.minecraft.network.protocol.game.ServerboundUseItemPacket(hand, sequence, at.yRot(), at.xRot()));
     }
 
     /**

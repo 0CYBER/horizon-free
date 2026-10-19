@@ -7,6 +7,7 @@
 //! client predicts its own movement; the server stays authoritative for
 //! everything else.
 use super::{Dim, Game, Mining, Screen};
+use horizon_client::first_person::Hand;
 use horizon_client::{
     Result,
     chunk::{BIOME_STRATEGY, Chunk, Light, MIN_Y, SECTIONS, Section, block_strategy},
@@ -1687,7 +1688,6 @@ impl Game<'_> {
             // ClientPacketListener.handleSwingAnimation: the entity swings
             // (LivingEntity.swing, which a swing in its first half ignores).
             C::SwingAnimation(p) => {
-                use horizon_client::first_person::Hand;
                 let hand = if p.hand == 1 { Hand::Off } else { Hand::Main };
                 let animation = horizon_client::first_person::SwingAnimation {
                     kind: p.kind.clamp(0, 255) as u8,
@@ -3215,12 +3215,16 @@ impl Game<'_> {
         false
     }
 
-    fn remote_use_block(&mut self) -> bool {
-        let held_block = self
-            .held()
+    /// MultiPlayerGameMode.useItemOn for `hand`: whether the click ends there
+    /// (the block reacts, or a block item is placed).
+    fn remote_use_block(&mut self, hand: Hand) -> bool {
+        let held = self.with_hand(hand, |g| g.held().cloned());
+        let held_block = held
+            .as_ref()
             .and_then(|h| self.res.items().get(&h.item))
             .is_some_and(|i| i.block.is_some());
         if let Some(hit) = self.pick() {
+            let reacts = hand == Hand::Main && self.remote_block_reacts(&hit, held.as_ref());
             let seq = self.next_sequence();
             let cursor = [
                 (hit.point[0] - f64::from(hit.pos[0])) as f32,
@@ -3228,7 +3232,7 @@ impl Game<'_> {
                 (hit.point[2] - f64::from(hit.pos[2])) as f32,
             ];
             self.send(S::UseItemOn(play::UseItemOn {
-                hand: 0,
+                hand: hand_id(hand),
                 pos: hit.pos,
                 face: i32::from(face_direction(hit.face)),
                 cursor,
@@ -3247,28 +3251,85 @@ impl Game<'_> {
                 r.placing = Some((target, ticks));
             }
             if held_block {
-                self.swing_arm();
+                self.with_hand(hand, Game::swing_arm);
                 return true;
             }
+            return reacts;
         }
         false
     }
 
-    fn remote_use_item(&mut self) {
-        if let Some(held) = self.held().cloned() {
-            let seq = self.next_sequence();
-            self.send(S::UseItem(play::UseItem {
-                hand: 0,
-                sequence: seq,
-                yaw: self.yaw,
-                pitch: self.pitch,
-            }));
-            // MultiPlayerGameMode.useItem runs the use here too: food starts
-            // being eaten (Consumable.startConsuming).
-            if let Some(info) = self.res.items().get(&held.item).cloned() {
-                self.start_eating(&info);
-            }
+    /// Whether the block hit takes a main-hand right click with `held`
+    /// (`BlockState.useItemOn`, then `useWithoutItem`): a door, a button, a
+    /// container. Vanilla's client runs it on its own level first; this runs
+    /// it on a copy that keeps no change.
+    fn remote_block_reacts(&self, hit: &super::Hit, held: Option<&ItemStack>) -> bool {
+        // Player.isSecondaryUseActive with something in either hand.
+        let hands_full = self.stack_in(self.selected).is_some() || self.offhand.is_some();
+        if self.keys.contains(&KeyCode::ShiftLeft) && hands_full {
+            return false;
         }
+        use horizon_core::geometry::Direction;
+        let face = match hit.face {
+            [0, 1, 0] => Direction::Up,
+            [0, -1, 0] => Direction::Down,
+            [0, 0, -1] => Direction::North,
+            [0, 0, 1] => Direction::South,
+            [-1, 0, 0] => Direction::West,
+            _ => Direction::East,
+        };
+        let mut level = DryLevel {
+            world: &self.world,
+            changed: HashMap::new(),
+            random: horizon_core::random::LegacyRandom::new(0),
+        };
+        self.res
+            .behaviours()
+            .use_item_on(
+                &mut level,
+                &mut horizon_world::level::Ticks::default(),
+                horizon_core::position::BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]),
+                face,
+                horizon_core::geometry::Vec3::new(hit.point[0], hit.point[1], hit.point[2]),
+                self.use_context(),
+                held.map(|s| &*s.item),
+            )
+            .consumes_action()
+    }
+
+    /// MultiPlayerGameMode.useItem for `hand`, if it holds something: whether
+    /// the click ends there, as far as this client can tell (`item_has_use`).
+    fn remote_use_item(&mut self, hand: Hand) -> bool {
+        let Some(held) = self.with_hand(hand, |g| g.held().cloned()) else {
+            return false;
+        };
+        let seq = self.next_sequence();
+        self.send(S::UseItem(play::UseItem {
+            hand: hand_id(hand),
+            sequence: seq,
+            yaw: self.yaw,
+            pitch: self.pitch,
+        }));
+        let Some(info) = self.res.items().get(&held.item).cloned() else {
+            return false;
+        };
+        // MultiPlayerGameMode.useItem runs the use here too: food starts
+        // being eaten (Consumable.startConsuming).
+        self.with_hand(hand, |g| g.start_eating(&info));
+        item_has_use(&info)
+    }
+
+    /// The rest of Minecraft.startUseItem once the main hand's target passed:
+    /// the main hand's item, then the off hand's turn (its block, its item).
+    /// The server does each packet's part with that packet's hand only.
+    fn remote_use_hands(&mut self) {
+        if self.remote_use_item(Hand::Main) {
+            return;
+        }
+        if !self.entity_targeted() && self.remote_use_block(Hand::Off) {
+            return;
+        }
+        self.remote_use_item(Hand::Off);
     }
     /// `LivingEntity.updatingUsingItem` for a consumable on a server client: the
     /// eating animation and its crumbs. The server eats it and sends the
@@ -4122,6 +4183,92 @@ pub(super) fn input_ordinal(input: Input) -> i32 {
     }
 }
 
+/// The client's world for a guess at what a click does: reads go to the
+/// world, writes stay here and are dropped.
+struct DryLevel<'w> {
+    world: &'w horizon_client::world::World,
+    changed: HashMap<horizon_core::position::BlockPos, BlockStateId>,
+    random: horizon_core::random::LegacyRandom,
+}
+
+impl horizon_world::level::LevelAccess for DryLevel<'_> {
+    fn block_state(&self, pos: horizon_core::position::BlockPos) -> BlockStateId {
+        self.changed
+            .get(&pos)
+            .copied()
+            .unwrap_or_else(|| self.world.block(pos.x, pos.y, pos.z))
+    }
+    fn set_raw(
+        &mut self,
+        pos: horizon_core::position::BlockPos,
+        state: BlockStateId,
+    ) -> Option<BlockStateId> {
+        let previous = self.block_state(pos);
+        self.changed.insert(pos, state);
+        Some(previous)
+    }
+    fn is_loaded(&self, pos: horizon_core::position::BlockPos) -> bool {
+        self.world.loaded(pos.x, pos.z)
+    }
+    fn random(&mut self) -> &mut horizon_core::random::LegacyRandom {
+        &mut self.random
+    }
+    fn game_time(&self) -> i64 {
+        self.world.game_time
+    }
+}
+
+/// `InteractionHand` on the wire.
+fn hand_id(hand: Hand) -> i32 {
+    match hand {
+        Hand::Main => 0,
+        Hand::Off => 1,
+    }
+}
+
+/// Whether `Item.use` usually acts on this item (eats, drinks, equips, raises,
+/// throws, shoots, fills or places), which ends `Minecraft.startUseItem` at
+/// its hand. Tools and materials pass, and the off hand gets its turn. The
+/// server decides; this is the client's guess of whether to go on.
+fn item_has_use(info: &horizon_client::items::ItemInfo) -> bool {
+    let id = info.id.trim_start_matches("minecraft:");
+    info.consumable.is_some()
+        || info.equip_slot.is_some()
+        || info.blocks_attacks.is_some()
+        || horizon_client::items::bucket_contents(&info.id).is_some()
+        || id.ends_with("_boat")
+        || id.ends_with("_raft")
+        || id.ends_with("_bundle")
+        || matches!(
+            id,
+            "bow"
+                | "crossbow"
+                | "trident"
+                | "spyglass"
+                | "fishing_rod"
+                | "snowball"
+                | "egg"
+                | "blue_egg"
+                | "brown_egg"
+                | "ender_pearl"
+                | "ender_eye"
+                | "wind_charge"
+                | "splash_potion"
+                | "lingering_potion"
+                | "experience_bottle"
+                | "bucket"
+                | "glass_bottle"
+                | "map"
+                | "writable_book"
+                | "written_book"
+                | "goat_horn"
+                | "bundle"
+                | "brush"
+                | "carrot_on_a_stick"
+                | "warped_fungus_on_a_stick"
+        )
+}
+
 /// The view distance a client asks for: its render distance, which Horizon
 /// lets go past vanilla's 32 (a vanilla server still caps it at its own).
 fn client_view_distance(render_distance: i32) -> i8 {
@@ -4137,10 +4284,10 @@ impl horizon_client::interaction_input::TargetUseWorld for RemoteUseWorld<'_, '_
         self.0.remote_use_entity()
     }
     fn use_block(&mut self) -> bool {
-        self.0.remote_use_block()
+        self.0.remote_use_block(Hand::Main)
     }
     fn use_item(&mut self) {
-        self.0.remote_use_item();
+        self.0.remote_use_hands();
     }
 }
 
