@@ -158,6 +158,16 @@ fn carry_all(
     data: &ProcessorData,
     carried: &mut BTreeMap<String, usize>,
 ) -> (Vec<Value>, bool) {
+    carry_at(list, data, carried, 0)
+}
+
+/// [`carry_all`] for a list `depth` pillars deep (see [`pillar`]).
+fn carry_at(
+    list: Vec<Value>,
+    data: &ProcessorData,
+    carried: &mut BTreeMap<String, usize>,
+    depth: usize,
+) -> (Vec<Value>, bool) {
     let (expanded, mut changed) = references(list, data, carried, 0);
     let mut out = Vec::with_capacity(expanded.len());
     for p in expanded {
@@ -165,7 +175,10 @@ fn carry_all(
         let replacement = match kind.as_str() {
             "lithostitched:apply_random" => apply_random(&p, data, carried).map(|p| vec![p]),
             "lithostitched:condition" => condition(&p, data, carried).map(|p| vec![p]),
-            _ => as_data(&kind, &p, data),
+            _ => match pillar_type(&kind) {
+                Some(to) => Some(vec![pillar(&p, to, data, carried, depth)]),
+                None => as_data(&kind, &p, data),
+            },
         };
         match replacement {
             Some(replacement) => {
@@ -177,6 +190,63 @@ fn carry_all(
         }
     }
     (out, changed)
+}
+
+/// The game's type for the mods' processors that place blocks past their
+/// template, which keep their fields (`horizon-world`'s `pillars.rs`).
+fn pillar_type(kind: &str) -> Option<&'static str> {
+    Some(match kind {
+        "repurposed_structures:pillar_processor" | "moogs_structures:pillar_processor" => {
+            "horizon:pillar"
+        }
+        "repurposed_structures:bottom_pillar_processor" => "horizon:bottom_pillar",
+        "repurposed_structures:close_off_fluid_sources_processor"
+        | "moogs_structures:close_off_fluid_sources_processor" => "horizon:close_off_fluid_sources",
+        "betterfortresses:pillar_processor" | "betterjungletemples:pillar_processor" => {
+            "horizon:yung_pillar"
+        }
+        "betterfortresses:stair_pillar_processor" => "horizon:stair_pillar",
+        _ => return None,
+    })
+}
+
+/// A pillar processor as the game's `to`. Its `pillar_processor_list`
+/// (which runs on each block of the column; Repurposed's often names the
+/// list it is in) is written in, carried; the pillars inside that copy lose
+/// theirs, as a column's blocks are never the mods' triggers. Better
+/// Fortresses' stair supports get the blocks its Java code names.
+fn pillar(
+    p: &Value,
+    to: &str,
+    data: &ProcessorData,
+    carried: &mut BTreeMap<String, usize>,
+    depth: usize,
+) -> Value {
+    if to == "horizon:stair_pillar" {
+        return json!({"processor_type": to,
+            "blocks": {"minecraft:stone_brick_stairs": "minecraft:red_nether_brick_stairs",
+                "minecraft:purpur_stairs": "minecraft:red_nether_bricks"},
+            "front": "minecraft:red_nether_brick_stairs",
+            "pillar": "minecraft:red_nether_bricks"});
+    }
+    let mut out = p.clone();
+    out["processor_type"] = to.into();
+    let Some(o) = out.as_object_mut() else {
+        return out;
+    };
+    let Some(list) = o.remove("pillar_processor_list") else {
+        return out;
+    };
+    let inner = match &list {
+        Value::String(id) if id == "minecraft:empty" => None,
+        _ if depth > 0 => None,
+        other => referenced(other, data),
+    };
+    if let Some(inner) = inner {
+        let (inner, _) = carry_at(inner, data, carried, depth + 1);
+        o.insert("pillar_processor_list".into(), json!({"processors": inner}));
+    }
+    out
 }
 
 /// A processor list inside a carried processor: an id stays (the game reads
@@ -1305,5 +1375,62 @@ mod tests {
             "repurposed_structures:y_value_pos_rule_test"}),
             &mut carried
         ));
+    }
+
+    #[test]
+    fn pillars_become_the_games() {
+        let mut d = ProcessorData::default();
+        // Repurposed's city list names itself as its pillar's list.
+        let city = json!({"processors": [
+            {"processor_type": "repurposed_structures:pillar_processor", "direction": "down",
+             "pillar_length": 15, "pillar_processor_list": "repurposed_structures:cities/x",
+             "pillar_trigger_and_replacements": [{"trigger": {"Name": "minecraft:red_stained_glass"},
+                 "replacement": {"Name": "minecraft:cobblestone"}}]},
+            {"processor_type": "minecraft:block_rot", "integrity": 0.5}]});
+        d.lists
+            .insert("repurposed_structures:cities/x".into(), city.clone());
+        let mut list = city;
+        list["processors"].as_array_mut().unwrap().extend([
+            json!({"processor_type": "repurposed_structures:bottom_pillar_processor",
+                   "pillar_processor_list": "minecraft:empty"}),
+            json!({"processor_type": "moogs_structures:close_off_fluid_sources_processor",
+                   "weighted_list_of_replacement_blocks": [{"block": "minecraft:stone", "weight": 1}]}),
+            json!({"processor_type": "betterfortresses:pillar_processor",
+                   "target_block": {"Name": "minecraft:orange_terracotta"},
+                   "target_block_output": {"defaultBlockState": {"Name": "minecraft:red_nether_bricks"}, "entries": []},
+                   "pillar_states": {"defaultBlockState": {"Name": "minecraft:nether_bricks"}, "entries": []}}),
+            json!({"processor_type": "betterfortresses:stair_pillar_processor"}),
+        ]);
+        let mut carried = BTreeMap::new();
+        assert!(carry("processor_list", &mut list, &d, &mut carried));
+        let p = list["processors"].as_array().unwrap();
+        let types: Vec<&str> = p
+            .iter()
+            .map(|p| p["processor_type"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            types,
+            [
+                "horizon:pillar",
+                "minecraft:block_rot",
+                "horizon:bottom_pillar",
+                "horizon:close_off_fluid_sources",
+                "horizon:yung_pillar",
+                "horizon:stair_pillar"
+            ]
+        );
+        // The named list is written in once; its own pillar loses its list.
+        let inner = &p[0]["pillar_processor_list"]["processors"];
+        assert_eq!(inner[0]["processor_type"], "horizon:pillar");
+        assert!(inner[0].get("pillar_processor_list").is_none());
+        assert_eq!(
+            inner[0]["pillar_trigger_and_replacements"],
+            p[0]["pillar_trigger_and_replacements"]
+        );
+        assert_eq!(inner[1]["processor_type"], "minecraft:block_rot");
+        assert!(p[2].get("pillar_processor_list").is_none());
+        assert_eq!(p[5]["pillar"], "minecraft:red_nether_bricks");
+        assert_eq!(carried["repurposed_structures:pillar_processor"], 2);
+        assert_eq!(carried["betterfortresses:stair_pillar_processor"], 1);
     }
 }
