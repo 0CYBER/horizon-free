@@ -1412,6 +1412,9 @@ pub struct MobWorld<'a> {
     pub collision: &'a BlockCollisionRegistry<'a>,
     pub data: &'a MobData,
     pub player: Option<PlayerView>,
+    /// `getNearestPlayer(mob, -1)`: where the nearest non-spectator of every
+    /// player in the level stands, alive or not (the despawn distance).
+    pub nearest_player: Option<Vec3>,
     pub others: &'a [Seen],
     /// `others` by position, when the caller keeps one (the mob ticks).
     pub others_grid: Option<&'a seen_grid::SeenGrid>,
