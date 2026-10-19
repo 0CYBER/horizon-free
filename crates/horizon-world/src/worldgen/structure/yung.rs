@@ -916,6 +916,7 @@ mod tests {
             waterlogging: None,
             yung: rules.map(Box::new),
             enhanced_terrain: None,
+            ground_level: 1,
         })
     }
 
