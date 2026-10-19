@@ -307,6 +307,17 @@ its row. The game reads this content into its block and item tables
 nobody registers (a block a port left out, another mod's item) is dropped,
 so the rest of the tag still loads; vanilla would drop the whole tag.
 
+Tags merge as a data pack's do. Every mod's file for one tag (vanilla's
+`data/minecraft/tags/`, the convention `data/c/tags/`, or another mod's) adds
+its values after vanilla's and the mods' before it, in load order. A file with
+`"replace": true` first drops what came before it, vanilla's entries and the
+earlier mods', and the mods after it still add theirs, as a higher data pack
+does. Since the result depends on load order, the game says so in the log:
+"mod towns replaces data/minecraft/tags/worldgen/biome/has_structure/village_plains.json:
+vanilla's entries and those of adds are left out, ...". Tags are the only
+`minecraft` files a mod may hold: its other content stays in its own
+namespaces.
+
 A mod adds to structure sets and template pools that are not its own
 (vanilla's villages, another mod's houses) with a set or pool file in its own
 namespace holding `horizon:add_to`, a key vanilla data never has. Its entries

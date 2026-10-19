@@ -758,3 +758,92 @@ fn mods_sharing_a_namespace_are_refused() {
     assert!(e.to_string().starts_with("mods towers and other"), "{e}");
     let _ = fs::remove_dir_all(&scratch);
 }
+
+/// Mods merge into a tag in load order, as data packs do: each adds its
+/// values, and one that replaces drops what came before it, with a warning
+/// naming what it dropped.
+#[test]
+fn tags_merge_in_load_order_and_replace_warns() {
+    let v = |ids: &[&str]| -> Vec<J> { ids.iter().map(|i| J::Str((*i).into())).collect() };
+    let file = "data/minecraft/tags/worldgen/biome/has_structure/village_plains.json";
+    let mut merge = TagMerge::default();
+    assert_eq!(merge.add("a", file, false, true, &v(&["a:x"])), None);
+    let warning = merge.add("b", file, true, true, &v(&["minecraft:plains"]));
+    assert_eq!(
+        warning.as_deref(),
+        Some(
+            "mod b replaces data/minecraft/tags/worldgen/biome/has_structure/village_plains.json: \
+             vanilla's entries and those of a are left out, as a data pack's replace does; \
+             the mods after it in load order still add to it"
+        )
+    );
+    assert_eq!(merge.add("c", file, false, true, &v(&["c:y"])), None);
+    assert!(merge.replaced);
+    assert_eq!(merge.values, v(&["minecraft:plains", "c:y"]));
+    // A second replace drops only the mods' entries.
+    let warning = merge.add("d", file, true, true, &v(&["d:z"])).unwrap();
+    assert!(
+        warning.contains(": those of b, c are left out"),
+        "{warning}"
+    );
+    assert_eq!(merge.values, v(&["d:z"]));
+    // A mod replacing a tag of its own that nobody added to drops nothing.
+    let own = "data/a/tags/item/gems.json";
+    assert_eq!(
+        TagMerge::default().add("a", own, true, false, &v(&["a:x"])),
+        None
+    );
+}
+
+/// A replacing mod's tag leaves vanilla's entries out of the tag file and of
+/// the worldgen loader's biome tags, and the root keeps the warning for the
+/// starts that reuse it.
+#[test]
+fn a_replacing_mod_tag_reaches_the_root() {
+    let Some(base) = prepared() else {
+        return;
+    };
+    let scratch = std::env::temp_dir().join(format!("horizon-mod-replace-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    let file = "data/minecraft/tags/worldgen/biome/has_structure/village_plains.json";
+    let adds = folder_mod(
+        &scratch.join("adds"),
+        &[
+            ("horizon-mod.toml", &manifest("adds", "")),
+            (file, r#"{"values": ["minecraft:forest"]}"#),
+        ],
+    );
+    let towns = folder_mod(
+        &scratch.join("towns"),
+        &[
+            ("horizon-mod.toml", &manifest("towns", "")),
+            (file, r#"{"replace": true, "values": ["minecraft:plains"]}"#),
+        ],
+    );
+    let late = folder_mod(
+        &scratch.join("late"),
+        &[
+            ("horizon-mod.toml", &manifest("late", "")),
+            (file, r#"{"values": ["minecraft:savanna"]}"#),
+        ],
+    );
+    let vanilla: serde_json::Value =
+        serde_json::from_slice(&fs::read(base.join(file)).unwrap()).unwrap();
+    assert!(vanilla["values"].as_array().unwrap().len() > 1, "{vanilla}");
+    let root = resource_root(&base, &[adds, towns, late], &scratch.join("cache")).unwrap();
+    let expected = serde_json::json!(["minecraft:plains", "minecraft:savanna"]);
+    let tag: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join(file)).unwrap()).unwrap();
+    assert_eq!(tag["values"], expected);
+    let tags: BTreeMap<String, String> =
+        serde_json::from_slice(&fs::read(root.join("worldgen/biome_tags.json")).unwrap()).unwrap();
+    let bundled: serde_json::Value =
+        serde_json::from_str(&tags["minecraft:has_structure/village_plains"]).unwrap();
+    assert_eq!(bundled["values"], expected);
+    let warnings = fs::read_to_string(root.join(WARNINGS)).unwrap();
+    assert!(
+        warnings.starts_with("mod towns replaces data/minecraft/tags/worldgen/biome/has_structure/village_plains.json: vanilla's entries and those of adds are left out"),
+        "{warnings}"
+    );
+    let _ = fs::remove_dir_all(&scratch);
+}

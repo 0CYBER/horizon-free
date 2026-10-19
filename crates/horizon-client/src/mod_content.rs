@@ -874,7 +874,7 @@ struct Known {
     tag_files: std::collections::BTreeSet<String>,
 }
 impl Known {
-    fn new(base: &Path, plan: &Plan, tags: &BTreeMap<String, Vec<J>>) -> Result<Self> {
+    fn new(base: &Path, plan: &Plan, tags: &BTreeMap<String, TagMerge>) -> Result<Self> {
         let mut blocks: std::collections::BTreeSet<String> =
             plan.defaults.keys().cloned().collect();
         blocks.extend(plan.blocks.iter().map(|b| b.decl.id.clone()));
@@ -945,8 +945,60 @@ impl Known {
     }
 }
 
-/// Builds the content root for `mods` over `base` in `out`.
-pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<()> {
+/// What the mods do to one tag file, in load order (a data pack's
+/// TagLoader): each adds its values, and one that replaces the tag first
+/// drops vanilla's entries and the mods' before it.
+#[derive(Default)]
+struct TagMerge {
+    /// A mod replaced the tag: vanilla's entries are left out.
+    replaced: bool,
+    /// The mods whose values are in `values`.
+    mods: Vec<String>,
+    values: Vec<J>,
+}
+
+impl TagMerge {
+    /// Adds one mod's tag file. A replace that drops entries (vanilla's in a
+    /// `shared` tag, one not in the mod's namespaces, or other mods') warns.
+    fn add(
+        &mut self,
+        id: &str,
+        file: &str,
+        replace: bool,
+        shared: bool,
+        values: &[J],
+    ) -> Option<String> {
+        let mut warning = None;
+        if replace {
+            let mut dropped: Vec<String> = Vec::new();
+            if shared && !self.replaced {
+                dropped.push("vanilla's entries".into());
+            }
+            if !self.mods.is_empty() {
+                dropped.push(format!("those of {}", self.mods.join(", ")));
+            }
+            if !dropped.is_empty() {
+                warning = Some(format!(
+                    "mod {id} replaces {file}: {} are left out, as a data pack's replace \
+                     does; the mods after it in load order still add to it",
+                    dropped.join(" and ")
+                ));
+            }
+            self.replaced = true;
+            self.mods.clear();
+            self.values.clear();
+        }
+        if !self.mods.iter().any(|m| m == id) {
+            self.mods.push(id.to_owned());
+        }
+        self.values.extend(values.iter().cloned());
+        warning
+    }
+}
+
+/// Builds the content root for `mods` over `base` in `out`. Returns the
+/// warnings for the log: the shared tags a mod replaced.
+pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<Vec<String>> {
     // Two mods owning one namespace would mix their files.
     for (i, a) in mods.iter().enumerate() {
         for b in &mods[..i] {
@@ -986,7 +1038,8 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<()> {
         overlay.write(name, &bytes)?;
     }
     // Mod files, and every tag addition gathered per tag file.
-    let mut tags: BTreeMap<String, Vec<J>> = BTreeMap::new();
+    let mut tags: BTreeMap<String, TagMerge> = BTreeMap::new();
+    let mut warnings = Vec::new();
     let mut worldgen: BTreeMap<&str, Vec<(String, String)>> = BTreeMap::new();
     let mut additions: BTreeMap<&str, Vec<Addition>> = BTreeMap::new();
     for m in mods {
@@ -996,19 +1049,14 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<()> {
             let is_tag = file.starts_with("data/") && file.contains("/tags/");
             if is_tag && file.ends_with(".json") {
                 let doc: J = serde_json::from_slice(&bytes).map_err(|e| format!("{file}: {e}"))?;
-                if doc.get("replace") == Some(&J::Bool(true)) {
-                    let e = format!(
-                        "{}: {file}: a mod adds to tags, it cannot replace them",
-                        m.id
-                    );
-                    return Err(e.into());
-                }
                 let Some(J::Arr(values)) = doc.get("values") else {
                     return Err(format!("{}: {file}: no values", m.id).into());
                 };
-                tags.entry(file.clone())
-                    .or_default()
-                    .extend(values.iter().cloned());
+                let replace = doc.get("replace") == Some(&J::Bool(true));
+                let ns = file.split('/').nth(1).unwrap_or_default();
+                let shared = !m.content.namespaces.iter().any(|n| n == ns);
+                let merge = tags.entry(file.clone()).or_default();
+                warnings.extend(merge.add(&m.id, file, replace, shared, values));
             } else if !file.starts_with(&declarations) {
                 overlay.write(file, &bytes)?;
                 if let Some((bundle, id)) = worldgen_entry(file) {
@@ -1034,8 +1082,8 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<()> {
     // carried-over mods name blocks left out or other mods' ids: such
     // entries are dropped instead, so the rest of the tag holds.
     let known = Known::new(base, &plan, &tags)?;
-    for (file, values) in &mut tags {
-        values.retain(|v| known.keeps(file, v));
+    for (file, merge) in &mut tags {
+        merge.values.retain(|v| known.keeps(file, v));
     }
     let mut bundles: Vec<(&str, J)> = Vec::new();
     for name in TAG_BUNDLES {
@@ -1043,11 +1091,13 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<()> {
             bundles.push((name, read_json(&base.join(name))?));
         }
     }
-    for (file, values) in &tags {
-        let vanilla = fs::read_to_string(base.join(file)).ok();
+    for (file, merge) in &tags {
+        let vanilla = fs::read_to_string(base.join(file))
+            .ok()
+            .filter(|_| !merge.replaced);
         overlay.write(
             file,
-            merge_tag(vanilla.as_deref(), values, file)?.as_bytes(),
+            merge_tag(vanilla.as_deref(), &merge.values, file)?.as_bytes(),
         )?;
         // data/<ns>/tags/block/<path>.json is the block tag <ns>:<path>.
         let Some((ns, path)) = file
@@ -1060,10 +1110,10 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<()> {
         let id = format!("{ns}:{path}");
         for (name, doc) in &mut bundles {
             let text = match doc.get(&id) {
-                Some(J::Str(t)) => Some(t.clone()),
+                Some(J::Str(t)) if !merge.replaced => Some(t.clone()),
                 _ => None,
             };
-            let merged = merge_tag(text.as_deref(), values, name)?;
+            let merged = merge_tag(text.as_deref(), &merge.values, name)?;
             doc.set(&id, J::Str(merged));
         }
     }
@@ -1071,23 +1121,24 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<()> {
         overlay.write(name, &serde_json::to_vec(doc)?)?;
     }
     // Biome tags, merged into the worldgen loader's bundle as block tags are.
-    let biome_tags: Vec<(String, &Vec<J>)> = tags
+    let biome_tags: Vec<(String, &TagMerge)> = tags
         .iter()
-        .filter_map(|(file, values)| {
+        .filter_map(|(file, merge)| {
             let (ns, path) = file
                 .strip_prefix("data/")?
                 .split_once("/tags/worldgen/biome/")?;
-            Some((format!("{ns}:{}", path.strip_suffix(".json")?), values))
+            Some((format!("{ns}:{}", path.strip_suffix(".json")?), merge))
         })
         .collect();
     if !biome_tags.is_empty() && base.join(BIOME_TAGS).exists() {
         let mut doc = read_json(&base.join(BIOME_TAGS))?;
-        for (id, values) in biome_tags {
+        for (id, merge) in biome_tags {
             let text = match doc.get(&id) {
-                Some(J::Str(t)) => Some(t.clone()),
+                Some(J::Str(t)) if !merge.replaced => Some(t.clone()),
                 _ => None,
             };
-            doc.set(&id, J::Str(merge_tag(text.as_deref(), values, BIOME_TAGS)?));
+            let merged = merge_tag(text.as_deref(), &merge.values, BIOME_TAGS)?;
+            doc.set(&id, J::Str(merged));
         }
         overlay.write(BIOME_TAGS, &serde_json::to_vec(&doc)?)?;
     }
@@ -1128,7 +1179,8 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<()> {
         .collect();
     namespaces.sort();
     overlay.write(MARKER, &serde_json::to_vec(&namespaces)?)?;
-    Ok(())
+    overlay.write(WARNINGS, warnings.join("\n").as_bytes())?;
+    Ok(warnings)
 }
 
 /// The root to load: `base` itself with no content, else the mods' overlay
@@ -1144,12 +1196,20 @@ pub fn resource_root(base: &Path, mods: &[ContentMod], cache: &Path) -> Result<P
     let out = cache.join("mod-content");
     let stamp = stamp(base, mods)?;
     if fs::read(out.join(STAMP)).is_ok_and(|s| s == stamp.as_bytes()) {
+        // A reused root warns as the build did.
+        let warnings = fs::read_to_string(out.join(WARNINGS)).unwrap_or_default();
+        warnings.lines().for_each(|w| log::warn!("Horizon: {w}"));
         return Ok(out);
     }
-    build(base, mods, &out)?;
+    for warning in build(base, mods, &out)? {
+        log::warn!("Horizon: {warning}");
+    }
     fs::write(out.join(STAMP), stamp)?;
     Ok(out)
 }
+
+/// In a root built by [`build`]: its warnings, one per line.
+const WARNINGS: &str = "horizon-mod-content-warnings.txt";
 
 /// In a root built by [`resource_root`]: what it was built from.
 const STAMP: &str = "horizon-mod-content.stamp";
