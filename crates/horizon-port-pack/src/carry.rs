@@ -28,6 +28,8 @@ pub struct Report {
     pub unreadable: BTreeMap<String, String>,
     pub recipes_upgraded: usize,
     pub loot_tables_upgraded: usize,
+    /// Advancements whose criteria were rewritten ([`upgrade_advancement`]).
+    pub advancements_upgraded: usize,
     /// Blocks whose jar has no loot table but drop themselves in the oracle:
     /// the mod registers that table in code, and carry-over writes it.
     pub loot_tables_added: usize,
@@ -237,6 +239,29 @@ pub fn renamed_ids(v: &mut Value) -> bool {
         Value::Object(o) => o.values_mut().fold(false, |c, x| renamed_ids(x) | c),
         _ => false,
     }
+}
+
+/// A 1.21.1 advancement in 26.3's shape, in place: an `enter_block`
+/// criterion names its block as `blocks`, which 26.3 reads as a block list.
+/// 26.3 skips the old `block` field, so the criterion matched any block the
+/// player entered (Regions Unexplored's "Downer" on the first dive).
+pub fn upgrade_advancement(v: &mut Value) -> bool {
+    let mut changed = false;
+    let criteria = v.get_mut("criteria").and_then(Value::as_object_mut);
+    for c in criteria.into_iter().flat_map(|o| o.values_mut()) {
+        let trigger = c.get("trigger").and_then(Value::as_str);
+        if !matches!(trigger, Some("minecraft:enter_block" | "enter_block")) {
+            continue;
+        }
+        if let Some(conditions) = c.get_mut("conditions").and_then(Value::as_object_mut)
+            && !conditions.contains_key("blocks")
+            && let Some(block) = conditions.remove("block")
+        {
+            conditions.insert("blocks".into(), block);
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// A 1.21.1 loot table in 26.3's shape, in place: `conditions` lists become
@@ -776,6 +801,16 @@ pub fn carry(
                 if let Ok(v) = serde_json::from_slice::<Value>(&bytes) {
                     crate::worldgen::convention_tags(&v, &mut biome_conventions);
                 }
+            } else if rel.starts_with("advancement/")
+                && name.starts_with("data/")
+                && name.ends_with(".json")
+            {
+                if let Ok(mut advancement) = serde_json::from_slice::<Value>(&bytes)
+                    && upgrade_advancement(&mut advancement)
+                {
+                    report.advancements_upgraded += 1;
+                    bytes = serde_json::to_vec_pretty(&advancement).unwrap_or(bytes);
+                }
             } else if rel.starts_with("loot_table/") && name.starts_with("data/") {
                 if let Some(b) = rel
                     .strip_prefix("loot_table/blocks/")
@@ -1092,6 +1127,33 @@ mod tests {
                 .unwrap()
                 .starts_with("does not parse")
         );
+    }
+
+    #[test]
+    fn enter_block_criteria_name_their_blocks() {
+        let mut a = json!({"criteria": {
+            "dive": {"trigger": "minecraft:enter_block",
+                "conditions": {"block": "m:giant_lily_pad"}},
+            "swim": {"trigger": "minecraft:enter_block",
+                "conditions": {"blocks": ["minecraft:water"]}},
+            "has": {"trigger": "minecraft:recipe_unlocked",
+                "conditions": {"recipe": "m:boat"}}}});
+        assert!(upgrade_advancement(&mut a));
+        assert_eq!(
+            a["criteria"]["dive"]["conditions"],
+            json!({"blocks": "m:giant_lily_pad"})
+        );
+        assert_eq!(
+            a["criteria"]["swim"]["conditions"],
+            json!({"blocks": ["minecraft:water"]})
+        );
+        assert_eq!(
+            a["criteria"]["has"]["conditions"],
+            json!({"recipe": "m:boat"})
+        );
+        // Already 26.3's: unchanged.
+        assert!(!upgrade_advancement(&mut a));
+        assert!(!upgrade_advancement(&mut json!({"parent": "m:root"})));
     }
 
     #[test]

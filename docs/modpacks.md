@@ -546,6 +546,11 @@ Two cases the oracle fills in:
     Repurposed's mineshafts, Better Dungeons' processors, Regions Unexplored's hanging sign
     recipes...), which otherwise fail to load in 26.3. With both, the 5 Nether mineshaft pools load: 47 of
     Repurposed's Nether mineshafts in the 128×128-chunk square (seed 1234), under the lava sea.
+  - **Advancements.** An `enter_block` criterion names its block as `blocks` in 26.3; 26.3
+    skips 1.21.1's `block`, so the criterion matched any block the player entered. Carry renames
+    it (20 advancements in Regions Unexplored: "Downer", "From the Tree Tops" and "Light as a
+    Frog" were granted on the first dive into the sea, and its boat recipes' "in water"
+    criteria).
   - **Big templates** (#838). Vanilla reads structure templates with no limit on their tag
     count; Horizon now does too (`nbt::Limits::templates`). Seven of ATM10's 8,962 carried
     templates are past the old 1,000,000-tag cap: YUNG's monument start, four When Dungeons
