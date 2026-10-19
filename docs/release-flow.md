@@ -229,6 +229,13 @@ so a signed list can't be reused under another tag.
   `gh secret set RELEASE_SIGNING_KEY --env release` and prints only the public key, which then goes into
   release-keys.txt by pull request.
 
+**Releases from before signing.** The launcher and `horizon-server update` install only signed releases, with
+one exception, so a player or a server can still go back to an older version: every release published before
+signing began has its archives' SHA-256 pinned in `crates/horizon-release-sign/legacy-releases.txt`, built into
+both. Those releases install only with exactly those files, whatever GitHub serves for them later. The file was
+written once by `tools/ci/legacy_releases.py` from the SHA-256s GitHub computed at upload; it lists no signed
+release and never changes again (`--check` says whether it is complete).
+
 **Rotating the key** (a new key every year, or at once if the old one may have leaked). The publish job signs
 with every key the environment holds, `RELEASE_SIGNING_KEY` and `RELEASE_SIGNING_KEY_NEXT`, and the two names take
 turns:

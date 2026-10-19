@@ -266,7 +266,8 @@ pub fn release(tag: Option<&str>) -> Result<Release, String> {
 }
 
 /// The archive for this computer in a release's JSON, with the SHA-256 the release's SHA256SUMS
-/// gives for it, once its signature checks with one of `keys` (docs/security.md). A release that
+/// gives for it, once its signature checks with one of `keys` (docs/security.md). A release from
+/// before signing gets the SHA-256 pinned for it (legacy-releases.txt); any other release that
 /// isn't signed, or not by Horizon's key, is refused.
 fn pick(
     release: &Value,
@@ -287,6 +288,18 @@ fn pick(
             )
         })?;
     let name = asset["name"].as_str().unwrap_or_default();
+    // A release from before signing: only the files pinned for it at the time (a rollback).
+    if let Some(hex) = horizon_release_sign::legacy_digest(tag, name) {
+        return Ok(Release {
+            tag: tag.to_owned(),
+            asset: name.to_owned(),
+            url: asset["browser_download_url"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+            sha256: hex.to_owned(),
+        });
+    }
     let attached = |file: &str| -> Result<Option<Vec<u8>>, String> {
         match assets.iter().find(|a| a["name"] == file) {
             Some(a) => fetch(a["browser_download_url"].as_str().unwrap_or_default())
@@ -752,6 +765,27 @@ mod tests {
     }
 
     #[test]
+    fn horizon_server_ships_with_a_release_key() {
+        // With no key in release-keys.txt every update after the pinned releases would be refused:
+        // this fails until the release environment's public key is listed (docs/security.md).
+        assert!(
+            !horizon_release_sign::trusted_keys().is_empty(),
+            "crates/horizon-release-sign/release-keys.txt lists no key"
+        );
+    }
+
+    #[test]
+    fn a_release_from_before_signing_is_picked_with_its_pinned_digest() {
+        if let Some(first) = ASSETS.first() {
+            let pinned = horizon_release_sign::legacy_digest("v2026.10.19", first)
+                .expect("v2026.10.19 is from before signing and has every platform's archive");
+            let old = json!({ "tag_name": "v2026.10.19", "assets": [{ "name": first, "browser_download_url": "u" }] });
+            let nothing = |_: &str| -> Result<Vec<u8>, String> { Err("404".into()) };
+            assert_eq!(pick(&old, nothing, &[]).unwrap().sha256, pinned);
+        }
+    }
+
+    #[test]
     fn the_archive_for_this_computer_is_picked_with_its_signed_digest() {
         use horizon_release_sign::{SigningKey, sha256_hex, sums_file};
         let asset = |name: &str| json!({ "name": name, "browser_download_url": format!("https://example.invalid/{name}") });
@@ -761,7 +795,7 @@ mod tests {
             .map(|n| (n.to_string(), sha256_hex(n.as_bytes())))
             .collect();
         let sums = sums_file(&listed);
-        let signature = key.sign("v2026.10.19", sums.as_bytes());
+        let signature = key.sign("v2099.01.01", sums.as_bytes());
         let files = |url: &str| -> Result<Vec<u8>, String> {
             match url.rsplit('/').next() {
                 Some("SHA256SUMS") => Ok(sums.clone().into_bytes()),
@@ -771,12 +805,12 @@ mod tests {
         };
         let names = ASSETS.iter().rev().copied().chain(["other.zip"]);
         let signed = json!({
-            "tag_name": "v2026.10.19",
+            "tag_name": "v2099.01.01",
             "assets": names.chain(["SHA256SUMS", "SHA256SUMS.sig"]).map(asset).collect::<Vec<_>>(),
         });
         if let Some(first) = ASSETS.first() {
             let picked = pick(&signed, files, &[key.public()]).unwrap();
-            assert_eq!(picked.tag, "v2026.10.19");
+            assert_eq!(picked.tag, "v2099.01.01");
             // The most specific archive (Linux: the server build), even when listed last.
             assert_eq!(picked.asset, *first);
             assert_eq!(picked.sha256, sha256_hex(first.as_bytes()));
@@ -791,7 +825,7 @@ mod tests {
             );
             // The same signed list under another tag: refused.
             let mut replayed = signed.clone();
-            replayed["tag_name"] = json!("v2026.10.20");
+            replayed["tag_name"] = json!("v2099.01.02");
             assert!(pick(&replayed, files, &[key.public()]).is_err());
         }
         assert!(
