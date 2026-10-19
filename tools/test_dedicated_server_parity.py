@@ -11,8 +11,9 @@ login, configuration and play, accepts the spawn teleport, receives the
 chunks around the spawn (their bytes are compared: the world is loaded from
 the same files), chats, runs /list and commands that fail (`/random value
 7..7`, `/random value x`, `/trigger nope`), trades, is made an operator by
-the console, runs /kill, respawns (as vanilla's LevelLoadTracker waits: until the "level
-chunks load start" event and the chunk under the player), sets a furnace
+the console, runs /kill, runs a command while dead, respawns (as vanilla's
+LevelLoadTracker waits: until the "level chunks load start" event and the
+chunk under the player), sets a furnace
 beside itself, gives itself raw iron and coal, sets and asks its own score
 (`@s`), opens the furnace, shift-clicks
 the ore and the coal in and the ingot out, and leaves. The
@@ -28,6 +29,8 @@ exactly:
   advancements, which vanilla keeps in hash maps, sorted); the command tree
   node by node; the chunks sent and their bytes; the replies to the chat
   message, /list and the failing commands, as text components;
+- the reply to the command run while dead (ServerGamePacketListenerImpl
+  runs a dead player's commands, #973);
 - after /kill, the packets from the death screen to the respawned
   inventory (PlayerList.respawn; chat, chunk data, light and keep-alives
   left out, runs of a packet counted), then that the level loads where the

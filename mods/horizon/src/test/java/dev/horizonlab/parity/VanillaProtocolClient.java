@@ -465,6 +465,9 @@ public final class VanillaProtocolClient {
         // The villager the server's console summoned beside the spawn.
         int villager = -1;
         net.minecraft.world.phys.Vec3 villagerAt = null;
+        // When the dead player sent a command (ServerGamePacketListenerImpl.handleChatCommand runs it
+        // whether the player is alive or not); it respawns once the reply came, or 3 s later.
+        long deadCommandAt = 0;
         while (System.currentTimeMillis() < deadline) {
             Received r;
             try {
@@ -543,9 +546,12 @@ public final class VanillaProtocolClient {
                 } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundPlayerCombatKillPacket p && step > 0) {
                     // The death message is left out: guests' death messages aren't Horizon's yet.
                     record("play-death", "death screen");
-                    send(new net.minecraft.network.protocol.game.ServerboundClientCommandPacket(
-                        net.minecraft.network.protocol.game.ServerboundClientCommandPacket.Action.PERFORM_RESPAWN));
-                    respawning = true;
+                    send(new ServerboundChatCommandPacket("trigger nope"));
+                    deadCommandAt = now;
+                } else if (packet instanceof ClientboundSystemChatPacket p && deadCommandAt > 0 && !respawning
+                    && json(p.content()).contains("nope")) {
+                    record("play-death", "command reply " + json(p.content()));
+                    respawning = respawn();
                 } else if (packet instanceof ClientboundSystemChatPacket p && step > 0 && step < 5 + REPLIES.length) {
                     record("play-chat", "system " + p.overlay() + " " + json(p.content()));
                 } else if (packet instanceof ClientboundPlayerChatPacket p && step > 0 && step < 5 + REPLIES.length) {
@@ -660,6 +666,9 @@ public final class VanillaProtocolClient {
                     new LastSeenMessages.Update(0, new BitSet(), (byte) 0)));
                 step++;
                 stepAt = now;
+            } else if (deadCommandAt > 0 && !respawning && now - deadCommandAt > 3000) {
+                record("play-death", "no command reply");
+                respawning = respawn();
             } else if (step == 6 + REPLIES.length && loadStart && respawnChunk) {
                 // LevelLoadTracker is done: the vanilla client leaves the loading screen.
                 if (runType != null) record("play-respawn", runLine(runType, run));
@@ -708,6 +717,13 @@ public final class VanillaProtocolClient {
             record("play-respawn", "level never loaded: load start " + loadStart + ", chunk under the player " + respawnChunk);
         }
         record("error", "timed out in play, step " + step + ", chunks " + chunks.size());
+    }
+
+    /** The death screen's Respawn button: true, the respawn being under way. */
+    private boolean respawn() throws Exception {
+        send(new net.minecraft.network.protocol.game.ServerboundClientCommandPacket(
+            net.minecraft.network.protocol.game.ServerboundClientCommandPacket.Action.PERFORM_RESPAWN));
+        return true;
     }
 
     /**
