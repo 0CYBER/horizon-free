@@ -117,7 +117,7 @@ impl Index {
     }
     fn retain(&mut self, mut keep: impl FnMut(&(i32, i32, i32)) -> bool) {
         self.order.retain(|k| keep(k));
-        self.set = self.order.iter().copied().collect();
+        self.set.retain(|k| keep(k));
     }
 }
 const KIND_SENSOR: u8 = 1;
@@ -338,12 +338,17 @@ impl Game<'_> {
         // Chunks that arrived or left (every half second is plenty).
         if self.sculk.ticks.is_multiple_of(10) {
             let loaded: HashSet<(i32, i32)> = self.world.chunks.keys().copied().collect();
-            for key in loaded.difference(&self.sculk.known.clone()) {
-                self.sculk_scan_chunk(*key);
+            let arrived: Vec<(i32, i32)> = loaded.difference(&self.sculk.known).copied().collect();
+            for key in arrived {
+                self.sculk_scan_chunk(key);
             }
-            let gone: Vec<(i32, i32)> = self.sculk.known.difference(&loaded).copied().collect();
-            for key in gone {
-                self.sculk.index.retain(|p| (p.0 >> 4, p.2 >> 4) != key);
+            // The blocks of every chunk that left, in one pass: a player
+            // leaving unloads thousands of chunks at once.
+            let gone: HashSet<(i32, i32)> = self.sculk.known.difference(&loaded).copied().collect();
+            if !gone.is_empty() {
+                self.sculk
+                    .index
+                    .retain(|p| !gone.contains(&(p.0 >> 4, p.2 >> 4)));
             }
             self.sculk.known = loaded;
         }
@@ -1634,6 +1639,21 @@ impl Game<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Retaining keeps the insertion order and the membership in step.
+    #[test]
+    fn the_index_retains_in_order() {
+        let mut index = Index::default();
+        for key in [(5, 0, 0), (40, 1, 0), (6, 2, 17), (-3, 3, 0), (41, 4, 0)] {
+            index.insert(key);
+        }
+        index.retain(|p| p.0 >> 4 != 2 && p.2 >> 4 != 1);
+        assert_eq!(index.order, [(5, 0, 0), (-3, 3, 0)]);
+        assert!(index.contains(&(5, 0, 0)) && !index.contains(&(41, 4, 0)));
+        assert_eq!(index.set.len(), 2);
+        index.insert((41, 4, 0));
+        assert_eq!(index.iter().last(), Some(&(41, 4, 0)));
+    }
 
     #[test]
     fn centres_and_blocks_agree() {
