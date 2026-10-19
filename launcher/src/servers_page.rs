@@ -1050,8 +1050,8 @@ impl Launcher {
         }
         if self.servers.list.is_empty() {
             return page.child(centered(
-                "No server yet. Create one: it takes a few seconds, and Create alone gives a \
-                 friends-only survival world.",
+                "No server yet. Create one: it takes a few seconds, and with the defaults (tick \
+                 the EULA, press Create) you get a friends-only survival world.",
                 &t,
             ));
         }

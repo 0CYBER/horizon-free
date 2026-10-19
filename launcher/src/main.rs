@@ -912,16 +912,18 @@ static KEYBOARD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::
 /// Makes a control reachable with Tab, pressed with Enter or Space, with a ring when the keyboard
 /// put it in focus.
 fn keyboard(el: Stateful<Div>, t: &Theme) -> Stateful<Div> {
-    let ring = t.accent;
+    let (ring, gap) = (t.accent, t.page);
+    // A ring with a gap of page colour, so it shows around filled buttons too. GPUI draws nothing
+    // for a shadow without blur: half a pixel keeps it crisp.
+    let shadow = |color, spread: f32| gpui::BoxShadow {
+        color,
+        offset: gpui::point(px(0.), px(0.)),
+        blur_radius: px(0.5),
+        spread_radius: px(spread),
+    };
     el.tab_index(0).focus(move |s| {
         if KEYBOARD.load(Ordering::Relaxed) {
-            s.shadow(vec![gpui::BoxShadow {
-                color: ring,
-                offset: gpui::point(px(0.), px(0.)),
-                // GPUI draws nothing for a shadow without blur: a half-pixel keeps it crisp.
-                blur_radius: px(0.5),
-                spread_radius: px(2.5),
-            }])
+            s.shadow(vec![shadow(ring, 4.), shadow(gap, 1.5)])
         } else {
             s
         }

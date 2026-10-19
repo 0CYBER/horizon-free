@@ -37,8 +37,8 @@ The opening, then Play ([clip](docs/opening.webm)):
 - **Servers**: host a world for friends with buttons. **Create a server** asks for a name, a world
   (a new one, with an optional seed, or a copy of one of your single-player worlds), the game mode,
   difficulty, most players, who can join (friends only, the default, or anyone with the address)
-  and your agreement to the Minecraft EULA; Create alone gives a friends-only survival world with
-  you as its operator. Each server then has **Start**, **Stop** and **Restart**, its state (also
+  and your agreement to the Minecraft EULA; with the defaults (tick the EULA, press Create) you get
+  a friends-only survival world with you as its operator. Each server then has **Start**, **Stop** and **Restart**, its state (also
   when it crashed and was restarted), players online with their heads, TPS, MSPT and RAM, the
   address friends on your network type with **Copy**, a console that takes commands, **Open the
   web panel**, and four tabs: **Overview**; **Players** (online players with Make operator, Kick
