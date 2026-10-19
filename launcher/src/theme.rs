@@ -83,3 +83,47 @@ impl Theme {
         }
     }
 }
+
+/// How strongly a selected suggestion in a text field is tinted with the accent.
+pub const SELECTION: f32 = 0.22;
+
+#[cfg(test)]
+mod tests {
+    use super::{tokens, SELECTION};
+
+    /// `top` at `alpha` over `under`, as the GPU blends them.
+    fn blend(top: u32, under: u32, alpha: f32) -> u32 {
+        let channel = |shift: u32| {
+            let (a, b) = ((top >> shift & 0xff) as f32, (under >> shift & 0xff) as f32);
+            ((a * alpha + b * (1. - alpha)).round() as u32) << shift
+        };
+        channel(16) | channel(8) | channel(0)
+    }
+
+    /// What the Servers page draws besides text (whose colours horizon-theme's own test holds to
+    /// WCAG AA on every background): the keyboard focus ring, the borders of a focused or refused
+    /// field (WCAG 1.4.11 asks 3:1 for those), and text over a selected suggestion.
+    #[test]
+    fn marks_and_selections_read_clearly() {
+        for p in [tokens::LIGHT, tokens::DARK] {
+            let theme = if p.dark { "dark" } else { "light" };
+            for (name, bg) in [
+                ("page", p.page),
+                ("plate_soft", p.plate_soft),
+                ("plate", p.plate),
+                ("surface", p.surface),
+            ] {
+                let ring = tokens::contrast(p.accent, bg);
+                assert!(ring >= 3.0, "{theme} focus ring on {name}: {ring:.2}");
+                let refused = tokens::contrast(p.danger, bg);
+                assert!(
+                    refused >= 3.0,
+                    "{theme} refused field on {name}: {refused:.2}"
+                );
+            }
+            let selection = blend(p.accent, p.surface, SELECTION);
+            let ratio = tokens::contrast(p.ink, selection);
+            assert!(ratio >= 4.5, "{theme} text on a selection: {ratio:.2}");
+        }
+    }
+}

@@ -287,6 +287,65 @@ fn bytes(n: u64) -> String {
 }
 
 /// A backup's date and kind from its name (`2026-10-19_11-28-57-manual.zip`, UTC), for people.
+/// What a key did in a one-line field.
+#[derive(Debug, PartialEq)]
+enum Key {
+    Enter,
+    Escape,
+    /// Command/Ctrl-V: the caller pastes the clipboard's first line.
+    Paste,
+    Edited,
+    /// Not the field's: Tab (focus), arrows, shortcuts.
+    Pass,
+}
+
+/// Types `key` into `text`. A `selected` suggestion is replaced by what's typed or pasted, and
+/// cleared by Backspace.
+fn type_key(
+    text: &mut String,
+    selected: bool,
+    key: &str,
+    key_char: Option<&str>,
+    command: bool,
+) -> Key {
+    let replace = |text: &mut String| {
+        if selected {
+            text.clear();
+        }
+    };
+    match key {
+        "enter" => Key::Enter,
+        "escape" => Key::Escape,
+        "v" if command => {
+            replace(text);
+            Key::Paste
+        }
+        "backspace" => {
+            if selected {
+                text.clear();
+            } else {
+                text.pop();
+            }
+            Key::Edited
+        }
+        _ if command => Key::Pass,
+        // Not every platform gives Space a character.
+        "space" => {
+            replace(text);
+            text.push(' ');
+            Key::Edited
+        }
+        _ => match key_char {
+            Some(ch) if !ch.is_empty() && !ch.chars().any(char::is_control) => {
+                replace(text);
+                text.push_str(ch);
+                Key::Edited
+            }
+            _ => Key::Pass,
+        },
+    }
+}
+
 fn backup_label(b: &Backup) -> (String, String) {
     let stem = b.name.trim_end_matches(".zip");
     let (when, kind) = match stem.get(..19) {
@@ -298,6 +357,13 @@ fn backup_label(b: &Backup) -> (String, String) {
     let kind = match kind {
         "auto" => "Automatic".to_string(),
         "manual" => "Made by hand".to_string(),
+        "before-update" => "Before an update".to_string(),
+        // horizon-server writes the tag with dashes (before-v2026-10-19-10).
+        k if k.starts_with("before-v")
+            && k[8..].chars().all(|c| c.is_ascii_digit() || c == '-') =>
+        {
+            format!("Before updating to {}", k[7..].replace('-', "."))
+        }
         k if k.starts_with("before-") => format!("Before updating to {}", &k[7..]),
         k => k.to_string(),
     };
@@ -849,7 +915,9 @@ impl Launcher {
             } else {
                 div()
                     .text_color(t.ink)
-                    .when(selected, |d| d.rounded(px(2.)).bg(t.accent.opacity(0.22)))
+                    .when(selected, |d| {
+                        d.rounded(px(2.)).bg(t.accent.opacity(theme::SELECTION))
+                    })
                     .child(shown)
             })
             .when(focused, |d| {
@@ -871,46 +939,31 @@ impl Launcher {
                 if k.key != "enter" && this.servers.invalid.is_some_and(|(g, _)| g == f) {
                     this.servers.invalid = None;
                 }
-                // A suggested value is selected: typing or pasting replaces it, Backspace clears it.
-                if this.servers.selected.take() == Some(f)
-                    && (k.key == "backspace"
-                        || (k.key == "v" && command)
-                        || (!command && (k.key == "space" || k.key_char.is_some())))
-                    && !matches!(k.key.as_str(), "enter" | "escape" | "tab")
-                {
-                    this.servers.text(f).clear();
-                    if k.key == "backspace" {
-                        cx.stop_propagation();
-                        cx.notify();
-                        return;
-                    }
-                }
-                match k.key.as_str() {
-                    "enter" => this.field_enter(f),
-                    // Not every platform gives Space a character.
-                    "space" if !command => this.servers.text(f).push(' '),
-                    "escape" => {
+                let selected = this.servers.selected.take() == Some(f);
+                let typed = type_key(
+                    this.servers.text(f),
+                    selected,
+                    &k.key,
+                    k.key_char.as_deref(),
+                    command,
+                );
+                match typed {
+                    Key::Enter => this.field_enter(f),
+                    Key::Escape => {
                         if this.servers.create.is_some() && !this.servers.creating {
                             this.servers.create = None;
                         }
                         window.blur();
                     }
-                    "backspace" => {
-                        this.servers.text(f).pop();
-                    }
-                    "v" if command => {
+                    Key::Paste => {
                         if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
                             let line = text.lines().next().unwrap_or_default().trim().to_string();
                             this.servers.text(f).push_str(&line);
                         }
                     }
-                    _ if !command => match &k.key_char {
-                        Some(ch) if !ch.chars().any(char::is_control) => {
-                            this.servers.text(f).push_str(ch)
-                        }
-                        _ => return,
-                    },
-                    _ => return,
+                    Key::Edited => {}
+                    // Tab and the rest go on to the window: Tab moves the focus.
+                    Key::Pass => return,
                 }
                 clip(this.servers.text(f));
                 cx.stop_propagation();
@@ -2927,6 +2980,14 @@ mod tests {
             "Before updating to v2026.10.20"
         );
         assert_eq!(
+            backup_label(&b("2026-10-19_13-35-36-before-v2026-10-19-10.zip")).1,
+            "Before updating to v2026.10.19.10"
+        );
+        assert_eq!(
+            backup_label(&b("2026-10-14_17-46-40-before-update.zip")).1,
+            "Before an update"
+        );
+        assert_eq!(
             backup_label(&b("2026-10-19_11-28-57-auto.zip")).1,
             "Automatic"
         );
@@ -2936,5 +2997,58 @@ mod tests {
         let mut long = "é".repeat(300);
         clip(&mut long);
         assert_eq!(long.chars().count(), 256);
+    }
+
+    /// The keyboard in a one-line field, as the Create dialog, Players, Settings and the console use it.
+    #[test]
+    fn fields_type_as_people_expect() {
+        let mut text = String::from("My server");
+        // The suggestion is selected: the first letter replaces it.
+        assert_eq!(
+            type_key(&mut text, true, "f", Some("F"), false),
+            Key::Edited
+        );
+        assert_eq!(text, "F");
+        // Space, which some platforms send without a character.
+        assert_eq!(
+            type_key(&mut text, false, "space", None, false),
+            Key::Edited
+        );
+        assert_eq!(
+            type_key(&mut text, false, "n", Some("N"), false),
+            Key::Edited
+        );
+        assert_eq!(text, "F N");
+        assert_eq!(
+            type_key(&mut text, false, "backspace", None, false),
+            Key::Edited
+        );
+        assert_eq!(text, "F ");
+        // Backspace on a suggestion clears it all.
+        let mut text = String::from("Server 2");
+        type_key(&mut text, true, "backspace", None, false);
+        assert_eq!(text, "");
+        // Paste replaces a suggestion too; the caller adds the clipboard.
+        let mut text = String::from("Server 2");
+        assert_eq!(type_key(&mut text, true, "v", Some("v"), true), Key::Paste);
+        assert_eq!(text, "");
+        // Tab, arrows and shortcuts aren't the field's: Tab moves the focus.
+        let mut text = String::from("Ludo");
+        for (key, ch, command) in [
+            ("tab", Some("\t"), false),
+            ("left", None, false),
+            ("a", Some("a"), true),
+        ] {
+            assert_eq!(type_key(&mut text, false, key, ch, command), Key::Pass);
+        }
+        assert_eq!(
+            type_key(&mut text, true, "enter", Some("\n"), false),
+            Key::Enter
+        );
+        assert_eq!(
+            type_key(&mut text, false, "escape", None, false),
+            Key::Escape
+        );
+        assert_eq!(text, "Ludo");
     }
 }
