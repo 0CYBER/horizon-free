@@ -68,7 +68,7 @@ impl Game<'_> {
     pub(super) fn is_powder_snow(&self, pos: [i32; 3]) -> bool {
         &*self
             .res
-            .facts
+            .facts()
             .get(self.world.block(pos[0], pos[1], pos[2]))
             .name
             == "minecraft:powder_snow"

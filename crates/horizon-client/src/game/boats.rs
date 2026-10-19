@@ -180,11 +180,11 @@ impl BoatModels {
 }
 impl Game<'_> {
     fn fluid_height(&self, x: i32, y: i32, z: i32) -> Option<(f32, bool)> {
-        let f = self.res.facts.get(self.world.block(x, y, z));
+        let f = self.res.facts().get(self.world.block(x, y, z));
         if f.fluid != Fluid::Water {
             return None;
         }
-        let above = self.res.facts.get(self.world.block(x, y + 1, z));
+        let above = self.res.facts().get(self.world.block(x, y + 1, z));
         // FluidState.getHeight: 1 under the same fluid, else amount / 9.
         let height = if above.fluid == Fluid::Water {
             1.0
@@ -277,7 +277,7 @@ impl Game<'_> {
                     && f64::from(x + 1) > lo.x
                     && f64::from(z) < hi.z
                     && f64::from(z + 1) > lo.z;
-                let f = self.res.facts.get(self.world.block(x, y0, z));
+                let f = self.res.facts().get(self.world.block(x, y0, z));
                 if inside && (f.full_collision || f.legacy_solid) && !f.has_class("LilyPadBlock") {
                     friction += f.friction;
                     count += 1;
@@ -443,8 +443,13 @@ impl Game<'_> {
     }
     /// Every boat but the ridden one (which ticks with its rider).
     pub(super) fn tick_boats(&mut self) {
+        // ServerLevel.tick: only entities in entity-ticking chunks tick.
+        let ticking = self.entity_ticking_area();
         for i in 0..self.boats.len() {
-            if Some(self.boats[i].id) == self.riding {
+            let p = self.boats[i].position;
+            if Some(self.boats[i].id) == self.riding
+                || !ticking(p.x.floor() as i32, p.z.floor() as i32)
+            {
                 continue;
             }
             let b = self.boats[i].clone();
@@ -495,8 +500,8 @@ impl Game<'_> {
         );
         let top = b.bounds().max_position().y;
         let (bx, by, bz) = (x.floor() as i32, top.floor() as i32, z.floor() as i32);
-        let below = self.res.facts.get(self.world.block(bx, by - 1, bz));
-        let here = self.res.facts.get(self.world.block(bx, by, bz));
+        let below = self.res.facts().get(self.world.block(bx, by - 1, bz));
+        let here = self.res.facts().get(self.world.block(bx, by, bz));
         let target = if below.fluid != Fluid::Water
             && !here.full_collision
             && (below.full_collision || below.legacy_solid)
@@ -723,6 +728,7 @@ impl Game<'_> {
             };
             let folder = if b.chest { "chest_boat" } else { "boat" };
             let Some(uv) = self
+                .gui
                 .atlas
                 .sprites
                 .get(&format!("entity/{folder}/{}", b.wood))

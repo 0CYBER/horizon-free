@@ -47,14 +47,24 @@ pub fn register(m: &mut Mob) {
     m.extra.vector[0] = f64::from(180.0 * m.yaw / std::f32::consts::PI);
     set_size(m, 1);
 }
-/// AbstractCubeMob.setSize: health size^2, speed 0.2 + 0.1 * size, damage size.
+/// AbstractCubeMob.setSize(size, true): the max health (size^2), movement
+/// speed (0.2 + 0.1 * size, in floats) and attack damage (size) bases, a
+/// magma cube's armor (size * 3), then the health back to the max.
 pub fn set_size(m: &mut Mob, size: i32) {
+    use super::finalize::{Attr, set_base};
     let size = size.clamp(1, 127);
     m.extra.size = size;
-    m.attrs.max_health = (size * size) as f32;
-    m.attrs.speed = 0.2 + 0.1 * f64::from(size);
-    m.attrs.attack_damage = size as f32;
-    m.health = m.attrs.max_health;
+    set_base(m, Attr::MaxHealth, f64::from(size * size));
+    set_base(
+        m,
+        Attr::MovementSpeed,
+        f64::from(0.2f32 + 0.1f32 * size as f32),
+    );
+    set_base(m, Attr::AttackDamage, f64::from(size));
+    if m.species() == super::Species::MagmaCube {
+        set_base(m, Attr::Armor, f64::from(size * 3));
+    }
+    m.health = super::finalize::max_health(m);
 }
 /// AbstractCubeMob.setSpawnSize: 1, 2 or 4 (normal difficulty special multiplier 0).
 pub fn finalize(m: &mut Mob) {

@@ -75,10 +75,10 @@ impl Game<'_> {
         if left <= 0 {
             return;
         }
-        let Some(kind) = self.res.mob_types.get("minecraft:elder_guardian") else {
+        let Some(kind) = self.res.mob_types().get("minecraft:elder_guardian") else {
             return;
         };
-        let Some(r) = self.atlas.sprites.get("entity/guardian_elder").copied() else {
+        let Some(r) = self.gui.atlas.sprites.get("entity/guardian_elder").copied() else {
             return;
         };
         let age = (APPARITION_TICKS - left) as f32 + alpha as f32;
@@ -142,12 +142,12 @@ impl Game<'_> {
             return;
         };
         let Some(head) =
-            render::part_transform(mob, alpha as f32, camera, &self.res.mob_data, "head")
+            render::part_transform(mob, alpha as f32, camera, self.res.mob_data(), "head")
         else {
             return;
         };
         let m = banner_matrix(head);
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let uv = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         // BannerRenderer: the flag sways with a per-banner phase.
         let phase =
@@ -187,7 +187,7 @@ impl Game<'_> {
     ) {
         for (corners, shade, side) in FACES {
             let name = cube.sprites[usize::from(side)];
-            let Some(r) = self.atlas.sprites.get(name).copied() else {
+            let Some(r) = self.gui.atlas.sprites.get(name).copied() else {
                 continue;
             };
             let tint = if side == 0 { cube.tint } else { 0xFF_FFFF };
@@ -261,7 +261,7 @@ impl Game<'_> {
             let Some(item) = item else { continue };
             let left = off_hand != mob.extra.main_hand_left;
             let Some(t) =
-                render::held_item_transform(mob, alpha as f32, camera, &self.res.mob_data, left)
+                render::held_item_transform(mob, alpha as f32, camera, self.res.mob_data(), left)
             else {
                 continue;
             };

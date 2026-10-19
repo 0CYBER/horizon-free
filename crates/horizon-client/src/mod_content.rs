@@ -697,6 +697,78 @@ fn worldgen_entry(file: &str) -> Option<(&'static str, String)> {
     Some((bundle, format!("{ns}:{}", path.strip_suffix(".json")?)))
 }
 
+/// The key of a mod's structure set or template pool file that adds its
+/// entries to other sets or pools (vanilla's, another mod's) instead of
+/// being one of its own. Vanilla data never has it.
+const ADD_TO: &str = "horizon:add_to";
+/// The bundles a mod may add to, and the list each entry goes into.
+const ADDABLE: [(&str, &str); 2] = [
+    ("worldgen/structure_sets.json", "structures"),
+    ("worldgen/template_pools.json", "elements"),
+];
+
+/// A mod file's additions (`horizon:add_to`): its entries appended to the
+/// list of each set or pool it names, as lithostitched's
+/// `add_structure_set_entries` and `add_template_pool_elements` do for
+/// NeoForge and Fabric packs.
+struct Addition {
+    targets: Vec<String>,
+    list: &'static str,
+    entries: Vec<J>,
+}
+impl Addition {
+    /// What a mod file of `bundle` adds, if it is an addition file.
+    fn read(bundle: &str, text: &str) -> Result<Option<Self>> {
+        let Some((_, list)) = ADDABLE.iter().find(|(b, _)| *b == bundle) else {
+            return Ok(None);
+        };
+        if !text.contains(ADD_TO) {
+            return Ok(None);
+        }
+        let doc: J = serde_json::from_str(text)?;
+        let Some(targets) = doc.get(ADD_TO) else {
+            return Ok(None);
+        };
+        let targets = match targets {
+            J::Str(s) => vec![s.clone()],
+            J::Arr(a) => a
+                .iter()
+                .map(|v| match v {
+                    J::Str(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .collect::<Option<_>>()
+                .ok_or(format!("{ADD_TO}: not a list of ids"))?,
+            _ => return Err(format!("{ADD_TO}: not an id or a list of ids").into()),
+        };
+        let Some(J::Arr(entries)) = doc.get(list) else {
+            return Err(format!("{ADD_TO} without a {list} list").into());
+        };
+        Ok(Some(Self {
+            targets,
+            list,
+            entries: entries.clone(),
+        }))
+    }
+    /// Appends the entries to each target in the bundle `doc` (id → the
+    /// file's text). A target nobody defines is skipped, as a tag entry
+    /// naming an unknown id is.
+    fn apply(&self, doc: &mut J) -> Result<()> {
+        for target in &self.targets {
+            let Some(J::Str(text)) = doc.get(target) else {
+                continue;
+            };
+            let mut v: J = serde_json::from_str(text).map_err(|e| format!("{target}: {e}"))?;
+            let Some(J::Arr(list)) = v.get_mut(self.list) else {
+                continue;
+            };
+            list.extend(self.entries.iter().cloned());
+            doc.set(target, J::Str(serde_json::to_string(&v)?));
+        }
+        Ok(())
+    }
+}
+
 /// The overlay being written: `out` mirrors `base` through links, and a
 /// directory becomes real only when something inside it is written.
 struct Overlay<'a> {
@@ -904,6 +976,7 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<()> {
     // Mod files, and every tag addition gathered per tag file.
     let mut tags: BTreeMap<String, Vec<J>> = BTreeMap::new();
     let mut worldgen: BTreeMap<&str, Vec<(String, String)>> = BTreeMap::new();
+    let mut additions: BTreeMap<&str, Vec<Addition>> = BTreeMap::new();
     for m in mods {
         let declarations = format!("data/{}/horizon/", m.id);
         for file in &m.content.files {
@@ -928,7 +1001,11 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<()> {
                 overlay.write(file, &bytes)?;
                 if let Some((bundle, id)) = worldgen_entry(file) {
                     let text = String::from_utf8(bytes).map_err(|e| format!("{file}: {e}"))?;
-                    worldgen.entry(bundle).or_default().push((id, text));
+                    let entries = worldgen.entry(bundle).or_default();
+                    match Addition::read(bundle, &text).map_err(|e| format!("{file}: {e}"))? {
+                        Some(addition) => additions.entry(bundle).or_default().push(addition),
+                        None => entries.push((id, text)),
+                    }
                 } else if let Some(template) = file
                     .strip_prefix("data/")
                     .and_then(|r| r.split_once("/structure/"))
@@ -1002,7 +1079,8 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<()> {
         }
         overlay.write(BIOME_TAGS, &serde_json::to_vec(&doc)?)?;
     }
-    // Structures and the pools, sets, processors and features they use.
+    // Structures and the pools, sets, processors and features they use, then
+    // what mods add to sets and pools, in mod and file order.
     for (bundle, entries) in &worldgen {
         if !base.join(bundle).exists() {
             continue;
@@ -1010,6 +1088,11 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<()> {
         let mut doc = read_json(&base.join(bundle))?;
         for (id, text) in entries {
             doc.set(id, J::Str(text.clone()));
+        }
+        for addition in additions.get(bundle).into_iter().flatten() {
+            addition
+                .apply(&mut doc)
+                .map_err(|e| format!("{bundle}: {e}"))?;
         }
         overlay.write(bundle, &serde_json::to_vec(&doc)?)?;
     }

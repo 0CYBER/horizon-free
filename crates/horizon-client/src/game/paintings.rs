@@ -94,7 +94,7 @@ impl Game<'_> {
         for x in slo[0].floor() as i32..=shi[0].floor() as i32 {
             for y in slo[1].floor() as i32..=shi[1].floor() as i32 {
                 for z in slo[2].floor() as i32..=shi[2].floor() as i32 {
-                    let f = self.res.facts.get(self.world.block(x, y, z));
+                    let f = self.res.facts().get(self.world.block(x, y, z));
                     if !(f.legacy_solid || f.has_class("DiodeBlock")) {
                         return false;
                     }
@@ -232,8 +232,16 @@ impl Game<'_> {
     }
     /// BlockAttachedEntity.tick: check survival every 100 ticks.
     pub(super) fn tick_paintings(&mut self) {
+        // ServerLevel.tick: only entities in entity-ticking chunks tick.
+        let ticking = self.entity_ticking_area();
         let mut i = 0;
         while i < self.paintings.len() {
+            let (lo, hi) = self.paintings[i].bounds();
+            let centre = [0, 2].map(|k| ((lo[k] + hi[k]) / 2.0).floor() as i32);
+            if !ticking(centre[0], centre[1]) {
+                i += 1;
+                continue;
+            }
             self.paintings[i].check_interval += 1;
             if self.paintings[i].check_interval >= 100 {
                 self.paintings[i].check_interval = 0;
@@ -249,7 +257,7 @@ impl Game<'_> {
     /// PaintingRenderer: the variant on the front, the back texture behind and
     /// on the edges.
     pub(super) fn painting_geometry(&self, camera: glam::DVec3, out: &mut Vec<Vertex>) {
-        let sprites = &self.atlas.sprites;
+        let sprites = &self.gui.atlas.sprites;
         let Some(back) = sprites.get("painting/back").copied() else {
             return;
         };

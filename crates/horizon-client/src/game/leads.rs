@@ -220,11 +220,11 @@ impl Game<'_> {
         };
         let name = self
             .res
-            .facts
+            .facts()
             .get(self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]));
         if !self
             .res
-            .items
+            .items()
             .block_tags
             .get("minecraft:fences")
             .is_some_and(|s| s.contains(&*name.name))
@@ -283,7 +283,7 @@ impl Game<'_> {
     }
     /// `LeashFeatureRenderer` for every lead and `LeashKnotRenderer` for the knots.
     pub(super) fn leash_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let white = atlas.font.white();
         let uv = [
             [white.u0, white.v1],

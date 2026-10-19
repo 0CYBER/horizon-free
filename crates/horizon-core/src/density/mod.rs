@@ -103,6 +103,13 @@ impl SamplerContext {
         self.scratch.push(buffer);
         result
     }
+    /// Start an independent evaluation, retaining only temporary scratch buffers.
+    /// Cached scalar/volume results and world bindings must not cross chunks or
+    /// graphs, whose cache IDs can refer to different functions.
+    pub fn reset(&mut self) {
+        self.caches = self.caches.as_ref().map(|_| Vec::new());
+        self.fields = WorldFields::default();
+    }
     /// Release retained storage between worlds or after unusually large work.
     pub fn clear_scratch(&mut self) {
         self.scratch.clear();

@@ -57,6 +57,19 @@ pub fn storage_len(bits: u8, entries: usize) -> usize {
     }
 }
 
+/// SimpleBitStorage's longs for `values` at `bits` each, a long at a time.
+fn pack<T>(values: &[T], bits: u8, id: impl Fn(&T) -> u64) -> Vec<i64> {
+    let per = 64 / bits as usize;
+    values
+        .chunks(per)
+        .map(|word| {
+            word.iter()
+                .enumerate()
+                .fold(0u64, |w, (k, v)| w | id(v) << (k * bits as usize)) as i64
+        })
+        .collect()
+}
+
 /// One PalettedContainer as sent.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Paletted {
@@ -160,12 +173,11 @@ impl Paletted {
                 data: Vec::new(),
             };
         }
-        let mut data = vec![0i64; storage_len(bits, values.len())];
-        let per = 64 / bits as usize;
-        for (i, (&v, &id)) in values.iter().zip(&ids).enumerate() {
-            let id = if has_palette { u64::from(id) } else { v as u64 };
-            data[i / per] |= (id << ((i % per) * bits as usize)) as i64;
-        }
+        let data = if has_palette {
+            pack(&ids, bits, |&id| u64::from(id))
+        } else {
+            pack(values, bits, |&v| v as u64)
+        };
         Self {
             bits,
             palette: if has_palette { palette } else { Vec::new() },

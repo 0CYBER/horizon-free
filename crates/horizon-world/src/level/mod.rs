@@ -301,6 +301,12 @@ pub trait LevelAccess {
     fn max_y(&self) -> i32 {
         320
     }
+    /// `getHeight(WORLD_SURFACE, x, z)`: one above the column's highest
+    /// block that isn't air. Only air lies above it, so scans for the other
+    /// heightmaps start there. The default, `max_y`, scans the whole column.
+    fn world_surface(&self, _x: i32, _z: i32) -> i32 {
+        self.max_y()
+    }
     /// Vanilla `level.random` (a `LegacyRandomSource`).
     fn random(&mut self) -> &mut LegacyRandom;
     fn game_time(&self) -> i64;

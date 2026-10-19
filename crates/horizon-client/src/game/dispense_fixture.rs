@@ -114,9 +114,9 @@ impl Game<'_> {
     }
 
     fn fixture_reset(&mut self, seed: i64) {
-        self.world = World::new(self.res.facts.air, seed);
+        self.world = World::new(self.res.facts().air, seed);
         // The oracle level is plains everywhere (bone meal's flowers, freezing).
-        let plains = u32::from(self.res.biomes.id("minecraft:plains"));
+        let plains = u32::from(self.res.biomes().id("minecraft:plains"));
         for cx in -2..=2 {
             for cz in -2..=2 {
                 let mut chunk = Chunk::empty(cx, cz);
@@ -198,7 +198,7 @@ impl Game<'_> {
             let state = BlockStateId(cell[3].as_u64().unwrap_or(0) as u32);
             self.world.set(p.0, p.1, p.2, state)?;
             before.insert(p, state.0);
-            if let Some(entity) = BlockEntity::for_block(&self.res.facts.get(state).name) {
+            if let Some(entity) = BlockEntity::for_block(&self.res.facts().get(state).name) {
                 self.world.block_entities.insert(p, entity);
             }
         }
@@ -284,7 +284,7 @@ impl Game<'_> {
         let state = self.world.block(origin.x, origin.y, origin.z);
         let mut used = Vec::new();
         if let Some(op) = case.get("remove") {
-            self.fixture_remove(origin, op)?;
+            used = self.fixture_remove(origin, op)?;
         } else if let Some(op) = case.get("use") {
             used = self.fixture_use(origin, op)?;
         } else if let Some(op) = case.get("use_item") {
@@ -339,7 +339,7 @@ impl Game<'_> {
         changed.dedup();
         for p in changed {
             let now = self.world.block(p.0, p.1, p.2).0;
-            if before.get(&p).copied().unwrap_or(self.res.facts.air.0) != now {
+            if before.get(&p).copied().unwrap_or(self.res.facts().air.0) != now {
                 out.push(format!("set {},{},{} {now}", p.0, p.1, p.2));
             }
         }
@@ -706,7 +706,7 @@ impl Game<'_> {
     /// lectern's book, or the items of a block entity Horizon keeps as saved.
     fn fixture_fill(&mut self, p: (i32, i32, i32), slot: usize, stack: Option<ItemStack>) {
         let jukebox =
-            &*self.res.facts.get(self.world.block(p.0, p.1, p.2)).name == "minecraft:jukebox";
+            &*self.res.facts().get(self.world.block(p.0, p.1, p.2)).name == "minecraft:jukebox";
         match self.world.block_entities.get_mut(&p) {
             Some(BlockEntity::Jukebox(j)) => j.record = stack,
             Some(BlockEntity::Lectern(l)) => l.book = stack,
@@ -735,7 +735,7 @@ impl Game<'_> {
         use horizon_world::nbt::Tag;
         let name = self
             .res
-            .facts
+            .facts()
             .get(self.world.block(p.0, p.1, p.2))
             .name
             .clone();
@@ -788,8 +788,9 @@ impl Game<'_> {
             other => *other = Tag::List(vec![item]),
         }
     }
-    /// `Level.setBlock`, `destroyBlock` or `removeBlock` on the case's block.
-    fn fixture_remove(&mut self, origin: BlockPos, op: &Value) -> Result<()> {
+    /// `Level.setBlock`, `destroyBlock` or `removeBlock` on the case's block, or
+    /// a player mining it (`fixture_mine`).
+    fn fixture_remove(&mut self, origin: BlockPos, op: &Value) -> Result<Vec<String>> {
         match op["op"].as_str().unwrap_or("") {
             "set" => {
                 let state = BlockStateId(op["state"].as_u64().unwrap_or(0) as u32);
@@ -803,9 +804,61 @@ impl Game<'_> {
             "remove" => {
                 self.with_level(|b, level, ticks| b.remove_block(level, ticks, origin, false));
             }
+            "mine" => return self.fixture_mine(origin, op),
             other => return Err(format!("unknown removal {other}").into()),
         }
-        self.process_level_events()
+        self.process_level_events()?;
+        Ok(Vec::new())
+    }
+
+    /// A survival player three blocks south of `pos` mines it holding the
+    /// case's item (`break_block`, which every player's mining goes through):
+    /// the statistics and the held stack, as `VanillaDispenserOracle.mine`
+    /// prints them.
+    fn fixture_mine(&mut self, pos: BlockPos, op: &Value) -> Result<Vec<String>> {
+        let stack = parse_stack(op["item"].as_str().unwrap_or("-"))?;
+        self.mode = GameMode::Survival;
+        self.creative = false;
+        self.player = Some(PlayerMotion::new(
+            self.motion,
+            horizon_core::geometry::Vec3::new(
+                f64::from(pos.x) + 0.5,
+                f64::from(pos.y) + 1.0,
+                f64::from(pos.z) + 3.5,
+            ),
+        )?);
+        self.yaw = 0.0;
+        self.pitch = 90.0;
+        self.keys.clear();
+        self.inventory[self.selected] = stack.clone();
+        self.offhand = None;
+        let state = self.world.block(pos.x, pos.y, pos.z);
+        let block = self.res.facts().get(state).name.clone();
+        let item = stack.as_ref().map(|s| s.item.clone());
+        let before = |game: &Self| {
+            let used = item.as_ref().map_or(0, |i| game.stats.get("used", i));
+            (used, game.stats.get("mined", &block))
+        };
+        let (used, mined) = before(self);
+        self.break_block([pos.x, pos.y, pos.z])?;
+        let (used_after, mined_after) = before(self);
+        let mut out = Vec::new();
+        if let Some(item) = &item
+            && used_after != used
+        {
+            out.push(format!("stat {item} minecraft:used {}", used_after - used));
+        }
+        if mined_after != mined {
+            out.push(format!(
+                "stat {block} minecraft:mined {}",
+                mined_after - mined
+            ));
+        }
+        out.push(format!(
+            "mine held {}",
+            canon_stack(self.inventory[self.selected].as_ref())
+        ));
+        Ok(out)
     }
 
     /// `EntityType.create` and `snapTo` for one target: no spawn finalization.
@@ -829,7 +882,7 @@ impl Game<'_> {
         }
         let t = self
             .res
-            .mob_types
+            .mob_types()
             .get(kind)
             .cloned()
             .ok_or_else(|| format!("no mob type {kind}"))?;

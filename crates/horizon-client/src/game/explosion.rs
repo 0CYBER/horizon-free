@@ -196,7 +196,7 @@ impl Game<'_> {
                             break;
                         }
                         let state = self.world.block(pos[0], pos[1], pos[2]);
-                        let f = self.res.facts.get(state);
+                        let f = self.res.facts().get(state);
                         let fluid = if f.fluid != Fluid::None {
                             100.0f32
                         } else {
@@ -206,7 +206,7 @@ impl Game<'_> {
                             Some((at, resistance)) if at == pos => {
                                 power -= (resistance + 0.3) * 0.3;
                             }
-                            _ if !self.res.facts.is_air(state) || f.fluid != Fluid::None => {
+                            _ if !self.res.facts().is_air(state) || f.fluid != Fluid::None => {
                                 power -= (f.explosion_resistance.max(fluid) + 0.3) * 0.3;
                             }
                             _ => {}
@@ -450,11 +450,11 @@ impl Game<'_> {
                 if self.world.random.next_int_bound(3).unwrap_or(1) == 0
                     && self
                         .res
-                        .facts
+                        .facts()
                         .is_air(self.world.block(pos[0], pos[1], pos[2]))
                     && self
                         .res
-                        .facts
+                        .facts()
                         .get(self.world.block(pos[0], pos[1] - 1, pos[2]))
                         .solid_render
                 {
@@ -475,7 +475,7 @@ impl Game<'_> {
         } else {
             targets.len()
         };
-        let (world, facts) = (&self.world, &self.res.facts);
+        let (world, facts) = (&self.world, self.res.facts());
         self.particles.explosion(center, radius, block_count, &|b| {
             facts.is_air(world.block(b[0], b[1], b[2]))
         });
@@ -490,10 +490,10 @@ impl Game<'_> {
         stacks: &mut Vec<([i32; 3], ItemStack)>,
     ) -> Result<()> {
         let state = self.world.block(pos[0], pos[1], pos[2]);
-        if self.res.facts.is_air(state) {
+        if self.res.facts().is_air(state) {
             return Ok(());
         }
-        let name = self.res.facts.get(state).name.clone();
+        let name = self.res.facts().get(state).name.clone();
         let is_tnt = &*name == "minecraft:tnt";
         // Block.onExplosionHit: the drops copy from the block entity, which
         // then spills its contents as the block turns to air.
@@ -510,7 +510,7 @@ impl Game<'_> {
             // tables' survives_explosion and explosion_decay draw from their
             // random sequence.
             let decay = (interaction == BlockInteraction::DestroyWithDecay).then_some(radius);
-            let drops = self.res.items.block_drops_exploded(
+            let drops = self.res.items().block_drops_exploded(
                 self.pack.assets.registry,
                 state,
                 None,

@@ -11,9 +11,7 @@ use horizon_client::{
     Result,
     lan::{LoginGate, NetConfig, NetLog, OnlineMode, hub::HubConfig},
     server::{
-        eula,
-        java_properties::now_millis,
-        profiles,
+        eula, profiles,
         properties::{GAME_MODES, ServerProperties, SystemEntropy},
         user_cache::UserCache,
         user_lists::{
@@ -84,18 +82,16 @@ fn log_from(thread: &str, level: &str, message: &str) {
         "ERROR" => ::log::Level::Error,
         _ => ::log::Level::Info,
     };
-    horizon_client::logging::write_only(file_level, message);
+    horizon_client::logging::write_as(thread, file_level, message);
     CAPTURE.with_borrow_mut(|lines| {
         if let Some(lines) = lines {
             lines.push(message.to_owned());
         }
     });
-    let secs = now_millis().div_euclid(1000).rem_euclid(86_400);
+    // Log4j's %d{HH:mm:ss}: the local time, as in logs/latest.log.
     println!(
-        "[{:02}:{:02}:{:02}] [{thread}/{level}]: {message}",
-        secs / 3600,
-        secs / 60 % 60,
-        secs % 60
+        "[{}] [{thread}/{level}]: {message}",
+        chrono::Local::now().format("%H:%M:%S")
     );
 }
 
@@ -340,7 +336,7 @@ impl Game<'_> {
             );
         }
         let settings = if flat {
-            let biomes = &self.res.biomes;
+            let biomes = self.res.biomes();
             let (settings, errors) = horizon_client::flatgen::settings_from_json(
                 &props.generator_settings,
                 |b| self.pack.assets.registry.default_state(b).is_some(),
@@ -431,6 +427,7 @@ const BROADCAST: &[&str] = &[
 impl Game<'_> {
     /// DedicatedServer.initServer and MinecraftServer.runServer.
     pub(super) fn run_dedicated(&mut self) -> Result<()> {
+        self.join_world_rest()?;
         let Setup {
             props,
             universe,
@@ -683,7 +680,7 @@ impl Game<'_> {
                 self.ticks = self.ticks.max(1);
             }
             // MinecraftServer.tickServer: while paused only the connections run.
-            self.tick_server(paused)?;
+            self.tick_server_timed(paused)?;
             if idle_timeout > 0 {
                 self.kick_idle(idle_timeout);
             }
@@ -829,6 +826,7 @@ impl Game<'_> {
         self.console_command(state, line);
         self.console_broadcast = None;
         if let Some(mut host) = self.lan.take() {
+            self.run_level_teleports(&mut host);
             self.send_admin_feedback(&mut host, None);
             self.lan = Some(host);
         }

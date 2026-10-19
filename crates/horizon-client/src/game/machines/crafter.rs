@@ -94,7 +94,7 @@ impl Game<'_> {
         // RecipeCache.get: the first crafting recipe that matches, assembled.
         let found = self
             .res
-            .recipes
+            .recipes()
             .find(&grid, 3)
             .map(|(name, result)| (name.to_owned(), result))
             .filter(|(_, result)| result.count > 0);
@@ -120,7 +120,7 @@ impl Game<'_> {
             horizon_world::level::flags::UPDATE_CLIENTS,
         );
         // The remainders come from the grid as it was before anything moved.
-        let remainders = self.res.recipes.remainders(&recipe, &grid, 3);
+        let remainders = self.res.recipes().remainders(&recipe, &grid, 3);
         self.crafter_eject(key, facing, result, &recipe);
         for rest in remainders.into_iter().flatten() {
             self.crafter_eject(key, facing, rest, &recipe);
@@ -202,7 +202,7 @@ impl Game<'_> {
     pub(in crate::game) fn crafter_result(&self) -> Option<ItemStack> {
         let key = self.container?;
         let c = self.crafter_at(key)?;
-        self.res.recipes.craft(&c.items, 3)
+        self.res.recipes().craft(&c.items, 3)
     }
     fn crafter_open(&self) -> bool {
         matches!(self.container_kind(), Some(BlockEntity::Crafter(_)))
@@ -243,7 +243,7 @@ impl Game<'_> {
         // The background goes first, then the labels, then the slot decorations.
         let (background, rest) = draws.split_at(2.min(draws.len()));
         self.paint_screen(batch, ox, oy, background, true);
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let grey = rgba(64, 64, 64, 255);
         let title = self.container_title(self.translate("container.crafter", "Crafter"));
         let tw = HudBatch::text_width(atlas, &title);

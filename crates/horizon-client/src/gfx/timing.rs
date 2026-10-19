@@ -147,7 +147,8 @@ impl GpuTimer {
                 continue;
             }
             if let Ok(data) = slot.buffer.slice(..).get_mapped_range() {
-                let stamps: &[u64] = bytemuck::cast_slice(&data);
+                // Read unaligned: the mapping isn't guaranteed to be 8-byte aligned.
+                let stamps: [u64; 2] = bytemuck::pod_read_unaligned(&data[..16]);
                 let ticks = stamps[1].saturating_sub(stamps[0]);
                 out.push((ticks as f64 * f64::from(self.period_ns) / 1e6) as f32);
             }

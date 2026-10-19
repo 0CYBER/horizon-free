@@ -31,10 +31,12 @@ fn main() -> Result<()> {
     };
     let (seed, size) = (flag("--seed", 12345), flag("--size", 8) as i32);
     let assets = Assets::load(&root)?;
+    let render = assets.reload(&root)?;
     let facts = BlockFacts::load(&root, assets.registry)?;
     let biomes = Biomes::load(&root)?;
     let tables = MeshTables::new(
         &assets,
+        &render,
         &facts,
         models::load_visibility(&root, assets.registry)?,
     )?;
@@ -132,6 +134,7 @@ fn main() -> Result<()> {
     let mut mesher = Mesher {
         nether_shading: false,
         assets: &assets,
+        render: &render,
         tables: &tables,
         biomes: &biomes,
         visibility: tables.visibility.clone(),

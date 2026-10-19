@@ -193,7 +193,7 @@ impl Game<'_> {
         };
         let raiders = self
             .res
-            .stations
+            .stations()
             .enchantments
             .entity_tags
             .get("minecraft:raiders")
@@ -201,7 +201,7 @@ impl Game<'_> {
             .unwrap_or_default();
         let frames = self
             .res
-            .items
+            .items()
             .block_tags
             .get("minecraft:conduit_effect_block")
             .cloned()
@@ -285,7 +285,7 @@ impl Game<'_> {
                 }
                 Ticker::Conduit => {
                     let world = &self.world;
-                    let facts = &self.res.facts;
+                    let facts = self.res.facts();
                     let registry = self.pack.assets.registry;
                     let is_water = |p: [i32; 3]| {
                         facts.get(world.block(p[0], p[1], p[2])).fluid
@@ -372,7 +372,7 @@ impl Game<'_> {
     /// pot's saved `sherds` (back, left, right, front).
     pub(super) fn block_anim(&self, pos: [i32; 3], partial: f32) -> BlockAnim {
         let state = self.world.block(pos[0], pos[1], pos[2]);
-        let sherds = if &*self.res.facts.get(state).name == "minecraft:decorated_pot" {
+        let sherds = if &*self.res.facts().get(state).name == "minecraft:decorated_pot" {
             let sherds = self.saved_tag(pos).and_then(|t| t.get("sherds"));
             ["back", "left", "right", "front"].map(|side| match sherds.and_then(|s| s.get(side)) {
                 // An item id, or the item stack the processed templates hold.

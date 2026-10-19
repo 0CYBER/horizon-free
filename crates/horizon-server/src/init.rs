@@ -205,6 +205,9 @@ pub fn run(dir: &Path, answers: Answers) -> Result<(), String> {
     match engine::program(&cfg, dir) {
         Ok(program) => {
             println!("Game: {}", program.display());
+            if let Err(e) = engine::check_starts(&program) {
+                println!("Warning: {e}");
+            }
             match engine::resources(&cfg, dir, Some(&program)) {
                 Ok(resources) => println!("Game files: {}", resources.display()),
                 Err(e) => println!("{e}"),

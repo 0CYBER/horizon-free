@@ -118,13 +118,14 @@ public final class VanillaGameLoopOracle {
 
     static final class StubPlayer extends LocalPlayer {
         boolean scoping;
+        boolean spectator;
 
         StubPlayer() {
             super(null, null, null, null, null, Input.EMPTY, false, null, null);
         }
 
         @Override public boolean isScoping() { return scoping; }
-        @Override public boolean isSpectator() { return false; }
+        @Override public boolean isSpectator() { return spectator; }
     }
 
     static Minecraft shell;
@@ -327,6 +328,12 @@ public final class VanillaGameLoopOracle {
         StubPlayer player = make(StubPlayer.class);
         Inventory inventory = make(Inventory.class);
         inventory.setSelectedSlot(c.get("slot").getAsInt());
+        player.spectator = c.has("spectator") && c.get("spectator").getAsBoolean();
+        field(net.minecraft.world.entity.player.Player.class, "abilities").set(player, new net.minecraft.world.entity.player.Abilities());
+        var hud = make(net.minecraft.client.gui.Hud.class);
+        field(net.minecraft.client.gui.Hud.class, "spectatorGui").set(hud,
+            make(net.minecraft.client.gui.components.spectator.SpectatorGui.class));
+        field(Gui.class, "hud").set(mc.gui, hud);
         field(net.minecraft.world.entity.player.Player.class, "inventory").set(player, inventory);
         mc.player = player;
         options.discreteMouseScroll().set(c.get("discrete").getAsBoolean());
@@ -336,7 +343,7 @@ public final class VanillaGameLoopOracle {
         for (var e : c.getAsJsonArray("ops")) {
             var op = e.getAsJsonArray();
             h.onScroll(1L, d(op.get(0)), d(op.get(1)));
-            out.println(inventory.getSelectedSlot());
+            out.println(inventory.getSelectedSlot() + (player.spectator ? " " + fb(player.getAbilities().getFlyingSpeed()) : ""));
         }
     }
 

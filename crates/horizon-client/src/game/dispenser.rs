@@ -328,18 +328,18 @@ impl Game<'_> {
         self.world.block(p.0, p.1, p.2)
     }
     fn dispenser_block_name(&self, p: Pos) -> std::sync::Arc<str> {
-        self.res.facts.get(self.block_at(p)).name.clone()
+        self.res.facts().get(self.block_at(p)).name.clone()
     }
     fn in_block_tag(&self, tag: &str, block: &str) -> bool {
         self.res
-            .items
+            .items()
             .block_tags
             .get(tag)
             .is_some_and(|s| s.contains(block))
     }
     fn water_at(&self, p: Pos) -> bool {
         matches!(
-            self.res.behaviours.fluid_kind(self.block_at(p)),
+            self.res.behaviours().fluid_kind(self.block_at(p)),
             FluidKind::Water | FluidKind::FlowingWater
         )
     }
@@ -520,7 +520,7 @@ impl Game<'_> {
         if let Some(entity) = self.world.block_entities.get_mut(&pos) {
             let max = self
                 .res
-                .items
+                .items()
                 .get(&rest.item)
                 .map_or(64, |i| i.max_stack)
                 .max(1);
@@ -555,7 +555,11 @@ impl Game<'_> {
     }
     /// `ItemStack.hurtAndBreak(amount)` without an entity.
     fn hurt_and_break(&mut self, mut stack: ItemStack, amount: u32) -> Option<ItemStack> {
-        let max = self.res.items.get(&stack.item).map_or(0, |i| i.max_damage);
+        let max = self
+            .res
+            .items()
+            .get(&stack.item)
+            .map_or(0, |i| i.max_damage);
         if max == 0 {
             return Some(stack);
         }
@@ -637,7 +641,7 @@ impl Game<'_> {
     ) -> Result<Dispensed> {
         let equippable = self
             .res
-            .items
+            .items()
             .get(&stack.item)
             .is_some_and(|i| i.equip_slot.is_some());
         if equippable {
@@ -649,7 +653,7 @@ impl Game<'_> {
         }
         let swallowable = self
             .res
-            .items
+            .items()
             .item_tags
             .get("minecraft:sulfur_cube_swallowable")
             .is_some_and(|t| t.contains(&*stack.item));
@@ -748,7 +752,7 @@ impl Game<'_> {
         } else {
             format!("minecraft:{kind}")
         };
-        let t = self.res.mob_types.get(&name)?.clone();
+        let t = self.res.mob_types().get(&name)?.clone();
         let y_off = if try_move_down {
             self.drop_offset(t.width, t.height, p)
         } else {
@@ -768,7 +772,7 @@ impl Game<'_> {
     /// `EquipmentDispenseItemBehavior.dispenseEquipment`: the first living
     /// entity in front that `canEquipWithDispenser` gets one of the item.
     fn dispense_equipment(&mut self, pos: Pos, facing: Direction, stack: &mut ItemStack) -> bool {
-        let Some(info) = self.res.items.get(&stack.item) else {
+        let Some(info) = self.res.items().get(&stack.item) else {
             return false;
         };
         let (Some(slot), true) = (
@@ -1078,7 +1082,7 @@ impl Game<'_> {
         let below = (front.0, front.1 - 1, front.2);
         let y_offset = if self.water_at(front) {
             1.0
-        } else if self.res.facts.is_air(self.block_at(front)) && self.water_at(below) {
+        } else if self.res.facts().is_air(self.block_at(front)) && self.water_at(below) {
             0.0
         } else {
             return (self.dispense_default(pos, facing, stack), CLICK);
@@ -1116,7 +1120,7 @@ impl Game<'_> {
         let y_offset = if let Some(rail) = self.rail(front.0, front.1, front.2) {
             if rail.shape.is_slope() { 0.6 } else { 0.1 }
         } else {
-            if !self.res.facts.is_air(self.block_at(front)) {
+            if !self.res.facts().is_air(self.block_at(front)) {
                 return (self.dispense_default(pos, facing, stack), CLICK);
             }
             let below = (front.0, front.1 - 1, front.2);
@@ -1389,7 +1393,7 @@ impl Game<'_> {
         stack: ItemStack,
     ) -> Result<Dispensed> {
         let target = offset(pos, facing);
-        let free = self.res.facts.is_air(self.block_at(target))
+        let free = self.res.facts().is_air(self.block_at(target))
             && target.1 >= horizon_client::chunk::MIN_Y + 2
             && self.ui.difficulty != 0
             && self.can_build_wither(target);
@@ -1443,7 +1447,7 @@ impl Game<'_> {
                 "minecraft:soul_sand" | "minecraft:soul_soil"
             )
         };
-        let air = |p: Pos| self.res.facts.is_air(self.block_at(p));
+        let air = |p: Pos| self.res.facts().is_air(self.block_at(p));
         for (ax, az) in [(1, 0), (0, 1)] {
             for col in 0..3 {
                 let left = (head.0 - ax * col, head.1, head.2 - az * col);
@@ -1466,7 +1470,7 @@ impl Game<'_> {
         stack: ItemStack,
     ) -> Result<Dispensed> {
         let target = offset(pos, facing);
-        if self.res.facts.is_air(self.block_at(target))
+        if self.res.facts().is_air(self.block_at(target))
             && self.can_spawn_golem([target.0, target.1, target.2])
         {
             if let Some(pumpkin) = self
@@ -1511,7 +1515,7 @@ impl Game<'_> {
         let front = offset(pos, facing);
         let below_empty = self
             .res
-            .facts
+            .facts()
             .is_air(self.block_at((front.0, front.1 - 1, front.2)));
         let clicked_face = if below_empty { facing } else { Direction::Up };
         let ctx = PlaceContext {
@@ -1539,7 +1543,7 @@ impl Game<'_> {
             return Ok((Some(stack), FAIL));
         };
         let target = (placed.x, placed.y, placed.z);
-        if let Some(entity) = BlockEntity::for_block(&self.res.facts.get(state).name) {
+        if let Some(entity) = BlockEntity::for_block(&self.res.facts().get(state).name) {
             self.world.block_entities.insert(target, entity);
             self.apply_placed_item([target.0, target.1, target.2], &stack, false);
         }
@@ -1689,14 +1693,14 @@ impl Game<'_> {
         table: &str,
         held: Option<&ItemStack>,
     ) -> Vec<ItemStack> {
-        match self.res.items.loot_sequence(parent) {
+        match self.res.items().loot_sequence(parent) {
             Some(sequence) => {
                 let random = self.rand_sequences.get(&sequence, self.level.seed);
-                self.res.items.loot_table_from(table, false, held, random)
+                self.res.items().loot_table_from(table, false, held, random)
             }
             None => self
                 .res
-                .items
+                .items()
                 .loot_table(table, false, held, &mut self.world.random),
         }
     }
@@ -1717,7 +1721,7 @@ impl Game<'_> {
     /// random draws) keeps the name, flags, persistence and age; the old one
     /// is discarded.
     pub(super) fn convert_mob(&mut self, index: usize, kind: &str) -> Option<u32> {
-        let t = self.res.mob_types.get(kind).cloned()?;
+        let t = self.res.mob_types().get(kind).cloned()?;
         let old = &self.mobs[index];
         self.next_entity += 1;
         let mut mob = Mob::new(self.next_entity, t, old.position, old.yaw);

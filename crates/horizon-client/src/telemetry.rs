@@ -3,6 +3,7 @@
 //! summary, in the outbox. It never sends anything itself: the launcher does, at its next start.
 //! Without the player's yes for that kind nothing is kept, and crash-reports/ stays local.
 use std::path::Path;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
@@ -18,12 +19,45 @@ const MIN_SECONDS: f32 = 60.0;
 const CRASH_DETAILS: [&str; 3] = ["Horizon Version", "Graphics Adapter", "Render Settings"];
 
 static STARTED: OnceLock<Instant> = OnceLock::new();
+/// When the menu bundle became ready, so the time to the title screen measures
+/// the menu and not the world bundle loaded behind it.
+static UI_READY_MS: AtomicU32 = AtomicU32::new(u32::MAX);
+static CORE_READY_MS: AtomicU32 = AtomicU32::new(u32::MAX);
+static REST_READY_MS: AtomicU32 = AtomicU32::new(u32::MAX);
 /// The GPU's name, driver and backend, once the renderer has its adapter.
 static GPU: Mutex<Option<(String, String, String)>> = Mutex::new(None);
 
 /// When the game started, for the time to the title screen. Call first thing in `main`.
 pub fn mark_start() {
     STARTED.get_or_init(Instant::now);
+}
+
+/// The menu bundle is ready: the title backdrop can draw. The first writer wins.
+pub fn mark_ui_ready() {
+    if let Some(started) = STARTED.get() {
+        let ms = started.elapsed().as_millis() as u32;
+        let _ = UI_READY_MS.compare_exchange(u32::MAX, ms, Ordering::Relaxed, Ordering::Relaxed);
+    }
+}
+
+pub fn mark_core_ready() {
+    mark_ready(&CORE_READY_MS);
+}
+
+pub fn mark_rest_ready() {
+    mark_ready(&REST_READY_MS);
+}
+
+fn mark_ready(mark: &AtomicU32) {
+    if let Some(started) = STARTED.get() {
+        let ms = started.elapsed().as_millis().min(u128::from(u32::MAX - 1)) as u32;
+        let _ = mark.compare_exchange(u32::MAX, ms, Ordering::Relaxed, Ordering::Relaxed);
+    }
+}
+
+fn readiness_ms(mark: &AtomicU32) -> Option<u32> {
+    let ms = mark.load(Ordering::Relaxed);
+    (ms != u32::MAX).then_some(ms)
 }
 
 pub fn set_gpu(name: &str, driver: String, backend: String) {
@@ -138,13 +172,23 @@ impl Session {
     pub fn title_shown(&mut self) {
         if !self.title_measured {
             self.title_measured = true;
-            self.to_title_ms = STARTED.get().map(|s| s.elapsed().as_millis() as u32);
+            let ui_ms = UI_READY_MS.load(Ordering::Relaxed);
+            self.to_title_ms = if ui_ms != u32::MAX {
+                Some(ui_ms)
+            } else {
+                STARTED.get().map(|s| s.elapsed().as_millis() as u32)
+            };
         }
     }
 
     /// A world starts loading.
     pub fn world_opening(&mut self) {
         self.opening.get_or_insert_with(Instant::now);
+    }
+
+    /// An entry queued during startup was cancelled before opening a world.
+    pub fn cancel_world_opening(&mut self) {
+        self.opening = None;
     }
 
     /// A frame drawn while playing (not in menus or loading).
@@ -175,6 +219,8 @@ impl Session {
             peak_ram_mb: peak_ram_mb(),
             to_title_ms: self.to_title_ms,
             to_world_ms: self.to_world_ms,
+            to_core_ms: self.to_title_ms.and_then(|_| readiness_ms(&CORE_READY_MS)),
+            to_rest_ms: self.to_title_ms.and_then(|_| readiness_ms(&REST_READY_MS)),
         })
     }
 
@@ -375,6 +421,20 @@ mod tests {
         let pending = outbox::pending(&home);
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].1.kind(), Kind::Crash);
+    }
+
+    #[test]
+    fn cancelled_startup_entry_does_not_time_menu_browsing() {
+        let mut session = Session::default();
+        session.world_opening();
+        assert!(session.opening.is_some());
+        session.cancel_world_opening();
+        assert!(session.opening.is_none());
+        session.frame(16.0);
+        assert!(session.to_world_ms.is_none());
+        session.world_opening();
+        session.frame(16.0);
+        assert!(session.to_world_ms.is_some());
     }
 
     #[test]

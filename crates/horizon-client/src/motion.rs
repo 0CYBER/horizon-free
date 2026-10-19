@@ -224,6 +224,8 @@ pub struct PlayerMotion {
     /// Spectator mode: no physics, always flying (`Player.tick`).
     pub spectator: bool,
     pub flying: bool,
+    /// Client-side `Abilities.flyingSpeed`, adjusted by the spectator scroll wheel.
+    pub flying_speed: f32,
     /// The jump key last tick (LocalPlayer.aiStep's wasJumping).
     pub was_jumping: bool,
     /// `LocalPlayer.autoJumpEnabled` (the Auto-Jump option) and
@@ -387,6 +389,7 @@ impl PlayerMotion {
             invulnerable: false,
             spectator: false,
             flying: false,
+            flying_speed: 0.05,
             was_jumping: false,
             auto_jump_enabled: false,
             auto_jump_time: 0,
@@ -649,7 +652,8 @@ impl MotionWorld<'_, '_, '_> {
             entities: self.entities,
         }
     }
-    pub(crate) fn no_player_collision(&mut self, bounds: Aabb) -> Result<bool> {
+    /// `Level.noCollision(player, bounds)`: blocks and the host's entity boxes.
+    pub fn no_player_collision(&mut self, bounds: Aabb) -> Result<bool> {
         let context = self.context();
         Ok(world_movement::no_world_collision(
             &mut self.movement_collisions(),
@@ -788,7 +792,7 @@ impl MotionWorld<'_, '_, '_> {
             // Vertical flight: jump up, shift down, three times the flying speed.
             let ya = i32::from(jumping) - i32::from(self.player.shift_key_down);
             if ya != 0 {
-                self.player.velocity.y += f64::from(ya as f32 * 0.05 * 3.0);
+                self.player.velocity.y += f64::from(ya as f32 * self.player.flying_speed * 3.0);
             }
         }
         self.dry_tick(TickInput::PreparedLocal {
@@ -1862,8 +1866,8 @@ impl LivingAirWorld for MotionWorld<'_, '_, '_> {
     }
     fn flying_speed(&mut self) -> Result<f32> {
         if self.player.flying {
-            // Abilities.flyingSpeed 0.05, doubled when sprinting.
-            return Ok(if self.player.sprinting { 0.1 } else { 0.05 });
+            // Player.getFlyingSpeed: abilities speed, doubled when sprinting.
+            return Ok(self.player.flying_speed * if self.player.sprinting { 2.0 } else { 1.0 });
         }
         Ok(if self.player.sprinting {
             0.025999999
@@ -2058,9 +2062,10 @@ mod tests {
             return;
         }
         let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let binding = crate::collisions::load(&root, assets.registry).unwrap();
         let resources = MotionResources::load(&root, &assets).unwrap();
-        let mut scene = World::test_scene(&assets, 1).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 1).unwrap();
         let entities = [Aabb::new(
             Vec3::new(10.0, 80.0, 10.0),
             Vec3::new(14.0, 84.0, 14.0),
@@ -2122,16 +2127,58 @@ mod tests {
     }
 
     #[test]
+    fn spectator_scroll_speed_controls_horizontal_and_vertical_flight() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let run = |steps| {
+            let mut scene = World::test_scene(&assets, &render, 2).unwrap();
+            let start = Vec3::new(20.5, 12.0, 20.5);
+            let mut player = PlayerMotion::new(&resources, start).unwrap();
+            player.spectator = true;
+            player.flying_speed = crate::mouse::spectator_flying_speed(player.flying_speed, steps);
+            MotionWorld {
+                entities: &[],
+                player: &mut player,
+                scene: &mut scene,
+                assets: &assets,
+                collision_binding: &binding,
+                resources: &resources,
+            }
+            .controlled_simulation_tick(crate::sprint::Keys {
+                forward: true,
+                jump: true,
+                ..Default::default()
+            })
+            .unwrap();
+            player.position.subtract(start)
+        };
+        let stopped = run(-100);
+        assert_eq!(stopped, Vec3::ZERO);
+        let normal = run(0);
+        let fast = run(10);
+        assert!(normal.y > 0.0 && normal.z > 0.0);
+        assert!((fast.y - normal.y * 2.0).abs() < 1e-6);
+        assert!((fast.z - normal.z * 2.0).abs() < 1e-6);
+    }
+
+    #[test]
     fn resident_spectator_flight_ignores_solid_and_climbable_blocks() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
         if !root.join("movement-properties.nbt").exists() {
             return;
         }
         let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let binding = crate::collisions::load(&root, assets.registry).unwrap();
         let resources = MotionResources::load(&root, &assets).unwrap();
         let run = |name: &str, spectator: bool| {
-            let mut scene = World::test_scene(&assets, 2).unwrap();
+            let mut scene = World::test_scene(&assets, &render, 2).unwrap();
             let state = assets.registry.default_state(name).unwrap();
             for x in 19..=23 {
                 for y in 10..=17 {
@@ -2367,10 +2414,11 @@ mod tests {
             return;
         }
         let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let binding = crate::collisions::load(&root, assets.registry).unwrap();
         let resources = MotionResources::load(&root, &assets).unwrap();
         for wet in [false, true] {
-            let mut scene = World::test_scene(&assets, 2).unwrap();
+            let mut scene = World::test_scene(&assets, &render, 2).unwrap();
             if wet {
                 let water = assets.registry.default_state("minecraft:water").unwrap();
                 for x in 19..=21 {
@@ -2413,9 +2461,10 @@ mod tests {
             return;
         }
         let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let binding = crate::collisions::load(&root, assets.registry).unwrap();
         let resources = MotionResources::load(&root, &assets).unwrap();
-        let mut scene = World::test_scene(&assets, 3).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 3).unwrap();
         let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
         let water = assets.registry.default_state("minecraft:water").unwrap();
         for x in 19..=21 {
@@ -2667,9 +2716,10 @@ mod tests {
             return;
         }
         let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let binding = crate::collisions::load(&root, assets.registry).unwrap();
         let resources = MotionResources::load(&root, &assets).unwrap();
-        let mut scene = World::test_scene(&assets, 3).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 3).unwrap();
         let water = assets.registry.default_state("minecraft:water").unwrap();
         for y in 4..=6 {
             scene.set(20, y, 20, water).unwrap();
@@ -2739,10 +2789,11 @@ mod tests {
             return;
         }
         let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let binding = crate::collisions::load(&root, assets.registry).unwrap();
         let resources = MotionResources::load(&root, &assets).unwrap();
         for name in ["minecraft:lava", "minecraft:water"] {
-            let mut scene = World::test_scene(&assets, 3).unwrap();
+            let mut scene = World::test_scene(&assets, &render, 3).unwrap();
             let fluid = assets.registry.default_state(name).unwrap();
             scene.set(20, 4, 20, fluid).unwrap();
             let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
@@ -2790,9 +2841,10 @@ mod tests {
             return;
         }
         let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let binding = crate::collisions::load(&root, assets.registry).unwrap();
         let resources = MotionResources::load(&root, &assets).unwrap();
-        let mut scene = World::test_scene(&assets, 3).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 3).unwrap();
         let water = assets.registry.default_state("minecraft:water").unwrap();
         scene.set(20, 4, 20, water).unwrap();
         scene.set(20, 5, 20, water).unwrap();
@@ -2859,10 +2911,11 @@ mod tests {
             return;
         }
         let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let binding = crate::collisions::load(&root, assets.registry).unwrap();
         let resources = MotionResources::load(&root, &assets).unwrap();
         for (water_level, lava_level, ground_jump) in [(0, 6, true), (6, 0, false)] {
-            let mut scene = World::test_scene(&assets, 3).unwrap();
+            let mut scene = World::test_scene(&assets, &render, 3).unwrap();
             for (name, level, x) in [
                 ("minecraft:water", water_level, 20),
                 ("minecraft:lava", lava_level, 21),
@@ -2907,7 +2960,8 @@ mod tests {
             return;
         }
         let assets = Assets::load(&root).unwrap();
-        let mut scene = World::test_scene(&assets, 3).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 3).unwrap();
         let binding = crate::collisions::load(&root, assets.registry).unwrap();
         let resources = MotionResources::load(&root, &assets).unwrap();
         let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();

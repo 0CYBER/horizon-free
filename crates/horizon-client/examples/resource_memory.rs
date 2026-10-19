@@ -94,12 +94,13 @@ fn main() -> Result<()> {
     drop(registry);
     step("registry dropped");
     let assets = Assets::load(&root)?;
+    let render = assets.reload(&root)?;
     step("assets");
     println!(
         "  sprites: {} layers of {}px, {:.0} MB of pixels",
-        assets.texture_layers,
-        assets.sprite_size,
-        assets.pixels.len() as f64 / MB
+        render.texture_layers,
+        render.sprite_size,
+        render.pixels.len() as f64 / MB
     );
     // The game decodes gameplay facts once for both tables (BlockFacts::load_pair).
     let (facts, behaviours) = BlockFacts::load_pair(&root, assets.registry)?;
@@ -114,6 +115,7 @@ fn main() -> Result<()> {
     step("light tables");
     let tables = MeshTables::new(
         &assets,
+        &render,
         &facts,
         models::load_visibility(&root, assets.registry)?,
     )?;

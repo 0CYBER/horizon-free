@@ -89,17 +89,17 @@ impl Game<'_> {
             if is_locked {
                 locked = true;
                 if scaling || locking {
-                    batch.sprite(&self.atlas, error, ox + 35.0, oy + 31.0);
+                    batch.sprite(&self.gui.atlas, error, ox + 35.0, oy + 31.0);
                 }
             }
             if scaling && scale >= 4 {
                 locked = true;
-                batch.sprite(&self.atlas, error, ox + 35.0, oy + 31.0);
+                batch.sprite(&self.gui.atlas, error, ox + 35.0, oy + 31.0);
             }
         }
         let sprite = |batch: &mut HudBatch, game: &Self, name: &str, x: f32, y: f32| {
             batch.sprite(
-                &game.atlas,
+                &game.gui.atlas,
                 &format!("gui/sprites/container/cartography_table/{name}"),
                 ox + x,
                 oy + y,

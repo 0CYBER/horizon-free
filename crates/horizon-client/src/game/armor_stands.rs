@@ -111,7 +111,12 @@ impl Game<'_> {
             let Some(item) = item else {
                 continue;
             };
-            let Some(asset) = self.res.items.get(item).and_then(|i| i.equip_asset.clone()) else {
+            let Some(asset) = self
+                .res
+                .items()
+                .get(item)
+                .and_then(|i| i.equip_asset.clone())
+            else {
                 continue;
             };
             let kind = if layer == "leggings" {
@@ -124,7 +129,7 @@ impl Game<'_> {
                 continue;
             };
             let (Some(r), Some(part)) = (
-                self.atlas.sprites.get(texture.as_str()),
+                self.gui.atlas.sprites.get(texture.as_str()),
                 assets.player.get(layer),
             ) else {
                 continue;
@@ -144,7 +149,7 @@ impl Game<'_> {
         // BlockPlaceContext: a replaceable clicked block is replaced.
         let clicked = self
             .res
-            .facts
+            .facts()
             .get(self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]));
         let pos = if clicked.replaceable {
             hit.pos
@@ -230,7 +235,7 @@ impl Game<'_> {
     fn equipment_slot(&self, stack: &ItemStack) -> usize {
         match self
             .res
-            .items
+            .items()
             .get(&stack.item)
             .and_then(|i| i.equip_slot.as_deref())
         {
@@ -377,9 +382,14 @@ impl Game<'_> {
             subject: None,
         };
         let mut dead = Vec::new();
+        // ServerLevel.tick: only entities in entity-ticking chunks tick.
+        let ticking = self.entity_ticking_area();
         for (i, a) in self.armor_stands.iter_mut().enumerate() {
+            if !ticking(a.position.x.floor() as i32, a.position.z.floor() as i32) {
+                continue;
+            }
             a.tick(&mut scene);
-            if !a.environment_tick(&self.world, &self.res.facts, self.pack.assets.registry) {
+            if !a.environment_tick(&self.world, self.res.facts(), self.pack.assets.registry) {
                 dead.push(i);
             }
         }
@@ -403,7 +413,7 @@ impl Game<'_> {
         out: &mut Vec<Vertex>,
     ) {
         let assets = &self.armor_stand_assets;
-        let sprites = &self.atlas.sprites;
+        let sprites = &self.gui.atlas.sprites;
         let uv_of = |name: &str| sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         let Some(wood) = uv_of("entity/armorstand/armorstand") else {
             return;
@@ -516,7 +526,7 @@ impl Game<'_> {
                 };
                 let Some(asset) = self
                     .res
-                    .items
+                    .items()
                     .get(&stack.item)
                     .and_then(|i| i.equip_asset.clone())
                 else {
@@ -568,7 +578,7 @@ impl Game<'_> {
     /// `Equippable.swapWithEquipmentSlot`: right-clicking armor swaps it into
     /// its slot (the worn piece comes back to the hand).
     pub(super) fn equip_from_hand(&mut self, stack: &ItemStack) -> bool {
-        let Some(info) = self.res.items.get(&stack.item) else {
+        let Some(info) = self.res.items().get(&stack.item) else {
             return false;
         };
         let index = match info.equip_slot.as_deref() {
@@ -699,7 +709,7 @@ impl Game<'_> {
                 &serde_json::Value::Null,
                 false,
                 pose,
-                &self.atlas.sprites,
+                &self.gui.atlas.sprites,
                 &self.item_host(),
                 &mut sink,
             );
@@ -709,7 +719,7 @@ impl Game<'_> {
         if let Some(stack) = &a.equipment[5]
             && self
                 .res
-                .items
+                .items()
                 .get(&stack.item)
                 .is_none_or(|i| i.equip_asset.is_none())
             && let Some(head) = part_matrix(model, base, poses, "head", 0.0)

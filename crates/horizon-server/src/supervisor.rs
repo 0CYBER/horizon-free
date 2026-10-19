@@ -8,7 +8,6 @@ use crate::{
     config::Config,
     engine, signals,
 };
-use horizon_server_files::java_properties::now_millis;
 use serde_json::json;
 use std::{
     fs::File,
@@ -29,15 +28,12 @@ const MAX_BACKOFF: Duration = Duration::from_secs(300);
 /// How long `stop` may take before the game is killed.
 const STOP_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// A line from the supervisor, in the game's log format (`[HH:mm:ss] [thread/LEVEL]: message`, UTC), on
-/// stdout and in the log the API serves.
+/// A line from the supervisor, in the game's log format (`[HH:mm:ss] [thread/LEVEL]: message`, local time
+/// as the game's own lines), on stdout and in the log the API serves.
 fn note(shared: &Shared, level: &str, message: &str) {
-    let secs = now_millis().div_euclid(1000).rem_euclid(86_400);
     let line = format!(
-        "[{:02}:{:02}:{:02}] [Supervisor/{level}]: {message}",
-        secs / 3600,
-        secs / 60 % 60,
-        secs % 60
+        "[{}] [Supervisor/{level}]: {message}",
+        chrono::Local::now().format("%H:%M:%S")
     );
     println!("{line}");
     shared.log.lock().unwrap().push(line);
@@ -76,6 +72,8 @@ pub fn run(dir: &Path) -> Result<(), String> {
     let config = Config::load(dir)?;
     let program = engine::program(&config, dir)?;
     let resources = engine::resources(&config, dir, Some(&program))?;
+    // A game the system can't load would only crash again at every restart: say why at once.
+    engine::check_starts(&program)?;
     let _lock = lock(dir)?;
     let shared = Shared::new(dir);
     let _endpoint = api::start(shared.clone())?;

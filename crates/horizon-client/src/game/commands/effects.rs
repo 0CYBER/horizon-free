@@ -59,7 +59,7 @@ impl Game<'_> {
         if ctx.get("targets").is_some() {
             self.entities(ctx, "targets", false)
         } else {
-            Ok(vec![Target::Player])
+            Ok(vec![self.implied_player()])
         }
     }
     /// `EffectCommands.giveEffect`.
@@ -83,10 +83,11 @@ impl Game<'_> {
         let mut tracker = Tracker::default();
         for t in self.living_targets(ctx)? {
             let changed = match t {
-                Target::Player => {
+                Target::Player | Target::Guest(_) => {
                     let mut instance = EffectInstance::new(effect.id, duration, amplifier);
                     instance.visible = particles;
-                    self.add_player_effect(instance)
+                    self.for_player(t, |g| g.add_player_effect(instance))
+                        .unwrap_or(false)
                 }
                 Target::Mob(id) => match self.mobs.iter_mut().find(|m| m.id == id) {
                     Some(m) => {
@@ -131,18 +132,22 @@ impl Game<'_> {
         let mut tracker = Tracker::default();
         for t in self.living_targets(ctx)? {
             let changed = match (t, effect) {
-                (Target::Player, None) => {
-                    let any = !self.potions.effects.list.is_empty();
-                    self.potions.effects.clear();
-                    self.apply_effect_status();
-                    any
-                }
-                (Target::Player, Some(e)) => {
-                    let before = self.potions.effects.list.len();
-                    self.potions.effects.list.retain(|x| x.id != e.id);
-                    self.apply_effect_status();
-                    self.potions.effects.list.len() != before
-                }
+                (Target::Player | Target::Guest(_), None) => self
+                    .for_player(t, |g| {
+                        let any = !g.potions.effects.list.is_empty();
+                        g.potions.effects.clear();
+                        g.apply_effect_status();
+                        any
+                    })
+                    .unwrap_or(false),
+                (Target::Player | Target::Guest(_), Some(e)) => self
+                    .for_player(t, |g| {
+                        let before = g.potions.effects.list.len();
+                        g.potions.effects.list.retain(|x| x.id != e.id);
+                        g.apply_effect_status();
+                        g.potions.effects.list.len() != before
+                    })
+                    .unwrap_or(false),
                 (Target::Mob(id), e) => match self.mobs.iter_mut().find(|m| m.id == id) {
                     Some(m) => {
                         let before = m.extra.effects.len();
@@ -187,7 +192,7 @@ impl Game<'_> {
             return Ok(0);
         };
         let level = Self::int(ctx, "level").unwrap_or(1);
-        let enchantments = &self.res.stations.enchantments;
+        let enchantments = &self.res.stations().enchantments;
         let Some(def) = enchantments.get(&id) else {
             return Err(err(
                 "argument.resource.not_found",
@@ -213,8 +218,8 @@ impl Game<'_> {
                         }
                         continue;
                     };
-                    let e = &self.res.stations.enchantments;
-                    let compatible = e.can_enchant(&self.res.items, &id, &stack.item)
+                    let e = &self.res.stations().enchantments;
+                    let compatible = e.can_enchant(self.res.items(), &id, &stack.item)
                         && stack
                             .crafting_enchantments()
                             .iter()
@@ -265,7 +270,7 @@ impl Game<'_> {
         }
         let (name, curse) = self
             .res
-            .stations
+            .stations()
             .enchantments
             .full_name(&id, level.max(0) as u32);
         let style = Style {

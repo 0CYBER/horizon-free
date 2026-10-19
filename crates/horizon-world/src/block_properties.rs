@@ -79,15 +79,18 @@ impl BlockProperty {
 #[derive(Clone, Debug)]
 pub struct BoundBlockProperty {
     states: Arc<[u8]>,
-    property: BlockProperty,
+    mask: u8,
 }
 impl BoundBlockProperty {
     pub fn contains(&self, id: BlockStateId) -> bool {
         self.states
             .get(id.0 as usize)
-            .is_some_and(|flags| flags & self.property.mask() != 0)
+            .is_some_and(|flags| flags & self.mask != 0)
     }
 }
+/// The per-state flag of the block definition's `canOcclude`, past the
+/// [`BlockProperty`] bits.
+const CAN_OCCLUDE: u8 = 16;
 
 /// Immutable FULL face-occlusion results, independent of support/collision.
 #[derive(Clone, Debug)]
@@ -195,7 +198,12 @@ impl<'r> BlockPropertiesRegistry<'r> {
                                     .ok_or_else(|| invalid("missing block occlusion shape"))?,
                             )
                             .map_err(|error| invalid(error.to_string()))?,
-                    ) << 3),
+                    ) << 3)
+                    | if properties.can_occlude {
+                        CAN_OCCLUDE
+                    } else {
+                        0
+                    },
             );
         }
         Ok(Self {
@@ -225,7 +233,14 @@ impl<'r> BlockPropertiesRegistry<'r> {
     pub fn bind(&self, property: BlockProperty) -> BoundBlockProperty {
         BoundBlockProperty {
             states: Arc::clone(&self.states),
-            property,
+            mask: property.mask(),
+        }
+    }
+    /// The states whose block definition can occlude (BlockState.canOcclude).
+    pub fn bind_can_occlude(&self) -> BoundBlockProperty {
+        BoundBlockProperty {
+            states: Arc::clone(&self.states),
+            mask: CAN_OCCLUDE,
         }
     }
 }

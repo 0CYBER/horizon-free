@@ -6,7 +6,7 @@ use horizon_client::{
     mobs::{Species, leash::Holder, spawning, trader},
     save::{read_dat, write_dat},
 };
-use horizon_core::random::RandomSource;
+use horizon_core::{geometry::Vec3, random::RandomSource};
 use horizon_world::nbt::Tag;
 
 const TICK_DELAY: i32 = 1200;
@@ -83,10 +83,7 @@ impl Game<'_> {
     }
     /// `WanderingTraderSpawner.tick`.
     pub(super) fn tick_wandering_trader(&mut self) {
-        if self.dim != Dim::Overworld
-            || self.player.is_none()
-            || !self.ui.rules.bool("spawn_wandering_traders")
-        {
+        if self.dim != Dim::Overworld || !self.ui.rules.bool("spawn_wandering_traders") {
             return;
         }
         self.load_trader_data();
@@ -110,9 +107,23 @@ impl Game<'_> {
     }
     /// `WanderingTraderSpawner.spawn`.
     fn spawn_trader(&mut self) -> bool {
-        let Some(p) = self.player.as_ref().map(|p| p.position) else {
+        // ServerLevel.getRandomPlayer: one of the living players, drawn
+        // from the level random.
+        let alive: Vec<Vec3> = self
+            .level_players()
+            .into_iter()
+            .filter(|p| p.alive)
+            .map(|p| p.position)
+            .collect();
+        if alive.is_empty() {
             return true;
-        };
+        }
+        let pick = self
+            .world
+            .random
+            .next_int_bound(alive.len() as i32)
+            .unwrap_or(0);
+        let p = alive[pick as usize];
         if self.world.random.next_int_bound(10).unwrap_or(1) != 0 {
             return false;
         }
@@ -126,14 +137,14 @@ impl Game<'_> {
         }
         let biome = self.world.chunks.get(&(pos[0] >> 4, pos[2] >> 4)).map(|c| {
             self.res
-                .biomes
+                .biomes()
                 .get(c.biome(pos[0], pos[1], pos[2]))
                 .name
                 .clone()
         });
         if biome.is_some_and(|b| {
             self.res
-                .mob_data
+                .mob_data()
                 .biome_has("minecraft:without_wandering_trader_spawns", &b)
         }) {
             return false;
@@ -214,7 +225,7 @@ impl Game<'_> {
                 (0..=1).all(|dz| {
                     !self
                         .res
-                        .facts
+                        .facts()
                         .get(self.world.block(pos[0] + dx, pos[1] + dy, pos[2] + dz))
                         .full_collision
                 })
@@ -230,7 +241,7 @@ impl Game<'_> {
                     continue;
                 }
                 for y in (from[1] - range).max(horizon_client::chunk::MIN_Y)..=from[1] + range {
-                    if &*self.res.facts.get(self.world.block(x, y, z)).name != "minecraft:bell" {
+                    if &*self.res.facts().get(self.world.block(x, y, z)).name != "minecraft:bell" {
                         continue;
                     }
                     let d = (x - from[0]).pow(2) + (y - from[1]).pow(2) + (z - from[2]).pow(2);

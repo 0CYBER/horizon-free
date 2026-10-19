@@ -1,0 +1,27 @@
+name: cancel-on-close
+# A closed or merged pull request's queued and running checks free the runners at once.
+# pull_request_target so the token can cancel runs of pull requests from forks too;
+# it checks out nothing and runs no code from the pull request.
+on:
+  pull_request_target:
+    types: [closed]
+permissions:
+  actions: write
+jobs:
+  cancel:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cancel the pull request's unfinished runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          for status in queued in_progress waiting pending requested; do
+            gh run list -R "$REPO" --branch "$BRANCH" --status "$status" --limit 100 \
+              --json databaseId,event,headSha \
+              -q ".[] | select(.event == \"pull_request\" and .headSha == \"$SHA\") | .databaseId"
+          done | sort -u | while read -r id; do
+            gh run cancel -R "$REPO" "$id" || true
+          done

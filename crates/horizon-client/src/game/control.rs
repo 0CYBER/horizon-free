@@ -54,12 +54,23 @@ pub struct Flight {
     /// Reply with every frame time too (`fly ... PITCH raw`).
     raw: bool,
     reply: Sender<String>,
+    /// The world's smoothed tick time each frame (the F3 server line): the
+    /// server thread's when single player runs on one.
+    tick_ms: Vec<f32>,
 }
 
 impl Game<'_> {
     /// Move the camera along the running flight; reply when it ends.
     pub(super) fn advance_flight(&mut self) {
-        let Some(flight) = &self.flight else { return };
+        let tick_ms = self
+            .integrated
+            .as_ref()
+            .map_or(self.debug_charts.smoothed_tick_ms, |s| s.smoothed_tick_ms());
+        let Some(flight) = self.flight.as_mut() else {
+            return;
+        };
+        flight.tick_ms.push(tick_ms);
+        let flight = &*flight;
         let t = (flight.started.elapsed().as_secs_f64() / flight.seconds).min(1.0);
         let (a, b) = (flight.from, flight.to);
         let d = [b.x - a.x, b.y - a.y, b.z - a.z];
@@ -79,6 +90,9 @@ impl Game<'_> {
             && let Some(flight) = self.flight.take()
         {
             let mut summary = self.frame_stats.summary();
+            let n = flight.tick_ms.len().max(1) as f32;
+            summary["tick_ms"] = (flight.tick_ms.iter().sum::<f32>() / n).into();
+            summary["tick_ms_max"] = flight.tick_ms.iter().copied().fold(0.0, f32::max).into();
             if flight.raw {
                 summary["frame_ms"] = self.frame_stats.frame_millis().into();
                 summary["cpu_ms"] = self.frame_stats.cpu_millis().into();
@@ -182,6 +196,16 @@ impl Game<'_> {
                     Some(other) => return Err(format!("unknown section draw mode {other}").into()),
                 }
                 Ok(Some(json!({ "ok": true, "flat": r.flat_draws() })))
+            }
+            "section-cull" => {
+                let r = self.renderer.as_mut().ok_or("no renderer")?;
+                match words.get(1).copied() {
+                    None => {}
+                    Some("on") => r.set_section_cull(true)?,
+                    Some("off") => r.set_section_cull(false)?,
+                    Some(other) => return Err(format!("unknown section cull mode {other}").into()),
+                }
+                Ok(Some(json!({ "ok": true, "cull": r.section_cull() })))
             }
             "sculk" => Ok(Some(self.sculk_command(&words)?)),
             "status" => Ok(Some(self.control_status())),
@@ -345,10 +369,18 @@ impl Game<'_> {
                 };
                 let info = self
                     .res
-                    .items
+                    .items()
                     .get(&item)
                     .ok_or_else(|| format!("unknown item {item}"))?;
                 let count: u32 = words.get(2).map_or(Ok(1), |c| c.parse())?;
+                // Single player's inventory is its server thread's player's.
+                if let Some(server) = &self.integrated {
+                    let command = format!("give @s {item} {count}");
+                    server
+                        .call(move |g| g.owner_console_command(&command))
+                        .ok_or("the integrated server stopped")?;
+                    return Ok(Some(json!({ "ok": true, "given": count })));
+                }
                 let max = info.max_stack;
                 let mut given = 0;
                 // Stop once the inventory is full.
@@ -379,7 +411,14 @@ impl Game<'_> {
                 ok()
             }
             "time" => {
-                self.world.day_time = arg(1)?.parse()?;
+                let time: i64 = arg(1)?.parse()?;
+                self.world.day_time = time;
+                // Single player's clock is its server thread's.
+                if let Some(server) = &self.integrated {
+                    server
+                        .call(move |g| g.world.day_time = time)
+                        .ok_or("the integrated server stopped")?;
+                }
                 ok()
             }
             "summon" => {
@@ -437,7 +476,7 @@ impl Game<'_> {
                 match self.screen {
                     Screen::Chat => self.chat_type(text),
                     Screen::CommandBlock => self.command_block_type(text),
-                    Screen::Options => self.ui.options.type_text(&self.atlas, text),
+                    Screen::Options => self.ui.options.type_text(&self.gui.atlas, text),
                     // The port, or the game rules' search and number boxes.
                     Screen::WorldOptions if text == "\\b" => self.world_options_text(None),
                     Screen::WorldOptions => self.world_options_text(Some(text)),
@@ -527,6 +566,7 @@ impl Game<'_> {
                     seconds: n(7)?.max(0.1),
                     raw: words.get(9) == Some(&"raw"),
                     reply: reply.clone(),
+                    tick_ms: Vec::new(),
                 });
                 Ok(None)
             }
@@ -661,7 +701,7 @@ impl Game<'_> {
         });
         let target = self.pick().map(|hit| {
             let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-            json!({ "pos": hit.pos, "block": &*self.res.facts.get(state).name })
+            json!({ "pos": hit.pos, "block": &*self.res.facts().get(state).name })
         });
         let renderer = self.renderer.as_ref().map(|r| {
             let [arena_bytes, section_vertex_bytes] = r.section_vertex_bytes();
@@ -684,6 +724,7 @@ impl Game<'_> {
                 "drawn_sections": r.drawn_sections,
                 "section_draws": r.section_draws,
                 "section_draw_calls": r.section_draw_calls,
+                "culled_sections": r.culled_sections(),
                 "uploaded_bytes": r.uploaded_bytes,
                 "resident_sections": r.resident_sections(),
                 "arena_bytes": arena_bytes,

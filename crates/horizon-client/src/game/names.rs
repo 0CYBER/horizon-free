@@ -218,7 +218,7 @@ impl Game<'_> {
         let forward = glam::DVec3::from_array(view_vector(self.yaw, self.pitch));
         let right = forward.cross(glam::DVec3::Y).normalize_or_zero();
         let up = right.cross(forward).normalize_or_zero();
-        let white = self.atlas.font.white();
+        let white = self.gui.atlas.font.white();
         let away = forward.as_vec3() * 0.002;
         for (text, lift) in lines {
             let o = (o + glam::DVec3::new(0.0, *lift, 0.0)).as_vec3();
@@ -240,7 +240,7 @@ impl Game<'_> {
                 .collect();
             let width: f32 = chars
                 .iter()
-                .map(|(c, _)| self.atlas.glyph(*c).map_or(6.0, |g| g.1))
+                .map(|(c, _)| self.gui.atlas.glyph(*c).map_or(6.0, |g| g.1))
                 .sum();
             let x0 = -(width / 2.0).trunc();
             let y0 = if text.plain() == "deadmau5" {
@@ -278,7 +278,7 @@ impl Game<'_> {
             }
             let mut x = x0;
             for (ch, color) in chars {
-                let Some((g, advance)) = self.atlas.glyph(ch) else {
+                let Some((g, advance)) = self.gui.atlas.glyph(ch) else {
                     x += 6.0;
                     continue;
                 };

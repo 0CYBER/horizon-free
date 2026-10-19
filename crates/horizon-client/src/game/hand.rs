@@ -39,7 +39,7 @@ impl Game<'_> {
         });
         self.clicks.destroying = destroying;
         self.attack_clicks = 0;
-        self.stop_remote_mining();
+        self.request_remote_mining_stop();
         self.mining = None;
     }
     /// `LivingEntity.swing` with `getModifiedSwingDuration`.
@@ -90,7 +90,7 @@ impl Game<'_> {
                 let (pos, first) = (d.pos, (d.ticks as u32 - 1).is_multiple_of(4));
                 let state = self.world.block(pos[0], pos[1], pos[2]);
                 if first {
-                    let sounds = self.res.facts.get(state).sounds.clone();
+                    let sounds = self.res.facts().get(state).sounds.clone();
                     self.audio.play(
                         &sounds.hit,
                         Some(pos.map(|v| f64::from(v) + 0.5)),
@@ -117,17 +117,17 @@ impl Game<'_> {
     /// `BlockBehaviour.getDestroyProgress` with `Player.getDestroySpeed`.
     pub(super) fn destroy_progress(&self, pos: [i32; 3]) -> f32 {
         let state = self.world.block(pos[0], pos[1], pos[2]);
-        let facts = self.res.facts.get(state);
+        let facts = self.res.facts().get(state);
         if facts.hardness == -1.0 {
             return 0.0;
         }
         let held = self.held();
-        let mut speed = self.res.items.mining_speed(held, &facts.name);
+        let mut speed = self.res.items().mining_speed(held, &facts.name);
         speed = self.modify_destroy_speed(speed);
         if let Some(eye) = self.eye_position()
             && self
                 .res
-                .facts
+                .facts()
                 .get(self.world.block(
                     eye[0].floor() as i32,
                     eye[1].floor() as i32,
@@ -141,7 +141,7 @@ impl Game<'_> {
         if self.player.as_ref().is_some_and(|p| !p.ground.on_ground) {
             speed /= 5.0;
         }
-        let harvest = !facts.requires_tool || self.res.items.correct_for_drops(held, &facts.name);
+        let harvest = !facts.requires_tool || self.res.items().correct_for_drops(held, &facts.name);
         speed / facts.hardness / if harvest { 30.0 } else { 100.0 }
     }
     /// Whether an attack would hit an entity rather than the block behind
@@ -287,7 +287,7 @@ impl Game<'_> {
         horizon_client::attack_strength::BASE_ATTACK_SPEED
             + self
                 .held()
-                .and_then(|h| self.res.items.get(&h.item))
+                .and_then(|h| self.res.items().get(&h.item))
                 .map_or(0.0, |i| f64::from(i.attack_speed))
     }
     /// `evaluateWhichHandsToRender`: which of the main and off hand show.
@@ -351,7 +351,7 @@ impl HandWorld for GameHands<'_, '_> {
     }
     fn is_air(&mut self, pos: [i32; 3]) -> bool {
         let state = self.game.world.block(pos[0], pos[1], pos[2]);
-        self.game.res.facts.get(state).name.ends_with("air")
+        self.game.res.facts().get(state).name.ends_with("air")
     }
     fn creative(&self) -> bool {
         self.game.creative

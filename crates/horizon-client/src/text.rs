@@ -279,6 +279,12 @@ impl Text {
         self.source = Some(c.into());
         self
     }
+    /// The same spans, sent to vanilla as `component` (a shape the spans'
+    /// own JSON would not take, such as a styled root with siblings).
+    pub fn with_component(mut self, component: Value) -> Self {
+        self.source = Some(component.into());
+        self
+    }
     pub fn with_color(self, color: u32) -> Self {
         self.with_style(&Style::color(color))
     }

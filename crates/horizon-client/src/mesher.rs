@@ -7,7 +7,7 @@ mod facing;
 mod fluid;
 mod lighting;
 use crate::{
-    assets::Assets,
+    assets::{Assets, RenderAssets},
     biome::Biomes,
     blocks::{BlockFacts, RenderShape},
     chunk::{Chunk, MIN_Y},
@@ -39,22 +39,66 @@ pub struct Vertex {
     /// RGBA8_SNORM face normal; w = -127 for two-sided lighting, 0 to keep baked/unlit colour.
     pub normal: [i8; 4],
 }
-/// A section vertex, 28 bytes like vanilla's `DefaultVertexFormat.BLOCK`
-/// (position, colour, UV0, UV2) with the sprite's array layer beside the
-/// light. Terrain has no normal: `ModelBlockRenderer` bakes the face shade
-/// into the colour and `terrain.vsh` only multiplies it by the lightmap.
+/// A section vertex: vanilla's `DefaultVertexFormat.BLOCK` (position, colour,
+/// UV0, UV2) with the sprite's array layer beside the light, in 24 bytes
+/// rather than vanilla's 28: the UV is fixed point, which holds model UVs
+/// (multiples of 1/16 and their halves) exactly. The position stays a float:
+/// fixed point would move the edges of offset plants and rotated elements by
+/// a fraction of a pixel. Terrain has no normal: `ModelBlockRenderer` bakes
+/// the face shade into the colour and `terrain.vsh` only multiplies it by the
+/// lightmap.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct TerrainVertex {
     /// Section-relative position.
     pub pos: [f32; 3],
-    pub uv: [f32; 2],
+    /// UV within the sprite, `UV_STEPS` per unit (`TerrainVertex::new`,
+    /// `terrain.wgsl`'s `terrain_uv`).
+    pub(crate) uv: [u16; 2],
     /// Sprite array layer, with `OPAQUE_LAYER` for opaque leaves.
     pub layer: u16,
     /// Smooth light, 16x fixed point: sky in the low byte, block in the high one.
     pub light: u16,
     /// RGBA8: tint multiplied by directional shade and ambient occlusion.
     pub color: u32,
+}
+/// Fixed-point steps per unit of `TerrainVertex` UVs, which span `[0, 2)`.
+pub const UV_STEPS: f32 = 32768.0;
+impl TerrainVertex {
+    pub fn new(pos: [f32; 3], uv: [f32; 2], layer: u16, color: u32, light: u16) -> Self {
+        Self {
+            pos,
+            uv: uv.map(|v| (v * UV_STEPS).round().clamp(0.0, f32::from(u16::MAX)) as u16),
+            layer,
+            light,
+            color,
+        }
+    }
+    /// The UV the GPU samples.
+    pub fn uv(&self) -> [f32; 2] {
+        self.uv.map(|v| f32::from(v) / UV_STEPS)
+    }
+}
+#[cfg(test)]
+mod vertex_tests {
+    use super::TerrainVertex;
+    #[test]
+    fn model_uvs_pack_exactly() {
+        for i in 0..=32 {
+            let u = i as f32 / 32.0;
+            let v = TerrainVertex::new([0.0; 3], [u, 1.0 - u], 0, 0, 0);
+            assert_eq!(v.uv(), [u, 1.0 - u]);
+        }
+    }
+    #[test]
+    fn other_uvs_round_within_a_step() {
+        // A flowing fluid's rotated UV.
+        let uv = [0.5 + 0.25 * 0.3f32.sin(), 0.5 - 0.25 * 0.3f32.cos()];
+        let packed = TerrainVertex::new([0.0; 3], uv, 0, 0, 0).uv();
+        for (a, b) in packed.iter().zip(uv) {
+            assert!((a - b).abs() <= 0.5 / 32768.0, "{a} {b}");
+        }
+    }
 }
 pub struct SectionMesh {
     pub solid: Vec<TerrainVertex>,
@@ -258,18 +302,19 @@ fn redstone_color(power: u8) -> u32 {
 impl MeshTables {
     pub fn new(
         assets: &Assets,
+        render: &RenderAssets,
         facts: &BlockFacts,
         visibility: FaceVisibility,
     ) -> crate::Result<Self> {
         // Terrain vertices keep the sprite layer below `OPAQUE_LAYER`.
-        let layers = assets.sprite_layers.values().max().map_or(0, |l| l + 1);
+        let layers = render.sprite_layers.values().max().map_or(0, |l| l + 1);
         if layers > u32::from(OPAQUE_LAYER) {
             return Err(
                 format!("{layers} block sprites, terrain vertices index {OPAQUE_LAYER}").into(),
             );
         }
         let layer = |name: &str| -> crate::Result<u16> {
-            assets
+            render
                 .sprite_layers
                 .get(name)
                 .map(|&l| l as u16)
@@ -594,6 +639,7 @@ pub struct Mesher<'a> {
     /// CardinalLighting.NETHER: brighter up/down faces.
     pub nether_shading: bool,
     pub assets: &'a Assets,
+    pub render: &'a RenderAssets,
     pub tables: &'a MeshTables,
     pub biomes: &'a Biomes,
     pub visibility: FaceVisibility,
@@ -663,7 +709,7 @@ impl Mesher<'_> {
                         continue;
                     }
                     let world = BlockPos::new(center.x * 16 + x, base_y + y, center.z * 16 + z);
-                    let Ok(models) = self.assets.model_catalog.collect(BlockStateId(id), world)
+                    let Ok(models) = self.render.model_catalog.collect(BlockStateId(id), world)
                     else {
                         continue;
                     };
@@ -786,18 +832,18 @@ impl Mesher<'_> {
                 None => [g; 3],
             };
             let p = q.positions[i];
-            target.push(TerrainVertex {
-                pos: [p[0] + origin[0], p[1] + origin[1], p[2] + origin[2]],
-                uv: q.uv[i],
+            target.push(TerrainVertex::new(
+                [p[0] + origin[0], p[1] + origin[1], p[2] + origin[2]],
+                q.uv[i],
                 // Opaque leaves (forceOpaque) draw in the solid layer: no alpha cutout.
-                layer: if !self.cutout_leaves && state.leaves {
+                if !self.cutout_leaves && state.leaves {
                     face.layer as u16 | OPAQUE_LAYER
                 } else {
                     face.layer as u16
                 },
-                color: pack_rgb(rgb),
-                light: pack_coords(lighting::with_emission(coords[i], q.light_emission)),
-            });
+                pack_rgb(rgb),
+                pack_coords(lighting::with_emission(coords[i], q.light_emission)),
+            ));
         }
     }
 }
