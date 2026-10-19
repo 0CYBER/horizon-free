@@ -255,7 +255,37 @@ fn int_bounds(v: &Value, value: i32) -> bool {
     }
 }
 
-fn load_dir(dir: &Path, prefix: &str, out: &mut HashMap<String, Value>) -> io::Result<()> {
+/// A JSON number read by an int codec (`Number.intValue`): `3.0`, which
+/// 1.21.1 mods write for rolls and counts, is 3.
+fn int_value(v: &Value) -> Option<i64> {
+    v.as_i64().or_else(|| v.as_f64().map(|f| f as i64))
+}
+
+/// `data/<ns>/<kind>/` of every namespace, as `ns:path`: vanilla's, and in
+/// a content mods' root theirs (docs/modpacks.md), whose chests name their
+/// own loot tables.
+fn load_kind(data: &Path, kind: &str, out: &mut HashMap<String, Value>) -> io::Result<()> {
+    let Ok(entries) = fs::read_dir(data) else {
+        return Ok(());
+    };
+    let mut namespaces: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().to_str().map(str::to_owned))
+        .collect();
+    namespaces.sort();
+    for ns in namespaces {
+        load_dir(&data.join(&ns).join(kind), &ns, "", out)?;
+    }
+    Ok(())
+}
+
+fn load_dir(
+    dir: &Path,
+    namespace: &str,
+    prefix: &str,
+    out: &mut HashMap<String, Value>,
+) -> io::Result<()> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Ok(());
     };
@@ -265,10 +295,10 @@ fn load_dir(dir: &Path, prefix: &str, out: &mut HashMap<String, Value>) -> io::R
             continue;
         };
         if path.is_dir() {
-            load_dir(&path, &format!("{prefix}{stem}/"), out)?;
+            load_dir(&path, namespace, &format!("{prefix}{stem}/"), out)?;
         } else if path.extension().is_some_and(|e| e == "json") {
             let value = serde_json::from_slice(&fs::read(&path)?)?;
-            out.insert(format!("minecraft:{prefix}{stem}"), value);
+            out.insert(format!("{namespace}:{prefix}{stem}"), value);
         }
     }
     Ok(())
@@ -281,15 +311,18 @@ fn cost(v: &Value) -> (i32, i32) {
 }
 
 impl LootData {
-    /// Load from a resource root holding `items.json` and `data/minecraft`.
+    /// Load from a resource root holding `items.json` and `data/`: loot
+    /// tables, item modifiers, predicates, tags and recipes of every
+    /// namespace, vanilla's enchantments.
     pub fn load(root: &Path) -> io::Result<Self> {
-        let data = root.join("data/minecraft");
+        let all = root.join("data");
+        let data = all.join("minecraft");
         let mut tables = HashMap::new();
-        load_dir(&data.join("loot_table"), "", &mut tables)?;
+        load_kind(&all, "loot_table", &mut tables)?;
         let mut modifiers = HashMap::new();
-        load_dir(&data.join("item_modifier"), "", &mut modifiers)?;
+        load_kind(&all, "item_modifier", &mut modifiers)?;
         let mut predicates = HashMap::new();
-        load_dir(&data.join("predicate"), "", &mut predicates)?;
+        load_kind(&all, "predicate", &mut predicates)?;
         let raw: BTreeMap<String, Value> =
             serde_json::from_slice(&fs::read(root.join("items.json"))?)?;
         let items = raw
@@ -308,7 +341,12 @@ impl LootData {
             })
             .collect();
         let mut raw_enchantments = HashMap::new();
-        load_dir(&data.join("enchantment"), "", &mut raw_enchantments)?;
+        load_dir(
+            &data.join("enchantment"),
+            "minecraft",
+            "",
+            &mut raw_enchantments,
+        )?;
         let mut names: Vec<&String> = raw_enchantments.keys().collect();
         names.sort();
         let enchantments = names
@@ -344,14 +382,14 @@ impl LootData {
             "damage_type",
         ] {
             let mut raw = HashMap::new();
-            load_dir(&data.join("tags").join(registry), "", &mut raw)?;
+            load_kind(&all, &format!("tags/{registry}"), &mut raw)?;
             for (name, value) in raw {
                 let values = value["values"].as_array().cloned().unwrap_or_default();
                 tags.insert((registry.to_owned(), name), values);
             }
         }
         let mut recipes = HashMap::new();
-        load_dir(&data.join("recipe"), "", &mut recipes)?;
+        load_kind(&all, "recipe", &mut recipes)?;
         let mut ids: Vec<&String> = recipes.keys().collect();
         ids.sort();
         let smelting = ids
@@ -833,7 +871,7 @@ impl<R: RandomSource> Context<'_, R> {
     }
     fn int(&mut self, v: &Value) -> i32 {
         match v {
-            Value::Number(n) => n.as_i64().unwrap_or(0) as i32,
+            Value::Number(_) => int_value(v).unwrap_or(0) as i32,
             Value::Object(_) => match v["type"].as_str().unwrap_or("") {
                 "minecraft:constant" => self.int(&v["value"]),
                 "minecraft:uniform" => {
@@ -1009,10 +1047,10 @@ impl<R: RandomSource> Context<'_, R> {
             "minecraft:limit_count" => {
                 let limit = &f["limit"];
                 let mut count = stack.get_count();
-                if let Some(min) = limit["min"].as_i64() {
+                if let Some(min) = int_value(&limit["min"]) {
                     count = count.max(min as i32);
                 }
-                if let Some(max) = limit["max"].as_i64() {
+                if let Some(max) = int_value(&limit["max"]) {
                     count = count.min(max as i32);
                 }
                 stack.count = count;
@@ -1139,7 +1177,7 @@ impl<R: RandomSource> Context<'_, R> {
                         let addition = level as f32 * self.float(&f["count"]);
                         // ItemStack.grow(Math.round(addition)).
                         stack.count = stack.get_count() + (addition + 0.5).floor() as i32;
-                        let limit = f["limit"].as_i64().unwrap_or(0) as i32;
+                        let limit = int_value(&f["limit"]).unwrap_or(0) as i32;
                         if limit > 0 && !stack.is_empty() && stack.count > limit {
                             stack.count = limit;
                         }
@@ -1313,8 +1351,8 @@ impl<R: RandomSource> Context<'_, R> {
         let luck = self.luck;
         let weight = |c: &Choice<'_>| {
             let e = c.entry;
-            let w = e["weight"].as_i64().unwrap_or(1) as f32
-                + e["quality"].as_i64().unwrap_or(0) as f32 * luck;
+            let w = int_value(&e["weight"]).unwrap_or(1) as f32
+                + int_value(&e["quality"]).unwrap_or(0) as f32 * luck;
             w.floor().max(0.0) as i32
         };
         let total: i32 = valid.iter().map(&weight).sum();
@@ -1358,7 +1396,7 @@ impl<R: RandomSource> Context<'_, R> {
                 true
             }
             "minecraft:item" | "minecraft:empty" | "minecraft:loot_table" => {
-                if entry["weight"].as_i64().unwrap_or(1) > 0 {
+                if int_value(&entry["weight"]).unwrap_or(1) > 0 {
                     out.push(Choice { entry, item: None });
                 }
                 true
@@ -1368,7 +1406,7 @@ impl<R: RandomSource> Context<'_, R> {
                 if entry["expand"].as_bool().unwrap_or(false) {
                     let items = self.data.holder_set("item", &entry["items"]);
                     for item in items {
-                        if entry["weight"].as_i64().unwrap_or(1) > 0 {
+                        if int_value(&entry["weight"]).unwrap_or(1) > 0 {
                             out.push(Choice {
                                 entry,
                                 item: Some(item),
@@ -1377,7 +1415,7 @@ impl<R: RandomSource> Context<'_, R> {
                     }
                     true
                 } else {
-                    if entry["weight"].as_i64().unwrap_or(1) > 0 {
+                    if int_value(&entry["weight"]).unwrap_or(1) > 0 {
                         out.push(Choice { entry, item: None });
                     }
                     true
@@ -1429,5 +1467,56 @@ fn enchant(stack: &mut LootStack, name: &str, level: i32) {
     match stack.enchantments.iter_mut().find(|(n, _)| n == name) {
         Some(slot) => slot.1 = level,
         None => stack.enchantments.push((name.to_owned(), level)),
+    }
+}
+
+#[cfg(test)]
+mod namespace_tests {
+    use super::*;
+
+    /// A content mods' root: the mods' loot tables and tags load beside
+    /// vanilla's, under their own namespaces.
+    #[test]
+    fn loads_every_namespace() {
+        let root = std::env::temp_dir().join(format!("horizon-loot-ns-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let files = [
+            ("items.json", r#"{"minecraft:bread": {}}"#),
+            (
+                "data/minecraft/loot_table/chests/village.json",
+                r#"{"pools": []}"#,
+            ),
+            (
+                "data/kaisyn/loot_table/village/forest/house.json",
+                r#"{"pools": []}"#,
+            ),
+            (
+                "data/kaisyn/tags/item/food.json",
+                r#"{"values": ["minecraft:bread"]}"#,
+            ),
+        ];
+        for (name, text) in files {
+            let path = root.join(name);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+        }
+        let data = LootData::load(&root).unwrap();
+        assert!(data.has_table("minecraft:chests/village"));
+        assert!(data.has_table("kaisyn:village/forest/house"));
+        assert!(!data.has_table("minecraft:village/forest/house"));
+        assert!(data.in_tag("item", "kaisyn:food", "minecraft:bread"));
+        // Rolls and weights written as floats (Towns and Towers' tables).
+        let table = r#"{"pools": [{"rolls": {"type": "minecraft:uniform", "min": 3.0, "max": 3.0},
+            "entries": [{"type": "minecraft:item", "name": "minecraft:bread", "weight": 2.0}]}]}"#;
+        fs::write(
+            root.join("data/kaisyn/loot_table/village/forest/house.json"),
+            table,
+        )
+        .unwrap();
+        let data = LootData::load(&root).unwrap();
+        let filled = data.fill("kaisyn:village/forest/house", 1, 27, None);
+        let count: i32 = filled.iter().flatten().map(|s| s.count).sum();
+        assert_eq!(count, 3);
+        let _ = fs::remove_dir_all(&root);
     }
 }
