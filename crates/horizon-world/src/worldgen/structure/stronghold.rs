@@ -14,17 +14,18 @@ use std::{collections::BTreeSet, f64::consts::PI, sync::Mutex};
 
 /// ChunkGeneratorStructureState.generateRingPositions with
 /// BiomeSource.findBiomeHorizontal (radius 112, step 1, not closest).
+/// `biomes` samples a search's quarts in order, as one caching resolver.
 pub fn ring_positions(
     seed: i64,
     distance: i32,
     spread: i32,
     count: i32,
     preferred: &BTreeSet<BiomeId>,
-    biome: &mut dyn FnMut([i32; 3]) -> BiomeId,
+    biomes: &mut dyn FnMut(&[[i32; 3]]) -> Vec<BiomeId>,
 ) -> Vec<ChunkPos> {
     ring_searches(seed, distance, spread, count)
         .iter()
-        .map(|search| search.find(preferred, biome))
+        .map(|search| search.find(preferred, biomes))
         .collect()
 }
 
@@ -39,23 +40,30 @@ pub struct RingSearch {
 impl RingSearch {
     /// BiomeSource.findBiomeHorizontal around the ring chunk's centre: a
     /// random preferred biome within 112 blocks, else the ring chunk itself.
+    ///
+    /// Vanilla samples the square in order on one thread, and its climate
+    /// index (Climate.RTree) starts each lookup from the previous result and
+    /// keeps it on a tie; so `biomes` gets the whole square at once, in
+    /// vanilla's order. Fresh lookups moved seed 1234's first stronghold 6
+    /// chunks: one quart on a lush caves / ocean tie went to the ocean.
     pub fn find(
         &self,
         preferred: &BTreeSet<BiomeId>,
-        biome: &mut dyn FnMut([i32; 3]) -> BiomeId,
+        biomes: &mut dyn FnMut(&[[i32; 3]]) -> Vec<BiomeId>,
     ) -> ChunkPos {
         let mut search = self.random.clone();
         let (cx, cz) = ((self.x * 16 + 8) >> 2, (self.z * 16 + 8) >> 2);
+        let quarts: Vec<[i32; 3]> = (-28..=28)
+            .flat_map(|dz| (-28..=28).map(move |dx| [cx + dx, 0, cz + dz]))
+            .collect();
         let mut found = 0;
         let mut result = None;
-        for dz in -28..=28 {
-            for dx in -28..=28 {
-                if preferred.contains(&biome([cx + dx, 0, cz + dz])) {
-                    if result.is_none() || search.next_int_bound(found + 1).unwrap_or(1) == 0 {
-                        result = Some(((cx + dx) << 2, (cz + dz) << 2));
-                    }
-                    found += 1;
+        for (quart, biome) in quarts.iter().zip(biomes(&quarts)) {
+            if preferred.contains(&biome) {
+                if result.is_none() || search.next_int_bound(found + 1).unwrap_or(1) == 0 {
+                    result = Some((quart[0] << 2, quart[2] << 2));
                 }
+                found += 1;
             }
         }
         match result {

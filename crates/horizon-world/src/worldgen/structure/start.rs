@@ -707,6 +707,10 @@ pub trait StartContext: JigsawContext {
     fn generation(&self) -> WorldGenerationContext;
     /// Noise biome at a quart position (caching resolver, no zoom).
     fn noise_biome(&mut self, quart: [i32; 3]) -> BiomeId;
+    /// Noise biomes of `quarts` in order through one resolver, as
+    /// BiomeSource.findBiomeHorizontal samples: each climate lookup starts
+    /// from the previous result, which a tie keeps.
+    fn noise_biomes(&mut self, quarts: &[[i32; 3]]) -> Vec<BiomeId>;
     fn set_valid_biomes(&mut self, biomes: &BTreeSet<BiomeId>);
 }
 

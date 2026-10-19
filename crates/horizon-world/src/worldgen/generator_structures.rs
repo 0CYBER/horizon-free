@@ -74,14 +74,14 @@ impl RingWork {
     fn help<'a>(
         &self,
         preferred: impl Fn(usize) -> &'a BTreeSet<BiomeId>,
-        biome: &mut dyn FnMut([i32; 3]) -> BiomeId,
+        biomes: &mut dyn FnMut(&[[i32; 3]]) -> Vec<BiomeId>,
     ) {
         loop {
             let i = self.next.fetch_add(1, Ordering::Relaxed);
             let Some((set, search)) = self.searches.get(i) else {
                 break;
             };
-            let _ = self.found[i].set(search.find(preferred(*set), biome));
+            let _ = self.found[i].set(search.find(preferred(*set), biomes));
             let mut left = self.left.lock().unwrap();
             *left -= 1;
             if *left == 0 {
@@ -239,8 +239,8 @@ impl StructureState {
             )
         });
         let registry = &self.registry;
-        work.help(|set| registry.ring_biomes(set), &mut |q| {
-            context.noise_biome(q)
+        work.help(|set| registry.ring_biomes(set), &mut |quarts| {
+            context.noise_biomes(quarts)
         });
         self.rings
             .get_or_init(|| work.rings(|set| registry.sets[set].name.clone()))
@@ -475,8 +475,13 @@ mod tests {
     #[test]
     fn ring_work_shared_between_threads_matches_serial_search() {
         let preferred: BTreeSet<BiomeId> = (0..20).map(|b| BiomeId(b * 3)).collect();
-        let biome = |q: [i32; 3]| {
-            BiomeId((q[0].wrapping_mul(31) ^ q[2].wrapping_mul(17)).rem_euclid(64) as u32)
+        let biomes = |quarts: &[[i32; 3]]| -> Vec<BiomeId> {
+            quarts
+                .iter()
+                .map(|q| {
+                    BiomeId((q[0].wrapping_mul(31) ^ q[2].wrapping_mul(17)).rem_euclid(64) as u32)
+                })
+                .collect()
         };
         let none = BTreeSet::new();
         for seed in [0, 1234, -77, i64::MAX] {
@@ -488,12 +493,12 @@ mod tests {
             let sets = [&preferred, &none, &preferred];
             std::thread::scope(|scope| {
                 for _ in 0..4 {
-                    scope.spawn(|| work.help(|set| sets[set], &mut { biome }));
+                    scope.spawn(|| work.help(|set| sets[set], &mut { biomes }));
                 }
             });
             let rings = work.rings(|set| format!("set{set}"));
             let serial = |s: i64, distance, spread, count, preferred| {
-                ring_positions(s, distance, spread, count, preferred, &mut { biome })
+                ring_positions(s, distance, spread, count, preferred, &mut { biomes })
             };
             assert_eq!(rings["set0"], serial(seed, 32, 3, 128, &preferred));
             assert_eq!(rings["set1"], Vec::new());
