@@ -194,8 +194,12 @@ public final class VanillaMenuOracle {
         out.append(" |");
         for (DataSlot d : data) out.append(' ').append(d.get());
         out.append(" | ").append(String.join(";", drops));
-        out.append(" | ").append(String.join(";", equips));
         return out.toString();
+    }
+
+    /** {@link #state} and what was equipped: the menu_click harness's line (place_recipe prints {@code state}). */
+    static String clickState(AbstractContainerMenu menu, Inventory inv) throws Exception {
+        return state(menu, inv) + " | " + String.join(";", equips);
     }
 
     public static void main(String[] args) throws Exception {
@@ -235,7 +239,7 @@ public final class VanillaMenuOracle {
                     for (int i = 0; i < dataJson.size(); i++) menu.setData(i, dataJson.get(i).getAsInt());
                     drops.clear();
                     equips.clear();
-                    out.println("init " + state(menu, inv));
+                    out.println("init " + clickState(menu, inv));
                     for (var opJson : f.getAsJsonArray("ops")) {
                         var op = opJson.getAsJsonArray();
                         int slot = op.get(0).getAsInt();
@@ -244,13 +248,13 @@ public final class VanillaMenuOracle {
                         if (kind.equals("BUTTON")) {
                             // ServerGamePacketListenerImpl.handleContainerButtonClick
                             if (menu.clickMenuButton(player, slot)) menu.broadcastChanges();
-                            out.println(state(menu, inv));
+                            out.println(clickState(menu, inv));
                             continue;
                         }
                         if (kind.equals("SLOT_STATE")) {
                             // handleContainerSlotStateChanged: CrafterBlockEntity.setSlotState
                             if (slot >= 0 && slot < 9) crafter.setSlotState(slot, button == 1);
-                            out.println(state(menu, inv));
+                            out.println(clickState(menu, inv));
                             continue;
                         }
                         if (kind.equals("QUICK_MOVE_ALL")) {
@@ -266,7 +270,7 @@ public final class VanillaMenuOracle {
                                     }
                                 }
                             }
-                            out.println(state(menu, inv));
+                            out.println(clickState(menu, inv));
                             continue;
                         }
                         var input = ContainerInput.valueOf(kind);
@@ -278,7 +282,7 @@ public final class VanillaMenuOracle {
                             if (System.getenv("MENU_TRACE") != null) cause.printStackTrace();
                             continue;
                         }
-                        out.println(state(menu, inv));
+                        out.println(clickState(menu, inv));
                     }
                     out.println("end");
                 } catch (Throwable e) {
