@@ -1313,7 +1313,8 @@ pub fn server_dir(requested: Option<PathBuf>) -> PathBuf {
         .unwrap_or_else(|| data_dir().join("server"))
 }
 
-fn need_prepared(tag: &str) -> Result<(), String> {
+/// Whether `tag` is prepared, with the run-time reports it needs completed when another copy has them.
+pub fn need_prepared(tag: &str) -> Result<(), String> {
     if is_prepared(tag) {
         complete_reports(&versions_dir(), tag);
         Ok(())

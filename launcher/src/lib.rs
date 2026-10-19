@@ -4,5 +4,6 @@ pub mod backend;
 pub mod desktop;
 pub mod modpacks;
 pub mod mojang;
+pub mod servers;
 pub mod sources;
 pub mod telemetry;
