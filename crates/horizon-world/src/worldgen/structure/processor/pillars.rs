@@ -133,7 +133,7 @@ fn read<W: PlacementContext>(
 
 /// Whether `pos` is outside the chunk being generated (WorldGenRegion's
 /// centre): the placement's bounding box, by column.
-fn outside_chunk(settings: &PlaceSettings<'_>, pos: [i32; 3]) -> bool {
+pub(super) fn outside_chunk(settings: &PlaceSettings<'_>, pos: [i32; 3]) -> bool {
     settings.bounding_box.is_some_and(|b| {
         pos[0] < b.min[0] || pos[0] > b.max[0] || pos[2] < b.min[2] || pos[2] > b.max[2]
     })
@@ -609,6 +609,9 @@ pub struct YungPillar {
     target: String,
     output: YungRandomizer,
     pillar: YungRandomizer,
+    /// The output and the column take the target's properties
+    /// (Block.withPropertiesOf: Better Witch Huts' fence legs).
+    keep_properties: bool,
     blocks: Blocks,
 }
 impl YungPillar {
@@ -622,6 +625,7 @@ impl YungPillar {
             target: bindings.registry().state(target).unwrap().name.clone(),
             output: YungRandomizer::decode(&v["target_block_output"], &state)?,
             pillar: YungRandomizer::decode(&v["pillar_states"], &state)?,
+            keep_properties: v["keep_properties"].as_bool().unwrap_or(false),
             blocks: Blocks::decode(bindings)?,
         })
     }
@@ -641,15 +645,23 @@ impl YungPillar {
         }
         let (min, max) = (world.min_y()?, world.max_y()?);
         let origin = info.pos;
+        let registry = &resources.registry;
+        let kept = |state: BlockStateId| match self.keep_properties {
+            true => registry
+                .state(state)
+                .and_then(|s| super::with_properties_of(registry, &s.name, info.state))
+                .unwrap_or(state),
+            false => state,
+        };
         settings.with_random(origin, |random| {
-            let state = self.output.get(random, None);
+            let state = kept(self.output.get(random, None));
             let mut at = [origin[0], origin[1] - 1, origin[2]];
             while at[1] > min && at[1] <= max {
                 let block = read(world, &self.blocks, at)?;
                 if !(self.blocks.air(block) || self.blocks.fluid(block)) {
                     break;
                 }
-                world.set_chunk_block(at, self.pillar.get(random, Some(at[1])))?;
+                world.set_chunk_block(at, kept(self.pillar.get(random, Some(at[1]))))?;
                 at[1] -= 1;
             }
             Ok(Some(BlockInfo { state, ..info }))
