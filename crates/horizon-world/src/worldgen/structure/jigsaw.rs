@@ -30,7 +30,7 @@ pub enum Projection {
     Rigid,
     TerrainMatching,
 }
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum PoolElement {
     Empty,
     Single {
@@ -400,7 +400,7 @@ impl Pools {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Junction {
     pub source_x: i32,
     pub source_ground_y: i32,
