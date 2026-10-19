@@ -53,7 +53,7 @@ fn launcher_object(assets: &Path, checksum: &str) -> Result<PathBuf, String> {
     let path = object_path(assets, checksum)?;
     if !path.is_file() {
         return Err(format!(
-            "Missing asset object {}. Play the pinned version once in the official launcher.",
+            "Missing asset object {}. Play the pinned version once in your launcher.",
             path.display()
         ));
     }

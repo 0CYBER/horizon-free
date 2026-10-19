@@ -2,7 +2,7 @@
 //! they show, in what groups, with what description and cost, and their
 //! input. How they look comes from `graphics_style`.
 use crate::{
-    graphics::{Overlay, Pacing, PresentMode, Preset},
+    graphics::{GraphicsApi, Overlay, Pacing, PresentMode, Preset},
     graphics_style::{Cost, STYLE},
     hud::{HudAtlas, HudBatch},
     options_ui::Opt,
@@ -21,6 +21,7 @@ pub enum Level {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum H {
     Preset,
+    LodDistance,
     CaveCulling,
     CullLeaves,
     EntityCulling,
@@ -38,6 +39,7 @@ pub enum H {
     Antialiasing,
     BatteryMode,
     ShaderPack,
+    GraphicsApi,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -76,7 +78,12 @@ pub fn rows(level: Level) -> Vec<Row> {
     let render = v(
         Opt::RenderDistance,
         High,
-        "How far terrain is drawn, in chunks. The biggest lever on frame time.",
+        "Full-detail terrain range. LOD Distance can extend local worlds farther.",
+    );
+    let lod = h(
+        H::LodDistance,
+        Medium,
+        "Coarse distant surface in local worlds; no extra simulation.",
     );
     let fov = v(
         Opt::Fov,
@@ -99,11 +106,12 @@ pub fn rows(level: Level) -> Vec<Row> {
         None,
         "Sets the options below together. Changing one makes it Custom.",
     );
-    match level {
-        Level::Simple => vec![preset, render, fov, fps, vsync, gui],
+    let mut rows = match level {
+        Level::Simple => vec![preset, render, lod, fov, fps, vsync, gui],
         Level::Advanced => vec![
             Row::Header("Rendering"),
             render,
+            lod,
             v(
                 Opt::SimulationDistance,
                 Medium,
@@ -211,7 +219,7 @@ pub fn rows(level: Level) -> Vec<Row> {
             h(
                 H::PresentMode,
                 None,
-                "How frames reach the screen. Auto follows VSync.",
+                "How frames reach the screen while VSync is off.",
             ),
             h(
                 H::Pacing,
@@ -249,6 +257,11 @@ pub fn rows(level: Level) -> Vec<Row> {
                 "Threads that generate, light and mesh chunks. Next start.",
             ),
             h(
+                H::GraphicsApi,
+                None,
+                "Vulkan, or DirectX 12 where Vulkan fails. Next start.",
+            ),
+            h(
                 H::UploadBudget,
                 Low,
                 "Mesh data sent to the GPU per frame. Lower is smoother while loading.",
@@ -260,7 +273,14 @@ pub fn rows(level: Level) -> Vec<Row> {
                 "Frame rate and frame times over the game, with a graph.",
             ),
         ],
+    };
+    // Only Windows has more than one graphics API.
+    if !cfg!(windows) {
+        rows.retain(
+            |row| !matches!(row, Row::Setting(s) if s.item == Item::Horizon(H::GraphicsApi)),
+        );
     }
+    rows
 }
 
 const UPLOAD_STEPS: [u32; 8] = [0, 256, 512, 1024, 2048, 4096, 8192, 16384];
@@ -311,6 +331,10 @@ impl H {
         let g = &s.horizon;
         match self {
             H::Preset => labelled("Preset", g.preset.label()),
+            H::LodDistance => match g.lod_distance {
+                0 => labelled("LOD Distance", "Off"),
+                n => labelled("LOD Distance", format!("{n} chunks")),
+            },
             H::CaveCulling => labelled("Cave Culling", on_off(g.cave_culling)),
             H::CullLeaves => labelled("Cull Leaves", on_off(g.cull_leaves)),
             H::EntityCulling => labelled("Entity Culling", on_off(g.entity_culling)),
@@ -342,6 +366,7 @@ impl H {
             H::ResolutionScale => labelled("Resolution Scale", format!("{}%", g.resolution_scale)),
             H::Antialiasing => labelled("Anti-aliasing", if g.fxaa { "FXAA" } else { "Off" }),
             H::BatteryMode => labelled("Battery Mode", on_off(g.battery)),
+            H::GraphicsApi => labelled("Graphics API", g.api.label()),
             H::ShaderPack => match g.shader_pack.as_str() {
                 "" => labelled("Shader Pack", "Off"),
                 id => labelled("Shader Pack", id),
@@ -383,6 +408,9 @@ impl H {
         }
         let g = &mut s.horizon;
         match self {
+            H::LodDistance => {
+                g.lod_distance = step(&[0, 64, 128, 256, 512, 1024], g.lod_distance, back)
+            }
             H::CaveCulling => g.cave_culling = !g.cave_culling,
             H::CullLeaves => g.cull_leaves = !g.cull_leaves,
             H::EntityCulling => g.entity_culling = !g.entity_culling,
@@ -393,6 +421,7 @@ impl H {
             H::PresentMode => g.present_mode = step(&PresentMode::ALL, g.present_mode, back),
             H::Antialiasing => g.fxaa = !g.fxaa,
             H::BatteryMode => g.battery = !g.battery,
+            H::GraphicsApi => g.api = step(&GraphicsApi::ALL, g.api, back),
             H::ShaderPack => {
                 // Off, then every pack in shaderpacks/ by folder name.
                 let dir = std::env::current_dir()
@@ -467,6 +496,10 @@ impl Item {
     }
     pub fn label(self, s: &Settings) -> Text {
         match self {
+            Item::Vanilla(Opt::RenderDistance) if s.horizon.lod_distance > 0 => labelled(
+                "Full Detail Distance",
+                format!("{} chunks", s.render_distance),
+            ),
             Item::Vanilla(o) => o.label(s),
             Item::Horizon(h) => h.label(s),
         }
@@ -497,6 +530,7 @@ impl Item {
                     | H::Workers
                     | H::BatteryMode
                     | H::ShaderPack
+                    | H::GraphicsApi
             ) | Item::Vanilla(
                 Opt::GuiScale
                     | Opt::Fullscreen
@@ -921,6 +955,40 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn lod_distance_cycles_in_both_levels_without_changing_near_distance() {
+        let mut s = Settings::default();
+        let item = Item::Horizon(H::LodDistance);
+        let near = s.render_distance;
+        assert_eq!(item.label(&s).plain(), "LOD Distance: Off");
+        for level in [Level::Simple, Level::Advanced] {
+            let items: Vec<_> = rows(level)
+                .into_iter()
+                .filter_map(|row| match row {
+                    Row::Setting(setting) => Some(setting.item),
+                    Row::Header(_) => None,
+                })
+                .collect();
+            let render = items
+                .iter()
+                .position(|i| *i == Item::Vanilla(Opt::RenderDistance))
+                .unwrap();
+            assert_eq!(items[render + 1], item);
+        }
+        for distance in [64, 128, 256, 512, 1024, 0] {
+            item.cycle(&mut s, false, [854, 480]);
+            assert_eq!(s.horizon.lod_distance, distance);
+            assert_eq!(s.render_distance, near);
+        }
+        item.cycle(&mut s, true, [854, 480]);
+        assert_eq!(s.horizon.lod_distance, 1024);
+        assert_eq!(item.label(&s).plain(), "LOD Distance: 1024 chunks");
+        assert_eq!(
+            Item::Vanilla(Opt::RenderDistance).label(&s).plain(),
+            format!("Full Detail Distance: {near} chunks")
+        );
     }
 
     #[test]

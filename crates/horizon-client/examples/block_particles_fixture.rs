@@ -12,9 +12,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().collect();
     let root = Path::new(&args[1]);
     let assets = Assets::load(root)?;
+    let render = assets.reload(root)?;
     let facts = BlockFacts::load(root, assets.registry)?;
     let tables = MeshTables::new(
         &assets,
+        &render,
         &facts,
         models::load_visibility(root, assets.registry)?,
     )?;

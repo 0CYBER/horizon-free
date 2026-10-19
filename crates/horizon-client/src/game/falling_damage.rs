@@ -6,7 +6,7 @@ use horizon_world::level::LevelEvent;
 
 impl Game<'_> {
     pub(super) fn finish_falling_block(&mut self, mut block: FallingBlock, pos: [i32; 3]) {
-        let anvil = self.res.facts.get(block.state).name.ends_with("anvil");
+        let anvil = self.res.facts().get(block.state).name.ends_with("anvil");
         if let Some(impact) = block.damage.impact(block.fall_distance) {
             if impact.amount > 0.0 {
                 falling_block::hurt_mobs(&mut self.mobs, block.position, impact.amount);
@@ -23,7 +23,7 @@ impl Game<'_> {
                         .guests
                         .iter()
                         .filter(|g| {
-                            g.placed
+                            host.hub.here(g)
                                 && g.loaded
                                 && !g.dead
                                 && !g.creative()
@@ -80,7 +80,7 @@ impl Game<'_> {
             && block.drop_item
             && self.ui.rules.bool("entity_drops")
         {
-            let item = self.res.facts.get(block.state).item.clone();
+            let item = self.res.facts().get(block.state).item.clone();
             if &*item != "minecraft:air" {
                 self.pop_resource(
                     pos,

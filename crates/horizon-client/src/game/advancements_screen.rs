@@ -163,11 +163,18 @@ impl Game<'_> {
         }
         let tree = self.adv.tree.clone();
         let kids = tree.children();
-        let pos = tree
-            .layout()
-            .into_iter()
-            .map(|p| p.map(|(x, y)| (x * 28, (y * 27.0).floor() as i32)))
-            .collect();
+        // A server's advancements come placed (`DisplayInfo` x, y).
+        let pos = match &self.adv.positions {
+            Some(server) => server
+                .iter()
+                .map(|&(x, y)| Some(((x * 28.0).floor() as i32, (y * 27.0).floor() as i32)))
+                .collect(),
+            None => tree
+                .layout()
+                .into_iter()
+                .map(|p| p.map(|(x, y)| (x * 28, (y * 27.0).floor() as i32)))
+                .collect(),
+        };
         self.adv_ui.cache = Some(Cache { tree, kids, pos });
     }
     fn adv_done(&self, i: usize) -> bool {
@@ -184,7 +191,12 @@ impl Game<'_> {
             };
         };
         let tree = &c.tree;
-        let visible = tree.visible(&c.kids, |i| self.adv.progress.done(&tree.list[i]));
+        // A server sends only what the player may see.
+        let visible = if self.adv.positions.is_some() {
+            vec![true; tree.list.len()]
+        } else {
+            tree.visible(&c.kids, |i| self.adv.progress.done(&tree.list[i]))
+        };
         // AdvancementTab.create: a displayed root with a background.
         let mut tabs: Vec<usize> = (0..tree.list.len())
             .filter(|&i| {
@@ -257,7 +269,7 @@ impl Game<'_> {
     }
     /// `AdvancementWidget`'s title lines, description lines and width.
     fn adv_widget_text(&self, i: usize) -> (Vec<Text>, Vec<Text>, f32) {
-        let font = &self.atlas.font;
+        let font = &self.gui.atlas.font;
         let a = &self.adv.tree.list[i];
         let Some(d) = &a.display else {
             return (Vec::new(), Vec::new(), 0.0);
@@ -320,7 +332,7 @@ impl Game<'_> {
         let (sx, sy) = self.adv_ui.scroll.unwrap_or_default();
         let (sx, sy) = (sx.floor() as i32, sy.floor() as i32);
         self.adv_tick_hover(&view, sx, sy, left, top);
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
         let title = Text::translate("gui.advancements", &[]);
         let tw = atlas.font.width_text(&title);
@@ -432,7 +444,7 @@ impl Game<'_> {
                     }
                     let (x, y) = pos(i);
                     let (x, y) = ((ox + x) as f32, (oy + y) as f32);
-                    let atlas = &self.atlas;
+                    let atlas = &self.gui.atlas;
                     batch.sprite_scaled(
                         atlas,
                         frame_sprite(d.frame, done),
@@ -449,7 +461,7 @@ impl Game<'_> {
             }
         }
         // The window, tabs and title.
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         batch.sprite_region(
             atlas,
             "gui/advancements/window",
@@ -463,7 +475,7 @@ impl Game<'_> {
                 let (x, y) = tab_pos(ty, i);
                 let sprite = tab_sprite(ty, i, ty.3, Some(t) == tab);
                 batch.sprite_scaled(
-                    &self.atlas,
+                    &self.gui.atlas,
                     &sprite,
                     left + x,
                     top + y,
@@ -482,7 +494,7 @@ impl Game<'_> {
                 }
             }
         }
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let title = tab.and_then(|t| tree.list[t].display.as_ref()).map_or_else(
             || Text::translate("gui.advancements", &[]),
             |d| text_of(&d.title),
@@ -497,7 +509,7 @@ impl Game<'_> {
             }
         }
         // Done.
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let (bx, by) = ((w / 2.0 - 100.0).floor(), h - FOOTER + 6.0);
         let hover = ui::hovered(self.cursor, bx, by, 200.0, 20.0);
         ui::button(
@@ -520,7 +532,7 @@ impl Game<'_> {
                 let (cx, cy) = self.cursor;
                 if cx > x && cx < x + ty.1 && cy > y && cy < y + ty.2 {
                     if let Some(d) = &tree.list[t].display {
-                        ui::tooltip(batch, &self.atlas, &[text_of(&d.title)], self.cursor);
+                        ui::tooltip(batch, &self.gui.atlas, &[text_of(&d.title)], self.cursor);
                     }
                     break;
                 }
@@ -604,7 +616,7 @@ impl Game<'_> {
                 ],
             )
         });
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let progress_w = progress.as_ref().map_or(0.0, |t| atlas.font.width_text(t)) as i32;
         let top_side = title_bottom + desc_h >= INSIDE_H;
         let amount = if a.criteria.is_empty() || total == 0 {

@@ -1,6 +1,6 @@
 [workspace]
-exclude = ["launcher", "crates/horizon-telemetry-server"]
-members = ["crates/horizon-core", "crates/horizon-dualsense", "crates/horizon-world", "crates/voxel-kernels", "crates/horizon-client", "crates/horizon-server-files", "crates/horizon-server", "crates/horizon-bots", "crates/horizon-assets", "crates/horizon-protocol", "crates/horizon-theme", "crates/horizon-shaderpack", "crates/horizon-prepare", "crates/horizon-telemetry", "crates/horizon-bench", "crates/horizon-friends", "crates/horizon-relay", "crates/horizon-mod-sdk", "crates/horizon-mods", "crates/horizon-mods/tests/guest", "crates/cargo-horizon-mod", "crates/horizon-port-pack", "crates/horizon-mod-sdk/examples/coords-hud", "xtask"]
+exclude = ["launcher", "crates/horizon-telemetry-server", "third_party/wgpu-hal"]
+members = ["crates/horizon-core", "crates/horizon-dualsense", "crates/horizon-threads", "crates/horizon-world", "crates/voxel-kernels", "crates/horizon-client", "crates/horizon-server-files", "crates/horizon-server", "crates/horizon-bots", "crates/horizon-assets", "crates/horizon-protocol", "crates/horizon-theme", "crates/horizon-shaderpack", "crates/horizon-prepare", "crates/horizon-telemetry", "crates/horizon-bench", "crates/horizon-friends", "crates/horizon-relay", "crates/horizon-mod-sdk", "crates/horizon-mods", "crates/horizon-mods/tests/guest", "crates/cargo-horizon-mod", "crates/horizon-port-pack", "crates/horizon-mod-sdk/examples/coords-hud", "xtask"]
 resolver = "2"
 
 [workspace.package]
@@ -15,6 +15,14 @@ too_many_arguments = "allow"
 type_complexity = "allow"
 needless_range_loop = "allow"
 large_enum_variant = "allow"
+
+# wgpu-hal 30.0.1 with gfx-rs/wgpu#10124: wgpu 30 creates a Vulkan descriptor
+# pool with no pool sizes while it creates the device, which Vulkan allows only
+# since 1.3.215, and Intel's Windows driver for 6th-10th gen iGPUs (HD 520/530,
+# UHD 620/630) crashes on it with an access violation (#746). Drop this and the
+# folder once a wgpu release has the fix.
+[patch.crates-io]
+wgpu-hal = { path = "third_party/wgpu-hal" }
 
 # Line tables keep file:line in backtraces; full debug info made every
 # example and test binary hundreds of megabytes and slow to link.

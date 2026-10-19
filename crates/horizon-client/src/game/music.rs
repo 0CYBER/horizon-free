@@ -50,7 +50,7 @@ impl Game<'_> {
         let (background, probe_volume) = match eye {
             Some(eye) => {
                 let (dimension, biome) = (self.dim.id(), self.biome_at(eye));
-                let tables = &self.res.music;
+                let tables = self.res.music();
                 (
                     tables.background(dimension, biome),
                     tables.volume(dimension, biome),
@@ -81,7 +81,7 @@ impl Game<'_> {
             .chunks
             .get(&(x >> 4, z >> 4))
             .map_or("minecraft:plains", |c| {
-                self.res.biomes.list[c.biome(x, y, z) as usize]
+                self.res.biomes().list[c.biome(x, y, z) as usize]
                     .name
                     .as_str()
             })
@@ -89,11 +89,11 @@ impl Game<'_> {
     /// `isEyeInFluid(WATER)`: the eye inside the water of its block column.
     fn eye_in_water(&self, x: f64, eye_y: f64, z: f64) -> bool {
         let (bx, by, bz) = (x.floor() as i32, eye_y.floor() as i32, z.floor() as i32);
-        let f = self.res.facts.get(self.world.block(bx, by, bz));
+        let f = self.res.facts().get(self.world.block(bx, by, bz));
         if f.fluid != Fluid::Water {
             return false;
         }
-        let above = self.res.facts.get(self.world.block(bx, by + 1, bz));
+        let above = self.res.facts().get(self.world.block(bx, by + 1, bz));
         let height = if above.fluid == Fluid::Water {
             1.0
         } else {
@@ -111,7 +111,7 @@ impl Game<'_> {
         };
         let feet = [p.position.x, p.position.y, p.position.z];
         let eye_y = feet[1] + f64::from(p.dimensions.eye_height);
-        let sounds = self.res.ambient.get(self.dim.id(), self.biome_at(feet));
+        let sounds = self.res.ambient().get(self.dim.id(), self.biome_at(feet));
         let underwater = self.eye_in_water(feet[0], eye_y, feet[2]);
         let world = &self.world;
         let light = |b: [i32; 3]| {
@@ -123,7 +123,7 @@ impl Game<'_> {
             f64::from(p.dimensions.height),
         );
         let registry = &self.pack.assets.registry;
-        let facts = &self.res.facts;
+        let facts = self.res.facts();
         let bubble_column = horizon_client::ambience::bubble_column_in(
             [
                 feet[0] - half,

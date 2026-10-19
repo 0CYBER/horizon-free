@@ -9,7 +9,10 @@ use crate::{
 use std::sync::Arc;
 
 mod beardifier;
-pub use beardifier::{Beardifier, JigsawJunction, RigidPiece, StructureBounds, TerrainAdjustment};
+pub use beardifier::{
+    Beardifier, JigsawJunction, KernelJunction, KernelPiece, RigidPiece, StructureBounds,
+    TerrainAdjustment, TerrainKernel,
+};
 mod cache;
 mod world_fields;
 pub use world_fields::{
@@ -90,6 +93,7 @@ pub struct SamplerContext {
     scratch: Vec<Vec<f32>>,
     caches: Option<Vec<cache::CacheCell>>,
     fields: WorldFields,
+    sparse: bool,
 }
 impl SamplerContext {
     fn with_buffer<T>(
@@ -102,6 +106,13 @@ impl SamplerContext {
         let result = sample(self, &mut buffer);
         self.scratch.push(buffer);
         result
+    }
+    /// Start an independent evaluation, retaining only temporary scratch buffers.
+    /// Cached scalar/volume results and world bindings must not cross chunks or
+    /// graphs, whose cache IDs can refer to different functions.
+    pub fn reset(&mut self) {
+        self.caches = self.caches.as_ref().map(|_| Vec::new());
+        self.fields = WorldFields::default();
     }
     /// Release retained storage between worlds or after unusually large work.
     pub fn clear_scratch(&mut self) {

@@ -100,11 +100,26 @@ impl Default for Limits {
 impl Limits {
     /// The prepared per-state block tables (`cached-collision.nbt`,
     /// `block-properties.nbt`, ...): trusted files with a row per block
-    /// state, which content mods' states grow past the default caps.
+    /// state, which content mods' states grow past the default caps
+    /// (vanilla's 35,723 states fill about a tenth of these; ATM10's ported
+    /// mods, 193,762 states, about half).
     pub fn tables() -> Self {
         Self {
+            max_bytes: 1 << 30,
+            max_nodes: 128_000_000,
+            max_depth: 512,
+        }
+    }
+
+    /// Structure templates (`structure/*.nbt`): vanilla reads them with
+    /// `NbtAccounter.unlimitedHeap()` (TemplateSource.readStructure), and
+    /// mods ship templates past the default node cap (YUNG's Better Ocean
+    /// Monuments' start piece, 115x64x126 blocks, holds millions of tags).
+    /// The byte cap stays as the only guard on the decompressed file.
+    pub fn templates() -> Self {
+        Self {
             max_bytes: 1 << 28,
-            max_nodes: 16_000_000,
+            max_nodes: usize::MAX,
             max_depth: 512,
         }
     }
@@ -122,13 +137,20 @@ impl std::fmt::Display for Error {
 }
 impl std::error::Error for Error {}
 
-struct Reader<'a> {
+/// Hands a streamed list's elements to the caller one at a time (see
+/// [`read_named_streaming`]).
+type Visit<'s> = &'s mut dyn FnMut(&mut ListElements<'_, '_, '_>) -> Result<(), Error>;
+
+struct Reader<'a, 's> {
     bytes: &'a [u8],
     offset: usize,
     limits: Limits,
     nodes: usize,
+    /// Lists with this key in the root compound or in a compound directly
+    /// under it are streamed to the visitor instead of kept.
+    stream: Option<(&'s str, Visit<'s>)>,
 }
-impl<'a> Reader<'a> {
+impl<'a> Reader<'a, '_> {
     fn error(&self, reason: &'static str) -> Error {
         Error {
             offset: self.offset,
@@ -264,7 +286,11 @@ impl<'a> Reader<'a> {
                         break;
                     }
                     let name = self.string()?;
-                    let value = self.payload(id, depth + 1)?;
+                    let value = if id == 9 && depth <= 1 && self.streams(&name) {
+                        self.stream_list(depth + 1)?
+                    } else {
+                        self.payload(id, depth + 1)?
+                    };
                     map.insert(name, value); // Java maps retain the last duplicate key.
                 }
                 Tag::Compound(map)
@@ -288,6 +314,82 @@ impl<'a> Reader<'a> {
             _ => return Err(self.error("unknown tag type")),
         })
     }
+    fn streams(&self, name: &JavaString) -> bool {
+        self.stream
+            .as_ref()
+            .is_some_and(|(key, _)| name.0.iter().copied().eq(key.encode_utf16()))
+    }
+    /// A list's payload handed to the visitor element by element; the tree
+    /// keeps it empty. Elements the visitor leaves are read and dropped.
+    fn stream_list(&mut self, depth: usize) -> Result<Tag, Error> {
+        if self.nodes >= self.limits.max_nodes {
+            return Err(self.error("node limit exceeded"));
+        }
+        self.nodes += 1;
+        if depth >= self.limits.max_depth {
+            return Err(self.error("depth limit exceeded"));
+        }
+        let element_id = self.byte()?;
+        let len = self.count(0)?;
+        if len > 0 && (element_id == 0 || element_id > 12) {
+            return Err(self.error("invalid list element type"));
+        }
+        if len > self.bytes.len().saturating_sub(self.offset) {
+            return Err(self.error("truncated list"));
+        }
+        let (key, visit) = self.stream.take().expect("streams() checked the visitor");
+        let mut elements = ListElements {
+            reader: self,
+            element_id,
+            depth: depth + 1,
+            len,
+            left: len,
+        };
+        let rest = visit(&mut elements).and_then(|()| {
+            while elements.next_element()?.is_some() {}
+            Ok(())
+        });
+        self.stream = Some((key, visit));
+        rest.map(|()| Tag::List(Vec::new()))
+    }
+}
+
+/// The elements of a list [`read_named_streaming`] streams, read one at a
+/// time.
+pub struct ListElements<'r, 'a, 's> {
+    reader: &'r mut Reader<'a, 's>,
+    element_id: u8,
+    depth: usize,
+    len: usize,
+    left: usize,
+}
+impl ListElements<'_, '_, '_> {
+    /// The list's length, as its header gives it.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+    /// The next element, unwrapped as [`read_named`] unwraps mixed-list
+    /// elements; `None` past the last.
+    pub fn next_element(&mut self) -> Result<Option<Tag>, Error> {
+        if self.left == 0 {
+            return Ok(None);
+        }
+        self.left -= 1;
+        let mut value = self.reader.payload(self.element_id, self.depth)?;
+        if let Tag::Compound(map) = &mut value {
+            if map.len() == 1 && map.contains_key(&JavaString::default()) {
+                value = map.remove(&JavaString::default()).unwrap();
+            }
+        }
+        Ok(Some(value))
+    }
+    /// An error at the current position in the input.
+    pub fn error(&self, reason: &'static str) -> Error {
+        self.reader.error(reason)
+    }
 }
 
 /// Read a file root (type, modified-UTF name, payload), returning bytes consumed.
@@ -297,6 +399,35 @@ pub fn read_named(bytes: &[u8], limits: Limits) -> Result<(NamedTag, usize), Err
         offset: 0,
         limits,
         nodes: 0,
+        stream: None,
+    };
+    let id = reader.byte()?;
+    let name = if id == 0 {
+        JavaString::default()
+    } else {
+        reader.string()?
+    };
+    let tag = reader.payload(id, 0)?;
+    Ok((NamedTag { name, tag }, reader.offset))
+}
+
+/// [`read_named`], except that lists keyed `key` in the root compound or in
+/// a compound directly under it are not kept: `visit` reads each one's
+/// elements as they come, and the tree holds it as an empty list. Per-state
+/// tables check hundreds of thousands of state identities this way without
+/// holding them as a tree (crate::registry::BlockTableFile).
+pub fn read_named_streaming(
+    bytes: &[u8],
+    limits: Limits,
+    key: &str,
+    visit: &mut dyn FnMut(&mut ListElements<'_, '_, '_>) -> Result<(), Error>,
+) -> Result<(NamedTag, usize), Error> {
+    let mut reader = Reader {
+        bytes,
+        offset: 0,
+        limits,
+        nodes: 0,
+        stream: Some((key, visit)),
     };
     let id = reader.byte()?;
     let name = if id == 0 {
@@ -315,6 +446,7 @@ pub fn read_network(bytes: &[u8], limits: Limits) -> Result<(Tag, usize), Error>
         offset: 0,
         limits,
         nodes: 0,
+        stream: None,
     };
     let id = reader.byte()?;
     let tag = reader.payload(id, 0)?;
@@ -657,6 +789,50 @@ impl Snbt<'_> {
 mod tests {
     use super::*;
     #[test]
+    fn streamed_lists_reach_the_visitor_and_stay_empty_in_the_tree() {
+        let list = |n: i32| Tag::List((0..n).map(Tag::Int).collect());
+        let root = NamedTag {
+            name: "".into(),
+            tag: Tag::compound([
+                ("states", list(3)),
+                ("inner", Tag::compound([("states", list(2))])),
+                (
+                    "deep",
+                    Tag::compound([("inner", Tag::compound([("states", list(1))]))]),
+                ),
+                ("other", list(4)),
+            ]),
+        };
+        let bytes = write_named(&root, Limits::default()).unwrap();
+        let mut seen = Vec::new();
+        let (read, used) = read_named_streaming(&bytes, Limits::default(), "states", &mut |l| {
+            let mut values = vec![l.len() as i32];
+            // Elements left unread are skipped.
+            if let Some(Tag::Int(v)) = l.next_element()? {
+                values.push(v);
+            }
+            seen.push(values);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(used, bytes.len());
+        // Compounds are written in key order: `inner` before `states`.
+        assert_eq!(seen, [vec![2, 0], vec![3, 0]]);
+        assert_eq!(read.tag.get("states"), Some(&Tag::List(Vec::new())));
+        assert_eq!(
+            read.tag.get("inner").unwrap().get("states"),
+            Some(&Tag::List(Vec::new()))
+        );
+        // Only the root and its direct children stream.
+        assert_eq!(read.tag.get("deep"), root.tag.get("deep"));
+        assert_eq!(read.tag.get("other"), root.tag.get("other"));
+        // A visitor's error stops the read.
+        let failed = read_named_streaming(&bytes, Limits::default(), "states", &mut |l| {
+            Err(l.error("refused"))
+        });
+        assert_eq!(failed.unwrap_err().reason, "refused");
+    }
+    #[test]
     fn wire_node_budget_includes_mixed_list_wrappers() {
         let tag = Tag::List(vec![Tag::Int(1), Tag::Byte(2)]);
         let limits = Limits {
@@ -671,6 +847,18 @@ mod tests {
         };
         assert!(write_network(&tag, limits).is_err());
         assert!(read_network(&bytes, limits).is_err());
+    }
+    #[test]
+    fn templates_read_past_the_default_node_cap() {
+        // A big mod template (YUNG's monument start) holds more tags than the
+        // default cap; vanilla reads templates with an unlimited accounter.
+        let root = NamedTag {
+            name: JavaString::default(),
+            tag: Tag::compound([("blocks", Tag::List(vec![Tag::Byte(1); 1_000_001]))]),
+        };
+        let bytes = write_named(&root, Limits::templates()).unwrap();
+        assert!(read_named(&bytes, Limits::default()).is_err());
+        assert_eq!(read_named(&bytes, Limits::templates()).unwrap().0, root);
     }
     #[test]
     fn depth_boundary_and_every_truncated_prefix() {

@@ -99,30 +99,16 @@ impl Game<'_> {
     }
     /// `getHeight(WORLD_SURFACE)`: above the highest non-air block.
     pub(super) fn world_surface(&self, x: i32, z: i32) -> i32 {
-        let (min, max) = (super::MIN_Y, super::MIN_Y + super::HEIGHT);
-        (min..max)
-            .rev()
-            .find(|&y| !self.res.facts.is_air(self.world.block(x, y, z)))
-            .map_or(min, |y| y + 1)
+        self.world
+            .world_surface(x, z, |id| self.res.facts().is_air(id))
     }
-    /// `BeaconBlockEntity.tick` for every beacon.
-    pub(super) fn tick_beacons(&mut self) {
-        let keys: Vec<(i32, i32, i32)> = self
-            .world
-            .block_entities
-            .iter()
-            .filter(|(_, e)| matches!(e, BlockEntity::Beacon(_)))
-            .map(|(k, _)| *k)
-            .collect();
-        for key in keys {
-            let Some(BlockEntity::Beacon(mut b)) = self.world.block_entities.remove(&key) else {
-                continue;
-            };
-            self.tick_beacon(key, &mut b);
-            self.world
-                .block_entities
-                .insert(key, BlockEntity::Beacon(b));
-        }
+    /// `BeaconBlockEntity.tick` of the beacon at `key`.
+    pub(super) fn tick_beacon_at(&mut self, key: (i32, i32, i32)) {
+        let Some(BlockEntity::Beacon(mut b)) = self.world.block_entities.take(&key) else {
+            return;
+        };
+        self.tick_beacon(key, &mut b);
+        self.world.block_entities.put(key, BlockEntity::Beacon(b));
     }
     fn tick_beacon(&mut self, (x, y, z): (i32, i32, i32), b: &mut Beacon) {
         let mut check = if b.last_check_y < y {
@@ -136,7 +122,7 @@ impl Game<'_> {
         let mut i = 0;
         while i < 10 && check <= surface {
             let state = self.world.block(x, check, z);
-            let f = self.res.facts.get(state);
+            let f = self.res.facts().get(state);
             if let Some(color) = self.beam_color(&f.name) {
                 if b.checking.len() <= 1 {
                     b.checking.push((color, 1));
@@ -197,7 +183,7 @@ impl Game<'_> {
     fn beacon_base(&self, x: i32, y: i32, z: i32) -> i32 {
         let base = self
             .res
-            .items
+            .items()
             .block_tags
             .get("minecraft:beacon_base_blocks");
         let mut levels = 0;
@@ -208,7 +194,7 @@ impl Game<'_> {
             }
             let ok = (x - step..=x + step).all(|lx| {
                 (z - step..=z + step).all(|lz| {
-                    let name = &self.res.facts.get(self.world.block(lx, ly, lz)).name;
+                    let name = &self.res.facts().get(self.world.block(lx, ly, lz)).name;
                     base.is_some_and(|t| t.contains(&**name))
                 })
             });
@@ -220,7 +206,11 @@ impl Game<'_> {
         levels
     }
     /// `applyEffects`: the powers for players within `levels * 10 + 10` (any height above).
+    /// `BeaconBlockEntity.applyEffects`: every player in range.
     fn beacon_effects(&mut self, p: [i32; 3], b: &Beacon) {
+        self.for_each_player(|g| g.beacon_effects_on_player(p, b));
+    }
+    fn beacon_effects_on_player(&mut self, p: [i32; 3], b: &Beacon) {
         let Some(primary) = b.primary.as_deref().and_then(effect_id) else {
             return;
         };
@@ -385,7 +375,7 @@ impl Game<'_> {
         let levels = self.beacon_levels();
         let sel = self.station.as_ref().map_or([None; 2], |s| s.beacon);
         let paid = self.station.as_ref().is_some_and(|s| s.inputs[0].is_some());
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         batch.fill(
             atlas,
             0.0,
@@ -406,7 +396,7 @@ impl Game<'_> {
             ("block.minecraft.beacon.secondary", "Secondary Power", 169.0),
         ] {
             let text = self.translate(key, fallback);
-            let atlas = &self.atlas;
+            let atlas = &self.gui.atlas;
             let w = HudBatch::text_width(atlas, &text);
             batch.text(
                 atlas,
@@ -421,7 +411,7 @@ impl Game<'_> {
             let x = [20.0, 41.0, 63.0, 86.0, 108.0][i];
             self.draw_item(batch, &ItemStack::new(item, 1), bx + x, by + 109.0);
         }
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let mut tooltip = None;
         let button =
             |batch: &mut HudBatch, x: f32, y: f32, active: bool, selected: bool, icon: &str| {
@@ -503,7 +493,7 @@ impl Game<'_> {
         if let Some(slot) = self.slot_at(batch, self.cursor.0, self.cursor.1) {
             let (sx, sy) = self.slot_position(slot);
             batch.fill(
-                &self.atlas,
+                &self.gui.atlas,
                 ox + sx,
                 oy + sy,
                 16.0,
@@ -524,7 +514,13 @@ impl Game<'_> {
     }
     /// `BeaconRenderer`: each section's rotating solid beam and its glow.
     pub(super) fn beacon_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
-        let Some(s) = self.atlas.sprites.get("entity/beacon/beacon_beam").copied() else {
+        let Some(s) = self
+            .gui
+            .atlas
+            .sprites
+            .get("entity/beacon/beacon_beam")
+            .copied()
+        else {
             return;
         };
         let time = (self.world.game_time.rem_euclid(40)) as f32 + alpha as f32;

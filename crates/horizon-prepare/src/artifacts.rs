@@ -11,9 +11,10 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 const LAUNCHER_HINT: &str =
-    "Horizon does not download the game: install Minecraft Java Edition with the official \
-launcher, play {version} once, then rerun. If the launcher uses another game directory, \
-pass --minecraft-dir or set HORIZON_MINECRAFT_DIR.";
+    "Horizon does not download the game: play {version} once in the launcher you play \
+Minecraft Java Edition with (the official launcher, Prism Launcher, MultiMC...) so it downloads \
+the game's files, then rerun. If that launcher keeps them in another folder, pass \
+--minecraft-dir or set HORIZON_MINECRAFT_DIR.";
 const SERVER_HINT: &str = "Horizon does not download the game: download the {version} server jar yourself (minecraft.net/download/server \
 while {version} is the current release, otherwise the downloads.server.url in your launcher's \
 versions/{version}/{version}.json), then pass --server-jar PATH or set HORIZON_SERVER_JAR.";
@@ -337,8 +338,9 @@ fn native_library_matches(library: &Value, names: &[&str]) -> bool {
     true
 }
 
-/// The client libraries the official launcher installs on this OS and architecture.
-fn client_library_artifacts(manifest: &Value) -> Result<Vec<&Value>, String> {
+/// The client libraries the official launcher installs on this OS and architecture: each
+/// library's Maven name and its download.
+fn client_library_artifacts(manifest: &Value) -> Result<Vec<(&str, &Value)>, String> {
     let libraries = manifest
         .get("libraries")
         .and_then(Value::as_array)
@@ -353,7 +355,8 @@ fn client_library_artifacts(manifest: &Value) -> Result<Vec<&Value>, String> {
             continue;
         };
         if library_allowed(library)? && native_library_matches(library, &names) {
-            artifacts.push(artifact);
+            let name = library.get("name").and_then(Value::as_str).unwrap_or("");
+            artifacts.push((name, artifact));
         }
     }
     Ok(artifacts)
@@ -372,6 +375,35 @@ pub(crate) fn safe_relative(path: &str) -> Option<PathBuf> {
         return None;
     }
     Some(parts.iter().collect())
+}
+
+/// A launcher's copy of the library `name`, whose path in the version JSON is `relative`, under
+/// its game folder `minecraft`: at that path, else where Prism Launcher keeps it (#849). Prism's
+/// metadata moves a native jar's classifier into its artifact name
+/// (`com.mojang:jtracy:1.14.38:natives-windows` is its `com.mojang:jtracy-natives-windows:1.14.38`)
+/// and Prism keeps libraries at their name's path, so the same jar, with the same sha1, is in
+/// `com/mojang/jtracy-natives-windows/1.14.38/jtracy-natives-windows-1.14.38.jar`. The path the
+/// version JSON gives is returned when neither exists, for the error to name.
+pub fn launcher_library(minecraft: &Path, name: &str, relative: &Path) -> PathBuf {
+    let libraries = minecraft.join("libraries");
+    let official = libraries.join(relative);
+    if official.is_file() {
+        return official;
+    }
+    if let [group, artifact, version, classifier] = name.split(':').collect::<Vec<_>>()[..] {
+        let artifact = format!("{artifact}-{classifier}");
+        let path = format!(
+            "{}/{artifact}/{version}/{artifact}-{version}.jar",
+            group.replace('.', "/")
+        );
+        if let Some(prism) = safe_relative(&path)
+            .map(|p| libraries.join(p))
+            .filter(|p| p.is_file())
+        {
+            return prism;
+        }
+    }
+    official
 }
 
 fn artifact_fields(artifact: &Value) -> Result<(&str, &str), String> {
@@ -502,11 +534,11 @@ pub fn import(
     let server = import_server(lock, server_jar)?;
     let (server, server_libraries) = unpack_server(server, &lock.directory, id)?;
     let mut client_libraries = Vec::new();
-    for artifact in client_library_artifacts(&manifest)? {
+    for (name, artifact) in client_library_artifacts(&manifest)? {
         let (path, sha1) = artifact_fields(artifact)?;
         let relative = safe_relative(path).ok_or("Unsafe library path")?;
         client_libraries.push(import_copy(
-            &minecraft.join("libraries").join(&relative),
+            &launcher_library(&minecraft, name, &relative),
             &lock.directory.join("libraries/client").join(&relative),
             sha1,
             "sha1",
@@ -744,7 +776,7 @@ pub fn verify(lock: &Lock) -> Result<Artifacts, String> {
 /// `client_libraries`); the client-side exporters compile against them.
 pub fn client_libraries(lock: &Lock, manifest: &Value) -> Result<Vec<PathBuf>, String> {
     let mut libraries = Vec::new();
-    for artifact in client_library_artifacts(manifest)? {
+    for (_, artifact) in client_library_artifacts(manifest)? {
         let (path, sha1) = artifact_fields(artifact)?;
         let relative = safe_relative(path).ok_or("Unsafe client library path")?;
         let library = lock.directory.join("libraries/client").join(&relative);
@@ -990,6 +1022,43 @@ mod tests {
             fs::read(target.join("jars/client.jar")).unwrap(),
             fs::read(fixture.imported(&fixture.source).join("jars/client.jar")).unwrap()
         );
+    }
+
+    /// A native jar is found where the official launcher keeps it, else under the name Prism
+    /// Launcher's metadata gives it (#849); a plain library only at the version JSON's path.
+    #[test]
+    fn libraries_are_found_where_prism_launcher_keeps_them() {
+        let fixture = Imports::new();
+        let minecraft = &fixture.directory;
+        let official = Path::new("com/mojang/jtracy/1.14.38/jtracy-1.14.38-natives-windows.jar");
+        let name = "com.mojang:jtracy:1.14.38:natives-windows";
+        let prism = minecraft.join(
+            "libraries/com/mojang/jtracy-natives-windows/1.14.38/jtracy-natives-windows-1.14.38.jar",
+        );
+        assert_eq!(
+            launcher_library(minecraft, name, official),
+            minecraft.join("libraries").join(official)
+        );
+        fs::create_dir_all(prism.parent().unwrap()).unwrap();
+        fs::write(&prism, b"natives").unwrap();
+        assert_eq!(launcher_library(minecraft, name, official), prism);
+        let mojang = minecraft.join("libraries").join(official);
+        fs::create_dir_all(mojang.parent().unwrap()).unwrap();
+        fs::write(&mojang, b"natives").unwrap();
+        assert_eq!(launcher_library(minecraft, name, official), mojang);
+        let plain = Path::new("com/mojang/jtracy/1.14.38/jtracy-1.14.38.jar");
+        assert_eq!(
+            launcher_library(minecraft, "com.mojang:jtracy:1.14.38", plain),
+            minecraft.join("libraries").join(plain)
+        );
+        for unsafe_name in ["a:..:1:x", "a:b\\c:1:x"] {
+            let path = launcher_library(minecraft, unsafe_name, plain);
+            assert_eq!(
+                path,
+                minecraft.join("libraries").join(plain),
+                "{unsafe_name}"
+            );
+        }
     }
 
     #[test]

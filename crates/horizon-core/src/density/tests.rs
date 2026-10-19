@@ -501,6 +501,28 @@ fn grid_interpolation_uses_child_bulk_corners_and_preserves_aligned_delegation()
         .unwrap();
     assert!(output.iter().all(|v| v.to_bits() == (-0.0_f32).to_bits()));
     assert_eq!(traced.volumes.lock().unwrap()[1], volume);
+    let distant = DensityVolume::new([16, 49, 16], [-8192, -64, -8192], [1024, 8, 1024]).unwrap();
+    let mut output = vec![19.; distant.size()];
+    sampler
+        .sample_volume(&mut SamplerContext::sparse(), &mut output, distant)
+        .unwrap();
+    assert_eq!(
+        traced.volumes.lock().unwrap()[2],
+        distant,
+        "far samples must not expand to a block-resolution bounding box"
+    );
+    let unaligned = DensityVolume::new([2; 3], [-5, -9, -7], [1024, 8, 1024]).unwrap();
+    let mut output = [19.; 8];
+    sampler
+        .sample_volume(&mut SamplerContext::sparse(), &mut output, unaligned)
+        .unwrap();
+    assert!(output.iter().all(|&v| v == 0.));
+    assert!(
+        traced.volumes.lock().unwrap()[3..]
+            .iter()
+            .all(|v| v.size() == 8),
+        "unaligned far points use bounded corner queries"
+    );
     assert!(InterpolatedSampler::new(traced.clone(), 0, 8).is_err());
     assert!(InterpolatedSampler::new(traced, 4, -1).is_err());
 }
@@ -754,4 +776,186 @@ fn spline_lazy_branch_failure_preserves_completed_output_and_returns_scratch() {
     assert_eq!(output, [7.0, 19.0]);
     assert_eq!(context.scratch.len(), 2);
     assert_eq!(sampler.sample_value(&mut context, [0; 3]), Ok(7.0));
+}
+
+#[test]
+fn reset_retains_scratch_but_discards_graph_caches_and_world_bindings() {
+    let binding = Arc::new(ConstantSampler(17.0));
+    let lifetime = Arc::downgrade(&binding);
+    let mut context = SamplerContext::cached()
+        .with_world_fields(WorldFields::default().with_field(WorldField::Beardifier, binding));
+    let cached = CachingDensitySampler::new(
+        0,
+        Arc::new(ContextBoundSampler::new(WorldField::Beardifier)),
+    )
+    .unwrap();
+    let volume = DensityVolume::new([2; 3], [0; 3], [1; 3]).unwrap();
+    let mut output = [0.0; 8];
+    cached
+        .sample_volume(&mut context, &mut output, volume)
+        .unwrap();
+    assert_eq!(output, [17.0; 8]);
+    assert_eq!(cached.sample_value(&mut context, [9; 3]), Ok(17.0));
+    context
+        .with_buffer(128, |_, buffer| {
+            buffer.fill(99.0);
+            Ok(())
+        })
+        .unwrap();
+    let allocation = context.scratch[0].as_ptr();
+    let capacity = context.scratch[0].capacity();
+    context.reset();
+    assert!(lifetime.upgrade().is_none());
+    assert!(context.caches.as_ref().unwrap().is_empty());
+    assert_eq!(context.scratch[0].as_ptr(), allocation);
+    assert_eq!(context.scratch[0].capacity(), capacity);
+    // Same coordinates and cache ID must resolve the new context's fallback.
+    assert_eq!(cached.sample_value(&mut context, [9; 3]), Ok(0.0));
+    cached
+        .sample_volume(&mut context, &mut output, volume)
+        .unwrap();
+    assert_eq!(output, [0.0; 8]);
+    // A different graph may reuse IDs without inheriting scalar/volume results.
+    context.reset();
+    let replacement = CachingDensitySampler::new(0, Arc::new(ConstantSampler(3.0))).unwrap();
+    assert_eq!(replacement.sample_value(&mut context, [9; 3]), Ok(3.0));
+    replacement
+        .sample_volume(&mut context, &mut output, volume)
+        .unwrap();
+    assert_eq!(output, [3.0; 8]);
+}
+
+#[test]
+fn reset_after_sampling_error_drops_blender_and_preserves_uncached_mode() {
+    let blender = Arc::new(EmptyBlender);
+    let lifetime = Arc::downgrade(&blender);
+    let mut context =
+        SamplerContext::default().with_world_fields(WorldFields::default().with_blender(blender));
+    let result: Result<(), SampleError> = context.with_buffer(64, |_, buffer| {
+        buffer.fill(42.0);
+        Err(SampleError::RecursiveCache)
+    });
+    assert_eq!(result, Err(SampleError::RecursiveCache));
+    let allocation = context.scratch[0].as_ptr();
+    context.reset();
+    assert!(lifetime.upgrade().is_none());
+    assert!(context.caches.is_none());
+    context
+        .with_buffer(32, |_, buffer| {
+            assert_eq!(buffer.as_ptr(), allocation);
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn unary_bulk_keeps_child_failure_writes_and_full_buffer_tail() {
+    #[derive(Debug)]
+    struct PartialInput;
+    impl DensitySampler for PartialInput {
+        fn sample_value(&self, _: &mut SamplerContext, _: [i32; 3]) -> Result<f32, SampleError> {
+            Err(SampleError::ZeroGradientPeriod)
+        }
+        fn sample_volume(
+            &self,
+            _: &mut SamplerContext,
+            buffer: &mut [f32],
+            _: DensityVolume,
+        ) -> Result<(), SampleError> {
+            buffer[0] = -3.0;
+            Err(SampleError::ZeroGradientPeriod)
+        }
+    }
+    let volume = DensityVolume::new([1; 3], [0; 3], [1; 3]).unwrap();
+    let mut context = SamplerContext::default();
+    let mut buffer = [17.0; 3];
+    let sampler = UnarySampler {
+        input: Arc::new(PartialInput),
+        operation: UnaryOp::Square,
+    };
+    assert_eq!(
+        sampler.sample_volume(&mut context, &mut buffer, volume),
+        Err(SampleError::ZeroGradientPeriod)
+    );
+    assert_eq!(buffer, [-3.0, 17.0, 17.0]);
+    let sampler = UnarySampler {
+        input: Arc::new(ConstantSampler(-3.0)),
+        operation: UnaryOp::Square,
+    };
+    sampler
+        .sample_volume(&mut context, &mut buffer, volume)
+        .unwrap();
+    assert_eq!(buffer, [9.0; 3]);
+}
+
+#[test]
+fn binary_bulk_preserves_child_failure_order_and_output() {
+    #[derive(Debug)]
+    struct Input {
+        name: &'static str,
+        value: f32,
+        fail: bool,
+        calls: Arc<std::sync::Mutex<Vec<&'static str>>>,
+    }
+    impl DensitySampler for Input {
+        fn sample_value(&self, _: &mut SamplerContext, _: [i32; 3]) -> Result<f32, SampleError> {
+            unreachable!("bulk-only fixture")
+        }
+        fn sample_volume(
+            &self,
+            _: &mut SamplerContext,
+            buffer: &mut [f32],
+            _: DensityVolume,
+        ) -> Result<(), SampleError> {
+            self.calls.lock().unwrap().push(self.name);
+            buffer.fill(self.value);
+            if self.fail {
+                Err(SampleError::ZeroGradientPeriod)
+            } else {
+                Ok(())
+            }
+        }
+    }
+    let volume = DensityVolume::new([1; 3], [0; 3], [1; 3]).unwrap();
+    for left_fails in [true, false] {
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sampler = BinarySampler {
+            left: Arc::new(Input {
+                name: "left",
+                value: 3.0,
+                fail: left_fails,
+                calls: calls.clone(),
+            }),
+            right: Arc::new(Input {
+                name: "right",
+                value: 7.0,
+                fail: true,
+                calls: calls.clone(),
+            }),
+            operation: BinaryOp::Multiply,
+        };
+        let mut context = SamplerContext::default();
+        let mut wrong_size = [17.0; 2];
+        assert!(
+            sampler
+                .sample_volume(&mut context, &mut wrong_size, volume)
+                .is_err()
+        );
+        assert_eq!(wrong_size, [17.0; 2]);
+        assert!(calls.lock().unwrap().is_empty());
+        let mut output = [17.0];
+        assert_eq!(
+            sampler.sample_volume(&mut context, &mut output, volume),
+            Err(SampleError::ZeroGradientPeriod)
+        );
+        assert_eq!(output, [3.0]);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            if left_fails {
+                vec!["left"]
+            } else {
+                vec!["left", "right"]
+            }
+        );
+    }
 }

@@ -11,7 +11,7 @@ use horizon_client::{
 };
 use serde_json::Value;
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     sync::Arc,
     time::Instant,
 };
@@ -72,13 +72,25 @@ impl Toast {
 #[derive(Default)]
 pub(super) struct AdvState {
     pub(super) tree: Arc<Tree>,
+    /// `ClientAdvancements`: a server's tree carries each advancement's
+    /// place on its tab (`DisplayInfo` x, y), in tree order.
+    pub(super) positions: Option<Vec<(f32, f32)>>,
     pub(super) progress: Progress,
     pub(super) loaded: bool,
     pub(super) toasts: VecDeque<Toast>,
     /// Awards skip the toast (`/advancement grant ... everything`).
     pub(super) quiet: bool,
     /// The inventory last seen by `inventory_changed`.
-    last_inventory: u64,
+    pub(super) last_inventory: u64,
+    /// While the game acts for a network player (`as_guest`): the
+    /// advancements whose progress changed (`progressChanged`), the recipes
+    /// unlocked and the announcements, for their client and everyone's.
+    pub(super) changed: BTreeSet<usize>,
+    pub(super) unlocked: Vec<String>,
+    pub(super) announced: Vec<Text>,
+    /// The tree being read on another thread since the world opened
+    /// (`prefetch_advancement_tree`), taken by the first `advancement_tree`.
+    pub(super) pending_tree: Option<std::thread::JoinHandle<Tree>>,
 }
 /// The game's world for predicates.
 struct View<'a, 'g>(&'a Game<'g>);
@@ -94,7 +106,7 @@ impl adv::World for View<'_, '_> {
             .map(|c| {
                 self.0
                     .res
-                    .biomes
+                    .biomes()
                     .get(c.biome(p[0], p[1], p[2]))
                     .name
                     .clone()
@@ -106,7 +118,7 @@ impl adv::World for View<'_, '_> {
     }
     fn block(&self, p: [i32; 3]) -> (String, BTreeMap<String, String>) {
         let state = self.0.world.block(p[0], p[1], p[2]);
-        let name = self.0.res.facts.get(state).name.to_string();
+        let name = self.0.res.facts().get(state).name.to_string();
         let props = self
             .0
             .pack
@@ -126,7 +138,7 @@ impl adv::World for View<'_, '_> {
         match self
             .0
             .res
-            .facts
+            .facts()
             .get(self.0.world.block(p[0], p[1], p[2]))
             .fluid
         {
@@ -140,7 +152,7 @@ impl adv::World for View<'_, '_> {
             !self
                 .0
                 .res
-                .facts
+                .facts()
                 .get(self.0.world.block(p[0], y, p[2]))
                 .full_collision
         })
@@ -153,47 +165,28 @@ impl adv::World for View<'_, '_> {
         (1..=5).any(|d| {
             self.0
                 .res
-                .facts
+                .facts()
                 .get(self.0.world.block(p[0], p[1] - d, p[2]))
                 .name
                 .ends_with("campfire")
         })
     }
     fn in_tag(&self, registry: &str, tag: &str, id: &str) -> bool {
-        let items = &self.0.res.items;
+        let items = &self.0.res.items();
         match registry {
             "item" => items.item_tags.get(tag).is_some_and(|t| t.contains(id)),
             "block" => items.block_tags.get(tag).is_some_and(|t| t.contains(id)),
-            "entity_type" => self.0.res.mob_data.entity_has(tag, id),
-            "worldgen/biome" => self.0.res.mob_data.biome_has(tag, id),
+            "entity_type" => self.0.res.mob_data().entity_has(tag, id),
+            "worldgen/biome" => self.0.res.mob_data().biome_has(tag, id),
             _ => false,
         }
     }
 }
 fn now_text() -> String {
-    // "yyyy-MM-dd HH:mm:ss Z" in UTC.
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs()) as i64;
-    let days = secs.div_euclid(86400);
-    let rem = secs.rem_euclid(86400);
-    // Civil from days (Howard Hinnant's algorithm).
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    format!(
-        "{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02} +0000",
-        rem / 3600,
-        rem % 3600 / 60,
-        rem % 60
-    )
+    adv::date_text(secs)
 }
 impl Game<'_> {
     /// `ItemPredicate.test` (the `item_filter` of a filtered item modifier).
@@ -217,30 +210,47 @@ pub(super) fn item_view(s: &ItemStack) -> ItemView {
 }
 impl Game<'_> {
     fn adv_path(&self) -> Option<std::path::PathBuf> {
-        let uuid = self.level.player_uuid?;
-        let hex: String = uuid.iter().map(|v| format!("{:08x}", *v as u32)).collect();
-        let text = format!(
-            "{}-{}-{}-{}-{}",
-            &hex[0..8],
-            &hex[8..12],
-            &hex[12..16],
-            &hex[16..20],
-            &hex[20..32]
-        );
-        Some(
-            self.world_root
-                .join("players/advancements")
-                .join(format!("{text}.json")),
-        )
+        Some(super::stats::player_json(
+            &self.world_root,
+            "advancements",
+            self.level.player_uuid?,
+        ))
+    }
+    /// A server with no player of its own and nobody it acts for: there is
+    /// no player for advancements and statistics.
+    pub(super) fn no_player_here(&self) -> bool {
+        self.options.dedicated.is_some() && self.lan_acting.is_none()
+    }
+    /// The advancement tree, loaded once.
+    pub(super) fn advancement_tree(&mut self) -> Arc<Tree> {
+        if self.adv.tree.list.is_empty() {
+            let tree = match self.adv.pending_tree.take().map(|h| h.join()) {
+                Some(Ok(tree)) => tree,
+                _ => Tree::load(&self.options.resources.join("data")),
+            };
+            self.adv.tree = Arc::new(tree);
+        }
+        self.adv.tree.clone()
+    }
+    /// Start reading the advancement files on another thread while the world
+    /// loads. The first tick's first criterion trigger used to read and parse
+    /// all of them on the game thread (about 60 ms).
+    pub(super) fn prefetch_advancement_tree(&mut self) {
+        if !self.adv.tree.list.is_empty() || self.adv.pending_tree.is_some() {
+            return;
+        }
+        let data = self.options.resources.join("data");
+        self.adv.pending_tree = std::thread::Builder::new()
+            .name("horizon-advancements".into())
+            .spawn(move || Tree::load(&data))
+            .ok();
     }
     pub(super) fn load_advancements(&mut self) {
-        if self.adv.loaded || self.remote.is_some() {
+        if self.adv.loaded || self.remote.is_some() || self.no_player_here() {
             return;
         }
         self.adv.loaded = true;
-        if self.adv.tree.list.is_empty() {
-            self.adv.tree = Arc::new(Tree::load(&self.options.resources.join("data")));
-        }
+        self.advancement_tree();
         let progress = self
             .adv_path()
             .and_then(|p| std::fs::read_to_string(p).ok())
@@ -254,7 +264,7 @@ impl Game<'_> {
         self.ui.registries.advancements = tree.list.iter().map(|a| a.id.clone()).collect();
     }
     pub(super) fn save_advancements(&self) {
-        if !self.adv.loaded || self.remote.is_some() {
+        if !self.adv.loaded || self.remote.is_some() || self.no_player_here() {
             return;
         }
         let Some(path) = self.adv_path() else {
@@ -376,7 +386,7 @@ impl Game<'_> {
     /// `SimpleCriterionTrigger.trigger`: test each open criterion of the
     /// trigger and award what it completes.
     pub(super) fn trigger(&mut self, name: &str, test: impl Fn(&Value, &dyn adv::World) -> bool) {
-        if self.remote.is_some() {
+        if self.remote.is_some() || self.no_player_here() {
             return;
         }
         self.load_advancements();
@@ -398,20 +408,35 @@ impl Game<'_> {
                 }
             }
         }
+        if hits.is_empty() {
+            return;
+        }
         let date = now_text();
         for (ai, ci) in hits {
             let a = &tree.list[ai];
             let was = self.adv.progress.done(a);
             self.adv.progress.grant(&a.id, &a.criteria[ci].name, &date);
+            self.progress_changed(ai);
             if !was && self.adv.progress.done(a) {
                 self.award(ai);
             }
         }
     }
+    /// `PlayerAdvancements.progressChanged`, kept for a network player's client.
+    fn progress_changed(&mut self, index: usize) {
+        if self.lan_acting.is_some() {
+            self.adv.changed.insert(index);
+        }
+    }
     /// After `ServerRecipeBook.addRecipes`: the toast and the
     /// `recipe_unlocked` trigger of each recipe now known.
     pub(super) fn recipe_unlocked(&mut self, unlocked: &[String]) {
-        self.recipe_toast(unlocked);
+        if self.lan_acting.is_some() {
+            // A network player's client gets them in ClientboundRecipeBookAddPacket.
+            self.adv.unlocked.extend_from_slice(unlocked);
+        } else {
+            self.recipe_toast(unlocked);
+        }
         for r in unlocked {
             let r = r.clone();
             self.trigger("minecraft:recipe_unlocked", move |c, _| {
@@ -432,17 +457,17 @@ impl Game<'_> {
             .rewards
             .recipes
             .iter()
-            .filter(|r| self.res.stations.recipe_index.contains(r))
+            .filter(|r| self.res.stations().recipe_index.contains(r))
             .cloned()
             .collect();
         let (_, unlocked) = self
             .level
             .recipe_book
-            .add_recipes(&self.res.stations.recipe_index, &rewards);
+            .add_recipes(&self.res.stations().recipe_index, &rewards);
         for table in &a.rewards.loot {
             let items = self
                 .res
-                .items
+                .items()
                 .loot_table(table, false, None, &mut self.world.random);
             for s in items {
                 if let Some(rest) = self.give(s)
@@ -453,7 +478,8 @@ impl Game<'_> {
             }
         }
         if let Some(d) = &a.display {
-            if d.show_toast && !self.adv.quiet {
+            // A network player's client shows its own toast.
+            if d.show_toast && !self.adv.quiet && self.lan_acting.is_none() {
                 self.adv.toasts.push_back(Toast {
                     icon: d.icon.clone(),
                     frame: d.frame,
@@ -471,10 +497,21 @@ impl Game<'_> {
                     Frame::Challenge => "chat.type.advancement.challenge",
                 };
                 let name = adv_name(a);
-                self.system_message(Text::translate(
-                    key,
-                    &[Text::literal(super::chat::PLAYER_NAME), name],
-                ));
+                // PlayerList.broadcastSystemMessage: everyone hears of a
+                // network player's advancement.
+                match self.lan_acting_name.clone() {
+                    // Player.getDisplayName.
+                    Some(_) => {
+                        let player = self.target_name(super::commands::Target::Player);
+                        self.adv
+                            .announced
+                            .push(Text::translate(key, &[player, name]));
+                    }
+                    None => self.system_message(Text::translate(
+                        key,
+                        &[Text::literal(super::chat::PLAYER_NAME), name],
+                    )),
+                }
             }
         }
         self.recipe_unlocked(&unlocked);
@@ -518,7 +555,7 @@ impl Game<'_> {
             .filter_map(|s| s.as_ref())
             .filter(|s| {
                 self.res
-                    .items
+                    .items()
                     .get(&s.item)
                     .is_some_and(|i| s.count >= i.max_stack)
             })
@@ -610,6 +647,19 @@ impl Game<'_> {
             };
             adv::conditions(&c["player"], &pctx, w) && adv::item(&c["item"], &it, w)
         });
+    }
+    pub(super) fn trigger_item_entity(
+        &mut self,
+        name: &str,
+        stack: &ItemStack,
+        target: &EntityView,
+    ) {
+        if self.lan_acting.is_some() {
+            return;
+        }
+        let me = self.player_entity();
+        let it = item_view(stack);
+        self.trigger(name, |c, w| adv::item_entity(c, &me, target, &it, w));
     }
     /// `EnterBlockTrigger`: the block, its state properties and the player.
     pub(super) fn trigger_enter_block(&mut self, state: horizon_world::registry::BlockStateId) {
@@ -746,11 +796,11 @@ impl Game<'_> {
         if let Some((station, item)) = recipe {
             // RecipeToast: black description under a purple title, the
             // station at 0.6 scale in the corner over the cycling result.
-            let atlas = &self.atlas;
+            let atlas = &self.gui.atlas;
             batch.sprite(atlas, "gui/sprites/toast/recipe", x, 0.0);
             let title = self.translate("recipe.toast.title", "New Recipe(s) Unlocked!");
             let description = self.translate("recipe.toast.description", "Check your recipe book");
-            let atlas = &self.atlas;
+            let atlas = &self.gui.atlas;
             batch.text(atlas, &title, x + 30.0, 7.0, 0xFF50_0050, false);
             batch.text(atlas, &description, x + 30.0, 18.0, 0xFF00_0000, false);
             let start = batch.vertices.len();
@@ -759,7 +809,7 @@ impl Game<'_> {
             self.draw_item_model(batch, &item, x + 8.0, 8.0);
             return;
         }
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         batch.sprite(atlas, "gui/sprites/toast/advancement", x, 0.0);
         let (key, color) = match frame {
             Frame::Task => ("advancements.toast.task", 0xFF00_FFFF),
@@ -788,18 +838,25 @@ pub(super) fn adv_name(a: &adv::Advancement) -> Text {
         Frame::Challenge => text::DARK_PURPLE,
         _ => text::GREEN,
     };
-    let tooltip = text_of(&d.title)
-        .with_color(color)
+    // Advancement.decorateName: the title in the frame's colour (styles
+    // merged into it), a new line and the description.
+    let coloured = text_of(&d.title).with_color(color);
+    let mut component = coloured.component();
+    if let Some(o) = component.as_object_mut() {
+        o.insert(
+            "extra".into(),
+            serde_json::json!(["\n", text_of(&d.description).component()]),
+        );
+    }
+    let tooltip = coloured
         .append("\n")
-        .append(text_of(&d.description));
+        .append(text_of(&d.description))
+        .with_component(component);
     let title = text_of(&d.title).with_style(&Style {
         hover: Some(Box::new(tooltip)),
         ..Style::default()
     });
-    Text::literal("[")
-        .append(title)
-        .append("]")
-        .with_color(color)
+    Text::translate("chat.square_brackets", &[title]).with_color(color)
 }
 impl Game<'_> {
     /// `AdvancementCommands.Action.GRANT` on one advancement (or one of
@@ -820,6 +877,7 @@ impl Game<'_> {
             let was = self.adv.progress.done(a);
             if self.adv.progress.grant(&a.id, c, &date) {
                 changed = true;
+                self.progress_changed(index);
                 if !was && self.adv.progress.done(a) {
                     self.award(index);
                 }
@@ -831,6 +889,7 @@ impl Game<'_> {
     pub(super) fn revoke_advancement(&mut self, index: usize, criterion: Option<&str>) -> bool {
         let tree = self.adv.tree.clone();
         let a = &tree.list[index];
+        self.progress_changed(index);
         match criterion {
             Some(c) => self.adv.progress.revoke(&a.id, c),
             None => {
@@ -839,6 +898,110 @@ impl Game<'_> {
                     any |= self.adv.progress.revoke(&a.id, &c.name);
                 }
                 any
+            }
+        }
+    }
+}
+impl Game<'_> {
+    /// `ClientAdvancements.update` (ClientboundUpdateAdvancementsPacket):
+    /// the server's advancements replace or join the tree, each changed one
+    /// takes the progress sent, and one just done shows its toast. `icons`
+    /// are the added advancements' icon items by name.
+    pub(super) fn remote_advancements(
+        &mut self,
+        p: horizon_protocol::packets::play::UpdateAdvancements,
+        icons: Vec<String>,
+    ) {
+        use horizon_client::scoreboard::tag_to_json;
+        let mut list: Vec<adv::Advancement> = Vec::new();
+        let mut positions: Vec<(f32, f32)> = Vec::new();
+        if !p.reset {
+            let old = self.adv.positions.take().unwrap_or_default();
+            for (i, a) in self.adv.tree.list.iter().enumerate() {
+                if !p.removed.contains(&a.id) {
+                    list.push(a.clone());
+                    positions.push(old.get(i).copied().unwrap_or((0.0, 0.0)));
+                }
+            }
+        } else {
+            self.adv.progress = Progress::default();
+        }
+        for id in &p.removed {
+            self.adv.progress.criteria.remove(id);
+        }
+        for (a, icon) in p.added.into_iter().zip(icons) {
+            list.retain(|o| o.id != a.id);
+            let display = a.display.map(|d| adv::Display {
+                icon,
+                title: tag_to_json(&d.title),
+                description: tag_to_json(&d.description),
+                frame: match d.frame {
+                    1 => Frame::Challenge,
+                    2 => Frame::Goal,
+                    _ => Frame::Task,
+                },
+                background: d.background,
+                show_toast: d.show_toast,
+                announce: false,
+                hidden: d.hidden,
+            });
+            let mut criteria: Vec<adv::Criterion> = Vec::new();
+            for name in a.requirements.iter().flatten() {
+                if !criteria.iter().any(|c| &c.name == name) {
+                    criteria.push(adv::Criterion {
+                        name: name.clone(),
+                        trigger: String::new(),
+                        conditions: Value::Null,
+                    });
+                }
+            }
+            list.push(adv::Advancement {
+                id: a.id,
+                parent: a.parent,
+                display,
+                criteria,
+                requirements: a.requirements,
+                rewards: Default::default(),
+            });
+            positions.push((a.x, a.y));
+        }
+        let mut tree = Tree {
+            list,
+            ..Tree::default()
+        };
+        for (i, a) in tree.list.iter().enumerate() {
+            tree.by_id.insert(a.id.clone(), i);
+        }
+        self.ui.registries.advancements = tree.list.iter().map(|a| a.id.clone()).collect();
+        self.adv.tree = Arc::new(tree);
+        self.adv.positions = Some(positions);
+        let tree = self.adv.tree.clone();
+        for (id, criteria) in p.progress {
+            let Some(&i) = tree.by_id.get(&id) else {
+                continue;
+            };
+            // The client only shows whether a criterion is obtained, not when.
+            let obtained: BTreeMap<String, String> = criteria
+                .into_iter()
+                .filter(|(_, at)| at.is_some())
+                .map(|(name, _)| (name, String::new()))
+                .collect();
+            self.adv.progress.criteria.insert(id, obtained);
+            let a = &tree.list[i];
+            if !p.reset
+                && p.show
+                && self.adv.progress.done(a)
+                && let Some(d) = a.display.as_ref().filter(|d| d.show_toast)
+            {
+                self.adv.toasts.push_back(Toast {
+                    icon: d.icon.clone(),
+                    frame: d.frame,
+                    title: text_of(&d.title),
+                    slide: Slide::default(),
+                    recipes: Vec::new(),
+                    changed: false,
+                    last_changed: 0,
+                });
             }
         }
     }

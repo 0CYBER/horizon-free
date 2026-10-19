@@ -31,13 +31,14 @@ fn main() -> Result<()> {
     };
     let root = PathBuf::from(root);
     let assets = Assets::load(&root)?;
-    let mut scene = World::test_scene(&assets, 1)?;
+    let render = assets.reload(&root)?;
+    let mut scene = World::test_scene(&assets, &render, 1)?;
     let binding = collisions::load(&root, assets.registry)?;
     let resources = MotionResources::load(&root, &assets)?;
     fs::write(
         scene_json,
         serde_json::to_vec(&serde_json::json!({
-            "radius": 1, "resident_chunks": scene.chunks.len(), "model_gallery": assets.model_gallery,
+            "radius": 1, "resident_chunks": scene.chunks.len(), "model_gallery": render.model_gallery,
         }))?,
     )?;
     let mut out = BufWriter::new(fs::File::create(output)?);

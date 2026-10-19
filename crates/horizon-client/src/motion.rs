@@ -31,8 +31,7 @@ use horizon_world::{
     movement_restitution::{self, RestitutionInput, RestitutionWorld},
     movement_statistics::{self, MovementStat, MovementStatisticsWorld},
     movement_support::{self, MovementLocation},
-    nbt::{self, Limits},
-    registry::BlockStateId,
+    registry::{BlockStateId, BlockTableFile},
     world_movement::{self, MovementRequest},
     worldgen::tags::TagDefinitions,
 };
@@ -57,17 +56,27 @@ pub struct MotionResources {
     pub fluids: FluidResources,
 }
 impl MotionResources {
+    /// [`Self::load_with_facts`] with the block facts decoded here.
     pub fn load(root: &Path, assets: &Assets) -> Result<Self> {
+        Self::load_with_facts(
+            root,
+            assets,
+            &crate::blocks::BlockFacts::load(root, assets.registry)?,
+        )
+    }
+    /// The motion tables, with the block facts the game already decoded
+    /// (decoding `gameplay-facts.json` again costs a second or more and, with
+    /// a big modpack, hundreds of megabytes while it runs).
+    pub fn load_with_facts(
+        root: &Path,
+        assets: &Assets,
+        facts: &crate::blocks::BlockFacts,
+    ) -> Result<Self> {
         let attributes = Arc::new(Catalog::from_json(&serde_json::from_slice(&fs::read(
             root.join("attributes.json"),
         )?)?)?);
-        let data = nbt::read_named(
-            &fs::read(root.join("movement-properties.nbt"))?,
-            Limits::tables(),
-        )?
-        .0
-        .tag;
-        let properties = MovementProperties::from_nbt(&data, assets.registry)?;
+        let file = BlockTableFile::open(&root.join("movement-properties.nbt"), assets.registry)?;
+        let properties = MovementProperties::from_table(file.table("movement")?)?;
         let bundle: BTreeMap<String, String> =
             serde_json::from_slice(&fs::read(root.join("block-tags.json"))?)?;
         let mut definitions = TagDefinitions::default();
@@ -91,7 +100,7 @@ impl MotionResources {
         Ok(Self {
             landing: crate::landing::load(root, &properties)?,
             health: crate::health::HealthResources::load(root)?,
-            fluids: FluidResources::load(root, assets)?,
+            fluids: FluidResources::new(assets, facts)?,
             attributes,
             blocks: properties.bind(&MovementTags {
                 fences: tag("minecraft:fences")?,
@@ -215,6 +224,8 @@ pub struct PlayerMotion {
     /// Spectator mode: no physics, always flying (`Player.tick`).
     pub spectator: bool,
     pub flying: bool,
+    /// Client-side `Abilities.flyingSpeed`, adjusted by the spectator scroll wheel.
+    pub flying_speed: f32,
     /// The jump key last tick (LocalPlayer.aiStep's wasJumping).
     pub was_jumping: bool,
     /// `LocalPlayer.autoJumpEnabled` (the Auto-Jump option) and
@@ -281,19 +292,37 @@ fn attribute_error(error: impl std::fmt::Debug) -> io::Error {
     io::Error::other(format!("movement attribute: {error:?}"))
 }
 impl PlayerMotion {
-    pub fn load_environment_once(
+    /// `Player.isSweepAttack`, using the resident player's known horizontal velocity.
+    pub fn is_sweep_attack(&self, strength: f32, critical: bool, sword: bool) -> bool {
+        let movement = self.velocity;
+        let limit = f64::from(self.speed) * 2.5;
+        strength > 0.9
+            && !critical
+            && !self.sprinting
+            && self.ground.on_ground
+            && movement.x * movement.x + movement.z * movement.z < limit * limit
+            && sword
+    }
+    /// Restore login state once; a later respawn starts with fresh health and food.
+    pub fn load_saved_state_once(
         &mut self,
         pending: &mut bool,
-        extra: Option<&horizon_world::nbt::Tag>,
-    ) {
+        level: &crate::save::Level,
+    ) -> Result<()> {
         if std::mem::take(pending) {
+            let extra = level.player_extra.as_ref();
             self.fire_ticks = extra
                 .and_then(|t| crate::save::number(t.get("Fire")))
                 .unwrap_or(-20) as i32;
             self.air = extra
                 .and_then(|t| crate::save::number(t.get("Air")))
                 .unwrap_or(300) as i32;
+            self.set_health(level.health, false)?;
+            self.health.food.food = level.food;
+            self.health.food.saturation = level.saturation;
+            self.flying = level.flying;
         }
+        Ok(())
     }
     pub fn set_remaining_fire_ticks(&mut self, ticks: i32) {
         self.fire_ticks = if self.invulnerable {
@@ -360,6 +389,7 @@ impl PlayerMotion {
             invulnerable: false,
             spectator: false,
             flying: false,
+            flying_speed: 0.05,
             was_jumping: false,
             auto_jump_enabled: false,
             auto_jump_time: 0,
@@ -622,7 +652,8 @@ impl MotionWorld<'_, '_, '_> {
             entities: self.entities,
         }
     }
-    pub(crate) fn no_player_collision(&mut self, bounds: Aabb) -> Result<bool> {
+    /// `Level.noCollision(player, bounds)`: blocks and the host's entity boxes.
+    pub fn no_player_collision(&mut self, bounds: Aabb) -> Result<bool> {
         let context = self.context();
         Ok(world_movement::no_world_collision(
             &mut self.movement_collisions(),
@@ -761,7 +792,7 @@ impl MotionWorld<'_, '_, '_> {
             // Vertical flight: jump up, shift down, three times the flying speed.
             let ya = i32::from(jumping) - i32::from(self.player.shift_key_down);
             if ya != 0 {
-                self.player.velocity.y += f64::from(ya as f32 * 0.05 * 3.0);
+                self.player.velocity.y += f64::from(ya as f32 * self.player.flying_speed * 3.0);
             }
         }
         self.dry_tick(TickInput::PreparedLocal {
@@ -1835,8 +1866,8 @@ impl LivingAirWorld for MotionWorld<'_, '_, '_> {
     }
     fn flying_speed(&mut self) -> Result<f32> {
         if self.player.flying {
-            // Abilities.flyingSpeed 0.05, doubled when sprinting.
-            return Ok(if self.player.sprinting { 0.1 } else { 0.05 });
+            // Player.getFlyingSpeed: abilities speed, doubled when sprinting.
+            return Ok(self.player.flying_speed * if self.player.sprinting { 2.0 } else { 1.0 });
         }
         Ok(if self.player.sprinting {
             0.025999999
@@ -1987,6 +2018,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sword_sweep_requires_charge_ground_and_slow_horizontal_movement() {
+        let root = std::env::var_os("HORIZON_TEST_RESOURCES")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3")
+            });
+        if !root.join("movement-properties.nbt").exists() {
+            eprintln!("skipped sword sweep regression: prepared resources unavailable");
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut p = PlayerMotion::new(&resources, Vec3::ZERO).unwrap();
+        p.ground.on_ground = true;
+        p.speed = 0.1;
+        assert!(p.is_sweep_attack(1.0, false, true));
+        assert!(!p.is_sweep_attack(0.9, false, true));
+        assert!(!p.is_sweep_attack(1.0, true, true));
+        assert!(!p.is_sweep_attack(1.0, false, false));
+        p.sprinting = true;
+        assert!(!p.is_sweep_attack(1.0, false, true));
+        p.sprinting = false;
+        p.ground.on_ground = false;
+        assert!(!p.is_sweep_attack(1.0, false, true));
+        p.ground.on_ground = true;
+        p.velocity = Vec3::new(0.2, 10.0, 0.0);
+        assert!(p.is_sweep_attack(1.0, false, true));
+        p.velocity.z = 0.2;
+        assert!(!p.is_sweep_attack(1.0, false, true));
+        p.velocity = Vec3::new(f64::from(p.speed) * 2.5, 0.0, 0.0);
+        assert!(!p.is_sweep_attack(1.0, false, true));
+    }
+
+    #[test]
     fn player_stands_walks_sneaks_and_jumps_on_ghast() {
         let root = std::env::var_os("HORIZON_TEST_RESOURCES")
             .map(std::path::PathBuf::from)
@@ -1997,9 +2062,10 @@ mod tests {
             return;
         }
         let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let binding = crate::collisions::load(&root, assets.registry).unwrap();
         let resources = MotionResources::load(&root, &assets).unwrap();
-        let mut scene = World::test_scene(&assets, 1).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 1).unwrap();
         let entities = [Aabb::new(
             Vec3::new(10.0, 80.0, 10.0),
             Vec3::new(14.0, 84.0, 14.0),
@@ -2061,16 +2127,58 @@ mod tests {
     }
 
     #[test]
+    fn spectator_scroll_speed_controls_horizontal_and_vertical_flight() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let run = |steps| {
+            let mut scene = World::test_scene(&assets, &render, 2).unwrap();
+            let start = Vec3::new(20.5, 12.0, 20.5);
+            let mut player = PlayerMotion::new(&resources, start).unwrap();
+            player.spectator = true;
+            player.flying_speed = crate::mouse::spectator_flying_speed(player.flying_speed, steps);
+            MotionWorld {
+                entities: &[],
+                player: &mut player,
+                scene: &mut scene,
+                assets: &assets,
+                collision_binding: &binding,
+                resources: &resources,
+            }
+            .controlled_simulation_tick(crate::sprint::Keys {
+                forward: true,
+                jump: true,
+                ..Default::default()
+            })
+            .unwrap();
+            player.position.subtract(start)
+        };
+        let stopped = run(-100);
+        assert_eq!(stopped, Vec3::ZERO);
+        let normal = run(0);
+        let fast = run(10);
+        assert!(normal.y > 0.0 && normal.z > 0.0);
+        assert!((fast.y - normal.y * 2.0).abs() < 1e-6);
+        assert!((fast.z - normal.z * 2.0).abs() < 1e-6);
+    }
+
+    #[test]
     fn resident_spectator_flight_ignores_solid_and_climbable_blocks() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
         if !root.join("movement-properties.nbt").exists() {
             return;
         }
         let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let binding = crate::collisions::load(&root, assets.registry).unwrap();
         let resources = MotionResources::load(&root, &assets).unwrap();
         let run = |name: &str, spectator: bool| {
-            let mut scene = World::test_scene(&assets, 2).unwrap();
+            let mut scene = World::test_scene(&assets, &render, 2).unwrap();
             let state = assets.registry.default_state(name).unwrap();
             for x in 19..=23 {
                 for y in 10..=17 {
@@ -2121,8 +2229,13 @@ mod tests {
 
     #[test]
     fn player_fire_damage_queues_hurt_sound_only_for_fresh_hits() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
+        let root = std::env::var_os("HORIZON_TEST_RESOURCES")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3")
+            });
         if !root.join("movement-properties.nbt").exists() {
+            eprintln!("skipped damage regression: prepared resources unavailable");
             return;
         }
         let assets = Assets::load(&root).unwrap();
@@ -2150,6 +2263,8 @@ mod tests {
                     .count(),
                 1
             );
+            assert_eq!(player.health.hurt_animation_time, 10);
+            player.health.advance_clock();
             player.events.clear();
             assert!(
                 !player
@@ -2162,9 +2277,14 @@ mod tests {
                     .iter()
                     .any(|e| matches!(e, MotionEvent::HurtSound(_)))
             );
+            assert_eq!(
+                player.health.hurt_animation_time, 9,
+                "cooldown hit must not restart animation"
+            );
             for _ in 0..20 {
                 player.health.advance_clock();
             }
+            assert_eq!(player.health.hurt_animation_time, 0);
             player.invulnerable = true;
             player.events.clear();
             assert!(
@@ -2226,15 +2346,61 @@ mod tests {
                 Default::default(),
                 source,
                 4.0,
-                Some(shield),
+                Some(shield.clone()),
             )
             .unwrap();
         assert!(!outcome.hurt && outcome.sound && outcome.blocked == 4.0);
+        assert_eq!(
+            player.health.hurt.hurt_time, 10,
+            "preserve server damage bookkeeping"
+        );
+        assert_eq!(
+            player.health.hurt_animation_time, 0,
+            "a fully blocked arrow must not animate hurt"
+        );
         assert!(
             !player
                 .events
                 .iter()
                 .any(|e| matches!(e, MotionEvent::HurtSound(_)))
+        );
+        // An unblocked hit after the shield block must still animate normally.
+        for _ in 0..20 {
+            player.health.advance_clock();
+        }
+        assert!(
+            player
+                .hurt(&resources.health, Default::default(), source, 4.0)
+                .unwrap()
+        );
+        assert_eq!(player.health.hurt_animation_time, 10);
+        player.health.advance_clock();
+        assert!(
+            !player
+                .hurt_blocking(
+                    &resources.health,
+                    Default::default(),
+                    source,
+                    4.0,
+                    Some(shield)
+                )
+                .unwrap()
+                .hurt
+        );
+        assert_eq!(
+            player.health.hurt_animation_time, 9,
+            "blocking must not erase or restart an existing animation"
+        );
+        let mut starving = PlayerMotion::new(&resources, Vec3::ZERO).unwrap();
+        starving.health.food.food = 0;
+        starving.health.food.timer = 79;
+        starving
+            .food_tick(&resources.health, Default::default())
+            .unwrap();
+        assert_eq!(starving.health.health(), 19.0);
+        assert_eq!(
+            starving.health.hurt_animation_time, 10,
+            "starvation must still animate hurt"
         );
     }
 
@@ -2248,10 +2414,11 @@ mod tests {
             return;
         }
         let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let binding = crate::collisions::load(&root, assets.registry).unwrap();
         let resources = MotionResources::load(&root, &assets).unwrap();
         for wet in [false, true] {
-            let mut scene = World::test_scene(&assets, 2).unwrap();
+            let mut scene = World::test_scene(&assets, &render, 2).unwrap();
             if wet {
                 let water = assets.registry.default_state("minecraft:water").unwrap();
                 for x in 19..=21 {
@@ -2284,14 +2451,20 @@ mod tests {
 
     #[test]
     fn resident_water_and_lava_are_not_treated_as_air() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
+        let root = std::env::var_os("HORIZON_TEST_RESOURCES")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3")
+            });
         if !root.join("movement-properties.nbt").exists() {
+            eprintln!("skipping resident water/lava test: prepared resources unavailable");
             return;
         }
         let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let binding = crate::collisions::load(&root, assets.registry).unwrap();
         let resources = MotionResources::load(&root, &assets).unwrap();
-        let mut scene = World::test_scene(&assets, 3).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 3).unwrap();
         let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
         let water = assets.registry.default_state("minecraft:water").unwrap();
         for x in 19..=21 {
@@ -2491,12 +2664,44 @@ mod tests {
             ("Fire", horizon_world::nbt::Tag::Short(160)),
             ("Air", horizon_world::nbt::Tag::Short(8)),
         ]);
+        let mut level = crate::save::Level {
+            health: 13.0,
+            food: 11,
+            saturation: 2.25,
+            player_extra: Some(extra),
+            flying: true,
+            ..Default::default()
+        };
         let mut pending = true;
-        w.player.load_environment_once(&mut pending, Some(&extra));
+        w.player
+            .load_saved_state_once(&mut pending, &level)
+            .unwrap();
         assert_eq!((w.player.fire_ticks, w.player.air), (160, 8));
+        assert!(w.player.flying);
+        assert_eq!(
+            (
+                w.player.health.health(),
+                w.player.health.food.food,
+                w.player.health.food.saturation
+            ),
+            (13.0, 11, 2.25)
+        );
         let mut respawn = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
-        respawn.load_environment_once(&mut pending, Some(&extra));
+        respawn.load_saved_state_once(&mut pending, &level).unwrap();
         assert_eq!((respawn.fire_ticks, respawn.air), (-20, 300));
+        assert!(!respawn.flying);
+        assert_eq!(
+            (respawn.health.health(), respawn.health.food.food),
+            (20.0, 20)
+        );
+        // Reopening another world restores its state, including a saved death.
+        pending = true;
+        level.health = 0.0;
+        w.player
+            .load_saved_state_once(&mut pending, &level)
+            .unwrap();
+        assert!(w.player.health.dead_or_dying());
+        assert!(!pending);
         w.player.fluids.was_touching_water = false;
         assert!(
             w.player.moving_slowly(),
@@ -2511,9 +2716,10 @@ mod tests {
             return;
         }
         let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let binding = crate::collisions::load(&root, assets.registry).unwrap();
         let resources = MotionResources::load(&root, &assets).unwrap();
-        let mut scene = World::test_scene(&assets, 3).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 3).unwrap();
         let water = assets.registry.default_state("minecraft:water").unwrap();
         for y in 4..=6 {
             scene.set(20, y, 20, water).unwrap();
@@ -2583,10 +2789,11 @@ mod tests {
             return;
         }
         let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let binding = crate::collisions::load(&root, assets.registry).unwrap();
         let resources = MotionResources::load(&root, &assets).unwrap();
         for name in ["minecraft:lava", "minecraft:water"] {
-            let mut scene = World::test_scene(&assets, 3).unwrap();
+            let mut scene = World::test_scene(&assets, &render, 3).unwrap();
             let fluid = assets.registry.default_state(name).unwrap();
             scene.set(20, 4, 20, fluid).unwrap();
             let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();
@@ -2634,9 +2841,10 @@ mod tests {
             return;
         }
         let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let binding = crate::collisions::load(&root, assets.registry).unwrap();
         let resources = MotionResources::load(&root, &assets).unwrap();
-        let mut scene = World::test_scene(&assets, 3).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 3).unwrap();
         let water = assets.registry.default_state("minecraft:water").unwrap();
         scene.set(20, 4, 20, water).unwrap();
         scene.set(20, 5, 20, water).unwrap();
@@ -2703,10 +2911,11 @@ mod tests {
             return;
         }
         let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let binding = crate::collisions::load(&root, assets.registry).unwrap();
         let resources = MotionResources::load(&root, &assets).unwrap();
         for (water_level, lava_level, ground_jump) in [(0, 6, true), (6, 0, false)] {
-            let mut scene = World::test_scene(&assets, 3).unwrap();
+            let mut scene = World::test_scene(&assets, &render, 3).unwrap();
             for (name, level, x) in [
                 ("minecraft:water", water_level, 20),
                 ("minecraft:lava", lava_level, 21),
@@ -2751,7 +2960,8 @@ mod tests {
             return;
         }
         let assets = Assets::load(&root).unwrap();
-        let mut scene = World::test_scene(&assets, 3).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 3).unwrap();
         let binding = crate::collisions::load(&root, assets.registry).unwrap();
         let resources = MotionResources::load(&root, &assets).unwrap();
         let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.0, 20.5)).unwrap();

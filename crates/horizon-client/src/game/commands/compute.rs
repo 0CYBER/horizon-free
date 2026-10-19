@@ -502,7 +502,7 @@ impl Game<'_> {
                             Some(Value::String(b)) => match b.strip_prefix('#') {
                                 Some(tag) => self
                                     .res
-                                    .items
+                                    .items()
                                     .block_tags
                                     .get(tag.trim_start_matches("minecraft:"))
                                     .is_some_and(|set| {

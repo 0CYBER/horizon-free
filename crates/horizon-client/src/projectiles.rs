@@ -63,8 +63,13 @@ pub enum ProjectileKind {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct Projectile {
+    /// The entity id a server tracks it by (0 until it is tracked).
+    pub id: u32,
     pub kind: ProjectileKind,
     pub owner: Option<Who>,
+    /// On a server, the guest (by connection) who shot it: `Who::Player`
+    /// then means them, not the host.
+    pub guest: Option<u32>,
     pub position: Vec3,
     pub previous: Vec3,
     pub velocity: Vec3,
@@ -128,8 +133,10 @@ impl Projectile {
     pub fn new(kind: ProjectileKind, position: Vec3, owner: Option<Who>) -> Self {
         let kind_is_arrow = matches!(kind, ProjectileKind::Arrow { .. });
         Self {
+            id: 0,
             kind,
             owner,
+            guest: None,
             position,
             previous: position,
             velocity: Vec3::ZERO,

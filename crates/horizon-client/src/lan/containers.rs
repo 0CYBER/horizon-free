@@ -25,7 +25,7 @@ impl Hub {
         for g in self
             .guests
             .iter()
-            .filter(|g| g.placed && Some(g.conn) != except)
+            .filter(|g| self.here(g) && Some(g.conn) != except)
         {
             let d: f64 = (0..3).map(|k| (g.position[k] - at[k]).powi(2)).sum();
             if d <= range * range {
@@ -79,11 +79,11 @@ impl Hub {
     }
 
     /// ClientboundBlockEventPacket (`PlayerList.broadcast` within 64 blocks).
-    pub fn block_event(&self, pos: [i32; 3], b0: i32, b1: i32, state: u16) {
+    pub fn block_event(&self, pos: [i32; 3], b0: i32, b1: i32, state: u32) {
         let block = self
             .encoder
             .block_ids
-            .get(usize::from(state))
+            .get(state as usize)
             .copied()
             .unwrap_or(0);
         let at = [f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])];
@@ -105,6 +105,33 @@ impl Hub {
             at,
             128.0,
             &C::EntityEvent(play::EntityEvent { id, event }),
+            None,
+        );
+    }
+
+    /// `ServerLevel.broadcastDamageEvent`: the clients around show the hurt
+    /// entity's flash and hear its hurt sound.
+    pub fn damage_event(
+        &self,
+        id: i32,
+        kind: &str,
+        cause: Option<i32>,
+        direct: Option<i32>,
+        at: [f64; 3],
+    ) {
+        let Some(source_type) = self.sync.id("minecraft:damage_type", kind) else {
+            return;
+        };
+        self.broadcast_near(
+            at,
+            128.0,
+            &C::DamageEvent(play::DamageEvent {
+                id,
+                source_type,
+                cause,
+                direct,
+                position: None,
+            }),
             None,
         );
     }
@@ -428,15 +455,17 @@ impl Hub {
         let Slots::Block(pos) = m.slots else {
             return;
         };
-        let Some(BlockEntity::Furnace(f)) = world.block_entities.get(&pos) else {
-            return;
-        };
-        let data = [
-            f.lit_remaining,
-            f.lit_total,
-            f.cooking_timer,
-            f.cooking_total,
-        ]
+        // AbstractFurnaceBlockEntity.dataAccess, BrewingStandBlockEntity.dataAccess.
+        let data = match world.block_entities.get(&pos) {
+            Some(BlockEntity::Furnace(f)) => [
+                f.lit_remaining,
+                f.lit_total,
+                f.cooking_timer,
+                f.cooking_total,
+            ],
+            Some(BlockEntity::Brewing(b)) => [b.brew_time, b.fuel, b.total_brew_time, b.total_fuel],
+            _ => return,
+        }
         .map(|v| v as i16);
         m.sent_data.resize(data.len(), i16::MIN);
         let window = m.window;
@@ -464,7 +493,7 @@ impl Hub {
             let Some(menu) = self.guests[i]
                 .menu
                 .as_ref()
-                .filter(|_| self.guests[i].placed)
+                .filter(|_| self.here(&self.guests[i]))
             else {
                 continue;
             };

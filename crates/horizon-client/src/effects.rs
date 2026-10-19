@@ -336,67 +336,8 @@ impl PlayerEffects {
     pub fn modifiers(&self) -> Vec<(&'static str, &'static str, f64, &'static str)> {
         let mut out = Vec::new();
         for e in &self.list {
-            let level = f64::from(e.amplifier + 1);
-            let m = match e.id {
-                "speed" => Some((
-                    "minecraft:movement_speed",
-                    "minecraft:effect.speed",
-                    0.2,
-                    "add_multiplied_total",
-                )),
-                "slowness" => Some((
-                    "minecraft:movement_speed",
-                    "minecraft:effect.slowness",
-                    -0.15,
-                    "add_multiplied_total",
-                )),
-                "haste" => Some((
-                    "minecraft:attack_speed",
-                    "minecraft:effect.haste",
-                    0.1,
-                    "add_multiplied_total",
-                )),
-                "mining_fatigue" => Some((
-                    "minecraft:attack_speed",
-                    "minecraft:effect.mining_fatigue",
-                    -0.1,
-                    "add_multiplied_total",
-                )),
-                "strength" => Some((
-                    "minecraft:attack_damage",
-                    "minecraft:effect.strength",
-                    3.0,
-                    "add_value",
-                )),
-                "weakness" => Some((
-                    "minecraft:attack_damage",
-                    "minecraft:effect.weakness",
-                    -4.0,
-                    "add_value",
-                )),
-                "jump_boost" => Some((
-                    "minecraft:safe_fall_distance",
-                    "minecraft:effect.jump_boost",
-                    1.0,
-                    "add_value",
-                )),
-                "health_boost" => Some((
-                    "minecraft:max_health",
-                    "minecraft:effect.health_boost",
-                    4.0,
-                    "add_value",
-                )),
-                "luck" => Some(("minecraft:luck", "minecraft:effect.luck", 1.0, "add_value")),
-                "unluck" => Some((
-                    "minecraft:luck",
-                    "minecraft:effect.unluck",
-                    -1.0,
-                    "add_value",
-                )),
-                _ => None,
-            };
-            if let Some((a, id, amount, op)) = m {
-                out.push((a, id, amount * level, op));
+            if let Some((a, id, amount, op)) = effect_modifier(e.id) {
+                out.push((a, id, amount * f64::from(e.amplifier + 1), op));
             }
         }
         out
@@ -436,6 +377,76 @@ impl StatusFlags {
             .iter()
             .find(|(t, _)| *t == damage_type)
             .map_or(0.0, |(_, p)| *p)
+    }
+}
+
+/// The attribute modifier an effect adds at amplifier 0
+/// (`MobEffect.addAttributeModifier`): (attribute, id, amount, operation).
+/// Each level multiplies the amount (`amplifier + 1`).
+pub fn effect_modifier(effect: &str) -> Option<(&'static str, &'static str, f64, &'static str)> {
+    match effect {
+        "speed" => Some((
+            "minecraft:movement_speed",
+            "minecraft:effect.speed",
+            0.2,
+            "add_multiplied_total",
+        )),
+        "slowness" => Some((
+            "minecraft:movement_speed",
+            "minecraft:effect.slowness",
+            -0.15,
+            "add_multiplied_total",
+        )),
+        "haste" => Some((
+            "minecraft:attack_speed",
+            "minecraft:effect.haste",
+            0.1,
+            "add_multiplied_total",
+        )),
+        "mining_fatigue" => Some((
+            "minecraft:attack_speed",
+            "minecraft:effect.mining_fatigue",
+            -0.1,
+            "add_multiplied_total",
+        )),
+        "strength" => Some((
+            "minecraft:attack_damage",
+            "minecraft:effect.strength",
+            3.0,
+            "add_value",
+        )),
+        "weakness" => Some((
+            "minecraft:attack_damage",
+            "minecraft:effect.weakness",
+            -4.0,
+            "add_value",
+        )),
+        "jump_boost" => Some((
+            "minecraft:safe_fall_distance",
+            "minecraft:effect.jump_boost",
+            1.0,
+            "add_value",
+        )),
+        "health_boost" => Some((
+            "minecraft:max_health",
+            "minecraft:effect.health_boost",
+            4.0,
+            "add_value",
+        )),
+        "absorption" => Some((
+            "minecraft:max_absorption",
+            "minecraft:effect.absorption",
+            4.0,
+            "add_value",
+        )),
+        "luck" => Some(("minecraft:luck", "minecraft:effect.luck", 1.0, "add_value")),
+        "unluck" => Some((
+            "minecraft:luck",
+            "minecraft:effect.unluck",
+            -1.0,
+            "add_value",
+        )),
+        _ => None,
     }
 }
 
@@ -537,5 +548,30 @@ mod tests {
         fx.add(EffectInstance::new("haste", 100, 1));
         assert!((fx.mining_speed_factor() - 1.4).abs() < 1e-6);
         assert_eq!(fx.modifiers().len(), 1);
+    }
+
+    #[test]
+    fn absorption_modifier_scales_with_amplifier() {
+        let mut fx = PlayerEffects::default();
+        fx.add(EffectInstance::new("absorption", 2400, 0));
+        assert_eq!(
+            fx.modifiers(),
+            vec![(
+                "minecraft:max_absorption",
+                "minecraft:effect.absorption",
+                4.0,
+                "add_value",
+            )]
+        );
+        fx.add(EffectInstance::new("absorption", 2400, 3));
+        assert_eq!(
+            fx.modifiers(),
+            vec![(
+                "minecraft:max_absorption",
+                "minecraft:effect.absorption",
+                16.0,
+                "add_value",
+            )]
+        );
     }
 }

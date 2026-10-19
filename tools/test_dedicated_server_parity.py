@@ -11,10 +11,14 @@ login, configuration and play, accepts the spawn teleport, receives the
 chunks around the spawn (their bytes are compared: the world is loaded from
 the same files), chats, runs /list and commands that fail (`/random value
 7..7`, `/random value x`, `/trigger nope`), trades, is made an operator by
-the console, runs /kill, respawns (as vanilla's LevelLoadTracker waits: until the "level
-chunks load start" event and the chunk under the player), sets a furnace
-beside itself, gives itself raw iron and coal, opens the furnace, shift-clicks
-the ore and the coal in and the ingot out, and leaves. The
+the console, runs /kill, runs a command while dead, respawns (as vanilla's
+LevelLoadTracker waits: until the "level chunks load start" event and the
+chunk under the player), sets a furnace
+beside itself, gives itself raw iron and coal, sets and asks its own score
+(`@s`), opens the furnace, shift-clicks
+the ore and the coal in and the ingot out, right-clicks the ground with a
+snowball in the main hand, then in the off hand, throws an ender pearl at
+its feet, and leaves. The
 console then runs `list` and `say` and `stop`. Compared, all of them
 exactly:
 
@@ -27,15 +31,24 @@ exactly:
   advancements, which vanilla keeps in hash maps, sorted); the command tree
   node by node; the chunks sent and their bytes; the replies to the chat
   message, /list and the failing commands, as text components;
+- the reply to the command run while dead (ServerGamePacketListenerImpl
+  runs a dead player's commands, #973);
 - after /kill, the packets from the death screen to the respawned
   inventory (PlayerList.respawn; chat, chunk data, light and keep-alives
   left out, runs of a packet counted), then that the level loads where the
   player respawned (guests' death messages aren't Horizon's yet: left out);
 - the furnace menu: its type and title, its contents, the slots each
   shift-click changes and its lit and cooking totals;
-- the console lines about the player, the chat, `list`, `say` and `stop`;
+- the snowballs each right click throws: one, though the client sends the
+  block's part and the item's of each hand as separate packets
+  (handleUseItemOn, handleUseItem), and that the player is their owner;
+- the ender pearl's teleport of the player who threw it, and the 5 damage;
+- the console lines about the player (an operator's command feedback, which
+  vanilla broadcasts to the console, included), the chat, `list`, `say` and
+  `stop`;
 - the files the servers leave: server.properties (but the date line),
-  eula.txt, ops.json, whitelist.json, banned-players.json, banned-ips.json.
+  eula.txt, ops.json, whitelist.json, banned-players.json, banned-ips.json,
+  usercache.json (but the date the player's entry expires).
 
 Online mode needs Mojang's session servers and is not tested.
 """
@@ -208,10 +221,9 @@ CONSOLE_LINE = re.compile(r'^\[\d\d:\d\d:\d\d\] \[([^\]]+)\]: (.*)$')
 KEPT = re.compile(r'Tester|\[Server\]|\[Not Secure\]|There are|Stopping|Saving|ThreadedAnvilChunkStorage|All dimensions|Unknown or incomplete')
 
 
-# Guests' death messages, the op's command feedback broadcast to the console and guests'
-# advancement announcements aren't Horizon's yet (the client's own transcript leaves the
-# death message out as well).
-NOT_YET = re.compile(r'Tester was killed|Killed Tester|System chat: \[Tester: |Tester has made the advancement')
+# Guests' death messages and advancement announcements aren't Horizon's yet (the client's
+# own transcript leaves the death message out as well).
+NOT_YET = re.compile(r'Tester was killed|Tester has made the advancement')
 
 
 def console_lines(lines):
@@ -238,7 +250,8 @@ def console_lines(lines):
 
 def server_files(directory):
     out = []
-    for name in ['server.properties', 'eula.txt', 'ops.json', 'whitelist.json', 'banned-players.json', 'banned-ips.json']:
+    for name in ['server.properties', 'eula.txt', 'ops.json', 'whitelist.json', 'banned-players.json', 'banned-ips.json',
+                 'usercache.json']:
         path = directory / name
         if not path.exists():
             out.append(f'{name}: missing')
@@ -249,6 +262,9 @@ def server_files(directory):
             text = re.sub(r'^(#[^\n]*\n)#[^\n]*\n', r'\1#<date>\n', text)
             # Random per server, and each side has its own port.
             text = re.sub(r'\n(management-server-secret|server-port)=[^\n]*', r'\n\1=<varies>', text)
+        if name == 'usercache.json':
+            # A month from when the player joined.
+            text = re.sub(r'"expiresOn":"[^"]*"', '"expiresOn":"<a month on>"', text)
         out.append(f'{name}: {text!r}')
     return out
 
@@ -261,6 +277,12 @@ def run_side(label, command, directory, client):
         # it stays put; experience keeps its profession).
         server.console('summon minecraft:villager ~1 ~ ~ {NoAI:1b,Xp:1,VillagerData:'
                        '{profession:"minecraft:librarian",level:2,type:"minecraft:plains"}}')
+        # The saved world still has fluid ticks due in the area the client is sent (a lava fall
+        # that never settles), and they run once their chunk ticks. When that is, against when the
+        # chunk is sent, follows how fast the server loads the chunks around the joining player:
+        # each run, vanilla sends a different set of them already flowed. Frozen until the client
+        # has its chunks, both servers send the world as saved; blocks tick again from the chat on.
+        server.console('tick freeze')
         port = int(PROPERTIES_PORTS[label])
         legacy = legacy_ping(port)
         # The client asks to be made an operator once it has traded, runs /kill and respawns.
@@ -275,7 +297,11 @@ def run_side(label, command, directory, client):
         joined = threading.Thread(target=join)
         joined.start()
         deadline = time.time() + 300
+        frozen = True
         while joined.is_alive() and not any('<Tester> ready to respawn' in l for l in server.lines):
+            if frozen and any('<Tester> hello from the parity client' in l for l in server.lines):
+                server.console('tick unfreeze')
+                frozen = False
             if time.time() > deadline:
                 break
             time.sleep(0.2)

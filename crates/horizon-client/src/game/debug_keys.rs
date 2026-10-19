@@ -51,6 +51,9 @@ impl DebugHost for Host<'_, '_> {
 
 impl Game<'_> {
     fn open_screen(&self) -> OpenScreen {
+        if self.title.is_some() {
+            return OpenScreen::Other;
+        }
         match self.screen {
             Screen::GameModeSwitcher => OpenScreen::GameModeSwitcher,
             Screen::Playing if self.book.is_none() && self.sign_edit.is_none() => OpenScreen::None,
@@ -88,8 +91,7 @@ impl Game<'_> {
             || self.book.is_some()
             || (self.screen == Screen::Creative && self.creative_screen.tab().search)
             || self.recipe_search_focused()
-            || self.station_typing()
-            || self.remote_chat_open();
+            || self.station_typing();
         // Container screens use Escape, the inventory key and the hotbar and
         // drop keys first; any other screen closes on Escape.
         let screen_key = match self.screen {
@@ -438,7 +440,7 @@ impl Game<'_> {
             }
         }
         let (left, right) = d.columns(&self.debug_chart_lines());
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let mut draws = debug_overlay::draw(&atlas.font, [&left, &right], scale, width);
         let charts = self.debug_charts.draw(
             &atlas.font,

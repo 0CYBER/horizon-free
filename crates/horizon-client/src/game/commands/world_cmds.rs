@@ -1,7 +1,6 @@
 //! `/recipe`, `/damage`, `/rotate`, `/swing`, `/playsound`, `/stopsound`,
 //! `/particle`, `/attribute`, `/ride` and `/spreadplayers`.
 use super::{Arg, Context, Game, R, Target, err};
-use crate::game::chat::PLAYER_NAME;
 use horizon_client::{
     mobs::{Damage, DamageKind, Who},
     scoreboard_cmd::{Holder, Tracker},
@@ -32,7 +31,7 @@ impl Game<'_> {
 
     /// Every recipe id of the recipe manager (what `/recipe` resolves and suggests).
     pub(super) fn learnable_recipes(&self) -> Vec<String> {
-        self.res.stations.recipe_index.ids().cloned().collect()
+        self.res.stations().recipe_index.ids().cloned().collect()
     }
     pub(super) fn cmd_recipe(&mut self, id: &str, ctx: &Context) -> R<i32> {
         let targets = self.entities(ctx, "targets", true)?;
@@ -53,7 +52,7 @@ impl Game<'_> {
             // displays (a transmute recipe has one per material count).
             let mut n = 0;
             // ServerPlayer.awardRecipes / resetRecipes: the displays changed.
-            let index = &self.res.stations.recipe_index;
+            let index = &self.res.stations().recipe_index;
             n += if give {
                 let (count, unlocked) = self.level.recipe_book.add_recipes(index, &recipes);
                 self.recipe_unlocked(&unlocked);
@@ -313,7 +312,7 @@ impl Game<'_> {
                 (pos, volume)
             };
             self.audio.play_on(source, &sound, Some(at), v, pitch);
-            tracker.mark(&holder(Text::literal(PLAYER_NAME)));
+            tracker.mark(&holder(Text::literal(self.acting_player_name())));
         }
         let name = Text::literal(sound.clone());
         let (message, total) = tracker.message(
@@ -1268,7 +1267,7 @@ impl Game<'_> {
     fn spread_spawn_y(&self, p: [f64; 2], max_y: i32) -> i32 {
         let (x, z) = (p[0].floor() as i32, p[1].floor() as i32);
         let air = |y: i32| {
-            let name: &str = &self.res.facts.get(self.world.block(x, y, z)).name;
+            let name: &str = &self.res.facts().get(self.world.block(x, y, z)).name;
             matches!(
                 name,
                 "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
@@ -1293,16 +1292,16 @@ impl Game<'_> {
     fn spread_safe(&self, p: [f64; 2], max_y: i32) -> bool {
         let y = self.spread_spawn_y(p, max_y) - 1;
         let (x, z) = (p[0].floor() as i32, p[1].floor() as i32);
-        let name = self.res.facts.get(self.world.block(x, y, z)).name.clone();
+        let name = self.res.facts().get(self.world.block(x, y, z)).name.clone();
         let liquid = matches!(&*name, "minecraft:water" | "minecraft:lava");
         let teleportable = self
             .res
-            .items
+            .items()
             .block_tags
             .get("entities_can_teleport_to")
             .or_else(|| {
                 self.res
-                    .items
+                    .items()
                     .block_tags
                     .get("minecraft:entities_can_teleport_to")
             })

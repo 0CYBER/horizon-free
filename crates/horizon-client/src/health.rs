@@ -161,6 +161,8 @@ pub struct PlayerHealth {
     pub ids: PlayerFloatIds,
     pub food: FoodData,
     pub hurt: State,
+    /// Client hurt animation; fully blocked hits only refresh the server's hurt state.
+    pub hurt_animation_time: i32,
     pub dead: bool,
     pub sync_velocity: bool,
     pub game_time: i64,
@@ -210,6 +212,7 @@ impl PlayerHealth {
                 last_source: None,
                 last_stamp: 0,
             },
+            hurt_animation_time: 0,
             dead: false,
             sync_velocity: false,
             game_time: 0,
@@ -241,6 +244,9 @@ impl PlayerHealth {
         }
         if self.hurt.hurt_time > 0 {
             self.hurt.hurt_time -= 1;
+        }
+        if self.hurt_animation_time > 0 {
+            self.hurt_animation_time -= 1;
         }
     }
 }
@@ -300,8 +306,11 @@ impl PlayerMotion {
             sound: environment.block_sound,
         };
         if environment.totem_fired {
-            self.health.totem_used = true;
-            self.health.totem_ready = false;
+            h.totem_used = true;
+            h.totem_ready = false;
+        }
+        if outcome.hurt {
+            h.hurt_animation_time = h.hurt.hurt_time;
         }
         Ok(outcome)
     }

@@ -56,10 +56,11 @@ fn main() -> horizon_client::Result<()> {
     let initial = LIVE.load(Relaxed);
     let start = Instant::now();
     let assets = Assets::load(root)?;
+    let render = assets.reload(root)?;
     let block_ms = start.elapsed().as_secs_f64() * 1000.;
     let block_retained = LIVE.load(Relaxed) - initial;
     let start_items = Instant::now();
-    let items = ItemRenderer::load_with_library(root, assets.model_library.clone())?;
+    let items = ItemRenderer::load_with_library(root, render.model_library.clone())?;
     let item_ms = start_items.elapsed().as_secs_f64() * 1000.;
     let total_ms = start.elapsed().as_secs_f64() * 1000.;
     let retained = LIVE.load(Relaxed) - initial;
@@ -74,7 +75,7 @@ fn main() -> horizon_client::Result<()> {
                 horizon_core::position::BlockPos::new(0, 0, 0),
                 horizon_core::position::BlockPos::new(-17, 65, 31),
             ] {
-                if let Ok(selected) = assets.model_catalog.collect(id, pos) {
+                if let Ok(selected) = render.model_catalog.collect(id, pos) {
                     for (variant, model) in selected {
                         format!("{variant:?}").hash(&mut hash);
                         model.ambient_occlusion.hash(&mut hash);

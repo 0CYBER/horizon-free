@@ -39,6 +39,17 @@ pub(super) struct Raiding {
     homes: HashMap<i32, (i64, std::sync::Arc<Vec<[i32; 3]>>)>,
 }
 
+impl Raiding {
+    /// Exchange the level-held parts (`ServerLevel.getRaids`) with another
+    /// level's (game/levels.rs).
+    pub(super) fn swap_level(&mut self, other: &mut Self) {
+        std::mem::swap(&mut self.raids, &mut other.raids);
+        std::mem::swap(&mut self.loaded, &mut other.loaded);
+        std::mem::swap(&mut self.bar_hurts, &mut other.bar_hurts);
+        std::mem::swap(&mut self.homes, &mut other.homes);
+    }
+}
+
 /// `SectionPos` of a block position.
 pub(super) fn section(p: [i32; 3]) -> (i32, i32, i32) {
     (p[0] >> 4, p[1] >> 4, p[2] >> 4)
@@ -89,7 +100,7 @@ impl RaidLevel for Lvl<'_, '_> {
         let w = g.mob_world_base(&[]);
         spawn_rules::is_spawn_position_ok(Species::Ravager, &w, x, y, z)
             || w.block_name(x, y - 1, z) == "minecraft:snow"
-                && g.res.facts.is_air(g.world.block(x, y, z))
+                && g.res.facts().is_air(g.world.block(x, y, z))
     }
     fn player(&self) -> Option<RaidPlayer> {
         let p = self.game.player.as_ref()?;
@@ -210,7 +221,7 @@ impl Game<'_> {
         let top = if self.dim == Dim::Nether { 127 } else { 319 };
         (horizon_client::chunk::MIN_Y..=top)
             .rev()
-            .find(|&y| !self.res.facts.is_air(self.world.block(x, y, z)))
+            .find(|&y| !self.res.facts().is_air(self.world.block(x, y, z)))
             .map_or(horizon_client::chunk::MIN_Y, |y| y + 1)
     }
     /// Every claimed village point of interest (job sites, beds, bells).
@@ -345,7 +356,7 @@ impl Game<'_> {
             .get(&(at[0] >> 4, at[2] >> 4))
             .map(|c| {
                 self.res
-                    .biomes
+                    .biomes()
                     .get(c.biome(at[0], at[1], at[2]))
                     .name
                     .clone()
@@ -613,17 +624,17 @@ impl Game<'_> {
                     raider::state_mut(m).ticks_outside_raid = ticks;
                 }
             }
-            Action::Victory { heroes, amplifier } => {
-                let me = self.level.player_uuid;
-                if me.is_some_and(|u| heroes.contains(&u)) && !self.spectator() {
+            // Raid.tick on a victory: each hero who is still alive.
+            Action::Victory { heroes, amplifier } => self.for_each_player(|g| {
+                if heroes.contains(&g.acting_uuid()) && !g.spectator() {
                     let mut effect =
                         EffectInstance::new("hero_of_the_village", raid::HERO_DURATION, amplifier);
                     effect.visible = false;
-                    self.potions.effects.add(effect);
-                    self.stats.custom("raid_win", 1);
-                    self.trigger_player("minecraft:hero_of_the_village");
+                    g.potions.effects.add(effect);
+                    g.stats.custom("raid_win", 1);
+                    g.trigger_player("minecraft:hero_of_the_village");
                 }
-            }
+            }),
         }
     }
     /// `Raid.playSound`: the horn, 13 blocks away from the player toward the
@@ -705,7 +716,7 @@ impl Game<'_> {
         leader: bool,
         reason: raider::Reason,
     ) -> Option<u32> {
-        let t = self.res.mob_types.get(kind).cloned()?;
+        let t = self.res.mob_types().get(kind).cloned()?;
         self.next_entity += 1;
         let mut mob = Mob::new(self.next_entity, t, Vec3::new(at[0], at[1], at[2]), 0.0);
         if leader {
@@ -971,11 +982,11 @@ impl Game<'_> {
                 for z in c[2] - 64..=c[2] + 64 {
                     for x in c[0] - 64..=c[0] + 64 {
                         let state = self.world.block(x, y, z);
-                        if self.res.facts.is_air(state) {
+                        if self.res.facts().is_air(state) {
                             continue;
                         }
                         let bed = *known.entry(state.0).or_insert_with(|| {
-                            self.res.facts.get(state).name.ends_with("_bed")
+                            self.res.facts().get(state).name.ends_with("_bed")
                                 && self.pack.assets.registry.state(state).is_some_and(|s| {
                                     s.properties.get("part").map(String::as_str) == Some("head")
                                 })
@@ -1110,7 +1121,7 @@ impl Game<'_> {
     pub(super) fn throw_gift(&mut self, table: &str, from: [f64; 3], to: [f64; 3]) {
         let drops = self
             .res
-            .items
+            .items()
             .loot_table(table, false, None, &mut self.world.random);
         let d = Vec3::new(to[0] - from[0], to[1] - from[1], to[2] - from[2]).normalize();
         for stack in drops {
@@ -1152,7 +1163,7 @@ impl Game<'_> {
                 .get(&(at[0] >> 4, at[2] >> 4))
                 .map(|c| {
                     game.res
-                        .biomes
+                        .biomes()
                         .get(c.biome(at[0], at[1], at[2]))
                         .name
                         .clone()

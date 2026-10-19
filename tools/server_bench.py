@@ -8,14 +8,33 @@ then measures for a while:
 - MSPT (average, P50, P95, P99) from each server's own `/tick query`, asked every 5 seconds on the console:
   vanilla's ServerTickRateManager numbers, which Horizon reproduces, so both measure themselves the same way;
 - RSS and CPU of the server's whole process tree, once a second;
-- chunks the bots receive per second (new terrain while the `explore` bots fly outwards);
+- chunks the bots receive per second (new terrain while the `explore` bots fly outwards), chunks sent again
+  while a bot still held them, and the moves the server refused (pull-backs; "moved too quickly" and
+  "moved wrongly" lines);
 - the start time to `Done`, and every bot that failed to join or was dropped.
 
-    python3 tools/server_bench.py --servers horizon,vanilla --bots 1,10,25 --seconds 120
+    python3 tools/server_bench.py --servers horizon,vanilla --bots 1,10,25 --behaviour walk,explore
+
+The bots can run on another machine, so they don't take the server's CPU: `--bots-via 'ssh macmini'` with
+`--bots-bin` naming horizon-bots there and `--connect` the address it reaches this machine at. `--nice 19`
+runs every server at the lowest priority (a shared machine). The explore bots fly as fast as each server
+sends them chunks, so a faster server gets more terrain to generate; `--explore-speed` slows them to a rate
+both servers keep up with, for equal work. After the runs, the work table compares the servers at each bot
+count: chunks sent and new chunks generated a second, against the busiest server's. A run whose work is more
+than 10 % apart isn't a fair comparison of its tick times.
 
 The vanilla side runs the pinned server jar from tools/lab.py prepare (your own copy). It needs Java 25. The
 Horizon side runs target/release/horizon-server with the engine beside it; build both first:
     cargo build --release -p horizon-client --bin horizon-client -p horizon-server -p horizon-bots
+
+Two more Java servers, both dev-only downloads into .local/server-bench/jars (never committed or shipped):
+- `paper`: Paper's newest build for the pinned version, from PaperMC's download API, checked against the
+  SHA-256 it publishes, with Paper's own defaults except `connection-throttle` (off: the bots all join from
+  one address). Paperclip patches the pinned server jar (your copy, put in
+  its cache so nothing is fetched from Mojang).
+- `fabric`: the pinned vanilla server on the pinned Fabric loader (packs/fabric.lock.json) with Lithium from
+  packs/mods.lock.json (and Fabric API only if Lithium asks for it), checked against the lock's SHA-512.
+Both run with the same heap as vanilla (`--heap`).
 """
 
 import argparse
@@ -32,11 +51,14 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
+import zipfile
 
 try:
-    from . import lab, test_rust_parity as base
+    from . import lab, runtime, test_rust_parity as base
 except ImportError:
     import lab
+    import runtime
     import test_rust_parity as base
 
 ROOT = lab.ROOT
@@ -149,8 +171,43 @@ class Server:
         self.log.close()
 
 
+# The line every server logs once it is up: vanilla, Fabric and Horizon `[time] [Server thread/INFO]: Done (`,
+# Paper `[time INFO]: Done (`.
+DONE = r'INFO\]: Done \('
 TICK_AVERAGE = re.compile(r'Average time per tick: ([0-9.]+) ?ms')
 TICK_PERCENTILES = re.compile(r'P50: ([0-9.]+) ?ms P95: ([0-9.]+) ?ms P99: ([0-9.]+) ?ms')
+
+
+# The newest Paper build for the pinned version, from PaperMC's download API (dev-only, never committed).
+PAPER_API = 'https://fill.papermc.io/v3/projects/paper/versions/{version}/builds/latest'
+JARS = lab.LOCAL / 'server-bench/jars'
+
+
+def paper_jar():
+    """Paper's newest build for the pinned version, downloaded once and checked against its SHA-256."""
+    lock, _ = lab.config()
+    version = lock['minecraft']['version']
+    request = urllib.request.Request(PAPER_API.format(version=version),
+                                     headers={'User-Agent': 'horizon-server-bench (github.com/ludovic111/horizon)'})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        build = json.load(response)
+    download = build['downloads']['server:default']
+    jar = runtime.fetch(download['url'], JARS / download['name'], download['checksums']['sha256'], 'sha256')
+    return jar, build['id']
+
+
+def fabric_mods():
+    """Lithium from packs/mods.lock.json, plus Fabric API if Lithium depends on it (checked, cached)."""
+    lock = json.loads((ROOT / 'packs/mods.lock.json').read_text())
+    def fetch(name):
+        project = lock['projects'][name]
+        return runtime.fetch(project['url'], JARS / project['filename'], project['hashes']['sha512'], 'sha512')
+    jars = [fetch('lithium')]
+    with zipfile.ZipFile(jars[0]) as archive:
+        depends = json.loads(archive.read('fabric.mod.json')).get('depends', {})
+    if any(d == 'fabric-api' or d.startswith('fabric-') and d != 'fabricloader' for d in depends):
+        jars.append(fetch('fabric-api'))
+    return jars, {'fabric_loader': lock['fabric_loader'], 'lithium': lock['projects']['lithium']['version']}
 
 
 def tick_query(server):
@@ -172,11 +229,38 @@ def tick_query(server):
 
 
 def server_command(kind, directory, args):
+    java = ['java', f'-Xms{args.heap}', f'-Xmx{args.heap}', '-Duser.timezone=UTC']
     if kind == 'vanilla':
         _, jars, libraries = base.verify_artifacts()
         classpath = os.pathsep.join(map(str, [jars['server'], *libraries]))
-        return ['java', f'-Xms{args.heap}', f'-Xmx{args.heap}', '-Duser.timezone=UTC', '-cp', classpath,
-                'net.minecraft.server.Main', 'nogui']
+        return [*java, '-cp', classpath, 'net.minecraft.server.Main', 'nogui']
+    if kind == 'paper':
+        lock, jars, _ = base.verify_artifacts()
+        jar, _ = paper_jar()
+        # Paperclip's cache, libraries and patched jar are shared by every run; the pinned server jar (your
+        # copy) seeds its cache, so it never downloads Mojang's.
+        shared = lab.LOCAL / 'server-bench/paper-shared'
+        cache = shared / 'cache'
+        cache.mkdir(parents=True, exist_ok=True)
+        mojang = cache / f'mojang_{lock["minecraft"]["version"]}.jar'
+        if not mojang.exists():
+            shutil.copyfile(jars['server'].parent / 'server.jar', mojang)
+        for name in ('cache', 'libraries', 'versions'):
+            (shared / name).mkdir(exist_ok=True)
+            (directory / name).symlink_to(shared / name, target_is_directory=True)
+        # Paper refuses a second login from one address within 4 s (bukkit.yml's connection-throttle), and
+        # every bot comes from the same one. Off, as on vanilla; Paper fills in the rest of the file.
+        (directory / 'bukkit.yml').write_text('settings:\n  connection-throttle: -1\n')
+        return [*java, '-jar', jar, '--nogui']
+    if kind == 'fabric':
+        _, jars, libraries = base.verify_artifacts()
+        mods = directory / 'mods'
+        mods.mkdir()
+        for jar in fabric_mods()[0]:
+            shutil.copyfile(jar, mods / jar.name)
+        classpath = os.pathsep.join(map(str, [jars['server'], *libraries, *runtime.fabric_libraries()]))
+        return [*java, '-Dfabric.log.disableAnsi=true', '-cp', classpath,
+                'net.fabricmc.loader.impl.launch.knot.KnotServer', 'nogui']
     server = BIN / f'horizon-server{EXE}'
     subprocess.run([server, '--dir', directory, 'import', directory / 'server.properties'], check=True,
                    capture_output=True)
@@ -186,8 +270,16 @@ def server_command(kind, directory, args):
     return [server, '--dir', directory, 'run']
 
 
-def run_once(kind, bots, args, out):
-    directory = out / f'{kind}-{bots}'
+def bots_command(args):
+    """horizon-bots here, or through `--bots-via` (for example `ssh macmini`) on another machine."""
+    if args.bots_via:
+        return [*args.bots_via.split(), args.bots_bin or 'horizon-bots']
+    return [args.bots_bin or BIN / f'horizon-bots{EXE}']
+
+
+def run_once(kind, bots, behaviour, args, out):
+    name = f'{kind}-{behaviour}-{bots}'
+    directory = out / name
     shutil.rmtree(directory, ignore_errors=True)
     directory.mkdir(parents=True)
     port = free_port()
@@ -195,19 +287,27 @@ def run_once(kind, bots, args, out):
     (directory / 'server.properties').write_text(''.join(f'{k}={v}\n' for k, v in props.items()))
     (directory / 'eula.txt').write_text('eula=true\n')
     command = server_command(kind, directory, args)
+    if args.nice:
+        command = ['nice', '-n', str(args.nice), *command]
     started = time.time()
-    server = Server(command, directory, out / f'{kind}-{bots}.log')
-    result = {'server': kind, 'bots': bots}
+    server = Server(command, directory, out / f'{name}.log')
+    result = {'server': kind, 'bots': bots, 'behaviour': behaviour}
     try:
-        server.wait_for(r'/INFO\]: Done \(', 600)
+        server.wait_for(DONE, 600)
         result['start_seconds'] = round(time.time() - started, 2)
+        # Every bot appears on the world spawn itself, not spread around it, so both servers see the same paths.
+        server.console('gamerule respawn_radius 0')
+        for rule in filter(None, args.gamerule.split(',')):
+            server.console('gamerule ' + rule.replace('=', ' '))
         time.sleep(5)
-        report = out / f'{kind}-{bots}-bots.json'
+        report = out / f'{name}-bots.json'
         total = bots * args.join_every + args.warmup + args.seconds
+        # The summary comes back on stdout after the per-second lines, so it works over ssh too.
         bot_process = subprocess.Popen(
-            [BIN / f'horizon-bots{EXE}', '--server', f'127.0.0.1:{port}', '--bots', str(bots),
-             '--behaviour', args.behaviour, '--join-every', str(args.join_every), '--seconds', str(int(total)),
-             '--seed', str(args.seed), '--report', report],
+            [*bots_command(args), '--server', f'{args.connect}:{port}', '--bots', str(bots),
+             '--behaviour', behaviour, '--join-every', str(args.join_every), '--seconds', str(int(total)),
+             '--seed', str(args.seed), '--report', '-',
+             *(['--explore-speed', str(args.explore_speed)] if args.explore_speed else [])],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         bot_lines = []
         threading.Thread(target=lambda: bot_lines.extend(bot_process.stdout), daemon=True).start()
@@ -229,11 +329,27 @@ def run_once(kind, bots, args, out):
                 if (t := tick_query(server)) is not None:
                     ticks.append(t)
                 next_query = now + 5
-        measured = [json.loads(l) for l in list(bot_lines) if l.startswith('{')]
-        window = [l for l in measured if l['t'] >= measured[-1]['t'] - args.seconds] if measured else []
         bot_process.wait(timeout=total + 120)
-        summary = json.loads(report.read_text()) if report.exists() else {}
+        time.sleep(0.5)
+        measured, rest = [], []
+        for line in list(bot_lines):
+            try:
+                sample = json.loads(line)
+            except ValueError:
+                sample = None
+            if isinstance(sample, dict) and 't' in sample:
+                measured.append(sample)
+            else:
+                rest.append(line)
+        window = [l for l in measured if l['t'] >= measured[-1]['t'] - args.seconds] if measured else []
+        summary_text = ''.join(rest)
+        summary = json.loads(summary_text) if summary_text.strip() else {}
+        report.write_text(json.dumps(summary, indent=2) + '\n')
         mean = lambda xs: round(statistics.fmean(xs), 2) if xs else None
+        per_bot = summary.get('per_bot', [])
+        by_behaviour = {}
+        for b in per_bot:
+            by_behaviour.setdefault(b['behaviour'], []).append(b)
         result.update({
             'mspt': {k: mean([t[k] for t in ticks]) for k in ('average', 'p50', 'p95', 'p99')},
             'mspt_worst_p99': max((t['p99'] for t in ticks), default=None),
@@ -242,6 +358,19 @@ def run_once(kind, bots, args, out):
             'rss_mb': {'mean': mean([r / 1e6 for r in rss]), 'max': round(max(rss) / 1e6, 1) if rss else None},
             'cpu_percent': mean(cpu),
             'chunks_per_second': mean([l['chunks_per_second'] for l in window]),
+            # Over the measured window: different chunks reaching the bots, chunks they had dropped and got
+            # again (walking back), and ticks the bots stood still waiting for their own chunk.
+            **({k + '_per_second': round((window[-1][k] - window[0][k]) / max(len(window) - 1, 1), 2)
+                for k in ('unique', 'forgotten', 'waited_ticks')} if len(window) > 1 else {}),
+            'chunks_total': summary.get('chunks'),
+            # Per bot over the whole run: every chunk received, the different ones, and those sent again
+            # while the bot still held them.
+            'chunks_per_bot': {k: mean([b['chunks'] for b in v]) for k, v in by_behaviour.items()},
+            'unique_chunks_per_bot': {k: mean([b['unique_chunks'] for b in v]) for k, v in by_behaviour.items()},
+            'resent': summary.get('resent'),
+            'pulled_back': summary.get('pulled_back'),
+            'moved_too_quickly': sum('moved too quickly!' in l for l in server.since(0)),
+            'moved_wrongly': sum('moved wrongly!' in l for l in server.since(0)),
             'bots_joined': summary.get('joined'),
             'bots_failed': [b for b in summary.get('per_bot', []) if b.get('error')],
             'tick_queries': len(ticks),
@@ -253,47 +382,114 @@ def run_once(kind, bots, args, out):
     return result
 
 
+# How far apart two servers' chunks a second (sent, and new) may be and still count as the same work: 10 %,
+# or a chunk a second when there are few.
+EQUAL_WORK = 0.10
+
+
+def work(runs):
+    """Each pass and bot count that ran on more than one server: every server's chunks sent and new chunks a
+    second as a share of the busiest one's, the ticks a second its bots stood waiting for their own chunk,
+    and whether the work was equal (within EQUAL_WORK on both)."""
+    groups = {}
+    for r in runs:
+        if 'error' not in r:
+            groups.setdefault((r['behaviour'], r['bots']), []).append(r)
+    rows = []
+    for (behaviour, bots), group in groups.items():
+        if len(group) < 2:
+            continue
+        row = {'behaviour': behaviour, 'bots': bots, 'servers': {}, 'equal': True}
+        for key in ('chunks_per_second', 'unique_per_second'):
+            top = max(r.get(key) or 0 for r in group)
+            for r in group:
+                value = r.get(key) or 0
+                share = round(value / top, 3) if top else 1.0
+                row['servers'].setdefault(r['server'], {})[key] = {'value': value, 'share': share}
+                if top - value > max(EQUAL_WORK * top, 1.0):
+                    row['equal'] = False
+        for r in group:
+            row['servers'][r['server']]['waited_ticks_per_second'] = r.get('waited_ticks_per_second')
+        rows.append(row)
+    return rows
+
+
+def versions(kinds):
+    """The Paper build and the Fabric loader and Lithium versions that ran, for the report."""
+    out = {}
+    if 'paper' in kinds:
+        out['paper_build'] = paper_jar()[1]
+    if 'fabric' in kinds:
+        out.update(fabric_mods()[1])
+    return out
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
-    parser.add_argument('--servers', default='horizon,vanilla')
+    parser.add_argument('--servers', default='horizon,vanilla', help='horizon, vanilla, paper, fabric (Lithium)')
     parser.add_argument('--bots', default='1,10,25,50')
-    parser.add_argument('--behaviour', default='mixed')
+    parser.add_argument('--behaviour', default='walk,explore', help='one pass per behaviour (comma-separated)')
     parser.add_argument('--join-every', type=float, default=1.0)
     parser.add_argument('--warmup', type=int, default=60)
     parser.add_argument('--seconds', type=int, default=300)
     parser.add_argument('--seed', type=int, default=12345)
-    parser.add_argument('--heap', default='4g', help='the Java heap, -Xms and -Xmx (vanilla)')
+    parser.add_argument('--explore-speed', type=float, default=0,
+                        help='blocks a second the explore bots fly (default: the bots\' 22, as fast as chunks '
+                             'come); a speed both servers keep up with makes the explore pass equal work')
+    parser.add_argument('--gamerule', default='',
+                        help="more game rules for both servers, 'name=value,...' (locator_bar=false: Horizon has "
+                             "no locator bar yet)")
+    parser.add_argument('--heap', default='4g', help='the Java heap, -Xms and -Xmx (vanilla, Paper, Fabric)')
     parser.add_argument('--out', type=Path, default=None, help='the report (JSON)')
+    parser.add_argument('--nice', type=int, default=0, help='run the servers under nice -n N')
+    parser.add_argument('--bots-via', default='', help="a command prefix to run the bots elsewhere ('ssh host')")
+    parser.add_argument('--bots-bin', default='', help='horizon-bots (on the --bots-via machine)')
+    parser.add_argument('--connect', default='127.0.0.1', help='the address the bots reach the server at')
     args = parser.parse_args()
     out = lab.LOCAL / 'server-bench'
     out.mkdir(parents=True, exist_ok=True)
     runs = []
-    for bots in [int(b) for b in args.bots.split(',')]:
-        for kind in args.servers.split(','):
-            print(f'{kind}, {bots} bots...', flush=True)
-            result = run_once(kind, bots, args, out)
-            runs.append(result)
-            print(json.dumps(result), flush=True)
+    for behaviour in args.behaviour.split(','):
+        for bots in [int(b) for b in args.bots.split(',')]:
+            for kind in args.servers.split(','):
+                print(f'{kind}, {bots} {behaviour} bots...', flush=True)
+                result = run_once(kind, bots, behaviour, args, out)
+                runs.append(result)
+                print(json.dumps(result), flush=True)
     report = {
         'kind': 'horizon-server-benchmark',
         'date': datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds'),
         'machine': {'system': platform.system(), 'machine': platform.machine(), 'cpus': os.cpu_count()},
         'commit': subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=ROOT, capture_output=True, text=True).stdout.strip(),
         'java': subprocess.run(['java', '--version'], capture_output=True, text=True).stdout.splitlines()[:1],
+        'versions': versions(args.servers.split(',')),
         'settings': {**vars(args), 'out': str(args.out), 'properties': PROPERTIES},
         'runs': runs,
+        'work': work(runs),
     }
     path = args.out or out / 'report.json'
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, indent=2) + '\n')
-    print(f'\n{"server":8} {"bots":>4} {"start s":>8} {"MSPT":>6} {"P95":>6} {"P99":>6} {"RSS MB":>7} {"CPU %":>6} {"chunks/s":>8} {"joined":>6}')
+    print(f'\n{"server":8} {"pass":8} {"bots":>4} {"start s":>8} {"MSPT":>6} {"P95":>6} {"P99":>6} {"RSS MB":>7} '
+          f'{"CPU %":>6} {"chunks/s":>8} {"/bot":>6} {"resent":>6} {"pulled":>6} {"joined":>6}')
     for r in runs:
         if 'error' in r:
-            print(f'{r["server"]:8} {r["bots"]:>4}  failed: {r["error"].splitlines()[0]}')
+            print(f'{r["server"]:8} {r["behaviour"]:8} {r["bots"]:>4}  failed: {r["error"].splitlines()[0]}')
             continue
-        print(f'{r["server"]:8} {r["bots"]:>4} {r["start_seconds"]:>8} {r["mspt"]["average"]!s:>6} {r["mspt"]["p95"]!s:>6} '
-              f'{r["mspt"]["p99"]!s:>6} {r["rss_mb"]["mean"]!s:>7} {r["cpu_percent"]!s:>6} {r["chunks_per_second"]!s:>8} '
+        # A mixed pass: every bot's.
+        per_bot = r['chunks_per_bot'].get(r['behaviour']) or round((r['chunks_total'] or 0) / r['bots'])
+        print(f'{r["server"]:8} {r["behaviour"]:8} {r["bots"]:>4} {r["start_seconds"]:>8} {r["mspt"]["average"]!s:>6} '
+              f'{r["mspt"]["p95"]!s:>6} {r["mspt"]["p99"]!s:>6} {r["rss_mb"]["mean"]!s:>7} {r["cpu_percent"]!s:>6} '
+              f'{r["chunks_per_second"]!s:>8} {per_bot!s:>6} {r["resent"]!s:>6} {r["pulled_back"]!s:>6} '
               f'{r["bots_joined"]!s:>6}')
+    if report['work']:
+        print(f'\nWork, against the busiest server (chunks a second sent, new; ticks a second bots waited):')
+        for row in report['work']:
+            cells = '  '.join(
+                f'{server} {w["chunks_per_second"]["value"]} ({w["chunks_per_second"]["share"]:.0%}), '
+                f'{w["unique_per_second"]["value"]} ({w["unique_per_second"]["share"]:.0%}), '
+                f'{w["waited_ticks_per_second"]}' for server, w in row['servers'].items())
+            print(f'{row["behaviour"]:8} {row["bots"]:>4}  {"equal" if row["equal"] else "NOT EQUAL"}  {cells}')
     print(f'\nWrote {path}')
 
 

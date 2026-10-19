@@ -14,6 +14,7 @@
 //! most 15 blocks, so the 48-wide region determines the centre exactly.
 //! `relight_block` applies vanilla's incremental decrease/increase passes
 //! directly to resident chunks after a block change.
+use crate::fast_hash::FxHashMap;
 use crate::{
     blocks::BlockFacts,
     chunk::{Chunk, HEIGHT, Light, MIN_Y, SECTIONS, index},
@@ -44,11 +45,19 @@ pub struct LightTables {
     /// `faceShapeOccludes(a, b)` for every pair of distinct face shapes.
     occludes: Vec<bool>,
     faces: usize,
+    /// Number of distinct `(shaped, faces)` configurations.
+    types: usize,
+    /// Per state: `emission << 16 | type << 4 | dampening`. The low 16 bits are
+    /// what `light_chunk` stores per cell, so a cell costs 2 bytes and the
+    /// flood fill never reads the (large) `cells` table.
+    info: Vec<u32>,
+    /// `blocked(type_a, type_b, direction)` as a bit per direction.
+    block_masks: Vec<u8>,
 }
 impl LightTables {
     /// Dampening and emission only: every occlusion face is empty.
     pub fn new(facts: &BlockFacts) -> Self {
-        Self {
+        let mut tables = Self {
             cells: facts
                 .states
                 .iter()
@@ -61,21 +70,64 @@ impl LightTables {
                 .collect(),
             occludes: vec![false, true, true, true],
             faces: 2,
+            types: 1,
+            info: Vec::new(),
+            block_masks: Vec::new(),
+        };
+        tables.rebuild_cache();
+        tables
+    }
+    /// Build the packed per-cell info and the per-configuration blocking masks
+    /// used by `light_chunk`'s flood fill.
+    fn rebuild_cache(&mut self) {
+        let empty: (bool, [u16; 6]) = (false, [EMPTY; 6]);
+        let mut by_config: HashMap<(bool, [u16; 6]), u16> = HashMap::new();
+        by_config.insert(empty, 0);
+        let mut configs: Vec<(bool, [u16; 6])> = vec![empty];
+        let mut info = vec![0u32; self.cells.len()];
+        for (id, cell) in self.cells.iter().enumerate() {
+            let ty = *by_config
+                .entry((cell.shaped, cell.faces))
+                .or_insert_with(|| {
+                    configs.push((cell.shaped, cell.faces));
+                    (configs.len() - 1) as u16
+                });
+            let packed = u32::from(ty) << 4 | u32::from(cell.dampening.min(15));
+            info[id] = u32::from(cell.emission.min(15)) << 16 | packed;
         }
+        let types = configs.len();
+        debug_assert!(
+            types <= 4096,
+            "light tables: {types} cell configurations exceed the 12-bit type field"
+        );
+        let mut block_masks = vec![0u8; types * types];
+        for a in 0..types {
+            for b in 0..types {
+                let (shaped_a, faces_a) = configs[a];
+                let (shaped_b, faces_b) = configs[b];
+                // `blocked`: an unshaped pair covers no face; otherwise the two
+                // face shapes are compared through the `occludes` table.
+                if !shaped_a && !shaped_b {
+                    continue;
+                }
+                let mut mask = 0u8;
+                for d in 0..6 {
+                    if self.occludes[faces_a[d] as usize * self.faces + faces_b[d ^ 1] as usize] {
+                        mask |= 1 << d;
+                    }
+                }
+                block_masks[a * types + b] = mask;
+            }
+        }
+        self.types = types;
+        self.info = info;
+        self.block_masks = block_masks;
     }
     /// Full tables with the vanilla occlusion shapes from `occlusion.nbt`.
     pub fn load(root: &Path, registry: &BlockRegistry, facts: &BlockFacts) -> crate::Result<Self> {
-        use horizon_world::{
-            collision::CachedCollisionRegistry,
-            nbt::{self, Limits},
-        };
-        let data = nbt::read_named(
-            &std::fs::read(root.join("occlusion.nbt"))?,
-            Limits::tables(),
-        )?
-        .0
-        .tag;
-        let occlusion = CachedCollisionRegistry::from_nbt(&data, registry)?;
+        use horizon_world::{collision::CachedCollisionRegistry, registry::BlockTableFile};
+        let file = BlockTableFile::open(&root.join("occlusion.nbt"), registry)?;
+        let occlusion = CachedCollisionRegistry::from_table(file.table("occlusion")?)?;
         let mut tables = Self::new(facts);
         let block = VoxelShape::block();
         let mut shapes: Vec<VoxelShape> = vec![VoxelShape::empty(), block.clone()];
@@ -147,7 +199,22 @@ impl LightTables {
         }
         tables.occludes = occludes;
         tables.faces = n;
+        tables.rebuild_cache();
         Ok(tables)
+    }
+    /// Assembled tables (tests and benchmarks): derives the packed light cache.
+    #[allow(dead_code)]
+    fn from_parts(cells: Vec<Cell>, occludes: Vec<bool>, faces: usize) -> Self {
+        let mut tables = Self {
+            cells,
+            occludes,
+            faces,
+            types: 0,
+            info: Vec::new(),
+            block_masks: Vec::new(),
+        };
+        tables.rebuild_cache();
+        tables
     }
     /// `LightEngine.shapeOccludes(from, to, direction)`.
     #[inline]
@@ -160,19 +227,29 @@ impl LightTables {
         let fb = b.faces[direction ^ 1] as usize;
         self.occludes[fa * self.faces + fb]
     }
+    /// `blocked` for two packed cells (`type << 4 | dampening`).
+    #[inline]
+    fn packed_blocked(&self, a: u16, b: u16, direction: usize) -> bool {
+        self.block_masks[(a >> 4) as usize * self.types + (b >> 4) as usize] & (1 << direction) != 0
+    }
     /// `ChunkSkyLightSources.isEdgeOccluded(top, bottom)`.
     #[inline]
     fn edge_occluded(&self, top: usize, bottom: usize) -> bool {
         self.cells[bottom].dampening != 0 || self.blocked(top, bottom, Direction::Down as usize)
     }
-    pub fn emission(&self, state: u16) -> u8 {
+    /// `edge_occluded` for two packed cells.
+    #[inline]
+    fn packed_edge_occluded(&self, top: u16, bottom: u16) -> bool {
+        bottom & 0xF != 0 || self.packed_blocked(top, bottom, Direction::Down as usize)
+    }
+    pub fn emission(&self, state: u32) -> u8 {
         self.cells[state as usize].emission
     }
-    pub fn dampening(&self, state: u16) -> u8 {
+    pub fn dampening(&self, state: u32) -> u8 {
         self.cells[state as usize].dampening
     }
     /// Whether a state change can change light (`hasDifferentLightProperties`).
-    pub fn differs(&self, old: u16, new: u16) -> bool {
+    pub fn differs(&self, old: u32, new: u32) -> bool {
         let (a, b) = (&self.cells[old as usize], &self.cells[new as usize]);
         old != new
             && (a.dampening != b.dampening || a.emission != b.emission || a.shaped || b.shaped)
@@ -211,12 +288,14 @@ pub fn light_chunk(
     // up to 14 blocks into it (sky light there is always 15).
     let h = ((top_section + 1) * 16).min(HEIGHT as usize);
     let at = |x: usize, y: usize, z: usize| (y * W + z) * W + x;
+    // Packed cells (`type << 4 | dampening`), not state ids: the flood fill
+    // then never touches the large `LightTables::cells` table.
     let mut states = vec![0u16; W * W * h];
     let mut sky = vec![0u8; W * W * h];
     let mut block = vec![0u8; W * W * h];
     let mut queue = VecDeque::new();
     let mut sky_queue = VecDeque::new();
-    let mut ids = Box::new([0u16; 4096]);
+    let mut ids = Box::new([0u32; 4096]);
     for (dz, row) in region.iter().enumerate() {
         for (dx, chunk) in row.iter().enumerate() {
             let Some(chunk) = chunk else { continue };
@@ -228,10 +307,11 @@ pub fn light_chunk(
                 for (i, &id) in ids.iter().enumerate() {
                     let (lx, lz, ly) = (i & 15, (i >> 4) & 15, i >> 8);
                     let p = at(dx * 16 + lx, si * 16 + ly, dz * 16 + lz);
-                    states[p] = id;
-                    let emission = tables.cells[id as usize].emission;
+                    let info = tables.info[id as usize];
+                    states[p] = info as u16;
+                    let emission = info >> 16;
                     if emission > 0 {
-                        block[p] = emission;
+                        block[p] = emission as u8;
                         queue.push_back(p as u32);
                     }
                 }
@@ -239,20 +319,25 @@ pub fn light_chunk(
         }
     }
     // Columns of missing neighbour chunks neither hold nor pass light.
-    let present = |x: usize, z: usize| region[z / 16][x / 16].is_some();
+    let mut present = vec![false; W * W];
+    for z in 0..W {
+        for x in 0..W {
+            present[z * W + x] = region[z / 16][x / 16].is_some();
+        }
+    }
     let mut lowest = vec![h as i32; W * W];
     for z in 0..W {
         for x in 0..W {
-            if !present(x, z) || !sky_light {
+            if !present[z * W + x] || !sky_light {
                 continue;
             }
             // The top layer (above the occupied range) is always open sky.
             let mut y = h as i32 - 1;
             sky[at(x, y as usize, z)] = 15;
             while y > 0
-                && !tables.edge_occluded(
-                    states[at(x, y as usize, z)] as usize,
-                    states[at(x, y as usize - 1, z)] as usize,
+                && !tables.packed_edge_occluded(
+                    states[at(x, y as usize, z)],
+                    states[at(x, y as usize - 1, z)],
                 )
             {
                 y -= 1;
@@ -263,7 +348,7 @@ pub fn light_chunk(
     }
     for z in 0..W {
         for x in 0..W {
-            if !present(x, z) || !sky_light {
+            if !present[z * W + x] || !sky_light {
                 continue;
             }
             let own = lowest[z * W + x];
@@ -274,7 +359,7 @@ pub fn light_chunk(
                 (x, z.wrapping_sub(1)),
                 (x, z + 1),
             ] {
-                if nx < W && nz < W && present(nx, nz) {
+                if nx < W && nz < W && present[nz * W + nx] {
                     deepest = deepest.max(lowest[nz * W + nx]);
                 }
             }
@@ -298,24 +383,40 @@ pub fn light_chunk(
             let x = p % W;
             let z = (p / W) % W;
             let y = p / (W * W);
-            let from = states[p] as usize;
-            for (d, (ox, oy, oz)) in OFFSETS.iter().enumerate() {
-                let (nx, ny, nz) = (x as i32 + ox, y as i32 + oy, z as i32 + oz);
-                if nx < 0 || nz < 0 || ny < 0 || nx >= W as i32 || nz >= W as i32 || ny >= h as i32
-                {
-                    continue;
-                }
-                let (nx, ny, nz) = (nx as usize, ny as usize, nz as usize);
-                if !present(nx, nz) {
-                    continue;
-                }
-                let q = at(nx, ny, nz);
-                let to = states[q] as usize;
-                let next = level.saturating_sub(tables.cells[to].dampening.max(1));
-                if next > light[q] && !tables.blocked(from, to, d) {
-                    light[q] = next;
-                    queue.push_back(q as u32);
-                }
+            let from = states[p];
+            let col = z * W + x;
+            // Neighbours by linear offset; `present` only depends on the
+            // column, and the axis bounds rule out wrapping.
+            macro_rules! neighbour {
+                ($d:expr, $q:expr, $ncol:expr) => {{
+                    if present[$ncol] {
+                        let q = $q;
+                        let to = states[q];
+                        let next = level.saturating_sub((to & 0xF).max(1) as u8);
+                        if next > light[q] && !tables.packed_blocked(from, to, $d) {
+                            light[q] = next;
+                            queue.push_back(q as u32);
+                        }
+                    }
+                }};
+            }
+            if y > 0 {
+                neighbour!(0, p - W * W, col);
+            }
+            if y + 1 < h {
+                neighbour!(1, p + W * W, col);
+            }
+            if z > 0 {
+                neighbour!(2, p - W, col - W);
+            }
+            if z + 1 < W {
+                neighbour!(3, p + W, col + W);
+            }
+            if x > 0 {
+                neighbour!(4, p - 1, col - 1);
+            }
+            if x + 1 < W {
+                neighbour!(5, p + 1, col + 1);
             }
         }
     };
@@ -364,10 +465,8 @@ pub fn apply_lighting(chunk: &mut Chunk, lights: Vec<Light>) {
 }
 
 /// `apply_lighting` for a chunk lit before: writes only the sections whose
-/// light changed and returns the block positions that changed.
-pub fn apply_relighting(chunk: &mut Chunk, lights: Vec<Light>) -> Vec<(i32, i32, i32)> {
-    let mut changed = Vec::new();
-    let (bx, bz) = (chunk.x * 16, chunk.z * 16);
+/// light changed and adds the cells that changed to `changed`.
+pub fn apply_relighting(chunk: &mut Chunk, lights: Vec<Light>, changed: &mut LightChanges) {
     for (sy, (section, light)) in chunk.sections.iter_mut().zip(lights).enumerate() {
         let old = &section.light;
         if let (Light::Uniform(a), Light::Uniform(b)) = (old, &light)
@@ -375,29 +474,104 @@ pub fn apply_relighting(chunk: &mut Chunk, lights: Vec<Light>) -> Vec<(i32, i32,
         {
             continue;
         }
-        let before = changed.len();
+        let mut classes = 0;
         for i in 0..4096 {
             if old.get(i) != light.get(i) {
-                let y = MIN_Y + sy as i32 * 16 + (i >> 8) as i32;
-                changed.push((bx + (i & 15) as i32, y, bz + (i >> 4 & 15) as i32));
+                let (x, y, z) = (i as i32 & 15, (i >> 8) as i32, (i >> 4) as i32 & 15);
+                classes |= 1 << LightChanges::class(x, y, z);
             }
         }
-        if changed.len() > before {
+        if classes != 0 {
+            changed.add((chunk.x, sy as i32, chunk.z), classes);
             Arc::make_mut(section).light = light;
         }
+    }
+}
+
+/// `DataLayer.get`: the nibble at index `i` (`y << 8 | z << 4 | x`), low first.
+#[inline]
+fn nibble(layer: &[u8], i: usize) -> u8 {
+    (layer[i >> 1] >> ((i & 1) * 4)) & 15
+}
+
+/// A column's light as vanilla stores it, two DataLayers per section (sky,
+/// block; `layers[i]` for section `i`, `None` where no layer is stored), into
+/// the sections' packed light, which then needs no light job. A missing sky
+/// layer repeats the bottom layer of the nearest stored one above it, and
+/// `above` (per `z << 4 | x`) above the highest
+/// (`SkyLightSectionStorage.getLightValue`); a missing block layer is dark.
+pub fn light_from_layers<L: AsRef<[u8]>>(
+    chunk: &mut Chunk,
+    layers: &[(Option<L>, Option<L>)],
+    mut above: [u8; 256],
+    sky_light: bool,
+) {
+    for (si, (sky, block)) in layers.iter().enumerate().take(SECTIONS).rev() {
+        let sky = sky.as_ref().filter(|_| sky_light);
+        let section = Arc::make_mut(&mut chunk.sections[si]);
+        if sky.is_none() && block.is_none() && above.iter().all(|&v| v == above[0]) {
+            section.light = Light::Uniform(above[0] << 4);
+            section.compact();
+            continue;
+        }
+        let mut data = Box::new([0u8; 4096]);
+        for (i, packed) in data.iter_mut().enumerate() {
+            let s = sky.map_or(above[i & 255], |a| nibble(a.as_ref(), i));
+            let b = block.as_ref().map_or(0, |a| nibble(a.as_ref(), i));
+            *packed = s << 4 | b;
+        }
+        for (i, a) in above.iter_mut().enumerate() {
+            *a = data[i] >> 4;
+        }
+        section.light = Light::Full(data);
+        section.compact();
+    }
+    chunk.lit = true;
+    chunk.light_loaded = true;
+}
+
+/// A light update's layers (`LevelLightEngine.queueSectionData`): each one
+/// given replaces that kind of light in its section, the other kind stays.
+/// Returns the sections whose light changed.
+pub fn update_light_layers<L: AsRef<[u8]>>(
+    chunk: &mut Chunk,
+    layers: &[(Option<L>, Option<L>)],
+    sky_light: bool,
+) -> Vec<usize> {
+    let mut changed = Vec::new();
+    for (si, (sky, block)) in layers.iter().enumerate().take(SECTIONS) {
+        let sky = sky.as_ref().filter(|_| sky_light);
+        if sky.is_none() && block.is_none() {
+            continue;
+        }
+        let old = &chunk.sections[si].light;
+        let mut data = Box::new([0u8; 4096]);
+        for (i, packed) in data.iter_mut().enumerate() {
+            let was = old.get(i);
+            let s = sky.map_or(was >> 4, |a| nibble(a.as_ref(), i));
+            let b = block.as_ref().map_or(was & 15, |a| nibble(a.as_ref(), i));
+            *packed = s << 4 | b;
+        }
+        if (0..4096).all(|i| old.get(i) == data[i]) {
+            continue;
+        }
+        let section = Arc::make_mut(&mut chunk.sections[si]);
+        section.light = Light::Full(data);
+        section.compact();
+        changed.push(si);
     }
     changed
 }
 
 /// Resident chunks the incremental relighter reads and writes.
 pub trait LightWorld {
-    fn state(&self, x: i32, y: i32, z: i32) -> Option<u16>;
+    fn state(&self, x: i32, y: i32, z: i32) -> Option<u32>;
     /// Packed light (sky << 4 | block), None outside loaded chunks.
     fn light(&self, x: i32, y: i32, z: i32) -> Option<u8>;
     fn set_light(&mut self, x: i32, y: i32, z: i32, packed: u8);
 }
 impl<S: std::hash::BuildHasher> LightWorld for HashMap<(i32, i32), Arc<Chunk>, S> {
-    fn state(&self, x: i32, y: i32, z: i32) -> Option<u16> {
+    fn state(&self, x: i32, y: i32, z: i32) -> Option<u32> {
         if !(MIN_Y..MIN_Y + HEIGHT).contains(&y) {
             return None;
         }
@@ -432,6 +606,90 @@ impl<S: std::hash::BuildHasher> LightWorld for HashMap<(i32, i32), Arc<Chunk>, S
     }
 }
 type Pos = (i32, i32, i32);
+/// Changed light by section, as vanilla's light engine reports it to
+/// `LevelRenderer` (`setSectionDirty`) instead of cell by cell: for each
+/// section (x, section index, z), a bit per class of position the changed
+/// cells take in it, `3 * 3 * 3` classes for the low face, the inside and the
+/// high face of each axis. Meshes sample light one block across a face, so the
+/// class says which neighbouring sections a change dirties too.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LightChanges {
+    sections: FxHashMap<Pos, u32>,
+}
+impl LightChanges {
+    /// A cell whose stored light changed.
+    #[inline]
+    pub fn push(&mut self, (x, y, z): Pos) {
+        let key = (x >> 4, (y - MIN_Y) >> 4, z >> 4);
+        *self.sections.entry(key).or_default() |= 1 << Self::class(x, y, z);
+    }
+    /// Cells of section `key` (x, section index, z) in the given classes.
+    fn add(&mut self, key: Pos, classes: u32) {
+        *self.sections.entry(key).or_default() |= classes;
+    }
+    /// The class of a cell in its section: per axis 0 on the low face, 1
+    /// inside, 2 on the high face.
+    fn class(x: i32, y: i32, z: i32) -> u32 {
+        let axis = |v: i32| match v & 15 {
+            0 => 0,
+            15 => 2,
+            _ => 1,
+        };
+        axis(x) + 3 * axis(y) + 9 * axis(z)
+    }
+    pub fn is_empty(&self) -> bool {
+        self.sections.is_empty()
+    }
+    /// The sections (x, section index, z) holding changed cells.
+    pub fn sections(&self) -> impl Iterator<Item = Pos> + '_ {
+        self.sections.keys().copied()
+    }
+    /// Every section (x, section index, z) whose cells lie within one block
+    /// of a changed cell, section indexes outside `0..SECTIONS` left out (a
+    /// section next to several changed ones comes once for each).
+    pub fn dirty_sections(&self, mut out: impl FnMut(Pos)) {
+        // Per class, the bit set of neighbour offsets (dx, dy, dz in -1..=1,
+        // bit (dx + 1) + 3 (dy + 1) + 9 (dz + 1)) its cells reach.
+        const REACH: [u32; 27] = {
+            let mut reach = [0; 27];
+            let mut class = 0;
+            while class < 27 {
+                let axis = [class % 3, class / 3 % 3, class / 9];
+                let mut offset = 0;
+                while offset < 27 {
+                    let d = [offset % 3, offset / 3 % 3, offset / 9];
+                    // Every class reaches its own section (d = 1, offset 0);
+                    // the low face also -1 (d = 0), the high face +1 (d = 2).
+                    if (d[0] == 1 || d[0] == axis[0])
+                        && (d[1] == 1 || d[1] == axis[1])
+                        && (d[2] == 1 || d[2] == axis[2])
+                    {
+                        reach[class] |= 1 << offset;
+                    }
+                    offset += 1;
+                }
+                class += 1;
+            }
+            reach
+        };
+        for (&(x, sy, z), &classes) in &self.sections {
+            let mut offsets = 0;
+            let mut rest = classes;
+            while rest != 0 {
+                offsets |= REACH[rest.trailing_zeros() as usize];
+                rest &= rest - 1;
+            }
+            while offsets != 0 {
+                let o = offsets.trailing_zeros() as i32;
+                offsets &= offsets - 1;
+                let s = sy + o / 3 % 3 - 1;
+                if (0..SECTIONS as i32).contains(&s) {
+                    out((x + o % 3 - 1, s, z + o / 9 - 1));
+                }
+            }
+        }
+    }
+}
 fn level(world: &impl LightWorld, sky: bool, p: Pos) -> Option<u8> {
     world
         .light(p.0, p.1, p.2)
@@ -470,8 +728,8 @@ pub fn lowest_sky_source(world: &impl LightWorld, tables: &LightTables, x: i32, 
 /// Vanilla's `checkBlock` + `runLightUpdates` for changed positions on
 /// resident, lit chunks: clear the light that may have come through or from
 /// the old states (decrease pass), then re-seed sources and propagate back in
-/// from the brighter boundary (increase pass). Returns every position whose
-/// stored light changed, for remeshing. `force` clears around each position
+/// from the brighter boundary (increase pass). Adds every position whose
+/// stored light changed to `changed`, for remeshing. `force` clears around each position
 /// as if it had been fully lit, for light computed from outdated blocks.
 pub fn relight(
     world: &mut impl LightWorld,
@@ -479,16 +737,9 @@ pub fn relight(
     sky_light: bool,
     positions: &[Pos],
     force: bool,
-) -> Vec<Pos> {
-    let mut changed = Vec::new();
-    relight_layer(
-        world,
-        tables,
-        false,
-        positions.to_vec(),
-        force,
-        &mut changed,
-    );
+    changed: &mut LightChanges,
+) {
+    relight_layer(world, tables, false, positions.to_vec(), force, changed);
     if sky_light {
         let mut seeds = positions.to_vec();
         let mut columns: HashMap<(i32, i32), i32> = HashMap::new();
@@ -511,11 +762,8 @@ pub fn relight(
                 y -= 1;
             }
         }
-        relight_layer(world, tables, true, seeds, force, &mut changed);
+        relight_layer(world, tables, true, seeds, force, changed);
     }
-    changed.sort_unstable();
-    changed.dedup();
-    changed
 }
 fn relight_layer(
     world: &mut impl LightWorld,
@@ -523,7 +771,7 @@ fn relight_layer(
     sky: bool,
     seeds: Vec<Pos>,
     force: bool,
-    changed: &mut Vec<Pos>,
+    changed: &mut LightChanges,
 ) {
     let mut decrease: VecDeque<(Pos, u8)> = VecDeque::new();
     let mut cleared: Vec<Pos> = Vec::new();
@@ -611,10 +859,10 @@ fn relight_layer(
 mod tests {
     use super::*;
 
-    const AIR: u16 = 0;
-    const STONE: u16 = 1;
-    const TORCH: u16 = 2;
-    const SLAB: u16 = 3;
+    const AIR: u32 = 0;
+    const STONE: u32 = 1;
+    const TORCH: u32 = 2;
+    const SLAB: u32 = 3;
     /// Air, stone, torch and a bottom slab (full bottom face, half sides,
     /// empty top), with a third face shape for the half sides.
     fn tables() -> LightTables {
@@ -624,17 +872,17 @@ mod tests {
             shaped: faces.iter().any(|f| *f != EMPTY),
             faces,
         };
-        LightTables {
-            cells: vec![
+        LightTables::from_parts(
+            vec![
                 cell(0, 0, [EMPTY; 6]),
                 cell(15, 0, [FULL; 6]),
                 cell(0, 14, [EMPTY; 6]),
                 cell(0, 0, [FULL, EMPTY, 2, 2, 2, 2]),
             ],
             // empty, full, half: only pairs with a full face cover the square.
-            occludes: vec![false, true, false, true, true, true, false, true, false],
-            faces: 3,
-        }
+            vec![false, true, false, true, true, true, false, true, false],
+            3,
+        )
     }
     fn world(edit: impl Fn(&mut Chunk)) -> HashMap<(i32, i32), Arc<Chunk>> {
         let mut chunks = HashMap::new();
@@ -719,7 +967,14 @@ mod tests {
         ];
         for ((x, y, z), state) in edits {
             Arc::make_mut(w.get_mut(&(0, 0)).unwrap()).set(x, y, z, state);
-            relight(&mut w, &tables(), true, &[(x, y, z)], false);
+            relight(
+                &mut w,
+                &tables(),
+                true,
+                &[(x, y, z)],
+                false,
+                &mut LightChanges::default(),
+            );
         }
         let region: [[Option<&Chunk>; 3]; 3] = std::array::from_fn(|dz| {
             std::array::from_fn(|dx| w.get(&(dx as i32 - 1, dz as i32 - 1)).map(|c| &**c))
@@ -765,7 +1020,16 @@ mod tests {
         assert_eq!(edited_snapshot.sections[0].light(index(8, MIN_Y, 8)), 0xF0);
         let mut world = HashMap::from([((0, 0), Arc::new(current))]);
         // Streaming replays edits made after the job snapshot with force=true.
-        relight(&mut world, &tables(), true, &[(8, MIN_Y, 8)], true);
+        let mut changed = LightChanges::default();
+        relight(
+            &mut world,
+            &tables(),
+            true,
+            &[(8, MIN_Y, 8)],
+            true,
+            &mut changed,
+        );
+        assert!(!changed.is_empty());
         let region = [[None; 3], [None, Some(&*world[&(0, 0)]), None], [None; 3]];
         let fresh = light_chunk(&region, &tables(), true);
         for (section, light) in world[&(0, 0)].sections.iter().zip(fresh) {
@@ -788,7 +1052,9 @@ mod tests {
         let sections: Vec<_> = chunk.sections.iter().map(Arc::as_ptr).collect();
         // The same light again: nothing changes and no section is copied.
         let light = lit(&chunk);
-        assert!(apply_relighting(&mut chunk, light).is_empty());
+        let mut changed = LightChanges::default();
+        apply_relighting(&mut chunk, light, &mut changed);
+        assert!(changed.is_empty());
         assert_eq!(
             sections,
             chunk.sections.iter().map(Arc::as_ptr).collect::<Vec<_>>()
@@ -796,8 +1062,8 @@ mod tests {
         let before = chunk.clone();
         chunk.set(3, MIN_Y + 20, 5, STONE);
         let light = lit(&chunk);
-        let changed = apply_relighting(&mut chunk, light);
-        let mut expected = Vec::new();
+        apply_relighting(&mut chunk, light, &mut changed);
+        let mut expected = LightChanges::default();
         for (sy, (old, new)) in before.sections.iter().zip(&chunk.sections).enumerate() {
             for i in 0..4096 {
                 if old.light(i) != new.light(i) {
@@ -815,6 +1081,95 @@ mod tests {
             .filter(|(old, new)| **old != Arc::as_ptr(new))
             .count();
         assert!(copied <= 3, "{copied} sections copied");
+    }
+
+    #[test]
+    fn changes_dirty_the_sections_within_a_block_of_each_cell() {
+        // Cells inside sections, on each face and corner, at the bottom and
+        // top of the world, on negative coordinates.
+        let mut cells = Vec::new();
+        for x in [-17, -16, -1, 0, 7, 15, 16, 31] {
+            for y in [
+                MIN_Y,
+                MIN_Y + 15,
+                MIN_Y + 16,
+                70,
+                79,
+                80,
+                MIN_Y + HEIGHT - 1,
+            ] {
+                for z in [-33, -32, 5, 15] {
+                    cells.push((x, y, z));
+                }
+            }
+        }
+        for n in [1, 2, cells.len()] {
+            for start in 0..cells.len().min(8) {
+                let some: Vec<Pos> = cells.iter().copied().cycle().skip(start).take(n).collect();
+                let mut changes = LightChanges::default();
+                some.iter().for_each(|&c| changes.push(c));
+                let mut dirty = std::collections::BTreeSet::new();
+                changes.dirty_sections(|s| {
+                    dirty.insert(s);
+                });
+                let mut expected = std::collections::BTreeSet::new();
+                for &(x, y, z) in &some {
+                    for (dx, dy, dz) in (-1..=1)
+                        .flat_map(|a| (-1..=1).flat_map(move |b| (-1..=1).map(move |c| (a, b, c))))
+                    {
+                        let s = (y + dy - MIN_Y) >> 4;
+                        if (0..SECTIONS as i32).contains(&s) {
+                            expected.insert(((x + dx) >> 4, s, (z + dz) >> 4));
+                        }
+                    }
+                }
+                assert_eq!(dirty, expected, "{some:?}");
+                let sections: std::collections::BTreeSet<_> = changes.sections().collect();
+                let own: std::collections::BTreeSet<_> = some
+                    .iter()
+                    .map(|&(x, y, z)| (x >> 4, (y - MIN_Y) >> 4, z >> 4))
+                    .collect();
+                assert_eq!(sections, own);
+            }
+        }
+    }
+
+    #[test]
+    fn stored_layers_fill_the_column_as_vanilla_reads_them() {
+        // Section 10's sky layer is 7 on its bottom row and 3 above; no
+        // layers anywhere else; a block layer of 5 in section 2.
+        let mut sky = vec![0x33u8; 2048];
+        sky[..128].fill(0x77);
+        let mut layers: Vec<(Option<Vec<u8>>, Option<Vec<u8>>)> = vec![(None, None); SECTIONS];
+        layers[10].0 = Some(sky);
+        layers[2].1 = Some(vec![0x55; 2048]);
+        let mut chunk = Chunk::empty(0, 0);
+        light_from_layers(&mut chunk, &layers, [15; 256], true);
+        let at = |c: &Chunk, si: usize, i: usize| c.sections[si].light(i);
+        assert!(chunk.lit && chunk.light_loaded);
+        assert!(
+            matches!(chunk.sections[11].light, Light::Uniform(0xF0)),
+            "above: open sky"
+        );
+        assert_eq!((at(&chunk, 10, 0), at(&chunk, 10, 4095)), (0x70, 0x30));
+        // Below, each section repeats the bottom row of the stored one above.
+        assert!(matches!(chunk.sections[9].light, Light::Uniform(0x70)));
+        assert_eq!(at(&chunk, 2, 100), 0x75, "block light only where stored");
+        assert!(matches!(chunk.sections[0].light, Light::Uniform(0x70)));
+
+        // A light update replaces one kind of light in the sections it names.
+        let mut update: Vec<(Option<Vec<u8>>, Option<Vec<u8>>)> = vec![(None, None); SECTIONS];
+        update[2].1 = Some(vec![0; 2048]);
+        update[3].0 = Some(vec![0x77; 2048]);
+        let changed = update_light_layers(&mut chunk, &update, true);
+        assert_eq!(changed, vec![2]);
+        assert!(matches!(chunk.sections[2].light, Light::Uniform(0x70)));
+        update[3].0 = Some(vec![0xFF; 2048]);
+        assert_eq!(
+            update_light_layers(&mut chunk, &update, false),
+            Vec::<usize>::new(),
+            "no sky storage"
+        );
     }
 
     #[test]
@@ -889,7 +1244,7 @@ mod tests {
         for (si, s) in fixture.sections.iter_mut().enumerate() {
             let section = Arc::make_mut(s);
             for i in 0..4096 {
-                section.set(i, ((i + si) % 16) as u16);
+                section.set(i, ((i + si) % 16) as u32);
             }
             for i in 0..64 {
                 section.biomes.set(i, (i % 4) as u32);

@@ -53,7 +53,9 @@ impl Preset {
 /// How the swapchain presents frames.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum PresentMode {
-    /// Follow vanilla's VSync option (Mailbox or Fifo on, Immediate off).
+    /// Vanilla's choice: Fifo with VSync on, else the first of Immediate,
+    /// Mailbox and Fifo the surface supports. The other modes apply only
+    /// with VSync off: VSync on always presents with Fifo.
     #[default]
     Auto,
     Fifo,
@@ -91,6 +93,48 @@ impl PresentMode {
     }
 }
 
+/// The graphics API the renderer runs on. Only Windows has a choice: the
+/// other systems always use their one backend (Vulkan on Linux, Metal on
+/// macOS). Applies at the next start.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum GraphicsApi {
+    /// Vulkan, and DirectX 12 when Vulkan has no adapter or device.
+    #[default]
+    Auto,
+    Vulkan,
+    Dx12,
+}
+impl GraphicsApi {
+    pub const ALL: [GraphicsApi; 3] = [GraphicsApi::Auto, GraphicsApi::Vulkan, GraphicsApi::Dx12];
+    pub fn name(self) -> &'static str {
+        match self {
+            GraphicsApi::Auto => "auto",
+            GraphicsApi::Vulkan => "vulkan",
+            GraphicsApi::Dx12 => "dx12",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            GraphicsApi::Auto => "Auto",
+            GraphicsApi::Vulkan => "Vulkan",
+            GraphicsApi::Dx12 => "DirectX 12",
+        }
+    }
+    /// The API a name stands for, ignoring case; `None` for anything else.
+    pub fn from_name(s: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|api| api.name().eq_ignore_ascii_case(s.trim()))
+    }
+    /// `HORIZON_GRAPHICS_API` (auto, vulkan or dx12) if set, else the setting.
+    pub fn with_env(self) -> Self {
+        std::env::var("HORIZON_GRAPHICS_API")
+            .ok()
+            .and_then(|v| Self::from_name(&v))
+            .unwrap_or(self)
+    }
+}
+
 /// What the frame limiter does in the last half millisecond before a frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Pacing {
@@ -115,6 +159,8 @@ pub enum Overlay {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Graphics {
     pub preset: Preset,
+    /// Distant surface terrain range, in chunks; 0 disables LODs.
+    pub lod_distance: u32,
     /// Skip sections hidden behind closed ones (vanilla's occlusion graph).
     pub cave_culling: bool,
     /// Hide shared leaf and mangrove-root faces, reducing foliage density.
@@ -147,11 +193,14 @@ pub struct Graphics {
     /// The Horizon shader pack in `shaderpacks/` (its folder name); empty:
     /// none, the vanilla picture (docs/shader-packs.md).
     pub shader_pack: String,
+    /// The graphics API (Windows only; see `GraphicsApi`).
+    pub api: GraphicsApi,
 }
 impl Default for Graphics {
     fn default() -> Self {
         Self {
             preset: Preset::Custom,
+            lod_distance: 0,
             cave_culling: true,
             cull_leaves: false,
             entity_culling: false,
@@ -170,6 +219,7 @@ impl Default for Graphics {
             advanced: false,
             battery: false,
             shader_pack: String::new(),
+            api: GraphicsApi::Auto,
         }
     }
 }
@@ -197,6 +247,7 @@ impl Graphics {
             let number = |d: u32| value.parse().unwrap_or(d);
             match key.trim() {
                 "preset" => g.preset = Preset::parse(value),
+                "lodDistance" => g.lod_distance = number(g.lod_distance).min(1024),
                 "caveCulling" => g.cave_culling = flag(g.cave_culling),
                 "cullLeaves" => g.cull_leaves = flag(g.cull_leaves),
                 "entityCulling" => g.entity_culling = flag(g.entity_culling),
@@ -220,6 +271,7 @@ impl Graphics {
                 "level" => g.advanced = value == "advanced",
                 "batteryMode" => g.battery = flag(g.battery),
                 "shaderPack" => g.shader_pack = value.to_string(),
+                "graphicsApi" => g.api = GraphicsApi::from_name(value).unwrap_or_default(),
                 "overlay" => {
                     g.overlay = match value {
                         "fps" => Overlay::Fps,
@@ -234,8 +286,9 @@ impl Graphics {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "preset:{}\ncaveCulling:{}\ncullLeaves:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nlevel:{}\nbatteryMode:{}\nshaderPack:{}\n",
+            "preset:{}\nlodDistance:{}\ncaveCulling:{}\ncullLeaves:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nlevel:{}\nbatteryMode:{}\nshaderPack:{}\ngraphicsApi:{}\n",
             self.preset.name(),
+            self.lod_distance,
             bool_text(self.cave_culling),
             bool_text(self.cull_leaves),
             bool_text(self.entity_culling),
@@ -261,6 +314,7 @@ impl Graphics {
             if self.advanced { "advanced" } else { "simple" },
             bool_text(self.battery),
             self.shader_pack,
+            self.api.name(),
         )
     }
     pub fn save(&self, dir: &Path) {
@@ -271,9 +325,14 @@ impl Graphics {
         if self.workers > 0 {
             return self.workers as usize;
         }
+        // The pool never takes every core. The render thread and the
+        // integrated server thread (single player runs on its own server
+        // thread by default) each need one, and a pool that fills every core
+        // starves them: the frame rate collapses to single digits while the
+        // workers saturate the CPU and its memory bandwidth.
         let auto = std::thread::available_parallelism()
             .map_or(2, |n| n.get())
-            .saturating_sub(1)
+            .saturating_sub(2)
             .max(1);
         if self.battery { auto.div_ceil(2) } else { auto }
     }
@@ -330,6 +389,7 @@ mod tests {
     fn round_trips() {
         let g = Graphics {
             preset: Preset::Balanced,
+            lod_distance: 256,
             cave_culling: false,
             cull_leaves: true,
             entity_culling: true,
@@ -348,6 +408,7 @@ mod tests {
             advanced: true,
             battery: true,
             shader_pack: "horizon-sample".into(),
+            api: GraphicsApi::Dx12,
         };
         assert_eq!(Graphics::parse(&g.serialize()), g);
         assert_eq!(Graphics::parse(""), Graphics::default());
@@ -355,6 +416,30 @@ mod tests {
             Graphics::parse("workers:abc\nsky:maybe\ncullLeaves:maybe\nentityCulling:maybe\n"),
             Graphics::default()
         );
+    }
+
+    #[test]
+    fn lod_distance_is_opt_in_and_bounded() {
+        assert_eq!(Graphics::default().lod_distance, 0);
+        for distance in [0, 64, 128, 256, 512, 1024] {
+            let g = Graphics::parse(&format!("lodDistance:{distance}\n"));
+            assert_eq!(g.lod_distance, distance);
+            assert_eq!(Graphics::parse(&g.serialize()), g);
+        }
+        assert_eq!(Graphics::parse("lodDistance:10000\n").lod_distance, 1024);
+        assert_eq!(Graphics::parse("lodDistance:-1\n").lod_distance, 0);
+        assert_eq!(Graphics::parse("lodDistance:invalid\n").lod_distance, 0);
+    }
+
+    #[test]
+    fn automatic_workers_leave_cores_for_the_render_and_server_threads() {
+        let g = Graphics::default();
+        assert_eq!(g.workers, 0);
+        let cores = std::thread::available_parallelism().map_or(2, |n| n.get());
+        assert_eq!(g.worker_threads(), cores.saturating_sub(2).max(1));
+        // A manual count is the player's own choice, kept as asked.
+        let manual = Graphics { workers: 3, ..g };
+        assert_eq!(manual.worker_threads(), 3);
     }
 
     #[test]

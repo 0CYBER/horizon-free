@@ -8,8 +8,7 @@ use crate::{
     collision::CachedCollisionRegistry,
     compression::invalid,
     fluid::{FluidBlockBindings, FluidKind, FluidState},
-    nbt::{self, Limits},
-    registry::{BlockRegistry, BlockStateId},
+    registry::{BlockRegistry, BlockStateId, BlockTableFile},
     worldgen::tags::TagDefinitions,
 };
 use horizon_core::geometry::{Aabb, Direction, ShapeOp, Vec3, VoxelShape};
@@ -21,6 +20,9 @@ use std::{
     path::Path,
     sync::Arc,
 };
+#[path = "data/cache.rs"]
+mod cache;
+pub(super) use cache::set_dir as set_cache_dir;
 
 /// Per-state flags read from vanilla accessors over an empty level.
 pub mod state_flags {
@@ -251,7 +253,7 @@ macro_rules! named_blocks {
         #[derive(Clone, Copy, Debug)]
         pub struct Named { $(pub $field: BlockId,)* }
         impl Named {
-            fn resolve(table: &StateTable) -> io::Result<Self> {
+            pub(super) fn resolve(table: &StateTable) -> io::Result<Self> {
                 Ok(Self { $($field: table.block_by_name(concat!("minecraft:", $name)).ok_or_else(|| invalid(concat!("missing block ", $name)))?,)* })
             }
         }
@@ -393,7 +395,7 @@ macro_rules! tags {
         #[derive(Clone, Debug, Default)]
         pub struct Tags { $(pub $field: Arc<BlockSet>,)* }
         impl Tags {
-            fn resolve(all: &HashMap<String, Arc<BlockSet>>) -> Self {
+            pub(super) fn resolve(all: &HashMap<String, Arc<BlockSet>>) -> Self {
                 Self { $($field: all.get(concat!("minecraft:", $name)).cloned().unwrap_or_default(),)* }
             }
         }
@@ -487,7 +489,7 @@ macro_rules! props {
         #[derive(Clone, Copy, Debug)]
         pub struct Props { $(pub $field: PropKey,)* }
         impl Props {
-            fn resolve(table: &mut StateTable) -> Self {
+            pub(super) fn resolve(table: &mut StateTable) -> Self {
                 Self { $($field: table.key($name),)* }
             }
         }
@@ -611,53 +613,59 @@ fn set_type(value: &Value, cache: &mut HashMap<String, Arc<str>>) -> Option<SetT
 }
 
 /// Build the block-state registry from the resources' `facts.json` (the
-/// same source the native client uses).
+/// same source the native client uses), streamed.
 pub fn load_registry(root: &Path) -> io::Result<BlockRegistry> {
-    use crate::{DATA_VERSION, nbt::Tag};
-    fn tag(value: &Value) -> io::Result<Tag> {
-        Ok(match value {
-            Value::String(value) => Tag::String(value.as_str().into()),
-            Value::Number(value) => Tag::Int(
-                value
-                    .as_i64()
-                    .and_then(|v| i32::try_from(v).ok())
-                    .ok_or_else(|| fail("invalid registry number"))?,
-            ),
-            Value::Array(values) => Tag::List(values.iter().map(tag).collect::<io::Result<_>>()?),
-            Value::Object(values) => Tag::Compound(
-                values
-                    .iter()
-                    .map(|(name, value)| Ok((name.as_str().into(), tag(value)?)))
-                    .collect::<io::Result<_>>()?,
-            ),
-            _ => return Err(fail("unsupported registry value")),
-        })
-    }
-    let facts = read_json(&root.join("facts.json"))?;
-    let states = facts["states"]
-        .as_array()
-        .ok_or_else(|| fail("missing registry state facts"))?;
-    BlockRegistry::from_nbt(&Tag::compound([
-        ("DataVersion", Tag::Int(DATA_VERSION)),
-        (
-            "states",
-            Tag::List(
-                states
-                    .iter()
-                    .map(|state| tag(&state[4]))
-                    .collect::<io::Result<_>>()?,
-            ),
-        ),
-        ("defaults", tag(&facts["defaults"])?),
-    ]))
+    BlockRegistry::from_facts_json(File::open(root.join("facts.json"))?)
 }
 
 pub(super) fn load(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviours> {
-    let behaviour = read_json(&root.join("block-behaviours.json"))?;
-    load_with_behaviour_json(registry, root, &behaviour)
+    cached(registry, root, || load_uncached(registry, root))
 }
 
+/// [`load`] with `block-behaviours.json` already parsed by the caller.
 pub(super) fn load_with_behaviour_json(
+    registry: &BlockRegistry,
+    root: &Path,
+    behaviour: &Value,
+) -> io::Result<Behaviours> {
+    cached(registry, root, || {
+        build_with_behaviour_json(registry, root, behaviour)
+    })
+}
+
+/// [`load`] with the client's typed gameplay projection. The snapshot is
+/// still tried first: on a hit the projection is not needed.
+pub(super) fn load_with_gameplay<G: GameplayStateSource>(
+    registry: &BlockRegistry,
+    root: &Path,
+    behaviour: &Value,
+    gameplay_states: &[G],
+) -> io::Result<Behaviours> {
+    cached(registry, root, || {
+        build_with_gameplay(registry, root, behaviour, gameplay_states)
+    })
+}
+
+/// The snapshot when it matches, else `build` and refresh the snapshot.
+fn cached(
+    registry: &BlockRegistry,
+    root: &Path,
+    build: impl FnOnce() -> io::Result<Behaviours>,
+) -> io::Result<Behaviours> {
+    if let Some(behaviours) = cache::load(registry, root) {
+        return Ok(behaviours);
+    }
+    let behaviours = build()?;
+    cache::store(registry, root, &behaviours);
+    Ok(behaviours)
+}
+
+fn load_uncached(registry: &BlockRegistry, root: &Path) -> io::Result<Behaviours> {
+    let behaviour = read_json(&root.join("block-behaviours.json"))?;
+    build_with_behaviour_json(registry, root, &behaviour)
+}
+
+fn build_with_behaviour_json(
     registry: &BlockRegistry,
     root: &Path,
     behaviour: &Value,
@@ -666,10 +674,10 @@ pub(super) fn load_with_behaviour_json(
     let gameplay_states = gameplay["states"]
         .as_array()
         .ok_or_else(|| fail("missing gameplay states"))?;
-    load_with_gameplay(registry, root, behaviour, gameplay_states)
+    build_with_gameplay(registry, root, behaviour, gameplay_states)
 }
 
-pub(super) fn load_with_gameplay<G: GameplayStateSource>(
+fn build_with_gameplay<G: GameplayStateSource>(
     registry: &BlockRegistry,
     root: &Path,
     behaviour: &Value,
@@ -742,14 +750,8 @@ pub(super) fn load_with_gameplay<G: GameplayStateSource>(
     };
 
     // Collision shapes.
-    let collision_tag = nbt::read_named(
-        &fs::read(root.join("cached-collision.nbt"))?,
-        Limits::default(),
-    )
-    .map_err(|e| invalid(e.to_string()))?
-    .0
-    .tag;
-    let cached = CachedCollisionRegistry::from_nbt(&collision_tag, registry)?;
+    let collision_file = BlockTableFile::open(&root.join("cached-collision.nbt"), registry)?;
+    let cached = CachedCollisionRegistry::from_table(collision_file.table("collision")?)?;
     let mut shapes: Vec<VoxelShape> = Vec::new();
     let mut shape_ids = Vec::with_capacity(table.state_count());
     for id in 0..table.state_count() {

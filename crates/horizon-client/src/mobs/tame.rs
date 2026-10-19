@@ -855,8 +855,17 @@ impl Goal for CatSitOnBlock {
         JUMP | MOVE
     }
     fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if !m.extra.tame || m.extra.sitting {
+            return false;
+        }
+        // MoveToBlockGoal.canUse draws the next delay only once the last one
+        // has run out.
+        if self.0.next_start > 0 {
+            self.0.next_start -= 1;
+            return false;
+        }
         let next = reduced(200 + m.random.next_int_bound(200).unwrap_or(0));
-        m.extra.tame && !m.extra.sitting && self.0.can_use(m, cx.w, next, can_sit_on)
+        self.0.can_use(m, cx.w, next, can_sit_on)
     }
     fn can_continue(&mut self, _: &mut Mob, cx: &mut Cx) -> bool {
         self.0.can_continue(cx.w, can_sit_on)

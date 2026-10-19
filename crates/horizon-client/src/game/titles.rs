@@ -16,10 +16,10 @@ impl Game<'_> {
         let (w, h) = (batch.width as i32, batch.height as i32);
         let partial = self.clock.fraction() as f32;
         let background = self.settings.text_background(0.0);
-        let font = &self.atlas.font;
+        let font = &self.gui.atlas.font;
         let mut draws = self.titles.overlay_message(w, h, partial, font, background);
         draws.extend(self.titles.title(w, h, partial, font, background));
-        hud_layout::paint(batch, &self.atlas, &draws);
+        hud_layout::paint(batch, &self.gui.atlas, &draws);
     }
     /// The selected stack as `Hud.tick` compares it for the name highlight.
     fn held_name(&self) -> Option<HeldName> {
@@ -54,9 +54,9 @@ impl Game<'_> {
             batch.width as i32,
             batch.height as i32,
             can_hurt,
-            &self.atlas.font,
+            &self.gui.atlas.font,
             self.settings.text_background(0.0),
         );
-        hud_layout::paint(batch, &self.atlas, &draws);
+        hud_layout::paint(batch, &self.gui.atlas, &draws);
     }
 }

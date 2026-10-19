@@ -13,6 +13,7 @@ mod panel;
 mod service;
 mod signals;
 mod supervisor;
+mod update;
 
 use std::{path::PathBuf, process::ExitCode};
 
@@ -23,7 +24,7 @@ Usage: horizon-server [--dir DIR] <command>
 
   init        Set up a server here: the EULA, the world, the port, who may join (asks, or takes flags:
               --eula --world NAME --seed SEED --port N --whitelist/--no-whitelist --player NAME... --op NAME
-              --yes)
+              --offline --yes)
   run         Run the server in the foreground; type console commands, Ctrl-C stops it cleanly. It
               restarts the game if it crashes.
   start       Run the server in the background (its output goes to logs/supervisor.log)
@@ -45,6 +46,11 @@ Usage: horizon-server [--dir DIR] <command>
               with sudo), a launchd agent on macOS, a task at logon on Windows
   panel       A one-time login link for the web panel ([panel] in server.toml; 127.0.0.1:8130 by
               default)
+  update [--check] [--version TAG] [--timeout SECONDS]
+              Install the newest release (checked against GitHub's SHA-256), back up the world and
+              restart on it; goes back by itself if the game isn't up within the timeout (300 s).
+              --archive FILE --version NAME installs an archive you have
+  rollback    Back to the release used before the update
   import FILE Write server.toml from a vanilla server.properties
   op NAME, deop NAME
   whitelist on|off|list, whitelist add|remove NAME
@@ -92,6 +98,8 @@ fn main() -> ExitCode {
             None => Err("restore needs a backup (`horizon-server backups` lists them)".into()),
         },
         Some("import") => import(&dir, &args[1..]),
+        Some("update") => update::command(&dir, &args[1..]),
+        Some("rollback") => update::rollback(&dir, &args[1..]),
         Some(command @ ("op" | "deop" | "whitelist")) => lists::run(&dir, command, &args[1..]),
         Some(other) => Err(format!(
             "unknown command {other}; `horizon-server help` lists them"
@@ -150,6 +158,7 @@ fn init_answers(args: &[String]) -> Result<init::Answers, String> {
             "--no-whitelist" => answers.whitelist = Some(false),
             "--player" => answers.players.push(value(arg)?),
             "--op" => answers.op = Some(value(arg)?),
+            "--offline" => answers.online = Some(false),
             other => return Err(format!("init: unknown option {other}")),
         }
     }

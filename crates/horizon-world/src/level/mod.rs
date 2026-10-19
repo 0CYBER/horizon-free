@@ -301,6 +301,12 @@ pub trait LevelAccess {
     fn max_y(&self) -> i32 {
         320
     }
+    /// `getHeight(WORLD_SURFACE, x, z)`: one above the column's highest
+    /// block that isn't air. Only air lies above it, so scans for the other
+    /// heightmaps start there. The default, `max_y`, scans the whole column.
+    fn world_surface(&self, _x: i32, _z: i32) -> i32 {
+        self.max_y()
+    }
     /// Vanilla `level.random` (a `LegacyRandomSource`).
     fn random(&mut self) -> &mut LegacyRandom;
     fn game_time(&self) -> i64;
@@ -483,6 +489,13 @@ impl Behaviours {
         behaviour: &serde_json::Value,
     ) -> io::Result<Self> {
         data::load_with_behaviour_json(registry, resources_dir, behaviour)
+    }
+
+    /// Keep a snapshot of the resolved tables in `dir` (a game folder's
+    /// `.horizon-cache`), so later launches of the same build restore it instead
+    /// of resolving the resources again. Without it, [`Self::load`] never caches.
+    pub fn set_cache_dir(dir: std::path::PathBuf) {
+        data::set_cache_dir(dir);
     }
     pub fn facts(&self, state: BlockStateId) -> &StateFacts {
         &self.facts[state.0 as usize]

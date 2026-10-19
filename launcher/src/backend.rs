@@ -792,7 +792,7 @@ pub fn preparer(
         match sources::resolve(minecraft, &pins, &known, &linked, &fetch, log)? {
             sources::Resolved::Folder(dir) => dir,
             sources::Resolved::NotFound(checked) => {
-                let not_found = sources::not_found(&version, &checked);
+                let not_found = sources::not_found(&version, &checked, minecraft);
                 download_for_owner(&pins, &own, &fetch, log).map_err(|e| not_found + &e)?;
                 own
             }
@@ -1008,6 +1008,63 @@ pub fn crash_summary(report: &str) -> Option<String> {
     (!error.is_empty()).then(|| error.join(" "))
 }
 
+/// The line the game prints when it has drawn its first frame.
+pub const GAME_FIRST_FRAME: &str = "Horizon: first frame";
+
+/// Whether a game's output ends in a crash while its Vulkan renderer started: an adapter line
+/// (`Horizon renderer: <GPU> (Vulkan, <type>)`) and no first frame. A native crash in a graphics
+/// driver leaves no crash report, only those lines (#746).
+pub fn vulkan_start_crashed<S: AsRef<str>>(lines: impl IntoIterator<Item = S>) -> bool {
+    let mut vulkan = false;
+    for line in lines {
+        let line = line.as_ref();
+        if line.starts_with(GAME_FIRST_FRAME) {
+            return false;
+        }
+        if let Some(adapter) = line.strip_prefix("Horizon renderer: ") {
+            // The adapter line, not one of the start's steps: "<GPU> (<backend>, <type>)".
+            if adapter.ends_with(')') && adapter.contains(" (") {
+                vulkan = adapter.contains(" (Vulkan, ");
+            }
+        }
+    }
+    vulkan
+}
+
+/// The game's graphics settings file in its home (the game's `graphics.rs`).
+const GRAPHICS_FILE: &str = "horizon-graphics.txt";
+
+/// Sets `graphicsApi:dx12` in `home`'s graphics settings when it is unset or `auto`, keeping
+/// every other line. True when it changed; a player's own `vulkan` or `dx12` stays.
+pub fn switch_to_dx12(home: &Path) -> Result<bool, String> {
+    let path = home.join(GRAPHICS_FILE);
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
+    let mut lines: Vec<String> = Vec::new();
+    let mut found = false;
+    for line in text.lines() {
+        match line.split_once(':') {
+            Some((key, value)) if key.trim() == "graphicsApi" => {
+                if value.trim() != "auto" {
+                    return Ok(false);
+                }
+                found = true;
+                lines.push("graphicsApi:dx12".to_owned());
+            }
+            _ => lines.push(line.to_owned()),
+        }
+    }
+    if !found {
+        lines.push("graphicsApi:dx12".to_owned());
+    }
+    fs::create_dir_all(home).map_err(|e| format!("{}: {e}", home.display()))?;
+    fs::write(&path, lines.join("\n") + "\n").map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(true)
+}
+
 /// The last `lines` lines of `file`, or why it cannot be read.
 fn tail_of(file: &Path, lines: usize) -> Result<String, String> {
     let bytes = fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
@@ -1087,6 +1144,74 @@ pub fn set_menu_style(style: MenuStyle) -> Result<(), String> {
     let file = home.join("horizon.txt");
     let text = style.into_file(&fs::read_to_string(&file).unwrap_or_default());
     fs::write(file, text).map_err(|e| e.to_string())
+}
+
+/// Splits the player's extra game arguments (Settings' one line) into words, the way a shell
+/// would: spaces separate them, single or double quotes group a word with spaces in it, and a
+/// backslash escapes the next character (outside quotes, or inside double quotes).
+pub fn split_args(line: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut started = false;
+    let mut quote: Option<char> = None;
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        match quote {
+            Some(q) => {
+                if c == q {
+                    quote = None;
+                } else if c == '\\' && q == '"' {
+                    // Inside double quotes only `"` and `\` are escaped, as a shell does.
+                    match chars.next() {
+                        Some(n @ ('"' | '\\')) => word.push(n),
+                        Some(n) => {
+                            word.push('\\');
+                            word.push(n);
+                        }
+                        None => word.push('\\'),
+                    }
+                } else {
+                    word.push(c);
+                }
+            }
+            None => match c {
+                '\'' | '"' => {
+                    quote = Some(c);
+                    started = true;
+                }
+                '\\' => {
+                    if let Some(n) = chars.next() {
+                        word.push(n);
+                        started = true;
+                    }
+                }
+                c if c.is_whitespace() => {
+                    if started {
+                        words.push(std::mem::take(&mut word));
+                        started = false;
+                    }
+                }
+                _ => {
+                    word.push(c);
+                    started = true;
+                }
+            },
+        }
+    }
+    if started {
+        words.push(word);
+    }
+    words
+}
+
+/// The extra game arguments the player set in Settings, split into words.
+pub fn game_args() -> Vec<String> {
+    split_args(&Settings::load().game_args)
+}
+
+/// Appends the player's extra game arguments, so they add to the launcher's own or override them.
+pub fn append_game_args(cmd: &mut Command) {
+    cmd.args(game_args());
 }
 
 pub fn client_command(tag: &str) -> Command {
@@ -1195,6 +1320,7 @@ pub fn client(tag: &str) -> Result<Command, String> {
     if let Err(e) = crate::account::attach_session(&mut cmd, &game_home()) {
         eprintln!("Playing offline: {e}");
     }
+    append_game_args(&mut cmd);
     Ok(cmd)
 }
 
@@ -1709,6 +1835,10 @@ pub enum Msg {
     /// The selected account's session file for the game about to start (none = offline), or
     /// why it could not be renewed.
     Session(Result<Option<PathBuf>, String>),
+    /// A modpack step's line (`modpacks`).
+    PackLine(String),
+    /// A modpack step ended: the pack as it now is.
+    PackDone(Result<Box<crate::modpacks::Imported>, String>),
 }
 
 /// A running process; its output arrives as `Msg::Line`, its end as `Msg::Exit`.
@@ -1792,6 +1922,10 @@ pub struct Settings {
     /// means yes; removing the entry stores `false`, so it doesn't come back on the next start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub desktop_entry: Option<bool>,
+    /// Extra arguments for the game's command line, as one line (see [`split_args`]). Empty by
+    /// default. Appended after the launcher's own arguments, so they can add to or override them.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub game_args: String,
 }
 
 impl Settings {
@@ -1840,6 +1974,95 @@ mod tests {
         assert!(props.is_some_and(|v| v
             .to_string_lossy()
             .contains("application.name = \"Horizon\"")));
+    }
+
+    #[test]
+    fn a_crash_after_the_vulkan_adapter_line_and_before_the_first_frame_is_a_start_crash() {
+        let start = [
+            "Horizon: resources loaded in 11.3s; 35723 block states, 1658 items, 67 biomes",
+            "Horizon renderer: Intel(R) HD Graphics 530 (Vulkan, IntegratedGpu)",
+        ];
+        assert!(vulkan_start_crashed(start));
+        // A step line after the adapter keeps it a start crash.
+        let step = [start[1], "Horizon renderer: creating the pipelines"];
+        assert!(vulkan_start_crashed(step));
+        // A crash after the first frame is the game's, not the renderer start's.
+        let later = [start[1], "Horizon: first frame after 812 ms"];
+        assert!(!vulkan_start_crashed(later));
+        // Already on DirectX 12, or no renderer yet: nothing to switch.
+        let dx12 = ["Horizon renderer: Intel(R) HD Graphics 530 (Dx12, IntegratedGpu)"];
+        assert!(!vulkan_start_crashed(dx12));
+        assert!(!vulkan_start_crashed(&start[..1]));
+        // Vulkan failed to open and DirectX 12 took over: its line is the last adapter.
+        assert!(!vulkan_start_crashed([start[1], dx12[0]]));
+    }
+
+    #[test]
+    fn a_renderer_start_crash_switches_auto_to_dx12_once() {
+        let home = std::env::temp_dir().join(format!("horizon-dx12-switch-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&home);
+        // No settings file yet: one with the API alone.
+        assert_eq!(switch_to_dx12(&home), Ok(true));
+        assert_eq!(
+            fs::read_to_string(home.join(GRAPHICS_FILE)).unwrap(),
+            "graphicsApi:dx12\n"
+        );
+        // Already DirectX 12, or the player's own Vulkan: left alone.
+        assert_eq!(switch_to_dx12(&home), Ok(false));
+        fs::write(home.join(GRAPHICS_FILE), "sky:false\ngraphicsApi:vulkan\n").unwrap();
+        assert_eq!(switch_to_dx12(&home), Ok(false));
+        // Auto becomes DirectX 12 and the other settings stay.
+        fs::write(
+            home.join(GRAPHICS_FILE),
+            "sky:false\ngraphicsApi:auto\nfog:true\n",
+        )
+        .unwrap();
+        assert_eq!(switch_to_dx12(&home), Ok(true));
+        assert_eq!(
+            fs::read_to_string(home.join(GRAPHICS_FILE)).unwrap(),
+            "sky:false\ngraphicsApi:dx12\nfog:true\n"
+        );
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn extra_game_arguments_split_like_a_shell() {
+        assert!(split_args("").is_empty());
+        assert!(split_args("   ").is_empty());
+        assert_eq!(split_args("--server-thread"), ["--server-thread"]);
+        assert_eq!(
+            split_args("--render-distance 32 --server-thread"),
+            ["--render-distance", "32", "--server-thread"]
+        );
+        // Quotes keep a word with spaces together; either kind works.
+        assert_eq!(
+            split_args("--name 'Two Words' --world \"My World\""),
+            ["--name", "Two Words", "--world", "My World"]
+        );
+        // An empty quoted word is still a word.
+        assert_eq!(split_args("--name \"\""), ["--name", ""]);
+        // A backslash escapes a space outside quotes, and " and \ inside double quotes.
+        assert_eq!(split_args("--name My\\ World"), ["--name", "My World"]);
+        assert_eq!(split_args("a\\tb c"), ["atb", "c"]);
+        assert_eq!(split_args("\"a\\\"b\" 'c\\d'"), ["a\"b", "c\\d"]);
+    }
+
+    #[test]
+    fn the_game_arguments_setting_round_trips_and_reaches_the_command() {
+        let settings = Settings::parse(r#"{"game_args":"--server-thread"}"#);
+        assert_eq!(settings.game_args, "--server-thread");
+        // Unset in an older settings.json: no arguments, and nothing is written for them.
+        let old = Settings::parse(r#"{"installed":true}"#);
+        assert_eq!(old.game_args, "");
+        assert!(!serde_json::to_string(&old).unwrap().contains("game_args"));
+
+        let mut cmd = Command::new("true");
+        cmd.args(split_args("--server-thread --render-distance 40"));
+        let args: Vec<_> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args, ["--server-thread", "--render-distance", "40"]);
     }
 
     #[test]

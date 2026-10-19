@@ -251,6 +251,15 @@ fn describe(status: &Value) -> String {
     if !usage.is_empty() {
         out += &format!("{}\n", usage.join(", "));
     }
+    let update = &status["update"];
+    if let Some(busy) = update["busy"].as_str() {
+        out += &format!("Updating: {busy}\n");
+    } else if let Some(tag) = update["available"].as_str() {
+        out += &format!(
+            "Horizon {tag} is out (this server runs {}): `horizon-server update` installs it\n",
+            update["installed"].as_str().unwrap_or("?")
+        );
+    }
     out
 }
 
@@ -428,6 +437,19 @@ mod tests {
         assert_eq!(
             describe(&json!({ "phase": "starting", "uptime_seconds": 4 })),
             "Starting, up 4 s\n"
+        );
+        assert_eq!(
+            describe(&json!({
+                "phase": "running",
+                "update": { "installed": "v2026.10.18", "available": "v2026.10.19" }
+            })),
+            "Running\nHorizon v2026.10.19 is out (this server runs v2026.10.18): `horizon-server update` installs it\n"
+        );
+        assert_eq!(
+            describe(
+                &json!({ "phase": "restarting", "update": { "busy": "Starting the game on v2" } })
+            ),
+            "Restarting\nUpdating: Starting the game on v2\n"
         );
     }
 }

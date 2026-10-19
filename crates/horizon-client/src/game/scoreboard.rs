@@ -130,7 +130,8 @@ impl Game<'_> {
     /// `ScoreHolder.getScoreboardName`: the player's name, an entity's UUID.
     pub(super) fn holder_name(&mut self, t: Target) -> Option<String> {
         match t {
-            Target::Player => Some(PLAYER_NAME.to_owned()),
+            Target::Player => Some(self.acting_player_name().to_owned()),
+            Target::Guest(conn) => self.command_guest(conn).map(|g| g.name.clone()),
             Target::Mob(id) | Target::Item(id) => Some(uuid_text(self.uuid_for(id))),
             _ => None,
         }
@@ -146,7 +147,7 @@ impl Game<'_> {
     }
     /// The entity with the given scoreboard name.
     fn target_of_holder(&self, name: &str) -> Option<Target> {
-        if name == PLAYER_NAME {
+        if name == self.acting_player_name() {
             return Some(Target::Player);
         }
         let uuid = uuid_from_text(name).filter(|_| name.len() == 36)?;
@@ -179,7 +180,7 @@ impl Game<'_> {
             | Target::Cart(id)
             | Target::Other(id) => self.persist.raw.get(&id),
             Target::Player => self.level.player_extra.as_ref(),
-            Target::Orb(_) | Target::Arrow(_) => None,
+            Target::Guest(_) | Target::Orb(_) | Target::Arrow(_) => None,
         };
         match raw.and_then(|r| r.get("Tags")) {
             Some(Tag::List(l)) => l
@@ -303,20 +304,33 @@ impl Game<'_> {
 
     // ---- criteria ----------------------------------------------------------
 
+    /// `ServerStatsCounter.setValue`'s scoreboard side: the objectives of
+    /// each changed statistic's criteria follow it for the player `name`.
+    pub(super) fn stat_criteria_changed(
+        &mut self,
+        name: &str,
+        events: Vec<(String, String, Option<i32>)>,
+    ) {
+        let board = &mut self.score.board;
+        if board.objectives.is_empty() {
+            return;
+        }
+        for (ty, key, amount) in events {
+            let criteria = sb::stat_criteria(&ty, &key);
+            if board.has_objectives_for(&criteria) {
+                board.for_all_objectives(&criteria, name, |v| {
+                    amount.map_or(0, |n| v.wrapping_add(n))
+                });
+            }
+        }
+    }
     /// `ServerPlayer.doTick` score updates and the statistic criteria.
     pub(super) fn tick_scoreboard(&mut self) {
         self.load_scoreboard();
         let events = std::mem::take(&mut self.stats.events);
+        self.stat_criteria_changed(PLAYER_NAME, events);
         let board = &mut self.score.board;
         if !board.objectives.is_empty() {
-            for (ty, key, amount) in events {
-                let criteria = sb::stat_criteria(&ty, &key);
-                if board.has_objectives_for(&criteria) {
-                    board.for_all_objectives(&criteria, PLAYER_NAME, |v| {
-                        amount.map_or(0, |n| v.wrapping_add(n))
-                    });
-                }
-            }
             let display = self.player_display_comp();
             if let Some(p) = self.player.as_mut() {
                 let health_and_absorption = p.health.health() + p.health.absorption();
@@ -366,8 +380,9 @@ impl Game<'_> {
     /// `ServerPlayer.die`: the death count.
     pub(super) fn score_player_died(&mut self) {
         let display = self.player_display_comp();
+        let me = self.acting_player_name().to_owned();
         let board = &mut self.score.board;
-        board.for_all_objectives_with(sb::CRITERIA_DEATH_COUNT, PLAYER_NAME, Some(&display), |v| {
+        board.for_all_objectives_with(sb::CRITERIA_DEATH_COUNT, &me, Some(&display), |v| {
             v.wrapping_add(1)
         });
         // A respawned player has everything to record again.
@@ -377,25 +392,21 @@ impl Game<'_> {
     pub(super) fn score_player_killed(&mut self, victim: Target) {
         let victim_name = self.holder_name(victim);
         let display = self.player_display_comp();
+        let me = self.acting_player_name().to_owned();
         let board = &mut self.score.board;
         let inc = |v: i32| v.wrapping_add(1);
-        board.for_all_objectives_with(sb::CRITERIA_TOTAL_KILLS, PLAYER_NAME, Some(&display), inc);
+        board.for_all_objectives_with(sb::CRITERIA_TOTAL_KILLS, &me, Some(&display), inc);
         if victim == Target::Player {
-            board.for_all_objectives_with(
-                sb::CRITERIA_PLAYER_KILLS,
-                PLAYER_NAME,
-                Some(&display),
-                inc,
-            );
+            board.for_all_objectives_with(sb::CRITERIA_PLAYER_KILLS, &me, Some(&display), inc);
         }
         let color_of =
             |board: &Scoreboard, name: &str| board.players_team(name).and_then(|t| t.color.clone());
         if let Some(victim_name) = victim_name {
             if let Some(color) = color_of(board, &victim_name) {
                 let criteria = format!("teamkill.{color}");
-                board.for_all_objectives_with(&criteria, PLAYER_NAME, Some(&display), inc);
+                board.for_all_objectives_with(&criteria, &me, Some(&display), inc);
             }
-            if let Some(color) = color_of(board, PLAYER_NAME) {
+            if let Some(color) = color_of(board, &me) {
                 let criteria = format!("killedByTeam.{color}");
                 board.for_all_objectives(&criteria, &victim_name, inc);
             }
@@ -417,7 +428,7 @@ impl Game<'_> {
         self.score.board.players_team(&uuid_text(*uuid))
     }
     pub(super) fn player_team(&self) -> Option<&sb::Team> {
-        self.score.board.players_team(PLAYER_NAME)
+        self.score.board.players_team(self.acting_player_name())
     }
     /// The teams of the player and of the mobs on one (empty without teams).
     pub(super) fn mob_teams(&self) -> horizon_client::mobs::Teams {
@@ -451,16 +462,17 @@ impl Game<'_> {
     }
     /// `Player.getDisplayName`: the name with the team's prefix, suffix and colour.
     pub(super) fn player_display_comp(&self) -> Comp {
-        let name = literal(PLAYER_NAME);
+        let name = literal(self.acting_player_name());
         match self.player_team() {
             Some(t) => t.formatted_name_comp(&name),
             None => name,
         }
     }
     pub(super) fn player_display_text(&self) -> Text {
+        let name = Text::literal(self.acting_player_name());
         match self.player_team() {
-            Some(t) => t.formatted_name(Text::literal(PLAYER_NAME)),
-            None => Text::literal(PLAYER_NAME),
+            Some(t) => t.formatted_name(name),
+            None => name,
         }
     }
 
@@ -573,11 +585,11 @@ impl Game<'_> {
             batch.height as i32,
             board,
             objective,
-            &self.atlas.font,
+            &self.gui.atlas.font,
             self.settings.text_background(0.3),
             self.settings.text_background(0.4),
         );
-        hud_layout::paint(batch, &self.atlas, &draws);
+        hud_layout::paint(batch, &self.gui.atlas, &draws);
     }
 }
 
@@ -587,9 +599,7 @@ impl Game<'_> {
     /// objective.
     pub(super) fn draw_tab_list(&mut self, batch: &mut HudBatch) {
         use horizon_client::tab_list::{self, TabInputs};
-        let chatting = self.remote.is_some() && self.remote_chat_open();
         let key = self.screen == super::Screen::Playing
-            && !chatting
             && self.keys.contains(&winit::keyboard::KeyCode::Tab);
         let (players, online_mode, upside_down) = match self.remote_tab_players() {
             Some(remote) => remote,
@@ -639,8 +649,8 @@ impl Game<'_> {
             ),
             upside_down: &up,
         };
-        let draws = self.tab_list.layout(&inputs, &self.atlas.font);
-        horizon_client::hud_layout::paint(batch, &self.atlas, &draws);
+        let draws = self.tab_list.layout(&inputs, &self.gui.atlas.font);
+        horizon_client::hud_layout::paint(batch, &self.gui.atlas, &draws);
     }
 }
 
@@ -675,7 +685,7 @@ impl Env for GameEnv<'_, '_> {
             .collect()
     }
     fn named(&mut self, name: &str) -> Holder {
-        if name.eq_ignore_ascii_case(PLAYER_NAME) && self.g.player.is_some() {
+        if name.eq_ignore_ascii_case(self.g.acting_player_name()) && self.g.player.is_some() {
             return self
                 .g
                 .holder_for(Target::Player)
@@ -692,7 +702,7 @@ impl Env for GameEnv<'_, '_> {
             None => Some(Target::Player),
         }?;
         let name = match entity {
-            Target::Player => PLAYER_NAME.to_owned(),
+            Target::Player => self.g.acting_player_name().to_owned(),
             Target::Mob(id) | Target::Item(id) => uuid_text(self.g.uuid_for(id)),
             _ => return None,
         };
@@ -735,6 +745,7 @@ mod tab_list_tests {
                 conn: uuid as u32,
                 uuid,
                 name: name.into(),
+                properties: Vec::new(),
                 info: ClientInformation::new(8),
                 brand: "test".into(),
                 sender: PlayerSender::new(tx, Arc::default()),

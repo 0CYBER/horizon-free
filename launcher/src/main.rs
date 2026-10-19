@@ -6,6 +6,7 @@ mod collection;
 mod game_tools;
 mod markdown;
 mod mcp;
+mod modpacks_page;
 mod perf;
 mod theme;
 
@@ -29,14 +30,16 @@ use theme::Theme;
 enum Page {
     Play,
     Versions,
+    Modpacks,
     Notes,
     Settings,
 }
 
 impl Page {
-    const ALL: [(Page, &'static str); 4] = [
+    const ALL: [(Page, &'static str); 5] = [
         (Page::Play, "Play"),
         (Page::Versions, "Versions"),
+        (Page::Modpacks, "Modpacks"),
         (Page::Notes, "Patch notes"),
         (Page::Settings, "Settings"),
     ];
@@ -128,6 +131,8 @@ struct Launcher {
     client_error: Option<String>,
     /// When the running client started, to tell its crash report from older ones.
     client_started: Option<std::time::SystemTime>,
+    /// The folder the running game keeps its settings in: the game home, or a modpack's.
+    client_home: Option<std::path::PathBuf>,
     crash: Option<Crash>,
     server: Option<Running>,
     /// Microsoft accounts (accounts.json), the sign-in under way and what it last showed.
@@ -148,6 +153,10 @@ struct Launcher {
     friend_focused: bool,
     friend_focus: FocusHandle,
     joining: Option<String>,
+    /// Settings' Game arguments field: the line, whether it has focus, and its focus handle.
+    args_input: String,
+    args_focused: bool,
+    args_focus: FocusHandle,
     console_scroll: ScrollHandle,
     /// Opt-in data collection: the player's answer and Settings' section (`collection`).
     collection: collection::Collection,
@@ -161,6 +170,17 @@ struct Launcher {
     play_pressed: Option<Instant>,
     /// `horizon-launcher benchmark` started this window to measure it.
     bench: Option<perf::Bench>,
+    /// The Modpacks page: the imported packs (read when the page first opens), the one shown,
+    /// the report's filter, and the pipeline step running now with its log.
+    packs: Vec<horizon_launcher::modpacks::Imported>,
+    packs_loaded: Option<Instant>,
+    pack_open: Option<String>,
+    pack_filter: Option<horizon_port_pack::report::Status>,
+    pack_busy: bool,
+    pack_log: VecDeque<String>,
+    pack_error: Option<String>,
+    /// The game starting now plays this pack's profile (its work folder).
+    starting_pack: Option<std::path::PathBuf>,
 }
 
 impl Launcher {
@@ -231,6 +251,9 @@ impl Launcher {
             install_error: None,
             confirm_remove: None,
             picker_open: false,
+            args_input: settings.game_args.clone(),
+            args_focused: false,
+            args_focus: cx.focus_handle(),
             settings,
             links: backend::Links::default(),
             menu_style: backend::menu_style(),
@@ -240,6 +263,7 @@ impl Launcher {
             client: None,
             client_error: None,
             client_started: None,
+            client_home: None,
             crash: None,
             server: None,
             accounts: Accounts::load(),
@@ -266,6 +290,14 @@ impl Launcher {
             prepare_started: None,
             play_pressed: None,
             bench: perf::Bench::from_env(),
+            packs: Vec::new(),
+            packs_loaded: None,
+            pack_open: None,
+            pack_filter: None,
+            pack_busy: false,
+            pack_log: VecDeque::new(),
+            pack_error: None,
+            starting_pack: None,
         };
         if this.bench.is_some() {
             this.perf.keep_local_log(false);
@@ -406,11 +438,21 @@ impl Launcher {
                             Err(e) => self.client_error = Some(format!("Playing offline: {e}")),
                         }
                         self.accounts = Accounts::load();
+                        if let Some(work) = self.starting_pack.take() {
+                            if let Err(e) =
+                                horizon_launcher::modpacks::apply_profile(&mut cmd, &work)
+                            {
+                                self.client_error = Some(e);
+                                continue;
+                            }
+                        }
                         if let Some(code) = self.joining.take() {
                             if let Err(e) = backend::join_friend(&mut cmd, &code) {
                                 self.client_error = Some(e);
                             }
                         }
+                        backend::append_game_args(&mut cmd);
+                        self.client_home = cmd.get_current_dir().map(|d| d.to_path_buf());
                         match backend::spawn(Job::Client, cmd, self.tx.clone()) {
                             Ok(r) => self.client = Some(r),
                             Err(e) => self.client_error = Some(e),
@@ -473,6 +515,13 @@ impl Launcher {
                         Err(e) => SelfUpdate::Failed(e),
                     };
                 }
+                Msg::PackLine(line) => {
+                    self.pack_log.push_back(line);
+                    if self.pack_log.len() > LOG_LINES {
+                        self.pack_log.pop_front();
+                    }
+                }
+                Msg::PackDone(result) => self.pack_done(result),
                 Msg::Line(job, line) => {
                     if job == Job::Client && line.starts_with(perf::GAME_FIRST_FRAME) {
                         if let Some(pressed) = self.play_pressed.take() {
@@ -519,7 +568,15 @@ impl Launcher {
                                 .client_started
                                 .take()
                                 .and_then(backend::crash_report_since);
-                            if error.is_some() || report.is_some() {
+                            if error.is_some() && report.is_none() && self.switched_to_dx12() {
+                                self.client_error = Some(
+                                    "Horizon's Vulkan renderer crashed while starting on this \
+                                     graphics card, so the game now uses DirectX 12. Press Play \
+                                     to start it again. Video Settings > Graphics API switches \
+                                     back."
+                                        .into(),
+                                );
+                            } else if error.is_some() || report.is_some() {
                                 let summary = report
                                     .as_ref()
                                     .and_then(|p| std::fs::read_to_string(p).ok())
@@ -580,6 +637,27 @@ impl Launcher {
         if changed {
             cx.notify();
         }
+    }
+
+    /// After a crash with no report: when the game's output ends while its Vulkan renderer
+    /// started, a native crash in the graphics driver (#746), switches the game to DirectX 12
+    /// (Windows only; only where the player left the graphics API on Auto). True when it did.
+    fn switched_to_dx12(&self) -> bool {
+        if !cfg!(windows) || !backend::vulkan_start_crashed(&self.prepare_log) {
+            return false;
+        }
+        // The GPU is the same for every profile: the game home's setting and the crashed run's.
+        let home = backend::game_home();
+        let mut homes = vec![home.clone()];
+        homes.extend(self.client_home.clone().filter(|h| *h != home));
+        let mut switched = false;
+        for home in homes {
+            match backend::switch_to_dx12(&home) {
+                Ok(changed) => switched |= changed,
+                Err(e) => eprintln!("Horizon launcher: could not switch to DirectX 12: {e}"),
+            }
+        }
+        switched
     }
 
     fn selected(&self) -> Option<&String> {
@@ -671,37 +749,8 @@ impl Launcher {
                 if self.client.is_some() || self.starting_client.is_some() {
                     return;
                 }
-                self.client_error = None;
-                self.crash = None;
-                self.prepare_log.clear();
-                // A little earlier than the spawn: file times can be coarse.
-                self.client_started =
-                    Some(std::time::SystemTime::now() - std::time::Duration::from_secs(2));
-                // The session (a network round trip when the token needs renewing) comes first;
-                // `drain` starts the game when it arrives.
-                self.starting_client = Some(tag);
-                self.play_pressed = Some(Instant::now());
-                let tx = self.tx.clone();
-                std::thread::spawn(move || {
-                    let session = (|| {
-                        let mut accounts = Accounts::load();
-                        let Some((a, secrets)) = account::session_for_launch(
-                            &account::Endpoints::live(),
-                            account::store(),
-                            &mut accounts,
-                        )?
-                        else {
-                            return Ok(None);
-                        };
-                        account::write_session_file(
-                            &backend::game_home().join("sessions"),
-                            &a,
-                            &secrets,
-                        )
-                        .map(Some)
-                    })();
-                    let _ = tx.send(Msg::Session(session));
-                });
+                self.starting_pack = None;
+                self.start_client(tag);
             }
             Mode::Server => {
                 if let Some(server) = &mut self.server {
@@ -727,6 +776,38 @@ impl Launcher {
                 }
             }
         }
+    }
+
+    /// Starts the game: the session first (a network round trip when the token needs
+    /// renewing), then `drain` starts the process when it arrives.
+    fn start_client(&mut self, tag: String) {
+        self.client_error = None;
+        self.crash = None;
+        self.prepare_log.clear();
+        // A little earlier than the spawn: file times can be coarse.
+        self.client_started =
+            Some(std::time::SystemTime::now() - std::time::Duration::from_secs(2));
+        // The session (a network round trip when the token needs renewing) comes first;
+        // `drain` starts the game when it arrives.
+        self.starting_client = Some(tag);
+        self.play_pressed = Some(Instant::now());
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let session = (|| {
+                let mut accounts = Accounts::load();
+                let Some((a, secrets)) = account::session_for_launch(
+                    &account::Endpoints::live(),
+                    account::store(),
+                    &mut accounts,
+                )?
+                else {
+                    return Ok(None);
+                };
+                account::write_session_file(&backend::game_home().join("sessions"), &a, &secrets)
+                    .map(Some)
+            })();
+            let _ = tx.send(Msg::Session(session));
+        });
     }
 
     fn choose_folder(&mut self, server: bool, cx: &mut Context<Self>) {
@@ -1986,23 +2067,24 @@ impl Launcher {
                         Some(menus.into_any_element()),
                         &t,
                     ))
-                    .child(index_row(n + 4, "Horizon", Some(plain(&horizon)), horizon_action, &t))
+                    .child(self.game_args_row(n + 4, cx))
+                    .child(index_row(n + 5, "Horizon", Some(plain(&horizon)), horizon_action, &t))
                     .child(index_row(
-                        n + 5,
+                        n + 6,
                         "Launcher",
                         Some(plain(&launcher)),
                         launcher_action,
                         &t,
                     ))
                     .child(index_row(
-                        n + 6,
+                        n + 7,
                         "Data folder",
                         Some(mono(short(&backend::data_dir()))),
                         None,
                         &t,
                     ))
                     .child(index_row(
-                        n + 7,
+                        n + 8,
                         "Logs",
                         Some(mono(format!(
                             "{}  ·  crash reports beside it",
@@ -2021,7 +2103,7 @@ impl Launcher {
                     ))
                     .when(cfg!(target_os = "linux"), |d| {
                         d.child(index_row(
-                            n + 8,
+                            n + 9,
                             "Applications menu",
                             Some(plain(if self.settings.desktop_entry() {
                                 "Horizon and its icon are in your desktop's menu."
@@ -2035,6 +2117,80 @@ impl Launcher {
             )
             .child(self.collection_section(cx))
             .child(agents)
+    }
+
+    /// Settings' Game arguments row: the extra arguments the game starts with, kept in
+    /// `settings.json` and appended to the launcher's own (quotes group a word with spaces).
+    fn game_args_row(&self, n: usize, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        let focused = self.args_focused;
+        let field = div()
+            .id("game-args")
+            .track_focus(&self.args_focus)
+            .flex()
+            .items_center()
+            .w(px(300.))
+            .h(px(30.))
+            .px(px(12.))
+            .overflow_hidden()
+            .rounded(px(6.))
+            .border_1()
+            .border_color(if focused { t.accent } else { t.rule })
+            .bg(t.surface)
+            .font_family(theme::MONO)
+            .text_size(px(12.))
+            .cursor_text()
+            .child(if self.args_input.is_empty() && !focused {
+                div()
+                    .text_color(t.muted)
+                    .child("For example --server-thread")
+            } else {
+                // The end of a long line stays in view while typing.
+                let chars: Vec<char> = self.args_input.chars().collect();
+                let shown: String = chars[chars.len().saturating_sub(44)..].iter().collect();
+                div().text_color(t.ink).child(shown)
+            })
+            .when(focused, |d| d.child(div().w(px(1.)).h(px(14.)).bg(t.ink)))
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                window.focus(&this.args_focus);
+                cx.notify();
+            }))
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| {
+                let k = &ev.keystroke;
+                let paste = k.key == "v" && (k.modifiers.control || k.modifiers.platform);
+                match k.key.as_str() {
+                    "backspace" => {
+                        this.args_input.pop();
+                    }
+                    _ if paste => {
+                        if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
+                            this.args_input.push_str(text.trim());
+                        }
+                    }
+                    _ if !k.modifiers.control && !k.modifiers.platform => {
+                        if let Some(ch) = &k.key_char {
+                            this.args_input.push_str(ch);
+                        }
+                    }
+                    _ => return,
+                }
+                this.args_input.truncate(1024);
+                this.settings.game_args = this.args_input.clone();
+                this.settings.save();
+                cx.stop_propagation();
+                cx.notify();
+            }));
+        index_row(
+            n,
+            "Game arguments",
+            Some(
+                div()
+                    .child("Extra arguments for the game, passed through as-is (quotes group a word with spaces). Applies the next time the game starts.")
+                    .into_any_element(),
+            ),
+            Some(field.into_any_element()),
+            &t,
+        )
     }
 
     /// Settings' Microsoft accounts: who is signed in and plays, the sign-in with its code. The
@@ -2771,9 +2927,11 @@ impl Render for Launcher {
         self.perf.frame();
         self.input_focused = self.focus.is_focused(window);
         self.friend_focused = self.friend_focus.is_focused(window);
+        self.args_focused = self.args_focus.is_focused(window);
         let content = match self.page {
             Page::Play => self.play_page(cx),
             Page::Versions => self.versions_page(cx),
+            Page::Modpacks => self.modpacks_page(cx),
             Page::Notes => self.notes_page(cx),
             Page::Settings => self.settings_page(cx),
         };

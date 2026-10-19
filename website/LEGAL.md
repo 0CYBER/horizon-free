@@ -43,8 +43,9 @@ the repository, so the launcher's screenshots no longer show it.
 ## Screenshots
 
 All captured in Horizon's Rust client, with vanilla resources prepared from the maintainer's
-own copy of Minecraft: Java Edition 26.3, and no mods or shaders. Converted to WebP at 1600
-and 800 pixels wide by `scripts/assets.mjs`.
+own copy of Minecraft: Java Edition 26.3, at the default graphics settings and with no mods or shaders
+(the game and menus last captured on 2026-10-17). Converted to WebP at 1600 and 800 pixels wide
+by `scripts/assets.mjs`.
 
 | Files in `public/media/` | Source | What it shows |
 | --- | --- | --- |
@@ -54,7 +55,7 @@ and 800 pixels wide by `scripts/assets.mjs`.
 | `menu-pause*.webp` | `docs/media/menu-pause.png` | Horizon's own pause screen |
 | `launcher*.webp` | `docs/media/launcher-play.png` | The Horizon launcher's Play page (no background image) |
 | `settings*.webp` | `docs/media/settings-simple.png` | Horizon's own Video settings, Simple view |
-| `hero*.webp`, `sunset*.webp`, `village*.webp`, `survival*.webp`, `nether*.webp`, `night*.webp`, `underwater*.webp` | `docs/media/*.jpg` | In-game views; none shows a Mojang logo or splash text |
+| `sunset*.webp`, `village*.webp`, `survival*.webp`, `nether*.webp`, `night*.webp`, `underwater*.webp` | `docs/media/<name>.jpg` | In-game views of one fixed-seed world; none shows a Mojang logo or splash text |
 
 Horizon's interface in these images is Horizon's original work (MIT). The block, mob and
 item textures and the HUD sprites drawn in them belong to Mojang and Microsoft; they are

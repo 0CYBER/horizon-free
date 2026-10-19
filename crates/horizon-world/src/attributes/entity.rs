@@ -11,6 +11,11 @@ impl AttributeId {
     pub(super) fn index(self) -> usize {
         self.0
     }
+    /// The attribute's id in the `minecraft:attribute` registry: the catalog
+    /// export lists `BuiltInRegistries.ATTRIBUTE` in order.
+    pub fn registry_id(self) -> i32 {
+        self.0 as i32
+    }
 }
 #[derive(Debug)]
 pub struct RegisteredAttribute {
@@ -99,6 +104,10 @@ impl Catalog {
             ids,
             defaults,
         })
+    }
+    /// The entity type's supplier base of an attribute, if the type has it.
+    pub fn default_base(&self, entity: &str, id: AttributeId) -> Option<f64> {
+        self.defaults.get(entity).and_then(|b| b[id.0])
     }
     pub fn id(&self, name: &str) -> Option<AttributeId> {
         self.ids.get(name).copied()

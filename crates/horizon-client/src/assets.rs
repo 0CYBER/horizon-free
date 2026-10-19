@@ -2,14 +2,13 @@ use crate::Result;
 use horizon_world::{
     DATA_VERSION,
     heightmap::HeightmapState,
-    nbt::Tag,
     registry::{BlockRegistry, BlockStateId},
     worldgen::{tags::TagDefinitions, terrain::TerrainBlockStates},
 };
 use serde_json::Value;
 use std::{
     collections::BTreeSet,
-    fs::{self, File},
+    fs::File,
     io::{self, BufReader},
     path::Path,
     sync::Arc,
@@ -43,17 +42,46 @@ impl HeightmapState for StateFacts {
 }
 #[derive(Clone)]
 pub struct Properties(Arc<Vec<StateFacts>>);
+#[cfg(test)]
+impl Properties {
+    /// Heightmap facts for tests, per state: (air, has a fluid, blocks
+    /// motion, blocks motion but is not leaves). State 0 is minecraft:air.
+    pub(crate) fn for_tests(states: &[(bool, bool, bool, bool)]) -> Self {
+        Self(Arc::new(
+            states
+                .iter()
+                .enumerate()
+                .map(|(i, &(air, fluid, motion, no_leaves))| StateFacts {
+                    air,
+                    fluid,
+                    air_block: i == 0,
+                    motion,
+                    no_leaves,
+                })
+                .collect(),
+        ))
+    }
+}
 impl TerrainBlockStates for Properties {
     type State = StateFacts;
     fn heightmap_state(&self, id: BlockStateId) -> StateFacts {
         self.0[id.0 as usize]
     }
 }
+/// The block registry and the facts read from `facts.json` and the block tags:
+/// everything world generation and collisions need, with none of the block
+/// models or baked sprites.
 pub struct Assets {
     /// Leaked once per process: shared by world generation threads.
     pub registry: &'static BlockRegistry,
     pub properties: Properties,
     pub material_states: [BlockStateId; 6],
+    /// Block names in `#minecraft:blocks_fluid_flow` (fluid flow vectors).
+    pub blocks_fluid_flow: BTreeSet<String>,
+}
+/// The block models and their baked sprites, read from the pack at `root` over
+/// an existing block registry: everything the mesher and renderer need.
+pub struct RenderAssets {
     pub sprite_size: u32,
     pub sprite_minimum_size: u32,
     pub pixels: Vec<u8>,
@@ -68,29 +96,9 @@ pub struct Assets {
     pub translucent_layers: Vec<bool>,
     /// Each layer's `MipmapGenerator` settings.
     pub sprite_mips: Vec<crate::mipmap::Settings>,
-    /// Block names in `#minecraft:blocks_fluid_flow` (fluid flow vectors).
-    pub blocks_fluid_flow: BTreeSet<String>,
 }
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
-}
-fn tag(value: &Value) -> Result<Tag> {
-    Ok(match value {
-        Value::String(value) => Tag::String(value.as_str().into()),
-        Value::Number(value) => Tag::Int(i32::try_from(
-            value
-                .as_i64()
-                .ok_or_else(|| invalid("invalid registry number"))?,
-        )?),
-        Value::Array(values) => Tag::List(values.iter().map(tag).collect::<Result<_>>()?),
-        Value::Object(values) => Tag::Compound(
-            values
-                .iter()
-                .map(|(name, value)| Ok((name.as_str().into(), tag(value)?)))
-                .collect::<Result<_>>()?,
-        ),
-        _ => return Err(invalid("unsupported registry value").into()),
-    })
 }
 impl Assets {
     pub fn load(root: &Path) -> Result<Self> {
@@ -100,23 +108,8 @@ impl Assets {
         if manifest["data_version"].as_i64() != Some(i64::from(DATA_VERSION)) {
             return Err(invalid("resources do not match Horizon's pinned data version").into());
         }
-        let facts: Value = serde_json::from_slice(&fs::read(root.join("facts.json"))?)?;
-        let states = facts["states"]
-            .as_array()
-            .ok_or_else(|| invalid("missing registry state facts"))?;
-        let registry = BlockRegistry::from_nbt(&Tag::compound([
-            ("DataVersion", Tag::Int(DATA_VERSION)),
-            (
-                "states",
-                Tag::List(
-                    states
-                        .iter()
-                        .map(|state| tag(&state[4]))
-                        .collect::<Result<_>>()?,
-                ),
-            ),
-            ("defaults", tag(&facts["defaults"])?),
-        ]))?;
+        let (registry, flags) =
+            BlockRegistry::from_facts_json_with_flags(File::open(root.join("facts.json"))?)?;
         let bundle: Value =
             serde_json::from_reader(BufReader::new(File::open(root.join("block-tags.json"))?))?;
         let mut definitions = TagDefinitions::default();
@@ -132,7 +125,7 @@ impl Assets {
             )?;
         }
         let built =
-            definitions.build(|name, _| facts["defaults"].get(name).map(|_| name.to_owned()))?;
+            definitions.build(|name, _| registry.default_state(name).map(|_| name.to_owned()))?;
         if !built.missing.is_empty() {
             return Err(invalid("unresolved block tags").into());
         }
@@ -158,27 +151,20 @@ impl Assets {
             .cloned()
             .collect();
         let properties = Properties(Arc::new(
-            states
+            flags
                 .iter()
-                .map(|state| {
+                .enumerate()
+                .map(|(i, &(air, fluid))| {
+                    let name = &registry
+                        .state(BlockStateId(i as u32))
+                        .ok_or_else(|| invalid("missing registry state"))?
+                        .name;
                     Ok(StateFacts {
-                        air: state[1]
-                            .as_bool()
-                            .ok_or_else(|| invalid("missing air fact"))?,
-                        fluid: state[2]
-                            .as_bool()
-                            .ok_or_else(|| invalid("missing fluid fact"))?,
-                        air_block: state[0].as_str() == Some("minecraft:air"),
-                        motion: motion.contains(
-                            state[0]
-                                .as_str()
-                                .ok_or_else(|| invalid("missing state name"))?,
-                        ),
-                        no_leaves: no_leaves.contains(
-                            state[0]
-                                .as_str()
-                                .ok_or_else(|| invalid("missing state name"))?,
-                        ),
+                        air,
+                        fluid,
+                        air_block: name == "minecraft:air",
+                        motion: motion.contains(name.as_str()),
+                        no_leaves: no_leaves.contains(name.as_str()),
                     })
                 })
                 .collect::<Result<_>>()?,
@@ -189,34 +175,27 @@ impl Assets {
                 .default_state(&format!("minecraft:{name}"))
                 .ok_or_else(|| invalid("missing test-scene material"))?;
         }
+        // Chunks hold every state of this registry: content mods can take it
+        // past vanilla's 16-bit global palette.
+        crate::chunk::set_block_states(registry.len());
         let registry: &'static BlockRegistry = Box::leak(Box::new(registry));
-        Self::with_models(
-            root,
+        Ok(Self {
             registry,
             properties,
             material_states,
             blocks_fluid_flow,
-        )
+        })
     }
-    /// The same blocks with the models and sprites of another resource root
+    /// The models and sprites of another resource root over these blocks
     /// (resource packs changed): the registry and block facts come from the
     /// game data, which resource packs do not touch.
-    pub fn reload(&self, root: &Path) -> Result<Self> {
-        Self::with_models(
-            root,
-            self.registry,
-            self.properties.clone(),
-            self.material_states,
-            self.blocks_fluid_flow.clone(),
-        )
+    pub fn reload(&self, root: &Path) -> Result<RenderAssets> {
+        RenderAssets::load(root, self)
     }
-    fn with_models(
-        root: &Path,
-        registry: &'static BlockRegistry,
-        properties: Properties,
-        material_states: [BlockStateId; 6],
-        blocks_fluid_flow: BTreeSet<String>,
-    ) -> Result<Self> {
+}
+impl RenderAssets {
+    pub fn load(root: &Path, assets: &Assets) -> Result<Self> {
+        let registry = assets.registry;
         let mut sprites = crate::sprites::Sprites::default();
         for name in MATERIALS {
             sprites.insert(root, &format!("minecraft:block/{name}"))?;
@@ -240,9 +219,6 @@ impl Assets {
         }
         sprites.finish();
         Ok(Self {
-            registry,
-            properties,
-            material_states,
             sprite_size: sprites.size,
             sprite_minimum_size: sprites.minimum_size,
             texture_layers: u32::try_from(sprites.count())?,
@@ -255,7 +231,6 @@ impl Assets {
             sprite_layers: sprites.layers,
             translucent_layers: sprites.translucent,
             sprite_mips: sprites.mips,
-            blocks_fluid_flow,
         })
     }
 }

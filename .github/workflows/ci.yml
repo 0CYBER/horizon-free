@@ -56,6 +56,8 @@ jobs:
         run: |
           cargo +stable fmt --all -- --check
           cargo +stable clippy --workspace --all-targets -- -D warnings
+          # The server build (released as horizon-engine): the game without sound or controllers.
+          cargo +stable clippy -p horizon-client --all-targets --no-default-features -- -D warnings
       - name: Test Rust core and voxel kernel correctness
         if: steps.rust.outputs.required != 'false'
         run: cargo +stable test --workspace

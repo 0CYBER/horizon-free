@@ -1,4 +1,5 @@
-//! One accepted connection: handshake, status ping, offline-mode login and the
+//! One accepted connection: handshake, status ping, login (offline, or online
+//! with encryption and the session service's verdict) and the
 //! configuration phase (ServerStatusPacketListenerImpl,
 //! ServerLoginPacketListenerImpl, ServerConfigurationPacketListenerImpl). A
 //! player that completes configuration continues in the play state: the
@@ -12,7 +13,7 @@ use super::{
 use horizon_protocol::{
     PROTOCOL_VERSION,
     connection::{ConnReader, ConnWriter, Connection},
-    crypto::offline_uuid,
+    crypto::{offline_uuid, server_hash, uuid_string},
     packets::{
         Empty,
         configuration::{self as cfg, ClientInformation, KnownPack},
@@ -25,7 +26,7 @@ use std::{
     net::TcpStream,
     sync::{
         Arc, Mutex, PoisonError,
-        atomic::{AtomicI32, AtomicI64, AtomicUsize, Ordering},
+        atomic::{AtomicI32, AtomicI64, AtomicU32, AtomicUsize, Ordering},
         mpsc::{Receiver, RecvTimeoutError, Sender, channel},
     },
     time::{Duration, Instant},
@@ -149,6 +150,8 @@ pub struct PlayerSender {
     pub tx: Sender<Out>,
     pub pending: Arc<AtomicUsize>,
     held: Arc<Mutex<Vec<Vec<u8>>>>,
+    /// What [`flush_all`] gave the post thread and it hasn't passed on yet.
+    posted: Arc<AtomicUsize>,
 }
 impl PlayerSender {
     pub fn new(tx: Sender<Out>, pending: Arc<AtomicUsize>) -> Self {
@@ -156,6 +159,7 @@ impl PlayerSender {
             tx,
             pending,
             held: Arc::default(),
+            posted: Arc::default(),
         }
     }
     fn held(&self) -> std::sync::MutexGuard<'_, Vec<Vec<u8>>> {
@@ -167,21 +171,104 @@ impl PlayerSender {
             self.held().push(body);
         } else {
             self.flush();
-            let _ = self.tx.send(Out::Packet(body));
+            self.deliver(Out::Packet(body));
+        }
+    }
+    /// Several packets in order, as [`Self::send`] each: under one lock
+    /// while the tick holds them.
+    pub fn send_many(&self, bodies: impl IntoIterator<Item = Vec<u8>>) {
+        if !HOLDING.get() {
+            bodies.into_iter().for_each(|body| self.send(body));
+            return;
+        }
+        let mut held = self.held();
+        for body in bodies {
+            self.pending.fetch_add(body.len(), Ordering::Relaxed);
+            held.push(body);
         }
     }
     /// Hand the held packets to the writer thread.
     pub fn flush(&self) {
         let held = std::mem::take(&mut *self.held());
         if !held.is_empty() {
-            let _ = self.tx.send(Out::Packets(held));
+            self.deliver(Out::Packets(held));
         }
     }
     /// Send a play disconnect with this reason after what was sent before.
     pub fn disconnect(&self, reason: horizon_world::nbt::Tag) {
         self.flush();
-        let _ = self.tx.send(Out::Disconnect(reason));
+        self.deliver(Out::Disconnect(reason));
     }
+    /// To the writer thread, after anything still with the post thread.
+    fn deliver(&self, out: Out) {
+        if self.posted.load(Ordering::Acquire) == 0 {
+            let _ = self.tx.send(out);
+        } else {
+            post(vec![self.posting(out)]);
+        }
+    }
+    fn posting(&self, out: Out) -> Posted {
+        self.posted.fetch_add(1, Ordering::AcqRel);
+        Posted {
+            tx: self.tx.clone(),
+            out,
+            posted: self.posted.clone(),
+        }
+    }
+}
+
+/// Hand every player's held packets to their writer threads. Waking a writer
+/// costs a system call, and on a busy machine often the rest of the core's
+/// time slice; one thread of its own wakes them, so the game thread wakes one
+/// thread per tick, not one per player. Each player's packets keep their
+/// order, also with what is sent to it next.
+pub fn flush_all<'a>(senders: impl IntoIterator<Item = &'a PlayerSender>) {
+    let batch: Vec<Posted> = senders
+        .into_iter()
+        .filter_map(|s| {
+            let held = std::mem::take(&mut *s.held());
+            (!held.is_empty()).then(|| s.posting(Out::Packets(held)))
+        })
+        .collect();
+    if !batch.is_empty() {
+        post(batch);
+    }
+}
+
+/// Packets on their way through the post thread.
+struct Posted {
+    tx: Sender<Out>,
+    out: Out,
+    posted: Arc<AtomicUsize>,
+}
+impl Posted {
+    fn hand_over(self) {
+        let _ = self.tx.send(self.out);
+        self.posted.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// Give a batch to the post thread, started the first time; without one
+/// (the thread could not start) the batch is handed over here.
+fn post(batch: Vec<Posted>) {
+    static POST: std::sync::OnceLock<Option<Sender<Vec<Posted>>>> = std::sync::OnceLock::new();
+    let post = POST.get_or_init(|| {
+        let (tx, rx) = channel::<Vec<Posted>>();
+        std::thread::Builder::new()
+            .name("horizon-lan-post".to_owned())
+            .spawn(move || {
+                for batch in rx {
+                    batch.into_iter().for_each(Posted::hand_over);
+                }
+            })
+            .ok()
+            .map(|_| tx)
+    });
+    let unsent = match post {
+        Some(tx) => tx.send(batch).err().map(|e| e.0),
+        None => Some(batch),
+    };
+    unsent.into_iter().flatten().for_each(Posted::hand_over);
 }
 
 /// LegacyQueryHandler: the pre-1.7 server list ping. What the first read
@@ -354,6 +441,145 @@ fn serve_status(c: &mut Connection, shared: &Shared) -> Result<(), String> {
     }
 }
 
+/// ServerLoginPacketListenerImpl.getUserName: the name and the address
+/// (Connection.getLoggableAddress, `/ip:port` as InetSocketAddress prints it).
+fn user_name(name: &str, address: std::net::SocketAddr, log: &super::NetLog) -> String {
+    if log.log_ips {
+        format!("{name} (/{address})")
+    } else {
+        format!("{name} (<ip address withheld>)")
+    }
+}
+
+/// ServerLoginPacketListenerImpl.disconnect: log the reason's text and send
+/// it. Returns the text, for the "lost connection" line that follows.
+fn refuse(
+    c: &mut Connection,
+    shared: &Shared,
+    thread: &str,
+    user: &str,
+    reason: &horizon_world::nbt::Tag,
+) -> String {
+    let text = shared
+        .config
+        .log
+        .as_ref()
+        .map(|log| horizon_protocol::text::plain(reason, &log.lang))
+        .unwrap_or_default();
+    if let Some(log) = &shared.config.log {
+        (log.write)(thread, "INFO", &format!("Disconnecting {user}: {text}"));
+    }
+    login_disconnect(c, reason);
+    text
+}
+
+/// ServerLoginPacketListenerImpl.onDisconnect, once the server thread sees
+/// the connection closed: by a refusal, or by the client ("Disconnected").
+fn lost(shared: &Shared, user: &str, text: &str) {
+    if let Some(log) = &shared.config.log {
+        (log.write)(
+            "Server thread",
+            "INFO",
+            &format!("{user} lost connection: {text}"),
+        );
+    }
+}
+
+/// UNIQUE_THREAD_ID: the User Authenticator threads are numbered from 1.
+static AUTHENTICATORS: AtomicU32 = AtomicU32::new(0);
+
+/// ServerLoginPacketListenerImpl.handleKey and the User Authenticator
+/// thread: check the client's answer to the encryption request, encrypt the
+/// connection, and ask the session service whether the player joined with
+/// this server's hash. The profile, or the text of the refusal.
+fn authenticate(
+    c: &mut Connection,
+    shared: &Shared,
+    online: &super::OnlineMode,
+    name: &str,
+    address: std::net::SocketAddr,
+    user: &str,
+) -> Result<Result<(u128, Vec<login::Property>), String>, String> {
+    let e = |e: horizon_protocol::Error| e.to_string();
+    let mut challenge = [0u8; 4];
+    horizon_protocol::crypto::random_bytes(&mut challenge).map_err(e)?;
+    c.send(
+        &login::Clientbound::Hello(login::Hello {
+            server_id: String::new(),
+            public_key: online.public_der.clone(),
+            challenge: challenge.to_vec(),
+            should_authenticate: true,
+        })
+        .encode(),
+    )
+    .map_err(e)?;
+    let (id, payload) = c.recv().map_err(e)?;
+    let key = match login::Serverbound::decode(id, &payload).map_err(e)? {
+        login::Serverbound::Key(k) => k,
+        _ => return Err("Unexpected packet during login".into()),
+    };
+    // ServerboundKeyPacket.isChallengeValid and getSecretKey.
+    let protocol_error = || "Protocol error".to_owned();
+    if online.key.decrypt(&key.challenge).ok().as_deref() != Some(&challenge[..]) {
+        return Err(protocol_error());
+    }
+    let secret: [u8; 16] = online
+        .key
+        .decrypt(&key.key)
+        .ok()
+        .and_then(|s| s.try_into().ok())
+        .ok_or_else(protocol_error)?;
+    let digest = server_hash("", &secret, &online.public_der);
+    c.enable_encryption(&secret);
+    let thread = format!(
+        "User Authenticator #{}",
+        AUTHENTICATORS.fetch_add(1, Ordering::Relaxed) + 1
+    );
+    let log = |level: &str, line: &str| {
+        if let Some(log) = &shared.config.log {
+            (log.write)(&thread, level, line);
+        }
+    };
+    let ip = online.prevent_proxy.then(|| address.ip());
+    match crate::auth::has_joined(name, &digest, ip) {
+        Ok(Some(profile)) => {
+            log(
+                "INFO",
+                &format!("UUID of player {name} is {}", uuid_string(profile.uuid)),
+            );
+            Ok(Ok((profile.uuid, profile.properties)))
+        }
+        Ok(None) => {
+            let text = refuse(
+                c,
+                shared,
+                &thread,
+                user,
+                &translatable("multiplayer.disconnect.unverified_username", &[]),
+            );
+            log(
+                "ERROR",
+                &format!("Username '{name}' tried to join with an invalid session"),
+            );
+            Ok(Err(text))
+        }
+        Err(_) => {
+            let text = refuse(
+                c,
+                shared,
+                &thread,
+                user,
+                &translatable("multiplayer.disconnect.authservers_down", &[]),
+            );
+            log(
+                "ERROR",
+                "Couldn't verify username because servers are unavailable",
+            );
+            Ok(Err(text))
+        }
+    }
+}
+
 fn serve_login(
     mut c: Connection,
     address: std::net::SocketAddr,
@@ -372,14 +598,36 @@ fn serve_login(
         );
         return Ok(());
     }
-    // Offline mode: the profile is derived from the name (PlayerList.canPlayerLogin
-    // then rejects duplicates and a full server).
-    let uuid = offline_uuid(&hello.name);
+    let user = shared
+        .config
+        .log
+        .as_ref()
+        .map(|log| user_name(&hello.name, address, log))
+        .unwrap_or_default();
+    // handleHello: online mode authenticates first; offline mode derives the
+    // profile from the name.
+    let (uuid, properties) = match &shared.config.online {
+        Some(online) => match authenticate(&mut c, shared, online, &hello.name, address, &user) {
+            Ok(Ok(profile)) => profile,
+            Ok(Err(refused)) => {
+                lost(shared, &user, &refused);
+                return Ok(());
+            }
+            Err(err) => {
+                lost(shared, &user, "Disconnected");
+                return Err(err);
+            }
+        },
+        None => (offline_uuid(&hello.name), Vec::new()),
+    };
+    // verifyLoginAndFinishConnectionSetup: PlayerList.canPlayerLogin, then
+    // duplicates and a full server.
     if let Some(reason) = shared.try_admit(address, uuid, &hello.name) {
-        login_disconnect(&mut c, &reason);
+        let text = refuse(&mut c, shared, "Server thread", &user, &reason);
+        lost(shared, &user, &text);
         return Ok(());
     }
-    let result = login_and_configure(&mut c, shared, uuid, &hello.name);
+    let result = login_and_configure(&mut c, shared, uuid, &hello.name, properties);
     match result {
         Ok(Some(parts)) => {
             play(c, shared, parts, address);
@@ -391,6 +639,9 @@ fn serve_login(
         }
         Err(err) => {
             shared.release(uuid);
+            // ServerConfigurationPacketListenerImpl.onDisconnect.
+            let profile = format!("{} ({})", hello.name, uuid_string(uuid));
+            lost(shared, &profile, "Disconnected");
             Err(err)
         }
     }
@@ -399,6 +650,7 @@ fn serve_login(
 struct Parts {
     uuid: u128,
     name: String,
+    properties: Vec<login::Property>,
     info: ClientInformation,
     brand: String,
 }
@@ -408,6 +660,7 @@ fn login_and_configure(
     shared: &Arc<Shared>,
     uuid: u128,
     name: &str,
+    properties: Vec<login::Property>,
 ) -> Result<Option<Parts>, String> {
     let e = |e: horizon_protocol::Error| e.to_string();
     // ServerLoginPacketListenerImpl: memory connections are not compressed.
@@ -422,7 +675,7 @@ fn login_and_configure(
             profile: login::GameProfile {
                 uuid,
                 name: name.to_owned(),
-                properties: Vec::new(),
+                properties: properties.clone(),
             },
             session: uuid,
         })
@@ -501,6 +754,7 @@ fn login_and_configure(
     Ok(Some(Parts {
         uuid,
         name: name.to_owned(),
+        properties,
         info,
         brand,
     }))
@@ -527,6 +781,7 @@ fn play(c: Connection, shared: &Arc<Shared>, parts: Parts, address: std::net::So
         conn: conn_id,
         uuid: parts.uuid,
         name: parts.name,
+        properties: parts.properties,
         info: parts.info,
         brand: parts.brand,
         sender,
@@ -579,6 +834,82 @@ fn read_loop(
     }
 }
 
+/// Packet bodies at least this large are compressed once for every
+/// connection: chunk columns, mostly, which every player near them receives.
+const SHARED_FRAME_MIN: usize = 8 << 10;
+/// The compressed frames kept, in bytes; the oldest go first.
+const SHARED_FRAME_BYTES: usize = 32 << 20;
+
+/// Compressed frame contents by the body they were made from: its length,
+/// two independently keyed 64-bit hashes of it, and the threshold.
+struct SharedFrames {
+    hashers: (std::hash::RandomState, std::hash::RandomState),
+    frames: Mutex<FrameCache>,
+    /// [`SHARED_FRAME_BYTES`].
+    limit: usize,
+}
+type FrameKey = (usize, u64, u64, usize);
+#[derive(Default)]
+struct FrameCache {
+    frames: crate::fast_hash::FxHashMap<FrameKey, Arc<[u8]>>,
+    order: std::collections::VecDeque<FrameKey>,
+    bytes: usize,
+}
+impl SharedFrames {
+    fn get() -> &'static Self {
+        static FRAMES: std::sync::OnceLock<SharedFrames> = std::sync::OnceLock::new();
+        FRAMES.get_or_init(|| Self::new(SHARED_FRAME_BYTES))
+    }
+    fn new(limit: usize) -> Self {
+        Self {
+            hashers: Default::default(),
+            frames: Mutex::default(),
+            limit,
+        }
+    }
+    /// `frame::contents(body, Some(threshold))`, compressed only when no
+    /// connection has sent the same body lately.
+    fn contents(&self, body: &[u8], threshold: usize) -> horizon_protocol::Result<Arc<[u8]>> {
+        use std::hash::BuildHasher;
+        let key = (
+            body.len(),
+            self.hashers.0.hash_one(body),
+            self.hashers.1.hash_one(body),
+            threshold,
+        );
+        let cache = || self.frames.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(contents) = cache().frames.get(&key) {
+            return Ok(contents.clone());
+        }
+        let contents: Arc<[u8]> = horizon_protocol::frame::contents(body, Some(threshold))?.into();
+        let mut cache = cache();
+        if cache.frames.insert(key, contents.clone()).is_none() {
+            cache.order.push_back(key);
+            cache.bytes += contents.len();
+            while cache.bytes > self.limit
+                && let Some(old) = cache.order.pop_front()
+            {
+                if let Some(c) = cache.frames.remove(&old) {
+                    cache.bytes -= c.len();
+                }
+            }
+        }
+        Ok(contents)
+    }
+}
+
+/// Send one packet body: a large one compressed through [`SharedFrames`],
+/// so a chunk column sent to fifty players is compressed once, not fifty
+/// times. The bytes on the wire are the same.
+fn send_body(writer: &mut ConnWriter, body: &[u8]) -> horizon_protocol::Result<()> {
+    match writer.threshold {
+        Some(t) if body.len() >= t.max(SHARED_FRAME_MIN) => {
+            writer.send_contents(&SharedFrames::get().contents(body, t)?)
+        }
+        _ => writer.send(body),
+    }
+}
+
 fn write_loop(
     mut writer: ConnWriter,
     rx: Receiver<Out>,
@@ -592,7 +923,7 @@ fn write_loop(
     loop {
         let mut write = |body: Vec<u8>| {
             pending.fetch_sub(body.len(), Ordering::Relaxed);
-            writer.send(&body).is_ok() && pending.load(Ordering::Relaxed) <= MAX_PENDING
+            send_body(&mut writer, &body).is_ok() && pending.load(Ordering::Relaxed) <= MAX_PENDING
         };
         match rx.recv_timeout(Duration::from_millis(200)) {
             Ok(Out::Packet(body)) => {
@@ -650,15 +981,90 @@ fn write_loop(
 mod tests {
     use super::*;
 
+    fn unpack(out: Out) -> Vec<Vec<u8>> {
+        match out {
+            Out::Packet(body) => vec![body],
+            Out::Packets(bodies) => bodies,
+            Out::Disconnect(_) => vec![b"disconnect".to_vec()],
+            Out::Close => vec![b"close".to_vec()],
+        }
+    }
+
     fn bodies(rx: &Receiver<Out>) -> Vec<Vec<Vec<u8>>> {
-        rx.try_iter()
-            .map(|out| match out {
-                Out::Packet(body) => vec![body],
-                Out::Packets(bodies) => bodies,
-                Out::Disconnect(_) => vec![b"disconnect".to_vec()],
-                Out::Close => vec![b"close".to_vec()],
-            })
-            .collect()
+        rx.try_iter().map(unpack).collect()
+    }
+
+    #[test]
+    fn packets_sent_after_a_posted_tick_follow_it() {
+        let (tx, rx) = channel();
+        let (tx2, rx2) = channel();
+        let sender = PlayerSender::new(tx, Arc::default());
+        let other = PlayerSender::new(tx2, Arc::default());
+        for round in 0..50u8 {
+            let holding = Holding::start();
+            sender.send(vec![round, 1]);
+            sender.send(vec![round, 2]);
+            other.send(vec![round]);
+            drop(holding);
+            flush_all([&sender, &other]);
+            // Straight after the tick, while the post thread may still hold it.
+            sender.send(vec![round, 3]);
+            let next = || unpack(rx.recv_timeout(Duration::from_secs(10)).unwrap());
+            assert_eq!(next(), [vec![round, 1], vec![round, 2]]);
+            assert_eq!(next(), [vec![round, 3]]);
+            let got = unpack(rx2.recv_timeout(Duration::from_secs(10)).unwrap());
+            assert_eq!(got, [vec![round]]);
+        }
+        let holding = Holding::start();
+        sender.send(vec![9]);
+        drop(holding);
+        flush_all([&sender]);
+        sender.disconnect(horizon_world::nbt::Tag::Byte(0));
+        let next = || unpack(rx.recv_timeout(Duration::from_secs(10)).unwrap());
+        assert_eq!(next(), [vec![9]]);
+        assert_eq!(next(), [b"disconnect".to_vec()]);
+        // Nothing sent twice, nothing left with the post thread.
+        assert!(rx.try_recv().is_err());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while sender.posted.load(Ordering::Acquire) != 0 {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn shared_frames_are_the_frames_compressed_here() {
+        use horizon_protocol::frame;
+        let frames = SharedFrames::new(usize::MAX);
+        let a: Vec<u8> = (0..40_000u32).map(|i| (i * 7 % 13) as u8).collect();
+        let mut b = a.clone();
+        b[20_000] ^= 1;
+        for (body, threshold) in [(&a, 256), (&b, 256), (&a, 256), (&a, 64), (&b, 256)] {
+            let shared = frames.contents(body, threshold).unwrap();
+            assert_eq!(*shared, *frame::contents(body, Some(threshold)).unwrap());
+        }
+        // One frame per body and threshold.
+        assert_eq!(frames.frames.lock().unwrap().frames.len(), 3);
+    }
+
+    #[test]
+    fn shared_frames_keep_the_newest_within_their_limit() {
+        let first = SharedFrames::new(0)
+            .contents(&[1; 9000], 256)
+            .unwrap()
+            .len();
+        let frames = SharedFrames::new(first * 2);
+        for n in 0..5u8 {
+            frames.contents(&[n; 9000], 256).unwrap();
+        }
+        let cache = frames.frames.lock().unwrap();
+        assert!((1..=2).contains(&cache.frames.len()));
+        assert_eq!(cache.order.len(), cache.frames.len());
+        assert_eq!(
+            cache.bytes,
+            cache.frames.values().map(|c| c.len()).sum::<usize>()
+        );
+        assert!(cache.bytes <= first * 2);
     }
 
     #[test]

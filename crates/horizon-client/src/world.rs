@@ -8,6 +8,46 @@ use std::{
     sync::Arc,
 };
 
+/// Sections (x, section index, z) waiting to be remeshed, kept by column
+/// (a bit per section index), so the mesh scheduler looks at each column once
+/// rather than at every section of it.
+#[derive(Clone, Debug, Default)]
+pub struct DirtySections {
+    columns: crate::fast_hash::FxHashMap<(i32, i32), u32>,
+}
+const _: () = assert!(SECTIONS <= 32);
+impl DirtySections {
+    pub fn insert(&mut self, (x, sy, z): (i32, i32, i32)) {
+        debug_assert!((0..SECTIONS as i32).contains(&sy));
+        *self.columns.entry((x, z)).or_default() |= 1 << sy;
+    }
+    pub fn contains(&self, &(x, sy, z): &(i32, i32, i32)) -> bool {
+        (0..SECTIONS as i32).contains(&sy)
+            && self.columns.get(&(x, z)).is_some_and(|m| m & 1 << sy != 0)
+    }
+    /// The dirty section indexes of column (x, z), as bits, removed.
+    pub fn take_column(&mut self, x: i32, z: i32) -> u32 {
+        self.columns.remove(&(x, z)).unwrap_or(0)
+    }
+    /// Keep the columns `keep` accepts.
+    pub fn retain_columns(&mut self, mut keep: impl FnMut(i32, i32) -> bool) {
+        self.columns.retain(|&(x, z), _| keep(x, z));
+    }
+    /// The columns holding dirty sections, with their section bits.
+    pub fn columns(&self) -> impl Iterator<Item = ((i32, i32), u32)> + '_ {
+        self.columns.iter().map(|(&c, &m)| (c, m))
+    }
+    pub fn clear(&mut self) {
+        self.columns.clear();
+    }
+    pub fn is_empty(&self) -> bool {
+        self.columns.is_empty()
+    }
+    /// How many sections are dirty.
+    pub fn len(&self) -> usize {
+        self.columns.values().map(|m| m.count_ones() as usize).sum()
+    }
+}
 pub struct World {
     pub fast_lava: bool,
     pub chunks: crate::chunk_map::ChunkMap,
@@ -16,17 +56,18 @@ pub struct World {
     pub health_rules: crate::health::HealthRules,
     pub air: BlockStateId,
     /// Sections whose geometry changed and need remeshing.
-    pub dirty_sections: crate::fast_hash::FxHashSet<(i32, i32, i32)>,
+    pub dirty_sections: DirtySections,
     /// Chunks whose light must be recomputed.
     pub dirty_light: crate::fast_hash::FxHashSet<(i32, i32)>,
     /// Edits on lit chunks (position, old state, new state), relit
     /// incrementally by streaming.
-    pub light_edits: Vec<((i32, i32, i32), u16, u16)>,
+    pub light_edits: Vec<((i32, i32, i32), u32, u32)>,
     /// Saved entities of chunks that just loaded, spawned by the game.
     pub loaded_entities: Vec<((i32, i32), Vec<horizon_world::nbt::Tag>)>,
     /// Chunks changed since the last save.
     pub modified: HashSet<(i32, i32)>,
-    pub block_entities: HashMap<(i32, i32, i32), crate::containers::BlockEntity>,
+    /// Block entities, and the order they tick in.
+    pub block_entities: crate::block_entities::BlockEntities,
     /// Each chest's `ContainerOpenersCounter`: opener count and largest
     /// interaction range.
     pub chest_openers: HashMap<(i32, i32, i32), (i32, f64)>,
@@ -36,7 +77,7 @@ pub struct World {
     /// blocks, which need a block entity).
     pub watched: Vec<bool>,
     /// Writes of watched states: position, previous and new state.
-    pub watched_writes: Vec<((i32, i32, i32), u16, u16)>,
+    pub watched_writes: Vec<((i32, i32, i32), u32, u32)>,
     /// `ChunkAccess.inhabitedTime` of resident chunks: ticks a player spent
     /// within spawning range (local difficulty).
     pub inhabited: HashMap<(i32, i32), i64>,
@@ -46,6 +87,10 @@ pub struct World {
     /// Every block position written since the log was last drained, kept
     /// only while the world is open to the network (see `lan`).
     pub block_log: Option<Vec<(i32, i32, i32)>>,
+    /// The sections whose light changed since the log was last drained, as
+    /// a bit per section of each column, kept while `block_log` is
+    /// (`ChunkHolder.sectionLightChanged`).
+    pub light_log: Option<crate::fast_hash::FxHashMap<(i32, i32), u32>>,
     /// The villager POIs of each section (`PoiManager`'s sections).
     pub pois: crate::poi_sections::PoiSections<crate::mobs::villager_brain::Poi>,
 }
@@ -122,7 +167,7 @@ impl World {
             light_edits: Vec::new(),
             loaded_entities: Vec::new(),
             modified: HashSet::new(),
-            block_entities: HashMap::new(),
+            block_entities: Default::default(),
             chest_openers: HashMap::new(),
             block_names: HashMap::new(),
             watched: Vec::new(),
@@ -132,12 +177,17 @@ impl World {
             day_time: 1000,
             weather: Weather::default(),
             block_log: None,
+            light_log: None,
             pois: Default::default(),
         }
     }
     /// A controlled blockstate scene for the native scene probes: material
     /// layers, a stepped pyramid and the model gallery. Not generated terrain.
-    pub fn test_scene(assets: &crate::assets::Assets, radius: i32) -> crate::Result<Self> {
+    pub fn test_scene(
+        assets: &crate::assets::Assets,
+        render: &crate::assets::RenderAssets,
+        radius: i32,
+    ) -> crate::Result<Self> {
         let air = assets
             .registry
             .default_state("minecraft:air")
@@ -182,7 +232,7 @@ impl World {
                 }
             }
         }
-        for (position, state) in &assets.model_placements {
+        for (position, state) in &render.model_placements {
             world.set(position.x, position.y, position.z, *state)?;
         }
         world.revision = 0;
@@ -198,12 +248,13 @@ impl World {
         if y < MIN_Y || y >= MIN_Y + (SECTIONS as i32) * 16 {
             return Err("write outside world height".into());
         }
-        let previous = Arc::make_mut(chunk).set(x & 15, y, z & 15, state.0 as u16);
-        if u32::from(previous) != state.0 {
-            let watches = |id: u16| self.watched.get(usize::from(id)).copied().unwrap_or(false);
-            if watches(previous) || watches(state.0 as u16) {
-                self.watched_writes
-                    .push(((x, y, z), previous, state.0 as u16));
+        let previous = Arc::make_mut(chunk).set(x & 15, y, z & 15, state.0);
+        if previous != state.0 {
+            self.block_entities
+                .state_changed((x, y, z), previous, state.0);
+            let watches = |id: u32| self.watched.get(id as usize).copied().unwrap_or(false);
+            if watches(previous) || watches(state.0) {
+                self.watched_writes.push(((x, y, z), previous, state.0));
             }
             self.revision = self.revision.wrapping_add(1);
             if let Some(log) = &mut self.block_log {
@@ -225,7 +276,7 @@ impl World {
             }
             let _ = sy;
             if self.chunks.get(&(x >> 4, z >> 4)).is_some_and(|c| c.lit) {
-                self.light_edits.push(((x, y, z), previous, state.0 as u16));
+                self.light_edits.push(((x, y, z), previous, state.0));
             } else {
                 for dz in -1..=1 {
                     for dx in -1..=1 {
@@ -236,10 +287,27 @@ impl World {
         }
         Ok(())
     }
+    /// `getHeight(Heightmap.Types.WORLD_SURFACE, x, z)`: one above the highest
+    /// block that isn't `air`, or `MIN_Y` (also where the chunk isn't loaded).
+    pub fn world_surface(&self, x: i32, z: i32, air: impl Fn(BlockStateId) -> bool) -> i32 {
+        self.chunks.get(&(x >> 4, z >> 4)).map_or(MIN_Y, |chunk| {
+            chunk.world_surface(x, z, |v| air(BlockStateId(v)))
+        })
+    }
     pub fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId {
         self.chunks
             .get(&(x >> 4, z >> 4))
             .map_or(self.air, |chunk| chunk.block(x & 15, y, z & 15))
+    }
+    /// The block entities to tick this tick, in order (`BlockEntities::tickers`).
+    pub fn block_entity_tickers(&mut self) -> Vec<(crate::block_entities::Pos, u32)> {
+        let (chunks, air) = (&self.chunks, self.air);
+        self.block_entities.tickers(|(x, y, z)| {
+            chunks
+                .get(&(x >> 4, z >> 4))
+                .map_or(air, |chunk| chunk.block(x & 15, y, z & 15))
+                .0
+        })
     }
     pub fn light(&self, x: i32, y: i32, z: i32) -> u8 {
         self.chunks

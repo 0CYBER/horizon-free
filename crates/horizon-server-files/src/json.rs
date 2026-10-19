@@ -78,6 +78,43 @@ impl Json {
         }
     }
 
+    /// `new GsonBuilder().create().toJson(element)`: compact, HTML-safe
+    /// strings, null members skipped.
+    pub fn gson(&self) -> String {
+        let mut out = String::new();
+        self.write_gson(&mut out);
+        out
+    }
+    fn write_gson(&self, out: &mut String) {
+        match self {
+            Json::String(s) => quote(out, s, true),
+            Json::Array(items) => {
+                out.push('[');
+                for (i, v) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    v.write_gson(out);
+                }
+                out.push(']');
+            }
+            Json::Object(m) => {
+                out.push('{');
+                let members = m.iter().filter(|(_, v)| *v != Json::Null);
+                for (i, (k, v)) in members.enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    quote(out, k, true);
+                    out.push(':');
+                    v.write_gson(out);
+                }
+                out.push('}');
+            }
+            other => other.write_compact(out),
+        }
+    }
+
     /// `new GsonBuilder().setPrettyPrinting().create().toJson(element, writer)`:
     /// two-space indents, HTML-safe strings, null members skipped.
     pub fn pretty(&self) -> String {

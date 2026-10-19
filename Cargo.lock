@@ -1293,6 +1293,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.21",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -1429,12 +1430,14 @@ dependencies = [
  "horizon-shaderpack",
  "horizon-telemetry",
  "horizon-theme",
+ "horizon-threads",
  "horizon-world",
  "log",
  "miniz_oxide 0.8.9",
  "naga",
  "png",
  "pollster",
+ "rustix 1.1.5",
  "serde",
  "serde_json",
  "sha2",
@@ -1539,6 +1542,7 @@ dependencies = [
  "horizon-world",
  "serde_json",
  "sha1",
+ "sha2",
 ]
 
 [[package]]
@@ -1554,13 +1558,16 @@ dependencies = [
 name = "horizon-server"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "horizon-bench",
  "horizon-server-files",
  "libc",
  "serde",
  "serde_json",
+ "sha2",
  "toml",
  "toml_edit",
+ "ureq",
  "windows-sys 0.61.2",
  "zip",
 ]
@@ -1569,10 +1576,12 @@ dependencies = [
 name = "horizon-server-files"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "horizon-core",
  "horizon-protocol",
  "horizon-world",
  "log",
+ "ureq",
 ]
 
 [[package]]
@@ -1601,6 +1610,14 @@ name = "horizon-theme"
 version = "0.1.0"
 
 [[package]]
+name = "horizon-threads"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "horizon-world"
 version = "0.1.0"
 dependencies = [
@@ -1608,7 +1625,10 @@ dependencies = [
  "horizon-core",
  "libm",
  "lz4_flex",
+ "postcard",
+ "serde",
  "serde_json",
+ "sha2",
  "xxhash-rust",
 ]
 
@@ -3009,6 +3029,12 @@ checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 dependencies = [
  "getrandom 0.2.17",
 ]
+
+[[package]]
+name = "range-alloc"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca45419789ae5a7899559e9512e58ca889e41f04f1f2445e9f4b290ceccd1d08"
 
 [[package]]
 name = "raw-window-handle"
@@ -4584,12 +4610,11 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "30.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6b7fb58561a792bc237628ba0792e332de418fefe145f13b5ed8201e6d52f58"
 dependencies = [
  "android_system_properties",
  "arrayvec",
  "ash",
+ "bit-set 0.10.0",
  "bitflags 2.13.2",
  "block2 0.6.2",
  "bytemuck",
@@ -4608,11 +4633,13 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "objc2-metal 0.3.2",
  "objc2-quartz-core 0.3.2",
+ "once_cell",
  "ordered-float",
  "parking_lot",
  "portable-atomic",
  "portable-atomic-util",
  "profiling",
+ "range-alloc",
  "raw-window-handle",
  "raw-window-metal",
  "renderdoc-sys",
@@ -4622,6 +4649,7 @@ dependencies = [
  "wgpu-naga-bridge",
  "wgpu-types",
  "windows 0.62.2",
+ "windows-core 0.62.2",
 ]
 
 [[package]]

@@ -169,7 +169,7 @@ impl Game<'_> {
                     return Ok(false);
                 };
                 let state = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
-                if self.res.facts.get(state).fluid != horizon_client::blocks::Fluid::Water {
+                if self.res.facts().get(state).fluid != horizon_client::blocks::Fluid::Water {
                     return Ok(false);
                 }
                 let at = [
@@ -228,7 +228,7 @@ impl Game<'_> {
         }
         let (lasting, now) = PlayerEffects::potion_effects(stack.potion(), 1.0);
         for e in lasting {
-            self.potions.effects.add(e);
+            self.add_player_effect(e);
         }
         for a in now {
             self.apply_effect_action(a);
@@ -249,7 +249,7 @@ impl Game<'_> {
         }
         true
     }
-    fn apply_effect_action(&mut self, action: EffectAction) {
+    pub(super) fn apply_effect_action(&mut self, action: EffectAction) {
         let creative = self.creative;
         let rules = self.world.health_rules;
         let Some(p) = self.player.as_mut() else {
@@ -329,9 +329,24 @@ impl Game<'_> {
         }
         self.apply_effect_status();
     }
+    /// Add an active effect to the player and update attributes / absorption.
+    pub(super) fn add_player_effect(&mut self, effect: EffectInstance) -> bool {
+        let id = effect.id;
+        let amp = effect.amplifier;
+        let changed = self.potions.effects.add(effect);
+        self.apply_effect_status();
+        if id == "absorption"
+            && let Some(p) = self.player.as_mut()
+        {
+            let target = 4.0 * (amp + 1) as f32;
+            let current = p.health.absorption();
+            let _ = p.set_health(current.max(target), true);
+        }
+        changed
+    }
     /// The effects' attribute modifiers, armor protection and status flags
     /// on `self.player`.
-    fn apply_effect_status(&mut self) {
+    pub(super) fn apply_effect_status(&mut self) {
         let modifiers = self.potions.effects.modifiers();
         if modifiers != self.potions.applied
             && let Some(p) = self.player.as_mut()
@@ -344,15 +359,21 @@ impl Game<'_> {
             }
             self.potions.applied = modifiers;
         }
+        if let Some(p) = self.player.as_mut()
+            && self.potions.effects.amplifier("absorption").is_none()
+            && p.health.absorption() > 0.0
+        {
+            let _ = p.set_health(0.0, true);
+        }
         // EnchantmentHelper.getDamageProtection per damage type, recomputed on armor change.
         let armor: Vec<Option<ItemStack>> = self.armor.to_vec();
         if self.potions.protection_for.as_ref() != Some(&armor) {
             let mut table = Vec::new();
-            let e = &self.res.stations.enchantments;
+            let e = &self.res.stations().enchantments;
             let mut random = horizon_core::random::LegacyRandom::new(0);
             for (_, def) in self.motion.health.damage.entries() {
                 let ctx = horizon_client::enchant::EffectContext {
-                    items: Some(&self.res.items),
+                    items: Some(self.res.items()),
                     damage_type: Some(&def.name),
                     this: Some("minecraft:player"),
                     ..Default::default()
@@ -408,7 +429,7 @@ impl Game<'_> {
                 let state =
                     self.world
                         .block(p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32);
-                if self.res.facts.get(state).full_collision
+                if self.res.facts().get(state).full_collision
                     || self.mobs.iter().any(|m| {
                         m.alive()
                             && (m.position.x - p.x).abs() < m.kind.width / 2.0 + 0.125
@@ -465,6 +486,41 @@ impl Game<'_> {
         self.potions.thrown = thrown;
         for (stack, at) in landed {
             self.splash(&stack, at);
+        }
+    }
+    /// A splash potion's effects on the player in place, by their distance.
+    fn splash_on_player(
+        &mut self,
+        effects: &'static [(&'static str, i32, i32)],
+        at: Vec3,
+        scale: f64,
+    ) {
+        if let Some(p) = self.player.as_ref() {
+            let center = Vec3::new(
+                p.position.x,
+                p.position.y + f64::from(p.dimensions.height) / 2.0,
+                p.position.z,
+            );
+            let d2 =
+                (center.x - at.x).powi(2) + (center.y - at.y).powi(2) + (center.z - at.z).powi(2);
+            if d2 < 16.0 && (center.y - at.y).abs() <= 2.0 + f64::from(p.dimensions.height) {
+                let intensity = 1.0 - d2.sqrt() / 4.0;
+                for (id, duration, amp) in effects {
+                    let instant = brewing::effect(id).is_some_and(|e| e.instant);
+                    if instant {
+                        if let Some(a) = horizon_client::effects::instant(id, *amp, intensity) {
+                            self.apply_effect_action(a);
+                        }
+                    } else {
+                        let d = (intensity * f64::from(*duration) * scale + 0.5) as i32;
+                        if d > 20
+                            && let Some(e) = brewing::effect(id)
+                        {
+                            self.add_player_effect(EffectInstance::new(e.id, d, *amp));
+                        }
+                    }
+                }
+            }
         }
     }
     /// `ThrownSplashPotion.onHitAsPotion` (lingering clouds apply as a weaker splash).
@@ -527,36 +583,11 @@ impl Game<'_> {
         let Some(def) = stack.potion().and_then(brewing::potion) else {
             return;
         };
-        // The player.
-        if let Some(p) = self.player.as_ref() {
-            let center = Vec3::new(
-                p.position.x,
-                p.position.y + f64::from(p.dimensions.height) / 2.0,
-                p.position.z,
-            );
-            let d2 =
-                (center.x - at.x).powi(2) + (center.y - at.y).powi(2) + (center.z - at.z).powi(2);
-            if d2 < 16.0 && (center.y - at.y).abs() <= 2.0 + f64::from(p.dimensions.height) {
-                let intensity = 1.0 - d2.sqrt() / 4.0;
-                for (id, duration, amp) in def.effects {
-                    let instant = brewing::effect(id).is_some_and(|e| e.instant);
-                    if instant {
-                        if let Some(a) = horizon_client::effects::instant(id, *amp, intensity) {
-                            self.apply_effect_action(a);
-                        }
-                    } else {
-                        let d = (intensity * f64::from(*duration) * scale + 0.5) as i32;
-                        if d > 20
-                            && let Some(e) = brewing::effect(id)
-                        {
-                            self.potions.effects.add(EffectInstance::new(e.id, d, *amp));
-                        }
-                    }
-                }
-            }
-        }
+        // Every player in range (`ThrownSplashPotion.applySplash` over
+        // `LivingEntity`s, the players among them).
+        self.for_each_player(|g| g.splash_on_player(def.effects, at, scale));
         // Mobs take the instant effects (undead invert healing and harming).
-        let undead = &self.res.stations.enchantments.entity_tags;
+        let undead = &self.res.stations().enchantments.entity_tags;
         let mut hits = Vec::new();
         for (i, m) in self.mobs.iter().enumerate() {
             let d2 = (m.position.x - at.x).powi(2)
@@ -613,7 +644,7 @@ impl Game<'_> {
             .map(hud_overlays::EffectIcon::from)
             .collect();
         let draws = hud_overlays::effects(batch.width as i32, false, &icons);
-        hud_layout::paint(batch, &self.atlas, &draws);
+        hud_layout::paint(batch, &self.gui.atlas, &draws);
     }
     /// `EffectsInInventory`: panels to the right of survival/creative inventory.
     pub(super) fn draw_inventory_effects(
@@ -629,11 +660,11 @@ impl Game<'_> {
             &self.potions.effects.list,
             self.clock.rate(),
             &|key| self.pack.names.get(key).map(str::to_owned),
-            &|text| self.atlas.font.width(text).ceil() as i32,
+            &|text| self.gui.atlas.font.width(text).ceil() as i32,
         );
         if let Some(lines) = inventory_effects::paint(
             batch,
-            &self.atlas,
+            &self.gui.atlas,
             &panels,
             [self.cursor.0 as i32, self.cursor.1 as i32],
         ) {

@@ -3,7 +3,7 @@
 //! the oracle's canonical form (vanilla ARGB colours and packed light coords).
 #![forbid(unsafe_code)]
 use horizon_client::{
-    assets::Assets,
+    assets::{Assets, RenderAssets},
     biome::{BiomeInfo, Biomes, GrassModifier},
     blocks::BlockFacts,
     chunk::{Chunk, Light, MIN_Y, index},
@@ -48,6 +48,7 @@ fn chunk_index(x: i32, z: i32) -> Result<usize> {
 fn scene(
     row: &Value,
     assets: &Assets,
+    render: &RenderAssets,
     tables: &MeshTables,
     biomes: &mut Biomes,
     pristine: &[BiomeInfo],
@@ -83,7 +84,7 @@ fn scene(
     for block in row["blocks"].as_array().ok_or("missing blocks")? {
         let (x, y, z) = (int(&block[0])?, int(&block[1])?, int(&block[2])?);
         let i = chunk_index(x, z)?;
-        chunks[i].set(x & 15, y, z & 15, u16::try_from(int(&block[3])?)?);
+        chunks[i].set(x & 15, y, z & 15, u32::try_from(int(&block[3])?)?);
     }
     for cell in row["lights"].as_array().ok_or("missing lights")? {
         let (x, y, z) = (int(&cell[0])?, int(&cell[1])?, int(&cell[2])?);
@@ -127,6 +128,7 @@ fn scene(
     let mut mesher = Mesher {
         nether_shading: row["nether"].as_bool().unwrap_or(false),
         assets,
+        render,
         tables,
         biomes: &*biomes,
         visibility: tables.visibility.clone(),
@@ -159,15 +161,8 @@ fn scene(
             let vertices: Vec<Value> = quad
                 .iter()
                 .map(|v| {
-                    json!([
-                        v.pos[0],
-                        v.pos[1],
-                        v.pos[2],
-                        v.uv[0],
-                        v.uv[1],
-                        argb(v.color),
-                        light_coords(v.light)
-                    ])
+                    let ([x, y, z], [u, w]) = (v.pos, v.uv());
+                    json!([x, y, z, u, w, argb(v.color), light_coords(v.light)])
                 })
                 .collect();
             quads.push(json!({"layer": layer, "sprite": sprite, "vertices": vertices}));
@@ -184,11 +179,12 @@ fn main() -> Result<()> {
     }
     let root = PathBuf::from(&args[0]);
     let assets = Assets::load(&root)?;
+    let render = assets.reload(&root)?;
     let facts = BlockFacts::load(&root, assets.registry)?;
     let mut biomes = Biomes::load(&root)?;
     let visibility = models::load_visibility(&root, assets.registry)?;
-    let tables = MeshTables::new(&assets, &facts, visibility)?;
-    let names: BTreeMap<u32, &str> = assets
+    let tables = MeshTables::new(&assets, &render, &facts, visibility)?;
+    let names: BTreeMap<u32, &str> = render
         .sprite_layers
         .iter()
         .map(|(name, layer)| (*layer, name.as_str()))
@@ -222,6 +218,7 @@ fn main() -> Result<()> {
         let result = scene(
             &row,
             &assets,
+            &render,
             &tables,
             &mut biomes,
             &pristine,

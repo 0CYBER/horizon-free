@@ -2,7 +2,7 @@
 use super::{
     biome::BiomeId,
     block_feature::FeatureBlockBindings,
-    generator::{GeneratorData, GeneratorError},
+    generator::{ChunkWork, GeneratorData, GeneratorError},
     structure::{
         StructureResources,
         start::{
@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::{
     collections::{BTreeSet, HashMap},
     sync::{
-        Arc, Condvar, Mutex, OnceLock,
+        Arc, Condvar, Mutex, OnceLock, RwLock,
         atomic::{AtomicUsize, Ordering},
     },
 };
@@ -30,7 +30,8 @@ pub(super) struct StructureState {
     possible_sets: Vec<usize>,
     /// Structure indices of each decoration step, in registry order.
     pub(super) by_step: Vec<Vec<usize>>,
-    starts: Mutex<HashMap<(i32, i32), Starts>>,
+    starts: StartCache,
+    start_work: ChunkWork,
     /// Concentric ring positions, computed on first use and shared with
     /// later generators of the same seed and dimension.
     rings: Arc<OnceLock<Rings>>,
@@ -73,14 +74,14 @@ impl RingWork {
     fn help<'a>(
         &self,
         preferred: impl Fn(usize) -> &'a BTreeSet<BiomeId>,
-        biome: &mut dyn FnMut([i32; 3]) -> BiomeId,
+        biomes: &mut dyn FnMut(&[[i32; 3]]) -> Vec<BiomeId>,
     ) {
         loop {
             let i = self.next.fetch_add(1, Ordering::Relaxed);
             let Some((set, search)) = self.searches.get(i) else {
                 break;
             };
-            let _ = self.found[i].set(search.find(preferred(*set), biome));
+            let _ = self.found[i].set(search.find(preferred(*set), biomes));
             let mut left = self.left.lock().unwrap();
             *left -= 1;
             if *left == 0 {
@@ -108,6 +109,45 @@ impl RingWork {
     }
 }
 const START_CACHE_LIMIT: usize = 65536;
+const START_SHARDS: usize = 64;
+
+/// The built starts by chunk, in shards: a lookup locks one shard for
+/// reading. Each generated chunk reads the 289 start chunks around it
+/// (`references`) and the server thread reads the starts of the chunks its
+/// mobs and players are in; with one lock for all, the server thread waited
+/// on the workers.
+struct StartCache {
+    shards: Box<[RwLock<HashMap<(i32, i32), Starts>>]>,
+}
+impl StartCache {
+    fn new() -> Self {
+        Self {
+            shards: (0..START_SHARDS).map(|_| RwLock::default()).collect(),
+        }
+    }
+    fn shard(&self, key: (i32, i32)) -> &RwLock<HashMap<(i32, i32), Starts>> {
+        let hash =
+            (key.0 as u32).wrapping_mul(0x9E37_79B9) ^ (key.1 as u32).wrapping_mul(0x85EB_CA6B);
+        &self.shards[(hash >> (32 - START_SHARDS.trailing_zeros())) as usize]
+    }
+    fn get(&self, key: (i32, i32)) -> Option<Starts> {
+        self.shard(key).read().unwrap().get(&key).cloned()
+    }
+    /// Keeps `starts` unless another thread built the same chunk's first:
+    /// everyone keeps the first, so placement state on its pieces is shared.
+    fn insert_first(&self, key: (i32, i32), starts: Starts) -> Starts {
+        let mut shard = self.shard(key).write().unwrap();
+        if shard.len() >= START_CACHE_LIMIT / START_SHARDS {
+            shard.clear();
+        }
+        shard.entry(key).or_insert(starts).clone()
+    }
+    fn clear(&self) {
+        for shard in &self.shards {
+            shard.write().unwrap().clear();
+        }
+    }
+}
 
 fn biome_set(data: &GeneratorData, value: &Value) -> Result<BTreeSet<BiomeId>, super::DecodeError> {
     let names: Vec<&str> = match value {
@@ -156,18 +196,27 @@ impl StructureState {
         for (i, def) in registry.structures.iter().enumerate() {
             by_step[def.step].push(i);
         }
-        let bindings = FeatureBlockBindings::with_tags(
+        let mut bindings = FeatureBlockBindings::with_tags(
             data.registry(),
             data.integers().clone(),
             &data.block_tags,
         )?;
+        // Processors that test what a block is made of read canOcclude.
+        if let Some(blocks) = data
+            .feature_resources
+            .as_ref()
+            .and_then(|r| r.blocks.as_ref())
+        {
+            bindings = bindings.with_block_properties(&blocks.properties)?;
+        }
         Ok(Some(Self {
             registry,
             resources: resources.clone(),
             bindings,
             possible_sets,
             by_step,
-            starts: Mutex::new(HashMap::new()),
+            starts: StartCache::new(),
+            start_work: ChunkWork::new(),
             rings,
             ring_work: OnceLock::new(),
         }))
@@ -190,8 +239,8 @@ impl StructureState {
             )
         });
         let registry = &self.registry;
-        work.help(|set| registry.ring_biomes(set), &mut |q| {
-            context.noise_biome(q)
+        work.help(|set| registry.ring_biomes(set), &mut |quarts| {
+            context.noise_biomes(quarts)
         });
         self.rings
             .get_or_init(|| work.rings(|set| registry.sets[set].name.clone()))
@@ -199,7 +248,9 @@ impl StructureState {
     /// Drop the cached starts, so that later chunks build fresh pieces (the
     /// pieces keep per-start placement state such as a shipwreck's height).
     pub(super) fn forget_starts(&self) {
-        self.starts.lock().unwrap().clear();
+        // As before, a build already in flight can publish after this clear.
+        // Do not wait for work locks or retain initialized entries here.
+        self.starts.clear();
     }
     /// The (cached) structure starts owned by a chunk.
     pub(super) fn starts_at(
@@ -207,10 +258,17 @@ impl StructureState {
         context: &mut impl super::structure::start::StartContext,
         chunk: ChunkPos,
     ) -> Starts {
-        if let Some(found) = self.starts.lock().unwrap().get(&(chunk.x, chunk.z)) {
-            return found.clone();
+        if let Some(found) = self.starts.get((chunk.x, chunk.z)) {
+            return found;
         }
+        // Ring searches enlist other workers and wait for them: never hold a
+        // chunk-work lock while helping, even when this chunk has no starts.
         let rings = self.rings(context);
+        let work = self.start_work.at((chunk.x, chunk.z));
+        let _work = work.lock().unwrap();
+        if let Some(found) = self.starts.get((chunk.x, chunk.z)) {
+            return found;
+        }
         let starts: Starts = Arc::new(
             create_starts(
                 &self.registry,
@@ -225,12 +283,7 @@ impl StructureState {
             .map(Arc::new)
             .collect(),
         );
-        let mut cache = self.starts.lock().unwrap();
-        if cache.len() >= START_CACHE_LIMIT {
-            cache.clear();
-        }
-        cache.insert((chunk.x, chunk.z), starts.clone());
-        starts
+        self.starts.insert_first((chunk.x, chunk.z), starts)
     }
     /// ChunkGenerator.findNearestMapStructure: the nearest start of one of
     /// `names` from block `from` (rings: every ring chunk; random spreads:
@@ -384,13 +437,51 @@ mod tests {
     use super::*;
     use crate::worldgen::structure::stronghold::{ring_positions, ring_searches};
 
+    /// The start cache keeps the first starts built for a chunk, spreads a
+    /// chunk's 289 reference lookups over the shards, and forgets on clear.
+    #[test]
+    fn start_cache_keeps_first_and_spreads_neighbours() {
+        let cache = StartCache::new();
+        let first: Starts = Arc::new(Vec::new());
+        let second: Starts = Arc::new(Vec::new());
+        assert!(cache.get((3, -4)).is_none());
+        assert!(Arc::ptr_eq(
+            &cache.insert_first((3, -4), first.clone()),
+            &first
+        ));
+        assert!(Arc::ptr_eq(&cache.insert_first((3, -4), second), &first));
+        assert!(Arc::ptr_eq(&cache.get((3, -4)).unwrap(), &first));
+        for (cx, cz) in [(0, 0), (-1000, 77), (i32::MAX - 8, i32::MIN + 8)] {
+            let mut used = vec![0; START_SHARDS];
+            for x in cx - 8..=cx + 8 {
+                for z in cz - 8..=cz + 8 {
+                    let shard = cache.shard((x, z)) as *const _;
+                    let i = cache
+                        .shards
+                        .iter()
+                        .position(|s| std::ptr::eq(s, shard))
+                        .unwrap();
+                    used[i] += 1;
+                }
+            }
+            assert!(used.iter().all(|&n| n > 0 && n < 20), "{used:?}");
+        }
+        cache.clear();
+        assert!(cache.get((3, -4)).is_none());
+    }
+
     /// Searches shared between threads give the positions of one thread
     /// running them in order, set by set.
     #[test]
     fn ring_work_shared_between_threads_matches_serial_search() {
         let preferred: BTreeSet<BiomeId> = (0..20).map(|b| BiomeId(b * 3)).collect();
-        let biome = |q: [i32; 3]| {
-            BiomeId((q[0].wrapping_mul(31) ^ q[2].wrapping_mul(17)).rem_euclid(64) as u32)
+        let biomes = |quarts: &[[i32; 3]]| -> Vec<BiomeId> {
+            quarts
+                .iter()
+                .map(|q| {
+                    BiomeId((q[0].wrapping_mul(31) ^ q[2].wrapping_mul(17)).rem_euclid(64) as u32)
+                })
+                .collect()
         };
         let none = BTreeSet::new();
         for seed in [0, 1234, -77, i64::MAX] {
@@ -402,12 +493,12 @@ mod tests {
             let sets = [&preferred, &none, &preferred];
             std::thread::scope(|scope| {
                 for _ in 0..4 {
-                    scope.spawn(|| work.help(|set| sets[set], &mut { biome }));
+                    scope.spawn(|| work.help(|set| sets[set], &mut { biomes }));
                 }
             });
             let rings = work.rings(|set| format!("set{set}"));
             let serial = |s: i64, distance, spread, count, preferred| {
-                ring_positions(s, distance, spread, count, preferred, &mut { biome })
+                ring_positions(s, distance, spread, count, preferred, &mut { biomes })
             };
             assert_eq!(rings["set0"], serial(seed, 32, 3, 128, &preferred));
             assert_eq!(rings["set1"], Vec::new());

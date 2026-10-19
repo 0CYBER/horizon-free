@@ -113,6 +113,8 @@ public final class VanillaProtocolClient {
     private ProtocolInfo<?> inbound;
     private ProtocolInfo<?> outbound;
     private String state;
+    /** With a fifth argument {@code entities}: the entity transcript mode (EntityTranscript). */
+    private EntityTranscript entities;
 
     public static void main(String[] args) throws Exception {
         ParityData.init();
@@ -121,6 +123,7 @@ public final class VanillaProtocolClient {
         String name = args[2];
         Path output = Path.of(args[3]);
         VanillaProtocolClient client = new VanillaProtocolClient();
+        if (args.length > 4 && args[4].equals("entities")) client.entities = new EntityTranscript();
         try {
             client.status(host, port);
             client.join(host, port, name);
@@ -405,6 +408,18 @@ public final class VanillaProtocolClient {
         play();
     }
 
+    /** The entity mode's step, and how long it records the entities for (ms). */
+    private static final int ENTITIES = 1000;
+    private static final long ENTITY_WAIT = 20_000;
+
+    static int moveEntityId(net.minecraft.network.protocol.game.ClientboundMoveEntityPacket p) {
+        return (int) field(p, net.minecraft.network.protocol.game.ClientboundMoveEntityPacket.class, "entityId");
+    }
+
+    static int rotateHeadId(net.minecraft.network.protocol.game.ClientboundRotateHeadPacket p) {
+        return (int) field(p, p.getClass(), "entityId");
+    }
+
     private static final String[] REPLIES = {"random value 7..7", "random value x", "trigger nope"};
 
     private void play() throws Exception {
@@ -447,9 +462,19 @@ public final class VanillaProtocolClient {
         net.minecraft.core.BlockPos furnace = null;
         int furnaceWindow = -1;
         int furnaceState = 0;
+        // Snowballs the server spawned since the last right click.
+        int snowballs = 0;
+        // The player's own id, and what the ender pearl it throws does to it.
+        int playerId = -1;
+        boolean pearl = false;
+        int pearlTeleports = 0;
+        float pearlHealth = -1;
         // The villager the server's console summoned beside the spawn.
         int villager = -1;
         net.minecraft.world.phys.Vec3 villagerAt = null;
+        // When the dead player sent a command (ServerGamePacketListenerImpl.handleChatCommand runs it
+        // whether the player is alive or not); it respawns once the reply came, or 3 s later.
+        long deadCommandAt = 0;
         while (System.currentTimeMillis() < deadline) {
             Received r;
             try {
@@ -461,6 +486,7 @@ public final class VanillaProtocolClient {
             if (r != null) {
                 Packet<?> packet = r.packet;
                 counts.merge(r.type, 1, Integer::sum);
+                if (entities != null && !entities.acceptSelf(packet) && step >= ENTITIES) entities.accept(packet);
                 if (r.type.equals("minecraft:chunk_batch_start")) ordered = false;
                 if (respawning && !respawned) {
                     String line = respawnLine(r);
@@ -478,13 +504,20 @@ public final class VanillaProtocolClient {
                         loadStart = true;
                     }
                 }
+                if (packet instanceof net.minecraft.network.protocol.game.ClientboundLoginPacket p) playerId = p.playerId();
+                // The first health after the pearl: the hurt (regeneration follows each server's ticks).
+                if (pearl && pearlHealth < 0 && packet instanceof net.minecraft.network.protocol.game.ClientboundSetHealthPacket p) {
+                    pearlHealth = p.getHealth();
+                }
                 if (packet instanceof ClientboundKeepAlivePacket p) {
                     send(new ServerboundKeepAlivePacket(p.getId()));
                 } else if (packet instanceof ClientboundPingPacket p) {
                     send(new ServerboundPongPacket(p.getId()));
                 } else if (packet instanceof ClientboundPlayerPositionPacket p) {
                     position = PositionMoveRotation.calculateAbsolute(position, p.change(), p.relatives());
-                    record("play-move", text(position.position()) + " " + position.yRot() + " " + position.xRot());
+                    // Where a pearl lands follows its random inaccuracy: only counted.
+                    if (pearl) pearlTeleports++;
+                    else record("play-move", text(position.position()) + " " + position.yRot() + " " + position.xRot());
                     if (respawning) respawnAt = position;
                     send(new ServerboundAcceptTeleportationPacket(p.id(), position.position().x, position.position().y, position.position().z,
                         position.yRot(), position.xRot()));
@@ -527,9 +560,12 @@ public final class VanillaProtocolClient {
                 } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundPlayerCombatKillPacket p && step > 0) {
                     // The death message is left out: guests' death messages aren't Horizon's yet.
                     record("play-death", "death screen");
-                    send(new net.minecraft.network.protocol.game.ServerboundClientCommandPacket(
-                        net.minecraft.network.protocol.game.ServerboundClientCommandPacket.Action.PERFORM_RESPAWN));
-                    respawning = true;
+                    send(new ServerboundChatCommandPacket("trigger nope"));
+                    deadCommandAt = now;
+                } else if (packet instanceof ClientboundSystemChatPacket p && deadCommandAt > 0 && !respawning
+                    && json(p.content()).contains("nope")) {
+                    record("play-death", "command reply " + json(p.content()));
+                    respawning = respawn();
                 } else if (packet instanceof ClientboundSystemChatPacket p && step > 0 && step < 5 + REPLIES.length) {
                     record("play-chat", "system " + p.overlay() + " " + json(p.content()));
                 } else if (packet instanceof ClientboundPlayerChatPacket p && step > 0 && step < 5 + REPLIES.length) {
@@ -539,6 +575,11 @@ public final class VanillaProtocolClient {
                         + p.chatType().targetName().map(VanillaProtocolClient::json));
                 } else if (packet instanceof ClientboundDisguisedChatPacket p && step > 0 && step < 5 + REPLIES.length) {
                     record("play-chat", "disguised " + json(p.message()) + " " + p.chatType().chatType().getRegisteredName());
+                } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundAddEntityPacket p
+                    && p.getType() == net.minecraft.world.entity.EntityTypes.SNOWBALL) {
+                    snowballs++;
+                    // Projectile.getAddEntityPacket: its owner's id.
+                    record("play-use", "snowball owner is the player: " + (p.getData() == playerId));
                 } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundAddEntityPacket p
                     && p.getType() == net.minecraft.world.entity.EntityTypes.VILLAGER) {
                     villager = p.getId();
@@ -581,8 +622,20 @@ public final class VanillaProtocolClient {
                     commandTree(p);
                 }
             }
+            if (entities != null && loaded && lastChunk > 0 && now - lastChunk > 3000 && step == 0) {
+                // Entity mode: the harness's console summons the scene once it reads this
+                // line; everything tracked from then on is recorded until the client leaves.
+                record("play-chunks", String.valueOf(chunks.size()));
+                send(new ServerboundChatPacket("summon the entities", Instant.now(), 0L, Optional.empty(),
+                    new LastSeenMessages.Update(0, new BitSet(), (byte) 0)));
+                step = ENTITIES;
+                stepAt = now;
+            } else if (step == ENTITIES && now - stepAt > ENTITY_WAIT) {
+                for (String line : entities.lines()) record("play-entities", line);
+                return;
+            }
             // Once the chunks stop coming: chat, then /list, then leave.
-            if (loaded && lastChunk > 0 && now - lastChunk > 3000 && step == 0) {
+            if (entities == null && loaded && lastChunk > 0 && now - lastChunk > 3000 && step == 0) {
                 record("play-chunks", chunks.size() + " " + chunks);
                 BLOCK_ENTITIES.forEach((k, v) -> record("play-block-entities", k + " " + v));
                 // Which light layers exist depends on the neighbouring
@@ -632,6 +685,9 @@ public final class VanillaProtocolClient {
                     new LastSeenMessages.Update(0, new BitSet(), (byte) 0)));
                 step++;
                 stepAt = now;
+            } else if (deadCommandAt > 0 && !respawning && now - deadCommandAt > 3000) {
+                record("play-death", "no command reply");
+                respawning = respawn();
             } else if (step == 6 + REPLIES.length && loadStart && respawnChunk) {
                 // LevelLoadTracker is done: the vanilla client leaves the loading screen.
                 if (runType != null) record("play-respawn", runLine(runType, run));
@@ -643,6 +699,11 @@ public final class VanillaProtocolClient {
                     + " minecraft:furnace"));
                 send(new ServerboundChatCommandPacket("give @s minecraft:raw_iron"));
                 send(new ServerboundChatCommandPacket("give @s minecraft:coal"));
+                // A score on @s is the player's own (its feedback reaches the console: broadcast);
+                // a query's reply doesn't.
+                send(new ServerboundChatCommandPacket("scoreboard objectives add parity dummy"));
+                send(new ServerboundChatCommandPacket("scoreboard players set @s parity 3"));
+                send(new ServerboundChatCommandPacket("scoreboard players get @s parity"));
                 step++;
                 stepAt = now;
             } else if (step == 7 + REPLIES.length && now - stepAt > 1500) {
@@ -667,6 +728,52 @@ public final class VanillaProtocolClient {
             } else if (step == 11 + REPLIES.length && now - stepAt > 1500) {
                 send(new net.minecraft.network.protocol.game.ServerboundContainerClosePacket(furnaceWindow));
                 record("play-furnace", "closed");
+                step++;
+                stepAt = now;
+            } else if (step == 12 + REPLIES.length && now - stepAt > 1500) {
+                // Once the furnace is closed on the server too: the slot change isn't the furnace menu's.
+                send(new ServerboundChatCommandPacket("item replace entity @s weapon.mainhand with minecraft:snowball 16"));
+                step++;
+                stepAt = now;
+            } else if (step == 13 + REPLIES.length && now - stepAt > 1500) {
+                // A right click on the ground with a snowball, as the 26.3 client sends it
+                // (Minecraft.startUseItem): the block's part, which passes, then the item's.
+                useOn(respawnAt, net.minecraft.world.InteractionHand.MAIN_HAND, 2);
+                use(position, net.minecraft.world.InteractionHand.MAIN_HAND, 3);
+                snowballs = 0;
+                step++;
+                stepAt = now;
+            } else if (step == 14 + REPLIES.length && now - stepAt > 2000) {
+                record("play-use", "main hand on a block: " + snowballs + " snowball(s)");
+                send(new ServerboundChatCommandPacket("item replace entity @s weapon.mainhand with minecraft:air"));
+                send(new ServerboundChatCommandPacket("item replace entity @s weapon.offhand with minecraft:snowball 16"));
+                step++;
+                stepAt = now;
+            } else if (step == 15 + REPLIES.length && now - stepAt > 1500) {
+                // An empty main hand: its block part only (no item to use), then the off hand's two.
+                useOn(respawnAt, net.minecraft.world.InteractionHand.MAIN_HAND, 4);
+                useOn(respawnAt, net.minecraft.world.InteractionHand.OFF_HAND, 5);
+                use(position, net.minecraft.world.InteractionHand.OFF_HAND, 6);
+                snowballs = 0;
+                step++;
+                stepAt = now;
+            } else if (step == 16 + REPLIES.length && now - stepAt > 2000) {
+                record("play-use", "off hand on a block: " + snowballs + " snowball(s)");
+                // An ender pearl thrown at its feet (no endermite: ThrownEnderpearl spawns one 5% of the time).
+                send(new ServerboundChatCommandPacket("gamerule spawn_monsters false"));
+                send(new ServerboundChatCommandPacket("item replace entity @s weapon.offhand with minecraft:air"));
+                send(new ServerboundChatCommandPacket("item replace entity @s weapon.mainhand with minecraft:ender_pearl"));
+                step++;
+                stepAt = now;
+            } else if (step == 17 + REPLIES.length && now - stepAt > 1500) {
+                pearl = true;
+                send(new net.minecraft.network.protocol.game.ServerboundUseItemPacket(net.minecraft.world.InteractionHand.MAIN_HAND, 7,
+                    position.yRot(), 90.0F));
+                step++;
+                stepAt = now;
+            } else if (step == 18 + REPLIES.length && now - stepAt > 2500) {
+                // ThrownEnderpearl.onHit: the thrower is teleported and takes 5 damage.
+                record("play-pearl", "teleported " + pearlTeleports + " time(s), health " + pearlHealth);
                 return;
             }
         }
@@ -677,12 +784,32 @@ public final class VanillaProtocolClient {
         record("error", "timed out in play, step " + step + ", chunks " + chunks.size());
     }
 
+    /** The death screen's Respawn button: true, the respawn being under way. */
+    private boolean respawn() throws Exception {
+        send(new net.minecraft.network.protocol.game.ServerboundClientCommandPacket(
+            net.minecraft.network.protocol.game.ServerboundClientCommandPacket.Action.PERFORM_RESPAWN));
+        return true;
+    }
+
     /**
      * A run of the same packet: counted, but for the entities removed with the dead player
      * (which mobs are tracked near the spawn at that moment varies).
      */
     private static String runLine(String type, int run) {
         return type + (run > 1 && !type.equals("minecraft:remove_entities") ? " x" + run : "");
+    }
+
+    /** ServerboundUseItemOnPacket on the top of the block under the player. */
+    private void useOn(PositionMoveRotation at, net.minecraft.world.InteractionHand hand, int sequence) throws Exception {
+        net.minecraft.core.BlockPos ground = net.minecraft.core.BlockPos.containing(at.position()).below();
+        send(new net.minecraft.network.protocol.game.ServerboundUseItemOnPacket(hand,
+            new net.minecraft.world.phys.BlockHitResult(net.minecraft.world.phys.Vec3.atCenterOf(ground).add(0.0, 0.5, 0.0),
+                net.minecraft.core.Direction.UP, ground, false), sequence));
+    }
+
+    /** ServerboundUseItemPacket, looking where the player looks. */
+    private void use(PositionMoveRotation at, net.minecraft.world.InteractionHand hand, int sequence) throws Exception {
+        send(new net.minecraft.network.protocol.game.ServerboundUseItemPacket(hand, sequence, at.yRot(), at.xRot()));
     }
 
     /**
@@ -905,8 +1032,12 @@ public final class VanillaProtocolClient {
     }
 
     private static Object field(Object owner, String name) {
+        return field(owner, owner.getClass(), name);
+    }
+
+    private static Object field(Object owner, Class<?> declaring, String name) {
         try {
-            var f = owner.getClass().getDeclaredField(name);
+            var f = declaring.getDeclaredField(name);
             f.setAccessible(true);
             return f.get(owner);
         } catch (ReflectiveOperationException e) {

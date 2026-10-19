@@ -201,7 +201,7 @@ impl Game<'_> {
             )
         };
         let p = self.player.as_ref()?;
-        let sleeping = self.sleeping.map(|(head, _)| {
+        let sleeping = self.sleeping.map(|head| {
             let state = self.world.block(head[0], head[1], head[2]);
             let props = self
                 .pack
@@ -266,7 +266,7 @@ impl Game<'_> {
                 binding: self.collision,
                 subject: None,
             },
-            facts: &self.res.facts,
+            facts: self.res.facts(),
             context,
         };
         view.align_with_entity(&entity, partial, kind, |from, to| {
@@ -296,7 +296,7 @@ impl Game<'_> {
             return;
         };
         if self.player_model.is_none() {
-            let Some(kind) = self.res.player_type.clone() else {
+            let Some(kind) = self.res.player_type().clone() else {
                 return;
             };
             self.player_model = Some(Mob::new(0, kind, p.position, self.yaw));
@@ -305,6 +305,13 @@ impl Game<'_> {
         let (position, flying) = (p.position, p.flying || p.fall_flying);
         let (fall_flying, fly_ticks, velocity) = (p.fall_flying, p.fall_fly_ticks, p.velocity);
         let using = self.using.map(|(_, ticks)| ticks as i32 + 1).unwrap_or(0);
+        let using_off_hand = self
+            .using
+            .is_some_and(|(slot, _)| slot == super::shield::OFFHAND_SLOT);
+        let blocking = self
+            .using
+            .and_then(|(slot, _)| self.stack_in(slot))
+            .is_some_and(|stack| self.blocks_attacks(stack).is_some());
         let charged = self.inventory[self.selected]
             .as_ref()
             .is_some_and(|s| s.data().is_some_and(|d| !d.charged.is_empty()));
@@ -313,13 +320,22 @@ impl Game<'_> {
             .map_or(25, |s| Self::charge_ticks(s).max(1)) as i32;
         let attack = (self.swing.old_animation, self.swing.animation);
         let swinging = self.swing.swinging();
+        // currentSwing.hand().asArm(mainArm).
+        let swing_right_arm = swinging.then(|| {
+            (self.swing.attack_hand() == horizon_client::first_person::Hand::Main)
+                != self.settings.main_hand_left
+        });
+        // LivingEntity.isVisuallySwimming and Entity.isInWater.
+        let visually_swimming =
+            p.pose == Pose::Swimming || (!p.fall_flying && p.pose == Pose::FallFlying);
+        let in_water = p.fluids.was_touching_water;
         let (yaw, pitch) = (self.yaw, self.pitch);
         let main = self.inventory[self.selected]
             .as_ref()
             .map(|s| s.item.clone());
         let off = self.offhand.as_ref().map(|s| s.item.clone());
         let riding = self.riding.is_some();
-        let hurt = p.health.hurt.hurt_time;
+        let hurt = p.health.hurt_animation_time;
         let Some(m) = self.player_model.as_mut() else {
             return;
         };
@@ -375,9 +391,13 @@ impl Game<'_> {
         m.extra.fall_fly_ticks = fly_ticks;
         m.extra.main_hand_left = self.settings.main_hand_left;
         m.extra.using_item = using;
+        m.extra.using_off_hand = using_off_hand;
+        m.extra.blocking = blocking;
         m.extra.charged = charged;
         m.extra.ints[5] = charge_duration;
         m.extra.elytra.tick(fall_flying, crouching, velocity);
+        m.extra.swim.tick(visually_swimming, in_water);
+        m.extra.swing_right_arm = swing_right_arm;
         m.hurt_time = hurt;
     }
     /// Whether the player's own model shows in the world view.
@@ -410,7 +430,7 @@ impl Game<'_> {
             m.position.z.floor() as i32,
         );
         let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         horizon_client::mobs::render::render_with(
             m,
@@ -418,7 +438,7 @@ impl Game<'_> {
             camera,
             &lookup,
             packed,
-            &self.res.mob_data,
+            self.res.mob_data(),
             &self.player_armor_layers(),
             out,
         );
@@ -464,7 +484,7 @@ impl Game<'_> {
         m.position.y += 0.125 * f64::from(u8::from(m.extra.crouching));
         m.previous = m.position;
         let camera = glam::DVec3::new(m.position.x, m.position.y, m.position.z);
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
         let mut verts = Vec::new();
         horizon_client::mobs::render::render_with(
@@ -473,7 +493,7 @@ impl Game<'_> {
             camera,
             &lookup,
             240 | 240 << 8,
-            &self.res.mob_data,
+            self.res.mob_data(),
             &self.player_armor_layers(),
             &mut verts,
         );
@@ -526,7 +546,7 @@ impl Game<'_> {
     ) {
         let Some(asset) = self.armor[1]
             .as_ref()
-            .and_then(|s| self.res.items.get(&s.item))
+            .and_then(|s| self.res.items().get(&s.item))
             .and_then(|i| i.equip_asset.as_ref())
         else {
             return;
@@ -535,9 +555,10 @@ impl Game<'_> {
         let Some((texture, _)) = assets.equipment.get(asset).and_then(|k| k.get("wings")) else {
             return;
         };
-        let (Some(model), Some(rect)) =
-            (assets.player.get("elytra"), self.atlas.sprites.get(texture))
-        else {
+        let (Some(model), Some(rect)) = (
+            assets.player.get("elytra"),
+            self.gui.atlas.sprites.get(texture),
+        ) else {
             return;
         };
         let base = horizon_client::mobs::render::base_transform(m, partial, camera)

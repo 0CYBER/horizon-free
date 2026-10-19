@@ -87,6 +87,7 @@ function renderStatus(status) {
   const parts = [`up ${duration(status.engine_uptime_seconds)}`, `horizon-server ${status.version}`];
   if (status.crashes) parts.push(`${status.crashes} crash${status.crashes > 1 ? "es" : ""}`);
   $("summary").textContent = parts.join(" · ");
+  renderUpdate(status.update);
 
   const players = (game && game.players) || [];
   $("player-count").textContent = game ? `${players.length} of ${game.max_players}` : "";
@@ -106,6 +107,20 @@ function renderStatus(status) {
       return tr;
     }),
   );
+}
+
+// Updates (horizon-server update): a newer release, one under way, or how the last one ended.
+function renderUpdate(update) {
+  const box = $("update");
+  const offer = update && !update.busy && update.available;
+  let text = "";
+  if (update && update.busy) text = `Updating: ${update.busy}…`;
+  else if (offer) text = `Horizon ${update.available} is out (this server runs ${update.installed}).`;
+  else if (update && update.last && !update.ok) text = update.last;
+  box.hidden = !text;
+  box.className = update && update.last && !update.ok && !update.busy && !offer ? "notice failed" : "notice";
+  $("update-text").textContent = text;
+  $("update-button").hidden = !offer;
 }
 
 function renderBackups(list) {
@@ -254,6 +269,12 @@ function setUp() {
     } catch (e) {
       toast(e.message);
     }
+  });
+  $("update-button").addEventListener("click", async () => {
+    const update = lastStatus && lastStatus.update;
+    if (!update || !update.available) return;
+    if (!confirm(`Update to ${update.available}? The world is backed up, then the game restarts on it (players are disconnected for a moment). If it doesn't come up, the server goes back to ${update.installed} by itself.`)) return;
+    await api("POST", "/api/v1/update", {}).then(() => toast("Updating…"), (e) => toast(e.message));
   });
   $("restart").addEventListener("click", async () => {
     if (!confirm("Restart the game? Players are disconnected for a moment.")) return;

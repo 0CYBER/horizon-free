@@ -4,7 +4,7 @@
 
 In the Horizon menu style, the Options screen's **Video** section holds the graphics settings, with a Simple / Advanced switch at the top (remembered between sessions):
 
-- **Simple**: a preset (Performance, Balanced, Quality, Ultra or Custom), render distance, FOV, max framerate, VSync and GUI scale.
+- **Simple**: a preset (Performance, Balanced, Quality, Ultra or Custom), render distance, LOD distance, FOV, max framerate, VSync and GUI scale.
 - **Advanced**: every setting, grouped under Rendering, Quality, Display, Preferences, Performance and Overlay.
 
 In the Classic style, Video Settings starts with two buttons opening the same settings as vanilla-looking screens.
@@ -17,7 +17,7 @@ Every row has a one-line description and its cost in frame time (none, low, medi
 | Group | Setting | Stored in |
 | --- | --- | --- |
 | Rendering | render distance, simulation distance, entity distance | `options.txt` (vanilla keys) |
-| | cave culling, chunk updates per frame | `horizon-graphics.txt` |
+| | LOD distance, cave culling, chunk updates per frame | `horizon-graphics.txt` |
 | Quality | smooth lighting, mipmap levels, biome blend, clouds, cloud distance, weather radius, particles, entity shadows, cutout leaves | `options.txt` |
 | | sky, fog, weather, animated textures | `horizon-graphics.txt` |
 | Display | FOV, max framerate, VSync, fullscreen, GUI scale | `options.txt` |
@@ -25,13 +25,31 @@ Every row has a one-line description and its cost in frame time (none, low, medi
 | Performance | battery mode, worker threads, upload budget per frame | `horizon-graphics.txt` |
 | Overlay | performance overlay: FPS, frame/CPU/GPU times, frame-time graph | `horizon-graphics.txt` |
 
-`options.txt` keeps exactly vanilla's keys and values, so the options harness still compares it with vanilla; Horizon's settings live in `horizon-graphics.txt` beside it. Their defaults render as vanilla does: cave culling on, no upload budgets, sky, fog and weather on, 100% resolution, no FXAA, the present mode following VSync. Frame pacing defaults to Efficient: the limiter sleeps through the last half millisecond where vanilla spins, which changes timing, not pixels.
+`options.txt` keeps exactly vanilla's keys and values, so the options harness still compares it with vanilla; Horizon's settings live in `horizon-graphics.txt` beside it. Their defaults render as vanilla does: cave culling on, no upload budgets, sky, fog and weather on, 100% resolution, no FXAA, the present mode following VSync. VSync on always waits for the display (Fifo), in a window and in fullscreen, as in vanilla; the present mode setting chooses how frames are shown only while VSync is off. Frame pacing defaults to Efficient: the limiter sleeps through the last half millisecond where vanilla spins, which changes timing, not pixels.
 
 **Battery mode** (Performance, off by default) is for laptops and handhelds: at most 60 frames per second in a world, 30 in menus without a world or while another window has focus, and half the automatic worker threads (chunks load slower). It changes only when frames are drawn: what they show and the game's 20 ticks per second stay as they are.
 
 Which settings each level shows, their descriptions and costs are in `crates/horizon-client/src/graphics_ui.rs` (`rows`); the Horizon shell draws them in `options_horizon.rs` with `ui_theme::described_row`, and the Classic screens use `graphics_style.rs`.
 
-Not implemented: distant-terrain LOD, anisotropic filtering (wgpu needs linear magnification for it, which blurs close blocks), MSAA (FXAA instead) and exclusive fullscreen (fullscreen is borderless).
+## Distant terrain
+
+**LOD Distance** is off by default. Enable it in Simple or Advanced graphics settings and choose 64, 128, 256, 512 or 1024 chunks. With LODs enabled, **Full Detail Distance** controls the nearby normal chunks; LOD Distance controls the outer view. Keep the nearby range modest, for example 12 chunks with a 256-chunk LOD distance. Increasing the distant range does not increase simulation distance.
+
+Distant terrain uses progressively coarser voxel columns. Columns retain separate material layers and air gaps; matching exposed faces are merged, with block-scale texture repeats. Complete chunk data is reduced once on the terrain worker and cached at each supported scale, across each cell’s area instead of enlarging its corner column. Material votes combine different light levels of the same block; reduced cells retain the brightest sampled sky and block light separately. Finer tiles replace only their own footprints in a loading fallback, and a movement margin limits rapid resolution changes at tile boundaries. Local Overworld, Nether and End worlds and a LAN world you host can supply their generator. Remote servers do not supply the client's world-generation seed or generator configuration.
+
+Unknown areas are sampled directly from the dimension's seed-bound density and surface rules, with shared per-tile scratch and material evaluation. A small pool samples tiles independently of meshing. Refinement prioritizes visible screen error; high aerial views use the distance to the world height range to avoid unnecessary close detail below the camera. Initial vegetation uses the world's configured tree types, placement densities and biome assignments at every distance level. Tree positions, shapes and large-cell coverage are visual approximations, not a replay of native feature placement.
+
+A separate bounded worker refines the nearest LOD levels with disposable ordinary chunk generation, including supported carvers, structures and decoration. Groups of 4×4 chunks share their generation halos, and each chunk is published once every neighbouring feature center has completed. Farther tiles use direct sampling rather than waiting for every intervening ordinary chunk. Saved and visited blocks take precedence over both paths. These temporary chunks never enter gameplay, simulation or normal save queues. Generated-column caches and request queues are bounded; far data is regenerated after reopening a world.
+
+Coverage and detail improve progressively; a large selected radius does not mean all its target detail is already resident. The control status reports target and sampled target tile counts separately. Direct far sampling approximates vertical noise interpolation, fluid boundaries and lighting; surface slopes and column extensions, small features and partial block shapes can differ. Unexplored distant structures are not synthesized by the direct path, and native decoration order can differ from subsequent gameplay generation. Horizon-supported data-driven noise and tree configurations can be reused; this does not execute arbitrary Fabric/NeoForge worldgen or structure mods.
+
+Ordinary Overworld atmospheric fog extends with the selected LOD distance. Fog Off disables distance haze at large ranges too; fluid, darkness and boss fog retain their limits.
+
+LOD terrain enters the existing world colour and depth passes, so supported shader-pack postprocessing can see it. This does not add Iris material passes or shadow maps: Java packs still have the [existing fullscreen-pass limitations](shader-packs.md). Shader appearance and transitions need testing with the selected pack.
+
+The setting is stored as `lodDistance` in `horizon-graphics.txt`; `0` disables it. Existing `renderDistance` in `options.txt` keeps its normal meaning for full chunks.
+
+Not implemented: anisotropic filtering (wgpu needs linear magnification for it, which blurs close blocks), MSAA (FXAA instead) and exclusive fullscreen (fullscreen is borderless).
 
 ## Benchmark
 

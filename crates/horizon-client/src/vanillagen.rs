@@ -4,7 +4,7 @@ use crate::{
     biome::Biomes,
     chunk::{BIOME_STRATEGY, Chunk, HEIGHT, MIN_Y, SECTIONS, Section},
     save::SavedProto,
-    streaming::{ChunkGenerator, Proto},
+    streaming::{ChunkGenerator, LodSampler, Proto},
 };
 use horizon_core::{
     paletted::PalettedContainer,
@@ -16,11 +16,15 @@ use horizon_world::{
     nbt::Tag,
     registry::BlockRegistry,
     worldgen::{
-        generator::{GeneratorData, GeneratorWorker, OverworldGenerator, ProtoChunk},
+        generator::{
+            GeneratorData, GeneratorWorker, OverworldGenerator, ProtoChunk, SurfaceSample,
+        },
         terrain::PreLightChunkStage,
     },
 };
 use std::{path::Path, sync::Arc};
+mod lod;
+use lod::VanillaLodSampler;
 
 pub struct VanillaTerrain {
     generator: OverworldGenerator,
@@ -35,6 +39,8 @@ pub struct VanillaTerrain {
     tick_blocks: Vec<u32>,
     /// Block index -> default state id: `tick_blocks` the other way.
     tick_states: Vec<u32>,
+    seed: i64,
+    dimension: String,
 }
 /// A proto chunk, or the position of one whose generation failed.
 enum VanillaProto {
@@ -42,6 +48,18 @@ enum VanillaProto {
     Failed(i32, i32),
 }
 impl VanillaTerrain {
+    fn client_surface(&self, surface: SurfaceSample) -> crate::lod::Surface {
+        crate::lod::Surface {
+            height: surface.height,
+            state: surface.state,
+            water: surface.water,
+            biome: self
+                .biome_map
+                .get(surface.biome.0 as usize)
+                .copied()
+                .unwrap_or(0),
+        }
+    }
     pub fn new(
         dir: &Path,
         registry: &'static BlockRegistry,
@@ -57,6 +75,19 @@ impl VanillaTerrain {
         seed: i64,
         dimension: &str,
     ) -> crate::Result<Self> {
+        Self::for_world(dir, registry, biomes, seed, dimension, true)
+    }
+    /// A dimension of a world whose `generate_structures` is `structures`
+    /// (`ChunkGenerator.createStructures` and `findNearestMapStructure` do
+    /// nothing without).
+    pub fn for_world(
+        dir: &Path,
+        registry: &'static BlockRegistry,
+        biomes: &Biomes,
+        seed: i64,
+        dimension: &str,
+        structures: bool,
+    ) -> crate::Result<Self> {
         let data: Arc<GeneratorData> = shared_data(dir, registry)?;
         let biome_map = data
             .biome_names()
@@ -64,7 +95,7 @@ impl VanillaTerrain {
             .map(|name| biomes.id(name))
             .collect();
         let generator =
-            OverworldGenerator::for_dimension(data, seed, "minecraft:normal", dimension)?;
+            OverworldGenerator::for_world(data, seed, "minecraft:normal", dimension, structures)?;
         let unsupported = generator.unsupported_features();
         if !unsupported.is_empty() {
             log::warn!(
@@ -106,6 +137,8 @@ impl VanillaTerrain {
             query: std::sync::Mutex::new(None),
             tick_blocks,
             tick_states,
+            seed,
+            dimension: dimension.to_owned(),
         })
     }
     /// A proto chunk's blocks, biomes, scheduled ticks and post-processing
@@ -119,7 +152,7 @@ impl VanillaTerrain {
             chunk.terrain.min_y().max(MIN_Y),
             (chunk.terrain.min_y() + chunk.terrain.height()).min(MIN_Y + HEIGHT),
         );
-        let mut values = Box::new([0u16; 4096]);
+        let mut values = Box::new([0u32; 4096]);
         for si in 0..SECTIONS as i32 {
             let base = MIN_Y + si * 16;
             if base + 16 <= lo || base >= hi {
@@ -130,7 +163,7 @@ impl VanillaTerrain {
             for y in base.max(lo)..(base + 16).min(hi) {
                 for z in 0..16 {
                     for x in 0..16 {
-                        let id = chunk.block(bx + x, y, bz + z).0 as u16;
+                        let id = chunk.block(bx + x, y, bz + z).0;
                         values[((y & 15) << 8 | z << 4 | x) as usize] = id;
                         any |= id != 0;
                     }
@@ -264,6 +297,30 @@ impl ChunkGenerator for VanillaTerrain {
     type Worker = GeneratorWorker;
     fn worker(&self) -> GeneratorWorker {
         self.generator.worker()
+    }
+    fn lod_sampler(self: Arc<Self>) -> Box<dyn LodSampler> {
+        Box::new(VanillaLodSampler::new(self))
+    }
+    fn lod_surface(
+        &self,
+        worker: &mut GeneratorWorker,
+        x: i32,
+        z: i32,
+    ) -> Option<crate::lod::Surface> {
+        Some(self.client_surface(worker.surface_sample(x, z)?))
+    }
+    /// The structure starts a saved chunk references, as vanilla reads them
+    /// with the chunk: built here, on the loading worker, into the
+    /// generator's cache, rather than on the game thread the first time
+    /// spawning or a mob asks which structures hold a position (a village
+    /// start took 70 to 110 ms there, one tick each, after a world loaded).
+    fn prepare_loaded(&self, worker: &mut GeneratorWorker, chunk: &Chunk) {
+        let mut starts: Vec<(i32, i32)> = chunk.structure_refs.iter().map(|(_, at)| *at).collect();
+        starts.sort_unstable();
+        starts.dedup();
+        for (x, z) in starts {
+            worker.structure_starts(ChunkPos::new(x, z));
+        }
     }
     fn proto(&self, worker: &mut GeneratorWorker, x: i32, z: i32) -> Proto {
         match worker.generate_proto(ChunkPos::new(x, z)) {

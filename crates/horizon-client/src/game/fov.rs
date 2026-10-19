@@ -55,7 +55,13 @@ impl Game<'_> {
             .fov_player()
             .map_or(1.0, |p| field_of_view_modifier(&p, first_person, effect));
         let target = self.zoomed_fov_target(target);
-        let eye = self.player.as_ref().map(|p| p.dimensions.eye_height);
+        let eye = self.player.as_ref().map(|p| {
+            if self.sleeping.is_some() {
+                0.2
+            } else {
+                p.dimensions.eye_height
+            }
+        });
         self.view.tick(eye, target);
     }
     /// The player's `deathTime` while dead or dying.
@@ -69,7 +75,7 @@ impl Game<'_> {
     }
     /// The fluid at the camera, as `Camera.getFluidInCamera` reports it.
     fn camera_fluid(&self, camera: [f64; 3]) -> CameraFluid {
-        match fog_type(&self.world, &self.res.facts, camera, self.forward()) {
+        match fog_type(&self.world, self.res.facts(), camera, self.forward()) {
             FogType::Water => CameraFluid::Water,
             FogType::Lava => CameraFluid::Lava,
             FogType::PowderSnow => CameraFluid::PowderSnow,
@@ -106,7 +112,7 @@ impl Game<'_> {
         let hurt = &p.health.hurt;
         let state = BobState {
             living: Some(HurtBob {
-                hurt_time: hurt.hurt_time as f32 - partial,
+                hurt_time: p.health.hurt_animation_time as f32 - partial,
                 hurt_duration: hurt.hurt_duration,
                 hurt_dir: 0.0,
                 death_time: self.death_time().map(|t| t as f32 + partial),
@@ -171,6 +177,6 @@ impl Game<'_> {
         }
         let draws =
             hud_overlays::spyglass(batch.width as i32, batch.height as i32, self.scope_scale);
-        hud_layout::paint(batch, &self.atlas, &draws);
+        hud_layout::paint(batch, &self.gui.atlas, &draws);
     }
 }

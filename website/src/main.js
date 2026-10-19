@@ -125,7 +125,8 @@ async function setUpLinks() {
 
 function setUpNav() {
   const bar = document.querySelector(".nav");
-  const links = [...document.querySelectorAll(".nav-links a")];
+  // The sections on this page (the nav also links to other pages, such as /server).
+  const links = [...document.querySelectorAll('.nav-links a[href^="#"]')];
   const sections = links.map((a) => document.querySelector(a.getAttribute("href")));
 
   let current = null;

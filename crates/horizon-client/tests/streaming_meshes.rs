@@ -55,13 +55,15 @@ fn columns_loaded_past_the_render_distance_mesh_when_they_come_in_range() {
         return;
     };
     let assets = Arc::new(Assets::load(&root).unwrap());
+    let render = Arc::new(assets.reload(&root).unwrap());
     let facts = BlockFacts::load(&root, assets.registry).unwrap();
     let visibility = models::load_visibility(&root, assets.registry).unwrap();
     let context = Arc::new(WorkerContext {
-        tables: Arc::new(MeshTables::new(&assets, &facts, visibility).unwrap()),
+        tables: Arc::new(MeshTables::new(&assets, &render, &facts, visibility).unwrap()),
         light: Arc::new(LightTables::load(&root, assets.registry, &facts).unwrap()),
         biomes: Arc::new(Biomes::load(&root).unwrap()),
         assets,
+        render: render.clone(),
     });
     let mut streaming = Streaming::new(Arc::new(Saved), context, 3);
     streaming.radius = 4;
@@ -107,7 +109,7 @@ fn columns_loaded_past_the_render_distance_mesh_when_they_come_in_range() {
 /// A one-block cave under the sky: a stone floor at y 62 with a glowstone,
 /// and a roof at y 64 with holes, so that every light change in the cave is
 /// sampled by a face.
-fn roofed(x: i32, z: i32, stone: u16, glowstone: u16) -> Chunk {
+fn roofed(x: i32, z: i32, stone: u32, glowstone: u32) -> Chunk {
     let mut chunk = Chunk::empty(x, z);
     for lz in 0..16 {
         for lx in 0..16 {
@@ -135,22 +137,25 @@ fn relit_columns_keep_every_mesh_current() {
         return;
     };
     let assets = Arc::new(Assets::load(&root).unwrap());
+    let render = Arc::new(assets.reload(&root).unwrap());
     let facts = BlockFacts::load(&root, assets.registry).unwrap();
     let visibility = models::load_visibility(&root, assets.registry).unwrap();
     let context = Arc::new(WorkerContext {
-        tables: Arc::new(MeshTables::new(&assets, &facts, visibility).unwrap()),
+        tables: Arc::new(MeshTables::new(&assets, &render, &facts, visibility).unwrap()),
         light: Arc::new(LightTables::load(&root, assets.registry, &facts).unwrap()),
         biomes: Arc::new(Biomes::load(&root).unwrap()),
         assets: assets.clone(),
+        render: render.clone(),
     });
-    let state = |name: &str| assets.registry.default_state(name).unwrap().0 as u16;
+    let state = |name: &str| assets.registry.default_state(name).unwrap().0;
     let (stone, glowstone, torch) = (
         state("minecraft:stone"),
         state("minecraft:glowstone"),
         state("minecraft:torch"),
     );
-    // Columns from a server, one of them never sent: its neighbours stay
-    // unlit, next to lit columns within the render distance.
+    // Columns from a server, one of them not sent yet. They keep the light
+    // the server sent (#824, as vanilla's `enableChunkLight`), so its
+    // neighbours are lit too.
     let mut streaming = Streaming::new(Arc::new(Saved), context.clone(), 3);
     streaming.radius = 4;
     streaming.remote = true;
@@ -176,7 +181,7 @@ fn relit_columns_keep_every_mesh_current() {
         }
     };
     settle(&mut streaming, &mut world);
-    assert!(!streaming.is_lit(1, 0) && streaming.is_lit(0, 0));
+    assert!(streaming.is_lit(1, 0) && streaming.is_lit(0, 0));
     // Open the roof and put torches in the cave on a ring two blocks inside
     // the unlit (1, 0): its lit neighbours are relit, and their meshes change
     // only through light (no edit is next to them).
@@ -185,9 +190,7 @@ fn relit_columns_keep_every_mesh_current() {
             let (bx, bz) = (16 + lx, lz);
             world.set(bx, 64, bz, BlockStateId(0)).unwrap();
             if i % 3 == 0 {
-                world
-                    .set(bx, 63, bz, BlockStateId(u32::from(torch)))
-                    .unwrap();
+                world.set(bx, 63, bz, BlockStateId(torch)).unwrap();
             }
         }
     }
@@ -212,6 +215,7 @@ fn relit_columns_keep_every_mesh_current() {
             cutout_leaves: true,
             cull_leaves: false,
             assets: &context.assets,
+            render: &context.render,
             tables: &context.tables,
             biomes: &context.biomes,
             visibility: context.tables.visibility.clone(),

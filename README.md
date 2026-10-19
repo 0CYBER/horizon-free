@@ -43,6 +43,8 @@ Horizon is downloaded only through **the Horizon launcher**: get it from [playho
 
 **You need** Minecraft: Java Edition installed with the official launcher, with 26.3 played once; Python 3.10 or newer and Java 25 (a JDK, e.g. Eclipse Temurin 25) for the one-time resource preparation; and a GPU with Vulkan on Linux and Windows, or any Apple Silicon Mac.
 
+**Host a server:** `horizon-server` is one native program with no Java, one settings file, a command line, a web panel, backups and updates that roll back by themselves. It installs with one command (`curl -fsSL https://raw.githubusercontent.com/ludovic111/horizon/main/packaging/server/install.sh | sh` on Linux and macOS, `irm https://raw.githubusercontent.com/ludovic111/horizon/main/packaging/server/install.ps1 | iex` on Windows). The guide is at [playhorizon.dev/server](https://playhorizon.dev/server) ([docs/hosting.md](docs/hosting.md)).
+
 ### The launcher
 
 <table>
@@ -65,7 +67,7 @@ Captured in the Rust client itself, with vanilla assets and no mods or shaders.
     <td colspan="2"><img src="docs/media/menu-title.webp" alt="Horizon's title screen: the mark and the pages on the left, the Horizon title, Singleplayer and Multiplayer, and the last world played and the faint wordmark, over a veiled snowy landscape"></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/media/menu-worlds.webp" alt="The Singleplayer page: three worlds with their dates and game modes, and Create world and Play buttons"></td>
+    <td width="50%"><img src="docs/media/menu-worlds.webp" alt="The Singleplayer page: two worlds with their dates and game modes, and Create world and Play buttons"></td>
     <td width="50%"><img src="docs/media/settings.webp" alt="The Video settings in their Simple view: a preset, render distance, field of view, framerate, VSync and GUI scale, each with what it costs"></td>
   </tr>
 </table>
@@ -79,17 +81,17 @@ The vanilla menus are one setting away: Options → Interface → Menu style →
     <td colspan="2"><img src="docs/media/sunset.webp" alt="Sunset over a savanna river valley and a plains village"></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/media/village.webp" alt="A plains village with farms, an iron golem and animals"></td>
-    <td width="50%"><img src="docs/media/survival.webp" alt="Survival at dusk: a zombie attacks near the village"></td>
+    <td width="50%"><img src="docs/media/village.webp" alt="A plains village among savanna hills, with farms, villagers and an iron golem"></td>
+    <td width="50%"><img src="docs/media/survival.webp" alt="Survival at dusk: a zombie walks up, with the hotbar, health, hunger and experience"></td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/media/nether.webp" alt="A crimson forest in the Nether with a zombified piglin"></td>
     <td width="50%"><img src="docs/media/night.webp" alt="Moonrise over a torch-lit village and river"></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/media/underwater.webp" alt="Salmon swimming in a river"></td>
+    <td width="50%"><img src="docs/media/underwater.webp" alt="Tropical fish over a warm-ocean coral reef"></td>
     <td width="50%" valign="middle">
-      Vanilla world generation ported to Rust (terrain, aquifers, carvers, features, villages and the Nether), every block model with smooth lighting and biome tints, the vanilla sky and fog, mobs, the HUD, chat and advancements: everything in these frames is drawn by Horizon.
+      Vanilla world generation ported to Rust (terrain, aquifers, carvers, features, villages and the Nether), every block model with smooth lighting and biome tints, the vanilla sky and fog, mobs and the HUD: everything in these frames is drawn by Horizon.
     </td>
   </tr>
 </table>

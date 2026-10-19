@@ -38,7 +38,7 @@ fn resources() -> Option<std::path::PathBuf> {
     root.join("items.json").exists().then_some(root)
 }
 
-const STONE: u16 = 1;
+const STONE: u32 = 1;
 
 fn flat_world() -> World {
     let mut world = World::new(BlockStateId(0), 0);
@@ -163,7 +163,7 @@ struct Server {
     hub: Hub,
     world: World,
     next_entity: u32,
-    placed: Vec<(u32, [i32; 3], u16, i32)>,
+    placed: Vec<(u32, [i32; 3], u32, i32)>,
 }
 impl Server {
     fn tick(&mut self, entities: &[EntityState]) {
@@ -181,6 +181,8 @@ impl Server {
             sprinting: false,
             equipment: Default::default(),
             health: 20.0,
+            attributes: Vec::new(),
+            living_flags: 0,
         };
         let mut ctx = TickCtx {
             world: &mut self.world,
@@ -193,6 +195,7 @@ impl Server {
             clock_rate: 1.0,
             tick_rate: 20.0,
             tick_frozen: false,
+            collision: None,
         };
         let events = self.hub.tick(&mut ctx);
         for event in events {
@@ -202,7 +205,7 @@ impl Server {
                     if let S::UseItemOn(p) = *packet {
                         let at = [p.pos[0], p.pos[1] + 1, p.pos[2]];
                         ctx.world
-                            .set(at[0], at[1], at[2], BlockStateId(u32::from(STONE)))
+                            .set(at[0], at[1], at[2], BlockStateId(STONE))
                             .unwrap();
                         self.placed.push((conn, at, STONE, p.sequence));
                         self.hub.ack(conn, p.sequence);
@@ -341,14 +344,12 @@ fn status_and_join() {
                 C::PlayerInfoUpdate(u) => {
                     info |= u.entries.iter().any(|e| e.name.as_deref() == Some("Host"));
                 }
-                C::Unknown(id, _) if id == horizon_protocol::ids::play::clientbound::COMMANDS => {
-                    commands = true
-                }
+                C::Commands(_) => commands = true,
                 C::LevelChunkWithLight(l) => {
                     chunks += 1;
                     let sections = l.chunk.sections(24, 16, 7).map_err(|e| e.to_string())?;
                     // The floor is in the lowest section.
-                    assert_eq!(sections[0].states.get(4 * 256), i32::from(STONE));
+                    assert_eq!(sections[0].states.get(4 * 256), STONE as i32);
                     assert_eq!(sections[0].non_empty, 256);
                     assert_eq!(sections[1].non_empty, 0);
                     assert!(!l.light.sky.is_empty());
@@ -394,7 +395,7 @@ fn status_and_join() {
         assert!(chunks >= 9, "only {chunks} chunks");
         assert_eq!(
             block_update,
-            Some(([9, MIN_Y + 5, 9], i32::from(STONE))),
+            Some(([9, MIN_Y + 5, 9], STONE as i32)),
             "placed block was not broadcast"
         );
         Ok(bot.name)
@@ -423,16 +424,40 @@ fn guests_see_each_other_and_the_world_entities() {
         data: 0,
         meta: Vec::new(),
         equipment: Vec::new(),
+        attributes: Vec::new(),
+        precise: false,
     };
     let first = thread::spawn(move || {
         let mut bot = connect(port, "Alex", false)?;
+        bot.c
+            .reader
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
         let mut zombies = 0;
         let mut players = 0;
         let mut moves = 0;
+        let mut at: Option<[f64; 3]> = None;
+        let mut reminder = Instant::now();
         let deadline = Instant::now() + Duration::from_secs(20);
         while Instant::now() < deadline && !(zombies > 0 && players > 0 && moves > 0) {
-            match bot.recv_play()? {
+            // A vanilla client sends its position at least every 20 ticks even
+            // when standing still (LocalPlayer's positionReminder), and the
+            // server checks which entities it sees again on each one.
+            if let Some([x, y, z]) = at
+                && reminder.elapsed() >= Duration::from_secs(1)
+            {
+                bot.send(S::MovePlayerPos(play::MovePlayerPos { x, y, z, flags: 1 }));
+                reminder = Instant::now();
+            }
+            let Ok((id, payload)) = bot.c.recv() else {
+                continue;
+            };
+            let Ok(packet) = C::decode(id, &payload) else {
+                continue;
+            };
+            match packet {
                 C::PlayerPosition(p) => {
+                    at = Some(p.position);
                     bot.send(S::AcceptTeleportation(play::AcceptTeleportation {
                         id: p.teleport,
                         x: p.position[0],

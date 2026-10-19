@@ -35,6 +35,11 @@ impl Game<'_> {
     pub(in crate::game) fn entity_nbt(&mut self, t: Target) -> Option<Tag> {
         let player_uuid = self.level.player_uuid;
         Some(match t {
+            Target::Guest(_) => {
+                return self
+                    .for_player(t, |g| g.entity_nbt(Target::Player))
+                    .flatten();
+            }
             Target::Player => {
                 self.player.as_ref()?;
                 self.sync_level();
@@ -142,7 +147,7 @@ impl Game<'_> {
                     set_key(&mut tag, "id", Tag::String(k.as_str().into()));
                 }
                 let new =
-                    entity_nbt::mob_from_nbt(&tag, &self.res.mob_types, id).ok_or_else(stale)?;
+                    entity_nbt::mob_from_nbt(&tag, self.res.mob_types(), id).ok_or_else(stale)?;
                 if let Some(slot) = self.mobs.iter_mut().find(|m| m.id == id) {
                     // Runtime-only state (AI, animation) carries over.
                     let old = std::mem::replace(slot, new);
@@ -661,13 +666,20 @@ impl Game<'_> {
     /// Spawn an entity from its compound (`EntityType.loadEntityRecursive`);
     /// returns what was created.
     pub(super) fn spawn_entity_from_nbt(&mut self, tag: Tag) -> Option<Target> {
-        let before = self.next_entity;
         let key = {
             let p = entity_nbt::position(&tag)?;
             ((p.x.floor() as i32) >> 4, (p.z.floor() as i32) >> 4)
         };
+        // Only this stack spawns now: the entities of chunks that finished
+        // loading wait for the level's entity tick, as in vanilla
+        // (PersistentEntitySectionManager.processPendingLoads), and must not
+        // take the ids counted as this stack's.
+        let mut waiting = std::mem::take(&mut self.world.loaded_entities);
+        let before = self.next_entity;
         self.world.loaded_entities.push((key, vec![tag]));
         self.spawn_loaded_entities();
+        waiting.append(&mut self.world.loaded_entities);
+        self.world.loaded_entities = waiting;
         if self.next_entity == before {
             return None;
         }

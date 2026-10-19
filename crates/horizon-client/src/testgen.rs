@@ -4,24 +4,24 @@ use crate::{chunk::Chunk, streaming::ChunkGenerator};
 use horizon_world::registry::BlockRegistry;
 
 pub struct TestTerrain {
-    stone: u16,
-    dirt: u16,
-    grass: u16,
-    water: u16,
-    sand: u16,
-    bedrock: u16,
-    log: u16,
-    leaves: u16,
-    short_grass: u16,
+    stone: u32,
+    dirt: u32,
+    grass: u32,
+    water: u32,
+    sand: u32,
+    bedrock: u32,
+    log: u32,
+    leaves: u32,
+    short_grass: u32,
     plains: u16,
 }
 impl TestTerrain {
     pub fn new(registry: &BlockRegistry, biomes: &crate::biome::Biomes) -> crate::Result<Self> {
-        let id = |name: &str| -> crate::Result<u16> {
+        let id = |name: &str| -> crate::Result<u32> {
             Ok(registry
                 .default_state(name)
                 .ok_or_else(|| format!("missing {name}"))?
-                .0 as u16)
+                .0)
         };
         Ok(Self {
             stone: id("minecraft:stone")?,
@@ -41,7 +41,7 @@ impl TestTerrain {
                     ]
                     .into(),
                 })?
-                .0 as u16,
+                .0,
             short_grass: id("minecraft:short_grass")?,
             plains: biomes.id("minecraft:plains"),
         })
@@ -64,6 +64,19 @@ fn hash(x: i32, z: i32) -> u32 {
 impl ChunkGenerator for TestTerrain {
     type Worker = ();
     fn worker(&self) {}
+    fn lod_surface(&self, _: &mut (), x: i32, z: i32) -> Option<crate::lod::Surface> {
+        let h = Self::height(x, z);
+        Some(crate::lod::Surface {
+            height: h + 1,
+            state: horizon_world::registry::BlockStateId(if h <= 63 {
+                self.sand
+            } else {
+                self.grass
+            }),
+            water: (h < 62).then_some((63, horizon_world::registry::BlockStateId(self.water))),
+            biome: self.plains,
+        })
+    }
     fn proto(&self, w: &mut (), x: i32, z: i32) -> crate::streaming::Proto {
         Box::new(self.generate(w, x, z))
     }
@@ -134,5 +147,40 @@ impl TestTerrain {
             std::sync::Arc::make_mut(s).compact();
         }
         chunk
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn far_surface_agrees_with_generated_land_and_water() {
+        let terrain = TestTerrain {
+            stone: 1,
+            dirt: 2,
+            grass: 3,
+            water: 4,
+            sand: 5,
+            bedrock: 6,
+            log: 7,
+            leaves: 8,
+            short_grass: 9,
+            plains: 10,
+        };
+        let mut wet = false;
+        for (cx, cz) in [(0, 0), (-7, 3), (15, -12), (-21, -8)] {
+            let chunk = terrain.generate(&mut (), cx, cz);
+            for x in 0..16 {
+                let surface = terrain.lod_surface(&mut (), cx * 16 + x, cz * 16).unwrap();
+                assert_eq!(chunk.get(x, surface.height - 1, 0), surface.state.0);
+                if let Some((height, state)) = surface.water {
+                    wet = true;
+                    assert_eq!(chunk.get(x, height - 1, 0), state.0);
+                    assert_eq!(chunk.get(x, height, 0), 0);
+                }
+            }
+        }
+        assert!(wet, "fixture includes underwater land");
     }
 }

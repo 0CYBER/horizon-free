@@ -16,7 +16,7 @@
 use crate::{
     Result,
     biome::Biomes,
-    chunk::{BIOME_STRATEGY, BLOCK_STRATEGY, Chunk, Light, MIN_Y, SECTIONS},
+    chunk::{BIOME_STRATEGY, Chunk, Light, MIN_Y, SECTIONS, Section, block_strategy},
     streaming::ChunkGenerator,
 };
 use horizon_core::{
@@ -29,9 +29,9 @@ use horizon_world::{
     chunk::BlockState,
     chunk_status::ChunkStatus,
     compression::Compression,
-    heightmap::{Heightmap, HeightmapChunk, HeightmapType},
+    heightmap::{Heightmap, HeightmapChunk, HeightmapState, HeightmapType},
     nbt::{self, Compound, JavaString, Limits, NamedTag, Tag},
-    region::{ChunkRecord, RegionFile, RegionWriter},
+    region::{ChunkRecord, RegionFile},
     registry::{BlockRegistry, BlockStateId},
     worldgen::terrain::TerrainBlockStates,
 };
@@ -238,7 +238,7 @@ pub struct SaveTables {
     default_state: Vec<bool>,
     block_entity: Vec<bool>,
     heightmaps: crate::assets::Properties,
-    air: u16,
+    air: u32,
 }
 impl SaveTables {
     pub fn new(assets: &crate::assets::Assets) -> Self {
@@ -266,9 +266,19 @@ impl SaveTables {
             default_state,
             block_entity: Vec::new(),
             heightmaps: assets.properties.clone(),
-            air: registry
-                .default_state("minecraft:air")
-                .map_or(0, |s| s.0 as u16),
+            air: registry.default_state("minecraft:air").map_or(0, |s| s.0),
+        }
+    }
+    /// Tables with only the heightmaps' state facts, for tests.
+    #[cfg(test)]
+    pub(crate) fn for_heightmaps(heightmaps: crate::assets::Properties) -> Self {
+        Self {
+            block_names: Vec::new(),
+            block_ids: HashMap::new(),
+            default_state: Vec::new(),
+            block_entity: Vec::new(),
+            heightmaps,
+            air: 0,
         }
     }
     /// Which states carry a block entity (`BlockFacts`), to drop entries for
@@ -675,8 +685,9 @@ pub fn decode_block_entity(tag: &Tag) -> Option<((i32, i32, i32), crate::contain
     Some((pos, entity))
 }
 
+/// A column's sections as `Heightmap.primeHeightmaps` reads them.
 struct HeightmapView<'a> {
-    chunk: &'a Chunk,
+    sections: &'a [Arc<Section>],
     tables: &'a SaveTables,
 }
 impl HeightmapChunk for HeightmapView<'_> {
@@ -689,7 +700,6 @@ impl HeightmapChunk for HeightmapView<'_> {
     }
     fn highest_section_y(&self) -> i32 {
         let top = self
-            .chunk
             .sections
             .iter()
             .rposition(|s| !s.is_uniform(self.tables.air))
@@ -697,9 +707,12 @@ impl HeightmapChunk for HeightmapView<'_> {
         MIN_Y + top as i32 * 16
     }
     fn block_state(&self, x: i32, y: i32, z: i32) -> Self::State {
-        self.tables
-            .heightmaps
-            .heightmap_state(self.chunk.block(x, y, z))
+        // Chunk.get: no block outside the sections.
+        let state = usize::try_from((y - MIN_Y) >> 4)
+            .ok()
+            .and_then(|s| self.sections.get(s))
+            .map_or(0, |s| s.get(crate::chunk::index(x, y, z)));
+        self.tables.heightmaps.heightmap_state(BlockStateId(state))
     }
 }
 /// Heightmaps kept after world generation (`ChunkStatus.FULL.heightmapsAfter`).
@@ -714,7 +727,10 @@ fn heightmaps(chunk: &Chunk, tables: &SaveTables) -> Tag {
         .iter()
         .filter_map(|k| Heightmap::new(*k, MIN_Y, SECTIONS as i32 * 16).ok())
         .collect();
-    let view = HeightmapView { chunk, tables };
+    let view = HeightmapView {
+        sections: &chunk.sections,
+        tables,
+    };
     let mut refs: Vec<&mut Heightmap> = maps.iter_mut().collect();
     if Heightmap::prime(&view, &mut refs).is_err() {
         return Tag::Compound(Compound::new());
@@ -730,6 +746,16 @@ fn heightmaps(chunk: &Chunk, tables: &SaveTables) -> Tag {
 /// sendToClient: WORLD_SURFACE, MOTION_BLOCKING, MOTION_BLOCKING_NO_LEAVES),
 /// as (network id, packed longs) in Heightmap.Types order.
 pub fn client_heightmaps(chunk: &Chunk, tables: &SaveTables) -> Vec<(i32, Vec<i64>)> {
+    client_heightmaps_in(&chunk.sections, tables, MIN_Y, SECTIONS as i32 * 16)
+}
+/// The client heightmaps of a column's sections, in a level from `min_y`,
+/// `height` blocks high.
+pub fn client_heightmaps_in(
+    sections: &[Arc<Section>],
+    tables: &SaveTables,
+    min_y: i32,
+    height: i32,
+) -> Vec<(i32, Vec<i64>)> {
     let kinds = [
         (1, HeightmapType::WorldSurface),
         (4, HeightmapType::MotionBlocking),
@@ -737,13 +763,9 @@ pub fn client_heightmaps(chunk: &Chunk, tables: &SaveTables) -> Vec<(i32, Vec<i6
     ];
     let mut maps: Vec<(i32, Heightmap)> = kinds
         .iter()
-        .filter_map(|(id, k)| {
-            Heightmap::new(*k, MIN_Y, SECTIONS as i32 * 16)
-                .ok()
-                .map(|m| (*id, m))
-        })
+        .filter_map(|(id, k)| Heightmap::new(*k, min_y, height).ok().map(|m| (*id, m)))
         .collect();
-    let view = HeightmapView { chunk, tables };
+    let view = HeightmapView { sections, tables };
     let mut refs: Vec<&mut Heightmap> = maps.iter_mut().map(|(_, m)| m).collect();
     if Heightmap::prime(&view, &mut refs).is_err() {
         return Vec::new();
@@ -1030,8 +1052,8 @@ fn decode_column(
             }
         }
     }
-    let air = registry.default_state("minecraft:air")?.0 as u16;
-    let mut cache: HashMap<String, u16> = HashMap::new();
+    let air = registry.default_state("minecraft:air")?.0;
+    let mut cache: HashMap<String, u32> = HashMap::new();
     let Some(Tag::List(sections)) = tag.get("sections") else {
         return Some(chunk);
     };
@@ -1046,7 +1068,7 @@ fn decode_column(
         if let Some(states) = section.get("block_states")
             && let Some(Tag::List(palette)) = states.get("palette")
         {
-            let ids: Vec<u16> = palette
+            let palette: Vec<u32> = palette
                 .iter()
                 .map(|p| {
                     let state = BlockState::from_nbt(p).ok();
@@ -1069,7 +1091,7 @@ fn decode_column(
                                     registry.id(&full).or(Some(default))
                                 })
                             })
-                            .map_or(air, |id| id.0 as u16)
+                            .map_or(air, |id| id.0)
                     })
                 })
                 .collect();
@@ -1080,9 +1102,8 @@ fn decode_column(
                 }
                 _ => None,
             };
-            let palette: Vec<u32> = ids.iter().map(|&id| u32::from(id)).collect();
             if let Ok(blocks) =
-                PalettedContainer::from_packed(BLOCK_STRATEGY, palette, data.as_deref())
+                PalettedContainer::from_packed(block_strategy(), palette, data.as_deref())
             {
                 target.blocks = blocks;
             }
@@ -1276,123 +1297,144 @@ pub fn load_light(tag: &Tag, chunk: &mut Chunk, sky_light: bool) {
         };
         layers[si as usize] = (layer("SkyLight"), layer("BlockLight"));
     }
-    let sky_default = if sky_light { 15u8 } else { 0 };
-    // Sky nibbles of the section above's bottom layer, going down.
-    let mut above: [u8; 256] = [sky_default; 256];
-    for si in (0..SECTIONS).rev() {
-        let (sky, block) = layers[si];
-        let mut data = Box::new([0u8; 4096]);
-        let nibble = |a: &[u8], i: usize| (a[i >> 1] >> ((i & 1) * 4)) & 15;
-        for (i, packed) in data.iter_mut().enumerate() {
-            let s = match sky {
-                Some(a) if sky_light => nibble(a, i),
-                _ => above[i & 255],
-            };
-            let b = block.map_or(0, |a| nibble(a, i));
-            *packed = s << 4 | b;
-        }
-        for (i, a) in above.iter_mut().enumerate() {
-            *a = data[i] >> 4;
-        }
-        let mut section = (*chunk.sections[si]).clone();
-        section.light = Light::Full(data);
-        section.compact();
-        chunk.sections[si] = Arc::new(section);
-    }
-    chunk.lit = true;
-    chunk.light_loaded = true;
+    let above = [if sky_light { 15 } else { 0 }; 256];
+    crate::light::light_from_layers(chunk, &layers, above, sky_light);
 }
 
 type RegionCache = Mutex<HashMap<(i32, i32), Option<Arc<Mutex<RegionFile>>>>>;
-/// Rewrite every region file in `folder` touched by `records`, keeping its
-/// other chunks. `None` deletes a chunk.
+/// The region file at `path` through the cache, which readers and the writer
+/// share, so a read never sees a header older than the sectors it points to.
+/// `create` makes a missing file (for a write); otherwise a missing file is
+/// `None`, until a write creates it.
+fn cached_region(
+    cache: &RegionCache,
+    key: (i32, i32),
+    path: &Path,
+    create: bool,
+) -> Result<Option<Arc<Mutex<RegionFile>>>> {
+    let mut regions = cache.lock().map_err(|_| "region cache poisoned")?;
+    if let Some(Some(region)) = regions.get(&key) {
+        return Ok(Some(region.clone()));
+    }
+    if !create && regions.contains_key(&key) {
+        return Ok(None);
+    }
+    if create && let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    // A file this process can't write (a read-only world) is still read.
+    let region = match RegionFile::open_writable(path, create) {
+        Err(e) if !create && e.kind() == std::io::ErrorKind::PermissionDenied => {
+            RegionFile::open(path)
+        }
+        other => other,
+    };
+    let region = match region {
+        Ok(r) => Some(Arc::new(Mutex::new(r))),
+        Err(_) if !create => None,
+        Err(e) => return Err(e.into()),
+    };
+    regions.insert(key, region.clone());
+    Ok(region)
+}
+/// Write `records` into the region files of `folder` in place, as vanilla's
+/// `RegionFile.write` does: each chunk takes free sectors and the header
+/// then points to it; the region's other chunks are not touched. `None`
+/// clears a chunk. The chunks are encoded and compressed before their region
+/// is locked for the writes (`compress_records`), and each region is flushed
+/// to the disk once.
 fn write_region_records(
     root: &Path,
     cache: &RegionCache,
     folder: &str,
-    records: Vec<((i32, i32), Option<Arc<NamedTag>>)>,
+    records: &[((i32, i32), &Record)],
 ) -> Result<()> {
-    let mut by_region: BTreeMap<(i32, i32), Vec<((i32, i32), Option<Arc<NamedTag>>)>> =
-        BTreeMap::new();
-    for (key, tag) in records {
-        by_region
-            .entry((key.0 >> 5, key.1 >> 5))
-            .or_default()
-            .push((key, tag));
-    }
-    if by_region.is_empty() {
-        return Ok(());
-    }
-    let staging = root.join(folder).join(".staging");
-    fs::create_dir_all(&staging)?;
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as u32);
+    let compressed = compress_records(records, timestamp);
+    let mut by_region: BTreeMap<(i32, i32), Vec<(ChunkPos, Option<ChunkRecord>)>> = BTreeMap::new();
+    for (&((x, z), _), record) in records.iter().zip(compressed) {
+        let record = record?;
+        by_region
+            .entry((x >> 5, z >> 5))
+            .or_default()
+            .push((ChunkPos::new(x, z), record));
+    }
     for ((rx, rz), list) in by_region {
         let path = region_path(root, folder, rx, rz);
-        let mut records: BTreeMap<(i32, i32), ChunkRecord> = BTreeMap::new();
-        let only_deletes = list.iter().all(|(_, tag)| tag.is_none());
-        if let Ok(mut existing) = RegionFile::open(&path) {
-            let positions: Vec<ChunkPos> = existing.chunks().map(|(p, _)| p).collect();
-            if only_deletes
-                && !positions
-                    .iter()
-                    .any(|p| list.iter().any(|(k, _)| *k == (p.x, p.z)))
-            {
-                continue;
-            }
-            for p in positions {
-                if let Ok(Some(r)) = existing.read(p) {
-                    records.insert((p.x, p.z), r);
-                }
-            }
-        } else if only_deletes {
+        // Clearing chunks of a region that doesn't exist changes nothing.
+        let create = list.iter().any(|(_, r)| r.is_some());
+        let Some(region) = cached_region(cache, (rx, rz), &path, create)? else {
             continue;
-        }
-        // Deleting chunks the region doesn't hold changes nothing: leave
-        // the file alone (unloading empty entity chunks asks for that).
+        };
+        let mut region = region.lock().map_err(|_| "region file poisoned")?;
         let mut changed = false;
-        for (key, tag) in list {
-            match tag {
-                Some(tag) => {
+        for (pos, record) in &list {
+            match record {
+                Some(record) => {
+                    region.write(*pos, record)?;
                     changed = true;
-                    records.insert(
-                        key,
-                        ChunkRecord::from_nbt(
-                            &tag,
-                            Compression::Zlib,
-                            timestamp,
-                            Limits::default(),
-                        )?,
-                    );
                 }
-                None => {
-                    changed |= records.remove(&key).is_some();
-                }
+                None => changed |= region.clear(*pos, timestamp)?,
             }
         }
-        if !changed {
-            continue;
+        if changed {
+            region.sync()?;
         }
-        if records.is_empty() {
-            let _ = fs::remove_file(&path);
-        } else {
-            let temporary = staging.join(format!("r.{rx}.{rz}.mca"));
-            let _ = fs::remove_file(&temporary);
-            let mut writer = RegionWriter::create(&temporary)?;
-            for ((x, z), r) in &records {
-                writer.write(ChunkPos::new(*x, *z), r)?;
-            }
-            writer.finish()?;
-            fs::rename(&temporary, &path)?;
-        }
-        cache
-            .lock()
-            .map_err(|_| "region cache poisoned")?
-            .remove(&(rx, rz));
     }
-    let _ = fs::remove_dir(&staging);
     Ok(())
+}
+
+/// Fewest chunks each helper of `compress_records` takes: below this a thread
+/// costs more to start than it saves.
+const CHUNKS_PER_HELPER: usize = 4;
+/// Each record encoded and compressed (`None` for a deletion), in the order
+/// given. Vanilla's IOWorker does this one chunk after another; here a batch
+/// is shared out to scoped threads, which take the next chunk as they finish
+/// one. Each chunk's bytes depend only on the chunk, and the writes stay in
+/// order, so the files are the same as from one thread. At most half the
+/// hardware threads help, leaving the rest to the game and its workers.
+fn compress_records(
+    records: &[((i32, i32), &Record)],
+    timestamp: u32,
+) -> Vec<std::io::Result<Option<ChunkRecord>>> {
+    let compress = |record: &Record| {
+        record
+            .tag()
+            .map(|tag| ChunkRecord::from_nbt(&tag, Compression::Zlib, timestamp, Limits::default()))
+            .transpose()
+    };
+    let helpers = std::thread::available_parallelism()
+        .map_or(1, |n| n.get().div_ceil(2))
+        .min(records.len() / CHUNKS_PER_HELPER);
+    if helpers <= 1 {
+        return records.iter().map(|(_, r)| compress(r)).collect();
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let mut done: Vec<(usize, std::io::Result<Option<ChunkRecord>>)> =
+        std::thread::scope(|scope| {
+            let threads: Vec<_> = (0..helpers)
+                .map(|_| {
+                    scope.spawn(|| {
+                        let mut out = Vec::new();
+                        loop {
+                            let i = next.fetch_add(1, Ordering::Relaxed);
+                            let Some((_, record)) = records.get(i) else {
+                                return out;
+                            };
+                            out.push((i, compress(record)));
+                        }
+                    })
+                })
+                .collect();
+            threads
+                .into_iter()
+                .flat_map(|t| t.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
+                .collect()
+        });
+    done.sort_unstable_by_key(|(i, _)| *i);
+    done.into_iter().map(|(_, r)| r).collect()
 }
 
 fn region_path(root: &Path, folder: &str, rx: i32, rz: i32) -> PathBuf {
@@ -1434,7 +1476,7 @@ impl Record {
 type PendingWrites = Mutex<HashMap<(bool, i32, i32), (u64, Record)>>;
 type WriteBatch = (bool, Vec<((i32, i32), Record, u64)>);
 
-/// The background thread that encodes chunks and rewrites region files, in
+/// The background thread that encodes chunks and writes them into the region files, in
 /// submission order.
 struct Writer {
     send: mpsc::Sender<WriteBatch>,
@@ -1496,17 +1538,8 @@ impl SaveDir {
         } else {
             &self.entity_regions
         };
-        let region = {
-            let mut regions = cache.lock().ok()?;
-            regions
-                .entry(key)
-                .or_insert_with(|| {
-                    RegionFile::open(self.region_path(folder, key.0, key.1))
-                        .ok()
-                        .map(|r| Arc::new(Mutex::new(r)))
-                })
-                .clone()?
-        };
+        let path = self.region_path(folder, key.0, key.1);
+        let region = cached_region(cache, key, &path, false).ok()??;
         let record = region.lock().ok()?.read(ChunkPos::new(x, z)).ok()??;
         record.nbt(Limits::default()).ok()
     }
@@ -1612,8 +1645,19 @@ impl SaveDir {
                     } else {
                         ("region", &regions)
                     };
-                    let records = batch.iter().map(|(k, r, _)| (*k, r.tag())).collect();
-                    if let Err(e) = write_region_records(&root, cache, folder, records) {
+                    // IOWorker.pendingWrites: a chunk queued again since is
+                    // written once, by its newest batch.
+                    let newest = |k: &(i32, i32), seq: u64| {
+                        pending.lock().map_or(true, |p| {
+                            p.get(&(entities, k.0, k.1)).is_none_or(|p| p.0 <= seq)
+                        })
+                    };
+                    let records: Vec<_> = batch
+                        .iter()
+                        .filter(|(k, _, seq)| newest(k, *seq))
+                        .map(|(k, r, _)| (*k, r))
+                        .collect();
+                    if let Err(e) = write_region_records(&root, cache, folder, &records) {
                         log::warn!("Horizon: failed to write {folder} files: {e}");
                     }
                     // Readers find the files (and a fresh region cache) from here on.
@@ -1648,7 +1692,7 @@ impl SaveDir {
             };
         }
     }
-    /// Rewrite every region touched by `chunks`, keeping their other chunks.
+    /// Write `chunks` into their region files and wait until they are on disk.
     pub fn save(
         &self,
         chunks: &[Arc<Chunk>],
@@ -1975,10 +2019,43 @@ impl Default for WorldGen {
 }
 /// Writes a new world's `world_gen_settings` (seed, options and dimensions).
 pub fn write_world_gen_settings(dir: &Path, seed: i64, options: WorldGen) -> Result<()> {
+    write_world_gen_settings_with(dir, seed, options, None)
+}
+/// [`write_world_gen_settings`] with a flat overworld's own generator
+/// settings (FlatLevelGeneratorSettings, as `flatgen::settings_from_json`
+/// reads them) instead of the Superflat preset's classic layers.
+pub fn write_world_gen_settings_with(
+    dir: &Path,
+    seed: i64,
+    options: WorldGen,
+    flat_settings: Option<Tag>,
+) -> Result<()> {
     fs::create_dir_all(dir)?;
     // worldgen/world_preset/flat.json's overworld: the classic flat layers.
     let layer = |block: &str, height: i32| {
         Tag::compound([("block", string(block)), ("height", Tag::Int(height))])
+    };
+    let classic = || {
+        Tag::compound([
+            ("biome", string("minecraft:plains")),
+            ("features", Tag::Byte(0)),
+            ("lakes", Tag::Byte(0)),
+            (
+                "layers",
+                Tag::List(vec![
+                    layer("minecraft:bedrock", 1),
+                    layer("minecraft:dirt", 2),
+                    layer("minecraft:grass_block", 1),
+                ]),
+            ),
+            (
+                "structure_overrides",
+                Tag::List(vec![
+                    string("minecraft:strongholds"),
+                    string("minecraft:villages"),
+                ]),
+            ),
+        ])
     };
     let flat = Tag::compound([
         ("type", string("minecraft:overworld")),
@@ -1986,29 +2063,7 @@ pub fn write_world_gen_settings(dir: &Path, seed: i64, options: WorldGen) -> Res
             "generator",
             Tag::compound([
                 ("type", string("minecraft:flat")),
-                (
-                    "settings",
-                    Tag::compound([
-                        ("biome", string("minecraft:plains")),
-                        ("features", Tag::Byte(0)),
-                        ("lakes", Tag::Byte(0)),
-                        (
-                            "layers",
-                            Tag::List(vec![
-                                layer("minecraft:bedrock", 1),
-                                layer("minecraft:dirt", 2),
-                                layer("minecraft:grass_block", 1),
-                            ]),
-                        ),
-                        (
-                            "structure_overrides",
-                            Tag::List(vec![
-                                string("minecraft:strongholds"),
-                                string("minecraft:villages"),
-                            ]),
-                        ),
-                    ]),
-                ),
+                ("settings", flat_settings.unwrap_or_else(classic)),
             ]),
         ),
     ]);
@@ -2133,11 +2188,25 @@ pub struct Level {
     pub on_ground: bool,
     pub food_exhaustion: f32,
     pub food_tick_timer: i32,
+    /// Abilities.flying: whether creative/spectator flight is active.
+    pub flying: bool,
     /// The player compound as loaded, for fields Horizon does not model
     /// (ender chest, effects, abilities, recipe book, attributes, ...).
     pub player_extra: Option<Tag>,
 }
 impl Level {
+    /// Initialize the offline single-player identity before saving or dropping items.
+    pub fn ensure_player_uuid(&mut self) -> [i32; 4] {
+        *self.player_uuid.get_or_insert_with(|| {
+            let u = horizon_protocol::crypto::offline_uuid("Player");
+            [
+                (u >> 96) as u32 as i32,
+                (u >> 64) as u32 as i32,
+                (u >> 32) as u32 as i32,
+                u as u32 as i32,
+            ]
+        })
+    }
     pub fn game_rule(&self, name: &str) -> i32 {
         self.game_rules
             .get(name)
@@ -2284,6 +2353,10 @@ impl Level {
             self.creative = mode == 1;
             self.game_mode = mode as i32;
         }
+        self.flying = p
+            .get("abilities")
+            .and_then(|a| number(a.get("flying")))
+            .is_some_and(|v| v != 0);
         if let Some(d) = text(p.get("Dimension")) {
             self.dimension = d;
         }
@@ -2415,7 +2488,9 @@ impl Level {
         }
         if spectator {
             put(&mut abilities, "flying", Tag::Byte(1));
-        } else if !creative {
+        } else if creative {
+            put(&mut abilities, "flying", Tag::Byte(i8::from(self.flying)));
+        } else {
             put(&mut abilities, "flying", Tag::Byte(0));
         }
         if let Tag::Compound(map) = &mut abilities {
@@ -2595,17 +2670,7 @@ impl Level {
                 map.remove(&JavaString::from(key));
             }
         }
-        // A new world's player has the offline profile id of its name
-        // (UUIDUtil.createOfflinePlayerUUID), as in an offline single-player game.
-        let uuid = *self.player_uuid.get_or_insert_with(|| {
-            let u = horizon_protocol::crypto::offline_uuid("Player");
-            [
-                (u >> 96) as u32 as i32,
-                (u >> 64) as u32 as i32,
-                (u >> 32) as u32 as i32,
-                u as u32 as i32,
-            ]
-        });
+        let uuid = self.ensure_player_uuid();
         // A new world's first spawn point is its world spawn.
         if self.world_spawn.is_none() {
             self.world_spawn = self.spawn.map(|s| {
@@ -2768,10 +2833,361 @@ pub struct Persistent<G> {
     pub registry: Arc<crate::assets::Assets>,
     pub biomes: Arc<Biomes>,
 }
+type LodSurfaces = Arc<[crate::lod::Column; 256]>;
+struct SavedLodSampler<G: ChunkGenerator> {
+    generator: Arc<Persistent<G>>,
+    inner: Box<dyn crate::streaming::LodSampler>,
+    cache: std::collections::VecDeque<((i32, i32), Option<LodSurfaces>)>,
+    details: Vec<crate::streaming::LodDetail>,
+}
+impl<G: ChunkGenerator> SavedLodSampler<G> {
+    fn saved_columns(&mut self, key: (i32, i32)) -> Option<LodSurfaces> {
+        let cached = match self.cache.iter().position(|(at, _)| *at == key) {
+            Some(index) => self.cache.remove(index).unwrap(),
+            None => (
+                key,
+                self.generator.save.lod_surfaces(
+                    key.0,
+                    key.1,
+                    &self.generator.registry,
+                    &self.generator.biomes,
+                ),
+            ),
+        };
+        let columns = cached.1.clone();
+        self.cache.push_front(cached);
+        self.cache.truncate(128);
+        columns
+    }
+}
+impl<G: ChunkGenerator> crate::streaming::LodSampler for SavedLodSampler<G> {
+    fn fork(&self) -> Option<Box<dyn crate::streaming::LodSampler>> {
+        Some(Box::new(Self {
+            generator: self.generator.clone(),
+            inner: self.inner.fork()?,
+            cache: Default::default(),
+            details: Vec::new(),
+        }))
+    }
+    fn request_detail(&mut self, chunks: &[(i32, i32)], center: [i32; 2]) {
+        let mut missing = Vec::new();
+        for &key in chunks {
+            if let Some(columns) = self.saved_columns(key) {
+                self.details.push((key, columns));
+            } else {
+                missing.push(key);
+            }
+        }
+        self.inner.request_detail(&missing, center);
+    }
+    fn drain_details(&mut self) -> Vec<crate::streaming::LodDetail> {
+        let mut details = std::mem::take(&mut self.details);
+        for (key, generated) in self.inner.drain_details() {
+            // A generation batch also returns neighbouring, unrequested chunks.
+            // Their saved builds must take precedence too.
+            details.push((key, self.saved_columns(key).unwrap_or(generated)));
+        }
+        details
+    }
+    fn grid(&mut self, x: i32, z: i32, stride: i32, side: usize) -> Vec<crate::lod::Column> {
+        let mut columns = self.inner.grid(x, z, stride, side);
+        if stride <= 16 {
+            for (index, column) in columns.iter_mut().enumerate() {
+                let (wx, wz) = (
+                    x + (index % side) as i32 * stride,
+                    z + (index / side) as i32 * stride,
+                );
+                if let Some(saved) = self.saved_columns((wx >> 4, wz >> 4)) {
+                    *column = crate::lod::Column::reduced(
+                        &saved,
+                        (wx & 15) as usize,
+                        (wz & 15) as usize,
+                        stride as usize,
+                    );
+                }
+            }
+        }
+        columns
+    }
+    fn sample(&mut self, x: i32, z: i32) -> Option<crate::lod::Surface> {
+        self.column(x, z).surface
+    }
+    fn column(&mut self, x: i32, z: i32) -> crate::lod::Column {
+        self.reduced_column(x, z, 1)
+    }
+    fn reduced_column(&mut self, x: i32, z: i32, width: i32) -> crate::lod::Column {
+        if width <= 16
+            && let Some(columns) = self.saved_columns((x >> 4, z >> 4))
+        {
+            return crate::lod::Column::reduced(
+                &columns,
+                (x & 15) as usize,
+                (z & 15) as usize,
+                width as usize,
+            );
+        }
+        self.inner.reduced_column(x, z, width)
+    }
+}
+
+/// Read one palette index without expanding the other entries in the section.
+fn lod_palette_index(
+    container: &Tag,
+    index: usize,
+    entries: usize,
+    minimum_bits: u32,
+) -> Option<usize> {
+    let Tag::List(palette) = container.get("palette")? else {
+        return None;
+    };
+    if palette.is_empty() || palette.len() > entries || index >= entries {
+        return None;
+    }
+    if palette.len() == 1 {
+        return Some(0);
+    }
+    let bits = (usize::BITS - (palette.len() - 1).leading_zeros()).max(minimum_bits);
+    let per_word = 64 / bits as usize;
+    let Tag::LongArray(data) = container.get("data")? else {
+        return None;
+    };
+    if data.len() != entries.div_ceil(per_word) {
+        return None;
+    }
+    let value = ((data[index / per_word] as u64 >> ((index % per_word) * bits as usize))
+        & ((1 << bits) - 1)) as usize;
+    (value < palette.len()).then_some(value)
+}
+fn lod_light_layers(sections: &[(i32, &Tag)], sky_light: bool) -> Box<[u8]> {
+    let mut layers = [(None, None); SECTIONS];
+    for &(y, section) in sections {
+        let layer = |name: &str| match section.get(name) {
+            Some(Tag::ByteArray(data)) if data.len() == 2048 => Some(&data[..]),
+            _ => None,
+        };
+        layers[(y - (MIN_Y >> 4)) as usize] = (
+            if sky_light { layer("SkyLight") } else { None },
+            layer("BlockLight"),
+        );
+    }
+    let mut light = vec![0u8; SECTIONS * 4096].into_boxed_slice();
+    let mut above = [if sky_light { 15u8 } else { 0 }; 256];
+    let nibble = |data: &[u8], index: usize| (data[index / 2] >> ((index & 1) * 4)) & 15;
+    for si in (0..SECTIONS).rev() {
+        let (sky, block) = layers[si];
+        let section = &mut light[si * 4096..(si + 1) * 4096];
+        for (index, value) in section.iter_mut().enumerate() {
+            *value = sky.map_or(above[index & 255], |data| nibble(data, index)) << 4
+                | block.map_or(0, |data| nibble(data, index));
+        }
+        // Missing sky layers inherit the bottom layer above, as load_light does.
+        for (index, value) in above.iter_mut().enumerate() {
+            *value = section[index] >> 4;
+        }
+    }
+    light
+}
+fn lod_face_light(light: &[u8], x: usize, y: usize, z: usize) -> u16 {
+    let index = y * 256 + z * 16 + x;
+    let mut sky = light[index] >> 4;
+    let mut block = light[index] & 15;
+    for (valid, index) in [
+        (x > 0, index.wrapping_sub(1)),
+        (x < 15, index + 1),
+        (z > 0, index.wrapping_sub(16)),
+        (z < 15, index + 16),
+        (y > 0, index.wrapping_sub(256)),
+        (y + 1 < SECTIONS * 16, index + 256),
+    ] {
+        if valid {
+            sky = sky.max(light[index] >> 4);
+            block = block.max(light[index] & 15);
+        }
+    }
+    u16::from(sky) << 4 | u16::from(block) << 12
+}
+fn decode_lod_surfaces(
+    root: &NamedTag,
+    assets: &crate::assets::Assets,
+    biomes: &Biomes,
+    sky_light: bool,
+) -> Option<LodSurfaces> {
+    let Tag::List(sections) = root.tag.get("sections")? else {
+        return None;
+    };
+    let mut sections: Vec<_> = sections
+        .iter()
+        .filter_map(|section| {
+            let y = number(section.get("Y"))? as i32;
+            (MIN_Y >> 4..(MIN_Y >> 4) + SECTIONS as i32)
+                .contains(&y)
+                .then_some((y, section))
+        })
+        .collect();
+    sections.sort_unstable_by_key(|(y, _)| std::cmp::Reverse(*y));
+    let mut columns: Box<[crate::lod::Column; 256]> =
+        Box::new(std::array::from_fn(|_| crate::lod::Column {
+            surface: None,
+            spans: Vec::new(),
+        }));
+    let mut water = [None; 256];
+    let light = lod_light_layers(&sections, sky_light);
+    let mut states = BTreeMap::new();
+    for (section_y, section) in sections {
+        if let Some(blocks) = section.get("block_states") {
+            let Tag::List(palette) = blocks.get("palette")? else {
+                return None;
+            };
+            // Resolve each state once per palette, rather than parsing NBT for every block.
+            let palette: Vec<_> = palette
+                .iter()
+                .map(|entry| {
+                    let descriptor = BlockState::from_nbt(entry).ok()?;
+                    let state = *states.entry(descriptor.clone()).or_insert_with(|| {
+                        assets
+                            .registry
+                            .id(&descriptor)
+                            .or_else(|| assets.registry.default_state(&descriptor.name))
+                    });
+                    Some(state.map(|state| {
+                        let properties = assets.properties.heightmap_state(state);
+                        let fluid = matches!(
+                            descriptor.name.as_str(),
+                            "minecraft:water" | "minecraft:lava"
+                        );
+                        (state, fluid, properties.blocks_motion_in_heightmap())
+                    }))
+                })
+                .collect::<Option<_>>()?;
+            let biome_palette: Vec<_> = section
+                .get("biomes")
+                .and_then(|container| match container.get("palette")? {
+                    Tag::List(palette) => Some(palette),
+                    _ => None,
+                })
+                .into_iter()
+                .flatten()
+                .map(|entry| match entry {
+                    Tag::String(name) => biomes.id(&name.to_string_lossy()),
+                    _ => 0,
+                })
+                .collect();
+            for z in 0..16 {
+                for x in 0..16 {
+                    let cell = z * 16 + x;
+                    let column = &mut columns[cell];
+                    for y in (0..16).rev() {
+                        let index = y * 256 + cell;
+                        let palette_index = lod_palette_index(blocks, index, 4096, 4)?;
+                        let Some((state, fluid, solid)) = palette[palette_index] else {
+                            continue;
+                        };
+                        if !solid && !fluid {
+                            continue;
+                        }
+                        let biome = section
+                            .get("biomes")
+                            .and_then(|container| {
+                                lod_palette_index(
+                                    container,
+                                    (y / 4) * 16 + (z / 4) * 4 + x / 4,
+                                    64,
+                                    1,
+                                )
+                            })
+                            .and_then(|index| biome_palette.get(index))
+                            .copied()
+                            .unwrap_or(0);
+                        let height = section_y * 16 + y as i32 + 1;
+                        if column.surface.is_none() {
+                            if fluid {
+                                water[cell].get_or_insert((height, state));
+                            } else {
+                                column.surface = Some(crate::lod::Surface {
+                                    height,
+                                    state,
+                                    water: water[cell],
+                                    biome,
+                                });
+                            }
+                        }
+                        let light = lod_face_light(&light, x, (height - 1 - MIN_Y) as usize, z);
+                        let min = (height - 1) as i16;
+                        let max = height as i16;
+                        if let Some(previous) = column.spans.last_mut()
+                            && previous.min == max
+                            && (previous.state, previous.biome, previous.light)
+                                == (state, biome, light)
+                        {
+                            previous.min = min;
+                        } else {
+                            column.spans.push(crate::lod::Span {
+                                min,
+                                max,
+                                state,
+                                biome,
+                                light,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for column in &mut *columns {
+        column.spans.reverse();
+    }
+    Some(Arc::from(columns))
+}
+
+impl SaveDir {
+    fn lod_surfaces(
+        &self,
+        x: i32,
+        z: i32,
+        assets: &crate::assets::Assets,
+        biomes: &Biomes,
+    ) -> Option<LodSurfaces> {
+        let pending = self
+            .pending
+            .lock()
+            .ok()?
+            .get(&(false, x, z))
+            .map(|(_, record)| record.clone());
+        let root = if let Some(record) = pending {
+            record.tag().map(|tag| (*tag).clone())?
+        } else {
+            // Far-only reads must not populate the gameplay region cache across the whole view.
+            let mut region = RegionFile::open(self.region_path("region", x >> 5, z >> 5)).ok()?;
+            region
+                .read(ChunkPos::new(x, z))
+                .ok()??
+                .nbt(Limits::default())
+                .ok()?
+        };
+        // Proto saves may still be missing decoration from their neighbors.
+        if text(root.tag.get("Status"))
+            .is_some_and(|status| status != "minecraft:full" && status != "full")
+        {
+            return None;
+        }
+        decode_lod_surfaces(&root, assets, biomes, self.sky_light)
+    }
+}
+
 impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
     type Worker = G::Worker;
     fn worker(&self) -> G::Worker {
         self.inner.worker()
+    }
+    fn lod_sampler(self: Arc<Self>) -> Box<dyn crate::streaming::LodSampler> {
+        let inner = ChunkGenerator::lod_sampler(self.inner.clone());
+        Box::new(SavedLodSampler {
+            generator: self,
+            inner,
+            cache: Default::default(),
+            details: Vec::new(),
+        })
     }
     fn load(&self, x: i32, z: i32) -> Option<Chunk> {
         self.save
@@ -2783,6 +3199,13 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
         }
         chunk.entities = self.save.load_entities(x, z);
         Some(chunk)
+    }
+    fn lod_surface(&self, worker: &mut G::Worker, x: i32, z: i32) -> Option<crate::lod::Surface> {
+        // Resident/visited summaries override this procedural fallback in the LOD cache.
+        self.inner.lod_surface(worker, x, z)
+    }
+    fn prepare_loaded(&self, worker: &mut G::Worker, chunk: &Chunk) {
+        self.inner.prepare_loaded(worker, chunk);
     }
     fn proto(&self, worker: &mut G::Worker, x: i32, z: i32) -> crate::streaming::Proto {
         let mut proto = self.inner.proto(worker, x, z);
@@ -2839,6 +3262,209 @@ impl<G: ChunkGenerator> ChunkGenerator for Persistent<G> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn saved_far_surface_reads_builds_and_water_without_gameplay_chunks() {
+        let Some(root) = std::env::var_os("HORIZON_TEST_RESOURCES") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let assets = crate::assets::Assets::load(&root).expect("assets");
+        let biomes = Biomes::load(&root).expect("biomes");
+        let stone = assets.registry.default_state("minecraft:stone").unwrap();
+        let water = assets.registry.default_state("minecraft:water").unwrap();
+        let sand = assets.registry.default_state("minecraft:sand").unwrap();
+        let dirt = assets.registry.default_state("minecraft:dirt").unwrap();
+        let leaves = assets
+            .registry
+            .default_state("minecraft:oak_leaves")
+            .unwrap();
+        let mut chunk = Chunk::empty(-2, 3);
+        chunk.set(0, 109, 0, stone.0);
+        chunk.set(3, 121, 5, stone.0);
+        chunk.set(3, 122, 5, stone.0);
+        chunk.set(3, 120, 5, dirt.0);
+        chunk.set(3, 119, 5, dirt.0);
+        chunk.set(3, 115, 5, stone.0);
+        chunk.set(11, 125, 11, stone.0);
+        chunk.set(14, 127, 14, stone.0);
+        chunk.set(14, 112, 14, stone.0);
+        for y in 95..98 {
+            chunk.set(2, y, 6, stone.0);
+        }
+        chunk.lit = true;
+        let mut cave_light = Box::new([0x03; 4096]);
+        cave_light[crate::chunk::index(12, 125, 11)] = 0xa7;
+        Arc::make_mut(&mut chunk.sections[((121 - MIN_Y) >> 4) as usize]).light =
+            Light::Full(cave_light);
+        chunk.set(7, 90, 9, sand.0);
+        chunk.set(7, 98, 9, leaves.0);
+        let forest = biomes.id("minecraft:forest");
+        chunk.set_biome_cell(7 / 4, (98 - MIN_Y) / 4, 9 / 4, forest);
+        chunk.set(4, 54, 4, sand.0);
+        for y in 55..64 {
+            chunk.set(4, y, 4, water.0);
+        }
+        let mut saved = encode(&chunk, assets.registry, &biomes);
+        put(
+            &mut saved.tag,
+            "block_entities",
+            Tag::String("not decoded by far sampling".into()),
+        );
+        let dir = std::env::temp_dir().join(format!("horizon-lod-save-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let save = SaveDir::new(dir.clone());
+        save.write_records("region", vec![((-2, 3), Some(saved))], true)
+            .unwrap();
+        let reopened = SaveDir::new(dir.clone());
+        let surfaces = reopened
+            .lod_surfaces(-2, 3, &assets, &biomes)
+            .expect("saved summary");
+        assert_eq!(surfaces[0].surface.unwrap().height, 110);
+        assert_eq!(surfaces[0].surface.unwrap().state, stone);
+        let narrow_build = surfaces[5 * 16 + 3].surface.unwrap();
+        assert_eq!((narrow_build.height, narrow_build.state), (123, stone));
+        assert!(
+            surfaces[5 * 16 + 2].surface.is_none(),
+            "adjacent columns stay distinct"
+        );
+        let strata = &surfaces[5 * 16 + 3].spans;
+        assert_eq!(
+            strata
+                .iter()
+                .map(|span| (span.min, span.max, span.state))
+                .collect::<Vec<_>>(),
+            vec![(115, 116, stone), (119, 121, dirt), (121, 123, stone)]
+        );
+        assert!(
+            strata.iter().all(|span| span.light == 0x3000),
+            "saved cave darkness and block light survive"
+        );
+        assert_eq!(
+            surfaces[11 * 16 + 11].spans[0].light,
+            0x70a0,
+            "neighbor face light uses separate sky/block channels"
+        );
+        let boundaries = &surfaces[14 * 16 + 14].spans;
+        assert_eq!(boundaries.len(), 2);
+        assert!(
+            boundaries.iter().all(|span| span.light == 0x30f0),
+            "face light crosses section boundaries above and below"
+        );
+        let across_sections = &surfaces[6 * 16 + 2].spans;
+        assert_eq!(across_sections.len(), 1);
+        assert_eq!((across_sections[0].min, across_sections[0].max), (95, 98));
+        let canopy = surfaces[9 * 16 + 7].surface.unwrap();
+        assert_eq!(
+            (canopy.height, canopy.state, canopy.biome),
+            (99, leaves, forest)
+        );
+        let underwater = surfaces[4 * 16 + 4].surface.unwrap();
+        assert_eq!((underwater.height, underwater.state), (55, sand));
+        assert_eq!(underwater.water, Some((64, water)));
+        assert!(surfaces[15].surface.is_none(), "saved void stays empty");
+        assert!(
+            reopened.regions.lock().unwrap().is_empty(),
+            "far reads do not grow gameplay region cache"
+        );
+        let mut proto = encode(&chunk, assets.registry, &biomes);
+        put(
+            &mut proto.tag,
+            "Status",
+            string(ChunkStatus::Terrain.name()),
+        );
+        put(&mut proto.tag, "xPos", Tag::Int(-3));
+        save.write_records("region", vec![((-3, 3), Some(proto))], true)
+            .unwrap();
+        assert!(
+            reopened.lod_surfaces(-3, 3, &assets, &biomes).is_none(),
+            "unfinished proto saves must not suppress complete decoration"
+        );
+        let mut nether = SaveDir::new(dir.clone());
+        nether.sky_light = false;
+        let dark = nether.lod_surfaces(-2, 3, &assets, &biomes).unwrap();
+        assert!(
+            dark.iter()
+                .flat_map(|c| &c.spans)
+                .all(|s| s.light & 0xf0 == 0),
+            "no invented skylight in Nether saves"
+        );
+        struct SavedOnly(Vec<crate::streaming::LodDetail>);
+        impl crate::streaming::LodSampler for SavedOnly {
+            fn sample(&mut self, _: i32, _: i32) -> Option<crate::lod::Surface> {
+                panic!("saved data must win")
+            }
+            fn request_detail(&mut self, chunks: &[(i32, i32)], _: [i32; 2]) {
+                assert!(
+                    chunks.is_empty(),
+                    "saved builds must not request speculative generation"
+                );
+            }
+            fn drain_details(&mut self) -> Vec<crate::streaming::LodDetail> {
+                std::mem::take(&mut self.0)
+            }
+        }
+        let inner = Arc::new(crate::testgen::TestTerrain::new(assets.registry, &biomes).unwrap());
+        let generator = Arc::new(Persistent {
+            inner,
+            save: Arc::new(reopened),
+            registry: Arc::new(assets),
+            biomes: Arc::new(biomes),
+        });
+        let mut sampler = SavedLodSampler {
+            generator,
+            inner: Box::new(SavedOnly(Vec::new())),
+            cache: Default::default(),
+            details: Vec::new(),
+        };
+        use crate::streaming::LodSampler;
+        sampler.request_detail(&[(-2, 3)], [-32, 48]);
+        let details = sampler.drain_details();
+        assert_eq!(details.len(), 1);
+        assert_eq!(&details[0].1[..], &surfaces[..]);
+        sampler.cache.clear();
+        let generated: LodSurfaces =
+            Arc::new(std::array::from_fn(|_| crate::lod::Column::default()));
+        sampler.inner = Box::new(SavedOnly(vec![
+            ((-2, 3), generated.clone()),
+            ((-9, 9), generated.clone()),
+        ]));
+        let details = sampler.drain_details();
+        assert_eq!(
+            &details[0].1[..],
+            &surfaces[..],
+            "unrequested batch neighbours must preserve saved builds"
+        );
+        assert!(Arc::ptr_eq(&details[1].1, &generated));
+        sampler.inner =
+            crate::streaming::ChunkGenerator::lod_sampler(sampler.generator.inner.clone());
+        let grid = sampler.grid(-32, 48, 2, 16);
+        for z in 0..8 {
+            for x in 0..8 {
+                assert_eq!(
+                    grid[z * 16 + x],
+                    crate::lod::Column::reduced(&surfaces, x * 2, z * 2, 2),
+                    "saved builds must override a batched direct grid"
+                );
+            }
+        }
+        drop((save, sampler, nether));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn saved_far_surface_rejects_invalid_packed_palettes() {
+        let mut states = Tag::compound([
+            ("palette", Tag::List(vec![Tag::Byte(0), Tag::Byte(1)])),
+            ("data", Tag::LongArray(vec![0; 256])),
+        ]);
+        assert_eq!(lod_palette_index(&states, 4095, 4096, 4), Some(0));
+        assert_eq!(lod_palette_index(&states, 4096, 4096, 4), None);
+        put(&mut states, "data", Tag::LongArray(vec![15; 256]));
+        assert_eq!(lod_palette_index(&states, 0, 4096, 4), None);
+        put(&mut states, "data", Tag::LongArray(vec![0; 255]));
+        assert_eq!(lod_palette_index(&states, 0, 4096, 4), None);
+    }
+
     #[test]
     fn save_batch_preserves_order_coordinates_and_ownership() {
         use crate::containers::BlockEntity;
@@ -2905,6 +3531,43 @@ mod tests {
         assert!(!snapshot[0].block_names.is_empty());
         assert_eq!(source.block_names[0].1, "stale");
         assert_eq!(source.block_entities[0].0, (99, 0, 99));
+    }
+
+    #[test]
+    fn records_compressed_on_helpers_match_one_thread_in_order() {
+        use super::{Record, compress_records};
+        let records: Vec<((i32, i32), Record)> = (0..53i32)
+            .map(|i| {
+                let record = if i % 7 == 3 {
+                    Record::Delete
+                } else {
+                    let payload: Vec<i64> = (0..i * 97 % 2000).map(|v| i64::from(v * i)).collect();
+                    Record::Tag(Arc::new(NamedTag {
+                        name: "".into(),
+                        tag: Tag::compound([
+                            ("xPos", Tag::Int(i)),
+                            ("Data", Tag::LongArray(payload)),
+                        ]),
+                    }))
+                };
+                ((i, -i), record)
+            })
+            .collect();
+        let refs: Vec<_> = records.iter().map(|(k, r)| (*k, r)).collect();
+        let compressed = compress_records(&refs, 1234);
+        assert_eq!(compressed.len(), records.len());
+        for ((_, record), got) in records.iter().zip(compressed) {
+            let want = record
+                .tag()
+                .map(|t| ChunkRecord::from_nbt(&t, Compression::Zlib, 1234, Limits::default()))
+                .transpose()
+                .unwrap();
+            let got = got.unwrap();
+            assert_eq!(
+                got.as_ref().map(|r| (&r.compressed, r.timestamp)),
+                want.as_ref().map(|r| (&r.compressed, r.timestamp))
+            );
+        }
     }
 
     #[test]
@@ -3135,6 +3798,7 @@ mod tests {
             world_spawn: Some([8, 64, 8]),
             spawn: Some([20.0, 70.0, 20.0]),
             difficulty_locked: true,
+            flying: true,
             ..Level::default()
         };
         level.weather.raining = true;
@@ -3146,6 +3810,7 @@ mod tests {
         assert_eq!(back.seed, -42);
         assert_eq!((back.time, back.day_time), (1234, 25000));
         assert!(back.creative);
+        assert!(back.flying);
         assert_eq!(back.position, Some([1.5, 70.0, -3.25]));
         assert_eq!(back.rotation, [90.0, 10.0]);
         assert_eq!((back.health, back.food, back.saturation), (17.0, 15, 2.5));
@@ -3199,6 +3864,17 @@ mod tests {
             third.ender_items[3].as_ref().map(|s| (&*s.item, s.count)),
             Some(("minecraft:diamond", 2))
         );
+        // A dead player's empty inventory replaces the previously loaded items.
+        let mut dead = third;
+        dead.health = 0.0;
+        dead.inventory.clear();
+        dead.inventory_components.clear();
+        dead.write(&dir).unwrap();
+        let dead = Level::read(&dir).unwrap();
+        assert_eq!(dead.health, 0.0);
+        assert!(dead.inventory.is_empty());
+        assert!(dead.inventory_components.is_empty());
+        assert!(dead.player_extra.unwrap().get("equipment").is_none());
         assert!(dir.join("data/minecraft/world_gen_settings.dat").exists());
         let _ = fs::remove_dir_all(&dir);
     }
@@ -3216,5 +3892,34 @@ mod tests {
         level.player_extra = Some(loaded);
         level.active_effects.clear();
         assert!(level.player_tag().get("active_effects").is_none());
+    }
+
+    #[test]
+    fn creative_flight_status_persists_in_save_and_resets_for_survival() {
+        let mut level = Level {
+            creative: true,
+            flying: true,
+            ..Level::default()
+        };
+        let tag = level.player_tag();
+        let flying_byte = tag
+            .get("abilities")
+            .and_then(|a| number(a.get("flying")))
+            .unwrap_or(0);
+        assert_eq!(flying_byte, 1);
+
+        let mut loaded = Level::default();
+        loaded.read_player(&tag);
+        assert!(loaded.flying);
+
+        // Survival mode resets flying ability to 0 in save.
+        level.creative = false;
+        level.game_mode = 0;
+        let tag_survival = level.player_tag();
+        let flying_survival = tag_survival
+            .get("abilities")
+            .and_then(|a| number(a.get("flying")))
+            .unwrap_or(0);
+        assert_eq!(flying_survival, 0);
     }
 }

@@ -57,6 +57,19 @@ pub fn storage_len(bits: u8, entries: usize) -> usize {
     }
 }
 
+/// SimpleBitStorage's longs for `values` at `bits` each, a long at a time.
+fn pack<T>(values: &[T], bits: u8, id: impl Fn(&T) -> u64) -> Vec<i64> {
+    let per = 64 / bits as usize;
+    values
+        .chunks(per)
+        .map(|word| {
+            word.iter()
+                .enumerate()
+                .fold(0u64, |w, (k, v)| w | id(v) << (k * bits as usize)) as i64
+        })
+        .collect()
+}
+
 /// One PalettedContainer as sent.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Paletted {
@@ -114,6 +127,66 @@ impl Paletted {
     /// Pack values the way the server's container would have grown:
     /// the smallest configuration for the number of distinct values.
     pub fn from_values(values: &[i32], strategy: Strategy, global_bits: u8) -> Self {
+        // Palette indices by value, in first-seen order: a table over the
+        // value range (registry ids are small), kept per thread and cleared
+        // after use, with the previous value remembered, since neighbouring
+        // blocks repeat.
+        thread_local! {
+            static INDEX: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+        }
+        let max = values.iter().copied().max().unwrap_or(0);
+        if values.iter().any(|&v| v < 0) || max >= 1 << 20 {
+            return Self::from_values_slow(values, strategy, global_bits);
+        }
+        let mut palette: Vec<i32> = Vec::new();
+        let mut ids = Vec::with_capacity(values.len());
+        INDEX.with_borrow_mut(|index| {
+            if index.len() <= max as usize {
+                index.resize(max as usize + 1, u32::MAX);
+            }
+            let (mut last, mut last_id) = (-1i32, 0u32);
+            for &v in values {
+                if v != last {
+                    let slot = &mut index[v as usize];
+                    if *slot == u32::MAX {
+                        *slot = palette.len() as u32;
+                        palette.push(v);
+                    }
+                    (last, last_id) = (v, *slot);
+                }
+                ids.push(last_id);
+            }
+            for &v in &palette {
+                index[v as usize] = u32::MAX;
+            }
+        });
+        let needed = if palette.len() <= 1 {
+            0
+        } else {
+            (usize::BITS - (palette.len() - 1).leading_zeros()) as u8
+        };
+        let (has_palette, bits) = strategy.configuration(needed, global_bits);
+        if bits == 0 {
+            return Self {
+                bits: 0,
+                palette: vec![palette.first().copied().unwrap_or(0)],
+                data: Vec::new(),
+            };
+        }
+        let data = if has_palette {
+            pack(&ids, bits, |&id| u64::from(id))
+        } else {
+            pack(values, bits, |&v| v as u64)
+        };
+        Self {
+            bits,
+            palette: if has_palette { palette } else { Vec::new() },
+            data,
+        }
+    }
+
+    /// `from_values` for any values: linear palette searches.
+    fn from_values_slow(values: &[i32], strategy: Strategy, global_bits: u8) -> Self {
         let mut palette: Vec<i32> = Vec::new();
         for &v in values {
             if !palette.contains(&v) {
@@ -289,6 +362,29 @@ pub fn nibble(layer: &[u8], i: usize) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn from_values_matches_the_linear_search() {
+        let mut seed = 12345u64;
+        let mut next = |n: u64| {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((seed >> 33) % n) as i32
+        };
+        for distinct in [1u64, 2, 16, 17, 200, 300, 5000] {
+            let values: Vec<i32> = (0..BLOCKS).map(|_| next(distinct) * 7).collect();
+            assert_eq!(
+                Paletted::from_values(&values, Strategy::Blocks, 16),
+                Paletted::from_values_slow(&values, Strategy::Blocks, 16)
+            );
+            let biomes: Vec<i32> = values[..BIOMES].to_vec();
+            assert_eq!(
+                Paletted::from_values(&biomes, Strategy::Biomes, 7),
+                Paletted::from_values_slow(&biomes, Strategy::Biomes, 7)
+            );
+        }
+    }
 
     #[test]
     fn bit_storage_matches_simple_bit_storage() {

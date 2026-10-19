@@ -17,7 +17,6 @@ use horizon_client::{
 };
 use horizon_core::{
     geometry::{Aabb, Vec3},
-    position::BlockPos,
     random::RandomSource,
 };
 use horizon_world::registry::BlockStateId;
@@ -91,6 +90,10 @@ pub(super) struct Minecart {
 }
 const WIDTH: f64 = 0.98;
 const HEIGHT: f64 = 0.7;
+/// AbstractMinecart.getDefaultDisplayOffset, in sixteenths of a block.
+fn display_offset(kind: CartKind) -> f64 {
+    if kind == CartKind::Hopper { 1.0 } else { 6.0 }
+}
 /// The minecart's passenger attachment minus Player.DEFAULT_VEHICLE_ATTACHMENT.
 const SEAT: f64 = 0.1875 - 0.6;
 /// The placeholder container key under which an open cart's items live.
@@ -154,6 +157,10 @@ pub(super) struct Rail {
     powered: bool,
 }
 impl Minecart {
+    /// `Entity.onGround`.
+    pub(super) fn on_ground(&self) -> bool {
+        self.on_ground
+    }
     pub fn new(id: u32, kind: CartKind, position: Vec3) -> Self {
         Self {
             id,
@@ -211,7 +218,7 @@ impl CartModels {
 impl Game<'_> {
     pub(super) fn rail(&self, x: i32, y: i32, z: i32) -> Option<Rail> {
         let state = self.world.block(x, y, z);
-        let name = self.res.facts.get(state).name.clone();
+        let name = self.res.facts().get(state).name.clone();
         if !matches!(
             &*name,
             "minecraft:rail"
@@ -240,11 +247,14 @@ impl Game<'_> {
         }
     }
     fn conductor(&self, x: i32, y: i32, z: i32) -> bool {
-        self.res.facts.get(self.world.block(x, y, z)).full_collision
+        self.res
+            .facts()
+            .get(self.world.block(x, y, z))
+            .full_collision
     }
     fn cart_in_water(&self, c: &Minecart) -> bool {
         let p = c.position;
-        let f = self.res.facts.get(self.world.block(
+        let f = self.res.facts().get(self.world.block(
             p.x.floor() as i32,
             (p.y + 0.1).floor() as i32,
             p.z.floor() as i32,
@@ -654,7 +664,7 @@ impl Game<'_> {
                         stack.count = 0;
                     }
                     Some(s) if s.same_item_same_components(&stack) => {
-                        let max = self.res.items.get(&s.item).map_or(64, |i| i.max_stack);
+                        let max = self.res.items().get(&s.item).map_or(64, |i| i.max_stack);
                         let moved = stack.count.min(max.saturating_sub(s.count));
                         s.count += moved;
                         stack.count -= moved;
@@ -882,9 +892,9 @@ impl Game<'_> {
                 (-1, 1),
             ] {
                 let (x, y, z) = (bx + dx, by + dy, bz + dz);
-                let below = self.res.facts.get(self.world.block(x, y - 1, z));
-                let here = self.res.facts.get(self.world.block(x, y, z));
-                let head = self.res.facts.get(self.world.block(x, y + 1, z));
+                let below = self.res.facts().get(self.world.block(x, y - 1, z));
+                let here = self.res.facts().get(self.world.block(x, y, z));
+                let head = self.res.facts().get(self.world.block(x, y + 1, z));
                 if (below.full_collision || below.legacy_solid)
                     && !here.full_collision
                     && !head.full_collision
@@ -1139,16 +1149,17 @@ impl Game<'_> {
             }
         }
     }
-    /// A block model's faces under `m` (block space 0..1), lit flat.
+    /// Baked block faces with terrain shade or block-item diffuse lighting.
     pub(super) fn block_model_vertices(
         &self,
         state: BlockStateId,
-        seed_pos: BlockPos,
+        seed: i64,
         m: glam::Mat4,
         light: u32,
+        diffuse: bool,
         out: &mut Vec<Vertex>,
     ) {
-        let Ok(models) = self.pack.assets.model_catalog.collect(state, seed_pos) else {
+        let Ok(models) = self.pack.render.model_catalog.collect_seeded(state, seed) else {
             return;
         };
         for (_, model) in &models {
@@ -1157,7 +1168,7 @@ impl Game<'_> {
                     .pack
                     .layer_names
                     .get(&face.layer)
-                    .and_then(|n| self.atlas.sprites.get(n))
+                    .and_then(|n| self.gui.atlas.sprites.get(n))
                 else {
                     continue;
                 };
@@ -1168,12 +1179,30 @@ impl Game<'_> {
                     D::North | D::South => 204,
                     D::West | D::East => 153,
                 };
-                let color = 0xFF00_0000 | shade << 16 | shade << 8 | shade;
+                let color = if diffuse {
+                    u32::MAX
+                } else {
+                    0xFF00_0000 | shade << 16 | shade << 8 | shade
+                };
+                let normal = if diffuse {
+                    use horizon_client::item_render::{direction_vector, transform_normal};
+                    let n = transform_normal(m, direction_vector(face.quad.facing));
+                    let n = n.to_array().map(|v| (v.clamp(-1.0, 1.0) * 127.0) as i8);
+                    [n[0], n[1], n[2], 127]
+                } else {
+                    [0; 4]
+                };
+                let light = if diffuse {
+                    let emission = u32::from(face.quad.light_emission) * 16;
+                    (light & 0xFF) | (light >> 8 & 0xFF).max(emission) << 8
+                } else {
+                    light
+                };
                 for k in 0..4 {
                     let p = face.quad.positions[k];
                     let uv = face.quad.uv[k];
                     out.push(Vertex {
-                        normal: [0; 4],
+                        normal,
                         pos: m.transform_point3(glam::Vec3::from_array(p)).to_array(),
                         uv: [s.u0 + uv[0] * (s.u1 - s.u0), s.v0 + uv[1] * (s.v1 - s.v0)],
                         layer: 0,
@@ -1212,17 +1241,22 @@ impl Game<'_> {
     /// front and back points, pitched on slopes, with the display block.
     pub(super) fn cart_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
         let a = alpha as f32;
+        let Some(uv) = self
+            .gui
+            .atlas
+            .sprites
+            .get("entity/minecart/minecart")
+            .map(|r| [r.u0, r.v0, r.u1, r.v1])
+        else {
+            return;
+        };
+        // Entity.shouldRenderAtSqrDistance: 64 times the bounding box's mean
+        // edge, scaled by the entity distance option.
+        let range =
+            (WIDTH + HEIGHT + WIDTH) / 3.0 * 64.0 * f64::from(self.settings.entity_distance);
         for c in &self.carts {
             let entity_start = out.len();
             let Some(model) = self.cart_models.models.get(&c.kind) else {
-                continue;
-            };
-            let Some(uv) = self
-                .atlas
-                .sprites
-                .get("entity/minecart/minecart")
-                .map(|r| [r.u0, r.v0, r.u1, r.v1])
-            else {
                 continue;
             };
             let (x, y, z) = (
@@ -1230,6 +1264,30 @@ impl Game<'_> {
                 c.previous.y + (c.position.y - c.previous.y) * alpha,
                 c.previous.z + (c.position.z - c.previous.z) * alpha,
             );
+            // LevelExtractor.isEntityVisible: the cart the player rides always draws.
+            if self.riding != Some(c.id) {
+                let d = glam::DVec3::new(c.position.x, c.position.y, c.position.z) - camera;
+                if d.length_squared() >= range * range {
+                    continue;
+                }
+                // EntityRenderer.shouldRender: the interpolated box grown by 0.5;
+                // AbstractMinecartRenderer.getBoundingBoxForCulling stretches it
+                // up by the display block's offset.
+                if let Some(view) = &self.view_frustum {
+                    let top = HEIGHT
+                        + if c.kind == CartKind::Rideable {
+                            0.0
+                        } else {
+                            display_offset(c.kind) * 0.75 / 16.0
+                        };
+                    let p = glam::DVec3::new(x, y, z) - camera;
+                    let lo = p - glam::DVec3::new(WIDTH / 2.0 + 0.5, 0.5, WIDTH / 2.0 + 0.5);
+                    let hi = p + glam::DVec3::new(WIDTH / 2.0 + 0.5, top + 0.5, WIDTH / 2.0 + 0.5);
+                    if !view.intersects(lo.as_vec3(), hi.as_vec3()) {
+                        continue;
+                    }
+                }
+            }
             let mut yaw =
                 c.previous_yaw + ((c.yaw - c.previous_yaw + 180.0).rem_euclid(360.0) - 180.0) * a;
             let mut pitch = 0.0f32;
@@ -1274,7 +1332,11 @@ impl Game<'_> {
             if let Some(state) = self.display_state(c) {
                 let display = base
                     * glam::Mat4::from_scale(glam::Vec3::splat(0.75))
-                    * glam::Mat4::from_translation(glam::Vec3::new(-0.5, (6.0 - 8.0) / 16.0, 0.5))
+                    * glam::Mat4::from_translation(glam::Vec3::new(
+                        -0.5,
+                        (display_offset(c.kind) as f32 - 8.0) / 16.0,
+                        0.5,
+                    ))
                     * glam::Mat4::from_rotation_y(90f32.to_radians());
                 if c.kind == CartKind::Chest {
                     self.cart_chest(state, display, l, out);
@@ -1297,7 +1359,7 @@ impl Game<'_> {
                         * glam::Mat4::from_translation(glam::Vec3::splat(-0.5));
                     let flash = c.kind == CartKind::Tnt && c.fuse > -1 && (c.fuse / 5) % 2 == 0;
                     let start = out.len();
-                    self.block_model_vertices(state, BlockPos::default(), m, packed, out);
+                    self.block_model_vertices(state, 0, m, packed, false, out);
                     if flash {
                         // submitWhiteSolidBlock: OverlayTexture.u(1.0) on the cart's own light.
                         for v in &mut out[start..] {
@@ -1324,15 +1386,15 @@ impl Game<'_> {
             game_time: self.world.game_time,
             max_y: self.dim.max_y(),
             world: &self.world,
-            sprites: &self.atlas.sprites,
+            sprites: &self.gui.atlas.sprites,
             nether: self.dim == super::Dim::Nether,
             lid: &lid,
             sign: &|_| None,
             banner: &|_| Vec::new(),
-            glyph: &|c| self.atlas.glyph_cell(c),
+            glyph: &|c| self.gui.atlas.glyph_cell(c),
         };
         self.res
-            .block_entity_render
+            .block_entity_render()
             .render_state(&scene, state.0, m, light, out);
     }
 }
@@ -1408,5 +1470,20 @@ impl Minecart {
         c.push = [double("PushX"), double("PushZ")];
         c.fuse = int("fuse").unwrap_or(-1);
         Some(c)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_offset_matches_vanilla_for_each_cart_kind() {
+        assert_eq!(display_offset(CartKind::Hopper), 1.0);
+        assert_eq!(display_offset(CartKind::Chest), 6.0);
+        assert_eq!(display_offset(CartKind::Furnace), 6.0);
+        assert_eq!(display_offset(CartKind::Tnt), 6.0);
+        assert_eq!(display_offset(CartKind::CommandBlock), 6.0);
+        assert_eq!(display_offset(CartKind::Rideable), 6.0);
     }
 }

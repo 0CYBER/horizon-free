@@ -16,6 +16,7 @@ pub struct ItemEntity {
     pub fire_ticks: i32,
     pub id: u32,
     pub stack: ItemStack,
+    pub thrower: Option<[i32; 4]>,
     pub position: Vec3,
     pub previous: Vec3,
     pub velocity: Vec3,
@@ -178,6 +179,8 @@ impl ItemEntity {
 /// ExperienceOrb: gravity 0.03, homing towards the player within 8 blocks.
 #[derive(Clone, Debug)]
 pub struct ExperienceOrb {
+    /// The entity id servers track it by.
+    pub id: u32,
     pub position: Vec3,
     pub previous: Vec3,
     pub velocity: Vec3,
@@ -532,15 +535,16 @@ impl ArmorStand {
             Vec3::new(p.x + w, p.y + h, p.z + w),
         )
     }
-    /// LivingEntity.travel with gravity 0.08 and 0.98 drag, falling until it
-    /// lands (armor stands have no other movement).
+    /// LivingEntity.travelInAir (armor stands have no other movement): move
+    /// by the velocity (a landing stops the fall,
+    /// `Block.updateEntityMovementAfterFallOn`), then gravity 0.08 and the
+    /// 0.98 drag, so a stand at rest on the ground keeps -0.0784 as vanilla's.
     pub fn tick(&mut self, scene: &mut crate::collisions::SceneCollisions) {
         if self.marker {
             return;
         }
-        let mut v = self.velocity;
-        v.y -= 0.08;
-        let wanted = v;
+        let wanted = self.velocity;
+        let mut y = wanted.y;
         if let Ok(moved) = scene.resolve(self.bounds(), wanted, 0.0, self.on_ground) {
             self.position = Vec3::new(
                 self.position.x + moved.x,
@@ -548,9 +552,11 @@ impl ArmorStand {
                 self.position.z + moved.z,
             );
             self.on_ground = wanted.y < 0.0 && moved.y > wanted.y;
-            v = Vec3::new(0.0, if moved.y != wanted.y { 0.0 } else { v.y * 0.98 }, 0.0);
+            if moved.y != wanted.y {
+                y = 0.0;
+            }
         }
-        self.velocity = v;
+        self.velocity = Vec3::new(0.0, (y - 0.08) * f64::from(0.98f32), 0.0);
     }
 }
 
@@ -596,9 +602,10 @@ mod fire_environment_tests {
             return;
         }
         let assets = crate::assets::Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
         let facts = BlockFacts::load(&root, assets.registry).unwrap();
         let items = crate::items::Items::load(&root, assets.registry, &facts).unwrap();
-        let mut world = World::test_scene(&assets, 3).unwrap();
+        let mut world = World::test_scene(&assets, &render, 3).unwrap();
         let at = Vec3::new(20.5, 4.0, 20.5);
         world
             .set(
@@ -610,6 +617,7 @@ mod fire_environment_tests {
             .unwrap();
         let make = |id: &str| ItemEntity {
             id: 1,
+            thrower: None,
             stack: ItemStack {
                 item: std::sync::Arc::from(id),
                 count: 1,

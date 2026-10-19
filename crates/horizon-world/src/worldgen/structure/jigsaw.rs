@@ -30,7 +30,7 @@ pub enum Projection {
     Rigid,
     TerrainMatching,
 }
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum PoolElement {
     Empty,
     Single {
@@ -39,6 +39,12 @@ pub enum PoolElement {
         legacy: bool,
         projection: Projection,
         waterlogging: Option<bool>,
+        /// YUNG's API's rules on the piece (`"horizon:yungsapi"`), read only
+        /// by its assembler ([`super::yung`]).
+        yung: Option<Box<super::yung::Rules>>,
+        /// The piece's own terrain kernel in a structure that has one
+        /// (`"horizon:enhanced_terrain_adaptation"`).
+        enhanced_terrain: Option<Arc<super::enhanced_terrain::Adaptation>>,
     },
     Feature {
         feature: String,
@@ -81,11 +87,12 @@ fn opposite(d: Direction) -> Direction {
         Direction::East => Direction::West,
     }
 }
-fn step(d: Direction) -> [i32; 3] {
+pub(super) fn step(d: Direction) -> [i32; 3] {
     let n = d.normal();
     [n[0], n[1], n[2]]
 }
-fn shuffle<T>(list: &mut [T], random: &mut impl RandomSource) {
+/// Util.shuffle.
+pub(super) fn shuffle<T>(list: &mut [T], random: &mut impl RandomSource) {
     for i in (2..=list.len()).rev() {
         let swap = random.next_int_bound(i as i32).unwrap_or(0) as usize;
         list.swap(i - 1, swap);
@@ -135,6 +142,14 @@ impl PoolElement {
                         Some("ignore_waterlogging") => Some(false),
                         _ => None,
                     },
+                    yung: value
+                        .get("horizon:yungsapi")
+                        .map(|rules| super::yung::Rules::decode(rules, resources).map(Box::new))
+                        .transpose()?,
+                    enhanced_terrain: value
+                        .get("horizon:enhanced_terrain_adaptation")
+                        .map(|a| super::enhanced_terrain::Adaptation::decode(a).map(Arc::new))
+                        .transpose()?,
                 }
             }
             "minecraft:feature_pool_element" => Self::Feature {
@@ -219,16 +234,35 @@ impl PoolElement {
                 .first()
                 .map(|e| e.shuffled_jigsaws(resources, position, rotation, random))
                 .unwrap_or_default(),
-            Self::Single { template, .. } => {
+            Self::Single { template, yung, .. } => {
                 let mut jigsaws = template_jigsaws(resources, template, position, rotation);
                 shuffle(&mut jigsaws, random);
-                jigsaws.sort_by_key(|j| std::cmp::Reverse(j.selection_priority));
+                // YUNG's elements keep the shuffled order.
+                if yung.is_none() {
+                    jigsaws.sort_by_key(|j| std::cmp::Reverse(j.selection_priority));
+                }
                 jigsaws
             }
         }
     }
     pub fn ground_level_delta(&self) -> i32 {
         1
+    }
+    /// YUNG's API's rules, on a piece of one of its structures.
+    pub fn yung(&self) -> Option<&super::yung::Rules> {
+        match self {
+            Self::Single { yung, .. } => yung.as_deref(),
+            _ => None,
+        }
+    }
+    /// The piece's own terrain kernel, in place of its structure's.
+    pub fn enhanced_terrain(&self) -> Option<&super::enhanced_terrain::Adaptation> {
+        match self {
+            Self::Single {
+                enhanced_terrain, ..
+            } => enhanced_terrain.as_deref(),
+            _ => None,
+        }
     }
 }
 /// StructureTemplate.getJigsaws: palette chosen by a position-seeded random.
@@ -274,7 +308,7 @@ fn template_jigsaws(
         })
         .collect()
 }
-fn can_attach(source: &Jigsaw, target: &Jigsaw) -> bool {
+pub(super) fn can_attach(source: &Jigsaw, target: &Jigsaw) -> bool {
     source.front == opposite(target.front)
         && (source.rollable || source.top == target.top)
         && target
@@ -285,12 +319,15 @@ fn can_attach(source: &Jigsaw, target: &Jigsaw) -> bool {
 
 #[derive(Debug)]
 pub struct Pool {
-    templates: Vec<Arc<PoolElement>>,
-    fallback: String,
+    /// Each element repeated by its weight.
+    pub(super) templates: Vec<Arc<PoolElement>>,
+    /// The elements with their weights, in file order (`rawTemplates`).
+    pub(super) raw: Vec<(Arc<PoolElement>, i32)>,
+    pub(super) fallback: String,
     max_size: OnceLock<i32>,
 }
 impl Pool {
-    fn random_template(&self, random: &mut impl RandomSource) -> Arc<PoolElement> {
+    pub(super) fn random_template(&self, random: &mut impl RandomSource) -> Arc<PoolElement> {
         if self.templates.is_empty() {
             return Arc::new(PoolElement::Empty);
         }
@@ -304,7 +341,7 @@ impl Pool {
         shuffle(&mut copy, random);
         copy
     }
-    fn max_size(&self) -> i32 {
+    pub(super) fn max_size(&self) -> i32 {
         *self.max_size.get_or_init(|| {
             self.templates
                 .iter()
@@ -343,7 +380,7 @@ impl Pools {
         }
         let pool = self.raw.get(name).and_then(|json| {
             let value: Value = serde_json::from_str(json).ok()?;
-            let mut templates = Vec::new();
+            let (mut templates, mut raw) = (Vec::new(), Vec::new());
             for entry in value["elements"].as_array()? {
                 let element =
                     match PoolElement::decode(&entry["element"], resources, bindings, None) {
@@ -355,12 +392,15 @@ impl Pools {
                             return None;
                         }
                     };
-                for _ in 0..entry["weight"].as_i64().unwrap_or(1) {
+                let weight = entry["weight"].as_i64().unwrap_or(1);
+                for _ in 0..weight {
                     templates.push(element.clone());
                 }
+                raw.push((element, weight as i32));
             }
             Some(Arc::new(Pool {
                 templates,
+                raw,
                 fallback: value["fallback"]
                     .as_str()
                     .unwrap_or("minecraft:empty")
@@ -376,7 +416,7 @@ impl Pools {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Junction {
     pub source_x: i32,
     pub source_ground_y: i32,
@@ -393,7 +433,7 @@ pub struct PoolPiece {
     pub waterlogging: bool,
 }
 impl PoolPiece {
-    fn moved(&mut self, dy: i32) {
+    pub(super) fn moved(&mut self, dy: i32) {
         self.position[1] += dy;
         self.bounding_box = self.bounding_box.moved([0, dy, 0]);
     }
@@ -466,6 +506,7 @@ fn place_element<W: FeatureWorld + PlacementContext, R: RandomSource>(
             legacy,
             projection,
             waterlogging: override_liquid,
+            ..
         } => {
             let ignore = if *legacy {
                 IGNORE_STRUCTURE_AND_AIR.get_or_init(|| {
@@ -547,13 +588,13 @@ pub struct JigsawConfig<'a> {
 
 /// Free space for children: an inclusive container box minus placed boxes.
 #[derive(Debug)]
-struct Free {
-    container: BoundingBox,
-    removed: Vec<BoundingBox>,
+pub(super) struct Free {
+    pub(super) container: BoundingBox,
+    pub(super) removed: Vec<BoundingBox>,
 }
 impl Free {
     /// Whether every point of the (0.25-deflated) box lies in free space.
-    fn fits(&self, b: &BoundingBox) -> bool {
+    pub(super) fn fits(&self, b: &BoundingBox) -> bool {
         (0..3).all(|i| b.min[i] >= self.container.min[i] && b.max[i] <= self.container.max[i])
             && !self.removed.iter().any(|r| r.intersects(b))
     }

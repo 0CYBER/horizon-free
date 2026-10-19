@@ -133,7 +133,7 @@ impl Game<'_> {
         if let Some(name) = &state.name {
             return name.clone();
         }
-        let e = &self.res.stations.enchantments;
+        let e = &self.res.stations().enchantments;
         let profession = state.session.profession.trim_start_matches("minecraft:");
         if state.session.villager {
             e.translate(&format!("entity.minecraft.villager.{profession}"))
@@ -245,15 +245,15 @@ impl Game<'_> {
             next_id: std::cell::Cell::new(next_map),
         };
         let trade_env = merchant::TradeEnv {
-            trades: &self.res.stations.trades,
-            enchantments: &self.res.stations.enchantments,
+            trades: &self.res.stations().trades,
+            enchantments: &self.res.stations().enchantments,
             maps: Some(&maps),
         };
         let env = Env {
-            items: &self.res.items,
-            recipes: &self.res.recipes,
-            brewing: &self.res.stations.brewing,
-            banners: &self.res.stations.banners,
+            items: self.res.items(),
+            recipes: self.res.recipes(),
+            brewing: &self.res.stations().brewing,
+            banners: &self.res.stations().banners,
             trade: Some(&trade_env),
         };
         let mut menu = Menu::new(Kind::Merchant);
@@ -372,7 +372,7 @@ impl Game<'_> {
                 .hub
                 .guests
                 .iter()
-                .find(|g| g.conn == conn)
+                .find(|g| g.conn == conn && host.hub.here(g))
                 .map(|g| uuid_words(g.uuid))
             else {
                 continue;

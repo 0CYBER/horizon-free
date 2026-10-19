@@ -22,12 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let port: u16 = args.next().ok_or("port")?.parse()?;
     let assets = Assets::load(&root)?;
     let facts = BlockFacts::load(&root, assets.registry)?;
-    let state = |name: &str| {
-        assets
-            .registry
-            .default_state(name)
-            .map_or(0, |s| s.0 as u16)
-    };
+    let state = |name: &str| assets.registry.default_state(name).map_or(0, |s| s.0);
     let sync = Arc::new(SyncData::load(&root)?);
     let biomes: Vec<String> = sync
         .dynamic
@@ -106,6 +101,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         sprinting: false,
         equipment: Default::default(),
         health: 20.0,
+        attributes: Vec::new(),
+        living_flags: 0,
     };
     loop {
         world.game_time += 1;
@@ -121,6 +118,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             clock_rate: 1.0,
             tick_rate: 20.0,
             tick_frozen: false,
+            collision: None,
         };
         for event in hub.tick(&mut ctx) {
             match event {
@@ -132,7 +130,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         eprintln!("[lan] {packet:?}");
                     }
                 }
-                HostEvent::Chat(line) => println!("{line}"),
+                HostEvent::Chat { line, .. } | HostEvent::Warn(line) | HostEvent::Error(line) => {
+                    println!("{line}")
+                }
                 HostEvent::Left(_) => {}
             }
         }

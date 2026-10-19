@@ -76,6 +76,9 @@ jobs:
             os: ubuntu-22.04
             dir: horizon-linux-x86_64
             asset: horizon-linux-x86_64.tar.gz
+            # The server build too: packaging/server/install.sh installs it on Linux.
+            server_dir: horizon-server-linux-x86_64
+            server_asset: horizon-server-linux-x86_64.tar.gz
           - name: windows
             os: windows-latest
             dir: horizon-windows-x64
@@ -174,13 +177,43 @@ jobs:
           case "${{ matrix.asset }}" in
             *.tar.gz) tar czf "${{ matrix.asset }}" "${{ matrix.dir }}" ;;
             *) if [[ "$RUNNER_OS" == Windows ]]; then 7z a -tzip "${{ matrix.asset }}" "${{ matrix.dir }}" > /dev/null
-               else ditto -c -k --keepParent "${{ matrix.dir }}" "${{ matrix.asset }}"; fi ;;
+               else
+                 # Without resource forks and extended attributes: plain ditto adds an
+                 # AppleDouble `._` file beside every file that has any.
+                 ditto -c -k --norsrc --noextattr --noqtn --keepParent "${{ matrix.dir }}" "${{ matrix.asset }}"
+                 if unzip -Z1 "${{ matrix.asset }}" | grep -E '(^|/)(\._|__MACOSX/)'; then
+                   echo "::error::macOS metadata files in ${{ matrix.asset }}"; exit 1
+                 fi
+               fi ;;
           esac
           ls -l "${{ matrix.asset }}"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
           path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 3
+      - name: The server build (the game without sound or controllers, as horizon-engine)
+        if: matrix.server_asset
+        run: |
+          set -euo pipefail
+          # After the client is packaged: target/release/horizon-client is rebuilt without the audio and
+          # controllers features, so it needs neither libasound nor libudev (minimal server images lack them).
+          cargo build --release --locked -p horizon-client --no-default-features --bin horizon-client
+          cargo run --locked -p xtask -- package-server target/release/horizon-client "dist/${{ matrix.server_dir }}"
+          folder="dist/${{ matrix.server_dir }}"
+          python3 tools/check_imports.py --server "$folder/horizon-engine" "$folder/horizon-server" "$folder/horizon-prepare"
+          "$folder/horizon-engine" --help | grep -q -- '--resources'
+          "$folder/horizon-server" --version
+          cd dist
+          rm -f "${{ matrix.server_asset }}"
+          tar czf "${{ matrix.server_asset }}" "${{ matrix.server_dir }}"
+          ls -l "${{ matrix.server_asset }}"
+      - uses: actions/upload-artifact@v4
+        if: matrix.server_asset
+        with:
+          name: ${{ matrix.server_asset }}
+          path: dist/${{ matrix.server_asset }}
           if-no-files-found: error
           retention-days: 3
 
@@ -213,7 +246,7 @@ jobs:
         run: |
           gh release create "$TAG" --target "${{ needs.decide.outputs.head }}" --title "$(cat notes/title.txt)" \
             --notes-file notes/body.md --latest dist/horizon-linux-x86_64.tar.gz dist/horizon-windows-x64.zip \
-            dist/horizon-macos-arm64.zip
+            dist/horizon-macos-arm64.zip dist/horizon-server-linux-x86_64.tar.gz
       - name: Dry run, the release that would be published
         if: needs.decide.outputs.dry_run == 'true'
         run: |

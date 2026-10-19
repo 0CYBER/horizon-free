@@ -8,7 +8,7 @@ use horizon_protocol::{
     packets::{configuration::ClientInformation, play},
 };
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::VecDeque,
     sync::{Arc, atomic::AtomicI32},
 };
 
@@ -37,6 +37,12 @@ pub struct Guest {
     pub last_action_tick: u64,
     /// The next ClientboundPlayerChatPacket.globalIndex for this connection.
     pub chat_index: i32,
+    /// Secure chat (ServerGamePacketListenerImpl): the player's message
+    /// chain, keyed once it sends a chat session; the messages its
+    /// acknowledgements cover; the signatures its client caches.
+    pub chain: horizon_protocol::secure_chat::Chain,
+    pub last_seen: horizon_protocol::secure_chat::LastSeenValidator,
+    pub signatures: horizon_protocol::secure_chat::SignatureCache,
     /// The hub tick the player was placed on: chunks go out from the tick
     /// after next, behind the first doTick's packets, as vanilla's do.
     pub placed_at: u64,
@@ -46,6 +52,8 @@ pub struct Guest {
     pub left_reason: String,
     pub uuid: u128,
     pub name: String,
+    /// The profile's properties, for the player list (skins).
+    pub properties: Vec<horizon_protocol::packets::login::Property>,
     pub entity_id: i32,
     pub sender: PlayerSender,
     pub latency: Arc<AtomicI32>,
@@ -67,19 +75,49 @@ pub struct Guest {
     pub fall_flying: bool,
     pub flying: bool,
     pub sleeping: bool,
+    /// `LivingEntity.DATA_LIVING_ENTITY_FLAGS`: 1 while using an item, 2 if
+    /// it is in the off hand.
+    pub living_flags: i8,
+    /// The bed (its head) the player sleeps in (`LivingEntity.getSleepingPos`),
+    /// `Player.sleepCounter`, and the bed last told to the player itself.
+    pub bed: Option<[i32; 3]>,
+    pub sleep_timer: u32,
+    pub sent_bed: Option<[i32; 3]>,
+    /// Where the player respawns (a bed's spot; `ServerPlayer.respawnConfig`),
+    /// None for the world spawn.
+    pub spawn: Option<[f64; 3]>,
     /// Pending ClientboundPlayerPositionPacket id; movement is ignored until
     /// the client accepts it (ServerGamePacketListenerImpl.awaitingPositionFromClient).
     pub awaiting_teleport: Option<(i32, [f64; 3])>,
     pub teleport_counter: i32,
+    /// The hub tick the pending teleport was (re)sent on (awaitingTeleportTime).
+    pub teleport_tick: u64,
+    /// Where the player was when this tick's packets began (firstGoodX/Y/Z),
+    /// for the moved-too-quickly check.
+    pub first_good: [f64; 3],
+    /// Position moves received in all and by the start of this tick
+    /// (receivedMovePacketCount, knownMovePacketCount).
+    pub received_moves: i32,
+    pub known_moves: i32,
+    /// A position move arrived since the client's last ClientTickEnd
+    /// (receivedPositionThisTick): a second one is a protocol error.
+    pub position_this_tick: bool,
+    /// It accepted a move since the last entity range checks
+    /// (ServerChunkCache.move), which then check all of its pairs again.
+    pub moved: bool,
     /// The client finished loading terrain (ServerboundPlayerLoadedPacket).
     pub loaded: bool,
     // Chunks.
     pub center: Option<(i32, i32)>,
-    pub sent_chunks: HashSet<(i32, i32)>,
+    pub sent_chunks: crate::fast_hash::FxHashSet<(i32, i32)>,
     pub chunk_queue: Vec<(i32, i32)>,
+    /// PlayerChunkSender: batches sent but not yet acknowledged, how many
+    /// may be (1 until the client's first acknowledgement, then 10), the
+    /// rate the client asks for and the chunks the next batch may hold.
     pub unacknowledged: u32,
+    pub max_unacknowledged: u32,
     pub chunks_per_tick: f32,
-    pub chunk_credit: f32,
+    pub batch_quota: f32,
     // Entities.
     pub tracker: Tracker,
     // Player state the gameplay code reads and writes.
@@ -111,7 +149,8 @@ pub struct Guest {
     /// What the client believes the inventory menu holds (for change detection).
     pub menu_sent: Vec<Option<ItemStack>>,
     pub menu_state: i32,
-    pub sent_health: Option<(f32, i32, f32)>,
+    /// `lastSentHealth`, `lastSentFood` and `lastFoodSaturationZero`.
+    pub sent_health: Option<(f32, i32, bool)>,
     pub sent_xp: Option<(f32, i32, i32)>,
     /// Where the player last died (Player.lastDeathLocation), sent with the respawn.
     pub last_death: Option<[i32; 3]>,
@@ -129,6 +168,9 @@ pub struct Guest {
     pub dead: bool,
     /// The join packets were sent (PlayerList.placeNewPlayer ran).
     pub placed: bool,
+    /// The level the player is in (`ServerPlayer.level().dimension()`): the
+    /// hub's level passes only reach the players in theirs.
+    pub dimension: String,
     /// The open block container, if any.
     pub menu: Option<super::menu::Menu>,
     pub next_window: i32,
@@ -136,6 +178,19 @@ pub struct Guest {
     pub drag: Option<(u8, Vec<usize>)>,
     /// The compound this player was loaded from, for fields Horizon does not model.
     pub saved: Option<horizon_world::nbt::Tag>,
+    /// `ServerPlayer.recipeBook`.
+    pub recipe_book: crate::recipe_book::Settings,
+    /// `PlayerAdvancements`: the criteria obtained, whether they came from
+    /// the player's file, the advancements the client was last told it may
+    /// see (empty before the first packet), and those whose progress
+    /// changed since (`progressChanged`).
+    pub advancements: crate::advancements::Progress,
+    pub advancements_loaded: bool,
+    pub advancements_visible: Vec<bool>,
+    pub advancements_changed: std::collections::BTreeSet<usize>,
+    /// Recipes unlocked since the client was last told
+    /// (`ServerRecipeBook.addRecipes` sends them).
+    pub recipes_unlocked: Vec<String>,
 }
 
 impl Guest {
@@ -145,11 +200,15 @@ impl Guest {
             address: j.address,
             last_action_tick: 0,
             chat_index: 0,
+            chain: Default::default(),
+            last_seen: Default::default(),
+            signatures: Default::default(),
             placed_at: 0,
             center_sent: None,
             left_reason: String::new(),
             uuid: j.uuid,
             name: j.name,
+            properties: j.properties,
             entity_id,
             sender: j.sender,
             latency: j.latency,
@@ -169,15 +228,27 @@ impl Guest {
             fall_flying: false,
             flying: false,
             sleeping: false,
+            living_flags: 0,
+            bed: None,
+            sleep_timer: 0,
+            sent_bed: None,
+            spawn: None,
             awaiting_teleport: None,
             teleport_counter: 0,
+            teleport_tick: 0,
+            first_good: position,
+            received_moves: 0,
+            known_moves: 0,
+            position_this_tick: false,
+            moved: false,
             loaded: false,
             center: None,
-            sent_chunks: HashSet::new(),
+            sent_chunks: Default::default(),
             chunk_queue: Vec::new(),
             unacknowledged: 0,
+            max_unacknowledged: 1,
             chunks_per_tick: 9.0,
-            chunk_credit: 0.0,
+            batch_quota: 0.0,
             tracker: Tracker::default(),
             motion: None,
             inventory: vec![None; 36],
@@ -210,10 +281,17 @@ impl Guest {
             moves_from_ground: false,
             dead: false,
             placed: false,
+            dimension: "minecraft:overworld".into(),
             menu: None,
             next_window: 0,
             drag: None,
             saved: None,
+            recipe_book: Default::default(),
+            advancements: Default::default(),
+            advancements_loaded: false,
+            advancements_visible: Vec::new(),
+            advancements_changed: Default::default(),
+            recipes_unlocked: Vec::new(),
         }
     }
     pub fn send(&self, packet: &play::Clientbound) {

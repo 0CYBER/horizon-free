@@ -284,7 +284,7 @@ impl Game<'_> {
             let focused = self.screen == Screen::Chat;
             self.ui
                 .chat
-                .add(&self.atlas, line, None, self.ticks, focused);
+                .add(&self.gui.atlas, line, None, self.ticks, focused);
         }
     }
     /// The mods' HUD panels, stacked with the extras in their corners.
@@ -305,7 +305,7 @@ impl Game<'_> {
                 .iter()
                 .map(|l| (l.text.as_str(), l.color))
                 .collect();
-            extras_hud::draw_lines(batch, &self.atlas, corners, corner, &lines);
+            extras_hud::draw_lines(batch, &self.gui.atlas, corners, corner, &lines);
         }
     }
 }

@@ -31,7 +31,7 @@ use winit::{
     dpi::PhysicalPosition,
     event::{DeviceId, ElementState, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent},
     event_loop::ActiveEventLoop,
-    keyboard::{KeyCode, NamedKey},
+    keyboard::KeyCode,
 };
 
 /// D-pad auto-repeat: the first step at once, the next after a pause.
@@ -859,7 +859,6 @@ impl Game<'_> {
             || (self.screen == Screen::Creative && self.creative_screen.tab().search)
             || self.recipe_search_focused()
             || self.station_typing()
-            || self.remote_chat_open()
     }
 
     /// Open the on-screen keyboard over the focused field: Horizon's, or
@@ -890,7 +889,7 @@ impl Game<'_> {
             && self.pad.in_use
             && menu.open_polls >= 3
             && self.pad_focus_mode()
-            && (self.screen == Screen::Chat || self.sign_edit.is_some() || self.remote_chat_open())
+            && (self.screen == Screen::Chat || self.sign_edit.is_some())
         {
             self.pad.menu.osk_dismissed = true;
             self.pad_open_keyboard();
@@ -901,10 +900,10 @@ impl Game<'_> {
     /// the field that has focus.
     fn pad_osk_output(&mut self, out: osk::Output) {
         use osk::Output;
-        let (key, named, text) = match &out {
-            Output::Text(t) => (None, None, Some(t.as_str())),
-            Output::Backspace => (Some(KeyCode::Backspace), Some(NamedKey::Backspace), None),
-            Output::Enter => (Some(KeyCode::Enter), Some(NamedKey::Enter), None),
+        let (key, text) = match &out {
+            Output::Text(t) => (None, Some(t.as_str())),
+            Output::Backspace => (Some(KeyCode::Backspace), None),
+            Output::Enter => (Some(KeyCode::Enter), None),
             Output::Close => {
                 self.pad.menu.osk = None;
                 self.pad.menu.osk_dismissed = true;
@@ -933,8 +932,6 @@ impl Game<'_> {
             if key != Some(KeyCode::Enter) {
                 self.station_text(text, backspace);
             }
-        } else if self.remote_chat_open() {
-            self.remote_chat_input(named, text);
         } else if self.screen == Screen::WorldOptions {
             if key != Some(KeyCode::Enter) {
                 self.world_options_text(text);
@@ -942,7 +939,7 @@ impl Game<'_> {
         } else if self.screen == Screen::Options {
             let result = match text {
                 Some(t) => {
-                    self.ui.options.type_text(&self.atlas, t);
+                    self.ui.options.type_text(&self.gui.atlas, t);
                     Ok(())
                 }
                 None => self.options_key(key.expect("a key"), None),
@@ -985,9 +982,8 @@ impl Game<'_> {
                 .menu
                 .focus
                 .is_some_and(|f| f.center().1 > batch.height / 2.0)
-                || self.screen == Screen::Chat
-                || self.remote_chat_open();
-            let mut ui = horizon_client::ui_theme::Ui::new(&self.atlas, batch, self.cursor);
+                || self.screen == Screen::Chat;
+            let mut ui = horizon_client::ui_theme::Ui::new(&self.gui.atlas, batch, self.cursor);
             keyboard.draw(&mut ui, at_top, self.ui.options.pad_style);
             ui.finish();
             return;
@@ -1002,7 +998,7 @@ impl Game<'_> {
             return;
         }
         // An arrow, outlined, pointing up-left at (x, y).
-        let atlas = &self.atlas;
+        let atlas = &self.gui.atlas;
         let (x, y) = (x.floor(), y.floor());
         const ROWS: [u8; 10] = [1, 2, 3, 4, 5, 6, 7, 4, 2, 1];
         for (i, &w) in ROWS.iter().enumerate() {
@@ -1047,7 +1043,7 @@ impl Game<'_> {
             };
         if horizon {
             use horizon_client::ui_theme::{self as theme, Ui, color};
-            let mut ui = Ui::new(&self.atlas, batch, self.cursor);
+            let mut ui = Ui::new(&self.gui.atlas, batch, self.cursor);
             let k = ui.batch.scale / ui.density;
             let (x, y, w, h) = (x * k, y * k, w * k, h * k);
             let radius = match focus.kind {
@@ -1070,7 +1066,7 @@ impl Game<'_> {
             return;
         }
         if matches!(focus.kind, Kind::Row | Kind::Field) {
-            let atlas = &self.atlas;
+            let atlas = &self.gui.atlas;
             let white = rgba(255, 255, 255, 255);
             batch.fill(atlas, x, y, w, 1.0, white);
             batch.fill(atlas, x, y + h - 1.0, w, 1.0, white);

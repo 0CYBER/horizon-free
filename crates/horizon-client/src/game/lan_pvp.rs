@@ -19,6 +19,9 @@ pub(super) struct Strike {
     scale: f32,
     crit: bool,
     from: [f64; 3],
+    sweep: Option<[f64; 3]>,
+    /// The attacker's team, for the victim's `Player.canHarmPlayer`.
+    team: Option<horizon_client::scoreboard::Team>,
 }
 
 impl Game<'_> {
@@ -31,7 +34,7 @@ impl Game<'_> {
         host.hub
             .guests
             .iter()
-            .filter(|g| g.placed && g.loaded && !g.dead && !g.spectator())
+            .filter(|g| host.hub.here(g) && g.loaded && !g.dead && !g.spectator())
             .filter_map(|g| Some((g.conn, ray_box(eye, dir, reach, guest_bounds(g))?)))
             .min_by(|a, b| a.1.total_cmp(&b.1))
     }
@@ -63,7 +66,7 @@ impl Game<'_> {
         host.hub
             .guests
             .iter()
-            .find(|g| g.entity_id == id && g.conn != conn && g.placed && !g.dead)
+            .find(|g| g.entity_id == id && g.conn != conn && host.hub.here(g) && !g.dead)
             .map(|g| Victim::Guest(g.conn))
     }
 
@@ -73,6 +76,7 @@ impl Game<'_> {
         let p = self.player.as_ref()?;
         let from = [p.position.x, p.position.y, p.position.z];
         let (amount, scale, crit) = self.melee_damage("minecraft:player");
+        let sweep = self.sweep_attack_position(scale, crit);
         self.attack_ticks = 0;
         if let Some(p) = self.player.as_mut()
             && !self.creative
@@ -85,12 +89,25 @@ impl Game<'_> {
             scale,
             crit,
             from,
+            sweep,
+            team: self.player_team().cloned(),
         })
     }
 
     /// The hit landing on the victim, then the attacker's attack sound.
     pub(super) fn pvp_land(&mut self, host: &mut LanHost, victim: Victim, s: &Strike) {
+        // ServerPlayer.canHarmPlayer: the pvp game rule, then the victim's
+        // team (Player.canHarmPlayer: allies only with friendly fire on).
+        let team = match victim {
+            Victim::Host => self.player_team(),
+            Victim::Guest(conn) => host
+                .hub
+                .guest(conn)
+                .and_then(|g| self.score.board.players_team(&g.name)),
+        };
+        let harm = horizon_client::scoreboard::teams_allow_damage(team, s.team.as_ref());
         let hurt = self.ui.rules.bool("pvp")
+            && harm
             && match victim {
                 Victim::Host => self.mob_hits_player(s.amount, s.from, "minecraft:player_attack"),
                 Victim::Guest(conn) => self
@@ -105,6 +122,10 @@ impl Game<'_> {
             (true, false, true) => "minecraft:entity.player.attack.strong",
             (true, false, false) => "minecraft:entity.player.attack.weak",
         };
-        self.audio.play(sound, Some(s.from), 1.0, 1.0);
+        if let Some(at) = s.sweep.filter(|_| hurt) {
+            self.sweep_attack(at, Some(s.from));
+        } else {
+            self.audio.play(sound, Some(s.from), 1.0, 1.0);
+        }
     }
 }

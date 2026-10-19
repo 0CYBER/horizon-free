@@ -56,16 +56,16 @@ fn main() -> horizon_client::Result<()> {
         "resource_load_ms={:.3}",
         start.elapsed().as_secs_f64() * 1000.0
     );
-    let inactive: Vec<u16> = facts
+    let inactive: Vec<u32> = facts
         .states
         .iter()
         .enumerate()
         .filter(|(_, f)| !f.random_ticks)
         .take(128)
-        .map(|(i, _)| i as u16)
+        .map(|(i, _)| i as u32)
         .collect();
-    let active = registry.default_state("minecraft:grass_block").unwrap().0 as u16;
-    assert!(facts.get(BlockStateId(u32::from(active))).random_ticks);
+    let active = registry.default_state("minecraft:grass_block").unwrap().0;
+    assert!(facts.get(BlockStateId(active)).random_ticks);
     for (name, palette) in [("sparse", 1), ("dense", 128)] {
         let start = Instant::now();
         let mut chunks = FxHashMap::default();

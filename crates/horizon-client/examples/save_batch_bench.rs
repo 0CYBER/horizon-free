@@ -4,7 +4,7 @@
 //! Exact NBT equality is always validated. No GPU, compression or disk I/O timed.
 use horizon_client::{
     biome::Biomes,
-    chunk::{BLOCK_STRATEGY, Chunk},
+    chunk::{Chunk, block_strategy},
     containers::BlockEntity,
     items::ItemStack,
     save::{self, ChunkExtras},
@@ -64,9 +64,8 @@ fn fixture(per_chunk: usize) -> (Vec<Arc<Chunk>>, Entities, Names) {
     };
     let mut template = Chunk::empty(0, 0);
     for s in &mut template.sections[..8] {
-        Arc::make_mut(s).blocks = PalettedContainer::new(BLOCK_STRATEGY, 1);
+        Arc::make_mut(s).blocks = PalettedContainer::new(block_strategy(), 1);
     }
-    template.heights = Arc::new([64; 256]);
     for i in 0..256 {
         let x = i % 16 - 8;
         let z = i / 16 - 8;

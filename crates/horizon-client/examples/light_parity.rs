@@ -206,7 +206,7 @@ fn incremental(
     sky_light: bool,
     edits: usize,
 ) {
-    use horizon_client::light::relight;
+    use horizon_client::light::{LightChanges, relight};
     use std::sync::Arc;
     let mut world: HashMap<(i32, i32), Arc<Chunk>> = HashMap::new();
     let inner: Vec<(i32, i32)> = {
@@ -232,7 +232,7 @@ fn incremental(
         c.lit = true;
         world.insert((x, z), Arc::new(c));
     }
-    let palette: Vec<u16> = [
+    let palette: Vec<u32> = [
         "minecraft:air",
         "minecraft:stone",
         "minecraft:torch",
@@ -242,7 +242,7 @@ fn incremental(
         "minecraft:glass",
     ]
     .iter()
-    .filter_map(|n| registry.default_state(n).map(|s| s.0 as u16))
+    .filter_map(|n| registry.default_state(n).map(|s| s.0))
     .chain(
         facts
             .states
@@ -257,7 +257,7 @@ fn incremental(
                 ]
                 .contains(&&*f.name)
             })
-            .map(|(i, _)| i as u16)
+            .map(|(i, _)| i as u32)
             .step_by(3),
     )
     .collect();
@@ -285,7 +285,14 @@ fn incremental(
         if old == state || !tables.differs(old, state) {
             continue;
         }
-        relight(&mut world, tables, sky_light, &[(x, y, z)], false);
+        relight(
+            &mut world,
+            tables,
+            sky_light,
+            &[(x, y, z)],
+            false,
+            &mut LightChanges::default(),
+        );
         for dz in -1..=1 {
             for dx in -1..=1 {
                 let (kx, kz) = (cx + dx, cz + dz);

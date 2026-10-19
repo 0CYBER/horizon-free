@@ -36,6 +36,8 @@ pub enum HRow {
     Extra(extras::Item),
     /// Installed mod `i` (`settings.mods.installed`) and its switch.
     Mod(usize),
+    /// Opens the directory where Horizon mods are installed.
+    OpenModFolder,
 }
 /// A sidebar section: name, description, rows.
 pub struct Section {
@@ -192,12 +194,15 @@ pub const SECTIONS: &[Section] = &[
         name: "Mods",
         blurb: "Mods made for Horizon, from the horizon-mods folder. Each runs in a sandbox and stays off until you turn it on; check what it may do first.",
         rows: |s| {
+            let mut rows = vec![HRow::OpenModFolder];
             if s.mods.installed.is_empty() {
-                return vec![HRow::Header(
+                rows.push(HRow::Header(
                     "No mods: put .hmod files in the horizon-mods folder",
-                )];
+                ));
+            } else {
+                rows.extend((0..s.mods.installed.len()).map(HRow::Mod));
             }
-            (0..s.mods.installed.len()).map(HRow::Mod).collect()
+            rows
         },
     },
 ];
@@ -207,8 +212,15 @@ const DONE: u64 = id("options.done", 0);
 const ROW: u64 = id("options.row", 0);
 const STYLE: u64 = id("options.style", 0);
 const LEVEL: u64 = id("options.level", 0);
+const SEARCH: u64 = id("options.search", 0);
 const ROW_H: f32 = 12.0 + CONTROL + 12.0;
 const HEADER_H: f32 = 40.0;
+pub(crate) fn searchable_section(section: usize) -> bool {
+    matches!(
+        SECTIONS.get(section).map(|s| s.name),
+        Some("Video" | "Controls")
+    )
+}
 
 /// Whether an option is an on/off switch, and its value.
 fn switch_value(opt: Opt, s: &Settings) -> Option<bool> {
@@ -258,20 +270,51 @@ fn caption_value(opt: Opt, s: &Settings) -> (String, String) {
 enum Target {
     Nav(usize),
     Done,
+    Search,
     Row(usize),
     Slider(Item, f32),
     Style(usize),
     Level(usize),
 }
+struct HorizonScrollbar {
+    x: f32,
+    top: f32,
+    bottom: f32,
+    max: f32,
+    thumb: f32,
+}
+impl HorizonScrollbar {
+    fn contains(&self, x: f32, y: f32) -> bool {
+        x >= self.x && x < self.x + 6.0 && y >= self.top && y < self.bottom
+    }
+}
+struct HorizonLayout {
+    sliders: Vec<(Item, f32, f32)>,
+    scrollbar: Option<HorizonScrollbar>,
+}
+fn horizon_batch(framebuffer: [i32; 2]) -> HudBatch {
+    HudBatch::new([framebuffer[0].max(1) as u32, framebuffer[1].max(1) as u32])
+}
 impl OptionsUi {
+    fn horizon_rows(&self, s: &Settings, section: usize) -> Vec<HRow> {
+        let rows = (SECTIONS[section].rows)(s);
+        let query = self.settings_search.value.to_lowercase();
+        if query.is_empty() || !searchable_section(section) {
+            return rows;
+        }
+        rows.into_iter()
+            .filter(|row| match row {
+                HRow::Opt(opt) => caption_value(*opt, s).0.to_lowercase().contains(&query),
+                HRow::Graphics(item, ..) => item.caption_value(s).0.to_lowercase().contains(&query),
+                HRow::Page(label, ..) => label.to_lowercase().contains(&query),
+                HRow::Level => true,
+                _ => false,
+            })
+            .collect()
+    }
     /// Lay out (and draw, on a real frame) the Horizon options shell.
-    /// Returns the sliders' tracks (option, x, width) for dragging.
-    fn horizon_layout(
-        &mut self,
-        s: &Settings,
-        ui: &mut Ui,
-        backdrop: f32,
-    ) -> Vec<(Item, f32, f32)> {
+    /// Returns the sliders' tracks and the scroll area for pointer input.
+    fn horizon_layout(&mut self, s: &Settings, ui: &mut Ui, backdrop: f32) -> HorizonLayout {
         let (w, h) = (ui.w, ui.h);
         if self.in_world {
             ui.atmosphere(horizon_theme::VEIL, 1.0);
@@ -307,8 +350,17 @@ impl OptionsUi {
         let sec = &SECTIONS[section];
         let mut y = 36.0;
         y += ui.page_header(x, y, sec.name, sec.blurb) + 24.0;
+        if searchable_section(section) {
+            ui.text_field(
+                SEARCH,
+                [x + cw - 240.0, y, 240.0, CONTROL],
+                &self.settings_search.value,
+                self.settings_search.focused,
+            );
+            y += CONTROL + 12.0;
+        }
         let top = y;
-        let rows = (sec.rows)(s);
+        let rows = self.horizon_rows(s, section);
         let content: f32 = rows
             .iter()
             .map(|r| {
@@ -436,6 +488,18 @@ impl OptionsUi {
                     ui.described_row(x, y, &installed.title, "", 0.0, cost, text, cw - 60.0);
                     ui.switch(ROW + i as u64, control_x, y + ROW_H / 2.0, s.mods.is_on(m));
                 }
+                HRow::OpenModFolder => {
+                    ui.row(x, y, "Mod folder", "", 0.0);
+                    let label = "Open Folder";
+                    let bw = ui.button_width(label, false).max(96.0);
+                    ui.button(
+                        ROW + i as u64,
+                        [control_x - bw, y + 12.0, bw, CONTROL],
+                        label,
+                        Button::Secondary,
+                        true,
+                    );
+                }
                 HRow::Extra(item) => {
                     let cy = y + ROW_H / 2.0;
                     let id = ROW + i as u64;
@@ -499,6 +563,7 @@ impl OptionsUi {
             .filter(|h| h.rect[1] >= cy0 && h.rect[3] <= cy1)
             .collect();
         ui.hits.extend(kept);
+        let mut scrollbar = None;
         if max > 0.0 {
             // A thin scroll indicator.
             let track = bottom - top;
@@ -512,11 +577,18 @@ impl OptionsUi {
                 1.5,
                 color::with_alpha(color::MUTED, 0.35),
             );
+            scrollbar = Some(HorizonScrollbar {
+                x: x + cw + 14.0,
+                top: top + oy,
+                bottom: bottom + oy,
+                max,
+                thumb: bar,
+            });
         }
         let _ = ox;
         ui.opacity = 1.0;
         ui.offset = (0.0, 0.0);
-        sliders
+        HorizonLayout { sliders, scrollbar }
     }
     pub(crate) fn draw_horizon(
         &mut self,
@@ -530,38 +602,67 @@ impl OptionsUi {
         self.horizon_layout(s, &mut ui, backdrop);
         ui.finish();
     }
-    fn horizon_target(&mut self, s: &Settings, atlas: &HudAtlas, x: f32, y: f32) -> Option<Target> {
-        let mut batch = t::scratch_batch();
+    fn horizon_target(
+        &mut self,
+        s: &Settings,
+        atlas: &HudAtlas,
+        x: f32,
+        y: f32,
+        framebuffer: [i32; 2],
+    ) -> (Option<Target>, Option<HorizonScrollbar>, (f32, f32)) {
+        let mut batch = horizon_batch(framebuffer);
         let mut ui = Ui::dry(atlas, &mut batch, (x, y));
-        let sliders = self.horizon_layout(s, &mut ui, 1.0);
-        let hit = ui.hit((x, y))?;
+        let layout = self.horizon_layout(s, &mut ui, 1.0);
+        let scrollbar = layout.scrollbar;
+        // The UI layer transforms raw GUI-pixel input into its own dp.
+        let cursor = ui.cursor;
+        let Some(hit) = ui.hit((x, y)) else {
+            return (None, scrollbar, cursor);
+        };
+        if hit == SEARCH {
+            return (Some(Target::Search), scrollbar, cursor);
+        }
         let section = self.section.min(SECTIONS.len() - 1);
         if (NAV..NAV + SECTIONS.len() as u64).contains(&hit) {
-            return Some(Target::Nav((hit - NAV) as usize));
+            return (Some(Target::Nav((hit - NAV) as usize)), scrollbar, cursor);
         }
         if hit == DONE {
-            return Some(Target::Done);
+            return (Some(Target::Done), scrollbar, cursor);
         }
         if hit == STYLE || hit == STYLE + 1 {
-            return Some(Target::Style((hit - STYLE) as usize));
+            return (
+                Some(Target::Style((hit - STYLE) as usize)),
+                scrollbar,
+                cursor,
+            );
         }
         if hit == LEVEL || hit == LEVEL + 1 {
-            return Some(Target::Level((hit - LEVEL) as usize));
+            return (
+                Some(Target::Level((hit - LEVEL) as usize)),
+                scrollbar,
+                cursor,
+            );
         }
-        let i = hit.checked_sub(ROW)? as usize;
-        let rows = (SECTIONS[section].rows)(s);
+        let Some(i) = hit.checked_sub(ROW).map(|i| i as usize) else {
+            return (None, scrollbar, cursor);
+        };
+        let rows = self.horizon_rows(s, section);
         let item = match rows.get(i) {
             Some(HRow::Opt(opt)) => Some(Item::Vanilla(*opt)),
             Some(HRow::Graphics(item, ..)) => Some(*item),
             _ => None,
         };
         if let Some(item) = item
-            && let Some(&(_, sx, sw)) = sliders.iter().find(|(o, ..)| *o == item)
+            && let Some(&(_, sx, sw)) = layout.sliders.iter().find(|(o, ..)| *o == item)
         {
             let v = t::slider_value(&ui, sx, sw, x);
-            return Some(Target::Slider(item, v));
+            return (Some(Target::Slider(item, v)), scrollbar, cursor);
         }
-        (i < rows.len()).then_some(Target::Row(i))
+        (
+            (i < rows.len()).then_some(Target::Row(i)),
+            scrollbar,
+            cursor,
+        )
     }
     /// A click (or a drag with the button held) on the Horizon shell.
     pub(crate) fn click_horizon(
@@ -576,14 +677,37 @@ impl OptionsUi {
     ) -> Vec<Event> {
         let mut events = Vec::new();
         if drag {
-            if let Some(item) = self.hdragging {
-                let mut batch = t::scratch_batch();
-                let mut ui = Ui::dry(atlas, &mut batch, (x, y));
-                let sliders = self.horizon_layout(s, &mut ui, 1.0);
-                if let Some(&(_, sx, sw)) = sliders.iter().find(|(o, ..)| *o == item) {
-                    set_item_slider(item, s, t::slider_value(&ui, sx, sw, x));
-                    events.push(Event::Changed);
+            let mut batch = horizon_batch(framebuffer);
+            let mut ui = Ui::dry(atlas, &mut batch, (x, y));
+            let layout = self.horizon_layout(s, &mut ui, 1.0);
+            // Scrollbar geometry and stored drag positions are in Horizon dp.
+            let pointer_y = ui.cursor.1;
+            if let Some(previous_y) = self.scrollbar_drag_y {
+                if let Some(scrollbar) = layout.scrollbar {
+                    // AbstractScrollArea.mouseDragged (inherited by AbstractSelectionList)
+                    // moves by the pointer delta and sends out-of-range drags to an end.
+                    let track = scrollbar.bottom - scrollbar.top;
+                    self.hscroll = if pointer_y < scrollbar.top {
+                        0.0
+                    } else if pointer_y > scrollbar.bottom {
+                        scrollbar.max
+                    } else {
+                        self.hscroll
+                            + (pointer_y - previous_y) * scrollbar.max
+                                / (track - scrollbar.thumb).max(1.0)
+                    };
+                    self.hscroll = self.hscroll.clamp(0.0, scrollbar.max);
+                    self.scrollbar_drag_y = Some(pointer_y);
+                } else {
+                    self.scrollbar_drag_y = None;
                 }
+                return events;
+            }
+            if let Some(item) = self.hdragging
+                && let Some(&(_, sx, sw)) = layout.sliders.iter().find(|(o, ..)| *o == item)
+            {
+                set_item_slider(item, s, t::slider_value(&ui, sx, sw, x));
+                events.push(Event::Changed);
             }
             return events;
         }
@@ -598,10 +722,27 @@ impl OptionsUi {
                 },
             );
         }
-        match self.horizon_target(s, atlas, x, y) {
+        let (target, scrollbar, cursor) = self.horizon_target(s, atlas, x, y, framebuffer);
+        self.settings_search.focused = false;
+        // AbstractScrollArea.updateScrolling grabs anywhere in the scrollbar column.
+        if !right
+            && let Some(scrollbar) = scrollbar
+            && scrollbar.contains(cursor.0, cursor.1)
+        {
+            self.scrollbar_drag_y = Some(cursor.1);
+            return events;
+        }
+        match target {
             Some(Target::Nav(i)) => {
+                if searchable_section(self.section) || searchable_section(i) {
+                    self.settings_search.set_value("");
+                }
                 self.section = i;
                 self.hscroll = 0.0;
+            }
+            Some(Target::Search) => {
+                self.settings_search.focused = true;
+                self.settings_search.move_cursor_to_end(false);
             }
             Some(Target::Done) => events.extend(self.back(s)),
             Some(Target::Style(i)) => {
@@ -626,7 +767,7 @@ impl OptionsUi {
             }
             Some(Target::Row(i)) => {
                 let section = self.section.min(SECTIONS.len() - 1);
-                match (SECTIONS[section].rows)(s).get(i) {
+                match self.horizon_rows(s, section).get(i) {
                     Some(HRow::Opt(opt)) => {
                         opt.cycle(s, right, framebuffer);
                         if *opt == Opt::Preset {
@@ -650,6 +791,10 @@ impl OptionsUi {
                         s.mods.toggle(*m);
                         events.push(Event::Changed);
                     }
+                    Some(HRow::OpenModFolder) if !right => {
+                        events.push(Event::ButtonClick);
+                        events.push(Event::OpenModFolder);
+                    }
                     _ => {}
                 }
             }
@@ -668,5 +813,213 @@ fn set_item_slider(item: Item, s: &mut Settings, v: f32) {
     match item {
         Item::Vanilla(opt) => options_ui::set_slider(opt, s, v),
         Item::Horizon(_) => item.set_slider(s, v),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn atlas() -> HudAtlas {
+        HudAtlas::build(std::path::Path::new("/nonexistent/horizon-test-assets")).unwrap()
+    }
+
+    fn section_ui(name: &str) -> OptionsUi {
+        let mut ui = OptionsUi::default();
+        ui.section = SECTIONS
+            .iter()
+            .position(|section| section.name == name)
+            .unwrap();
+        ui
+    }
+
+    fn extras_ui() -> OptionsUi {
+        section_ui("Extras")
+    }
+
+    fn scrollbar(
+        ui: &mut OptionsUi,
+        settings: &Settings,
+        atlas: &HudAtlas,
+        framebuffer: [i32; 2],
+    ) -> HorizonScrollbar {
+        let mut batch = horizon_batch(framebuffer);
+        let mut draw = Ui::dry(atlas, &mut batch, (0.0, 0.0));
+        ui.horizon_layout(settings, &mut draw, 1.0)
+            .scrollbar
+            .unwrap()
+    }
+
+    fn gui_pointer(atlas: &HudAtlas, framebuffer: [i32; 2], point: (f32, f32)) -> (f32, f32) {
+        let mut batch = horizon_batch(framebuffer);
+        let ui = Ui::dry(atlas, &mut batch, (0.0, 0.0));
+        let gui_per_dp = ui.density / ui.batch.scale;
+        (point.0 * gui_per_dp, point.1 * gui_per_dp)
+    }
+
+    #[test]
+    fn horizon_scrollbar_track_drag_is_bounded_and_stops_on_release() {
+        let atlas = atlas();
+        let framebuffer = [2560, 1440];
+        let mut settings = Settings::default();
+        let mut ui = section_ui("Controls");
+        let bar = scrollbar(&mut ui, &settings, &atlas, framebuffer);
+        let max = bar.max;
+        let track = bar.bottom - bar.top;
+        assert!(max > 0.0);
+
+        // Start on the track below the thumb, then move horizontally away;
+        // the held scrollbar keeps following the pointer.
+        let x = bar.x + 2.0;
+        let y = bar.top + bar.thumb + (track - bar.thumb) / 2.0;
+        assert!(y < bar.bottom);
+        let (click_x, click_y) = gui_pointer(&atlas, framebuffer, (x, y));
+        assert!(
+            ui.click_horizon(
+                &mut settings,
+                &atlas,
+                click_x,
+                click_y,
+                framebuffer,
+                false,
+                false,
+            )
+            .is_empty()
+        );
+        assert_eq!(ui.hscroll, 0.0);
+        let delta = 5.0;
+        let (drag_x, drag_y) = gui_pointer(&atlas, framebuffer, (x - 100.0, y + delta));
+        assert!(
+            ui.click_horizon(
+                &mut settings,
+                &atlas,
+                drag_x,
+                drag_y,
+                framebuffer,
+                true,
+                false,
+            )
+            .is_empty()
+        );
+        assert!((ui.hscroll - delta * max / (track - bar.thumb)).abs() < 0.001);
+
+        let (below_x, below_y) = gui_pointer(&atlas, framebuffer, (x, bar.bottom + 100.0));
+        assert!(
+            ui.click_horizon(
+                &mut settings,
+                &atlas,
+                below_x,
+                below_y,
+                framebuffer,
+                true,
+                false,
+            )
+            .is_empty()
+        );
+        assert_eq!(ui.hscroll, max);
+        let (above_x, above_y) = gui_pointer(&atlas, framebuffer, (x, bar.top - 100.0));
+        assert!(
+            ui.click_horizon(
+                &mut settings,
+                &atlas,
+                above_x,
+                above_y,
+                framebuffer,
+                true,
+                false,
+            )
+            .is_empty()
+        );
+        assert_eq!(ui.hscroll, 0.0);
+
+        assert!(ui.release().is_empty());
+        let (below_x, below_y) = gui_pointer(&atlas, framebuffer, (x, bar.bottom + 100.0));
+        assert!(
+            ui.click_horizon(
+                &mut settings,
+                &atlas,
+                below_x,
+                below_y,
+                framebuffer,
+                true,
+                false,
+            )
+            .is_empty()
+        );
+        assert_eq!(ui.hscroll, 0.0);
+        assert_eq!(settings.keys, Settings::default().keys);
+    }
+
+    #[test]
+    fn horizon_key_rebinding_takes_precedence_over_scrollbar_press() {
+        let atlas = atlas();
+        let framebuffer = [2560, 1440];
+        let mut settings = Settings::default();
+        let mut ui = extras_ui();
+        let bar = scrollbar(&mut ui, &settings, &atlas, framebuffer);
+        let dp_y = bar.top + bar.thumb + (bar.bottom - bar.top - bar.thumb) / 2.0;
+        ui.selected_key = Some(extras::SORT_KEY);
+        let (x, y) = gui_pointer(&atlas, framebuffer, (bar.x + 2.0, dp_y));
+
+        assert_eq!(
+            ui.click_horizon(&mut settings, &atlas, x, y, framebuffer, false, false,),
+            vec![Event::Changed]
+        );
+        assert_eq!(settings.extras.sort_key, "key.mouse.left");
+        assert_eq!(ui.selected_key, None);
+        assert_eq!(ui.hscroll, 0.0);
+
+        let (x, drag_y) = gui_pointer(&atlas, framebuffer, (bar.x + 2.0, dp_y + 10.0));
+        ui.click_horizon(&mut settings, &atlas, x, drag_y, framebuffer, true, false);
+        assert_eq!(ui.hscroll, 0.0);
+    }
+
+    #[test]
+    fn mods_section_opens_folder_from_its_button() {
+        let atlas = atlas();
+        let framebuffer = [2560, 1440];
+        let mut options = section_ui("Mods");
+        let mut settings = Settings::default();
+        let mut batch = horizon_batch(framebuffer);
+        let mut ui = Ui::dry(&atlas, &mut batch, (0.0, 0.0));
+        options.horizon_layout(&settings, &mut ui, 1.0);
+        let rect = ui
+            .hits
+            .iter()
+            .find(|hit| hit.id == ROW)
+            .expect("Mods section has an Open Folder button")
+            .rect;
+        let scale = ui.density / ui.batch.scale;
+        let cursor = (
+            (rect[0] + rect[2]) * 0.5 * scale,
+            (rect[1] + rect[3]) * 0.5 * scale,
+        );
+        drop(ui);
+
+        assert_eq!(
+            options.click_horizon(
+                &mut settings,
+                &atlas,
+                cursor.0,
+                cursor.1,
+                framebuffer,
+                false,
+                false
+            ),
+            vec![Event::ButtonClick, Event::OpenModFolder]
+        );
+        assert!(
+            options
+                .click_horizon(
+                    &mut settings,
+                    &atlas,
+                    cursor.0,
+                    cursor.1,
+                    framebuffer,
+                    false,
+                    true
+                )
+                .is_empty()
+        );
     }
 }

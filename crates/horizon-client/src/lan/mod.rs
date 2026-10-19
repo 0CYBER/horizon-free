@@ -5,6 +5,7 @@
 //! ever exchanges decoded packets with these threads through channels, so a
 //! world that is not open to the network pays nothing.
 mod advancements;
+pub mod attributes;
 pub mod chunks;
 mod command_order;
 pub mod command_suggestions;
@@ -20,8 +21,9 @@ pub mod menu;
 pub mod playerdata;
 mod recipes;
 pub mod tracking;
+pub mod waypoints;
 
-pub use conn::{Holding, PlayerSender};
+pub use conn::{Holding, PlayerSender, flush_all};
 use horizon_protocol::packets::play;
 use horizon_protocol::{
     GAME_VERSION, PROTOCOL_VERSION, crypto::uuid_string, packets::configuration::ClientInformation,
@@ -58,6 +60,8 @@ pub struct Joined {
     pub conn: u32,
     pub uuid: u128,
     pub name: String,
+    /// The profile's properties (skin textures, in online mode).
+    pub properties: Vec<horizon_protocol::packets::login::Property>,
     pub info: ClientInformation,
     pub brand: String,
     pub sender: PlayerSender,
@@ -81,6 +85,27 @@ pub enum Out {
 pub type LoginGate =
     Arc<dyn Fn(SocketAddr, u128, &str) -> Option<horizon_world::nbt::Tag> + Send + Sync>;
 
+/// online-mode=true: the key pair the server made at startup
+/// (MinecraftServer.initializeKeyPair) and how players are verified.
+pub struct OnlineMode {
+    pub key: horizon_protocol::rsa::RsaPrivateKey,
+    /// The public key as X.509 (PublicKey.getEncoded), sent in the hello.
+    pub public_der: Vec<u8>,
+    /// prevent-proxy-connections: the session service also checks the address.
+    pub prevent_proxy: bool,
+}
+
+/// The dedicated server's log for the login phase: (thread, level, line)
+/// written as vanilla's Log4j would, and the language that turns a
+/// disconnect reason into its text (Component.getString).
+#[derive(Clone)]
+pub struct NetLog {
+    pub write: Arc<dyn Fn(&str, &str, &str) + Send + Sync>,
+    pub lang: Arc<horizon_protocol::text::Language>,
+    /// log-ips: addresses in the log, or "<ip address withheld>".
+    pub log_ips: bool,
+}
+
 /// How the server side of the network behaves: an integrated server's LAN
 /// uses the defaults, a dedicated server takes them from server.properties.
 #[derive(Clone)]
@@ -98,8 +123,8 @@ pub struct NetConfig {
     pub hide_online_players: bool,
     /// server-icon.png (64x64 PNG bytes).
     pub favicon: Option<Vec<u8>>,
-    /// MinecraftServer.enforceSecureProfile.
-    pub enforces_secure_chat: bool,
+    /// Secure chat (a dedicated server; none on a LAN world).
+    pub secure_chat: Option<Arc<SecureChat>>,
     pub accepts_transfers: bool,
     /// LanServerPinger: announce the world on the local network.
     pub announce: bool,
@@ -109,8 +134,15 @@ pub struct NetConfig {
     /// Ops bypass a full server (ServerOpList.canBypassPlayerLimit).
     pub bypasses_limit: Option<Arc<dyn Fn(u128) -> bool + Send + Sync>>,
     pub gate: Option<LoginGate>,
+    /// Online mode: players are authenticated (none on a LAN world).
+    pub online: Option<Arc<OnlineMode>>,
+    pub log: Option<NetLog>,
 }
 impl NetConfig {
+    /// MinecraftServer.enforceSecureProfile.
+    pub fn enforces_secure_chat(&self) -> bool {
+        self.secure_chat.as_ref().is_some_and(|s| s.enforced())
+    }
     /// IntegratedServer.publishServer.
     pub fn lan(port: u16, motd: String, max_players: usize) -> Self {
         Self {
@@ -122,13 +154,55 @@ impl NetConfig {
             enable_status: true,
             hide_online_players: false,
             favicon: None,
-            enforces_secure_chat: false,
+            secure_chat: None,
             accepts_transfers: false,
             announce: true,
             listen: true,
             bypasses_limit: None,
             gate: None,
+            online: None,
+            log: None,
         }
+    }
+}
+
+/// A dedicated server's secure chat (DedicatedServer.enforceSecureProfile,
+/// Services.profileKeySignatureValidator): the services' profile-key keys,
+/// fetched in the background from startup and waited for by their first
+/// use, as authlib's RetryableFetch does.
+pub struct SecureChat {
+    /// enforce-secure-profile, in online mode.
+    pub enforce: bool,
+    keys: std::sync::OnceLock<Vec<horizon_protocol::rsa::RsaPublicKey>>,
+    fetch: Mutex<Option<JoinHandle<Vec<horizon_protocol::rsa::RsaPublicKey>>>>,
+}
+
+impl SecureChat {
+    pub fn new(
+        enforce: bool,
+        fetch: impl FnOnce() -> Vec<horizon_protocol::rsa::RsaPublicKey> + Send + 'static,
+    ) -> Self {
+        let handle = std::thread::Builder::new()
+            .name("Services keys".into())
+            .spawn(fetch)
+            .ok();
+        Self {
+            enforce,
+            keys: std::sync::OnceLock::new(),
+            fetch: Mutex::new(handle),
+        }
+    }
+    /// The keys players' chat keys must be signed by (none when the
+    /// services couldn't be reached).
+    pub fn keys(&self) -> &[horizon_protocol::rsa::RsaPublicKey] {
+        self.keys.get_or_init(|| {
+            let handle = self.fetch.lock().ok().and_then(|mut h| h.take());
+            handle.and_then(|h| h.join().ok()).unwrap_or_default()
+        })
+    }
+    /// enforceSecureProfile: enforced, and able to check keys.
+    pub fn enforced(&self) -> bool {
+        self.enforce && !self.keys().is_empty()
     }
 }
 
@@ -272,7 +346,7 @@ impl Shared {
                 Json::String(format!("data:image/png;base64,{}", base64(icon))),
             ));
         }
-        if self.config.enforces_secure_chat {
+        if self.config.enforces_secure_chat() {
             status.push(("enforcesSecureChat".to_owned(), Json::Bool(true)));
         }
         Json::Object(status).compact()

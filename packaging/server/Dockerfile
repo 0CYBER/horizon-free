@@ -13,20 +13,15 @@
 # start writes /data/server.toml from HORIZON_* (EULA, WORLD, SEED, PORT, WHITELIST, PLAYERS, OP); later
 # starts use the file. Manage it with `docker exec horizon horizon-server status|cmd|backup|logs ...`.
 FROM rust:1-slim-bookworm AS build
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends pkg-config libasound2-dev libudev-dev \
-    && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY . .
-RUN cargo build --release --locked -p horizon-client --bin horizon-client -p horizon-server --bin horizon-server \
-    && mkdir /out && cp target/release/horizon-client target/release/horizon-server /out/
+# The server build of the game (no sound, no controllers: it needs neither ALSA nor udev) as horizon-engine.
+RUN cargo build --release --locked -p horizon-client --no-default-features --bin horizon-client \
+    && cargo build --release --locked -p horizon-server --bin horizon-server \
+    && mkdir /out && cp target/release/horizon-client /out/horizon-engine && cp target/release/horizon-server /out/
 
 FROM debian:bookworm-slim
-# The game links ALSA and udev even when it runs headless with no sound.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends libasound2 libudev1 \
-    && rm -rf /var/lib/apt/lists/* \
-    && useradd --system --home-dir /data --shell /usr/sbin/nologin horizon \
+RUN useradd --system --home-dir /data --shell /usr/sbin/nologin horizon \
     && mkdir -p /data /opt/horizon/.local/horizon-client \
     && chown horizon:horizon /data
 COPY --from=build /out/ /opt/horizon/

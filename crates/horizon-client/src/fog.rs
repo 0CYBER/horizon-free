@@ -32,6 +32,7 @@ pub struct FogData {
 }
 
 /// Per-biome water fog end multipliers (`visual/water_fog_end_distance`).
+#[derive(Default)]
 pub struct FogTables {
     water_fog_end: Vec<f32>,
 }
@@ -180,6 +181,8 @@ pub struct FogInputs<'a> {
     pub water_fog_color: [f32; 3],
     pub biome: u16,
     pub render_distance_chunks: i32,
+    /// Extend ordinary Overworld atmosphere for terrain beyond vanilla's range.
+    pub distant_terrain: bool,
     /// The Cloud Distance option, in chunks.
     pub cloud_range_chunks: i32,
     pub camera_y: f64,
@@ -336,6 +339,18 @@ pub fn setup_fog(tables: &FogTables, state: &FogState, input: &FogInputs) -> Fog
     let span = (rd / 10.0).clamp(4.0, 64.0);
     fog.render_distance_start = rd - span;
     fog.render_distance_end = rd;
+    if input.distant_terrain
+        && input.skybox
+        && input.fog_type == FogType::Atmospheric
+        && input.blindness.is_none()
+        && input.darkness.is_none()
+        && !input.boss_world_fog
+        && sky.fog_end >= 1024.0
+    {
+        let scale = (rd / 1024.0).max(1.0);
+        fog.environmental_start *= scale;
+        fog.environmental_end *= scale;
+    }
     fog
 }
 /// `AtmosphericFogEnvironment.updateRainFogState`.
@@ -368,6 +383,7 @@ mod tests {
             water_fog_color: [0.0, 0.0, 0.2],
             biome: 0,
             render_distance_chunks: 12,
+            distant_terrain: false,
             cloud_range_chunks: 128,
             camera_y: 70.0,
             min_y: -64,
@@ -444,6 +460,38 @@ mod tests {
         assert!((fog.render_distance_start - (192.0 - 19.2)).abs() < 1e-4);
         assert_eq!(fog.render_distance_end, 192.0);
         assert_eq!(fog.sky_end, 192.0);
+    }
+    #[test]
+    fn distant_atmosphere_extends_without_extending_environmental_overrides() {
+        let sky = Sky {
+            fog_end: 1024.,
+            ..Sky::default()
+        };
+        let tables = FogTables {
+            water_fog_end: vec![1.],
+        };
+        let mut input = inputs(&sky);
+        input.render_distance_chunks = 1024;
+        input.distant_terrain = true;
+        let fog = setup_fog(&tables, &FogState::default(), &input);
+        assert_eq!(fog.environmental_end, 16384.);
+        input.fog_type = FogType::Water;
+        assert_eq!(
+            setup_fog(&tables, &FogState::default(), &input).environmental_end,
+            24.
+        );
+        input.fog_type = FogType::Atmospheric;
+        input.darkness = Some(1.);
+        assert_eq!(
+            setup_fog(&tables, &FogState::default(), &input).environmental_end,
+            15.
+        );
+        input.darkness = None;
+        input.boss_world_fog = true;
+        assert_eq!(
+            setup_fog(&tables, &FogState::default(), &input).environmental_end,
+            96.
+        );
     }
     #[test]
     fn cloud_fog_ends_at_the_cloud_distance() {

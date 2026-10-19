@@ -10,11 +10,17 @@ description = "Host a Horizon server: server.toml, the CLI and the supervisor th
 horizon-server-files = { path = "../horizon-server-files" }
 # The game process's RAM and CPU (the same probes the benchmark reports use).
 horizon-bench = { path = "../horizon-bench" }
+# The log's local times, as the game prints them.
+chrono = { version = "0.4.42", default-features = false, features = ["clock", "std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1.1"
 # Edits server.toml in place, keeping the owner's comments and order.
 toml_edit = "0.25"
+# Updates: the release from GitHub, checked against the SHA-256 GitHub publishes (both already in the
+# lockfile, ureq through horizon-server-files).
+sha2 = "0.10"
+ureq = { version = "2", default-features = false, features = ["tls"] }
 # Backups: one zip anyone can open, Windows included.
 zip = { version = "2", default-features = false, features = ["deflate"] }
 

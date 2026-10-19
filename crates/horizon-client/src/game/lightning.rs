@@ -24,14 +24,18 @@ pub(super) struct Bolt {
     converted: Vec<u32>,
 }
 impl Game<'_> {
-    /// One `tickThunder` roll per loaded chunk.
+    /// `ServerChunkCache.tickSpawningChunk`: one `tickThunder` roll per
+    /// spawning chunk (within 128 blocks of a player) that is in entity
+    /// ticking range.
     pub(super) fn tick_thunder(&mut self) {
         // isRaining (rain level > 0.2) and isThundering (> 0.9, sky light, no ceiling).
         let (rain, thunder) = self.world.weather.levels(1.0);
         if rain <= 0.2 || thunder <= 0.9 || self.dim != super::Dim::Overworld {
             return;
         }
-        let chunks: Vec<(i32, i32)> = self.world.chunks.keys().copied().collect();
+        let (_, mut chunks) = self.spawning_chunks(&self.level_players());
+        let levels = self.tickets.levels();
+        chunks.retain(|&(x, z)| levels.random_ticking(x, z));
         for (cx, cz) in chunks {
             if self.world.random.next_int_bound(100_000).unwrap_or(1) != 0 {
                 continue;
@@ -50,7 +54,7 @@ impl Game<'_> {
             let difficulty = f64::from(self.ui.difficulty) * 0.75;
             let below = &self
                 .res
-                .facts
+                .facts()
                 .get(self.world.block(pos[0], pos[1] - 1, pos[2]))
                 .name;
             let trap = self.ui.rules.bool("spawn_mobs")
@@ -160,11 +164,11 @@ impl Game<'_> {
         }
         for p in spots {
             let state = self.world.block(p[0], p[1], p[2]);
-            if !self.res.facts.is_air(state) {
+            if !self.res.facts().is_air(state) {
                 continue;
             }
             // BaseFireBlock.getState: soul fire on soul soil and sand.
-            let below = self.res.facts.get(self.world.block(p[0], p[1] - 1, p[2]));
+            let below = self.res.facts().get(self.world.block(p[0], p[1] - 1, p[2]));
             let name = if matches!(&*below.name, "minecraft:soul_soil" | "minecraft:soul_sand") {
                 "minecraft:soul_fire"
             } else {
@@ -236,7 +240,7 @@ impl Game<'_> {
             at[2].floor() as i32,
         ];
         let state = self.world.block(p[0], p[1], p[2]);
-        if !self.res.facts.get(state).name.ends_with("lightning_rod") {
+        if !self.res.facts().get(state).name.ends_with("lightning_rod") {
             return;
         }
         let registry = self.pack.assets.registry;
@@ -348,7 +352,7 @@ impl Game<'_> {
     /// `LightningBoltRenderer`: 4 layers of a trunk and two branches, 8
     /// segments of 16 blocks, from the bolt's seed.
     pub(super) fn bolt_geometry(&self, camera: glam::DVec3, out: &mut Vec<Vertex>) {
-        let white = self.atlas.font.white();
+        let white = self.gui.atlas.font.white();
         let uv = [white.u0, white.v0];
         // ARGB 0.45, 0.45, 0.5 at 0.3 alpha, packed RGBA.
         let color = (76u32 << 24) | (127 << 16) | (114 << 8) | 114;

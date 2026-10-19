@@ -65,6 +65,8 @@ pub(super) struct Portals {
     arrivals: Vec<Arrival>,
     loaded: bool,
     dirty: bool,
+    /// Per-chunk portal palette masks, kept across ticks (portal_sections).
+    pub(super) sections: horizon_client::portal_sections::PortalSections,
 }
 
 fn rotate_y(v: Vec3, degrees: f32) -> Vec3 {
@@ -92,13 +94,13 @@ impl Game<'_> {
         }
     }
     /// `ServerLevel.isAllowedToEnterPortal`.
-    fn may_enter(&self, target: Dim) -> bool {
+    pub(super) fn may_enter(&self, target: Dim) -> bool {
         target != Dim::Nether || self.ui.rules.bool("allow_entering_nether_using_portals")
     }
     /// The plan of an entity of `width` by `height` at `at` going through the
     /// portal at `entry` (`getDimensionTransitionFromExit` and the scaled,
     /// clamped exit of `getPortalDestination`).
-    fn portal_plan(
+    pub(super) fn portal_plan(
         &self,
         entry: BlockPos,
         at: Vec3,
@@ -112,7 +114,7 @@ impl Game<'_> {
             Dim::Nether
         };
         let state = self.world.block(entry.x, entry.y, entry.z);
-        let b = &self.res.behaviours;
+        let b = self.res.behaviours();
         let (entry_x_axis, offset) = match b.portal_axis(state) {
             Some(x_axis) => {
                 let area = largest_rectangle_around(
@@ -150,7 +152,7 @@ impl Game<'_> {
     /// (the points of interest `PortalForcer` searches): loaded chunks as
     /// they are, the others as saved; chunks never generated have none.
     fn portal_blocks(&self, center: BlockPos, radius: i32) -> Vec<BlockPos> {
-        let b = &self.res.behaviours;
+        let b = self.res.behaviours();
         let chunk_radius = radius.div_euclid(16) + 1;
         let (cx, cz) = (center.x >> 4, center.z >> 4);
         let mut out = Vec::new();
@@ -161,7 +163,7 @@ impl Game<'_> {
                     Some(c) => &**c,
                     None => match self
                         .save
-                        .load(x, z, self.pack.assets.registry, &self.res.biomes)
+                        .load(x, z, self.pack.assets.registry, self.res.biomes())
                     {
                         Some(c) => {
                             saved = c;
@@ -195,7 +197,7 @@ impl Game<'_> {
     }
     /// The exit portal of `plan` in the loaded dimension: the closest one
     /// within reach, else one built by `PortalForcer.createPortal`.
-    fn nether_exit_portal(&mut self, plan: &Plan) -> Option<FoundRectangle> {
+    pub(super) fn nether_exit_portal(&mut self, plan: &Plan) -> Option<FoundRectangle> {
         let to_nether = plan.dim == Dim::Nether;
         let radius = if to_nether { 16 } else { 128 };
         let border = self.border_bounds();
@@ -211,7 +213,7 @@ impl Game<'_> {
         );
         if let Some(found) = found {
             let state = self.world.block(found.x, found.y, found.z);
-            let x_axis = self.res.behaviours.portal_axis(state).unwrap_or(true);
+            let x_axis = self.res.behaviours().portal_axis(state).unwrap_or(true);
             return Some(largest_rectangle_around(
                 found,
                 if x_axis { Axis::X } else { Axis::Z },
@@ -231,8 +233,8 @@ impl Game<'_> {
     }
     /// `NetherPortalBlock.createDimensionTransition`: the arrival position
     /// and the yaw turned by.
-    fn arrival(&self, plan: &Plan, exit: FoundRectangle) -> (Vec3, f32) {
-        let b = &self.res.behaviours;
+    pub(super) fn arrival(&self, plan: &Plan, exit: FoundRectangle) -> (Vec3, f32) {
+        let b = self.res.behaviours();
         let corner = exit.min_corner;
         let exit_x_axis = b
             .portal_axis(self.world.block(corner.x, corner.y, corner.z))
@@ -296,6 +298,12 @@ impl Game<'_> {
         else {
             return Ok(());
         };
+        self.player_through_nether_portal(entry)
+    }
+    /// `Entity.handlePortal` once the player's portal process at `entry`
+    /// finished: `NetherPortalBlock.getPortalDestination`, then
+    /// `teleportToPortalDestination` (`isAllowedToEnterPortal`).
+    pub(super) fn player_through_nether_portal(&mut self, entry: BlockPos) -> Result<()> {
         let Some(p) = self.player.as_ref() else {
             return Ok(());
         };
@@ -312,8 +320,16 @@ impl Game<'_> {
         self.portals.travel = Some(plan);
         self.end_portal_travel = false;
         self.enter_dimension(plan.dim)?;
-        // The destination is all on disk now: load around the portal its
-        // points of interest lead to, or the approximate exit.
+        let centre = self.arrival_centre(&plan);
+        if let Some((_, target)) = self.travelling.as_mut() {
+            *target = centre;
+        }
+        Ok(())
+    }
+    /// Where to wait for the destination of `plan` to load, once its level
+    /// is open: the portal its points of interest lead to, or the
+    /// approximate exit.
+    pub(super) fn arrival_centre(&self, plan: &Plan) -> Vec3 {
         let to_nether = plan.dim == Dim::Nether;
         let portals = self.portal_blocks(plan.approximate, if to_nether { 16 } else { 128 });
         let (min_section, max_section) = if to_nether { (0, 15) } else { (-4, 19) };
@@ -327,14 +343,11 @@ impl Game<'_> {
             max_section,
         );
         let centre = found.unwrap_or(plan.approximate);
-        if let Some((_, target)) = self.travelling.as_mut() {
-            *target = Vec3::new(
-                f64::from(centre.x) + 0.5,
-                f64::from(centre.y),
-                f64::from(centre.z) + 0.5,
-            );
-        }
-        Ok(())
+        Vec3::new(
+            f64::from(centre.x) + 0.5,
+            f64::from(centre.y),
+            f64::from(centre.z) + 0.5,
+        )
     }
     /// The player's arrival once the destination has loaded around the
     /// approximate exit: the waiting entities first, then the exit portal
@@ -347,10 +360,23 @@ impl Game<'_> {
     ) -> Result<()> {
         self.resolve_arrivals();
         let plan = self.portals.travel.take();
-        let exit = plan.as_ref().and_then(|plan| self.nether_exit_portal(plan));
-        let (position, rotation) = match (plan, exit) {
-            (Some(plan), Some(exit)) => self.arrival(&plan, exit),
-            _ => (target, 0.0),
+        let Some(plan) = plan else {
+            // A command teleport can change dimensions without going through
+            // a portal. It has no portal placement, rotation, or sound effect.
+            player.position = target;
+            player.velocity = Vec3::ZERO;
+            player.fall_distance = 0.0;
+            self.previous_position = target;
+            self.player = Some(player);
+            self.pad.player_replaced();
+            self.sway = Default::default();
+            self.apply_equipment();
+            return Ok(());
+        };
+        let exit = self.nether_exit_portal(&plan);
+        let (position, rotation) = match exit {
+            Some(exit) => self.arrival(&plan, exit),
+            None => (target, 0.0),
         };
         player.position = position;
         // Relative.ROTATION and Relative.DELTA: the yaw turns, the motion
@@ -481,12 +507,14 @@ impl Game<'_> {
             .filter(|m| self.mob_can_use_portal(m))
             .map(|m| (m.id, m.position, m.width(), m.height()))
             .collect();
+        let mut portal_sections = std::mem::take(&mut self.portals.sections);
         for (id, to, width, height) in items.into_iter().chain(mobs) {
             let from = self.portals.before.get(&id).copied().unwrap_or(to);
-            if let Some(pos) = self.swept_portal(from, to, width, height) {
+            if let Some(pos) = self.swept_portal(from, to, width, height, &mut portal_sections) {
                 inside.push((id, pos));
             }
         }
+        self.portals.sections = portal_sections;
         for (id, pos) in inside {
             self.portals
                 .entities
@@ -497,7 +525,14 @@ impl Game<'_> {
     }
     /// The first nether portal block an entity box swept through
     /// (`Entity.checkInsideBlocks`, whose first portal sets the entry).
-    fn swept_portal(&self, from: Vec3, to: Vec3, width: f32, height: f32) -> Option<BlockPos> {
+    fn swept_portal(
+        &self,
+        from: Vec3,
+        to: Vec3,
+        width: f32,
+        height: f32,
+        portal_sections: &mut horizon_client::portal_sections::PortalSections,
+    ) -> Option<BlockPos> {
         let half = f64::from(width) / 2.0;
         let bounds = horizon_core::geometry::Aabb::new(
             Vec3::new(to.x - half, to.y, to.z - half),
@@ -508,6 +543,13 @@ impl Game<'_> {
             f64::from(1.0e-5_f32),
             f64::from(1.0e-5_f32),
         ));
+        // Every block the sweep visits lies in the box covering both ends.
+        let reach = bounds
+            .union_bounds(bounds.move_by(from.subtract(to)))
+            .inflate(Vec3::new(1.0, 1.0, 1.0));
+        if !self.may_hold_portal(reach, portal_sections) {
+            return None;
+        }
         let mut found = None;
         let _ = horizon_core::geometry::sweep_intersected_blocks(
             from,
@@ -517,7 +559,7 @@ impl Game<'_> {
             |p, _| {
                 if self
                     .res
-                    .behaviours
+                    .behaviours()
                     .portal_axis(self.world.block(p.x, p.y, p.z))
                     .is_some()
                 {
@@ -528,6 +570,53 @@ impl Game<'_> {
             },
         );
         found
+    }
+    /// Whether a section `reach` touches has a nether portal state in its
+    /// palette: without one, no block there is a portal. Palette answers are
+    /// kept per chunk across ticks (`portal_sections`); a box over many
+    /// sections is not checked.
+    fn may_hold_portal(
+        &self,
+        reach: horizon_core::geometry::Aabb,
+        sections: &mut horizon_client::portal_sections::PortalSections,
+    ) -> bool {
+        use horizon_client::chunk::{MIN_Y, SECTIONS};
+        let (min, max) = (reach.min_position(), reach.max_position());
+        if !min.is_finite() || !max.is_finite() {
+            return true;
+        }
+        let (min, max) = (BlockPos::containing(min), BlockPos::containing(max));
+        let top = SECTIONS as i32 - 1;
+        let (x0, x1) = (min.x >> 4, max.x >> 4);
+        let (z0, z1) = (min.z >> 4, max.z >> 4);
+        let (y0, y1) = (
+            ((min.y - MIN_Y) >> 4).clamp(0, top),
+            ((max.y - MIN_Y) >> 4).clamp(0, top),
+        );
+        let count = (i64::from(x1) - i64::from(x0) + 1)
+            * (i64::from(y1) - i64::from(y0) + 1)
+            * (i64::from(z1) - i64::from(z0) + 1);
+        if count > 64 {
+            return true;
+        }
+        let mut y_mask = 0u32;
+        for sy in y0..=y1 {
+            y_mask |= 1 << sy;
+        }
+        let behaviours = self.res.behaviours();
+        let chunks = &self.world.chunks;
+        (x0..=x1).any(|cx| {
+            (z0..=z1).any(|cz| {
+                chunks.get(&(cx, cz)).is_some_and(|chunk| {
+                    sections.get((cx, cz), chunk, |v| {
+                        behaviours
+                            .portal_axis(horizon_world::registry::BlockStateId(v))
+                            .is_some()
+                    }) & y_mask
+                        != 0
+                })
+            })
+        })
     }
     /// `Entity.teleportCrossDimension` away from the loaded dimension: the
     /// entity is saved and removed, and waits for its dimension to load.

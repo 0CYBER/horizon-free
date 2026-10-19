@@ -233,6 +233,10 @@ impl Text {
     }
     /// The `Component` as vanilla's JSON (ComponentSerialization): the one
     /// built through the constructors, else the spans as literal siblings.
+    /// The key of a `Component.translatable` built through [`Text::translate`].
+    pub fn translation_key(&self) -> Option<&str> {
+        self.source.as_deref()?.get("translate")?.as_str()
+    }
     pub fn component(&self) -> Value {
         if let Some(c) = &self.source {
             return (**c).clone();
@@ -262,6 +266,24 @@ impl Text {
             }
             _ => c,
         }
+    }
+    /// Style fields the spans don't model (an entity hover, an insertion),
+    /// set on the component sent to vanilla only.
+    pub fn with_component_fields(mut self, fields: Vec<(String, Value)>) -> Self {
+        let mut c = self.component();
+        if let Value::Object(o) = &mut c {
+            for (k, v) in fields {
+                o.entry(k).or_insert(v);
+            }
+        }
+        self.source = Some(c.into());
+        self
+    }
+    /// The same spans, sent to vanilla as `component` (a shape the spans'
+    /// own JSON would not take, such as a styled root with siblings).
+    pub fn with_component(mut self, component: Value) -> Self {
+        self.source = Some(component.into());
+        self
     }
     pub fn with_color(self, color: u32) -> Self {
         self.with_style(&Style::color(color))

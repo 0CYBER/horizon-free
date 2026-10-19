@@ -11,15 +11,27 @@ use std::{
     time::Duration,
 };
 
-/// The game's program names, most specific first: a headless engine once there is one, else the game.
+/// The game's program names, most specific first: the server build (the game without sound or
+/// controllers, so it needs neither ALSA nor udev on Linux; `horizon-server-linux-x86_64.tar.gz` holds it),
+/// else the full game.
 const PROGRAMS: [&str; 2] = ["horizon-engine", "horizon-client"];
 
 fn exe(name: &str) -> String {
     format!("{name}{}", std::env::consts::EXE_SUFFIX)
 }
 
-/// The game program: `engine.path`, else one installed beside `horizon-server`, else one on the PATH.
+/// The game program: `engine.path`, else one installed beside `horizon-server` (in the release in use when
+/// it was installed by the installers), else one on the PATH.
 pub fn program(config: &Config, dir: &Path) -> Result<PathBuf, String> {
+    program_in(config, dir, crate::update::Install::find().as_ref())
+}
+
+/// [`program`], for the install `install`.
+pub fn program_in(
+    config: &Config,
+    dir: &Path,
+    install: Option<&crate::update::Install>,
+) -> Result<PathBuf, String> {
     if !config.engine.path.is_empty() {
         let path = dir.join(&config.engine.path);
         return path
@@ -27,9 +39,12 @@ pub fn program(config: &Config, dir: &Path) -> Result<PathBuf, String> {
             .then_some(path)
             .ok_or_else(|| format!("engine.path {} is not a file", config.engine.path));
     }
-    let beside = std::env::current_exe()
-        .ok()
-        .and_then(|e| e.parent().map(Path::to_path_buf));
+    // Installed: the release `current` points at now, so a switch applies at the next start.
+    let beside = install.map(crate::update::Install::programs).or_else(|| {
+        std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(Path::to_path_buf))
+    });
     let path_dirs = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
         .unwrap_or_default();
@@ -49,6 +64,55 @@ pub fn program(config: &Config, dir: &Path) -> Result<PathBuf, String> {
         })
 }
 
+/// Checks that the game program starts at all: `--help` loads no game files, so it fails only when the
+/// system can't load the program, as on a Linux without the ALSA and udev libraries the full game links
+/// (the server build doesn't). The reason, with what to install.
+pub fn check_starts(program: &Path) -> Result<(), String> {
+    let output = Command::new(program)
+        .arg("--help")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("the game ({}) can't start: {e}", program.display()))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(start_failure(program, output.status.code(), &stderr))
+}
+
+/// What to tell the owner when the game program exits at once.
+fn start_failure(program: &Path, code: Option<i32>, stderr: &str) -> String {
+    let reason = stderr
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim();
+    let mut text = format!(
+        "the game ({}) can't start{}{}",
+        program.display(),
+        code.map_or(String::new(), |c| format!(" (exit status {c})")),
+        if reason.is_empty() {
+            String::new()
+        } else {
+            format!(": {reason}")
+        }
+    );
+    if reason.contains("error while loading shared libraries")
+        && (reason.contains("libasound") || reason.contains("libudev"))
+    {
+        text.push_str(
+            "\nThe full game needs ALSA's and udev's libraries (libasound.so.2, libudev.so.1). Install the \
+             server build, which needs neither (packaging/server/install.sh picks it on Linux), or the \
+             libraries:\n  Debian, Ubuntu: sudo apt install libasound2 libudev1   (Ubuntu 24.04 and later: \
+             libasound2t64)\n  Fedora, RHEL: sudo dnf install alsa-lib systemd-libs\n  Arch: sudo pacman -S \
+             alsa-lib systemd-libs\n  NixOS: enable programs.nix-ld with alsa-lib and udev in its libraries",
+        );
+    }
+    text
+}
+
 /// Where the prepared game files may be, in the order they are tried.
 pub fn resource_candidates(config: &Config, dir: &Path, program: Option<&Path>) -> Vec<PathBuf> {
     if !config.engine.resources.is_empty() {
@@ -65,12 +129,13 @@ pub fn resource_candidates(config: &Config, dir: &Path, program: Option<&Path>) 
     out
 }
 
-/// The prepared game files: a folder holding the asset index `horizon-prepare` writes.
+/// The prepared game files: a folder holding the manifest every `horizon-prepare` run writes
+/// (`asset-index.json` comes only with the optional sounds, which a server doesn't need).
 pub fn resources(config: &Config, dir: &Path, program: Option<&Path>) -> Result<PathBuf, String> {
     let candidates = resource_candidates(config, dir, program);
     candidates
         .iter()
-        .find(|d| d.join("asset-index.json").is_file())
+        .find(|d| d.join("horizon-resources.json").is_file())
         .cloned()
         .ok_or_else(|| {
             let tried: Vec<String> = candidates
@@ -89,14 +154,18 @@ pub fn resources(config: &Config, dir: &Path, program: Option<&Path>) -> Result<
 /// Starts the engine in the server folder, with its console and log piped to the supervisor and its status
 /// on the control endpoint.
 pub fn spawn(program: &Path, resources: &Path, dir: &Path) -> std::io::Result<Child> {
+    // The game runs in the server folder, so a folder given relative to ours (`--dir srv`) would put its
+    // control endpoint in `srv/srv/.horizon`, which doesn't exist.
+    let dir = std::path::absolute(dir)?;
+    let resources = std::path::absolute(resources)?;
     let mut command = Command::new(program);
     command
         .arg("--resources")
         .arg(resources)
         .arg("--control-socket")
-        .arg(control_path(dir))
+        .arg(control_path(&dir))
         .args(["--dedicated", "--nogui"])
-        .current_dir(dir)
+        .current_dir(&dir)
         .env("HORIZON_NO_AUDIO", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -178,5 +247,106 @@ mod tests {
             resource_candidates(&config, dir, Some(program)),
             [PathBuf::from("/data/res")]
         );
+    }
+
+    #[test]
+    fn resources_prepared_without_sounds_are_found() {
+        let root = std::env::temp_dir().join(format!("horizon-server-res-{}", std::process::id()));
+        let prepared = root.join(".local/horizon-client/26.3");
+        std::fs::create_dir_all(&prepared).unwrap();
+        let program = root.join("horizon-client");
+        let config = Config::default();
+        let server = root.join("server");
+        assert!(resources(&config, &server, Some(&program)).is_err());
+        // What `horizon-prepare` writes on every run; no asset index without `horizon-prepare sounds`.
+        std::fs::write(prepared.join("horizon-resources.json"), "{}").unwrap();
+        assert_eq!(resources(&config, &server, Some(&program)), Ok(prepared));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_missing_library_says_what_to_install() {
+        let program = Path::new("/opt/horizon/horizon-client");
+        let text = start_failure(
+            program,
+            Some(127),
+            "/opt/horizon/horizon-client: error while loading shared libraries: libasound.so.2: cannot open \
+             shared object file: No such file or directory\n",
+        );
+        assert!(text.starts_with(
+            "the game (/opt/horizon/horizon-client) can't start (exit status 127): /opt/horizon/horizon-client: \
+             error while loading shared libraries: libasound.so.2"
+        ));
+        assert!(text.contains("sudo apt install libasound2 libudev1"));
+        // Another library: no ALSA advice (the server build, horizon-engine, links neither).
+        let engine = start_failure(
+            Path::new("/opt/horizon/horizon-engine"),
+            Some(127),
+            "/opt/horizon/horizon-engine: error while loading shared libraries: libgcc_s.so.1: cannot open \
+             shared object file: No such file or directory\n",
+        );
+        assert!(!engine.contains("libasound"), "{engine}");
+        let other = start_failure(program, Some(1), "something else\n");
+        assert_eq!(
+            other,
+            "the game (/opt/horizon/horizon-client) can't start (exit status 1): something else"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_relative_folder_reaches_the_game_whole() {
+        use std::os::unix::fs::PermissionsExt;
+        // Relative to this process's folder (the crate's, under cargo test), as `--dir srv` gives it.
+        let root = PathBuf::from(format!("reldir-test-{}", std::process::id()));
+        let server = root.join("srv");
+        std::fs::create_dir_all(server.join(".horizon")).unwrap();
+        std::fs::create_dir_all(root.join("res")).unwrap();
+        // A game that checks, from its own folder, the folders it was given.
+        let game = root.join("game");
+        std::fs::write(
+            &game,
+            "#!/bin/sh\nwhile [ $# -gt 0 ]; do case \"$1\" in --resources) r=$2; shift;; \
+             --control-socket) c=$2; shift;; esac; shift; done\n\
+             [ -d \"$r\" ] && [ -d \"$(dirname \"$c\")\" ] && [ -f server.toml ]\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&game, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(server.join("server.toml"), "").unwrap();
+        let status = spawn(
+            &std::path::absolute(&game).unwrap(),
+            &root.join("res"),
+            &server,
+        )
+        .unwrap()
+        .wait();
+        std::fs::remove_dir_all(&root).unwrap();
+        let status = status.unwrap();
+        assert!(status.success(), "{status}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_check_runs_the_program() {
+        use std::os::unix::fs::PermissionsExt;
+        let root =
+            std::env::temp_dir().join(format!("horizon-server-check-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let script = |name: &str, body: &str| {
+            let path = root.join(name);
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            path
+        };
+        assert_eq!(check_starts(&script("starts", "exit 0")), Ok(()));
+        let fails = script("fails", "echo 'no luck' >&2; exit 3");
+        assert_eq!(
+            check_starts(&fails),
+            Err(format!(
+                "the game ({}) can't start (exit status 3): no luck",
+                fails.display()
+            ))
+        );
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

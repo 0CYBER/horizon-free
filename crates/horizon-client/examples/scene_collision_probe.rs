@@ -40,7 +40,8 @@ fn main() -> Result<()> {
         return Err("radius must be 1..16".into());
     }
     let assets = assets::Assets::load(&resources)?;
-    let world = world::World::test_scene(&assets, radius)?;
+    let render = assets.reload(&resources)?;
+    let world = world::World::test_scene(&assets, &render, radius)?;
     let binding = collisions::load(&resources, assets.registry)?;
     let mut scene = collisions::SceneCollisions {
         world: &world,
@@ -50,7 +51,7 @@ fn main() -> Result<()> {
     fs::write(
         dir.join("scene.json"),
         serde_json::to_vec(&serde_json::json!({
-            "radius":radius,"resident_chunks":world.chunks.len(),"model_gallery":assets.model_gallery,
+            "radius":radius,"resident_chunks":world.chunks.len(),"model_gallery":render.model_gallery,
         }))?,
     )?;
     let mut output = std::io::BufWriter::new(fs::File::create(dir.join("rust.txt"))?);

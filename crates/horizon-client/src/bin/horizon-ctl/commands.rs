@@ -187,6 +187,10 @@ pub const COMMANDS: &[Cmd] = &[
         &[opt("radius", Ty::Num, "search radius in blocks (default 32)"), opt("type", Ty::Str, "entity type filter")], mcp: true, local: false),
     cmd!("block", Observe, "block X Y Z", "the block state at a position", "",
         ["horizon-ctl block 10 64 -3"], &BLOCK_XYZ, mcp: true, local: false),
+    cmd!("light", Observe, "light X1 Y1 Z1 X2 Y2 Z2", "the stored sky and block light of a box",
+        "At most 32768 blocks per request. One hex digit per block in `sky` and `block`, x fastest, then z, then y; `.` where no chunk is loaded.",
+        ["horizon-ctl light 0 64 0 15 70 15"],
+        &[p("x1", Ty::Int, "corner X"), p("y1", Ty::Int, "corner Y"), p("z1", Ty::Int, "corner Z"), p("x2", Ty::Int, "opposite X"), p("y2", Ty::Int, "opposite Y"), p("z2", Ty::Int, "opposite Z")], mcp: true, local: false),
     cmd!("blocks", Observe, "blocks X1 Y1 Z1 X2 Y2 Z2", "the non-air blocks of a box, with counts per block",
         "At most 32768 blocks per request.", ["horizon-ctl blocks 0 60 0 15 70 15"],
         &[p("x1", Ty::Int, "corner X"), p("y1", Ty::Int, "corner Y"), p("z1", Ty::Int, "corner Z"), p("x2", Ty::Int, "opposite X"), p("y2", Ty::Int, "opposite Y"), p("z2", Ty::Int, "opposite Z")], mcp: true, local: false),
@@ -339,7 +343,7 @@ pub const COMMANDS: &[Cmd] = &[
     cmd!("bench", Scripting, "bench SECONDS", "reset frame stats, wait, reply with the summary", "", ["horizon-ctl bench 10"], &[], mcp: false, local: false),
     cmd!("stats", Scripting, "stats [reset]", "frame-time summary since the last reset", "", ["horizon-ctl stats"], &[], mcp: false, local: false),
     cmd!("fly", Scripting, "fly X1 Y1 Z1 X2 Y2 Z2 SECONDS [PITCH [raw]]", "fly the camera along a line, then reply with the frame summary",
-        "With raw, the reply also lists every frame time in milliseconds (frame_ms).",
+        "The reply's tick_ms and tick_ms_max are the world's smoothed tick time over the flight (the server thread's when single player runs on one). With raw, the reply also lists every frame time in milliseconds (frame_ms).",
         ["horizon-ctl fly 0 100 0 500 100 0 20"], &[], mcp: false, local: false),
 ];
 

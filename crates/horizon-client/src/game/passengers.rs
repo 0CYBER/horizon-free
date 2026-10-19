@@ -186,9 +186,9 @@ impl Game<'_> {
             at[2].floor() as i32,
         );
         let frequent = self.world.chunks.get(&(x >> 4, z >> 4)).is_some_and(|c| {
-            let b = self.res.biomes.get(c.biome(x, y, z));
+            let b = self.res.biomes().get(c.biome(x, y, z));
             self.res
-                .mob_data
+                .mob_data()
                 .biome_has("minecraft:more_frequent_drowned_spawns", &b.name)
         });
         if frequent {

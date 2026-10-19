@@ -22,7 +22,19 @@ pub struct Pack {
     pub files: Vec<PackFile>,
     /// Override files by top folder (`config`, `kubejs`, ...).
     pub overrides: BTreeMap<String, usize>,
+    /// A CurseForge zip's files by project and file id only: how many its
+    /// manifest lists, when the files came from the pack's own mod list.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub curseforge_files: usize,
 }
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
+/// Where Crash Assistant keeps its list in an instance (and in the
+/// overrides of packs that ship it, such as All the Mods 10).
+pub const MODLIST: &str = "config/crash_assistant/modlist.json";
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct PackFile {
@@ -83,7 +95,16 @@ pub fn import(path: &Path) -> Result<Pack, String> {
         return Ok(mrpack(&index, &names(&zip)));
     }
     if let Some(manifest) = read_json(&mut zip, "manifest.json")? {
-        return Ok(curseforge(&manifest, &names(&zip)));
+        let mut pack = curseforge(&manifest, &names(&zip));
+        // The manifest names files only by CurseForge ids, which need a key
+        // to resolve; the pack's own mod list names them and gives their
+        // SHA-1s, so Modrinth can answer for most.
+        let root = manifest["overrides"].as_str().unwrap_or("overrides");
+        if let Some(list) = read_json(&mut zip, &format!("{root}/{MODLIST}"))? {
+            pack.curseforge_files = pack.files.len();
+            pack.files = modlist(&list)?.files;
+        }
+        return Ok(pack);
     }
     Err(format!(
         "{}: neither modrinth.index.json nor manifest.json",
@@ -103,7 +124,7 @@ fn read_json(zip: &mut zip::ZipArchive<fs::File>, name: &str) -> Result<Option<V
     entry
         .read_to_string(&mut text)
         .map_err(|e| format!("{name}: {e}"))?;
-    serde_json::from_str(&text)
+    serde_json::from_str(text.trim_start_matches('\u{feff}'))
         .map(Some)
         .map_err(|e| format!("{name}: {e}"))
 }
@@ -161,6 +182,7 @@ pub fn mrpack(index: &Value, names: &[String]) -> Pack {
             names,
             &["overrides", "client-overrides", "server-overrides"],
         ),
+        ..Pack::default()
     }
 }
 
@@ -197,6 +219,7 @@ pub fn curseforge(manifest: &Value, names: &[String]) -> Pack {
         loader_version: loader_version.to_owned(),
         files,
         overrides: overrides(names, &[root]),
+        ..Pack::default()
     }
 }
 
@@ -417,5 +440,37 @@ mod tests {
         );
         assert_eq!(p.files[0].curseforge, Some((238222, 5101366)));
         assert_eq!(p.overrides["kubejs"], 1);
+    }
+
+    #[test]
+    fn a_curseforge_zip_takes_names_from_its_mod_list() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("horizon-cf-zip-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("pack.zip");
+        let mut zip = zip::ZipWriter::new(fs::File::create(&path).unwrap());
+        let opts = zip::write::SimpleFileOptions::default();
+        let manifest = json!({"name": "Pack", "overrides": "overrides",
+            "minecraft": {"version": "1.21.1", "modLoaders": [{"id": "neoforge-21.1.259"}]},
+            "files": [{"projectID": 1, "fileID": 2}, {"projectID": 3, "fileID": 4}]});
+        zip.start_file("manifest.json", opts).unwrap();
+        zip.write_all(manifest.to_string().as_bytes()).unwrap();
+        zip.start_file(format!("overrides/{MODLIST}"), opts)
+            .unwrap();
+        let list = json!({"mcw-doors-1.1.2.jar": {"jarName": "mcw-doors-1.1.2.jar",
+            "modId": "mcwdoors", "modrinthHash": "0123456789abcdef0123456789abcdef01234567"}});
+        // Crash Assistant writes a byte order mark.
+        zip.write_all(format!("\u{feff}{list}").as_bytes()).unwrap();
+        zip.finish().unwrap();
+        let pack = import(&path).unwrap();
+        assert_eq!(
+            (pack.format.as_str(), pack.name.as_str()),
+            ("curseforge", "Pack")
+        );
+        assert_eq!(pack.curseforge_files, 2);
+        assert_eq!(pack.files.len(), 1);
+        assert_eq!(pack.files[0].path, "mods/mcw-doors-1.1.2.jar");
+        assert_eq!(pack.overrides["config"], 1);
+        fs::remove_dir_all(&dir).unwrap();
     }
 }
