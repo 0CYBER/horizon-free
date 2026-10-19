@@ -22,6 +22,8 @@ use std::{
 const CELLS: usize = 16;
 const MAX_SAVED: usize = 1024;
 const SAMPLE_JOBS: usize = 4;
+/// The coarsest tile level: `Plan` roots cover at most 1024 chunks around.
+const MAX_LEVEL: u8 = 10;
 /// Top solid face and optional fluid face, in absolute block coordinates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Surface {
@@ -142,7 +144,9 @@ impl Column {
             self.spans.push(span);
         }
     }
-    fn from_chunk(chunk: &Chunk, facts: &BlockFacts, x: i32, z: i32) -> Self {
+    /// `kinds`: `state_kinds`, per block state.
+    fn from_chunk(chunk: &Chunk, kinds: &[u8], x: i32, z: i32) -> Self {
+        let kind = |state: BlockStateId| kinds.get(state.0 as usize).copied().unwrap_or(0);
         let face_light = |y: i32| {
             let mut sky = 0;
             let mut block = 0;
@@ -177,13 +181,8 @@ impl Column {
             for offset in (0..16).step_by(step) {
                 let y = min + offset;
                 let state = BlockStateId(chunk.get(x, y, z));
-                let f = facts.get(state);
-                if facts.is_air(state)
-                    || !(f.solid_render
-                        || f.full_collision
-                        || f.name.ends_with("_leaves")
-                        || matches!(&*f.name, "minecraft:water" | "minecraft:lava"))
-                {
+                let kind = kind(state);
+                if kind & KEPT == 0 {
                     continue;
                 }
                 let light = face_light(y);
@@ -192,17 +191,13 @@ impl Column {
                     max: (y + step as i32) as i16,
                     state,
                     biome: chunk.biome(x, y, z),
-                    light: u16::from(light & 0xf0)
-                        | (u16::from((light & 15).max(f.emission)) << 12),
+                    light: u16::from(light & 0xf0) | (u16::from((light & 15).max(kind >> 4)) << 12),
                 });
             }
         }
         let mut water = None;
         for span in column.spans.iter().rev() {
-            if matches!(
-                &*facts.get(span.state).name,
-                "minecraft:water" | "minecraft:lava"
-            ) {
+            if kind(span.state) & FLUID != 0 {
                 water.get_or_insert((i32::from(span.max), span.state));
             } else {
                 column.surface = Some(Surface {
@@ -219,13 +214,37 @@ impl Column {
         {
             column.surface = Some(Surface {
                 height: MIN_Y,
-                state: facts.air,
+                state: BlockStateId(
+                    kinds.iter().position(|&kind| kind & AIR != 0).unwrap_or(0) as u32
+                ),
                 water: Some((height, state)),
                 biome: chunk.biome(x, height - 1, z),
             });
         }
         column
     }
+}
+/// `state_kinds` bits: kept in columns, a fluid, the air state; the light
+/// emission is in the high nibble.
+const KEPT: u8 = 1;
+const FLUID: u8 = 2;
+const AIR: u8 = 4;
+/// What `Column::from_chunk` needs of each block state, read from the facts
+/// once: matching their names for every block made observing a chunk slow.
+fn state_kinds(facts: &BlockFacts) -> Vec<u8> {
+    (0..facts.states.len())
+        .map(|i| {
+            let state = BlockStateId(i as u32);
+            let f = facts.get(state);
+            let fluid = matches!(&*f.name, "minecraft:water" | "minecraft:lava");
+            let kept = !facts.is_air(state)
+                && (f.solid_render || f.full_collision || f.name.ends_with("_leaves") || fluid);
+            (u8::from(kept) * KEPT)
+                | (u8::from(fluid) * FLUID)
+                | (u8::from(state == facts.air) * AIR)
+                | (f.emission.min(15) << 4)
+        })
+        .collect()
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TileKey {
@@ -239,6 +258,13 @@ impl TileKey {
     }
     pub fn origin(self) -> [i32; 3] {
         [self.x * self.size(), 0, self.z * self.size()]
+    }
+    fn parent(self) -> Self {
+        Self {
+            x: self.x.div_euclid(2),
+            z: self.z.div_euclid(2),
+            level: self.level + 1,
+        }
     }
     fn children(self) -> [Self; 4] {
         std::array::from_fn(|i| Self {
@@ -335,7 +361,7 @@ impl Plan {
     fn select(
         &self,
         key: TileKey,
-        ready: &FxHashMap<TileKey, Vec<Column>>,
+        ready: &FxHashMap<TileKey, impl Sized>,
         out: &mut Vec<TileKey>,
     ) -> bool {
         if !self.nodes.contains(&key) {
@@ -365,15 +391,43 @@ impl Plan {
         }
     }
 }
+/// A mesh job whose inputs are being gathered, a few each frame
+/// (`INPUT_BUDGET`): gathering hundreds at once stalled the frame.
+struct Gathering {
+    active: FxHashSet<TileKey>,
+    /// The active tiles' samples when the job began: a replan may drop them
+    /// from `ready` before the job is sent.
+    samples: FxHashMap<TileKey, Arc<Vec<Column>>>,
+    keys: Vec<TileKey>,
+    finer: FxHashMap<TileKey, Vec<TileKey>>,
+    inputs: Vec<MeshInput>,
+    covered: FxHashSet<(i32, i32)>,
+    bounds: Option<[i32; 4]>,
+}
+/// How long one frame may spend gathering mesh inputs (at least one).
+const INPUT_BUDGET: std::time::Duration = std::time::Duration::from_millis(2);
 struct MeshInput {
     key: TileKey,
-    columns: Vec<Column>,
+    /// The tile's samples, with `visited` replacing some of them (`columns`).
+    samples: Arc<Vec<Column>>,
+    visited: Vec<(usize, Column)>,
     neighbors: [Vec<mesh::EdgeColumn>; 4],
     finer: Vec<TileKey>,
 }
 struct ReducedColumns {
     columns: Arc<[Column; 256]>,
     levels: [Vec<Column>; 4],
+}
+impl MeshInput {
+    /// Built on the worker: cloning every tile's samples on the render
+    /// thread stalled it for tens of milliseconds after a move.
+    fn columns(&self) -> Vec<Column> {
+        let mut columns = (*self.samples).clone();
+        for (index, column) in &self.visited {
+            columns[*index] = column.clone();
+        }
+        columns
+    }
 }
 impl ReducedColumns {
     fn new(columns: Arc<[Column; 256]>) -> Self {
@@ -439,6 +493,12 @@ pub struct Lod {
     #[cfg(test)]
     context: Arc<WorkerContext>,
     meshing: bool,
+    /// The next mesh job, while its inputs are gathered (`meshing` is set).
+    gathering: Option<Gathering>,
+    /// Something `select` reads changed since it last ran.
+    reselect: bool,
+    /// The plan or the covered columns changed: covered leaves need stand-ins.
+    replanned: bool,
     invalidated: FxHashSet<(i32, i32)>,
     area: Option<([i32; 2], i32, u32, i32)>,
     plan: Plan,
@@ -447,7 +507,10 @@ pub struct Lod {
     detail_masks: FxHashMap<TileKey, [u64; 4]>,
     detail_request_pending: bool,
     detail_request_at: std::time::Instant,
-    ready: FxHashMap<TileKey, Vec<Column>>,
+    /// `state_kinds`, from the first observed chunk's facts.
+    kinds: Option<Vec<u8>>,
+    /// Each tile's samples, shared with mesh jobs in flight.
+    ready: FxHashMap<TileKey, Arc<Vec<Column>>>,
     active: FxHashSet<TileKey>,
     dirty: FxHashSet<TileKey>,
     removed: Vec<TileKey>,
@@ -583,7 +646,7 @@ impl Lod {
                                 }
                                 let mesh = mesher.mesh(
                                     input.key,
-                                    &input.columns,
+                                    &input.columns(),
                                     &covered,
                                     bounds,
                                     &mesh_context,
@@ -617,6 +680,9 @@ impl Lod {
             #[cfg(test)]
             context,
             meshing: false,
+            gathering: None,
+            reselect: true,
+            replanned: true,
             invalidated: FxHashSet::default(),
             area: None,
             plan: Plan::default(),
@@ -625,6 +691,7 @@ impl Lod {
             detail_masks: FxHashMap::default(),
             detail_request_pending: false,
             detail_request_at: std::time::Instant::now(),
+            kinds: None,
             ready: FxHashMap::default(),
             active: FxHashSet::default(),
             dirty: FxHashSet::default(),
@@ -673,21 +740,34 @@ impl Lod {
         if self.meshing {
             self.invalidated.insert((x, z));
         }
-        for &key in &self.active {
-            let [ox, _, oz] = key.origin();
-            if x * 16 <= ox + key.size()
-                && (x + 1) * 16 >= ox
-                && z * 16 <= oz + key.size()
-                && (z + 1) * 16 >= oz
-            {
-                self.dirty.insert(key);
+        // The tiles touching the chunk: a few per level, not every active one.
+        for level in 0..=MAX_LEVEL {
+            let size = 16 << level;
+            for kz in (z * 16).div_euclid(size) - 1..=((z + 1) * 16).div_euclid(size) {
+                for kx in (x * 16).div_euclid(size) - 1..=((x + 1) * 16).div_euclid(size) {
+                    let key = TileKey {
+                        x: kx,
+                        z: kz,
+                        level,
+                    };
+                    let [ox, _, oz] = key.origin();
+                    if x * 16 <= ox + size
+                        && (x + 1) * 16 >= ox
+                        && z * 16 <= oz + size
+                        && (z + 1) * 16 >= oz
+                        && self.active.contains(&key)
+                    {
+                        self.dirty.insert(key);
+                    }
+                }
             }
         }
     }
     /// Capture actual block columns, including canopy gaps and material layers.
     pub fn observe(&mut self, chunk: &Chunk, facts: &BlockFacts) {
+        let kinds = self.kinds.get_or_insert_with(|| state_kinds(facts));
         let values = Arc::new(std::array::from_fn(|i| {
-            Column::from_chunk(chunk, facts, (i & 15) as i32, (i >> 4) as i32)
+            Column::from_chunk(chunk, kinds, (i & 15) as i32, (i >> 4) as i32)
         }));
         let key = (chunk.x, chunk.z);
         if self.saved.get(&key) == Some(&values) {
@@ -720,7 +800,8 @@ impl Lod {
             level: 0,
         };
         if self.plan.nodes.contains(&fine) || self.ready.contains_key(&fine) {
-            self.ready.insert(fine, columns.to_vec());
+            self.ready.insert(fine, Arc::new(columns.to_vec()));
+            self.reselect = true;
             self.detail_masks.insert(fine, [u64::MAX; 4]);
         }
     }
@@ -748,6 +829,7 @@ impl Lod {
             if x0 == x1 || z0 == z1 {
                 continue;
             }
+            let samples = Arc::make_mut(samples);
             let mask = self.detail_masks.entry(key).or_default();
             for z in z0..z1 {
                 for x in x0..x1 {
@@ -775,7 +857,8 @@ impl Lod {
                     }
                 }
             }
-            self.ready.insert(key, samples);
+            self.ready.insert(key, Arc::new(samples));
+            self.reselect = true;
         }
     }
     fn finish_detail(&mut self, key: (i32, i32), columns: ReducedColumns) {
@@ -859,7 +942,7 @@ impl Lod {
         yaw: f32,
         detail: i32,
         distance: u32,
-        covered: FxHashSet<(i32, i32)>,
+        covered: Option<FxHashSet<(i32, i32)>>,
     ) -> Vec<(TileKey, SectionMesh)> {
         let elevation =
             (((camera[1] - f64::from(MIN_Y + crate::chunk::HEIGHT)).clamp(0., 16384.)) as i32 / 32)
@@ -881,13 +964,32 @@ impl Lod {
             elevation,
         );
         if self.area != Some(area) {
-            self.area = Some(area);
-            self.plan = Plan::with_previous(camera, detail, distance, &self.plan, elevation);
-            self.ready.retain(|key, _| self.plan.nodes.contains(key));
-            self.detail_masks
-                .retain(|key, _| self.plan.nodes.contains(key));
+            crate::spans::time("lod_plan", || {
+                self.area = Some(area);
+                self.plan = Plan::with_previous(camera, detail, distance, &self.plan, elevation);
+                self.ready.retain(|key, _| self.plan.nodes.contains(key));
+                self.detail_masks
+                    .retain(|key, _| self.plan.nodes.contains(key));
+                self.replanned = true;
+                self.reselect = true;
+            });
         }
         let mut meshes = Vec::new();
+        crate::spans::time("lod_results", || self.receive(&mut meshes));
+        crate::spans::time("lod_covered", || self.cover(covered));
+        if !self.meshing {
+            crate::spans::time("lod_select", || self.select());
+        }
+        if self.gathering.is_some() {
+            crate::spans::time("lod_input", || self.gather(INPUT_BUDGET));
+        }
+        crate::spans::time("lod_request", || self.request_detail(focus));
+        crate::spans::time("lod_wanted", || {
+            self.request_samples(camera, focus, yaw, detail, elevation)
+        });
+        meshes
+    }
+    fn receive(&mut self, meshes: &mut Vec<(TileKey, SectionMesh)>) {
         while let Ok(done) = self.results.try_recv() {
             match done {
                 Done::Detail(key, columns) => {
@@ -906,6 +1008,7 @@ impl Lod {
                         .extend(self.active.difference(&active).copied());
                     self.active = active;
                     self.meshing = false;
+                    self.reselect = true;
                     for (x, z) in std::mem::take(&mut self.invalidated) {
                         self.invalidate_chunk(x, z);
                     }
@@ -913,7 +1016,12 @@ impl Lod {
                 }
             }
         }
-        if self.covered != covered {
+    }
+    /// Takes the new full-detail columns, when they changed (`None`: not).
+    fn cover(&mut self, covered: Option<FxHashSet<(i32, i32)>>) {
+        if let Some(covered) = covered
+            && self.covered != covered
+        {
             let changes: Vec<_> = self
                 .covered
                 .symmetric_difference(&covered)
@@ -934,17 +1042,28 @@ impl Lod {
                 })
             });
             self.covered = covered;
+            self.replanned = true;
+            self.reselect = true;
         }
         // Complete resident columns need no duplicate noise work. Their real
         // summaries are retained when the full-detail chunks leave the view.
-        for &key in &self.plan.nodes {
-            if key.level == 0 && self.covered.contains(&(key.x, key.z)) {
-                self.ready
-                    .entry(key)
-                    .or_insert_with(|| vec![Column::default(); CELLS * CELLS]);
+        if std::mem::take(&mut self.replanned) {
+            for &key in &self.plan.nodes {
+                if key.level == 0 && self.covered.contains(&(key.x, key.z)) {
+                    self.ready
+                        .entry(key)
+                        .or_insert_with(|| Arc::new(vec![Column::default(); CELLS * CELLS]));
+                }
             }
         }
-        if !self.meshing {
+    }
+    /// Chooses the tiles to draw and meshes those that changed, when the
+    /// plan, the samples, the covered columns or the active tiles changed.
+    fn select(&mut self) {
+        if !std::mem::take(&mut self.reselect) && self.dirty.is_empty() {
+            return;
+        }
+        {
             let mut selected = Vec::new();
             for &key in &self.plan.roots {
                 self.plan.select(key, &self.ready, &mut selected);
@@ -970,27 +1089,68 @@ impl Lod {
             self.dirty.extend(next.difference(&self.active).copied());
             self.dirty.retain(|key| next.contains(key));
             if !self.dirty.is_empty() || next != self.active {
-                let inputs = self
-                    .dirty
+                let finer = Self::finer(&next, &self.dirty);
+                let samples = next
                     .iter()
-                    .map(|&key| crate::spans::time("lod_input", || self.mesh_input(key, &next)))
+                    .filter_map(|key| Some((*key, self.ready.get(key)?.clone())))
                     .collect();
-                self.dirty.clear();
+                let keys: Vec<_> = self.dirty.drain().collect();
                 self.meshing = true;
-                self.shared.jobs.lock().unwrap().push_front(Job::Mesh {
+                self.gathering = Some(Gathering {
                     active: next,
-                    inputs,
+                    samples,
+                    inputs: Vec::with_capacity(keys.len()),
+                    keys,
+                    finer,
                     covered: self.covered.clone(),
                     bounds: self.covered_bounds,
                 });
-                self.shared.wake.notify_all();
             }
         }
-        self.request_detail(focus);
+    }
+    /// Gathers mesh inputs for about `budget`, then sends the job once all
+    /// are in.
+    fn gather(&mut self, budget: std::time::Duration) {
+        let Some(mut gathering) = self.gathering.take() else {
+            return;
+        };
+        let start = std::time::Instant::now();
+        while let Some(key) = gathering.keys.pop() {
+            let finer = gathering.finer.remove(&key).unwrap_or_default();
+            gathering.inputs.push(self.mesh_input(
+                key,
+                &gathering.active,
+                &gathering.samples,
+                finer,
+            ));
+            if start.elapsed() >= budget {
+                break;
+            }
+        }
+        if !gathering.keys.is_empty() {
+            self.gathering = Some(gathering);
+            return;
+        }
+        self.shared.jobs.lock().unwrap().push_front(Job::Mesh {
+            active: gathering.active,
+            inputs: gathering.inputs,
+            covered: gathering.covered,
+            bounds: gathering.bounds,
+        });
+        self.shared.wake.notify_all();
+    }
+    fn request_samples(
+        &mut self,
+        camera: [i32; 2],
+        focus: [i32; 2],
+        yaw: f32,
+        detail: i32,
+        elevation: i32,
+    ) {
         // Every sample slot busy: no tile can be requested this frame.
         let free = SAMPLE_JOBS.saturating_sub(self.pending.len());
         if free == 0 {
-            return meshes;
+            return;
         }
         // Load desired nearby leaves directly, alongside broad fallback coverage.
         // Waiting for every ancestor/sibling made full detail take minutes to appear.
@@ -1071,7 +1231,6 @@ impl Lod {
             drop(jobs);
             self.shared.wake.notify_all();
         }
-        meshes
     }
     fn visited_column(&self, wx: i32, wz: i32, width: i32) -> Option<&Column> {
         let key = (wx.div_euclid(16), wz.div_euclid(16));
@@ -1091,8 +1250,14 @@ impl Lod {
             None
         }
     }
-    fn neighbor(&self, wx: i32, wz: i32, active: &FxHashSet<TileKey>) -> Option<(Column, i32)> {
-        for level in 0..=10 {
+    fn neighbor(
+        &self,
+        wx: i32,
+        wz: i32,
+        active: &FxHashSet<TileKey>,
+        samples: &FxHashMap<TileKey, Arc<Vec<Column>>>,
+    ) -> Option<(Column, i32)> {
+        for level in 0..=MAX_LEVEL {
             let size = 16 << level;
             let key = TileKey {
                 x: wx.div_euclid(size),
@@ -1110,19 +1275,27 @@ impl Lod {
             if let Some(column) = self.visited_column(sx, sz, stride) {
                 return Some((column.clone(), stride));
             }
-            return Some((self.ready[&key][(z * 16 + x) as usize].clone(), stride));
+            return samples
+                .get(&key)
+                .map(|columns| (columns[(z * 16 + x) as usize].clone(), stride));
         }
         None
     }
-    fn mesh_input(&self, key: TileKey, active: &FxHashSet<TileKey>) -> MeshInput {
+    fn mesh_input(
+        &self,
+        key: TileKey,
+        active: &FxHashSet<TileKey>,
+        samples: &FxHashMap<TileKey, Arc<Vec<Column>>>,
+        finer: Vec<TileKey>,
+    ) -> MeshInput {
         let stride = key.size() / CELLS as i32;
         let [ox, _, oz] = key.origin();
-        let mut columns = self.ready[&key].clone();
+        let mut visited = Vec::new();
         for z in 0..CELLS {
             for x in 0..CELLS {
                 let (wx, wz) = (ox + x as i32 * stride, oz + z as i32 * stride);
                 if let Some(column) = self.visited_column(wx, wz, stride) {
-                    columns[z * CELLS + x] = column.clone();
+                    visited.push((z * CELLS + x, column.clone()));
                 }
             }
         }
@@ -1137,7 +1310,7 @@ impl Lod {
                     _ => (ox + offset, oz + key.size()),
                 };
                 let (column, neighbor_stride) = self
-                    .neighbor(wx, wz, active)
+                    .neighbor(wx, wz, active, samples)
                     .unwrap_or_else(|| (Column::default(), stride));
                 let coordinate = if direction < 2 { wz } else { wx };
                 let width = (neighbor_stride - coordinate.rem_euclid(neighbor_stride))
@@ -1153,28 +1326,38 @@ impl Lod {
         });
         MeshInput {
             key,
-            columns,
+            samples: samples[&key].clone(),
+            visited,
             neighbors,
-            finer: active
-                .iter()
-                .copied()
-                .filter(|other| {
-                    let [x, _, z] = other.origin();
-                    other.level < key.level
-                        && x >= ox
-                        && z >= oz
-                        && x + other.size() <= ox + key.size()
-                        && z + other.size() <= oz + key.size()
-                })
-                .collect(),
+            finer,
         }
+    }
+    /// The active tiles inside each of `keys` (finer, so each a descendant).
+    fn finer(
+        active: &FxHashSet<TileKey>,
+        keys: &FxHashSet<TileKey>,
+    ) -> FxHashMap<TileKey, Vec<TileKey>> {
+        let mut finer: FxHashMap<TileKey, Vec<TileKey>> = FxHashMap::default();
+        for &tile in active {
+            let mut parent = tile;
+            while parent.level < MAX_LEVEL {
+                parent = parent.parent();
+                if keys.contains(&parent) {
+                    finer.entry(parent).or_default().push(tile);
+                }
+            }
+        }
+        finer
     }
     #[cfg(test)]
     fn mesh(&self, key: TileKey) -> SectionMesh {
-        let input = self.mesh_input(key, &self.active);
+        let finer = Self::finer(&self.active, &[key].into_iter().collect())
+            .remove(&key)
+            .unwrap_or_default();
+        let input = self.mesh_input(key, &self.active, &self.ready, finer);
         mesh::Mesher::default().mesh(
             key,
-            &input.columns,
+            &input.columns(),
             &self.covered,
             self.covered_bounds,
             &self.context,
@@ -1202,6 +1385,7 @@ mod tests {
             for distance in [64, 256, 1024] {
                 let plan = Plan::new(camera, 12, distance);
                 assert!(plan.nodes.len() < 12000, "{} nodes", plan.nodes.len());
+                assert!(plan.roots.iter().all(|key| key.level <= MAX_LEVEL));
                 for key in &plan.nodes {
                     if !plan.split.contains(key) && key.distance(camera) < 12 * 16 {
                         assert_eq!(key.level, 0);
@@ -1259,7 +1443,7 @@ mod tests {
         plan.nodes.insert(parent);
         plan.split.insert(parent);
         plan.nodes.extend(parent.children());
-        let mut ready = FxHashMap::default();
+        let mut ready: FxHashMap<TileKey, Vec<Column>> = FxHashMap::default();
         ready.insert(parent, vec![]);
         ready.insert(parent.children()[0], vec![]);
         let mut selected = Vec::new();
@@ -1400,7 +1584,7 @@ mod tests {
         };
         lod.ready.insert(
             key,
-            vec![
+            Arc::new(vec![
                 Column::from_surface(Some(Surface {
                     height: 70,
                     state: stone,
@@ -1408,7 +1592,7 @@ mod tests {
                     biome: biomes.id("minecraft:plains"),
                 }));
                 CELLS * CELLS
-            ],
+            ]),
         );
         // A chunk covers only one quarter of this parent's 32² cell. Both
         // opaque terrain and water must leave precisely that 16² footprint.
@@ -1512,7 +1696,8 @@ mod tests {
             z: -1,
             level: 0,
         };
-        lod.ready.insert(fine, vec![Column::default(); 256]);
+        lod.ready
+            .insert(fine, Arc::new(vec![Column::default(); 256]));
         lod.finish_detail(
             (-1, -1),
             ReducedColumns::new(Arc::new(std::array::from_fn(|_| Column::default()))),
@@ -1571,10 +1756,12 @@ mod tests {
         lod.area = Some(([-16, -16], 2, 64, 0));
         lod.plan.roots = vec![key];
         lod.plan.nodes.insert(key);
+        // As a replan does (`update` only selects after a change).
+        lod.reselect = true;
         let await_meshes = |lod: &mut Lod| {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
             loop {
-                let meshes = lod.update(camera, 0.0, 2, 64, lod.covered.clone());
+                let meshes = lod.update(camera, 0.0, 2, 64, None);
                 if !meshes.is_empty() {
                     return meshes;
                 }
@@ -1591,10 +1778,8 @@ mod tests {
             lod.plan.nodes.insert(child);
             lod.ready.insert(child, lod.ready[&key].clone());
         }
-        assert!(
-            lod.update(camera, 0.0, 2, 64, lod.covered.clone())
-                .is_empty()
-        );
+        lod.reselect = true;
+        assert!(lod.update(camera, 0.0, 2, 64, None).is_empty());
         assert!(
             lod.active.contains(&key),
             "parent retired before child meshes"
@@ -1617,11 +1802,14 @@ mod tests {
         lod.plan = Plan::default();
         lod.plan.roots.push(covered_fine);
         lod.plan.nodes.insert(covered_fine);
-        lod.ready.insert(covered_fine, vec![Column::default(); 256]);
+        lod.ready
+            .insert(covered_fine, Arc::new(vec![Column::default(); 256]));
         lod.covered.insert((-1, -2));
+        lod.reselect = true;
+        lod.replanned = true;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
-            lod.update(camera, 0., 2, 64, lod.covered.clone());
+            lod.update(camera, 0., 2, 64, None);
             if !lod.meshing && lod.active.is_empty() {
                 break;
             }
@@ -1648,7 +1836,8 @@ mod tests {
         };
         lod.plan.roots = vec![parent];
         lod.ready.clear();
-        lod.ready.insert(parent, vec![Column::default(); 256]);
+        lod.ready
+            .insert(parent, Arc::new(vec![Column::default(); 256]));
         lod.active = [parent].into_iter().collect();
         lod.pending = (0..SAMPLE_JOBS - 1)
             .map(|i| TileKey {
@@ -1660,7 +1849,7 @@ mod tests {
         lod.sample_nearby = true;
         lod.detail_request_pending = true;
         lod.meshing = true;
-        lod.update(camera, 0.0, 2, 64, FxHashSet::default());
+        lod.update(camera, 0.0, 2, 64, Some(FxHashSet::default()));
         let Some(Job::Sample(nearby)) = lod.shared.jobs.lock().unwrap().pop_front() else {
             panic!("nearby detail was not scheduled");
         };
@@ -1670,14 +1859,14 @@ mod tests {
             "detail should load ahead of the view"
         );
         lod.finish_sample(nearby, vec![Column::default(); 256]);
-        lod.update(camera, 0.0, 2, 64, FxHashSet::default());
+        lod.update(camera, 0.0, 2, 64, Some(FxHashSet::default()));
         let Some(Job::Sample(fallback)) = lod.shared.jobs.lock().unwrap().pop_front() else {
             panic!("fallback refinement was starved");
         };
         assert!(fallback.level > 0);
         lod.pending.remove(&fallback);
         lod.sample_nearby = true;
-        lod.update(camera, 90.0, 2, 64, FxHashSet::default());
+        lod.update(camera, 90.0, 2, 64, Some(FxHashSet::default()));
         let Some(Job::Sample(turned)) = lod.shared.jobs.lock().unwrap().pop_front() else {
             panic!("turned view was not scheduled");
         };
@@ -1703,7 +1892,8 @@ mod tests {
             lod.plan.nodes.insert(parent);
             lod.plan.split.insert(parent);
             lod.plan.nodes.extend(parent.children());
-            lod.ready.insert(parent, vec![Column::default(); 256]);
+            lod.ready
+                .insert(parent, Arc::new(vec![Column::default(); 256]));
         }
         lod.active = [near, far].into_iter().collect();
         lod.shared.jobs.lock().unwrap().clear();
@@ -1715,7 +1905,7 @@ mod tests {
             })
             .collect();
         lod.sample_nearby = false;
-        lod.update(camera, 0., 2, 64, FxHashSet::default());
+        lod.update(camera, 0., 2, 64, Some(FxHashSet::default()));
         let Some(Job::Sample(broad)) = lod.shared.jobs.lock().unwrap().pop_front() else {
             panic!("projected-error refinement missing")
         };
