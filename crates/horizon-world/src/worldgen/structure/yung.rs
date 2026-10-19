@@ -615,6 +615,7 @@ mod tests {
             projection: Projection::Rigid,
             waterlogging: None,
             yung: rules.map(Box::new),
+            enhanced_terrain: None,
         })
     }
 
