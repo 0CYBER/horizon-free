@@ -170,6 +170,9 @@ class Server:
         self.log.close()
 
 
+# The line every server logs once it is up: vanilla, Fabric and Horizon `[time] [Server thread/INFO]: Done (`,
+# Paper `[time INFO]: Done (`.
+DONE = r'INFO\]: Done \('
 TICK_AVERAGE = re.compile(r'Average time per tick: ([0-9.]+) ?ms')
 TICK_PERCENTILES = re.compile(r'P50: ([0-9.]+) ?ms P95: ([0-9.]+) ?ms P99: ([0-9.]+) ?ms')
 
@@ -286,8 +289,7 @@ def run_once(kind, bots, behaviour, args, out):
     server = Server(command, directory, out / f'{name}.log')
     result = {'server': kind, 'bots': bots, 'behaviour': behaviour}
     try:
-        # Vanilla, Fabric and Horizon log `[time] [Server thread/INFO]: Done (`, Paper `[time INFO]: Done (`.
-        server.wait_for(r'INFO\]: Done \(', 600)
+        server.wait_for(DONE, 600)
         result['start_seconds'] = round(time.time() - started, 2)
         # Every bot appears on the world spawn itself, not spread around it, so both servers see the same paths.
         server.console('gamerule respawn_radius 0')
