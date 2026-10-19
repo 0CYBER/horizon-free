@@ -39,14 +39,21 @@ const slim = (r) => ({
   body: r.body || "",
   assets: r.assets.map((a) => ({ name: a.name, browser_download_url: a.browser_download_url, size: a.size })),
 });
+const isGame = (tag) => /^v\d{4}\.\d{1,2}\.\d{1,2}/.test(tag);
 const isLauncher = (r) => r.tag_name.startsWith("launcher-v") && !r.prerelease;
 const versionKey = (tag) => tag.replace("launcher-v", "").split(".").map(Number);
 const newer = (a, b) => versionKey(b).reduce((d, n, i) => d || n - (versionKey(a)[i] || 0), 0);
 
-// The newest 30 releases. Game releases come out several times a day, so the newest launcher release can be
-// older than all of them: then it is looked up by its tag (the newest launcher-v tag with a published release).
+// The newest 100 releases (GitHub's most per page). Game betas come out several times a day, so the stable game
+// release and the newest launcher release can both be older than all of them. The stable game release is then
+// GitHub's "latest" (betas and launcher releases are never marked latest); the launcher release is looked up by its
+// tag (the newest launcher-v tag with a published release).
 async function loadReleases() {
-  const list = (await get(`https://api.github.com/repos/${REPO}/releases?per_page=30`)).filter((r) => !r.draft).map(slim);
+  const list = (await get(`https://api.github.com/repos/${REPO}/releases?per_page=100`)).filter((r) => !r.draft).map(slim);
+  if (!list.some((r) => isGame(r.tag_name) && !r.prerelease)) {
+    const latest = await get(`https://api.github.com/repos/${REPO}/releases/latest`).catch(() => null);
+    if (latest && !latest.draft) list.push(slim(latest));
+  }
   if (list.some(isLauncher)) return list;
   const refs = await get(`https://api.github.com/repos/${REPO}/git/matching-refs/tags/launcher-v`).catch(() => []);
   const tags = refs.map((r) => r.ref.replace("refs/tags/", "")).filter((t) => /^launcher-v\d+\.\d+\.\d+$/.test(t)).sort(newer);
@@ -98,8 +105,6 @@ async function setUpDownload() {
 }
 
 // --- Patch notes and the links from main ---------------------------------
-
-const isGame = (tag) => /^v\d{4}\.\d{1,2}\.\d{1,2}/.test(tag);
 
 async function setUpNotes() {
   const list = (await releases).filter((r) => isGame(r.tag_name) && !r.prerelease);

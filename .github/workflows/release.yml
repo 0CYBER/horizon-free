@@ -6,7 +6,8 @@ name: release
 # RELEASES_PAUSED=1 (repository variable) stops them.
 # Builds Linux (an older Ubuntu, so the binary runs on any recent distribution and on NixOS through nix-ld) and
 # Windows on GitHub, macOS on the Mac mini's runner (MAC_RUNNER=macos-latest sends it to GitHub), then
-# publishes vYYYY.MM.DD[.N] with notes from the merged pull requests.
+# publishes vYYYY.MM.DD[.N] with notes from the merged pull requests, as a beta (a pre-release) that promote.yml makes
+# stable after 6 hours.
 #   gh workflow run release --ref <branch>                       # dry run: builds and notes, publishes nothing
 #   gh workflow run release -f dry_run=false -f force=true       # on main: release now, whatever the rules say
 on:
@@ -171,6 +172,15 @@ jobs:
                   or not report.get("meshed_sections") or not report.get("player"):
               sys.exit("the smoke run did not draw a world")
           EOF
+          # Published with the release: a beta becomes stable only with it (tools/release_channels.py).
+          cp "$home/smoke.json" "$RUNNER_TEMP/smoke-test.json"
+      - uses: actions/upload-artifact@v4
+        if: runner.environment == 'self-hosted'
+        with:
+          name: smoke-test.json
+          path: ${{ runner.temp }}/smoke-test.json
+          if-no-files-found: error
+          retention-days: 3
       - name: Package
         run: |
           set -euo pipefail
@@ -296,9 +306,12 @@ jobs:
           TAG: ${{ needs.decide.outputs.tag }}
         run: |
           signature=(); [[ -f dist/SHA256SUMS.sig ]] && signature=(dist/SHA256SUMS.sig)
+          smoke=(); [[ -f dist/smoke-test.json ]] && smoke=(dist/smoke-test.json)
+          # A beta (pre-release): promote.yml makes it stable and latest after 6 hours (docs/release-flow.md).
           gh release create "$TAG" --target "${{ needs.decide.outputs.head }}" --title "$(cat notes/title.txt)" \
-            --notes-file notes/body.md --latest dist/horizon-linux-x86_64.tar.gz dist/horizon-windows-x64.zip \
-            dist/horizon-macos-arm64.zip dist/horizon-server-linux-x86_64.tar.gz dist/SHA256SUMS "${signature[@]}"
+            --notes-file notes/body.md --prerelease --latest=false dist/horizon-linux-x86_64.tar.gz \
+            dist/horizon-windows-x64.zip dist/horizon-macos-arm64.zip dist/horizon-server-linux-x86_64.tar.gz \
+            dist/SHA256SUMS "${signature[@]}" "${smoke[@]}"
       - name: Dry run, the release that would be published
         if: needs.decide.outputs.dry_run == 'true'
         run: |

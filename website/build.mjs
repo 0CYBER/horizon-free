@@ -38,15 +38,18 @@ try {
   console.warn(`links.json: ${e.message}; using the built-in links`);
 }
 
+// An optional token (a Railway variable, or `gh auth token` locally) lifts the rate limit.
+const githubHeaders = { Accept: "application/vnd.github+json", ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}) };
 let releases = [];
 try {
-  const res = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=100`, {
-    // An optional token (a Railway variable, or `gh auth token` locally) lifts the rate limit.
-    headers: { Accept: "application/vnd.github+json", ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}) },
-    signal: AbortSignal.timeout(15000),
-  });
+  const res = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=100`, { headers: githubHeaders, signal: AbortSignal.timeout(15000) });
   if (res.ok) releases = (await res.json()).filter((r) => !r.draft);
   else console.warn(`releases: ${res.status} from GitHub; the page will load them itself`);
+  // A day of betas can push the stable release out of the newest 100: it is GitHub's "latest" (betas never are).
+  if (res.ok && !releases.some((r) => /^v\d{4}\./.test(r.tag_name) && !r.prerelease)) {
+    const latest = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: githubHeaders, signal: AbortSignal.timeout(15000) });
+    if (latest.ok) releases.push(await latest.json());
+  }
 } catch (e) {
   console.warn(`releases: ${e.message}; the page will load them itself`);
 }
