@@ -250,6 +250,9 @@ pub struct Renderer {
     offscreen: Option<wgpu::Texture>,
     /// Offscreen submissions still on the GPU: at most two frames run ahead.
     in_flight: std::collections::VecDeque<wgpu::SubmissionIndex>,
+    /// Which steps of the first frame on this device still go to the log
+    /// (see `startup_step`).
+    first_frame: FirstFrame,
     gpu_timer: Option<timing::GpuTimer>,
     /// GPU frame times (ms) read back since the caller last drained them.
     pub gpu_times: Vec<f32>,
@@ -558,6 +561,24 @@ const NO_GPU_DRIVER: &str = "No Metal graphics device found";
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 const NO_GPU_DRIVER: &str = "No Vulkan graphics driver found: Horizon needs the Vulkan loader \
      (libvulkan.so.1) and a Vulkan driver for your GPU (Mesa's, or NVIDIA's)";
+/// Logs a step of the renderer's start, for a native crash in the graphics
+/// driver: it leaves no panic or crash report, so the log's last line is the
+/// only sign of where the game stopped. The log file is written unbuffered;
+/// the flush is for loggers that buffer.
+fn startup_step(step: std::fmt::Arguments) {
+    log::info!("Horizon renderer: {step}");
+    log::logger().flush();
+}
+/// How far the first frame on a new device got, for `startup_step`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FirstFrame {
+    Acquire,
+    Submit,
+    Drawn,
+}
+fn on_off(on: bool) -> &'static str {
+    if on { "on" } else { "off" }
+}
 impl Renderer {
     /// Sections with GPU buffers, for soak tests watching residency.
     pub fn resident_sections(&self) -> usize {
@@ -656,16 +677,29 @@ impl Renderer {
         let (device, queue) = match previous {
             Some(renderer) => (renderer.device.clone(), renderer.queue.clone()),
             None => {
+                // Mappable primary buffers: section pages that no longer fit
+                // in video memory go to system memory.
+                let features = timing::GpuTimer::features(&adapter)
+                    | cull::Cull::features(&adapter)
+                    | (adapter.features()
+                        & (wgpu::Features::INDIRECT_FIRST_INSTANCE
+                            | wgpu::Features::MAPPABLE_PRIMARY_BUFFERS));
+                let driver = format!("{} {}", info.driver, info.driver_info);
+                startup_step(format_args!(
+                    "requesting the device (driver {}) with features [{features}] and the adapter's \
+                     limits (buffers up to {} bytes, storage bindings up to {} bytes, {} texture layers)",
+                    match driver.trim() {
+                        "" => "unnamed",
+                        driver => driver,
+                    },
+                    limits.max_buffer_size,
+                    limits.max_storage_buffer_binding_size,
+                    limits.max_texture_array_layers,
+                ));
                 adapter
                     .request_device(&wgpu::DeviceDescriptor {
                         label: Some("Horizon device"),
-                        // Mappable primary buffers: section pages that no
-                        // longer fit in video memory go to system memory.
-                        required_features: timing::GpuTimer::features(&adapter)
-                            | cull::Cull::features(&adapter)
-                            | (adapter.features()
-                                & (wgpu::Features::INDIRECT_FIRST_INSTANCE
-                                    | wgpu::Features::MAPPABLE_PRIMARY_BUFFERS)),
+                        required_features: features,
                         required_limits: limits.clone(),
                         ..Default::default()
                     })
@@ -700,6 +734,12 @@ impl Renderer {
                         wgpu::PresentMode::Fifo
                     }
                 });
+            if previous.is_none() {
+                startup_step(format_args!(
+                    "device ready; configuring the surface ({}x{} {:?}, {:?})",
+                    config.width, config.height, config.format, config.present_mode
+                ));
+            }
             surface.configure(&device, &config);
             (config, caps.present_modes.clone())
         } else {
@@ -720,6 +760,9 @@ impl Renderer {
         let offscreen = surface
             .is_none()
             .then(|| Self::offscreen_target(&device, &config));
+        if previous.is_none() {
+            startup_step(format_args!("creating the pipelines"));
+        }
         let gpu_timer = timing::GpuTimer::new(&device, &queue);
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Horizon terrain"),
@@ -1774,12 +1817,25 @@ impl Renderer {
             config.format.remove_srgb_suffix(),
             panorama_faces,
         );
+        if previous.is_none() {
+            startup_step(format_args!(
+                "pipelines ready (multi-draw {}, occlusion culling {}, GPU timer {})",
+                on_off(multi_draw),
+                on_off(cull.is_some()),
+                on_off(gpu_timer.is_some()),
+            ));
+        }
         Ok(Self {
             instance,
             adapter,
             surface,
             offscreen,
             in_flight: std::collections::VecDeque::new(),
+            first_frame: if previous.is_none() {
+                FirstFrame::Acquire
+            } else {
+                FirstFrame::Drawn
+            },
             gpu_timer,
             gpu_times: Vec::new(),
             lightmap_pixels: [0; 16 * 16 * 4],
@@ -2420,6 +2476,11 @@ impl Renderer {
             return Ok(false);
         }
         let started = Instant::now();
+        if self.first_frame == FirstFrame::Acquire {
+            // Once: a minimized window acquires nothing for a while.
+            startup_step(format_args!("acquiring the first frame"));
+            self.first_frame = FirstFrame::Submit;
+        }
         let acquire = Instant::now();
         let acquired = self.surface.as_ref().map(|s| s.get_current_texture());
         self.last_wait = acquire.elapsed();
@@ -3412,6 +3473,11 @@ impl Renderer {
             self.section_uploads.finish(&encoder);
         }
         let commands = crate::spans::time("encode", || encoder.finish());
+        let first_frame = self.first_frame == FirstFrame::Submit;
+        if first_frame {
+            startup_step(format_args!("submitting the first frame"));
+            self.first_frame = FirstFrame::Drawn;
+        }
         let submission = crate::spans::time("submit", || self.queue.submit([commands]));
         if let Some(cull) = &mut self.cull {
             cull.submitted();
@@ -3433,6 +3499,9 @@ impl Renderer {
             // display: with it off, vanilla's window draws uncapped.
             if self.config.present_mode == wgpu::PresentMode::Fifo {
                 self.window.pre_present_notify();
+            }
+            if first_frame {
+                startup_step(format_args!("presenting the first frame"));
             }
             self.queue.present(surface_frame);
             if reconfigure && let Some(surface) = &self.surface {
