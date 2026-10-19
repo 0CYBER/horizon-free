@@ -22,6 +22,10 @@ use std::{
 const CELLS: usize = 16;
 const MAX_SAVED: usize = 1024;
 const SAMPLE_JOBS: usize = 4;
+/// While the near terrain loads on a machine with four threads or fewer, far
+/// terrain starts one sample job at most this often and no detail: it would
+/// otherwise take the cores the near chunks and the frame need.
+const HELD_SAMPLE_STEP: std::time::Duration = std::time::Duration::from_millis(500);
 /// The coarsest tile level: `Plan` roots cover at most 1024 chunks around.
 const MAX_LEVEL: u8 = 10;
 /// Top solid face and optional fluid face, in absolute block coordinates.
@@ -507,6 +511,12 @@ pub struct Lod {
     detail_masks: FxHashMap<TileKey, [u64; 4]>,
     detail_request_pending: bool,
     detail_request_at: std::time::Instant,
+    /// Four threads or fewer: far work waits for the near terrain (`hold`).
+    small: bool,
+    /// The near terrain is loading (`set_near_loading`).
+    near_loading: bool,
+    /// When `request_samples` last started a job while held.
+    held_sample_at: std::time::Instant,
     /// `state_kinds`, from the first observed chunk's facts.
     kinds: Option<Vec<u8>>,
     /// Each tile's samples, shared with mesh jobs in flight.
@@ -691,6 +701,9 @@ impl Lod {
             detail_masks: FxHashMap::default(),
             detail_request_pending: false,
             detail_request_at: std::time::Instant::now(),
+            small: thread::available_parallelism().map_or(1, |n| n.get()) <= 4,
+            near_loading: false,
+            held_sample_at: std::time::Instant::now(),
             kinds: None,
             ready: FxHashMap::default(),
             active: FxHashSet::default(),
@@ -875,8 +888,17 @@ impl Lod {
         }
         self.invalidate_chunk(key.0, key.1);
     }
+    /// Whether the near terrain is still loading: on small machines far
+    /// terrain then holds back (`HELD_SAMPLE_STEP`).
+    pub fn set_near_loading(&mut self, loading: bool) {
+        self.near_loading = loading;
+    }
+    fn held(&self) -> bool {
+        self.small && self.near_loading
+    }
     fn request_detail(&mut self, camera: [i32; 2]) {
-        if self.detail_request_pending
+        if self.held()
+            || self.detail_request_pending
             || self.detail_request_at.elapsed() < std::time::Duration::from_millis(250)
         {
             return;
@@ -1148,9 +1170,18 @@ impl Lod {
         elevation: i32,
     ) {
         // Every sample slot busy: no tile can be requested this frame.
-        let free = SAMPLE_JOBS.saturating_sub(self.pending.len());
+        let free = if self.held() {
+            usize::from(
+                self.pending.is_empty() && self.held_sample_at.elapsed() >= HELD_SAMPLE_STEP,
+            )
+        } else {
+            SAMPLE_JOBS.saturating_sub(self.pending.len())
+        };
         if free == 0 {
             return;
+        }
+        if self.held() {
+            self.held_sample_at = std::time::Instant::now();
         }
         // Load desired nearby leaves directly, alongside broad fallback coverage.
         // Waiting for every ancestor/sibling made full detail take minutes to appear.

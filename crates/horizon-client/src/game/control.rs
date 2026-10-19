@@ -752,6 +752,7 @@ impl Game<'_> {
         physical_keys.sort();
         let lod = json!({
             "distance": self.settings.horizon.lod_distance,
+            "effective_distance": self.lod_distance(),
             "terrain_distance": self.terrain_distance(),
             "source": if self.lod.is_none() { "none" } else if self.integrated.is_some() { "integrated" } else { "local" },
             "source_attempted": self.lod_source_attempted,
