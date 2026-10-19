@@ -606,19 +606,22 @@ pub fn sidebar(
             .then_with(|| compare_ignore_case(&a.owner, &b.owner))
     });
     entries.truncate(15);
+    // Font draws each literal through StringDecomposer.iterateFormatted:
+    // legacy `§` codes style what follows and are not drawn.
     let rows: Vec<(Text, Text, i32)> = entries
         .iter()
         .map(|e| {
             let name = match board.players_team(&e.owner) {
                 Some(team) => team.formatted_name(e.owner_name()),
                 None => e.owner_name(),
-            };
-            let score = e.format_value(&format);
+            }
+            .resolve_legacy();
+            let score = e.format_value(&format).resolve_legacy();
             let score_width = width(font, &score);
             (name, score, score_width)
         })
         .collect();
-    let title = objective.display_text();
+    let title = objective.display_text().resolve_legacy();
     let title_width = width(font, &title);
     let spacer = font.width(": ") as i32;
     let mut biggest = title_width;

@@ -135,7 +135,10 @@ def jump(rng, n):
             'jumpScale': rng.choice([0.0, 1.0, 0.4, 0.001, round(rng.random(), 4)])}
 
 
-OWNERS = ['Alex', 'steve', 'Zed', 'bob', 'Bobby', 'ÉLodie', 'élan', '#hidden', 'x', 'LongPlayerName_123', 'Mia', '_under']
+# Servers' sidebars use legacy formatting codes in fake owners, team affixes and titles (#937):
+# a code, an unknown code, `§r` and a trailing lone `§`.
+OWNERS = ['Alex', 'steve', 'Zed', 'bob', 'Bobby', 'ÉLodie', 'élan', '#hidden', 'x', 'LongPlayerName_123', 'Mia', '_under',
+          '§1§r', '§a§lPro§r name', 'end§', '§zodd§Rcase']
 FORMATS = [None, None, None, {'type': 'blank'}, {'type': 'fixed', 'value': {'text': 'FIX', 'color': 'aqua'}},
            {'type': 'styled', 'style': {'color': 'gold', 'bold': True}}, {'type': 'styled', 'style': {}}]
 
@@ -150,12 +153,14 @@ def sidebar(rng, n):
                'format': rng.choice(FORMATS)} for o in owners]
     teams = []
     for t in range(rng.choice([0, 0, 1, 2])):
-        teams.append({'name': f'team{t}', 'prefix': rng.choice([{'text': ''}, {'text': '[A] '}, {'text': '<', 'color': 'red'}]),
-                      'suffix': rng.choice([{'text': ''}, {'text': ' *'}]),
+        teams.append({'name': f'team{t}', 'prefix': rng.choice([{'text': ''}, {'text': '[A] '}, {'text': '<', 'color': 'red'},
+                                                                {'text': '§c§lRed §r', 'color': 'blue'}]),
+                      'suffix': rng.choice([{'text': ''}, {'text': ' *'}, {'text': ' §7(§e5§7)§'}]),
                       'color': rng.choice([None, 'red', 'blue', 'gold', 'white']),
                       'members': [o for o in owners if rng.random() < 0.3]})
     return {**screen(rng), **backdrop(rng),
-            'objective': {'display': rng.choice(TITLES + [{'text': 'Kills'}]), 'format': rng.choice(FORMATS)},
+            'objective': {'display': rng.choice(TITLES + [{'text': 'Kills'}, {'text': '§e§lANTICHEAT §7test'}]),
+                          'format': rng.choice(FORMATS + [{'type': 'fixed', 'value': {'text': '§a12§'}}])},
             'scores': scores, 'teams': teams}
 
 
