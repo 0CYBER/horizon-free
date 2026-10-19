@@ -2066,8 +2066,12 @@ impl Launcher {
         let running = status.running();
         if self.servers.config.is_none() {
             return div().child(centered(
-                "Reading the settings… A server set up by an older Horizon shows them here once \
-                 it's updated (Backups and updates, below).",
+                if self.older_horizon() {
+                    "This server's Horizon is too old to show its settings here. Update it on \
+                     the Backups tab, then they appear."
+                } else {
+                    "Reading the settings…"
+                },
                 &t,
             ));
         }
@@ -2280,7 +2284,14 @@ impl Launcher {
                 if idle {
                     b.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.servers.update = None;
-                        this.server_command(&format!("Updating to {tag}"), vec!["update".into()]);
+                        if let Some(dir) = this.servers.open.clone() {
+                            let done = format!(
+                                "Updated to Horizon {tag}. The world was backed up first (Backups)."
+                            );
+                            this.server_job(format!("Updating to {tag}"), move |log| {
+                                servers::run_streamed(&dir, &["update"], log).map(|_| done)
+                            });
+                        }
                         cx.notify();
                     }))
                 } else {
@@ -2335,6 +2346,12 @@ impl Launcher {
             .gap(px(10.))
             .child(text(theme::HEADING).text_color(t.ink).child("Updates"))
             .child(rows)
+    }
+
+    /// The server's details came back without its settings: its horizon-server predates
+    /// `config` (and `backups --json`).
+    fn older_horizon(&self) -> bool {
+        self.servers.service.is_some() && self.servers.config.is_none()
     }
 
     fn backups_tab(&mut self, status: &Status, cx: &mut Context<Self>) -> Div {
@@ -2467,6 +2484,14 @@ impl Launcher {
                             })),
                     ),
             );
+        if self.older_horizon() {
+            return tab
+                .child(text(theme::UI).text_color(t.muted).child(
+                    "This server's Horizon is too old to list its backups here: they're in its \
+                     backups folder. Update it below.",
+                ))
+                .child(self.updates_section(status, cx));
+        }
         if self.servers.confirm_restore.is_some() {
             tab = tab.child(notice(
                 "Restoring replaces the world with this backup. The world as it is now isn't \
