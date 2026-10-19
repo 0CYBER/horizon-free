@@ -236,6 +236,10 @@ How the game loads them, without touching vanilla's path:
   so the same mod set gives the same ids. Saves store block names, so ids never reach the disk.
 - Loaders that read only `data/minecraft/` (recipes, loot, tags) read every namespace, as
   vanilla does. With no mods there is only `minecraft`, so nothing changes.
+- **Namespaces.** A mod's files go under its id, and under the namespaces its manifest lists
+  when its Java original ships them so (`namespaces = ["kaisyn", "towns_and_towers"]` for Towns
+  and Towers, mod id `t_and_t`; docs/mods.md). No namespace has two owners: a mod whose id or
+  listed namespace another mod that is on already owns is left out, with both named in the log.
 - The overlay is built on the first start with a set of mods and kept for later starts. A stamp
   (`horizon-mod-content.stamp`) hashes the game executable, the base tables and every mod file's
   size and mtime. Adding, removing or editing a mod, or a new build of Horizon, rebuilds it. For
