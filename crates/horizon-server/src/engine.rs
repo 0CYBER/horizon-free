@@ -141,14 +141,18 @@ pub fn resources(config: &Config, dir: &Path, program: Option<&Path>) -> Result<
 /// Starts the engine in the server folder, with its console and log piped to the supervisor and its status
 /// on the control endpoint.
 pub fn spawn(program: &Path, resources: &Path, dir: &Path) -> std::io::Result<Child> {
+    // The game runs in the server folder, so a folder given relative to ours (`--dir srv`) would put its
+    // control endpoint in `srv/srv/.horizon`, which doesn't exist.
+    let dir = std::path::absolute(dir)?;
+    let resources = std::path::absolute(resources)?;
     let mut command = Command::new(program);
     command
         .arg("--resources")
         .arg(resources)
         .arg("--control-socket")
-        .arg(control_path(dir))
+        .arg(control_path(&dir))
         .args(["--dedicated", "--nogui"])
-        .current_dir(dir)
+        .current_dir(&dir)
         .env("HORIZON_NO_AUDIO", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -274,6 +278,38 @@ mod tests {
             other,
             "the game (/opt/horizon/horizon-client) can't start (exit status 1): something else"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_relative_folder_reaches_the_game_whole() {
+        use std::os::unix::fs::PermissionsExt;
+        // Relative to this process's folder (the crate's, under cargo test), as `--dir srv` gives it.
+        let root = PathBuf::from(format!("reldir-test-{}", std::process::id()));
+        let server = root.join("srv");
+        std::fs::create_dir_all(server.join(".horizon")).unwrap();
+        std::fs::create_dir_all(root.join("res")).unwrap();
+        // A game that checks, from its own folder, the folders it was given.
+        let game = root.join("game");
+        std::fs::write(
+            &game,
+            "#!/bin/sh\nwhile [ $# -gt 0 ]; do case \"$1\" in --resources) r=$2; shift;; \
+             --control-socket) c=$2; shift;; esac; shift; done\n\
+             [ -d \"$r\" ] && [ -d \"$(dirname \"$c\")\" ] && [ -f server.toml ]\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&game, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(server.join("server.toml"), "").unwrap();
+        let status = spawn(
+            &std::path::absolute(&game).unwrap(),
+            &root.join("res"),
+            &server,
+        )
+        .unwrap()
+        .wait();
+        std::fs::remove_dir_all(&root).unwrap();
+        let status = status.unwrap();
+        assert!(status.success(), "{status}");
     }
 
     #[cfg(unix)]
