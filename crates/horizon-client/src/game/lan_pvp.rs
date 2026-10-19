@@ -20,6 +20,8 @@ pub(super) struct Strike {
     crit: bool,
     from: [f64; 3],
     sweep: Option<[f64; 3]>,
+    /// The attacker's team, for the victim's `Player.canHarmPlayer`.
+    team: Option<horizon_client::scoreboard::Team>,
 }
 
 impl Game<'_> {
@@ -88,12 +90,24 @@ impl Game<'_> {
             crit,
             from,
             sweep,
+            team: self.player_team().cloned(),
         })
     }
 
     /// The hit landing on the victim, then the attacker's attack sound.
     pub(super) fn pvp_land(&mut self, host: &mut LanHost, victim: Victim, s: &Strike) {
+        // ServerPlayer.canHarmPlayer: the pvp game rule, then the victim's
+        // team (Player.canHarmPlayer: allies only with friendly fire on).
+        let team = match victim {
+            Victim::Host => self.player_team(),
+            Victim::Guest(conn) => host
+                .hub
+                .guest(conn)
+                .and_then(|g| self.score.board.players_team(&g.name)),
+        };
+        let harm = horizon_client::scoreboard::teams_allow_damage(team, s.team.as_ref());
         let hurt = self.ui.rules.bool("pvp")
+            && harm
             && match victim {
                 Victim::Host => self.mob_hits_player(s.amount, s.from, "minecraft:player_attack"),
                 Victim::Guest(conn) => self

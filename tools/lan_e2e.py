@@ -18,7 +18,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - mobs:      with the host in creative, a zombie and a skeleton go for the guest and hurt them;
 - hazards:   a guest in survival gets hungry sprint-jumping and is hurt by lava, a block at the eyes,
              drowning and the void (then respawns);
-- pvp:       the guest and the host hit each other with a sword; with the pvp game rule off, nothing;
+- pvp:       the guest and the host hit each other with a sword; with the pvp game rule off, or on one
+             team without friendly fire, nothing;
 - respawn:   a player killed is drawn dead by the other side, and alive again once it respawns (the
              respawned player is a new entity to the others); the host dies, and on the server thread
              the guest too;
@@ -582,8 +583,14 @@ def check_pvp(host, guest, out):
     hits = {}
     try:
         for name, rule, attacker in (('guest hits host', 'true', guest), ('host hits guest', 'true', host),
-                                     ('pvp off', 'false', guest)):
+                                     ('pvp off', 'false', guest), ('guest hits teammate', 'true', guest),
+                                     ('host hits teammate', 'true', host)):
             host('command', command=f'gamerule pvp {rule}')
+            if name == 'guest hits teammate':
+                # Player.canHarmPlayer: the victim's team without friendly fire spares its allies.
+                host('command', command='team add parity_allies')
+                host('command', command='team modify parity_allies friendlyFire false')
+                host('command', command='team join parity_allies @a')
             face_each_other(host, guest)
             attacker.wait(30)  # a full attack charge
             victim = (lambda: host('state')['player']['health']) if attacker is guest else (lambda: remote(guest)['health'])
@@ -594,9 +601,12 @@ def check_pvp(host, guest, out):
             attacker.shot(out, 'pvp-' + name.replace(' ', '-'))
     finally:
         host('command', command='gamerule pvp true')
+        host('command', command='team remove parity_allies')
     assert hits['guest hits host'][1] < hits['guest hits host'][0], f'the guest did not hurt the host: {hits}'
     assert hits['host hits guest'][1] < hits['host hits guest'][0], f'the host did not hurt the guest: {hits}'
     assert hits['pvp off'][1] == hits['pvp off'][0], f'pvp off still hurts: {hits}'
+    for name in ('guest hits teammate', 'host hits teammate'):
+        assert hits[name][1] == hits[name][0], f'friendly fire off still hurts ({name}): {hits}'
     return hits
 
 
