@@ -1805,7 +1805,12 @@ impl Game<'_> {
                 }
                 _ => {}
             },
-            C::PlayerAbilities(p) => self.creative = p.flags & 8 != 0,
+            C::PlayerAbilities(p) => {
+                self.creative = p.flags & 8 != 0;
+                if let Some(player) = &mut self.player {
+                    player.flying_speed = p.flying_speed;
+                }
+            }
             C::SetHeldSlot(p) => {
                 self.selected = p.slot.clamp(0, 8) as usize;
                 if let Some(r) = self.remote.as_mut() {

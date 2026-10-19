@@ -233,22 +233,32 @@ fn mouse(c: &Value, out: &mut impl Write) -> Result<()> {
 fn scroll(c: &Value, out: &mut impl Write) -> Result<()> {
     let mut handler = MouseLook::default();
     let mut slot = c["slot"].as_i64().unwrap() as i32;
+    let spectator = c["spectator"].as_bool().unwrap_or(false);
+    let mut speed = 0.05;
     // OptionInstance.set quantises the wheel sensitivity.
     let mut file = OptionsFile::default();
     file.set("mouseWheelSensitivity", V::Double(db(&c["sens"])));
     let sensitivity = file.double("mouseWheelSensitivity");
     writeln!(out, "scroll")?;
     for op in c["ops"].as_array().unwrap() {
-        if let Some((wheel, _)) =
+        if let Some((wheel, (_, y))) =
             handler.on_scroll(db(&op[0]), db(&op[1]), b(&c["discrete"]), sensitivity)
         {
-            slot = horizon_client::mouse::ScrollWheelHandler::next_selection(
-                f64::from(wheel),
-                slot,
-                9,
-            );
+            if spectator {
+                speed = horizon_client::mouse::spectator_flying_speed(speed, y);
+            } else {
+                slot = horizon_client::mouse::ScrollWheelHandler::next_selection(
+                    f64::from(wheel),
+                    slot,
+                    9,
+                );
+            }
         }
-        writeln!(out, "{slot}")?;
+        if spectator {
+            writeln!(out, "{slot} {}", fb(speed))?;
+        } else {
+            writeln!(out, "{slot}")?;
+        }
     }
     Ok(())
 }
