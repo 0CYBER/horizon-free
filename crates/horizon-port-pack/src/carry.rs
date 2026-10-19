@@ -343,13 +343,68 @@ fn unreadable(name: &str, bytes: &mut Vec<u8>) -> Option<String> {
     }
     let value: Value = match serde_json::from_slice(bytes) {
         Ok(v) => v,
-        Err(e) => return Some(format!("does not parse as JSON: {e}")),
+        // Minecraft reads data files with Gson's lenient reader, which skips
+        // comments: YUNG's pools have them. The carry is plain JSON.
+        Err(e) => match serde_json::from_slice::<Value>(&without_comments(bytes)) {
+            Ok(v) => {
+                *bytes = serde_json::to_vec_pretty(&v).expect("a parsed value serializes");
+                v
+            }
+            Err(_) => return Some(format!("does not parse as JSON: {e}")),
+        },
     };
     let shared_tag = name.starts_with("data/minecraft/tags/") || name.starts_with("data/c/tags/");
     if shared_tag && value.get("replace").and_then(Value::as_bool) == Some(true) {
         return Some("replaces a shared tag; a content mod may only add to it".into());
     }
     None
+}
+
+/// JSON text without the comments Gson's lenient reader skips: `//` and
+/// `#` to the end of the line, and `/* ... */`, outside strings.
+fn without_comments(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    let mut string = false;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if string {
+            out.push(b);
+            if b == b'\\' {
+                out.extend(bytes.get(i + 1));
+                i += 1;
+            } else if b == b'"' {
+                string = false;
+            }
+            i += 1;
+            continue;
+        }
+        match (b, bytes.get(i + 1)) {
+            (b'"', _) => {
+                string = true;
+                out.push(b);
+                i += 1;
+            }
+            (b'/', Some(b'/')) | (b'#', _) => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            (b'/', Some(b'*')) => {
+                i += 2;
+                while i < bytes.len() && !bytes[i..].starts_with(b"*/") {
+                    i += 1;
+                }
+                i += 2;
+                out.push(b' ');
+            }
+            _ => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    out
 }
 
 /// Carries `jar` over into `out/carry/`. With the oracle's `facts`, blocks
@@ -799,6 +854,36 @@ fn write(path: &Path, bytes: &[u8]) -> Result<(), String> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    /// YUNG's pools carry comments, which Minecraft's lenient reader skips;
+    /// the carry holds them as plain JSON. A comment marker inside a string
+    /// stays, and text that is not JSON without its comments is refused.
+    #[test]
+    fn reads_json_with_comments_as_minecraft_does() {
+        let name = "data/m/worldgen/template_pool/bridge.json";
+        let mut bytes = br#"{
+  // Pillar w/ chance of unlit beacon
+  "elements": [ /* one */ {"weight": 20, "location": "m:a//b#c"} ], # done
+  "fallback": "minecraft:empty"
+}"#
+        .to_vec();
+        assert_eq!(unreadable(name, &mut bytes), None);
+        let v: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            v,
+            json!({"elements": [{"weight": 20, "location": "m:a//b#c"}],
+                "fallback": "minecraft:empty"})
+        );
+        let mut plain = br#"{"a": "b\"//"}"#.to_vec();
+        assert_eq!(unreadable(name, &mut plain), None);
+        assert_eq!(plain, br#"{"a": "b\"//"}"#.to_vec());
+        let mut broken = b"{\"a\": 1} trailing".to_vec();
+        assert!(
+            unreadable(name, &mut broken)
+                .unwrap()
+                .starts_with("does not parse")
+        );
+    }
 
     #[test]
     fn upgrades_ingredients() {
