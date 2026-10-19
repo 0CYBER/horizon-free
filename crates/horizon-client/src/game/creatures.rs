@@ -1661,9 +1661,47 @@ impl Game<'_> {
         }
         self.creatures.projectiles.append(&mut projectiles);
         for (p, hit) in hits {
-            self.projectile_hit(&p, hit)?;
+            // A guest's projectile lands as theirs: a pearl takes them, what
+            // it hurts answers to them. One hitting the host (`Who::Player`
+            // here) stays the host's hit.
+            match p.guest {
+                Some(conn)
+                    if !matches!(
+                        hit,
+                        Hit::Entity {
+                            who: Who::Player,
+                            ..
+                        }
+                    ) =>
+                {
+                    self.guest_projectile_hit(conn, &p, hit)?;
+                }
+                _ => self.projectile_hit(&p, hit)?,
+            }
         }
         Ok(())
+    }
+    /// `projectile_hit` for a projectile the guest `conn` shot, run as them;
+    /// as the host's when they have left.
+    fn guest_projectile_hit(&mut self, conn: u32, p: &Projectile, hit: Hit) -> Result<()> {
+        let Some(mut host) = self.lan.take() else {
+            return self.projectile_hit(p, hit);
+        };
+        let result = self.as_guest(&mut host, conn, |g| g.projectile_hit(p, hit));
+        // The mob hit now answers to the guest (LivingEntity.lastHurtByPlayer).
+        if result.is_some()
+            && let Hit::Entity {
+                who: Who::Mob(id), ..
+            } = hit
+            && self.mobs.iter().any(|m| m.id == id)
+        {
+            host.mob_players.insert(id, conn);
+        }
+        self.lan = Some(host);
+        match result {
+            Some(r) => r,
+            None => self.projectile_hit(p, hit),
+        }
     }
     /// What an arrow's tick asked for: its particles and sounds.
     fn arrow_event(&mut self, at: Vec3, event: horizon_client::arrows::ArrowEvent) {
@@ -1968,9 +2006,15 @@ impl Game<'_> {
                     m.damage(0.0, source);
                 }
                 if p.owner == Some(Who::Player) && self.player.is_some() {
-                    // ThrownEnderpearl: 5% endermite, teleport, 5 damage.
-                    if self.world.random.next_float() < 0.05 {
-                        self.spawn_mob("minecraft:endermite", atp, false);
+                    // ThrownEnderpearl: 5% endermite where the player was
+                    // (when monsters spawn), teleport, 5 damage.
+                    if self.world.random.next_float() < 0.05
+                        && self.ui.rules.bool("spawn_monsters")
+                        && self.ui.difficulty != 0
+                        && let Some(pl) = self.player.as_ref()
+                    {
+                        let from = pl.position;
+                        self.spawn_mob("minecraft:endermite", [from.x, from.y, from.z], false);
                     }
                     if let Some(pl) = self.player.as_mut() {
                         pl.position = at;

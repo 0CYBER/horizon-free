@@ -67,6 +67,9 @@ pub struct Projectile {
     pub id: u32,
     pub kind: ProjectileKind,
     pub owner: Option<Who>,
+    /// On a server, the guest (by connection) who shot it: `Who::Player`
+    /// then means them, not the host.
+    pub guest: Option<u32>,
     pub position: Vec3,
     pub previous: Vec3,
     pub velocity: Vec3,
@@ -133,6 +136,7 @@ impl Projectile {
             id: 0,
             kind,
             owner,
+            guest: None,
             position,
             previous: position,
             velocity: Vec3::ZERO,

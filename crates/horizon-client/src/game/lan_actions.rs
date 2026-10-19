@@ -125,6 +125,8 @@ pub(super) struct GuestSwap {
     packets: Vec<play::Clientbound>,
     /// The host's count of swings started, kept while the guest acts.
     swings: u32,
+    /// How many projectiles there were: those added since are the guest's.
+    projectiles: usize,
 }
 
 impl GuestPlay {
@@ -298,6 +300,7 @@ impl Game<'_> {
         );
         let packets = std::mem::take(&mut self.guest_packets);
         let swings = self.swings_started;
+        let projectiles = self.creatures.projectiles.len();
         Some(GuestSwap {
             conn,
             i,
@@ -341,6 +344,7 @@ impl Game<'_> {
             acting,
             packets,
             swings,
+            projectiles,
         })
     }
 
@@ -390,7 +394,14 @@ impl Game<'_> {
             acting,
             packets,
             swings,
+            projectiles,
         } = swap;
+        // What the guest shot is theirs (Projectile.setOwner).
+        for p in self.creatures.projectiles.iter_mut().skip(projectiles) {
+            if p.owner == Some(horizon_client::mobs::Who::Player) && p.guest.is_none() {
+                p.guest = Some(conn);
+            }
+        }
         // The guest's swings are theirs: the host's own count stays the host's.
         play.swings += self.swings_started.wrapping_sub(swings);
         self.swings_started = swings;
