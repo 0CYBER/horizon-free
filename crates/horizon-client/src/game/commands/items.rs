@@ -208,16 +208,20 @@ impl Game<'_> {
                 }
                 None => false,
             },
+            // LivingEntity's equipment SlotAccess: setItemSlot, so onEquipItem.
             Slot::Armor(i) => match self.armor.get_mut(*i) {
                 Some(slot) => {
-                    *slot = stack;
+                    let old = std::mem::replace(slot, stack.clone());
+                    let name = ["head", "chest", "legs", "feet"][*i];
+                    self.player_on_equip(name, old.as_ref(), stack.as_ref());
                     self.apply_equipment();
                     true
                 }
                 None => false,
             },
             Slot::Offhand => {
-                self.offhand = stack;
+                let old = std::mem::replace(&mut self.offhand, stack.clone());
+                self.player_on_equip("offhand", old.as_ref(), stack.as_ref());
                 true
             }
             Slot::Ender(i) => match self.ender_items.get_mut(*i) {
