@@ -21,6 +21,8 @@ use horizon_core::{
 use serde_json::Value;
 use std::{collections::BTreeSet, sync::Arc};
 
+mod lithostitched;
+
 /// The draws processors make from StructurePlaceSettings' random.
 pub trait ProcessorRandom {
     fn float(&mut self) -> f32;
@@ -291,6 +293,14 @@ pub enum Processor {
     /// `horizon:block_swap` (Lithostitched's `block_swap`): blocks by name
     /// become others, keeping the properties both have.
     BlockSwap(std::collections::BTreeMap<String, String>),
+    /// `horizon:apply_random` (Lithostitched's `apply_random`): a processor
+    /// list drawn by weight runs on the block.
+    ApplyRandom(Box<lithostitched::ApplyRandom>),
+    /// `horizon:condition` (Lithostitched's `condition`): `then` or `else`
+    /// runs on the block, by a test of it.
+    Condition(Box<lithostitched::Conditional>),
+    /// `horizon:set_block` (Lithostitched's `set_block`).
+    SetBlock(Box<lithostitched::SetBlock>),
 }
 #[derive(Clone, Debug, Default)]
 pub struct ProcessorList(pub Vec<Processor>);
@@ -744,6 +754,15 @@ impl Processor {
                     .collect::<Result<_, DecodeError>>()?,
             ),
             "horizon:count_cap" => Self::CountCap(Box::new(CountCap::decode(value, state)?)),
+            "horizon:apply_random" => Self::ApplyRandom(Box::new(
+                lithostitched::ApplyRandom::decode(value, resources, bindings)?,
+            )),
+            "horizon:set_block" => {
+                Self::SetBlock(Box::new(lithostitched::SetBlock::decode(value, state)?))
+            }
+            "horizon:condition" => Self::Condition(Box::new(lithostitched::Conditional::decode(
+                value, resources, bindings,
+            )?)),
             _ => return Err(DecodeError::Field("structure processor type")),
         })
     }
@@ -880,11 +899,37 @@ fn blackstone(name: &str) -> Option<&'static str> {
     })
 }
 type ProcessResult = Result<Option<BlockInfo>, PlacementQueryError>;
+/// The processors of a list in turn, until one removes the block.
+#[allow(clippy::too_many_arguments)]
+fn process_list<W: PlacementContext>(
+    list: &ProcessorList,
+    world: &mut W,
+    resources: &StructureResources,
+    position: [i32; 3],
+    reference: [i32; 3],
+    relative: [i32; 3],
+    info: BlockInfo,
+    settings: &mut PlaceSettings<'_>,
+) -> ProcessResult {
+    let mut current = info;
+    for processor in &list.0 {
+        match process_block(
+            processor, world, resources, position, reference, relative, current, settings,
+        )? {
+            Some(next) => current = next,
+            None => return Ok(None),
+        }
+    }
+    Ok(Some(current))
+}
+/// StructureProcessor.processBlock: `position` is the piece's, `reference`
+/// the structure's pivot and `relative` the block's in the template.
 #[allow(clippy::too_many_arguments)]
 fn process_block<W: PlacementContext>(
     processor: &Processor,
     world: &mut W,
     resources: &StructureResources,
+    position: [i32; 3],
     reference: [i32; 3],
     relative: [i32; 3],
     info: BlockInfo,
@@ -1028,6 +1073,42 @@ fn process_block<W: PlacementContext>(
             }
             false => Some(info),
         },
+        Processor::ApplyRandom(apply) => {
+            let seed = world.world_seed()?;
+            let mut random = apply.random.create(seed, position, reference, info.pos);
+            match apply.pick(&mut random) {
+                Some(list) => {
+                    return process_list(
+                        list, world, resources, position, reference, relative, info, settings,
+                    );
+                }
+                None => Some(info),
+            }
+        }
+        Processor::SetBlock(set) => {
+            let seed = world.world_seed()?;
+            let state = set.state(seed, position, reference, info.pos);
+            let state = match set.preserves() {
+                true => registry
+                    .state(state)
+                    .and_then(|s| with_properties_of(registry, &s.name, info.state))
+                    .unwrap_or(state),
+                false => state,
+            };
+            Some(BlockInfo { state, ..info })
+        }
+        Processor::Condition(c) => {
+            let seed = world.world_seed()?;
+            let mut random = c.random.create(seed, position, reference, info.pos);
+            let location = world.block_state(info.pos)?;
+            let passed = c
+                .condition
+                .test(info.state, location, registry, &mut random);
+            let list = if passed { &c.then } else { &c.otherwise };
+            return process_list(
+                list, world, resources, position, reference, relative, info, settings,
+            );
+        }
         Processor::Pick(pick) => match name(info.state) == pick.block {
             true => Some(settings.with_random(info.pos, |r| pick.apply(info, r))),
             false => Some(info),
@@ -1176,7 +1257,7 @@ fn process_infos<W: PlacementContext>(
         for processor in processors {
             let Some(value) = current.take() else { break };
             current = process_block(
-                processor, world, resources, reference, info.pos, value, settings,
+                processor, world, resources, position, reference, info.pos, value, settings,
             )?;
         }
         if let Some(value) = current {
@@ -1220,6 +1301,7 @@ fn process_infos<W: PlacementContext>(
                 delegate,
                 world,
                 resources,
+                position,
                 reference,
                 original[index].pos,
                 before.clone(),
