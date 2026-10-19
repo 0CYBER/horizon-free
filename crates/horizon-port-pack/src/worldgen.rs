@@ -510,6 +510,12 @@ fn upgrade_types(
                 v["type"] = "minecraft:jigsaw".into();
                 true
             }
+            // Formations' SimpleStructure: its pool and placement, laid out
+            // by the game (`horizon_world::worldgen::structure::formations`).
+            Some("formations:simple") => {
+                v["type"] = "horizon:formations".into();
+                true
+            }
             Some(t) if !t.starts_with("minecraft:") => {
                 unsupported(t);
                 false
@@ -567,6 +573,15 @@ fn upgrade_types(
                     changed = true;
                 } else if t == "yungsapi:yung_single_element" {
                     yung_element(element, lost);
+                    changed = true;
+                } else if t == "formations:single_pool_element" {
+                    // Vanilla's element with its own ground level (1 when
+                    // missing, as its codec reads it).
+                    element["element_type"] = "minecraft:single_pool_element".into();
+                    if let Some(o) = element.as_object_mut() {
+                        let ground = o.remove("ground_level").unwrap_or(1.into());
+                        o.insert("horizon:ground_level".into(), ground);
+                    }
                     changed = true;
                 } else if !t.starts_with("minecraft:") {
                     unsupported(t);
@@ -1208,13 +1223,46 @@ mod tests {
     const NO_TAGS: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
     #[test]
+    fn formations_become_the_games() {
+        let mut report = Upgrade::default();
+        let mut s = json!({"type": "formations:simple", "template": "f:campsites",
+            "placement": "surface", "biomes": "#f:x", "step": "surface_structures",
+            "terrain_adaptation": "beard_thin", "spawn_overrides": {}});
+        assert!(upgrade("structure", &mut s, &mut report, &NO_TAGS));
+        assert_eq!(s["type"], "horizon:formations");
+        assert_eq!(s["placement"], "surface");
+        let mut pool = json!({"elements": [
+            {"weight": 1, "element": {"element_type": "formations:single_pool_element",
+                "location": "f:a", "projection": "rigid", "ground_level": 6, "processors": []}},
+            {"weight": 1, "element": {"element_type": "formations:single_pool_element",
+                "location": "f:b", "projection": "rigid", "processors": []}}]});
+        assert!(upgrade("template_pool", &mut pool, &mut report, &NO_TAGS));
+        let e = |i: usize| &pool["elements"][i]["element"];
+        assert_eq!(e(0)["element_type"], "minecraft:single_pool_element");
+        assert_eq!(
+            (
+                e(0)["horizon:ground_level"].clone(),
+                e(1)["horizon:ground_level"].clone()
+            ),
+            (json!(6), json!(1))
+        );
+        assert!(e(0).get("ground_level").is_none());
+        // The pieced structure stays out.
+        let mut pieced = json!({"type": "formations:pieced", "start_pool": "f:p", "max_depth": 2,
+            "max_distance_from_center": 40, "placement": "surface", "biomes": "#f:x"});
+        assert!(!upgrade("structure", &mut pieced, &mut report, &NO_TAGS));
+        assert_eq!(report.unsupported.get("formations:pieced"), Some(&1));
+        assert_eq!(report.unsupported.len(), 1);
+    }
+
+    #[test]
     fn maps_library_types_to_vanillas() {
         let mut report = Upgrade::default();
         let mut s = json!({"type": "lithostitched:jigsaw", "start_pool": "a:b"});
         assert!(upgrade("structure", &mut s, &mut report, &NO_TAGS));
         assert_eq!(s["type"], "minecraft:jigsaw");
-        let mut formation = json!({"type": "formations:simple"});
-        assert!(!upgrade("structure", &mut formation, &mut report, &NO_TAGS));
+        let mut other = json!({"type": "somelib:structure"});
+        assert!(!upgrade("structure", &mut other, &mut report, &NO_TAGS));
         let mut set = json!({"placement": {"type": "moogs_structures:advanced_random_spread",
             "spacing": 10, "separation": 5, "min_distance_from_world_origin": 250}});
         assert!(upgrade("structure_set", &mut set, &mut report, &NO_TAGS));
@@ -1258,8 +1306,8 @@ mod tests {
         assert_eq!(
             report.unsupported,
             BTreeMap::from([
-                ("formations:simple".into(), 1),
                 ("somelib:element".into(), 1),
+                ("somelib:structure".into(), 1),
             ])
         );
     }

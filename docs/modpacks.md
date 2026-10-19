@@ -566,13 +566,22 @@ Two cases the oracle fills in:
     its mod id `t_and_t`, and a mod's content may only use its own namespace (docs/mods.md), so
     carry leaves them out and its 60 structures are missing.
   - Still lost, written in Java:
-    - Formations' structure and element types (179): their placements read block states in the
-      noise column (solid, water, lava), which the structure context doesn't give yet;
+    - Formations' pieced structure (1, its one jigsaw-like type);
     - Repurposed's mineshafts, mansions and monuments, Better Mineshafts and two Better
       Dungeons types: Java structure types;
     - the block processors written in Java
       (YUNG's banners, legs and decorations, Lithostitched's block swaps);
     - MO Structures (38; its library is only on CurseForge).
+  - **Formations** (Overworld and Nether: 50 structures, 128 pool elements) places one
+    template per start at a height found in the noise columns under its corners and centre: on
+    the surface, on water or lava, or in a cave (on its floor, under its ceiling, buried in
+    stone, on a lava lake). Carry writes its `formations:simple` as the game's
+    `horizon:formations` (`horizon-world`'s `structure/formations.rs`, which reads the blocks
+    of ChunkGenerator.getBaseColumn through the structure context) and its pool element as
+    vanilla's with its `ground_level` under `horizon:ground_level`. In chunks -64..63 that adds
+    39 Overworld and 672 Nether starts at seed 1234 (51 and 643 at seed 2), and leaves every
+    other start as it was. Its processors (biome replacements, aged blocks, bed colours,
+    plants) are still dropped, so its structures keep their templates' blocks.
 
   With every structure PR above, the same square (seed 1234, chunks -64..63) holds 362
   overworld starts with 22,026 pieces. CTOV has 7, Better Dungeons 72 and Better Ocean
