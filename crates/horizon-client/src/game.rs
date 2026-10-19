@@ -1017,8 +1017,6 @@ struct Game<'a> {
     lod_observe: horizon_client::fast_hash::FxHashSet<(i32, i32)>,
     /// The detail revision, centre and radius `Lod::update` last had covered for.
     lod_covered_at: Option<(u64, (i32, i32), i32)>,
-    /// Unloaded columns `Lod::observe` has yet to summarise.
-    lod_unloaded: std::collections::VecDeque<Arc<horizon_client::chunk::Chunk>>,
     options: Options,
     player: Option<PlayerMotion>,
     spawn: Option<Vec3>,
@@ -9748,7 +9746,6 @@ impl Game<'_> {
         self.lod_source_attempted = false;
         self.lod_observe.clear();
         self.lod_covered_at = None;
-        self.lod_unloaded.clear();
         if let Some(renderer) = &mut self.renderer {
             renderer.clear_lods();
         }
@@ -9806,28 +9803,21 @@ impl Game<'_> {
                 self.lod_observe.remove(&(chunk.x, chunk.z));
             }
             // Unloaded columns first (their summaries are all that remains),
-            // then resident ones: at least one a frame, more within about a
-            // millisecond. Moving fast unloads dozens in one frame.
-            self.lod_unloaded.extend(unloaded.iter().cloned());
-            let start = std::time::Instant::now();
-            let mut observed = 0;
-            while observed < 1 || start.elapsed() < std::time::Duration::from_millis(1) {
-                let chunk = if let Some(chunk) = self.lod_unloaded.pop_front() {
-                    chunk
-                } else if let Some(&key) = self.lod_observe.iter().next() {
+            // then a few resident ones (an edit copies a chunk the worker
+            // still holds). The worker summarizes them.
+            horizon_client::spans::time("lod_observe", || {
+                for chunk in &unloaded {
+                    lod.observe(chunk.clone(), self.res.facts());
+                }
+                while lod.observing() < horizon_client::lod::OBSERVE_AHEAD
+                    && let Some(&key) = self.lod_observe.iter().next()
+                {
                     self.lod_observe.remove(&key);
-                    match self.world.chunks.get(&key) {
-                        Some(chunk) => chunk.clone(),
-                        None => continue,
+                    if let Some(chunk) = self.world.chunks.get(&key) {
+                        lod.observe(chunk.clone(), self.res.facts());
                     }
-                } else {
-                    break;
-                };
-                horizon_client::spans::time("lod_observe", || {
-                    lod.observe(&chunk, self.res.facts())
-                });
-                observed += 1;
-            }
+                }
+            });
         }
         let dirty: Vec<_> = unloaded
             .iter()
@@ -10848,7 +10838,6 @@ impl<'a> Game<'a> {
             lod_source_attempted: false,
             lod_observe: Default::default(),
             lod_covered_at: None,
-            lod_unloaded: Default::default(),
             options,
             player: None,
             spawn: None,

@@ -5,7 +5,7 @@ use crate::{
     chunk::{Chunk, MIN_Y},
     fast_hash::{FxHashMap, FxHashSet},
     mesher::SectionMesh,
-    streaming::{LodDetail, LodSource, WorkerContext},
+    streaming::{LodSource, WorkerContext},
 };
 mod mesh;
 use horizon_world::registry::BlockStateId;
@@ -21,6 +21,9 @@ use std::{
 
 const CELLS: usize = 16;
 const MAX_SAVED: usize = 1024;
+/// How many resident chunks may wait for the worker's summary at once
+/// (`Lod::observing`).
+pub const OBSERVE_AHEAD: usize = 8;
 const SAMPLE_JOBS: usize = 4;
 /// While the near terrain loads on a machine with four threads or fewer, far
 /// terrain starts one sample job at most this often and no detail: it would
@@ -228,6 +231,12 @@ impl Column {
         column
     }
 }
+/// A chunk's 256 columns (`Column::from_chunk`), on the far-terrain worker.
+fn summarize(chunk: &Chunk, kinds: &[u8]) -> Arc<[Column; 256]> {
+    Arc::new(std::array::from_fn(|i| {
+        Column::from_chunk(chunk, kinds, (i & 15) as i32, (i >> 4) as i32)
+    }))
+}
 /// `state_kinds` bits: kept in columns, a fluid, the air state; the light
 /// emission is in the high nibble.
 const KEPT: u8 = 1;
@@ -395,21 +404,18 @@ impl Plan {
         }
     }
 }
-/// A mesh job whose inputs are being gathered, a few each frame
-/// (`INPUT_BUDGET`): gathering hundreds at once stalled the frame.
-struct Gathering {
+/// Visited chunks' summaries (`Lod::saved`) and their reductions.
+type Saved = FxHashMap<(i32, i32), Arc<[Column; 256]>>;
+type Reduced = FxHashMap<(i32, i32), Arc<ReducedColumns>>;
+/// What a mesh job reads, as it was when the job began: the worker gathers
+/// every tile's inputs from it (gathering on the render thread stalled the
+/// frame, tens of milliseconds for a large job on a 4-thread machine).
+struct Snapshot {
     active: FxHashSet<TileKey>,
-    /// The active tiles' samples when the job began: a replan may drop them
-    /// from `ready` before the job is sent.
     samples: FxHashMap<TileKey, Arc<Vec<Column>>>,
-    keys: Vec<TileKey>,
-    finer: FxHashMap<TileKey, Vec<TileKey>>,
-    inputs: Vec<MeshInput>,
-    covered: FxHashSet<(i32, i32)>,
-    bounds: Option<[i32; 4]>,
+    saved: Saved,
+    reduced: Reduced,
 }
-/// How long one frame may spend gathering mesh inputs (at least one).
-const INPUT_BUDGET: std::time::Duration = std::time::Duration::from_millis(2);
 struct MeshInput {
     key: TileKey,
     /// The tile's samples, with `visited` replacing some of them (`columns`).
@@ -458,20 +464,24 @@ impl ReducedColumns {
 }
 enum Job {
     Sample(TileKey),
-    Reduce(LodDetail),
+    /// Summarize the chunk `Shared::observed` holds for this column.
+    Observe((i32, i32)),
     RequestDetail {
         chunks: Vec<(i32, i32)>,
         center: [i32; 2],
     },
     Mesh {
-        active: FxHashSet<TileKey>,
-        inputs: Vec<MeshInput>,
+        snapshot: Snapshot,
+        keys: Vec<TileKey>,
+        finer: FxHashMap<TileKey, Vec<TileKey>>,
         covered: FxHashSet<(i32, i32)>,
         bounds: Option<[i32; 4]>,
     },
 }
 enum Done {
     Detail((i32, i32), ReducedColumns),
+    /// A visited chunk's summary (`Job::Observe`).
+    Observed((i32, i32), ReducedColumns),
     DetailRequested,
     Sample {
         key: TileKey,
@@ -485,6 +495,11 @@ enum Done {
 }
 struct Shared {
     jobs: Mutex<VecDeque<Job>>,
+    /// The latest chunk to summarize per column, queued as `Job::Observe`
+    /// once: edits made before the worker gets to it are summarized once.
+    observed: Mutex<FxHashMap<(i32, i32), Arc<Chunk>>>,
+    /// `state_kinds`, from the first observed chunk's facts.
+    kinds: std::sync::OnceLock<Vec<u8>>,
     wake: Condvar,
     stop: AtomicBool,
 }
@@ -497,8 +512,6 @@ pub struct Lod {
     #[cfg(test)]
     context: Arc<WorkerContext>,
     meshing: bool,
-    /// The next mesh job, while its inputs are gathered (`meshing` is set).
-    gathering: Option<Gathering>,
     /// Something `select` reads changed since it last ran.
     reselect: bool,
     /// The plan or the covered columns changed: covered leaves need stand-ins.
@@ -517,8 +530,6 @@ pub struct Lod {
     near_loading: bool,
     /// When `request_samples` last started a job while held.
     held_sample_at: std::time::Instant,
-    /// `state_kinds`, from the first observed chunk's facts.
-    kinds: Option<Vec<u8>>,
     /// Each tile's samples, shared with mesh jobs in flight.
     ready: FxHashMap<TileKey, Arc<Vec<Column>>>,
     active: FxHashSet<TileKey>,
@@ -529,14 +540,16 @@ pub struct Lod {
     /// The covered columns the active meshes leave out, when a mesh job
     /// has finished since the last `take_cutout`.
     cutout: Option<FxHashSet<(i32, i32)>>,
-    saved: FxHashMap<(i32, i32), Arc<[Column; 256]>>,
-    reduced: FxHashMap<(i32, i32), ReducedColumns>,
+    saved: Saved,
+    reduced: Reduced,
     saved_order: VecDeque<(i32, i32)>,
 }
 impl Lod {
     pub fn new(source: Arc<dyn LodSource>, context: Arc<WorkerContext>) -> Self {
         let shared = Arc::new(Shared {
             jobs: Mutex::new(VecDeque::new()),
+            observed: Mutex::new(FxHashMap::default()),
+            kinds: std::sync::OnceLock::new(),
             wake: Condvar::new(),
             stop: AtomicBool::new(false),
         });
@@ -631,8 +644,12 @@ impl Lod {
                     };
                     let Some(job) = job else { continue };
                     let done = match job {
-                        Job::Reduce((key, columns)) => {
-                            Done::Detail(key, ReducedColumns::new(columns))
+                        Job::Observe(key) => {
+                            let chunk = worker.observed.lock().unwrap().remove(&key);
+                            let (Some(chunk), Some(kinds)) = (chunk, worker.kinds.get()) else {
+                                continue;
+                            };
+                            Done::Observed(key, ReducedColumns::new(summarize(&chunk, kinds)))
                         }
                         Job::RequestDetail { chunks, center } => {
                             sampler.request_detail(&chunks, center);
@@ -644,16 +661,19 @@ impl Lod {
                             Done::Sample { key, samples }
                         }
                         Job::Mesh {
-                            active,
-                            inputs,
+                            snapshot,
+                            keys,
+                            mut finer,
                             covered,
                             bounds,
                         } => {
-                            let mut meshes = Vec::with_capacity(inputs.len());
-                            for input in inputs {
+                            let mut meshes = Vec::with_capacity(keys.len());
+                            for key in keys {
                                 if worker.stop.load(Ordering::Relaxed) {
                                     break 'work;
                                 }
+                                let finer = finer.remove(&key).unwrap_or_default();
+                                let input = snapshot.mesh_input(key, finer);
                                 let mesh = mesher.mesh(
                                     input.key,
                                     &input.columns(),
@@ -666,7 +686,7 @@ impl Lod {
                                 meshes.push((input.key, mesh));
                             }
                             Done::Mesh {
-                                active,
+                                active: snapshot.active,
                                 meshes,
                                 covered,
                             }
@@ -690,7 +710,6 @@ impl Lod {
             #[cfg(test)]
             context,
             meshing: false,
-            gathering: None,
             reselect: true,
             replanned: true,
             invalidated: FxHashSet::default(),
@@ -704,7 +723,6 @@ impl Lod {
             small: thread::available_parallelism().map_or(1, |n| n.get()) <= 4,
             near_loading: false,
             held_sample_at: std::time::Instant::now(),
-            kinds: None,
             ready: FxHashMap::default(),
             active: FxHashSet::default(),
             dirty: FxHashSet::default(),
@@ -776,14 +794,41 @@ impl Lod {
             }
         }
     }
-    /// Capture actual block columns, including canopy gaps and material layers.
-    pub fn observe(&mut self, chunk: &Chunk, facts: &BlockFacts) {
-        let kinds = self.kinds.get_or_insert_with(|| state_kinds(facts));
-        let values = Arc::new(std::array::from_fn(|i| {
-            Column::from_chunk(chunk, kinds, (i & 15) as i32, (i >> 4) as i32)
-        }));
+    /// Capture actual block columns, including canopy gaps and material
+    /// layers: the worker summarizes the chunk (`summarize`, a few
+    /// milliseconds a chunk), then `finish_observed` keeps it.
+    pub fn observe(&mut self, chunk: Arc<Chunk>, facts: &BlockFacts) {
+        self.shared.kinds.get_or_init(|| state_kinds(facts));
         let key = (chunk.x, chunk.z);
-        if self.saved.get(&key) == Some(&values) {
+        if self
+            .shared
+            .observed
+            .lock()
+            .unwrap()
+            .insert(key, chunk)
+            .is_none()
+        {
+            self.shared
+                .jobs
+                .lock()
+                .unwrap()
+                .push_back(Job::Observe(key));
+            self.shared.wake.notify_all();
+        }
+    }
+    /// Chunks waiting for the worker to summarize them. A resident chunk
+    /// held here is copied by its next edit (`Arc::make_mut`), so callers
+    /// hand over a few at a time (`OBSERVE_AHEAD`).
+    pub fn observing(&self) -> usize {
+        self.shared.observed.lock().unwrap().len()
+    }
+    /// Keeps a visited chunk's summary, unless it is unchanged.
+    fn finish_observed(&mut self, key: (i32, i32), columns: ReducedColumns) {
+        if self
+            .saved
+            .get(&key)
+            .is_some_and(|saved| **saved == *columns.columns)
+        {
             return;
         }
         if !self.saved.contains_key(&key) {
@@ -795,16 +840,8 @@ impl Lod {
             }
             self.saved_order.push_back(key);
         }
-        self.apply_fine(key, &values);
-        self.saved.insert(key, values.clone());
-        self.reduced.remove(&key);
-        let mut jobs = self.shared.jobs.lock().unwrap();
-        // Coalesce edits and drop jobs whose bounded visited cache was evicted.
-        jobs.retain(|job| !matches!(job, Job::Reduce((at, _)) if *at == key || !self.saved.contains_key(at)));
-        jobs.push_back(Job::Reduce((key, values)));
-        drop(jobs);
-        self.shared.wake.notify_all();
-        self.invalidate_chunk(chunk.x, chunk.z);
+        self.saved.insert(key, columns.columns.clone());
+        self.finish_detail(key, columns);
     }
     fn apply_fine(&mut self, (cx, cz): (i32, i32), columns: &[Column; 256]) {
         let fine = TileKey {
@@ -884,7 +921,7 @@ impl Lod {
         }
         self.apply_detail(key, &columns);
         if self.saved.contains_key(&key) {
-            self.reduced.insert(key, columns);
+            self.reduced.insert(key, Arc::new(columns));
         }
         self.invalidate_chunk(key.0, key.1);
     }
@@ -1002,9 +1039,6 @@ impl Lod {
         if !self.meshing {
             crate::spans::time("lod_select", || self.select());
         }
-        if self.gathering.is_some() {
-            crate::spans::time("lod_input", || self.gather(INPUT_BUDGET));
-        }
         crate::spans::time("lod_request", || self.request_detail(focus));
         crate::spans::time("lod_wanted", || {
             self.request_samples(camera, focus, yaw, detail, elevation)
@@ -1016,6 +1050,9 @@ impl Lod {
             match done {
                 Done::Detail(key, columns) => {
                     crate::spans::time("lod_detail", || self.finish_detail(key, columns))
+                }
+                Done::Observed(key, columns) => {
+                    crate::spans::time("lod_detail", || self.finish_observed(key, columns))
                 }
                 Done::DetailRequested => self.detail_request_pending = false,
                 Done::Sample { key, samples } => self.finish_sample(key, samples),
@@ -1118,48 +1155,21 @@ impl Lod {
                     .collect();
                 let keys: Vec<_> = self.dirty.drain().collect();
                 self.meshing = true;
-                self.gathering = Some(Gathering {
-                    active: next,
-                    samples,
-                    inputs: Vec::with_capacity(keys.len()),
+                self.shared.jobs.lock().unwrap().push_front(Job::Mesh {
+                    snapshot: Snapshot {
+                        active: next,
+                        samples,
+                        saved: self.saved.clone(),
+                        reduced: self.reduced.clone(),
+                    },
                     keys,
                     finer,
                     covered: self.covered.clone(),
                     bounds: self.covered_bounds,
                 });
+                self.shared.wake.notify_all();
             }
         }
-    }
-    /// Gathers mesh inputs for about `budget`, then sends the job once all
-    /// are in.
-    fn gather(&mut self, budget: std::time::Duration) {
-        let Some(mut gathering) = self.gathering.take() else {
-            return;
-        };
-        let start = std::time::Instant::now();
-        while let Some(key) = gathering.keys.pop() {
-            let finer = gathering.finer.remove(&key).unwrap_or_default();
-            gathering.inputs.push(self.mesh_input(
-                key,
-                &gathering.active,
-                &gathering.samples,
-                finer,
-            ));
-            if start.elapsed() >= budget {
-                break;
-            }
-        }
-        if !gathering.keys.is_empty() {
-            self.gathering = Some(gathering);
-            return;
-        }
-        self.shared.jobs.lock().unwrap().push_front(Job::Mesh {
-            active: gathering.active,
-            inputs: gathering.inputs,
-            covered: gathering.covered,
-            bounds: gathering.bounds,
-        });
-        self.shared.wake.notify_all();
     }
     fn request_samples(
         &mut self,
@@ -1263,6 +1273,50 @@ impl Lod {
             self.shared.wake.notify_all();
         }
     }
+    /// The active tiles inside each of `keys` (finer, so each a descendant).
+    fn finer(
+        active: &FxHashSet<TileKey>,
+        keys: &FxHashSet<TileKey>,
+    ) -> FxHashMap<TileKey, Vec<TileKey>> {
+        let mut finer: FxHashMap<TileKey, Vec<TileKey>> = FxHashMap::default();
+        for &tile in active {
+            let mut parent = tile;
+            while parent.level < MAX_LEVEL {
+                parent = parent.parent();
+                if keys.contains(&parent) {
+                    finer.entry(parent).or_default().push(tile);
+                }
+            }
+        }
+        finer
+    }
+    #[cfg(test)]
+    fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            active: self.active.clone(),
+            samples: self.ready.clone(),
+            saved: self.saved.clone(),
+            reduced: self.reduced.clone(),
+        }
+    }
+    #[cfg(test)]
+    fn mesh(&self, key: TileKey) -> SectionMesh {
+        let finer = Self::finer(&self.active, &[key].into_iter().collect())
+            .remove(&key)
+            .unwrap_or_default();
+        let input = self.snapshot().mesh_input(key, finer);
+        mesh::Mesher::default().mesh(
+            key,
+            &input.columns(),
+            &self.covered,
+            self.covered_bounds,
+            &self.context,
+            &input.neighbors,
+            &input.finer,
+        )
+    }
+}
+impl Snapshot {
     fn visited_column(&self, wx: i32, wz: i32, width: i32) -> Option<&Column> {
         let key = (wx.div_euclid(16), wz.div_euclid(16));
         if width == 1 {
@@ -1281,13 +1335,7 @@ impl Lod {
             None
         }
     }
-    fn neighbor(
-        &self,
-        wx: i32,
-        wz: i32,
-        active: &FxHashSet<TileKey>,
-        samples: &FxHashMap<TileKey, Arc<Vec<Column>>>,
-    ) -> Option<(Column, i32)> {
+    fn neighbor(&self, wx: i32, wz: i32) -> Option<(Column, i32)> {
         for level in 0..=MAX_LEVEL {
             let size = 16 << level;
             let key = TileKey {
@@ -1295,7 +1343,7 @@ impl Lod {
                 z: wz.div_euclid(size),
                 level,
             };
-            if !active.contains(&key) {
+            if !self.active.contains(&key) {
                 continue;
             }
             let stride = 1 << level;
@@ -1306,19 +1354,14 @@ impl Lod {
             if let Some(column) = self.visited_column(sx, sz, stride) {
                 return Some((column.clone(), stride));
             }
-            return samples
+            return self
+                .samples
                 .get(&key)
                 .map(|columns| (columns[(z * 16 + x) as usize].clone(), stride));
         }
         None
     }
-    fn mesh_input(
-        &self,
-        key: TileKey,
-        active: &FxHashSet<TileKey>,
-        samples: &FxHashMap<TileKey, Arc<Vec<Column>>>,
-        finer: Vec<TileKey>,
-    ) -> MeshInput {
+    fn mesh_input(&self, key: TileKey, finer: Vec<TileKey>) -> MeshInput {
         let stride = key.size() / CELLS as i32;
         let [ox, _, oz] = key.origin();
         let mut visited = Vec::new();
@@ -1341,7 +1384,7 @@ impl Lod {
                     _ => (ox + offset, oz + key.size()),
                 };
                 let (column, neighbor_stride) = self
-                    .neighbor(wx, wz, active, samples)
+                    .neighbor(wx, wz)
                     .unwrap_or_else(|| (Column::default(), stride));
                 let coordinate = if direction < 2 { wz } else { wx };
                 let width = (neighbor_stride - coordinate.rem_euclid(neighbor_stride))
@@ -1357,44 +1400,11 @@ impl Lod {
         });
         MeshInput {
             key,
-            samples: samples[&key].clone(),
+            samples: self.samples[&key].clone(),
             visited,
             neighbors,
             finer,
         }
-    }
-    /// The active tiles inside each of `keys` (finer, so each a descendant).
-    fn finer(
-        active: &FxHashSet<TileKey>,
-        keys: &FxHashSet<TileKey>,
-    ) -> FxHashMap<TileKey, Vec<TileKey>> {
-        let mut finer: FxHashMap<TileKey, Vec<TileKey>> = FxHashMap::default();
-        for &tile in active {
-            let mut parent = tile;
-            while parent.level < MAX_LEVEL {
-                parent = parent.parent();
-                if keys.contains(&parent) {
-                    finer.entry(parent).or_default().push(tile);
-                }
-            }
-        }
-        finer
-    }
-    #[cfg(test)]
-    fn mesh(&self, key: TileKey) -> SectionMesh {
-        let finer = Self::finer(&self.active, &[key].into_iter().collect())
-            .remove(&key)
-            .unwrap_or_default();
-        let input = self.mesh_input(key, &self.active, &self.ready, finer);
-        mesh::Mesher::default().mesh(
-            key,
-            &input.columns(),
-            &self.covered,
-            self.covered_bounds,
-            &self.context,
-            &input.neighbors,
-            &input.finer,
-        )
     }
 }
 impl Drop for Lod {
@@ -1708,14 +1718,26 @@ mod tests {
         assert!(side(0, 496.0, 496.0, 512.0).is_empty());
 
         // Block edits do not refresh Chunk.heights; observation must scan the
-        // actual blocks, including builds above the old heightmap.
+        // actual blocks, including builds above the old heightmap. The worker
+        // summarizes the chunk; its result is kept on receipt.
+        let receive_observed = |lod: &mut Lod| {
+            let Done::Observed(key, columns) = lod
+                .results
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap()
+            else {
+                panic!("expected the observed chunk's summary");
+            };
+            lod.finish_observed(key, columns);
+        };
         let mut chunk = Chunk::empty(-1, -1);
         chunk.set(0, 120, 0, stone.0);
         chunk.set(4, 54, 4, stone.0);
         for y in 55..64 {
             chunk.set(4, y, 4, water.0);
         }
-        lod.observe(&chunk, &facts);
+        lod.observe(Arc::new(chunk.clone()), &facts);
+        receive_observed(&mut lod);
         let observed = &lod.saved[&(-1, -1)];
         assert_eq!(observed[0].surface.unwrap().height, 121);
         assert_eq!(observed[0].surface.unwrap().state, stone);
@@ -1750,36 +1772,34 @@ mod tests {
         assert_eq!(lod.detail_masks[&fine], [u64::MAX; 4]);
         lod.plan.nodes.remove(&fine);
 
-        // Real worker results populate the reusable pyramid; an older result
-        // must never put a previous edit back into that cache.
-        let receive_reduction = |lod: &mut Lod| {
-            let Done::Detail(key, columns) = lod
-                .results
-                .recv_timeout(std::time::Duration::from_secs(5))
+        // The worker's summary comes with the reusable pyramid; a newer
+        // observation replaces both, and an unchanged one changes nothing.
+        assert!(Arc::ptr_eq(
+            &lod.reduced[&(-1, -1)].columns,
+            &lod.saved[&(-1, -1)]
+        ));
+        assert!(
+            lod.snapshot()
+                .visited_column(-16, -16, 2)
                 .unwrap()
-            else {
-                panic!("expected queued visited reduction");
-            };
-            lod.finish_detail(key, columns);
-        };
-        receive_reduction(&mut lod);
-        assert!(Arc::ptr_eq(
-            &lod.reduced[&(-1, -1)].columns,
-            &lod.saved[&(-1, -1)]
-        ));
-        assert!(lod.visited_column(-16, -16, 2).unwrap().spans.is_empty());
+                .spans
+                .is_empty()
+        );
         let old = lod.saved[&(-1, -1)].clone();
+        lod.observe(Arc::new(chunk.clone()), &facts);
+        receive_observed(&mut lod);
+        assert!(Arc::ptr_eq(&lod.saved[&(-1, -1)], &old));
         chunk.set(0, 130, 0, stone.0);
-        lod.observe(&chunk, &facts);
-        assert!(!lod.reduced.contains_key(&(-1, -1)));
-        lod.finish_detail((-1, -1), ReducedColumns::new(old));
-        assert!(!lod.reduced.contains_key(&(-1, -1)));
+        lod.observe(Arc::new(chunk.clone()), &facts);
+        receive_observed(&mut lod);
         assert_eq!(lod.ready[&fine][0].surface.unwrap().height, 131);
-        receive_reduction(&mut lod);
         assert!(Arc::ptr_eq(
             &lod.reduced[&(-1, -1)].columns,
             &lod.saved[&(-1, -1)]
         ));
+        // A seed reduction arriving after the edit cannot restore old data.
+        lod.finish_detail((-1, -1), ReducedColumns::new(old));
+        assert_eq!(lod.ready[&fine][0].surface.unwrap().height, 131);
 
         // Exercise the actual worker/update seam: a parent stays displayed
         // until all four child meshes can replace it in the same update.
