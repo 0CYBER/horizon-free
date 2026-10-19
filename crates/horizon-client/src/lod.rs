@@ -881,13 +881,27 @@ impl Lod {
             elevation,
         );
         if self.area != Some(area) {
-            self.area = Some(area);
-            self.plan = Plan::with_previous(camera, detail, distance, &self.plan, elevation);
-            self.ready.retain(|key, _| self.plan.nodes.contains(key));
-            self.detail_masks
-                .retain(|key, _| self.plan.nodes.contains(key));
+            crate::spans::time("lod_plan", || {
+                self.area = Some(area);
+                self.plan = Plan::with_previous(camera, detail, distance, &self.plan, elevation);
+                self.ready.retain(|key, _| self.plan.nodes.contains(key));
+                self.detail_masks
+                    .retain(|key, _| self.plan.nodes.contains(key));
+            });
         }
         let mut meshes = Vec::new();
+        crate::spans::time("lod_results", || self.receive(&mut meshes));
+        crate::spans::time("lod_covered", || self.cover(covered));
+        if !self.meshing {
+            crate::spans::time("lod_select", || self.select());
+        }
+        crate::spans::time("lod_request", || self.request_detail(focus));
+        crate::spans::time("lod_wanted", || {
+            self.request_samples(camera, focus, yaw, detail, elevation)
+        });
+        meshes
+    }
+    fn receive(&mut self, meshes: &mut Vec<(TileKey, SectionMesh)>) {
         while let Ok(done) = self.results.try_recv() {
             match done {
                 Done::Detail(key, columns) => {
@@ -913,6 +927,8 @@ impl Lod {
                 }
             }
         }
+    }
+    fn cover(&mut self, covered: FxHashSet<(i32, i32)>) {
         if self.covered != covered {
             let changes: Vec<_> = self
                 .covered
@@ -944,7 +960,9 @@ impl Lod {
                     .or_insert_with(|| vec![Column::default(); CELLS * CELLS]);
             }
         }
-        if !self.meshing {
+    }
+    fn select(&mut self) {
+        {
             let mut selected = Vec::new();
             for &key in &self.plan.roots {
                 self.plan.select(key, &self.ready, &mut selected);
@@ -986,11 +1004,19 @@ impl Lod {
                 self.shared.wake.notify_all();
             }
         }
-        self.request_detail(focus);
+    }
+    fn request_samples(
+        &mut self,
+        camera: [i32; 2],
+        focus: [i32; 2],
+        yaw: f32,
+        detail: i32,
+        elevation: i32,
+    ) {
         // Every sample slot busy: no tile can be requested this frame.
         let free = SAMPLE_JOBS.saturating_sub(self.pending.len());
         if free == 0 {
-            return meshes;
+            return;
         }
         // Load desired nearby leaves directly, alongside broad fallback coverage.
         // Waiting for every ancestor/sibling made full detail take minutes to appear.
@@ -1071,7 +1097,6 @@ impl Lod {
             drop(jobs);
             self.shared.wake.notify_all();
         }
-        meshes
     }
     fn visited_column(&self, wx: i32, wz: i32, width: i32) -> Option<&Column> {
         let key = (wx.div_euclid(16), wz.div_euclid(16));

@@ -9803,17 +9803,19 @@ impl Game<'_> {
                 }
             }
             if let (Some(lod), Some(player)) = (&mut self.lod, &self.player) {
-                let covered = renderer
-                    .lod_detail_columns()
-                    .filter(|&(x, z)| {
-                        horizon_client::streaming::in_view_distance(
-                            self.streaming.center,
-                            self.streaming.radius,
-                            x,
-                            z,
-                        )
-                    })
-                    .collect();
+                let covered = horizon_client::spans::time("lod_covered_set", || {
+                    renderer
+                        .lod_detail_columns()
+                        .filter(|&(x, z)| {
+                            horizon_client::streaming::in_view_distance(
+                                self.streaming.center,
+                                self.streaming.radius,
+                                x,
+                                z,
+                            )
+                        })
+                        .collect()
+                });
                 for (key, mesh) in horizon_client::spans::time("lod_update", || {
                     lod.update(
                         [player.position.x, player.position.y, player.position.z],
