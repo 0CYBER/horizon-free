@@ -373,6 +373,12 @@ pub struct Renderer {
     depth: wgpu::TextureView,
     sections: resident::Resident<SectionGpu>,
     lods: HashMap<crate::lod::TileKey, lod::Tile>,
+    /// The chunk columns the resident tiles leave out (`Lod::take_cutout`):
+    /// their sections are drawn even past the render distance, so terrain
+    /// leaving it never opens a hole before the tiles fill it in.
+    lod_cutout: crate::fast_hash::FxHashSet<(i32, i32)>,
+    /// Removed sections of `lod_cutout` columns, released once tiles cover them.
+    lod_retiring: crate::fast_hash::FxHashSet<SectionKey>,
     detail_columns: HashMap<(i32, i32), u32>,
     arena: arena::Arena,
     sorted_indices: arena::Arena,
@@ -2041,6 +2047,8 @@ impl Renderer {
             depth,
             sections: resident::Resident::default(),
             lods: HashMap::new(),
+            lod_cutout: Default::default(),
+            lod_retiring: Default::default(),
             detail_columns: HashMap::new(),
             arena,
             sorted_indices,
@@ -2255,6 +2263,9 @@ impl Renderer {
         if changed {
             self.block_entity_revision = next_block_entity_revision();
         }
+        if !self.lod_retiring.is_empty() {
+            self.lod_retiring.remove(&key);
+        }
         self.release_section(key);
         let section = self.upload_mesh(mesh);
         if section.is_some() || (mesh.solid.is_empty() && mesh.translucent.is_empty()) {
@@ -2415,6 +2426,8 @@ impl Renderer {
         self.block_entity_revision = next_block_entity_revision();
         self.sections.clear();
         self.lods.clear();
+        self.lod_cutout.clear();
+        self.lod_retiring.clear();
         self.detail_columns.clear();
         self.arena.clear();
         if let Some(flat) = &mut self.flat {
@@ -2441,7 +2454,12 @@ impl Renderer {
             self.block_entity_revision = next_block_entity_revision();
         }
         self.occlusion.remove(key);
-        self.release_section(key);
+        if !self.lod_cutout.is_empty() && self.lod_cutout.contains(&(key.0, key.2)) {
+            // Distant tiles still leave its column out: drawn until they don't.
+            self.lod_retiring.insert(key);
+        } else {
+            self.release_section(key);
+        }
     }
     /// Run `pack`'s stages over the world from now on (`None`: no pack, the
     /// vanilla frame). On error the previous pack stays.
@@ -2829,6 +2847,7 @@ impl Renderer {
             });
         }
         let reachable = &self.occlusion;
+        let cutout = &self.lod_cutout;
         let mut visible = std::mem::take(&mut self.visible);
         visible.clear();
         crate::spans::time("visibility", || {
@@ -2837,6 +2856,7 @@ impl Renderer {
                 (frame.detail_distance / 16.0) as i32,
                 &view,
                 |k| !culling || reachable.contains(k),
+                |x, z| !cutout.is_empty() && cutout.contains(&(x, z)),
                 &mut visible,
             )
         });

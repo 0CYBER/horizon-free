@@ -422,6 +422,7 @@ enum Done {
     Mesh {
         active: FxHashSet<TileKey>,
         meshes: Vec<(TileKey, SectionMesh)>,
+        covered: FxHashSet<(i32, i32)>,
     },
 }
 struct Shared {
@@ -452,6 +453,9 @@ pub struct Lod {
     removed: Vec<TileKey>,
     covered: FxHashSet<(i32, i32)>,
     covered_bounds: Option<[i32; 4]>,
+    /// The covered columns the active meshes leave out, when a mesh job
+    /// has finished since the last `take_cutout`.
+    cutout: Option<FxHashSet<(i32, i32)>>,
     saved: FxHashMap<(i32, i32), Arc<[Column; 256]>>,
     reduced: FxHashMap<(i32, i32), ReducedColumns>,
     saved_order: VecDeque<(i32, i32)>,
@@ -588,7 +592,11 @@ impl Lod {
                                 );
                                 meshes.push((input.key, mesh));
                             }
-                            Done::Mesh { active, meshes }
+                            Done::Mesh {
+                                active,
+                                meshes,
+                                covered,
+                            }
                         }
                     };
                     if tx.send(done).is_err() {
@@ -623,6 +631,7 @@ impl Lod {
             removed: Vec::new(),
             covered: FxHashSet::default(),
             covered_bounds: None,
+            cutout: None,
             saved: FxHashMap::default(),
             reduced: FxHashMap::default(),
             saved_order: VecDeque::new(),
@@ -652,6 +661,13 @@ impl Lod {
     }
     pub fn removed(&mut self) -> Vec<TileKey> {
         std::mem::take(&mut self.removed)
+    }
+    /// The full-detail columns the active meshes leave out, once per finished
+    /// mesh job. Until a column leaves this set, nothing distant stands in for
+    /// it: its full-detail terrain must still be drawn, in or past the render
+    /// distance, or a hole opens there.
+    pub fn take_cutout(&mut self) -> Option<FxHashSet<(i32, i32)>> {
+        self.cutout.take()
     }
     pub fn invalidate_chunk(&mut self, x: i32, z: i32) {
         if self.meshing {
@@ -882,7 +898,9 @@ impl Lod {
                 Done::Mesh {
                     active,
                     meshes: completed,
+                    covered,
                 } => {
+                    self.cutout = Some(covered);
                     // Retire parents only when the entire replacement is ready.
                     self.removed
                         .extend(self.active.difference(&active).copied());

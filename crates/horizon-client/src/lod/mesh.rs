@@ -377,6 +377,7 @@ fn mesh_columns_with_edges(
                 }
             }
             let column = &prepared[z * CELLS + x];
+            let own_sky = column.last().map_or(0, |top| top.span.light & 0xff);
             for dz in (0..stride).step_by(step as usize) {
                 for dx in (0..stride).step_by(step as usize) {
                     if is_covered(wx + dx, wz + dz) {
@@ -462,10 +463,21 @@ fn mesh_columns_with_edges(
                             // Near meshes may have culled against the real neighbor.
                             // Keep a finite seal where their full-detail area begins.
                             if is_covered(nw[0], nw[1]) {
-                                add_side(&mut faces, direction, plane, u0, u1, segment, &[], side);
+                                add_side(
+                                    &mut faces,
+                                    direction,
+                                    plane,
+                                    u0,
+                                    u1,
+                                    segment,
+                                    &[],
+                                    side,
+                                    own_sky,
+                                );
                             } else if !edge {
                                 add_side(
                                     &mut faces, direction, plane, u0, u1, segment, column, side,
+                                    own_sky,
                                 );
                             } else if (0..CELLS as i32).contains(&nx)
                                 && (0..CELLS as i32).contains(&nz)
@@ -479,6 +491,7 @@ fn mesh_columns_with_edges(
                                     segment,
                                     &prepared[nz as usize * CELLS + nx as usize],
                                     side,
+                                    own_sky,
                                 );
                             } else {
                                 let edge_side = match direction {
@@ -498,6 +511,7 @@ fn mesh_columns_with_edges(
                                         segment,
                                         &[],
                                         side,
+                                        own_sky,
                                     );
                                 }
                                 // A coarse face can meet several finer columns.
@@ -515,6 +529,7 @@ fn mesh_columns_with_edges(
                                             segment,
                                             &prepared[edge_offsets[edge_side] + i],
                                             side,
+                                            own_sky,
                                         );
                                     }
                                 }
@@ -621,6 +636,11 @@ mod refinement_tests {
     }
 }
 
+/// Adds the parts of `segment`'s side not hidden by `neighbor`, the column
+/// it faces. Parts above the neighbour's top face open air: reduced columns
+/// and the seals at full-detail edges expose sides that were buried (their
+/// recorded light is a cave's or none), so those take at least the sky light
+/// over the top of the neighbour (or of this column, with no neighbour).
 fn add_side(
     faces: &mut Faces,
     direction: Direction,
@@ -630,7 +650,23 @@ fn add_side(
     segment: &Segment<'_>,
     neighbor: &[Segment<'_>],
     side: Material,
+    own_sky: u16,
 ) {
+    let (open, sky) = neighbor.last().map_or((f32::NEG_INFINITY, own_sky), |top| {
+        (f32::from(top.span.max), top.span.light & 0xff)
+    });
+    let mut add = |v0: f32, v1: f32| {
+        let mut lit = side;
+        for paint in lit.faces.iter_mut().flatten() {
+            paint.light = (paint.light & 0xff00) | (paint.light & 0xff).max(sky);
+        }
+        let split = open.clamp(v0, v1);
+        for (v0, v1, material) in [(v0, split, side), (split, v1, lit)] {
+            if v0 < v1 {
+                add_face(faces, direction, plane, Rect { u0, v0, u1, v1 }, material);
+            }
+        }
+    };
     let mut floor = segment.min;
     for next in neighbor {
         if next.max <= floor
@@ -640,18 +676,7 @@ fn add_side(
             continue;
         }
         if floor < next.min {
-            add_face(
-                faces,
-                direction,
-                plane,
-                Rect {
-                    u0,
-                    v0: floor,
-                    u1,
-                    v1: next.min.min(segment.max),
-                },
-                side,
-            );
+            add(floor, next.min.min(segment.max));
         }
         floor = floor.max(next.max);
         if floor >= segment.max {
@@ -659,18 +684,7 @@ fn add_side(
         }
     }
     if floor < segment.max {
-        add_face(
-            faces,
-            direction,
-            plane,
-            Rect {
-                u0,
-                v0: floor,
-                u1,
-                v1: segment.max,
-            },
-            side,
-        );
+        add(floor, segment.max);
     }
 }
 
@@ -958,6 +972,44 @@ mod tests {
                 .fold(f32::NEG_INFINITY, f32::max),
             7.0
         );
+    }
+    #[test]
+    fn exposed_buried_sides_take_the_sky_light_over_their_neighbor() {
+        let mut columns = columns();
+        let dark = |min, max| Span {
+            light: 0,
+            ..span(min, max, 1)
+        };
+        // A reduced column whose lower blocks were buried (no light), next to
+        // a lower column, and to one with a cave below its top.
+        columns[0].spans = vec![dark(0, 9), span(9, 10, 1)];
+        columns[1].spans = vec![span(0, 4, 1)];
+        columns[CELLS].spans = vec![span(0, 2, 1), span(6, 12, 1)];
+        let mesh = mesh(&columns);
+        let quads = mesh.solid.as_chunks::<4>().0;
+        let bounds = |q: &[TerrainVertex; 4]| {
+            let ys = q.iter().map(|v| v.pos[1]);
+            (
+                ys.clone().fold(f32::INFINITY, f32::min),
+                ys.fold(0.0, f32::max),
+            )
+        };
+        // Over the lower neighbour: open air, lit like its top.
+        let open: Vec<_> = quads
+            .iter()
+            .filter(|q| q.iter().all(|v| v.pos[0] == 1.0 && v.pos[2] <= 1.0) && normal(q).x > 0.0)
+            .collect();
+        assert_eq!(open.len(), 1);
+        assert_eq!(bounds(open[0]), (4.0, 10.0));
+        assert!(open[0].iter().all(|v| v.light == 240));
+        // Into the cave: its recorded light.
+        let cave: Vec<_> = quads
+            .iter()
+            .filter(|q| q.iter().all(|v| v.pos[2] == 1.0 && v.pos[0] <= 1.0) && normal(q).z > 0.0)
+            .collect();
+        assert_eq!(cave.len(), 1);
+        assert_eq!(bounds(cave[0]), (2.0, 6.0));
+        assert!(cave[0].iter().all(|v| v.light == 0));
     }
     #[test]
     fn greedy_faces_preserve_material_and_light_boundaries() {

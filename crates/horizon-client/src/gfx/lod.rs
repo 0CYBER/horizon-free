@@ -104,6 +104,23 @@ impl Renderer {
         for (_, tile) in std::mem::take(&mut self.lods) {
             self.release_mesh(tile.mesh);
         }
+        self.set_lod_cutout(Default::default());
+    }
+
+    /// The chunk columns the resident tiles now leave out (`Lod::take_cutout`).
+    /// Removed sections they no longer leave out are released.
+    pub fn set_lod_cutout(&mut self, cutout: crate::fast_hash::FxHashSet<(i32, i32)>) {
+        self.lod_cutout = cutout;
+        let released: Vec<_> = self
+            .lod_retiring
+            .iter()
+            .copied()
+            .filter(|key| !self.lod_cutout.contains(&(key.0, key.2)))
+            .collect();
+        for key in released {
+            self.lod_retiring.remove(&key);
+            self.release_section(key);
+        }
     }
 }
 
