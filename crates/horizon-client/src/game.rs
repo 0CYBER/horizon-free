@@ -9828,6 +9828,9 @@ impl Game<'_> {
                 for key in lod.removed() {
                     renderer.remove_lod(key);
                 }
+                if let Some(cutout) = lod.take_cutout() {
+                    renderer.set_lod_cutout(cutout);
+                }
             }
         }
     }
