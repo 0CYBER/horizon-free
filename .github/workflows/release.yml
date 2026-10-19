@@ -242,8 +242,9 @@ jobs:
           RELEASE_SIGNING_KEY_NEXT: ${{ secrets.RELEASE_SIGNING_KEY_NEXT }}
           EPHEMERAL: ${{ needs.decide.outputs.dry_run == 'true' && 'yes' || '' }}
           TAG: ${{ needs.decide.outputs.tag }}
-        run: bash tools/ci/sign_release.sh "$TAG" dist/horizon-linux-x86_64.tar.gz dist/horizon-windows-x64.zip \
-          dist/horizon-macos-arm64.zip dist/horizon-server-linux-x86_64.tar.gz
+        run: |
+          bash tools/ci/sign_release.sh "$TAG" dist/horizon-linux-x86_64.tar.gz dist/horizon-windows-x64.zip \
+            dist/horizon-macos-arm64.zip dist/horizon-server-linux-x86_64.tar.gz
       - uses: actions/upload-artifact@v4
         with:
           name: signature
