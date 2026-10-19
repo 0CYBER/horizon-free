@@ -149,6 +149,8 @@ pub(super) struct Servers {
     focused: Option<Field>,
     /// The field to put the keyboard in on the next frame.
     focus_soon: Option<Field>,
+    /// A suggested value shown selected: the first key typed replaces it.
+    selected: Option<Field>,
     copied: Option<Instant>,
     faces: HashMap<String, Option<Vec<[u8; 4]>>>,
     tx: Sender<Event>,
@@ -189,6 +191,7 @@ impl Servers {
             focus: HashMap::new(),
             focused: None,
             focus_soon: None,
+            selected: None,
             copied: None,
             faces: HashMap::new(),
             tx,
@@ -212,6 +215,9 @@ impl Servers {
         self.focused = Field::ALL
             .into_iter()
             .find(|f| self.focus.get(f).is_some_and(|h| h.is_focused(window)));
+        if self.focused.is_some() && self.focused != self.selected {
+            self.selected = None;
+        }
     }
 
     fn status(&self) -> Status {
@@ -700,6 +706,7 @@ impl Launcher {
             format!("Server {}", self.servers.list.len() + 1)
         };
         *self.servers.text(Field::Name) = name;
+        self.servers.selected = Some(Field::Name);
         self.servers.text(Field::Seed).clear();
         *self.servers.text(Field::Players) = own_name(&self.accounts).unwrap_or_default();
         self.servers.problem = None;
@@ -795,6 +802,7 @@ impl Launcher {
         let t = self.theme;
         let handle = self.focus_handle(f, cx);
         let focused = self.servers.focused == Some(f);
+        let selected = focused && self.servers.selected == Some(f);
         let value = self.servers.value(f).to_string();
         let shown: String = {
             let chars: Vec<char> = value.chars().collect();
@@ -822,12 +830,19 @@ impl Launcher {
             .child(if value.is_empty() && !focused {
                 div().text_color(t.muted).child(placeholder)
             } else {
-                div().text_color(t.ink).child(shown)
+                div()
+                    .text_color(t.ink)
+                    .when(selected, |d| d.rounded(px(2.)).bg(t.accent.opacity(0.22)))
+                    .child(shown)
             })
             .when(focused, |d| {
                 d.child(div().flex_none().w(px(1.)).h(px(16.)).bg(t.ink))
             })
-            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+            .on_click(cx.listener(move |this, ev: &ClickEvent, window, cx| {
+                // A click puts the caret in: the suggestion is no longer selected.
+                if matches!(ev, ClickEvent::Mouse(_)) {
+                    this.servers.selected = None;
+                }
                 if let Some(h) = this.servers.focus.get(&f) {
                     window.focus(h);
                 }
@@ -836,8 +851,24 @@ impl Launcher {
             .on_key_down(cx.listener(move |this, ev: &KeyDownEvent, window, cx| {
                 let k = &ev.keystroke;
                 let command = k.modifiers.control || k.modifiers.platform;
+                // A suggested value is selected: typing or pasting replaces it, Backspace clears it.
+                if this.servers.selected.take() == Some(f)
+                    && (k.key == "backspace"
+                        || (k.key == "v" && command)
+                        || (!command && (k.key == "space" || k.key_char.is_some())))
+                    && !matches!(k.key.as_str(), "enter" | "escape" | "tab")
+                {
+                    this.servers.text(f).clear();
+                    if k.key == "backspace" {
+                        cx.stop_propagation();
+                        cx.notify();
+                        return;
+                    }
+                }
                 match k.key.as_str() {
                     "enter" => this.field_enter(f),
+                    // Not every platform gives Space a character.
+                    "space" if !command => this.servers.text(f).push(' '),
                     "escape" => {
                         if this.servers.create.is_some() && !this.servers.creating {
                             this.servers.create = None;
