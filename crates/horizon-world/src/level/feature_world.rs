@@ -96,6 +96,15 @@ impl<L: LevelAccess + ?Sized> PlacementContext for LevelFeatureWorld<'_, '_, L> 
         self.sim.level.set_raw(pos(position), state);
         Ok(())
     }
+    /// LevelChunk.setBlockState without neighbour or shape updates.
+    fn set_chunk_block(
+        &mut self,
+        position: [i32; 3],
+        state: BlockStateId,
+    ) -> Result<(), PlacementQueryError> {
+        self.sim.set_block(pos(position), state, 2 | 16);
+        Ok(())
+    }
     fn collision_full_block(
         &mut self,
         state: BlockStateId,
