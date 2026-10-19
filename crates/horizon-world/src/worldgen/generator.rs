@@ -974,6 +974,19 @@ where
         worker: &mut WorkerState,
         pos: ChunkPos,
     ) -> Result<ProtoChunk, GeneratorError> {
+        let mut context = std::mem::take(&mut worker.terrain_context);
+        let result = self.generate_with_context(worker, pos, &mut context);
+        // Release chunk-specific bindings and caches even after a sampling error.
+        context.reset();
+        worker.terrain_context = context;
+        result
+    }
+    fn generate_with_context(
+        &self,
+        worker: &mut WorkerState,
+        pos: ChunkPos,
+        context: &mut SamplerContext,
+    ) -> Result<ProtoChunk, GeneratorError> {
         let data = &self.data;
         let (min, height, sea) = (
             self.settings.noise_min_y,
@@ -1025,13 +1038,12 @@ where
             ),
             None => Vec::new(),
         };
-        let mut context = SamplerContext::cached();
         if let Some(beard) = self
             .structures
             .as_ref()
             .and_then(|s| s.beardifier(&references, pos))
         {
-            context = context.with_world_fields(
+            *context = std::mem::take(context).with_world_fields(
                 horizon_core::density::WorldFields::default().with_field(
                     horizon_core::density::WorldField::Beardifier,
                     Arc::new(beard),
@@ -1056,7 +1068,7 @@ where
                         .fork_positional(),
                     RegistryAquiferBlockStates::new(data.registry).map_err(stage("aquifer"))?,
                     volume,
-                    &mut context,
+                    context,
                 )
                 .map_err(stage("aquifer"))?,
             ),
@@ -1070,7 +1082,7 @@ where
             &mut chunk,
             volume,
             self.router.get(RouterField::FinalDensity).as_ref(),
-            &mut context,
+            context,
             aquifer.as_mut(),
             self.settings.default_block,
         )
@@ -1091,7 +1103,7 @@ where
                     possible: Some(possible),
                 },
                 preliminary_surface: self.preliminary.clone(),
-                density_context: &mut context,
+                density_context: context,
                 write_min_y: min,
                 write_max_y: min + height - 1,
             },
@@ -1126,7 +1138,7 @@ where
                         possible: None,
                     },
                     preliminary_surface: self.preliminary.clone(),
-                    density_context: &mut context,
+                    density_context: context,
                 },
                 aquifer.as_mut(),
                 &data.carving_blocks,
@@ -1431,6 +1443,7 @@ pub struct StageTimings {
 /// thread-local caches and never change results.
 pub(super) struct WorkerState {
     pub(super) temperatures: Vec<BiomeTemperature>,
+    terrain_context: SamplerContext,
     biome_context: SamplerContext,
     carver_context: SamplerContext,
     /// Seed/dimension-bound lookups avoid the shared mutex for overlapping
@@ -1909,6 +1922,7 @@ impl OverworldGenerator {
                     .iter()
                     .map(|s| BiomeTemperature::new(*s))
                     .collect(),
+                terrain_context: SamplerContext::cached(),
                 biome_context: SamplerContext::cached(),
                 carver_context: SamplerContext::default(),
                 carver_biomes: HashMap::new(),
