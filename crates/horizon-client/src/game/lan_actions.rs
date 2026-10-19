@@ -1592,9 +1592,7 @@ impl Game<'_> {
                 if w.player.ground.on_ground && !on_ground && moved[1] > 0.0 {
                     let sprinting = w.player.sprinting;
                     w.player
-                        .health
-                        .food
-                        .add_exhaustion(if sprinting { 0.2 } else { 0.05 });
+                        .cause_food_exhaustion(if sprinting { 0.2 } else { 0.05 });
                 }
                 let landed = (|| -> horizon_client::Result<()> {
                     w.set_on_ground_with_movement(on_ground, false, movement)?;

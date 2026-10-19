@@ -81,7 +81,7 @@ impl Game<'_> {
         if let Some(p) = self.player.as_mut()
             && !self.creative
         {
-            p.health.food.exhaustion = (p.health.food.exhaustion + 0.1).min(40.0);
+            p.cause_food_exhaustion(0.1);
         }
         self.swing_arm();
         Some(Strike {

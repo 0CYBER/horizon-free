@@ -280,7 +280,7 @@ impl Game<'_> {
                 }
             }
             EffectAction::Exhaust(amount) => {
-                p.health.food.exhaustion = (p.health.food.exhaustion + amount).min(40.0);
+                p.cause_food_exhaustion(amount);
             }
             EffectAction::Eat(nutrition, saturation) => {
                 let food = &mut p.health.food;
