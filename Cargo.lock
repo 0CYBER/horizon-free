@@ -1555,6 +1555,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-release-sign"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "ring",
+]
+
+[[package]]
 name = "horizon-server"
 version = "0.1.0"
 dependencies = [

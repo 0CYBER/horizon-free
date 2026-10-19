@@ -162,6 +162,41 @@ runs the game: GitHub's runners have neither a GPU worth the name nor the game f
 Kira posts every published release in #releases and pings the releases role only when the notes have a
 `### New` section.
 
+### Signed checksums
+
+Every game and launcher release carries `SHA256SUMS` (the archives' SHA-256, `sha256sum`'s format) and
+`SHA256SUMS.sig`: one base64 Ed25519 signature per line over `horizon release <tag>\n` followed by SHA256SUMS,
+so a signed list can't be reused under another tag.
+
+- A `sign` job of its own makes them: `tools/ci/sign_release.sh` runs the runner's `sha256sum` and OpenSSL and
+  nothing else. It is the only job that holds the private key, the `RELEASE_SIGNING_KEY` secret of the
+  repository's `release` environment, which only real releases from main enter (`environment:` is empty in dry
+  runs, which sign with a throwaway key). No code from the repository runs beside the key, so no pull request
+  can read it by changing what a build compiles; the key is in no file, no log and no password vault, and nobody
+  needs to read it.
+- The publish job then checks the signature the way launchers do (`horizon-release-sign verify --publishing`,
+  crates/horizon-release-sign), against the public keys built in from
+  `crates/horizon-release-sign/release-keys.txt`. While that file lists no key, releases go out with SHA256SUMS
+  alone and a warning (today's releases keep working). Once it lists one, a missing secret or a key it doesn't
+  list fails the release before anything is published, instead of publishing something launchers would refuse.
+- Making the key: `tools/ci/new_release_key.sh` pipes a new key from `horizon-release-sign keygen` straight into
+  `gh secret set RELEASE_SIGNING_KEY --env release` and prints only the public key, which then goes into
+  release-keys.txt by pull request.
+
+**Rotating the key** (a new key every year, or at once if the old one may have leaked). The publish job signs
+with every key the environment holds, `RELEASE_SIGNING_KEY` and `RELEASE_SIGNING_KEY_NEXT`, and the two names take
+turns:
+
+1. `tools/ci/new_release_key.sh <the empty name>` makes the next key; add its public key to release-keys.txt
+   beside the old one. From then on every release is signed with both keys (one line each).
+2. Wait until launchers and servers built with both keys are in use (a few weeks: launchers update themselves).
+3. Delete the old key's secret (`gh secret delete <its name> --env release`) and its line in release-keys.txt.
+   The next rotation makes its new key under the name just freed.
+
+If the old key may have leaked, skip the wait: remove its public key from release-keys.txt at once and delete
+its secret. Launchers built before the new key cannot check releases signed only with it: they refuse to install
+them with a clear message, and players download the launcher again from the website once.
+
 ### Starting one by hand
 
 ```sh
