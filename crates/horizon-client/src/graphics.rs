@@ -93,6 +93,48 @@ impl PresentMode {
     }
 }
 
+/// The graphics API the renderer runs on. Only Windows has a choice: the
+/// other systems always use their one backend (Vulkan on Linux, Metal on
+/// macOS). Applies at the next start.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum GraphicsApi {
+    /// Vulkan, and DirectX 12 when Vulkan has no adapter or device.
+    #[default]
+    Auto,
+    Vulkan,
+    Dx12,
+}
+impl GraphicsApi {
+    pub const ALL: [GraphicsApi; 3] = [GraphicsApi::Auto, GraphicsApi::Vulkan, GraphicsApi::Dx12];
+    pub fn name(self) -> &'static str {
+        match self {
+            GraphicsApi::Auto => "auto",
+            GraphicsApi::Vulkan => "vulkan",
+            GraphicsApi::Dx12 => "dx12",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            GraphicsApi::Auto => "Auto",
+            GraphicsApi::Vulkan => "Vulkan",
+            GraphicsApi::Dx12 => "DirectX 12",
+        }
+    }
+    /// The API a name stands for, ignoring case; `None` for anything else.
+    pub fn from_name(s: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|api| api.name().eq_ignore_ascii_case(s.trim()))
+    }
+    /// `HORIZON_GRAPHICS_API` (auto, vulkan or dx12) if set, else the setting.
+    pub fn with_env(self) -> Self {
+        std::env::var("HORIZON_GRAPHICS_API")
+            .ok()
+            .and_then(|v| Self::from_name(&v))
+            .unwrap_or(self)
+    }
+}
+
 /// What the frame limiter does in the last half millisecond before a frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Pacing {
@@ -149,6 +191,8 @@ pub struct Graphics {
     /// The Horizon shader pack in `shaderpacks/` (its folder name); empty:
     /// none, the vanilla picture (docs/shader-packs.md).
     pub shader_pack: String,
+    /// The graphics API (Windows only; see `GraphicsApi`).
+    pub api: GraphicsApi,
 }
 impl Default for Graphics {
     fn default() -> Self {
@@ -172,6 +216,7 @@ impl Default for Graphics {
             advanced: false,
             battery: false,
             shader_pack: String::new(),
+            api: GraphicsApi::Auto,
         }
     }
 }
@@ -222,6 +267,7 @@ impl Graphics {
                 "level" => g.advanced = value == "advanced",
                 "batteryMode" => g.battery = flag(g.battery),
                 "shaderPack" => g.shader_pack = value.to_string(),
+                "graphicsApi" => g.api = GraphicsApi::from_name(value).unwrap_or_default(),
                 "overlay" => {
                     g.overlay = match value {
                         "fps" => Overlay::Fps,
@@ -236,7 +282,7 @@ impl Graphics {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "preset:{}\ncaveCulling:{}\ncullLeaves:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nlevel:{}\nbatteryMode:{}\nshaderPack:{}\n",
+            "preset:{}\ncaveCulling:{}\ncullLeaves:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nlevel:{}\nbatteryMode:{}\nshaderPack:{}\ngraphicsApi:{}\n",
             self.preset.name(),
             bool_text(self.cave_culling),
             bool_text(self.cull_leaves),
@@ -263,6 +309,7 @@ impl Graphics {
             if self.advanced { "advanced" } else { "simple" },
             bool_text(self.battery),
             self.shader_pack,
+            self.api.name(),
         )
     }
     pub fn save(&self, dir: &Path) {
@@ -355,6 +402,7 @@ mod tests {
             advanced: true,
             battery: true,
             shader_pack: "horizon-sample".into(),
+            api: GraphicsApi::Dx12,
         };
         assert_eq!(Graphics::parse(&g.serialize()), g);
         assert_eq!(Graphics::parse(""), Graphics::default());

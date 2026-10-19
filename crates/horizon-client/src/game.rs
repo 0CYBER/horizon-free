@@ -8285,6 +8285,7 @@ impl Game<'_> {
             pack,
             gui,
             self.renderer.as_ref(),
+            self.settings.horizon.api,
         )
     }
     fn apply_settings(&mut self) {
@@ -11346,6 +11347,7 @@ fn build_renderer(
     pack: &PackResources,
     gui: &UiResources,
     previous: Option<&Renderer>,
+    api: horizon_client::graphics::GraphicsApi,
 ) -> Result<Renderer> {
     let assets = &pack.render;
     let atlas = &gui.atlas;
@@ -11362,6 +11364,7 @@ fn build_renderer(
         (&pack.forcefield.2, pack.forcefield.0),
         &gui.panorama,
         previous,
+        api,
     ))?;
     renderer.hud.fire_animations = atlas
         .fire_animations
@@ -11379,6 +11382,7 @@ fn loading_renderer(
     offscreen: bool,
     gui: Option<&UiResources>,
     previous: Option<&Renderer>,
+    api: horizon_client::graphics::GraphicsApi,
 ) -> Result<Renderer> {
     static FORCEFIELD: [u8; 4] = [0; 4];
     static EMPTY_HUD: [u8; 4] = [0, 0, 0, 255];
@@ -11405,6 +11409,7 @@ fn loading_renderer(
         (&FORCEFIELD[..], 1),
         panorama,
         previous,
+        api,
     ))?;
     if let Some(atlas) = atlas {
         renderer.hud.fire_animations = atlas
@@ -11670,7 +11675,13 @@ impl Loading {
             }
         };
         let offscreen = self.options.as_ref().is_some_and(|o| o.offscreen);
-        match loading_renderer(window.clone(), offscreen, self.gui.as_ref(), None) {
+        match loading_renderer(
+            window.clone(),
+            offscreen,
+            self.gui.as_ref(),
+            None,
+            self.settings.horizon.api,
+        ) {
             Ok(r) => self.renderer = Some(r),
             Err(e) => {
                 self.error = Some(e);
@@ -11712,7 +11723,13 @@ impl Loading {
         if let Some(renderer) = &mut self.renderer {
             renderer.release_surface();
         }
-        match loading_renderer(window, offscreen, self.gui.as_ref(), self.renderer.as_ref()) {
+        match loading_renderer(
+            window,
+            offscreen,
+            self.gui.as_ref(),
+            self.renderer.as_ref(),
+            self.settings.horizon.api,
+        ) {
             Ok(r) => {
                 self.settings
                     .clamp_gui_scale([r.config.width as i32, r.config.height as i32]);
@@ -11783,6 +11800,7 @@ impl Loading {
             &loaded.pack,
             &gui,
             self.renderer.as_ref(),
+            self.settings.horizon.api,
         )?;
         log::info!(
             "Horizon: world renderer ready after {} ms",
