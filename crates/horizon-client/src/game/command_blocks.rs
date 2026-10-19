@@ -356,7 +356,7 @@ impl Game<'_> {
                 eyes: false,
                 silent: false,
                 store: None,
-                elsewhere: false,
+                dimension: self.dim,
                 level: None,
                 block: Some(pos),
             };
