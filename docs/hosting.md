@@ -13,7 +13,10 @@ plan are in [docs/server.md](https://github.com/ludovic111/horizon/blob/main/doc
 - **Names you add are accounts** (release v2026.10.17.14 and newer). `init --player`, `horizon-server
   whitelist add` and `op`, and the console's `whitelist add`, `op` and `ban` look a name up the way vanilla
   does: players already seen (kept in `usercache.json`), then Mojang's profile service. In online mode a name
-  with no account is refused. So you can whitelist friends before they first join.
+  with no account is refused. So you can whitelist friends before they first join. On an offline server,
+  `horizon-server whitelist add` always writes the offline UUID, the one the player joins with, also while
+  the server runs (it writes the entry and the game reloads the list): the console's own `whitelist add`
+  takes the account's UUID when someone owns that name, as vanilla does, and that player is then refused.
 - **Horizon's own client can't sign in to a Microsoft account yet.** That needs an Azure app registration and
   Mojang's approval, which the project doesn't have
   ([docs/microsoft-account.md](https://github.com/ludovic111/horizon/blob/main/docs/microsoft-account.md)).
