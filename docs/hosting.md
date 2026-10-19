@@ -199,11 +199,13 @@ horizon-server op|deop NAME
 horizon-server whitelist on|off|list
 horizon-server whitelist add|remove NAME
 horizon-server backup [NAME]             back up now
-horizon-server backups                   list the backups
+horizon-server backups [--json]          list the backups
 horizon-server restore BACKUP [--yes]
 horizon-server service install|uninstall|print [--system]
 horizon-server panel                     a one-time login link for the web panel
 horizon-server import FILE               server.toml from a vanilla server.properties
+horizon-server config [--json]           the settings in server.toml
+horizon-server config set KEY=VALUE...   change settings, checked first (below)
 horizon-server update [--check]          install the newest release and restart on it (below)
 horizon-server rollback                  back to the release before
 ```
@@ -211,6 +213,13 @@ horizon-server rollback                  back to the release before
 While the server runs, `op`, `whitelist` and `cmd` go to the game's console, so they act exactly as vanilla's
 console commands do. While it's stopped, they edit vanilla's files directly. Any console command works through
 `cmd`: `horizon-server cmd ban Griefer`, `horizon-server cmd say Restarting in 5 minutes`.
+
+`config set` changes `server.toml` without opening it: `horizon-server config set world.difficulty=hard
+server.max_players=10`. Each key is a section and a name from the file (`properties.spawn-protection=0` for any
+other vanilla key). The values are checked as the server checks them, and nothing is written if one is wrong.
+A running server takes the difficulty, the default game mode, the whitelist and the backup settings at once;
+the rest applies at its next start, and `config set` says which. `--json` prints that as `saved`, `applied`
+and `restart`.
 
 The server restarts the game by itself if it crashes: after 5 s, then waiting longer each time, up to 5
 minutes. It keeps the crash report and gives up after 5 crashes in 10 minutes, and `status` says why.

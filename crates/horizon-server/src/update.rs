@@ -388,6 +388,7 @@ pub fn backup_name(tag: &str) -> String {
 /// `update [--check] [--version TAG] [--archive FILE --version TAG] [--timeout SECONDS]`.
 pub fn command(dir: &Path, args: &[String]) -> Result<(), String> {
     let mut check = false;
+    let mut as_json = false;
     let mut version = None;
     let mut archive = None;
     let mut timeout = crate::api::UPDATE_TIMEOUT;
@@ -400,6 +401,7 @@ pub fn command(dir: &Path, args: &[String]) -> Result<(), String> {
         };
         match arg.as_str() {
             "--check" => check = true,
+            "--json" => as_json = true,
             "--version" => version = Some(value()?),
             "--archive" => archive = Some(PathBuf::from(value()?)),
             "--timeout" => timeout = seconds(&value()?)?,
@@ -419,6 +421,18 @@ pub fn command(dir: &Path, args: &[String]) -> Result<(), String> {
         }
         None => {
             let release = release(version.as_deref())?;
+            if check && as_json {
+                println!(
+                    "{}",
+                    json!({
+                        "installed": current,
+                        "newest": release.tag,
+                        "available": newer(&release.tag, &current),
+                        "previous": install.previous(),
+                    })
+                );
+                return Ok(());
+            }
             if check {
                 if newer(&release.tag, &current) {
                     println!(

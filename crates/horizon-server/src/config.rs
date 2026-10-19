@@ -426,10 +426,18 @@ pub fn sync_back(dir: &Path, written: &[(String, String)]) -> Result<Vec<String>
 
 /// Sets one typed setting in `server.toml` (`whitelist on`), keeping the owner's comments.
 pub fn update(dir: &Path, section: &str, field: &str, value: toml::Value) -> Result<(), String> {
+    update_all(dir, &[(section.to_owned(), field.to_owned(), value)])
+}
+
+/// Sets settings in `server.toml`, keeping the owner's comments; nothing is written unless the result is
+/// a valid configuration.
+pub fn update_all(dir: &Path, changes: &[(String, String, toml::Value)]) -> Result<(), String> {
     let path = dir.join(FILE);
     let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e| format!("{e}"))?;
-    set(&mut doc, section, field, &value);
+    for (section, field, value) in changes {
+        set(&mut doc, section, field, value);
+    }
     let updated = doc.to_string();
     Config::parse(&updated)?;
     std::fs::write(&path, updated).map_err(|e| e.to_string())
@@ -483,7 +491,7 @@ fn typed_value(text: &str, like: &toml::Value) -> Option<toml::Value> {
 }
 
 /// A server.properties value for `[properties]`: a boolean or a number when it reads back the same.
-fn loose_value(text: &str) -> toml::Value {
+pub fn loose_value(text: &str) -> toml::Value {
     match text {
         "true" => toml::Value::Boolean(true),
         "false" => toml::Value::Boolean(false),
