@@ -1279,15 +1279,23 @@ where
         self.pipeline.generation()
     }
     fn noise_biome(&mut self, quart: [i32; 3]) -> BiomeId {
+        self.noise_biomes(&[quart])[0]
+    }
+    fn noise_biomes(&mut self, quarts: &[[i32; 3]]) -> Vec<BiomeId> {
         let mut resolver = self.pipeline.source.resolver(
             &self.pipeline.climate,
             self.pipeline.router.get(RouterField::Erosion).as_ref(),
         );
-        resolver
-            .sample(&mut self.worker.carver_context, quart)
-            .ok()
-            .and_then(|name| self.pipeline.data.biome_id(name))
-            .unwrap_or(BiomeId(0))
+        quarts
+            .iter()
+            .map(|&quart| {
+                resolver
+                    .sample(&mut self.worker.carver_context, quart)
+                    .ok()
+                    .and_then(|name| self.pipeline.data.biome_id(name))
+                    .unwrap_or(BiomeId(0))
+            })
+            .collect()
     }
     fn set_valid_biomes(&mut self, biomes: &BTreeSet<BiomeId>) {
         self.valid = biomes.clone();
@@ -2011,10 +2019,8 @@ mod tests {
         assert_eq!(second.state.carver_biomes, expected);
     }
 
-    /// Generators of one seed and dimension share their ring positions;
-    /// another seed or generator gets its own, and old entries go.
-    #[test]
-    fn ring_positions_are_shared_by_seed_and_dimension() {
+    /// The prepared worldgen data, if this checkout has it.
+    fn prepared_data() -> Option<Arc<GeneratorData>> {
         let root = std::env::var_os("HORIZON_RESOURCES")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| {
@@ -2022,12 +2028,46 @@ mod tests {
             });
         if !root.join("worldgen/world_presets.json").exists() {
             eprintln!("skipping: no worldgen bundle at {}", root.display());
-            return;
+            return None;
         }
         let registry: &'static BlockRegistry = Box::leak(Box::new(
             crate::level::data::load_registry(&root).expect("registry"),
         ));
-        let data = GeneratorData::load(&root.join("worldgen"), registry).expect("worldgen data");
+        Some(GeneratorData::load(&root.join("worldgen"), registry).expect("worldgen data"))
+    }
+
+    /// Seed 1234's strongholds where vanilla 26.3 puts them
+    /// (VanillaStructureStartOracle with HORIZON_RINGS). Each search sampled
+    /// its quarts through fresh resolvers, which broke climate ties their own
+    /// way: three of the 128 were up to 6 chunks off.
+    #[test]
+    fn stronghold_rings_match_vanilla() {
+        let Some(data) = prepared_data() else {
+            return;
+        };
+        let generator = OverworldGenerator::new(data, 1234).expect("generator");
+        generator.worker().structure_starts(ChunkPos::new(0, 0));
+        let rings = generator
+            .ring_positions("minecraft:strongholds")
+            .expect("ring positions");
+        assert_eq!(rings.len(), 128);
+        for (i, x, z) in [
+            (0, -100, -125),
+            (1, 131, -12),
+            (111, 1190, -560),
+            (113, 1305, -112),
+        ] {
+            assert_eq!(rings[i], ChunkPos::new(x, z), "stronghold {i}");
+        }
+    }
+
+    /// Generators of one seed and dimension share their ring positions;
+    /// another seed or generator gets its own, and old entries go.
+    #[test]
+    fn ring_positions_are_shared_by_seed_and_dimension() {
+        let Some(data) = prepared_data() else {
+            return;
+        };
         let first = OverworldGenerator::new(data.clone(), 1234).expect("generator");
         let again = OverworldGenerator::new(data.clone(), 1234).expect("generator");
         {
