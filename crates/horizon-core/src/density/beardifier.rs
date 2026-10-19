@@ -2,7 +2,7 @@
 //! Discovery/filtering of live structure starts is a separate world subsystem.
 use super::{DensitySampler, SampleError, SamplerContext, check_buffer};
 use crate::noise::DensityVolume;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StructureBounds {
@@ -52,10 +52,93 @@ pub struct JigsawJunction {
     pub source_z: i32,
 }
 
+/// A structure library's terrain kernel: YUNG's API's and MoogsStructureLib's
+/// enhanced terrain adaptation (EnhancedTerrainAdaptation.computeDensityFactor).
+/// Like vanilla's beard, but with its own size and falloff, and an action
+/// above the piece's floor and one below it: bury adds terrain, carve takes
+/// it away.
+#[derive(Debug)]
+pub struct TerrainKernel {
+    size: i32,
+    /// Density sign above the floor and below it: 1 buries, -1 carves, 0 none.
+    top: i32,
+    bottom: i32,
+    weights: Vec<f32>,
+}
+impl TerrainKernel {
+    /// A kernel `size` blocks across whose weights fall off as
+    /// e^(-d²/`distance`). Size 0 is the libraries' NONE: no density.
+    pub fn new(size: i32, distance: i32, top: i32, bottom: i32) -> Self {
+        let size = size.max(0);
+        let radius = size / 2;
+        let mut weights = vec![0.; (size as usize).pow(3)];
+        for x in 0..size {
+            for y in 0..size {
+                for z in 0..size {
+                    let (kx, ky, kz) = (
+                        f64::from(x - radius),
+                        f64::from(y - radius) + 0.5,
+                        f64::from(z - radius),
+                    );
+                    let squared = kx * kx + ky * ky + kz * kz;
+                    weights[((z * size + x) * size + y) as usize] =
+                        crate::jmath::pow(std::f64::consts::E, -squared / f64::from(distance))
+                            as f32;
+                }
+            }
+        }
+        Self {
+            size,
+            top,
+            bottom,
+            weights,
+        }
+    }
+    pub fn radius(&self) -> i32 {
+        self.size / 2
+    }
+    /// The libraries' NONE: no kernel at all.
+    pub fn is_none(&self) -> bool {
+        self.size == 0
+    }
+    /// The density at (`dx`, `dy`, `dz`) from the nearest point of a piece
+    /// (or a junction), `floor` blocks above the piece's floor.
+    fn factor(&self, dx: i32, dy: i32, dz: i32, floor: i32) -> f64 {
+        let radius = self.radius();
+        let k = [dx, dy, dz].map(|v| v.wrapping_add(radius));
+        if k.iter().any(|v| !(0..self.size).contains(v)) {
+            return 0.;
+        }
+        let weight = self.weights[((k[2] * self.size + k[0]) * self.size + k[1]) as usize];
+        let floor = f64::from(floor) + 0.5;
+        let squared = f64::from(dx) * f64::from(dx) + floor * floor + f64::from(dz) * f64::from(dz);
+        // Mth.invSqrt(double): 1 / sqrt, not vanilla beard's fast estimate.
+        let multiplier = (floor * (1. / (squared / 2.).sqrt()) / 2.).abs();
+        let sign = if floor > 0. { self.top } else { self.bottom };
+        multiplier * f64::from(weight) * f64::from(sign)
+    }
+}
+/// A rigid piece's box under a terrain kernel (already moved, padded or cut
+/// to a band as the piece's adaptation says).
+#[derive(Clone, Debug)]
+pub struct KernelPiece {
+    pub bounds: StructureBounds,
+    pub kernel: Arc<TerrainKernel>,
+}
+/// A jigsaw junction under a terrain kernel; `source` holds the ground
+/// height with the adaptation's offset.
+#[derive(Clone, Debug)]
+pub struct KernelJunction {
+    pub source: [i32; 3],
+    pub kernel: Arc<TerrainKernel>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Beardifier {
     pieces: Vec<RigidPiece>,
     junctions: Vec<JigsawJunction>,
+    kernel_pieces: Vec<KernelPiece>,
+    kernel_junctions: Vec<KernelJunction>,
     affected: Option<StructureBounds>,
 }
 impl Beardifier {
@@ -70,7 +153,20 @@ impl Beardifier {
             pieces,
             junctions,
             affected,
+            ..Self::default()
         }
+    }
+    /// Adds terrain kernels' pieces and junctions, summed after vanilla's
+    /// density in double precision as the libraries' Beardifier mixins do.
+    /// `affected` must cover them.
+    pub fn with_kernels(
+        mut self,
+        pieces: Vec<KernelPiece>,
+        junctions: Vec<KernelJunction>,
+    ) -> Self {
+        self.kernel_pieces = pieces;
+        self.kernel_junctions = junctions;
+        self
     }
     pub fn affected_bounds(&self) -> Option<StructureBounds> {
         self.affected
@@ -114,7 +210,30 @@ impl Beardifier {
             let dz = z.wrapping_sub(junction.source_z);
             value += beard(kernel, dx, dy, dz, dy) * 0.4;
         }
-        value
+        if self.kernel_pieces.is_empty() && self.kernel_junctions.is_empty() {
+            return value;
+        }
+        let mut density = f64::from(value);
+        for piece in &self.kernel_pieces {
+            let (low, high) = (piece.bounds.minimum, piece.bounds.maximum);
+            let d: [i32; 3] = std::array::from_fn(|i| {
+                0.max(
+                    low[i]
+                        .wrapping_sub([x, y, z][i])
+                        .max([x, y, z][i].wrapping_sub(high[i])),
+                )
+            });
+            density += piece
+                .kernel
+                .factor(d[0], d[1], d[2], y.wrapping_sub(low[1]))
+                * 0.8;
+        }
+        for junction in &self.kernel_junctions {
+            let d: [i32; 3] =
+                std::array::from_fn(|i| [x, y, z][i].wrapping_sub(junction.source[i]));
+            density += junction.kernel.factor(d[0], d[1], d[2], d[1]) * 0.4;
+        }
+        density as f32
     }
 }
 impl DensitySampler for Beardifier {
@@ -214,4 +333,55 @@ fn kernel() -> &'static [f32; 13824] {
             crate::jmath::pow(std::f64::consts::E, -squared / 16.) as f32
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample(beardifier: &Beardifier, position: [i32; 3]) -> f32 {
+        beardifier
+            .sample_value(&mut SamplerContext::default(), position)
+            .unwrap()
+    }
+
+    /// YUNG's carved top (kernel 24, distance 24, carve above, nothing
+    /// below) around a 5-block cube, values worked out from
+    /// EnhancedTerrainAdaptation.computeDensityFactor.
+    #[test]
+    fn kernel_pieces_carve_above_the_floor_only() {
+        let kernel = Arc::new(TerrainKernel::new(24, 24, -1, 0));
+        let bounds = StructureBounds::new([0; 3], [4; 3]).unwrap();
+        let affected = StructureBounds::new([-20; 3], [20; 3]);
+        let b = Beardifier::new(Vec::new(), Vec::new(), affected)
+            .with_kernels(vec![KernelPiece { bounds, kernel }], Vec::new());
+        // Inside, on the floor: |0.5 / sqrt(0.125) / 2| * e^(-0.25/24) * -0.8.
+        assert!((sample(&b, [2, 0, 2]) + 0.559_823_4).abs() < 1e-6);
+        // Three blocks east: |0.5 / sqrt(4.625) / 2| * e^(-9.25/24) * -0.8.
+        assert!((sample(&b, [7, 0, 2]) + 0.063_254_3).abs() < 1e-6);
+        // Below the floor the bottom action (none) applies; past the radius
+        // nothing does.
+        assert_eq!(sample(&b, [2, -3, 2]), 0.);
+        assert_eq!(sample(&b, [17, 2, 2]), 0.);
+    }
+
+    #[test]
+    fn kernel_junctions_bury_at_four_tenths() {
+        let kernel = Arc::new(TerrainKernel::new(24, 24, 1, 1));
+        let b = Beardifier::new(
+            Vec::new(),
+            Vec::new(),
+            StructureBounds::new([-20; 3], [80; 3]),
+        )
+        .with_kernels(
+            Vec::new(),
+            vec![KernelJunction {
+                source: [0, 64, 0],
+                kernel,
+            }],
+        );
+        assert!((sample(&b, [0, 64, 0]) - 0.279_911_7).abs() < 1e-6);
+        assert!(sample(&b, [0, 60, 0]) > 0.);
+        assert!(TerrainKernel::new(0, 0, 1, 1).is_none());
+    }
 }
