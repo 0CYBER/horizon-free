@@ -1730,7 +1730,12 @@ impl Launcher {
                     cx,
                     move |this| this.api_command(format!("ban {n3}")),
                 ));
-            let ping = p.ping.map(|ms| format!("{ms} ms ping")).unwrap_or_default();
+            let ping = p.ping.map(|ms| format!("{ms} ms ping"));
+            let about = match (op, ping) {
+                (true, Some(ping)) => Some(format!("Operator · {ping}")),
+                (true, None) => Some("Operator".to_string()),
+                (false, ping) => ping,
+            };
             online = online.child(
                 div()
                     .flex()
@@ -1747,11 +1752,9 @@ impl Launcher {
                             .flex_col()
                             .flex_1()
                             .child(text(theme::UI).text_color(t.ink).child(p.name.clone()))
-                            .child(text(theme::CAPTION).text_color(t.muted).child(if op {
-                                format!("Operator · {ping}")
-                            } else {
-                                ping
-                            })),
+                            .children(
+                                about.map(|a| text(theme::CAPTION).text_color(t.muted).child(a)),
+                            ),
                     )
                     .child(actions),
             );
@@ -2444,46 +2447,17 @@ impl Launcher {
                 &t,
             ));
         }
-        let mut tab = div()
-            .flex()
-            .flex_col()
-            .gap(px(20.))
-            .child(
-                div().flex().items_center().gap(px(16.)).child(now).child(
-                    text(theme::CAPTION)
-                        .text_color(t.muted)
-                        .child(if status.running() {
-                            "Players stay online: the world is saved, then zipped."
-                        } else {
-                            "Zips the world and the server's settings into its backups folder."
-                        }),
-                ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(14.))
-                    .child(toggle)
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .child(
-                                text(theme::UI)
-                                    .text_color(t.ink)
-                                    .child("Back up automatically"),
-                            )
-                            .child(text(theme::CAPTION).text_color(t.muted).child(if auto {
-                                format!(
-                                    "On: every {every} while the server runs, keeping the last \
-                                     {keep}. Backups you make yourself are never deleted."
-                                )
-                            } else {
-                                "Off: only the backups you make.".to_string()
-                            })),
-                    ),
-            );
+        let mut tab = div().flex().flex_col().gap(px(20.)).child(
+            div().flex().items_center().gap(px(16.)).child(now).child(
+                text(theme::CAPTION)
+                    .text_color(t.muted)
+                    .child(if status.running() {
+                        "Players stay online: the world is saved, then zipped."
+                    } else {
+                        "Zips the world and the server's settings into its backups folder."
+                    }),
+            ),
+        );
         if self.older_horizon() {
             return tab
                 .child(text(theme::UI).text_color(t.muted).child(
@@ -2492,6 +2466,31 @@ impl Launcher {
                 ))
                 .child(self.updates_section(status, cx));
         }
+        tab = tab.child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(14.))
+                .child(toggle)
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            text(theme::UI)
+                                .text_color(t.ink)
+                                .child("Back up automatically"),
+                        )
+                        .child(text(theme::CAPTION).text_color(t.muted).child(if auto {
+                            format!(
+                                "On: every {every} while the server runs, keeping the last \
+                                     {keep}. Backups you make yourself are never deleted."
+                            )
+                        } else {
+                            "Off: only the backups you make.".to_string()
+                        })),
+                ),
+        );
         if self.servers.confirm_restore.is_some() {
             tab = tab.child(notice(
                 "Restoring replaces the world with this backup. The world as it is now isn't \
