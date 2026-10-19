@@ -17,6 +17,10 @@ serde_json = "1"
 toml = "1.1"
 # Edits server.toml in place, keeping the owner's comments and order.
 toml_edit = "0.25"
+# Updates: the release from GitHub, checked against the SHA-256 GitHub publishes (both already in the
+# lockfile, ureq through horizon-server-files).
+sha2 = "0.10"
+ureq = { version = "2", default-features = false, features = ["tls"] }
 # Backups: one zip anyone can open, Windows included.
 zip = { version = "2", default-features = false, features = ["deflate"] }
 

@@ -204,6 +204,8 @@ horizon-server restore BACKUP [--yes]
 horizon-server service install|uninstall|print [--system]
 horizon-server panel                     a one-time login link for the web panel
 horizon-server import FILE               server.toml from a vanilla server.properties
+horizon-server update [--check]          install the newest release and restart on it (below)
+horizon-server rollback                  back to the release before
 ```
 
 While the server runs, `op`, `whitelist` and `cmd` go to the game's console, so they act exactly as vanilla's
@@ -213,14 +215,31 @@ console commands do. While it's stopped, they edit vanilla's files directly. Any
 The server restarts the game by itself if it crashes: after 5 s, then waiting longer each time, up to 5
 minutes. It keeps the crash report and gives up after 5 crashes in 10 minutes, and `status` says why.
 
-Coming: `update` and `rollback`, `console` (attach to a server running in the background), `ban` and
-`pardon` as their own commands, and `mcp` (an MCP server so an AI assistant can run the server).
+**Updates** (a server installed with the install script). The server checks for a newer release a minute
+after it starts and every 6 hours after, and says so in its log, in `status` and in the panel; it never
+updates by itself. `horizon-server update --check` asks once. `horizon-server update`:
+
+1. downloads the newest release and checks it against the SHA-256 GitHub publishes for it;
+2. stops the game, backs up the world (`backups/<time>-before-<release>.zip`) and switches to the new
+   release;
+3. starts the game on it and waits up to 5 minutes (`--timeout SECONDS`) for it to come up.
+
+If the new game crashes or doesn't come up in time, the server goes back to the release it was on by itself
+and puts the world back as it was just before the switch (the world the new game left is kept in
+`backups/`). `horizon-server rollback` goes back to the release before by hand, keeping the world as it is
+(it backs it up first). `--version vX.Y.Z` installs a given release, and `--archive FILE --version NAME` an
+archive you have, such as your own build. A stopped server is switched and starts on the new release next
+time. Set `HORIZON_NO_UPDATE_CHECK=1` in the server's environment to turn the check off.
+
+Coming: `console` (attach to a server running in the background), `ban` and `pardon` as their own
+commands, and `mcp` (an MCP server so an AI assistant can run the server).
 
 ## 6. Web panel
 
 The panel runs inside `horizon-server` while the server runs. It shows live TPS, MSPT, RAM and CPU graphs for
 the last 10 minutes, the players with their ping (and a kick button), the console with a command line, and the
-backups (back up now, restore with a confirmation), with Restart and Stop.
+backups (back up now, restore with a confirmation), with Restart and Stop. When a newer release is out it says
+so, with an Update button that runs `horizon-server update` (section 5), and shows how it went.
 
 ```sh
 horizon-server panel

@@ -1563,8 +1563,10 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "sha2",
  "toml",
  "toml_edit",
+ "ureq",
  "windows-sys 0.61.2",
  "zip",
 ]
