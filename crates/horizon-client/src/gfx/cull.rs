@@ -273,7 +273,9 @@ impl Cull {
             }
             let mapped = r.buffer.slice(..r.slots.len() as u64 * 4);
             if let Ok(data) = mapped.get_mapped_range() {
-                let results: &[u32] = bytemuck::cast_slice(&data);
+                // The mapping isn't guaranteed to be 4-byte aligned (a Vega 11
+                // on Windows panicked in cast_slice), so copy the words out.
+                let results: Vec<u32> = bytemuck::pod_collect_to_vec(&data);
                 let (mut hidden, mut indices) = (0, 0u64);
                 for (&result, &n) in results.iter().zip(&r.indices) {
                     if result != r.stamp {
@@ -283,7 +285,7 @@ impl Cull {
                 }
                 let share = indices as f32 / r.total.max(1) as f32;
                 self.hidden = ([hidden, results.len()], share);
-                for (&slot, &result) in r.slots.iter().zip(results) {
+                for (&slot, &result) in r.slots.iter().zip(&results) {
                     let slot = slot as usize;
                     if slot >= self.seen.len() {
                         self.seen.resize(slot + 1, false);
