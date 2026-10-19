@@ -1,6 +1,11 @@
 //! `op`, `deop` and `whitelist`. While the server runs, the game owns the lists: the command goes to its
 //! console. While it is stopped, they edit vanilla's files with the code the game reads them with
 //! (horizon-server-files) and answer with vanilla's console messages.
+//!
+//! One exception: `whitelist add` on a running offline server. The game asks Mojang for the name first, as
+//! vanilla does, so a name someone owns gets that account's UUID, and the player, who joins under the
+//! offline UUID, is still refused. There the offline entry is written to whitelist.json and the game
+//! reloads it (`whitelist reload`), as it would be written while the server is stopped.
 
 use crate::{config, supervisor};
 use horizon_server_files::user_lists::{NameAndId, OpEntry, OpList, WhiteEntry, WhiteList};
@@ -10,6 +15,12 @@ pub fn run(dir: &Path, command: &str, args: &[String]) -> Result<(), String> {
     let config = config::Config::load(dir)?;
     // Holding the folder's lock keeps the server from starting halfway through.
     let Ok(_lock) = supervisor::lock(dir) else {
+        if let ("whitelist", [add, name]) = (command, args)
+            && add == "add"
+            && !config.server.online_mode
+        {
+            return add_offline(dir, name);
+        }
         let mut words = vec![command.to_owned()];
         words.extend_from_slice(args);
         return crate::cli::command(dir, &words);
@@ -99,6 +110,26 @@ pub fn run(dir: &Path, command: &str, args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// `whitelist add` on a running offline server: the offline entry, then the game reloads the list.
+fn add_offline(dir: &Path, name: &str) -> Result<(), String> {
+    if crate::api::Client::open(dir)?.is_none() {
+        return Err(format!("no server is running in {}", dir.display()));
+    }
+    let user = account(name, false)?;
+    let mut white = load(WhiteList::new(dir.join("whitelist.json")))?;
+    if white.contains(&user) {
+        println!("Player is already whitelisted");
+        return Ok(());
+    }
+    white.add(WhiteEntry { user });
+    white
+        .save()
+        .map_err(|e| format!("{}: {e}", white.file.display()))?;
+    crate::cli::command(dir, &["whitelist".to_owned(), "reload".to_owned()])?;
+    println!("Added {name} to the whitelist");
+    Ok(())
+}
+
 /// The profile a running server would store for `name`: the offline one, or in online mode the account the
 /// services know by that name.
 pub fn account(name: &str, online: bool) -> Result<NameAndId, String> {
@@ -161,11 +192,18 @@ mod tests {
         // A running server owns the lists: without its API, nothing changes.
         let lock = supervisor::lock(&dir).unwrap();
         assert!(run(&dir, "op", &s(&["Alex"])).is_err());
+        config::update(&dir, "server", "online_mode", toml::Value::Boolean(false)).unwrap();
+        assert!(run(&dir, "whitelist", &s(&["add", "Kai"])).is_err());
         drop(lock);
         assert!(
             !std::fs::read_to_string(dir.join("ops.json"))
                 .unwrap()
                 .contains("Alex")
+        );
+        assert!(
+            !std::fs::read_to_string(dir.join("whitelist.json"))
+                .unwrap()
+                .contains("Kai")
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }

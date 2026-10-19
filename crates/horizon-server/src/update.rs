@@ -368,8 +368,11 @@ pub fn unpack(install: &Install, archive: &Path, tag: &str) -> Result<PathBuf, S
                 .and_then(|mut z| z.extract(&scratch))
                 .map_err(|e| format!("{}: {e}", archive.display()))?;
         } else if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
-            // tar is on every Linux and macOS, and on Windows 10 and later.
+            // tar is on every Linux and macOS, and on Windows 10 and later. The files are the
+            // user's, not the archive's owners: as root in a user namespace (an unprivileged LXC
+            // or rootless container) taking those fails, and as plain root they'd be strangers'.
             let status = Command::new("tar")
+                .arg("--no-same-owner")
                 .arg("-xzf")
                 .arg(archive)
                 .arg("-C")
@@ -455,6 +458,7 @@ pub fn backup_name(tag: &str) -> String {
 /// `update [--check] [--version TAG] [--archive FILE --version TAG] [--timeout SECONDS]`.
 pub fn command(dir: &Path, args: &[String]) -> Result<(), String> {
     let mut check = false;
+    let mut as_json = false;
     let mut version = None;
     let mut archive = None;
     let mut timeout = crate::api::UPDATE_TIMEOUT;
@@ -467,6 +471,7 @@ pub fn command(dir: &Path, args: &[String]) -> Result<(), String> {
         };
         match arg.as_str() {
             "--check" => check = true,
+            "--json" => as_json = true,
             "--version" => version = Some(value()?),
             "--archive" => archive = Some(PathBuf::from(value()?)),
             "--timeout" => timeout = seconds(&value()?)?,
@@ -486,6 +491,18 @@ pub fn command(dir: &Path, args: &[String]) -> Result<(), String> {
         }
         None => {
             let release = release(version.as_deref())?;
+            if check && as_json {
+                println!(
+                    "{}",
+                    json!({
+                        "installed": current,
+                        "newest": release.tag,
+                        "available": newer(&release.tag, &current),
+                        "previous": install.previous(),
+                    })
+                );
+                return Ok(());
+            }
             if check {
                 if newer(&release.tag, &current) {
                     println!(

@@ -308,9 +308,12 @@ a typed key set again under `[properties]` and values vanilla would refuse. Plan
   After it stops, the supervisor compares the file with what it wrote and copies any changed keys back into
   `server.toml`, so an in-game change survives the next start. Edits go through `toml_edit`, so the owner's
   comments and order are kept.
-- **Reload (planned).** The four lists already reload through the engine (`whitelist reload`). `reload` will
-  send what can change live and say which settings need a restart. A real hot reload (view distance, MOTD) needs engine
-  support and comes later.
+- **Changes without opening the file.** `horizon-server config set KEY=VALUE...` (the launcher's Servers
+  page uses it) writes through `toml_edit`, checks the result as `server.toml` is checked, and writes nothing
+  if a value is wrong. On a running server it sends what vanilla changes live through its console:
+  `difficulty`, `defaultgamemode` and `whitelist on|off`; the backup settings apply at once because the
+  supervisor reads them each time. Everything else waits for the next start, and the command says which. A
+  real hot reload (view distance, MOTD) needs engine support and comes later.
 - `server.properties`, `ops.json`, `whitelist.json`, `banned-*.json` and `world/` keep vanilla's names and
   formats. A vanilla server folder works as is, and so does going back to vanilla.
 
@@ -327,6 +330,7 @@ horizon-server op|deop <player>
 horizon-server whitelist on|off|list|add|remove [player]
 horizon-server backup [NAME]             backups             restore <backup> [--yes]
 horizon-server import <server.properties>
+horizon-server config [--json]           config set KEY=VALUE... [--json]
 horizon-server service install|uninstall|print [--system]
 horizon-server panel                     the panel's address and a one-time login link
 horizon-server update [--check] [--version vX.Y.Z] [--timeout S]     rollback [--timeout S]
