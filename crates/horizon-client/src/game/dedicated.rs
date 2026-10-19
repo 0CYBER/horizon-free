@@ -427,6 +427,8 @@ const BROADCAST: &[&str] = &[
 impl Game<'_> {
     /// DedicatedServer.initServer and MinecraftServer.runServer.
     pub(super) fn run_dedicated(&mut self) -> Result<()> {
+        // This thread ticks the server (MinecraftServer.spin's priority).
+        horizon_threads::favour_current();
         self.join_world_rest()?;
         let Setup {
             props,
