@@ -302,8 +302,34 @@ fn mesh_columns_with_edges(
         count += neighbors[side].len();
         start
     });
-    let prepared: Vec<Vec<Segment<'_>>> = columns
+    let stride = key.size() / CELLS as i32;
+    let [ox, _, oz] = key.origin();
+    // A cell meets full-detail or finer terrain: it is meshed in smaller steps.
+    let cell_step = |x: usize, z: usize| {
+        let (wx, wz) = (ox + x as i32 * stride, oz + z as i32 * stride);
+        let overlaps = covered_bounds.is_some_and(|[x0, z0, x1, z1]| {
+            wx < x1 && wx + stride > x0 && wz < z1 && wz + stride > z0
+        });
+        let mut step = if overlaps { stride.min(16) } else { stride };
+        for other in finer {
+            let [x, _, z] = other.origin();
+            if wx < x + other.size() && x < wx + stride && wz < z + other.size() && z < wz + stride
+            {
+                step = step.min(other.size());
+            }
+        }
+        step
+    };
+    let filled = fill_buried_gaps(
+        columns,
+        neighbors,
+        stride,
+        |x, z| cell_step(x, z) == stride,
+        |span| material(span, Direction::Up).fluid != 0,
+    );
+    let prepared: Vec<Vec<Segment<'_>>> = filled
         .iter()
+        .map(|column| &**column)
         .chain(neighbors.iter().flatten().map(|edge| &edge.column))
         .map(|column| {
             let materials: Vec<_> = column
@@ -342,8 +368,6 @@ fn mesh_columns_with_edges(
         })
         .collect();
     let mut faces = Faces::new();
-    let stride = key.size() / CELLS as i32;
-    let [ox, _, oz] = key.origin();
     let finer_keys: FxHashSet<_> = finer.iter().copied().collect();
     let mut finer_levels: Vec<_> = finer.iter().map(|key| key.level).collect();
     finer_levels.sort_unstable();
@@ -362,20 +386,7 @@ fn mesh_columns_with_edges(
     for z in 0..CELLS {
         for x in 0..CELLS {
             let (wx, wz) = (ox + x as i32 * stride, oz + z as i32 * stride);
-            let overlaps = covered_bounds.is_some_and(|[x0, z0, x1, z1]| {
-                wx < x1 && wx + stride > x0 && wz < z1 && wz + stride > z0
-            });
-            let mut step = if overlaps { stride.min(16) } else { stride };
-            for other in finer {
-                let [x, _, z] = other.origin();
-                if wx < x + other.size()
-                    && x < wx + stride
-                    && wz < z + other.size()
-                    && z < wz + stride
-                {
-                    step = step.min(other.size());
-                }
-            }
+            let step = cell_step(x, z);
             let column = &prepared[z * CELLS + x];
             let own_sky = column.last().map_or(0, |top| top.span.light & 0xff);
             for dz in (0..stride).step_by(step as usize) {
@@ -634,6 +645,102 @@ mod refinement_tests {
         }
         assert_eq!(area, (parent.size() * parent.size() - 256) as f32);
     }
+}
+
+/// The tile's columns with the gaps no neighbour's open air reaches filled
+/// with the material below them, or the fluid above them (kelp and seagrass
+/// leave gaps in water): a cave seen from nowhere adds no faces. A
+/// gap is open when a neighbouring column's top lies below the gap's top, so
+/// that column's open air looks into it. Unknown neighbours, and cells that
+/// `whole` rejects (they meet full-detail or finer terrain), count as open;
+/// those cells keep their gaps.
+fn fill_buried_gaps<'a>(
+    columns: &'a [Column],
+    neighbors: &[Vec<EdgeColumn>; 4],
+    stride: i32,
+    whole: impl Fn(usize, usize) -> bool,
+    mut fluid: impl FnMut(&Span) -> bool,
+) -> Vec<std::borrow::Cow<'a, Column>> {
+    use std::borrow::Cow;
+    let top = |column: &Column| {
+        column
+            .spans
+            .iter()
+            .rev()
+            .find(|span| span.min < span.max)
+            .map_or(i16::MIN, |span| span.max)
+    };
+    let tops: Vec<_> = (0..CELLS * CELLS)
+        .map(|i| {
+            if whole(i % CELLS, i / CELLS) {
+                top(&columns[i])
+            } else {
+                i16::MIN
+            }
+        })
+        .collect();
+    let edge = |side: usize, cell: usize| {
+        let (start, end) = (cell as i32 * stride, (cell as i32 + 1) * stride);
+        neighbors[side]
+            .iter()
+            .filter(|edge| edge.start < end && start < edge.end)
+            .map(|edge| top(&edge.column))
+            .min()
+            .unwrap_or(i16::MIN)
+    };
+    columns
+        .iter()
+        .enumerate()
+        .map(|(i, column)| {
+            let (x, z) = (i % CELLS, i / CELLS);
+            if column.spans.len() < 2 || !whole(x, z) {
+                return Cow::Borrowed(column);
+            }
+            let open = [
+                if x > 0 { tops[i - 1] } else { edge(0, z) },
+                if x + 1 < CELLS {
+                    tops[i + 1]
+                } else {
+                    edge(1, z)
+                },
+                if z > 0 { tops[i - CELLS] } else { edge(2, x) },
+                if z + 1 < CELLS {
+                    tops[i + CELLS]
+                } else {
+                    edge(3, x)
+                },
+            ]
+            .into_iter()
+            .min()
+            .unwrap_or(i16::MIN);
+            let buried = |below: &Span, above: &Span| below.max < above.min && above.min <= open;
+            if !column
+                .spans
+                .windows(2)
+                .any(|pair| buried(&pair[0], &pair[1]))
+            {
+                return Cow::Borrowed(column);
+            }
+            let mut filled = Column {
+                surface: column.surface,
+                spans: Vec::with_capacity(column.spans.len()),
+            };
+            for &span in &column.spans {
+                let mut span = span;
+                if let Some(below) = filled.spans.last_mut()
+                    && buried(below, &span)
+                {
+                    if fluid(&span) {
+                        span.min = below.max;
+                    } else {
+                        below.max = span.min;
+                    }
+                }
+                filled.push(span);
+            }
+            Cow::Owned(filled)
+        })
+        .collect()
 }
 
 /// Adds the parts of `segment`'s side not hidden by `neighbor`, the column
@@ -1010,6 +1117,50 @@ mod tests {
         assert_eq!(cave.len(), 1);
         assert_eq!(bounds(cave[0]), (2.0, 6.0));
         assert!(cave[0].iter().all(|v| v.light == 0));
+    }
+    #[test]
+    fn caves_no_neighbor_sees_into_add_no_faces() {
+        let mut columns = columns();
+        for column in &mut columns {
+            column.spans = vec![span(0, 20, 1)];
+        }
+        let cave = 5 * CELLS + 5;
+        columns[cave].spans = vec![span(0, 8, 1), span(12, 20, 1)];
+        let at = |mesh: &SectionMesh, y: f32| {
+            mesh.solid
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .filter(|q| q.iter().all(|v| v.pos[1] == y))
+                .count()
+        };
+        // Closed on every side: filled, no floor or ceiling.
+        let closed = mesh(&columns);
+        assert_eq!((at(&closed, 8.0), at(&closed, 12.0)), (0, 0));
+        assert!(
+            closed
+                .solid
+                .iter()
+                .all(|v| v.pos[1] == 0.0 || v.pos[1] == 20.0)
+        );
+        // A lower neighbour's open air looks in: the cave stays.
+        columns[cave + 1].spans = vec![span(0, 10, 1)];
+        let open = mesh(&columns);
+        assert_eq!((at(&open, 8.0), at(&open, 12.0)), (1, 1));
+        // Kelp leaves a gap in water: water fills it, without inner faces.
+        for column in &mut columns {
+            column.spans = vec![span(0, 5, 1), span(5, 10, 2)];
+        }
+        columns[cave].spans = vec![span(0, 5, 1), span(5, 7, 2), span(8, 10, 2)];
+        let water = mesh(&columns);
+        assert!(
+            water
+                .translucent
+                .iter()
+                .all(|v| v.pos[1] != 7.0 && v.pos[1] != 8.0)
+        );
+        let uniform = mesh(&vec![columns[0].clone(); CELLS * CELLS]);
+        assert_eq!(water.translucent.len(), uniform.translucent.len());
     }
     #[test]
     fn greedy_faces_preserve_material_and_light_boundaries() {
