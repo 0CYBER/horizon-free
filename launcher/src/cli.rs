@@ -268,7 +268,7 @@ fn attached(mut cmd: Command) -> Result<(), String> {
 
 fn release_json(r: &Release) -> serde_json::Value {
     serde_json::json!({
-        "tag": r.tag, "name": r.name, "date": r.date,
+        "tag": r.tag, "name": r.name, "date": r.date, "channel": if r.beta { "beta" } else { "stable" },
         "available_here": r.asset.is_some(), "installed": backend::installed().contains(&r.tag),
     })
 }
@@ -317,7 +317,8 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                     (false, true) => "",
                     (false, false) => "no build for this platform",
                 };
-                println!("{:<14} {}  {}", r.tag, r.date, state);
+                let channel = if r.beta { "beta" } else { "stable" };
+                println!("{:<15} {}  {:<6}  {}", r.tag, r.date, channel, state);
             }
         }
         Cmd::Install { tag } => {

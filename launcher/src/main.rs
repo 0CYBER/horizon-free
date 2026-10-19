@@ -1898,6 +1898,15 @@ impl Launcher {
                 cx.notify();
             }),
         );
+        let betas = switch("beta-builds", self.settings.beta_builds, &t).on_click(cx.listener(
+            |this, _: &ClickEvent, _, cx| {
+                this.settings.beta_builds = !this.settings.beta_builds;
+                this.settings.save();
+                // What counts as new changed: check again (and install it if that is on).
+                this.check_updates();
+                cx.notify();
+            },
+        ));
         let opening = switch("opening", !self.settings.skip_opening, &t).on_click(cx.listener(
             |this, _: &ClickEvent, _, cx| {
                 this.settings.skip_opening = !this.settings.skip_opening;
@@ -2053,13 +2062,22 @@ impl Launcher {
                     ))
                     .child(index_row(
                         n + 2,
+                        "Beta builds",
+                        Some(plain(
+                            "New versions as soon as they are released, before they become stable 6 hours later. Off: only stable versions install by themselves.",
+                        )),
+                        Some(betas.into_any_element()),
+                        &t,
+                    ))
+                    .child(index_row(
+                        n + 3,
                         "Show the opening",
                         Some(plain("The wordmark, while the release list loads.")),
                         Some(opening.into_any_element()),
                         &t,
                     ))
                     .child(index_row(
-                        n + 3,
+                        n + 4,
                         "Game menus",
                         Some(plain(
                             "Classic is vanilla's own screens, with no way back inside the game: switch back here. Applies the next time the game starts.",
@@ -2067,24 +2085,24 @@ impl Launcher {
                         Some(menus.into_any_element()),
                         &t,
                     ))
-                    .child(self.game_args_row(n + 4, cx))
-                    .child(index_row(n + 5, "Horizon", Some(plain(&horizon)), horizon_action, &t))
+                    .child(self.game_args_row(n + 5, cx))
+                    .child(index_row(n + 6, "Horizon", Some(plain(&horizon)), horizon_action, &t))
                     .child(index_row(
-                        n + 6,
+                        n + 7,
                         "Launcher",
                         Some(plain(&launcher)),
                         launcher_action,
                         &t,
                     ))
                     .child(index_row(
-                        n + 7,
+                        n + 8,
                         "Data folder",
                         Some(mono(short(&backend::data_dir()))),
                         None,
                         &t,
                     ))
                     .child(index_row(
-                        n + 8,
+                        n + 9,
                         "Logs",
                         Some(mono(format!(
                             "{}  ·  crash reports beside it",
@@ -2103,7 +2121,7 @@ impl Launcher {
                     ))
                     .when(cfg!(target_os = "linux"), |d| {
                         d.child(index_row(
-                            n + 9,
+                            n + 10,
                             "Applications menu",
                             Some(plain(if self.settings.desktop_entry() {
                                 "Horizon and its icon are in your desktop's menu."
@@ -2603,7 +2621,8 @@ impl Launcher {
             let tag = release.tag.clone();
             let installed = self.installed.contains(&tag);
             let selected = self.selected() == Some(&tag);
-            let mut meta = vec![release.date.clone()];
+            let channel = if release.beta { "Beta" } else { "Stable" };
+            let mut meta = vec![channel.to_string(), release.date.clone()];
             if let Some((_, size)) = release.asset {
                 meta.push(megabytes(size));
             }
