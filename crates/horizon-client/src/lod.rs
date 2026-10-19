@@ -710,13 +710,21 @@ impl Lod {
     }
     fn apply_detail(&mut self, (cx, cz): (i32, i32), columns: &ReducedColumns) {
         self.apply_fine((cx, cz), &columns.columns);
-        for (&key, samples) in &mut self.ready {
+        // A single generated chunk cannot describe a larger cell's area
+        // (strides over 16 blocks, levels over 4); at each level up to that,
+        // only the tile holding the chunk overlaps it.
+        for level in 0..=4u8 {
+            let size = 16 << level;
+            let key = TileKey {
+                x: (cx * 16).div_euclid(size),
+                z: (cz * 16).div_euclid(size),
+                level,
+            };
+            let Some(samples) = self.ready.get_mut(&key) else {
+                continue;
+            };
             let [ox, _, oz] = key.origin();
             let stride = key.size() / 16;
-            // A single generated chunk cannot describe a larger cell's area.
-            if stride > 16 {
-                continue;
-            }
             let x0 = ((cx * 16 - ox + stride - 1).div_euclid(stride)).clamp(0, 16);
             let x1 = (((cx + 1) * 16 - ox + stride - 1).div_euclid(stride)).clamp(0, 16);
             let z0 = ((cz * 16 - oz + stride - 1).div_euclid(stride)).clamp(0, 16);
@@ -957,7 +965,14 @@ impl Lod {
                     covered: self.covered.clone(),
                     bounds: self.covered_bounds,
                 });
+                self.shared.wake.notify_all();
             }
+        }
+        self.request_detail(focus);
+        // Every sample slot busy: no tile can be requested this frame.
+        let free = SAMPLE_JOBS.saturating_sub(self.pending.len());
+        if free == 0 {
+            return meshes;
         }
         // Load desired nearby leaves directly, alongside broad fallback coverage.
         // Waiting for every ancestor/sibling made full detail take minutes to appear.
@@ -997,12 +1012,20 @@ impl Lod {
                 }
             }
         }
+        // Only the first `free` keys not already pending are taken. A key is
+        // listed at most twice (as a root and as a node), so the best
+        // `2 * (SAMPLE_JOBS + pending)` entries hold them, in order.
+        let best = 2 * (SAMPLE_JOBS + self.pending.len());
+        if wanted.len() > best {
+            wanted.select_nth_unstable(best);
+            wanted.truncate(best);
+        }
         wanted.sort_unstable();
-        fallback.sort_unstable();
         // Alternate one nearby final tile with one broad refinement tile.
         if let Some(fallback) = fallback
             .into_iter()
-            .find(|(_, _, k)| !self.pending.contains(k))
+            .filter(|(_, _, k)| !self.pending.contains(k))
+            .min()
         {
             let index = if self.sample_nearby {
                 wanted
@@ -1020,17 +1043,16 @@ impl Lod {
             .map(|(_, _, key)| key)
             .filter(|key| !self.pending.contains(key) && unique.insert(*key))
             .collect();
-        self.request_detail(focus);
-        let mut jobs = self.shared.jobs.lock().unwrap();
-        for key in wanted
-            .into_iter()
-            .take(SAMPLE_JOBS.saturating_sub(self.pending.len()))
-        {
-            self.pending.insert(key);
-            self.sample_nearby = !self.sample_nearby;
-            jobs.push_back(Job::Sample(key));
+        if !wanted.is_empty() {
+            let mut jobs = self.shared.jobs.lock().unwrap();
+            for key in wanted.into_iter().take(free) {
+                self.pending.insert(key);
+                self.sample_nearby = !self.sample_nearby;
+                jobs.push_back(Job::Sample(key));
+            }
+            drop(jobs);
+            self.shared.wake.notify_all();
         }
-        self.shared.wake.notify_all();
         meshes
     }
     fn visited_column(&self, wx: i32, wz: i32, width: i32) -> Option<&Column> {
