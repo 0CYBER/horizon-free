@@ -120,8 +120,9 @@ jobs:
         with:
           ref: ${{ needs.decide.outputs.head }}
           persist-credentials: false
-          # The Mac mini's runner keeps its target/ between runs.
-          clean: ${{ runner.environment == 'github-hosted' }}
+          # Always from a clean checkout, the Mac mini's runner too: its work folder is shared with pull requests'
+          # parity jobs, and nothing they leave may end up in a launcher release (target/ is rebuilt from scratch).
+          clean: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         if: runner.environment == 'github-hosted'

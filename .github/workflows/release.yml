@@ -102,8 +102,11 @@ jobs:
         with:
           ref: ${{ needs.decide.outputs.head }}
           persist-credentials: false
-          # On the Mac mini's runner, keep target/ (incremental) and .local/ (the prepared resources).
-          clean: ${{ runner.environment == 'github-hosted' }}
+          # Always from a clean checkout, the Mac mini's runner too: its work folder is shared with pull requests'
+          # parity jobs, and nothing they leave (target/, an untracked .cargo/config.toml, a build script's output)
+          # may end up in a release. target/ is rebuilt from scratch; .local/ is relinked by vanilla-data.sh, which
+          # keeps its preparations outside the checkout.
+          clean: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         if: runner.environment == 'github-hosted'
