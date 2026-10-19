@@ -451,6 +451,15 @@ struct Hit {
     face: [i32; 3],
     point: [f64; 3],
 }
+/// A guest's right click comes as one packet per hand and part
+/// (`Minecraft.startUseItem`): `ServerGamePacketListenerImpl.handleUseItemOn`
+/// does the block's and `ItemStack.useOn`'s part, `handleUseItem` the
+/// item's own (`Item.use`). Running both for either would use the item twice.
+#[derive(Clone, Copy)]
+enum GuestUse {
+    OnBlock(Hand),
+    Item(Hand),
+}
 
 /// The client world as seen by the vanilla block-behaviour library.
 struct GameLevel<'w> {
@@ -1354,9 +1363,8 @@ struct Game<'a> {
     saved_for_exit: bool,
     /// The block a guest is acting on (game/lan_actions.rs).
     forced_hit: Option<Hit>,
-    /// A guest's `ServerboundUseItemPacket`: the held item alone, no block
-    /// or entity (`ServerGamePacketListenerImpl.handleUseItem`).
-    lan_item_only: bool,
+    /// The part of a right click a guest's packet asks for (game/lan_actions.rs).
+    guest_use: Option<GuestUse>,
     /// Level events of this tick for the guests, and the guest acting now.
     lan_events: Vec<(i32, [i32; 3], i32, Option<u32>)>,
     /// Block events (position, b0, b1, state) and entity events (id, event,
@@ -2889,13 +2897,18 @@ impl Game<'_> {
             return Ok(None);
         }
         // A carrot or warped fungus on a stick boosts the ridden pig or strider.
-        if self.riding.is_some()
+        // A guest's use packets name one hand and touch no entity: the client
+        // sends one per hand and part of its click, and Interact for entities.
+        let guest = self.guest_use;
+        let on_block = matches!(guest, Some(GuestUse::OnBlock(_)));
+        if !on_block
+            && self.riding.is_some()
             && let Some(item) = self.held().map(|s| s.item.clone())
             && self.use_steering_stick(&item)
         {
             return Ok(Some(Hand::Main));
         }
-        if !self.lan_item_only
+        if guest.is_none()
             && (self.interact_frame()
                 || self.interact_armor_stand()
                 || self.interact_boat()
@@ -2906,12 +2919,16 @@ impl Game<'_> {
             return Ok(Some(Hand::Main));
         }
         // An EntityHitResult may fall through to Item.use, never to useItemOn.
-        let block_hit = if self.lan_item_only || self.entity_targeted() {
+        let block_hit = if matches!(guest, Some(GuestUse::Item(_))) || self.entity_targeted() {
             None
         } else {
             self.pick()
         };
-        for hand in Hand::BOTH {
+        let hands = match guest {
+            Some(GuestUse::OnBlock(hand) | GuestUse::Item(hand)) => vec![hand],
+            None => Hand::BOTH.to_vec(),
+        };
+        for hand in hands {
             if self.with_hand(hand, |game| game.use_hand(block_hit.as_ref()))? {
                 return Ok(Some(hand));
             }
@@ -2971,17 +2988,7 @@ impl Game<'_> {
                     [-1, 0, 0] => Direction::West,
                     _ => Direction::East,
                 };
-                let player = PlayerContext {
-                    yaw: self.yaw,
-                    pitch: self.pitch,
-                    may_build: self.may_build(),
-                    can_eat: self.creative
-                        || self
-                            .player
-                            .as_ref()
-                            .is_some_and(|p| p.health.food.food < 20),
-                    game_master: self.can_use_game_master_blocks(),
-                };
+                let player = self.use_context();
                 let at = Vec3::new(hit.point[0], hit.point[1], hit.point[2]);
                 let item = held.as_ref().map(|s| s.item.to_string());
                 let result = self.with_level(|b, level, ticks| {
@@ -3011,6 +3018,10 @@ impl Game<'_> {
         if block_hit.is_some() && (self.use_bone_meal(&stack)? || self.ignite_tnt(&stack)?) {
             return Ok(true);
         }
+        // A guest's UseItemOn stops at ItemStack.useOn: what Item.use does
+        // (throw, drink, eat, raise, equip) waits for its UseItem.
+        let on_block = matches!(self.guest_use, Some(GuestUse::OnBlock(_)));
+        let spawn_egg = stack.item.ends_with("_spawn_egg");
         use horizon_client::first_person::UseResult;
         let swings = self.swings_started;
         match self.use_tool(&stack, block_hit.is_some())? {
@@ -3023,30 +3034,33 @@ impl Game<'_> {
             UseResult::Fail => return Ok(true),
             UseResult::Pass => {}
         }
-        if self.use_potion_item(&stack)?
-            || ((block_hit.is_some() || !stack.item.ends_with("_spawn_egg"))
+        if (!on_block && self.use_potion_item(&stack)?)
+            || ((block_hit.is_some() || !spawn_egg)
+                && (!on_block || spawn_egg)
                 && self.throw_item(&stack)?)
         {
             return Ok(true);
         }
-        if self.raise_shield(self.held_slot())
-            || self.use_fishing_rod(&stack)
+        if !on_block
+            && (self.raise_shield(self.held_slot())
+                || self.use_fishing_rod(&stack)
             || self.use_crossbow(&stack)
             || self.use_trident(&stack)
             || self.boost_firework(&stack)
             || self.use_empty_map(&stack)
-            || self.use_book(&stack)
-            // Block items (heads, carved pumpkins) aimed at a block are
-            // placed first (useItemOn before useItem).
-            || (!(info.block.is_some() && block_hit.is_some()) && self.equip_from_hand(&stack))
+                || self.use_book(&stack)
+                // Block items (heads, carved pumpkins) aimed at a block are
+                // placed first (useItemOn before useItem).
+                || (!(info.block.is_some() && block_hit.is_some())
+                    && self.equip_from_hand(&stack)))
         {
             return Ok(true);
         }
-        if &*stack.item == "minecraft:spyglass" {
+        if !on_block && &*stack.item == "minecraft:spyglass" {
             self.use_spyglass();
             return Ok(true);
         }
-        if &*stack.item == "minecraft:bow" {
+        if !on_block && &*stack.item == "minecraft:bow" {
             if self.using.is_none()
                 && (self.creative || self.projectile_slot("minecraft:bow").is_some())
             {
@@ -3055,11 +3069,11 @@ impl Game<'_> {
             return Ok(true);
         }
         // Block foods attempt placement before starting consumption.
-        if !(info.block.is_some() && block_hit.is_some()) && self.start_eating(&info) {
+        if !on_block && !(info.block.is_some() && block_hit.is_some()) && self.start_eating(&info) {
             return Ok(true);
         }
         // BoatItem.use also performs its own fluid/block raycast.
-        if self.place_boat(&stack) {
+        if !on_block && self.place_boat(&stack) {
             return Ok(true);
         }
         if let Some(hit) = block_hit
@@ -3083,7 +3097,7 @@ impl Game<'_> {
         }
         if !self.may_build() {
             // ItemStack.useOn passes in adventure mode; useItem eats.
-            return Ok(self.start_eating(&info));
+            return Ok(!on_block && self.start_eating(&info));
         }
         let face = match hit.face {
             [0, 1, 0] => Direction::Up,
@@ -3159,6 +3173,20 @@ impl Game<'_> {
             *self.held_mut() = Some(ItemStack::new("minecraft:bucket", 1));
         }
         Ok(true)
+    }
+    /// The player as a block's `useItemOn` / `useWithoutItem` sees them.
+    fn use_context(&self) -> PlayerContext {
+        PlayerContext {
+            yaw: self.yaw,
+            pitch: self.pitch,
+            may_build: self.may_build(),
+            can_eat: self.creative
+                || self
+                    .player
+                    .as_ref()
+                    .is_some_and(|p| p.health.food.food < 20),
+            game_master: self.can_use_game_master_blocks(),
+        }
     }
     /// `Consumable.startConsuming` for a held consumable: food needs
     /// `Player.canEat` (`Consumable.canConsume`), anything else is always
@@ -7626,6 +7654,13 @@ impl Game<'_> {
         {
             return Ok(UseResult::Success { swing: true });
         }
+        // BucketItem has no useOn: a guest's UseItemOn leaves it to UseItem.
+        let bucket = horizon_client::items::bucket_contents(&stack.item);
+        if matches!(self.guest_use, Some(GuestUse::OnBlock(_)))
+            && (item == "bucket" || bucket.is_some())
+        {
+            return Ok(UseResult::Pass);
+        }
         if item == "bucket" {
             // getPlayerPOVHitResult(SOURCE_ONLY): powder snow's outline before
             // a fluid source behind it.
@@ -7684,7 +7719,6 @@ impl Game<'_> {
             return Ok(UseResult::Success { swing: true });
         }
         // BucketItem.use has its own ray, even when the crosshair hits an entity.
-        let bucket = horizon_client::items::bucket_contents(&stack.item);
         if !allow_block_actions && bucket.is_none() {
             return Ok(UseResult::Pass);
         }
@@ -10969,7 +11003,7 @@ impl<'a> Game<'a> {
             text_selection: Default::default(),
             saved_for_exit: false,
             forced_hit: None,
-            lan_item_only: false,
+            guest_use: None,
             lan_events: Vec::new(),
             lan_block_events: Vec::new(),
             lan_entity_events: Vec::new(),

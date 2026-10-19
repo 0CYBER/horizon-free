@@ -5,7 +5,7 @@
 //! blocks, attacking and the commands all behave exactly as they do for the
 //! host, and every world change they cause reaches all players through the
 //! block log, the level events and the entity tracker.
-use super::{Game, Hit, Mining, Screen, lan::LanHost};
+use super::{Game, GuestUse, Hit, Mining, Screen, lan::LanHost};
 use horizon_client::{
     command::vanilla,
     containers::BlockEntity,
@@ -766,11 +766,14 @@ impl Game<'_> {
                         f64::from(p.pos[2]) + f64::from(p.cursor[2]),
                     ],
                 };
+                let hand = if p.hand == 1 { Hand::Off } else { Hand::Main };
                 let swung = self.as_guest(host, conn, |g| {
                     g.forced_hit = Some(hit);
+                    g.guest_use = Some(GuestUse::OnBlock(hand));
                     let swings = g.swings_started;
                     let _ = g.use_item();
                     g.forced_hit = None;
+                    g.guest_use = None;
                     g.swings_started != swings
                 });
                 self.lan_swing_back(host, conn, swung);
@@ -789,14 +792,17 @@ impl Game<'_> {
                 if spectator {
                     return;
                 }
-                // handleUseItem: the client's rotation, then the item alone. What it
-                // looked at a moment ago (a block, a mob) is UseItemOn's or Interact's.
+                // handleUseItem: the client's rotation (absSnapRotationTo, which
+                // sends nothing back), then the item alone. What it looked at a
+                // moment ago (a block, a mob) is UseItemOn's or Interact's.
+                let hand = if p.hand == 1 { Hand::Off } else { Hand::Main };
+                let g = &mut host.hub.guests[gi];
+                (g.yaw, g.pitch) = (p.yaw, p.pitch);
                 let swung = self.as_guest(host, conn, |g| {
-                    (g.yaw, g.pitch) = (p.yaw, p.pitch);
-                    g.lan_item_only = true;
+                    g.guest_use = Some(GuestUse::Item(hand));
                     let swings = g.swings_started;
                     let _ = g.use_item();
-                    g.lan_item_only = false;
+                    g.guest_use = None;
                     g.swings_started != swings
                 });
                 self.lan_swing_back(host, conn, swung);

@@ -15,7 +15,8 @@ the console, runs /kill, respawns (as vanilla's LevelLoadTracker waits: until th
 chunks load start" event and the chunk under the player), sets a furnace
 beside itself, gives itself raw iron and coal, sets and asks its own score
 (`@s`), opens the furnace, shift-clicks
-the ore and the coal in and the ingot out, and leaves. The
+the ore and the coal in and the ingot out, right-clicks the ground with a
+snowball in the main hand, then in the off hand, and leaves. The
 console then runs `list` and `say` and `stop`. Compared, all of them
 exactly:
 
@@ -34,6 +35,9 @@ exactly:
   player respawned (guests' death messages aren't Horizon's yet: left out);
 - the furnace menu: its type and title, its contents, the slots each
   shift-click changes and its lit and cooking totals;
+- the snowballs each right click throws: one, though the client sends the
+  block's part and the item's of each hand as separate packets
+  (handleUseItemOn, handleUseItem);
 - the console lines about the player (an operator's command feedback, which
   vanilla broadcasts to the console, included), the chat, `list`, `say` and
   `stop`;
