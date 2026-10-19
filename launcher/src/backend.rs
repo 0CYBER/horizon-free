@@ -1008,6 +1008,63 @@ pub fn crash_summary(report: &str) -> Option<String> {
     (!error.is_empty()).then(|| error.join(" "))
 }
 
+/// The line the game prints when it has drawn its first frame.
+pub const GAME_FIRST_FRAME: &str = "Horizon: first frame";
+
+/// Whether a game's output ends in a crash while its Vulkan renderer started: an adapter line
+/// (`Horizon renderer: <GPU> (Vulkan, <type>)`) and no first frame. A native crash in a graphics
+/// driver leaves no crash report, only those lines (#746).
+pub fn vulkan_start_crashed<S: AsRef<str>>(lines: impl IntoIterator<Item = S>) -> bool {
+    let mut vulkan = false;
+    for line in lines {
+        let line = line.as_ref();
+        if line.starts_with(GAME_FIRST_FRAME) {
+            return false;
+        }
+        if let Some(adapter) = line.strip_prefix("Horizon renderer: ") {
+            // The adapter line, not one of the start's steps: "<GPU> (<backend>, <type>)".
+            if adapter.ends_with(')') && adapter.contains(" (") {
+                vulkan = adapter.contains(" (Vulkan, ");
+            }
+        }
+    }
+    vulkan
+}
+
+/// The game's graphics settings file in its home (the game's `graphics.rs`).
+const GRAPHICS_FILE: &str = "horizon-graphics.txt";
+
+/// Sets `graphicsApi:dx12` in `home`'s graphics settings when it is unset or `auto`, keeping
+/// every other line. True when it changed; a player's own `vulkan` or `dx12` stays.
+pub fn switch_to_dx12(home: &Path) -> Result<bool, String> {
+    let path = home.join(GRAPHICS_FILE);
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
+    let mut lines: Vec<String> = Vec::new();
+    let mut found = false;
+    for line in text.lines() {
+        match line.split_once(':') {
+            Some((key, value)) if key.trim() == "graphicsApi" => {
+                if value.trim() != "auto" {
+                    return Ok(false);
+                }
+                found = true;
+                lines.push("graphicsApi:dx12".to_owned());
+            }
+            _ => lines.push(line.to_owned()),
+        }
+    }
+    if !found {
+        lines.push("graphicsApi:dx12".to_owned());
+    }
+    fs::create_dir_all(home).map_err(|e| format!("{}: {e}", home.display()))?;
+    fs::write(&path, lines.join("\n") + "\n").map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(true)
+}
+
 /// The last `lines` lines of `file`, or why it cannot be read.
 fn tail_of(file: &Path, lines: usize) -> Result<String, String> {
     let bytes = fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
@@ -1917,6 +1974,55 @@ mod tests {
         assert!(props.is_some_and(|v| v
             .to_string_lossy()
             .contains("application.name = \"Horizon\"")));
+    }
+
+    #[test]
+    fn a_crash_after_the_vulkan_adapter_line_and_before_the_first_frame_is_a_start_crash() {
+        let start = [
+            "Horizon: resources loaded in 11.3s; 35723 block states, 1658 items, 67 biomes",
+            "Horizon renderer: Intel(R) HD Graphics 530 (Vulkan, IntegratedGpu)",
+        ];
+        assert!(vulkan_start_crashed(start));
+        // A step line after the adapter keeps it a start crash.
+        let step = [start[1], "Horizon renderer: creating the pipelines"];
+        assert!(vulkan_start_crashed(step));
+        // A crash after the first frame is the game's, not the renderer start's.
+        let later = [start[1], "Horizon: first frame after 812 ms"];
+        assert!(!vulkan_start_crashed(later));
+        // Already on DirectX 12, or no renderer yet: nothing to switch.
+        let dx12 = ["Horizon renderer: Intel(R) HD Graphics 530 (Dx12, IntegratedGpu)"];
+        assert!(!vulkan_start_crashed(dx12));
+        assert!(!vulkan_start_crashed(&start[..1]));
+        // Vulkan failed to open and DirectX 12 took over: its line is the last adapter.
+        assert!(!vulkan_start_crashed([start[1], dx12[0]]));
+    }
+
+    #[test]
+    fn a_renderer_start_crash_switches_auto_to_dx12_once() {
+        let home = std::env::temp_dir().join(format!("horizon-dx12-switch-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&home);
+        // No settings file yet: one with the API alone.
+        assert_eq!(switch_to_dx12(&home), Ok(true));
+        assert_eq!(
+            fs::read_to_string(home.join(GRAPHICS_FILE)).unwrap(),
+            "graphicsApi:dx12\n"
+        );
+        // Already DirectX 12, or the player's own Vulkan: left alone.
+        assert_eq!(switch_to_dx12(&home), Ok(false));
+        fs::write(home.join(GRAPHICS_FILE), "sky:false\ngraphicsApi:vulkan\n").unwrap();
+        assert_eq!(switch_to_dx12(&home), Ok(false));
+        // Auto becomes DirectX 12 and the other settings stay.
+        fs::write(
+            home.join(GRAPHICS_FILE),
+            "sky:false\ngraphicsApi:auto\nfog:true\n",
+        )
+        .unwrap();
+        assert_eq!(switch_to_dx12(&home), Ok(true));
+        assert_eq!(
+            fs::read_to_string(home.join(GRAPHICS_FILE)).unwrap(),
+            "sky:false\ngraphicsApi:dx12\nfog:true\n"
+        );
+        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]
