@@ -2290,6 +2290,12 @@ impl Launcher {
             None if self.servers.checking => {
                 disabled(button("update-check", "Checking…", Kind::Secondary, &t))
             }
+            None if !idle => disabled(button(
+                "update-check",
+                "Check for updates",
+                Kind::Secondary,
+                &t,
+            )),
             None => button("update-check", "Check for updates", Kind::Secondary, &t).on_click(
                 cx.listener(|this, _: &ClickEvent, _, cx| {
                     if let Some(dir) = this.servers.open.clone() {
