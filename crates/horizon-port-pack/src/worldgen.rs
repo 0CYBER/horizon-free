@@ -610,9 +610,8 @@ fn yung_structure(v: &mut Value, lost: &mut BTreeMap<String, usize>) {
 
 /// YUNG's single pool element as vanilla's, its rules under
 /// `horizon:yungsapi`: name and `max_count`, depth range, priority,
-/// `ignore_bounds` and its condition; its terrain adaptation under
-/// `horizon:enhanced_terrain_adaptation`. Its dead-end pool and modifiers
-/// are lost.
+/// `ignore_bounds`, its condition, dead-end pool and modifiers; its terrain
+/// adaptation under `horizon:enhanced_terrain_adaptation`.
 fn yung_element(element: &mut Value, lost: &mut BTreeMap<String, usize>) {
     let Some(o) = element.as_object_mut() else {
         return;
@@ -641,14 +640,56 @@ fn yung_element(element: &mut Value, lost: &mut BTreeMap<String, usize>) {
     if let Some(a) = o.remove(ENHANCED_TERRAIN) {
         o.insert(HORIZON_ENHANCED_TERRAIN.into(), yung_terrain(&a, lost));
     }
-    for key in ["deadend_pool", "modifiers"] {
-        let empty =
-            |x: &Value| x.as_array().is_some_and(Vec::is_empty) || x["type"] == "yungsapi:none";
-        if o.remove(key).is_some_and(|x| !empty(&x)) {
-            *lost.entry(format!("yungsapi {key}")).or_default() += 1;
-        }
+    if let Some(pool) = o.remove("deadend_pool").filter(Value::is_string) {
+        rules.insert("deadend_pool".into(), pool);
+    }
+    let modifiers: Vec<Value> = o
+        .remove("modifiers")
+        .and_then(|m| m.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|m| yung_modifier(m, lost))
+        .collect();
+    if !modifiers.is_empty() {
+        rules.insert("modifiers".into(), modifiers.into());
     }
     o.insert("horizon:yungsapi".into(), rules.into());
+}
+
+/// One of YUNG's structure modifiers in the game's terms: its condition and
+/// its transform and delay_generation actions, on the piece itself (`self`,
+/// the API's only target). Another target loses the modifier, another action
+/// just that action.
+fn yung_modifier(m: &Value, lost: &mut BTreeMap<String, usize>) -> Option<Value> {
+    let target = m["target_selector"]["type"].as_str().unwrap_or_default();
+    if target != "yungsapi:self" {
+        *lost
+            .entry(format!("yungsapi modifier target {target}"))
+            .or_default() += 1;
+        return None;
+    }
+    let mut actions = Vec::new();
+    for a in m["actions"].as_array().into_iter().flatten() {
+        let int = |k: &str| a[k].as_i64().unwrap_or(0);
+        match a["type"].as_str().unwrap_or_default() {
+            "yungsapi:transform" => actions.push(serde_json::json!({"type": "transform",
+                "output": a["output"].clone(),
+                "offset": [int("x_offset"), int("y_offset"), int("z_offset")]})),
+            "yungsapi:delay_generation" => {
+                actions.push(serde_json::json!({"type": "delay_generation"}))
+            }
+            other => {
+                *lost
+                    .entry(format!("yungsapi modifier action {other}"))
+                    .or_default() += 1
+            }
+        }
+    }
+    let condition = match m.get("condition") {
+        Some(c) => yung_condition(c, lost),
+        None => serde_json::json!({"type": "true"}),
+    };
+    Some(serde_json::json!({"condition": condition, "actions": actions}))
 }
 
 /// YUNG's API's terrain adaptation as the game's kernel: its two presets
@@ -741,6 +782,11 @@ fn yung_condition(c: &Value, lost: &mut BTreeMap<String, usize>) -> Value {
                 "pieces": if any { Vec::new() } else { pieces },
                 "range": opt("range"), "rotation": opt("rotation")})
         }
+        // The game reads "yungsapi:all" (or no list) as any piece.
+        "piece_in_range" => serde_json::json!({"type": "piece_in_range",
+            "pieces": c.get("pieces").cloned().unwrap_or_else(|| Vec::<Value>::new().into()),
+            "horizontal_range": opt("horizontal_range"), "above_range": opt("above_range"),
+            "below_range": opt("below_range")}),
         "mod_loaded" if c["modid"] == "minecraft" => serde_json::json!({"type": "true"}),
         "mod_loaded" => serde_json::json!({"type": "false"}),
         _ => {
@@ -1366,6 +1412,14 @@ mod tests {
             "processors": "minecraft:empty", "projection": "rigid",
             "name": "room", "max_count": 2, "min_required_depth": 1, "is_priority": true,
             "ignore_bounds": false, "deadend_pool": "y:end",
+            "modifiers": [
+                {"condition": {"type": "yungsapi:piece_in_range", "pieces": ["y:pillar"],
+                    "above_range": 40},
+                 "target_selector": {"type": "yungsapi:self"},
+                 "actions": [{"type": "yungsapi:transform", "output": ["y:covered"], "x_offset": -1},
+                    {"type": "yungsapi:delay_generation"}, {"type": "yungsapi:spin"}]},
+                {"condition": {"type": "yungsapi:always_true"},
+                 "target_selector": {"type": "yungsapi:all"}, "actions": []}],
             "enhanced_terrain_adaptation": {"type": "yungsapi:carved_top_no_beard_small"},
             "condition": {"type": "yungsapi:all_of", "conditions": [
                 {"type": "yungsapi:piece_in_horizontal_direction", "pieces": ["yungsapi:all"],
@@ -1382,9 +1436,14 @@ mod tests {
                 "ignore_bounds": false, "condition": {"type": "all_of", "conditions": [
                     {"type": "piece_in_horizontal_direction", "pieces": [], "range": 5, "rotation": "none"},
                     {"type": "not", "condition": {"type": "false"}},
-                    {"type": "false"}]}})
+                    {"type": "false"}]},
+                "deadend_pool": "y:end",
+                "modifiers": [{"condition": {"type": "piece_in_range", "pieces": ["y:pillar"],
+                        "horizontal_range": null, "above_range": 40, "below_range": null},
+                    "actions": [{"type": "transform", "output": ["y:covered"], "offset": [-1, 0, 0]},
+                        {"type": "delay_generation"}]}]})
         );
-        assert!(e.get("deadend_pool").is_none());
+        assert!(e.get("deadend_pool").is_none() && e.get("modifiers").is_none());
         assert_eq!(
             e["horizon:enhanced_terrain_adaptation"],
             json!({"kernel_size": 12, "kernel_distance": 6, "top": "carve", "bottom": "none"})
@@ -1393,7 +1452,8 @@ mod tests {
             report.rules_lost,
             BTreeMap::from([
                 ("yungsapi condition yungsapi:biome".into(), 1),
-                ("yungsapi deadend_pool".into(), 1),
+                ("yungsapi modifier action yungsapi:spin".into(), 1),
+                ("yungsapi modifier target yungsapi:all".into(), 1),
             ])
         );
         assert!(report.unsupported.is_empty());
