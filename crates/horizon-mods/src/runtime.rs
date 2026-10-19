@@ -23,7 +23,7 @@ pub use bindings::horizon::mods::{
 use bindings::{
     HorizonMod,
     exports::horizon::mods::events::Registration,
-    horizon::mods::{chat, game, hud, log as mod_log},
+    horizon::mods::{chat, game, hud, log as mod_log, storage},
 };
 
 /// A mod's linear memory cap.
@@ -38,6 +38,11 @@ const FUEL_EVENT: u64 = 100_000_000;
 const CHAT_PER_CALL: usize = 8;
 const HUD_LINES: usize = 16;
 const LINE_CHARS: usize = 256;
+/// Total bytes a mod's `storage` may hold on disk, across all its keys.
+const STORAGE_QUOTA: u64 = 4 << 20;
+/// A mod's data, beside its `horizon-mods` folder (`find`'s `path.parent()`
+/// never has a manifest there, so `find` never mistakes it for a mod).
+const STORAGE_DIR: &str = ".horizon-mod-data";
 
 /// What mods may read of the game, copied once per tick by the game.
 #[derive(Clone, Debug, Default)]
@@ -97,6 +102,8 @@ struct State {
     snapshot: Arc<Snapshot>,
     out: Vec<Output>,
     panel: Option<Panel>,
+    /// Capability `storage`'s folder; made on first `set`.
+    data_dir: PathBuf,
     limits: StoreLimits,
 }
 
@@ -156,13 +163,14 @@ impl Mods {
                         // Content is read before the world loads; a mod whose
                         // content is refused stays off, with the reason.
                         let content = crate::Content::read(path, &package.manifest);
-                        entry.status = match content.and_then(|_| mods.start(&package, &reserved)) {
-                            Ok(run) => {
-                                entry.run = run;
-                                Status::Running
-                            }
-                            Err(e) => Status::Failed(e),
-                        };
+                        entry.status =
+                            match content.and_then(|_| mods.start(path, &package, &reserved)) {
+                                Ok(run) => {
+                                    entry.run = run;
+                                    Status::Running
+                                }
+                                Err(e) => Status::Failed(e),
+                            };
                     }
                 }
             }
@@ -189,8 +197,11 @@ impl Mods {
 
     /// Starts a mod's code; `Ok(None)` for a content-only mod, which has
     /// nothing to run (the game reads its content before the world loads).
+    /// `path` is the mod's own `.hmod` or folder, for capability `storage`'s
+    /// per-mod directory.
     fn start(
         &mut self,
+        path: &Path,
         package: &Package,
         reserved: &dyn Fn(&str) -> bool,
     ) -> Result<Option<Running>, String> {
@@ -217,12 +228,18 @@ impl Mods {
             .map(|(name, _)| name.to_string())
             .collect();
         m.check_imports(imports.iter().map(String::as_str))?;
+        let data_dir = path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join(STORAGE_DIR)
+            .join(&m.id);
         let state = State {
             name: m.name.clone(),
             id: m.id.clone(),
             snapshot,
             out: Vec::new(),
             panel: None,
+            data_dir,
             limits: StoreLimitsBuilder::new()
                 .memory_size(MEMORY)
                 .instances(16)
@@ -402,9 +419,10 @@ impl Mods {
             any = true;
             self.entries[i].modified = now;
             self.entries[i].run = None;
-            let started = Package::read(&self.entries[i].path).and_then(|p| {
+            let path = self.entries[i].path.clone();
+            let started = Package::read(&path).and_then(|p| {
                 self.entries[i].manifest = Some(p.manifest.clone());
-                self.start(&p, &reserved)
+                self.start(&path, &p, &reserved)
             });
             let entry = &mut self.entries[i];
             let id = entry.manifest.as_ref().map_or("?", |m| m.id.as_str());
@@ -503,4 +521,48 @@ impl hud::Host for State {
     fn clear(&mut self) {
         self.panel = None;
     }
+}
+impl storage::Host for State {
+    fn get(&mut self, key: String) -> Option<Vec<u8>> {
+        storage_key_ok(&key)
+            .then(|| std::fs::read(self.data_dir.join(&key)).ok())
+            .flatten()
+    }
+    fn set(&mut self, key: String, value: Vec<u8>) -> Result<(), String> {
+        if !storage_key_ok(&key) {
+            return Err(format!("{key:?} is not [a-z0-9_.-]{{1,64}}"));
+        }
+        // Everything already on disk but the file this call replaces.
+        let used: u64 = std::fs::read_dir(&self.data_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy() != key)
+            .filter_map(|e| e.metadata().ok())
+            .map(|m| m.len())
+            .sum();
+        if used + value.len() as u64 > STORAGE_QUOTA {
+            return Err(format!(
+                "would use over {} MiB of storage",
+                STORAGE_QUOTA >> 20
+            ));
+        }
+        std::fs::create_dir_all(&self.data_dir).map_err(|e| e.to_string())?;
+        std::fs::write(self.data_dir.join(&key), value).map_err(|e| e.to_string())
+    }
+    fn delete(&mut self, key: String) {
+        if storage_key_ok(&key) {
+            let _ = std::fs::remove_file(self.data_dir.join(&key));
+        }
+    }
+}
+
+/// A storage key: one path segment of `[a-z0-9_.-]{1,64}`, not `.` or `..`.
+/// No `/`, so a key can never leave the mod's own directory.
+fn storage_key_ok(key: &str) -> bool {
+    let chars_ok = (1..=64).contains(&key.len())
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_.-".contains(&b));
+    chars_ok && key != "." && key != ".."
 }

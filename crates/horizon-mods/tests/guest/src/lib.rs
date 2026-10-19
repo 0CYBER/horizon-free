@@ -1,7 +1,8 @@
 //! A mod for the runtime's tests: `/spin` loops forever, `/panic` panics,
-//! `/grow` asks for a gigabyte, `/hello` chats; `tick` and `frame` do
-//! nothing, to measure the cost of a call.
-use horizon_mod_sdk::{Mod, Registration, chat};
+//! `/grow` asks for a gigabyte, `/hello` chats, `/save` and `/load` exercise
+//! capability `storage`; `tick` and `frame` do nothing, to measure the cost
+//! of a call.
+use horizon_mod_sdk::{Mod, Registration, chat, storage};
 
 struct Guest {
     ticks: u64,
@@ -9,7 +10,7 @@ struct Guest {
 
 impl Mod for Guest {
     fn init() -> Result<(Self, Registration), String> {
-        let hooks = ["spin", "panic", "grow", "hello"]
+        let hooks = ["spin", "panic", "grow", "hello", "save", "load"]
             .into_iter()
             .fold(Registration::new(), Registration::command)
             .on_tick()
@@ -32,6 +33,16 @@ impl Mod for Guest {
             "grow" => {
                 let big = std::hint::black_box(vec![1u8; 1 << 30]);
                 Ok(Some(format!("{}", big.len())))
+            }
+            "save" => {
+                storage::set("note", args.as_bytes())?;
+                Ok(Some("saved".into()))
+            }
+            "load" => {
+                let text =
+                    storage::get("note").map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
+                chat::show(text.as_deref().unwrap_or("(empty)"));
+                Ok(None)
             }
             _ => {
                 chat::show(&format!("hello {args} after {} ticks", self.ticks));

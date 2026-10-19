@@ -15,7 +15,7 @@ id = "test_guest"
 name = "Test Guest"
 version = "0.1.0"
 api = "0.1"
-capabilities = ["chat"]
+capabilities = ["chat", "storage"]
 "#;
 
 /// Builds both mods once and writes their `.hmod` files; returns the folder.
@@ -133,7 +133,7 @@ fn undeclared_capabilities_are_refused() {
         .unwrap()
         .wasm
         .expect("the guest has code");
-    let manifest = GUEST_MANIFEST.replace("[\"chat\"]", "[]");
+    let manifest = GUEST_MANIFEST.replace("\"chat\", ", "");
     std::fs::write(dir.join("horizon-mod.toml"), manifest).unwrap();
     std::fs::write(dir.join("mod.wasm"), wasm).unwrap();
     let mods = Mods::load(&[dir], |_| true, |_| false);
@@ -205,6 +205,55 @@ fn hot_reload_restarts_a_changed_mod() {
         text: "hello world after 0 ticks".into(),
     };
     assert_eq!(mods.drain(), [chat]);
+}
+
+#[test]
+fn storage_persists_across_reload() {
+    let dir = mods_dir().join("storage_reload");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("guest.hmod");
+    std::fs::copy(mods_dir().join("horizon_mods_test_guest.hmod"), &path).unwrap();
+    let mut mods = Mods::load(std::slice::from_ref(&path), |_| true, |_| false);
+    assert!(mods.command("save remembered"));
+    let saved = Output::Feedback {
+        text: "saved".into(),
+        error: false,
+    };
+    assert_eq!(mods.drain(), [saved]);
+
+    // A rebuild (hot_reload_restarts_a_changed_mod's pattern): a fresh Store,
+    // but the same on-disk data directory.
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+    assert!(mods.reload_changed(|_| false));
+
+    assert!(mods.command("load"));
+    let chat = Output::Chat {
+        name: "Test Guest".into(),
+        text: "remembered".into(),
+    };
+    assert_eq!(mods.drain(), [chat]);
+}
+
+#[test]
+fn storage_quota_is_enforced() {
+    let dir = mods_dir().join("storage_quota");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("guest.hmod");
+    std::fs::copy(mods_dir().join("horizon_mods_test_guest.hmod"), &path).unwrap();
+    let mut mods = Mods::load(std::slice::from_ref(&path), |_| true, |_| false);
+    let over_quota = "a".repeat((4 << 20) + 1024);
+    assert!(mods.command(&format!("save {over_quota}")));
+    let refused = Output::Feedback {
+        text: "would use over 4 MiB of storage".into(),
+        error: true,
+    };
+    assert_eq!(mods.drain(), [refused]);
 }
 
 /// `cargo test -p horizon-mods --release -- --ignored --nocapture`: the
