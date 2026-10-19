@@ -80,6 +80,12 @@ impl ScrollWheelHandler {
     }
 }
 
+/// `MouseHandler.onScroll` with the spectator menu closed. Only vertical whole
+/// wheel steps adjust `Abilities.flyingSpeed`; horizontal scrolling does not.
+pub fn spectator_flying_speed(speed: f32, vertical_steps: i32) -> f32 {
+    (speed + vertical_steps as f32 * 0.005).clamp(0.0, 0.2)
+}
+
 /// Entity rotation as `Entity.turn` keeps it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rotation {

@@ -9925,15 +9925,25 @@ impl ApplicationHandler for Game<'_> {
                         && self.sleeping.is_none()
                         && self.player.is_some()
                         && !self.extras_scroll(d)
-                        && let Some((wheel, _)) =
+                        && let Some((wheel, (_, vertical_steps))) =
                             self.mouse
                                 .on_scroll(raw_x, raw_y, discrete, wheel_sensitivity)
                     {
-                        self.selected = horizon_client::mouse::ScrollWheelHandler::next_selection(
-                            f64::from(wheel),
-                            self.selected as i32,
-                            9,
-                        ) as usize;
+                        if self.spectator() {
+                            if let Some(player) = &mut self.player {
+                                player.flying_speed = horizon_client::mouse::spectator_flying_speed(
+                                    player.flying_speed,
+                                    vertical_steps,
+                                );
+                            }
+                        } else {
+                            self.selected =
+                                horizon_client::mouse::ScrollWheelHandler::next_selection(
+                                    f64::from(wheel),
+                                    self.selected as i32,
+                                    9,
+                                ) as usize;
+                        }
                     }
                     if self.screen == Screen::Chat && d != 0.0 {
                         self.chat_scroll(d);
