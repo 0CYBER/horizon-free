@@ -243,11 +243,22 @@ pub fn renamed_ids(v: &mut Value) -> bool {
 /// one `condition` (`all_of` for several), `functions` become `modifier`,
 /// and conditions and functions name their kind in `type`. A tool match on
 /// silk touch alone, or on shears alone, becomes 26.3's
-/// `minecraft:tool/can_silk_touch` or `minecraft:tool/can_shear`.
+/// `minecraft:tool/can_silk_touch` or `minecraft:tool/can_shear`. Number
+/// providers written as a bare `{min, max}` get their `type`
+/// ([`type_number`]).
 pub fn upgrade_loot(v: &mut Value) {
     match v {
         Value::Array(a) => a.iter_mut().for_each(upgrade_loot),
         Value::Object(o) => {
+            if let Some(Value::Array(pools)) = o.get_mut("pools") {
+                for pool in pools {
+                    for key in ["rolls", "bonus_rolls"] {
+                        if let Some(n) = pool.get_mut(key) {
+                            type_number(n);
+                        }
+                    }
+                }
+            }
             if let Some(Value::Array(mut list)) = o.remove("conditions") {
                 list.iter_mut().for_each(upgrade_condition);
                 let one = match <[Value; 1]>::try_from(list) {
@@ -259,6 +270,7 @@ pub fn upgrade_loot(v: &mut Value) {
             if let Some(Value::Array(mut list)) = o.remove("functions") {
                 for f in &mut list {
                     rename_kind(f, "function");
+                    type_function_numbers(f);
                     upgrade_loot(f);
                 }
                 o.insert("modifier".to_owned(), Value::Array(list));
@@ -270,6 +282,87 @@ pub fn upgrade_loot(v: &mut Value) {
             }
         }
         _ => {}
+    }
+}
+
+/// A number provider in 26.3's shape, in place. 1.21.1 read a `{min, max}`
+/// with no `type` as a uniform one (NumberProviders.CODEC's fallback to
+/// UniformGenerator); 26.3 dispatches on `type` alone and refuses the table.
+/// Bounds nested in a uniform or binomial one get theirs too.
+fn type_number(v: &mut Value) {
+    let Some(o) = v.as_object_mut() else {
+        return;
+    };
+    if !o.contains_key("type") && o.contains_key("min") && o.contains_key("max") {
+        o.insert("type".to_owned(), json!("minecraft:uniform"));
+    }
+    let kind = o.get("type").and_then(Value::as_str).unwrap_or_default();
+    let bounds: &[&str] = match kind.strip_prefix("minecraft:").unwrap_or(kind) {
+        "uniform" => &["min", "max"],
+        "binomial" => &["n", "p"],
+        _ => &[],
+    };
+    for key in bounds {
+        if let Some(b) = o.get_mut(*key) {
+            type_number(b);
+        }
+    }
+}
+
+/// The number providers of one loot function ([`type_number`]): the fields
+/// its 1.21.1 codec reads with NumberProviders.CODEC. Range bounds such as
+/// `limit_count`'s are providers too, the range itself is not.
+fn type_function_numbers(f: &mut Value) {
+    let kind = f["type"].as_str().unwrap_or_default().to_owned();
+    let Some(f) = f.as_object_mut() else {
+        return;
+    };
+    let mut each = |list: &str, key: &str| {
+        for x in f
+            .get_mut(list)
+            .and_then(Value::as_array_mut)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(n) = x.get_mut(key) {
+                type_number(n);
+            }
+        }
+    };
+    match kind.strip_prefix("minecraft:").unwrap_or(&kind) {
+        "set_stew_effect" => each("effects", "duration"),
+        "set_attributes" => each("modifiers", "amount"),
+        "set_enchantments" => {
+            for level in f
+                .get_mut("enchantments")
+                .and_then(Value::as_object_mut)
+                .into_iter()
+                .flatten()
+            {
+                type_number(level.1);
+            }
+        }
+        "limit_count" => {
+            if let Some(limit) = f.get_mut("limit") {
+                for key in ["min", "max"] {
+                    if let Some(n) = limit.get_mut(key) {
+                        type_number(n);
+                    }
+                }
+            }
+        }
+        k => {
+            let key = match k {
+                "set_count" | "enchanted_count_increase" => "count",
+                "set_damage" => "damage",
+                "enchant_with_levels" => "levels",
+                "set_ominous_bottle_amplifier" => "amplifier",
+                _ => return,
+            };
+            if let Some(n) = f.get_mut(key) {
+                type_number(n);
+            }
+        }
     }
 }
 
@@ -1051,6 +1144,47 @@ mod tests {
         let mut new = glass.clone();
         upgrade_loot(&mut new);
         assert_eq!(new, glass);
+    }
+
+    #[test]
+    fn types_bare_number_ranges() {
+        // When Dungeons Arise's and Structory's chests: rolls and counts as
+        // bare ranges, nested in each other or in a binomial.
+        let mut chest = json!({"pools": [{"rolls": {"min": 1, "max": 2}, "bonus_rolls": 0,
+            "entries": [{"type": "minecraft:item", "name": "minecraft:cod", "functions": [
+                {"function": "minecraft:set_count", "count": {"min": 3, "max": {"min": 5, "max": 7}}},
+                {"function": "minecraft:enchant_with_levels", "levels": {"type": "minecraft:binomial",
+                    "n": {"min": 1, "max": 3}, "p": 0.5}},
+                {"function": "minecraft:limit_count", "limit": {"min": {"min": 0, "max": 1}, "max": 4}},
+                {"function": "minecraft:set_count", "count": 2,
+                    "conditions": [{"condition": "minecraft:match_tool",
+                        "predicate": {"count": {"min": 1, "max": 3}}}]}]}]}]});
+        upgrade_loot(&mut chest);
+        let uniform =
+            |min: Value, max: Value| json!({"type": "minecraft:uniform", "min": min, "max": max});
+        let pool = &chest["pools"][0];
+        assert_eq!(pool["rolls"], uniform(json!(1), json!(2)));
+        assert_eq!(pool["bonus_rolls"], 0);
+        let modifiers = &pool["entries"][0]["modifier"];
+        assert_eq!(
+            modifiers[0]["count"],
+            uniform(json!(3), uniform(json!(5), json!(7)))
+        );
+        assert_eq!(modifiers[1]["levels"]["n"], uniform(json!(1), json!(3)));
+        // A range stays a range; its bounds are providers.
+        assert_eq!(
+            modifiers[2]["limit"],
+            json!({"min": uniform(json!(0), json!(1)), "max": 4})
+        );
+        // An item predicate's count is a range too.
+        assert_eq!(
+            modifiers[3]["condition"]["predicate"]["count"],
+            json!({"min": 1, "max": 3})
+        );
+        // Already typed, it stays as it is.
+        let mut again = chest.clone();
+        upgrade_loot(&mut again);
+        assert_eq!(again, chest);
     }
 
     #[test]

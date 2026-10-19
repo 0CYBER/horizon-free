@@ -330,7 +330,10 @@ A byte-order mark is dropped. For ATM10's 42 mods that is 19 files in 7 mods, an
 carried. No class file is copied. It upgrades from 1.21.1 to 26.3: vanilla-type recipes (ingredients), loot tables
 (`conditions` lists become one `condition`, `functions` become `modifier`, kinds move to `type`,
 tool matches on silk touch or shears become `minecraft:tool/can_silk_touch` and
-`minecraft:tool/can_shear`), and the `items/` definitions 1.21.4 introduced.
+`minecraft:tool/can_shear`, and number providers written as a bare `{"min", "max"}` get
+`"type": "minecraft:uniform"`), and the `items/` definitions 1.21.4 introduced. 1.21.1 read such
+a bare range as uniform and 26.3 refuses it: 304 of ATM10's carried tables have them (rolls,
+counts, enchantment levels), and before the carry typed them their chests came out empty or short.
 
 Blocks and items come from the NeoForge oracle when `<work>/oracle/facts.json` exists (step 6):
 every block the mod registers gets the vanilla template of the same vanilla class and states
