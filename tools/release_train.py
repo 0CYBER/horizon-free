@@ -4,6 +4,7 @@
     python3 tools/release_train.py decide --kind game [--head SHA] [--force]
     python3 tools/release_train.py decide --kind launcher
     python3 tools/release_train.py notes --kind game --tag v2026.10.15 --out dist/notes
+    python3 tools/release_train.py notes --kind game --tag v2026.10.15 --head v2026.10.15 --stable   # at promotion
 
 A kind releases when a pull request merged into main since its last published release changed one of its
 player-facing paths (GAME_PATHS, LAUNCHER_PATHS) and the newest of them merged at least DEBOUNCE ago (a burst
@@ -14,7 +15,9 @@ towards a release and aren't listed in the notes. RELEASES_PAUSED=1 (a repositor
 Game releases are tagged vYYYY.MM.DD, then .01, .02 the same UTC day; launcher releases launcher-vX.Y.Z, the
 patch after the last launcher tag, or the next minor when a merged pull request is labelled feature. Notes:
 "### New" lists the pull requests labelled feature, "### Fixed" the others, "### Known issues" the bullets of
-docs/known-issues.md. See docs/release-flow.md.
+docs/known-issues.md. Game releases go out as betas (GitHub pre-releases) and tools/release_channels.py promotes
+them to stable; a beta's notes cover what changed since the release before it (beta or stable), a promoted
+release's (--stable) everything since the last stable one. See docs/release-flow.md.
 
 Prints the decision as JSON and writes it to $GITHUB_OUTPUT when set. Needs git history and the gh CLI.
 """
@@ -55,6 +58,8 @@ LAUNCHER_IGNORED = ["launcher/links.json", "launcher/docs/", "launcher/tests/"]
 FOOTER = {
     "game": "Install or update it from the Horizon launcher: it installs new versions by itself. "
             "New here? Get the launcher at https://playhorizon.dev. You need your own copy of Minecraft: Java Edition.",
+    "beta": "This is a beta build: launchers with Beta builds turned on in Settings install it now; everyone gets it "
+            "once it has been out 6 hours without a release-blocker.",
     "launcher": "Your launcher updates itself. New here? Download the archive for your system below, extract it, "
                 "and run `horizon-launcher`. Website: https://playhorizon.dev",
 }
@@ -149,11 +154,11 @@ def pull_request(number):
     }
 
 
-def published_releases():
-    """Published (not draft, not pre-release) releases, newest first, with their tags and dates."""
+def published_releases(betas=True):
+    """Published (not draft) releases with their tags and dates; without betas (pre-releases) when betas is False."""
     releases = gh_json("api", f"repos/{REPO}/releases?per_page=100", "--paginate", "--slurp")
     flat = [release for page in releases for release in page]
-    return [release for release in flat if not release["draft"] and not release["prerelease"]]
+    return [release for release in flat if not release["draft"] and (betas or not release["prerelease"])]
 
 
 def last_release(releases, kind):
@@ -225,8 +230,8 @@ def known_issues(path=ROOT / "docs" / "known-issues.md"):
     return [line.rstrip() for line in path.read_text().splitlines() if line.startswith("- ")]
 
 
-def notes(kind, version, prs, issues):
-    """(title, body) of a release."""
+def notes(kind, version, prs, issues, beta=False):
+    """(title, body) of a release; a game beta's say it is one."""
     shown = [pr for pr in prs if pr["paths"] and "skip-release" not in pr["labels"]]
     new = [pr for pr in shown if "feature" in pr["labels"]]
     fixed = [pr for pr in shown if "feature" not in pr["labels"]]
@@ -244,14 +249,17 @@ def notes(kind, version, prs, issues):
     contributors = sorted({pr["author"] for pr in shown if pr["author"] and pr["author"] != REPO.split("/")[0]})
     if contributors:
         parts.append("Thanks to " + ", ".join(f"@{name}" for name in contributors) + ".")
+    if beta and kind == "game":
+        parts.append(FOOTER["beta"])
     parts.append(FOOTER[kind])
     parts.append(DISCLAIMER)
     return title, "\n\n".join(parts) + "\n"
 
 
-def gather(kind, head, releases=None):
-    """The last published release of this kind and the pull requests merged since, with their player-facing paths."""
-    releases = published_releases() if releases is None else releases
+def gather(kind, head, releases=None, betas=True):
+    """The last published release of this kind (stable only when betas is False) and the pull requests merged
+    since, with their player-facing paths."""
+    releases = published_releases(betas) if releases is None else releases
     last = last_release(releases, kind)
     base = last["tag_name"] if last else run("git", "rev-list", "--max-parents=0", head).split()[0]
     exporter_paths = exporters()
@@ -289,6 +297,8 @@ def main():
     parser.add_argument("--force", action="store_true", help="release even without player-facing changes, before merges settle or while paused")
     parser.add_argument("--out", type=Path, help="notes: write title.txt and body.md here")
     parser.add_argument("--now", help="the time to decide at (ISO 8601; default now)")
+    parser.add_argument("--stable", action="store_true",
+                        help="notes: for promoting a beta to stable, so since the last stable release, without the beta line")
     args = parser.parse_args()
     now = dt.datetime.fromisoformat(args.now) if args.now else dt.datetime.now(dt.timezone.utc)
 
@@ -299,10 +309,10 @@ def main():
         write_outputs({"release": "false", "reason": result["reason"]})
         return 0
     head = run("git", "rev-parse", head).strip()
-    last, prs = gather(args.kind, head)
+    last, prs = gather(args.kind, head, betas=not args.stable)
     if args.command == "notes":
         version = args.tag or "unreleased"
-        title, body = notes(args.kind, version, prs, known_issues())
+        title, body = notes(args.kind, version, prs, known_issues(), beta=not args.stable)
         if args.out:
             args.out.mkdir(parents=True, exist_ok=True)
             (args.out / "title.txt").write_text(title + "\n")

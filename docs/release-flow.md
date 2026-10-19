@@ -1,8 +1,9 @@
 # Release flow
 
 How a change gets from a pull request to players: the checks a pull request passes, how it merges, and the
-automatic releases that follow. Releases are automatic and frequent so the latest Horizon is always playable;
-there is no separate development channel.
+automatic releases that follow. Releases are automatic and frequent so the latest Horizon is always playable.
+Each one goes out as a **beta** and becomes **stable** 6 hours later unless something holds it back
+([Channels](#channels)): launchers and servers install stable builds unless their owner turns betas on.
 
 ## Pull request checks
 
@@ -99,9 +100,12 @@ flowchart LR
         windows["Windows x64<br/>GitHub windows-latest"]
         mac["macOS arm64<br/>Mac mini runner<br/>+ offscreen game run"]
     end
-    build --> publish["publish vYYYY.MM.DD[.N]<br/>notes from the merged PRs"]
-    publish --> launcher(["launchers install it"])
-    publish --> kira(["Kira posts it;<br/>pings only with ### New"])
+    build --> publish["publish vYYYY.MM.DD[.N] as a beta<br/>notes from the merged PRs"]
+    publish --> beta(["launchers with Beta builds on install it"])
+    publish --> promote{"promote.yml, every 30 min:<br/>6 h old, smoke test, no release-blocker"}
+    promote --> stable["stable and latest<br/>notes since the last stable"]
+    stable --> launcher(["every launcher and server installs it"])
+    stable --> kira(["Kira posts it;<br/>pings only with ### New"])
 ```
 
 ### When it releases
@@ -131,6 +135,7 @@ commits) since the last **published** game release:
 | `skip-release` | Doesn't trigger a release and isn't listed in the notes |
 | `run-parity` | Runs the parity job once on a fork's pull request |
 | `parity-regression` | Opened by the nightly audit for a harness that fails on main |
+| `release-blocker` | On an issue: holds the beta it names, and every later one, back from stable ([Channels](#channels)) |
 
 Pull requests without `feature` are listed under **Fixed**. Titles are written for players, since they become
 the notes.
@@ -161,6 +166,40 @@ runs the game: GitHub's runners have neither a GPU worth the name nor the game f
 
 Kira posts every published release in #releases and pings the releases role only when the notes have a
 `### New` section.
+
+### Channels
+
+Every game release is published as a **beta**, a GitHub pre-release, so GitHub's *latest* release stays the last
+**stable** one. Launchers and `horizon-server update` install stable builds by default (the launcher's Settings
+has a "Beta builds" switch; `horizon-server update --version <beta>` takes one by name), and Kira announces a release
+when it becomes stable: Discord's #releases only ever shows stable ones.
+
+`.github/workflows/promote.yml` runs `tools/release_channels.py promote` every 30 minutes. It promotes the newest
+beta that
+
+- is newer than the stable release,
+- has been out 6 hours,
+- passed its release smoke test: the macOS build attaches `smoke-test.json` (the offscreen game run's report) only
+  when the game drew a world on the Mac mini, so a release built while `MAC_RUNNER` sends macOS to GitHub waits
+  for a hand,
+- and isn't covered by an issue labelled `release-blocker`. A blocker covers the beta whose version it names
+  (`v2026.10.19.03` or `2026.10.19.3`, title or body) and every later one, or every beta when it names none,
+  while it is open; closed as completed it still covers the betas published before it closed (they have the
+  bug), closed as not planned it covers nothing. Issue text is only searched for versions.
+
+Promoting marks the beta stable and latest and rewrites its notes to list everything since the previous stable
+release (`release_train.py notes --stable`), so players who skipped the betas see all of it. Older betas stay
+betas. By hand, from a phone too (GitHub app: Actions, promote, Run workflow):
+
+```sh
+gh workflow run promote -f tag=v2026.10.19.03               # that beta now: no 6-hour wait, still no blocker
+gh workflow run promote -f tag=v2026.10.19.03 -f force=true  # even blocked or without a smoke test
+gh workflow run promote -f dry_run=true                      # what would be promoted now
+```
+
+A beta's notes cover only what changed since the release before it (beta or stable), and say it is a beta.
+`release_train.py decide` counts pull requests from the newest release of either channel, so betas don't
+release the same changes again.
 
 ### Signed checksums
 
@@ -225,7 +264,8 @@ A bad release is withdrawn by turning it back into a draft:
 gh release edit v2026.10.15.01 --draft
 ```
 
-Launchers list only published releases: the previous version becomes the newest one again, launchers that
+A beta that is not promoted yet needs no rollback: label an issue naming it `release-blocker`. For a stable
+release: launchers list only published releases, so the previous version becomes the newest one again, launchers that
 didn't install the bad one won't, and players who did can pick the previous version in the launcher's version
 list (`launcher/src/backend.rs` tests `withdrawn_release_is_never_offered`). The tag stays, so the next release
 that day takes the next number, and its notes start from the last *published* release, so they list the
