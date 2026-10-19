@@ -10,24 +10,7 @@ impl Game<'_> {
     /// Load the configured/placed feature registry used by saplings, fungi
     /// and bone meal (once per process; shares the generator's bundle).
     pub(super) fn install_live_features(&self) {
-        if self.res.behaviours().live_features().is_some() {
-            return;
-        }
-        let dir = self.options.resources.join("worldgen");
-        let started = std::time::Instant::now();
-        let features = vanillagen::shared_data(&dir, self.pack.assets.registry)
-            .map_err(|e| e.to_string())
-            .and_then(|data| LiveFeatures::new(&data).map_err(|e| e.to_string()));
-        match features {
-            Ok(Some(features)) => {
-                self.res.behaviours().set_live_features(Arc::new(features));
-                log::info!("Horizon: live features ready in {:?}", started.elapsed());
-            }
-            Ok(None) => {
-                log::warn!("Horizon: the worldgen bundle has no features; saplings will not grow")
-            }
-            Err(e) => log::warn!("Horizon: live features unavailable: {e}"),
-        }
+        install_live_features(&self.res, &self.pack, &self.options);
     }
     /// `BoneMealItem.useOn` for the targeted block.
     pub(super) fn use_bone_meal(&mut self, stack: &ItemStack) -> Result<bool> {
@@ -64,5 +47,31 @@ impl Game<'_> {
             self.consume_held();
         }
         Ok(used)
+    }
+}
+
+/// Shared by the initialization worker and fixture setup.
+pub(super) fn install_live_features(
+    res: &super::Resources,
+    pack: &super::PackResources,
+    options: &super::Options,
+) {
+    if res.behaviours().live_features().is_some() {
+        return;
+    }
+    let dir = options.resources.join("worldgen");
+    let started = std::time::Instant::now();
+    let features = vanillagen::shared_data(&dir, pack.assets.registry)
+        .map_err(|e| e.to_string())
+        .and_then(|data| LiveFeatures::new(&data).map_err(|e| e.to_string()));
+    match features {
+        Ok(Some(features)) => {
+            res.behaviours().set_live_features(Arc::new(features));
+            log::info!("Horizon: live features ready in {:?}", started.elapsed());
+        }
+        Ok(None) => {
+            log::warn!("Horizon: the worldgen bundle has no features; saplings will not grow")
+        }
+        Err(e) => log::warn!("Horizon: live features unavailable: {e}"),
     }
 }
