@@ -401,7 +401,11 @@ def execute():
         {'op': 'settle'},
         cmd('/execute if dimension minecraft:the_nether run say dimension switched'),
         cmd('/data get entity @s Pos'),
-        cmd('/execute in minecraft:the_nether positioned 80 100 -40 in minecraft:overworld run tp @s ~ ~ ~'),
+        # Back to the terrain loaded since the start (x and z scaled by 8: 12 230 4). The fresh
+        # ocean chunks at 644 100 -316 broke some of their kelp and seagrass while they loaded,
+        # on some runs only (vanilla loads chunks asynchronously): that rolled those blocks' loot
+        # and added their random sequences to the count of /random reset *.
+        cmd('/execute in minecraft:the_nether positioned 1 230 0 in minecraft:overworld run tp @s ~ ~ ~'),
         {'op': 'settle'},
         cmd('/execute if dimension minecraft:overworld run say relative dimension'),
         cmd('/data get entity @s Pos'),
