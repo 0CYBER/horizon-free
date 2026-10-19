@@ -125,10 +125,16 @@ impl VoxelShape {
             .clone()
     }
     pub fn block() -> Self {
+        Self::block_ref().clone()
+    }
+    fn block_ref() -> &'static Self {
         static BLOCK: OnceLock<VoxelShape> = OnceLock::new();
-        BLOCK
-            .get_or_init(|| Self::from_cube([1, 1, 1], &[true]).expect("valid unit cube"))
-            .clone()
+        BLOCK.get_or_init(|| Self::from_cube([1, 1, 1], &[true]).expect("valid unit cube"))
+    }
+    /// `shape == Shapes.block()`: the same as `same_identity(&block())`
+    /// without cloning the shared unit cube.
+    pub fn is_block(&self) -> bool {
+        self.same_identity(Self::block_ref())
     }
     pub fn is_empty(&self) -> bool {
         self.bounds.is_none()
@@ -283,7 +289,9 @@ impl VoxelShape {
             }
         }
         result.coords = Arc::new(coords);
-        result.boxes = Arc::new(result.decompose());
+        // The same occupancy decomposes into the same boxes, over coordinates
+        // moved by the same additions.
+        result.boxes = Arc::new(self.boxes.iter().map(|b| b.move_by(offset)).collect());
         result.bounds = self.bounds.map(|bounds| bounds.move_by(offset));
         result
     }
@@ -547,5 +555,46 @@ mod tests {
             Some(Vec3::new(0.1, 0.5, 0.5))
         );
         assert!(VoxelShape::from_grid(std::array::from_fn(|_| vec![0.0, 1.0]), &[]).is_err());
+    }
+    #[test]
+    fn moved_boxes_are_the_moved_shapes_decomposition() {
+        let stair = VoxelShape::from_cube(
+            [2, 2, 2],
+            &[true, true, false, false, true, true, true, true],
+        )
+        .unwrap();
+        let slab = VoxelShape::from_grid([vec![0.0, 1.0], vec![0.0, 0.5], vec![0.0, 1.0]], &[true])
+            .unwrap();
+        let offsets = [
+            Vec3::new(3.0, -64.0, -7.0),
+            Vec3::new(-0.0, 0.0, -0.0),
+            Vec3::new(1.0e-9, 319.999, -30_000_000.0),
+            Vec3::new(f64::from(i32::MAX), f64::from(i32::MIN), 0.1),
+        ];
+        for shape in [VoxelShape::block(), stair, slab] {
+            for offset in offsets {
+                let moved = shape.moved(offset);
+                let [nx, ny, nz] = shape.sizes();
+                let occupied: Vec<bool> = (0..nx * ny * nz)
+                    .map(|i| {
+                        shape.is_full(
+                            (i / (ny * nz)) as i32,
+                            (i / nz % ny) as i32,
+                            (i % nz) as i32,
+                        )
+                    })
+                    .collect();
+                let rebuilt = VoxelShape::from_grid(
+                    Axis::ALL.map(|axis| moved.coordinates(axis).to_vec()),
+                    &occupied,
+                )
+                .unwrap();
+                assert_eq!(moved.boxes(), rebuilt.boxes());
+                assert_eq!(moved.bounds(), rebuilt.bounds());
+            }
+        }
+        assert!(VoxelShape::block().is_block());
+        assert!(!VoxelShape::block().moved(Vec3::ZERO).is_block());
+        assert!(!VoxelShape::block().fresh_identity().is_block());
     }
 }

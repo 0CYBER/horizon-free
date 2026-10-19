@@ -83,6 +83,8 @@ pub struct BlockCollisionScan<'w, 'c, W: BlockCollisionWorld> {
     start: BlockPos,
     sizes: [usize; 3],
     index: usize,
+    /// The cell at `index`, relative to `start` (x fastest, then y, then z).
+    cursor: [usize; 3],
     count: usize,
     budget: usize,
     chunk: Option<(ChunkPos, W::Chunk)>,
@@ -131,6 +133,7 @@ impl<'w, 'c, W: BlockCollisionWorld> BlockCollisionScan<'w, 'c, W> {
             start,
             sizes: sizes.map(|s| s as usize),
             index: 0,
+            cursor: [0; 3],
             count,
             budget: candidate_budget,
             chunk: None,
@@ -144,12 +147,17 @@ impl<'w, 'c, W: BlockCollisionWorld> BlockCollisionScan<'w, 'c, W> {
                 return Err(CollisionScanError::VisitBudget);
             }
             let [width, height, _] = self.sizes;
-            let relative = [
-                self.index % width,
-                self.index / width % height,
-                self.index / width / height,
-            ];
+            let relative = self.cursor;
             self.index += 1;
+            self.cursor[0] += 1;
+            if self.cursor[0] == width {
+                self.cursor[0] = 0;
+                self.cursor[1] += 1;
+                if self.cursor[1] == height {
+                    self.cursor[1] = 0;
+                    self.cursor[2] += 1;
+                }
+            }
             let kind = relative
                 .into_iter()
                 .zip(self.sizes)
@@ -199,13 +207,10 @@ impl<'w, 'c, W: BlockCollisionWorld> BlockCollisionScan<'w, 'c, W> {
                 .context_shape(block, p, &self.context)
                 .map_err(CollisionScanError::World)?;
             let offset = Vec3::new(f64::from(p.x), f64::from(p.y), f64::from(p.z));
-            let moved = if shape.same_identity(&VoxelShape::block()) {
+            let moved = if shape.is_block() {
                 // Native adds one in floating point, including at i32::MAX.
-                let unit = Aabb::new(
-                    offset,
-                    Vec3::new(offset.x + 1.0, offset.y + 1.0, offset.z + 1.0),
-                );
-                if !self.bounds.intersects(unit) {
+                let top = Vec3::new(offset.x + 1.0, offset.y + 1.0, offset.z + 1.0);
+                if !self.bounds.intersects_corners(offset, top) {
                     continue;
                 }
                 shape.moved(offset)
