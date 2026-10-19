@@ -180,12 +180,34 @@ pub struct SigningKey(Ed25519KeyPair);
 
 impl SigningKey {
     /// A new key, and its PKCS#8 document in base64 (what the secret holds).
+    ///
+    /// The document is PKCS#8 v1 (RFC 8410: the 32-byte seed alone), which every OpenSSL 3 reads;
+    /// ring makes v2 (with the public key too), which OpenSSL 3.0, Ubuntu's, refuses.
     pub fn generate() -> Result<(Self, String), String> {
-        let document = Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
+        const V2_PREFIX: [u8; 16] = [
+            0x30, 0x51, 0x02, 0x01, 0x01, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22,
+            0x04, 0x20,
+        ];
+        const V1_PREFIX: [u8; 16] = [
+            0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22,
+            0x04, 0x20,
+        ];
+        let v2 = Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
             .map_err(|_| "no randomness to make a key with".to_string())?;
-        let key = Ed25519KeyPair::from_pkcs8(document.as_ref())
+        let seed = v2
+            .as_ref()
+            .strip_prefix(&V2_PREFIX)
+            .and_then(|rest| rest.get(..32))
+            .ok_or("ring's key document has an unexpected layout")?;
+        let v1 = [&V1_PREFIX[..], seed].concat();
+        let key = Ed25519KeyPair::from_pkcs8_maybe_unchecked(&v1)
             .map_err(|_| "the new key doesn't parse".to_string())?;
-        Ok((Self(key), STANDARD.encode(document.as_ref())))
+        let same = Ed25519KeyPair::from_pkcs8(v2.as_ref())
+            .is_ok_and(|k| k.public_key().as_ref() == key.public_key().as_ref());
+        if !same {
+            return Err("the new key's two forms disagree".into());
+        }
+        Ok((Self(key), STANDARD.encode(&v1)))
     }
 
     /// The key a secret holds (base64 PKCS#8). The error never quotes the secret.
@@ -295,6 +317,9 @@ mod tests {
     #[test]
     fn keys_round_trip_through_their_text_forms() {
         let (key, secret) = SigningKey::generate().unwrap();
+        // PKCS#8 v1 (version 0, the seed alone): what OpenSSL 3.0 reads.
+        let document = STANDARD.decode(&secret).unwrap();
+        assert_eq!((document.len(), document[4]), (48, 0));
         let again = SigningKey::from_base64(&format!("{secret}\n")).unwrap();
         assert_eq!(again.public(), key.public());
         assert_eq!(
