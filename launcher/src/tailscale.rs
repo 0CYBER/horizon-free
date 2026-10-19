@@ -37,7 +37,7 @@ pub const LINUX_LOGIN: &str = "sudo tailscale up --operator=$USER";
 /// The `tailscale` command, wherever the installer put it.
 pub fn cli() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("HORIZON_LAUNCHER_TAILSCALE") {
-        return Some(PathBuf::from(p));
+        return Some(PathBuf::from(p)).filter(|p| p.is_file());
     }
     let mut places: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|p| {
