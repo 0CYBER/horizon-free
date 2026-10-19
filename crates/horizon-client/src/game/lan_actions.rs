@@ -656,7 +656,15 @@ impl Game<'_> {
         let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn) else {
             return;
         };
-        if host.hub.guests[gi].dead && !matches!(packet, S::ClientCommand(_)) {
+        // A dead player acts no more, but the death screen still respawns and chats: its
+        // commands run as anyone's (ServerGamePacketListenerImpl.handleChatCommand doesn't
+        // look at the player's health).
+        if host.hub.guests[gi].dead
+            && !matches!(
+                packet,
+                S::ClientCommand(_) | S::ChatCommand(_) | S::ChatCommandSigned(_)
+            )
+        {
             return;
         }
         let spectator = host.hub.guests[gi].spectator();
