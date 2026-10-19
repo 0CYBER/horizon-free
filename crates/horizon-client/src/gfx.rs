@@ -524,6 +524,46 @@ fn terrain_group(
         ],
     })
 }
+/// CPU texture uploads prepared by the resource worker. Consumed by renderer
+/// construction so the temporary mip chains are released after GPU upload.
+pub struct PreparedTextures {
+    sprites: Vec<(Vec<u8>, u32)>,
+    forcefield: (Vec<u8>, u32),
+}
+impl PreparedTextures {
+    pub fn new(
+        pixels: &[u8],
+        size: u32,
+        layers: u32,
+        settings: &[crate::mipmap::Settings],
+        forcefield: (&[u8], u32),
+    ) -> Self {
+        Self::with_split(pixels, size, layers, settings, forcefield, sprite_split())
+    }
+
+    fn with_split(
+        pixels: &[u8],
+        size: u32,
+        layers: u32,
+        settings: &[crate::mipmap::Settings],
+        forcefield: (&[u8], u32),
+        split: u32,
+    ) -> Self {
+        let layer_bytes = (size * size * 4) as usize;
+        Self {
+            sprites: (0..layers.div_ceil(split).max(1))
+                .map(|array| {
+                    let first = array * split;
+                    let count = layers.saturating_sub(first).clamp(1, split);
+                    let start = (first as usize * layer_bytes).min(pixels.len());
+                    mip_chain(&pixels[start..], size, settings, first, count)
+                })
+                .collect(),
+            forcefield: mip_chain(forcefield.0, forcefield.1, &[], 0, 1),
+        }
+    }
+}
+
 fn mip_chain(
     pixels: &[u8],
     size: u32,
@@ -807,6 +847,7 @@ impl Renderer {
         hud_atlas: (&[u8], u32, u32),
         forcefield: (&[u8], u32),
         panorama_faces: &panorama::Faces,
+        prepared: Option<PreparedTextures>,
         previous: Option<&Self>,
         api: GraphicsApi,
     ) -> Result<Self> {
@@ -1180,20 +1221,17 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let layer_bytes = (sprite_size * sprite_size * 4) as usize;
+        let prepared = prepared.unwrap_or_else(|| {
+            PreparedTextures::new(sprite_pixels, sprite_size, layers, sprite_mips, forcefield)
+        });
         let mut mip_levels = 1;
-        let sprite_textures: Vec<wgpu::Texture> = (0..sprite_arrays)
-            .map(|array| {
-                let first = array * split;
+        let sprite_textures: Vec<wgpu::Texture> = prepared
+            .sprites
+            .into_iter()
+            .enumerate()
+            .map(|(array, (mips, levels))| {
+                let first = array as u32 * split;
                 let count = layers.saturating_sub(first).clamp(1, split);
-                let start = (first as usize * layer_bytes).min(sprite_pixels.len());
-                let (mips, levels) = mip_chain(
-                    &sprite_pixels[start..],
-                    sprite_size,
-                    sprite_mips,
-                    first,
-                    count,
-                );
                 mip_levels = levels;
                 device.create_texture_with_data(
                     &queue,
@@ -1654,9 +1692,8 @@ impl Renderer {
         });
         // WorldBorderRenderer: misc/forcefield.png as a MipmappedTexture
         // (repeat, linear minification with mipmaps, nearest magnification).
-        let (forcefield_pixels, forcefield_size) = forcefield;
-        let (forcefield_mips, forcefield_levels) =
-            mip_chain(forcefield_pixels, forcefield_size, &[], 0, 1);
+        let forcefield_size = forcefield.1;
+        let (forcefield_mips, forcefield_levels) = prepared.forcefield;
         let forcefield_texture = device.create_texture_with_data(
             &queue,
             &wgpu::TextureDescriptor {
@@ -4537,6 +4574,50 @@ mod sprite_upload_tests {
             assert_eq!(state.cache_bytes, bytes);
             assert_eq!(state.cache.len(), 1);
             assert!(state.cache.contains_key(&(0, 0)));
+        }
+    }
+
+    #[test]
+    fn prepared_texture_uploads_preserve_layer_order_and_settings() {
+        let size = 4;
+        let layers = 5;
+        let pixels: Vec<u8> = (0..size * size * layers)
+            .flat_map(|i| [i as u8, (i * 3) as u8, 99, if i % 3 == 0 { 0 } else { 255 }])
+            .collect();
+        let settings: Vec<_> = (0..layers)
+            .map(|i| crate::mipmap::Settings {
+                strategy: if i % 2 == 0 {
+                    crate::mipmap::Strategy::Mean
+                } else {
+                    crate::mipmap::Strategy::StrictCutout
+                },
+                ..Default::default()
+            })
+            .collect();
+        let border = [20, 30, 40, 128].repeat(16);
+        let expected = mip_chain(&pixels, size, &settings, 0, layers);
+        // A partial final array and an exact boundary exercise the global
+        // layer offset used to select each sprite's mipmap settings.
+        for split in [1, 2, 5, 8] {
+            let prepared = PreparedTextures::with_split(
+                &pixels,
+                size,
+                layers,
+                &settings,
+                (&border, size),
+                split,
+            );
+            assert_eq!(prepared.sprites.len(), layers.div_ceil(split) as usize);
+            let actual: Vec<_> = prepared
+                .sprites
+                .iter()
+                .flat_map(|(bytes, levels)| {
+                    assert_eq!(*levels, expected.1);
+                    bytes.iter().copied()
+                })
+                .collect();
+            assert_eq!(actual, expected.0);
+            assert_eq!(prepared.forcefield, mip_chain(&border, size, &[], 0, 1));
         }
     }
 
