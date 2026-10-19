@@ -318,6 +318,47 @@ pub struct Passes {
     /// After `final`, these targets' alternate side is copied back so the
     /// next frame starts unflipped.
     pub flipped_at_end: BTreeSet<u32>,
+    pub directives: Directives,
+}
+
+/// The `const` directives of a program folder that aren't about targets
+/// (`PackDirectives`), read from the same programs in the same order.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Directives {
+    /// `sunPathRotation`, degrees: how far the sun and moon's path tilts
+    /// toward the north or south (a Z rotation between the sky's Y -90 and
+    /// its angle, `CelestialUniforms`).
+    pub sun_path_rotation: f32,
+    /// `eyeBrightnessHalflife`, tenths of a second: `eyeBrightnessSmooth`.
+    pub eye_brightness_half_life: f32,
+}
+
+impl Default for Directives {
+    fn default() -> Self {
+        Self {
+            sun_path_rotation: 0.0,
+            eye_brightness_half_life: 10.0,
+        }
+    }
+}
+
+impl Directives {
+    /// Read from `fragments` in order, the last one winning.
+    pub fn read<'a>(fragments: impl IntoIterator<Item = &'a str>) -> Self {
+        let mut out = Self::default();
+        for fragment in fragments {
+            for c in const_directives(fragment) {
+                // Java's `Float.parseFloat` takes a trailing `f`.
+                let value = c.value.trim_end_matches(['f', 'F']).parse::<f32>();
+                match (c.ty, c.key.as_str(), value) {
+                    ("float", "sunPathRotation", Ok(v)) => out.sun_path_rotation = v,
+                    ("float", "eyeBrightnessHalflife", Ok(v)) => out.eye_brightness_half_life = v,
+                    _ => {}
+                }
+            }
+        }
+        out
+    }
 }
 
 /// Iris's single programs (`ProgramId`), in order.
@@ -435,6 +476,7 @@ impl JavaPack {
         }
         let mut out = Passes {
             targets: target_settings(sources.iter().map(String::as_str), properties),
+            directives: Directives::read(sources.iter().map(String::as_str)),
             ..Passes::default()
         };
 
@@ -687,6 +729,19 @@ mod tests {
         assert_eq!(draw_buffers("void main() {}"), Ok(None));
         assert!(draw_buffers("/* RENDERTARGETS: 40 */").is_err());
         assert!(draw_buffers("/* DRAWBUFFERS:0a */").is_err());
+    }
+
+    #[test]
+    fn sky_directives_last_one_wins() {
+        assert_eq!(Directives::read([]), Directives::default());
+        assert_eq!(Directives::default().eye_brightness_half_life, 10.0);
+        let d = Directives::read([
+            "const float sunPathRotation = 30.0;\nconst float eyeBrightnessHalflife = 4.0f;",
+            "const float sunPathRotation = -40.0; // Complementary Unbound",
+            "const int sunPathRotation = 5;",
+        ]);
+        assert_eq!(d.sun_path_rotation, -40.0);
+        assert_eq!(d.eye_brightness_half_life, 4.0);
     }
 
     #[test]

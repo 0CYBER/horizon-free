@@ -238,6 +238,9 @@ pub struct ShaderInputs {
     /// The time of day as a fraction (0 sunrise, 0.25 noon) and the partial tick.
     pub day_fraction: f32,
     pub partial_tick: f32,
+    /// The block and sky light (0..15) of the block holding the camera
+    /// entity's eyes; no sky light without a sky.
+    pub eye_light: [u8; 2],
 }
 /// One frame of the world border wall (`WorldBorderRenderer.render`).
 #[derive(Clone, Debug)]
@@ -3552,6 +3555,11 @@ impl Renderer {
                     size,
                     &self.world_post,
                     pack_uniform,
+                    java_stages::JavaFrame {
+                        eye_light: frame.shader.eye_light,
+                        sun_angle: frame.sky.sun_angle,
+                        moon_angle: frame.sky.moon_angle,
+                    },
                 ),
             };
             self.world_post

@@ -6,8 +6,10 @@
 //! `shadow`) don't run yet: the world is drawn by Horizon.
 use horizon_shaderpack::{
     JavaPack,
-    pipeline::{Program, TargetSettings},
+    pipeline::{Directives, Program, TargetSettings},
     preprocess::Environment,
+    properties::SkyDirectives,
+    uniforms::CustomUniforms,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -28,11 +30,17 @@ pub struct JavaFolder {
     pub final_pass: Option<Program>,
     /// The targets whose alternate side holds the frame's last write.
     pub flipped_at_end: BTreeSet<u32>,
+    /// `sunPathRotation` and `eyeBrightnessHalflife`.
+    pub directives: Directives,
 }
 
 /// A loaded Java pack.
 pub struct JavaPasses {
     pub folders: Vec<JavaFolder>,
+    /// `uniform.*` / `variable.*` from `shaders.properties`.
+    pub uniforms: CustomUniforms,
+    /// What the pack keeps of the vanilla sky (`clouds`, `sun`, `moon`).
+    pub sky: SkyDirectives,
 }
 
 impl JavaPasses {
@@ -122,12 +130,21 @@ pub fn load(
             flipped_after_prepare: plan.flipped_after_prepare,
             final_pass,
             flipped_at_end: plan.flipped_at_end,
+            directives: plan.directives,
         });
     }
     if folders.is_empty() {
         return Err("no deferred, composite or final programs".into());
     }
-    Ok(JavaPasses { folders })
+    let uniforms = properties.custom_uniforms();
+    for problem in &uniforms.problems {
+        log::warn!("Horizon: shader pack custom uniform {problem}");
+    }
+    Ok(JavaPasses {
+        folders,
+        uniforms,
+        sky: properties.sky(),
+    })
 }
 
 #[cfg(test)]

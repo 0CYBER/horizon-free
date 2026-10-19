@@ -6,6 +6,7 @@
 use super::Game;
 use horizon_client::shader_pack::{self, ShaderPack, Stamp};
 use horizon_client::text::Text;
+use horizon_shaderpack::properties::SkyDirectives;
 use std::{
     path::PathBuf,
     time::{Duration, Instant},
@@ -25,6 +26,14 @@ impl ShaderPacks {
     /// The loaded pack's folder name.
     pub(super) fn id(&self) -> Option<&str> {
         self.pack.as_ref().map(|p| p.id.as_str())
+    }
+    /// What a loaded Java pack changes in the vanilla sky of `dimension`
+    /// (0 overworld, -1 the Nether, 1 the End): its `sunPathRotation`, and
+    /// whether it keeps the clouds, sun and moon (Iris's sky mixins).
+    pub(super) fn java_sky(&self, dimension: i8) -> Option<(f32, SkyDirectives)> {
+        let java = self.pack.as_ref()?.java.as_ref()?;
+        let folder = &java.folders[java.folder_for(dimension)?];
+        Some((folder.directives.sun_path_rotation, java.sky))
     }
 }
 
