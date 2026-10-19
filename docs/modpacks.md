@@ -511,6 +511,14 @@ Two cases the oracle fills in:
     structure's piece caps and required pieces from the mod's `*_pieces_spawn_counts` files.
     The game assembles them the mods' way and runs their post-layout steps (centring,
     burying, the Nether land search).
+  - **Enhanced terrain adaptation.** YUNG's API and MoogsStructureLib add a kernel of their
+    own to the Beardifier: its own size and falloff, carving or burying above and below each
+    piece's floor. Carry writes it as `horizon:enhanced_terrain_adaptation` on the structure
+    and on pool elements with their own (docs/mods.md), and the game sums it after vanilla's
+    terrain density. In seed 1234's terrain before structures are placed, Better Fortresses'
+    pieces held 39 to 41 % netherrack and now 3 to 7 %, the mod's open bridges; Moog's mega
+    fortress band 45 % and now 30 %; Better Strongholds' pieces, buried, go from 92 to 97 %
+    solid to 99 %, closing the caves that cut through them.
 
 
   Each mod's `carry-report.json` lists what was mapped, the rules and processors lost by name,
@@ -530,9 +538,9 @@ Two cases the oracle fills in:
       noise column (solid, water, lava), which the structure context doesn't give yet;
     - Repurposed's mineshafts, mansions and monuments, Better Mineshafts and two Better
       Dungeons types: Java structure types;
-    - YUNG's and Moog's enhanced terrain adaptation, YUNG's piece modifiers and dead-end pools,
-      and the block processors written in Java (YUNG's banners, legs and decorations, Repurposed's
-      pillars and fluid fixes, Lithostitched's block swaps);
+    - YUNG's piece modifiers and dead-end pools, and the block processors written in Java
+      (YUNG's banners, legs and decorations, Repurposed's pillars and fluid fixes,
+      Lithostitched's block swaps);
     - MO Structures (38; its library is only on CurseForge).
 
   With every structure PR above, the same square (seed 1234, chunks -64..63) holds 362
