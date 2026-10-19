@@ -12,7 +12,10 @@
 //!   preset is on; one that ships off is a no-op and is taken out.
 //! - Lithostitched's `reference` runs other processor lists in turn: their
 //!   processors are written in its place (Choice Theorem's Overhauled
-//!   Villages builds most of its lists so).
+//!   Villages builds most of its lists so). Its `apply_random` and
+//!   `condition` become the game's `horizon:apply_random` and
+//!   `horizon:condition`, with the lists inside them carried the same way,
+//!   and its `set_block` (simple or weighted states) `horizon:set_block`.
 //!
 //! What is not here is taken out of its list later and counted
 //! (`worldgen::upgrade`). The entity NBT is written in 26.3's shape (an
@@ -142,24 +145,140 @@ pub fn carry(
         let Some(list) = processors(list) else {
             return false;
         };
-        let mut changed = false;
-        let expanded = references(std::mem::take(list), data, carried, 0);
-        changed |= expanded.1;
-        let mut out = Vec::with_capacity(expanded.0.len());
-        for p in expanded.0 {
-            let kind = p["processor_type"].as_str().unwrap_or_default().to_owned();
-            match as_data(&kind, &p, data) {
-                Some(replacement) => {
-                    *carried.entry(kind).or_default() += 1;
-                    out.extend(replacement);
-                    changed = true;
-                }
-                None => out.push(p),
-            }
-        }
+        let (out, changed) = carry_all(std::mem::take(list), data, carried);
         *list = out;
         changed
     })
+}
+
+/// The processors of one list carried: references written in, then each
+/// one with a data form replaced by it. Whether anything changed.
+fn carry_all(
+    list: Vec<Value>,
+    data: &ProcessorData,
+    carried: &mut BTreeMap<String, usize>,
+) -> (Vec<Value>, bool) {
+    let (expanded, mut changed) = references(list, data, carried, 0);
+    let mut out = Vec::with_capacity(expanded.len());
+    for p in expanded {
+        let kind = p["processor_type"].as_str().unwrap_or_default().to_owned();
+        let replacement = match kind.as_str() {
+            "lithostitched:apply_random" => apply_random(&p, data, carried).map(|p| vec![p]),
+            "lithostitched:condition" => condition(&p, data, carried).map(|p| vec![p]),
+            _ => as_data(&kind, &p, data),
+        };
+        match replacement {
+            Some(replacement) => {
+                *carried.entry(kind).or_default() += 1;
+                out.extend(replacement);
+                changed = true;
+            }
+            None => out.push(p),
+        }
+    }
+    (out, changed)
+}
+
+/// A processor list inside a carried processor: an id stays (the game reads
+/// that file, carried on its own); an inline one is carried here.
+fn nested(list: &Value, data: &ProcessorData, carried: &mut BTreeMap<String, usize>) -> Value {
+    let mut list = list.clone();
+    if let Some(ps) = processors(&mut list) {
+        *ps = carry_all(std::mem::take(ps), data, carried).0;
+    }
+    list
+}
+
+/// Lithostitched's `apply_random` as `horizon:apply_random`: its weighted
+/// lists, or its set of lists at weight 1. A tag is not carried.
+fn apply_random(
+    p: &Value,
+    data: &ProcessorData,
+    carried: &mut BTreeMap<String, usize>,
+) -> Option<Value> {
+    let lists = &p["processor_lists"];
+    let weighted = lists.as_array().is_some_and(|a| {
+        a.iter()
+            .all(|e| e.get("weight").is_some() && e.get("data").is_some())
+    });
+    let entries: Vec<(Value, Value)> = if weighted {
+        lists
+            .as_array()?
+            .iter()
+            .map(|e| (e["weight"].clone(), e["data"].clone()))
+            .collect()
+    } else {
+        match lists {
+            Value::String(id) if !id.starts_with('#') => vec![(1.into(), lists.clone())],
+            Value::Array(a) if a.iter().any(|x| x.get("processor_type").is_some()) => {
+                vec![(1.into(), lists.clone())]
+            }
+            Value::Array(a)
+                if a.iter()
+                    .all(|x| x.as_str().is_some_and(|s| !s.starts_with('#')) || x.is_object()) =>
+            {
+                a.iter().map(|x| (1.into(), x.clone())).collect()
+            }
+            Value::Object(_) => vec![(1.into(), lists.clone())],
+            _ => return None,
+        }
+    };
+    let lists: Vec<Value> = entries
+        .into_iter()
+        .map(|(weight, list)| json!({"weight": weight, "data": nested(&list, data, carried)}))
+        .collect();
+    let mut out = json!({"processor_type": "horizon:apply_random", "processor_lists": lists});
+    if let Some(mode) = p.get("mode") {
+        out["mode"] = mode.clone();
+    }
+    Some(out)
+}
+
+/// Lithostitched's `condition` as `horizon:condition`, when the game runs
+/// every condition in it (true, all_of, any_of, not, random_chance,
+/// matching_blocks with plain property values); else it stays Java.
+fn condition(
+    p: &Value,
+    data: &ProcessorData,
+    carried: &mut BTreeMap<String, usize>,
+) -> Option<Value> {
+    fn runs(c: &Value) -> bool {
+        if let Some(all) = c.as_array() {
+            return all.iter().all(runs);
+        }
+        let kind = c["type"].as_str().unwrap_or_default();
+        match kind.strip_prefix("lithostitched:").unwrap_or(kind) {
+            "true" | "random_chance" => true,
+            "all_of" | "any_of" => c["conditions"]
+                .as_array()
+                .is_some_and(|a| a.iter().all(runs)),
+            "not" => runs(&c["condition"]),
+            "matching_blocks" => c.get("properties").is_none_or(|p| {
+                p.as_object()
+                    .is_some_and(|o| o.values().all(Value::is_string))
+            }),
+            _ => false,
+        }
+    }
+    if !runs(&p["if_true"]) {
+        return None;
+    }
+    // One processor or a list of them.
+    let mut branch = |key: &str| -> Value {
+        let list = match p.get(key) {
+            None => Vec::new(),
+            Some(Value::Array(a)) => a.clone(),
+            Some(one) => vec![one.clone()],
+        };
+        carry_all(list, data, carried).0.into()
+    };
+    let (then, otherwise) = (branch("then"), branch("else"));
+    let mut out = json!({"processor_type": "horizon:condition", "if_true": p["if_true"],
+        "then": then, "else": otherwise});
+    if let Some(mode) = p.get("random_mode") {
+        out["random_mode"] = mode.clone();
+    }
+    Some(out)
 }
 
 /// Repurposed Structures' rule tests and the game's types that run them
@@ -354,6 +473,28 @@ fn as_data(kind: &str, p: &Value, data: &ProcessorData) -> Option<Vec<Value>> {
             // The same map; the game's swap keeps the properties both have.
             p["blocks"].as_object()?;
             vec![json!({"processor_type": "horizon:block_swap", "blocks": p["blocks"]})]
+        }
+        "lithostitched:set_block" => {
+            // A simple or weighted state provider, the block entity left as
+            // it is.
+            let provider = p["state_provider"]["type"].as_str()?;
+            let modifier = p["block_entity_modifier"]["type"].as_str();
+            let plain =
+                modifier.is_none_or(|m| m.trim_start_matches("minecraft:") == "passthrough");
+            if !plain
+                || !matches!(
+                    provider,
+                    "minecraft:simple_state_provider" | "minecraft:weighted_state_provider"
+                )
+            {
+                return None;
+            }
+            let mut out = p.clone();
+            out["processor_type"] = "horizon:set_block".into();
+            if let Some(o) = out.as_object_mut() {
+                o.remove("block_entity_modifier");
+            }
+            vec![out]
         }
         "betterdungeons:small_dungeon_chest_processor" => {
             // Its config's defaults: one chest at least, two at most, a
@@ -1057,6 +1198,59 @@ mod tests {
         assert_eq!(p[3]["processor_lists"], "#v:roads");
         assert_eq!(p[4]["processor_lists"], json!(["v:nowhere"]));
         assert_eq!(carried["lithostitched:reference"], 2);
+    }
+
+    #[test]
+    fn lithostitched_random_and_condition_become_the_games() {
+        let mut data = data();
+        let swap = json!({"processor_type": "lithostitched:block_swap",
+            "blocks": {"minecraft:dirt": "minecraft:grass_block"}});
+        data.lists
+            .insert("v:green".into(), json!({"processors": [swap.clone()]}));
+        let mut list = json!({"processors": [
+            {"processor_type": "lithostitched:apply_random", "mode": "per_piece", "processor_lists": [
+                {"weight": 3, "data": "minecraft:empty"},
+                {"weight": 1, "data": {"processors": [
+                    {"processor_type": "lithostitched:reference", "processor_lists": "v:green"},
+                    {"processor_type": "v:java"}]}}]},
+            {"processor_type": "lithostitched:apply_random", "mode": "per_block",
+             "processor_lists": ["v:green", "v:red"]},
+            {"processor_type": "lithostitched:apply_random", "mode": "per_block",
+             "processor_lists": "#v:colours"},
+            {"processor_type": "lithostitched:condition",
+             "if_true": [{"type": "lithostitched:matching_blocks", "blocks": "minecraft:cobblestone"}],
+             "then": swap, "else": {"processor_type": "lithostitched:set_block", "state_provider":
+                {"type": "minecraft:simple_state_provider", "state": {"Name": "minecraft:stone"}}}},
+            {"processor_type": "lithostitched:condition",
+             "if_true": {"type": "lithostitched:matching_biomes", "biomes": "#c:is_cold"},
+             "then": []}]});
+        let mut carried = BTreeMap::new();
+        assert!(carry("processor_list", &mut list, &data, &mut carried));
+        let p = list["processors"].as_array().unwrap();
+        let green = json!({"processor_type": "horizon:block_swap",
+            "blocks": {"minecraft:dirt": "minecraft:grass_block"}});
+        // Inline lists are carried; Java left in them is dropped later.
+        assert_eq!(
+            p[0],
+            json!({"processor_type": "horizon:apply_random", "mode": "per_piece", "processor_lists": [
+                {"weight": 3, "data": "minecraft:empty"},
+                {"weight": 1, "data": {"processors": [green.clone(), {"processor_type": "v:java"}]}}]})
+        );
+        assert_eq!(
+            p[1]["processor_lists"],
+            json!([{"weight": 1, "data": "v:green"}, {"weight": 1, "data": "v:red"}])
+        );
+        assert_eq!(p[2]["processor_type"], "lithostitched:apply_random");
+        assert_eq!(
+            p[3],
+            json!({"processor_type": "horizon:condition",
+                "if_true": [{"type": "lithostitched:matching_blocks", "blocks": "minecraft:cobblestone"}],
+                "then": [green], "else": [{"processor_type": "horizon:set_block", "state_provider":
+                    {"type": "minecraft:simple_state_provider", "state": {"Name": "minecraft:stone"}}}]})
+        );
+        assert_eq!(p[4]["processor_type"], "lithostitched:condition");
+        assert_eq!(carried["lithostitched:apply_random"], 2);
+        assert_eq!(carried["lithostitched:condition"], 1);
     }
 
     #[test]

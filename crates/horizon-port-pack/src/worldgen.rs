@@ -382,7 +382,29 @@ fn drop_java_processors(list: &mut Value, dropped: &mut BTreeMap<String, usize>)
         }
         !java
     });
-    processors.len() != before
+    let mut changed = processors.len() != before;
+    // The inline lists inside the game's apply_random and condition.
+    for p in processors.iter_mut() {
+        let inner: Vec<&mut Value> = match p["processor_type"].as_str() {
+            Some("horizon:apply_random") => p["processor_lists"]
+                .as_array_mut()
+                .into_iter()
+                .flatten()
+                .map(|e| &mut e["data"])
+                .collect(),
+            Some("horizon:condition") => {
+                let o = p.as_object_mut().into_iter().flat_map(|o| o.iter_mut());
+                o.filter(|(k, _)| *k == "then" || *k == "else")
+                    .map(|(_, v)| v)
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
+        for list in inner {
+            changed |= drop_java_processors(list, dropped);
+        }
+    }
+    changed
 }
 
 /// 1.21.1 writes a block or fluid state as `{"Name": ..., "Properties":
