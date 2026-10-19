@@ -9,6 +9,9 @@ use serde_json::Value;
 
 /// How often Tailscale's state is read while the panel shows.
 const POLL: Duration = Duration::from_secs(10);
+/// How often the invitations and access controls are read again while the panel shows, so an
+/// accepted invitation appears without a click.
+const RELOAD: Duration = Duration::from_secs(30);
 
 pub(super) enum Event {
     State(State),
@@ -29,6 +32,7 @@ pub(super) struct Internet {
     asking_token: bool,
     invites: Option<Result<Vec<Invite>, String>>,
     policy: Option<Result<(Value, Option<String>), String>>,
+    loaded: Option<Instant>,
     busy: bool,
     message: Option<Result<String, String>>,
     /// The invitation just made, its link shown to copy.
@@ -50,6 +54,7 @@ impl Internet {
             asking_token: false,
             invites: None,
             policy: None,
+            loaded: None,
             busy: false,
             message: None,
             fresh: None,
@@ -110,7 +115,8 @@ impl Launcher {
                 let was_running = i.node().map(|n| n.id.clone());
                 i.state = Some(state);
                 let now = i.node().map(|n| n.id.clone());
-                if now.is_some() && now != was_running {
+                let stale = i.loaded.is_none_or(|at| at.elapsed() >= RELOAD);
+                if now.is_some() && (now != was_running || (stale && !i.busy)) {
                     self.internet_load();
                 }
             }
@@ -142,10 +148,11 @@ impl Launcher {
 
     /// Reads the invitations and the access controls (needs the token and a running Tailscale).
     fn internet_load(&mut self) {
-        let i = &self.internet;
+        let i = &mut self.internet;
         let (Some(token), Some(node)) = (i.token(), i.node().cloned()) else {
             return;
         };
+        i.loaded = Some(Instant::now());
         let tx = i.tx.clone();
         std::thread::spawn(move || {
             let api = Api::new(&token);
