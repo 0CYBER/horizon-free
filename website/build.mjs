@@ -1,8 +1,9 @@
 // Builds the site into dist/: src/index.html with the README's parity table and
-// the community links and contributors baked in, plus public/ and fingerprinted CSS and JS. No dependencies.
+// the community links and contributors baked in, the documentation (docs/*.md, one page each, listed in
+// docs/nav.json), plus public/ and fingerprinted CSS and JS. No dependencies.
 //
 // Railway builds only website/, so the README and links.json come from the repo when they
-// are next to it (a local checkout) and from main on GitHub otherwise. The latest releases and
+// are next to it (a local checkout) and from main on GitHub otherwise. The documentation lives in website/. The latest releases and
 // the contributors are baked in when GitHub answers, so the page reads well before (or without) JavaScript.
 import { readFile, writeFile, mkdir, rm, cp } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -29,11 +30,6 @@ async function repoFile(path) {
 
 // The README: required, a site with a stale or missing parity table is worse than no deploy.
 const [readme, readmeFrom] = await repoFile("README.md");
-// The server guide (/server) is docs/hosting.md from its first section on: the page has its own title and lede.
-const [hosting] = await repoFile("docs/hosting.md");
-const guideStart = hosting.search(/^## /m);
-if (guideStart < 0) throw new Error("docs/hosting.md: no '## ' section");
-
 let links = { ...DEFAULT_LINKS };
 try {
   const parsed = JSON.parse((await repoFile("launcher/links.json"))[0]);
@@ -203,10 +199,81 @@ const values = {
   CONTRIBUTORS_HIDDEN: contributors.length ? "" : " hidden",
   BAKED: JSON.stringify(baked).replace(/</g, "\\u003c"),
   YEAR: String(new Date().getUTCFullYear()),
-  SERVER_GUIDE: markdown(hosting.slice(guideStart)),
 };
 
-const pages = ["index.html", "404.html", "privacy.html", "server.html"];
+// --- The documentation ---------------------------------------------------------------------
+// website/docs/<slug>.md: "# Title", a one-paragraph lede, then the body. docs/nav.json orders them in groups.
+
+const docsNav = JSON.parse(await readFile(join(site, "docs", "nav.json"), "utf8"));
+const docs = [];
+for (const { group, pages: slugs } of docsNav) {
+  for (const slug of slugs) {
+    const file = `${slug}.md`;
+    const text = (await readFile(join(site, "docs", file), "utf8")).replace(/\r\n?/g, "\n");
+    const m = text.match(/^# (.+)\n\n((?:[^\n]+\n)+)\n/);
+    if (!m) throw new Error(`docs/${file}: needs "# Title", a blank line, a lede paragraph and a blank line`);
+    docs.push({ slug, file, group, title: m[1].trim(), lede: m[2].trim().replace(/\n/g, " "), body: text.slice(m[0].length), path: slug === "index" ? "/docs/" : `/docs/${slug}` });
+  }
+}
+const plain = (md) => md.replace(/`/g, "").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/\*\*/g, "");
+const anchors = new Map(); // path -> ids, to check every link between the pages
+const problems = [];
+const renderedDocs = docs.map((d) => {
+  const headings = [];
+  const html = markdown(d.body.replaceAll("{{HARNESSES}}", harnesses).replaceAll("{{PERCENT}}", percent), { site: true, headings });
+  anchors.set(d.path, new Set(headings.map((h) => h.id)));
+  return { ...d, html, headings };
+});
+for (const d of renderedDocs) {
+  for (const [, link] of d.html.matchAll(/<a href="((?:\/docs|#)[^"]*)"/g)) {
+    const [path, id] = link.split("#");
+    const to = path || d.path;
+    const known = anchors.get(to);
+    if (!known) problems.push(`${d.file}: ${link} is not a docs page`);
+    else if (id && !known.has(id)) problems.push(`${d.file}: ${link} has no such heading`);
+  }
+  for (const [, src] of d.html.matchAll(/<img src="(\/media\/[^"]+)"/g)) {
+    if (!existsSync(join(site, "public", src))) problems.push(`${d.file}: image ${src} is not in public/`);
+  }
+}
+if (problems.length) throw new Error(`docs: ${problems.length} broken link(s)\n${problems.join("\n")}`);
+
+const docNav = (current) =>
+  docsNav
+    .map(({ group, pages: slugs }) => {
+      const items = slugs
+        .map((slug) => {
+          const d = docs.find((x) => x.slug === slug);
+          return `<li><a href="${d.path}"${slug === current.slug ? ' aria-current="page"' : ""}>${escape(d.title)}</a></li>`;
+        })
+        .join("");
+      return `          <p class="docs-nav-group">${escape(group)}</p>\n          <ul>${items}</ul>`;
+    })
+    .join("\n");
+const pagerLink = (d, rel) => (d ? `<a class="docs-pager-${rel}" href="${d.path}"><span>${rel === "next" ? "Next" : "Previous"}</span>${escape(d.title)}</a>` : "");
+
+await mkdir(join(dist, "docs"), { recursive: true });
+const docPageFiles = [];
+const docPages = renderedDocs.map((d, i) => {
+  const toc = d.headings.filter((h) => h.level === 2);
+  return {
+    file: join("docs", d.slug + ".html"),
+    values: {
+      DOC_TITLE: escape(d.title),
+      DOC_DESC: escape(plain(d.lede).slice(0, 220)),
+      DOC_PATH: d.path,
+      DOC_GROUP: escape(d.group),
+      DOC_LEDE: inline(d.lede, true),
+      DOC_NAV: docNav(d),
+      DOC_TOC: toc.length >= 4 ? `        <nav class="docs-toc" aria-label="On this page"><p>On this page</p><ul>${toc.map((h) => `<li><a href="#${h.id}">${escape(h.text)}</a></li>`).join("")}</ul></nav>` : "",
+      DOC_BODY: d.html,
+      DOC_PAGER: pagerLink(renderedDocs[i - 1], "prev") + pagerLink(renderedDocs[i + 1], "next"),
+      DOC_FILE: d.file,
+    },
+  };
+});
+
+const pages = ["index.html", "404.html", "privacy.html"];
 for (const page of pages) {
   let html = await readFile(join(site, "src", page), "utf8");
   html = html.replace(/\{\{(\w+)\}\}/g, (all, key) => {
@@ -216,15 +283,32 @@ for (const page of pages) {
   html = html.replace(/href="\/(favicon\.svg|favicon-32\.png|apple-touch-icon\.png)"/g, (all, icon) => `href="/${icon}?v=${iconVersions[icon]}"`);
   await writeFile(join(dist, page), html);
 }
+const docTemplate = await readFile(join(site, "src", "docs.html"), "utf8");
+for (const { file, values: own } of docPages) {
+  let html = docTemplate.replace(/\{\{(\w+)\}\}/g, (all, key) => {
+    const value = key in own ? own[key] : values[key];
+    if (value === undefined) throw new Error(`docs.html: unknown placeholder ${all}`);
+    return value;
+  });
+  html = html.replace(/href="\/(favicon\.svg|favicon-32\.png|apple-touch-icon\.png)"/g, (all, icon) => `href="/${icon}?v=${iconVersions[icon]}"`);
+  await writeFile(join(dist, file), html);
+  docPageFiles.push(file);
+}
 
 // The pages' inline scripts (they mark the page as scripted and apply the saved theme before CSS
 // applies) and the inlined stylesheet: the Content-Security-Policy in the Caddyfile allows them by hash.
-const allHtml = (await Promise.all(pages.map((page) => readFile(join(dist, page), "utf8")))).join("\n");
+const allHtml = (await Promise.all([...pages, ...docPageFiles].map((page) => readFile(join(dist, page), "utf8")))).join("\n");
 const hashes = (re) => [...new Set([...allHtml.matchAll(re)].map((m) => `'sha256-${createHash("sha256").update(m[1]).digest("base64")}'`))].join(" ");
 await writeFile(join(dist, ".csp-script"), hashes(/<script>([\s\S]*?)<\/script>/g));
 await writeFile(join(dist, ".csp-style"), hashes(/<style>([\s\S]*?)<\/style>/g));
 
+const urls = ["/", ...docs.map((d) => d.path), "/privacy"];
+await writeFile(
+  join(dist, "sitemap.xml"),
+  `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.map((u) => `  <url><loc>https://playhorizon.dev${u}</loc></url>`).join("\n")}\n</urlset>\n`,
+);
+
 console.log(
   `built dist/ from ${readmeFrom}: ${body.length} subsystems, ${percent}, ${harnesses} harnesses, ` +
-    `${game.length} game releases baked${launcher ? `, launcher ${launcher.tag_name}` : ""}, ${contributors.length} contributors`,
+    `${game.length} game releases baked${launcher ? `, launcher ${launcher.tag_name}` : ""}, ${contributors.length} contributors, ${docs.length} docs pages`,
 );

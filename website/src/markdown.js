@@ -9,15 +9,17 @@ export function escape(text) {
   return text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
 
-function href(url) {
+function href(url, site) {
   url = url.trim();
   if (/^(https?:|mailto:)/i.test(url)) return url;
-  if (url.startsWith("#")) return null; // README anchors have no target here
+  // The docs pages (`site`) link each other and their own headings; the README's anchors have no target here.
+  if (site && (/^\/(?!\/)/.test(url) || url.startsWith("#"))) return url;
+  if (url.startsWith("#")) return null;
   if (/^[a-z]+:/i.test(url)) return null; // javascript: and the like
   return REPO_BLOB + url.replace(/^\.?\//, "");
 }
 
-export function inline(text) {
+export function inline(text, site = false) {
   const codes = [];
   let out = text.replace(/`([^`]+)`/g, (_, code) => {
     codes.push(code);
@@ -35,8 +37,8 @@ export function inline(text) {
     .replace(/&lt;(https?:\/\/[^\s&]+)&gt;/g, (_, u) => `<a href="${u}">${u}</a>`);
   out = out.replace(/\u0001(\d+)\u0001/g, (_, i) => {
     const [label, url] = links[i];
-    const target = href(url);
-    const body = inline(label);
+    const target = href(url, site);
+    const body = inline(label, site);
     return target ? `<a href="${escape(target)}">${body}</a>` : body;
   });
   return out.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${escape(codes[i])}</code>`);
@@ -45,7 +47,7 @@ export function inline(text) {
 const indentOf = (line) => line.match(/^ */)[0].length;
 const ITEM = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
 
-function list(lines, start) {
+function list(lines, start, site) {
   // Collects the items at this list's indentation; deeper lines belong to the item above.
   const base = indentOf(lines[start]);
   const ordered = /\d/.test(lines[start].match(ITEM)[2]);
@@ -65,7 +67,7 @@ function list(lines, start) {
     if (m && indentOf(line) === base) {
       items.push({ text: [m[3]], children: [] });
     } else if (m && indentOf(line) > base) {
-      const [html, end] = list(lines, i);
+      const [html, end] = list(lines, i, site);
       items[items.length - 1].children.push(html);
       i = end;
       continue;
@@ -77,12 +79,24 @@ function list(lines, start) {
     i++;
   }
   const tag = ordered ? "ol" : "ul";
-  const body = items.map((it) => `<li>${inline(it.text.join(" "))}${it.children.join("")}</li>`).join("");
+  const body = items.map((it) => `<li>${inline(it.text.join(" "), site)}${it.children.join("")}</li>`).join("");
   return [`<${tag}>${body}</${tag}>`, i];
 }
 
-/** Renders Markdown; `shift` moves headings down (a `#` becomes `h{1 + shift}`). */
-export function markdown(source, { shift = 0 } = {}) {
+const slug = (text) =>
+  text
+    .toLowerCase()
+    .replace(/`/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+
+/**
+ * Renders Markdown; `shift` moves headings down (a `#` becomes `h{1 + shift}`).
+ * `site` is for the docs pages: links to the site's own pages and anchors stay as they are, `##` and `###`
+ * headings get an id (and are pushed onto `headings`, for a table of contents), and a line holding only
+ * `![caption](/media/…)` becomes a figure.
+ */
+export function markdown(source, { shift = 0, site = false, headings = null } = {}) {
   const lines = source.replace(/\r\n?/g, "\n").split("\n");
   const out = [];
   let i = 0;
@@ -95,7 +109,17 @@ export function markdown(source, { shift = 0 } = {}) {
     let m;
     if ((m = line.match(/^(#{1,6})\s+(.*?)\s*#*$/))) {
       const level = Math.min(6, m[1].length + shift);
-      out.push(`<h${level}>${inline(m[2])}</h${level}>`);
+      let id = "";
+      if (site && (m[1].length === 2 || m[1].length === 3)) {
+        const base = slug(m[2]);
+        id = base;
+        for (let n = 2; headings && headings.some((h) => h.id === id); n++) id = `${base}-${n}`;
+        headings?.push({ level: m[1].length, text: m[2].replace(/`/g, ""), id });
+      }
+      out.push(`<h${level}${id ? ` id="${id}"` : ""}>${inline(m[2], site)}</h${level}>`);
+      i++;
+    } else if (site && (m = line.match(/^!\[([^\]]*)\]\((\/media\/[\w./-]+)\)\s*$/))) {
+      out.push(`<figure><img src="${escape(m[2])}" alt="${escape(m[1])}" loading="lazy" decoding="async"><figcaption>${inline(m[1], true)}</figcaption></figure>`);
       i++;
     } else if ((m = line.match(/^\s*(```|~~~)/))) {
       const fence = m[1];
@@ -108,13 +132,13 @@ export function markdown(source, { shift = 0 } = {}) {
       out.push("<hr>");
       i++;
     } else if (ITEM.test(line)) {
-      const [html, end] = list(lines, i);
+      const [html, end] = list(lines, i, site);
       out.push(html);
       i = end;
     } else if (line.startsWith(">")) {
       const quote = [];
       while (i < lines.length && lines[i].startsWith(">")) quote.push(lines[i++].replace(/^>\s?/, ""));
-      out.push(`<blockquote>${markdown(quote.join("\n"), { shift })}</blockquote>`);
+      out.push(`<blockquote>${markdown(quote.join("\n"), { shift, site })}</blockquote>`);
     } else {
       const para = [];
       while (
@@ -125,7 +149,7 @@ export function markdown(source, { shift = 0 } = {}) {
       ) {
         para.push(lines[i++].trim());
       }
-      out.push(`<p>${inline(para.join(" "))}</p>`);
+      out.push(`<p>${inline(para.join(" "), site)}</p>`);
     }
   }
   return out.join("\n");

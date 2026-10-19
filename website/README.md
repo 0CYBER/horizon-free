@@ -2,7 +2,7 @@
 
 Live at **https://playhorizon.dev**.
 
-One static page in Horizon's design language (`docs/design-system.md`), with the tokens of
+A landing page and a documentation section in Horizon's design language (`docs/design-system.md`), with the tokens of
 `crates/horizon-theme` (generated into `src/tokens.css` by `cargo run -p xtask -- tokens`):
 Geist and Geist Mono, cool neutrals in a light and a dark appearance (the system's, or the
 toggle's) and one violet accent, numbered index lists with one-pixel rules, and short, eased
@@ -14,18 +14,20 @@ no runtime dependencies.
 
 ```
 build.mjs          renders dist/ (no dependencies)
+docs/*.md          the documentation, one Markdown file per page: "# Title", a lede paragraph, then sections
+docs/nav.json      the order of the pages and the groups of the left navigation
 serve.mjs          a tiny static server for local checks
 src/index.html     the page, with {{placeholders}} build.mjs fills
 src/404.html       the not-found page
 src/privacy.html   what the launcher can send when players allow it, retention, deletion (/privacy)
-src/server.html    host a server (/server): docs/hosting.md rendered into the page
+src/docs.html      the template of every documentation page (/docs/...), with its left navigation
 src/tokens.css     the design tokens, generated from crates/horizon-theme (do not edit)
 src/style.css      every style, on top of the tokens
 src/main.js        download buttons, patch notes, links, contributors, nav and menu, tabs, lightbox, motion
 src/markdown.js    a small Markdown renderer (escapes everything), shared by build and page
 src/releases.js    the patch notes' markup, shared by build and page
 src/contributors.js the contributors' filtering and markup, shared by build and page
-public/            fonts, screenshots, icons, og.png, robots.txt, sitemap.xml: copied as is
+public/            fonts, screenshots, icons, og.png, robots.txt: copied as is (sitemap.xml is written by the build)
 scripts/assets.mjs rebuilds public/ from the repo (fonts to WOFF2, images to WebP)
 scripts/shots.mjs  Playwright screenshots at every width, and og.png
 Dockerfile, Caddyfile, railway.json   the Railway service
@@ -36,7 +38,7 @@ shots/             (gitignored) full-page screenshots at 360–1920 px, a 1250×
 ## What comes from where
 
 - **Built in** (`build.mjs`): the parity table, its score, harness count and audit date,
-  all from `README.md`; the server guide (`/server`) from `docs/hosting.md`; the Discord and Sponsor links from
+  all from `README.md`; the documentation pages (`/docs`) from `website/docs/`; the Discord and Sponsor links from
   `launcher/links.json`; the latest releases and the contributors (`/repos/ludovic111/horizon/contributors`,
   bots left out, the owner first), when GitHub answers; without an answer the build still succeeds and
   the Contributors block and its menu entries stay hidden until the page loads them. Locally these come from
@@ -47,6 +49,17 @@ shots/             (gitignored) full-page screenshots at 360–1920 px, a 1250×
   notes are rendered), the contributors (avatars come from `avatars.githubusercontent.com`),
   and `links.json` from `main`. Each
   falls back to what was built in, and the download button to the releases page.
+
+## The documentation
+
+`docs/<slug>.md` becomes `/docs/<slug>` (`index.md` is `/docs/`). Write for players first, then hosters,
+then contributors; plain words, short paragraphs; claim only what players can download today, and
+mark merged-but-unreleased things "next release". `{{HARNESSES}}` and `{{PERCENT}}` are filled from
+the README. A line holding only `![caption](/media/...)` becomes a figure (the file must be in
+`public/media/`); links to other pages are `/docs/<slug>#heading`. The build checks every link
+between pages and every image, and fails with the list when one is broken. `/server`
+redirects to `/docs/hosting`. The developer docs in the repository's `docs/` stay as they are and are linked from
+the Contributing page.
 
 ## Run it locally
 

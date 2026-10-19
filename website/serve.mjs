@@ -6,13 +6,19 @@ import { join, extname, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(fileURLToPath(new URL(".", import.meta.url)), "dist");
-const types = { ".html": "text/html; charset=utf-8", ".css": "text/css", ".js": "text/javascript", ".webp": "image/webp", ".png": "image/png", ".svg": "image/svg+xml", ".woff2": "font/woff2", ".txt": "text/plain; charset=utf-8", ".md": "text/plain; charset=utf-8", ".json": "application/json" };
+const types = { ".html": "text/html; charset=utf-8", ".css": "text/css", ".js": "text/javascript", ".webp": "image/webp", ".png": "image/png", ".svg": "image/svg+xml", ".woff2": "font/woff2", ".txt": "text/plain; charset=utf-8", ".md": "text/plain; charset=utf-8", ".json": "application/json", ".xml": "application/xml" };
 const port = Number(process.env.PORT) || 4173;
 
 createServer(async (req, res) => {
   let path = normalize(decodeURIComponent(new URL(req.url, "http://x").pathname)).replace(/^(\.\.[/\\])+/, "");
   if (path.endsWith("/")) path += "index.html";
-  // /privacy is privacy.html, as the Caddyfile rewrites it.
+  // The server guide is part of the docs now, as the Caddyfile redirects it.
+  if (path === "/server" || path === "/server.html") {
+    res.writeHead(301, { Location: "/docs/hosting" });
+    return res.end();
+  }
+  if (path === "/docs") path = "/docs/index.html";
+  // /privacy and /docs/<page> are .html files, as the Caddyfile rewrites them.
   if (!extname(path)) path += ".html";
   let file = join(root, path);
   let status = 200;
