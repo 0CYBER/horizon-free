@@ -401,6 +401,9 @@ fn drop_java_processors(list: &mut Value, dropped: &mut BTreeMap<String, usize>)
                     .map(|(_, v)| v)
                     .collect()
             }
+            Some("horizon:pillar" | "horizon:bottom_pillar") => {
+                p.get_mut("pillar_processor_list").into_iter().collect()
+            }
             _ => Vec::new(),
         };
         for list in inner {

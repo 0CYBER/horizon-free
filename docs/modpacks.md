@@ -472,8 +472,26 @@ Two cases the oracle fills in:
     1234 the farms now grow carrots, potatoes and beetroot besides wheat, and 1,655
     cobblestone blocks become paths, grass, mossy cobblestone and planks. No Lithostitched processor is
     dropped now (130 before), only CTOV's compat hooks for other mods inside them (142 copies).
-    Still taken out: Formations' biome replacements, Repurposed's pillars and fluid fixes,
-    blocks aged or propped up.
+    The processors that build outside their template are carried too: Repurposed's and
+    Moog's pillar processors become the game's `horizon:pillar` (a column from a placeholder
+    block down to the ground, with the processor list they run on each of its blocks written
+    in), Repurposed's bottom pillars `horizon:bottom_pillar`, their fluid fix (a wall of the
+    structure's block over water and lava sources next to its open blocks)
+    `horizon:close_off_fluid_sources`, and YUNG's pillars (Better Fortresses, Better Jungle
+    Temples) and Better Fortresses' stair supports `horizon:yung_pillar` and
+    `horizon:stair_pillar`. They write only in the chunk being generated, as the mods do.
+    Dropped processors went from 570 to 456 in Repurposed Structures (its pillars, bottom
+    pillars and fluid fixes: 242 lists), 14 to 1 in Moog's, 10 to 5 in Better Fortresses and
+    52 to 50 in Better Jungle Temples; the structure starts are the same (382 starts, 37,451
+    pieces in chunks -64..63, seed 1234). Around spawn at seed 1234, 1,515 blocks change: the
+    382 red glass placeholders under Repurposed's ocean outpost and pyramids become prismarine
+    columns, and their gravel and prismarine pillars reach the sea floor. In the Nether, the
+    Better Fortresses fortress at chunk (-23, 9) stands on its pillars: its terracotta
+    placeholders become nether bricks and 41,487 blocks of air (and 2,163 of lava) under it
+    become brick and magma columns down to the netherrack, 64,568 blocks changed in its 180
+    chunks (the huge fungi there grow around the columns).
+    Still taken out: Formations' biome replacements, Repurposed's air fix
+    (`close_off_air_sources`), blocks aged or propped up.
     In the 128×128-chunk square (seed 1234), every spawner of a mod structure now has its mob:
     in the Overworld 83 Better Dungeons spawners held the template's placeholder pig and 17 of
     Moog's were empty (763 spawners with a mob, up from 628); in the Nether the 52 empty ones
@@ -553,8 +571,7 @@ Two cases the oracle fills in:
     - Repurposed's mineshafts, mansions and monuments, Better Mineshafts and two Better
       Dungeons types: Java structure types;
     - the block processors written in Java
-      (YUNG's banners, legs and decorations, Repurposed's pillars and fluid fixes,
-      Lithostitched's block swaps);
+      (YUNG's banners, legs and decorations, Lithostitched's block swaps);
     - MO Structures (38; its library is only on CurseForge).
 
   With every structure PR above, the same square (seed 1234, chunks -64..63) holds 362
