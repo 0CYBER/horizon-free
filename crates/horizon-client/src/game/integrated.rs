@@ -216,6 +216,8 @@ impl Game<'_> {
         let thread = std::thread::Builder::new()
             .name("Server thread".into())
             .spawn(move || {
+                // MinecraftServer.spin's Thread.setPriority(8).
+                horizon_threads::favour_current();
                 let result = serve(
                     &res,
                     pack,
