@@ -43,6 +43,8 @@ Horizon is downloaded only through **the Horizon launcher**: get it from [playho
 
 **You need** Minecraft: Java Edition installed with the official launcher, with 26.3 played once; Python 3.10 or newer and Java 25 (a JDK, e.g. Eclipse Temurin 25) for the one-time resource preparation; and a GPU with Vulkan on Linux and Windows, or any Apple Silicon Mac.
 
+**Host a server:** `horizon-server` is one native program with no Java, one settings file, a command line, a web panel, backups and updates that roll back by themselves. It installs with one command (`curl -fsSL https://raw.githubusercontent.com/ludovic111/horizon/main/packaging/server/install.sh | sh` on Linux and macOS, `irm https://raw.githubusercontent.com/ludovic111/horizon/main/packaging/server/install.ps1 | iex` on Windows). The guide is at [playhorizon.dev/server](https://playhorizon.dev/server) ([docs/hosting.md](docs/hosting.md)).
+
 ### The launcher
 
 <table>

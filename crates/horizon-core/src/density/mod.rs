@@ -9,7 +9,10 @@ use crate::{
 use std::sync::Arc;
 
 mod beardifier;
-pub use beardifier::{Beardifier, JigsawJunction, RigidPiece, StructureBounds, TerrainAdjustment};
+pub use beardifier::{
+    Beardifier, JigsawJunction, KernelJunction, KernelPiece, RigidPiece, StructureBounds,
+    TerrainAdjustment, TerrainKernel,
+};
 mod cache;
 mod world_fields;
 pub use world_fields::{
@@ -90,6 +93,7 @@ pub struct SamplerContext {
     scratch: Vec<Vec<f32>>,
     caches: Option<Vec<cache::CacheCell>>,
     fields: WorldFields,
+    sparse: bool,
 }
 impl SamplerContext {
     fn with_buffer<T>(

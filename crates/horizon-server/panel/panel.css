@@ -126,3 +126,17 @@ code { font-family: var(--mono); font-size: 13px; }
   border-radius: var(--radius);
   max-width: 90vw;
 }
+
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 16px max(24px, calc((100% - 1152px) / 2)) 0;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: var(--plate-soft);
+  border: 1px solid var(--rule);
+}
+.notice.failed {
+  color: var(--danger);
+}

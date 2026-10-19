@@ -1026,6 +1026,7 @@ mod tests {
             projection: Projection::Rigid,
             waterlogging: None,
             yung: None,
+            enhanced_terrain: None,
         });
         let piece = || PoolPiece {
             bounding_box: BoundingBox::new([0; 3], [4; 3]),

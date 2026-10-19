@@ -102,6 +102,9 @@ pub struct StructureDef {
     pub biomes: BTreeSet<BiomeId>,
     pub step: usize,
     pub terrain: TerrainAdjustment,
+    /// A structure library's terrain kernel
+    /// (`"horizon:enhanced_terrain_adaptation"`).
+    pub enhanced_terrain: Option<super::enhanced_terrain::StructureAdaptation>,
     /// Another loaded structure turns this one's type off
     /// (`"horizon:disables"`): it never starts.
     pub disabled: bool,
@@ -375,6 +378,10 @@ impl StructureRegistry {
                     .position(|s| Some(*s) == v["step"].as_str())
                     .unwrap_or(4),
                 terrain: terrain(v["terrain_adaptation"].as_str()),
+                enhanced_terrain: v
+                    .get("horizon:enhanced_terrain_adaptation")
+                    .map(super::enhanced_terrain::StructureAdaptation::decode)
+                    .transpose()?,
                 disabled: false,
             });
         }
@@ -1105,6 +1112,10 @@ fn try_generate(
     if def.terrain != TerrainAdjustment::None {
         bounding_box = bounding_box.inflated(12, 12);
     }
+    if let Some(enhanced) = def.enhanced_terrain.as_ref().filter(|e| e.inflate) {
+        let r = enhanced.radius();
+        bounding_box = bounding_box.inflated(r, r);
+    }
     Some(StructureStart {
         structure,
         name: def.name.clone(),
@@ -1177,8 +1188,18 @@ pub fn beardifier(
         Some(a) => a.encapsulate(&b),
         None => *any = Some(b),
     };
+    let (mut kernel_pieces, mut kernel_junctions) = (Vec::new(), Vec::new());
+    let mut kernels: Option<BoundingBox> = None;
     for start in starts {
-        let adjustment = registry.structures[start.structure].terrain;
+        let def = &registry.structures[start.structure];
+        if let Some(enhanced) = &def.enhanced_terrain {
+            if let Some(b) =
+                enhanced.collect(start, chunk, &mut kernel_pieces, &mut kernel_junctions)
+            {
+                include(b, &mut kernels);
+            }
+        }
+        let adjustment = def.terrain;
         if adjustment == TerrainAdjustment::None {
             continue;
         }
@@ -1225,13 +1246,20 @@ pub fn beardifier(
             }
         }
     }
-    let any = any?;
-    let affected = any.inflated(24, 24);
-    Some(Beardifier::new(
-        rigids,
-        junctions,
-        StructureBounds::new(affected.min, affected.max),
-    ))
+    // The libraries' kernels reach as far as their radius, beyond vanilla's.
+    let mut affected = any.map(|a| a.inflated(24, 24));
+    if let Some(k) = kernels {
+        include(k, &mut affected);
+    }
+    let affected = affected?;
+    Some(
+        Beardifier::new(
+            rigids,
+            junctions,
+            StructureBounds::new(affected.min, affected.max),
+        )
+        .with_kernels(kernel_pieces, kernel_junctions),
+    )
 }
 
 /// StructureStart.placeInChunk for pieces intersecting the chunk's writable box.

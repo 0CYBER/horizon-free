@@ -1,6 +1,8 @@
 import unittest
 
-from tools.server_bench import work
+import re
+
+from tools.server_bench import DONE, TICK_AVERAGE, TICK_PERCENTILES, work
 
 
 def run(server, bots, sent, new, waited=0.0, behaviour="mixed"):
@@ -30,3 +32,18 @@ class ServerBenchWorkTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ServerBenchLogTests(unittest.TestCase):
+    def test_every_server_says_it_is_up_the_same_way(self):
+        for line in ['[05:16:10] [Server thread/INFO]: Done (9.762s)! For help, type "help"',
+                     '[02:53:58 INFO]: Done (29.649s)! For help, type "help"']:
+            self.assertTrue(re.search(DONE, line), line)
+        self.assertFalse(re.search(DONE, '[02:53:58 INFO]: Preparing spawn area: Done (12%)'))
+
+    def test_paper_answers_tick_query_as_vanilla_does(self):
+        # Paper 26.3 build 205, from a smoke run of this tool.
+        self.assertEqual(TICK_AVERAGE.search("Average time per tick: 14.4ms (Target: 50.0ms)").group(1), "14.4")
+        self.assertEqual(TICK_PERCENTILES.search(
+            "[02:54:10 INFO]: System chat: Percentiles: P50: 1.0ms P95: 34.6ms P99: 764.4ms. Sample: 100").groups(),
+            ("1.0", "34.6", "764.4"))

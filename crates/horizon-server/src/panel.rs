@@ -145,7 +145,7 @@ fn secure(response: Response) -> Response {
         .with("Referrer-Policy", "no-referrer")
 }
 
-fn handle(shared: &Shared, address: SocketAddr, request: &Request) -> Response {
+fn handle(shared: &Arc<Shared>, address: SocketAddr, request: &Request) -> Response {
     if !request
         .header("host")
         .is_some_and(|h| host_allowed(h, address))

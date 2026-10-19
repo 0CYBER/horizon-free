@@ -42,6 +42,9 @@ pub enum PoolElement {
         /// YUNG's API's rules on the piece (`"horizon:yungsapi"`), read only
         /// by its assembler ([`super::yung`]).
         yung: Option<Box<super::yung::Rules>>,
+        /// The piece's own terrain kernel in a structure that has one
+        /// (`"horizon:enhanced_terrain_adaptation"`).
+        enhanced_terrain: Option<Arc<super::enhanced_terrain::Adaptation>>,
     },
     Feature {
         feature: String,
@@ -142,6 +145,10 @@ impl PoolElement {
                     yung: value
                         .get("horizon:yungsapi")
                         .map(|rules| super::yung::Rules::decode(rules, resources).map(Box::new))
+                        .transpose()?,
+                    enhanced_terrain: value
+                        .get("horizon:enhanced_terrain_adaptation")
+                        .map(|a| super::enhanced_terrain::Adaptation::decode(a).map(Arc::new))
                         .transpose()?,
                 }
             }
@@ -245,6 +252,15 @@ impl PoolElement {
     pub fn yung(&self) -> Option<&super::yung::Rules> {
         match self {
             Self::Single { yung, .. } => yung.as_deref(),
+            _ => None,
+        }
+    }
+    /// The piece's own terrain kernel, in place of its structure's.
+    pub fn enhanced_terrain(&self) -> Option<&super::enhanced_terrain::Adaptation> {
+        match self {
+            Self::Single {
+                enhanced_terrain, ..
+            } => enhanced_terrain.as_deref(),
             _ => None,
         }
     }

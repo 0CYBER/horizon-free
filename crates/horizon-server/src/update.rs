@@ -1,0 +1,763 @@
+//! Updates and rollbacks (docs/server.md, section 7) for a `horizon-server` installed by install.sh or
+//! install.ps1: each release in `<dir>/releases/<tag>`, `<dir>/current` pointing at the one in use, and
+//! `<dir>/previous` naming the one before it. An update downloads the newest release from GitHub, checks it
+//! against the SHA-256 GitHub publishes for it, unpacks it beside the others and switches `current`; the
+//! supervisor then restarts the game on it and switches back by itself if the new game doesn't come up.
+
+use crate::{api::Client, backup, config::Config, engine, supervisor};
+use serde_json::{Value, json};
+use std::{
+    io::Read,
+    path::{Path, PathBuf},
+    process::Command,
+    time::{Duration, Instant},
+};
+
+const REPO: &str = "ludovic111/horizon";
+/// The release archives for this computer, most specific first: on Linux the server build (no ALSA or
+/// udev), else the full game (releases before the server build).
+const ASSETS: &[&str] = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+    &[
+        "horizon-server-linux-x86_64.tar.gz",
+        "horizon-linux-x86_64.tar.gz",
+    ]
+} else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+    &["horizon-macos-arm64.zip"]
+} else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+    &["horizon-windows-x64.zip"]
+} else {
+    &[]
+};
+
+fn exe(name: &str) -> String {
+    format!("{name}{}", std::env::consts::EXE_SUFFIX)
+}
+
+/// The installer's folder: `releases/`, `current`, `previous` and `game-files/`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Install {
+    pub root: PathBuf,
+}
+
+impl Install {
+    /// The install this program runs from, if it runs from one.
+    pub fn find() -> Option<Self> {
+        Self::around(&std::env::current_exe().ok()?)
+    }
+
+    /// The install holding `program` (`<root>/releases/<tag>/horizon-server`, reached directly or through
+    /// `current`).
+    pub fn around(program: &Path) -> Option<Self> {
+        let program = std::fs::canonicalize(program).ok()?;
+        let releases = program.parent()?.parent()?;
+        if releases.file_name()? != "releases" {
+            return None;
+        }
+        let root = releases.parent()?.to_path_buf();
+        root.join("current").is_dir().then_some(Self { root })
+    }
+
+    /// The install, or why there is none to update.
+    pub fn required() -> Result<Self, String> {
+        Self::find().ok_or_else(|| {
+            "this horizon-server wasn't installed by install.sh or install.ps1 (no releases/ and current \
+             around it): update it the way you installed it"
+                .into()
+        })
+    }
+
+    pub fn release(&self, tag: &str) -> PathBuf {
+        self.root.join("releases").join(tag)
+    }
+
+    /// Where the game programs in use are: `current`, so a switch applies at the next start.
+    pub fn programs(&self) -> PathBuf {
+        self.root.join("current")
+    }
+
+    /// The release in use.
+    pub fn current(&self) -> Option<String> {
+        let target = std::fs::canonicalize(self.root.join("current")).ok()?;
+        Some(target.file_name()?.to_string_lossy().into_owned())
+    }
+
+    /// The release used before the current one, if it is still there.
+    pub fn previous(&self) -> Option<String> {
+        let tag = std::fs::read_to_string(self.root.join("previous")).ok()?;
+        let tag = tag.trim();
+        (!tag.is_empty() && self.release(tag).is_dir()).then(|| tag.to_owned())
+    }
+
+    /// Points `current` at the release `tag`, and remembers the one it pointed at as `previous`.
+    pub fn switch(&self, tag: &str) -> Result<(), String> {
+        let target = self.release(tag);
+        if !target.join(exe("horizon-server")).is_file() {
+            return Err(format!("{} holds no horizon-server", target.display()));
+        }
+        if let Some(old) = self.current().filter(|old| old != tag) {
+            std::fs::write(self.root.join("previous"), format!("{old}\n"))
+                .map_err(|e| format!("{}: {e}", self.root.join("previous").display()))?;
+        }
+        point(&self.root.join("current"), &target)
+            .map_err(|e| format!("switching current to {tag}: {e}"))
+    }
+
+    /// Undoes a [`Install::switch`]: `current` back on `from` and `previous` as it was before, so a later
+    /// rollback doesn't go to the release that failed.
+    pub fn switch_back(&self, from: &str, previous: Option<&str>) -> Result<(), String> {
+        point(&self.root.join("current"), &self.release(from))
+            .map_err(|e| format!("switching current back to {from}: {e}"))?;
+        let file = self.root.join("previous");
+        match previous {
+            Some(tag) => std::fs::write(&file, format!("{tag}\n")),
+            None => std::fs::remove_file(&file).or_else(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            }),
+        }
+        .map_err(|e| format!("{}: {e}", file.display()))
+    }
+}
+
+/// Makes `link` point at the folder `target`, replacing what it pointed at.
+#[cfg(unix)]
+fn point(link: &Path, target: &Path) -> std::io::Result<()> {
+    // A new link renamed over the old one: `current` always points at a whole release.
+    let fresh = link.with_extension("switching");
+    let _ = std::fs::remove_file(&fresh);
+    std::os::unix::fs::symlink(target, &fresh)?;
+    std::fs::rename(&fresh, link)
+}
+
+/// Makes `link` a junction to `target` (install.ps1's links: they need no admin rights).
+#[cfg(windows)]
+fn point(link: &Path, target: &Path) -> std::io::Result<()> {
+    if link.exists() || link.symlink_metadata().is_ok() {
+        std::fs::remove_dir(link)?;
+    }
+    let status = Command::new("cmd")
+        .arg("/C")
+        .arg("mklink")
+        .arg("/J")
+        .arg(link)
+        .arg(target)
+        .stdout(std::process::Stdio::null())
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!(
+            "mklink /J failed ({status})"
+        )))
+    }
+}
+
+/// A release on GitHub: its tag and the archive for this computer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Release {
+    pub tag: String,
+    pub asset: String,
+    pub url: String,
+    pub sha256: String,
+}
+
+/// The newest release (or `tag`), from GitHub's API.
+pub fn release(tag: Option<&str>) -> Result<Release, String> {
+    let url = match tag {
+        Some(tag) => format!("https://api.github.com/repos/{REPO}/releases/tags/{tag}"),
+        None => format!("https://api.github.com/repos/{REPO}/releases/latest"),
+    };
+    let text = ureq::get(&url)
+        .set("Accept", "application/vnd.github+json")
+        .set("User-Agent", "horizon-server")
+        .call()
+        .map_err(|e| match e {
+            ureq::Error::Status(404, _) => format!("no release {} on GitHub", tag.unwrap_or("")),
+            e => format!("GitHub didn't answer: {e}"),
+        })?
+        .into_string()
+        .map_err(|e| format!("GitHub's answer: {e}"))?;
+    pick(&serde_json::from_str(&text).map_err(|e| format!("GitHub's answer: {e}"))?)
+}
+
+/// The archive for this computer in a release's JSON, with the SHA-256 GitHub publishes for it.
+fn pick(release: &Value) -> Result<Release, String> {
+    let tag = release["tag_name"]
+        .as_str()
+        .ok_or("GitHub's answer has no tag")?;
+    let assets = release["assets"].as_array().cloned().unwrap_or_default();
+    let asset = ASSETS
+        .iter()
+        .find_map(|name| assets.iter().find(|a| a["name"] == *name))
+        .ok_or_else(|| {
+            format!(
+                "release {tag} has no archive for this computer ({})",
+                ASSETS.join(", ")
+            )
+        })?;
+    let name = asset["name"].as_str().unwrap_or_default();
+    let sha256 = asset["digest"]
+        .as_str()
+        .and_then(|d| d.strip_prefix("sha256:"))
+        .ok_or_else(|| format!("release {tag} publishes no SHA-256 for {name}"))?;
+    Ok(Release {
+        tag: tag.to_owned(),
+        asset: name.to_owned(),
+        url: asset["browser_download_url"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned(),
+        sha256: sha256.to_ascii_lowercase(),
+    })
+}
+
+/// Whether the release `tag` is newer than `than`: releases are tagged `vYYYY.MM.DD[.N]`, compared
+/// number by number. A tag that isn't one (an archive installed by hand) is never older than a release.
+pub fn newer(tag: &str, than: &str) -> bool {
+    let numbers = |t: &str| -> Option<Vec<u64>> {
+        t.strip_prefix('v')?
+            .split('.')
+            .map(|n| n.parse().ok())
+            .collect()
+    };
+    match (numbers(tag), numbers(than)) {
+        (Some(a), Some(b)) => a > b,
+        (Some(_), None) => true,
+        _ => false,
+    }
+}
+
+/// Downloads a release's archive into `<root>/downloads/` and checks its SHA-256; the archive's path.
+pub fn download(install: &Install, release: &Release) -> Result<PathBuf, String> {
+    use sha2::Digest;
+    let folder = install.root.join("downloads");
+    std::fs::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+    let path = folder.join(&release.asset);
+    let part = folder.join(format!("{}.part", release.asset));
+    let result = (|| {
+        let mut reader = ureq::get(&release.url)
+            .set("User-Agent", "horizon-server")
+            .call()
+            .map_err(|e| format!("downloading {}: {e}", release.asset))?
+            .into_reader();
+        let mut file =
+            std::fs::File::create(&part).map_err(|e| format!("{}: {e}", part.display()))?;
+        let mut hasher = sha2::Sha256::new();
+        let mut buffer = vec![0; 1 << 16];
+        loop {
+            let n = reader
+                .read(&mut buffer)
+                .map_err(|e| format!("downloading {}: {e}", release.asset))?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buffer[..n]);
+            std::io::Write::write_all(&mut file, &buffer[..n]).map_err(|e| e.to_string())?;
+        }
+        let got: String = hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        if got != release.sha256 {
+            return Err(format!(
+                "{} doesn't match its SHA-256 (got {got}, expected {}): not installed",
+                release.asset, release.sha256
+            ));
+        }
+        std::fs::rename(&part, &path).map_err(|e| e.to_string())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&part);
+    }
+    result.map(|()| path)
+}
+
+/// Unpacks a release archive into `<root>/releases/<tag>`, with its `.local/horizon-client` linked to the
+/// install's prepared game files (which updates keep), as the installers do. It doesn't switch to it.
+pub fn unpack(install: &Install, archive: &Path, tag: &str) -> Result<PathBuf, String> {
+    if tag.is_empty() || tag.contains(['/', '\\']) || tag.starts_with('.') {
+        return Err(format!("{tag:?} isn't a release name"));
+    }
+    let target = install.release(tag);
+    if install.current().as_deref() == Some(tag) {
+        return Err(format!("{tag} is the release in use"));
+    }
+    let scratch = install
+        .root
+        .join("releases")
+        .join(format!(".{tag}.unpacking"));
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch).map_err(|e| format!("{}: {e}", scratch.display()))?;
+    let result = (|| {
+        let name = archive.to_string_lossy();
+        if name.ends_with(".zip") {
+            let file =
+                std::fs::File::open(archive).map_err(|e| format!("{}: {e}", archive.display()))?;
+            zip::ZipArchive::new(file)
+                .and_then(|mut z| z.extract(&scratch))
+                .map_err(|e| format!("{}: {e}", archive.display()))?;
+        } else if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
+            // tar is on every Linux and macOS, and on Windows 10 and later.
+            let status = Command::new("tar")
+                .arg("-xzf")
+                .arg(archive)
+                .arg("-C")
+                .arg(&scratch)
+                .status()
+                .map_err(|e| format!("tar: {e}"))?;
+            if !status.success() {
+                return Err(format!(
+                    "tar couldn't unpack {} ({status})",
+                    archive.display()
+                ));
+            }
+        } else {
+            return Err(format!(
+                "{} is neither a .tar.gz nor a .zip",
+                archive.display()
+            ));
+        }
+        let source = find_program(&scratch, &exe("horizon-server"))
+            .and_then(|p| p.parent().map(Path::to_path_buf))
+            .ok_or_else(|| format!("{} holds no horizon-server", archive.display()))?;
+        #[cfg(unix)]
+        for name in [
+            "horizon-server",
+            "horizon-engine",
+            "horizon-client",
+            "horizon-prepare",
+        ] {
+            use std::os::unix::fs::PermissionsExt;
+            let path = source.join(name);
+            if path.is_file() {
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
+            }
+        }
+        if target.exists() {
+            std::fs::remove_dir_all(&target).map_err(|e| format!("{}: {e}", target.display()))?;
+        }
+        std::fs::rename(&source, &target).map_err(|e| format!("{}: {e}", target.display()))?;
+        let game_files = install.root.join("game-files/horizon-client");
+        std::fs::create_dir_all(&game_files).map_err(|e| e.to_string())?;
+        let local = target.join(".local");
+        std::fs::create_dir_all(&local).map_err(|e| e.to_string())?;
+        let link = local.join("horizon-client");
+        if link.symlink_metadata().is_err() {
+            point(&link, &game_files).map_err(|e| format!("{}: {e}", link.display()))?;
+        }
+        Ok(target.clone())
+    })();
+    let _ = std::fs::remove_dir_all(&scratch);
+    result
+}
+
+/// The first file called `name` under `dir`, breadth first.
+fn find_program(dir: &Path, name: &str) -> Option<PathBuf> {
+    let mut queue = std::collections::VecDeque::from([dir.to_path_buf()]);
+    while let Some(folder) = queue.pop_front() {
+        let mut entries: Vec<_> = std::fs::read_dir(&folder).ok()?.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            let path = entry.path();
+            let kind = entry.file_type().ok()?;
+            if kind.is_file() && entry.file_name() == name {
+                return Some(path);
+            }
+            if kind.is_dir() {
+                queue.push_back(path);
+            }
+        }
+    }
+    None
+}
+
+/// A backup name for the world before a switch to `tag` (backup names take letters, digits, - and _).
+pub fn backup_name(tag: &str) -> String {
+    let clean: String = tag
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .take(48)
+        .collect();
+    format!("before-{clean}")
+}
+
+/// `update [--check] [--version TAG] [--archive FILE --version TAG] [--timeout SECONDS]`.
+pub fn command(dir: &Path, args: &[String]) -> Result<(), String> {
+    let mut check = false;
+    let mut version = None;
+    let mut archive = None;
+    let mut timeout = crate::api::UPDATE_TIMEOUT;
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        let mut value = || {
+            it.next()
+                .cloned()
+                .ok_or_else(|| format!("{arg} needs a value"))
+        };
+        match arg.as_str() {
+            "--check" => check = true,
+            "--version" => version = Some(value()?),
+            "--archive" => archive = Some(PathBuf::from(value()?)),
+            "--timeout" => timeout = seconds(&value()?)?,
+            other => return Err(format!("update: unknown option {other}")),
+        }
+    }
+    let install = Install::required()?;
+    let current = install
+        .current()
+        .ok_or("the installer's `current` points at no release")?;
+    let (tag, archive, downloaded) = match archive {
+        Some(_) if check => return Err("--check looks at GitHub's releases: drop --archive".into()),
+        Some(archive) => {
+            let tag = version
+                .ok_or("--archive needs --version NAME: the release name to install it as")?;
+            (tag, archive, false)
+        }
+        None => {
+            let release = release(version.as_deref())?;
+            if check {
+                if newer(&release.tag, &current) {
+                    println!(
+                        "Horizon {} is out; this server runs {current}. `horizon-server update` installs it.",
+                        release.tag
+                    );
+                } else {
+                    println!(
+                        "Up to date: {current} (the newest release is {}).",
+                        release.tag
+                    );
+                }
+                return Ok(());
+            }
+            if version.is_none() && !newer(&release.tag, &current) {
+                println!("Already on the newest release ({current}).");
+                return Ok(());
+            }
+            println!("Downloading Horizon {} ({})...", release.tag, release.asset);
+            let archive = download(&install, &release)?;
+            (release.tag, archive, true)
+        }
+    };
+    if tag == current {
+        println!("Already on {tag}.");
+        return Ok(());
+    }
+    let unpacked = unpack(&install, &archive, &tag);
+    if downloaded {
+        let _ = std::fs::remove_file(&archive);
+    }
+    unpacked?;
+    switch_to(dir, &install, &tag, timeout)
+}
+
+/// `rollback [--timeout SECONDS]`: back to the release used before the current one.
+pub fn rollback(dir: &Path, args: &[String]) -> Result<(), String> {
+    let timeout = match args {
+        [] => crate::api::UPDATE_TIMEOUT,
+        [flag, value] if flag == "--timeout" => seconds(value)?,
+        _ => return Err("rollback takes only --timeout SECONDS".into()),
+    };
+    let install = Install::required()?;
+    let previous = install.previous().ok_or(
+        "no release to go back to: this install hasn't been updated, or the one before is gone",
+    )?;
+    switch_to(dir, &install, &previous, timeout)
+}
+
+fn seconds(text: &str) -> Result<Duration, String> {
+    text.parse()
+        .ok()
+        .filter(|&s| s > 0)
+        .map(Duration::from_secs)
+        .ok_or_else(|| format!("--timeout needs a number of seconds (got {text:?})"))
+}
+
+/// Switches the install to the release `tag`. A running server restarts on it through its supervisor, which
+/// goes back by itself if the game isn't up within `timeout`; a stopped one is switched and its game checked.
+/// Either way the world is backed up first.
+fn switch_to(dir: &Path, install: &Install, tag: &str, timeout: Duration) -> Result<(), String> {
+    let Some(client) = Client::open(dir)? else {
+        return switch_stopped(dir, install, tag);
+    };
+    let finished = |status: &Value| status["update"]["finished"].as_u64().unwrap_or(0);
+    let before = finished(&client.call("GET", "/api/v1/status", None)?);
+    client
+        .call(
+            "POST",
+            "/api/v1/update",
+            Some(&json!({ "tag": tag, "timeout": timeout.as_secs() })),
+        )
+        .map_err(|e| {
+            if e == "no such endpoint" {
+                "the running server is older than updates: stop it, then run `horizon-server update` again".into()
+            } else {
+                e
+            }
+        })?;
+    print!("Restarting the server on {tag}");
+    // The backup, the stop, the start and, if it fails, the way back.
+    let deadline = Instant::now() + timeout + Duration::from_secs(3600);
+    loop {
+        std::thread::sleep(Duration::from_millis(500));
+        let status = client.call("GET", "/api/v1/status", None)?;
+        if finished(&status) > before {
+            let update = &status["update"];
+            let last = update["last"].as_str().unwrap_or_default().to_owned();
+            if update["ok"] == true {
+                println!("\n{last}");
+                return Ok(());
+            }
+            // Rolled back (or stayed): say so once the game is up again on the release it went back to.
+            let mut phase = status["phase"].as_str().unwrap_or_default().to_owned();
+            let until = Instant::now() + crate::api::UPDATE_TIMEOUT;
+            while phase != "running" && phase != "stopping" && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(500));
+                print!(".");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+                phase = client.call("GET", "/api/v1/status", None)?["phase"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned();
+            }
+            println!();
+            return Err(if phase == "running" {
+                format!("{last}. The game is up again.")
+            } else {
+                last
+            });
+        }
+        if Instant::now() > deadline {
+            println!();
+            return Err(
+                "no word from the server about the update; `horizon-server logs` shows where it is"
+                    .into(),
+            );
+        }
+        print!(".");
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+    }
+}
+
+/// The switch for a stopped server (or outside any server folder): the world backed up, `current` moved,
+/// and the new game checked to load on this system, else switched back.
+fn switch_stopped(dir: &Path, install: &Install, tag: &str) -> Result<(), String> {
+    let from = install
+        .current()
+        .ok_or("the installer's `current` points at no release")?;
+    let server = dir.join(crate::config::FILE).is_file();
+    let _lock = if server {
+        Some(supervisor::lock(dir)?)
+    } else {
+        None
+    };
+    let config = if server {
+        Config::load(dir)?
+    } else {
+        Config::default()
+    };
+    let backed_up = if server {
+        let file = backup::file_name(std::time::SystemTime::now(), Some(&backup_name(tag)))?;
+        backup::create(dir, &config, &file)?;
+        format!(" The world is backed up in {}/{file}.", backup::DIR)
+    } else {
+        String::new()
+    };
+    let previous = install.previous();
+    install.switch(tag)?;
+    if let Err(e) =
+        engine::program_in(&config, dir, Some(install)).and_then(|p| engine::check_starts(&p))
+    {
+        install.switch_back(&from, previous.as_deref())?;
+        return Err(format!("stayed on {from}: {e}"));
+    }
+    println!(
+        "Switched from {from} to {tag}.{backed_up}{} `horizon-server rollback` goes back to {from}.",
+        if server {
+            " The server is stopped: `horizon-server start` runs the new version."
+        } else {
+            ""
+        }
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "horizon-server-update-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// An install as install.sh leaves it, with releases `tags`, the first in use.
+    #[cfg(unix)]
+    fn installed(name: &str, tags: &[&str]) -> Install {
+        // Canonical, as `around` sees it (macOS's temporary folder is behind a link).
+        let root = std::fs::canonicalize(scratch(name)).unwrap();
+        for tag in tags {
+            let release = root.join("releases").join(tag);
+            std::fs::create_dir_all(&release).unwrap();
+            std::fs::write(release.join("horizon-server"), tag).unwrap();
+        }
+        std::os::unix::fs::symlink(root.join("releases").join(tags[0]), root.join("current"))
+            .unwrap();
+        Install { root }
+    }
+
+    #[test]
+    fn tags_compare_by_number() {
+        assert!(newer("v2026.10.19", "v2026.10.18.27"));
+        assert!(newer("v2026.10.18.27", "v2026.10.18.9"));
+        assert!(newer("v2026.10.19.1", "v2026.10.19"));
+        assert!(!newer("v2026.10.19", "v2026.10.19"));
+        assert!(!newer("v2026.10.18", "v2026.10.19"));
+        // An archive installed by hand: any release is newer, and it is never newer than one.
+        assert!(newer("v2026.10.19", "local"));
+        assert!(!newer("local", "v2026.10.19"));
+    }
+
+    #[test]
+    fn the_archive_for_this_computer_is_picked_with_its_digest() {
+        let asset = |name: &str| {
+            json!({
+                "name": name,
+                "browser_download_url": format!("https://example.invalid/{name}"),
+                "digest": "sha256:ABCDEF",
+            })
+        };
+        let release = json!({
+            "tag_name": "v2026.10.19",
+            "assets": ASSETS.iter().rev().map(|n| asset(n)).chain([asset("other.zip")]).collect::<Vec<_>>(),
+        });
+        if let Some(first) = ASSETS.first() {
+            let picked = pick(&release).unwrap();
+            assert_eq!(picked.tag, "v2026.10.19");
+            // The most specific archive (Linux: the server build), even when listed last.
+            assert_eq!(picked.asset, *first);
+            assert_eq!(picked.sha256, "abcdef");
+            let undigested = json!({ "tag_name": "v1", "assets": [{ "name": first, "browser_download_url": "x" }] });
+            assert!(pick(&undigested).unwrap_err().contains("no SHA-256"));
+        }
+        assert!(
+            pick(&json!({ "tag_name": "v1", "assets": [asset("other.zip")] }))
+                .unwrap_err()
+                .contains("no archive for this computer")
+        );
+    }
+
+    #[test]
+    fn backup_names_are_valid() {
+        let name = backup_name("v2026.10.19");
+        assert_eq!(name, "before-v2026-10-19");
+        crate::backup::file_name(std::time::SystemTime::now(), Some(&name)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn switching_keeps_the_previous_release() {
+        let install = installed("switch", &["v1", "v2"]);
+        let exe = install.root.join("current/horizon-server");
+        assert_eq!(Install::around(&exe), Some(install.clone()));
+        assert_eq!(
+            Install::around(&install.release("v2").join("horizon-server")),
+            Some(install.clone())
+        );
+        assert_eq!(install.current().as_deref(), Some("v1"));
+        assert_eq!(install.previous(), None);
+        install.switch("v2").unwrap();
+        assert_eq!(install.current().as_deref(), Some("v2"));
+        assert_eq!(install.previous().as_deref(), Some("v1"));
+        assert_eq!(std::fs::read_to_string(&exe).unwrap(), "v2");
+        // Undoing it leaves `previous` as it was.
+        install.switch_back("v1", None).unwrap();
+        assert_eq!(install.current().as_deref(), Some("v1"));
+        assert_eq!(install.previous(), None);
+        install.switch("v2").unwrap();
+        // Rolling back is a switch to the previous release, which then becomes the one to go back to.
+        install.switch("v1").unwrap();
+        assert_eq!(install.current().as_deref(), Some("v1"));
+        assert_eq!(install.previous().as_deref(), Some("v2"));
+        // Switching to the release in use changes nothing; to a missing one is refused.
+        install.switch("v1").unwrap();
+        assert_eq!(install.previous().as_deref(), Some("v2"));
+        assert!(
+            install
+                .switch("v3")
+                .unwrap_err()
+                .contains("no horizon-server")
+        );
+        assert_eq!(install.current().as_deref(), Some("v1"));
+        std::fs::remove_dir_all(&install.root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_archive_unpacks_beside_the_others_with_the_game_files_linked() {
+        let install = installed("unpack", &["v1"]);
+        let source = scratch("unpack-source");
+        let inner = source.join("horizon-v2");
+        std::fs::create_dir_all(&inner).unwrap();
+        std::fs::write(inner.join("horizon-server"), "v2").unwrap();
+        std::fs::write(inner.join("horizon-engine"), "engine").unwrap();
+        let archive = source.join("horizon-server-linux-x86_64.tar.gz");
+        let status = Command::new("tar")
+            .arg("-czf")
+            .arg(&archive)
+            .arg("-C")
+            .arg(&source)
+            .arg("horizon-v2")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let release = unpack(&install, &archive, "v2").unwrap();
+        assert_eq!(release, install.release("v2"));
+        assert_eq!(
+            std::fs::read_to_string(release.join("horizon-engine")).unwrap(),
+            "engine"
+        );
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(release.join("horizon-engine"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o111, 0o111);
+        }
+        assert_eq!(
+            std::fs::canonicalize(release.join(".local/horizon-client")).unwrap(),
+            std::fs::canonicalize(install.root.join("game-files/horizon-client")).unwrap()
+        );
+        // Not switched yet; nothing left behind; the release in use can't be unpacked over.
+        assert_eq!(install.current().as_deref(), Some("v1"));
+        assert!(!install.root.join("releases/.v2.unpacking").exists());
+        assert!(
+            unpack(&install, &archive, "v1")
+                .unwrap_err()
+                .contains("in use")
+        );
+        assert!(unpack(&install, &archive, "../x").is_err());
+        let empty = source.join("empty.zip");
+        zip::ZipWriter::new(std::fs::File::create(&empty).unwrap())
+            .finish()
+            .unwrap();
+        assert!(
+            unpack(&install, &empty, "v3")
+                .unwrap_err()
+                .contains("holds no horizon-server")
+        );
+        assert!(!install.release("v3").exists());
+        std::fs::remove_dir_all(&install.root).unwrap();
+        std::fs::remove_dir_all(&source).unwrap();
+    }
+}

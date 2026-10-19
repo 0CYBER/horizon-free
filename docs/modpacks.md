@@ -504,7 +504,11 @@ Two cases the oracle fills in:
   - **YUNG's API** (#839, #846 in the game; #840, #847 in carry). `yungsapi:yung_jigsaw` and its
     elements become vanilla's jigsaw and single element, with their rules under
     `horizon:yungsapi`. The game assembles them as YUNG's `JigsawManager` does: priority
-    pieces, caps by name, depth ranges, `ignore_bounds` and the conditions tree. YUNG's
+    pieces, caps by name, depth ranges, `ignore_bounds` and the conditions tree, with
+    `piece_in_range`. Dead-end pools swap a piece that got no child for one of its dead-end
+    pool, and once the layout is done each piece's modifiers can turn it into another template
+    (`transform`) or place it last (`delay_generation`). Better Fortresses' bridges need all
+    three: over seed 1234's Nether chunks -64..63 it goes from 3,765 to 4,106 pieces. YUNG's
     placements become `horizon:` keys on a random spread: `horizon:exclusion_zone` for the
     enhanced exclusion zone, `horizon:avoid_biomes` for the temples' ocean and river search,
     `horizon:ring_sections` for Better Strongholds' rings. `horizon:disables` on a YUNG
@@ -518,6 +522,14 @@ Two cases the oracle fills in:
     structure's piece caps and required pieces from the mod's `*_pieces_spawn_counts` files.
     The game assembles them the mods' way and runs their post-layout steps (centring,
     burying, the Nether land search).
+  - **Enhanced terrain adaptation.** YUNG's API and MoogsStructureLib add a kernel of their
+    own to the Beardifier: its own size and falloff, carving or burying above and below each
+    piece's floor. Carry writes it as `horizon:enhanced_terrain_adaptation` on the structure
+    and on pool elements with their own (docs/mods.md), and the game sums it after vanilla's
+    terrain density. In seed 1234's terrain before structures are placed, Better Fortresses'
+    pieces held 39 to 41 % netherrack and now 3 to 7 %, the mod's open bridges; Moog's mega
+    fortress band 45 % and now 30 %; Better Strongholds' pieces, buried, go from 92 to 97 %
+    solid to 99 %, closing the caves that cut through them.
 
 
   Each mod's `carry-report.json` lists what was mapped, the rules and processors lost by name,
@@ -531,15 +543,18 @@ Two cases the oracle fills in:
   (unchanged), and no pool that fails to decode (65 before #816 in the 64×64 centre).
   - 1,061 files were mapped (MVS 413, MNS 210, MSS 157, MES 110, Repurposed Structures 104,
     ChoiceTheorem's Overhauled Village 66), and 103 convention biome tags written.
-  - When Dungeons Arise, Structory and Towns and Towers use vanilla's types already.
+  - When Dungeons Arise and Structory use vanilla's types already. Towns and Towers does too,
+    but its 1,198 worldgen files sit under the `kaisyn` and `towns_and_towers` namespaces, not
+    its mod id `t_and_t`, and a mod's content may only use its own namespace (docs/mods.md), so
+    carry leaves them out and its 60 structures are missing.
   - Still lost, written in Java:
     - Formations' structure and element types (179): their placements read block states in the
       noise column (solid, water, lava), which the structure context doesn't give yet;
     - Repurposed's mineshafts, mansions and monuments, Better Mineshafts and two Better
       Dungeons types: Java structure types;
-    - YUNG's and Moog's enhanced terrain adaptation, YUNG's piece modifiers and dead-end pools,
-      and the block processors written in Java (YUNG's banners, legs and decorations, Repurposed's
-      pillars and fluid fixes, Lithostitched's block swaps);
+    - the block processors written in Java
+      (YUNG's banners, legs and decorations, Repurposed's pillars and fluid fixes,
+      Lithostitched's block swaps);
     - MO Structures (38; its library is only on CurseForge).
 
   With every structure PR above, the same square (seed 1234, chunks -64..63) holds 362

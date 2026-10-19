@@ -501,6 +501,28 @@ fn grid_interpolation_uses_child_bulk_corners_and_preserves_aligned_delegation()
         .unwrap();
     assert!(output.iter().all(|v| v.to_bits() == (-0.0_f32).to_bits()));
     assert_eq!(traced.volumes.lock().unwrap()[1], volume);
+    let distant = DensityVolume::new([16, 49, 16], [-8192, -64, -8192], [1024, 8, 1024]).unwrap();
+    let mut output = vec![19.; distant.size()];
+    sampler
+        .sample_volume(&mut SamplerContext::sparse(), &mut output, distant)
+        .unwrap();
+    assert_eq!(
+        traced.volumes.lock().unwrap()[2],
+        distant,
+        "far samples must not expand to a block-resolution bounding box"
+    );
+    let unaligned = DensityVolume::new([2; 3], [-5, -9, -7], [1024, 8, 1024]).unwrap();
+    let mut output = [19.; 8];
+    sampler
+        .sample_volume(&mut SamplerContext::sparse(), &mut output, unaligned)
+        .unwrap();
+    assert!(output.iter().all(|&v| v == 0.));
+    assert!(
+        traced.volumes.lock().unwrap()[3..]
+            .iter()
+            .all(|v| v.size() == 8),
+        "unaligned far points use bounded corner queries"
+    );
     assert!(InterpolatedSampler::new(traced.clone(), 0, 8).is_err());
     assert!(InterpolatedSampler::new(traced, 4, -1).is_err());
 }
@@ -824,4 +846,116 @@ fn reset_after_sampling_error_drops_blender_and_preserves_uncached_mode() {
             Ok(())
         })
         .unwrap();
+}
+
+#[test]
+fn unary_bulk_keeps_child_failure_writes_and_full_buffer_tail() {
+    #[derive(Debug)]
+    struct PartialInput;
+    impl DensitySampler for PartialInput {
+        fn sample_value(&self, _: &mut SamplerContext, _: [i32; 3]) -> Result<f32, SampleError> {
+            Err(SampleError::ZeroGradientPeriod)
+        }
+        fn sample_volume(
+            &self,
+            _: &mut SamplerContext,
+            buffer: &mut [f32],
+            _: DensityVolume,
+        ) -> Result<(), SampleError> {
+            buffer[0] = -3.0;
+            Err(SampleError::ZeroGradientPeriod)
+        }
+    }
+    let volume = DensityVolume::new([1; 3], [0; 3], [1; 3]).unwrap();
+    let mut context = SamplerContext::default();
+    let mut buffer = [17.0; 3];
+    let sampler = UnarySampler {
+        input: Arc::new(PartialInput),
+        operation: UnaryOp::Square,
+    };
+    assert_eq!(
+        sampler.sample_volume(&mut context, &mut buffer, volume),
+        Err(SampleError::ZeroGradientPeriod)
+    );
+    assert_eq!(buffer, [-3.0, 17.0, 17.0]);
+    let sampler = UnarySampler {
+        input: Arc::new(ConstantSampler(-3.0)),
+        operation: UnaryOp::Square,
+    };
+    sampler
+        .sample_volume(&mut context, &mut buffer, volume)
+        .unwrap();
+    assert_eq!(buffer, [9.0; 3]);
+}
+
+#[test]
+fn binary_bulk_preserves_child_failure_order_and_output() {
+    #[derive(Debug)]
+    struct Input {
+        name: &'static str,
+        value: f32,
+        fail: bool,
+        calls: Arc<std::sync::Mutex<Vec<&'static str>>>,
+    }
+    impl DensitySampler for Input {
+        fn sample_value(&self, _: &mut SamplerContext, _: [i32; 3]) -> Result<f32, SampleError> {
+            unreachable!("bulk-only fixture")
+        }
+        fn sample_volume(
+            &self,
+            _: &mut SamplerContext,
+            buffer: &mut [f32],
+            _: DensityVolume,
+        ) -> Result<(), SampleError> {
+            self.calls.lock().unwrap().push(self.name);
+            buffer.fill(self.value);
+            if self.fail {
+                Err(SampleError::ZeroGradientPeriod)
+            } else {
+                Ok(())
+            }
+        }
+    }
+    let volume = DensityVolume::new([1; 3], [0; 3], [1; 3]).unwrap();
+    for left_fails in [true, false] {
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sampler = BinarySampler {
+            left: Arc::new(Input {
+                name: "left",
+                value: 3.0,
+                fail: left_fails,
+                calls: calls.clone(),
+            }),
+            right: Arc::new(Input {
+                name: "right",
+                value: 7.0,
+                fail: true,
+                calls: calls.clone(),
+            }),
+            operation: BinaryOp::Multiply,
+        };
+        let mut context = SamplerContext::default();
+        let mut wrong_size = [17.0; 2];
+        assert!(
+            sampler
+                .sample_volume(&mut context, &mut wrong_size, volume)
+                .is_err()
+        );
+        assert_eq!(wrong_size, [17.0; 2]);
+        assert!(calls.lock().unwrap().is_empty());
+        let mut output = [17.0];
+        assert_eq!(
+            sampler.sample_volume(&mut context, &mut output, volume),
+            Err(SampleError::ZeroGradientPeriod)
+        );
+        assert_eq!(output, [3.0]);
+        assert_eq!(
+            *calls.lock().unwrap(),
+            if left_fails {
+                vec!["left"]
+            } else {
+                vec!["left", "right"]
+            }
+        );
+    }
 }

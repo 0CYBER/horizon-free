@@ -7,8 +7,9 @@ should beat vanilla, Paper and Fabric + Lithium on TPS/MSPT, RAM, CPU, chunk gen
 Gameplay stays vanilla: there are no Paper-style rule changes unless the owner turns one on.
 
 This page covers what the server does today (measured), the design of `horizon-server`, and what ships for the
-first working version (2026-10-23). It replaces the Java/Fabric starter (`docs/server-quickstart.txt`,
-`tools/server.py`), which goes once the benchmark below exists.
+first working version (2026-10-23). It replaced the Java/Fabric starter (`docs/server-quickstart.txt`,
+`tools/server.py`, retired on 2026-10-19). The owner's guide is docs/hosting.md, also at
+https://playhorizon.dev/server.
 
 ## 1. Today
 
@@ -325,11 +326,12 @@ horizon-server backup [NAME]             backups             restore <backup> [-
 horizon-server import <server.properties>
 horizon-server service install|uninstall|print [--system]
 horizon-server panel                     the panel's address and a one-time login link
+horizon-server update [--check] [--version vX.Y.Z] [--timeout S]     rollback [--timeout S]
+horizon-server update --archive FILE --version NAME     an archive you have (your own build)
 
 Planned:
 horizon-server console                   attach: the live log, and send commands (Ctrl-D detaches)
 horizon-server ban|pardon <player> [reason]      ban-ip|pardon-ip <address>   (`cmd ban …` works now)
-horizon-server update [--check] [--version vX.Y.Z]      rollback
 horizon-server import-resources <dir>      prepare --server-jar PATH
 horizon-server mcp                       MCP server on stdio (section 8)
 ```
@@ -350,8 +352,11 @@ line), and backups (list, back up now, restore with confirmation), with restart 
 the supervisor, so it is up exactly when the server is: starting a stopped server stays a command (or the
 service manager's job). Whitelist and bans go through the console for now.
 
-**Later:** bans and IP bans, worlds, updates with rollback, `server.properties` import, logs and crash
-reports, and modpacks (with the modpack work).
+**Updates:** when a newer release is out, the panel says so with an Update button, which runs the same
+path as `horizon-server update` (section 7) and then shows how it went.
+
+**Later:** bans and IP bans, worlds, `server.properties` import, logs and crash reports, and modpacks (with
+the modpack work).
 
 **Tech:** one HTML page with plain JS and CSS (`crates/horizon-server/panel/`), embedded in the binary with
 `include_str!`. No build step, no framework, no CDN. It uses Horizon's design system tokens (`horizon-theme`'s
@@ -393,16 +398,29 @@ runtime or new dependency. Server-sent events can replace the polling later if a
   lines and the engine's crash report (`crash-reports/`), restarts it after 5 s, and doubles the wait up to
   5 minutes. It gives up after 5 crashes in 10 minutes, so it doesn't loop on a broken world, and shows the
   reason in `status` and the panel.
-- **Updates.** `update --check` compares with the latest GitHub release. `update`:
-  1. downloads the server archive and checks its SHA-256;
-  2. backs up the world;
-  3. keeps the current binaries as `.horizon/previous/`;
-  4. swaps in the new ones and restarts;
-  5. watches for `Done` within the start timeout and a first status reply.
+- **Updates** (`crates/horizon-server/src/update.rs`), for a `horizon-server` installed by `install.sh` or
+  `install.ps1`. Releases ship often (release-flow.md), so updates stay opt-in: a running server looks for a
+  newer release a minute after it starts and then every 6 hours, and only says so, in its log, in `status`
+  and in the panel (`HORIZON_NO_UPDATE_CHECK=1` turns the check off). `update --check` asks GitHub once.
+  `update`:
+  1. downloads the release archive for this computer (on Linux the server build) and checks it against the
+     SHA-256 GitHub publishes for it;
+  2. unpacks it into `<dir>/releases/<tag>`, beside the others, with its game files linked to
+     `<dir>/game-files` as the installers do;
+  3. stops the game, backs up the world (`backups/<time>-before-<tag>.zip`), records the release in use in
+     `<dir>/previous` and points `<dir>/current` at the new one;
+  4. checks that the new game loads on this system (`--help`), then starts it;
+  5. waits until it has logged `Done` and answered a status request, for 300 s (`--timeout`).
 
-  If that check fails, it puts the previous binaries back, restores the world if the new engine touched it,
-  and restarts. `rollback` does the same by hand. Releases ship often (release-flow.md), so updates stay
-  opt-in, with `update --check` in `status` and a notice in the panel.
+  If the new game doesn't load, stops, or isn't up in time, the supervisor goes back by itself: `current`
+  points at the release before, `previous` is left as it was, the world is put back from the backup (the
+  one the new game left is kept in `backups/replaced-<time>/`), and the game starts again on the old
+  release. `rollback` switches to `previous` by hand, through the same path (the world is backed up first
+  and kept as it is). The supervisor keeps running as it was: the new `horizon-server` itself takes over
+  the next time the server starts (`stop` and `start`, or the service's restart). A stopped server is
+  switched and its new game checked to load; it starts on the new release next time. One install serves
+  every server folder on the machine, so each one runs the new release from its next start. Old releases
+  stay in `<dir>/releases/` until they are deleted by hand (keep `current` and `previous`).
 
 ## 8. Control API and MCP
 
@@ -411,7 +429,9 @@ runtime or new dependency. Server-sent events can replace the polling later if a
   `.horizon/api.json`. It's plain HTTP/1.1 on `std::net` (`crates/horizon-server/src/http.rs`), no runtime.
   - built (PR 2b, 2c): `GET status` (phase, uptime, crashes, RSS, CPU, and the engine's TPS, MSPT
     average/P50/P95/P99, players, chunks), `GET logs?since=`, `POST command {line}` (returns the output),
-    `POST stop`, `POST restart`, `GET backups`, `POST backups {name}`, `POST restore {name}`;
+    `POST stop`, `POST restart`, `GET backups`, `POST backups {name}`, `POST restore {name}`, `POST update
+    {tag, timeout}` (without a tag: the newest release, downloaded first; `status` has an `update` object
+    that says how it went);
   - planned: `GET metrics?since=` (the panel's graphs), `GET events` (SSE: log lines and metrics),
     `GET`/`PATCH config` (server.toml fields, validated).
 - **Auth.** Every call needs `Authorization: Bearer <token from .horizon/api.json>` (file mode 0600), and the
@@ -521,6 +541,20 @@ reproducible by anyone, and show the same gameplay on both sides.
   - Horizon's RSS was 4.1 to 4.9 times smaller (1.03 GB at 50).
   - Served in full, vanilla's walking bots got 5400 to 6100 chunks each, against 640 to 1100 in the first
     run. That is why vanilla held 50 bots there and not here.
+- **Four servers, equal work (2026-10-19,** `benchmarks/server-four-way-2026-10-19/`). The same load
+  against vanilla, Paper (build 205, its defaults except the connection throttle, which refused bots that
+  share an address) and vanilla on Fabric with Lithium. Horizon was release v2026.10.19, which spawns mobs
+  and ticks blocks around every player as vanilla does (#950, #931), so it now does vanilla's work away
+  from spawn too. Results, on the ThinkPad (the desktop didn't wake):
+  - The work was equal on all four at every count (chunks a second within 4 %).
+  - Horizon's RSS was 3.8 to 4.8 times smaller (0.72 to 1.11 GB). It started in 8.2 to 8.5 s, against
+    14.7 to 22.4 s for the Java servers. From 10 bots up it used the least CPU.
+  - Average tick: Paper was ahead of Horizon at every count (10.3 against 13.7 ms at 1 bot, 28.3 against
+    30.9 at 25, 46.9 against 47.8 at 50). Fabric + Lithium was ahead at 1 and 10 bots (12.5 and 20.2
+    against 13.7 and 22.9), behind at 25, and fell to 17.2 TPS at 50. Vanilla was slowest, and its
+    watchdog stopped it at 50.
+  - Horizon's P99 was the lowest from 10 bots up (73 ms at 50, against Paper's 110 and Fabric's 174), and
+    its worst single P99 the lowest at every count.
 - **Ownership.** perf-server-1 owns making the tick faster. This work only measures it, files what it finds,
   and fixes startup, RAM and packaging.
 
@@ -553,11 +587,7 @@ machine, then published in `benchmarks/`; and item 5.
 - the Nether and End for remote players;
 - the headless engine and its RAM win;
 - a server-only prepare without a JDK;
-- updates and rollback (the design is above; they ship right after);
 - a Windows service, hot reload, modpacks in the panel;
-- Paper and Fabric + Lithium in the benchmark;
-- the website's "host a server" page;
-- retiring `tools/server.py` and `docs/server-quickstart.txt` (once the benchmark replaces them).
 
 Online mode works, so a public server can check accounts. An offline server should still run only on a
 LAN, a tailnet, or behind a whitelist.

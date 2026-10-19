@@ -1,0 +1,437 @@
+{
+  "kind": "horizon-server-benchmark",
+  "date": "2026-10-19T05:52:44+00:00",
+  "machine": {
+    "system": "Linux",
+    "machine": "x86_64",
+    "cpus": 4
+  },
+  "commit": "38505a07b5334f3ea2c467efb4a00e5557f910f8",
+  "java": [
+    "openjdk 25.0.4.1 2026-08-18"
+  ],
+  "versions": {
+    "paper_build": 205,
+    "fabric_loader": "0.19.5",
+    "lithium": "mc26.3-0.26.2-fabric"
+  },
+  "settings": {
+    "servers": "horizon,vanilla,paper,fabric",
+    "bots": "25,50",
+    "behaviour": "mixed",
+    "join_every": 1.0,
+    "warmup": 300,
+    "seconds": 300,
+    "seed": 12345,
+    "explore_speed": 0.8,
+    "gamerule": "",
+    "heap": "4g",
+    "out": "/home/ludovic/sh10/out/mixed-equal-25-50.json",
+    "nice": 19,
+    "bots_via": "ssh macmini",
+    "bots_bin": "/Users/ludovicmarie/code/horizon/.claude/worktrees/sh10-bench/target/release/horizon-bots",
+    "connect": "the ThinkPad's tailnet address",
+    "properties": {
+      "level-seed": "12345",
+      "view-distance": "10",
+      "simulation-distance": "10",
+      "online-mode": "false",
+      "white-list": "false",
+      "gamemode": "creative",
+      "force-gamemode": "true",
+      "spawn-protection": "0",
+      "max-players": "200",
+      "difficulty": "easy",
+      "sync-chunk-writes": "true"
+    }
+  },
+  "runs": [
+    {
+      "server": "horizon",
+      "bots": 25,
+      "behaviour": "mixed",
+      "start_seconds": 8.51,
+      "mspt": {
+        "average": 30.92,
+        "p50": 27.88,
+        "p95": 48.25,
+        "p99": 72.0
+      },
+      "mspt_worst_p99": 121.1,
+      "tps": 20.0,
+      "rss_mb": {
+        "mean": 1012.01,
+        "max": 1121.3
+      },
+      "cpu_percent": 98.57,
+      "chunks_per_second": 155.81,
+      "unique_per_second": 5.78,
+      "forgotten_per_second": 155.62,
+      "waited_ticks_per_second": 0.0,
+      "chunks_total": 106268,
+      "chunks_per_bot": {
+        "walk": 6506.33,
+        "explore": 1261.6,
+        "idle": 473.0
+      },
+      "unique_chunks_per_bot": {
+        "walk": 702.13,
+        "explore": 1184.4,
+        "idle": 473.0
+      },
+      "resent": 0,
+      "pulled_back": 3008,
+      "moved_too_quickly": 0,
+      "moved_wrongly": 0,
+      "bots_joined": 25,
+      "bots_failed": [],
+      "tick_queries": 58
+    },
+    {
+      "server": "vanilla",
+      "bots": 25,
+      "behaviour": "mixed",
+      "start_seconds": 15.47,
+      "mspt": {
+        "average": 37.35,
+        "p50": 35.64,
+        "p95": 48.2,
+        "p99": 82.66
+      },
+      "mspt_worst_p99": 579.8,
+      "tps": 20.0,
+      "rss_mb": {
+        "mean": 3935.5,
+        "max": 4157.4
+      },
+      "cpu_percent": 191.44,
+      "chunks_per_second": 158.52,
+      "unique_per_second": 5.71,
+      "forgotten_per_second": 158.39,
+      "waited_ticks_per_second": 0.0,
+      "chunks_total": 103148,
+      "chunks_per_bot": {
+        "walk": 6306.87,
+        "explore": 1236.0,
+        "idle": 473.0
+      },
+      "unique_chunks_per_bot": {
+        "walk": 704.2,
+        "explore": 1160.2,
+        "idle": 473.0
+      },
+      "resent": 0,
+      "pulled_back": 3762,
+      "moved_too_quickly": 11,
+      "moved_wrongly": 0,
+      "bots_joined": 25,
+      "bots_failed": [],
+      "tick_queries": 59
+    },
+    {
+      "server": "paper",
+      "bots": 25,
+      "behaviour": "mixed",
+      "start_seconds": 18.95,
+      "mspt": {
+        "average": 28.3,
+        "p50": 23.7,
+        "p95": 61.68,
+        "p99": 90.4
+      },
+      "mspt_worst_p99": 124.3,
+      "tps": 20.0,
+      "rss_mb": {
+        "mean": 4160.34,
+        "max": 4246.4
+      },
+      "cpu_percent": 124.24,
+      "chunks_per_second": 156.35,
+      "unique_per_second": 5.72,
+      "forgotten_per_second": 156.25,
+      "waited_ticks_per_second": 0.0,
+      "chunks_total": 102715,
+      "chunks_per_bot": {
+        "walk": 6280.4,
+        "explore": 1228.8,
+        "idle": 473.0
+      },
+      "unique_chunks_per_bot": {
+        "walk": 703.07,
+        "explore": 1155.6,
+        "idle": 473.0
+      },
+      "resent": 0,
+      "pulled_back": 4337,
+      "moved_too_quickly": 9,
+      "moved_wrongly": 0,
+      "bots_joined": 25,
+      "bots_failed": [],
+      "tick_queries": 59
+    },
+    {
+      "server": "fabric",
+      "bots": 25,
+      "behaviour": "mixed",
+      "start_seconds": 17.45,
+      "mspt": {
+        "average": 31.44,
+        "p50": 28.33,
+        "p95": 52.45,
+        "p99": 93.35
+      },
+      "mspt_worst_p99": 409.3,
+      "tps": 20.0,
+      "rss_mb": {
+        "mean": 3884.61,
+        "max": 4186.4
+      },
+      "cpu_percent": 174.04,
+      "chunks_per_second": 158.89,
+      "unique_per_second": 5.75,
+      "forgotten_per_second": 158.54,
+      "waited_ticks_per_second": 0.0,
+      "chunks_total": 103913,
+      "chunks_per_bot": {
+        "walk": 6356.8,
+        "explore": 1239.2,
+        "idle": 473.0
+      },
+      "unique_chunks_per_bot": {
+        "walk": 704.27,
+        "explore": 1163.0,
+        "idle": 473.0
+      },
+      "resent": 0,
+      "pulled_back": 4194,
+      "moved_too_quickly": 11,
+      "moved_wrongly": 0,
+      "bots_joined": 25,
+      "bots_failed": [],
+      "tick_queries": 59
+    },
+    {
+      "server": "horizon",
+      "bots": 50,
+      "behaviour": "mixed",
+      "start_seconds": 8.31,
+      "mspt": {
+        "average": 47.83,
+        "p50": 46.02,
+        "p95": 62.42,
+        "p99": 73.21
+      },
+      "mspt_worst_p99": 133.0,
+      "tps": 20.0,
+      "rss_mb": {
+        "mean": 1112.46,
+        "max": 1296.4
+      },
+      "cpu_percent": 143.22,
+      "chunks_per_second": 302.68,
+      "unique_per_second": 11.02,
+      "forgotten_per_second": 303.15,
+      "waited_ticks_per_second": 0.0,
+      "chunks_total": 211296,
+      "chunks_per_bot": {
+        "walk": 6468.47,
+        "explore": 1251.2,
+        "idle": 473.0
+      },
+      "unique_chunks_per_bot": {
+        "walk": 701.67,
+        "explore": 1180.5,
+        "idle": 473.0
+      },
+      "resent": 0,
+      "pulled_back": 8562,
+      "moved_too_quickly": 0,
+      "moved_wrongly": 0,
+      "bots_joined": 50,
+      "bots_failed": [],
+      "tick_queries": 58
+    },
+    {
+      "server": "vanilla",
+      "bots": 50,
+      "behaviour": "mixed",
+      "start_seconds": 15.45,
+      "error": "[Errno 32] Broken pipe"
+    },
+    {
+      "server": "paper",
+      "bots": 50,
+      "behaviour": "mixed",
+      "start_seconds": 19.35,
+      "mspt": {
+        "average": 46.86,
+        "p50": 45.11,
+        "p95": 61.16,
+        "p99": 109.72
+      },
+      "mspt_worst_p99": 213.4,
+      "tps": 20.0,
+      "rss_mb": {
+        "mean": 4353.02,
+        "max": 4516.1
+      },
+      "cpu_percent": 210.21,
+      "chunks_per_second": 310.51,
+      "unique_per_second": 11.16,
+      "forgotten_per_second": 310.64,
+      "waited_ticks_per_second": 0.0,
+      "chunks_total": 209303,
+      "chunks_per_bot": {
+        "walk": 6411.0,
+        "explore": 1224.3,
+        "idle": 473.0
+      },
+      "unique_chunks_per_bot": {
+        "walk": 703.47,
+        "explore": 1155.8,
+        "idle": 473.0
+      },
+      "resent": 0,
+      "pulled_back": 7344,
+      "moved_too_quickly": 35,
+      "moved_wrongly": 0,
+      "bots_joined": 50,
+      "bots_failed": [],
+      "tick_queries": 58
+    },
+    {
+      "server": "fabric",
+      "bots": 50,
+      "behaviour": "mixed",
+      "start_seconds": 17.45,
+      "mspt": {
+        "average": 58.3,
+        "p50": 54.73,
+        "p95": 83.06,
+        "p99": 174.37
+      },
+      "mspt_worst_p99": 887.6,
+      "tps": 17.15,
+      "rss_mb": {
+        "mean": 4521.47,
+        "max": 4744.2
+      },
+      "cpu_percent": 236.04,
+      "chunks_per_second": 311.52,
+      "unique_per_second": 11.28,
+      "forgotten_per_second": 311.74,
+      "waited_ticks_per_second": 0.0,
+      "chunks_total": 206965,
+      "chunks_per_bot": {
+        "walk": 6331.7,
+        "explore": 1228.4,
+        "idle": 473.0
+      },
+      "unique_chunks_per_bot": {
+        "walk": 703.3,
+        "explore": 1160.3,
+        "idle": 473.0
+      },
+      "resent": 0,
+      "pulled_back": 6350,
+      "moved_too_quickly": 46,
+      "moved_wrongly": 0,
+      "bots_joined": 50,
+      "bots_failed": [],
+      "tick_queries": 58
+    }
+  ],
+  "work": [
+    {
+      "behaviour": "mixed",
+      "bots": 25,
+      "servers": {
+        "horizon": {
+          "chunks_per_second": {
+            "value": 155.81,
+            "share": 0.981
+          },
+          "unique_per_second": {
+            "value": 5.78,
+            "share": 1.0
+          },
+          "waited_ticks_per_second": 0.0
+        },
+        "vanilla": {
+          "chunks_per_second": {
+            "value": 158.52,
+            "share": 0.998
+          },
+          "unique_per_second": {
+            "value": 5.71,
+            "share": 0.988
+          },
+          "waited_ticks_per_second": 0.0
+        },
+        "paper": {
+          "chunks_per_second": {
+            "value": 156.35,
+            "share": 0.984
+          },
+          "unique_per_second": {
+            "value": 5.72,
+            "share": 0.99
+          },
+          "waited_ticks_per_second": 0.0
+        },
+        "fabric": {
+          "chunks_per_second": {
+            "value": 158.89,
+            "share": 1.0
+          },
+          "unique_per_second": {
+            "value": 5.75,
+            "share": 0.995
+          },
+          "waited_ticks_per_second": 0.0
+        }
+      },
+      "equal": true
+    },
+    {
+      "behaviour": "mixed",
+      "bots": 50,
+      "servers": {
+        "horizon": {
+          "chunks_per_second": {
+            "value": 302.68,
+            "share": 0.972
+          },
+          "unique_per_second": {
+            "value": 11.02,
+            "share": 0.977
+          },
+          "waited_ticks_per_second": 0.0
+        },
+        "paper": {
+          "chunks_per_second": {
+            "value": 310.51,
+            "share": 0.997
+          },
+          "unique_per_second": {
+            "value": 11.16,
+            "share": 0.989
+          },
+          "waited_ticks_per_second": 0.0
+        },
+        "fabric": {
+          "chunks_per_second": {
+            "value": 311.52,
+            "share": 1.0
+          },
+          "unique_per_second": {
+            "value": 11.28,
+            "share": 1.0
+          },
+          "waited_ticks_per_second": 0.0
+        }
+      },
+      "equal": true
+    }
+  ]
+}

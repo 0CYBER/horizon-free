@@ -9,6 +9,9 @@
 //! - `GET /api/v1/metrics?since=T`: the samples taken after T (seconds since 1970), up to 10 minutes.
 //! - `GET /api/v1/backups`; `POST /api/v1/backups {"name": "..."}` backs up now; `POST /api/v1/restore
 //!   {"name": "..."}` restarts the game with that backup's world.
+//! - `POST /api/v1/update {"tag": "...", "timeout": seconds}`: restarts the game on that installed release,
+//!   and goes back to the one in use if it isn't up within the timeout; without a tag, downloads the newest
+//!   release first (update.rs). `GET /api/v1/status` says how it went (`update`).
 //! - `POST /api/v1/panel/login`: a one-time login link for the web panel (with the token only).
 
 use crate::{
@@ -17,6 +20,7 @@ use crate::{
     engine,
     http::{self, Request, Response},
     panel,
+    update::{self, Install},
 };
 use serde_json::{Value, json};
 use std::{
@@ -91,6 +95,25 @@ impl Log {
     }
 }
 
+/// How long a game started on another release has to come up before the switch is undone.
+pub const UPDATE_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Updates and rollbacks (update.rs): what the check found, what is under way, how the last one ended.
+#[derive(Default)]
+pub struct Updates {
+    /// A release newer than the one in use, from the last check.
+    pub available: Option<String>,
+    /// What is happening now, or nothing.
+    pub busy: Option<String>,
+    /// How the last update or rollback ended, and whether it went well.
+    pub last: Option<String>,
+    pub ok: bool,
+    /// Counts the updates that ended, so a client can wait for the one it asked for.
+    pub finished: u64,
+    /// The release to restart the game on, and how long it has to come up.
+    pub pending: Option<(String, Duration)>,
+}
+
 /// What the supervisor and the API threads share.
 pub struct Shared {
     pub dir: PathBuf,
@@ -107,10 +130,17 @@ pub struct Shared {
     pub metrics: Mutex<VecDeque<Value>>,
     /// The panel's address, login links and sessions.
     pub panel: Mutex<panel::Auth>,
+    /// The installer's folder this program runs from (none for a build of your own: no updates).
+    pub install: Option<Install>,
+    pub update: Mutex<Updates>,
 }
 
 impl Shared {
     pub fn new(dir: &Path) -> Arc<Self> {
+        Self::with_install(dir, Install::find())
+    }
+
+    pub fn with_install(dir: &Path, install: Option<Install>) -> Arc<Self> {
         Arc::new(Self {
             dir: dir.to_owned(),
             state: Mutex::new(State {
@@ -129,7 +159,84 @@ impl Shared {
             started: Instant::now(),
             metrics: Mutex::new(VecDeque::new()),
             panel: Mutex::new(panel::Auth::default()),
+            install,
+            update: Mutex::new(Updates::default()),
         })
+    }
+
+    /// Ends an update or rollback: its outcome, in the log and in `status`.
+    pub fn finish_update(&self, ok: bool, message: String) {
+        {
+            let mut update = self.update.lock().unwrap();
+            update.busy = None;
+            update.ok = ok;
+            update.finished += 1;
+            if ok {
+                update.available = None;
+            }
+            update.last = Some(message.clone());
+        }
+        crate::supervisor::note(self, if ok { "INFO" } else { "ERROR" }, &message);
+    }
+
+    /// Asks for a restart on the installed release `tag` (the supervisor switches when the game stops).
+    fn switch_to(&self, tag: String, timeout: Duration) {
+        self.update.lock().unwrap().busy = Some(format!("Restarting the game on {tag}"));
+        self.update.lock().unwrap().pending = Some((tag, timeout));
+        self.restart.store(true, Ordering::SeqCst);
+    }
+
+    /// `POST /api/v1/update`: switches to `tag`, or downloads the newest release first.
+    fn start_update(
+        self: &Arc<Self>,
+        tag: Option<String>,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        let install = self.install.clone().ok_or(
+            "this horizon-server wasn't installed by install.sh or install.ps1: no updates",
+        )?;
+        {
+            let mut update = self.update.lock().unwrap();
+            if let Some(busy) = &update.busy {
+                return Err(format!("an update is under way: {busy}"));
+            }
+            update.busy = Some("Looking for the newest release".into());
+        }
+        if let Some(tag) = tag {
+            if !install.release(&tag).is_dir() || tag.contains(['/', '\\']) {
+                self.update.lock().unwrap().busy = None;
+                return Err(format!(
+                    "{tag} isn't installed (`horizon-server update` downloads it)"
+                ));
+            }
+            self.switch_to(tag, timeout);
+            return Ok(());
+        }
+        let shared = self.clone();
+        std::thread::Builder::new()
+            .name("update".into())
+            .spawn(move || {
+                let fetched = (|| {
+                    let current = install.current().unwrap_or_default();
+                    let release = update::release(None)?;
+                    if !update::newer(&release.tag, &current) {
+                        return Ok(None);
+                    }
+                    shared.update.lock().unwrap().busy =
+                        Some(format!("Downloading {} ({})", release.tag, release.asset));
+                    let archive = update::download(&install, &release)?;
+                    let unpacked = update::unpack(&install, &archive, &release.tag);
+                    let _ = std::fs::remove_file(&archive);
+                    unpacked.map(|_| Some(release.tag))
+                })();
+                match fetched {
+                    Ok(Some(tag)) => shared.switch_to(tag, timeout),
+                    Ok(None) => shared.finish_update(true, "Already on the newest release".into()),
+                    Err(e) => shared.finish_update(false, format!("Not updated: {e}")),
+                }
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
     /// Keeps one sample for the graphs.
     pub fn record(&self, sample: Value) {
@@ -187,6 +294,23 @@ fn status(shared: &Shared) -> Value {
         "crashes": state.crashes,
         "last_crash": state.last_crash,
         "sample": state.sample,
+        "update": updates(shared),
+    })
+}
+
+fn updates(shared: &Shared) -> Value {
+    let Some(install) = &shared.install else {
+        return Value::Null;
+    };
+    let update = shared.update.lock().unwrap();
+    json!({
+        "installed": install.current(),
+        "previous": install.previous(),
+        "available": update.available,
+        "busy": update.busy,
+        "last": update.last,
+        "ok": update.ok,
+        "finished": update.finished,
     })
 }
 
@@ -273,7 +397,7 @@ pub fn start(shared: Arc<Shared>) -> Result<Endpoint, String> {
 }
 
 /// The API's routes, for the CLI (with the token) and the panel (with a session).
-pub fn route(shared: &Shared, request: &Request) -> Response {
+pub fn route(shared: &Arc<Shared>, request: &Request) -> Response {
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/api/v1/status") => Response::json(200, &status(shared)),
         ("GET", "/api/v1/metrics") => {
@@ -354,10 +478,21 @@ pub fn route(shared: &Shared, request: &Request) -> Response {
                 Err(e) => Response::error(404, &e),
             }
         }
+        ("POST", "/api/v1/update") => {
+            let body: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
+            let timeout = body["timeout"]
+                .as_u64()
+                .map_or(UPDATE_TIMEOUT, Duration::from_secs);
+            match shared.start_update(body["tag"].as_str().map(str::to_owned), timeout) {
+                Ok(()) => Response::json(200, &json!({ "ok": true })),
+                Err(e) => Response::error(409, &e),
+            }
+        }
         (
             _,
             "/api/v1/status" | "/api/v1/logs" | "/api/v1/command" | "/api/v1/stop"
-            | "/api/v1/restart" | "/api/v1/backups" | "/api/v1/restore" | "/api/v1/metrics",
+            | "/api/v1/restart" | "/api/v1/backups" | "/api/v1/restore" | "/api/v1/metrics"
+            | "/api/v1/update",
         ) => Response::error(405, "wrong method"),
         _ => Response::error(404, "no such endpoint"),
     }

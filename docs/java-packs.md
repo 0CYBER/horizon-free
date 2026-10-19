@@ -1,6 +1,6 @@
 # Java performance packs (no longer developed)
 
-Before the Rust rewrite, Horizon was a lab for Minecraft Java client performance: pinned Fabric performance packs, distant terrain, an original frame and tick recorder, and client and server starter downloads. This track is **no longer developed**. No release downloads are published; build the packs and starters locally with `python3 tools/build_release.py` (see [Build and run](#build-and-run)). This page keeps its documentation.
+Before the Rust rewrite, Horizon was a lab for Minecraft Java client performance: pinned Fabric performance packs, distant terrain, an original frame and tick recorder, and client and server starter downloads (the server starter is gone: [horizon-server](hosting.md) replaces it). This track is **no longer developed**. No release downloads are published; build the packs and starters locally with `python3 tools/build_release.py` (see [Build and run](#build-and-run)). This page keeps its documentation.
 
 ## Java packs: Mac starter (out of scope)
 
@@ -91,9 +91,9 @@ python3 tools/build_mod.py
 python3 tools/build_release.py
 ```
 
-Gitignored `dist/` contains twenty packs, our original instrumentation JAR, client/server starter ZIPs and SHA256SUMS. [mods.lock.json](../packs/mods.lock.json) pins mod versions, exact dependency closure, SHA-1/SHA-512 and source/license; [fabric.lock.json](../packs/fabric.lock.json) pins loader/library SHA-256. Packs use the [Modrinth format](https://support.modrinth.com/en/articles/8802351-modrinth-modpack-format-mrpack). They embed only original project code; third-party mods, game and assets download from their publishers.
+Gitignored `dist/` contains twenty packs, our original instrumentation JAR, the client starter ZIP and SHA256SUMS. [mods.lock.json](../packs/mods.lock.json) pins mod versions, exact dependency closure, SHA-1/SHA-512 and source/license; [fabric.lock.json](../packs/fabric.lock.json) pins loader/library SHA-256. Packs use the [Modrinth format](https://support.modrinth.com/en/articles/8802351-modrinth-modpack-format-mrpack). They embed only original project code; third-party mods, game and assets download from their publishers.
 
-The server starter uses Lithium/FerriteCore and `/horizonserver bench <label> <seconds>`. [Server instructions](server-quickstart.txt) cover setup and a baseline. Files are prepared before you accept Minecraft's EULA locally. A 50-active-player workload remains to be measured.
+The Fabric server starter (Lithium/FerriteCore, `tools/server.py`) was retired on 2026-10-19. To host a server, use [horizon-server](hosting.md) ([playhorizon.dev/server](https://playhorizon.dev/server)); its benchmarks are in [server.md](server.md), section 9.
 
 Local smoke testing uses the game's built-in limited demo; normal play uses Prism's licensed account authentication:
 

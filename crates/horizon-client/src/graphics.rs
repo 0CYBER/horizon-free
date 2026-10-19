@@ -159,6 +159,8 @@ pub enum Overlay {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Graphics {
     pub preset: Preset,
+    /// Distant surface terrain range, in chunks; 0 disables LODs.
+    pub lod_distance: u32,
     /// Skip sections hidden behind closed ones (vanilla's occlusion graph).
     pub cave_culling: bool,
     /// Hide shared leaf and mangrove-root faces, reducing foliage density.
@@ -198,6 +200,7 @@ impl Default for Graphics {
     fn default() -> Self {
         Self {
             preset: Preset::Custom,
+            lod_distance: 0,
             cave_culling: true,
             cull_leaves: false,
             entity_culling: false,
@@ -244,6 +247,7 @@ impl Graphics {
             let number = |d: u32| value.parse().unwrap_or(d);
             match key.trim() {
                 "preset" => g.preset = Preset::parse(value),
+                "lodDistance" => g.lod_distance = number(g.lod_distance).min(1024),
                 "caveCulling" => g.cave_culling = flag(g.cave_culling),
                 "cullLeaves" => g.cull_leaves = flag(g.cull_leaves),
                 "entityCulling" => g.entity_culling = flag(g.entity_culling),
@@ -282,8 +286,9 @@ impl Graphics {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "preset:{}\ncaveCulling:{}\ncullLeaves:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nlevel:{}\nbatteryMode:{}\nshaderPack:{}\ngraphicsApi:{}\n",
+            "preset:{}\nlodDistance:{}\ncaveCulling:{}\ncullLeaves:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nlevel:{}\nbatteryMode:{}\nshaderPack:{}\ngraphicsApi:{}\n",
             self.preset.name(),
+            self.lod_distance,
             bool_text(self.cave_culling),
             bool_text(self.cull_leaves),
             bool_text(self.entity_culling),
@@ -384,6 +389,7 @@ mod tests {
     fn round_trips() {
         let g = Graphics {
             preset: Preset::Balanced,
+            lod_distance: 256,
             cave_culling: false,
             cull_leaves: true,
             entity_culling: true,
@@ -410,6 +416,19 @@ mod tests {
             Graphics::parse("workers:abc\nsky:maybe\ncullLeaves:maybe\nentityCulling:maybe\n"),
             Graphics::default()
         );
+    }
+
+    #[test]
+    fn lod_distance_is_opt_in_and_bounded() {
+        assert_eq!(Graphics::default().lod_distance, 0);
+        for distance in [0, 64, 128, 256, 512, 1024] {
+            let g = Graphics::parse(&format!("lodDistance:{distance}\n"));
+            assert_eq!(g.lod_distance, distance);
+            assert_eq!(Graphics::parse(&g.serialize()), g);
+        }
+        assert_eq!(Graphics::parse("lodDistance:10000\n").lod_distance, 1024);
+        assert_eq!(Graphics::parse("lodDistance:-1\n").lod_distance, 0);
+        assert_eq!(Graphics::parse("lodDistance:invalid\n").lod_distance, 0);
     }
 
     #[test]

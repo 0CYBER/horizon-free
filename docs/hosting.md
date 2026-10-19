@@ -204,6 +204,8 @@ horizon-server restore BACKUP [--yes]
 horizon-server service install|uninstall|print [--system]
 horizon-server panel                     a one-time login link for the web panel
 horizon-server import FILE               server.toml from a vanilla server.properties
+horizon-server update [--check]          install the newest release and restart on it (below)
+horizon-server rollback                  back to the release before
 ```
 
 While the server runs, `op`, `whitelist` and `cmd` go to the game's console, so they act exactly as vanilla's
@@ -213,14 +215,31 @@ console commands do. While it's stopped, they edit vanilla's files directly. Any
 The server restarts the game by itself if it crashes: after 5 s, then waiting longer each time, up to 5
 minutes. It keeps the crash report and gives up after 5 crashes in 10 minutes, and `status` says why.
 
-Coming: `update` and `rollback`, `console` (attach to a server running in the background), `ban` and
-`pardon` as their own commands, and `mcp` (an MCP server so an AI assistant can run the server).
+**Updates** (a server installed with the install script). The server checks for a newer release a minute
+after it starts and every 6 hours after, and says so in its log, in `status` and in the panel; it never
+updates by itself. `horizon-server update --check` asks once. `horizon-server update`:
+
+1. downloads the newest release and checks it against the SHA-256 GitHub publishes for it;
+2. stops the game, backs up the world (`backups/<time>-before-<release>.zip`) and switches to the new
+   release;
+3. starts the game on it and waits up to 5 minutes (`--timeout SECONDS`) for it to come up.
+
+If the new game crashes or doesn't come up in time, the server goes back to the release it was on by itself
+and puts the world back as it was just before the switch (the world the new game left is kept in
+`backups/`). `horizon-server rollback` goes back to the release before by hand, keeping the world as it is
+(it backs it up first). `--version vX.Y.Z` installs a given release, and `--archive FILE --version NAME` an
+archive you have, such as your own build. A stopped server is switched and starts on the new release next
+time. Set `HORIZON_NO_UPDATE_CHECK=1` in the server's environment to turn the check off.
+
+Coming: `console` (attach to a server running in the background), `ban` and `pardon` as their own
+commands, and `mcp` (an MCP server so an AI assistant can run the server).
 
 ## 6. Web panel
 
 The panel runs inside `horizon-server` while the server runs. It shows live TPS, MSPT, RAM and CPU graphs for
 the last 10 minutes, the players with their ping (and a kick button), the console with a command line, and the
-backups (back up now, restore with a confirmation), with Restart and Stop.
+backups (back up now, restore with a confirmation), with Restart and Stop. When a newer release is out it says
+so, with an Update button that runs `horizon-server update` (section 5), and shows how it went.
 
 ```sh
 horizon-server panel
@@ -297,25 +316,26 @@ docker run -d --name horizon -p 25565:25565 --stop-timeout 180 \
 
 ## 10. How fast is it
 
-The latest bot benchmark against vanilla 26.3 is in
-[benchmarks/server-2026-10-17](https://github.com/ludovic111/horizon/blob/main/benchmarks/server-2026-10-17/README.md).
-It ran on `main` at `7bbbf6e9` (in release v2026.10.17.17), on a 4-thread laptop CPU (i7-7500U), with the bots
-on another machine. Earlier measurements are in [docs/server.md](https://github.com/ludovic111/horizon/blob/main/docs/server.md).
-In short:
+The latest bot benchmark compares Horizon with vanilla 26.3, Paper and Fabric + Lithium:
+[benchmarks/server-four-way-2026-10-19](https://github.com/ludovic111/horizon/blob/main/benchmarks/server-four-way-2026-10-19/README.md).
+It ran release v2026.10.19 on a 4-thread laptop CPU (i7-7500U), with 1 to 50 players walking, exploring and
+standing around spawn, the bots on another machine. All four servers did the same work. Earlier
+measurements are in [docs/server.md](https://github.com/ludovic111/horizon/blob/main/docs/server.md). In
+short:
 
-- **Memory:** 0.8–0.9 GB with up to 100 players, and 1.4 GB at most with 100 players flying out fast. Vanilla
-  uses 3.4–4.0 GB with its 4 GB heap.
-- **Start:** a new world is ready in 9–10 s, against 15–17 s for vanilla.
-- **Same work** (players exploring at the same pace, so both servers send the same chunks): Horizon's average
-  tick is 44–81 % shorter than vanilla's with 1 to 50 players, and its 95th percentile is lower too.
-- **Players walking around spawn:** Horizon's average tick is shorter at every count. With 25 and 50 players,
-  its slowest ticks (95th percentile) are a little longer than vanilla's (31 against 28 ms, 60 against 56 ms).
-- **100 players** walking: Horizon keeps 15.8 TPS (63 ms ticks). Vanilla's watchdog stopped it on this machine.
-- **Players flying out as fast as they can:** with 10 and 25 players vanilla's average tick is a little shorter
-  than Horizon's, but Horizon sends 1.6–1.8 times as many new chunks. Vanilla's watchdog stopped it at 50 and 100.
+- **Memory:** 0.7 GB with one player and 1.1 GB with 50, against 3.4 to 4.5 GB for the Java servers
+  (each with a 4 GB heap): 3.8 to 4.8 times less.
+- **Start:** ready in 8 to 9 s, against 15 s for vanilla, 17 s for Fabric and 19 to 22 s for Paper.
+- **CPU:** from 10 players up, the least of the four (1.4 cores at 50, against Paper's 2.1 and Fabric's 2.4).
+- **Average tick:** Paper's is shorter at every count (10.3 against 13.7 ms with one player, 46.9 against
+  47.8 with 50), and Fabric + Lithium's with 1 and 10 players. Horizon's is shorter than vanilla's (equal
+  with 10), and than Fabric's from 25 players up.
+- **Slow ticks:** from 10 players up, Horizon's slowest ticks (99th percentile) are the shortest of the
+  four (73 ms with 50, against 110 for Paper and 174 for Fabric).
+- **50 players:** Horizon and Paper keep 20 TPS, Fabric + Lithium drops to 17, and vanilla's watchdog
+  stopped it.
 
-On this 4-thread machine Horizon held 20 TPS with 50 players in every scenario, and 15.8–19 TPS with 100. For more
-than 50 active players, give it more cores.
+For more than 50 active players, give it more cores.
 
 ## When something goes wrong
 

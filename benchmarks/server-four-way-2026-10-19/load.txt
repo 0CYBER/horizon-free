@@ -1,0 +1,870 @@
+2026-10-19T02:57:31Z
+ludothinkpad ok: 29.0 GB free, 4 threads 1% busy, 0 sessions
+desktop offline
+macmini busy: 28.7 GB free, 14 threads 89% busy, 1 sessions
+macbook offline
+2026-10-19T02:58:36Z
+ludothinkpad ok: 28.3 GB free, 4 threads 20% busy, 0 sessions
+desktop offline
+macmini busy: 26.0 GB free, 14 threads 92% busy, 1 sessions
+macbook offline
+2026-10-19T02:59:40Z
+ludothinkpad ok: 28.3 GB free, 4 threads 20% busy, 0 sessions
+desktop offline
+macmini busy: 26.8 GB free, 14 threads 96% busy, 1 sessions
+macbook offline
+2026-10-19T03:00:44Z
+ludothinkpad ok: 28.3 GB free, 4 threads 15% busy, 0 sessions
+desktop offline
+macmini busy: 25.8 GB free, 14 threads 97% busy, 1 sessions
+macbook offline
+2026-10-19T03:01:48Z
+ludothinkpad ok: 27.8 GB free, 4 threads 27% busy, 0 sessions
+desktop offline
+macmini ok: 26.8 GB free, 14 threads 84% busy, 1 sessions
+macbook offline
+2026-10-19T03:02:52Z
+ludothinkpad ok: 28.4 GB free, 4 threads 18% busy, 0 sessions
+desktop offline
+macmini busy: 25.7 GB free, 14 threads 93% busy, 1 sessions
+macbook offline
+2026-10-19T03:03:56Z
+ludothinkpad ok: 28.4 GB free, 4 threads 14% busy, 0 sessions
+desktop offline
+macmini busy: 29.6 GB free, 14 threads 96% busy, 1 sessions
+macbook offline
+2026-10-19T03:05:00Z
+ludothinkpad ok: 28.4 GB free, 4 threads 11% busy, 0 sessions
+desktop offline
+macmini ok: 29.4 GB free, 14 threads 84% busy, 1 sessions
+macbook offline
+2026-10-19T03:06:04Z
+ludothinkpad ok: 28.3 GB free, 4 threads 22% busy, 0 sessions
+desktop offline
+macmini ok: 26.8 GB free, 14 threads 82% busy, 1 sessions
+macbook offline
+2026-10-19T03:07:09Z
+ludothinkpad ok: 28.4 GB free, 4 threads 11% busy, 0 sessions
+desktop offline
+macmini busy: 26.1 GB free, 14 threads 91% busy, 1 sessions
+macbook offline
+2026-10-19T03:08:13Z
+ludothinkpad busy: 26.9 GB free, 4 threads 92% busy, 0 sessions
+desktop offline
+macmini ok: 26.4 GB free, 14 threads 76% busy, 1 sessions
+macbook offline
+2026-10-19T03:09:17Z
+ludothinkpad ok: 25.8 GB free, 4 threads 19% busy, 0 sessions
+desktop offline
+macmini busy: 29.5 GB free, 14 threads 87% busy, 1 sessions
+macbook offline
+2026-10-19T03:10:21Z
+ludothinkpad ok: 25.8 GB free, 4 threads 49% busy, 0 sessions
+desktop offline
+macmini ok: 25.8 GB free, 14 threads 79% busy, 1 sessions
+macbook offline
+2026-10-19T03:11:25Z
+ludothinkpad ok: 25.8 GB free, 4 threads 19% busy, 0 sessions
+desktop offline
+macmini busy: 26.7 GB free, 14 threads 85% busy, 1 sessions
+macbook offline
+2026-10-19T03:12:29Z
+ludothinkpad ok: 25.8 GB free, 4 threads 18% busy, 0 sessions
+desktop offline
+macmini busy: 26.2 GB free, 14 threads 88% busy, 1 sessions
+macbook offline
+2026-10-19T03:13:33Z
+ludothinkpad ok: 25.8 GB free, 4 threads 17% busy, 0 sessions
+desktop offline
+macmini ok: 28.0 GB free, 14 threads 84% busy, 1 sessions
+macbook offline
+2026-10-19T03:14:37Z
+ludothinkpad ok: 25.8 GB free, 4 threads 17% busy, 0 sessions
+desktop offline
+macmini ok: 28.7 GB free, 14 threads 76% busy, 1 sessions
+macbook offline
+2026-10-19T03:15:41Z
+ludothinkpad ok: 25.8 GB free, 4 threads 18% busy, 0 sessions
+desktop offline
+macmini busy: 26.2 GB free, 14 threads 87% busy, 1 sessions
+macbook offline
+2026-10-19T03:16:46Z
+ludothinkpad ok: 25.8 GB free, 4 threads 18% busy, 0 sessions
+desktop offline
+macmini busy: 25.0 GB free, 14 threads 91% busy, 1 sessions
+macbook offline
+2026-10-19T03:17:50Z
+ludothinkpad ok: 25.8 GB free, 4 threads 19% busy, 0 sessions
+desktop offline
+macmini ok: 25.6 GB free, 14 threads 78% busy, 1 sessions
+macbook offline
+2026-10-19T03:18:54Z
+ludothinkpad ok: 26.7 GB free, 4 threads 71% busy, 0 sessions
+desktop offline
+macmini busy: 26.2 GB free, 14 threads 91% busy, 1 sessions
+macbook offline
+2026-10-19T03:19:58Z
+ludothinkpad ok: 25.1 GB free, 4 threads 16% busy, 0 sessions
+desktop offline
+macmini busy: 25.6 GB free, 14 threads 85% busy, 1 sessions
+macbook offline
+2026-10-19T03:21:02Z
+ludothinkpad ok: 25.1 GB free, 4 threads 15% busy, 0 sessions
+desktop offline
+macmini busy: 25.7 GB free, 14 threads 87% busy, 1 sessions
+macbook offline
+2026-10-19T03:22:06Z
+ludothinkpad ok: 25.1 GB free, 4 threads 12% busy, 0 sessions
+desktop offline
+macmini busy: 26.8 GB free, 14 threads 87% busy, 1 sessions
+macbook offline
+2026-10-19T03:23:10Z
+ludothinkpad ok: 25.1 GB free, 4 threads 12% busy, 0 sessions
+desktop offline
+macmini ok: 25.6 GB free, 14 threads 81% busy, 1 sessions
+macbook offline
+2026-10-19T03:24:14Z
+ludothinkpad ok: 25.1 GB free, 4 threads 19% busy, 0 sessions
+desktop offline
+macmini ok: 27.1 GB free, 14 threads 82% busy, 1 sessions
+macbook offline
+2026-10-19T03:25:19Z
+ludothinkpad ok: 25.1 GB free, 4 threads 9% busy, 0 sessions
+desktop offline
+macmini busy: 28.6 GB free, 14 threads 86% busy, 1 sessions
+macbook offline
+2026-10-19T03:26:23Z
+ludothinkpad ok: 25.1 GB free, 4 threads 13% busy, 0 sessions
+desktop offline
+macmini ok: 25.9 GB free, 14 threads 71% busy, 1 sessions
+macbook offline
+2026-10-19T03:27:27Z
+ludothinkpad ok: 25.1 GB free, 4 threads 14% busy, 0 sessions
+desktop offline
+macmini busy: 26.0 GB free, 14 threads 94% busy, 1 sessions
+macbook offline
+2026-10-19T03:28:31Z
+ludothinkpad ok: 25.1 GB free, 4 threads 13% busy, 0 sessions
+desktop offline
+macmini ok: 26.1 GB free, 14 threads 79% busy, 1 sessions
+macbook offline
+2026-10-19T03:29:35Z
+ludothinkpad ok: 27.5 GB free, 4 threads 36% busy, 0 sessions
+desktop offline
+macmini ok: 25.5 GB free, 14 threads 84% busy, 1 sessions
+macbook offline
+2026-10-19T03:30:39Z
+ludothinkpad ok: 25.8 GB free, 4 threads 22% busy, 0 sessions
+desktop offline
+macmini ok: 26.2 GB free, 14 threads 73% busy, 1 sessions
+macbook offline
+2026-10-19T03:31:43Z
+ludothinkpad ok: 25.8 GB free, 4 threads 20% busy, 0 sessions
+desktop offline
+macmini busy: 26.1 GB free, 14 threads 86% busy, 1 sessions
+macbook offline
+2026-10-19T03:32:47Z
+ludothinkpad ok: 25.8 GB free, 4 threads 21% busy, 0 sessions
+desktop offline
+macmini busy: 28.4 GB free, 14 threads 90% busy, 1 sessions
+macbook offline
+2026-10-19T03:33:52Z
+ludothinkpad ok: 25.8 GB free, 4 threads 18% busy, 0 sessions
+desktop offline
+macmini ok: 26.9 GB free, 14 threads 84% busy, 2 sessions
+macbook offline
+2026-10-19T03:34:56Z
+ludothinkpad ok: 25.8 GB free, 4 threads 14% busy, 0 sessions
+desktop offline
+macmini ok: 26.1 GB free, 14 threads 76% busy, 1 sessions
+macbook offline
+2026-10-19T03:36:00Z
+ludothinkpad ok: 25.8 GB free, 4 threads 16% busy, 0 sessions
+desktop offline
+macmini ok: 27.4 GB free, 14 threads 78% busy, 1 sessions
+macbook offline
+2026-10-19T03:37:04Z
+ludothinkpad ok: 25.8 GB free, 4 threads 15% busy, 0 sessions
+desktop offline
+macmini ok: 26.6 GB free, 14 threads 77% busy, 1 sessions
+macbook offline
+2026-10-19T03:38:08Z
+ludothinkpad ok: 25.8 GB free, 4 threads 14% busy, 0 sessions
+desktop offline
+macmini busy: 25.8 GB free, 14 threads 94% busy, 1 sessions
+macbook offline
+2026-10-19T03:39:12Z
+ludothinkpad ok: 25.8 GB free, 4 threads 17% busy, 0 sessions
+desktop offline
+macmini busy: 27.1 GB free, 14 threads 91% busy, 1 sessions
+macbook offline
+2026-10-19T03:40:16Z
+ludothinkpad ok: 28.4 GB free, 4 threads 73% busy, 0 sessions
+desktop offline
+macmini ok: 25.5 GB free, 14 threads 78% busy, 1 sessions
+macbook offline
+2026-10-19T03:41:20Z
+ludothinkpad ok: 28.3 GB free, 4 threads 41% busy, 0 sessions
+desktop offline
+macmini busy: 25.8 GB free, 14 threads 86% busy, 1 sessions
+macbook offline
+2026-10-19T03:42:24Z
+ludothinkpad ok: 28.3 GB free, 4 threads 24% busy, 0 sessions
+desktop offline
+macmini busy: 26.9 GB free, 14 threads 88% busy, 1 sessions
+macbook offline
+2026-10-19T03:43:29Z
+ludothinkpad ok: 28.3 GB free, 4 threads 26% busy, 0 sessions
+desktop offline
+macmini busy: 25.0 GB free, 14 threads 87% busy, 1 sessions
+macbook offline
+2026-10-19T03:44:33Z
+ludothinkpad ok: 28.2 GB free, 4 threads 22% busy, 0 sessions
+desktop offline
+macmini ok: 25.6 GB free, 14 threads 81% busy, 1 sessions
+macbook offline
+2026-10-19T03:45:37Z
+ludothinkpad ok: 28.2 GB free, 4 threads 27% busy, 0 sessions
+desktop offline
+macmini ok: 27.8 GB free, 14 threads 76% busy, 1 sessions
+macbook offline
+2026-10-19T03:46:41Z
+ludothinkpad ok: 28.1 GB free, 4 threads 37% busy, 0 sessions
+desktop offline
+macmini ok: 27.3 GB free, 14 threads 81% busy, 1 sessions
+macbook offline
+2026-10-19T03:47:45Z
+ludothinkpad ok: 28.1 GB free, 4 threads 21% busy, 0 sessions
+desktop offline
+macmini ok: 27.1 GB free, 14 threads 82% busy, 1 sessions
+macbook offline
+2026-10-19T03:48:49Z
+ludothinkpad ok: 28.1 GB free, 4 threads 32% busy, 0 sessions
+desktop offline
+macmini ok: 26.2 GB free, 14 threads 82% busy, 1 sessions
+macbook offline
+2026-10-19T03:49:53Z
+ludothinkpad ok: 28.1 GB free, 4 threads 25% busy, 0 sessions
+desktop offline
+macmini busy: 25.7 GB free, 14 threads 85% busy, 1 sessions
+macbook offline
+2026-10-19T03:50:57Z
+ludothinkpad busy: 26.6 GB free, 4 threads 94% busy, 0 sessions
+desktop offline
+macmini ok: 25.1 GB free, 14 threads 85% busy, 1 sessions
+macbook offline
+2026-10-19T03:52:01Z
+ludothinkpad ok: 25.8 GB free, 4 threads 28% busy, 0 sessions
+desktop offline
+macmini busy: 25.1 GB free, 14 threads 91% busy, 1 sessions
+macbook offline
+2026-10-19T03:53:06Z
+ludothinkpad ok: 25.8 GB free, 4 threads 50% busy, 0 sessions
+desktop offline
+macmini busy: 26.4 GB free, 14 threads 87% busy, 1 sessions
+macbook offline
+2026-10-19T03:54:10Z
+ludothinkpad ok: 25.7 GB free, 4 threads 41% busy, 0 sessions
+desktop offline
+macmini busy: 25.8 GB free, 14 threads 87% busy, 1 sessions
+macbook offline
+2026-10-19T03:55:14Z
+ludothinkpad ok: 25.6 GB free, 4 threads 27% busy, 0 sessions
+desktop offline
+macmini busy: 31.4 GB free, 14 threads 90% busy, 1 sessions
+macbook offline
+2026-10-19T03:56:18Z
+ludothinkpad ok: 25.6 GB free, 4 threads 26% busy, 0 sessions
+desktop offline
+macmini busy: 31.0 GB free, 14 threads 88% busy, 1 sessions
+macbook offline
+2026-10-19T03:57:22Z
+ludothinkpad ok: 25.6 GB free, 4 threads 33% busy, 0 sessions
+desktop offline
+macmini busy: 26.5 GB free, 14 threads 91% busy, 1 sessions
+macbook offline
+2026-10-19T03:58:26Z
+ludothinkpad ok: 25.5 GB free, 4 threads 45% busy, 0 sessions
+desktop offline
+macmini busy: 26.7 GB free, 14 threads 89% busy, 1 sessions
+macbook offline
+2026-10-19T03:59:30Z
+ludothinkpad ok: 25.5 GB free, 4 threads 24% busy, 0 sessions
+desktop offline
+macmini ok: 25.6 GB free, 14 threads 77% busy, 1 sessions
+macbook offline
+2026-10-19T04:00:34Z
+ludothinkpad ok: 25.5 GB free, 4 threads 31% busy, 0 sessions
+desktop offline
+macmini ok: 25.0 GB free, 14 threads 81% busy, 1 sessions
+macbook offline
+2026-10-19T04:01:38Z
+ludothinkpad busy: 27.0 GB free, 4 threads 99% busy, 0 sessions
+desktop offline
+macmini ok: 28.3 GB free, 14 threads 82% busy, 1 sessions
+macbook offline
+2026-10-19T04:02:42Z
+ludothinkpad ok: 26.2 GB free, 4 threads 19% busy, 0 sessions
+desktop offline
+macmini busy: 26.5 GB free, 14 threads 87% busy, 1 sessions
+macbook offline
+2026-10-19T04:03:47Z
+ludothinkpad ok: 25.9 GB free, 4 threads 14% busy, 0 sessions
+desktop offline
+macmini ok: 27.9 GB free, 14 threads 78% busy, 1 sessions
+macbook offline
+2026-10-19T04:04:51Z
+ludothinkpad ok: 25.7 GB free, 4 threads 11% busy, 0 sessions
+desktop offline
+macmini busy: 30.0 GB free, 14 threads 91% busy, 1 sessions
+macbook offline
+2026-10-19T04:05:55Z
+ludothinkpad ok: 25.3 GB free, 4 threads 10% busy, 0 sessions
+desktop offline
+macmini busy: 27.5 GB free, 14 threads 88% busy, 1 sessions
+macbook offline
+2026-10-19T04:06:59Z
+ludothinkpad ok: 25.3 GB free, 4 threads 13% busy, 0 sessions
+desktop offline
+macmini ok: 26.9 GB free, 14 threads 77% busy, 1 sessions
+macbook offline
+2026-10-19T04:08:03Z
+ludothinkpad ok: 25.3 GB free, 4 threads 12% busy, 0 sessions
+desktop offline
+macmini ok: 25.8 GB free, 14 threads 81% busy, 1 sessions
+macbook offline
+2026-10-19T04:09:07Z
+ludothinkpad ok: 25.3 GB free, 4 threads 10% busy, 0 sessions
+desktop offline
+macmini busy: 26.9 GB free, 14 threads 86% busy, 1 sessions
+macbook offline
+2026-10-19T04:10:11Z
+ludothinkpad ok: 25.3 GB free, 4 threads 8% busy, 0 sessions
+desktop offline
+macmini busy: 26.6 GB free, 14 threads 92% busy, 1 sessions
+macbook offline
+2026-10-19T04:11:15Z
+ludothinkpad ok: 25.3 GB free, 4 threads 9% busy, 0 sessions
+desktop offline
+macmini ok: 27.3 GB free, 14 threads 77% busy, 1 sessions
+macbook offline
+2026-10-19T04:12:20Z
+ludothinkpad busy: 27.5 GB free, 4 threads 88% busy, 0 sessions
+desktop offline
+macmini busy: 26.5 GB free, 14 threads 86% busy, 1 sessions
+macbook offline
+2026-10-19T04:13:24Z
+ludothinkpad ok: 25.8 GB free, 4 threads 44% busy, 0 sessions
+desktop offline
+macmini busy: 27.6 GB free, 14 threads 90% busy, 1 sessions
+macbook offline
+2026-10-19T04:14:28Z
+ludothinkpad ok: 25.7 GB free, 4 threads 28% busy, 0 sessions
+desktop offline
+macmini busy: 27.8 GB free, 14 threads 87% busy, 1 sessions
+macbook offline
+2026-10-19T04:15:32Z
+ludothinkpad ok: 25.7 GB free, 4 threads 26% busy, 0 sessions
+desktop offline
+macmini ok: 26.7 GB free, 14 threads 73% busy, 1 sessions
+macbook offline
+2026-10-19T04:16:36Z
+ludothinkpad ok: 25.6 GB free, 4 threads 28% busy, 0 sessions
+desktop offline
+macmini ok: 29.3 GB free, 14 threads 80% busy, 1 sessions
+macbook offline
+2026-10-19T04:17:40Z
+ludothinkpad ok: 25.6 GB free, 4 threads 32% busy, 0 sessions
+desktop offline
+macmini busy: 26.3 GB free, 14 threads 90% busy, 1 sessions
+macbook offline
+2026-10-19T04:18:44Z
+ludothinkpad ok: 25.5 GB free, 4 threads 76% busy, 0 sessions
+desktop offline
+macmini ok: 28.4 GB free, 14 threads 84% busy, 1 sessions
+macbook offline
+2026-10-19T04:19:48Z
+ludothinkpad ok: 25.5 GB free, 4 threads 26% busy, 0 sessions
+desktop offline
+macmini ok: 30.4 GB free, 14 threads 79% busy, 1 sessions
+macbook offline
+2026-10-19T04:20:52Z
+ludothinkpad ok: 25.5 GB free, 4 threads 26% busy, 0 sessions
+desktop offline
+macmini ok: 28.1 GB free, 14 threads 73% busy, 1 sessions
+macbook offline
+2026-10-19T04:21:57Z
+ludothinkpad ok: 25.5 GB free, 4 threads 28% busy, 0 sessions
+desktop offline
+macmini ok: 31.0 GB free, 14 threads 84% busy, 1 sessions
+macbook offline
+2026-10-19T04:23:01Z
+ludothinkpad ok: 25.5 GB free, 4 threads 10% busy, 0 sessions
+desktop offline
+macmini ok: 31.7 GB free, 14 threads 83% busy, 1 sessions
+macbook offline
+2026-10-19T04:24:05Z
+ludothinkpad ok: 28.3 GB free, 4 threads 41% busy, 0 sessions
+desktop offline
+macmini ok: 27.1 GB free, 14 threads 71% busy, 1 sessions
+macbook offline
+2026-10-19T04:25:15Z
+ludothinkpad ok: 28.8 GB free, 4 threads 4% busy, 0 sessions
+desktop offline
+macmini busy: 25.7 GB free, 14 threads 98% busy, 1 sessions
+macbook offline
+2026-10-19T04:26:19Z
+ludothinkpad ok: 28.3 GB free, 4 threads 40% busy, 0 sessions
+desktop offline
+macmini ok: 32.1 GB free, 14 threads 65% busy, 1 sessions
+macbook offline
+2026-10-19T04:27:23Z
+ludothinkpad ok: 28.2 GB free, 4 threads 41% busy, 0 sessions
+desktop offline
+macmini busy: 29.4 GB free, 14 threads 89% busy, 1 sessions
+macbook offline
+2026-10-19T04:28:27Z
+ludothinkpad ok: 28.2 GB free, 4 threads 44% busy, 0 sessions
+desktop offline
+macmini ok: 28.9 GB free, 14 threads 77% busy, 1 sessions
+macbook offline
+2026-10-19T04:29:32Z
+ludothinkpad ok: 28.1 GB free, 4 threads 33% busy, 0 sessions
+desktop offline
+macmini ok: 25.3 GB free, 14 threads 71% busy, 1 sessions
+macbook offline
+2026-10-19T04:30:36Z
+ludothinkpad ok: 28.1 GB free, 4 threads 31% busy, 0 sessions
+desktop offline
+macmini ok: 30.0 GB free, 14 threads 63% busy, 1 sessions
+macbook offline
+2026-10-19T04:31:40Z
+ludothinkpad ok: 28.0 GB free, 4 threads 40% busy, 0 sessions
+desktop offline
+macmini ok: 27.4 GB free, 14 threads 73% busy, 1 sessions
+macbook offline
+2026-10-19T04:32:44Z
+ludothinkpad ok: 28.0 GB free, 4 threads 35% busy, 0 sessions
+desktop offline
+macmini ok: 29.3 GB free, 14 threads 51% busy, 1 sessions
+macbook offline
+2026-10-19T04:33:48Z
+ludothinkpad ok: 28.0 GB free, 4 threads 31% busy, 0 sessions
+desktop offline
+macmini ok: 27.5 GB free, 14 threads 67% busy, 1 sessions
+macbook offline
+2026-10-19T04:34:52Z
+ludothinkpad ok: 28.0 GB free, 4 threads 35% busy, 0 sessions
+desktop offline
+macmini ok: 26.6 GB free, 14 threads 82% busy, 1 sessions
+macbook offline
+2026-10-19T04:35:56Z
+ludothinkpad ok: 27.9 GB free, 4 threads 34% busy, 0 sessions
+desktop offline
+macmini ok: 28.9 GB free, 14 threads 66% busy, 1 sessions
+macbook offline
+2026-10-19T04:37:00Z
+ludothinkpad busy: 25.8 GB free, 4 threads 98% busy, 0 sessions
+desktop offline
+macmini ok: 26.9 GB free, 14 threads 75% busy, 1 sessions
+macbook offline
+2026-10-19T04:38:04Z
+ludothinkpad ok: 25.7 GB free, 4 threads 64% busy, 0 sessions
+desktop offline
+macmini ok: 25.6 GB free, 14 threads 74% busy, 1 sessions
+macbook offline
+2026-10-19T04:39:09Z
+ludothinkpad ok: 25.6 GB free, 4 threads 64% busy, 0 sessions
+desktop offline
+macmini ok: 26.8 GB free, 14 threads 77% busy, 1 sessions
+macbook offline
+2026-10-19T04:40:13Z
+ludothinkpad ok: 25.5 GB free, 4 threads 51% busy, 0 sessions
+desktop offline
+macmini ok: 26.3 GB free, 14 threads 70% busy, 1 sessions
+macbook offline
+2026-10-19T04:41:17Z
+ludothinkpad ok: 25.4 GB free, 4 threads 62% busy, 0 sessions
+desktop offline
+macmini ok: 26.3 GB free, 14 threads 83% busy, 1 sessions
+macbook offline
+2026-10-19T04:42:21Z
+ludothinkpad ok: 25.4 GB free, 4 threads 47% busy, 0 sessions
+desktop offline
+macmini ok: 26.2 GB free, 14 threads 68% busy, 1 sessions
+macbook offline
+2026-10-19T04:43:25Z
+ludothinkpad ok: 25.4 GB free, 4 threads 67% busy, 0 sessions
+desktop offline
+macmini busy: 26.9 GB free, 14 threads 88% busy, 1 sessions
+macbook offline
+2026-10-19T04:44:29Z
+ludothinkpad ok: 25.3 GB free, 4 threads 64% busy, 0 sessions
+desktop offline
+macmini ok: 30.4 GB free, 14 threads 79% busy, 1 sessions
+macbook offline
+2026-10-19T04:45:33Z
+ludothinkpad ok: 25.2 GB free, 4 threads 66% busy, 0 sessions
+desktop offline
+macmini ok: 25.0 GB free, 14 threads 69% busy, 1 sessions
+macbook offline
+2026-10-19T04:46:37Z
+ludothinkpad ok: 25.1 GB free, 4 threads 48% busy, 0 sessions
+desktop offline
+macmini busy: 26.4 GB free, 14 threads 87% busy, 1 sessions
+macbook offline
+2026-10-19T04:47:42Z
+ludothinkpad ok: 27.5 GB free, 4 threads 69% busy, 0 sessions
+desktop offline
+macmini ok: 28.0 GB free, 14 threads 83% busy, 1 sessions
+macbook offline
+2026-10-19T04:48:46Z
+ludothinkpad ok: 25.3 GB free, 4 threads 83% busy, 0 sessions
+desktop offline
+macmini busy: 25.6 GB free, 14 threads 85% busy, 1 sessions
+macbook offline
+2026-10-19T04:49:50Z
+ludothinkpad ok: 25.3 GB free, 4 threads 55% busy, 0 sessions
+desktop offline
+macmini busy: 25.3 GB free, 14 threads 88% busy, 1 sessions
+macbook offline
+2026-10-19T04:50:54Z
+ludothinkpad ok: 25.2 GB free, 4 threads 51% busy, 0 sessions
+desktop offline
+macmini ok: 30.9 GB free, 14 threads 74% busy, 1 sessions
+macbook offline
+2026-10-19T04:51:58Z
+ludothinkpad ok: 25.2 GB free, 4 threads 57% busy, 0 sessions
+desktop offline
+macmini ok: 29.2 GB free, 14 threads 83% busy, 1 sessions
+macbook offline
+2026-10-19T04:53:02Z
+ludothinkpad ok: 25.1 GB free, 4 threads 59% busy, 0 sessions
+desktop offline
+macmini busy: 26.2 GB free, 14 threads 88% busy, 1 sessions
+macbook offline
+2026-10-19T04:54:06Z
+ludothinkpad ok: 25.1 GB free, 4 threads 38% busy, 0 sessions
+desktop offline
+macmini busy: 25.4 GB free, 14 threads 90% busy, 2 sessions
+macbook offline
+2026-10-19T04:55:10Z
+ludothinkpad ok: 25.1 GB free, 4 threads 43% busy, 0 sessions
+desktop offline
+macmini busy: 25.4 GB free, 14 threads 85% busy, 1 sessions
+macbook offline
+2026-10-19T04:56:15Z
+ludothinkpad ok: 25.1 GB free, 4 threads 42% busy, 0 sessions
+desktop offline
+macmini ok: 27.6 GB free, 14 threads 80% busy, 1 sessions
+macbook offline
+2026-10-19T04:57:19Z
+ludothinkpad ok: 25.0 GB free, 4 threads 45% busy, 0 sessions
+desktop offline
+macmini ok: 27.0 GB free, 14 threads 67% busy, 1 sessions
+macbook offline
+2026-10-19T04:58:23Z
+ludothinkpad ok: 25.0 GB free, 4 threads 48% busy, 0 sessions
+desktop offline
+macmini ok: 27.4 GB free, 14 threads 74% busy, 1 sessions
+macbook offline
+2026-10-19T04:59:27Z
+ludothinkpad busy: 26.6 GB free, 4 threads 100% busy, 0 sessions
+desktop offline
+macmini busy: 27.7 GB free, 14 threads 91% busy, 1 sessions
+macbook offline
+2026-10-19T05:00:31Z
+ludothinkpad ok: 25.6 GB free, 4 threads 53% busy, 0 sessions
+desktop offline
+macmini ok: 32.2 GB free, 14 threads 64% busy, 1 sessions
+macbook offline
+2026-10-19T05:01:35Z
+ludothinkpad ok: 25.7 GB free, 4 threads 54% busy, 0 sessions
+desktop offline
+macmini ok: 26.1 GB free, 14 threads 85% busy, 1 sessions
+macbook offline
+2026-10-19T05:02:39Z
+ludothinkpad ok: 25.6 GB free, 4 threads 59% busy, 0 sessions
+desktop offline
+macmini ok: 25.4 GB free, 14 threads 84% busy, 1 sessions
+macbook offline
+2026-10-19T05:03:43Z
+ludothinkpad ok: 25.6 GB free, 4 threads 55% busy, 0 sessions
+desktop offline
+macmini busy: 25.3 GB free, 14 threads 87% busy, 1 sessions
+macbook offline
+2026-10-19T05:04:48Z
+ludothinkpad busy: 25.0 GB free, 4 threads 96% busy, 0 sessions
+desktop offline
+macmini ok: 26.6 GB free, 14 threads 79% busy, 1 sessions
+macbook offline
+2026-10-19T05:05:52Z
+ludothinkpad ok: 25.4 GB free, 4 threads 51% busy, 0 sessions
+desktop offline
+macmini ok: 27.8 GB free, 14 threads 84% busy, 1 sessions
+macbook offline
+2026-10-19T05:06:56Z
+ludothinkpad ok: 25.4 GB free, 4 threads 46% busy, 0 sessions
+desktop offline
+macmini busy: 25.9 GB free, 14 threads 92% busy, 1 sessions
+macbook offline
+2026-10-19T05:08:00Z
+ludothinkpad ok: 25.4 GB free, 4 threads 53% busy, 0 sessions
+desktop offline
+macmini busy: 29.0 GB free, 14 threads 88% busy, 1 sessions
+macbook offline
+2026-10-19T05:09:04Z
+ludothinkpad ok: 25.1 GB free, 4 threads 64% busy, 0 sessions
+desktop offline
+macmini ok: 27.3 GB free, 14 threads 81% busy, 1 sessions
+macbook offline
+2026-10-19T05:10:08Z
+ludothinkpad ok: 28.6 GB free, 4 threads 28% busy, 0 sessions
+desktop offline
+macmini ok: 26.8 GB free, 14 threads 78% busy, 1 sessions
+macbook offline
+2026-10-19T05:11:12Z
+ludothinkpad ok: 28.2 GB free, 4 threads 48% busy, 0 sessions
+desktop offline
+macmini busy: 28.5 GB free, 14 threads 88% busy, 1 sessions
+macbook offline
+2026-10-19T05:12:16Z
+ludothinkpad ok: 28.2 GB free, 4 threads 52% busy, 0 sessions
+desktop offline
+macmini ok: 27.3 GB free, 14 threads 74% busy, 1 sessions
+macbook offline
+2026-10-19T05:13:21Z
+ludothinkpad ok: 28.1 GB free, 4 threads 41% busy, 0 sessions
+desktop offline
+macmini busy: 25.9 GB free, 14 threads 87% busy, 1 sessions
+macbook offline
+2026-10-19T05:14:25Z
+ludothinkpad ok: 28.1 GB free, 4 threads 56% busy, 0 sessions
+desktop offline
+macmini busy: 26.7 GB free, 14 threads 88% busy, 1 sessions
+macbook offline
+2026-10-19T05:15:29Z
+ludothinkpad ok: 28.0 GB free, 4 threads 50% busy, 0 sessions
+desktop offline
+macmini busy: 25.4 GB free, 14 threads 90% busy, 1 sessions
+macbook offline
+2026-10-19T05:16:33Z
+ludothinkpad ok: 27.9 GB free, 4 threads 47% busy, 0 sessions
+desktop offline
+macmini ok: 29.1 GB free, 14 threads 77% busy, 1 sessions
+macbook offline
+2026-10-19T05:17:37Z
+ludothinkpad ok: 27.9 GB free, 4 threads 61% busy, 0 sessions
+desktop offline
+macmini ok: 27.5 GB free, 14 threads 75% busy, 1 sessions
+macbook offline
+2026-10-19T05:18:41Z
+ludothinkpad ok: 27.9 GB free, 4 threads 68% busy, 0 sessions
+desktop offline
+macmini ok: 27.3 GB free, 14 threads 76% busy, 1 sessions
+macbook offline
+2026-10-19T05:19:45Z
+ludothinkpad ok: 27.8 GB free, 4 threads 45% busy, 0 sessions
+desktop offline
+macmini busy: 27.5 GB free, 14 threads 85% busy, 1 sessions
+macbook offline
+2026-10-19T05:20:49Z
+ludothinkpad ok: 27.5 GB free, 4 threads 60% busy, 0 sessions
+desktop offline
+macmini busy: 26.6 GB free, 14 threads 95% busy, 1 sessions
+macbook offline
+2026-10-19T05:21:53Z
+ludothinkpad busy: 26.7 GB free, 4 threads 99% busy, 0 sessions
+desktop offline
+macmini ok: 29.8 GB free, 14 threads 72% busy, 1 sessions
+macbook offline
+2026-10-19T05:22:58Z
+ludothinkpad busy: 25.7 GB free, 4 threads 97% busy, 0 sessions
+desktop offline
+macmini busy: 26.6 GB free, 14 threads 86% busy, 1 sessions
+macbook offline
+2026-10-19T05:24:02Z
+ludothinkpad busy: 25.4 GB free, 4 threads 90% busy, 0 sessions
+desktop offline
+macmini busy: 28.2 GB free, 14 threads 85% busy, 1 sessions
+macbook offline
+2026-10-19T05:25:06Z
+ludothinkpad ok: 25.3 GB free, 4 threads 73% busy, 0 sessions
+desktop offline
+macmini busy: 27.8 GB free, 14 threads 89% busy, 1 sessions
+macbook offline
+2026-10-19T05:26:10Z
+ludothinkpad ok: 25.2 GB free, 4 threads 69% busy, 0 sessions
+desktop offline
+macmini ok: 28.8 GB free, 14 threads 74% busy, 1 sessions
+macbook offline
+2026-10-19T05:27:14Z
+ludothinkpad ok: 25.2 GB free, 4 threads 82% busy, 0 sessions
+desktop offline
+macmini ok: 29.6 GB free, 14 threads 80% busy, 1 sessions
+macbook offline
+2026-10-19T05:28:18Z
+ludothinkpad ok: 25.2 GB free, 4 threads 66% busy, 0 sessions
+desktop offline
+macmini busy: 33.7 GB free, 14 threads 88% busy, 1 sessions
+macbook offline
+2026-10-19T05:29:22Z
+ludothinkpad busy: 26.4 GB free, 4 threads 99% busy, 0 sessions
+desktop offline
+macmini ok: 33.7 GB free, 14 threads 81% busy, 1 sessions
+macbook offline
+2026-10-19T05:30:27Z
+ludothinkpad ok: 25.0 GB free, 4 threads 73% busy, 0 sessions
+desktop offline
+macmini busy: 31.8 GB free, 14 threads 87% busy, 1 sessions
+macbook offline
+2026-10-19T05:31:31Z
+ludothinkpad ok: 24.9 GB free, 4 threads 66% busy, 0 sessions
+desktop offline
+macmini ok: 29.7 GB free, 14 threads 77% busy, 1 sessions
+macbook offline
+2026-10-19T05:32:35Z
+ludothinkpad busy: 25.0 GB free, 4 threads 94% busy, 0 sessions
+desktop offline
+macmini busy: 27.8 GB free, 14 threads 87% busy, 1 sessions
+macbook offline
+2026-10-19T05:33:39Z
+ludothinkpad ok: 24.9 GB free, 4 threads 70% busy, 0 sessions
+desktop offline
+macmini busy: 25.7 GB free, 14 threads 90% busy, 1 sessions
+macbook offline
+2026-10-19T05:34:43Z
+ludothinkpad busy: 24.9 GB free, 4 threads 88% busy, 0 sessions
+desktop offline
+macmini busy: 32.7 GB free, 14 threads 88% busy, 1 sessions
+macbook offline
+2026-10-19T05:35:47Z
+ludothinkpad ok: 24.9 GB free, 4 threads 72% busy, 0 sessions
+desktop offline
+macmini busy: 33.3 GB free, 14 threads 86% busy, 1 sessions
+macbook offline
+2026-10-19T05:36:51Z
+ludothinkpad ok: 24.8 GB free, 4 threads 76% busy, 0 sessions
+desktop offline
+macmini ok: 32.6 GB free, 14 threads 83% busy, 1 sessions
+macbook offline
+2026-10-19T05:37:55Z
+ludothinkpad ok: 24.7 GB free, 4 threads 71% busy, 0 sessions
+desktop offline
+macmini ok: 31.5 GB free, 14 threads 65% busy, 1 sessions
+macbook offline
+2026-10-19T05:39:00Z
+ludothinkpad busy: 24.7 GB free, 4 threads 92% busy, 0 sessions
+desktop offline
+macmini ok: 29.7 GB free, 14 threads 69% busy, 1 sessions
+macbook offline
+2026-10-19T05:40:04Z
+ludothinkpad ok: 28.6 GB free, 4 threads 55% busy, 0 sessions
+desktop offline
+macmini ok: 30.0 GB free, 14 threads 73% busy, 1 sessions
+macbook offline
+2026-10-19T05:41:08Z
+ludothinkpad busy: 25.6 GB free, 4 threads 100% busy, 0 sessions
+desktop offline
+macmini busy: 28.3 GB free, 14 threads 88% busy, 1 sessions
+macbook offline
+2026-10-19T05:42:12Z
+ludothinkpad busy: 25.5 GB free, 4 threads 97% busy, 0 sessions
+desktop offline
+macmini ok: 27.6 GB free, 14 threads 80% busy, 1 sessions
+macbook offline
+2026-10-19T05:43:16Z
+ludothinkpad busy: 25.3 GB free, 4 threads 98% busy, 0 sessions
+desktop offline
+macmini ok: 29.5 GB free, 14 threads 76% busy, 1 sessions
+macbook offline
+2026-10-19T05:44:20Z
+ludothinkpad ok: 25.2 GB free, 4 threads 85% busy, 0 sessions
+desktop offline
+macmini ok: 28.6 GB free, 14 threads 64% busy, 1 sessions
+macbook offline
+2026-10-19T05:45:25Z
+ludothinkpad ok: 25.2 GB free, 4 threads 74% busy, 0 sessions
+desktop offline
+macmini ok: 26.6 GB free, 14 threads 78% busy, 1 sessions
+macbook offline
+2026-10-19T05:46:29Z
+ludothinkpad ok: 25.2 GB free, 4 threads 68% busy, 0 sessions
+desktop offline
+macmini ok: 26.5 GB free, 14 threads 82% busy, 1 sessions
+macbook offline
+2026-10-19T05:47:33Z
+ludothinkpad ok: 24.5 GB free, 4 threads 84% busy, 0 sessions
+desktop offline
+macmini busy: 26.5 GB free, 14 threads 90% busy, 1 sessions
+macbook offline
+2026-10-19T05:48:37Z
+ludothinkpad busy: 24.4 GB free, 4 threads 86% busy, 0 sessions
+desktop offline
+macmini ok: 30.6 GB free, 14 threads 61% busy, 1 sessions
+macbook offline
+2026-10-19T05:49:41Z
+ludothinkpad ok: 24.2 GB free, 4 threads 80% busy, 0 sessions
+desktop offline
+macmini busy: 26.9 GB free, 14 threads 85% busy, 3 sessions
+macbook offline
+2026-10-19T05:50:45Z
+ludothinkpad ok: 24.2 GB free, 4 threads 72% busy, 0 sessions
+desktop offline
+macmini busy: 25.7 GB free, 14 threads 89% busy, 1 sessions
+macbook offline
+2026-10-19T05:51:49Z
+ludothinkpad ok: 24.1 GB free, 4 threads 17% busy, 0 sessions
+desktop offline
+macmini busy: 29.1 GB free, 14 threads 87% busy, 1 sessions
+macbook offline
+2026-10-19T05:52:54Z
+ludothinkpad ok: 27.5 GB free, 4 threads 83% busy, 0 sessions
+desktop offline
+macmini ok: 26.9 GB free, 14 threads 76% busy, 1 sessions
+macbook offline
+2026-10-19T05:53:58Z
+ludothinkpad ok: 25.8 GB free, 4 threads 56% busy, 0 sessions
+desktop offline
+macmini ok: 27.3 GB free, 14 threads 82% busy, 1 sessions
+macbook offline
+2026-10-19T05:55:02Z
+ludothinkpad ok: 25.8 GB free, 4 threads 35% busy, 0 sessions
+desktop offline
+macmini busy: 27.2 GB free, 14 threads 95% busy, 1 sessions
+macbook offline
+2026-10-19T05:56:06Z
+ludothinkpad ok: 25.0 GB free, 4 threads 52% busy, 0 sessions
+desktop offline
+macmini ok: 29.6 GB free, 14 threads 56% busy, 1 sessions
+macbook offline
+2026-10-19T05:57:10Z
+ludothinkpad ok: 25.1 GB free, 4 threads 30% busy, 0 sessions
+desktop offline
+macmini busy: 26.2 GB free, 14 threads 91% busy, 1 sessions
+macbook offline
+2026-10-19T05:58:14Z
+ludothinkpad ok: 25.1 GB free, 4 threads 36% busy, 0 sessions
+desktop offline
+macmini busy: 27.8 GB free, 14 threads 94% busy, 1 sessions
+macbook offline
+2026-10-19T05:59:18Z
+ludothinkpad ok: 25.0 GB free, 4 threads 27% busy, 0 sessions
+desktop offline
+macmini ok: 30.3 GB free, 14 threads 51% busy, 1 sessions
+macbook offline
+2026-10-19T06:00:22Z
+ludothinkpad ok: 25.0 GB free, 4 threads 24% busy, 0 sessions
+desktop offline
+macmini busy: 26.7 GB free, 14 threads 86% busy, 1 sessions
+macbook offline
+2026-10-19T06:01:26Z
+ludothinkpad ok: 24.4 GB free, 4 threads 38% busy, 0 sessions
+desktop offline
+macmini busy: 27.1 GB free, 14 threads 89% busy, 1 sessions
+macbook offline
+2026-10-19T06:02:31Z
+ludothinkpad ok: 25.2 GB free, 4 threads 27% busy, 0 sessions
+desktop offline
+macmini ok: 29.1 GB free, 14 threads 55% busy, 1 sessions
+macbook offline

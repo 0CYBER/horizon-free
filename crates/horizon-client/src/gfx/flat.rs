@@ -330,7 +330,7 @@ impl Flat {
         draws: &[[u32; 5]],
         pages: &[(u32, Option<u32>)],
         solid_draws: usize,
-        origins: impl Iterator<Item = (u32, [f32; 3])>,
+        origins: impl Iterator<Item = (u32, [f32; 4])>,
         sorted_page: impl Fn(u32) -> wgpu::Buffer,
     ) -> bool {
         // Origins by section id.
@@ -340,7 +340,7 @@ impl Flat {
             if self.origin_data.len() <= id {
                 self.origin_data.resize(id + 1, [0.0; 4]);
             }
-            self.origin_data[id] = [o[0], o[1], o[2], 0.0];
+            self.origin_data[id] = o;
         }
         if self.origin_data.len() as u64 > self.origin_capacity {
             self.origin_capacity = (self.origin_data.len() as u64).next_power_of_two();
