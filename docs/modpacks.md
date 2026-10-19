@@ -521,6 +521,12 @@ Two cases the oracle fills in:
     from the template's origin along one axis, and a world height range. The game runs them
     as `horizon:matter_phase`, `horizon:piece_origin_axis_aligned_linear_pos` and
     `horizon:y_value` with the mod's fields, and carry renames them (213 in 75 lists).
+  - **Waterlogging.** Repurposed's `waterlogging_when_replacing_water_processor` (the bottom
+    pillars of its villages and outposts, 16 lists) is `horizon:waterlog_in_world_water`: a
+    block that can be waterlogged is where the world holds water, dry where it does not, and
+    one placed in water gets a block tick. Its dropped processors go from 370 to 253 (with
+    the structure voids carried); around the ocean village at chunk (12, 10), seed 1234, 6
+    spruce fences of its pillars under the sea are now waterlogged.
   - **Namespaces besides the mod id.** Towns and Towers (mod id `t_and_t`) ships all 60 of its
     structures under `kaisyn` and `towns_and_towers`, which carry used to leave in `outside/`.
     Carry now claims a namespace for the mod when the mod's own files (its id's, its tag
