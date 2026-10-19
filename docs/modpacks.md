@@ -490,6 +490,16 @@ Two cases the oracle fills in:
     placeholders become nether bricks and 41,487 blocks of air (and 2,163 of lava) under it
     become brick and magma columns down to the netherrack, 64,568 blocks changed in its 180
     chunks (the huge fungi there grow around the columns).
+    Better Ocean Monuments' ten processors are carried as well, so its monuments are no longer
+    dry: its templates are mostly air, which its air processor turns to water below the sea
+    level (the game's `horizon:flood_air`); its waterlog processor (`horizon:waterlog`)
+    waterlogs what can be and marks the water on the chunk's edges for postprocessing, its
+    structure void keeps the world's block (`horizon:keep_world_block`), its placeholder
+    blocks become slabs, sponges, seagrass, gravel and aged copper (vanilla's `rule`, and
+    `horizon:pick` with a new `nextFloat` for each chance, as the mod draws), and its legs and
+    Better Witch Huts' log and fence legs are `horizon:yung_pillar`. In the monument at chunk
+    (2, 8) (seed 1234), 318,512 blocks of air become water and none is left between y 30 and
+    60 (227,034 before); its 5,142 placeholder blocks are gone.
     Still taken out: Formations' biome replacements, Repurposed's air fix
     (`close_off_air_sources`), blocks aged or propped up.
     In the 128×128-chunk square (seed 1234), every spawner of a mod structure now has its mob:
@@ -571,7 +581,7 @@ Two cases the oracle fills in:
     - Repurposed's mineshafts, mansions and monuments, Better Mineshafts and two Better
       Dungeons types: Java structure types;
     - the block processors written in Java
-      (YUNG's banners, legs and decorations, Lithostitched's block swaps);
+      (YUNG's banners and decorations, Better Strongholds' legs, Lithostitched's block swaps);
     - MO Structures (38; its library is only on CurseForge).
 
   With every structure PR above, the same square (seed 1234, chunks -64..63) holds 362

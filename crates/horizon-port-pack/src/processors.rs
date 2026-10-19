@@ -574,7 +574,131 @@ fn as_data(kind: &str, p: &Value, data: &ProcessorData) -> Option<Vec<Value>> {
                 "min": 1, "max": 2, "chance": 0.2f32 as f64,
                 "replacement": block("minecraft:cave_air")})]
         }
+        "betterwitchhuts:leg_processor" => vec![yung_leg(
+            "minecraft:brown_stained_glass",
+            json!({"id": "minecraft:oak_log", "properties": {"axis": "y"}}),
+            false,
+        )],
+        "betterwitchhuts:fence_leg_processor" => vec![yung_leg(
+            "minecraft:crimson_fence",
+            block("minecraft:oak_fence"),
+            true,
+        )],
+        _ if ns == "betteroceanmonuments" => ocean_monument(kind)?,
         _ if ns == "betterdungeons" || ns == "betterdeserttemples" => vec![yung_spawner(kind, p)?],
+        _ => return None,
+    })
+}
+
+/// YUNG's leg processors (Better Ocean Monuments, Better Witch Huts): a
+/// placeholder block becomes `state` and a column of it runs down through
+/// air and fluids: the game's `horizon:yung_pillar` with fixed states, and
+/// the placeholder's properties kept for the fence legs.
+fn yung_leg(target: &str, state: Value, keep_properties: bool) -> Value {
+    let fixed = json!({"entries": [], "defaultBlockState": state});
+    json!({"processor_type": "horizon:yung_pillar", "target_block": block(target),
+        "target_block_output": fixed, "pillar_states": fixed,
+        "keep_properties": keep_properties})
+}
+
+/// Better Ocean Monuments' processors (no fields; what they do is in their
+/// Java code): placeholder blocks as vanilla's `rule` or the game's
+/// `horizon:pick` (a new `nextFloat` for each chance, as the mod draws),
+/// and its sea-level ones as the game's `horizon:flood_air`,
+/// `horizon:waterlog` and `horizon:keep_world_block`.
+fn ocean_monument(kind: &str) -> Option<Vec<Value>> {
+    let rule = |rules: &[(&str, Value)]| {
+        let rules: Vec<Value> = rules
+            .iter()
+            .map(|(from, to)| {
+                json!({"input_predicate": {"predicate_type": "minecraft:block_match", "block": from},
+                "location_predicate": {"predicate_type": "minecraft:always_true"},
+                "output_state": to})
+            })
+            .collect();
+        json!({"processor_type": "minecraft:rule", "rules": rules})
+    };
+    let state = |id: &str, props: Value| json!({"id": id, "properties": props});
+    let pick = |from: &str, picks: Vec<(f32, Value)>, default: Value, keep: bool| {
+        let picks: Vec<Value> = picks
+            .into_iter()
+            .map(|(below, state)| json!({"below": below as f64, "state": state}))
+            .collect();
+        json!({"processor_type": "horizon:pick", "block": from, "picks": picks,
+            "default": {"state": default}, "redraw": true, "keep_properties": keep})
+    };
+    let slabs = |from: &str, slab: &str, otherwise: &str| {
+        let wet = |t: &str| state(slab, json!({"type": t, "waterlogged": "true"}));
+        pick(
+            from,
+            vec![(0.4, wet("top")), (0.8, wet("bottom"))],
+            block(otherwise),
+            false,
+        )
+    };
+    // Exposed below 0.1, else weathered below a new 0.3, else oxidized,
+    // with the placeholder's properties for the stairs and slabs.
+    let copper = |kind: &str| {
+        let id = |age: &str| block(&format!("minecraft:{age}{kind}"));
+        pick(
+            &format!("minecraft:oxidized_{kind}"),
+            vec![(0.1, id("exposed_")), (0.3, id("weathered_"))],
+            id("oxidized_"),
+            true,
+        )
+    };
+    Some(match kind.strip_prefix("betteroceanmonuments:")? {
+        "random_prismarine_slab_decoration_processor" => vec![slabs(
+            "minecraft:lime_concrete",
+            "minecraft:prismarine_slab",
+            "minecraft:air",
+        )],
+        "random_dark_prismarine_slab_decoration_processor" => vec![slabs(
+            "minecraft:blue_concrete",
+            "minecraft:dark_prismarine_slab",
+            "minecraft:water",
+        )],
+        "sand_gravel_processor" => {
+            vec![rule(&[(
+                "minecraft:yellow_stained_glass",
+                block("minecraft:gravel"),
+            )])]
+        }
+        "random_oxidization_processor" => [
+            "copper",
+            "cut_copper",
+            "cut_copper_stairs",
+            "cut_copper_slab",
+        ]
+        .into_iter()
+        .map(copper)
+        .collect(),
+        "structure_void_processor" => vec![json!({"processor_type": "horizon:keep_world_block",
+            "blocks": ["minecraft:purpur_slab", "minecraft:brown_wool"]})],
+        "air_processor" => vec![json!({"processor_type": "horizon:flood_air"})],
+        "waterlog_processor" => vec![json!({"processor_type": "horizon:waterlog"})],
+        "seagrass_processor" => vec![rule(&[
+            (
+                "minecraft:red_sandstone_slab",
+                state("minecraft:tall_seagrass", json!({"half": "lower"})),
+            ),
+            (
+                "minecraft:end_stone_brick_slab",
+                state("minecraft:tall_seagrass", json!({"half": "upper"})),
+            ),
+            ("minecraft:brick_slab", block("minecraft:seagrass")),
+        ])],
+        "random_sponge_processor" => vec![pick(
+            "minecraft:orange_stained_glass",
+            vec![(0.75, block("minecraft:wet_sponge"))],
+            block("minecraft:water"),
+            false,
+        )],
+        "leg_processor" => vec![yung_leg(
+            "minecraft:blue_stained_glass",
+            block("minecraft:prismarine_bricks"),
+            false,
+        )],
         _ => return None,
     })
 }
@@ -1375,6 +1499,71 @@ mod tests {
             "repurposed_structures:y_value_pos_rule_test"}),
             &mut carried
         ));
+    }
+
+    #[test]
+    fn ocean_monuments_become_the_games() {
+        let names = [
+            "random_prismarine_slab_decoration_processor",
+            "random_dark_prismarine_slab_decoration_processor",
+            "sand_gravel_processor",
+            "random_oxidization_processor",
+            "structure_void_processor",
+            "air_processor",
+            "waterlog_processor",
+            "seagrass_processor",
+            "random_sponge_processor",
+            "leg_processor",
+        ];
+        let processors: Vec<Value> = names
+            .iter()
+            .map(|n| json!({"processor_type": format!("betteroceanmonuments:{n}")}))
+            .chain([json!({"processor_type": "betterwitchhuts:fence_leg_processor"})])
+            .collect();
+        let mut list = json!({"processors": processors});
+        let mut carried = BTreeMap::new();
+        assert!(carry(
+            "processor_list",
+            &mut list,
+            &ProcessorData::default(),
+            &mut carried
+        ));
+        let p = list["processors"].as_array().unwrap();
+        let types: Vec<&str> = p
+            .iter()
+            .map(|p| p["processor_type"].as_str().unwrap())
+            .collect();
+        let mut want = vec!["horizon:pick", "horizon:pick", "minecraft:rule"];
+        want.extend(["horizon:pick"; 4]);
+        want.extend([
+            "horizon:keep_world_block",
+            "horizon:flood_air",
+            "horizon:waterlog",
+            "minecraft:rule",
+            "horizon:pick",
+            "horizon:yung_pillar",
+            "horizon:yung_pillar",
+        ]);
+        assert_eq!(types, want);
+        assert_eq!(carried.values().sum::<usize>(), 11);
+        // Copper stairs keep their properties, each chance on a new float.
+        let stairs = &p[5];
+        assert_eq!(stairs["block"], "minecraft:oxidized_cut_copper_stairs");
+        assert_eq!(
+            stairs["picks"][1]["state"]["id"],
+            "minecraft:weathered_cut_copper_stairs"
+        );
+        assert_eq!(
+            (stairs["redraw"].clone(), stairs["keep_properties"].clone()),
+            (json!(true), json!(true))
+        );
+        assert_eq!(p[0]["picks"][0]["state"]["properties"]["type"], "top");
+        assert_eq!(p[1]["default"]["state"]["id"], "minecraft:water");
+        assert_eq!(
+            p[12]["target_block_output"]["defaultBlockState"]["id"],
+            "minecraft:prismarine_bricks"
+        );
+        assert_eq!(p[13]["keep_properties"], true);
     }
 
     #[test]
