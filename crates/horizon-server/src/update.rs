@@ -1,8 +1,9 @@
 //! Updates and rollbacks (docs/server.md, section 7) for a `horizon-server` installed by install.sh or
 //! install.ps1: each release in `<dir>/releases/<tag>`, `<dir>/current` pointing at the one in use, and
-//! `<dir>/previous` naming the one before it. An update downloads the newest release from GitHub, checks it
-//! against the SHA-256 GitHub publishes for it, unpacks it beside the others and switches `current`; the
-//! supervisor then restarts the game on it and switches back by itself if the new game doesn't come up.
+//! `<dir>/previous` naming the one before it. An update downloads the newest stable release from GitHub, checks it
+//! against the SHA-256 in the release's signed SHA256SUMS (docs/security.md), unpacks it beside the others and
+//! switches `current`; the supervisor then restarts the game on it and switches back by itself if the new game
+//! doesn't come up.
 
 use crate::{api::Client, backup, config::Config, engine, supervisor};
 use serde_json::{Value, json};
@@ -231,27 +232,47 @@ pub struct Release {
     pub sha256: String,
 }
 
-/// The newest release (or `tag`), from GitHub's API.
+/// GitHub's API, or a release asset: the body of `url`.
+fn fetch(url: &str) -> Result<Vec<u8>, String> {
+    let mut body = Vec::new();
+    ureq::get(url)
+        .set("Accept", "application/vnd.github+json")
+        .set("User-Agent", "horizon-server")
+        .call()
+        .map_err(|e| match e {
+            ureq::Error::Status(404, _) => "404".to_string(),
+            e => format!("GitHub didn't answer: {e}"),
+        })?
+        .into_reader()
+        .take(64 << 20)
+        .read_to_end(&mut body)
+        .map_err(|e| format!("GitHub's answer: {e}"))?;
+    Ok(body)
+}
+
+/// The newest stable release (or `tag`), from GitHub's API, with the SHA-256 its signed checksums
+/// give for this computer's archive.
 pub fn release(tag: Option<&str>) -> Result<Release, String> {
     let url = match tag {
         Some(tag) => format!("https://api.github.com/repos/{REPO}/releases/tags/{tag}"),
         None => format!("https://api.github.com/repos/{REPO}/releases/latest"),
     };
-    let text = ureq::get(&url)
-        .set("Accept", "application/vnd.github+json")
-        .set("User-Agent", "horizon-server")
-        .call()
-        .map_err(|e| match e {
-            ureq::Error::Status(404, _) => format!("no release {} on GitHub", tag.unwrap_or("")),
-            e => format!("GitHub didn't answer: {e}"),
-        })?
-        .into_string()
-        .map_err(|e| format!("GitHub's answer: {e}"))?;
-    pick(&serde_json::from_str(&text).map_err(|e| format!("GitHub's answer: {e}"))?)
+    let text = fetch(&url).map_err(|e| match e.as_str() {
+        "404" => format!("no release {} on GitHub", tag.unwrap_or("")),
+        _ => e,
+    })?;
+    let json = serde_json::from_slice(&text).map_err(|e| format!("GitHub's answer: {e}"))?;
+    pick(&json, fetch, &horizon_release_sign::trusted_keys())
 }
 
-/// The archive for this computer in a release's JSON, with the SHA-256 GitHub publishes for it.
-fn pick(release: &Value) -> Result<Release, String> {
+/// The archive for this computer in a release's JSON, with the SHA-256 the release's SHA256SUMS
+/// gives for it, once its signature checks with one of `keys` (docs/security.md). A release that
+/// isn't signed, or not by Horizon's key, is refused.
+fn pick(
+    release: &Value,
+    fetch: impl Fn(&str) -> Result<Vec<u8>, String>,
+    keys: &[horizon_release_sign::PublicKey],
+) -> Result<Release, String> {
     let tag = release["tag_name"]
         .as_str()
         .ok_or("GitHub's answer has no tag")?;
@@ -266,10 +287,24 @@ fn pick(release: &Value) -> Result<Release, String> {
             )
         })?;
     let name = asset["name"].as_str().unwrap_or_default();
-    let sha256 = asset["digest"]
-        .as_str()
-        .and_then(|d| d.strip_prefix("sha256:"))
-        .ok_or_else(|| format!("release {tag} publishes no SHA-256 for {name}"))?;
+    let attached = |file: &str| -> Result<Option<Vec<u8>>, String> {
+        match assets.iter().find(|a| a["name"] == file) {
+            Some(a) => fetch(a["browser_download_url"].as_str().unwrap_or_default())
+                .map(Some)
+                .map_err(|e| format!("{file} of {tag}: {e}")),
+            None => Ok(None),
+        }
+    };
+    let sums = attached(horizon_release_sign::SUMS)?;
+    let signature = attached(horizon_release_sign::SIGNATURE)?
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
+    let sha256 = horizon_release_sign::signed_digest(
+        tag,
+        name,
+        sums.as_deref(),
+        signature.as_deref(),
+        keys,
+    )?;
     Ok(Release {
         tag: tag.to_owned(),
         asset: name.to_owned(),
@@ -277,7 +312,7 @@ fn pick(release: &Value) -> Result<Release, String> {
             .as_str()
             .unwrap_or_default()
             .to_owned(),
-        sha256: sha256.to_ascii_lowercase(),
+        sha256,
     })
 }
 
@@ -717,31 +752,56 @@ mod tests {
     }
 
     #[test]
-    fn the_archive_for_this_computer_is_picked_with_its_digest() {
-        let asset = |name: &str| {
-            json!({
-                "name": name,
-                "browser_download_url": format!("https://example.invalid/{name}"),
-                "digest": "sha256:ABCDEF",
-            })
+    fn the_archive_for_this_computer_is_picked_with_its_signed_digest() {
+        use horizon_release_sign::{SigningKey, sha256_hex, sums_file};
+        let asset = |name: &str| json!({ "name": name, "browser_download_url": format!("https://example.invalid/{name}") });
+        let (key, _) = SigningKey::generate().unwrap();
+        let listed: Vec<(String, String)> = ASSETS
+            .iter()
+            .map(|n| (n.to_string(), sha256_hex(n.as_bytes())))
+            .collect();
+        let sums = sums_file(&listed);
+        let signature = key.sign("v2026.10.19", sums.as_bytes());
+        let files = |url: &str| -> Result<Vec<u8>, String> {
+            match url.rsplit('/').next() {
+                Some("SHA256SUMS") => Ok(sums.clone().into_bytes()),
+                Some("SHA256SUMS.sig") => Ok(signature.clone().into_bytes()),
+                _ => Err("404".into()),
+            }
         };
-        let release = json!({
+        let names = ASSETS.iter().rev().copied().chain(["other.zip"]);
+        let signed = json!({
             "tag_name": "v2026.10.19",
-            "assets": ASSETS.iter().rev().map(|n| asset(n)).chain([asset("other.zip")]).collect::<Vec<_>>(),
+            "assets": names.chain(["SHA256SUMS", "SHA256SUMS.sig"]).map(asset).collect::<Vec<_>>(),
         });
         if let Some(first) = ASSETS.first() {
-            let picked = pick(&release).unwrap();
+            let picked = pick(&signed, files, &[key.public()]).unwrap();
             assert_eq!(picked.tag, "v2026.10.19");
             // The most specific archive (Linux: the server build), even when listed last.
             assert_eq!(picked.asset, *first);
-            assert_eq!(picked.sha256, "abcdef");
-            let undigested = json!({ "tag_name": "v1", "assets": [{ "name": first, "browser_download_url": "x" }] });
-            assert!(pick(&undigested).unwrap_err().contains("no SHA-256"));
+            assert_eq!(picked.sha256, sha256_hex(first.as_bytes()));
+            // Signed by another key, or not signed at all: refused.
+            let (other, _) = SigningKey::generate().unwrap();
+            assert!(pick(&signed, files, &[other.public()]).is_err());
+            let unsigned = json!({ "tag_name": "v1", "assets": [asset(first)] });
+            assert!(
+                pick(&unsigned, files, &[key.public()])
+                    .unwrap_err()
+                    .contains("not signed")
+            );
+            // The same signed list under another tag: refused.
+            let mut replayed = signed.clone();
+            replayed["tag_name"] = json!("v2026.10.20");
+            assert!(pick(&replayed, files, &[key.public()]).is_err());
         }
         assert!(
-            pick(&json!({ "tag_name": "v1", "assets": [asset("other.zip")] }))
-                .unwrap_err()
-                .contains("no archive for this computer")
+            pick(
+                &json!({ "tag_name": "v1", "assets": [asset("other.zip")] }),
+                files,
+                &[]
+            )
+            .unwrap_err()
+            .contains("no archive for this computer")
         );
     }
 

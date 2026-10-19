@@ -2666,6 +2666,7 @@ dependencies = [
  "horizon-friends",
  "horizon-port-pack",
  "horizon-prepare",
+ "horizon-release-sign",
  "horizon-telemetry",
  "horizon-theme",
  "image",
@@ -2714,6 +2715,14 @@ dependencies = [
  "sha1",
  "sha2 0.10.9",
  "zip",
+]
+
+[[package]]
+name = "horizon-release-sign"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "ring",
 ]
 
 [[package]]
