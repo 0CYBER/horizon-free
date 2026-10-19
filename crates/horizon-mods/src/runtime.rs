@@ -40,6 +40,15 @@ const HUD_LINES: usize = 16;
 const LINE_CHARS: usize = 256;
 /// Total bytes a mod's `storage` may hold on disk, across all its keys.
 const STORAGE_QUOTA: u64 = 4 << 20;
+/// Distinct keys a mod's `storage` may hold: `STORAGE_QUOTA` alone doesn't
+/// bound a flood of zero- or near-zero-byte files (each still a file name,
+/// a directory entry and an inode).
+const STORAGE_MAX_KEYS: usize = 64;
+/// Bytes `storage::set` may write across one hook call: fuel bounds a
+/// mod's CPU time per call, not the time a synchronous disk write takes, so
+/// a cheap-in-fuel loop replacing one key with large payloads needs its own
+/// cap, separate from the on-disk quota it would otherwise stay under.
+const STORAGE_WRITE_BUDGET: u64 = 1 << 20;
 /// A mod's data, beside its `horizon-mods` folder (`find`'s `path.parent()`
 /// never has a manifest there, so `find` never mistakes it for a mod).
 const STORAGE_DIR: &str = ".horizon-mod-data";
@@ -104,6 +113,11 @@ struct State {
     panel: Option<Panel>,
     /// Capability `storage`'s folder; made on first `set`.
     data_dir: PathBuf,
+    /// Bytes `storage::set` may still write before this hook call ends
+    /// (reset per call in [`Mods::call`]): fuel bounds a mod's CPU time but
+    /// not disk I/O time, so a loop of small-fuel, large-payload `set`s
+    /// needs its own budget.
+    storage_budget: u64,
     limits: StoreLimits,
 }
 
@@ -212,6 +226,15 @@ impl Mods {
         if m.side == Side::Server {
             return Err("server mods do not run yet".into());
         }
+        // Two running mods with the same id would share one `data_dir`
+        // (capability `storage`): the first loaded keeps the id.
+        if self
+            .entries
+            .iter()
+            .any(|e| e.run.is_some() && e.manifest.as_ref().is_some_and(|other| other.id == m.id))
+        {
+            return Err(format!("another running mod already uses id {}", m.id));
+        }
         let taken: Vec<String> = self
             .entries
             .iter()
@@ -240,6 +263,7 @@ impl Mods {
             out: Vec::new(),
             panel: None,
             data_dir,
+            storage_budget: STORAGE_WRITE_BUDGET,
             limits: StoreLimitsBuilder::new()
                 .memory_size(MEMORY)
                 .instances(16)
@@ -309,6 +333,7 @@ impl Mods {
         let entry = &mut self.entries[i];
         let run = entry.run.as_mut()?;
         run.store.data_mut().snapshot = self.snapshot.clone();
+        run.store.data_mut().storage_budget = STORAGE_WRITE_BUDGET;
         let started = Instant::now();
         let result = run
             .store
@@ -532,23 +557,35 @@ impl storage::Host for State {
         if !storage_key_ok(&key) {
             return Err(format!("{key:?} is not [a-z0-9_.-]{{1,64}}"));
         }
+        let len = value.len() as u64;
+        if len > self.storage_budget {
+            return Err("too much storage traffic in one call".into());
+        }
         // Everything already on disk but the file this call replaces.
-        let used: u64 = std::fs::read_dir(&self.data_dir)
+        let existing: Vec<std::fs::DirEntry> = std::fs::read_dir(&self.data_dir)
             .into_iter()
             .flatten()
             .flatten()
             .filter(|e| e.file_name().to_string_lossy() != key)
+            .collect();
+        if existing.len() >= STORAGE_MAX_KEYS {
+            return Err(format!("would hold over {STORAGE_MAX_KEYS} keys"));
+        }
+        let used: u64 = existing
+            .iter()
             .filter_map(|e| e.metadata().ok())
             .map(|m| m.len())
             .sum();
-        if used + value.len() as u64 > STORAGE_QUOTA {
+        if used + len > STORAGE_QUOTA {
             return Err(format!(
                 "would use over {} MiB of storage",
                 STORAGE_QUOTA >> 20
             ));
         }
         std::fs::create_dir_all(&self.data_dir).map_err(|e| e.to_string())?;
-        std::fs::write(self.data_dir.join(&key), value).map_err(|e| e.to_string())
+        std::fs::write(self.data_dir.join(&key), value).map_err(|e| e.to_string())?;
+        self.storage_budget -= len;
+        Ok(())
     }
     fn delete(&mut self, key: String) {
         if storage_key_ok(&key) {

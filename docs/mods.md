@@ -82,7 +82,7 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 | `game` | `game-read` | `get-player()`: x y z, yaw, pitch, health, food, dimension; `get-clock()`: game time, day time |
 | `chat` | `chat` | `show(text)`: a line only the local player sees, after the mod's name (8 per call) |
 | `hud` | `hud` | `set-panel(corner, lines)`, `clear()`: up to 16 lines of 256 characters |
-| `storage` | `storage` | `get(key)`, `set(key, value)`, `delete(key)`: a per-mod folder of files, 4 MiB total |
+| `storage` | `storage` | `get(key)`, `set(key, value)`, `delete(key)`: a per-mod folder of up to 64 files, 4 MiB total, at most 1 MiB written per call |
 
 | Hook (export) | When |
 |---|---|
@@ -191,6 +191,10 @@ allocation, next to a healthy mod).
    switch. They start off; the choice is kept in `horizon-mods.txt`
    (`mod.<id>:true`).
 3. A mod that failed to load or stopped shows why, in red, on its row.
+
+Two turned-on mods never share an `id` while running (it is also capability
+`storage`'s directory): the one `find` lists first starts, the other stays
+off with the reason on its row.
 
 Benchmarks (`--benchmark`) never load mods.
 
