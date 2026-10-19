@@ -75,7 +75,18 @@ pub(super) fn content_root(
         {
             continue;
         }
-        match Content::read(path, m) {
+        let content = Content::read(path, m).and_then(|content| {
+            // The first of two mods owning one namespace stays on.
+            let own = (m.id.as_str(), content.namespaces.as_slice());
+            match mods
+                .iter()
+                .find_map(|c| horizon_mods::content::clash((&c.id, &c.content.namespaces), own))
+            {
+                Some(e) => Err(e),
+                None => Ok(content),
+            }
+        });
+        match content {
             Ok(content) => mods.push(ContentMod {
                 id: m.id.clone(),
                 content,
