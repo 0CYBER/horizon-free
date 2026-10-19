@@ -131,6 +131,8 @@ struct Launcher {
     client_error: Option<String>,
     /// When the running client started, to tell its crash report from older ones.
     client_started: Option<std::time::SystemTime>,
+    /// The folder the running game keeps its settings in: the game home, or a modpack's.
+    client_home: Option<std::path::PathBuf>,
     crash: Option<Crash>,
     server: Option<Running>,
     /// Microsoft accounts (accounts.json), the sign-in under way and what it last showed.
@@ -261,6 +263,7 @@ impl Launcher {
             client: None,
             client_error: None,
             client_started: None,
+            client_home: None,
             crash: None,
             server: None,
             accounts: Accounts::load(),
@@ -449,6 +452,7 @@ impl Launcher {
                             }
                         }
                         backend::append_game_args(&mut cmd);
+                        self.client_home = cmd.get_current_dir().map(|d| d.to_path_buf());
                         match backend::spawn(Job::Client, cmd, self.tx.clone()) {
                             Ok(r) => self.client = Some(r),
                             Err(e) => self.client_error = Some(e),
@@ -564,7 +568,15 @@ impl Launcher {
                                 .client_started
                                 .take()
                                 .and_then(backend::crash_report_since);
-                            if error.is_some() || report.is_some() {
+                            if error.is_some() && report.is_none() && self.switched_to_dx12() {
+                                self.client_error = Some(
+                                    "Horizon's Vulkan renderer crashed while starting on this \
+                                     graphics card, so the game now uses DirectX 12. Press Play \
+                                     to start it again. Video Settings > Graphics API switches \
+                                     back."
+                                        .into(),
+                                );
+                            } else if error.is_some() || report.is_some() {
                                 let summary = report
                                     .as_ref()
                                     .and_then(|p| std::fs::read_to_string(p).ok())
@@ -625,6 +637,27 @@ impl Launcher {
         if changed {
             cx.notify();
         }
+    }
+
+    /// After a crash with no report: when the game's output ends while its Vulkan renderer
+    /// started, a native crash in the graphics driver (#746), switches the game to DirectX 12
+    /// (Windows only; only where the player left the graphics API on Auto). True when it did.
+    fn switched_to_dx12(&self) -> bool {
+        if !cfg!(windows) || !backend::vulkan_start_crashed(&self.prepare_log) {
+            return false;
+        }
+        // The GPU is the same for every profile: the game home's setting and the crashed run's.
+        let home = backend::game_home();
+        let mut homes = vec![home.clone()];
+        homes.extend(self.client_home.clone().filter(|h| *h != home));
+        let mut switched = false;
+        for home in homes {
+            match backend::switch_to_dx12(&home) {
+                Ok(changed) => switched |= changed,
+                Err(e) => eprintln!("Horizon launcher: could not switch to DirectX 12: {e}"),
+            }
+        }
+        switched
     }
 
     fn selected(&self) -> Option<&String> {
