@@ -157,16 +157,19 @@ Kira posts every published release in #releases and pings the releases role only
 
 Every game and launcher release carries `SHA256SUMS` (the archives' SHA-256, `sha256sum`'s format) and
 `SHA256SUMS.sig`: one base64 Ed25519 signature per line over `horizon release <tag>\n` followed by SHA256SUMS,
-so a signed list can't be reused under another tag. The publish job signs with
-`cargo run -p horizon-release-sign -- sign` (crates/horizon-release-sign), then checks the result the way
-launchers do, against the public keys built in from `crates/horizon-release-sign/release-keys.txt`:
+so a signed list can't be reused under another tag.
 
-- The private key is the `RELEASE_SIGNING_KEY` secret of the repository's `release` environment, which only real
-  releases from main enter (`environment:` is empty in dry runs, which sign with a throwaway key). It is in no
-  file, no log and no password vault; nobody needs to read it.
-- While release-keys.txt lists no key, releases go out with SHA256SUMS alone and a warning (today's releases keep
-  working). Once it lists one, a missing secret or a key it doesn't list fails the release before anything is
-  published, instead of publishing something launchers would refuse.
+- A `sign` job of its own makes them: `tools/ci/sign_release.sh` runs the runner's `sha256sum` and OpenSSL and
+  nothing else. It is the only job that holds the private key, the `RELEASE_SIGNING_KEY` secret of the
+  repository's `release` environment, which only real releases from main enter (`environment:` is empty in dry
+  runs, which sign with a throwaway key). No code from the repository runs beside the key, so no pull request
+  can read it by changing what a build compiles; the key is in no file, no log and no password vault, and nobody
+  needs to read it.
+- The publish job then checks the signature the way launchers do (`horizon-release-sign verify --publishing`,
+  crates/horizon-release-sign), against the public keys built in from
+  `crates/horizon-release-sign/release-keys.txt`. While that file lists no key, releases go out with SHA256SUMS
+  alone and a warning (today's releases keep working). Once it lists one, a missing secret or a key it doesn't
+  list fails the release before anything is published, instead of publishing something launchers would refuse.
 - Making the key: `tools/ci/new_release_key.sh` pipes a new key from `horizon-release-sign keygen` straight into
   `gh secret set RELEASE_SIGNING_KEY --env release` and prints only the public key, which then goes into
   release-keys.txt by pull request.

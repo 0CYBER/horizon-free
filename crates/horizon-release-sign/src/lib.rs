@@ -3,9 +3,10 @@
 //! Every release carries `SHA256SUMS` (`sha256sum`'s format, `<hex>  <file>` per line) and
 //! `SHA256SUMS.sig`: one base64 Ed25519 signature per line, each over `horizon release <tag>\n`
 //! followed by SHA256SUMS's bytes, so a signed list can't be passed off under another tag.
-//! release.yml and launcher.yml sign with the key(s) in the `release` environment's secrets; the
-//! launcher and `horizon-server update` check a download against the public keys built in from
-//! `release-keys.txt` before installing it, and refuse it otherwise.
+//! release.yml and launcher.yml sign with the key(s) in the `release` environment's secrets
+//! (tools/ci/sign_release.sh, OpenSSL only); the launcher and `horizon-server update` check a
+//! download against the public keys built in from `release-keys.txt` before installing it, and
+//! refuse it otherwise.
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use ring::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey};
@@ -14,8 +15,6 @@ use ring::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey};
 pub const SUMS: &str = "SHA256SUMS";
 /// Its signatures' asset name.
 pub const SIGNATURE: &str = "SHA256SUMS.sig";
-/// The secrets release.yml signs with: the key in use and, while rotating, the next one.
-pub const KEY_VARIABLES: [&str; 2] = ["RELEASE_SIGNING_KEY", "RELEASE_SIGNING_KEY_NEXT"];
 
 const KEYS: &str = include_str!("../release-keys.txt");
 
@@ -175,7 +174,8 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hash.hex()
 }
 
-/// A private signing key (release.yml only).
+/// A private signing key: `keygen` makes them, and tests sign with them (releases are signed by
+/// OpenSSL in tools/ci/sign_release.sh, from the same PKCS#8 document).
 pub struct SigningKey(Ed25519KeyPair);
 
 impl SigningKey {
