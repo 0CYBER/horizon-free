@@ -116,6 +116,8 @@ enum Phase {
         path: Option<PathBox>,
         target: Option<Vec3>,
         clockwise: bool,
+        /// `attackTarget`: the player it strafes.
+        player: Option<FightWho>,
     },
     LandingApproach {
         path: Option<PathBox>,
@@ -182,6 +184,7 @@ impl Phase {
                 path: None,
                 target: None,
                 clockwise: false,
+                player: None,
             },
             2 => Self::LandingApproach {
                 path: None,
@@ -274,7 +277,65 @@ pub(super) struct Dragon {
     pub parts: [(Vec3, Vec3); 8],
     nodes: Option<[[i32; 3]; 24]>,
     nearest_crystal: Option<usize>,
+    /// A crystal destroyed while it held its pattern (taken on its next tick).
+    strafe_request: Option<StrafeRequest>,
     random: LegacyRandom,
+}
+/// A player in the fight: the window's own player, or a guest by
+/// connection (a LAN or server player, or a companion).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FightWho {
+    Host,
+    Guest(u32),
+}
+/// A player in the End as the dragon sees it.
+#[derive(Clone, Copy, Debug)]
+struct FightPlayer {
+    who: FightWho,
+    position: Vec3,
+    bounds: Aabb,
+    alive: bool,
+    creative: bool,
+    spectator: bool,
+}
+impl FightPlayer {
+    /// `Player.canBeSeenAsEnemy`: alive, neither creative nor spectator.
+    fn enemy(&self) -> bool {
+        self.alive && !self.creative && !self.spectator
+    }
+}
+/// `TargetingConditions.forCombat` (visibility aside) in
+/// `Level.getNearestPlayer`: the enemy nearest `at` among `players`, within
+/// `range` of the dragon at `from` and passing `selector`; none on Peaceful.
+fn nearest_enemy(
+    players: &[FightPlayer],
+    peaceful: bool,
+    at: Vec3,
+    range: Option<(Vec3, f64)>,
+    selector: impl Fn(&FightPlayer) -> bool,
+) -> Option<FightPlayer> {
+    if peaceful {
+        return None;
+    }
+    players
+        .iter()
+        .filter(|p| p.enemy() && selector(p))
+        .filter(|p| range.is_none_or(|(from, r)| p.position.distance_squared(from) <= r * r))
+        .min_by(|a, b| {
+            a.position
+                .distance_squared(at)
+                .total_cmp(&b.position.distance_squared(at))
+        })
+        .copied()
+}
+/// Whom a destroyed crystal sends a holding dragon after
+/// (`DragonHoldingPatternPhase.onCrystalDestroyed`).
+#[derive(Clone, Copy, Debug)]
+enum StrafeRequest {
+    /// The player who destroyed it.
+    Player(FightWho),
+    /// Anything else: the player nearest the crystal.
+    Nearest(Vec3),
 }
 /// What `EnderDragon.hurt` made of a hit.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -335,6 +396,7 @@ impl Dragon {
             parts: [(position, position); 8],
             nodes: None,
             nearest_crystal: None,
+            strafe_request: None,
             random: LegacyRandom::new(seed),
         }
     }
@@ -618,6 +680,53 @@ impl Game<'_> {
     fn arena_loaded(&self) -> bool {
         (-2..=1).all(|cz| (-2..=1).all(|cx| self.streaming.is_lit(cx, cz)))
     }
+    /// The player acting now: the guest whose turn it is, else the host.
+    fn acting_player(&self) -> FightWho {
+        self.lan_acting.map_or(FightWho::Host, FightWho::Guest)
+    }
+    /// The players in the level the dragon sees (`level.players()`): the
+    /// window's own, then every guest in the level.
+    fn fight_players(&self) -> Vec<FightPlayer> {
+        let mut out = Vec::new();
+        if let Some(p) = self.player.as_ref() {
+            out.push(FightPlayer {
+                who: FightWho::Host,
+                position: p.position,
+                bounds: p.bounds(),
+                alive: !p.health.dead_or_dying(),
+                creative: self.creative,
+                spectator: self.spectator(),
+            });
+        }
+        if let Some(h) = self.lan.as_ref() {
+            for g in h.hub.guests.iter().filter(|g| h.hub.here(g) && g.loaded) {
+                let [x, y, z] = g.position;
+                out.push(FightPlayer {
+                    who: FightWho::Guest(g.conn),
+                    position: Vec3::new(x, y, z),
+                    bounds: super::lan_mobs::guest_bounds(g),
+                    alive: !g.dead,
+                    creative: g.creative(),
+                    spectator: g.spectator(),
+                });
+            }
+        }
+        out
+    }
+    /// Run `f` as the fight's player `who` (a guest's turn, its knockback
+    /// sent to its client).
+    fn as_fight_player(&mut self, who: FightWho, f: impl FnOnce(&mut Self)) {
+        match who {
+            FightWho::Host => f(self),
+            FightWho::Guest(conn) => {
+                let Some(mut host) = self.lan.take() else {
+                    return;
+                };
+                self.guest_hit_by(&mut host, conn, f);
+                self.lan = Some(host);
+            }
+        }
+    }
     /// `EnderDragonFight.validPlayer`: the players alive within 192 blocks of
     /// (0, 128, 0), the host and the guests in the level alike.
     fn fight_has_players(&self) -> bool {
@@ -679,6 +788,14 @@ impl Game<'_> {
                     self.count_crystals();
                 }
             }
+        }
+        // EnderDragon's constructor takes its id and its parts' from the
+        // entity counter (a dragon loaded from the save gets them here too).
+        if let Some(d) = self.dragon.as_mut()
+            && d.id == 0
+        {
+            d.id = self.next_entity + 1;
+            self.next_entity += 9;
         }
         self.tick_crystals();
         self.tick_dragon();
@@ -744,7 +861,7 @@ impl Game<'_> {
         }
     }
     /// A crystal took damage: `EndCrystal.hurtServer` blows it up (power 6).
-    fn destroy_crystal(&mut self, index: usize, by_player: bool) {
+    fn destroy_crystal(&mut self, index: usize, by: Option<FightWho>) {
         if index >= self.crystals.len() || self.crystals[index].invulnerable {
             return;
         }
@@ -775,18 +892,15 @@ impl Game<'_> {
             {
                 *n -= 1;
             }
-            if by_player
-                && let Some(d) = self.dragon.as_mut()
+            // EnderDragon.onCrystalDestroyed: the player who did it, else the
+            // nearest; DragonHoldingPatternPhase strafes them.
+            if let Some(d) = self.dragon.as_mut()
                 && matches!(d.phase, Phase::Holding { .. })
             {
-                // DragonHoldingPatternPhase.onCrystalDestroyed: strafe the player.
-                d.set_phase(Phase::Strafe {
-                    charge: 0,
-                    path: None,
-                    target: None,
-                    clockwise: false,
+                d.strafe_request = Some(match by {
+                    Some(who) => StrafeRequest::Player(who),
+                    None => StrafeRequest::Nearest(c.position),
                 });
-                self.strafe_begin();
             }
         }
     }
@@ -840,7 +954,8 @@ impl Game<'_> {
             if self.crystals.get(index).is_none_or(|c| c.invulnerable) {
                 return Hurt::Refused;
             }
-            self.destroy_crystal(index, by_player);
+            let by = by_player.then(|| self.acting_player());
+            self.destroy_crystal(index, by);
             Hurt::Landed { full: true }
         } else if id >= SPECIAL {
             self.hurt_dragon((id - SPECIAL) as usize, amount, by_player, arrow)
@@ -1081,10 +1196,8 @@ impl Game<'_> {
         path.advance();
         Some(path)
     }
-    fn strafe_begin(&mut self) {
-        let Some(p) = self.player.as_ref().map(|p| p.position) else {
-            return;
-        };
+    /// `DragonStrafePlayerPhase.setTarget`: a path to the player at `p`.
+    fn strafe_begin(&mut self, p: Vec3) {
         let Some(d) = self.dragon.as_ref() else {
             return;
         };
@@ -1114,6 +1227,32 @@ impl Game<'_> {
     }
     /// One phase server tick (`doServerTick`).
     fn tick_phase(&mut self) {
+        let players = self.fight_players();
+        let peaceful = self.ui.difficulty == 0;
+        // A crystal destroyed since: strafe whoever it names, if the dragon
+        // can attack them (`canAttack`).
+        if let Some(d) = self.dragon.as_mut()
+            && let Some(request) = d.strafe_request.take()
+            && matches!(d.phase, Phase::Holding { .. })
+        {
+            let target = match request {
+                StrafeRequest::Player(who) => players
+                    .iter()
+                    .find(|p| p.who == who && p.enemy() && !peaceful)
+                    .copied(),
+                StrafeRequest::Nearest(at) => nearest_enemy(&players, peaceful, at, None, |_| true),
+            };
+            if let Some(t) = target {
+                d.set_phase(Phase::Strafe {
+                    charge: 0,
+                    path: None,
+                    target: None,
+                    clockwise: false,
+                    player: Some(t.who),
+                });
+                self.strafe_begin(t.position);
+            }
+        }
         let Some(d) = self.dragon.as_ref() else {
             return;
         };
@@ -1125,14 +1264,13 @@ impl Game<'_> {
                 (t.x - pos.x).powi(2) + (t.y - pos.y).powi(2) + (t.z - pos.z).powi(2)
             })
         };
-        let player = self
-            .player
-            .as_ref()
-            .filter(|p| !p.health.dead_or_dying())
-            .map(|p| p.position);
-        let survival_player = player.filter(|_| !self.creative);
         let podium = self.podium_top();
+        // The egg's place (`getHeightmapPos` at the podium) and its centre.
+        let egg = Vec3::new(0.0, podium.y, 0.0);
+        let egg_centre = Vec3::new(0.5, podium.y + 0.5, 0.5);
         let mut next: Option<Phase> = None;
+        // Where the player a new strafe goes after stands.
+        let mut strafe_at: Option<Vec3> = None;
         match &mut phase {
             Phase::Holding {
                 path,
@@ -1152,11 +1290,10 @@ impl Game<'_> {
                                 target: None,
                             });
                             chosen = true;
-                        } else if let Some(pp) = survival_player {
-                            let dist = ((pp.x - podium.x).powi(2)
-                                + (pp.y - podium.y).powi(2)
-                                + (pp.z - podium.z).powi(2))
-                                / 512.0;
+                        } else if let Some(nearest) =
+                            nearest_enemy(&players, peaceful, egg, None, |_| true)
+                        {
+                            let dist = nearest.position.distance_squared(egg_centre) / 512.0;
                             let r = &mut self.dragon.as_mut().expect("dragon").random;
                             if r.next_int_bound((dist + 2.0) as i32).unwrap_or(1) == 0
                                 || r.next_int_bound(crystals + 2).unwrap_or(1) == 0
@@ -1166,7 +1303,9 @@ impl Game<'_> {
                                     path: None,
                                     target: None,
                                     clockwise: false,
+                                    player: Some(nearest.who),
                                 });
+                                strafe_at = Some(nearest.position);
                                 chosen = true;
                             }
                         }
@@ -1186,8 +1325,12 @@ impl Game<'_> {
                 path,
                 target,
                 clockwise,
+                player,
             } => {
-                let Some(pp) = survival_player else {
+                // Its target as it is now, whatever became of it; gone from
+                // the level, or never found: back to the holding pattern.
+                let tracked = player.and_then(|who| players.iter().find(|p| p.who == who));
+                let Some(pp) = tracked.map(|p| p.position) else {
                     next = Some(Phase::Holding {
                         path: None,
                         target: None,
@@ -1245,7 +1388,9 @@ impl Game<'_> {
                 if dt < 100.0 || dt > 22500.0 || collided {
                     if path.as_ref().is_none_or(|p| p.0.done()) {
                         let current = self.closest_node(pos.x, pos.y, pos.z);
-                        let target_node = match player {
+                        // NEAR_EGG_TARGETING: the enemy nearest the egg.
+                        let near_egg = nearest_enemy(&players, peaceful, egg, None, |_| true);
+                        let target_node = match near_egg.map(|p| p.position) {
                             Some(pp) => {
                                 let aim = glam::DVec2::new(pp.x, pp.z).normalize_or_zero();
                                 self.closest_node(-aim.x * 40.0, 105.0, -aim.y * 40.0)
@@ -1317,12 +1462,12 @@ impl Game<'_> {
             }
             Phase::Scanning { time } => {
                 *time += 1;
-                let near = player.filter(|pp| {
-                    (pp.x - pos.x).powi(2) + (pp.y - pos.y).powi(2) + (pp.z - pos.z).powi(2)
-                        <= 400.0
-                        && (pp.y - pos.y).abs() <= 10.0
-                });
-                if let Some(pp) = near.filter(|_| !self.creative) {
+                // scanTargeting: within 20 blocks, at most 10 above or below.
+                let near = nearest_enemy(&players, peaceful, pos, Some((pos, 20.0)), |p| {
+                    (p.position.y - pos.y).abs() <= 10.0
+                })
+                .map(|p| p.position);
+                if let Some(pp) = near {
                     if *time > 25 {
                         next = Some(Phase::Attacking { ticks: 0 });
                     } else {
@@ -1338,19 +1483,15 @@ impl Game<'_> {
                         d.yaw += d.yaw_accel;
                     }
                 } else if *time >= 100 {
-                    next = Some(match survival_player {
-                        Some(pp)
-                            if (pp.x - pos.x).powi(2)
-                                + (pp.y - pos.y).powi(2)
-                                + (pp.z - pos.z).powi(2)
-                                <= 150.0 * 150.0 =>
-                        {
-                            Phase::Charging {
-                                target: Some(pp),
-                                since: 0,
-                            }
-                        }
-                        _ => Phase::Takeoff {
+                    // CHARGE_TARGETING: within 150 blocks.
+                    let charge =
+                        nearest_enemy(&players, peaceful, pos, Some((pos, 150.0)), |_| true);
+                    next = Some(match charge {
+                        Some(p) => Phase::Charging {
+                            target: Some(p.position),
+                            since: 0,
+                        },
+                        None => Phase::Takeoff {
                             first: true,
                             path: None,
                             target: None,
@@ -1455,10 +1596,9 @@ impl Game<'_> {
         let d = self.dragon.as_mut().expect("dragon");
         d.phase = phase;
         if let Some(n) = next {
-            let strafe = matches!(n, Phase::Strafe { .. });
             d.set_phase(n);
-            if strafe {
-                self.strafe_begin();
+            if let Some(at) = strafe_at {
+                self.strafe_begin(at);
             }
         }
     }
@@ -1692,34 +1832,41 @@ impl Game<'_> {
         );
         let wings = [d.part_box(6), d.part_box(7)];
         let heads = [d.part_box(0), d.part_box(1)];
-        let player_box = self.player.as_ref().map(|p| p.bounds());
-        let creative = self.creative;
-        if !recently_hurt && let Some(pb) = player_box.filter(|_| !creative) {
-            for w in wings {
-                let zone = w
-                    .inflate(Vec3::new(4.0, 2.0, 4.0))
-                    .move_by(Vec3::new(0.0, -2.0, 0.0));
-                if zone.intersects(pb) {
-                    let pp = self
-                        .player
-                        .as_ref()
-                        .map(|p| p.position)
-                        .unwrap_or(Vec3::ZERO);
-                    let (xd, zd) = (pp.x - bc, pp.z - bz);
-                    let dd = (xd * xd + zd * zd).max(0.1);
-                    if let Some(p) = self.player.as_mut() {
-                        p.velocity.x += xd / dd * 4.0;
-                        p.velocity.y += 0.2;
-                        p.velocity.z += zd / dd * 4.0;
-                    }
-                    if !sitting {
-                        self.hurt_player_by("minecraft:mob_attack", 5.0);
+        if !recently_hurt {
+            // EntitySelector.NO_CREATIVE_OR_SPECTATOR, every player alike.
+            let players: Vec<FightPlayer> = self
+                .fight_players()
+                .into_iter()
+                .filter(|p| p.alive && !p.creative && !p.spectator)
+                .collect();
+            for p in players {
+                // knockBack, once for each wing whose zone holds them.
+                for w in wings {
+                    let zone = w
+                        .inflate(Vec3::new(4.0, 2.0, 4.0))
+                        .move_by(Vec3::new(0.0, -2.0, 0.0));
+                    if zone.intersects(p.bounds) {
+                        let (xd, zd) = (p.position.x - bc, p.position.z - bz);
+                        let dd = (xd * xd + zd * zd).max(0.1);
+                        self.as_fight_player(p.who, |g| {
+                            if let Some(pl) = g.player.as_mut() {
+                                pl.velocity.x += xd / dd * 4.0;
+                                pl.velocity.y += 0.2;
+                                pl.velocity.z += zd / dd * 4.0;
+                            }
+                            if !sitting {
+                                g.hurt_player_by("minecraft:mob_attack", 5.0);
+                            }
+                        });
                     }
                 }
-            }
-            for h in heads {
-                if h.inflate(Vec3::new(1.0, 1.0, 1.0)).intersects(pb) {
-                    self.hurt_player_by("minecraft:mob_attack", 10.0);
+                // hurt: the head and the neck.
+                for h in heads {
+                    if h.inflate(Vec3::new(1.0, 1.0, 1.0)).intersects(p.bounds) {
+                        self.as_fight_player(p.who, |g| {
+                            g.hurt_player_by("minecraft:mob_attack", 10.0);
+                        });
+                    }
                 }
             }
         }
@@ -1884,7 +2031,13 @@ impl Game<'_> {
     /// power, bursting into dragon's breath on impact.
     pub(super) fn tick_dragon_fireballs(&mut self) {
         let mut balls = std::mem::take(&mut self.dragon_fireballs);
-        let player = self.player.as_ref().map(|p| p.bounds());
+        // Projectile.canHitEntity: any player but spectators.
+        let players: Vec<Aabb> = self
+            .fight_players()
+            .iter()
+            .filter(|p| p.alive && !p.spectator)
+            .map(|p| p.bounds)
+            .collect();
         balls.retain_mut(|b| {
             b.previous = b.position;
             b.age += 1;
@@ -1906,7 +2059,7 @@ impl Game<'_> {
                 let f = self.res.facts().get(self.world.block(p[0], p[1], p[2]));
                 f.full_collision || f.legacy_solid
             };
-            let hit_player = player.is_some_and(|pb| {
+            let hit_player = players.iter().any(|pb| {
                 pb.intersects(Aabb::new(
                     Vec3::new(next.x - 0.5, next.y - 0.5, next.z - 0.5),
                     Vec3::new(next.x + 0.5, next.y + 0.5, next.z + 0.5),
@@ -1942,7 +2095,13 @@ impl Game<'_> {
     /// The dragon's breath clouds (`AreaEffectCloud` with instant damage at
     /// a quarter duration scale): shrinking, puffing particles, harming the player.
     fn tick_breath(&mut self) {
-        let player = self.player.as_ref().map(|p| p.position);
+        // What instant damage reaches: neither creative nor spectator players.
+        let players: Vec<FightPlayer> = self
+            .fight_players()
+            .into_iter()
+            .filter(|p| p.alive && !p.creative && !p.spectator)
+            .collect();
+        let mut harmed: Vec<(FightWho, f32)> = Vec::new();
         let mut clouds = std::mem::take(&mut self.breath_clouds);
         clouds.retain_mut(|c| {
             c.age += 1;
@@ -1969,20 +2128,26 @@ impl Game<'_> {
                 );
             }
             // AreaEffectCloud: after its 20-tick wait, every 20 ticks per entity.
-            if c.age >= 20
-                && c.age % 20 == 0
-                && let Some(pp) = player
-                && (pp.x - c.at[0]).hypot(pp.z - c.at[2]) <= f64::from(r)
-                && (pp.y - c.at[1]).abs() < 1.0
-                && !self.creative
-            {
+            if c.age >= 20 && c.age % 20 == 0 {
                 // Instant damage: I (6) from the breath, II (12) from a fireball.
                 let amount = if c.from_dragon { 6.0 } else { 12.0 };
-                self.hurt_player_by("minecraft:indirect_magic", amount);
+                for p in &players {
+                    let pp = p.position;
+                    if (pp.x - c.at[0]).hypot(pp.z - c.at[2]) <= f64::from(r)
+                        && (pp.y - c.at[1]).abs() < 1.0
+                    {
+                        harmed.push((p.who, amount));
+                    }
+                }
             }
             true
         });
         self.breath_clouds.append(&mut clouds);
+        for (who, amount) in harmed {
+            self.as_fight_player(who, |g| {
+                g.hurt_player_by("minecraft:indirect_magic", amount);
+            });
+        }
     }
     /// `BossHealthOverlay`: the dragon's pink bar, then the withers', the
     /// raids' and the custom bars, in that order.
@@ -2480,7 +2645,7 @@ impl Game<'_> {
         for at in crystals {
             // One blowing up may already have taken the next.
             if let Some(i) = self.crystals.iter().position(|c| c.position == at) {
-                self.destroy_crystal(i, false);
+                self.destroy_crystal(i, None);
             }
         }
         let Some(d) = self.dragon.as_ref() else {
@@ -2535,11 +2700,21 @@ impl Game<'_> {
     pub(super) fn dragon_status(&self) -> serde_json::Value {
         serde_json::json!({
             "dragon": self.dragon.as_ref().map(|d| serde_json::json!({
+                "id": d.id,
                 "position": [d.position.x, d.position.y, d.position.z],
                 "health": d.health,
                 "phase": d.phase.id(),
                 "death_time": d.death_time,
+                // The player it strafes: "host", or the guest's entity id.
+                "strafing": match &d.phase {
+                    Phase::Strafe { player: Some(FightWho::Host), .. } => serde_json::json!("host"),
+                    Phase::Strafe { player: Some(FightWho::Guest(conn)), .. } => serde_json::json!(
+                        self.lan.as_ref().and_then(|h| h.hub.guest(*conn)).map(|g| g.entity_id)
+                    ),
+                    _ => serde_json::Value::Null,
+                },
             })),
+            "players": self.fight.players,
             "crystals": self.crystals.len(),
             "alive_crystals": self.fight.alive_crystals,
             "killed": self.fight.killed,
@@ -3032,5 +3207,44 @@ mod tests {
             d.hurt(part, amount, true, false);
         }
         assert_eq!(d.health, MAX_HEALTH - 85.0);
+    }
+
+    fn player(who: FightWho, x: f64, creative: bool, spectator: bool) -> FightPlayer {
+        let position = Vec3::new(x, 64.0, 0.0);
+        FightPlayer {
+            who,
+            position,
+            bounds: Aabb::new(position, Vec3::new(x + 0.6, 65.8, 0.6)),
+            alive: true,
+            creative,
+            spectator,
+        }
+    }
+
+    #[test]
+    fn the_dragon_targets_any_player_it_can_attack() {
+        let at = Vec3::new(0.0, 64.0, 0.0);
+        // A spectating host and a creative guest are never targets: the
+        // survival guest further away is.
+        let players = [
+            player(FightWho::Host, 1.0, false, true),
+            player(FightWho::Guest(7), 2.0, true, false),
+            player(FightWho::Guest(8), 30.0, false, false),
+        ];
+        let t = nearest_enemy(&players, false, at, None, |_| true);
+        assert_eq!(t.map(|p| p.who), Some(FightWho::Guest(8)));
+        // Out of a 20-block range, or filtered out, or on Peaceful: none.
+        assert!(nearest_enemy(&players, false, at, Some((at, 20.0)), |_| true).is_none());
+        assert!(nearest_enemy(&players, false, at, None, |p| p.position.x < 10.0).is_none());
+        assert!(nearest_enemy(&players, true, at, None, |_| true).is_none());
+        // The nearest of several, measured from where it looks (the egg).
+        let players = [
+            player(FightWho::Host, 5.0, false, false),
+            player(FightWho::Guest(8), -3.0, false, false),
+        ];
+        let t = nearest_enemy(&players, false, at, None, |_| true);
+        assert_eq!(t.map(|p| p.who), Some(FightWho::Guest(8)));
+        let t = nearest_enemy(&players, false, Vec3::new(9.0, 64.0, 0.0), None, |_| true);
+        assert_eq!(t.map(|p| p.who), Some(FightWho::Host));
     }
 }

@@ -264,13 +264,6 @@ impl Game<'_> {
         self.tridents.iter_mut().for_each(|t| give(&mut t.id));
         self.rockets.iter_mut().for_each(|r| give(&mut r.id));
         self.crystals.iter_mut().for_each(|c| give(&mut c.id));
-        // EnderDragon: the dragon, then its eight parts.
-        if let Some(d) = self.dragon.as_mut()
-            && d.id == 0
-        {
-            d.id = *next + 1;
-            *next += 9;
-        }
     }
 
     /// Primed TNT, falling blocks, projectiles, tridents, firework rockets and
