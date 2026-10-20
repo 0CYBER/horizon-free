@@ -1720,8 +1720,14 @@ impl Game<'_> {
         Some(stack)
     }
     fn particle_sprite(&self, state: BlockStateId) -> Option<(String, u32)> {
-        let models = self
-            .pack
+        Self::block_particle_sprite(&self.pack, self.res.facts(), state)
+    }
+    fn block_particle_sprite(
+        pack: &PackResources,
+        facts: &BlockFacts,
+        state: BlockStateId,
+    ) -> Option<(String, u32)> {
+        let models = pack
             .render
             .model_catalog
             .collect(state, horizon_core::position::BlockPos::new(0, 0, 0))
@@ -1735,9 +1741,9 @@ impl Game<'_> {
         let layer = face
             .map(|face| face.layer)
             .or_else(|| models.iter().find_map(|(_, model)| model.particle))?;
-        let name = self.pack.layer_names.get(&layer)?.clone();
+        let name = pack.layer_names.get(&layer)?.clone();
         let tint = if face.is_some_and(|face| face.quad.tint_index >= 0) {
-            let n = &self.res.facts().get(state).name;
+            let n = &facts.get(state).name;
             if n.contains("leaves") || n.contains("vine") {
                 0x48B518
             } else {

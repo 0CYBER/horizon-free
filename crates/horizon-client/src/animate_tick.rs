@@ -6,6 +6,8 @@
 use crate::{
     biome::Biomes,
     blocks::{BlockFacts, Fluid},
+    command::args::GameMode,
+    items::ItemStack,
     particles::{ParticleEngine, ParticleOptions, ParticleType as T},
     world::World,
 };
@@ -254,6 +256,24 @@ pub struct AnimateContext<'a> {
     pub registry: &'a BlockRegistry,
     /// `Level.isRainingAt`.
     pub raining_at: &'a dyn Fn([i32; 3]) -> bool,
+    /// Creative main-hand marker block and a resolver for each placed state's sprite.
+    pub marker: Option<(&'a str, &'a dyn Fn(BlockStateId) -> Option<ParticleOptions>)>,
+}
+
+/// `ClientLevel.getMarkerParticleTarget`: only the selected main-hand item counts.
+pub fn marker_particle_target(
+    mode: GameMode,
+    main_hand: Option<&ItemStack>,
+) -> Option<&'static str> {
+    if mode != GameMode::Creative {
+        return None;
+    }
+    let stack = main_hand.filter(|stack| stack.count > 0)?;
+    match stack.item.as_ref() {
+        "minecraft:barrier" => Some("minecraft:barrier"),
+        "minecraft:light" => Some("minecraft:light"),
+        _ => None,
+    }
 }
 impl AnimateContext<'_> {
     fn state(&self, p: [i32; 3]) -> BlockStateId {
@@ -357,6 +377,12 @@ fn do_animate_tick(
             let top_solid = ctx.sturdy(pos);
             try_spawn_drip(tables, engine, ctx, [x, y - 1, z], drip, top_solid);
         }
+    }
+    if let Some((block, options)) = ctx.marker
+        && ctx.registry.state(state).is_some_and(|s| s.name == block)
+        && let Some(options) = options(state)
+    {
+        engine.add(&options, pos.map(|v| f64::from(v) + 0.5), [0.0; 3]);
     }
     if !facts.full_collision {
         let biome = ctx
