@@ -37,6 +37,10 @@ pub(super) struct Fight {
     exit_portal: Option<[i32; 3]>,
     alive_crystals: i32,
     crystal_scan: i32,
+    /// `ticksSinceLastPlayerScan`, and whether the last scan found a player
+    /// for the fight (`dragonEvent.getPlayers()` is not empty).
+    player_scan: i32,
+    players: bool,
     /// The spikes' crystals have been placed (worldgen does not place entities here).
     crystals_placed: bool,
     /// The respawn sequence (`DragonRespawnStage`) and its tick count.
@@ -239,6 +243,9 @@ impl Phase {
     }
 }
 pub(super) struct Dragon {
+    /// `Entity.id` once tracked to guests (0 before); its parts take the
+    /// eight ids after it (`EnderDragon`'s constructor reserves them).
+    pub id: u32,
     pub position: Vec3,
     pub previous: Vec3,
     velocity: Vec3,
@@ -284,6 +291,7 @@ const ADJACENCY: [u32; 24] = [
 impl Dragon {
     fn new(position: Vec3, yaw: f32, seed: i64) -> Self {
         Self {
+            id: 0,
             position,
             previous: position,
             velocity: Vec3::ZERO,
@@ -422,6 +430,8 @@ impl Game<'_> {
                 Some(Tag::IntArray(v)) if v.len() == 3 => Some([v[0], v[1], v[2]]),
                 _ => None,
             },
+            // The first tick scans for players.
+            player_scan: 21,
             ..Default::default()
         };
         if fight.gateways.is_empty() {
@@ -495,45 +505,67 @@ impl Game<'_> {
     fn arena_loaded(&self) -> bool {
         (-2..=1).all(|cz| (-2..=1).all(|cx| self.streaming.is_lit(cx, cz)))
     }
-    /// `EnderDragonFight.tick` while the player is in the End.
+    /// `EnderDragonFight.validPlayer`: the players alive within 192 blocks of
+    /// (0, 128, 0), the host and the guests in the level alike.
+    fn fight_has_players(&self) -> bool {
+        let near =
+            |p: [f64; 3]| p[0].powi(2) + (p[1] - 128.0).powi(2) + p[2].powi(2) <= 192.0 * 192.0;
+        let host = self.player.as_ref().is_some_and(|p| {
+            !p.health.dead_or_dying() && near([p.position.x, p.position.y, p.position.z])
+        });
+        host || self.lan.as_ref().is_some_and(|h| {
+            h.hub
+                .guests
+                .iter()
+                .any(|g| h.hub.here(g) && g.loaded && !g.dead && near(g.position))
+        })
+    }
+    /// `EnderDragonFight.tick` and the fight's entities, while the End is
+    /// ticked (in place for its player, or on a server with players in it).
     pub(super) fn tick_fight(&mut self) {
         if self.dim != Dim::End || self.travelling.is_some() {
             return;
         }
         self.load_fight();
+        // updatePlayers, every 20 ticks.
+        self.fight.player_scan += 1;
+        if self.fight.player_scan >= 20 {
+            self.fight.player_scan = 0;
+            self.fight.players = self.fight_has_players();
+        }
         if !self.arena_loaded() {
             return;
-        }
-        if self.fight.needs_scan {
-            // scanState: a missing exit portal means a fight in progress.
-            self.fight.previously_killed = self.end_portal_active();
-            if !self.fight.previously_killed {
-                self.fight.killed = false;
-            }
-            self.fight.needs_scan = false;
-            self.fight.dirty = true;
         }
         if !self.fight.crystals_placed {
             self.place_spike_crystals();
             self.fight.crystals_placed = true;
             self.fight.dirty = true;
         }
-        let Some(p) = self.player.as_ref().map(|p| p.position) else {
-            return;
-        };
-        let near = p.x.powi(2) + (p.y - 128.0).powi(2) + p.z.powi(2) <= 192.0 * 192.0;
-        if !self.fight.killed && near && self.dragon.is_none() {
-            // createNewDragon: over the podium, holding pattern, a random yaw.
-            let yaw = self.world.random.next_float() * 360.0;
-            let seed = self.world.random.next_long();
-            self.dragon = Some(Dragon::new(Vec3::new(0.0, 128.0, 0.0), yaw, seed));
-        }
-        if self.fight.respawn.is_some() {
-            self.tick_respawn();
-        }
-        self.fight.crystal_scan += 1;
-        if self.fight.crystal_scan >= 100 {
-            self.count_crystals();
+        if self.fight.players {
+            if self.fight.needs_scan {
+                // scanState: a missing exit portal means a fight in progress.
+                self.fight.previously_killed = self.end_portal_active();
+                if !self.fight.previously_killed {
+                    self.fight.killed = false;
+                }
+                self.fight.needs_scan = false;
+                self.fight.dirty = true;
+            }
+            if self.fight.respawn.is_some() {
+                self.tick_respawn();
+            }
+            if !self.fight.killed {
+                if self.dragon.is_none() {
+                    // createNewDragon: over the podium, holding pattern, a random yaw.
+                    let yaw = self.world.random.next_float() * 360.0;
+                    let seed = self.world.random.next_long();
+                    self.dragon = Some(Dragon::new(Vec3::new(0.0, 128.0, 0.0), yaw, seed));
+                }
+                self.fight.crystal_scan += 1;
+                if self.fight.crystal_scan >= 100 {
+                    self.count_crystals();
+                }
+            }
         }
         self.tick_crystals();
         self.tick_dragon();
@@ -664,6 +696,21 @@ impl Game<'_> {
             ));
         }
         out
+    }
+    /// The box of the dragon part or end crystal guests know as entity `id`
+    /// (`EnderDragonPart`s follow the dragon's id).
+    pub(super) fn tracked_special_box(&self, id: i32) -> Option<Aabb> {
+        let id = u32::try_from(id).ok().filter(|&id| id != 0)?;
+        if let Some(d) = self.dragon.as_ref().filter(|d| d.alive() && d.id != 0)
+            && (d.id + 1..=d.id + 8).contains(&id)
+        {
+            return Some(d.part_box((id - d.id - 1) as usize));
+        }
+        let i = self.crystals.iter().position(|c| c.id == id)?;
+        self.special_targets()
+            .into_iter()
+            .find(|(s, _)| *s == CRYSTAL_IDS + i as u32)
+            .map(|(_, b)| b)
     }
     /// Damage to a special id (from projectiles and melee).
     pub(super) fn hit_special(&mut self, id: u32, amount: f32, by_player: bool) {
@@ -2353,6 +2400,41 @@ impl Game<'_> {
                 self.hurt_dragon(part, amount, true);
             }
         }
+    }
+}
+impl Game<'_> {
+    /// The dragon as guests track it (`EnderDragon.getAddEntityPacket` and
+    /// the synched data that differs from the defaults: its health, defined
+    /// as 1, and `DATA_PHASE`, defined as hovering). Vanilla pairs it with no
+    /// attribute instances.
+    pub(super) fn lan_dragon_state(&self) -> Option<horizon_client::lan::entity::EntityState> {
+        use horizon_protocol::entity_data::{Value, serializer};
+        let d = self.dragon.as_ref().filter(|d| d.id != 0)?;
+        let mut meta = Vec::new();
+        let health = d.health.max(0.0);
+        if health != 1.0 {
+            meta.push((9, serializer::FLOAT, Value::Float(health)));
+        }
+        let phase = d.phase.id();
+        if phase != 10 {
+            meta.push((16, serializer::INT, Value::Int(phase)));
+        }
+        Some(horizon_client::lan::entity::EntityState {
+            id: d.id as i32,
+            uuid: super::lan::entity_uuid(d.id),
+            kind: "minecraft:ender_dragon".to_owned(),
+            position: [d.position.x, d.position.y, d.position.z],
+            yaw: d.yaw,
+            pitch: 0.0,
+            head_yaw: d.yaw,
+            on_ground: false,
+            velocity: [d.velocity.x, d.velocity.y, d.velocity.z],
+            data: 0,
+            meta,
+            equipment: Vec::new(),
+            attributes: Vec::new(),
+            precise: false,
+        })
     }
 }
 impl Game<'_> {

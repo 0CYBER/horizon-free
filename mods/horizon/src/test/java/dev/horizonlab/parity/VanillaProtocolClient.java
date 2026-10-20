@@ -523,7 +523,9 @@ public final class VanillaProtocolClient {
                         position.yRot(), position.xRot()));
                     // The 26.3 client answers with the acceptance alone; a second position in the
                     // same tick is an invalid move to vanilla's server once the player is loaded.
-                    if (!respawning) {
+                    // The entity mode's scene may teleport the player (to another level): the
+                    // acceptance alone, as the 26.3 client sends.
+                    if (!respawning && step < ENTITIES) {
                         send(new ServerboundMovePlayerPacket.PosRot(position.position(), position.yRot(), position.xRot(), false, false));
                     }
                     if (!loaded) {
