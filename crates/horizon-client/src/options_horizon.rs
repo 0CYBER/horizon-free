@@ -126,17 +126,21 @@ pub const SECTIONS: &[Section] = &[
         name: "Accessibility",
         blurb: "Contrast, motion, text backgrounds and notifications.",
         rows: |_| {
-            [
-                Opt::HighContrast,
-                Opt::MenuBlur,
-                Opt::TextBackgroundOpacity,
-                Opt::NotificationDisplayTime,
-                Opt::ShowSubtitles,
-                Opt::ViewBobbing,
-                Opt::ChatLineSpacing,
-            ]
-            .map(HRow::Opt)
-            .to_vec()
+            let mut rows = vec![
+                HRow::Opt(Opt::Narrator),
+                HRow::Page(
+                    "Controls",
+                    "Key binds, mouse and controller",
+                    Page::Controls,
+                ),
+            ];
+            rows.extend(
+                options_ui::ACCESSIBILITY_OPTIONS[1..]
+                    .iter()
+                    .copied()
+                    .map(HRow::Opt),
+            );
+            rows
         },
     },
     Section {
@@ -225,6 +229,8 @@ pub(crate) fn searchable_section(section: usize) -> bool {
 /// Whether an option is an on/off switch, and its value.
 fn switch_value(opt: Opt, s: &Settings) -> Option<bool> {
     Some(match opt {
+        Opt::HideLightningFlashes => s.file.bool("hideLightningFlashes"),
+        Opt::HideSplashTexts => s.file.bool("hideSplashTexts"),
         Opt::InvertY => s.invert_y,
         Opt::DiscreteScroll => s.discrete_scroll,
         Opt::ViewBobbing => s.view_bobbing,
@@ -392,7 +398,18 @@ impl OptionsUi {
                 HRow::Opt(opt) => {
                     let (caption, value) = caption_value(opt, s);
                     let cy = y + ROW_H / 2.0;
-                    if let Some(on) = switch_value(opt, s) {
+                    if !opt.available() {
+                        ui.row(x, y, &caption, "", 0.0);
+                        let label = "Unavailable";
+                        let bw = ui.button_width(label, false).max(96.0);
+                        ui.button(
+                            ROW + i as u64,
+                            [control_x - bw, y + 12.0, bw, CONTROL],
+                            label,
+                            Button::Secondary,
+                            false,
+                        );
+                    } else if let Some(on) = switch_value(opt, s) {
                         ui.row(x, y, &caption, "", 0.0);
                         ui.switch(ROW + i as u64, control_x, cy, on);
                     } else if let Kind::Slider(v) = opt.kind(s) {
@@ -768,7 +785,7 @@ impl OptionsUi {
             Some(Target::Row(i)) => {
                 let section = self.section.min(SECTIONS.len() - 1);
                 match self.horizon_rows(s, section).get(i) {
-                    Some(HRow::Opt(opt)) => {
+                    Some(HRow::Opt(opt)) if opt.available() => {
                         opt.cycle(s, right, framebuffer);
                         if *opt == Opt::Preset {
                             apply_preset(s);
@@ -855,6 +872,25 @@ mod tests {
         let ui = Ui::dry(atlas, &mut batch, (0.0, 0.0));
         let gui_per_dp = ui.density / ui.batch.scale;
         (point.0 * gui_per_dp, point.1 * gui_per_dp)
+    }
+
+    #[test]
+    fn accessibility_section_shares_the_complete_option_list() {
+        let s = Settings::default();
+        let section = SECTIONS.iter().find(|s| s.name == "Accessibility").unwrap();
+        let rows = (section.rows)(&s);
+        let options: Vec<_> = rows
+            .iter()
+            .filter_map(|row| match row {
+                HRow::Opt(opt) => Some(*opt),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(options, options_ui::ACCESSIBILITY_OPTIONS);
+        assert!(
+            rows.iter()
+                .any(|r| matches!(r, HRow::Page(_, _, Page::Controls)))
+        );
     }
 
     #[test]
