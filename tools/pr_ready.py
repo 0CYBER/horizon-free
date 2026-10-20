@@ -12,6 +12,9 @@ same way when it, horizon-prepare or horizon-theme changed; website/src/tokens.c
 Cargo.lock changing only with a Cargo.toml; the Python tests and the public-tree check; and the vanilla
 harnesses the changes can affect, picked as CI's parity job picks them (tools/parity.py --changed). Harnesses run
 where the vanilla data is (a prepared .local/ here, or the Mac mini); elsewhere they are listed for CI.
+Clippy checks all targets of touched crates and their transitive workspace dependents, including examples.
+Tests select library, binary and integration targets explicitly, followed by doc tests, so unrelated example
+executables are not built and linked again.
 
 It prints one Markdown block for the pull request's body (stdout) and exits non-zero when a check fails.
 Progress, and the end of a failed check's output, go to stderr (--verbose: all of it).
@@ -89,7 +92,7 @@ def launcher_rust(path):
 
 def touched_crates(paths, packages):
     """Workspace packages to test for these paths ({name: directory}), or None for the whole workspace."""
-    if any(path in ("Cargo.toml", "Cargo.lock") or path.startswith(".cargo/") for path in paths):
+    if any(path in ROOT_RUST or path.startswith(".cargo/") for path in paths):
         return None
     crates = set()
     for path in paths:
@@ -195,14 +198,37 @@ def line_counts(base, changed):
 
 
 def packages():
-    """The main workspace's packages and their directories, from Cargo's metadata."""
+    """Workspace directories, libraries and path dependencies, including optional/build/dev dependencies."""
     try:
         output = subprocess.run(["cargo", "metadata", "--no-deps", "--format-version", "1"], cwd=ROOT,
                                 capture_output=True, text=True, check=True).stdout
     except (OSError, subprocess.CalledProcessError) as error:
         sys.exit(f"pr_ready: cargo metadata failed: {getattr(error, 'stderr', error)}")
-    return {package["name"]: Path(package["manifest_path"]).parent.relative_to(ROOT).as_posix()
-            for package in json.loads(output)["packages"]}
+    metadata = json.loads(output)
+    members = set(metadata["workspace_members"])
+    workspace = [package for package in metadata["packages"] if package["id"] in members]
+    directories = {package["name"]: Path(package["manifest_path"]).parent.relative_to(ROOT).as_posix()
+                   for package in workspace}
+    libraries = {package["name"] for package in workspace
+                 if any("lib" in target["kind"] for target in package["targets"])}
+    names_by_path = {Path(package["manifest_path"]).parent.resolve(): package["name"] for package in workspace}
+    dependencies = {package["name"]: {names_by_path[path] for dependency in package["dependencies"]
+                                     if dependency.get("path") and
+                                     (path := Path(dependency["path"]).resolve()) in names_by_path}
+                    for package in workspace}
+    return directories, libraries, dependencies
+
+
+def dependent_crates(crates, dependencies):
+    """Include every workspace consumer, even through renamed or feature-gated dependencies."""
+    if crates is None:
+        return None
+    selected = set(crates)
+    while True:
+        consumers = {name for name, used in dependencies.items() if selected.intersection(used)}
+        if consumers <= selected:
+            return sorted(selected)
+        selected.update(consumers)
 
 
 def prepare_key():
@@ -248,12 +274,22 @@ def parity_summary(output):
     return text
 
 
-def plan(args, base, changed, crates_of):
+def plan(args, base, changed, crates_of, libraries, dependencies):
     """The checks for these changed files, in the order they run."""
     rust = any(workspace_rust(path) for path in changed)
     launcher = any(launcher_rust(path) for path in changed)
     python = any(path.endswith(".py") or path.startswith(("tests/", "tools/")) for path in changed)
     crates = touched_crates(changed, crates_of) if rust or TOKENS in changed else []
+    # An unrecognised Rust path must not silently skip validation.
+    if rust and crates == []:
+        crates = None
+    selection = "--workspace" if crates is None else " ".join(f"-p {shlex.quote(c)}" for c in crates)
+    clippy_crates = dependent_crates(crates, dependencies)
+    clippy_selection = "--workspace" if clippy_crates is None else " ".join(
+        f"-p {shlex.quote(c)}" for c in clippy_crates)
+    test_skip = None if crates is None or crates else "no crate touched"
+    doc_crates = sorted(libraries if crates is None else libraries.intersection(crates))
+    doc_selection = "--workspace" if crates is None else " ".join(f"-p {shlex.quote(c)}" for c in doc_crates)
     no_rust = "no Rust change"
     steps = [
         Step("Cargo.lock", where="git"),
@@ -261,10 +297,13 @@ def plan(args, base, changed, crates_of):
         Step("Python tests", "python3 -m unittest discover -s tests", where="here",
              skip=None if python else "no Python change", summary=unittest_passed),
         Step("rustfmt", "cargo fmt --all -- --check", skip=None if rust else no_rust),
-        Step("clippy", "cargo clippy --workspace --all-targets --locked -- -D warnings", skip=None if rust else no_rust),
+        Step("clippy", f"cargo clippy {clippy_selection} --all-targets --locked -- -D warnings",
+             skip=None if rust else no_rust),
         Step("tests" + (": workspace" if crates is None else f": {', '.join(crates)}" if crates else ""),
-             "cargo test --locked " + ("--workspace" if crates is None else " ".join(f"-p {c}" for c in crates or [])),
-             skip=None if crates is None or crates else "no crate touched", summary=tests_passed),
+             f"cargo test --locked {selection} --tests",
+             skip=test_skip, summary=tests_passed),
+        Step("doc tests", f"cargo test --locked {doc_selection} --doc",
+             skip=test_skip or (None if doc_crates else "no library touched"), summary=tests_passed),
         Step("tokens.css up to date", "cargo test --locked -p horizon-theme --lib website_tokens_are_up_to_date",
              skip=None if any(p.startswith(("crates/horizon-theme/", "xtask/")) or p == TOKENS for p in changed)
              else "theme untouched"),
@@ -448,7 +487,9 @@ def main():
         parser.error(f"no merge base with {args.base} (git fetch?)")
     merge_base = git("merge-base", "HEAD", args.base).strip()
     counts = line_counts(merge_base, changed)
-    steps = plan(args, args.base, changed, packages() if any(workspace_rust(p) for p in changed) or TOKENS in changed else {})
+    crates_of, libraries, dependencies = packages() if any(workspace_rust(p) for p in changed) or TOKENS in changed \
+        else ({}, set(), {})
+    steps = plan(args, args.base, changed, crates_of, libraries, dependencies)
     print(f"pr_ready: {len(changed)} files changed since {args.base}; checks on {args.host}", file=sys.stderr, flush=True)
 
     lock = steps[0]

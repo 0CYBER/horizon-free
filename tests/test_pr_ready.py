@@ -1,4 +1,5 @@
 import argparse
+import json
 import unittest
 from unittest import mock
 
@@ -6,6 +7,8 @@ from tools import pr_ready
 
 PACKAGES = {"horizon-core": "crates/horizon-core", "horizon-client": "crates/horizon-client",
             "horizon-theme": "crates/horizon-theme", "xtask": "xtask"}
+LIBRARIES = set(PACKAGES) - {"xtask"}
+DEPENDENCIES = {"horizon-client": {"horizon-core"}}
 
 
 def args(host="local", quick=False):
@@ -37,6 +40,100 @@ class PrReadyTests(unittest.TestCase):
         self.assertFalse(pr_ready.launcher_rust("launcher/links.json"))
         self.assertFalse(pr_ready.launcher_rust("launcher/README.md"))
         self.assertFalse(pr_ready.launcher_rust("crates/horizon-client/src/game.rs"))
+
+    def test_crate_checks_do_not_link_unrelated_examples(self):
+        with mock.patch.object(pr_ready, "affected_here", return_value=[]):
+            steps = pr_ready.plan(args(quick=True), "origin/main", {"crates/horizon-client/src/game.rs"}, PACKAGES, LIBRARIES, DEPENDENCIES)
+        by_name = {step.name: step for step in steps}
+        self.assertEqual(by_name["clippy"].command,
+                         "cargo clippy -p horizon-client --all-targets --locked -- -D warnings")
+        self.assertEqual(by_name["tests: horizon-client"].command,
+                         "cargo test --locked -p horizon-client --tests")
+        self.assertEqual(by_name["doc tests"].command, "cargo test --locked -p horizon-client --doc")
+        self.assertIsNone(by_name["doc tests"].status)
+
+    def test_shared_rust_configuration_keeps_workspace_coverage(self):
+        for path in sorted(pr_ready.ROOT_RUST | {".cargo/config.toml", "crates/unknown/src/lib.rs"}):
+            with self.subTest(path=path), mock.patch.object(pr_ready, "affected_here", return_value=[]):
+                steps = pr_ready.plan(args(quick=True), "origin/main", {path}, PACKAGES, LIBRARIES, DEPENDENCIES)
+                by_name = {step.name: step for step in steps}
+                self.assertEqual(by_name["clippy"].command,
+                                 "cargo clippy --workspace --all-targets --locked -- -D warnings")
+                self.assertEqual(by_name["tests: workspace"].command,
+                                 "cargo test --locked --workspace --tests")
+                self.assertEqual(by_name["doc tests"].command, "cargo test --locked --workspace --doc")
+
+    def test_non_rust_changes_skip_workspace_checks(self):
+        for path in ("README.md", "tools/pr_ready.py", "launcher/src/main.rs"):
+            with self.subTest(path=path), mock.patch.object(pr_ready, "affected_here", return_value=[]):
+                steps = pr_ready.plan(args(quick=True), "origin/main", {path}, PACKAGES, LIBRARIES, DEPENDENCIES)
+                by_name = {step.name: step for step in steps}
+                for name in ("clippy", "tests", "doc tests"):
+                    self.assertEqual(by_name[name].status, "skip")
+
+    def test_multiple_touched_crates_share_the_same_check_scope(self):
+        with mock.patch.object(pr_ready, "affected_here", return_value=[]):
+            steps = pr_ready.plan(args(), "origin/main",
+                                  {"crates/horizon-core/src/lib.rs", "crates/horizon-client/examples/probe.rs"}, PACKAGES, LIBRARIES, DEPENDENCIES)
+        for step in steps:
+            if step.name in ("clippy", "tests: horizon-client, horizon-core", "doc tests"):
+                self.assertIn("-p horizon-client -p horizon-core", step.command)
+                self.assertIsNone(step.status)
+
+    def test_binary_only_crates_skip_doc_tests(self):
+        with mock.patch.object(pr_ready, "affected_here", return_value=[]):
+            steps = pr_ready.plan(args(), "origin/main", {"xtask/src/main.rs"}, PACKAGES, LIBRARIES, DEPENDENCIES)
+        by_name = {step.name: step for step in steps}
+        self.assertEqual(by_name["tests: xtask"].command, "cargo test --locked -p xtask --tests")
+        self.assertIsNone(by_name["tests: xtask"].status)
+        self.assertEqual(by_name["doc tests"].status, "skip")
+        with mock.patch.object(pr_ready, "affected_here", return_value=[]):
+            steps = pr_ready.plan(args(), "origin/main",
+                                  {"xtask/src/main.rs", "crates/horizon-core/src/lib.rs"}, PACKAGES, LIBRARIES, DEPENDENCIES)
+        by_name = {step.name: step for step in steps}
+        self.assertEqual(by_name["doc tests"].command, "cargo test --locked -p horizon-core --doc")
+
+    def test_clippy_checks_transitive_consumers_but_tests_only_touched_crates(self):
+        packages = {name: f"crates/{name}" for name in ("core", "world", "client", "unrelated")}
+        dependencies = {"world": {"core"}, "client": {"world"}, "unrelated": set()}
+        with mock.patch.object(pr_ready, "affected_here", return_value=[]):
+            steps = pr_ready.plan(args(), "origin/main", {"crates/core/src/lib.rs"},
+                                  packages, set(packages), dependencies)
+        by_name = {step.name: step for step in steps}
+        self.assertEqual(by_name["clippy"].command,
+                         "cargo clippy -p client -p core -p world --all-targets --locked -- -D warnings")
+        self.assertEqual(by_name["tests: core"].command, "cargo test --locked -p core --tests")
+        self.assertEqual(by_name["doc tests"].command, "cargo test --locked -p core --doc")
+
+    def test_dependent_scope_handles_cycles_and_multiple_changed_crates(self):
+        dependencies = {"a": {"b"}, "b": {"a"}, "c": {"b"}, "d": set()}
+        self.assertEqual(pr_ready.dependent_crates(["a"], dependencies), ["a", "b", "c"])
+        self.assertEqual(pr_ready.dependent_crates(["a", "d"], dependencies), ["a", "b", "c", "d"])
+        self.assertEqual(pr_ready.dependent_crates([], dependencies), [])
+        self.assertIsNone(pr_ready.dependent_crates(None, dependencies))
+
+    def test_metadata_includes_renamed_optional_platform_build_and_dev_consumers(self):
+        core = str(pr_ready.ROOT / "crates/core")
+        metadata = {"workspace_members": ["core", "optional", "build", "dev"], "packages": [
+            {"id": "core", "name": "core", "manifest_path": core + "/Cargo.toml",
+             "targets": [{"kind": ["lib"]}], "dependencies": []},
+        ]}
+        for name, kind in (("optional", None), ("build", "build"), ("dev", "dev")):
+            metadata["packages"].append({
+                "id": name, "name": name, "manifest_path": str(pr_ready.ROOT / f"crates/{name}/Cargo.toml"),
+                "targets": [{"kind": ["bin"]}], "dependencies": [
+                    {"name": "core", "rename": "alias", "path": core, "kind": kind,
+                     "optional": name == "optional", "target": "cfg(windows)"},
+                    {"name": "external", "path": None},
+                ],
+            })
+        # A path dependency outside this workspace must not become a selectable package.
+        metadata["packages"].append({"id": "outside", "name": "outside", "manifest_path": "/outside/Cargo.toml"})
+        with mock.patch.object(pr_ready.subprocess, "run", return_value=mock.Mock(stdout=json.dumps(metadata))):
+            directories, libraries, dependencies = pr_ready.packages()
+        self.assertEqual(set(directories), {"core", "optional", "build", "dev"})
+        self.assertEqual(libraries, {"core"})
+        self.assertEqual(pr_ready.dependent_crates(["core"], dependencies), ["build", "core", "dev", "optional"])
 
     def test_scope_warns_on_size_and_mixed_areas(self):
         self.assertEqual(pr_ready.scope_warnings({"crates/horizon-client/src/game.rs", "tools/test_food_parity.py",
@@ -85,7 +182,7 @@ class PrReadyTests(unittest.TestCase):
     def test_harnesses_are_listed_when_they_cannot_run(self):
         changed = {"crates/horizon-world/src/food.rs"}
         with mock.patch.object(pr_ready, "affected_here", return_value=["food", "light"]):
-            steps = pr_ready.plan(args(quick=True), "origin/main", changed, {"horizon-world": "crates/horizon-world"})
+            steps = pr_ready.plan(args(quick=True), "origin/main", changed, {"horizon-world": "crates/horizon-world"}, {"horizon-world"}, {})
         harness = steps[-1]
         self.assertEqual(harness.status, "list")
         self.assertIn("2 affected, to run in CI (--quick): food, light", harness.detail)
@@ -94,7 +191,7 @@ class PrReadyTests(unittest.TestCase):
         self.assertEqual(by_name["launcher clippy"].status, "skip")
         self.assertIsNone(by_name["clippy"].status)
         with mock.patch.object(pr_ready, "affected_here", return_value=["food"]):
-            steps = pr_ready.plan(args(host="macmini"), "origin/main", changed, {"horizon-world": "crates/horizon-world"})
+            steps = pr_ready.plan(args(host="macmini"), "origin/main", changed, {"horizon-world": "crates/horizon-world"}, {"horizon-world"}, {})
         self.assertIn("--changed-files", steps[-1].command)
         self.assertIn("crates/horizon-world/src/food.rs", steps[-1].command)
 

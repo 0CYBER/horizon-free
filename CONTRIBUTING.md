@@ -53,6 +53,11 @@ crates you touched (and the launcher's), generated files, `Cargo.lock`, the Pyth
 your change can affect. Without the vanilla data on your machine it lists those harnesses instead; CI runs them.
 `--quick` skips the harnesses. It exits non-zero when something fails.
 
+For the game workspace, Clippy checks all targets of the touched crates and their transitive workspace dependents,
+including examples. The dependency scope includes optional, platform, build and development dependencies.
+Tests run library, binary, integration and doc tests without building unrelated example executables. Shared Cargo
+configuration and toolchain changes select the whole workspace; CI also keeps its workspace-wide checks.
+
 ## Pull requests
 
 - **Small.** One change per pull request, under about 500 lines of code where you can; split bigger work into
