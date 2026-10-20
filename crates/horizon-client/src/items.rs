@@ -1705,7 +1705,15 @@ mod tests {
     }
 }
 
-pub fn take_held_drop(slot: &mut Option<ItemStack>, all: bool) -> Option<ItemStack> {
+/// Minecraft.handleKeybinds: spectators cannot drop from the selected slot.
+pub fn take_held_drop(
+    slot: &mut Option<ItemStack>,
+    all: bool,
+    spectator: bool,
+) -> Option<ItemStack> {
+    if spectator {
+        return None;
+    }
     let stack = slot.as_mut()?;
     if stack.count == 0 {
         return None;
@@ -1727,10 +1735,23 @@ mod held_drop_tests {
     #[test]
     fn one_all_and_empty_drop() {
         let mut slot = Some(ItemStack::new("minecraft:stone", 4));
-        assert_eq!(take_held_drop(&mut slot, false).unwrap().count, 1);
+        assert_eq!(take_held_drop(&mut slot, false, false).unwrap().count, 1);
         assert_eq!(slot.as_ref().unwrap().count, 3);
-        assert_eq!(take_held_drop(&mut slot, true).unwrap().count, 3);
+        assert_eq!(take_held_drop(&mut slot, true, false).unwrap().count, 3);
         assert!(slot.is_none());
-        assert!(take_held_drop(&mut slot, false).is_none());
+        assert!(take_held_drop(&mut slot, false, false).is_none());
+    }
+    #[test]
+    fn spectator_keeps_selected_stack_for_single_and_whole_stack_drops() {
+        for all in [false, true] {
+            let mut slot = Some(ItemStack::new("minecraft:stone", 4));
+            assert!(take_held_drop(&mut slot, all, true).is_none());
+            assert_eq!(slot.as_ref().unwrap().count, 4);
+            // Leaving spectator allows dropping the same selected stack again.
+            assert_eq!(
+                take_held_drop(&mut slot, all, false).unwrap().count,
+                if all { 4 } else { 1 }
+            );
+        }
     }
 }
