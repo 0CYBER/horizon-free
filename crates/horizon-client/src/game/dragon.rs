@@ -797,6 +797,12 @@ impl Game<'_> {
             d.id = self.next_entity + 1;
             self.next_entity += 9;
         }
+        // The spikes' crystals too (EndCrystal's constructor): an id whether
+        // or not a client has tracked them yet, to be aimed at by it.
+        for c in self.crystals.iter_mut().filter(|c| c.id == 0) {
+            self.next_entity += 1;
+            c.id = self.next_entity;
+        }
         self.tick_crystals();
         self.tick_dragon();
     }
@@ -2716,6 +2722,11 @@ impl Game<'_> {
             })),
             "players": self.fight.players,
             "crystals": self.crystals.len(),
+            // The tracked id (0 until tracked) and position of each crystal.
+            "crystal_list": self.crystals.iter().map(|c| serde_json::json!({
+                "id": c.id,
+                "position": [c.position.x, c.position.y, c.position.z],
+            })).collect::<Vec<_>>(),
             "alive_crystals": self.fight.alive_crystals,
             "killed": self.fight.killed,
             "exit_portal": self.fight.exit_portal,
