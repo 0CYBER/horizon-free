@@ -9,18 +9,20 @@ mod markdown;
 mod mcp;
 mod modpacks_page;
 mod perf;
+mod scrollbar;
 mod servers_page;
 mod theme;
 
 use gpui::{
     div, ease_out_quint, prelude::*, px, relative, size, Animation, AnimationExt, AnyElement, App,
     Application, Bounds, ClickEvent, Context, Div, ElementId, FocusHandle, FontWeight, Hsla,
-    KeyDownEvent, PathPromptOptions, ScrollHandle, SharedString, Stateful, Subscription,
-    TitlebarOptions, Window, WindowBounds, WindowOptions,
+    KeyDownEvent, PathPromptOptions, SharedString, Stateful, Subscription, TitlebarOptions, Window,
+    WindowBounds, WindowOptions,
 };
 use horizon_launcher::account::{self, Accounts, SignIn, SignInState};
 use horizon_launcher::backend::{self, Job, Msg, Release, Running, Settings, Updates};
 use horizon_launcher::telemetry;
+use scrollbar::Scrollbar;
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
@@ -103,6 +105,7 @@ struct Launcher {
     page: Page,
     /// How many times the page changed, for the page transition.
     switches: usize,
+    content_scroll: Scrollbar,
     opening: Option<Opening>,
     updates: Updates,
     checked: Option<Instant>,
@@ -223,6 +226,7 @@ impl Launcher {
             theme: Theme::for_appearance(window.appearance()),
             page: Page::Play,
             switches: 0,
+            content_scroll: Scrollbar::default(),
             opening: (!settings.skip_opening).then(|| {
                 let focus = cx.focus_handle();
                 window.focus(&focus);
@@ -314,6 +318,7 @@ impl Launcher {
         if page != self.page {
             self.page = page;
             self.switches += 1;
+            self.content_scroll = Scrollbar::default();
         }
         self.picker_open = false;
     }
@@ -2745,20 +2750,25 @@ impl Render for Launcher {
                     .top(px(theme::RISE * (1. - ui)))
                     .child(self.topbar(cx))
                     .child(
-                        div()
-                            .id("content")
-                            .relative()
-                            .flex_1()
-                            .min_h_0()
-                            .overflow_y_scroll()
-                            .child(
+                        self.content_scroll
+                            .wrap(
                                 div()
-                                    .flex()
-                                    .px(px(theme::GUTTER))
-                                    .pt(px(24.))
-                                    .pb(px(48.))
-                                    .child(content),
-                            ),
+                                    .id("content")
+                                    .relative()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .overflow_y_scroll()
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .px(px(theme::GUTTER))
+                                            .pt(px(24.))
+                                            .pb(px(48.))
+                                            .child(content),
+                                    ),
+                                &t,
+                            )
+                            .flex_1(),
                     )
                     .child(self.footer(cx)),
             );

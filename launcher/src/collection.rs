@@ -7,6 +7,8 @@ use horizon_telemetry::{Choices, Consent, Kind as DataKind};
 /// What the window keeps about data collection.
 pub(crate) struct Collection {
     pub consent: Consent,
+    body_scroll: Scrollbar,
+    json_scroll: Scrollbar,
     /// The question's switches, until the player answers.
     pub draft: Choices,
     /// "View what would be sent": a line on what it is, and the JSON.
@@ -20,6 +22,8 @@ impl Collection {
     pub fn load() -> Self {
         Self {
             consent: telemetry::consent(),
+            body_scroll: Scrollbar::default(),
+            json_scroll: Scrollbar::default(),
             draft: Choices::NONE,
             view: None,
             note: None,
@@ -42,7 +46,7 @@ fn kind_id(prefix: &str, kind: DataKind) -> &'static str {
 }
 
 /// The exact JSON, in mono, scrolling inside a plate.
-fn json_view(view: &(String, String), t: &Theme) -> Div {
+fn json_view(view: &(String, String), t: &Theme, scroll: &Scrollbar) -> Div {
     div()
         .flex()
         .flex_col()
@@ -53,20 +57,21 @@ fn json_view(view: &(String, String), t: &Theme) -> Div {
                 .child(view.0.clone()),
         )
         .child(
-            div()
-                .id("data-json")
-                .max_h(px(260.))
-                .overflow_y_scroll()
-                // GPUI lets wheel events reach scroll containers behind this one unless stopped.
-                .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
-                .p(px(16.))
-                .rounded(px(theme::RADIUS_PLATE))
-                .bg(t.plate)
-                .font_family(theme::MONO)
-                .text_size(px(theme::CAPTION.px))
-                .line_height(px(18.))
-                .text_color(t.ink_soft)
-                .children(view.1.lines().map(|l| div().child(l.to_string()))),
+            scroll.wrap(
+                div()
+                    .id("data-json")
+                    .max_h(px(260.))
+                    .overflow_y_scroll()
+                    .p(px(16.))
+                    .rounded(px(theme::RADIUS_PLATE))
+                    .bg(t.plate)
+                    .font_family(theme::MONO)
+                    .text_size(px(theme::CAPTION.px))
+                    .line_height(px(18.))
+                    .text_color(t.ink_soft)
+                    .children(view.1.lines().map(|l| div().child(l.to_string()))),
+                t,
+            ),
         )
 }
 
@@ -160,7 +165,7 @@ impl Launcher {
                         cx.notify();
                     })),
             )
-            .children(self.collection.view.as_ref().map(|v| json_view(v, &t)));
+            .children(self.collection.view.as_ref().map(|v| json_view(v, &t, &self.collection.json_scroll)));
         let answers = div()
             .flex()
             .flex_none()
@@ -193,7 +198,7 @@ impl Launcher {
             .bg(t.page)
             .border_1()
             .border_color(t.rule)
-            .child(body)
+            .child(self.collection.body_scroll.wrap(body, &t))
             .child(answers);
         div()
             .id("consent")
@@ -208,6 +213,7 @@ impl Launcher {
             .py(px(24.))
             .bg(t.page.opacity(0.92))
             .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+            .occlude()
             .child(card)
     }
 
@@ -315,6 +321,6 @@ impl Launcher {
             .child(list)
             .child(text(theme::CAPTION).text_color(t.muted).child(telemetry::NEVER))
             .children(self.collection.note.clone().map(|n| text(theme::UI).text_color(t.ink).child(n)))
-            .children(self.collection.view.as_ref().map(|v| json_view(v, &t)))
+            .children(self.collection.view.as_ref().map(|v| json_view(v, &t, &self.collection.json_scroll)))
     }
 }
