@@ -254,7 +254,10 @@ pub(super) struct Dragon {
     yaw_accel: f32,
     pub health: f32,
     pub hurt_time: i32,
+    /// `LivingEntity.damageCooldownTime` and `lastHurt`: within the window
+    /// only damage above the last hit lands, and only the excess.
     invulnerable: i32,
+    last_hurt: f32,
     pub death_time: i32,
     pub flap: f32,
     pub old_flap: f32,
@@ -272,6 +275,18 @@ pub(super) struct Dragon {
     nodes: Option<[[i32; 3]; 24]>,
     nearest_crystal: Option<usize>,
     random: LegacyRandom,
+}
+/// What `EnderDragon.hurt` made of a hit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Hurt {
+    /// It returned true; `full` when it was a new hit, not just the excess
+    /// over the last one (the hurt sound and animation).
+    Landed { full: bool },
+    /// It returned false (dying, too little damage).
+    Refused,
+    /// A perched dragon's `onHurt` took an arrow's damage away (and set the
+    /// arrow alight for a second).
+    Shrugged,
 }
 const PART_SIZES: [(f64, f64); 8] = [
     (1.0, 1.0),
@@ -301,6 +316,7 @@ impl Dragon {
             health: MAX_HEALTH,
             hurt_time: 0,
             invulnerable: 0,
+            last_hurt: 0.0,
             death_time: 0,
             flap: 0.0,
             old_flap: 0.0,
@@ -348,6 +364,103 @@ impl Dragon {
             Vec3::new(p.x - w / 2.0, p.y, p.z - w / 2.0),
             Vec3::new(p.x + w / 2.0, p.y + h, p.z + w / 2.0),
         )
+    }
+    /// `EnderDragon.hurt(part, source, damage)`: whether the hit landed
+    /// (an arrow is spent, else it turns back). `counts` is
+    /// `source.getEntity() instanceof Player` or a damage type that always
+    /// hurts dragons (explosions); `arrow` a direct arrow or wind charge,
+    /// which a perched dragon shrugs off (`AbstractDragonSittingPhase.onHurt`).
+    fn hurt(&mut self, part: usize, damage: f32, counts: bool, arrow: bool) -> Hurt {
+        if matches!(self.phase, Phase::Dying { .. }) || !self.alive() {
+            return Hurt::Refused;
+        }
+        if arrow && self.phase.sitting() {
+            return Hurt::Shrugged;
+        }
+        let mut damage = damage;
+        if part != 0 && part != 1 {
+            damage = damage / 4.0 + damage.min(1.0);
+        }
+        if damage < 0.01 {
+            return Hurt::Refused;
+        }
+        if !counts {
+            return Hurt::Landed { full: false };
+        }
+        let before = self.health;
+        // LivingEntity.hurtServer: within the cooldown only what exceeds the last hit.
+        let full = if self.invulnerable > 10 {
+            if damage <= self.last_hurt {
+                return Hurt::Landed { full: false };
+            }
+            self.health -= damage - self.last_hurt;
+            self.last_hurt = damage;
+            false
+        } else {
+            self.last_hurt = damage;
+            self.invulnerable = 20;
+            self.health -= damage;
+            self.hurt_time = 10;
+            true
+        };
+        if self.health <= 0.0 {
+            if self.phase.sitting() {
+                self.health = 0.0;
+            } else {
+                // handleKillingBlow: dying flight first.
+                self.health = 1.0;
+                self.set_phase(Phase::Dying {
+                    target: None,
+                    time: 0,
+                });
+            }
+        }
+        if self.phase.sitting() {
+            self.sitting_damage += before - self.health.max(0.0);
+            if self.sitting_damage > 0.25 * MAX_HEALTH {
+                self.sitting_damage = 0.0;
+                self.set_phase(Phase::Takeoff {
+                    first: true,
+                    path: None,
+                    target: None,
+                });
+            }
+        }
+        Hurt::Landed { full }
+    }
+    /// `ServerExplosion.hurtEntities` on the dragon: the dragon itself (its
+    /// body takes it), then each part, in `Level.getEntities` order, each by
+    /// its distance and how much of its box the blast sees (`exposure`).
+    fn explosion_hits(
+        &self,
+        center: [f64; 3],
+        radius: f32,
+        exposure: impl Fn(Aabb) -> f32,
+    ) -> Vec<(usize, f32)> {
+        let diameter = f64::from(radius * 2.0);
+        let dist = |p: Vec3| {
+            ((p.x - center[0]).powi(2) + (p.y - center[1]).powi(2) + (p.z - center[2]).powi(2))
+                .sqrt()
+                / diameter
+        };
+        let p = self.position;
+        let whole = Aabb::new(
+            Vec3::new(p.x - 8.0, p.y, p.z - 8.0),
+            Vec3::new(p.x + 8.0, p.y + 8.0, p.z + 8.0),
+        );
+        std::iter::once((2, p, whole))
+            .chain((0..8).map(|i| (i, self.parts[i].0, self.part_box(i))))
+            .filter_map(|(part, at, b)| {
+                let d = dist(at);
+                (d <= 1.0).then(|| {
+                    let pow = (1.0 - d) * f64::from(exposure(b));
+                    (
+                        part,
+                        ((pow * pow + pow) / 2.0 * 7.0 * diameter + 1.0) as f32,
+                    )
+                })
+            })
+            .collect()
     }
     fn set_phase(&mut self, phase: Phase) {
         if self.phase.id() == phase.id() && phase.id() != 1 {
@@ -656,7 +769,7 @@ impl Game<'_> {
         if let Some(d) = self.dragon.as_mut() {
             if d.nearest_crystal == Some(index) {
                 d.nearest_crystal = None;
-                self.hurt_dragon(0, 10.0, true);
+                self.hurt_dragon(0, 10.0, true, false);
             } else if let Some(n) = d.nearest_crystal.as_mut()
                 && *n > index
             {
@@ -712,64 +825,42 @@ impl Game<'_> {
             .find(|(s, _)| *s == CRYSTAL_IDS + i as u32)
             .map(|(_, b)| b)
     }
-    /// Damage to a special id (from projectiles and melee).
-    pub(super) fn hit_special(&mut self, id: u32, amount: f32, by_player: bool) {
+    /// Damage to a special id (from projectiles and melee): what the
+    /// dragon part or crystal made of it. `arrow` for a direct arrow.
+    pub(super) fn hit_special(
+        &mut self,
+        id: u32,
+        amount: f32,
+        by_player: bool,
+        arrow: bool,
+    ) -> Hurt {
         if id >= CRYSTAL_IDS {
-            self.destroy_crystal((id - CRYSTAL_IDS) as usize, by_player);
+            // EndCrystal.hurtServer: false while invulnerable, else it blows up.
+            let index = (id - CRYSTAL_IDS) as usize;
+            if self.crystals.get(index).is_none_or(|c| c.invulnerable) {
+                return Hurt::Refused;
+            }
+            self.destroy_crystal(index, by_player);
+            Hurt::Landed { full: true }
         } else if id >= SPECIAL {
-            self.hurt_dragon((id - SPECIAL) as usize, amount, by_player);
+            self.hurt_dragon((id - SPECIAL) as usize, amount, by_player, arrow)
+        } else {
+            Hurt::Refused
         }
     }
-    /// `EnderDragon.hurt(part, source, damage)`.
-    fn hurt_dragon(&mut self, part: usize, damage: f32, counts: bool) {
+    /// `EnderDragon.hurt(part, source, damage)` on the dragon in the level.
+    fn hurt_dragon(&mut self, part: usize, damage: f32, counts: bool, arrow: bool) -> Hurt {
         let Some(d) = self.dragon.as_mut() else {
-            return;
+            return Hurt::Refused;
         };
-        if matches!(d.phase, Phase::Dying { .. }) || !d.alive() {
-            return;
+        let hurt = d.hurt(part, damage, counts, arrow);
+        if hurt == (Hurt::Landed { full: true }) {
+            let at = [d.position.x, d.position.y, d.position.z];
+            let pitch = 0.8 + self.world.random.next_float() * 0.3;
+            self.audio
+                .play("minecraft:entity.ender_dragon.hurt", Some(at), 5.0, pitch);
         }
-        let mut damage = damage;
-        if part != 0 && part != 1 {
-            damage = damage / 4.0 + damage.min(1.0);
-        }
-        if damage < 0.01 || !counts {
-            return;
-        }
-        // LivingEntity.hurt invulnerability: only damage above the last one in the window.
-        if d.invulnerable > 10 {
-            return;
-        }
-        let before = d.health;
-        d.health -= damage;
-        d.invulnerable = 20;
-        d.hurt_time = 10;
-        let at = [d.position.x, d.position.y, d.position.z];
-        if d.health <= 0.0 {
-            if d.phase.sitting() {
-                d.health = 0.0;
-            } else {
-                // handleKillingBlow: dying flight first.
-                d.health = 1.0;
-                d.set_phase(Phase::Dying {
-                    target: None,
-                    time: 0,
-                });
-            }
-        }
-        if d.phase.sitting() {
-            d.sitting_damage += before - d.health.max(0.0);
-            if d.sitting_damage > 0.25 * MAX_HEALTH {
-                d.sitting_damage = 0.0;
-                d.set_phase(Phase::Takeoff {
-                    first: true,
-                    path: None,
-                    target: None,
-                });
-            }
-        }
-        let pitch = 0.8 + self.world.random.next_float() * 0.3;
-        self.audio
-            .play("minecraft:entity.ender_dragon.hurt", Some(at), 5.0, pitch);
+        hurt
     }
     /// Player melee on the dragon's parts or a crystal under the crosshair.
     /// The dragon part under the crosshair within reach: its id and distance.
@@ -826,7 +917,7 @@ impl Game<'_> {
         amount += self.enchant_damage_bonus("minecraft:ender_dragon") * scale;
         self.attack_ticks = 0;
         self.swing_arm();
-        self.hit_special(id, amount, true);
+        self.hit_special(id, amount, true, false);
         true
     }
     /// The 24 nodes (`findClosestNode` builds them on first use).
@@ -2370,35 +2461,37 @@ impl Crystal {
     }
 }
 impl Game<'_> {
-    /// `Explosion.explode` for crystals (they blow up in turn) and the
-    /// dragon's parts (explosions always hurt dragons).
+    /// `ServerExplosion.hurtEntities` on the end crystals (each in reach
+    /// blows up in turn) and the dragon (explosions always hurt dragons).
     pub(super) fn explosion_hits_special(&mut self, center: [f64; 3], radius: f32) {
         let diameter = f64::from(radius * 2.0);
-        let dist = |p: Vec3| {
+        let in_reach = |p: Vec3| {
             ((p.x - center[0]).powi(2) + (p.y - center[1]).powi(2) + (p.z - center[2]).powi(2))
                 .sqrt()
+                / diameter
+                <= 1.0
         };
-        if let Some(i) = self
+        let crystals: Vec<Vec3> = self
             .crystals
             .iter()
-            .position(|c| !c.invulnerable && dist(c.position) / diameter <= 1.0)
-        {
-            self.destroy_crystal(i, false);
-        }
-        if let Some(d) = self.dragon.as_ref() {
-            let hits: Vec<(usize, f32)> = (0..8)
-                .filter_map(|i| {
-                    let p = d.parts[i].0;
-                    let r = dist(p) / diameter;
-                    (r <= 1.0).then(|| {
-                        let pow = 1.0 - r;
-                        (i, ((pow * pow + pow) / 2.0 * 7.0 * diameter + 1.0) as f32)
-                    })
-                })
-                .collect();
-            if let Some(&(part, amount)) = hits.iter().max_by(|a, b| a.1.total_cmp(&b.1)) {
-                self.hurt_dragon(part, amount, true);
+            .filter(|c| !c.invulnerable && in_reach(c.position))
+            .map(|c| c.position)
+            .collect();
+        for at in crystals {
+            // One blowing up may already have taken the next.
+            if let Some(i) = self.crystals.iter().position(|c| c.position == at) {
+                self.destroy_crystal(i, false);
             }
+        }
+        let Some(d) = self.dragon.as_ref() else {
+            return;
+        };
+        let hits = d.explosion_hits(center, radius, |b| {
+            let (lo, hi) = (b.min_position(), b.max_position());
+            self.seen_percent(center, [lo.x, lo.y, lo.z], [hi.x, hi.y, hi.z])
+        });
+        for (part, amount) in hits {
+            self.hurt_dragon(part, amount, true, false);
         }
     }
 }
@@ -2838,5 +2931,106 @@ impl Game<'_> {
         self.reset_spike_crystals();
         let _ = self.activate_exit_portal();
         self.fight.dirty = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dragon(phase: Phase) -> Dragon {
+        let mut d = Dragon::new(Vec3::new(0.0, 70.0, 0.0), 0.0, 1);
+        d.phase = phase;
+        d
+    }
+    fn flying() -> Phase {
+        Phase::Holding {
+            path: None,
+            target: None,
+            clockwise: false,
+        }
+    }
+
+    #[test]
+    fn a_perched_dragon_shrugs_arrows_off() {
+        // AbstractDragonSittingPhase.onHurt: an arrow does nothing, melee does.
+        let mut d = dragon(Phase::Scanning { time: 0 });
+        assert_eq!(d.hurt(0, 9.0, true, true), Hurt::Shrugged);
+        assert_eq!(d.health, MAX_HEALTH);
+        assert_eq!(d.hurt(0, 9.0, true, false), Hurt::Landed { full: true });
+        assert_eq!(d.health, MAX_HEALTH - 9.0);
+        // In flight an arrow lands.
+        let mut d = dragon(flying());
+        assert_eq!(d.hurt(0, 9.0, true, true), Hurt::Landed { full: true });
+        assert_eq!(d.health, MAX_HEALTH - 9.0);
+    }
+
+    #[test]
+    fn the_cooldown_lets_only_the_excess_through() {
+        // LivingEntity.hurtServer: damageCooldownTime > 10 keeps lastHurt.
+        let mut d = dragon(flying());
+        assert_eq!(d.hurt(0, 6.0, true, false), Hurt::Landed { full: true });
+        assert_eq!(d.hurt(0, 4.0, true, false), Hurt::Landed { full: false });
+        assert_eq!(d.health, MAX_HEALTH - 6.0);
+        assert_eq!(d.hurt(0, 10.0, true, false), Hurt::Landed { full: false });
+        assert_eq!(d.health, MAX_HEALTH - 10.0);
+        // Ten ticks on, the window is over: a full hit again.
+        d.invulnerable = 10;
+        assert_eq!(d.hurt(0, 3.0, true, false), Hurt::Landed { full: true });
+        assert_eq!(d.health, MAX_HEALTH - 13.0);
+    }
+
+    #[test]
+    fn parts_and_sources() {
+        // Neither head nor neck: a quarter plus one.
+        let mut d = dragon(flying());
+        assert_eq!(d.hurt(2, 20.0, true, false), Hurt::Landed { full: true });
+        assert_eq!(d.health, MAX_HEALTH - 6.0);
+        // Not a player's and not an explosion: true, but no damage.
+        let mut d = dragon(flying());
+        assert_eq!(d.hurt(0, 20.0, false, false), Hurt::Landed { full: false });
+        assert_eq!(d.health, MAX_HEALTH);
+        // Too little after the part's cut, and nothing while dying.
+        assert_eq!(d.hurt(3, 0.001, true, false), Hurt::Refused);
+        d.phase = Phase::Dying {
+            target: None,
+            time: 0,
+        };
+        assert_eq!(d.hurt(0, 20.0, true, false), Hurt::Refused);
+    }
+
+    #[test]
+    fn a_quarter_of_its_health_while_perched_makes_it_take_off() {
+        let mut d = dragon(Phase::Flaming { ticks: 0 });
+        d.hurt(0, 30.0, true, false);
+        assert!(d.phase.sitting());
+        d.invulnerable = 0;
+        d.hurt(0, 21.0, true, false);
+        assert!(matches!(d.phase, Phase::Takeoff { .. }));
+        assert_eq!(d.sitting_damage, 0.0);
+    }
+
+    #[test]
+    fn explosions_hit_each_part_by_its_exposure() {
+        let mut d = dragon(flying());
+        for (i, part) in d.parts.iter_mut().enumerate() {
+            part.0 = Vec3::new(i as f64 * 4.0, 70.0, 0.0);
+        }
+        // A power-6 blast at the dragon's feet: diameter 12.
+        let center = [0.0, 70.0, 0.0];
+        let open = d.explosion_hits(center, 6.0, |_| 1.0);
+        // The dragon itself (its body), then the parts within 12 blocks.
+        let parts: Vec<usize> = open.iter().map(|h| h.0).collect();
+        assert_eq!(parts, vec![2, 0, 1, 2, 3]);
+        // At the centre: (1 + 1) / 2 * 7 * 12 + 1.
+        assert_eq!(open[0].1, 85.0);
+        // Behind cover (no ray reaches the box) only the 1 is left.
+        let covered = d.explosion_hits(center, 6.0, |_| 0.0);
+        assert!(covered.iter().all(|h| h.1 == 1.0));
+        // Through the cooldown the strongest hit after the part's cut wins.
+        for (part, amount) in open {
+            d.hurt(part, amount, true, false);
+        }
+        assert_eq!(d.health, MAX_HEALTH - 85.0);
     }
 }
