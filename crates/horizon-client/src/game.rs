@@ -3726,6 +3726,9 @@ impl Game<'_> {
                     f64::from(z) + 0.5,
                 ));
                 self.level.spawn = Some([f64::from(x), f64::from(y), f64::from(z)]);
+                // The world's spawn from the start, not only once saved: a bed set
+                // before the first save must not become it.
+                self.level.world_spawn.get_or_insert([x, y, z]);
             }
             let s = self
                 .level
