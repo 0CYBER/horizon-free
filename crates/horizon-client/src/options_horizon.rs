@@ -126,18 +126,16 @@ pub const SECTIONS: &[Section] = &[
         name: "Accessibility",
         blurb: "Contrast, motion, text backgrounds and notifications.",
         rows: |_| {
-            let mut rows = vec![
-                HRow::Opt(Opt::Narrator),
-                HRow::Page(
-                    "Controls",
-                    "Key binds, mouse and controller",
-                    Page::Controls,
-                ),
-            ];
+            let mut rows = vec![HRow::Page(
+                "Controls",
+                "Key binds, mouse and controller",
+                Page::Controls,
+            )];
             rows.extend(
-                options_ui::ACCESSIBILITY_OPTIONS[1..]
+                options_ui::ACCESSIBILITY_OPTIONS
                     .iter()
                     .copied()
+                    .filter(|opt| opt.available())
                     .map(HRow::Opt),
             );
             rows
@@ -875,7 +873,7 @@ mod tests {
     }
 
     #[test]
-    fn accessibility_section_shares_the_complete_option_list() {
+    fn accessibility_section_only_shows_available_options() {
         let s = Settings::default();
         let section = SECTIONS.iter().find(|s| s.name == "Accessibility").unwrap();
         let rows = (section.rows)(&s);
@@ -886,7 +884,13 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(options, options_ui::ACCESSIBILITY_OPTIONS);
+        let expected: Vec<_> = options_ui::ACCESSIBILITY_OPTIONS
+            .iter()
+            .copied()
+            .filter(|opt| opt.available())
+            .collect();
+        assert_eq!(options, expected);
+        assert!(options.iter().all(|opt| opt.available()));
         assert!(
             rows.iter()
                 .any(|r| matches!(r, HRow::Page(_, _, Page::Controls)))

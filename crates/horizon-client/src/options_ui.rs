@@ -1385,11 +1385,6 @@ impl OptionsUi {
                     )),
                 )];
                 rows.extend(pairs(&ACCESSIBILITY_OPTIONS[1..]));
-                rows.extend(pairs(&[
-                    Opt::ToggleCrouch,
-                    Opt::ToggleSprint,
-                    Opt::AutoJump,
-                ]));
                 rows
             }
             Page::Font => pairs(&[Opt::ForceUnicode, Opt::JapaneseGlyphs]),
@@ -2691,6 +2686,18 @@ mod tests {
         let mut ui = OptionsUi::default();
         ui.show(Page::Accessibility);
         let (widgets, _, _, _) = ui.layout(&s, 480.0, 1200.0);
+        let options: Vec<_> = widgets
+            .iter()
+            .filter_map(|w| match w.kind {
+                WKind::Button {
+                    act: Act::Cycle(opt),
+                    ..
+                }
+                | WKind::Slider { opt, .. } => Some(opt),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(options, ACCESSIBILITY_OPTIONS);
         for &opt in ACCESSIBILITY_OPTIONS {
             let widget = widgets
                 .iter()
