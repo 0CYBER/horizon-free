@@ -62,6 +62,10 @@ Only if you say yes, and each kind has its own switch. Everything is off by defa
 
 Often. Every change players can see is released automatically after it is merged, so new versions can come out several times a day. The launcher installs them for you, or only stable ones if you leave **Beta builds** off. See [Install](/docs/install#updating).
 
+## What do the version numbers mean?
+
+Since 0.2, every release has a number: 0.2.0, then 0.2.1, 0.2.2 and so on, one for each release. The game and the launcher are both on 0.2 and count on their own, so you can play Horizon 0.2.7 with launcher 0.2.3. A bigger step, such as 0.3, is announced when it comes. Releases before 0.2 were named after the day they came out (2026.10.19.15); every 0.2 release is newer than all of them.
+
 ## How do I report a bug?
 
 See [Logs, crashes and bug reports](/docs/troubleshooting).
