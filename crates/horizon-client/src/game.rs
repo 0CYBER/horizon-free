@@ -6717,6 +6717,7 @@ impl Game<'_> {
         let target_kind = format!("minecraft:{}", target_kind.trim_start_matches("minecraft:"));
         let (amount, scale, crit) = self.melee_damage(&target_kind);
         let sweep = self.sweep_attack_position(scale, crit);
+        let (knockback, knockback_attack) = self.extra_knockback(&target_kind, scale);
         self.attack_ticks = 0;
         if let Some(p) = self.player.as_mut()
             && !self.creative
@@ -6725,6 +6726,10 @@ impl Game<'_> {
         }
         let player = self.player.as_ref();
         let from = player.map(|p| [p.position.x, p.position.y, p.position.z]);
+        if knockback_attack {
+            self.audio
+                .play("minecraft:entity.player.attack.knockback", from, 1.0, 1.0);
+        }
         self.swing_arm();
         // LivingEntity.setLastHurtMob (tamed wolves join in).
         self.combat.last_hurt_mob = Some((self.mobs[index].id, self.world.game_time));
@@ -6734,6 +6739,11 @@ impl Game<'_> {
             None => horizon_client::mobs::Damage::of(horizon_client::mobs::DamageKind::Generic),
         };
         if self.hurt_by_player(index, amount, source) {
+            if knockback > 0.0 {
+                let (xd, zd) = self.extra_knockback_direction();
+                self.mobs[index].knockback(f64::from(knockback), xd, zd);
+                self.stop_sprint_after_extra_knockback();
+            }
             let mob = &self.mobs[index];
             // Player.damageStatsAndHearts: the damage the hit actually did.
             let actual = old_health - mob.health;

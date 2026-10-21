@@ -1440,13 +1440,8 @@ impl Game<'_> {
                 o.hurt
             }
         {
-            let (dx, dz) = (player.position.x - from[0], player.position.z - from[2]);
-            let l = (dx * dx + dz * dz).sqrt().max(1e-4);
-            player.velocity = Vec3::new(
-                player.velocity.x / 2.0 + dx / l * 0.4,
-                (player.velocity.y / 2.0 + 0.4).min(0.4),
-                player.velocity.z / 2.0 + dz / l * 0.4,
-            );
+            let (xd, zd) = (from[0] - player.position.x, from[2] - player.position.z);
+            self.knock_back_player(f64::from(0.4_f32), xd, zd);
             self.hurt_armor(amount);
             self.thorns(from);
         }
@@ -1454,6 +1449,35 @@ impl Game<'_> {
             self.after_block(outcome, amount, attacker, projectile);
         }
         outcome.hurt
+    }
+    /// `LivingEntity.knockback` on the player: pushed `power` away from the
+    /// direction (`xd`, `zd`), less its knockback resistance, and up only from
+    /// the ground.
+    pub(super) fn knock_back_player(&mut self, power: f64, mut xd: f64, mut zd: f64) {
+        let Some(p) = self.player.as_mut() else {
+            return;
+        };
+        let resistance = p.attribute("minecraft:knockback_resistance").unwrap_or(0.0);
+        let power = power * (1.0 - resistance);
+        if power <= 0.0 {
+            return;
+        }
+        while xd * xd + zd * zd < f64::from(1.0e-5_f32) {
+            let r = &mut self.world.random;
+            xd = (r.next_double() - r.next_double()) * 0.01;
+            zd = (r.next_double() - r.next_double()) * 0.01;
+        }
+        let l = (xd * xd + zd * zd).sqrt();
+        let v = p.velocity;
+        p.velocity = Vec3::new(
+            v.x / 2.0 - xd / l * power,
+            if p.ground.on_ground {
+                (v.y / 2.0 + power).min(0.4)
+            } else {
+                v.y
+            },
+            v.z / 2.0 - zd / l * power,
+        );
     }
     /// A status effect from a mob, arrow or splash potion (`addEffect`).
     pub(super) fn give_player_effect(&mut self, effect: &'static str, ticks: i32, amplifier: i32) {

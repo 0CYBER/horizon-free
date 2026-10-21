@@ -6,7 +6,7 @@
 //! the armor attribute effects (respiration, depth strider, ...).
 use super::Game;
 use horizon_client::{enchant::EffectContext, items::ItemStack};
-use horizon_core::{geometry::Vec3, random::RandomSource};
+use horizon_core::random::RandomSource;
 
 impl Game<'_> {
     /// `Player.getDestroySpeed` after the tool speed: mining efficiency, haste
@@ -84,7 +84,50 @@ impl Game<'_> {
             - fx.amplifier("weakness")
                 .map_or(0.0, |a| 4.0 * (a + 1) as f32)
     }
-    /// After a successful melee hit: knockback enchantment and fire aspect.
+    /// `Player.attack`'s extra knockback: `getKnockback` (the weapon's knockback
+    /// enchantment, halved) plus 0.5 for a sprinting full-strength hit, and
+    /// whether the hit is that knockback attack.
+    pub(super) fn extra_knockback(&mut self, target_kind: &str, scale: f32) -> (f32, bool) {
+        let knockback_attack = scale > 0.9 && self.player.as_ref().is_some_and(|p| p.sprinting);
+        let enchanted = match self.inventory[self.selected].clone() {
+            Some(held) => {
+                let ctx = EffectContext {
+                    this: Some(target_kind),
+                    attacker: Some("minecraft:player"),
+                    direct_attacker: Some("minecraft:player"),
+                    is_direct: true,
+                    items: Some(self.res.items()),
+                    ..Default::default()
+                };
+                self.res.stations().enchantments.modify_value(
+                    Some(&held),
+                    "minecraft:knockback",
+                    &ctx,
+                    &mut self.world.random,
+                    0.0,
+                )
+            }
+            None => 0.0,
+        };
+        let bonus = if knockback_attack { 0.5 } else { 0.0 };
+        (enchanted / 2.0 + bonus, knockback_attack)
+    }
+    /// `causeExtraKnockback`'s direction, `(sin yRot, -cos yRot)`: the target
+    /// flies where the attacker looks, not away from it.
+    pub(super) fn extra_knockback_direction(&self) -> (f64, f64) {
+        let yaw = self.yaw.to_radians();
+        (f64::from(yaw.sin()), -f64::from(yaw.cos()))
+    }
+    /// The attacker's side of `causeExtraKnockback` as the attacking client
+    /// sees it: the server's player stops sprinting, and its flag reaches the
+    /// client. (The server's 0.6 speed cut never does: the client's own
+    /// `Player.attack` simulates no hurt, so it skips the knockback.)
+    pub(super) fn stop_sprint_after_extra_knockback(&mut self) {
+        if let Some(p) = self.player.as_mut() {
+            let _ = p.set_sprinting(false);
+        }
+    }
+    /// After a successful melee hit: fire aspect and wind burst.
     pub(super) fn post_attack(&mut self, mob: usize) {
         let Some(held) = self.inventory[self.selected].clone() else {
             return;
@@ -99,34 +142,6 @@ impl Game<'_> {
             items: Some(self.res.items()),
             ..Default::default()
         };
-        let knockback = self.res.stations().enchantments.modify_value(
-            Some(&held),
-            "minecraft:knockback",
-            &ctx,
-            &mut self.world.random,
-            0.0,
-        );
-        if knockback > 0.0 {
-            // LivingEntity.knockback(strength * 0.5, sin(yRot), -cos(yRot)).
-            let strength = f64::from(knockback) * 0.5;
-            let (s, c) = (
-                f64::from(self.yaw.to_radians().sin()),
-                f64::from(self.yaw.to_radians().cos()),
-            );
-            let (dx, dz) = (s, -c);
-            let l = (dx * dx + dz * dz).sqrt().max(1e-5);
-            let m = &mut self.mobs[mob];
-            let v = m.velocity;
-            m.velocity = Vec3::new(
-                v.x / 2.0 - dx / l * strength,
-                if m.on_ground {
-                    (v.y / 2.0 + strength).min(0.4)
-                } else {
-                    v.y
-                },
-                v.z / 2.0 - dz / l * strength,
-            );
-        }
         // minecraft:post_attack ignite effects of the attacker's weapon (fire aspect).
         let mut ignite = 0.0f32;
         for (id, level) in held.enchantments() {
