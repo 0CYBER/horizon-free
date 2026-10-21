@@ -7,7 +7,7 @@ use crate::{
     Result,
     item_data::StackData,
     items::{ItemStack, Items},
-    particles::{FireworkExplosion, FireworkShape},
+    particles::{DYE_FIREWORK_COLORS, FireworkExplosion, FireworkShape},
 };
 use horizon_world::nbt::Tag;
 use serde_json::Value;
@@ -17,12 +17,6 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-
-/// `DyeColor.getFireworkColor` in dye order (white to black).
-const FIREWORK_COLORS: [u32; 16] = [
-    15_790_320, 15_435_844, 12_801_229, 6_719_955, 14_602_026, 4_312_372, 14_188_952, 4_408_131,
-    11_250_603, 2_651_799, 8_073_150, 2_437_522, 5_320_730, 3_887_386, 11_743_532, 1_973_019,
-];
 
 /// A set of accepted items (expanded from an item, list or tag), and the
 /// items in its `HolderSet` order (`Ingredient.display`'s `TagSlotDisplay`).
@@ -965,7 +959,7 @@ impl Special {
                     } else if trail.test(s) {
                         has_trail = true;
                     } else if dye.test(s) {
-                        colors.push(FIREWORK_COLORS[ctx.dye(s).unwrap_or(0)]);
+                        colors.push(DYE_FIREWORK_COLORS[ctx.dye(s).unwrap_or(0)].1);
                     }
                 }
                 let mut out = result.create();
@@ -987,7 +981,7 @@ impl Special {
                 let mut target_stack = None;
                 for s in &stacks {
                     if dye.test(s) {
-                        colors.push(FIREWORK_COLORS[ctx.dye(s).unwrap_or(0)]);
+                        colors.push(DYE_FIREWORK_COLORS[ctx.dye(s).unwrap_or(0)].1);
                     } else if target.test(s) {
                         target_stack = Some(*s);
                     }

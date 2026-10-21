@@ -277,14 +277,6 @@ pub fn detail_lines(
         );
     }
     let data = stack.data();
-    // FireworkRocketItem: the flight duration (an unset component is 1).
-    if path == "firework_rocket" {
-        let flight = data.and_then(|d| d.fireworks.as_ref()).map_or(1, |f| f.0);
-        lines.push(format!(
-            "{} {flight}",
-            text("item.minecraft.firework_rocket.flight")
-        ));
-    }
     // PotDecorations.addToTooltip.
     if let Some(sherds) = data
         .and_then(|d| d.pot_decorations.as_ref())
@@ -296,6 +288,7 @@ pub fn detail_lines(
             lines.push(name_line(&ItemStack::new(item, 1), translate));
         }
     }
+    lines.extend(firework_lines(stack, translate));
     // PotionContents.addToTooltip: the effects, then their attribute modifiers.
     if is_potion_item(&stack.item) {
         let scale = match path {
@@ -357,6 +350,101 @@ pub fn detail_lines(
                 .into_iter()
                 .map(|(line, _)| line),
         );
+    }
+    lines
+}
+
+/// `Fireworks.addToTooltip` (a rocket's flight duration, its explosions with
+/// runs of equal ones counted) and `FireworkExplosion.addToTooltip` (a
+/// star's), unless the stack's tooltip display hides them. A rocket without
+/// the component has the item's default: flight duration 1, no explosions.
+pub fn firework_lines(
+    stack: &ItemStack,
+    translate: &dyn Fn(&str) -> Option<String>,
+) -> Vec<String> {
+    use crate::particles::FireworkExplosion;
+    let text = |key: &str| translate(key).unwrap_or_else(|| key.to_owned());
+    let shape = |e: &FireworkExplosion| {
+        text(&format!(
+            "item.minecraft.firework_star.shape.{}",
+            e.shape.name()
+        ))
+    };
+    // FireworkExplosion.appendColors: dye names (getColorName), comma-separated.
+    let colors = |colors: &[u32]| {
+        colors
+            .iter()
+            .map(|c| {
+                match crate::particles::DYE_FIREWORK_COLORS
+                    .iter()
+                    .find(|(_, firework)| firework == c)
+                {
+                    Some((name, _)) => text(&format!("item.minecraft.firework_star.{name}")),
+                    None => text("item.minecraft.firework_star.custom_color"),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    // FireworkExplosion.addAdditionalTooltip.
+    let details = |e: &FireworkExplosion, indent: &str, lines: &mut Vec<String>| {
+        if !e.colors.is_empty() {
+            lines.push(format!("{indent}{}", colors(&e.colors)));
+        }
+        if !e.fade.is_empty() {
+            let fade = text("item.minecraft.firework_star.fade_to");
+            lines.push(format!("{indent}{fade} {}", colors(&e.fade)));
+        }
+        if e.trail {
+            lines.push(format!(
+                "{indent}{}",
+                text("item.minecraft.firework_star.trail")
+            ));
+        }
+        if e.twinkle {
+            lines.push(format!(
+                "{indent}{}",
+                text("item.minecraft.firework_star.flicker")
+            ));
+        }
+    };
+    let display = TooltipDisplay::for_stack(stack);
+    let data = stack.data();
+    let mut lines = Vec::new();
+    let fireworks = match data.and_then(|d| d.fireworks.as_ref()) {
+        Some((flight, explosions)) => Some((*flight, explosions.as_slice())),
+        None => (&*stack.item == "minecraft:firework_rocket").then_some((1, &[][..])),
+    };
+    if let Some((flight, explosions)) = fireworks
+        && display.shows("minecraft:fireworks")
+    {
+        if flight > 0 {
+            lines.push(
+                text("item.minecraft.firework_rocket.flight_duration").replacen(
+                    "%s",
+                    &flight.to_string(),
+                    1,
+                ),
+            );
+        }
+        // Fireworks.addExplosionTooltip for each run of equal explosions.
+        for run in explosions.chunk_by(|a, b| a == b) {
+            let e = &run[0];
+            lines.push(if run.len() == 1 {
+                text("item.minecraft.firework_rocket.single_star").replacen("%s", &shape(e), 1)
+            } else {
+                text("item.minecraft.firework_rocket.multiple_stars")
+                    .replacen("%s", &run.len().to_string(), 1)
+                    .replacen("%s", &shape(e), 1)
+            });
+            details(e, "  ", &mut lines);
+        }
+    }
+    if let Some(e) = data.and_then(|d| d.firework_explosion.as_ref())
+        && display.shows("minecraft:firework_explosion")
+    {
+        lines.push(shape(e));
+        details(e, "", &mut lines);
     }
     lines
 }
