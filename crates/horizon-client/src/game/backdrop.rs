@@ -5,7 +5,8 @@
 //! from the vanilla generator for a fixed seed and are cached in
 //! `saves/.horizon-title/backdrop` (no level.dat, so no world list entry).
 //! The ice-spikes spot is found once with `/locate biome`'s search and kept
-//! in `spot.txt` there.
+//! in `spot.txt` there. The generator is built and the spot found on a
+//! worker, so the title keeps drawing its panorama until both are ready.
 use super::Game;
 use horizon_client::{
     Result,
@@ -27,9 +28,16 @@ const BIOME: &str = "minecraft:ice_spikes";
 /// Late morning: the snow reads clearly; the grade (`PostGrade::FROST`) makes it cold.
 const DAY_TIME: i64 = 4_000;
 
+/// The worker's result: the generator for [`SEED`], or why it failed.
+type Built = std::result::Result<Arc<VanillaTerrain>, String>;
+
 #[derive(Default)]
 pub(super) struct Backdrop {
     pub active: bool,
+    /// The generator, once the worker has built it; taken when it is installed.
+    terrain: Arc<Mutex<Option<Built>>>,
+    /// The generator streams the backdrop's chunks.
+    installed: bool,
     /// The search for the spot, then the spot (block x, z).
     spot: Arc<Mutex<Option<Option<(i32, i32)>>>>,
     centred: bool,
@@ -90,6 +98,25 @@ impl Game<'_> {
         if !self.backdrop.active {
             self.start_backdrop()?;
         }
+        if !self.backdrop.installed {
+            let built = self
+                .backdrop
+                .terrain
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take();
+            match built {
+                // Still building: the panorama stays up.
+                None => return Ok(()),
+                Some(Ok(terrain)) => self.install_backdrop(terrain)?,
+                Some(Err(e)) => {
+                    // The panorama stays up for good.
+                    log::warn!("Horizon: title backdrop: {e}");
+                    self.backdrop.installed = true;
+                    return Ok(());
+                }
+            }
+        }
         let found = *self.backdrop.spot.lock().unwrap_or_else(|e| e.into_inner());
         let Some(Some((x, z))) = found else {
             return Ok(());
@@ -148,47 +175,18 @@ impl Game<'_> {
         let air = self.res.facts().air;
         (-60..320).rev().find(|&y| self.world.block(x, y, z) != air)
     }
+    /// Start building the generator and finding the spot on a worker
+    /// (`VanillaTerrain::new` takes seconds on a cold cache).
     fn start_backdrop(&mut self) -> Result<()> {
         log::info!(
             "Horizon: starting title backdrop after {} ms",
             self.started.elapsed().as_millis()
         );
         let seed = seed();
-        let root = std::env::current_dir()?
-            .join("saves")
-            .join(".horizon-title")
-            .join("backdrop");
-        std::fs::create_dir_all(&root)?;
-        let save = Arc::new(SaveDir::new(root.join(format!("{seed}"))));
-        let (res, pack) = (&*self.res, &self.pack);
-        let inner = Arc::new(
-            VanillaTerrain::new(
-                &self.options.resources.join("worldgen"),
-                pack.assets.registry,
-                res.biomes(),
-                seed,
-            )
-            .map_err(|e| format!("title backdrop: {e}"))?,
-        );
-        let mut streaming = Streaming::new(
-            Arc::new(Persistent {
-                inner: inner.clone(),
-                save: save.clone(),
-                registry: pack.assets.clone(),
-                biomes: res.biomes().clone(),
-            }),
-            pack.context.clone(),
-            res.threads().min(6),
-        );
-        streaming.radius = self.settings.render_distance.clamp(4, 10);
-        streaming.biome_blend = self.settings.biome_blend;
-        streaming.smooth_lighting = self.settings.smooth_lighting;
-        streaming.cutout_leaves = self.settings.cutout_leaves;
-        streaming.cull_leaves = self.settings.horizon.cull_leaves;
-        streaming.biome_zoom = BiomeZoom::new(obfuscate_seed(seed));
-        streaming.paused = true;
-        self.streaming = streaming;
-        self.save = save;
+        let dir = self.backdrop_root()?.join(format!("{seed}"));
+        std::fs::create_dir_all(&dir)?;
+        // The streaming is replaced once the generator is built.
+        self.streaming.paused = true;
         let mut world = World::new(self.res.facts().air, seed);
         world.day_time = DAY_TIME;
         world.game_time = 6000;
@@ -212,13 +210,29 @@ impl Game<'_> {
             started: Some(Instant::now()),
             ..Default::default()
         };
-        // Find (or recall) the spot off the main thread.
-        let spot = self.backdrop.spot.clone();
-        std::fs::create_dir_all(root.join(format!("{seed}")))?;
-        let cache = root.join(format!("{seed}")).join("spot.txt");
+        let (terrain, spot) = (self.backdrop.terrain.clone(), self.backdrop.spot.clone());
+        let worldgen = self.options.resources.join("worldgen");
+        let registry = self.pack.assets.registry;
+        let biomes = self.res.biomes().clone();
+        let cache = dir.join("spot.txt");
         std::thread::Builder::new()
             .name("horizon-backdrop".into())
             .spawn(move || {
+                let built = Instant::now();
+                let inner = match VanillaTerrain::new(&worldgen, registry, &biomes, seed) {
+                    Ok(t) => Arc::new(t),
+                    Err(e) => {
+                        *terrain.lock().unwrap_or_else(|e| e.into_inner()) =
+                            Some(Err(e.to_string()));
+                        return;
+                    }
+                };
+                log::info!(
+                    "Horizon: title backdrop generator built in {} ms",
+                    built.elapsed().as_millis()
+                );
+                *terrain.lock().unwrap_or_else(|e| e.into_inner()) = Some(Ok(inner.clone()));
+                // Find (or recall) the spot.
                 let known = std::fs::read_to_string(&cache).ok().and_then(|t| {
                     let mut it = t.split_whitespace().map(|v| v.parse::<i32>().ok());
                     Some((it.next()??, it.next()??))
@@ -243,6 +257,39 @@ impl Game<'_> {
                 *spot.lock().unwrap_or_else(|e| e.into_inner()) =
                     Some(Some(found.unwrap_or((0, 0))));
             })?;
+        Ok(())
+    }
+    fn backdrop_root(&self) -> Result<std::path::PathBuf> {
+        Ok(std::env::current_dir()?
+            .join("saves")
+            .join(".horizon-title")
+            .join("backdrop"))
+    }
+    /// The built generator streams the backdrop's chunks.
+    fn install_backdrop(&mut self, inner: Arc<VanillaTerrain>) -> Result<()> {
+        let seed = seed();
+        let save = Arc::new(SaveDir::new(self.backdrop_root()?.join(format!("{seed}"))));
+        let (res, pack) = (&*self.res, &self.pack);
+        let mut streaming = Streaming::new(
+            Arc::new(Persistent {
+                inner,
+                save: save.clone(),
+                registry: pack.assets.clone(),
+                biomes: res.biomes().clone(),
+            }),
+            pack.context.clone(),
+            res.threads().min(6),
+        );
+        streaming.radius = self.settings.render_distance.clamp(4, 10);
+        streaming.biome_blend = self.settings.biome_blend;
+        streaming.smooth_lighting = self.settings.smooth_lighting;
+        streaming.cutout_leaves = self.settings.cutout_leaves;
+        streaming.cull_leaves = self.settings.horizon.cull_leaves;
+        streaming.biome_zoom = BiomeZoom::new(obfuscate_seed(seed));
+        streaming.paused = true;
+        self.streaming = streaming;
+        self.save = save;
+        self.backdrop.installed = true;
         Ok(())
     }
     fn stop_backdrop(&mut self) {
