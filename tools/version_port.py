@@ -10,6 +10,9 @@
                                                   code each changed class concerns: diff-OLD-NEW/diff.json
     version_port.py regen NEW [--base REF]        a port/NEW worktree pinned to NEW with every generated table
                                                   regenerated (tools/port_regen.py): diff-OLD-NEW/regen.json
+    version_port.py harnesses NEW [--baseline S]  horizon-prepare and every harness in the candidate, each pass,
+                                                  oracle (no longer compiles) or fail, and newly failing against
+                                                  a run on the pinned version (tools/port_harness.py)
     version_port.py report OLD NEW [--results S]  the ranked port report: diff-OLD-NEW/report.md and .json
     version_port.py port NEW [--old OLD]          prepare both, diff, regen, report
     version_port.py gc [--keep VERSION...]        keep the pinned, the newest two others and --keep
@@ -36,10 +39,11 @@ import urllib.request
 import zipfile
 
 try:
-    from . import class_index, lab, port_regen, port_report, vanilla_map
+    from . import class_index, lab, port_harness, port_regen, port_report, vanilla_map
 except ImportError:
     import class_index
     import lab
+    import port_harness
     import port_regen
     import port_report
     import vanilla_map
@@ -564,6 +568,25 @@ def regen(args):
     return 1 if any(e["status"] == "failed" for e in result["generators"].values()) else 0
 
 
+# --- harnesses ---------------------------------------------------------------------------------------------
+
+def harnesses(args):
+    version, old = safe_version(args.new), args.old or pinned()
+    directory = diff_dir(old, version)
+    previous = json.loads((directory / "harnesses.json").read_text()) if args.no_run else None
+    result = port_harness.harnesses(version, version_dir(version),
+                                    Path(args.worktree) if args.worktree else PORTS / version,
+                                    args.baseline, args.names or None, args.timeout, previous)
+    lab.write_json(directory / "harnesses.json", result)
+    port_harness.keep_logs(result, directory / "harness-logs")
+    counts = result["summary"]
+    print(f"horizon-prepare: {result['prepare']['status']}")
+    print(f"harnesses: {counts['pass']} pass, {counts['oracle']} oracle no longer compiles, {counts['fail']} fail; "
+          f"{counts['new']} newly failing, {counts['known']} failing on the baseline too")
+    print(f"{directory / 'harnesses.json'}")
+    return 0
+
+
 # --- report ------------------------------------------------------------------------------------------------
 
 def harness_results(state_path):
@@ -582,10 +605,11 @@ def report(args):
     result = json.loads((directory / "diff.json").read_text())
     mapping = json.loads((directory / "vanilla_map.json").read_text())
     results = harness_results(args.results) if args.results else None
-    regenerated = directory / "regen.json"
+    regenerated, ran = directory / "regen.json", directory / "harnesses.json"
     regenerated = json.loads(regenerated.read_text()) if regenerated.exists() else None
+    ran = json.loads(ran.read_text()) if ran.exists() and not args.results else None
     built = port_report.build(result, mapping, args.old, args.new, load(pinned(), "facts.json"), results,
-                              regen=regenerated)
+                              regen=regenerated, harnesses=ran)
     lab.write_json(directory / "report.json", built)
     (directory / "report.md").write_text(port_report.markdown(built))
     print("\n".join(port_report.markdown(built).splitlines()[:args.lines]))
@@ -652,10 +676,20 @@ def main():
     command.add_argument("--base", default="origin/main", help="what port/NEW starts from (default origin/main)")
     command.add_argument("--worktree", help="where (default: $HORIZON_PORTS/NEW)")
     command.add_argument("--only", nargs="*", help="these generators only (names in tools/port_regen.py)")
+    command = commands.add_parser("harnesses", help="horizon-prepare and every harness in the candidate")
+    command.add_argument("new")
+    command.add_argument("names", nargs="*", help="these harnesses only (default: all)")
+    command.add_argument("--old", help="the version the port starts from (default: the pinned one)")
+    command.add_argument("--worktree", help="the candidate (default: $HORIZON_PORTS/NEW)")
+    command.add_argument("--baseline", help="tools/parity.py's state.json from a run on the pinned version: what "
+                                            "fails there too is not newly failing")
+    command.add_argument("--timeout", type=int, help="per harness, seconds (tools/parity.py --timeout)")
+    command.add_argument("--no-run", action="store_true", help="classify the last run again (another --baseline)")
     command = commands.add_parser("report", help="the ranked port report of a diff")
     command.add_argument("old")
     command.add_argument("new")
-    command.add_argument("--results", help="tools/parity.py's state.json from a run against NEW")
+    command.add_argument("--results", help="tools/parity.py's state.json from a run against NEW (default: "
+                                           "harnesses.json, when version_port.py harnesses ran)")
     command.add_argument("--lines", type=int, default=60, help="how much of report.md to print")
     command = commands.add_parser("port", help="prepare, diff and report in one go")
     command.add_argument("new")
@@ -670,8 +704,8 @@ def main():
     command.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     STORE.mkdir(parents=True, exist_ok=True)
-    return {"detect": detect, "prepare": prepare, "diff": diff, "regen": regen, "report": report, "port": port,
-            "gc": gc}[args.command](args)
+    return {"detect": detect, "prepare": prepare, "diff": diff, "regen": regen, "harnesses": harnesses,
+            "report": report, "port": port, "gc": gc}[args.command](args)
 
 
 if __name__ == "__main__":

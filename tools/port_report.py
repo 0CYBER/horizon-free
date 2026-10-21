@@ -5,8 +5,8 @@
 Ranks:
   1  blocks the switch: version facts, packets, the save format (DataFixers), data component types, report
      formats, generated tables to regenerate
-  2  a harness failed against the new version (with --results), else changed vanilla code a harness proves:
-     rerun it
+  2  a harness newly fails against the new version, or its oracle no longer compiles (version_port.py
+     harnesses, or --results), else changed vanilla code a harness proves: rerun it
   3  changed vanilla code Horizon ports and no harness proves
   4  new content: registry entries, and new classes in the vanilla packages Horizon ports
   5  changed and new vanilla code Horizon doesn't port (two summary items)
@@ -203,11 +203,12 @@ def code_items(diff, mapping, results=None):
         harnesses = item_harnesses(key, group["classes"], mapping)
         failed = sorted(set(harnesses) & failing)
         rank, kind = (2, "harness-failed") if failed else (2, "rerun") if harnesses else (3, "unproved")
+        oracle = sorted(h for h in failed if results[h] == "oracle")
         top = sorted(group["classes"], key=lambda c: (-group["classes"][c]["methods"], c))
         title = (f"{key}: {len(group['classes'])} vanilla classes changed "
                  f"({group['methods']} methods, {group['precise']} named in Horizon)")
         items.append(item(rank, kind, title, module=key, files=sorted(group["files"]), harnesses=harnesses,
-                          failed=failed, classes={c: group["classes"][c] for c in top},
+                          failed=failed, oracle=oracle, classes={c: group["classes"][c] for c in top},
                           score=group["methods"] + 10 * group["precise"] + (1000 if failed else 0)))
     if unported:
         items.append(item(5, "unported", f"{sum(unported.values())} changed or removed vanilla classes Horizon "
@@ -245,12 +246,36 @@ def content_items(diff, mapping):
     return items
 
 
-def build(diff, mapping, old, new, pinned_facts, results=None, root=ROOT, regen=None):
+def harness_items(ran, items, new):
+    """Rank 1 when horizon-prepare fails on NEW (its exporters no longer compile, or a format broke); rank 2 for
+    each newly failing harness that no code item names, so none is lost."""
+    found = []
+    prepared = ran["prepare"]
+    if prepared["status"] != "ok":
+        what = "its exporters no longer compile" if prepared.get("compile_errors") else "it fails"
+        found.append(item(1, "prepare-failed", f"horizon-prepare on {new}: {what}", files=["crates/horizon-prepare"],
+                          error=prepared["error"], compile_errors=prepared.get("compile_errors", [])))
+    named = {h for i in items for h in i.get("failed", [])}
+    for harness, entry in ran["harnesses"].items():
+        if entry["new"] and harness not in named:
+            what = "its oracle no longer compiles" if entry["status"] == "oracle" else "fails"
+            found.append(item(2, "harness-failed", f"Harness {harness}: {what} on {new}", harnesses=[harness],
+                              failed=[harness], oracle=[harness] if entry["status"] == "oracle" else [],
+                              compile_errors=entry.get("compile_errors", []), score=1000))
+    return found
+
+
+def build(diff, mapping, old, new, pinned_facts, results=None, root=ROOT, regen=None, harnesses=None):
     """The report: summary, ranked items and what came out clean. pinned_facts: the facts of the version the
     code states today (to find where it states them); results: {harness: "pass" | "fail"} against NEW; regen:
-    version_port.py regen's result (without it, the tables a diff makes stale are listed to regenerate)."""
+    version_port.py regen's result (without it, the tables a diff makes stale are listed to regenerate);
+    harnesses: version_port.py harnesses' result (only newly failing harnesses count)."""
+    if harnesses:
+        results = {h: e["status"] if e["new"] else "pass" for h, e in harnesses["harnesses"].items()}
     items = blocking_items(diff, mapping, pinned_facts, root, regen)
     items += code_items(diff, mapping, results) + content_items(diff, mapping)
+    if harnesses:
+        items += harness_items(harnesses, items, new)
     items.sort(key=lambda i: (i["rank"], -i.get("score", 0), i["title"]))
     for number, entry in enumerate(items, 1):
         entry["id"] = number
@@ -268,6 +293,7 @@ def build(diff, mapping, old, new, pinned_facts, results=None, root=ROOT, regen=
             "generators": ({name: e["status"] for name, e in regen["generators"].items()} if regen
                            else {i["files"][0]: "stale" for i in items if i["kind"] == "regenerate"}),
         },
+        "harnesses": harnesses["summary"] if harnesses else None,
         "regen": {"candidate": regen["candidate"], "commit": regen["commit"],
                   "stat": {p: s for e in regen["generators"].values() for p, s in e.get("stat", {}).items()}}
         if regen else None,
@@ -298,6 +324,10 @@ def markdown(report, limit=12):
                                  for s in ("regenerated", "unchanged", "failed")))
         for path, (added, removed) in report["regen"]["stat"].items():
             lines.append(f"  - regenerated `{path}` (+{added} -{removed})")
+    if report.get("harnesses"):
+        h = report["harnesses"]
+        lines.append(f"- harnesses on {report['new']}: {h['pass']} pass, {h['oracle']} whose oracle no longer compiles, "
+                     f"{h['fail']} fail; {h['new']} newly failing, {h['known']} failing on {report['old']} too")
     names = {1: "Blocks the switch", 2: "Proved by a harness: rerun it", 3: "Ported, no harness",
              4: "New content", 5: "Not ported"}
     for rank in sorted({i["rank"] for i in report["items"]}):
@@ -311,7 +341,8 @@ def markdown(report, limit=12):
             elif entry.get("error"):
                 lines.append("- error: `" + entry["error"].strip().splitlines()[-1][:300] + "`")
             if entry.get("failed"):
-                lines.append(f"- failing harnesses: {', '.join(entry['failed'])}")
+                lines.append(f"- failing harnesses: {', '.join(entry['failed'])}"
+                             + (f" (oracle no longer compiles: {', '.join(entry['oracle'])})" if entry.get("oracle") else ""))
             if entry.get("harnesses"):
                 lines.append(f"- harnesses: {', '.join(entry['harnesses'][:limit])}"
                              + (f" (+{len(entry['harnesses']) - limit})" if len(entry["harnesses"]) > limit else ""))
