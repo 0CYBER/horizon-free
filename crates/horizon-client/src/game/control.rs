@@ -24,6 +24,7 @@ const HELP: &[&str] = &[
     "time TICKS                     set the time of day",
     "summon KIND [X Y Z] [baby]     spawn a mob (in front of the player without a position)",
     "mobs [RADIUS]                  list mobs near the player with their AI state",
+    "hurtlog                        the hurts taken and melee attacks made since the last call, per player (host and guests)",
     "fill X1 Y1 Z1 X2 Y2 Z2 BLOCK   set a box of loaded blocks",
     "resume                         leave the pause menu",
     "screenshot PATH                write the next frame as PNG",
@@ -450,6 +451,10 @@ impl Game<'_> {
                 let radius: f64 = words.get(1).map_or(Ok(64.0), |r| r.parse())?;
                 Ok(Some(self.control_mobs(radius)))
             }
+            "hurtlog" => {
+                self.require_world()?;
+                Ok(Some(self.control_hurt_log()))
+            }
             "resume" => {
                 if self.screen == Screen::Paused {
                     self.screen = Screen::Playing;
@@ -705,6 +710,49 @@ impl Game<'_> {
             Screen::WorldOptions => "world-options",
             Screen::CommandBlock => "command-block",
         }
+    }
+
+    /// The hurts and melee attacks each player logged since the last call
+    /// (`PlayerMotion::hurt_log`, `attack_log`), taken out.
+    fn control_hurt_log(&mut self) -> Value {
+        fn drain(name: &str, p: &mut horizon_client::motion::PlayerMotion) -> Value {
+            let hurts: Vec<Value> = p
+                .hurt_log
+                .drain(..)
+                .map(|r| {
+                    json!({
+                        "t": r.game_time, "source": r.source, "amount": r.amount,
+                        "blocked": r.blocked, "taken": r.taken, "hurt": r.hurt,
+                        "armor": r.armor, "toughness": r.toughness, "health": r.health,
+                        "fire_ticks": r.fire_ticks, "knockback": r.knockback,
+                    })
+                })
+                .collect();
+            let attacks: Vec<Value> = p
+                .attack_log
+                .drain(..)
+                .map(|r| {
+                    json!({
+                        "t": r.game_time, "target": r.target, "id": r.id, "killed": r.killed, "amount": r.amount,
+                        "scale": r.scale, "crit": r.crit, "landed": r.landed, "dealt": r.dealt,
+                    })
+                })
+                .collect();
+            json!({ "name": name, "hurts": hurts, "attacks": attacks })
+        }
+        let mut players = Vec::new();
+        if let Some(p) = self.player.as_mut() {
+            players.push(drain("host", p));
+        }
+        if let Some(host) = self.lan.as_mut() {
+            for g in &mut host.hub.guests {
+                let name = g.name.clone();
+                if let Some(m) = g.motion.as_mut() {
+                    players.push(drain(&name, m));
+                }
+            }
+        }
+        json!({ "ok": true, "players": players })
     }
 
     fn control_status(&self) -> Value {
