@@ -1434,6 +1434,13 @@ impl LootContext<'_> {
                             .count() as u32;
                     }
                 }
+                // SetPotionFunction (the barter's fire resistance potions).
+                "minecraft:set_potion" => {
+                    if let Some(id) = f["id"].as_str() {
+                        *stack = std::mem::replace(stack, ItemStack::new("minecraft:air", 0))
+                            .with_potion(id);
+                    }
+                }
                 "minecraft:limit_count" => {
                     let limit = &f["limit"];
                     if let Some(min) = limit["min"].as_i64() {
@@ -1629,6 +1636,18 @@ mod tests {
                 .evaluate(&leaves, &mut random)
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn set_potion_gives_the_potion_its_contents() {
+        let items = Items::for_tests(HashMap::new());
+        let props = BTreeMap::new();
+        let table = json!({"pools":[{"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:splash_potion",
+            "modifier":{"type":"minecraft:set_potion","id":"minecraft:fire_resistance"}}]}]});
+        let drops = ctx(&items, None, &props, "").evaluate(&table, &mut LegacyRandom::new(1));
+        assert_eq!(drops.len(), 1);
+        assert_eq!(&*drops[0].item, "minecraft:splash_potion");
+        assert_eq!(drops[0].potion(), Some("minecraft:fire_resistance"));
     }
 
     #[test]
