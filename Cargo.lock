@@ -1568,6 +1568,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "horizon-bench",
+ "horizon-release-sign",
  "horizon-server-files",
  "libc",
  "serde",

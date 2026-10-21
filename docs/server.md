@@ -410,8 +410,10 @@ runtime or new dependency. Server-sent events can replace the polling later if a
   newer release a minute after it starts and then every 6 hours, and only says so, in its log, in `status`
   and in the panel (`HORIZON_NO_UPDATE_CHECK=1` turns the check off). `update --check` asks GitHub once.
   `update`:
-  1. downloads the release archive for this computer (on Linux the server build) and checks it against the
-     SHA-256 GitHub publishes for it;
+  1. downloads the newest stable release's archive for this computer (on Linux the server build; `--version`
+     picks another, a beta included) and checks it against the release's SHA256SUMS, whose Ed25519 signature
+     must check with a key built into `horizon-server` (docs/release-flow.md, "Signed checksums"): an unsigned
+     or tampered release is refused;
   2. unpacks it into `<dir>/releases/<tag>`, beside the others, with its game files linked to
      `<dir>/game-files` as the installers do;
   3. stops the game, backs up the world (`backups/<time>-before-<tag>.zip`), records the release in use in

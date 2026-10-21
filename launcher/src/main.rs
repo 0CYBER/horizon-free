@@ -643,10 +643,11 @@ impl Launcher {
     }
 
     fn install(&mut self, release: &Release) {
-        let Some((url, size)) = release.asset.clone() else {
+        if release.asset.is_none() {
             return;
-        };
-        let (tag, tx) = (release.tag.clone(), self.tx.clone());
+        }
+        let (release, tx) = (release.clone(), self.tx.clone());
+        let tag = release.tag.clone();
         self.installing = Some((tag.clone(), 0.0));
         self.install_started = Some(Instant::now());
         self.bar = (0., 0.);
@@ -655,7 +656,7 @@ impl Launcher {
             let progress = |p| {
                 let _ = tx.send(Msg::Progress(tag.clone(), p));
             };
-            let result = backend::install(&tag, &url, size, progress);
+            let result = backend::install(&release, progress);
             let _ = tx.send(Msg::Installed(tag, result));
         });
     }

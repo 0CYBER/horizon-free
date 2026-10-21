@@ -50,6 +50,7 @@ LAUNCHER_PATHS = [
     "crates/horizon-mods/",
     "crates/horizon-port-pack/",
     "crates/horizon-prepare/",
+    "crates/horizon-release-sign/",
     "crates/horizon-telemetry/",
     "crates/horizon-theme/",
 ]

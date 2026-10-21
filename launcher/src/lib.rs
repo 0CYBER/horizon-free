@@ -6,6 +6,7 @@ pub mod heads;
 pub mod modpacks;
 pub mod mojang;
 pub mod servers;
+pub mod signed;
 pub mod sources;
 pub mod tailscale;
 pub mod telemetry;

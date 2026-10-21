@@ -7,6 +7,11 @@
 //! (tools/ci/sign_release.sh, OpenSSL only); the launcher and `horizon-server update` check a
 //! download against the public keys built in from `release-keys.txt` before installing it, and
 //! refuse it otherwise.
+//!
+//! Releases published before signing began carry no SHA256SUMS. Their archives' SHA-256s are
+//! pinned in `legacy-releases.txt` (taken from GitHub when signing began, by
+//! tools/ci/legacy_releases.py), so they stay installable for a rollback without trusting
+//! whatever GitHub serves for them later.
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use ring::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey};
@@ -17,6 +22,7 @@ pub const SUMS: &str = "SHA256SUMS";
 pub const SIGNATURE: &str = "SHA256SUMS.sig";
 
 const KEYS: &str = include_str!("../release-keys.txt");
+const LEGACY: &str = include_str!("../legacy-releases.txt");
 
 /// An Ed25519 public key.
 pub type PublicKey = [u8; 32];
@@ -128,6 +134,23 @@ pub fn signed_digest(
         .map(|(_, hex)| hex)
         .ok_or_else(|| {
             format!("{asset} is not in {tag}'s signed checksums, so it was not installed.")
+        })
+}
+
+/// The pinned SHA-256 of `asset` in a release from before signing (legacy-releases.txt). Callers
+/// use it instead of the release's files when there is one: [`signed_digest`] otherwise.
+pub fn legacy_digest(tag: &str, asset: &str) -> Option<&'static str> {
+    legacy_entries(LEGACY).find_map(|(t, a, hex)| (t == tag && a == asset).then_some(hex))
+}
+
+/// The `<tag> <asset> <sha256>` lines of a legacy releases file; blank lines and `#` comments skipped.
+fn legacy_entries(text: &str) -> impl Iterator<Item = (&str, &str, &str)> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            Some((parts.next()?, parts.next()?, parts.next()?))
         })
 }
 
@@ -252,6 +275,34 @@ mod tests {
     #[test]
     fn the_built_in_keys_file_parses() {
         assert!(parse_keys(KEYS).is_ok());
+    }
+
+    #[test]
+    fn releases_from_before_signing_keep_their_pinned_digests() {
+        let mut seen = std::collections::HashSet::new();
+        for line in LEGACY.lines().map(str::trim) {
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            assert_eq!(parts.len(), 3, "{line}");
+            assert_eq!(parts[2].len(), 64, "{line}");
+            assert!(
+                parts[2]
+                    .bytes()
+                    .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()),
+                "{line}"
+            );
+            assert!(seen.insert((parts[0], parts[1])), "listed twice: {line}");
+        }
+        if let Some((tag, asset, hex)) = legacy_entries(LEGACY).next() {
+            assert_eq!(legacy_digest(tag, asset), Some(hex));
+            assert_eq!(legacy_digest(tag, "not-an-asset.zip"), None);
+        }
+        assert_eq!(
+            legacy_digest("v2099.01.01", "horizon-windows-x64.zip"),
+            None
+        );
     }
 
     #[test]
