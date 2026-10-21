@@ -325,8 +325,10 @@ into `mods/<id>/carry/`, a folder content mod (API 0.2) the game loads with `--d
 keeps what a content mod may not hold (other namespaces, vanilla data) in `outside/`. Files of
 the mod's own content that the game's content loader would refuse whole also go to `outside/`,
 listed with the reason in the report's `unreadable`: paths vanilla does not read (upper case),
-JSON that does not parse, and shared tags with `"replace": true`. Vanilla skips them one by one.
-A byte-order mark is dropped. For ATM10's 42 mods that is 19 files in 7 mods, and the 42 load as
+and JSON that does not parse. Vanilla skips them one by one. A vanilla or convention tag
+with `"replace": true` is carried as it is: the game honours it as a data pack's, with a warning
+(docs/mods.md); Towns and Towers' seven `minecraft:has_structure/*` biome tags are such.
+A byte-order mark is dropped. For ATM10's 42 mods that is 6 files in 4 mods, and the 42 load as
 carried. No class file is copied. It upgrades from 1.21.1 to 26.3: vanilla-type recipes (ingredients), loot tables
 (`conditions` lists become one `condition`, `functions` become `modifier`, kinds move to `type`,
 tool matches on silk touch or shears become `minecraft:tool/can_silk_touch` and
