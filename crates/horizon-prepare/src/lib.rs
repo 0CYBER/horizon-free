@@ -17,7 +17,7 @@ pub mod pyjson;
 mod sounds;
 mod survival;
 
-pub use sounds::{panorama, sounds};
+pub use sounds::{fonts, panorama, sounds};
 
 use pyjson::Value;
 use sha2::Digest;
@@ -684,10 +684,11 @@ fn steps(
         count += 1;
     }
 
-    // The JAR holds only gray 1x1 panorama placeholders. Import the indexed
-    // textures afterwards, including on reruns that just extracted the JAR again.
-    // Cosmetic assets are optional when preparing from already-imported JARs.
-    sounds::optional_panorama(repo, minecraft, run.log);
+    // The JAR holds only gray 1x1 panorama placeholders and an empty Unifont
+    // include. Import the indexed ones afterwards, including on reruns that just
+    // extracted the JAR again. They are optional when preparing from
+    // already-imported JARs.
+    sounds::optional_assets(repo, minecraft, run.log);
 
     // One file each, exported again when the exporter or the jar it reads changed.
     let single = |what: &str,

@@ -105,11 +105,23 @@ pub fn panorama(root: &Path, minecraft: Option<&Path>, log: Log) -> Result<PathB
     copy_assets(root, minecraft, log, is_panorama, "Panorama", &PANORAMA)
 }
 
+/// Replaces the client JAR's empty `font/include/unifont.json` with the asset index's, and
+/// adds the GNU Unifont glyphs it names (`font/unifont*.zip`): the default font's fallback for
+/// every character the bitmap fonts lack (#1076). Also usable on prepared resources without Java.
+pub fn fonts(root: &Path, minecraft: Option<&Path>, log: Log) -> Result<PathBuf, String> {
+    copy_assets(root, minecraft, log, is_font, "Font", &UNIFONT)
+}
+
 /// Full preparation can run from cached JARs without an official launcher install.
-pub(crate) fn optional_panorama(root: &Path, minecraft: Option<&Path>, log: Log) {
+pub(crate) fn optional_assets(root: &Path, minecraft: Option<&Path>, log: Log) {
     if let Err(error) = panorama(root, minecraft, log) {
         log(&format!(
             "Title panorama not imported: {error}; run horizon-prepare panorama later"
+        ));
+    }
+    if let Err(error) = fonts(root, minecraft, log) {
+        log(&format!(
+            "Unifont glyphs not imported: {error}; run horizon-prepare fonts later"
         ));
     }
 }
@@ -126,6 +138,16 @@ const PANORAMA: [&str; 7] = [
 
 fn is_panorama(name: &str) -> bool {
     PANORAMA.contains(&name)
+}
+
+const UNIFONT: [&str; 2] = [
+    "minecraft/font/include/unifont.json",
+    "minecraft/font/unifont.zip",
+];
+
+/// The fonts only the asset index holds (the JAR has the bitmap fonts).
+fn is_font(name: &str) -> bool {
+    name.starts_with("minecraft/font/")
 }
 
 fn copy_assets(
@@ -206,6 +228,9 @@ mod tests {
         crate::hex(&sha1::Sha1::digest(data))
     }
 
+    /// Where the fixture's panorama objects start.
+    const FIRST_FACE: usize = 6;
+
     /// A Horizon folder and an official launcher directory holding version `9.9` with
     /// sounds, a language file and the full title panorama in its asset store.
     struct Fixture {
@@ -233,6 +258,11 @@ mod tests {
                 ("minecraft/sounds/ambient/cave1.ogg", b"OggS cave".to_vec()),
                 ("minecraft/sounds/dig/stone1.ogg", b"OggS stone".to_vec()),
                 ("minecraft/lang/fr_fr.json", b"{}".to_vec()),
+                (
+                    UNIFONT[0],
+                    b"{\"providers\": [{\"type\": \"unihex\"}]}".to_vec(),
+                ),
+                (UNIFONT[1], b"PK unifont".to_vec()),
             ];
             for &name in panorama {
                 // Distinct object bytes let the test catch swapped faces too.
@@ -392,7 +422,7 @@ mod tests {
         let target = f.root.join(".local/horizon-client/9.9");
         for _ in 0..2 {
             // Full preparation extracts the JAR before importing the asset store.
-            for (name, _) in &f.objects[4..] {
+            for (name, _) in &f.objects[FIRST_FACE..] {
                 let path = target.join("assets").join(name);
                 fs::create_dir_all(path.parent().unwrap()).unwrap();
                 fs::write(path, b"1x1 gray placeholder").unwrap();
@@ -401,7 +431,7 @@ mod tests {
                 panorama(&f.root, Some(&f.minecraft), &|_| {}).unwrap(),
                 target
             );
-            for (name, data) in &f.objects[4..] {
+            for (name, data) in &f.objects[FIRST_FACE..] {
                 assert_eq!(&fs::read(target.join("assets").join(name)).unwrap(), data);
             }
         }
@@ -412,18 +442,18 @@ mod tests {
     #[test]
     fn panorama_objects_are_verified_before_replacing_placeholders() {
         let f = Fixture::new("panorama-corrupt");
-        fs::write(f.object(4), b"corrupt panorama").unwrap();
+        fs::write(f.object(FIRST_FACE), b"corrupt panorama").unwrap();
         let path = f
             .root
             .join(".local/horizon-client/9.9/assets")
-            .join(f.objects[4].0);
+            .join(f.objects[FIRST_FACE].0);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, b"placeholder").unwrap();
         assert!(panorama(&f.root, Some(&f.minecraft), &|_| {})
             .unwrap_err()
             .starts_with("Corrupt asset object"));
         assert_eq!(fs::read(path).unwrap(), b"placeholder");
-        fs::remove_file(f.object(4)).unwrap();
+        fs::remove_file(f.object(FIRST_FACE)).unwrap();
         assert!(panorama(&f.root, Some(&f.minecraft), &|_| {})
             .unwrap_err()
             .starts_with("Missing asset object"));
@@ -461,19 +491,49 @@ mod tests {
             let error = panorama(&f.root, Some(&f.minecraft), &|_| {}).unwrap_err();
             let lines = std::cell::RefCell::new(Vec::new());
             // This is the optional import step used by full preparation after extraction.
-            optional_panorama(&f.root, Some(&f.minecraft), &|line| {
+            optional_assets(&f.root, Some(&f.minecraft), &|line| {
                 lines.borrow_mut().push(line.to_string())
             });
+            let lines = lines.into_inner();
             assert_eq!(
-                *lines.borrow(),
-                [format!(
-                    "Title panorama not imported: {error}; run horizon-prepare panorama later"
-                )]
+                lines[0],
+                format!("Title panorama not imported: {error}; run horizon-prepare panorama later")
             );
+            // The fonts come on their own when only a panorama face is missing.
+            match missing {
+                "last-object" => assert_eq!(lines[1], "Font assets ready: 2 files, 0.0 MB"),
+                _ => assert!(
+                    lines[1].starts_with("Unifont glyphs not imported: "),
+                    "{lines:?}"
+                ),
+            }
+            assert_eq!(lines.len(), 2);
             for name in PANORAMA {
                 assert_eq!(fs::read(target.join(name)).unwrap(), b"jar placeholder");
             }
         }
+    }
+
+    /// #1076: the JAR's `font/include/unifont.json` is empty; the asset index has the real
+    /// one and the glyph archives it names.
+    #[test]
+    fn fonts_replace_the_jar_include_and_add_unifont() {
+        let f = Fixture::new("fonts");
+        let target = f.root.join(".local/horizon-client/9.9");
+        let include = target.join("assets").join(UNIFONT[0]);
+        fs::create_dir_all(include.parent().unwrap()).unwrap();
+        fs::write(&include, b"{\"providers\": []}").unwrap();
+        let lines = std::cell::RefCell::new(Vec::new());
+        let done = fonts(&f.root, Some(&f.minecraft), &|l| {
+            lines.borrow_mut().push(l.to_string())
+        });
+        assert_eq!(done.unwrap(), target);
+        for (name, data) in &f.objects[4..FIRST_FACE] {
+            assert_eq!(&fs::read(target.join("assets").join(name)).unwrap(), data);
+        }
+        assert_eq!(*lines.borrow(), ["Font assets ready: 2 files, 0.0 MB"]);
+        assert!(!target.join("assets/minecraft/sounds.json").exists());
+        assert!(!target.join("assets/minecraft/textures").exists());
     }
 
     #[test]
