@@ -487,6 +487,10 @@ fn as_data(kind: &str, p: &Value, data: &ProcessorData) -> Option<Vec<Value>> {
                 .collect();
             vec![spawner_mobs(p, mobs, repurposed_light(p)?)]
         }
+        // Wet where the world holds water, dry where it does not.
+        "repurposed_structures:waterlogging_when_replacing_water_processor" => {
+            vec![json!({"processor_type": "horizon:waterlog_in_world_water"})]
+        }
         "moogs_structures:vanilla_loot_swap_processor" => {
             let key = (
                 p["modid"].as_str()?.to_owned(),
@@ -1335,6 +1339,23 @@ mod tests {
             "betterdeserttemples:quartz_pillar_processor"
         );
         assert_eq!(carried.values().sum::<usize>(), 4);
+    }
+
+    #[test]
+    fn repurposed_waterlogging_follows_the_world() {
+        let mut list = json!({"processors": [{"processor_type":
+            "repurposed_structures:waterlogging_when_replacing_water_processor"}]});
+        let mut carried = BTreeMap::new();
+        assert!(carry(
+            "processor_list",
+            &mut list,
+            &ProcessorData::default(),
+            &mut carried
+        ));
+        assert_eq!(
+            list["processors"],
+            json!([{"processor_type": "horizon:waterlog_in_world_water"}])
+        );
     }
 
     #[test]

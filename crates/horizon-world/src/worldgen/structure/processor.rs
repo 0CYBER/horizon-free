@@ -328,6 +328,9 @@ pub enum Processor {
     Waterlog,
     /// `horizon:keep_world_block` (Better Ocean Monuments' structure void).
     KeepWorldBlock(Box<sea_level::KeepWorldBlock>),
+    /// `horizon:waterlog_in_world_water` (Repurposed Structures'): blocks
+    /// are waterlogged where the world holds water, dry where it does not.
+    WaterlogInWorldWater,
 }
 #[derive(Clone, Debug, Default)]
 pub struct ProcessorList(pub Vec<Processor>);
@@ -823,6 +826,7 @@ impl Processor {
                 Self::FloodAir(Box::new(sea_level::FloodAir::decode(resources.registry)?))
             }
             "horizon:waterlog" => Self::Waterlog,
+            "horizon:waterlog_in_world_water" => Self::WaterlogInWorldWater,
             "horizon:keep_world_block" => {
                 Self::KeepWorldBlock(Box::new(sea_level::KeepWorldBlock::decode(value)?))
             }
@@ -1206,6 +1210,14 @@ fn process_block<W: PlacementContext>(
         }
         Processor::KeepWorldBlock(p) => {
             return p.process(world, resources.registry, info, settings);
+        }
+        Processor::WaterlogInWorldWater => {
+            return sea_level::WaterlogInWorldWater::process(
+                world,
+                resources.registry,
+                info,
+                settings,
+            );
         }
         Processor::Pick(pick) => match name(info.state) == pick.block {
             true => {
