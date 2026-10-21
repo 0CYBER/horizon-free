@@ -240,6 +240,30 @@ fn tracked(cx: i32, cz: i32, r: i32, x: i32, z: i32) -> bool {
     dx * dx + dz * dz < i64::from(r) * i64::from(r)
 }
 
+/// The view's queue around a new centre: the queued chunks still tracked, then
+/// the tracked ones neither sent nor queued, closest first (a stable sort, so
+/// equally close chunks keep their order).
+fn requeue(
+    queue: &mut Vec<(i32, i32)>,
+    sent: &crate::fast_hash::FxHashSet<(i32, i32)>,
+    (cx, cz): (i32, i32),
+    r: i32,
+) {
+    queue.retain(|&(x, z)| tracked(cx, cz, r, x, z));
+    // A walking player changes chunk every few ticks with hundreds of chunks
+    // queued: a set, not a scan of the queue for each of the view's chunks.
+    let mut queued: crate::fast_hash::FxHashSet<(i32, i32)> = queue.iter().copied().collect();
+    for dz in -r - 2..=r + 2 {
+        for dx in -r - 2..=r + 2 {
+            let key = (cx + dx, cz + dz);
+            if tracked(cx, cz, r, key.0, key.1) && !sent.contains(&key) && queued.insert(key) {
+                queue.push(key);
+            }
+        }
+    }
+    queue.sort_by_key(|&(x, z)| i64::from(x - cx).pow(2) + i64::from(z - cz).pow(2));
+}
+
 /// What a level's players were last told of its clock and weather.
 #[derive(Clone, Copy)]
 struct LevelSync {
@@ -1288,20 +1312,7 @@ impl Hub {
             g.sent_chunks.remove(&(x, z));
             g.send(&C::ForgetLevelChunk(play::ForgetLevelChunk { pos: [x, z] }));
         }
-        g.chunk_queue.retain(|&(x, z)| tracked(cx, cz, r, x, z));
-        for dz in -r - 2..=r + 2 {
-            for dx in -r - 2..=r + 2 {
-                let key = (cx + dx, cz + dz);
-                if tracked(cx, cz, r, key.0, key.1)
-                    && !g.sent_chunks.contains(&key)
-                    && !g.chunk_queue.contains(&key)
-                {
-                    g.chunk_queue.push(key);
-                }
-            }
-        }
-        g.chunk_queue
-            .sort_by_key(|&(x, z)| i64::from(x - cx).pow(2) + i64::from(z - cz).pow(2));
+        requeue(&mut g.chunk_queue, &g.sent_chunks, (cx, cz), r);
     }
 
     /// PlayerChunkSender.sendNextChunks' choice: ready chunks, closest first,
@@ -2456,4 +2467,77 @@ fn ticking_state(rate: f32, frozen: bool) -> C {
     w.f32(rate);
     w.bool(frozen);
     raw(ids::TICKING_STATE, w.data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fast_hash::FxHashSet;
+
+    /// `requeue` as it was, scanning the queue for each chunk of the view.
+    fn requeue_scan(
+        queue: &mut Vec<(i32, i32)>,
+        sent: &FxHashSet<(i32, i32)>,
+        (cx, cz): (i32, i32),
+        r: i32,
+    ) {
+        queue.retain(|&(x, z)| tracked(cx, cz, r, x, z));
+        for dz in -r - 2..=r + 2 {
+            for dx in -r - 2..=r + 2 {
+                let key = (cx + dx, cz + dz);
+                if tracked(cx, cz, r, key.0, key.1) && !sent.contains(&key) && !queue.contains(&key)
+                {
+                    queue.push(key);
+                }
+            }
+        }
+        queue.sort_by_key(|&(x, z)| i64::from(x - cx).pow(2) + i64::from(z - cz).pow(2));
+    }
+
+    /// A player walking a loop, sending a few chunks a tick: the queue
+    /// after every move is the one the scan built.
+    #[test]
+    fn requeue_matches_the_scan() {
+        for r in [2, 5, 10, 12, 32] {
+            let (mut a, mut b) = (Vec::new(), Vec::new());
+            let mut sent = FxHashSet::default();
+            for step in 0..60i32 {
+                let center = ((step % 17) - 8, (step * 3 % 11) - 5);
+                requeue(&mut a, &sent, center, r);
+                requeue_scan(&mut b, &sent, center, r);
+                assert_eq!(a, b, "radius {r}, step {step}");
+                for key in a.drain(..a.len().min(7)) {
+                    sent.insert(key);
+                }
+                b.drain(..b.len().min(7));
+                sent.retain(|&(x, z)| tracked(center.0, center.1, r, x, z));
+            }
+        }
+    }
+
+    /// cargo test --release -p horizon-client --lib lan::hub::tests::requeue_cost -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn requeue_cost() {
+        for r in [10, 16, 32] {
+            for (name, f) in [
+                ("scan", requeue_scan as fn(&mut _, &_, _, _)),
+                ("set", requeue as fn(&mut _, &_, _, _)),
+            ] {
+                let sent = FxHashSet::default();
+                let mut queue = Vec::new();
+                let start = std::time::Instant::now();
+                let moves = 200;
+                for step in 0..moves {
+                    // Nothing sent yet (an explorer waiting on generation).
+                    f(&mut queue, &sent, (step, 0), r);
+                }
+                let per = start.elapsed().as_secs_f64() * 1e6 / f64::from(moves);
+                println!(
+                    "view {r}: {name} {per:.1} us per chunk crossed, {} queued",
+                    queue.len()
+                );
+            }
+        }
+    }
 }
