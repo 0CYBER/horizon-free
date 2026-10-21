@@ -6689,8 +6689,13 @@ impl Game<'_> {
     }
     /// SkyRenderer.renderSunMoonAndStars: bodies on a frame rotated Y -90 then X by angle.
     /// A Java pack's `sunPathRotation` tilts it about Z in between, and its
-    /// `sun = false` / `moon = false` leave those out, as Iris does.
-    fn celestial_geometry(&self, sky: &horizon_client::environment::Sky) -> Vec<Vertex> {
+    /// `sun = false` / `moon = false` leave those out, as Iris does. Returns
+    /// the sun and moon quads, and the stars' frame and brightness (the
+    /// renderer keeps their geometry, built once).
+    fn celestial_geometry(
+        &self,
+        sky: &horizon_client::environment::Sky,
+    ) -> (Vec<Vertex>, Option<(glam::Mat4, f32)>) {
         let mut out = Vec::new();
         let atlas = &self.gui.atlas;
         let (tilt, keep) = self.java_sky().unwrap_or_default();
@@ -6745,46 +6750,10 @@ impl Game<'_> {
                 0xFFFF_FFFF,
             );
         }
-        if sky.star_brightness > 0.0 {
-            let b = (sky.star_brightness.clamp(0.0, 1.0) * 255.0) as u32;
-            let color = b << 24 | b << 16 | b << 8 | b;
-            let white = atlas.sprites.get("horizon/white").copied();
-            let m = frame(sky.star_angle);
-            if let Some(r) = white {
-                let (cu, cv) = ((r.u0 + r.u1) / 2.0, (r.v0 + r.v1) / 2.0);
-                // SkyRenderer.buildStars with its fixed seed.
-                let mut random = horizon_core::random::LegacyRandom::new(10842);
-                for _ in 0..1500 {
-                    let x = random.next_float() * 2.0 - 1.0;
-                    let y = random.next_float() * 2.0 - 1.0;
-                    let z = random.next_float() * 2.0 - 1.0;
-                    let size = 0.15 + random.next_float() * 0.1;
-                    let l = x * x + y * y + z * z;
-                    if l <= 0.010_000_001 || l >= 1.0 {
-                        continue;
-                    }
-                    let center = glam::Vec3::new(x, y, z).normalize() * 100.0;
-                    let z_rot = (random.next_double() * std::f64::consts::TAU) as f32;
-                    let forward = -center.normalize();
-                    let right = glam::Vec3::Y.cross(forward).normalize_or(glam::Vec3::X);
-                    let up = forward.cross(right);
-                    let (s, c) = (-z_rot).sin_cos();
-                    let (r2, u2) = (right * c + up * s, up * c - right * s);
-                    for (a, b) in [(size, -size), (size, size), (-size, size), (-size, -size)] {
-                        let p = m.transform_point3(center + r2 * a + u2 * b);
-                        out.push(Vertex {
-                            normal: [0; 4],
-                            pos: p.to_array(),
-                            uv: [cu, cv],
-                            layer: 2,
-                            color,
-                            light: 0,
-                        });
-                    }
-                }
-            }
-        }
-        out
+        // SkyRenderer.renderStars: the static star buffer on the same frame.
+        let stars =
+            (sky.star_brightness > 0.0).then(|| (frame(sky.star_angle), sky.star_brightness));
+        (out, stars)
     }
     /// Load (or create) a world folder under saves/ and start streaming it.
     fn open_world(
@@ -9330,8 +9299,8 @@ impl Game<'_> {
             }
             .to_owned()
         };
-        let celestial = if title && !live {
-            Vec::new()
+        let (celestial, stars) = if title && !live {
+            (Vec::new(), None)
         } else if self.dim == Dim::Overworld
             && self.potions.effects.get("darkness").is_none()
             && self.potions.effects.get("blindness").is_none()
@@ -9339,9 +9308,9 @@ impl Game<'_> {
             // Camera.doesMobEffectBlockSky: no sun, moon or stars.
             self.celestial_geometry(&sky)
         } else if self.dim == Dim::End {
-            self.end_sky_geometry()
+            (self.end_sky_geometry(), None)
         } else {
-            Vec::new()
+            (Vec::new(), None)
         };
         let hand = if title || self.scoping() {
             Vec::new()
@@ -9437,6 +9406,7 @@ impl Game<'_> {
             } else {
                 &[]
             },
+            stars: stars.filter(|_| self.settings.horizon.sky || title),
             hand: &hand,
             hand_fov_degrees: self.hud_fov_degrees(alpha as f32, camera.to_array()),
             screen: &screen,
@@ -11812,6 +11782,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         additive: &[],
         see_through: &[],
         celestial: &[],
+        stars: None,
         hand: &[],
         hand_fov_degrees: 70.0,
         screen: &[],

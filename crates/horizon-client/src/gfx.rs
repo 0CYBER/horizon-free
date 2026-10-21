@@ -67,6 +67,7 @@ mod occlusion;
 mod pack_stages;
 pub mod panorama;
 mod resident;
+mod stars;
 mod timing;
 pub mod translucency;
 pub(crate) mod upload;
@@ -189,8 +190,13 @@ pub struct Frame<'a> {
     pub additive: &'a [Vertex],
     /// Name tags over everything, without depth (`TEXT_SEE_THROUGH`).
     pub see_through: &'a [Vertex],
-    /// Camera-relative sun, moon and stars (drawn behind everything, additive).
+    /// Camera-relative sun and moon, or the End sky box (drawn behind
+    /// everything, additive).
     pub celestial: &'a [Vertex],
+    /// The stars, drawn from their static buffer after the sun and moon:
+    /// the sky's rotation (camera-relative world from star space) and the
+    /// star brightness.
+    pub stars: Option<(Mat4, f32)>,
     /// First-person hand and held item, drawn after clearing depth.
     pub hand: &'a [Vertex],
     /// `CameraRenderState.hudFov`: the hand's own field of view
@@ -321,6 +327,7 @@ pub struct Renderer {
     see_through_pipeline: wgpu::RenderPipeline,
     celestial_pipeline: wgpu::RenderPipeline,
     celestial_buffer: wgpu::Buffer,
+    stars: stars::Stars,
     panorama: panorama::Panorama,
     /// `RenderPipelines.WORLD_BORDER` and its buffers.
     border_pipeline: wgpu::RenderPipeline,
@@ -1988,6 +1995,7 @@ impl Renderer {
         let world_post = world_post::Post::new(&device, config.format.remove_srgb_suffix());
         let uploads = upload::Uploads::new(&device);
         let section_uploads = upload::Uploads::with_chunk(&device, SECTION_UPLOAD_CHUNK);
+        let stars = stars::Stars::new(&device, config.format.remove_srgb_suffix());
         let panorama = panorama::Panorama::new(
             &device,
             &queue,
@@ -2049,6 +2057,7 @@ impl Renderer {
             see_through_pipeline,
             celestial_pipeline,
             celestial_buffer,
+            stars,
             panorama,
             border_pipeline,
             border_group,
@@ -3225,6 +3234,14 @@ impl Renderer {
                 bytemuck::cast_slice(all_entities),
             );
         }
+        if let Some((rotation, brightness)) = frame.stars {
+            self.stars.prepare(
+                &mut self.uploads,
+                &mut encoder,
+                view_proj * rotation,
+                brightness,
+            );
+        }
         let celestial_vertices = frame.celestial.len().min(2048 * 4);
         if celestial_vertices > 0 {
             self.uploads.buffer(
@@ -3432,6 +3449,10 @@ impl Renderer {
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                     pass.set_vertex_buffer(0, self.celestial_buffer.slice(..));
                     pass.draw_indexed(0..(celestial_vertices as u32 / 4) * 6, 0, 0..1);
+                    pass.set_bind_group(0, &self.group, &[]);
+                }
+                if !frame.title && frame.stars.is_some() {
+                    self.stars.draw(&mut pass);
                     pass.set_bind_group(0, &self.group, &[]);
                 }
                 if !frame.title && frame.dark_disc {
