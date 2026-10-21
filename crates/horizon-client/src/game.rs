@@ -835,6 +835,8 @@ struct FallingBlock {
     drop_item: bool,
     /// `Entity.fallDistance` (powder snow holds a block that fell far at 0.9).
     fall_distance: f64,
+    /// `Entity.stuckSpeedMultiplier`: a cobweb it is in scales its next move.
+    stuck: Vec3,
     damage: horizon_client::falling_block::Damage,
     /// The UUID and compound it was loaded with, kept while it moves.
     saved: Option<Box<([i32; 4], horizon_world::nbt::Tag)>>,
@@ -2473,6 +2475,7 @@ impl Game<'_> {
                         no_gravity: false,
                         drop_item: true,
                         fall_distance: 0.0,
+                        stuck: Vec3::ZERO,
                         damage: if self.res.facts().get(state).name.ends_with("anvil") {
                             horizon_client::falling_block::Damage::anvil()
                         } else {
@@ -2707,7 +2710,14 @@ impl Game<'_> {
             if !f.no_gravity {
                 f.velocity.y -= 0.04;
             }
-            let wanted = f.velocity;
+            let mut wanted = f.velocity;
+            // Entity.move: a cobweb it was in scales this move, which then
+            // starts from rest.
+            if f.stuck.length_squared() > 1.0e-7 {
+                wanted = wanted.multiply(f.stuck);
+                f.stuck = Vec3::ZERO;
+                f.velocity = Vec3::ZERO;
+            }
             let mut scene = collisions::SceneCollisions {
                 world: &self.world,
                 binding: self.collision,
@@ -2760,6 +2770,7 @@ impl Game<'_> {
             if next.y < f.position.y {
                 f.fall_distance += f.position.y - next.y;
             }
+            let from = f.position;
             f.position = next;
             if on_ground {
                 let pos = [
@@ -2769,6 +2780,22 @@ impl Game<'_> {
                 ];
                 landed.push((f.clone(), pos));
                 return false;
+            }
+            // applyEffectsFromBlocks: WebBlock.entityInside makes it stuck
+            // (Entity.makeStuckInBlock, which forgets the fall). Entity.move
+            // records the move unless it was blocked short of a tiny one.
+            let moved = movement.length_squared();
+            let recorded = moved > 1.0e-7 || wanted.length_squared() - moved < 1.0e-7;
+            let world = &self.world;
+            let facts = self.res.facts();
+            if horizon_client::falling_block::passes_cobweb(
+                from,
+                f.position,
+                recorded.then_some(wanted),
+                |p| &*facts.get(world.block(p.x, p.y, p.z)).name == "minecraft:cobweb",
+            ) {
+                f.fall_distance = 0.0;
+                f.stuck = horizon_client::falling_block::web_multiplier();
             }
             if movement.x != wanted.x {
                 f.velocity.x = 0.0;

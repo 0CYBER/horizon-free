@@ -7,9 +7,10 @@ client (VanillaProtocolClient in its entity mode) joins, and once its chunks are
 console freezes the ticks, builds a wall and a rail and summons, around the spawn, every kind of minecart (one
 set rolling along the rail), boats and a raft (one falling onto the ground), armor stands (posed, small, with
 arms, wearing a helmet, one falling), a chicken jockey, a slime, a pig whose scale `/attribute` sets, item
-frames (one holding a turned diamond), paintings, primed TNT (one falling), a floating falling block, an arrow
-that lands and an end crystal. The client records for 20 seconds, the ticks running for 200 more after 3, what
-ClientPacketListener would make of the packets (EntityTranscript): each entity's spawn
+frames (one holding a turned diamond), paintings, primed TNT (one falling), a floating falling block, sand
+falling into a cobweb, an arrow that lands and an end crystal. The client records for 20 seconds, the ticks
+running for 200 more after 3, what ClientPacketListener would make of the packets (EntityTranscript): each
+entity's spawn
 packet (position, rotations, data, motion), the entity data it was paired with and all it was sent since, its
 equipment, its attribute instances (ClientboundUpdateAttributesPacket: the ones its first tick creates, the
 type's set by finalizeSpawn, the baby speed modifier, effects', equipment's and /attribute's) and passengers, and
@@ -81,6 +82,9 @@ SCENE = [
     'summon minecraft:tnt 6.5 -60 6.5 {fuse:2000s}',
     'summon minecraft:tnt 6.5 -56 4.5 {fuse:2000s}',
     'summon minecraft:falling_block 2.5 -58 -0.5 {BlockState:{Name:"minecraft:sand"},NoGravity:1b}',
+    # Sand dropped into a cobweb, which holds it (WebBlock.entityInside).
+    'setblock -7 -58 0 minecraft:cobweb',
+    'summon minecraft:falling_block -6.5 -54 0.5 {BlockState:{Name:"minecraft:sand"}}',
     'summon minecraft:arrow 0.5 -55 -1.5 {Motion:[0.3d,0d,0d]}',
     'summon minecraft:end_crystal -6.5 -60 6.5 {ShowBottom:0b}',
 ]
@@ -185,7 +189,8 @@ def main():
         java=subprocess.check_output(['java', '--version'], text=True).splitlines()[0],
         entities=len(vanilla), output_sha256=lab.digest(build / 'horizon.txt', 'sha256'),
         scope='Minecarts (one rolling), boats (one falling), armor stands, a chicken jockey, a slime, a pig with a '
-              'scale, item frames, paintings, primed TNT, a falling block, an arrow and an end crystal '
+              'scale, item frames, paintings, primed TNT, falling blocks (one held by a cobweb), an arrow and an '
+              'end crystal '
               'tracked to a vanilla-codec client by a dedicated server: spawn packets, entity data, equipment, '
               'attributes, passengers and the positions the syncs leave them at.'))
     print(f'server entities: {len(vanilla)} entities identical')
