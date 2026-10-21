@@ -1404,6 +1404,7 @@ pub struct PlayerView {
     /// (`EntitySelector.pushableBy` on the client).
     pub remote: bool,
 }
+#[derive(Clone)]
 pub struct MobWorld<'a> {
     pub world: &'a World,
     pub registry: &'a horizon_world::registry::BlockRegistry,
@@ -1418,6 +1419,8 @@ pub struct MobWorld<'a> {
     pub others: &'a [Seen],
     /// `others` by position, when the caller keeps one (the mob ticks).
     pub others_grid: Option<&'a seen_grid::SeenGrid>,
+    /// Where each id stands in `others`, when the caller keeps one.
+    pub others_index: Option<&'a crate::fast_hash::FxHashMap<u32, u32>>,
     pub daylight: bool,
     pub game_time: i64,
     pub day_time: i64,
@@ -1436,22 +1439,23 @@ pub struct MobWorld<'a> {
     pub world_seed: i64,
     /// `Level.getSeaLevel` (63 in the overworld, -63 in a flat world).
     pub sea_level: i32,
-    /// The scoreboard teams of the player and the mobs (collision rules).
-    pub teams: Teams,
+    /// The scoreboard teams of the player and the mobs (collision rules),
+    /// shared: the mob ticks build them once a tick, not once a mob.
+    pub teams: std::sync::Arc<Teams<'a>>,
     /// Item data (max stack sizes), when the host has it.
     pub items: Option<&'a crate::items::Items>,
 }
 /// `Entity.getTeam` of the player and of the mobs on a team.
 #[derive(Clone, Debug, Default)]
-pub struct Teams {
-    pub player: Option<crate::scoreboard::Team>,
-    pub mobs: HashMap<u32, crate::scoreboard::Team>,
+pub struct Teams<'a> {
+    pub player: Option<&'a crate::scoreboard::Team>,
+    pub mobs: HashMap<u32, &'a crate::scoreboard::Team>,
 }
-impl Teams {
-    pub fn of(&self, who: Who) -> Option<&crate::scoreboard::Team> {
+impl<'a> Teams<'a> {
+    pub fn of(&self, who: Who) -> Option<&'a crate::scoreboard::Team> {
         match who {
-            Who::Player => self.player.as_ref(),
-            Who::Mob(id) => self.mobs.get(&id),
+            Who::Player => self.player,
+            Who::Mob(id) => self.mobs.get(&id).copied(),
         }
     }
 }
@@ -2130,5 +2134,236 @@ mod elytra_tests {
             wings.tick(false, true, Vec3::ZERO);
         }
         assert!((wings.angles[1] - 0.08726646).abs() < 0.00001);
+    }
+}
+#[cfg(test)]
+mod teams_tests {
+    use super::*;
+    use crate::save::uuid_text;
+    use crate::scoreboard::{Scoreboard, Team};
+
+    /// A board where every other mob is on the player's team, as with a
+    /// datapack that colours its mobs' names.
+    fn board(mobs: u32) -> (Scoreboard, HashMap<u32, [i32; 4]>) {
+        let mut board = Scoreboard::default();
+        board.add_team("red");
+        board.add_to_team("Steve", "red");
+        let uuids: HashMap<u32, [i32; 4]> = (0..mobs)
+            .map(|id| (id, [id as i32, 7, -(id as i32), 11]))
+            .collect();
+        for (id, uuid) in &uuids {
+            if id % 2 == 0 {
+                board.add_to_team(&uuid_text(*uuid), "red");
+            }
+        }
+        (board, uuids)
+    }
+    /// `Game::mob_teams` as built for each mob before: owned clones of the teams.
+    fn owned(board: &Scoreboard, uuids: &HashMap<u32, [i32; 4]>) -> HashMap<u32, Team> {
+        uuids
+            .iter()
+            .filter_map(|(id, u)| Some((*id, board.players_team(&uuid_text(*u))?.clone())))
+            .collect()
+    }
+    fn borrowed<'a>(board: &'a Scoreboard, uuids: &HashMap<u32, [i32; 4]>) -> Teams<'a> {
+        Teams {
+            player: board.players_team("Steve"),
+            mobs: uuids
+                .iter()
+                .filter_map(|(id, u)| Some((*id, board.players_team(&uuid_text(*u))?)))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn borrowed_teams_answer_as_the_clones() {
+        let (board, uuids) = board(40);
+        let teams = borrowed(&board, &uuids);
+        let old = owned(&board, &uuids);
+        for id in 0..41 {
+            assert_eq!(teams.of(Who::Mob(id)), old.get(&id), "mob {id}");
+        }
+        assert_eq!(teams.of(Who::Player).map(|t| t.name.as_str()), Some("red"));
+    }
+
+    /// One tick's worth of team building: once per mob (before) against once.
+    #[test]
+    #[ignore]
+    fn teams_cost() {
+        for mobs in [100u32, 250, 500] {
+            let (board, uuids) = board(mobs);
+            let t = std::time::Instant::now();
+            for _ in 0..mobs {
+                std::hint::black_box(owned(&board, &uuids));
+            }
+            let before = t.elapsed();
+            let t = std::time::Instant::now();
+            let reps = 20;
+            for _ in 0..reps {
+                std::hint::black_box(borrowed(&board, &uuids));
+            }
+            let after = t.elapsed() / reps;
+            println!(
+                "{mobs} mobs, half on a team: per tick {:.3} ms -> {:.3} ms",
+                before.as_secs_f64() * 1e3,
+                after.as_secs_f64() * 1e3
+            );
+        }
+    }
+}
+#[cfg(test)]
+mod sensor_scan_tests {
+    use super::*;
+    use horizon_core::geometry::Vec3;
+    use serde_json::json;
+
+    fn kind() -> Arc<MobType> {
+        Arc::new(MobType {
+            id: "minecraft:cow".into(),
+            species: Species::Cow,
+            width: 0.9,
+            height: 1.4,
+            eye_height: 1.3,
+            category: "creature".into(),
+            max_health: 10.0,
+            speed: 0.2,
+            flying_speed: 0.4,
+            attack_damage: 0.0,
+            attack_knockback: 0.0,
+            follow_range: 16.0,
+            step_height: 0.6,
+            armor: 0.0,
+            armor_toughness: 0.0,
+            knockback_resistance: 0.0,
+            jump_strength: 0.42,
+            attributes: Arc::default(),
+            gravity: 0.08,
+            safe_fall_distance: 3.0,
+            fall_damage_multiplier: 1.0,
+            water_efficiency: 0.0,
+            water_slowdown: 0.8,
+            air_speed: 0.02,
+            baby_scale: 0.5,
+            head_rot_speed: 10.0,
+            max_head_x_rot: 40.0,
+            max_head_y_rot: 75.0,
+            ambient_interval: 120,
+            flags: Flags {
+                animal: true,
+                ..Default::default()
+            },
+            model: Arc::new(Part::parse("root", &json!({}))),
+            layers: HashMap::new(),
+            texture: String::new(),
+            brain: Brain::Passive,
+            anim: Anim::Rabbit,
+            sounds: [""; 3],
+            step_sound: None,
+            food: Arc::default(),
+            tempt: Arc::default(),
+        })
+    }
+    /// `n` mobs in pens of 20 spread over a square of `side` blocks, as on a
+    /// server's farms; their snapshot and its grid.
+    fn herd(n: u32, side: f64) -> (Vec<Seen>, seen_grid::SeenGrid) {
+        let kind = kind();
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = |range: f64| {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            (seed >> 11) as f64 / (1u64 << 53) as f64 * range
+        };
+        let mut pen = Vec3::ZERO;
+        let seen: Vec<Seen> = (0..n)
+            .map(|id| {
+                if id % 20 == 0 {
+                    pen = Vec3::new(next(side), 64.0, next(side));
+                }
+                let at = Vec3::new(pen.x + next(8.0), 64.0, pen.z + next(8.0));
+                Mob::new(id, kind.clone(), at, 0.0).seen(None)
+            })
+            .collect();
+        let grid = seen_grid::SeenGrid::new(seen.iter().map(|s| s.bounds));
+        (seen, grid)
+    }
+    /// `NearestLivingEntitySensor` over every mob, as the brains ran it.
+    fn scan(seen: &[Seen], me: &Seen, area: Aabb) -> Vec<u32> {
+        seen.iter()
+            .filter(|o| o.id != me.id && o.alive && o.bounds.intersects(area))
+            .map(|o| o.id)
+            .collect()
+    }
+    fn indexed(seen: &[Seen], grid: &seen_grid::SeenGrid, me: &Seen, area: Aabb) -> Vec<u32> {
+        let mut near = Vec::new();
+        assert!(grid.candidates(area, &mut near));
+        near.iter()
+            .map(|&i| &seen[i as usize])
+            .filter(|o| o.id != me.id && o.alive && o.bounds.intersects(area))
+            .map(|o| o.id)
+            .collect()
+    }
+
+    #[test]
+    fn the_grid_finds_what_the_scan_finds() {
+        let (seen, grid) = herd(600, 160.0);
+        for me in &seen {
+            let area = me.bounds.inflate(Vec3::new(16.0, 16.0, 16.0));
+            assert_eq!(indexed(&seen, &grid, me, area), scan(&seen, me, area));
+        }
+    }
+
+    /// `MobWorld::seen` once per mob (a target, a breeding partner...), by
+    /// scan as before and by the tick's id index.
+    #[test]
+    #[ignore]
+    fn lookup_cost() {
+        for n in [500u32, 1000, 2000] {
+            let (seen, _) = herd(n, 256.0);
+            let index: crate::fast_hash::FxHashMap<u32, u32> = seen
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (s.id, i as u32))
+                .collect();
+            let wanted: Vec<u32> = (0..n).map(|i| (i * 7919) % n).collect();
+            let t = std::time::Instant::now();
+            let a: usize = wanted
+                .iter()
+                .filter_map(|&id| seen.iter().find(|s| s.id == id))
+                .map(|s| s.id as usize)
+                .sum();
+            let before = t.elapsed().as_secs_f64() * 1e3;
+            let t = std::time::Instant::now();
+            let b: usize = wanted
+                .iter()
+                .filter_map(|&id| index.get(&id).map(|&i| &seen[i as usize]))
+                .map(|s| s.id as usize)
+                .sum();
+            let after = t.elapsed().as_secs_f64() * 1e3;
+            assert_eq!(a, b);
+            println!(
+                "{n} lookups over {n} mobs ({} B each): {before:.3} ms -> {after:.3} ms",
+                std::mem::size_of::<Seen>()
+            );
+        }
+    }
+
+    /// One tick of sensing: a twentieth of the mobs fire their sensor.
+    #[test]
+    #[ignore]
+    fn sensor_cost() {
+        for (n, side) in [(500u32, 256.0), (1000, 384.0), (2000, 512.0)] {
+            let (seen, grid) = herd(n, side);
+            let time = |f: &dyn Fn(&Seen, Aabb) -> usize| {
+                let t = std::time::Instant::now();
+                let mut found = 0;
+                for me in &seen {
+                    found += f(me, me.bounds.inflate(Vec3::new(16.0, 16.0, 16.0)));
+                }
+                (t.elapsed().as_secs_f64() * 1e3 / 20.0, found)
+            };
+            let (before, a) = time(&|me, area| scan(&seen, me, area).len());
+            let (after, b) = time(&|me, area| indexed(&seen, &grid, me, area).len());
+            assert_eq!(a, b);
+            println!("{n} mobs: per tick {before:.3} ms -> {after:.3} ms");
+        }
     }
 }

@@ -970,8 +970,7 @@ impl Goal for LookAtPlayer {
         let (id, only) = (m.id, self.only);
         let at = Vec3::new(m.position.x, m.eye_y(), m.position.z);
         let candidates: Vec<(u32, Vec3)> =
-            cx.w.others
-                .iter()
+            cx.w.others_near(area)
                 .filter(|s| s.id != id && s.alive && s.bounds.intersects(area))
                 .filter(|s| only.is_none_or(|o| s.species == o))
                 .map(|s| (s.id, s.position))
