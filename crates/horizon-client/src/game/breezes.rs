@@ -39,11 +39,13 @@ impl Game<'_> {
                 m.position.y.floor() as i32,
                 m.position.z.floor() as i32,
             );
+            let mut at = [x, y, z];
             let mut state = self.world.block(x, y, z);
             if self.res.facts().is_air(state) {
-                state = self.world.block(x, (m.position.y - 0.2).floor() as i32, z);
+                at[1] = (m.position.y - 0.2).floor() as i32;
+                state = self.world.block(x, at[1], z);
             }
-            let Some((sprite, tint)) = self.particle_sprite(state) else {
+            let Some((sprite, tint)) = self.particle_sprite(state, at) else {
                 continue;
             };
             let at = if jump_trail {

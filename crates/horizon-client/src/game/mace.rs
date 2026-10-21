@@ -267,7 +267,7 @@ impl Game<'_> {
         pos: BlockPos,
         fall_distance: f64,
     ) {
-        let Some((sprite, tint)) = self.particle_sprite(state) else {
+        let Some((sprite, tint)) = self.particle_sprite(state, [pos.x, pos.y, pos.z]) else {
             return;
         };
         let count = (50.0 * fall_distance).clamp(0.0, 200.0) as u32;
@@ -288,7 +288,7 @@ impl Game<'_> {
     /// pillars of the block at `pos`, a cluster over it and a ring 3.5 out.
     pub(super) fn smash_dust(&mut self, pos: BlockPos, count: i32) {
         let state = self.world.block(pos.x, pos.y, pos.z);
-        let Some((sprite, tint)) = self.particle_sprite(state) else {
+        let Some((sprite, tint)) = self.particle_sprite(state, [pos.x, pos.y, pos.z]) else {
             return;
         };
         let options = ParticleOptions::block(ParticleType::DustPillar, sprite, tint);

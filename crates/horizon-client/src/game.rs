@@ -1785,14 +1785,10 @@ impl Game<'_> {
         }
         Some(stack)
     }
-    fn particle_sprite(&self, state: BlockStateId) -> Option<(String, u32)> {
-        Self::block_particle_sprite(&self.pack, self.res.facts(), state)
-    }
-    fn block_particle_sprite(
-        pack: &PackResources,
-        facts: &BlockFacts,
-        state: BlockStateId,
-    ) -> Option<(String, u32)> {
+    /// The block's first up face (or any face) and its fixed tint, for block
+    /// models drawn as entities (falling blocks, carried blocks).
+    fn block_face_sprite(&self, state: BlockStateId) -> Option<(String, u32)> {
+        let pack = &self.pack;
         let models = pack
             .render
             .model_catalog
@@ -1802,14 +1798,10 @@ impl Game<'_> {
             .iter()
             .flat_map(|(_, m)| m.faces.iter())
             .find(|f| f.quad.facing == horizon_assets::model::Direction::Up)
-            .or_else(|| models.iter().flat_map(|(_, m)| m.faces.iter()).next());
-        // Entity-rendered blocks may have a particle texture without any faces.
-        let layer = face
-            .map(|face| face.layer)
-            .or_else(|| models.iter().find_map(|(_, model)| model.particle))?;
-        let name = pack.layer_names.get(&layer)?.clone();
-        let tint = if face.is_some_and(|face| face.quad.tint_index >= 0) {
-            let n = &facts.get(state).name;
+            .or_else(|| models.iter().flat_map(|(_, m)| m.faces.iter()).next())?;
+        let name = pack.layer_names.get(&face.layer)?.clone();
+        let tint = if face.quad.tint_index >= 0 {
+            let n = &self.res.facts().get(state).name;
             if n.contains("leaves") || n.contains("vine") {
                 0x48B518
             } else {
@@ -1819,6 +1811,51 @@ impl Game<'_> {
             0xFFFFFF
         };
         Some((name, tint))
+    }
+    /// `TerrainParticle` at `pos`: the model's particle sprite and tint source
+    /// 0's `colorAsTerrainParticle` (white when the block has none).
+    fn particle_sprite(&self, state: BlockStateId, pos: [i32; 3]) -> Option<(String, u32)> {
+        let sprite = Self::block_particle_sprite(&self.pack, state)?;
+        let chunks = &self.world.chunks;
+        let (cx, cz) = (pos[0] >> 4, pos[2] >> 4);
+        let region: [[Option<&horizon_client::chunk::Chunk>; 3]; 3] = std::array::from_fn(|dz| {
+            std::array::from_fn(|dx| {
+                chunks
+                    .get(&(cx + dx as i32 - 1, cz + dz as i32 - 1))
+                    .map(|c| &**c)
+            })
+        });
+        let tint = self
+            .pack
+            .context
+            .tables
+            .terrain_particle_tint(
+                state,
+                pos,
+                &region,
+                self.res.biomes(),
+                self.streaming.biome_zoom,
+                self.streaming.biome_blend,
+            )
+            .unwrap_or(0xFFFFFF);
+        Some((sprite, tint))
+    }
+    /// `BlockStateModelSet.getParticleMaterial`: the sprite of the model's
+    /// `particle` texture, else its first face (entity-rendered blocks may
+    /// have a particle texture without faces, and faces without one).
+    fn block_particle_sprite(pack: &PackResources, state: BlockStateId) -> Option<String> {
+        let catalog = &pack.render.model_catalog;
+        let layer = catalog.particle(state).or_else(|| {
+            let models = catalog
+                .collect(state, horizon_core::position::BlockPos::new(0, 0, 0))
+                .ok()?;
+            models
+                .iter()
+                .flat_map(|(_, m)| m.faces.iter())
+                .next()
+                .map(|f| f.layer)
+        })?;
+        pack.layer_names.get(&layer).cloned()
     }
     fn particle_shape(&self, pos: [i32; 3], state: BlockStateId) -> Vec<[f64; 6]> {
         let f = self.res.facts().get(state);
@@ -1838,7 +1875,7 @@ impl Game<'_> {
     }
     /// ClientLevel.addDestroyBlockEffect: a burst per outline box.
     fn destroy_particles(&mut self, pos: [i32; 3], state: BlockStateId) {
-        let Some((sprite, tint)) = self.particle_sprite(state) else {
+        let Some((sprite, tint)) = self.particle_sprite(state, pos) else {
             return;
         };
         let boxes = self.particle_shape(pos, state);
@@ -1849,7 +1886,7 @@ impl Game<'_> {
     }
     /// ClientLevel.addBreakingParticles: one crumb on the face being mined.
     fn crack_particle(&mut self, pos: [i32; 3], face: [i32; 3], state: BlockStateId) {
-        let Some((sprite, tint)) = self.particle_sprite(state) else {
+        let Some((sprite, tint)) = self.particle_sprite(state, pos) else {
             return;
         };
         let boxes = self.particle_shape(pos, state);
@@ -6436,7 +6473,7 @@ impl Game<'_> {
         }
         // Falling blocks use their baked model, including non-cubic shapes.
         for f in &self.falling {
-            let Some((_, tint)) = self.particle_sprite(f.state) else {
+            let Some((_, tint)) = self.block_face_sprite(f.state) else {
                 continue;
             };
             let p = glam::DVec3::new(

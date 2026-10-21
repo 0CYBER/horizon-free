@@ -1433,7 +1433,7 @@ impl Game<'_> {
             at[2].floor() as i32,
         );
         let state = self.world.block(below.0, below.1, below.2);
-        let Some((sprite, tint)) = self.particle_sprite(state) else {
+        let Some((sprite, tint)) = self.particle_sprite(state, [below.0, below.1, below.2]) else {
             return;
         };
         for _ in 0..30 {
