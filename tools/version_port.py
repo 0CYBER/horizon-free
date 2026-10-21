@@ -8,12 +8,15 @@
     version_port.py diff OLD NEW                  facts, packets, registries, blocks, items, commands,
                                                   data packs, assets, lang and classes, with the Horizon
                                                   code each changed class concerns: diff-OLD-NEW/diff.json
+    version_port.py regen NEW [--base REF]        a port/NEW worktree pinned to NEW with every generated table
+                                                  regenerated (tools/port_regen.py): diff-OLD-NEW/regen.json
     version_port.py report OLD NEW [--results S]  the ranked port report: diff-OLD-NEW/report.md and .json
-    version_port.py port NEW [--old OLD]          prepare both, diff, report
+    version_port.py port NEW [--old OLD]          prepare both, diff, regen, report
     version_port.py gc [--keep VERSION...]        keep the pinned, the newest two others and --keep
 
 The downloads are for development only: they go to the version store (~/code/horizon-parity/versions,
-HORIZON_VERSIONS overrides it), never into the repository, and nothing from them is shipped. The pinned
+HORIZON_VERSIONS overrides it), never into the repository, and nothing from them is shipped. Candidate
+worktrees go to ~/code/horizon-parity/ports/NEW (HORIZON_PORTS overrides it). The pinned
 version is not downloaded: its files are read where tools/lab.py prepared them (.local/).
 
 detect exits 0 when nothing is new, 10 for a new release and 11 for a new snapshot (with --snapshots).
@@ -33,15 +36,17 @@ import urllib.request
 import zipfile
 
 try:
-    from . import class_index, lab, port_report, vanilla_map
+    from . import class_index, lab, port_regen, port_report, vanilla_map
 except ImportError:
     import class_index
     import lab
+    import port_regen
     import port_report
     import vanilla_map
 
 MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 STORE = Path(os.environ.get("HORIZON_VERSIONS", Path.home() / "code" / "horizon-parity" / "versions"))
+PORTS = Path(os.environ.get("HORIZON_PORTS", STORE.parent / "ports"))
 STATES = ["handshake", "status", "login", "configuration", "play"]
 # How many changed JSON paths one changed file keeps in diff.json.
 PATH_LIMIT = 50
@@ -545,6 +550,20 @@ def diff(args):
     return 0
 
 
+# --- regen -------------------------------------------------------------------------------------------------
+
+def regen(args):
+    version = safe_version(args.new)
+    result = port_regen.regen(version, paths(version), version_dir(version), args.base,
+                              Path(args.worktree) if args.worktree else PORTS / version, args.only)
+    lab.write_json(diff_dir(result["old"], version) / "regen.json", result)
+    for name, entry in result["generators"].items():
+        stat = ", ".join(f"{p} +{a} -{r}" for p, (a, r) in entry.get("stat", {}).items())
+        print(f"{name}: {entry['status']}" + (f" ({stat})" if stat else ""))
+    print(f"\n{result['candidate']} at {result['commit'][:10]}; {diff_dir(result['old'], version) / 'regen.json'}")
+    return 1 if any(e["status"] == "failed" for e in result["generators"].values()) else 0
+
+
 # --- report ------------------------------------------------------------------------------------------------
 
 def harness_results(state_path):
@@ -563,7 +582,10 @@ def report(args):
     result = json.loads((directory / "diff.json").read_text())
     mapping = json.loads((directory / "vanilla_map.json").read_text())
     results = harness_results(args.results) if args.results else None
-    built = port_report.build(result, mapping, args.old, args.new, load(pinned(), "facts.json"), results)
+    regenerated = directory / "regen.json"
+    regenerated = json.loads(regenerated.read_text()) if regenerated.exists() else None
+    built = port_report.build(result, mapping, args.old, args.new, load(pinned(), "facts.json"), results,
+                              regen=regenerated)
     lab.write_json(directory / "report.json", built)
     (directory / "report.md").write_text(port_report.markdown(built))
     print("\n".join(port_report.markdown(built).splitlines()[:args.lines]))
@@ -572,11 +594,13 @@ def report(args):
 
 
 def port(args):
-    """prepare both, diff, report."""
+    """prepare both, diff, regen, report."""
     old = args.old or pinned()
     for version in (old, args.new):
         prepare(argparse.Namespace(version=version, download=False, jobs=args.jobs))
     diff(argparse.Namespace(old=old, new=args.new))
+    if not args.no_regen:
+        regen(argparse.Namespace(new=args.new, base=args.base, worktree=None, only=None))
     return report(argparse.Namespace(old=old, new=args.new, results=args.results, lines=args.lines))
 
 
@@ -623,6 +647,11 @@ def main():
     command = commands.add_parser("diff", help="diff two prepared versions")
     command.add_argument("old")
     command.add_argument("new")
+    command = commands.add_parser("regen", help="a candidate worktree pinned to NEW, every table regenerated")
+    command.add_argument("new")
+    command.add_argument("--base", default="origin/main", help="what port/NEW starts from (default origin/main)")
+    command.add_argument("--worktree", help="where (default: $HORIZON_PORTS/NEW)")
+    command.add_argument("--only", nargs="*", help="these generators only (names in tools/port_regen.py)")
     command = commands.add_parser("report", help="the ranked port report of a diff")
     command.add_argument("old")
     command.add_argument("new")
@@ -633,13 +662,15 @@ def main():
     command.add_argument("--old", help="default: the pinned version")
     command.add_argument("--results", help="tools/parity.py's state.json from a run against NEW")
     command.add_argument("--lines", type=int, default=60)
+    command.add_argument("--base", default="origin/main", help="what the candidate starts from")
+    command.add_argument("--no-regen", action="store_true", help="diff and report only (snapshots)")
     command.add_argument("-j", "--jobs", type=int, default=int(os.environ.get("FLEET_LOAD_JOBS", 0)) or None)
     command = commands.add_parser("gc", help="delete versions and scratch the store doesn't need")
     command.add_argument("--keep", nargs="*", default=[])
     command.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     STORE.mkdir(parents=True, exist_ok=True)
-    return {"detect": detect, "prepare": prepare, "diff": diff, "report": report, "port": port,
+    return {"detect": detect, "prepare": prepare, "diff": diff, "regen": regen, "report": report, "port": port,
             "gc": gc}[args.command](args)
 
 

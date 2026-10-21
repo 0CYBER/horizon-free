@@ -5,7 +5,7 @@ registers them in a different order. Brigadier keeps children in
 registration order, and /help (smart usage) lists them that way.
 
   python3 tools/test_command_parse_parity.py         # exports .local/command-parse-parity/tree.json
-  command_parse_fixture tree rust_tree.json          # Horizon's tree with child order
+  command_parse_fixture tree rust_tree.json          # Horizon's tree in its registration order
   generate_command_order.py VANILLA_TREE RUST_TREE
 """
 import argparse

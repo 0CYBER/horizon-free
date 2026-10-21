@@ -36,6 +36,14 @@ pub fn build() -> Dispatcher {
 /// The tree Commands registers; `dev` adds the commands vanilla only
 /// registers in development builds (raid, warden_spawn_tracker).
 pub fn build_with(dev: bool) -> Dispatcher {
+    let mut d = registered(dev);
+    apply_vanilla_order(&mut d);
+    d
+}
+/// The tree in the order Horizon's code registers it, before
+/// [`vanilla_order`](super::vanilla_order) puts children in vanilla's order
+/// (tools/generate_command_order.py compares the two).
+pub fn registered(dev: bool) -> Dispatcher {
     let mut d = Dispatcher::new();
     let root = 0;
 
@@ -403,7 +411,6 @@ pub fn build_with(dev: bool) -> Dispatcher {
     super::tree_misc::register(&mut d, root);
     super::tree_world::register(&mut d, root);
     super::tree_extra::register(&mut d, root);
-    apply_vanilla_order(&mut d);
     d
 }
 
