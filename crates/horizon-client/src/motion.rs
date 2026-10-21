@@ -242,6 +242,9 @@ pub struct PlayerMotion {
     /// Gliding (shared flag 7) and LivingEntity.fallFlyTicks.
     pub fall_flying: bool,
     pub fall_fly_ticks: i32,
+    /// The server saw the glide end last tick (`updateFallFlying`'s `canGlide`
+    /// failed): the cleared flag reaches the client at its next tick.
+    pub glide_ending: bool,
     /// Glider durability to take this tick (updateFallFlying).
     pub glider_wear: u32,
     pub sprinting: bool,
@@ -399,6 +402,7 @@ impl PlayerMotion {
             pitch: 0.0,
             fall_flying: false,
             fall_fly_ticks: 0,
+            glide_ending: false,
             glider_wear: 0,
             sprinting: false,
             sprint_input: crate::sprint::SprintState::default(),
@@ -756,6 +760,13 @@ impl MotionWorld<'_, '_, '_> {
             }
         }
         let toggled = flying_before != self.player.flying;
+        // The server clears the glide flag from the position the client sent
+        // last tick, and the client applies it a tick later, before aiStep: a
+        // landing glide lasts one more tick on the ground, with no ground
+        // friction, so a jump then keeps the speed (the elytra hop).
+        if std::mem::take(&mut self.player.glide_ending) {
+            self.player.fall_flying = false;
+        }
         // Player.tryToStartFallFlying (canGlide: airborne, not flying, a glider;
         // never from inside a liquid).
         let can_glide = self.player.glider
@@ -772,7 +783,7 @@ impl MotionWorld<'_, '_, '_> {
             // canGlide alone: water and lava don't end a glide.
             let still = self.player.glider && !self.player.ground.on_ground && !self.player.flying;
             if !still {
-                self.player.fall_flying = false;
+                self.player.glide_ending = true;
             } else if (self.player.fall_fly_ticks + 1) % 10 == 0
                 && ((self.player.fall_fly_ticks + 1) / 10) % 2 == 0
             {
@@ -2526,6 +2537,47 @@ mod tests {
                 assert!(w.player.health.health() < 20.0);
             }
         }
+    }
+    #[test]
+    fn a_landing_glide_lasts_a_tick_so_a_jump_keeps_its_speed() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 2).unwrap();
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 4.2, 20.5)).unwrap();
+        let mut w = MotionWorld {
+            entities: &[],
+            player: &mut player,
+            scene: &mut scene,
+            assets: &assets,
+            collision_binding: &binding,
+            resources: &resources,
+        };
+        w.move_self(Vec3::new(0.0, -1.0, 0.0)).unwrap();
+        assert!(w.player.ground.on_ground);
+        w.player.set_sprinting(true).unwrap();
+        w.player.glider = true;
+        w.player.fall_flying = true;
+        w.player.velocity = Vec3::new(0.0, 0.0, 1.5);
+        // The landed glide's extra tick: the jump's sprint boost, no ground friction.
+        w.player_movement_tick([0.0, 1.0], true).unwrap();
+        assert!(w.player.fall_flying);
+        assert!(w.player.velocity.y > 0.3, "jumped: {:?}", w.player.velocity);
+        assert!(
+            w.player.velocity.z > 1.5,
+            "kept its speed: {:?}",
+            w.player.velocity
+        );
+        // Then the server's cleared flag arrives.
+        w.player_movement_tick([0.0, 1.0], true).unwrap();
+        assert!(!w.player.fall_flying);
     }
 
     #[test]
