@@ -21,8 +21,8 @@ use super::{
     value_provider::IntProvider,
 };
 use crate::registry::BlockStateId;
-pub(crate) use decorator::GROUND_FEATURE_KEY;
 use decorator::TreeDecorator;
+pub(crate) use decorator::{GROUND_FEATURE_KEY, beehive_occupants};
 pub use fallen::FallenTreeFeature;
 use foliage::{FoliageAttachment, FoliagePlacer};
 use horizon_core::{geometry::Direction, random::RandomSource};

@@ -122,6 +122,17 @@ impl<L: LevelAccess + ?Sized> PlacementContext for LevelFeatureWorld<'_, '_, L> 
     ) -> Result<bool, PlacementQueryError> {
         Ok(self.sim.b.has_flag(state, state_flags::COLLISION_EMPTY))
     }
+    /// BeehiveDecorator's bees go into the nest's block entity (the tree
+    /// checked the nest is there).
+    fn store_beehive_occupants(
+        &mut self,
+        position: [i32; 3],
+        ticks_in_hive: &[i32],
+    ) -> Result<(), PlacementQueryError> {
+        let nbt = crate::worldgen::tree::beehive_occupants(ticks_in_hive);
+        self.sim.level.load_block_entity(pos(position), nbt);
+        Ok(())
+    }
     /// Live levels hold no loot-table containers placed by these features.
     fn set_block_entity_loot_table(
         &mut self,

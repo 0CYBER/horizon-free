@@ -812,6 +812,16 @@ impl LevelAccess for GameLevel<'_> {
     fn remove_block_entity(&mut self, pos: BlockPos, old: BlockStateId, side_effects: bool) -> u8 {
         self.remove_entity(pos, old, side_effects)
     }
+    fn load_block_entity(&mut self, pos: BlockPos, mut nbt: horizon_world::nbt::Compound) {
+        use horizon_world::nbt::Tag;
+        for (k, v) in [("x", pos.x), ("y", pos.y), ("z", pos.z)] {
+            nbt.insert(k.into(), Tag::Int(v));
+        }
+        if let Some((key, entity)) = horizon_client::save::decode_block_entity(&Tag::Compound(nbt))
+        {
+            self.world.block_entities.insert(key, entity);
+        }
+    }
     fn set_command_block_powered(&mut self, pos: BlockPos, powered: bool) -> Option<(bool, bool)> {
         command_blocks::set_powered(self.world, self.registry, (pos.x, pos.y, pos.z), powered)
     }

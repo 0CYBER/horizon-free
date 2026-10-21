@@ -416,6 +416,10 @@ pub trait LevelAccess {
     ) -> u8 {
         0
     }
+    /// Load saved block-entity data into the block entity of the block just
+    /// placed at `pos` (`BlockEntity.loadWithComponents`): a bee nest a grown
+    /// tree placed gets its bees. Levels without block entities drop it.
+    fn load_block_entity(&mut self, _pos: BlockPos, _nbt: crate::nbt::Compound) {}
     /// Biome identifier at `pos` (`minecraft:plains`), for features placed by
     /// block behaviour (bone meal flowers). None when unknown.
     fn biome_name(&self, _pos: BlockPos) -> Option<&str> {

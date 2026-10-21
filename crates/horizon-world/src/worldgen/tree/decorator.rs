@@ -675,3 +675,25 @@ fn mushroom_pos(log: [i32; 3], facing: Direction) -> [i32; 3] {
     let n = facing.normal();
     tb::offset(log, n[0], 0, n[2])
 }
+
+/// The nest's block entity after `BeehiveDecorator` stored its bees
+/// (`Occupant.create(ticks)`: a bee, with 600 minimum ticks in the hive).
+pub(crate) fn beehive_occupants(ticks_in_hive: &[i32]) -> crate::nbt::Compound {
+    use crate::nbt::{Compound, Tag};
+    let bees = ticks_in_hive
+        .iter()
+        .map(|&ticks| {
+            let mut entity = Compound::new();
+            entity.insert("id".into(), Tag::String("minecraft:bee".into()));
+            let mut bee = Compound::new();
+            bee.insert("entity_data".into(), Tag::Compound(entity));
+            bee.insert("ticks_in_hive".into(), Tag::Int(ticks));
+            bee.insert("min_ticks_in_hive".into(), Tag::Int(600));
+            Tag::Compound(bee)
+        })
+        .collect();
+    let mut nbt = Compound::new();
+    nbt.insert("id".into(), Tag::String("minecraft:beehive".into()));
+    nbt.insert("bees".into(), Tag::List(bees));
+    nbt
+}
