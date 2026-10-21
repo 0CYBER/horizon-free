@@ -536,7 +536,7 @@ impl Enchantments {
             {
                 out.push((
                     a["attribute"].as_str().unwrap_or("").to_owned(),
-                    format!("{}.{}", a["id"].as_str().unwrap_or(""), level),
+                    a["id"].as_str().unwrap_or("").to_owned(),
                     f64::from(level_value(&a["amount"], *level)),
                     a["operation"].as_str().unwrap_or("add_value").to_owned(),
                 ));
