@@ -19,11 +19,17 @@ fn state(menu: &Menu) -> String {
         .map(|i| canon_stack(menu.slot(i)))
         .collect();
     let data: String = menu.data.iter().map(|d| format!(" {d}")).collect();
+    let equipped: Vec<String> = menu
+        .equipped
+        .iter()
+        .map(|(slot, stack)| format!("{slot}:{}", canon_stack(stack.as_ref())))
+        .collect();
     format!(
-        "{} | {} |{data} | {}",
+        "{} | {} |{data} | {} | {}",
         slots.join(" "),
         canon_stack(menu.carried.as_ref()),
-        menu.drops.join(";")
+        menu.drops.join(";"),
+        equipped.join(";")
     )
 }
 
@@ -82,6 +88,7 @@ fn main() -> horizon_client::Result<()> {
             speed: 1.0,
         });
         menu.drops.clear();
+        menu.equipped.clear();
         out += &format!("init {}\n", state(&menu));
         for op in case["ops"].as_array().ok_or("ops")? {
             let slot = op[0].as_i64().unwrap_or(0) as i32;

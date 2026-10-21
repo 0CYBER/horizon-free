@@ -1,0 +1,15 @@
+[package]
+name = "horizon-release-sign"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version = "1.85"
+description = "Signed release checksums: release.yml signs SHA256SUMS, the launcher and horizon-server check them before installing"
+
+[dependencies]
+# Ed25519 and SHA-256, already in every build through rustls (ureq's TLS): no new crypto code.
+ring = "0.17"
+base64 = "0.22"
+
+[lints]
+workspace = true

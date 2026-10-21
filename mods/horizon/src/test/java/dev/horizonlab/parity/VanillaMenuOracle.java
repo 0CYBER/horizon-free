@@ -35,6 +35,8 @@ public final class VanillaMenuOracle {
     static java.lang.reflect.Method allocate;
     static RecipeManager recipes;
     static final List<String> drops = new ArrayList<>();
+    /** onEquipItem calls that change the item (its sound and game event): slot and new stack. */
+    static final List<String> equips = new ArrayList<>();
     /** The block entity behind a "crafter_be" menu (slot state packets go to it). */
     static net.minecraft.world.level.block.entity.CrafterBlockEntity crafter;
 
@@ -105,7 +107,9 @@ public final class VanillaMenuOracle {
         @Override public EntityType<?> getType() { return net.minecraft.world.entity.EntityTypes.PLAYER; }
         @Override public net.minecraft.core.Holder<EntityType<?>> typeHolder() { return net.minecraft.world.entity.EntityTypes.PLAYER.builtInRegistryHolder(); }
         @Override public boolean canUseSlot(EquipmentSlot slot) { return true; }
-        @Override public void onEquipItem(EquipmentSlot slot, ItemStack old, ItemStack now) { }
+        @Override public void onEquipItem(EquipmentSlot slot, ItemStack old, ItemStack now) {
+            if (!ItemStack.isSameItemSameComponents(old, now)) equips.add(slot.getName() + ":" + ParityData.canon(now));
+        }
         @Override public boolean hasDisconnected() { return false; }
         @Override public ItemEntity drop(ItemStack stack, boolean thrown, net.minecraft.util.Prediction p) {
             if (!stack.isEmpty()) drops.add(ParityData.canon(stack));
@@ -193,6 +197,11 @@ public final class VanillaMenuOracle {
         return out.toString();
     }
 
+    /** {@link #state} and what was equipped: the menu_click harness's line (place_recipe prints {@code state}). */
+    static String clickState(AbstractContainerMenu menu, Inventory inv) throws Exception {
+        return state(menu, inv) + " | " + String.join(";", equips);
+    }
+
     public static void main(String[] args) throws Exception {
         ParityData.init();
         var field = Class.forName("sun.misc.Unsafe").getDeclaredField("theUnsafe");
@@ -207,6 +216,7 @@ public final class VanillaMenuOracle {
                 var f = JsonParser.parseString(line).getAsJsonObject();
                 try {
                     drops.clear();
+                    equips.clear();
                     var world = make(World.class);
                     world.server = make(Server.class);
                     var player = make(FakePlayer.class);
@@ -228,7 +238,8 @@ public final class VanillaMenuOracle {
                     var dataJson = f.getAsJsonArray("data");
                     for (int i = 0; i < dataJson.size(); i++) menu.setData(i, dataJson.get(i).getAsInt());
                     drops.clear();
-                    out.println("init " + state(menu, inv));
+                    equips.clear();
+                    out.println("init " + clickState(menu, inv));
                     for (var opJson : f.getAsJsonArray("ops")) {
                         var op = opJson.getAsJsonArray();
                         int slot = op.get(0).getAsInt();
@@ -237,13 +248,13 @@ public final class VanillaMenuOracle {
                         if (kind.equals("BUTTON")) {
                             // ServerGamePacketListenerImpl.handleContainerButtonClick
                             if (menu.clickMenuButton(player, slot)) menu.broadcastChanges();
-                            out.println(state(menu, inv));
+                            out.println(clickState(menu, inv));
                             continue;
                         }
                         if (kind.equals("SLOT_STATE")) {
                             // handleContainerSlotStateChanged: CrafterBlockEntity.setSlotState
                             if (slot >= 0 && slot < 9) crafter.setSlotState(slot, button == 1);
-                            out.println(state(menu, inv));
+                            out.println(clickState(menu, inv));
                             continue;
                         }
                         if (kind.equals("QUICK_MOVE_ALL")) {
@@ -259,7 +270,7 @@ public final class VanillaMenuOracle {
                                     }
                                 }
                             }
-                            out.println(state(menu, inv));
+                            out.println(clickState(menu, inv));
                             continue;
                         }
                         var input = ContainerInput.valueOf(kind);
@@ -271,7 +282,7 @@ public final class VanillaMenuOracle {
                             if (System.getenv("MENU_TRACE") != null) cause.printStackTrace();
                             continue;
                         }
-                        out.println(state(menu, inv));
+                        out.println(clickState(menu, inv));
                     }
                     out.println("end");
                 } catch (Throwable e) {

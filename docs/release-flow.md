@@ -1,21 +1,31 @@
 # Release flow
 
 How a change gets from a pull request to players: the checks a pull request passes, how it merges, and the
-automatic releases that follow. Releases are automatic and frequent so the latest Horizon is always playable;
-there is no separate development channel.
+automatic releases that follow. Releases are automatic and frequent so the latest Horizon is always playable.
+Each one goes out as a **beta** and becomes **stable** 6 hours later unless something holds it back
+([Channels](#channels)): launchers and servers install stable builds unless their owner turns betas on.
 
 ## Pull request checks
 
-The `checks` workflow (`.github/workflows/ci.yml`) runs two jobs on every pull request:
+The `checks` workflow (`.github/workflows/ci.yml`) runs two jobs on every pull request (opened, pushed to or
+reopened; labels never start it):
 
 | Job | Runs on | What | Time |
 | --- | --- | --- | --- |
 | `verify` | GitHub `ubuntu-latest` | Public-tree check, Python tests, rustfmt, clippy with warnings denied, Rust tests. Dependencies and the workspace build come from a cache saved by main's runs | ~4 min cold, less warm |
-| `parity` | The Mac mini's runner (`ludovics-mac-mini`, label `horizon-game`) | The vanilla harnesses the change can affect (`tools/parity.py --changed <base>`) | seconds when nothing is affected; minutes per affected harness |
+| `parity / parity` | The Mac mini's runner (`ludovics-mac-mini`, label `horizon-game`) | The vanilla harnesses the change can affect (`tools/parity.py --changed <base>`) | seconds when nothing is affected; minutes per affected harness |
 
 Pushes to main run `verify` only; the nightly audit covers main's harnesses.
 
+`verify` is the check main requires, so it has no condition and runs in every run of `checks`: GitHub counts a
+*skipped* required check as passed, and labels used to start runs whose `verify` was skipped, which let
+auto-merge merge before the real `verify` finished. A pull request that changes no Rust (docs, tools) runs only its
+quick steps and finishes in seconds.
+
 ### The parity job
+
+The job is `.github/workflows/parity.yml`, a reusable workflow: `checks` calls it for pull requests from this
+repository, `run-parity.yml` for a fork's pull request a maintainer labels `run-parity`.
 
 Horizon never downloads the game, so harnesses that compare with vanilla run only where the maintainer's own
 copy is: the Mac mini. Its runner runs as the maintainer's account and keeps its checkout between runs
@@ -64,11 +74,11 @@ parallel, and main's own `checks` run catches the rare semantic conflict.
 `parity` becomes required once it has run green on pull requests for a while (a week without a false failure):
 
 ```sh
-gh api -X POST repos/ludovic111/horizon/branches/main/protection/required_status_checks/contexts -f 'contexts[]=parity'
+gh api -X POST repos/ludovic111/horizon/branches/main/protection/required_status_checks/contexts -f 'contexts[]=parity / parity'
 ```
 
-A skipped `parity` (a fork without the label, a run started by a label) counts as passed, so requiring it never
-blocks a fork's pull request; the maintainer decides whether to run it.
+A skipped `parity` (a fork's pull request without the label) counts as passed, so requiring it never blocks a
+fork's pull request; the maintainer decides whether to run it.
 
 ## Game releases
 
@@ -90,9 +100,12 @@ flowchart LR
         windows["Windows x64<br/>GitHub windows-latest"]
         mac["macOS arm64<br/>Mac mini runner<br/>+ offscreen game run"]
     end
-    build --> publish["publish vYYYY.MM.DD[.N]<br/>notes from the merged PRs"]
-    publish --> launcher(["launchers install it"])
-    publish --> kira(["Kira posts it;<br/>pings only with ### New"])
+    build --> publish["publish vYYYY.MM.DD[.N] as a beta<br/>notes from the merged PRs"]
+    publish --> beta(["launchers with Beta builds on install it"])
+    publish --> promote{"promote.yml, every 30 min:<br/>6 h old, smoke test, no release-blocker"}
+    promote --> stable["stable and latest<br/>notes since the last stable"]
+    stable --> launcher(["every launcher and server installs it"])
+    stable --> kira(["Kira posts it;<br/>pings only with ### New"])
 ```
 
 ### When it releases
@@ -122,6 +135,7 @@ commits) since the last **published** game release:
 | `skip-release` | Doesn't trigger a release and isn't listed in the notes |
 | `run-parity` | Runs the parity job once on a fork's pull request |
 | `parity-regression` | Opened by the nightly audit for a harness that fails on main |
+| `release-blocker` | On an issue: holds every beta back from stable while it is open ([Channels](#channels)) |
 
 Pull requests without `feature` are listed under **Fixed**. Titles are written for players, since they become
 the notes.
@@ -153,6 +167,82 @@ runs the game: GitHub's runners have neither a GPU worth the name nor the game f
 Kira posts every published release in #releases and pings the releases role only when the notes have a
 `### New` section.
 
+### Channels
+
+Every game release is published as a **beta**, a GitHub pre-release, so GitHub's *latest* release stays the last
+**stable** one. Launchers and `horizon-server update` install stable builds by default (the launcher's Settings
+has a "Beta builds" switch; `horizon-server update --version <beta>` takes one by name), and Kira announces a release
+when it becomes stable: Discord's #releases only ever shows stable ones.
+
+`.github/workflows/promote.yml` runs `tools/release_channels.py promote` every 30 minutes. It promotes the newest
+beta that
+
+- is newer than the stable release,
+- has been out 6 hours,
+- passed its release smoke test: the macOS build attaches `smoke-test.json` (the offscreen game run's report) only
+  when the game drew a world on the Mac mini, so a release built while `MAC_RUNNER` sends macOS to GitHub waits
+  for a hand,
+- and isn't covered by an issue labelled `release-blocker`. An open blocker holds every beta; closed as completed
+  it still holds the betas published before it closed (they have the bug); closed as not planned it holds
+  nothing. Only the label and the issue's state count, never its text: whoever opened the issue can edit the
+  text after a maintainer labels it, so it can't pick which betas go out.
+
+Nothing older than the stable release is ever promoted, not even with `force`: GitHub's latest release is what
+`horizon-server update` and `install.sh` download, so it only moves forward.
+
+When the oldest beta newer than the stable release has waited 24 hours, promote.yml opens an issue titled
+"Promotion to stable has stalled" with the reason from the last check (a blocker left open, smoke tests not
+running). It closes itself after the next promotion.
+
+Promoting marks the beta stable and latest and rewrites its notes to list everything since the previous stable
+release (`release_train.py notes --stable`), so players who skipped the betas see all of it. Older betas stay
+betas. By hand, from a phone too (GitHub app: Actions, promote, Run workflow):
+
+```sh
+gh workflow run promote -f tag=v2026.10.19.03               # that beta now: no 6-hour wait, still no blocker
+gh workflow run promote -f tag=v2026.10.19.03 -f force=true  # even blocked or without a smoke test
+gh workflow run promote -f dry_run=true                      # what would be promoted now
+```
+
+A beta's notes cover only what changed since the release before it (beta or stable), and say it is a beta.
+`release_train.py decide` counts pull requests from the newest release of either channel, so betas don't
+release the same changes again.
+
+### Signed checksums
+
+Every game and launcher release carries `SHA256SUMS` (the archives' SHA-256, `sha256sum`'s format) and
+`SHA256SUMS.sig`: one base64 Ed25519 signature per line over `horizon release <tag>\n` followed by SHA256SUMS,
+so a signed list can't be reused under another tag.
+
+- A `sign` job of its own makes them: `tools/ci/sign_release.sh` runs the runner's `sha256sum` and OpenSSL and
+  nothing else. It is the only job that holds the private key, the `RELEASE_SIGNING_KEY` secret of the
+  repository's `release` environment, which only real releases from main enter (`environment:` is empty in dry
+  runs, which sign with a throwaway key). No code from the repository runs beside the key, so no pull request
+  can read it by changing what a build compiles; the key is in no file, no log and no password vault, and nobody
+  needs to read it.
+- The publish job then checks the signature the way launchers do (`horizon-release-sign verify --publishing`,
+  crates/horizon-release-sign), against the public keys built in from
+  `crates/horizon-release-sign/release-keys.txt`. While that file lists no key, releases go out with SHA256SUMS
+  alone and a warning (today's releases keep working). Once it lists one, a missing secret or a key it doesn't
+  list fails the release before anything is published, instead of publishing something launchers would refuse.
+- Making the key: `tools/ci/new_release_key.sh` pipes a new key from `horizon-release-sign keygen` straight into
+  `gh secret set RELEASE_SIGNING_KEY --env release` and prints only the public key, which then goes into
+  release-keys.txt by pull request.
+
+**Rotating the key** (a new key every year, or at once if the old one may have leaked). The publish job signs
+with every key the environment holds, `RELEASE_SIGNING_KEY` and `RELEASE_SIGNING_KEY_NEXT`, and the two names take
+turns:
+
+1. `tools/ci/new_release_key.sh <the empty name>` makes the next key; add its public key to release-keys.txt
+   beside the old one. From then on every release is signed with both keys (one line each).
+2. Wait until launchers and servers built with both keys are in use (a few weeks: launchers update themselves).
+3. Delete the old key's secret (`gh secret delete <its name> --env release`) and its line in release-keys.txt.
+   The next rotation makes its new key under the name just freed.
+
+If the old key may have leaked, skip the wait: remove its public key from release-keys.txt at once and delete
+its secret. Launchers built before the new key cannot check releases signed only with it: they refuse to install
+them with a clear message, and players download the launcher again from the website once.
+
 ### Starting one by hand
 
 ```sh
@@ -181,7 +271,8 @@ A bad release is withdrawn by turning it back into a draft:
 gh release edit v2026.10.15.01 --draft
 ```
 
-Launchers list only published releases: the previous version becomes the newest one again, launchers that
+A beta that is not promoted yet needs no rollback: label an issue about it `release-blocker`. For a stable
+release: launchers list only published releases, so the previous version becomes the newest one again, launchers that
 didn't install the bad one won't, and players who did can pick the previous version in the launcher's version
 list (`launcher/src/backend.rs` tests `withdrawn_release_is_never_offered`). The tag stays, so the next release
 that day takes the next number, and its notes start from the last *published* release, so they list the

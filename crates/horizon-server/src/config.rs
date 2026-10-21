@@ -49,6 +49,9 @@ restart_on_crash = true
 every = "6h"                 # automatic backups while the server runs: 30m, 6h, 1d...; "0" turns them off
 keep = 12                    # automatic backups kept (backups made by hand are never deleted)
 
+[updates]
+keep = 1                     # other releases kept by updates, besides the one in use and the one rollback goes to
+
 [panel]
 bind = "127.0.0.1:8130"      # the web panel: this computer only, or a tailnet address (100.x); "" turns it off
 allow_public = false         # true lets bind be any address; never put the panel on the open internet
@@ -85,6 +88,8 @@ pub struct Config {
     pub engine: Engine,
     #[serde(default)]
     pub backups: Backups,
+    #[serde(default)]
+    pub updates: Updates,
     #[serde(default)]
     pub panel: Panel,
 }
@@ -179,6 +184,20 @@ pub fn private(ip: std::net::IpAddr) -> bool {
 pub struct Backups {
     pub every: String,
     pub keep: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Updates {
+    /// Releases kept in `releases/` after an update besides the one in use and the one `rollback` goes
+    /// back to (crate::update::Install::prune).
+    pub keep: u32,
+}
+
+impl Default for Updates {
+    fn default() -> Self {
+        Self { keep: 1 }
+    }
 }
 
 impl Default for Server {
@@ -378,6 +397,7 @@ pub fn render(config: &Config) -> String {
         ("engine", "restart_on_crash"),
         ("backups", "every"),
         ("backups", "keep"),
+        ("updates", "keep"),
         ("panel", "bind"),
         ("panel", "allow_public"),
     ] {
@@ -426,10 +446,18 @@ pub fn sync_back(dir: &Path, written: &[(String, String)]) -> Result<Vec<String>
 
 /// Sets one typed setting in `server.toml` (`whitelist on`), keeping the owner's comments.
 pub fn update(dir: &Path, section: &str, field: &str, value: toml::Value) -> Result<(), String> {
+    update_all(dir, &[(section.to_owned(), field.to_owned(), value)])
+}
+
+/// Sets settings in `server.toml`, keeping the owner's comments; nothing is written unless the result is
+/// a valid configuration.
+pub fn update_all(dir: &Path, changes: &[(String, String, toml::Value)]) -> Result<(), String> {
     let path = dir.join(FILE);
     let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e| format!("{e}"))?;
-    set(&mut doc, section, field, &value);
+    for (section, field, value) in changes {
+        set(&mut doc, section, field, value);
+    }
     let updated = doc.to_string();
     Config::parse(&updated)?;
     std::fs::write(&path, updated).map_err(|e| e.to_string())
@@ -483,7 +511,7 @@ fn typed_value(text: &str, like: &toml::Value) -> Option<toml::Value> {
 }
 
 /// A server.properties value for `[properties]`: a boolean or a number when it reads back the same.
-fn loose_value(text: &str) -> toml::Value {
+pub fn loose_value(text: &str) -> toml::Value {
     match text {
         "true" => toml::Value::Boolean(true),
         "false" => toml::Value::Boolean(false),

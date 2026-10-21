@@ -92,6 +92,8 @@ pub enum StructureKind {
     Fortress,
     NetherFossil(HeightProvider),
     EndCity,
+    /// `horizon:formations`: Formations' SimpleStructure.
+    Formations(super::formations::Def),
     /// A structure type whose generator is not implemented yet.
     Unsupported(String),
 }
@@ -367,6 +369,10 @@ impl StructureRegistry {
                 "minecraft:nether_fossil" => StructureKind::NetherFossil(
                     HeightProvider::from_json(&v["height"].to_string())?,
                 ),
+                "horizon:formations" => match super::formations::Def::decode(&v) {
+                    Ok(def) => StructureKind::Formations(def),
+                    Err(_) => StructureKind::Unsupported("horizon:formations".into()),
+                },
                 other => StructureKind::Unsupported(other.to_owned()),
             };
             defs.push(StructureDef {
@@ -701,6 +707,41 @@ pub struct StructureStart {
     pub bounding_box: BoundingBox,
 }
 
+/// A block of a noise column (ChunkGenerator.getBaseColumn), by what
+/// structures ask of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoiseBlock {
+    Air,
+    /// The water block (`is(Blocks.WATER)`), as the aquifers and the sea
+    /// fill it.
+    Water,
+    Lava,
+    /// BlockState.isSolid: the noise's own blocks (stone, deepslate, ore
+    /// veins, netherrack...).
+    Solid,
+    Other,
+}
+impl NoiseBlock {
+    pub fn is_solid(self) -> bool {
+        self == Self::Solid
+    }
+}
+/// ChunkGenerator.getBaseColumn's blocks from `min` up; past its ends a
+/// NoiseColumn reads air.
+#[derive(Clone, Debug, Default)]
+pub struct NoiseColumn {
+    pub min: i32,
+    pub blocks: Vec<NoiseBlock>,
+}
+impl NoiseColumn {
+    pub fn get(&self, y: i32) -> NoiseBlock {
+        usize::try_from(y - self.min)
+            .ok()
+            .and_then(|i| self.blocks.get(i).copied())
+            .unwrap_or(NoiseBlock::Air)
+    }
+}
+
 /// Biome and height queries for one structure generation attempt.
 pub trait StartContext: JigsawContext {
     fn seed(&self) -> i64;
@@ -709,6 +750,9 @@ pub trait StartContext: JigsawContext {
     fn base_column(&mut self, x: i32, z: i32, kind: HeightmapType) -> Vec<bool>;
     /// base_column for several heightmap kinds from one noise-column pass.
     fn base_columns(&mut self, x: i32, z: i32, kinds: &[HeightmapType]) -> Vec<Vec<bool>>;
+    /// ChunkGenerator.getBaseColumn's blocks: the noise column's states, as
+    /// mods' placements test them (Formations').
+    fn noise_column(&mut self, x: i32, z: i32) -> NoiseColumn;
     /// Biome.coldEnoughToSnow at a position.
     fn cold_enough_to_snow(&mut self, biome: BiomeId, pos: [i32; 3]) -> bool;
     fn generation(&self) -> WorldGenerationContext;
@@ -1098,6 +1142,18 @@ fn try_generate(
             }
             let piece = super::nether_fossil::piece(resources, &mut random, position)?;
             (position, legacy(vec![piece]))
+        }
+        StructureKind::Formations(formations) => {
+            let (position, piece) = super::formations::generate(
+                formations,
+                context,
+                &registry.pools,
+                resources,
+                bindings,
+                &mut random,
+                chunk,
+            )?;
+            (position, vec![Piece::Pool(piece)])
         }
         StructureKind::Unsupported(_) => return None,
     };

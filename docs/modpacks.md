@@ -236,6 +236,10 @@ How the game loads them, without touching vanilla's path:
   so the same mod set gives the same ids. Saves store block names, so ids never reach the disk.
 - Loaders that read only `data/minecraft/` (recipes, loot, tags) read every namespace, as
   vanilla does. With no mods there is only `minecraft`, so nothing changes.
+- **Namespaces.** A mod's files go under its id, and under the namespaces its manifest lists
+  when its Java original ships them so (`namespaces = ["kaisyn", "towns_and_towers"]` for Towns
+  and Towers, mod id `t_and_t`; docs/mods.md). No namespace has two owners: a mod whose id or
+  listed namespace another mod that is on already owns is left out, with both named in the log.
 - The overlay is built on the first start with a set of mods and kept for later starts. A stamp
   (`horizon-mod-content.stamp`) hashes the game executable, the base tables and every mod file's
   size and mtime. Adding, removing or editing a mod, or a new build of Horizon, rebuilds it. For
@@ -326,7 +330,10 @@ A byte-order mark is dropped. For ATM10's 42 mods that is 19 files in 7 mods, an
 carried. No class file is copied. It upgrades from 1.21.1 to 26.3: vanilla-type recipes (ingredients), loot tables
 (`conditions` lists become one `condition`, `functions` become `modifier`, kinds move to `type`,
 tool matches on silk touch or shears become `minecraft:tool/can_silk_touch` and
-`minecraft:tool/can_shear`), and the `items/` definitions 1.21.4 introduced.
+`minecraft:tool/can_shear`, and number providers written as a bare `{"min", "max"}` get
+`"type": "minecraft:uniform"`), and the `items/` definitions 1.21.4 introduced. 1.21.1 read such
+a bare range as uniform and 26.3 refuses it: 304 of ATM10's carried tables have them (rolls,
+counts, enchantment levels), and before the carry typed them their chests came out empty or short.
 
 Blocks and items come from the NeoForge oracle when `<work>/oracle/facts.json` exists (step 6):
 every block the mod registers gets the vanilla template of the same vanilla class and states
@@ -339,7 +346,9 @@ same states (Macaw's garage doors, multi-part gates). Recipes get the convention
 (`c:dyes/red`), filled from the oracle with vanilla's and the mod's own members. Without the
 oracle, templates are guessed from the blockstate's properties: the template whose properties
 include them with the fewest left over (models often ignore `powered` or `waterlogged`), the
-block's name breaking ties (`_pane`, `_gate`, `_trapdoor`).
+block's name breaking ties (`_pane`, `_gate`, `_trapdoor`). Walls and vines have the same
+property names; sides tested as `true` / `false` make a vine (Chipped's 11 vines, which the game
+refused as walls: their blockstates did not load).
 
 ### 1. Import
 
@@ -472,24 +481,78 @@ Two cases the oracle fills in:
     1234 the farms now grow carrots, potatoes and beetroot besides wheat, and 1,655
     cobblestone blocks become paths, grass, mossy cobblestone and planks. No Lithostitched processor is
     dropped now (130 before), only CTOV's compat hooks for other mods inside them (142 copies).
-    Still taken out: Formations' biome replacements, Repurposed's pillars and fluid fixes,
-    blocks aged or propped up.
+    The processors that build outside their template are carried too: Repurposed's and
+    Moog's pillar processors become the game's `horizon:pillar` (a column from a placeholder
+    block down to the ground, with the processor list they run on each of its blocks written
+    in), Repurposed's bottom pillars `horizon:bottom_pillar`, their fluid fix (a wall of the
+    structure's block over water and lava sources next to its open blocks)
+    `horizon:close_off_fluid_sources`, and YUNG's pillars (Better Fortresses, Better Jungle
+    Temples) and Better Fortresses' stair supports `horizon:yung_pillar` and
+    `horizon:stair_pillar`. They write only in the chunk being generated, as the mods do.
+    Dropped processors went from 570 to 456 in Repurposed Structures (its pillars, bottom
+    pillars and fluid fixes: 242 lists), 14 to 1 in Moog's, 10 to 5 in Better Fortresses and
+    52 to 50 in Better Jungle Temples; the structure starts are the same (382 starts, 37,451
+    pieces in chunks -64..63, seed 1234). Around spawn at seed 1234, 1,515 blocks change: the
+    382 red glass placeholders under Repurposed's ocean outpost and pyramids become prismarine
+    columns, and their gravel and prismarine pillars reach the sea floor. In the Nether, the
+    Better Fortresses fortress at chunk (-23, 9) stands on its pillars: its terracotta
+    placeholders become nether bricks and 41,487 blocks of air (and 2,163 of lava) under it
+    become brick and magma columns down to the netherrack, 64,568 blocks changed in its 180
+    chunks (the huge fungi there grow around the columns).
+    Better Ocean Monuments' ten processors are carried as well, so its monuments are no longer
+    dry: its templates are mostly air, which its air processor turns to water below the sea
+    level (the game's `horizon:flood_air`); its waterlog processor (`horizon:waterlog`)
+    waterlogs what can be and marks the water on the chunk's edges for postprocessing, its
+    structure void keeps the world's block (`horizon:keep_world_block`), its placeholder
+    blocks become slabs, sponges, seagrass, gravel and aged copper (vanilla's `rule`, and
+    `horizon:pick` with a new `nextFloat` for each chance, as the mod draws), and its legs and
+    Better Witch Huts' log and fence legs are `horizon:yung_pillar`. In the monument at chunk
+    (2, 8) (seed 1234), 318,512 blocks of air become water and none is left between y 30 and
+    60 (227,034 before); its 5,142 placeholder blocks are gone.
+    Still taken out: Formations' biome replacements, Repurposed's air fix
+    (`close_off_air_sources`), blocks aged or propped up.
     In the 128×128-chunk square (seed 1234), every spawner of a mod structure now has its mob:
     in the Overworld 83 Better Dungeons spawners held the template's placeholder pig and 17 of
     Moog's were empty (763 spawners with a mob, up from 628); in the Nether the 52 empty ones
     in Moog's Nether Structures are filled (162, up from 110). Chests are unchanged: 2,777
-    and 1,405 with a loot table.
+    and 1,405 with a loot table. The game read loot tables from `data/minecraft/` only, so every one of
+    those chests naming a mod's table opened empty; it now reads every namespace, and an
+    integer field written as a float (`"rolls": {"min": 3.0, ...}`, as Towns and Towers
+    writes them) counts as vanilla's int codecs count it. Of the 675 chest and other
+    non-block tables in ATM10's carried mods, 534 now fill a chest (seed 1; none before).
+    Repurposed's structure voids keep the world's block, as vanilla's `minecraft:block_ignore`
+    does (its 82 lists: mineshafts, the ocean and swamp villages, the ocean and taiga temples,
+    the jungle pyramid's hidden room). Before, the game placed them like any template block:
+    around the ocean mineshaft at chunk (-18, -54), seed 1234, 974 structure voids took the
+    place of 464 prismarine blocks of its walls, 225 of water (dry holes in the sea), 279 of
+    air and cave air and 6 rails and walls.
   - **Rule tests** written in Java. Repurposed Structures' mineshafts and Nether monument test
     blocks with three of the mod's own rule tests inside vanilla `rule` processors: what a
     block is made of (solid, liquid, air, with rails and chains), a chance over the distance
     from the template's origin along one axis, and a world height range. The game runs them
     as `horizon:matter_phase`, `horizon:piece_origin_axis_aligned_linear_pos` and
     `horizon:y_value` with the mod's fields, and carry renames them (213 in 75 lists).
+  - **Namespaces besides the mod id.** Towns and Towers (mod id `t_and_t`) ships all 60 of its
+    structures under `kaisyn` and `towns_and_towers`, which carry used to leave in `outside/`.
+    Carry now claims a namespace for the mod when the mod's own files (its id's, its tag
+    additions and the namespaces already claimed) name ids in it, and no mod of the pack has
+    it as its id; it lists them in the manifest's `namespaces` (docs/mods.md). Files for mods
+    it supports (CTOV's `wares` and `monobank`, YUNG's `morevillagers` tags) and configs of
+    pack mods (`cristellib`) stay outside: of ATM10's 42 jars only T&T claims any. A tag of a
+    mod's own namespace that `replace`s is carried as an addition (no pack before it defines
+    it). In the 128×128-chunk square T&T has 7 starts at seed 1234 (its ocean wreckages, an
+    ocean village and outpost) and 7 at seed 2 (forest and snowy taiga villages, snowy
+    outposts), from none.
   - **Renamed ids.** 26.3 calls 1.21.1's chain the iron chain (its datafixers rename it in
     worlds). Carry renames it in recipes, loot tables and worldgen files (112 files in 5 mods:
     Repurposed's mineshafts, Better Dungeons' processors, Regions Unexplored's hanging sign
     recipes...), which otherwise fail to load in 26.3. With both, the 5 Nether mineshaft pools load: 47 of
     Repurposed's Nether mineshafts in the 128×128-chunk square (seed 1234), under the lava sea.
+  - **Advancements.** An `enter_block` criterion names its block as `blocks` in 26.3; 26.3
+    skips 1.21.1's `block`, so the criterion matched any block the player entered. Carry renames
+    it (20 advancements in Regions Unexplored: "Downer", "From the Tree Tops" and "Light as a
+    Frog" were granted on the first dive into the sea, and its boat recipes' "in water"
+    criteria).
   - **Big templates** (#838). Vanilla reads structure templates with no limit on their tag
     count; Horizon now does too (`nbt::Limits::templates`). Seven of ATM10's 8,962 carried
     templates are past the old 1,000,000-tag cap: YUNG's monument start, four When Dungeons
@@ -543,19 +606,25 @@ Two cases the oracle fills in:
   (unchanged), and no pool that fails to decode (65 before #816 in the 64×64 centre).
   - 1,061 files were mapped (MVS 413, MNS 210, MSS 157, MES 110, Repurposed Structures 104,
     ChoiceTheorem's Overhauled Village 66), and 103 convention biome tags written.
-  - When Dungeons Arise and Structory use vanilla's types already. Towns and Towers does too,
-    but its 1,198 worldgen files sit under the `kaisyn` and `towns_and_towers` namespaces, not
-    its mod id `t_and_t`, and a mod's content may only use its own namespace (docs/mods.md), so
-    carry leaves them out and its 60 structures are missing.
+  - When Dungeons Arise, Structory and Towns and Towers use vanilla's types already (T&T's
+    namespaces are carried since the namespaces rule above).
   - Still lost, written in Java:
-    - Formations' structure and element types (179): their placements read block states in the
-      noise column (solid, water, lava), which the structure context doesn't give yet;
+    - Formations' pieced structure (1, its one jigsaw-like type);
     - Repurposed's mineshafts, mansions and monuments, Better Mineshafts and two Better
       Dungeons types: Java structure types;
     - the block processors written in Java
-      (YUNG's banners, legs and decorations, Repurposed's pillars and fluid fixes,
-      Lithostitched's block swaps);
+      (YUNG's banners and decorations, Better Strongholds' legs, Lithostitched's block swaps);
     - MO Structures (38; its library is only on CurseForge).
+  - **Formations** (Overworld and Nether: 50 structures, 128 pool elements) places one
+    template per start at a height found in the noise columns under its corners and centre: on
+    the surface, on water or lava, or in a cave (on its floor, under its ceiling, buried in
+    stone, on a lava lake). Carry writes its `formations:simple` as the game's
+    `horizon:formations` (`horizon-world`'s `structure/formations.rs`, which reads the blocks
+    of ChunkGenerator.getBaseColumn through the structure context) and its pool element as
+    vanilla's with its `ground_level` under `horizon:ground_level`. In chunks -64..63 that adds
+    39 Overworld and 672 Nether starts at seed 1234 (51 and 643 at seed 2), and leaves every
+    other start as it was. Its processors (biome replacements, aged blocks, bed colours,
+    plants) are still dropped, so its structures keep their templates' blocks.
 
   With every structure PR above, the same square (seed 1234, chunks -64..63) holds 362
   overworld starts with 22,026 pieces. CTOV has 7, Better Dungeons 72 and Better Ocean

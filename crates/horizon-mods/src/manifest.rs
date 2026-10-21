@@ -13,6 +13,9 @@ pub const API: &str = "0.1";
 /// `assets/` and `data/` in the `.hmod`, with blocks and items declared in
 /// `data/<id>/horizon/` (docs/modpacks.md). Code still links API 0.1.
 pub const APIS: [&str; 2] = [API, "0.2"];
+/// Namespaces no mod may claim: vanilla's, the convention tags' (mods add
+/// to those, docs/mods.md) and the game's own.
+const RESERVED_NAMESPACES: [&str; 3] = ["minecraft", "c", "horizon"];
 /// The biggest `mod.wasm` a mod may ship.
 const MAX_WASM: u64 = 32 << 20;
 
@@ -33,6 +36,12 @@ pub struct Manifest {
     pub side: Side,
     #[serde(default)]
     pub capabilities: Vec<Capability>,
+    /// Namespaces besides `id` that the mod's `assets/` and `data/` use, for
+    /// a content mod whose files sit under other names than its id (Towns
+    /// and Towers ships `kaisyn` and `towns_and_towers`). No two content mods
+    /// that are on may share one (`content::clash`).
+    #[serde(default)]
+    pub namespaces: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq)]
@@ -55,15 +64,17 @@ pub enum Capability {
     GameRead,
     Chat,
     Hud,
+    Storage,
     /// New blocks and items from the mod's `data/` (API 0.2): no WIT
     /// interface, the game reads them before the world loads.
     Registries,
 }
 impl Capability {
-    pub const ALL: [Capability; 4] = [
+    pub const ALL: [Capability; 5] = [
         Capability::GameRead,
         Capability::Chat,
         Capability::Hud,
+        Capability::Storage,
         Capability::Registries,
     ];
     /// The WIT interface it grants, in `horizon:mods`.
@@ -72,6 +83,7 @@ impl Capability {
             Capability::GameRead => "game",
             Capability::Chat => "chat",
             Capability::Hud => "hud",
+            Capability::Storage => "storage",
             Capability::Registries => "registries",
         }
     }
@@ -81,6 +93,7 @@ impl Capability {
             Capability::GameRead => "see your position, health and the time",
             Capability::Chat => "show you chat messages",
             Capability::Hud => "draw text on your screen",
+            Capability::Storage => "save its own settings to disk",
             Capability::Registries => "add blocks and items to your worlds",
         }
     }
@@ -110,6 +123,7 @@ impl fmt::Display for Capability {
             Capability::GameRead => "game-read",
             Capability::Chat => "chat",
             Capability::Hud => "hud",
+            Capability::Storage => "storage",
             Capability::Registries => "registries",
         };
         f.write_str(name)
@@ -141,7 +155,36 @@ impl Manifest {
                 "{MANIFEST}: capability registries needs api = \"0.2\""
             ));
         }
+        if !m.namespaces.is_empty() && !m.capabilities.contains(&Capability::Registries) {
+            return Err(format!(
+                "{MANIFEST}: namespaces are for content, which needs capability registries"
+            ));
+        }
+        for (i, ns) in m.namespaces.iter().enumerate() {
+            // Vanilla's namespace characters, at most as long as an id.
+            let chars_ok = (1..=64).contains(&ns.len())
+                && ns
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_.-".contains(&b));
+            if !chars_ok {
+                return Err(format!(
+                    "{MANIFEST}: namespace {ns:?} is not [a-z0-9_.-]{{1,64}}"
+                ));
+            }
+            if RESERVED_NAMESPACES.contains(&ns.as_str()) {
+                return Err(format!(
+                    "{MANIFEST}: namespace {ns} is not a mod's to claim (only to add to its tags)"
+                ));
+            }
+            if *ns == m.id || m.namespaces[..i].contains(ns) {
+                return Err(format!("{MANIFEST}: namespace {ns} is listed twice"));
+            }
+        }
         Ok(m)
+    }
+    /// The namespaces the mod's content owns: its id, then `namespaces`.
+    pub fn owned_namespaces(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.id.as_str()).chain(self.namespaces.iter().map(String::as_str))
     }
     /// Checks that the component's imports need only declared capabilities.
     pub fn check_imports<'a>(
@@ -300,6 +343,14 @@ capabilities = ["game-read", "hud"]
         );
         assert!(m.check_imports(["wasi:filesystem/types@0.2.0"]).is_err());
         assert!(m.check_imports(["horizon:mods/game@0.2.0"]).is_err());
+        let storage = m.check_imports(["horizon:mods/storage@0.1.0"]);
+        assert_eq!(
+            storage,
+            Err("uses capability storage, missing from horizon-mod.toml".into())
+        );
+        let with_storage = EXAMPLE.replace("\"hud\"", "\"hud\", \"storage\"");
+        let m = Manifest::parse(&with_storage).unwrap();
+        assert_eq!(m.check_imports(["horizon:mods/storage@0.1.0"]), Ok(()));
     }
 
     #[test]
@@ -310,6 +361,25 @@ capabilities = ["game-read", "hud"]
         assert!(Manifest::parse(&bad_api).unwrap_err().contains("API 0.3"));
         let unknown = format!("{EXAMPLE}network = true\n");
         assert!(Manifest::parse(&unknown).is_err());
+    }
+
+    #[test]
+    fn checks_extra_namespaces() {
+        let content = "id = \"t_and_t\"\nname = \"T\"\nversion = \"1\"\napi = \"0.2\"\ncapabilities = [\"registries\"]\n";
+        let with = |list: &str| Manifest::parse(&format!("{content}namespaces = [{list}]\n"));
+        let m = with("\"kaisyn\", \"towns_and_towers\"").unwrap();
+        let owned: Vec<&str> = m.owned_namespaces().collect();
+        assert_eq!(owned, ["t_and_t", "kaisyn", "towns_and_towers"]);
+        for reserved in ["minecraft", "c", "horizon"] {
+            let e = with(&format!("\"{reserved}\"")).unwrap_err();
+            assert!(e.contains("not a mod's to claim"), "{e}");
+        }
+        assert!(with("\"t_and_t\"").unwrap_err().contains("twice"));
+        assert!(with("\"a\", \"a\"").unwrap_err().contains("twice"));
+        assert!(with("\"Kaisyn\"").unwrap_err().contains("is not"));
+        assert!(with("\"\"").unwrap_err().contains("is not"));
+        let code = format!("{EXAMPLE}namespaces = [\"kaisyn\"]\n");
+        assert!(Manifest::parse(&code).unwrap_err().contains("registries"));
     }
 
     #[test]

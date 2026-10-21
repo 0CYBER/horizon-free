@@ -688,6 +688,7 @@ mod tests {
             vanilla_root: PathBuf::new(),
             pack_error: None,
             started: Instant::now(),
+            panorama_rotation: Default::default(),
             progress: Progress::new(),
             receiver,
             loaded: None,

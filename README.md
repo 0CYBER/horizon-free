@@ -14,106 +14,64 @@
 <p align="center">
   <a href="https://playhorizon.dev"><b>Website</b></a> ·
   <a href="#download"><b>Download</b></a> ·
-  <a href="#what-changed-in-v202610131"><b>What changed</b></a> ·
-  <a href="#screenshots"><b>Screenshots</b></a> ·
-  <a href="#project-status"><b>Parity status</b></a> ·
-  <a href="docs/README.md"><b>Documentation</b></a>
+  <a href="https://playhorizon.dev/docs/"><b>Documentation</b></a> ·
+  <a href="https://github.com/ludovic111/horizon/releases"><b>Release notes</b></a> ·
+  <a href="#project-status"><b>Project status</b></a> ·
+  <a href="#contributing"><b>Contributing</b></a>
 </p>
 
 # Horizon
 
-A Rust rewrite of Minecraft: Java Edition 26.3 built for one-to-one vanilla parity, checked against the game itself with differential tests.
-
-Every subsystem matches vanilla in all 281 parity harnesses, on Linux and macOS: 100% of what the harnesses compare (see [Project status](#project-status)). The native client is playable on Linux, macOS (Apple Silicon) and Windows.
+Horizon is Minecraft: Java Edition 26.3 rewritten in Rust: a native game that reads the same worlds, follows the same rules and generates the same terrain as the Java game, and is checked against it by 281 differential harnesses. You play it through a small launcher, on the files from your own copy of Minecraft. It is free, open source and unofficial.
 
 > Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft. Horizon contains no Minecraft code, assets or data: you need your own legally obtained copy of Minecraft: Java Edition 26.3.
 
-## What changed in v2026.10.13.1
-
-The latest release ([notes](https://github.com/ludovic111/horizon/releases/tag/v2026.10.13.1)):
-
-- **Horizon's own menus:** a new title screen, world list, options and pause menu in the launcher's style, over a live frozen landscape. The vanilla look is still available: Options → Interface → Menu style → Classic.
-- **Graphics settings, Simple and Advanced:** presets (Performance, Balanced, Quality, Ultra), or every rendering, quality, display and performance setting, each with a short description and its cost, plus a performance overlay.
-- **Much faster rendering:** for example, at render distance 8 over a village, 363 → 2,409 FPS on an RTX 4080. Render distance 32 still stutters in places.
-- **Fixed:** no sound on Linux; Linux builds that only ran on the machine they were built on; a missing DLL on Windows (the launcher no longer needs the Visual C++ runtime); memory growing and the frame rate dropping near villages (mobs were duplicated when chunks reloaded); resource preparation failing on Linux with "Missing … java-objc-bridge" ([#41](https://github.com/ludovic111/horizon/issues/41)); the hand and held item at high FOV; missing swing animations.
-
 ## Download
 
-Horizon is downloaded only through **the Horizon launcher**: get it from [playhorizon.dev](https://playhorizon.dev) or from [the launcher's releases](https://github.com/ludovic111/horizon/releases?q=launcher-v&expanded=true) (the newest `launcher-v*` release, currently [launcher-v0.1.3](https://github.com/ludovic111/horizon/releases/tag/launcher-v0.1.3)), for Linux x86-64, macOS Apple Silicon or Windows x64. The launcher installs and updates the game, prepares its resources from your own copy of Minecraft, starts the client or a dedicated server, and updates itself.
+Horizon is installed through **the Horizon launcher**. Get it from [playhorizon.dev](https://playhorizon.dev) (the Download button picks your system) or from [the launcher releases](https://github.com/ludovic111/horizon/releases?q=launcher-v&expanded=true), for Linux x86-64, macOS on Apple Silicon or Windows x64. The launcher installs and updates the game, prepares its files from your own copy of Minecraft, and updates itself.
 
-**You need** Minecraft: Java Edition installed with the official launcher, with 26.3 played once; Python 3.10 or newer and Java 25 (a JDK, e.g. Eclipse Temurin 25) for the one-time resource preparation; and a GPU with Vulkan on Linux and Windows, or any Apple Silicon Mac.
-
-**Host a server:** `horizon-server` is one native program with no Java, one settings file, a command line, a web panel, backups and updates that roll back by themselves. It installs with one command (`curl -fsSL https://raw.githubusercontent.com/ludovic111/horizon/main/packaging/server/install.sh | sh` on Linux and macOS, `irm https://raw.githubusercontent.com/ludovic111/horizon/main/packaging/server/install.ps1 | iex` on Windows). The guide is at [playhorizon.dev/server](https://playhorizon.dev/server) ([docs/hosting.md](docs/hosting.md)).
-
-### The launcher
+**You need** Minecraft: Java Edition 26.3, played once (the official launcher, Prism, MultiMC and other launchers all work); a Java 25 JDK, for the one-time preparation; and a GPU with Vulkan on Linux and Windows, or any Apple Silicon Mac. Step by step, with macOS's first-open prompt and the first launch: [Install and first launch](https://playhorizon.dev/docs/install).
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/media/launcher-play.webp" alt="The launcher's Play page: v2026.10.14.1 ready to play, its summary, Client and Server, the version picker and Play, the resources and the Minecraft folder as a numbered list"></td>
-    <td width="50%"><img src="docs/media/launcher-patch-notes.webp" alt="The launcher's Patch notes page, showing the notes of Horizon 2026.10.14.1"></td>
+    <td width="50%"><img src="docs/media/launcher-play.webp" alt="The launcher's Play page: a version ready to play, its summary, Client and Server, the version picker and Play"></td>
+    <td width="50%"><img src="docs/media/launcher-patch-notes.webp" alt="The launcher's Patch notes page"></td>
   </tr>
 </table>
 
-It lists Horizon's releases and installs the build for your platform, shows each release's patch notes, updates Horizon and itself, and doubles as a command-line tool and an MCP server. See [the launcher's README](launcher/README.md).
+## What works today
 
-## Screenshots
+The [documentation](https://playhorizon.dev/docs/) covers each of these.
 
-Captured in the Rust client itself, with vanilla assets and no mods or shaders.
+- **The game:** singleplayer with vanilla's world generation, mobs, villagers, raids, redstone, every command, the HUD and the recipe book, on saves in vanilla's format. Worlds from 1.8 to 26.2 are upgraded as vanilla does. [Status table](#project-status).
+- **Horizon's own extras:** new menus (vanilla's are one setting away), graphics presets, distant terrain up to 1024 chunks, controller support, optional zoom, minimap and more, all off by default where they would change the vanilla look. See [Settings](https://playhorizon.dev/docs/settings).
+- **Resource packs, shader packs and data packs:** resource packs work, Java shader packs run their full-screen effects (experimental), and data packs load functions, predicates and item modifiers.
+- **Playing with others:** invite friends from the pause menu with a code, Open to LAN, and joining offline-mode servers. Horizon cannot sign in to a Microsoft account yet, so it cannot join servers that check accounts. See [Multiplayer](https://playhorizon.dev/docs/multiplayer).
+- **Mods:** Horizon has its own mod system (Rust compiled to WebAssembly). Java mod jars do not run. See [Mods and data packs](https://playhorizon.dev/docs/mods).
 
-### Menus and settings
-
-<table>
-  <tr>
-    <td colspan="2"><img src="docs/media/menu-title.webp" alt="Horizon's title screen: the mark and the pages on the left, the Horizon title, Singleplayer and Multiplayer, and the last world played and the faint wordmark, over a veiled snowy landscape"></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="docs/media/menu-worlds.webp" alt="The Singleplayer page: two worlds with their dates and game modes, and Create world and Play buttons"></td>
-    <td width="50%"><img src="docs/media/settings.webp" alt="The Video settings in their Simple view: a preset, render distance, field of view, framerate, VSync and GUI scale, each with what it costs"></td>
-  </tr>
-</table>
-
-The vanilla menus are one setting away: Options → Interface → Menu style → Classic. See [Graphics settings](docs/graphics.md).
-
-### In game
+Screenshots, captured in the Rust client itself with vanilla assets and no mods or shaders:
 
 <table>
   <tr>
     <td colspan="2"><img src="docs/media/sunset.webp" alt="Sunset over a savanna river valley and a plains village"></td>
   </tr>
   <tr>
+    <td width="50%"><img src="docs/media/menu-title.webp" alt="Horizon's title screen over a veiled snowy landscape"></td>
+    <td width="50%"><img src="docs/media/settings.webp" alt="The Video settings in their Simple view: a preset, render distance, field of view, framerate, VSync and GUI scale, each with what it costs"></td>
+  </tr>
+  <tr>
     <td width="50%"><img src="docs/media/village.webp" alt="A plains village among savanna hills, with farms, villagers and an iron golem"></td>
-    <td width="50%"><img src="docs/media/survival.webp" alt="Survival at dusk: a zombie walks up, with the hotbar, health, hunger and experience"></td>
-  </tr>
-  <tr>
     <td width="50%"><img src="docs/media/nether.webp" alt="A crimson forest in the Nether with a zombified piglin"></td>
-    <td width="50%"><img src="docs/media/night.webp" alt="Moonrise over a torch-lit village and river"></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="docs/media/underwater.webp" alt="Tropical fish over a warm-ocean coral reef"></td>
-    <td width="50%" valign="middle">
-      Vanilla world generation ported to Rust (terrain, aquifers, carvers, features, villages and the Nether), every block model with smooth lighting and biome tints, the vanilla sky and fog, mobs and the HUD: everything in these frames is drawn by Horizon.
-    </td>
   </tr>
 </table>
 
-## What it does
+## Host a server
 
-Horizon reimplements the Minecraft Java client and its game logic in Rust, one subsystem at a time, and compares each piece with the vanilla game. Each `tools/test_*_parity.py` harness drives the same inputs through Horizon and through the vanilla client and server bytecode from your own copy of the game, then checks that the outputs are identical. It is for players and developers interested in game reimplementation, and for anyone who wants to see how far a behaviour-exact native rewrite can go.
+The launcher's **Servers** page creates, starts, backs up and updates a Horizon server with buttons, and invites friends over Tailscale (it arrives with the next launcher release). On a VPS, `horizon-server` installs with one command and runs without Java. Guide: [Host a server](https://playhorizon.dev/docs/hosting) ([reference](docs/hosting.md)).
 
-The [native client](docs/native-client.md) opens on a vanilla-style title screen with world creation and selection, and generates worlds with the Rust port of the vanilla generators: noise terrain, aquifers, surface rules, carvers and placed features, all checked against vanilla. It streams and lights chunks on worker threads and renders every vanilla block model with smooth lighting, biome tints, the vanilla sky, sun, moon, stars and clouds. Gameplay includes:
+## Modpacks
 
-- validated player physics, health and hunger;
-- mining with vanilla tool rules and loot tables;
-- placing, crafting, chests and furnaces;
-- dropped items, particles and sounds;
-- passive and hostile mobs with combat and vanilla AI, including guardians, shulkers, illagers, ravagers, the wither, the ender dragon fight, the breeze, the creaking, the sniffer, the happy ghast, llamas and the copper golem;
-- villagers that take jobs, trade, restock, meet at the bell and sleep in beds, on a port of vanilla's brain;
-- raids and pillager patrols;
-- dispensers, crafters, the loom and the recipe book;
-- every command, scoreboards and teams, the player list, subtitles and the HUD overlays;
-- boats, minecarts, item frames, paintings and armor stands;
-- shields, maps, books, fireworks, beacons, advancements and statistics;
-- Anvil saves, joining vanilla servers, and opening a world to LAN.
+The launcher's **Modpacks** page imports a Modrinth or CurseForge pack, shows which of its mods Horizon can carry over, and plays the ones it can as their own profile. Today that means content mods made of data and assets; mods with Java code are not ported yet. See [Modpacks](https://playhorizon.dev/docs/modpacks).
 
 ## Agent control
 
@@ -149,7 +107,18 @@ cargo run --release -p horizon-client
 
 Everything prepared lands in the gitignored `.local/`. It is derived from the game: never commit it or share it.
 
-The client starts on the title screen. Command-line options (`--world`, `--seed`, `--creative`, `--render-distance`, `--dedicated`), controls, playing and scripting through `horizon-ctl` and its MCP server, and the architecture are described in [the native client guide](docs/native-client.md). The rest of the documentation is indexed in [docs/README.md](docs/README.md), including [the parity workflow](docs/parity-workflow.md).
+The client starts on the title screen. Command-line options (`--world`, `--seed`, `--creative`, `--render-distance`, `--dedicated`), controls, scripting through `horizon-ctl` and the architecture are described in [the native client guide](docs/native-client.md). The rest of the developer documentation is indexed in [docs/README.md](docs/README.md), including [the parity workflow](docs/parity-workflow.md).
+
+## Contributing
+
+Issues and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) for how we work (vanilla first, small pull requests, labels), or [the contributing guide](https://playhorizon.dev/docs/contributing) on the site. Questions and ideas: [Discord](https://discord.gg/HcTeMZxe5E). Before opening a pull request, run the self-check and paste the block it prints:
+
+```sh
+git config core.hooksPath .githooks
+python3 tools/pr_ready.py
+```
+
+It runs rustfmt, clippy with warnings denied, the tests of the crates you touched, the Python tests, the public-tree check, and the vanilla harnesses your change can affect. CI runs the same checks on GitHub's Linux runners; the vanilla harnesses need the game, which Horizon never downloads, so they run on a maintainer's computer holding their own copy. Never commit game files, decompiled source or prepared resources: `tools/check_public_tree.py` rejects them, and tracked Java is allowed only under the project's own `dev/horizonlab` namespace.
 
 ## Project status
 
@@ -184,18 +153,7 @@ them too (Rust uses Java's own float maths on each platform).
 
 ### Known issues
 
-Online-mode servers (Mojang's session servers) are not supported; skins served over https show the default skin unless already cached; pack icons show the unknown-pack texture in game; the creative hotbar keys (C/X) aren't wired to the hotbar loader; item tooltips lack attribute lines.
-
-## Contributing
-
-Issues and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) for how we work (vanilla first, small pull requests, labels). Before opening a pull request, run the self-check and paste the block it prints:
-
-```sh
-git config core.hooksPath .githooks
-python3 tools/pr_ready.py
-```
-
-It runs rustfmt, clippy with warnings denied, the tests of the crates you touched, the Python tests, the public-tree check, and the vanilla harnesses your change can affect. CI runs the same checks on GitHub's Linux runners; the vanilla harnesses need the game, which Horizon never downloads, so they run on a self-hosted runner holding the maintainer's own copy. Never commit game files, decompiled source or prepared resources: `tools/check_public_tree.py` rejects them, and tracked Java is allowed only under the project's own `dev/horizonlab` namespace.
+Horizon can't sign in to a Microsoft account yet, so it can't join online-mode servers (it joins offline-mode ones); skins served over https show the default skin unless already cached; pack icons show the unknown-pack texture in game; the creative hotbar keys (C/X) aren't wired to the hotbar loader; item tooltips lack attribute lines.
 
 ## Licence
 

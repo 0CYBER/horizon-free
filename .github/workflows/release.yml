@@ -6,7 +6,8 @@ name: release
 # RELEASES_PAUSED=1 (repository variable) stops them.
 # Builds Linux (an older Ubuntu, so the binary runs on any recent distribution and on NixOS through nix-ld) and
 # Windows on GitHub, macOS on the Mac mini's runner (MAC_RUNNER=macos-latest sends it to GitHub), then
-# publishes vYYYY.MM.DD[.N] with notes from the merged pull requests.
+# publishes vYYYY.MM.DD[.N] with notes from the merged pull requests, as a beta (a pre-release) that promote.yml makes
+# stable after 6 hours.
 #   gh workflow run release --ref <branch>                       # dry run: builds and notes, publishes nothing
 #   gh workflow run release -f dry_run=false -f force=true       # on main: release now, whatever the rules say
 on:
@@ -102,8 +103,11 @@ jobs:
         with:
           ref: ${{ needs.decide.outputs.head }}
           persist-credentials: false
-          # On the Mac mini's runner, keep target/ (incremental) and .local/ (the prepared resources).
-          clean: ${{ runner.environment == 'github-hosted' }}
+          # Always from a clean checkout, the Mac mini's runner too: its work folder is shared with pull requests'
+          # parity jobs, and nothing they leave (target/, an untracked .cargo/config.toml, a build script's output)
+          # may end up in a release. target/ is rebuilt from scratch; .local/ is relinked by vanilla-data.sh, which
+          # keeps its preparations outside the checkout.
+          clean: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         if: runner.environment == 'github-hosted'
@@ -168,6 +172,15 @@ jobs:
                   or not report.get("meshed_sections") or not report.get("player"):
               sys.exit("the smoke run did not draw a world")
           EOF
+          # Published with the release: a beta becomes stable only with it (tools/release_channels.py).
+          cp "$home/smoke.json" "$RUNNER_TEMP/smoke-test.json"
+      - uses: actions/upload-artifact@v4
+        if: runner.environment == 'self-hosted'
+        with:
+          name: smoke-test.json
+          path: ${{ runner.temp }}/smoke-test.json
+          if-no-files-found: error
+          retention-days: 3
       - name: Package
         run: |
           set -euo pipefail
@@ -217,10 +230,51 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  publish:
+  sign:
     needs: [decide, build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The only job that holds the release signing key, a secret of the `release` environment, which only main's real
+    # releases enter (dry runs sign with a throwaway key). It runs no code from the repository but
+    # tools/ci/sign_release.sh, which calls only the runner's sha256sum and OpenSSL (docs/release-flow.md).
+    environment: ${{ needs.decide.outputs.dry_run != 'true' && 'release' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools/ci/sign_release.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: horizon-*
+          merge-multiple: true
+      - name: Sign the checksums (SHA256SUMS, SHA256SUMS.sig)
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+          RELEASE_SIGNING_KEY_NEXT: ${{ secrets.RELEASE_SIGNING_KEY_NEXT }}
+          EPHEMERAL: ${{ needs.decide.outputs.dry_run == 'true' && 'yes' || '' }}
+          TAG: ${{ needs.decide.outputs.tag }}
+        run: |
+          bash tools/ci/sign_release.sh "$TAG" dist/horizon-linux-x86_64.tar.gz dist/horizon-windows-x64.zip \
+            dist/horizon-macos-arm64.zip dist/horizon-server-linux-x86_64.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signature
+          path: dist/SHA256SUMS*
+          if-no-files-found: error
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        if: needs.decide.outputs.dry_run == 'true'
+        with:
+          name: ephemeral.pub
+          path: dist/ephemeral.pub
+          retention-days: 3
+
+  publish:
+    needs: [decide, build, sign]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
@@ -238,15 +292,26 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: The signature, checked as launchers check it
+        env:
+          TAG: ${{ needs.decide.outputs.tag }}
+          EPHEMERAL: ${{ needs.decide.outputs.dry_run == 'true' && 'yes' || '' }}
+        run: |
+          key=(); [[ -n "$EPHEMERAL" ]] && key=(--key "$(cat dist/ephemeral.pub)")
+          cargo run --locked --quiet -p horizon-release-sign -- verify --tag "$TAG" --publishing "${key[@]}" dist
       - name: Publish ${{ needs.decide.outputs.tag }}
         if: needs.decide.outputs.dry_run != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.decide.outputs.tag }}
         run: |
+          signature=(); [[ -f dist/SHA256SUMS.sig ]] && signature=(dist/SHA256SUMS.sig)
+          smoke=(); [[ -f dist/smoke-test.json ]] && smoke=(dist/smoke-test.json)
+          # A beta (pre-release): promote.yml makes it stable and latest after 6 hours (docs/release-flow.md).
           gh release create "$TAG" --target "${{ needs.decide.outputs.head }}" --title "$(cat notes/title.txt)" \
-            --notes-file notes/body.md --latest dist/horizon-linux-x86_64.tar.gz dist/horizon-windows-x64.zip \
-            dist/horizon-macos-arm64.zip dist/horizon-server-linux-x86_64.tar.gz
+            --notes-file notes/body.md --prerelease --latest=false dist/horizon-linux-x86_64.tar.gz \
+            dist/horizon-windows-x64.zip dist/horizon-macos-arm64.zip dist/horizon-server-linux-x86_64.tar.gz \
+            dist/SHA256SUMS "${signature[@]}" "${smoke[@]}"
       - name: Dry run, the release that would be published
         if: needs.decide.outputs.dry_run == 'true'
         run: |

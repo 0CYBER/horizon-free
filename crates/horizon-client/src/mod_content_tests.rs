@@ -661,3 +661,100 @@ fn content_root_carries_a_structure_mod() {
     assert!(at[0].abs() < 1024 && at[2].abs() < 1024, "{at:?}");
     let _ = fs::remove_dir_all(&scratch);
 }
+
+/// A content mod folder from `(path, text)` pairs, read as the game reads it.
+fn folder_mod(dir: &Path, files: &[(&str, &str)]) -> ContentMod {
+    for (name, text) in files {
+        let path = dir.join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+    let package = horizon_mods::Package::read(dir).unwrap();
+    ContentMod {
+        id: package.manifest.id.clone(),
+        content: Content::read(dir, &package.manifest).unwrap(),
+    }
+}
+
+fn manifest(id: &str, namespaces: &str) -> String {
+    format!(
+        "id = \"{id}\"\nname = \"{id}\"\nversion = \"1.0\"\napi = \"0.2\"\ncapabilities = [\"registries\"]\nnamespaces = [{namespaces}]\n"
+    )
+}
+
+/// A mod whose files sit under namespaces besides its id (Towns and Towers'
+/// `kaisyn`): they join the root, and loaders read those namespaces.
+#[test]
+fn listed_namespaces_join_the_root() {
+    let Some(base) = prepared() else {
+        return;
+    };
+    let scratch = std::env::temp_dir().join(format!("horizon-mod-ns-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    let toml = manifest("towers", "\"kaisyn\"");
+    let m = folder_mod(
+        &scratch.join("towers"),
+        &[
+            ("horizon-mod.toml", &toml),
+            (
+                "data/kaisyn/worldgen/processor_list/mossy.json",
+                r#"{"processors": []}"#,
+            ),
+            (
+                "data/kaisyn/tags/worldgen/biome/has_tower.json",
+                r#"{"values": ["minecraft:plains"]}"#,
+            ),
+            (
+                "assets/kaisyn/lang/en_us.json",
+                r#"{"block.kaisyn.x": "X"}"#,
+            ),
+        ],
+    );
+    let root = scratch.join("root");
+    build(&base, &[m], &root).unwrap();
+    assert_eq!(namespaces(&root), ["kaisyn", "towers"]);
+    assert!(tag_namespaces(&root).contains(&"kaisyn".to_owned()));
+    let lists: BTreeMap<String, String> =
+        serde_json::from_slice(&fs::read(root.join("worldgen/processor_lists.json")).unwrap())
+            .unwrap();
+    assert!(lists.contains_key("kaisyn:mossy"));
+    let tags: BTreeMap<String, String> =
+        serde_json::from_slice(&fs::read(root.join("worldgen/biome_tags.json")).unwrap()).unwrap();
+    assert!(tags.contains_key("kaisyn:has_tower"));
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+/// Two mods owning one namespace (one's listed namespace is the other's id,
+/// or both list it) are refused together, naming both.
+#[test]
+fn mods_sharing_a_namespace_are_refused() {
+    let scratch = std::env::temp_dir().join(format!("horizon-mod-clash-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&scratch);
+    let towers = folder_mod(
+        &scratch.join("towers"),
+        &[("horizon-mod.toml", &manifest("towers", "\"kaisyn\""))],
+    );
+    let kaisyn = folder_mod(
+        &scratch.join("kaisyn"),
+        &[("horizon-mod.toml", &manifest("kaisyn", ""))],
+    );
+    let other = folder_mod(
+        &scratch.join("other"),
+        &[("horizon-mod.toml", &manifest("other", "\"kaisyn\""))],
+    );
+    // The check runs before the base is read.
+    let base = scratch.join("no-base");
+    let out = scratch.join("root");
+    let e = build(&base, &[towers, kaisyn], &out).unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "mods towers and kaisyn both use the namespace kaisyn; turn one of them off"
+    );
+    let towers = folder_mod(
+        &scratch.join("towers"),
+        &[("horizon-mod.toml", &manifest("towers", "\"kaisyn\""))],
+    );
+    let e = build(&base, &[towers, other], &out).unwrap_err();
+    assert!(e.to_string().starts_with("mods towers and other"), "{e}");
+    let _ = fs::remove_dir_all(&scratch);
+}

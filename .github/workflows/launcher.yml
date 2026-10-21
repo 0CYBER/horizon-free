@@ -120,8 +120,9 @@ jobs:
         with:
           ref: ${{ needs.decide.outputs.head }}
           persist-credentials: false
-          # The Mac mini's runner keeps its target/ between runs.
-          clean: ${{ runner.environment == 'github-hosted' }}
+          # Always from a clean checkout, the Mac mini's runner too: its work folder is shared with pull requests'
+          # parity jobs, and nothing they leave may end up in a launcher release (target/ is rebuilt from scratch).
+          clean: true
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         if: runner.environment == 'github-hosted'
@@ -218,10 +219,49 @@ jobs:
           path: launcher/out/*
           retention-days: 3
 
-  release:
+  sign:
     needs: [decide, build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The only job that holds the release signing key, a secret of the `release` environment, which only main's real
+    # releases enter (dry runs sign with a throwaway key). It runs no code from the repository but
+    # tools/ci/sign_release.sh, which calls only the runner's sha256sum and OpenSSL (docs/release-flow.md).
+    environment: ${{ needs.decide.outputs.dry_run != 'true' && 'release' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: tools/ci/sign_release.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: horizon-launcher-*
+          merge-multiple: true
+      - name: Sign the checksums (SHA256SUMS, SHA256SUMS.sig)
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+          RELEASE_SIGNING_KEY_NEXT: ${{ secrets.RELEASE_SIGNING_KEY_NEXT }}
+          EPHEMERAL: ${{ needs.decide.outputs.dry_run == 'true' && 'yes' || '' }}
+          TAG: ${{ needs.decide.outputs.tag }}
+        run: bash tools/ci/sign_release.sh "$TAG" dist/horizon-launcher-*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signature
+          path: dist/SHA256SUMS*
+          if-no-files-found: error
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        if: needs.decide.outputs.dry_run == 'true'
+        with:
+          name: ephemeral.pub
+          path: dist/ephemeral.pub
+          retention-days: 3
+
+  release:
+    needs: [decide, build, sign]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
@@ -239,6 +279,13 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: The signature, checked as launchers check it
+        env:
+          TAG: ${{ needs.decide.outputs.tag }}
+          EPHEMERAL: ${{ needs.decide.outputs.dry_run == 'true' && 'yes' || '' }}
+        run: |
+          key=(); [[ -n "$EPHEMERAL" ]] && key=(--key "$(cat dist/ephemeral.pub)")
+          cargo run --locked --quiet -p horizon-release-sign -- verify --tag "$TAG" --publishing "${key[@]}" dist
       # Never marked latest: Horizon's own releases stay the repository's latest.
       - name: Publish ${{ needs.decide.outputs.tag }}
         if: needs.decide.outputs.dry_run != 'true'
@@ -246,8 +293,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.decide.outputs.tag }}
         run: |
+          signature=(); [[ -f dist/SHA256SUMS.sig ]] && signature=(dist/SHA256SUMS.sig)
           gh release create "$TAG" --target "${{ needs.decide.outputs.head }}" --title "$(cat notes/title.txt)" \
-            --notes-file notes/body.md --latest=false dist/horizon-launcher-*
+            --notes-file notes/body.md --latest=false dist/horizon-launcher-* dist/SHA256SUMS "${signature[@]}"
       - name: Dry run, the release that would be published
         if: needs.decide.outputs.dry_run == 'true'
         run: |

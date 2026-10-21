@@ -138,6 +138,23 @@ pub fn carry(
         .chain(["minecraft"])
         .collect();
     let loaded = |m: &str| ported.contains(m);
+    // Every mod of the pack, ported or not: a namespace one of them has as
+    // its id is never another mod's.
+    let in_pack: BTreeSet<&str> = records
+        .iter()
+        .flat_map(|r| {
+            [
+                Some(r.key.as_str()),
+                r.info.as_ref().map(|i| i.mod_id.as_str()),
+            ]
+        })
+        .flatten()
+        .collect();
+    let in_pack = |m: &str| in_pack.contains(m);
+    let pack = carry::Pack {
+        loaded: &loaded,
+        mods: &in_pack,
+    };
     let mut done = 0;
     for r in &records {
         let chosen = chosen(r);
@@ -169,7 +186,7 @@ pub fn carry(
             &work.join("mods").join(&r.key),
             facts.as_ref().filter(seen),
             &allowed,
-            &loaded,
+            &pack,
             &conventions,
         ) {
             Ok(report) => {

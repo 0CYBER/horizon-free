@@ -581,28 +581,31 @@ impl Game<'_> {
         let Some(info) = self.res.items().get(&stack.item) else {
             return false;
         };
-        let index = match info.equip_slot.as_deref() {
-            Some("head") => 0,
-            Some("chest") => 1,
-            Some("legs") => 2,
-            Some("feet") => 3,
+        let (index, slot) = match info.equip_slot.as_deref() {
+            Some("head") => (0, "head"),
+            Some("chest") => (1, "chest"),
+            Some("legs") => (2, "legs"),
+            Some("feet") => (3, "feet"),
             _ => return false,
         };
         if !info.swappable {
             return false;
         }
-        let sound = info.equip_sound.clone();
         let current = self.armor[index].clone();
-        // PREVENT_ARMOR_CHANGE (Curse of Binding) outside creative, or the same stack.
+        // PREVENT_ARMOR_CHANGE (Curse of Binding) outside creative, or the same item.
         if current.as_ref().is_some_and(|c| {
-            (c.enchantment_level("minecraft:binding_curse") > 0 && !self.creative) || c == stack
+            (c.enchantment_level("minecraft:binding_curse") > 0 && !self.creative)
+                || c.same_item_same_components(stack)
         }) {
             return true;
         }
-        self.armor[index] = Some(ItemStack {
+        let equipped = ItemStack {
             count: 1,
             ..stack.clone()
-        });
+        };
+        self.armor[index] = Some(equipped.clone());
+        // Player.setItemSlot: onEquipItem plays the equip sound.
+        self.player_equipped(slot, Some(&equipped));
         if !self.creative {
             let mut held = stack.clone();
             held.count -= 1;
@@ -620,13 +623,6 @@ impl Game<'_> {
             }
         }
         self.apply_equipment();
-        if let Some(sound) = sound {
-            let at = self
-                .player
-                .as_ref()
-                .map(|p| [p.position.x, p.position.y, p.position.z]);
-            self.audio.play(&sound, at, 1.0, 1.0);
-        }
         self.swing_arm();
         true
     }

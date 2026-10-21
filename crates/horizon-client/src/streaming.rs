@@ -768,6 +768,15 @@ impl Streaming {
     pub fn pending(&self) -> usize {
         self.shared.queue.lock().unwrap().len()
     }
+    /// Whether any chunk is queued or on its way from generation to a mesh.
+    pub fn busy(&self) -> bool {
+        !(self.generating.is_empty()
+            && self.decorating == 0
+            && self.finishing.is_empty()
+            && self.lighting.is_empty()
+            && self.meshing.is_empty()
+            && self.pending() == 0)
+    }
     /// How much work each stage holds: queued jobs, then what is in flight or
     /// waiting at each step from generation to meshing.
     pub fn stages(&self) -> [(&'static str, usize); 7] {

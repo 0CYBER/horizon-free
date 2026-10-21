@@ -746,9 +746,15 @@ impl Game<'_> {
                     let g = &mut host.hub.guests[gi];
                     let slot = g.selected;
                     std::mem::swap(&mut g.inventory[slot], &mut g.offhand);
+                    let (offhand, main) = (g.offhand.clone(), g.inventory[slot].clone());
                     if let Some(play) = host.play.get_mut(&conn) {
                         play.using = None;
                     }
+                    // setItemInHand: the off hand, then the main hand.
+                    self.as_guest(host, conn, |g| {
+                        g.player_on_equip("offhand", main.as_ref(), offhand.as_ref());
+                        g.player_on_equip("mainhand", offhand.as_ref(), main.as_ref());
+                    });
                 }
                 _ => {}
             },
@@ -844,7 +850,21 @@ impl Game<'_> {
                     return;
                 }
                 let item = self.item_from_network(host, &p.item);
-                host.hub.guests[gi].set_menu_slot(p.slot as usize, item);
+                let slot = p.slot as usize;
+                let g = &mut host.hub.guests[gi];
+                let old = g.menu_slot(slot);
+                g.set_menu_slot(slot, item.clone());
+                // InventoryMenu's ArmorSlot and off-hand slot: setByPlayer.
+                let equipment = match slot {
+                    5..=8 => Some(["head", "chest", "legs", "feet"][slot - 5]),
+                    45 => Some("offhand"),
+                    _ => None,
+                };
+                if let Some(equipment) = equipment {
+                    self.as_guest(host, conn, |g| {
+                        g.player_on_equip(equipment, old.as_ref(), item.as_ref());
+                    });
+                }
             }
             S::ContainerClick(p) if self.lan_merchant_click(host, conn, &p) => {}
             S::ContainerClick(p) if self.lan_inventory_click(host, conn, &p) => {}
@@ -1572,9 +1592,7 @@ impl Game<'_> {
                 if w.player.ground.on_ground && !on_ground && moved[1] > 0.0 {
                     let sprinting = w.player.sprinting;
                     w.player
-                        .health
-                        .food
-                        .add_exhaustion(if sprinting { 0.2 } else { 0.05 });
+                        .cause_food_exhaustion(if sprinting { 0.2 } else { 0.05 });
                 }
                 let landed = (|| -> horizon_client::Result<()> {
                     w.set_on_ground_with_movement(on_ground, false, movement)?;

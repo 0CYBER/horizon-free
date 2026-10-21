@@ -307,6 +307,34 @@ fn parse_blend(value: &str) -> Result<Blend, String> {
     }
 }
 
+/// `clouds = off | fast | fancy`: replaces the player's cloud setting while
+/// the pack runs (`ShaderProperties.cloudSetting`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloudSetting {
+    Off,
+    Fast,
+    Fancy,
+}
+
+/// The vanilla sky the pack keeps: Iris draws no clouds with `clouds = off`,
+/// and no sun or moon with `sun = false` / `moon = false`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SkyDirectives {
+    pub clouds: Option<CloudSetting>,
+    pub sun: bool,
+    pub moon: bool,
+}
+
+impl Default for SkyDirectives {
+    fn default() -> Self {
+        Self {
+            clouds: None,
+            sun: true,
+            moon: true,
+        }
+    }
+}
+
 /// A pack's `shaders.properties`.
 #[derive(Debug, Default)]
 pub struct ShaderProperties {
@@ -482,6 +510,31 @@ impl ShaderProperties {
                 ))
             })
             .collect()
+    }
+
+    /// `uniform.*` and `variable.*`: the pack's custom uniforms.
+    pub fn custom_uniforms(&self) -> crate::uniforms::CustomUniforms {
+        crate::uniforms::CustomUniforms::parse(self.preprocessed.iter())
+    }
+
+    /// `clouds`, `sun` and `moon`: what the pack does with the vanilla sky.
+    pub fn sky(&self) -> SkyDirectives {
+        let boolean = |key| {
+            !matches!(
+                self.preprocessed.get(key).map(str::trim),
+                Some("false" | "0")
+            )
+        };
+        SkyDirectives {
+            clouds: match self.preprocessed.get("clouds").map(str::trim) {
+                Some("off") => Some(CloudSetting::Off),
+                Some("fast") => Some(CloudSetting::Fast),
+                Some("fancy") => Some(CloudSetting::Fancy),
+                _ => None,
+            },
+            sun: boolean("sun"),
+            moon: boolean("moon"),
+        }
     }
 
     /// `blend.<program>`: the program's blend override.

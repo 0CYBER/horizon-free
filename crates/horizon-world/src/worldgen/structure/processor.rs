@@ -22,6 +22,8 @@ use serde_json::Value;
 use std::{collections::BTreeSet, sync::Arc};
 
 mod lithostitched;
+mod pillars;
+mod sea_level;
 
 /// The draws processors make from StructurePlaceSettings' random.
 pub trait ProcessorRandom {
@@ -301,6 +303,28 @@ pub enum Processor {
     Condition(Box<lithostitched::Conditional>),
     /// `horizon:set_block` (Lithostitched's `set_block`).
     SetBlock(Box<lithostitched::SetBlock>),
+    /// `horizon:pillar` (Repurposed Structures' and Moog's pillars): a
+    /// trigger block starts a column down to the ground.
+    Pillar(Box<pillars::Pillar>),
+    /// `horizon:bottom_pillar` (Repurposed Structures'): the bottom layer
+    /// continues down to the ground.
+    BottomPillar(Box<pillars::BottomPillar>),
+    /// `horizon:close_off_fluid_sources` (Repurposed Structures' and Moog's):
+    /// fluid sources beside open blocks are walled off.
+    CloseOffFluidSources(Box<pillars::CloseOffFluidSources>),
+    /// `horizon:yung_pillar` (YUNG's pillars: Better Fortresses, Better
+    /// Jungle Temples).
+    YungPillar(Box<pillars::YungPillar>),
+    /// `horizon:stair_pillar` (Better Fortresses' stair supports).
+    StairPillar(Box<pillars::StairPillar>),
+    /// `horizon:flood_air` (Better Ocean Monuments'): air below sea level
+    /// becomes water.
+    FloodAir(Box<sea_level::FloodAir>),
+    /// `horizon:waterlog` (Better Ocean Monuments'): blocks below sea level
+    /// are waterlogged.
+    Waterlog,
+    /// `horizon:keep_world_block` (Better Ocean Monuments' structure void).
+    KeepWorldBlock(Box<sea_level::KeepWorldBlock>),
 }
 #[derive(Clone, Debug, Default)]
 pub struct ProcessorList(pub Vec<Processor>);
@@ -327,6 +351,12 @@ pub struct Pick {
     block: String,
     picks: Vec<(f32, Outcome)>,
     default: Option<Outcome>,
+    /// Each pick draws its own `nextFloat` (`if (r.nextFloat() < a) ...
+    /// else if (r.nextFloat() < b)`), Better Ocean Monuments' way.
+    redraw: bool,
+    /// The picked block takes the placeholder's properties
+    /// (Block.withPropertiesOf).
+    keep_properties: bool,
 }
 #[derive(Clone, Debug)]
 struct Outcome {
@@ -412,11 +442,19 @@ impl Pick {
                 .map(|p| Ok((below(p)?, outcome(p)?)))
                 .collect::<Result<_, DecodeError>>()?,
             default: value.get("default").map(outcome).transpose()?,
+            redraw: value["redraw"].as_bool().unwrap_or(false),
+            keep_properties: value["keep_properties"].as_bool().unwrap_or(false),
         })
     }
     fn apply(&self, info: BlockInfo, random: &mut dyn ProcessorRandom) -> BlockInfo {
         let outcome = match self.picks.is_empty() {
             true => self.default.as_ref(),
+            false if self.redraw => self
+                .picks
+                .iter()
+                .find(|(b, _)| random.float() < *b)
+                .map(|(_, o)| o)
+                .or(self.default.as_ref()),
             false => {
                 let f = random.float();
                 self.picks
@@ -760,6 +798,28 @@ impl Processor {
             "horizon:set_block" => {
                 Self::SetBlock(Box::new(lithostitched::SetBlock::decode(value, state)?))
             }
+            "horizon:pillar" => Self::Pillar(Box::new(pillars::Pillar::decode(
+                value, resources, bindings, state,
+            )?)),
+            "horizon:bottom_pillar" => Self::BottomPillar(Box::new(pillars::BottomPillar::decode(
+                value, resources, bindings,
+            )?)),
+            "horizon:close_off_fluid_sources" => Self::CloseOffFluidSources(Box::new(
+                pillars::CloseOffFluidSources::decode(value, resources, bindings)?,
+            )),
+            "horizon:yung_pillar" => Self::YungPillar(Box::new(pillars::YungPillar::decode(
+                value, bindings, state,
+            )?)),
+            "horizon:stair_pillar" => Self::StairPillar(Box::new(pillars::StairPillar::decode(
+                value, resources, bindings,
+            )?)),
+            "horizon:flood_air" => {
+                Self::FloodAir(Box::new(sea_level::FloodAir::decode(resources.registry)?))
+            }
+            "horizon:waterlog" => Self::Waterlog,
+            "horizon:keep_world_block" => {
+                Self::KeepWorldBlock(Box::new(sea_level::KeepWorldBlock::decode(value)?))
+            }
             "horizon:condition" => Self::Condition(Box::new(lithostitched::Conditional::decode(
                 value, resources, bindings,
             )?)),
@@ -773,6 +833,23 @@ impl Processor {
 impl ProcessorList {
     /// A processor list holder: a registry name, `{"processors": [...]}` or a list.
     pub fn decode(
+        json: &str,
+        resources: &StructureResources,
+        bindings: &FeatureBlockBindings<'_>,
+    ) -> Result<Self, DecodeError> {
+        // Lists name lists (a pillar's, Lithostitched's): a cycle of names
+        // is refused rather than followed.
+        thread_local!(static DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) });
+        let depth = DEPTH.get();
+        if depth >= 16 {
+            return Err(DecodeError::Field("processor lists nest too deep"));
+        }
+        DEPTH.set(depth + 1);
+        let decoded = Self::decode_at(json, resources, bindings);
+        DEPTH.set(depth);
+        decoded
+    }
+    fn decode_at(
         json: &str,
         resources: &StructureResources,
         bindings: &FeatureBlockBindings<'_>,
@@ -1109,8 +1186,32 @@ fn process_block<W: PlacementContext>(
                 list, world, resources, position, reference, relative, info, settings,
             );
         }
+        Processor::Pillar(p) => return p.process(world, resources, position, info, settings),
+        Processor::BottomPillar(p) => {
+            return p.process(world, resources, position, relative, info, settings);
+        }
+        Processor::CloseOffFluidSources(p) => return p.process(world, info, settings),
+        Processor::YungPillar(p) => return p.process(world, resources, info, settings),
+        Processor::StairPillar(p) => return p.process(world, resources, info, settings),
+        Processor::FloodAir(p) => return p.process(world, info),
+        Processor::Waterlog => {
+            return sea_level::Waterlog::process(world, resources.registry, info, settings);
+        }
+        Processor::KeepWorldBlock(p) => {
+            return p.process(world, resources.registry, info, settings);
+        }
         Processor::Pick(pick) => match name(info.state) == pick.block {
-            true => Some(settings.with_random(info.pos, |r| pick.apply(info, r))),
+            true => {
+                let mut out = settings.with_random(info.pos, |r| pick.apply(info.clone(), r));
+                if pick.keep_properties
+                    && let Some(kept) = registry
+                        .state(out.state)
+                        .and_then(|s| with_properties_of(registry, &s.name, info.state))
+                {
+                    out.state = kept;
+                }
+                Some(out)
+            }
             false => Some(info),
         },
         Processor::SpawnerMobs(spawner) => {
@@ -1837,6 +1938,37 @@ mod tests {
         fn long(&mut self) -> i64 {
             unreachable!()
         }
+    }
+
+    #[test]
+    fn redrawn_picks_draw_a_float_each() {
+        // Better Ocean Monuments' copper: < 0.1 exposed, else a new float
+        // < 0.3 weathered, else oxidized.
+        let id = |v: &Value| Ok(BlockStateId(v["Name"].as_str().unwrap().len() as u32));
+        let pick = Pick::decode(
+            &json!({"block": "oxidized_copper", "redraw": true, "keep_properties": true,
+                "picks": [{"below": 0.1, "state": {"Name": "a"}},
+                          {"below": 0.3, "state": {"Name": "bb"}}],
+                "default": {"state": {"Name": "ccc"}}}),
+            id,
+        )
+        .unwrap();
+        assert!(pick.keep_properties);
+        let run = |f: Vec<f32>| {
+            pick.apply(
+                BlockInfo {
+                    pos: [0; 3],
+                    state: BlockStateId(0),
+                    nbt: None,
+                },
+                &mut Draws(f, vec![]),
+            )
+            .state
+        };
+        assert_eq!(run(vec![0.05]), BlockStateId(1));
+        // One float would give weathered at 0.2; the second draw decides.
+        assert_eq!(run(vec![0.2, 0.5]), BlockStateId(3));
+        assert_eq!(run(vec![0.2, 0.25]), BlockStateId(2));
     }
 
     #[test]

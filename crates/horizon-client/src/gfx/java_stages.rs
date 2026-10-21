@@ -11,8 +11,21 @@ use super::pack_stages::FrameUniform;
 use crate::java_pack::{JavaFolder, JavaPasses};
 use glam::{Mat3, Mat4, Vec3, Vec4};
 use horizon_shaderpack::pipeline::TargetSettings;
-use horizon_shaderpack::pipeline::{Program, target_index};
-use std::collections::{BTreeMap, BTreeSet};
+use horizon_shaderpack::pipeline::{Directives, Program, target_index};
+use horizon_shaderpack::uniforms::{CustomUniforms, SmoothFloat, UniformState};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+/// What Iris's uniforms read from the game that the frame uniform doesn't
+/// carry.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct JavaFrame {
+    /// The block and sky light at the camera's eye block, 0..15
+    /// (`CommonUniforms.getEyeBrightness`).
+    pub eye_light: [u8; 2],
+    /// `visual/sun_angle` and `visual/moon_angle`, degrees (0: overhead).
+    pub sun_angle: f32,
+    pub moon_angle: f32,
+}
 
 /// Iris's `noisetex` size (`noiseTextureResolution`'s default).
 const NOISE_SIZE: u32 = 256;
@@ -203,6 +216,7 @@ struct Folder {
     flipped_at_end: BTreeSet<u32>,
     passes: Vec<PassGpu>,
     final_pass: Option<PassGpu>,
+    directives: Directives,
 }
 
 pub struct JavaStages {
@@ -216,6 +230,10 @@ pub struct JavaStages {
     last: Option<std::time::Instant>,
     frames: u32,
     previous: Option<(Mat4, Mat4, Vec3)>,
+    uniforms: CustomUniforms,
+    uniform_state: UniformState,
+    /// `eyeBrightnessSmooth`, block then sky.
+    eye_smooth: [SmoothFloat; 2],
 }
 
 impl JavaStages {
@@ -256,6 +274,7 @@ impl JavaStages {
                     flipped_at_end: plan.flipped_at_end.clone(),
                     passes,
                     final_pass,
+                    directives: plan.directives,
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -273,6 +292,9 @@ impl JavaStages {
             last: None,
             frames: 0,
             previous: None,
+            uniforms: pack.uniforms.clone(),
+            uniform_state: UniformState::default(),
+            eye_smooth: [SmoothFloat::default(); 2],
         })
     }
 
@@ -289,6 +311,7 @@ impl JavaStages {
         size: [u32; 2],
         post: &super::world_post::Post,
         frame: FrameUniform,
+        world: JavaFrame,
     ) -> &wgpu::BindGroup {
         let dimension = (frame.dimension[0] as i32).clamp(-1, 1);
         let folder = self.folder_for[(dimension + 1) as usize].unwrap_or(0);
@@ -302,7 +325,8 @@ impl JavaStages {
         let now = std::time::Instant::now();
         let frame_time = self.last.map_or(0.0, |t| (now - t).as_secs_f32());
         self.last = Some(now);
-        let inputs = Inputs::new(
+        let directives = self.folders[folder].directives;
+        let mut inputs = Inputs::new(
             &frame,
             size,
             self.started.elapsed().as_secs_f32(),
@@ -310,6 +334,16 @@ impl JavaStages {
             self.frames,
             self.previous,
         );
+        inputs.set_world(&world, directives.sun_path_rotation);
+        let half_life = directives.eye_brightness_half_life;
+        for (i, smooth) in self.eye_smooth.iter_mut().enumerate() {
+            inputs.eye_smooth[i] = smooth.update(inputs.eye[i], half_life, half_life, frame_time);
+        }
+        self.uniforms
+            .update(&mut self.uniform_state, frame_time, &|name| {
+                inputs.builtin(name)
+            });
+        inputs.custom = self.uniform_state.values().clone();
         self.previous = Some((inputs.view, inputs.projection, inputs.camera));
         self.frames = self.frames.wrapping_add(1);
         let bound = self.bound.as_ref().expect("bound above");
@@ -1405,6 +1439,32 @@ struct Inputs {
     frame_time: f32,
     frames: u32,
     frame: FrameUniform,
+    /// `eyeBrightness` and `eyeBrightnessSmooth`: block, sky light × 16.
+    eye: [f32; 2],
+    eye_smooth: [f32; 2],
+    /// `CelestialUniforms`, in view space.
+    sun_position: Vec3,
+    moon_position: Vec3,
+    up_position: Vec3,
+    /// `sunAngle` and `shadowAngle`, 0..1.
+    sun_angle: f32,
+    shadow_angle: f32,
+    is_day: bool,
+    /// The pack's custom uniforms this frame.
+    custom: HashMap<String, Vec<f32>>,
+}
+
+/// `CelestialUniforms.getSunAngle`: the body's angle plus 90, in 0..360
+/// (0 at sunrise for the sun).
+fn celestial_angle(degrees: f32) -> f32 {
+    let c = degrees + 90.0;
+    if c < 0.0 {
+        c + 360.0
+    } else if c > 360.0 {
+        c - 360.0
+    } else {
+        c
+    }
 }
 
 impl Inputs {
@@ -1427,7 +1487,7 @@ impl Inputs {
         );
         let projection = to_gl * Mat4::from_cols_array_2d(&frame.projection);
         let camera = Vec4::from(frame.camera_position).truncate();
-        Self {
+        let mut out = Self {
             view,
             projection,
             camera,
@@ -1437,20 +1497,64 @@ impl Inputs {
             frame_time,
             frames,
             frame: *frame,
-        }
+            eye: [0.0; 2],
+            eye_smooth: [0.0; 2],
+            sun_position: Vec3::ZERO,
+            moon_position: Vec3::ZERO,
+            up_position: Vec3::ZERO,
+            sun_angle: 0.0,
+            shadow_angle: 0.0,
+            is_day: true,
+            custom: HashMap::new(),
+        };
+        out.set_world(&JavaFrame::default(), 0.0);
+        out
     }
 
-    /// The value of Iris uniform `name`, as its scalars in order; `None` for
-    /// one Horizon doesn't provide (it stays zero).
+    /// The light at the eye and the sun and moon, tilted by the pack's
+    /// `sunPathRotation` as Iris tilts them.
+    fn set_world(&mut self, world: &JavaFrame, sun_path_rotation: f32) {
+        self.eye = world.eye_light.map(|l| f32::from(l) * 16.0);
+        self.eye_smooth = self.eye;
+        // CelestialUniforms.getCelestialPosition: the sky's Y -90, the
+        // tilt, the body's angle, then (0, 100, 0) as a point.
+        let sky = self.view * Mat4::from_rotation_y((-90f32).to_radians());
+        let body = |angle: f32| {
+            let m = sky
+                * Mat4::from_rotation_z(sun_path_rotation.to_radians())
+                * Mat4::from_rotation_x(angle.to_radians());
+            m.transform_point3(Vec3::new(0.0, 100.0, 0.0))
+        };
+        self.sun_position = body(world.sun_angle);
+        self.moon_position = body(world.moon_angle);
+        self.up_position = sky.transform_vector3(Vec3::new(0.0, 100.0, 0.0));
+        let sun = celestial_angle(world.sun_angle);
+        self.is_day = sun < 180.0;
+        self.sun_angle = sun / 360.0;
+        self.shadow_angle = if self.is_day {
+            sun
+        } else {
+            celestial_angle(world.moon_angle)
+        } / 360.0;
+    }
+
+    /// The value of uniform `name`, as its scalars in order: Iris's own,
+    /// else the pack's custom uniform; `None` for one Horizon doesn't
+    /// provide (it stays zero).
     fn value(&self, name: &str) -> Option<Vec<f32>> {
+        self.builtin(name)
+            .or_else(|| self.custom.get(name).cloned())
+    }
+
+    /// The value of Iris uniform `name`; `None` for one Horizon doesn't
+    /// provide.
+    fn builtin(&self, name: &str) -> Option<Vec<f32>> {
         if let Some(flag) = name.strip_prefix("iris_bool_") {
             return self.value(flag);
         }
         let f = &self.frame;
         let mat = |m: Mat4| m.to_cols_array().to_vec();
         let vec3 = |v: Vec3| v.to_array().to_vec();
-        let in_view = |v: Vec3| (self.view * v.extend(0.0)).truncate() * 100.0;
-        let sun = Vec4::from(f.sun).truncate();
         let day = f.time[2].rem_euclid(1.0);
         // The full-screen passes' own matrices: 0..1 onto the screen.
         let screen = Mat4::orthographic_rh_gl(0.0, 1.0, 0.0, 1.0, -1.0, 1.0);
@@ -1476,12 +1580,16 @@ impl Inputs {
             "frameCounter" => vec![(self.frames % 720_720) as f32],
             "worldTime" => vec![(day * 24000.0).floor()],
             "worldDay" => vec![0.0],
-            "sunAngle" => vec![day],
-            "shadowAngle" => vec![if day < 0.5 { day } else { day - 0.5 }],
-            "sunPosition" => vec3(in_view(sun)),
-            "moonPosition" => vec3(in_view(-sun)),
-            "shadowLightPosition" => vec3(in_view(if sun.y >= 0.0 { sun } else { -sun })),
-            "upPosition" => vec3(in_view(Vec3::Y)),
+            "sunAngle" => vec![self.sun_angle],
+            "shadowAngle" => vec![self.shadow_angle],
+            "sunPosition" => vec3(self.sun_position),
+            "moonPosition" => vec3(self.moon_position),
+            "shadowLightPosition" => vec3(if self.is_day {
+                self.sun_position
+            } else {
+                self.moon_position
+            }),
+            "upPosition" => vec3(self.up_position),
             "moonPhase" => vec![f.moon[3]],
             "rainStrength" | "wetness" => vec![f.weather[0]],
             "thunderStrength" => vec![f.weather[1]],
@@ -1491,9 +1599,9 @@ impl Inputs {
             "nightVision" => vec![f.camera_state[1]],
             "darknessFactor" => vec![f.camera_state[2]],
             "screenBrightness" => vec![1.0],
-            // Sky light at full with a sky, no block light: Horizon doesn't
-            // give the light at the eye yet.
-            "eyeBrightness" | "eyeBrightnessSmooth" => vec![0.0, 240.0 * f.dimension[1]],
+            "eyeBrightness" => self.eye.to_vec(),
+            // An ivec2: the smoothed value truncated.
+            "eyeBrightnessSmooth" => self.eye_smooth.map(f32::trunc).to_vec(),
             "hasSkylight" => vec![f.dimension[1]],
             "iris_ModelViewMatrix" | "iris_ModelViewMatrixInverse" => mat(Mat4::IDENTITY),
             "iris_ProjectionMatrix" | "iris_ModelViewProjectionMatrix" => mat(screen),
@@ -1557,6 +1665,60 @@ mod tests {
             sampler_kind("sampler3D").unwrap().0,
             wgpu::TextureViewDimension::D3
         );
+    }
+
+    #[test]
+    fn celestial_and_eye_uniforms_follow_iris() {
+        let frame = FrameUniform {
+            view: Mat4::IDENTITY.to_cols_array_2d(),
+            ..Default::default()
+        };
+        let close = |a: Option<Vec<f32>>, b: [f32; 3]| {
+            let a = a.unwrap();
+            assert!(
+                a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-3),
+                "{a:?} != {b:?}"
+            );
+        };
+        let mut inputs = Inputs::new(&frame, [300, 200], 0.0, 0.0, 0, None);
+        // Sunrise: the sun in the east, at angle 0; the moon in the west.
+        let world = |sun_angle: f32| JavaFrame {
+            eye_light: [3, 15],
+            sun_angle,
+            moon_angle: sun_angle + 180.0,
+        };
+        inputs.set_world(&world(-90.0), 0.0);
+        close(inputs.value("sunPosition"), [100.0, 0.0, 0.0]);
+        close(inputs.value("moonPosition"), [-100.0, 0.0, 0.0]);
+        close(inputs.value("upPosition"), [0.0, 100.0, 0.0]);
+        assert_eq!(inputs.value("sunAngle"), Some(vec![0.0]));
+        assert_eq!(inputs.value("eyeBrightness"), Some(vec![48.0, 240.0]));
+        // Complementary Unbound's sunPathRotation of -40 at noon: the sun
+        // where its GetSunVector puts it, (0, cos 40, sin 40).
+        let tilt = (-40f32).to_radians();
+        inputs.set_world(&world(0.0), -40.0);
+        close(
+            inputs.value("sunPosition"),
+            [0.0, 100.0 * tilt.cos(), -100.0 * tilt.sin()],
+        );
+        assert_eq!(inputs.value("sunAngle"), Some(vec![0.25]));
+        close(inputs.value("shadowLightPosition"), {
+            let s = inputs.sun_position;
+            [s.x, s.y, s.z]
+        });
+        // Night: the moon casts the shadows.
+        inputs.set_world(&world(150.0), 0.0);
+        assert!(!inputs.is_day);
+        assert_eq!(
+            inputs.value("shadowLightPosition"),
+            inputs.value("moonPosition")
+        );
+        assert!((inputs.value("shadowAngle").unwrap()[0] - 60.0 / 360.0).abs() < 1e-6);
+        // Custom uniforms come after Iris's own.
+        inputs.custom.insert("eyeBrightnessM".into(), vec![0.5]);
+        inputs.custom.insert("sunAngle".into(), vec![9.0]);
+        assert_eq!(inputs.value("eyeBrightnessM"), Some(vec![0.5]));
+        assert_ne!(inputs.value("sunAngle"), Some(vec![9.0]));
     }
 
     #[test]

@@ -72,6 +72,8 @@ pub mod translucency;
 pub(crate) mod upload;
 mod world_post;
 
+/// A column whose every section has its mesh (`Renderer::lod_detail_columns`).
+const COMPLETE_COLUMN: u32 = (1 << (crate::chunk::HEIGHT / 16)) - 1;
 /// A section's instance: its camera-relative origin and, in `w`, the step of
 /// its fixed-point UVs (`terrain.wgsl`'s `terrain_uv`).
 fn section_instance(origin: [f32; 3]) -> [f32; 4] {
@@ -238,6 +240,9 @@ pub struct ShaderInputs {
     /// The time of day as a fraction (0 sunrise, 0.25 noon) and the partial tick.
     pub day_fraction: f32,
     pub partial_tick: f32,
+    /// The block and sky light (0..15) of the block holding the camera
+    /// entity's eyes; no sky light without a sky.
+    pub eye_light: [u8; 2],
 }
 /// One frame of the world border wall (`WorldBorderRenderer.render`).
 #[derive(Clone, Debug)]
@@ -370,7 +375,17 @@ pub struct Renderer {
     depth: wgpu::TextureView,
     sections: resident::Resident<SectionGpu>,
     lods: HashMap<crate::lod::TileKey, lod::Tile>,
+    /// The chunk columns the resident tiles leave out (`Lod::take_cutout`):
+    /// their sections are drawn even past the render distance, so terrain
+    /// leaving it never opens a hole before the tiles fill it in.
+    lod_cutout: crate::fast_hash::FxHashSet<(i32, i32)>,
+    /// Removed sections of `lod_cutout` columns, released once tiles cover them.
+    lod_retiring: crate::fast_hash::FxHashSet<SectionKey>,
+    /// Finished tile meshes `upload_lods` has yet to upload.
+    lod_pending: Option<lod::Pending>,
     detail_columns: HashMap<(i32, i32), u32>,
+    /// Bumped whenever a column becomes or stops being complete.
+    detail_revision: u64,
     arena: arena::Arena,
     sorted_indices: arena::Arena,
     translucent_sorter: translucency::Sorter,
@@ -509,6 +524,46 @@ fn terrain_group(
         ],
     })
 }
+/// CPU texture uploads prepared by the resource worker. Consumed by renderer
+/// construction so the temporary mip chains are released after GPU upload.
+pub struct PreparedTextures {
+    sprites: Vec<(Vec<u8>, u32)>,
+    forcefield: (Vec<u8>, u32),
+}
+impl PreparedTextures {
+    pub fn new(
+        pixels: &[u8],
+        size: u32,
+        layers: u32,
+        settings: &[crate::mipmap::Settings],
+        forcefield: (&[u8], u32),
+    ) -> Self {
+        Self::with_split(pixels, size, layers, settings, forcefield, sprite_split())
+    }
+
+    fn with_split(
+        pixels: &[u8],
+        size: u32,
+        layers: u32,
+        settings: &[crate::mipmap::Settings],
+        forcefield: (&[u8], u32),
+        split: u32,
+    ) -> Self {
+        let layer_bytes = (size * size * 4) as usize;
+        Self {
+            sprites: (0..layers.div_ceil(split).max(1))
+                .map(|array| {
+                    let first = array * split;
+                    let count = layers.saturating_sub(first).clamp(1, split);
+                    let start = (first as usize * layer_bytes).min(pixels.len());
+                    mip_chain(&pixels[start..], size, settings, first, count)
+                })
+                .collect(),
+            forcefield: mip_chain(forcefield.0, forcefield.1, &[], 0, 1),
+        }
+    }
+}
+
 fn mip_chain(
     pixels: &[u8],
     size: u32,
@@ -792,6 +847,7 @@ impl Renderer {
         hud_atlas: (&[u8], u32, u32),
         forcefield: (&[u8], u32),
         panorama_faces: &panorama::Faces,
+        prepared: Option<PreparedTextures>,
         previous: Option<&Self>,
         api: GraphicsApi,
     ) -> Result<Self> {
@@ -1165,20 +1221,17 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let layer_bytes = (sprite_size * sprite_size * 4) as usize;
+        let prepared = prepared.unwrap_or_else(|| {
+            PreparedTextures::new(sprite_pixels, sprite_size, layers, sprite_mips, forcefield)
+        });
         let mut mip_levels = 1;
-        let sprite_textures: Vec<wgpu::Texture> = (0..sprite_arrays)
-            .map(|array| {
-                let first = array * split;
+        let sprite_textures: Vec<wgpu::Texture> = prepared
+            .sprites
+            .into_iter()
+            .enumerate()
+            .map(|(array, (mips, levels))| {
+                let first = array as u32 * split;
                 let count = layers.saturating_sub(first).clamp(1, split);
-                let start = (first as usize * layer_bytes).min(sprite_pixels.len());
-                let (mips, levels) = mip_chain(
-                    &sprite_pixels[start..],
-                    sprite_size,
-                    sprite_mips,
-                    first,
-                    count,
-                );
                 mip_levels = levels;
                 device.create_texture_with_data(
                     &queue,
@@ -1639,9 +1692,8 @@ impl Renderer {
         });
         // WorldBorderRenderer: misc/forcefield.png as a MipmappedTexture
         // (repeat, linear minification with mipmaps, nearest magnification).
-        let (forcefield_pixels, forcefield_size) = forcefield;
-        let (forcefield_mips, forcefield_levels) =
-            mip_chain(forcefield_pixels, forcefield_size, &[], 0, 1);
+        let forcefield_size = forcefield.1;
+        let (forcefield_mips, forcefield_levels) = prepared.forcefield;
         let forcefield_texture = device.create_texture_with_data(
             &queue,
             &wgpu::TextureDescriptor {
@@ -2038,7 +2090,11 @@ impl Renderer {
             depth,
             sections: resident::Resident::default(),
             lods: HashMap::new(),
+            lod_cutout: Default::default(),
+            lod_retiring: Default::default(),
+            lod_pending: None,
             detail_columns: HashMap::new(),
+            detail_revision: 0,
             arena,
             sorted_indices,
             translucent_sorter: translucency::Sorter::default(),
@@ -2252,13 +2308,15 @@ impl Renderer {
         if changed {
             self.block_entity_revision = next_block_entity_revision();
         }
+        if !self.lod_retiring.is_empty() {
+            self.lod_retiring.remove(&key);
+        }
         self.release_section(key);
         let section = self.upload_mesh(mesh);
-        if section.is_some() || (mesh.solid.is_empty() && mesh.translucent.is_empty()) {
-            *self.detail_columns.entry((key.0, key.2)).or_default() |= 1 << key.1;
-        } else if let Some(mask) = self.detail_columns.get_mut(&(key.0, key.2)) {
-            *mask &= !(1 << key.1);
-        }
+        self.set_detail(
+            key,
+            section.is_some() || (mesh.solid.is_empty() && mesh.translucent.is_empty()),
+        );
         if let Some(section) = section {
             self.sections.insert(key, section);
         }
@@ -2412,7 +2470,11 @@ impl Renderer {
         self.block_entity_revision = next_block_entity_revision();
         self.sections.clear();
         self.lods.clear();
+        self.lod_cutout.clear();
+        self.lod_retiring.clear();
+        self.lod_pending = None;
         self.detail_columns.clear();
+        self.detail_revision += 1;
         self.arena.clear();
         if let Some(flat) = &mut self.flat {
             flat.clear();
@@ -2422,23 +2484,44 @@ impl Renderer {
         self.occlusion.clear();
     }
     pub fn lod_detail_columns(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
-        let complete = (1u32 << (crate::chunk::HEIGHT / 16)) - 1;
         self.detail_columns
             .iter()
-            .filter_map(move |(&column, &mask)| (mask == complete).then_some(column))
+            .filter_map(move |(&column, &mask)| (mask == COMPLETE_COLUMN).then_some(column))
+    }
+    /// Changes whenever `lod_detail_columns` does.
+    pub fn lod_detail_revision(&self) -> u64 {
+        self.detail_revision
+    }
+    /// Whether the section at `key` has its mesh, for `lod_detail_columns`.
+    fn set_detail(&mut self, key: SectionKey, meshed: bool) {
+        let column = (key.0, key.2);
+        let mask = self.detail_columns.get(&column).copied().unwrap_or(0);
+        let next = if meshed {
+            mask | 1 << key.1
+        } else {
+            mask & !(1 << key.1)
+        };
+        if (mask == COMPLETE_COLUMN) != (next == COMPLETE_COLUMN) {
+            self.detail_revision += 1;
+        }
+        if next == 0 {
+            self.detail_columns.remove(&column);
+        } else {
+            self.detail_columns.insert(column, next);
+        }
     }
     pub fn remove(&mut self, key: SectionKey) {
-        if let Some(mask) = self.detail_columns.get_mut(&(key.0, key.2)) {
-            *mask &= !(1 << key.1);
-            if *mask == 0 {
-                self.detail_columns.remove(&(key.0, key.2));
-            }
-        }
+        self.set_detail(key, false);
         if self.block_entities.remove(&key).is_some() {
             self.block_entity_revision = next_block_entity_revision();
         }
         self.occlusion.remove(key);
-        self.release_section(key);
+        if !self.lod_cutout.is_empty() && self.lod_cutout.contains(&(key.0, key.2)) {
+            // Distant tiles still leave its column out: drawn until they don't.
+            self.lod_retiring.insert(key);
+        } else {
+            self.release_section(key);
+        }
     }
     /// Run `pack`'s stages over the world from now on (`None`: no pack, the
     /// vanilla frame). On error the previous pack stays.
@@ -2826,6 +2909,7 @@ impl Renderer {
             });
         }
         let reachable = &self.occlusion;
+        let cutout = &self.lod_cutout;
         let mut visible = std::mem::take(&mut self.visible);
         visible.clear();
         crate::spans::time("visibility", || {
@@ -2834,6 +2918,7 @@ impl Renderer {
                 (frame.detail_distance / 16.0) as i32,
                 &view,
                 |k| !culling || reachable.contains(k),
+                |x, z| !cutout.is_empty() && cutout.contains(&(x, z)),
                 &mut visible,
             )
         });
@@ -3552,6 +3637,11 @@ impl Renderer {
                     size,
                     &self.world_post,
                     pack_uniform,
+                    java_stages::JavaFrame {
+                        eye_light: frame.shader.eye_light,
+                        sun_angle: frame.sky.sun_angle,
+                        moon_angle: frame.sky.moon_angle,
+                    },
                 ),
             };
             self.world_post
@@ -4484,6 +4574,50 @@ mod sprite_upload_tests {
             assert_eq!(state.cache_bytes, bytes);
             assert_eq!(state.cache.len(), 1);
             assert!(state.cache.contains_key(&(0, 0)));
+        }
+    }
+
+    #[test]
+    fn prepared_texture_uploads_preserve_layer_order_and_settings() {
+        let size = 4;
+        let layers = 5;
+        let pixels: Vec<u8> = (0..size * size * layers)
+            .flat_map(|i| [i as u8, (i * 3) as u8, 99, if i % 3 == 0 { 0 } else { 255 }])
+            .collect();
+        let settings: Vec<_> = (0..layers)
+            .map(|i| crate::mipmap::Settings {
+                strategy: if i % 2 == 0 {
+                    crate::mipmap::Strategy::Mean
+                } else {
+                    crate::mipmap::Strategy::StrictCutout
+                },
+                ..Default::default()
+            })
+            .collect();
+        let border = [20, 30, 40, 128].repeat(16);
+        let expected = mip_chain(&pixels, size, &settings, 0, layers);
+        // A partial final array and an exact boundary exercise the global
+        // layer offset used to select each sprite's mipmap settings.
+        for split in [1, 2, 5, 8] {
+            let prepared = PreparedTextures::with_split(
+                &pixels,
+                size,
+                layers,
+                &settings,
+                (&border, size),
+                split,
+            );
+            assert_eq!(prepared.sprites.len(), layers.div_ceil(split) as usize);
+            let actual: Vec<_> = prepared
+                .sprites
+                .iter()
+                .flat_map(|(bytes, levels)| {
+                    assert_eq!(*levels, expected.1);
+                    bytes.iter().copied()
+                })
+                .collect();
+            assert_eq!(actual, expected.0);
+            assert_eq!(prepared.forcefield, mip_chain(&border, size, &[], 0, 1));
         }
     }
 

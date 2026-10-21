@@ -974,6 +974,17 @@ impl PlacementContext for World<'_> {
             .zone
             .contains_block(BlockPos::new(position[0], position[1], position[2])))
     }
+    /// ProtoChunk.setBlockState: the section and the stage's heightmaps.
+    fn set_chunk_block(
+        &mut self,
+        position: [i32; 3],
+        state: BlockStateId,
+    ) -> Result<(), PlacementQueryError> {
+        self.region
+            .set_block_worldgen(position, state)
+            .map_err(|e| query(format!("{e:?}")))?;
+        Ok(())
+    }
     /// BulkSectionAccess write: section storage only, no heightmap updates.
     fn set_section_block(
         &mut self,

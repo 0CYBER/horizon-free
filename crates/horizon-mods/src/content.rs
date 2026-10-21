@@ -3,9 +3,11 @@
 //! declares in `data/<id>/horizon/block/` and `data/<id>/horizon/item/`.
 //!
 //! Content is data, not code: nothing here runs in the sandbox. What a mod
-//! may add is fenced instead. Its own namespace, plus additions to vanilla
-//! tags and to the convention tags (`c`, which NeoForge and Fabric mods share). Paths are plain, files and totals are capped, and vanilla ids
-//! cannot be redefined.
+//! may add is fenced instead. Its own namespaces (its id and the ones its
+//! manifest lists), plus additions to vanilla tags and to the convention
+//! tags (`c`, which NeoForge and Fabric mods share). Paths are plain, files
+//! and totals are capped, vanilla ids cannot be redefined, and no two mods
+//! share a namespace ([`clash`]).
 use crate::manifest::{Capability, MANIFEST, Manifest};
 use serde::Deserialize;
 use std::{
@@ -141,6 +143,19 @@ pub struct Content {
     pub files: Vec<String>,
     pub blocks: Vec<Block>,
     pub items: Vec<Item>,
+    /// The namespaces it owns: the mod id, then the manifest's `namespaces`.
+    pub namespaces: Vec<String>,
+}
+
+/// Why two content mods cannot be on together: a namespace both own (one's
+/// id or listed namespace is the other's), which would mix their files.
+/// `a` and `b` are (mod id, owned namespaces).
+pub fn clash(a: (&str, &[String]), b: (&str, &[String])) -> Option<String> {
+    let shared = a.1.iter().find(|ns| b.1.contains(ns))?;
+    Some(format!(
+        "mods {} and {} both use the namespace {shared}; turn one of them off",
+        a.0, b.0
+    ))
 }
 
 impl Content {
@@ -187,6 +202,7 @@ impl Content {
             files,
             blocks: Vec::new(),
             items: Vec::new(),
+            namespaces: manifest.owned_namespaces().map(str::to_owned).collect(),
         };
         content.check(manifest)?;
         Ok(content)
@@ -249,13 +265,19 @@ impl Content {
                 parts.next().unwrap_or(""),
             );
             let own = namespace == id;
+            let owned = own || manifest.namespaces.iter().any(|n| n == namespace);
             // Vanilla's own files stay vanilla's; a mod may only add to its
             // tags, and to the convention tags mods share.
             let shared = matches!(namespace, "minecraft" | "c");
-            let allowed = own || (top == "data" && shared && rest.starts_with("tags/"));
+            let allowed = owned || (top == "data" && shared && rest.starts_with("tags/"));
             if !allowed {
                 return Err(format!(
-                    "{name}: a mod adds files in its own namespace ({top}/{id}/) or to vanilla and convention (c) tags"
+                    "{name}: a mod adds files in its own namespaces ({top}/{id}/ and those listed in namespaces) or to vanilla and convention (c) tags"
+                ));
+            }
+            if !own && top == "data" && rest.starts_with("horizon/") {
+                return Err(format!(
+                    "{name}: blocks and items are declared in data/{id}/horizon/"
                 ));
             }
             let Some(decl) = (own && top == "data")
@@ -471,7 +493,7 @@ capabilities = ["registries"]
             e
         };
         let e = refused("other-ns", &[("data/other/horizon/block/a.json", BLOCK)]);
-        assert!(e.contains("own namespace"), "{e}");
+        assert!(e.contains("own namespaces"), "{e}");
         refused(
             "vanilla-asset",
             &[("assets/minecraft/textures/block/stone.png", b"x")],
@@ -520,6 +542,38 @@ capabilities = ["registries"]
                 br#"{"template": "minecraft:stick", "max_stack_size": 100}"#,
             )],
         );
+    }
+
+    #[test]
+    fn listed_namespaces_hold_content() {
+        let manifest = format!("{MANIFEST_TEXT}namespaces = [\"kaisyn\"]\n");
+        let files: &[(&str, &[u8])] = &[
+            ("data/kaisyn/worldgen/template_pool/a.json", b"{}"),
+            ("data/kaisyn/structure/a.nbt", b"nbt"),
+            ("assets/kaisyn/lang/en_us.json", b"{}"),
+        ];
+        let content = hmod("listed", &manifest, files).unwrap();
+        assert_eq!(content.files.len(), 3);
+        assert_eq!(content.namespaces, ["ruby", "kaisyn"]);
+        // Declarations stay in the id's namespace.
+        let decl: &[(&str, &[u8])] = &[("data/kaisyn/horizon/block/a.json", BLOCK)];
+        let e = hmod("listed-decl", &manifest, decl).unwrap_err();
+        assert!(e.contains("declared in data/ruby/horizon/"), "{e}");
+        // A namespace it does not list is still outside.
+        let other: &[(&str, &[u8])] = &[("data/other/structure/a.nbt", b"nbt")];
+        assert!(hmod("listed-other", &manifest, other).is_err());
+    }
+
+    #[test]
+    fn mods_sharing_a_namespace_clash() {
+        let t_and_t = ["t_and_t".to_owned(), "kaisyn".to_owned()];
+        let kaisyn = ["kaisyn".to_owned()];
+        let ruby = ["ruby".to_owned(), "gems".to_owned()];
+        assert_eq!(
+            clash(("t_and_t", &t_and_t), ("kaisyn", &kaisyn)).as_deref(),
+            Some("mods t_and_t and kaisyn both use the namespace kaisyn; turn one of them off")
+        );
+        assert_eq!(clash(("t_and_t", &t_and_t), ("ruby", &ruby)), None);
     }
 
     #[test]

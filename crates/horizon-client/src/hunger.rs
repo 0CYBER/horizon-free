@@ -14,6 +14,14 @@ use horizon_world::{
 };
 
 impl PlayerMotion {
+    /// Player.causeFoodExhaustion: creative and spectator abilities suppress
+    /// exhaustion from movement, attacks and effects.
+    pub fn cause_food_exhaustion(&mut self, amount: f32) {
+        if !self.invulnerable && !self.spectator {
+            self.health.food.add_exhaustion(amount);
+        }
+    }
+
     /// ServerPlayer.tickRegeneration, dispatched from Player.aiStep before
     /// inventory and living movement. The separately invoked food tick follows
     /// movement in ServerPlayer.doTick.
@@ -51,6 +59,7 @@ impl PlayerMotion {
         let mut world = TickWorld {
             resources,
             rules,
+            invulnerable: self.invulnerable || self.spectator,
             attributes: &mut self.attributes,
             data: &mut h.data,
             ids: h.ids,
@@ -67,6 +76,7 @@ impl PlayerMotion {
 struct TickWorld<'a> {
     resources: &'a HealthResources,
     rules: HealthRules,
+    invulnerable: bool,
     attributes: &'a mut Attributes,
     data: &'a mut SyncedFloats,
     ids: PlayerFloatIds,
@@ -118,6 +128,11 @@ impl FoodWorld for TickWorld<'_> {
             .expect("validated health field"))
     }
     fn hurt_starvation(&mut self, _: (), food: &mut FoodData, amount: f32) -> Result<()> {
+        // FoodData still ticks after a mode switch with an empty food bar, but
+        // Player.hurtServer rejects starvation for invulnerable abilities.
+        if self.invulnerable {
+            return Ok(());
+        }
         let id = self
             .resources
             .damage

@@ -303,9 +303,24 @@ pub fn backup(dir: &Path, name: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-/// `backups`: the backups, newest first.
-pub fn backups(dir: &Path) -> Result<(), String> {
+/// `backups [--json]`: the backups, newest first.
+pub fn backups(dir: &Path, as_json: bool) -> Result<(), String> {
     let all = backup::list(dir);
+    if as_json {
+        let list: Vec<Value> = all
+            .iter()
+            .map(|b| {
+                let modified = std::fs::metadata(dir.join(backup::DIR).join(&b.name))
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs());
+                json!({ "name": b.name, "bytes": b.bytes, "modified": modified })
+            })
+            .collect();
+        println!("{}", Value::Array(list));
+        return Ok(());
+    }
     if all.is_empty() {
         println!("No backups yet: `horizon-server backup` makes one.");
     }

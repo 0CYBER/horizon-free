@@ -289,6 +289,9 @@ restart_on_crash = true
 [backups]
 every = "6h"                 # automatic backups while the server runs: 30m, 6h, 1d...; "0" turns them off
 keep = 12                    # automatic backups kept (backups made by hand are never deleted)
+
+[updates]
+keep = 1                     # other releases kept by updates, besides the one in use and the one rollback goes to
 ```
 
 This is the file `init` writes today (PR 4 adds `[panel] bind = "127.0.0.1:8130"` and `allow_public =
@@ -305,9 +308,12 @@ a typed key set again under `[properties]` and values vanilla would refuse. Plan
   After it stops, the supervisor compares the file with what it wrote and copies any changed keys back into
   `server.toml`, so an in-game change survives the next start. Edits go through `toml_edit`, so the owner's
   comments and order are kept.
-- **Reload (planned).** The four lists already reload through the engine (`whitelist reload`). `reload` will
-  send what can change live and say which settings need a restart. A real hot reload (view distance, MOTD) needs engine
-  support and comes later.
+- **Changes without opening the file.** `horizon-server config set KEY=VALUE...` (the launcher's Servers
+  page uses it) writes through `toml_edit`, checks the result as `server.toml` is checked, and writes nothing
+  if a value is wrong. On a running server it sends what vanilla changes live through its console:
+  `difficulty`, `defaultgamemode` and `whitelist on|off`; the backup settings apply at once because the
+  supervisor reads them each time. Everything else waits for the next start, and the command says which. A
+  real hot reload (view distance, MOTD) needs engine support and comes later.
 - `server.properties`, `ops.json`, `whitelist.json`, `banned-*.json` and `world/` keep vanilla's names and
   formats. A vanilla server folder works as is, and so does going back to vanilla.
 
@@ -324,6 +330,7 @@ horizon-server op|deop <player>
 horizon-server whitelist on|off|list|add|remove [player]
 horizon-server backup [NAME]             backups             restore <backup> [--yes]
 horizon-server import <server.properties>
+horizon-server config [--json]           config set KEY=VALUE... [--json]
 horizon-server service install|uninstall|print [--system]
 horizon-server panel                     the panel's address and a one-time login link
 horizon-server update [--check] [--version vX.Y.Z] [--timeout S]     rollback [--timeout S]
@@ -419,8 +426,11 @@ runtime or new dependency. Server-sent events can replace the polling later if a
   and kept as it is). The supervisor keeps running as it was: the new `horizon-server` itself takes over
   the next time the server starts (`stop` and `start`, or the service's restart). A stopped server is
   switched and its new game checked to load; it starts on the new release next time. One install serves
-  every server folder on the machine, so each one runs the new release from its next start. Old releases
-  stay in `<dir>/releases/` until they are deleted by hand (keep `current` and `previous`).
+  every server folder on the machine, so each one runs the new release from its next start. Once the new
+  game is up (or a stopped server is switched), old releases are deleted from `<dir>/releases/`: the one in
+  use, the one `previous` names (where `rollback` goes), the one the running `horizon-server` itself came
+  from, and the `updates.keep` newest of the others (1 by default) stay. A release that can't be deleted (a
+  program still running from it on Windows) is left for the next update.
 
 ## 8. Control API and MCP
 

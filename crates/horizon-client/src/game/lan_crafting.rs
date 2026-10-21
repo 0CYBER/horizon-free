@@ -105,9 +105,18 @@ impl Game<'_> {
         load_player(menu, &host.hub.guests[gi]);
         let result = op(menu, &env);
         let dropped = std::mem::take(&mut menu.dropped);
+        let equipped = std::mem::take(&mut menu.equipped);
         menu.drops.clear();
         menu.crafted.clear();
         store_player(menu, &mut host.hub.guests[gi]);
+        if !equipped.is_empty() {
+            let conn = host.hub.guests[gi].conn;
+            self.as_guest(host, conn, |g| {
+                for (slot, stack) in equipped {
+                    g.player_equipped(slot, stack.as_ref());
+                }
+            });
+        }
         self.drop_guest_items(host, gi, dropped);
         result
     }

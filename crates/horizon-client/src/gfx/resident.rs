@@ -163,11 +163,17 @@ fn camera_column(camera: DVec3) -> (i32, i32) {
 /// Whether the section at `key` is drawn: its column within the render
 /// distance of the camera's (`SectionOcclusionGraph.isInViewDistance`), and
 /// partly inside the frustum. `None` when it is not, else its squared centre
-/// distance and origin.
+/// distance and origin. `Resident::visible` walks columns instead.
+#[cfg(test)]
 fn in_view(key: SectionKey, camera: DVec3, radius: i32, frustum: &Frustum) -> Option<(f64, Vec3)> {
     if !in_view_distance(camera_column(camera), radius, key.0, key.2) {
         return None;
     }
+    in_frustum(key, camera, frustum)
+}
+
+/// `in_view` without the distance test.
+fn in_frustum(key: SectionKey, camera: DVec3, frustum: &Frustum) -> Option<(f64, Vec3)> {
     let origin = origin(key, camera);
     let min = origin.as_vec3();
     if !frustum.intersects(min, min + Vec3::splat(16.0)) {
@@ -178,7 +184,10 @@ fn in_view(key: SectionKey, camera: DVec3, radius: i32, frustum: &Frustum) -> Op
 
 impl<T> Resident<T> {
     /// Appends the sections `in_view` and `reachable` to `out`, nearest
-    /// first (ties by key, so the order never depends on storage).
+    /// first (ties by key, so the order never depends on storage), and the
+    /// sections in the frustum of columns past the render distance that
+    /// `beyond` keeps (distant terrain still leaves them out; the occlusion
+    /// graph never reaches them).
     ///
     /// Columns are tested first, with the same distance test (it depends
     /// only on x and z) and a box spanning their sections: every section box
@@ -191,11 +200,13 @@ impl<T> Resident<T> {
         radius: i32,
         frustum: &Frustum,
         reachable: impl Fn(SectionKey) -> bool,
+        beyond: impl Fn(i32, i32) -> bool,
         out: &mut Vec<Visible>,
     ) {
         let from = camera_column(camera);
         for column in &self.columns {
-            if !in_view_distance(from, radius, column.x, column.z) {
+            let near = in_view_distance(from, radius, column.x, column.z);
+            if !near && !beyond(column.x, column.z) {
                 continue;
             }
             let min = origin((column.x, column.low, column.z), camera).as_vec3();
@@ -205,10 +216,10 @@ impl<T> Resident<T> {
             }
             for &(y, slot) in &column.sections {
                 let key = (column.x, y, column.z);
-                if !reachable(key) {
+                if near && !reachable(key) {
                     continue;
                 }
-                if let Some((d, o)) = in_view(key, camera, radius, frustum) {
+                if let Some((d, o)) = in_frustum(key, camera, frustum) {
                     out.push(Visible {
                         distance: d.to_bits(),
                         key,
@@ -255,13 +266,22 @@ mod tests {
                     planes: super::super::frustum(projection * view),
                 };
                 let mut fast = Vec::new();
-                r.visible(camera, radius, &frustum, reachable, &mut fast);
+                // Columns past the distance kept for distant terrain.
+                let beyond = |x: i32, z: i32| (x + z).rem_euclid(3) == 0;
+                r.visible(camera, radius, &frustum, reachable, beyond, &mut fast);
                 let mut slow: Vec<(SectionKey, f64, [f32; 3])> = r
                     .items
                     .iter()
-                    .filter(|(k, _)| reachable(*k))
-                    .filter_map(|(k, _)| {
-                        in_view(*k, camera, radius, &frustum).map(|(d, o)| (*k, d, o.to_array()))
+                    .filter_map(|&(k, _)| {
+                        let near = in_view_distance(camera_column(camera), radius, k.0, k.2);
+                        if near {
+                            in_view(k, camera, radius, &frustum).filter(|_| reachable(k))
+                        } else if beyond(k.0, k.2) {
+                            in_frustum(k, camera, &frustum)
+                        } else {
+                            None
+                        }
+                        .map(|(d, o)| (k, d, o.to_array()))
                     })
                     .collect();
                 slow.sort_unstable_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
@@ -370,7 +390,7 @@ mod tests {
             old = old.min(t.elapsed());
             let t = Instant::now();
             list.clear();
-            r.visible(camera, 32, &frustum, |_| true, &mut list);
+            r.visible(camera, 32, &frustum, |_| true, |_, _| false, &mut list);
             for v in &list {
                 sum += i64::from(r.get(v.slot)[1] + r.get(v.slot)[0]);
             }

@@ -84,8 +84,10 @@ fn main() -> Result<()> {
         horizon_client::collisions::load(&root, registry).map_err(step("collisions"))?;
     let loaded = began.elapsed().as_secs_f64() - built;
     let ours = |id: &str| {
-        id.split_once(':')
-            .is_some_and(|(ns, _)| mods.iter().any(|m| m.id == ns))
+        id.split_once(':').is_some_and(|(ns, _)| {
+            mods.iter()
+                .any(|m| m.content.namespaces.iter().any(|n| n == ns))
+        })
     };
     let tools: Vec<String> = serde_json::from_value(oracle["tools"].clone())?;
 

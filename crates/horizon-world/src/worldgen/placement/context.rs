@@ -71,6 +71,17 @@ pub trait PlacementContext {
     ) -> Result<(), PlacementQueryError> {
         Err(PlacementQueryError::Unavailable)
     }
+    /// ChunkAccess.setBlockState(pos, state, false) in generation (a
+    /// ProtoChunk write with its heightmaps, no neighbour or block-entity
+    /// effects), as mods' structure processors write past their template.
+    /// Worlds without generation chunks write the section.
+    fn set_chunk_block(
+        &mut self,
+        position: [i32; 3],
+        state: crate::registry::BlockStateId,
+    ) -> Result<(), PlacementQueryError> {
+        self.set_section_block(position, state)
+    }
     /// BlockState.isCollisionShapeFullBlock for an already-read state.
     fn collision_full_block(
         &mut self,

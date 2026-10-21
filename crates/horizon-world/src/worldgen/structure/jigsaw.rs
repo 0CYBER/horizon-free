@@ -45,6 +45,9 @@ pub enum PoolElement {
         /// The piece's own terrain kernel in a structure that has one
         /// (`"horizon:enhanced_terrain_adaptation"`).
         enhanced_terrain: Option<Arc<super::enhanced_terrain::Adaptation>>,
+        /// getGroundLevelDelta: 1, or Formations' `ground_level`
+        /// (`"horizon:ground_level"`).
+        ground_level: i32,
     },
     Feature {
         feature: String,
@@ -150,6 +153,13 @@ impl PoolElement {
                         .get("horizon:enhanced_terrain_adaptation")
                         .map(|a| super::enhanced_terrain::Adaptation::decode(a).map(Arc::new))
                         .transpose()?,
+                    ground_level: match value.get("horizon:ground_level") {
+                        None => 1,
+                        Some(v) => v
+                            .as_u64()
+                            .and_then(|g| i32::try_from(g).ok())
+                            .ok_or(DecodeError::Field("horizon:ground_level"))?,
+                    },
                 }
             }
             "minecraft:feature_pool_element" => Self::Feature {
@@ -246,7 +256,10 @@ impl PoolElement {
         }
     }
     pub fn ground_level_delta(&self) -> i32 {
-        1
+        match self {
+            Self::Single { ground_level, .. } => *ground_level,
+            _ => 1,
+        }
     }
     /// YUNG's API's rules, on a piece of one of its structures.
     pub fn yung(&self) -> Option<&super::yung::Rules> {

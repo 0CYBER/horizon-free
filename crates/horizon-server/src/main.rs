@@ -11,6 +11,7 @@ mod init;
 mod lists;
 mod panel;
 mod service;
+mod settings;
 mod signals;
 mod supervisor;
 mod update;
@@ -37,7 +38,8 @@ Usage: horizon-server [--dir DIR] <command>
               The last N lines of the log (default 50); -f follows it
   backup [NAME]
               Zip the world and the settings into backups/ (a running server saves first and stays up)
-  backups     List the backups
+  backups [--json]
+              List the backups
   restore BACKUP [--yes]
               Put a backup's world in place (the current one is kept in backups/); a running
               server restarts with it
@@ -46,11 +48,17 @@ Usage: horizon-server [--dir DIR] <command>
               with sudo), a launchd agent on macOS, a task at logon on Windows
   panel       A one-time login link for the web panel ([panel] in server.toml; 127.0.0.1:8130 by
               default)
-  update [--check] [--version TAG] [--timeout SECONDS]
+  update [--check [--json]] [--version TAG] [--timeout SECONDS]
               Install the newest release (checked against GitHub's SHA-256), back up the world and
               restart on it; goes back by itself if the game isn't up within the timeout (300 s).
               --archive FILE --version NAME installs an archive you have
   rollback    Back to the release used before the update
+  config [--json]
+              The settings in server.toml
+  config set KEY=VALUE... [--json]
+              Change settings (for example world.difficulty=hard server.max_players=10), checked first;
+              a running server takes the difficulty, default game mode and whitelist at once, the rest
+              at its next start
   import FILE Write server.toml from a vanilla server.properties
   op NAME, deop NAME
   whitelist on|off|list, whitelist add|remove NAME
@@ -91,13 +99,14 @@ fn main() -> ExitCode {
         Some("logs") => logs(&dir, &args[1..]),
         Some("panel") => cli::panel(&dir),
         Some("backup") => cli::backup(&dir, args.get(1).map(String::as_str)),
-        Some("backups") => cli::backups(&dir),
+        Some("backups") => cli::backups(&dir, args[1..].iter().any(|a| a == "--json")),
         Some("service") => service::command(&dir, &args[1..]),
         Some("restore") => match args.get(1) {
             Some(name) => cli::restore(&dir, name, args[2..].iter().any(|a| a == "--yes")),
             None => Err("restore needs a backup (`horizon-server backups` lists them)".into()),
         },
         Some("import") => import(&dir, &args[1..]),
+        Some("config") => settings::command(&dir, &args[1..]),
         Some("update") => update::command(&dir, &args[1..]),
         Some("rollback") => update::rollback(&dir, &args[1..]),
         Some(command @ ("op" | "deop" | "whitelist")) => lists::run(&dir, command, &args[1..]),

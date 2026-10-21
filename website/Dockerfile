@@ -4,6 +4,7 @@ FROM node:22-alpine AS build
 WORKDIR /site
 COPY build.mjs ./
 COPY src ./src
+COPY docs ./docs
 COPY public ./public
 COPY LEGAL.md ./
 ARG GITHUB_TOKEN

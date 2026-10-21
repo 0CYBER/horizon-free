@@ -15,7 +15,7 @@ id = "test_guest"
 name = "Test Guest"
 version = "0.1.0"
 api = "0.1"
-capabilities = ["chat"]
+capabilities = ["chat", "storage"]
 "#;
 
 /// Builds both mods once and writes their `.hmod` files; returns the folder.
@@ -133,7 +133,7 @@ fn undeclared_capabilities_are_refused() {
         .unwrap()
         .wasm
         .expect("the guest has code");
-    let manifest = GUEST_MANIFEST.replace("[\"chat\"]", "[]");
+    let manifest = GUEST_MANIFEST.replace("\"chat\", ", "");
     std::fs::write(dir.join("horizon-mod.toml"), manifest).unwrap();
     std::fs::write(dir.join("mod.wasm"), wasm).unwrap();
     let mods = Mods::load(&[dir], |_| true, |_| false);
@@ -205,6 +205,129 @@ fn hot_reload_restarts_a_changed_mod() {
         text: "hello world after 0 ticks".into(),
     };
     assert_eq!(mods.drain(), [chat]);
+}
+
+#[test]
+fn storage_persists_across_reload() {
+    let dir = mods_dir().join("storage_reload");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("guest.hmod");
+    std::fs::copy(mods_dir().join("horizon_mods_test_guest.hmod"), &path).unwrap();
+    let mut mods = Mods::load(std::slice::from_ref(&path), |_| true, |_| false);
+    assert!(mods.command("save remembered"));
+    let saved = Output::Feedback {
+        text: "saved".into(),
+        error: false,
+    };
+    assert_eq!(mods.drain(), [saved]);
+
+    // A rebuild (hot_reload_restarts_a_changed_mod's pattern): a fresh Store,
+    // but the same on-disk data directory.
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+    assert!(mods.reload_changed(|_| false));
+
+    assert!(mods.command("load"));
+    let chat = Output::Chat {
+        name: "Test Guest".into(),
+        text: "remembered".into(),
+    };
+    assert_eq!(mods.drain(), [chat]);
+}
+
+#[test]
+fn storage_write_budget_limits_one_call() {
+    let dir = mods_dir().join("storage_budget");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("guest.hmod");
+    std::fs::copy(mods_dir().join("horizon_mods_test_guest.hmod"), &path).unwrap();
+    let mut mods = Mods::load(std::slice::from_ref(&path), |_| true, |_| false);
+    // Under the 4 MiB on-disk quota, but over the 1 MiB a single call may
+    // write: a loop replacing one key can never bypass the quota by
+    // writing a lot in one call, only across many.
+    let over_budget = "a".repeat((1 << 20) + 1024);
+    assert!(mods.command(&format!("save {over_budget}")));
+    let refused = Output::Feedback {
+        text: "too much storage traffic in one call".into(),
+        error: true,
+    };
+    assert_eq!(mods.drain(), [refused]);
+}
+
+#[test]
+fn storage_quota_is_enforced() {
+    let dir = mods_dir().join("storage_quota");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("guest.hmod");
+    std::fs::copy(mods_dir().join("horizon_mods_test_guest.hmod"), &path).unwrap();
+    let mut mods = Mods::load(std::slice::from_ref(&path), |_| true, |_| false);
+    // Each call is under the per-call write budget; distinct keys so the
+    // quota (not the fixed "note" key being overwritten) is what's tested.
+    let chunk = "a".repeat(900 << 10);
+    for i in 0..4 {
+        assert!(mods.command(&format!("save_key k{i} {chunk}")));
+        assert_eq!(
+            mods.drain(),
+            [Output::Feedback {
+                text: "saved".into(),
+                error: false,
+            }]
+        );
+    }
+    assert!(mods.command(&format!("save_key k4 {chunk}")));
+    let refused = Output::Feedback {
+        text: "would use over 4 MiB of storage".into(),
+        error: true,
+    };
+    assert_eq!(mods.drain(), [refused]);
+}
+
+#[test]
+fn storage_key_count_is_bounded() {
+    let dir = mods_dir().join("storage_keys");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("guest.hmod");
+    std::fs::copy(mods_dir().join("horizon_mods_test_guest.hmod"), &path).unwrap();
+    let mut mods = Mods::load(std::slice::from_ref(&path), |_| true, |_| false);
+    for i in 0..64 {
+        assert!(mods.command(&format!("save_key k{i} x")));
+        assert_eq!(
+            mods.drain(),
+            [Output::Feedback {
+                text: "saved".into(),
+                error: false,
+            }],
+            "key {i}"
+        );
+    }
+    assert!(mods.command("save_key k64 x"));
+    let refused = Output::Feedback {
+        text: "would hold over 64 keys".into(),
+        error: true,
+    };
+    assert_eq!(mods.drain(), [refused]);
+}
+
+#[test]
+fn duplicate_mod_ids_are_refused() {
+    let dir = mods_dir().join("duplicate_ids");
+    std::fs::create_dir_all(&dir).unwrap();
+    let first = dir.join("first.hmod");
+    let second = dir.join("second.hmod");
+    std::fs::copy(mods_dir().join("horizon_mods_test_guest.hmod"), &first).unwrap();
+    std::fs::copy(mods_dir().join("horizon_mods_test_guest.hmod"), &second).unwrap();
+    // Both declare id "test_guest" (the guest's own manifest): sharing a
+    // `data_dir` would let the second read, overwrite or delete the
+    // first's storage, so only the first-loaded one may start.
+    let mods = Mods::load(&[first, second], |_| true, |_| false);
+    assert_eq!(mods.entries()[0].status, Status::Running);
+    let refused = Status::Failed("another running mod already uses id test_guest".into());
+    assert_eq!(mods.entries()[1].status, refused);
 }
 
 /// `cargo test -p horizon-mods --release -- --ignored --nocapture`: the

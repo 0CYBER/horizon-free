@@ -2668,6 +2668,7 @@ dependencies = [
  "horizon-prepare",
  "horizon-telemetry",
  "horizon-theme",
+ "image",
  "keyring",
  "oo7",
  "pulldown-cmark",

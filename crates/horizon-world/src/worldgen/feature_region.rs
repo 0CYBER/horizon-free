@@ -521,6 +521,15 @@ where
             .map_err(RegionError::from)?;
         Ok(())
     }
+    /// ProtoChunk.setBlockState: the section and the stage's heightmaps.
+    fn set_chunk_block(
+        &mut self,
+        position: [i32; 3],
+        state: BlockStateId,
+    ) -> Result<(), PlacementQueryError> {
+        self.region.set_block_worldgen(position, state)?;
+        Ok(())
+    }
     fn water_at(&mut self, position: [i32; 3]) -> Result<bool, PlacementQueryError> {
         self.region.water_at(position)
     }

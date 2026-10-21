@@ -21,6 +21,7 @@ Both are off by default. With no pack selected the renderer draws exactly what i
 | Java shader packs: `shaders.properties` (`horizon_shaderpack::properties`: screens, sliders, profiles, `program.*.enabled`, image formats, blend modes) | done, no screen yet: read like Iris for the three test packs |
 | Java shader packs: full-screen pass plan (`horizon_shaderpack::pipeline`: `DRAWBUFFERS`/`RENDERTARGETS`, `colortexN` formats and clearing, buffer flips) | done: planned for the three test packs |
 | Java shader packs: full-screen passes drawn (`java_pack.rs`, `gfx/java_stages.rs`: `begin`, `prepare`, `deferred*`, `composite*`, `final` over Horizon's world) | first slice: BSL and Complementary run (below) |
+| Java shader packs: custom uniforms (`horizon_shaderpack::uniforms`), `sunPathRotation`, `clouds`/`sun`/`moon`, eye light | done for the full-screen passes (below) |
 | Java shader packs: `gbuffers_*`, `shadow`, custom textures, images, compute, option screen | planned |
 
 ## How the renderer draws a frame today
@@ -262,7 +263,8 @@ A `shaders/` folder of GLSL programs, named by where Iris (and OptiFine before i
 
 Order: preprocessor and legaliser until the three test packs parse; then `composite`/`final`/`deferred` with the
 uniforms; then `gbuffers_terrain`, `gbuffers_water` and `gbuffers_skybasic`/`skytextured` (the packs' look comes
-from these); then entities, hand, weather, clouds; then `shadow`; then custom uniforms, custom textures, compute.
+from these); then entities, hand, weather, clouds; then `shadow`; then custom textures, compute. Custom uniforms
+are done (below).
 
 The test set is Complementary Reimagined, BSL and Sildur's Vibrant. Their licences don't allow redistribution, so
 they are downloaded for development only, outside the repository (never committed, never shipped, never uploaded);
@@ -355,15 +357,26 @@ What makes Horizon look like OpenGL to the pack:
   `noisetex`, `iris_compare` for shadow lookups) instead of one each.
 - **`isnan`/`isinf`** test the float's bits: Metal compiles with fast math, which folds `x != x` to false, and a NaN
   then stays forever in Complementary's TAA history (the picture turns black).
-- **Uniforms.** Matrices, camera, view size, time, sun and moon, weather, fog and sky colour, eye state come from the
-  frame; `eyeBrightness(Smooth)` is `(0, 240)` under the sky; `noisetex` is a fixed 256² noise.
+- **Uniforms.** Matrices, camera, view size, time, weather, fog and sky colour, eye state come from the frame;
+  `eyeBrightness` is the block and sky light (× 16) of the camera entity's eye block, and `eyeBrightnessSmooth` follows
+  it with the pack's `eyeBrightnessHalflife` (Iris's `SmoothedFloat`); `sunPosition`, `moonPosition`,
+  `shadowLightPosition`, `sunAngle` and `shadowAngle` are `CelestialUniforms`' (the sky's `sun_angle` and `moon_angle`
+  turned by Y -90, the pack's `sunPathRotation` about Z, then the angle about X); `noisetex` is a fixed 256² noise.
+- **Custom uniforms.** `uniform.<type>.<name>` and `variable.<type>.<name>` in `shaders.properties` are evaluated
+  each frame (`horizon-shaderpack`'s `uniforms.rs`: Iris's operators and priorities, its functions, `smooth` with
+  `SmoothFloat`'s half-lives). A definition naming something Horizon doesn't provide (`biome`, `blindness`...) is left
+  out with everything that uses it, as Iris leaves out the ones it can't resolve: the uniform stays 0.
+- **The vanilla sky.** While the pack runs, `sunPathRotation` tilts Horizon's sun, moon and stars as Iris tilts
+  vanilla's, `clouds = off | fast | fancy` replaces the cloud option, and `sun = false` / `moon = false` hide those.
+  Complementary and Sildur's turn the vanilla clouds off: drawn anyway, they wrote depth the packs' light shafts and
+  fog took for terrain.
 
 Measured on the Mac mini (M4 Pro) with the packs' default options: BSL v10.1.8 and Complementary Reimagined r5.9.3
 grade and light Horizon's world as their post-processing would. Sildur's Vibrant v2.02 draws only its sky: its
 `deferred` reads the albedo `gbuffers_*` write to `colortex4`. Without `gbuffers_*` and `shadow`, no pack has its
 shadows, water or sky look yet; Distant Horizons' and Voxy's depth read as far. Not supported yet: images and
 compute (`.csh`; a pack that needs them doesn't load), mipmapped targets (`colortexNMipmapEnabled` is read but
-ignored), custom textures, custom uniforms, the option screen; shadow matrices are identity.
+ignored), custom textures, the option screen; shadow matrices are identity.
 
 ### Order to implement
 
@@ -381,5 +394,5 @@ ignored), custom textures, custom uniforms, the option screen; shadow matrices a
 5. **Entities, block entities, hand, weather, clouds, particles** `gbuffers_*`.
 6. **Shadow pass**: terrain and entities from the sun into `shadowtex0/1` and `shadowcolor0/1`, culled from the
    light's view, with the pack's distortion.
-7. **The rest**: custom uniforms (`uniform.*` expressions), custom textures, compute programs and images, per-dimension
+7. **The rest**: custom textures, compute programs and images, per-dimension
    folders, `entity.properties`/`item.properties`.

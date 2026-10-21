@@ -15,6 +15,7 @@
 use super::Species;
 use super::spawn_rules::{self, Reason, SpawnLevel};
 use crate::biome::SpawnEntry;
+use crate::fast_hash::FxHashMap;
 use horizon_core::{
     geometry::{Aabb, Vec3},
     random::RandomSource,
@@ -365,9 +366,15 @@ pub trait NaturalLevel: SpawnLevel {
     fn spawn_cost(&self, entity: &str, x: i32, y: i32, z: i32) -> Option<SpawnCost>;
     /// The `creature_world_gen_spawn_probability` attribute at a position.
     fn creature_probability(&self, x: i32, y: i32, z: i32) -> f32;
-    /// Every structure whose references reach the position's chunk, in the
-    /// chunk's reference order.
-    fn structures_at(&self, x: i32, y: i32, z: i32) -> Vec<StructureAt>;
+    /// Every structure whose references reach the position's chunk and
+    /// whose id `wanted` takes, in the chunk's reference order.
+    fn structures_at(
+        &self,
+        x: i32,
+        y: i32,
+        z: i32,
+        wanted: &dyn Fn(&str) -> bool,
+    ) -> Vec<StructureAt>;
     fn structure_spawns(&self) -> &StructureSpawns;
     /// `getNearestPlayer(x, y, z, -1, false)`: the squared distance to the
     /// nearest player that is not a spectator.
@@ -624,7 +631,9 @@ pub struct Override {
 /// Every structure's `spawn_overrides`, by structure id then category.
 #[derive(Clone, Debug, Default)]
 pub struct StructureSpawns {
-    pub overrides: HashMap<String, HashMap<String, Override>>,
+    /// Fx-hashed: natural spawning asks for every structure reaching every
+    /// position it tries.
+    pub overrides: FxHashMap<String, FxHashMap<String, Override>>,
 }
 impl StructureSpawns {
     /// The overrides of the resource root first asked for, loaded once.
@@ -633,7 +642,7 @@ impl StructureSpawns {
         SHARED.get_or_init(|| Self::load(root))
     }
     pub fn load(root: &Path) -> Self {
-        let mut overrides = HashMap::new();
+        let mut overrides = FxHashMap::default();
         let dir = root.join("data/minecraft/worldgen/structure");
         for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
             let path = entry.path();
@@ -646,7 +655,7 @@ impl StructureSpawns {
             else {
                 continue;
             };
-            let map: HashMap<String, Override> = v["spawn_overrides"]
+            let map: FxHashMap<String, Override> = v["spawn_overrides"]
                 .as_object()
                 .into_iter()
                 .flatten()
@@ -709,7 +718,14 @@ pub fn mobs_at<L: NaturalLevel>(
     y: i32,
     z: i32,
 ) -> Vec<SpawnEntry> {
-    let structures = l.structures_at(x, y, z);
+    // Only a fortress or a structure overriding this category's spawns can
+    // change the list, so only theirs are looked up (the references reaching
+    // most chunks are mineshafts, which override nothing).
+    let overrides = l.structure_spawns();
+    let monster = category == Category::Monster;
+    let structures = l.structures_at(x, y, z, &|id| {
+        (monster && id == "minecraft:fortress") || overrides.get(id, category.name()).is_some()
+    });
     if category == Category::Monster
         && name_at(l, x, y - 1, z) == "minecraft:nether_bricks"
         && structures
@@ -719,7 +735,7 @@ pub fn mobs_at<L: NaturalLevel>(
         return fortress_enemies();
     }
     for s in &structures {
-        if let Some(o) = l.structure_spawns().get(&s.id, category.name())
+        if let Some(o) = overrides.get(&s.id, category.name())
             && (if o.piece { s.in_piece } else { s.in_bounds })
         {
             return o.spawns.clone();
@@ -801,8 +817,8 @@ pub struct SpawnState {
     counts: [i32; 8],
     charges: Vec<([i32; 3], f64)>,
     players: Vec<SpawnPlayer>,
-    players_near: HashMap<(i32, i32), Vec<usize>>,
-    player_counts: HashMap<usize, [i32; 8]>,
+    players_near: FxHashMap<(i32, i32), Vec<usize>>,
+    player_counts: FxHashMap<usize, [i32; 8]>,
     last_checked: Option<([i32; 3], String, f64)>,
 }
 impl SpawnState {
@@ -821,8 +837,8 @@ impl SpawnState {
             counts: [0; 8],
             charges: Vec::new(),
             players,
-            players_near: HashMap::new(),
-            player_counts: HashMap::new(),
+            players_near: FxHashMap::default(),
+            player_counts: FxHashMap::default(),
             last_checked: None,
         };
         for e in entities {

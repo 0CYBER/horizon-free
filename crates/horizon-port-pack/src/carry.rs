@@ -16,6 +16,9 @@ use std::{
 #[derive(Debug, Default, Serialize)]
 pub struct Report {
     pub copied: usize,
+    /// Namespaces besides the mod id its content owns ([`extra_namespaces`]),
+    /// listed in the manifest's `namespaces`.
+    pub namespaces: Vec<String>,
     /// Files outside what a content mod may hold (other namespaces, vanilla
     /// data other than tags), kept in `outside/` for review.
     pub outside: Vec<String>,
@@ -25,6 +28,8 @@ pub struct Report {
     pub unreadable: BTreeMap<String, String>,
     pub recipes_upgraded: usize,
     pub loot_tables_upgraded: usize,
+    /// Advancements whose criteria were rewritten ([`upgrade_advancement`]).
+    pub advancements_upgraded: usize,
     /// Blocks whose jar has no loot table but drop themselves in the oracle:
     /// the mod registers that table in code, and carry-over writes it.
     pub loot_tables_added: usize,
@@ -52,6 +57,14 @@ pub struct Report {
     pub worldgen_types: crate::worldgen::Upgrade,
     /// The loader's convention biome tags the structures name, carried.
     pub convention_biome_tags: usize,
+}
+
+/// The pack around a mod being carried.
+pub struct Pack<'a> {
+    /// The mods ported along, for the conditions of worldgen modifiers.
+    pub loaded: &'a dyn Fn(&str) -> bool,
+    /// Every mod of the pack by id, ported or not: their namespaces are theirs.
+    pub mods: &'a dyn Fn(&str) -> bool,
 }
 
 /// Vanilla blocks by their sorted property names.
@@ -101,6 +114,52 @@ pub fn template(name: &str, properties: &BTreeSet<String>) -> Option<&'static st
     };
     fits.min_by_key(|&(extra, t)| (extra, hint(t)))
         .map(|(_, t)| t)
+}
+
+/// [`template`] for a blockstate file. A wall's sides are `none`, `low` or
+/// `tall`; sides and `up` that are `true` or `false` are a vine's (Chipped's
+/// vines), which the names alone take for a wall.
+pub fn block_template(name: &str, blockstate: &Value) -> Option<&'static str> {
+    let t = template(name, &properties(blockstate))?;
+    let boolean = ["north", "east", "south", "west"]
+        .iter()
+        .flat_map(|side| values(blockstate, side))
+        .any(|v| v == "true" || v == "false");
+    Some(if t == "minecraft:cobblestone_wall" && boolean {
+        "minecraft:vine"
+    } else {
+        t
+    })
+}
+
+/// The values a blockstate file tests a property for.
+fn values(blockstate: &Value, property: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for key in blockstate["variants"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(k, _)| k)
+    {
+        for pair in key.split(',') {
+            if let Some((k, v)) = pair.split_once('=')
+                && k == property
+            {
+                out.insert(v.to_owned());
+            }
+        }
+    }
+    for part in blockstate["multipart"].as_array().into_iter().flatten() {
+        let when = &part["when"];
+        let mut conditions: Vec<&Value> = vec![when];
+        for or in ["OR", "AND"] {
+            conditions.extend(when[or].as_array().into_iter().flatten());
+        }
+        for v in conditions.iter().filter_map(|c| c[property].as_str()) {
+            out.extend(v.trim_start_matches('!').split('|').map(str::to_owned));
+        }
+    }
+    out
 }
 
 /// The property names a blockstate file uses.
@@ -228,15 +287,49 @@ pub fn renamed_ids(v: &mut Value) -> bool {
     }
 }
 
+/// A 1.21.1 advancement in 26.3's shape, in place: an `enter_block`
+/// criterion names its block as `blocks`, which 26.3 reads as a block list.
+/// 26.3 skips the old `block` field, so the criterion matched any block the
+/// player entered (Regions Unexplored's "Downer" on the first dive).
+pub fn upgrade_advancement(v: &mut Value) -> bool {
+    let mut changed = false;
+    let criteria = v.get_mut("criteria").and_then(Value::as_object_mut);
+    for c in criteria.into_iter().flat_map(|o| o.values_mut()) {
+        let trigger = c.get("trigger").and_then(Value::as_str);
+        if !matches!(trigger, Some("minecraft:enter_block" | "enter_block")) {
+            continue;
+        }
+        if let Some(conditions) = c.get_mut("conditions").and_then(Value::as_object_mut)
+            && !conditions.contains_key("blocks")
+            && let Some(block) = conditions.remove("block")
+        {
+            conditions.insert("blocks".into(), block);
+            changed = true;
+        }
+    }
+    changed
+}
+
 /// A 1.21.1 loot table in 26.3's shape, in place: `conditions` lists become
 /// one `condition` (`all_of` for several), `functions` become `modifier`,
 /// and conditions and functions name their kind in `type`. A tool match on
 /// silk touch alone, or on shears alone, becomes 26.3's
-/// `minecraft:tool/can_silk_touch` or `minecraft:tool/can_shear`.
+/// `minecraft:tool/can_silk_touch` or `minecraft:tool/can_shear`. Number
+/// providers written as a bare `{min, max}` get their `type`
+/// ([`type_number`]).
 pub fn upgrade_loot(v: &mut Value) {
     match v {
         Value::Array(a) => a.iter_mut().for_each(upgrade_loot),
         Value::Object(o) => {
+            if let Some(Value::Array(pools)) = o.get_mut("pools") {
+                for pool in pools {
+                    for key in ["rolls", "bonus_rolls"] {
+                        if let Some(n) = pool.get_mut(key) {
+                            type_number(n);
+                        }
+                    }
+                }
+            }
             if let Some(Value::Array(mut list)) = o.remove("conditions") {
                 list.iter_mut().for_each(upgrade_condition);
                 let one = match <[Value; 1]>::try_from(list) {
@@ -248,6 +341,7 @@ pub fn upgrade_loot(v: &mut Value) {
             if let Some(Value::Array(mut list)) = o.remove("functions") {
                 for f in &mut list {
                     rename_kind(f, "function");
+                    type_function_numbers(f);
                     upgrade_loot(f);
                 }
                 o.insert("modifier".to_owned(), Value::Array(list));
@@ -259,6 +353,87 @@ pub fn upgrade_loot(v: &mut Value) {
             }
         }
         _ => {}
+    }
+}
+
+/// A number provider in 26.3's shape, in place. 1.21.1 read a `{min, max}`
+/// with no `type` as a uniform one (NumberProviders.CODEC's fallback to
+/// UniformGenerator); 26.3 dispatches on `type` alone and refuses the table.
+/// Bounds nested in a uniform or binomial one get theirs too.
+fn type_number(v: &mut Value) {
+    let Some(o) = v.as_object_mut() else {
+        return;
+    };
+    if !o.contains_key("type") && o.contains_key("min") && o.contains_key("max") {
+        o.insert("type".to_owned(), json!("minecraft:uniform"));
+    }
+    let kind = o.get("type").and_then(Value::as_str).unwrap_or_default();
+    let bounds: &[&str] = match kind.strip_prefix("minecraft:").unwrap_or(kind) {
+        "uniform" => &["min", "max"],
+        "binomial" => &["n", "p"],
+        _ => &[],
+    };
+    for key in bounds {
+        if let Some(b) = o.get_mut(*key) {
+            type_number(b);
+        }
+    }
+}
+
+/// The number providers of one loot function ([`type_number`]): the fields
+/// its 1.21.1 codec reads with NumberProviders.CODEC. Range bounds such as
+/// `limit_count`'s are providers too, the range itself is not.
+fn type_function_numbers(f: &mut Value) {
+    let kind = f["type"].as_str().unwrap_or_default().to_owned();
+    let Some(f) = f.as_object_mut() else {
+        return;
+    };
+    let mut each = |list: &str, key: &str| {
+        for x in f
+            .get_mut(list)
+            .and_then(Value::as_array_mut)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(n) = x.get_mut(key) {
+                type_number(n);
+            }
+        }
+    };
+    match kind.strip_prefix("minecraft:").unwrap_or(&kind) {
+        "set_stew_effect" => each("effects", "duration"),
+        "set_attributes" => each("modifiers", "amount"),
+        "set_enchantments" => {
+            for level in f
+                .get_mut("enchantments")
+                .and_then(Value::as_object_mut)
+                .into_iter()
+                .flatten()
+            {
+                type_number(level.1);
+            }
+        }
+        "limit_count" => {
+            if let Some(limit) = f.get_mut("limit") {
+                for key in ["min", "max"] {
+                    if let Some(n) = limit.get_mut(key) {
+                        type_number(n);
+                    }
+                }
+            }
+        }
+        k => {
+            let key = match k {
+                "set_count" | "enchanted_count_increase" => "count",
+                "set_damage" => "damage",
+                "enchant_with_levels" => "levels",
+                "set_ominous_bottle_amplifier" => "amplifier",
+                _ => return,
+            };
+            if let Some(n) = f.get_mut(key) {
+                type_number(n);
+            }
+        }
     }
 }
 
@@ -312,18 +487,99 @@ fn named_tool_condition(predicate: &Value) -> Option<&'static str> {
     }
 }
 
-/// Where a jar entry goes: `Some(true)` inside the content mod (its own
-/// namespace, additions to vanilla and convention tags), `Some(false)`
-/// to `outside/`, `None` not carried (code, metadata).
-fn place(name: &str, id: &str) -> Option<bool> {
+/// A jar entry's root (`assets` or `data`), namespace and the rest, for
+/// the files a content mod may carry.
+fn split(name: &str) -> Option<(&str, &str, &str)> {
     let mut parts = name.splitn(3, '/');
     let (root, ns, rest) = (parts.next()?, parts.next()?, parts.next()?);
-    if !(root == "assets" || root == "data") || rest.is_empty() || name.ends_with('/') {
-        return None;
+    let carried = (root == "assets" || root == "data") && !rest.is_empty() && !name.ends_with('/');
+    carried.then_some((root, ns, rest))
+}
+
+/// Additions to vanilla and convention tags, which every mod may hold.
+fn shared_tag(root: &str, ns: &str, rest: &str) -> bool {
+    root == "data" && (ns == "minecraft" || ns == "c") && rest.starts_with("tags/")
+}
+
+/// Where a jar entry goes: `Some(true)` inside the content mod (its own
+/// namespaces, additions to vanilla and convention tags), `Some(false)`
+/// to `outside/`, `None` not carried (code, metadata).
+fn place(name: &str, owned: &[&str]) -> Option<bool> {
+    let (root, ns, rest) = split(name)?;
+    Some(owned.contains(&ns) || shared_tag(root, ns, rest))
+}
+
+/// Namespaces no carried mod claims: vanilla's, the convention tags', the
+/// game's own and the loaders'.
+const NOT_CLAIMED: [&str; 6] = ["minecraft", "c", "horizon", "forge", "neoforge", "fabric"];
+
+/// The namespaces besides `id` a mod's content owns. Some mods ship their
+/// files under other names than their id (Towns and Towers, `t_and_t`,
+/// under `kaisyn` and `towns_and_towers`); others ship files for mods they
+/// support (`wares`, `morevillagers`) or configure (`cristellib`). A
+/// namespace is the mod's when its own files (its id's, its tag additions
+/// and the namespaces already claimed) name ids in it, and no mod of the
+/// pack (`pack_mod`) has it as its id.
+fn extra_namespaces(
+    zip: &mut zip::ZipArchive<fs::File>,
+    id: &str,
+    pack_mod: &dyn Fn(&str) -> bool,
+) -> Vec<String> {
+    let mut candidates = BTreeSet::new();
+    for name in zip.file_names() {
+        if let Some((_, ns, _)) = split(name)
+            && ns != id
+            && !NOT_CLAIMED.contains(&ns)
+            && !pack_mod(ns)
+        {
+            candidates.insert(ns.to_owned());
+        }
     }
-    let shared_tags =
-        root == "data" && (ns == "minecraft" || ns == "c") && rest.starts_with("tags/");
-    Some(ns == id || shared_tags)
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    // The JSON files that could be the mod's, by namespace ("" for tag additions).
+    let mut texts: Vec<(String, Vec<u8>)> = Vec::new();
+    for i in 0..zip.len() {
+        let Ok(mut entry) = zip.by_index(i) else {
+            continue;
+        };
+        let Some((root, ns, rest)) = split(entry.name()) else {
+            continue;
+        };
+        let ns = match () {
+            _ if shared_tag(root, ns, rest) => String::new(),
+            _ if ns == id || candidates.contains(ns) => ns.to_owned(),
+            _ => continue,
+        };
+        let mut bytes = Vec::new();
+        if entry.name().ends_with(".json") && entry.read_to_end(&mut bytes).is_ok() {
+            texts.push((ns, bytes));
+        }
+    }
+    let mut owned: BTreeSet<String> = [String::new(), id.to_owned()].into();
+    let mut claimed = Vec::new();
+    loop {
+        let named = candidates.iter().find(|ns| {
+            let (id, tag) = (format!("\"{ns}:"), format!("\"#{ns}:"));
+            texts.iter().any(|(owner, text)| {
+                owned.contains(owner)
+                    && (contains(text, id.as_bytes()) || contains(text, tag.as_bytes()))
+            })
+        });
+        let Some(ns) = named.cloned() else {
+            break;
+        };
+        candidates.remove(&ns);
+        owned.insert(ns.clone());
+        claimed.push(ns);
+    }
+    claimed.sort();
+    claimed
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
 }
 
 /// Why the game would refuse a file of the mod's own content, if it would.
@@ -341,7 +597,7 @@ fn unreadable(name: &str, bytes: &mut Vec<u8>) -> Option<String> {
     if bytes.starts_with(b"\xEF\xBB\xBF") {
         bytes.drain(..3);
     }
-    let value: Value = match serde_json::from_slice(bytes) {
+    let mut value: Value = match serde_json::from_slice(bytes) {
         Ok(v) => v,
         // Minecraft reads data files with Gson's lenient reader, which skips
         // comments: YUNG's pools have them. The carry is plain JSON.
@@ -356,6 +612,13 @@ fn unreadable(name: &str, bytes: &mut Vec<u8>) -> Option<String> {
     let shared_tag = name.starts_with("data/minecraft/tags/") || name.starts_with("data/c/tags/");
     if shared_tag && value.get("replace").and_then(Value::as_bool) == Some(true) {
         return Some("replaces a shared tag; a content mod may only add to it".into());
+    }
+    // A tag of the mod's own that replaces: no pack before it defines the
+    // tag, so it is the same tag added to (Towns and Towers' biome tags).
+    let own_tag = name.starts_with("data/") && name.contains("/tags/");
+    if own_tag && let Some(o) = value.as_object_mut().filter(|o| o.contains_key("replace")) {
+        o.remove("replace");
+        *bytes = serde_json::to_vec_pretty(&value).expect("a parsed value serializes");
     }
     None
 }
@@ -410,17 +673,17 @@ fn without_comments(bytes: &[u8]) -> Vec<u8> {
 /// Carries `jar` over into `out/carry/`. With the oracle's `facts`, blocks
 /// and items are the ones the mod registers, with the templates and numbers
 /// the facts give; `allowed` says which vanilla blocks the game has;
-/// `loaded` which mods are ported along, for the conditions of the mod's
-/// worldgen modifiers.
+/// `pack` which mods the pack holds and ports along.
 pub fn carry(
     jar: &Path,
     info: &JarInfo,
     out: &Path,
     facts: Option<&Facts>,
     allowed: &dyn Fn(&str) -> bool,
-    loaded: &dyn Fn(&str) -> bool,
+    pack: &Pack,
     conventions: &BTreeMap<String, Value>,
 ) -> Result<Report, String> {
+    let loaded = pack.loaded;
     let id = &info.mod_id;
     if id.is_empty()
         || id.len() > 64
@@ -446,10 +709,14 @@ pub fn carry(
     let set_tags = crate::worldgen::structure_set_tags(&mut zip);
     let piece_counts = crate::worldgen::piece_counts(&mut zip);
     let processor_data = crate::processors::ProcessorData::read(&mut zip);
+    report.namespaces = extra_namespaces(&mut zip, id, pack.mods);
+    let owned: Vec<&str> = std::iter::once(id.as_str())
+        .chain(report.namespaces.iter().map(String::as_str))
+        .collect();
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
         let name = entry.name().to_owned();
-        let Some(keep) = place(&name, id) else {
+        let Some(keep) = place(&name, &owned) else {
             continue;
         };
         if name.split('/').any(|p| p == ".." || p.is_empty()) {
@@ -476,7 +743,13 @@ pub fn carry(
             outside.join(&name)
         };
         if keep {
-            let rel = name.split_once(&format!("/{id}/")).map_or("", |(_, r)| r);
+            // The path in one of the mod's own namespaces; "" for tag additions.
+            let (ns, rel) = match split(&name) {
+                Some((_, ns, rest)) if owned.contains(&ns) => (ns, rest),
+                _ => ("", ""),
+            };
+            // Blocks and items are declared under the mod id only.
+            let own = ns == id;
             if name.starts_with("data/")
                 && (rel.starts_with("worldgen/") || rel.starts_with("structure/"))
             {
@@ -524,7 +797,7 @@ pub fn carry(
                         crate::worldgen::upgrade(kind, &mut v, types, &set_tags) || carried;
                     if kind == "structure" {
                         let path = rel.trim_start_matches("worldgen/structure/");
-                        let structure = format!("{id}:{}", path.trim_end_matches(".json"));
+                        let structure = format!("{ns}:{}", path.trim_end_matches(".json"));
                         changed |= crate::worldgen::disables(&structure, &mut v);
                         changed |=
                             crate::worldgen::add_piece_counts(&structure, &mut v, &piece_counts);
@@ -574,10 +847,21 @@ pub fn carry(
                 if let Ok(v) = serde_json::from_slice::<Value>(&bytes) {
                     crate::worldgen::convention_tags(&v, &mut biome_conventions);
                 }
+            } else if rel.starts_with("advancement/")
+                && name.starts_with("data/")
+                && name.ends_with(".json")
+            {
+                if let Ok(mut advancement) = serde_json::from_slice::<Value>(&bytes)
+                    && upgrade_advancement(&mut advancement)
+                {
+                    report.advancements_upgraded += 1;
+                    bytes = serde_json::to_vec_pretty(&advancement).unwrap_or(bytes);
+                }
             } else if rel.starts_with("loot_table/") && name.starts_with("data/") {
                 if let Some(b) = rel
                     .strip_prefix("loot_table/blocks/")
                     .and_then(|b| b.strip_suffix(".json"))
+                    .filter(|_| own)
                 {
                     block_loot.insert(b.to_owned());
                 }
@@ -593,6 +877,7 @@ pub fn carry(
             } else if let Some(b) = rel
                 .strip_prefix("blockstates/")
                 .and_then(|b| b.strip_suffix(".json"))
+                .filter(|_| own)
             {
                 if let Ok(v) = serde_json::from_slice(&bytes) {
                     blockstates.insert(b.to_owned(), v);
@@ -600,6 +885,7 @@ pub fn carry(
             } else if let Some(m) = rel
                 .strip_prefix("models/item/")
                 .and_then(|m| m.strip_suffix(".json"))
+                .filter(|_| own)
             {
                 item_models.insert(m.to_owned());
             }
@@ -780,7 +1066,7 @@ pub fn carry(
         }
     } else {
         for (b, state) in &blockstates {
-            match template(b, &properties(state)) {
+            match block_template(b, state) {
                 Some(t) => {
                     write_decl("block", b, &json!({"template": t}))?;
                     report.blocks.insert(b.clone(), t.to_owned());
@@ -799,7 +1085,7 @@ pub fn carry(
     }
     let q = |s: &str| toml::Value::String(s.to_owned()).to_string();
     let name = if info.name.is_empty() { id } else { &info.name };
-    let manifest = format!(
+    let mut manifest = format!(
         "# Carried over from {jar} by horizon-port-pack, for local use only.\n# Licence: {license}\nid = {}\nname = {}\nversion = {}\napi = \"0.2\"\nside = \"both\"\ncapabilities = [\"registries\"]\n",
         q(id),
         q(name),
@@ -811,6 +1097,10 @@ pub fn carry(
             &info.license
         },
     );
+    if !report.namespaces.is_empty() {
+        let list: Vec<String> = report.namespaces.iter().map(|n| q(n)).collect();
+        manifest.push_str(&format!("namespaces = [{}]\n", list.join(", ")));
+    }
     write(&inside.join("horizon-mod.toml"), manifest.as_bytes())?;
     write(
         &out.join("carry-report.json"),
@@ -886,6 +1176,33 @@ mod tests {
     }
 
     #[test]
+    fn enter_block_criteria_name_their_blocks() {
+        let mut a = json!({"criteria": {
+            "dive": {"trigger": "minecraft:enter_block",
+                "conditions": {"block": "m:giant_lily_pad"}},
+            "swim": {"trigger": "minecraft:enter_block",
+                "conditions": {"blocks": ["minecraft:water"]}},
+            "has": {"trigger": "minecraft:recipe_unlocked",
+                "conditions": {"recipe": "m:boat"}}}});
+        assert!(upgrade_advancement(&mut a));
+        assert_eq!(
+            a["criteria"]["dive"]["conditions"],
+            json!({"blocks": "m:giant_lily_pad"})
+        );
+        assert_eq!(
+            a["criteria"]["swim"]["conditions"],
+            json!({"blocks": ["minecraft:water"]})
+        );
+        assert_eq!(
+            a["criteria"]["has"]["conditions"],
+            json!({"recipe": "m:boat"})
+        );
+        // Already 26.3's: unchanged.
+        assert!(!upgrade_advancement(&mut a));
+        assert!(!upgrade_advancement(&mut json!({"parent": "m:root"})));
+    }
+
+    #[test]
     fn upgrades_ingredients() {
         let mut r = json!({"type": "minecraft:crafting_shaped", "pattern": ["##"],
             "key": {"#": {"item": "gem:gem"}, "s": {"tag": "c:rods/wooden"}},
@@ -935,6 +1252,47 @@ mod tests {
         let mut new = glass.clone();
         upgrade_loot(&mut new);
         assert_eq!(new, glass);
+    }
+
+    #[test]
+    fn types_bare_number_ranges() {
+        // When Dungeons Arise's and Structory's chests: rolls and counts as
+        // bare ranges, nested in each other or in a binomial.
+        let mut chest = json!({"pools": [{"rolls": {"min": 1, "max": 2}, "bonus_rolls": 0,
+            "entries": [{"type": "minecraft:item", "name": "minecraft:cod", "functions": [
+                {"function": "minecraft:set_count", "count": {"min": 3, "max": {"min": 5, "max": 7}}},
+                {"function": "minecraft:enchant_with_levels", "levels": {"type": "minecraft:binomial",
+                    "n": {"min": 1, "max": 3}, "p": 0.5}},
+                {"function": "minecraft:limit_count", "limit": {"min": {"min": 0, "max": 1}, "max": 4}},
+                {"function": "minecraft:set_count", "count": 2,
+                    "conditions": [{"condition": "minecraft:match_tool",
+                        "predicate": {"count": {"min": 1, "max": 3}}}]}]}]}]});
+        upgrade_loot(&mut chest);
+        let uniform =
+            |min: Value, max: Value| json!({"type": "minecraft:uniform", "min": min, "max": max});
+        let pool = &chest["pools"][0];
+        assert_eq!(pool["rolls"], uniform(json!(1), json!(2)));
+        assert_eq!(pool["bonus_rolls"], 0);
+        let modifiers = &pool["entries"][0]["modifier"];
+        assert_eq!(
+            modifiers[0]["count"],
+            uniform(json!(3), uniform(json!(5), json!(7)))
+        );
+        assert_eq!(modifiers[1]["levels"]["n"], uniform(json!(1), json!(3)));
+        // A range stays a range; its bounds are providers.
+        assert_eq!(
+            modifiers[2]["limit"],
+            json!({"min": uniform(json!(0), json!(1)), "max": 4})
+        );
+        // An item predicate's count is a range too.
+        assert_eq!(
+            modifiers[3]["condition"]["predicate"]["count"],
+            json!({"min": 1, "max": 3})
+        );
+        // Already typed, it stays as it is.
+        let mut again = chest.clone();
+        upgrade_loot(&mut again);
+        assert_eq!(again, chest);
     }
 
     #[test]
@@ -998,6 +1356,18 @@ mod tests {
             template("gem_block", &properties(&json!({"variants": {"": {}}}))),
             Some("minecraft:stone")
         );
+        // Walls and vines have the same sides and up; their values tell them apart.
+        let wall = json!({"multipart": [{"when": {"up": "true"}},
+            {"when": {"north": "low"}}, {"when": {"east": "tall"}},
+            {"when": {"south": "low"}}, {"when": {"west": "low"}}]});
+        assert_eq!(
+            block_template("gem_wall", &wall),
+            Some("minecraft:cobblestone_wall")
+        );
+        let vine = json!({"multipart": [{"when": {"up": "true"}},
+            {"when": {"up": "false", "north": "false", "east": "false", "south": "false",
+                "west": "false"}}, {"when": {"north": "true"}}]});
+        assert_eq!(block_template("gem_vine", &vine), Some("minecraft:vine"));
         let odd = json!({"variants": {"charge=1,mode=fast": {}}});
         assert_eq!(template("gem_core", &properties(&odd)), None);
     }
@@ -1096,7 +1466,10 @@ mod tests {
             &out,
             None,
             &|_| true,
-            &|_| true,
+            &Pack {
+                loaded: &|_| true,
+                mods: &|_| false,
+            },
             &BTreeMap::new(),
         )
         .unwrap();
@@ -1160,6 +1533,95 @@ mod tests {
         assert_eq!(blocks, ["gem:gem_block", "gem:gem_door"]);
         assert_eq!(content.items.len(), 1);
         assert_eq!(content.items[0].id, "gem:gem");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A mod shipping its files under other names than its id: the
+    /// namespaces its own files name are its, compat files for other mods
+    /// and a pack mod's namespace stay outside.
+    #[test]
+    fn claims_the_namespaces_its_files_name() {
+        let dir = std::env::temp_dir().join(format!("horizon-port-pack-ns-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let jar = dir.join("towers-1.0.jar");
+        let mut zip = zip::ZipWriter::new(fs::File::create(&jar).unwrap());
+        let files: &[(&str, &str)] = &[
+            (
+                "META-INF/neoforge.mods.toml",
+                "license = \"MIT\"\n[[mods]]\nmodId = \"towers\"\nversion = \"1.0\"\n",
+            ),
+            // Its tag addition names its structure; the structure names its pool.
+            (
+                "data/minecraft/tags/worldgen/structure/village.json",
+                r#"{"values": ["towers_wg:tower"]}"#,
+            ),
+            (
+                "data/towers_wg/worldgen/structure/tower.json",
+                r#"{"type": "minecraft:jigsaw", "start_pool": "kaisyn:tower/start"}"#,
+            ),
+            ("data/kaisyn/structure/tower.nbt", "nbt"),
+            (
+                "data/towers_wg/tags/worldgen/biome/has_tower.json",
+                r#"{"replace": true, "values": ["minecraft:plains"]}"#,
+            ),
+            (
+                "assets/kaisyn/blockstates/brick.json",
+                r#"{"variants": {}}"#,
+            ),
+            // Compat for a mod outside the pack, named by nothing of its own.
+            ("data/wares/loot_table/crate.json", r#"{"pools": []}"#),
+            // A pack mod's config naming the mod's sets, and a loader's file.
+            (
+                "data/cristel/config/towers.json",
+                r#"{"sets": ["towers_wg:towns"]}"#,
+            ),
+            (
+                "data/neoforge/loot_modifiers/global.json",
+                r#"{"entries": ["towers_wg:x"]}"#,
+            ),
+        ];
+        for (name, text) in files {
+            zip.start_file(*name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(text.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap();
+        let info = crate::jar::read(&jar).unwrap();
+        let out = dir.join("work/mods/towers");
+        let pack = Pack {
+            loaded: &|_| true,
+            mods: &|m| m == "cristel",
+        };
+        let report = carry(&jar, &info, &out, None, &|_| true, &pack, &BTreeMap::new()).unwrap();
+        assert_eq!(report.namespaces, ["kaisyn", "towers_wg"]);
+        assert_eq!(report.worldgen, 2);
+        assert_eq!(
+            report.outside,
+            [
+                "data/wares/loot_table/crate.json",
+                "data/cristel/config/towers.json",
+                "data/neoforge/loot_modifiers/global.json",
+            ]
+        );
+        // No block is declared from another namespace's blockstate.
+        assert!(report.blocks.is_empty());
+        let carried = out.join("carry");
+        let package = horizon_mods::Package::read(&carried).unwrap();
+        assert_eq!(package.manifest.namespaces, ["kaisyn", "towers_wg"]);
+        let content = horizon_mods::Content::read(&carried, &package.manifest).unwrap();
+        assert!(
+            content
+                .files
+                .contains(&"data/kaisyn/structure/tower.nbt".to_owned())
+        );
+        assert!(content.blocks.is_empty());
+        // Its own tag that replaces is the same tag added to.
+        let tag: Value = serde_json::from_slice(
+            &fs::read(carried.join("data/towers_wg/tags/worldgen/biome/has_tower.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(tag, json!({"values": ["minecraft:plains"]}));
         fs::remove_dir_all(&dir).unwrap();
     }
 }

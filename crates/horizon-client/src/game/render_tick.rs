@@ -3,7 +3,7 @@
 use super::{Dim, Game};
 use horizon_client::fog::{FogData, FogInputs, FogType, fog_type, update_rain_fog};
 use horizon_client::{
-    animate_tick::{AnimateContext, animate_tick, campfire_particles},
+    animate_tick::{AnimateContext, animate_tick, campfire_particles, marker_particle_target},
     biome::Biomes,
     blocks::{BlockFacts, Fluid},
     chunk::{HEIGHT, MIN_Y},
@@ -121,6 +121,11 @@ impl Game<'_> {
         };
         let at = [camera.x, camera.y, camera.z];
         let day = self.world.day_time;
+        let has_sky_light = self.dim == Dim::Overworld;
+        // CommonUniforms.getEyeBrightness: the camera entity's eye block.
+        let eye = self.eye_position().unwrap_or(at).map(|v| v.floor() as i32);
+        let light = self.world.light(eye[0], eye[1], eye[2]);
+        let eye_light = [light & 15, if has_sky_light { light >> 4 } else { 0 }];
         horizon_client::gfx::ShaderInputs {
             rain,
             thunder,
@@ -135,10 +140,11 @@ impl Game<'_> {
                 Dim::Nether => -1,
                 Dim::End => 1,
             },
-            has_sky_light: self.dim == Dim::Overworld,
+            has_sky_light,
             moon_phase: day.div_euclid(24_000).rem_euclid(8) as u8,
             day_fraction: (day.rem_euclid(24_000) as f32 + partial_tick) / 24_000.0,
             partial_tick,
+            eye_light,
         }
     }
     /// `SkyRenderer.shouldRenderDarkDisc`: eye below the horizon (y 63) and not under water.
@@ -284,6 +290,15 @@ impl Game<'_> {
         } else {
             (0.0, 0.0)
         };
+        let marker = marker_particle_target(self.mode, self.stack_in(self.selected));
+        let marker_options = |state| {
+            let (sprite, tint) = Self::block_particle_sprite(&self.pack, self.res.facts(), state)?;
+            Some(ParticleOptions::block(
+                ParticleType::BlockMarker,
+                sprite,
+                tint,
+            ))
+        };
         let world = &self.world;
         let facts = self.res.facts();
         let biomes = self.res.biomes();
@@ -300,6 +315,7 @@ impl Game<'_> {
             biomes,
             registry: self.pack.assets.registry,
             raining_at: &raining_at,
+            marker: marker.map(|name| (name, &marker_options as &dyn Fn(_) -> _)),
         };
         if let Some(e) = eye {
             let block = [

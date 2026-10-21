@@ -1219,6 +1219,30 @@ where
         });
         columns
     }
+    /// ChunkGenerator.getBaseColumn's blocks, by what structures test
+    /// (BlockState.isSolid is blocksMotion for the noise's blocks, which
+    /// are never cobwebs or bamboo saplings).
+    fn noise_blocks(&self, x: i32, z: i32) -> super::structure::start::NoiseColumn {
+        use super::structure::start::{NoiseBlock, NoiseColumn};
+        let (min, height) = (self.settings.noise_min_y, self.settings.noise_height);
+        let mut blocks = vec![NoiseBlock::Air; height as usize];
+        let registry = self.data.registry;
+        self.noise_column(x, z, &mut |y, state| {
+            let props = self.data.states.get(state);
+            blocks[(y - min) as usize] = if props.is_air() {
+                NoiseBlock::Air
+            } else {
+                match registry.state(state).map(|s| s.name.as_str()) {
+                    Some("minecraft:water") => NoiseBlock::Water,
+                    Some("minecraft:lava") => NoiseBlock::Lava,
+                    _ if props.blocks_motion_in_heightmap() => NoiseBlock::Solid,
+                    _ => NoiseBlock::Other,
+                }
+            };
+            false
+        });
+        NoiseColumn { min, blocks }
+    }
     /// iterateNoiseColumn from the top down until `visit` returns true.
     fn noise_column(&self, x: i32, z: i32, visit: &mut dyn FnMut(i32, BlockStateId) -> bool) {
         let (min, height) = (self.settings.noise_min_y, self.settings.noise_height);
@@ -1326,6 +1350,9 @@ where
     }
     fn base_columns(&mut self, x: i32, z: i32, kinds: &[HeightmapType]) -> Vec<Vec<bool>> {
         self.pipeline.base_columns(x, z, kinds)
+    }
+    fn noise_column(&mut self, x: i32, z: i32) -> super::structure::start::NoiseColumn {
+        self.pipeline.noise_blocks(x, z)
     }
     fn cold_enough_to_snow(&mut self, biome: BiomeId, pos: [i32; 3]) -> bool {
         let sea = self.pipeline.settings.sea_level;
