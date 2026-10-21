@@ -27,7 +27,7 @@ use std::{
     net::TcpListener,
     path::Path,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicI32, AtomicU16, AtomicU32, Ordering},
         mpsc::{Receiver, Sender, channel, sync_channel},
     },
@@ -41,6 +41,7 @@ struct Flags {
     /// `Minecraft.pause`: a single-player pause screen is open.
     paused: AtomicBool,
     stop: AtomicBool,
+    failure: Mutex<Option<String>>,
     /// `IntegratedServer.getPort`: the port it is open to the LAN on, 0
     /// while it is not.
     published: AtomicU16,
@@ -96,19 +97,42 @@ impl Integrated {
         rx.recv_timeout(Duration::from_secs(10)).ok()
     }
     /// `IntegratedServer.halt(true)`: returns once the world is saved and let go.
-    pub fn stop(mut self) {
-        self.halt();
+    pub fn stop(mut self) -> Result<()> {
+        self.halt()
     }
-    fn halt(&mut self) {
+    /// Stop on the server thread; the window polls completion while drawing.
+    pub fn request_stop(&self) {
         self.flags.stop.store(true, Ordering::Relaxed);
+    }
+    pub fn stopped(&self) -> bool {
+        self.thread
+            .as_ref()
+            .is_none_or(|thread| thread.is_finished())
+    }
+    fn halt(&mut self) -> Result<()> {
+        self.request_stop();
         if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+            thread
+                .join()
+                .map_err(|_| "the integrated server panicked")?;
+        }
+        match self
+            .flags
+            .failure
+            .lock()
+            .map_err(|_| "server status poisoned")?
+            .as_ref()
+        {
+            Some(error) => Err(error.clone().into()),
+            None => Ok(()),
         }
     }
 }
 impl Drop for Integrated {
     fn drop(&mut self) {
-        self.halt();
+        if let Err(error) = self.halt() {
+            log::error!("Horizon: integrated server shutdown: {error}");
+        }
     }
 }
 
@@ -224,12 +248,13 @@ impl Game<'_> {
                     options,
                     settings,
                     launch,
-                    server_flags,
+                    server_flags.clone(),
                     server_tasks,
                     &ready_tx,
                 );
                 if let Err(e) = result {
                     log::error!("Horizon: integrated server: {e}");
+                    *server_flags.failure.lock().unwrap() = Some(e.to_string());
                     let _ = ready_tx.send(Err(e.to_string()));
                 }
             })?;
@@ -386,7 +411,7 @@ impl Game<'_> {
         std::thread::sleep(Duration::from_millis(100));
         self.save_game()?;
         self.lan_close(false);
-        self.save.flush();
+        self.save.flush()?;
         self.session_lock = None;
         Ok(())
     }
@@ -662,4 +687,43 @@ fn serve(
     let audio = Audio::silent(&options.resources);
     let mut server = Game::new(res, pack, gui, options, settings, audio, None)?;
     server.run_integrated(launch, flags, tasks, ready)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shutdown_request_does_not_join_a_server_still_saving() {
+        let flags = Arc::new(Flags::default());
+        let (release, wait) = channel();
+        let (tasks, _) = channel();
+        let server = Integrated {
+            flags: flags.clone(),
+            thread: Some(std::thread::spawn(move || wait.recv().unwrap())),
+            tasks,
+            world_name: String::new(),
+        };
+        server.request_stop();
+        assert!(flags.stop.load(Ordering::Relaxed));
+        assert!(!server.stopped());
+        release.send(()).unwrap();
+        server.stop().unwrap();
+    }
+
+    #[test]
+    fn shutdown_reports_a_failed_server_save() {
+        let flags = Arc::new(Flags::default());
+        let saving = flags.clone();
+        let (tasks, _) = channel();
+        let server = Integrated {
+            flags,
+            thread: Some(std::thread::spawn(move || {
+                *saving.failure.lock().unwrap() = Some("disk write failed".into());
+            })),
+            tasks,
+            world_name: String::new(),
+        };
+        assert_eq!(server.stop().unwrap_err().to_string(), "disk write failed");
+    }
 }

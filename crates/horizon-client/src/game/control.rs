@@ -117,6 +117,9 @@ impl Game<'_> {
         }
         while let Some(request) = self.control.as_ref().and_then(|c| c.try_recv()) {
             self.answer(request, event_loop);
+            if self.pending_save.is_some() {
+                break;
+            }
         }
         if self.control.is_some() {
             self.watch_events();
@@ -140,6 +143,9 @@ impl Game<'_> {
         event_loop: &ActiveEventLoop,
     ) -> Result<Option<Value>> {
         let words: Vec<&str> = line.split_whitespace().collect();
+        if self.pending_save.is_some() && words.first() != Some(&"quit") {
+            return Err("a world save is in progress".into());
+        }
         let arg = |i: usize| {
             words
                 .get(i)
@@ -625,6 +631,9 @@ impl Game<'_> {
                     server
                         .call(move |g| g.control_save(all).map_err(|e| e.to_string()))
                         .ok_or("the integrated server stopped")??;
+                } else if self.remote.is_none() {
+                    self.begin_control_save(all, reply.clone())?;
+                    return Ok(None);
                 } else {
                     self.control_save(all)?;
                 }
@@ -637,8 +646,7 @@ impl Game<'_> {
                 ok()
             }
             "quit" => {
-                self.save_for_exit()?;
-                event_loop.exit();
+                self.begin_closing_save(true)?;
                 ok()
             }
             other => match self.station_command(&words)? {
