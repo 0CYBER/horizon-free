@@ -96,8 +96,9 @@ their content overflows. Drag the thumb or click the track to navigate without a
 The launcher looks for a newer Horizon release when it starts and every four hours while it
 is open, and shows a small "available, Install" line on Play.
 
-It also updates itself from GitHub releases tagged `launcher-vX.Y.Z` (Horizon's own are
-`vYYYY.MM.DD`; neither is ever taken for the other). It downloads the new build, replaces its
+It also updates itself from GitHub releases tagged `launcher@X.Y.Z` (Horizon's own are `vX.Y.Z`;
+neither is ever taken for the other). Before 0.2 they were `launcher-vX.Y.Z` and `vYYYY.MM.DD`:
+every 0.2 tag counts as newer than all of those (docs/versioning.md). It downloads the new build, replaces its
 own binary, and offers "Restart" in the footer. Development builds and
 `HORIZON_LAUNCHER_NO_SELF_UPDATE=1` never replace themselves.
 
