@@ -346,7 +346,9 @@ same states (Macaw's garage doors, multi-part gates). Recipes get the convention
 (`c:dyes/red`), filled from the oracle with vanilla's and the mod's own members. Without the
 oracle, templates are guessed from the blockstate's properties: the template whose properties
 include them with the fewest left over (models often ignore `powered` or `waterlogged`), the
-block's name breaking ties (`_pane`, `_gate`, `_trapdoor`).
+block's name breaking ties (`_pane`, `_gate`, `_trapdoor`). Walls and vines have the same
+property names; sides tested as `true` / `false` make a vine (Chipped's 11 vines, which the game
+refused as walls: their blockstates did not load).
 
 ### 1. Import
 
