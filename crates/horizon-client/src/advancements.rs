@@ -1095,6 +1095,77 @@ impl Tree {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The criteria an inventory change and a recipe unlock test, on vanilla's tree:
+    /// `cargo test -p horizon-client --lib -- --ignored --nocapture index_on_vanilla_tree`
+    /// with HORIZON_RESOURCES set to the prepared resources.
+    #[test]
+    #[ignore = "needs the prepared resources"]
+    fn index_on_vanilla_tree() {
+        let Some(root) = std::env::var_os("HORIZON_RESOURCES").map(std::path::PathBuf::from) else {
+            return;
+        };
+        let data = root.join("data");
+        let t = std::time::Instant::now();
+        let tree = Tree::load(&data);
+        let load = t.elapsed();
+        let tags = data.join("minecraft/tags/item");
+        let tag_items: HashMap<String, Vec<String>> = std::fs::read_dir(&tags)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| {
+                let v: Value =
+                    serde_json::from_str(&std::fs::read_to_string(e.path()).ok()?).ok()?;
+                let name = format!("minecraft:{}", e.path().file_stem()?.to_string_lossy());
+                let values = v["values"]
+                    .as_array()?
+                    .iter()
+                    .filter_map(|x| x.as_str().map(str::to_owned));
+                Some((name, values.collect()))
+            })
+            .collect();
+        let t = std::time::Instant::now();
+        let index = InventoryIndex::build(&tree, |tag| {
+            tag_items
+                .get(tag)
+                .map(|v| v.iter().map(String::as_str).collect())
+                .unwrap_or_default()
+        });
+        let build = t.elapsed();
+        let all = tree
+            .by_trigger
+            .get("minecraft:inventory_changed")
+            .map_or(0, Vec::len);
+        let held = [
+            "minecraft:iron_ingot",
+            "minecraft:oak_log",
+            "minecraft:cobblestone",
+            "minecraft:diamond_pickaxe",
+            "minecraft:bread",
+            "minecraft:torch",
+            "minecraft:oak_planks",
+            "minecraft:stick",
+            "minecraft:coal",
+        ];
+        let t = std::time::Instant::now();
+        let mut candidates = 0;
+        for _ in 0..1000 {
+            candidates = index.candidates(held).len();
+        }
+        let per_change = t.elapsed() / 1000;
+        let recipes = tree
+            .by_trigger
+            .get("minecraft:recipe_unlocked")
+            .map_or(0, Vec::len);
+        let per_recipe = tree.recipe_criteria("minecraft:iron_pickaxe").len();
+        eprintln!(
+            "tree {load:?}; inventory_changed: {all} criteria, index built in {build:?}, \
+             a 9-stack inventory tests {candidates} (looked up in {per_change:?}); \
+             recipe_unlocked: {recipes} criteria, iron_pickaxe tests {per_recipe}"
+        );
+        assert!(candidates < all / 10);
+    }
     struct Flat;
     impl World for Flat {
         fn dimension(&self) -> &str {
