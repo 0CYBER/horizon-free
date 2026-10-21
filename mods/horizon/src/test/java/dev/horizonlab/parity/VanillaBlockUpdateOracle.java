@@ -232,7 +232,9 @@ public final class VanillaBlockUpdateOracle {
         @Override public boolean isRaining() { return raining; }
         @Override public boolean isThundering() { return thundering; }
         @Override public boolean isRainingAt(BlockPos p) { return raining; }
-        @Override public boolean isUnobstructed(BlockState state, BlockPos pos, net.minecraft.world.phys.shapes.CollisionContext c) { return true; }
+        // With entities (a harness opted in) vanilla's own check runs on them
+        // (CollisionGetter.isUnobstructed, then EntityGetter's blocksBuilding test).
+        @Override public boolean isUnobstructed(BlockState state, BlockPos pos, net.minecraft.world.phys.shapes.CollisionContext c) { return entities == null || super.isUnobstructed(state, pos, c); }
         @Override public boolean isUnobstructed(Entity entity) { return true; }
         // Entities exist only when a harness opts in (the dispenser oracle);
         // they are searched in the order they were added, as within one entity section.

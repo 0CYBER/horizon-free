@@ -22,7 +22,7 @@ pub(super) struct PrimedTnt {
 }
 impl PrimedTnt {
     const SIZE: f64 = 0.98;
-    fn bounds(&self) -> Aabb {
+    pub(super) fn bounds(&self) -> Aabb {
         let h = Self::SIZE / 2.0;
         Aabb::new(
             Vec3::new(self.position.x - h, self.position.y, self.position.z - h),
