@@ -3,8 +3,10 @@ name: launcher
 # push to main that changes the launcher or a crate it builds in (the paths below),
 # every 10 minutes (a release waiting for merges to settle goes out) and by hand, tools/release_train.py decides as
 # for the game.
-# A release is launcher-vX.Y.Z: the patch after the last launcher tag, or the next minor when a merged pull
-# request is labelled feature. The version is given to the build (HORIZON_LAUNCHER_VERSION): no bump commits.
+# A release is launcher@X.Y.Z on the release line in .github/release-line.txt (docs/versioning.md); without it
+# launcher-vX.Y.Z, the patch after the last launcher tag or the next minor when a merged pull request is labelled
+# feature. The version and the tag are given to the build (HORIZON_LAUNCHER_VERSION, HORIZON_LAUNCHER_TAG): no bump
+# commits.
 # Never marked latest. Pushes to launcher branches only build. RELEASES_PAUSED=1 stops releases.
 # macOS: with the repository variable MACOS_SIGN_IDENTITY set, Horizon.app and the .dmg are signed with
 # Developer ID, notarized and stapled, from the runner's signing keychain (packaging/macos/README.md);
@@ -75,7 +77,8 @@ jobs:
           python3 tools/release_train.py decide --kind launcher ${HEAD_SHA:+--head "$HEAD_SHA"} ${FORCE:+--force} | tee decision.json
           echo "### $(jq -r '.reason' decision.json)" >> "$GITHUB_STEP_SUMMARY"
           tag=$(jq -r '.tag' decision.json)
-          echo "version=${tag#launcher-v}" >> "$GITHUB_OUTPUT"
+          version=${tag#launcher-v}
+          echo "version=${version#launcher@}" >> "$GITHUB_OUTPUT"
           # A dry run (and a launcher branch's push) builds whatever the decision.
           if [[ "${{ steps.mode.outputs.dry_run }}" == true ]]; then
             echo "release=true" >> "$GITHUB_OUTPUT"
@@ -113,9 +116,10 @@ jobs:
       # Horizon's Azure app for Microsoft sign-in (docs/microsoft-account.md): a repository
       # variable, not a secret. Unset, the launcher says sign-in is not configured.
       HORIZON_MSA_CLIENT_ID: ${{ vars.HORIZON_MSA_CLIENT_ID }}
-      # The release's version, built in (launcher/src/backend.rs VERSION); a launcher branch's build keeps
-      # Cargo.toml's.
+      # The release's version and tag, built in (launcher/src/backend.rs VERSION and own_tag: the tag says which
+      # line it is on, docs/versioning.md); a launcher branch's build keeps Cargo.toml's.
       HORIZON_LAUNCHER_VERSION: ${{ (github.event_name != 'push' || github.ref == 'refs/heads/main') && needs.decide.outputs.version || '' }}
+      HORIZON_LAUNCHER_TAG: ${{ (github.event_name != 'push' || github.ref == 'refs/heads/main') && needs.decide.outputs.tag || '' }}
     defaults:
       run:
         working-directory: launcher

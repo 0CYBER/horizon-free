@@ -52,6 +52,71 @@ class ReleaseTrainTests(unittest.TestCase):
         self.assertEqual(train.next_launcher_tag(tags, minor=False), "launcher-v0.1.11")
         self.assertEqual(train.next_launcher_tag(tags, minor=True), "launcher-v0.2.0")
 
+    def test_0_2_tags_follow_every_tag_from_before(self):
+        order = ["launcher-v0.1.9", "launcher-v0.16.0", "v2026.10.19.15", "v2026.10.21", "v0.2.0-beta.1", "v0.2.0",
+                 "v0.2.1-beta", "v0.2.1-beta.1", "v0.2.1-beta.2", "v0.2.1-beta.11", "v0.2.1-rc.1", "v0.2.1", "v0.2.9",
+                 "v0.2.10", "v0.3.0-1", "v0.3.0-alpha", "v0.3.0", "v1.0.0"]
+        self.assertEqual(sorted(reversed(order), key=train.tag_key), order)
+        self.assertGreater(train.tag_key("launcher@0.2.0"), train.tag_key("launcher-v0.16.0"))
+        self.assertEqual(train.tag_key("v2026.10.19"), train.tag_key("v2026.10.19.0"))
+        for tag in ["v0.2.0", "v0.3.0-rc.1", "v2026.10.21", "v2026.10.19.15"]:
+            self.assertTrue(train.is_game_tag(tag), tag)
+        for tag in ["launcher@0.2.0", "launcher-v0.2.0", "v0.2", "vnext", "v2026.10.21-x", "v0.2.0-"]:
+            self.assertFalse(train.is_game_tag(tag), tag)
+        self.assertTrue(train.is_launcher_tag("launcher@0.2.0") and train.is_launcher_tag("launcher-v0.16.0"))
+        self.assertFalse(train.is_launcher_tag("v0.2.0"))
+
+    def test_tags_on_a_release_line(self):
+        line = (0, 2)
+        before = ["v2026.10.19.15", "v2026.10.21", "launcher-v0.16.0", "launcher-v0.2.0", "launcher-v0.2.1"]
+        today = dt.date(2026, 10, 23)
+        self.assertEqual(train.next_game_tag(before, today, line), "v0.2.0")
+        self.assertEqual(train.next_launcher_tag(before, minor=True, line=line), "launcher@0.2.0")
+        self.assertTrue(train.first_on_line(before, "v", line))
+        after = before + ["v0.2.0", "v0.2.1", "launcher@0.2.0", "v0.3.0-rc.1"]
+        self.assertEqual(train.next_game_tag(after, today, line), "v0.2.2")
+        # A feature doesn't move the line; only .github/release-line.txt does.
+        self.assertEqual(train.next_launcher_tag(after, minor=True, line=line), "launcher@0.2.1")
+        self.assertFalse(train.first_on_line(after, "v", line))
+        self.assertTrue(train.first_on_line(after, "v", (0, 3)), "a pre-release isn't the line's first release")
+        self.assertEqual(train.next_game_tag(after, today, (0, 3)), "v0.3.0")
+        with self.assertRaises(SystemExit):
+            train.next_game_tag(after + ["v0.3.0"], today, line)
+        # Without a line, the tags from before 0.2, whatever 0.2 tags exist.
+        self.assertEqual(train.next_game_tag(before, today), "v2026.10.23")
+        self.assertEqual(train.next_launcher_tag(after, minor=False), "launcher-v0.16.1")
+
+    def test_the_release_line_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "release-line.txt"
+            self.assertIsNone(train.release_line(path))
+            path.write_text("0.2\n")
+            self.assertEqual(train.release_line(path), (0, 2))
+            path.write_text("0.2.0\n")
+            with self.assertRaises(SystemExit):
+                train.release_line(path)
+        # Not set on main until the switch to 0.2 (docs/versioning.md).
+        self.assertIsNone(train.release_line()) if not train.LINE_FILE.exists() else self.assertIsNotNone(train.release_line())
+
+    def test_a_new_line_releases_at_once_unless_paused(self):
+        self.assertEqual(train.decision("game", [], NOW, new_line="0.2"), (True, "the first release of 0.2"))
+        self.assertFalse(train.decision("game", [], NOW, paused=True, new_line="0.2")[0])
+        self.assertFalse(train.decision("game", [], NOW)[0])
+
+    def test_the_first_release_of_0_2_says_what_changed(self):
+        title, body = train.notes("game", "v0.2.0", [pr(1)], [], beta=True, previous="v2026.10.21")
+        self.assertTrue(title.startswith("Horizon 0.2.0: "), title)
+        self.assertTrue(body.startswith("Horizon is numbered from now on: this is Horizon 0.2.0, the release after 2026.10.21."))
+        self.assertIn("`horizon-server update --version v0.2.0`", body)
+        title, body = train.notes("launcher", "launcher@0.2.0", [], [], previous="launcher-v0.17.0")
+        self.assertEqual(title, "Horizon launcher 0.2.0")
+        self.assertIn("the release after launcher 0.17.0", body)
+        self.assertIn("Rebuilt from the latest main.", body)
+        self.assertTrue(train.notes("game", "v0.3.0", [pr(1)], [], previous="v0.2.14")[1].startswith("The first release of Horizon 0.3."))
+        for version, previous in [("v0.2.1", "v0.2.0"), ("v0.3.0-rc.1", "v0.2.9"), ("v2026.10.23", "v2026.10.21")]:
+            body = train.notes("game", version, [pr(1)], [], previous=previous)[1]
+            self.assertTrue(body.startswith("### Fixed"), (version, body))
+
     def test_decision(self):
         minute = dt.timedelta(minutes=1)
         decide = lambda prs, **kw: train.decision("game", prs, NOW, **kw)[0]

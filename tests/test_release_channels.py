@@ -80,6 +80,23 @@ class ReleaseChannelTests(unittest.TestCase):
         same = release("v2026.10.18.04", 30, prerelease=False)
         self.assertIsNone(channels.choose([same], [], NOW, tag="v2026.10.18.04", force=True)[0])
 
+    def test_0_2_follows_the_dated_releases(self):
+        bridge = release("v2026.10.21", 30, prerelease=False)
+        first = release("v0.2.0", 7)
+        chosen, why = channels.choose([bridge, first], [], NOW)
+        self.assertEqual(chosen["tag_name"], "v0.2.0", why)
+        stable = release("v0.2.0", 30, prerelease=False)
+        older = release("v2026.10.22", 8)
+        self.assertIsNone(channels.choose([stable, older], [], NOW)[0], "a dated beta never follows 0.2")
+        chosen, why = channels.choose([stable, older], [], NOW, tag="v2026.10.22", force=True)
+        self.assertIsNone(chosen)
+        self.assertIn("not newer than the stable v0.2.0", why)
+        patch = release("v0.2.1", 7)
+        self.assertEqual(channels.choose([stable, older, patch], [], NOW)[0]["tag_name"], "v0.2.1")
+        self.assertEqual(channels.stable([stable, bridge])["tag_name"], "v0.2.0")
+        launcher = release("launcher@0.2.0", 7)
+        self.assertIsNone(channels.choose([bridge, launcher], [], NOW)[0], "launcher releases are never game betas")
+
     def test_a_stall_is_reported_once_the_oldest_waiting_beta_is_a_day_old(self):
         self.assertIsNone(channels.stalled([STABLE, release("v2026.10.19", 23), release("v2026.10.19.01", 2)], NOW))
         releases = [STABLE, release("v2026.10.19", 25), release("v2026.10.19.01", 2)]

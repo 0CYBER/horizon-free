@@ -12,8 +12,12 @@ of merges becomes one release), or the oldest at least MAX_WAIT ago (merges that
 of those pull requests is labelled release-now. Pull requests labelled skip-release (work players don't see) don't count
 towards a release and aren't listed in the notes. RELEASES_PAUSED=1 (a repository variable) stops automatic releases.
 
-Game releases are tagged vYYYY.MM.DD, then .01, .02 the same UTC day; launcher releases launcher-vX.Y.Z, the
-patch after the last launcher tag, or the next minor when a merged pull request is labelled feature. Notes:
+Tags (docs/versioning.md): with a release line in .github/release-line.txt (MAJOR.MINOR, e.g. 0.2), game releases
+are vMAJOR.MINOR.PATCH and launcher releases launcher@MAJOR.MINOR.PATCH, each the patch after the last tag of its kind
+on the line (MAJOR.MINOR.0 first: a line's first release goes out without waiting for a pull request). Without the
+file, the tags from before 0.2: vYYYY.MM.DD, then .01, .02 the same UTC day, and launcher-vX.Y.Z, the patch after
+the last launcher tag or the next minor when a merged pull request is labelled feature. Every 0.2 tag is newer than
+every tag from before (tag_key). Notes:
 "### New" lists the pull requests labelled feature, "### Fixed" the others, "### Known issues" the bullets of
 docs/known-issues.md. Game releases go out as betas (GitHub pre-releases) and tools/release_channels.py promotes
 them to stable; a beta's notes cover what changed since the release before it (beta or stable), a promoted
@@ -39,6 +43,14 @@ MAX_WAIT = dt.timedelta(hours=1)
 PROPER = {"Horizon", "Horizon's", "Minecraft", "Mojang", "Microsoft", "Java", "Xbox", "PlayStation", "Steam", "Windows",
           "Linux", "LAN", "Kira", "Discord", "Wayland", "Hyprland", "F3", "GUI", "UI"}
 EXPORTERS = "mods/horizon/src/test/java/dev/horizonlab/parity/"
+# The release line (docs/versioning.md): MAJOR.MINOR. Without the file, releases keep the tags from before 0.2.
+LINE_FILE = ROOT / ".github" / "release-line.txt"
+SEMVER = r"(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
+# Semver's majors stay below this; a date tag's first number is a year.
+FIRST_YEAR = 1000
+GAME_PREFIX = "v"
+LAUNCHER_PREFIX = "launcher@"
+OLD_LAUNCHER_PREFIX = "launcher-v"
 
 # What players run. Documentation (*.md), tests, benchmarks and harness probes (examples/) never count.
 GAME_PATHS = ["crates/", "xtask/", "packaging/", "Cargo.toml", "Cargo.lock", "research-lock.json"]
@@ -95,23 +107,75 @@ def player_facing(path, kind, exporter_paths=frozenset()):
     return any(path == p or path.startswith(p) for p in GAME_PATHS) or path in exporter_paths
 
 
+def semver(tag, prefix):
+    """(major, minor, patch, pre-release or None) of a 0.2 tag `<prefix>X.Y.Z[-PRE]`, else None."""
+    match = re.fullmatch(re.escape(prefix) + SEMVER, tag)
+    if not match or int(match[1]) >= FIRST_YEAR:
+        return None
+    return int(match[1]), int(match[2]), int(match[3]), match[4]
+
+
 def is_game_tag(tag):
-    return re.fullmatch(r"v\d{4}\.\d{2}\.\d{2}(\.\d+)?", tag) is not None
+    return re.fullmatch(r"v\d{4}\.\d{2}\.\d{2}(\.\d+)?", tag) is not None or semver(tag, GAME_PREFIX) is not None
 
 
 def is_launcher_tag(tag):
-    return re.fullmatch(r"launcher-v\d+\.\d+\.\d+", tag) is not None
+    return re.fullmatch(r"launcher-v\d+\.\d+\.\d+", tag) is not None or semver(tag, LAUNCHER_PREFIX) is not None
 
 
 def tag_key(tag):
-    return tuple(int(part) for part in re.findall(r"\d+", tag))
+    """A tag's place among releases (docs/versioning.md): the tags from before 0.2 (vYYYY.MM.DD[.N],
+    launcher-vX.Y.Z) by their numbers, trailing zeros dropped (v2026.10.19 is v2026.10.19.0); then every 0.2 tag
+    (vX.Y.Z, launcher@X.Y.Z) in semver's order, a pre-release (v0.3.0-rc.1) before its release."""
+    version = semver(tag, GAME_PREFIX) or semver(tag, LAUNCHER_PREFIX)
+    if version is None:
+        numbers = [int(part) for part in re.findall(r"\d+", tag)]
+        while numbers and numbers[-1] == 0:
+            numbers.pop()
+        return 0, tuple(numbers), ()
+    *numbers, pre = version
+    # A release follows its pre-releases; their identifiers compare one by one, numbers before words.
+    rank = (1,) if pre is None else (0, tuple((0, int(i), "") if i.isdigit() else (1, 0, i) for i in pre.split(".")))
+    return 1, tuple(numbers), rank
 
 
-def next_game_tag(tags, today):
-    """vYYYY.MM.DD, or .01, .02... when that day already has a tag (drafts and rolled-back releases included).
+def release_line(path=LINE_FILE):
+    """(major, minor) of the release line, or None without the file (the tags from before 0.2)."""
+    if not path.exists():
+        return None
+    text = path.read_text().strip()
+    match = re.fullmatch(r"(\d+)\.(\d+)", text)
+    if not match:
+        raise SystemExit(f"{path}: a release line is MAJOR.MINOR, like 0.2 (got {text!r})")
+    return int(match[1]), int(match[2])
+
+
+def next_on_line(tags, prefix, line):
+    """<prefix>MAJOR.MINOR.PATCH: the patch after the newest release tagged on the line (drafts and rolled-back
+    releases included; a hand-made pre-release such as v0.3.0-rc.1 is not one), or .0. Never a line below one that
+    has tags: GitHub's latest release only moves forward."""
+    major, minor = line
+    versions = [v for v in (semver(tag, prefix) for tag in tags) if v]
+    above = [v for v in versions if (v[0], v[1]) > line and v[3] is None]
+    if above:
+        raise SystemExit(f"{LINE_FILE.name} says {major}.{minor}, but {prefix}{'.'.join(map(str, above[0][:3]))} exists")
+    patches = [v[2] for v in versions if (v[0], v[1]) == line and v[3] is None]
+    return f"{prefix}{major}.{minor}.{max(patches) + 1 if patches else 0}"
+
+
+def first_on_line(tags, prefix, line):
+    """Whether no release of this kind is tagged on the line yet (its first goes out at once)."""
+    return not any(v and (v[0], v[1]) == line and v[3] is None for v in (semver(tag, prefix) for tag in tags))
+
+
+def next_game_tag(tags, today, line=None):
+    """vMAJOR.MINOR.PATCH on a release line; before 0.2, vYYYY.MM.DD, or .01, .02... when that day already has a
+    tag (drafts and rolled-back releases included).
 
     The counter has two digits because GitHub's releases page sorts a day's tags as text: .9 went above .18.
     Every reader compares the numbers as integers, so the unpadded tags from before still order correctly."""
+    if line:
+        return next_on_line(tags, GAME_PREFIX, line)
     day = f"v{today:%Y.%m.%d}"
     taken = [tag for tag in tags if tag == day or tag.startswith(day + ".")]
     if not taken:
@@ -119,8 +183,13 @@ def next_game_tag(tags, today):
     return f"{day}.{max(int(tag.split('.')[3]) if tag.count('.') == 3 else 0 for tag in taken) + 1:02d}"
 
 
-def next_launcher_tag(tags, minor):
-    versions = sorted((tag_key(tag) for tag in tags if is_launcher_tag(tag)), reverse=True)
+def next_launcher_tag(tags, minor, line=None):
+    """launcher@MAJOR.MINOR.PATCH on a release line (a feature doesn't change the line); before 0.2,
+    launcher-vX.Y.Z, the next patch or with minor the next minor."""
+    if line:
+        return next_on_line(tags, LAUNCHER_PREFIX, line)
+    versions = sorted((tuple(int(part) for part in re.findall(r"\d+", tag)) for tag in tags
+                       if tag.startswith(OLD_LAUNCHER_PREFIX) and is_launcher_tag(tag)), reverse=True)
     major, minor_, patch = versions[0] if versions else (0, 1, 0)
     return f"launcher-v{major}.{minor_ + 1}.0" if minor else f"launcher-v{major}.{minor_}.{patch + 1}"
 
@@ -168,9 +237,10 @@ def last_release(releases, kind):
     return max(ours, key=lambda release: tag_key(release["tag_name"]), default=None)
 
 
-def decision(kind, prs, now, paused=False, force=False):
+def decision(kind, prs, now, paused=False, force=False, new_line=None):
     """Whether to release now, and why. prs: the merged pull requests since the last release, each with the
-    files it changed under "paths" (player-facing ones only) and when it merged ("merged_at")."""
+    files it changed under "paths" (player-facing ones only) and when it merged ("merged_at"). new_line: the
+    release line ("0.2") when it has no release of this kind yet; its first goes out at once."""
     counted = [pr for pr in prs if pr["paths"] and "skip-release" not in pr["labels"]]
     urgent = [pr for pr in counted if "release-now" in pr["labels"]]
     merged = [pr["merged_at"] for pr in counted if pr.get("merged_at")]
@@ -178,6 +248,8 @@ def decision(kind, prs, now, paused=False, force=False):
         return True, "started by hand with force"
     if paused:
         return False, "RELEASES_PAUSED is set"
+    if new_line:
+        return True, f"the first release of {new_line}"
     if not counted:
         return False, "no merged pull request changed what players run"
     if urgent:
@@ -231,16 +303,39 @@ def known_issues(path=ROOT / "docs" / "known-issues.md"):
     return [line.rstrip() for line in path.read_text().splitlines() if line.startswith("- ")]
 
 
-def notes(kind, version, prs, issues, beta=False):
-    """(title, body) of a release; a game beta's say it is one."""
+def line_intro(kind, version, previous):
+    """The paragraph a line's first release (X.Y.0) opens with; the first after the dated tags says what changed."""
+    found = semver(version, GAME_PREFIX if kind == "game" else LAUNCHER_PREFIX)
+    if not found or found[2] != 0 or found[3] is not None:
+        return None
+    line = f"{found[0]}.{found[1]}"
+    if previous and semver(previous, GAME_PREFIX if kind == "game" else LAUNCHER_PREFIX):
+        return f"The first release of Horizon {line}."
+    if kind == "launcher":
+        return (f"The launcher is numbered with the game from now on: this is launcher {line}.0, the release after "
+                f"launcher {(previous or '').removeprefix(OLD_LAUNCHER_PREFIX) or '0.16'}. Your launcher takes it by itself.")
+    before = (previous or "").removeprefix(GAME_PREFIX)
+    return (f"Horizon is numbered from now on: this is Horizon {line}.0" + (f", the release after {before}" if before else "")
+            + ". Releases used to be named after the day they came out; from now on they count up from "
+            f"{line}.0, and the launcher's too. The launcher installs it by itself once it has updated itself. A server "
+            "installed with install.sh that still says it is up to date takes it with "
+            f"`horizon-server update --version {version}`.")
+
+
+def notes(kind, version, prs, issues, beta=False, previous=None):
+    """(title, body) of a release; a game beta's say it is one. previous: the release before it, for a line's
+    first release."""
     shown = [pr for pr in prs if pr["paths"] and "skip-release" not in pr["labels"]]
     new = [pr for pr in shown if "feature" in pr["labels"]]
     fixed = [pr for pr in shown if "feature" not in pr["labels"]]
     if kind == "game":
-        title = f"Horizon {version.removeprefix('v')}" + (f": {summary(new, fixed)}" if shown else "")
+        title = f"Horizon {version.removeprefix(GAME_PREFIX)}" + (f": {summary(new, fixed)}" if shown else "")
     else:
-        title = f"Horizon launcher {version.removeprefix('launcher-v')}"
-    parts = [] if shown else ["Rebuilt from the latest main."]
+        title = f"Horizon launcher {version.removeprefix(OLD_LAUNCHER_PREFIX).removeprefix(LAUNCHER_PREFIX)}"
+    intro = line_intro(kind, version, previous)
+    parts = [intro] if intro else []
+    if not shown:
+        parts.append("Rebuilt from the latest main.")
     if new:
         parts.append("### New\n" + "\n".join(map(bullet, new)))
     if fixed:
@@ -313,7 +408,8 @@ def main():
     last, prs = gather(args.kind, head, betas=not args.stable)
     if args.command == "notes":
         version = args.tag or "unreleased"
-        title, body = notes(args.kind, version, prs, known_issues(), beta=not args.stable)
+        previous = last["tag_name"] if last and last["tag_name"] != version else None
+        title, body = notes(args.kind, version, prs, known_issues(), beta=not args.stable, previous=previous)
         if args.out:
             args.out.mkdir(parents=True, exist_ok=True)
             (args.out / "title.txt").write_text(title + "\n")
@@ -321,10 +417,13 @@ def main():
         print(title + "\n\n" + body)
         return 0
 
-    release, reason = decision(args.kind, prs, now, os.environ.get("RELEASES_PAUSED") == "1", args.force)
     tags = run("git", "tag", "--list").split()
+    line = release_line()
+    prefix = GAME_PREFIX if args.kind == "game" else LAUNCHER_PREFIX
+    new_line = f"{line[0]}.{line[1]}" if line and first_on_line(tags, prefix, line) else None
+    release, reason = decision(args.kind, prs, now, os.environ.get("RELEASES_PAUSED") == "1", args.force, new_line)
     minor = any("feature" in pr["labels"] for pr in prs if pr["paths"])
-    tag = next_game_tag(tags, now.date()) if args.kind == "game" else next_launcher_tag(tags, minor)
+    tag = next_game_tag(tags, now.date(), line) if args.kind == "game" else next_launcher_tag(tags, minor, line)
     result = {
         "release": release, "reason": reason, "tag": tag, "head": head,
         "last": last["tag_name"] if last else None, "last_published": last["published_at"] if last else None,

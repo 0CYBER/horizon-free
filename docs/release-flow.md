@@ -100,7 +100,7 @@ flowchart LR
         windows["Windows x64<br/>GitHub windows-latest"]
         mac["macOS arm64<br/>Mac mini runner<br/>+ offscreen game run"]
     end
-    build --> publish["publish vYYYY.MM.DD[.N] as a beta<br/>notes from the merged PRs"]
+    build --> publish["publish vX.Y.Z as a beta<br/>notes from the merged PRs"]
     publish --> beta(["launchers with Beta builds on install it"])
     publish --> promote{"promote.yml, every 30 min:<br/>6 h old, smoke test, no release-blocker"}
     promote --> stable["stable and latest<br/>notes since the last stable"]
@@ -125,6 +125,18 @@ commits) since the last **published** game release:
 - One release at a time (concurrency group `game-release`); a run that finds nothing new does nothing.
 - A scheduled or hand-started run releases main's newest commit whose `checks` passed; after `checks`, the commit
   they passed on.
+- The first release of a new release line (below) goes out at once, without waiting for a pull request.
+
+### Tags
+
+How releases are numbered, and how installs from before 0.2 reach it: [versioning.md](versioning.md).
+
+- With a release line in `.github/release-line.txt` (`MAJOR.MINOR`, e.g. `0.2`), a game release is `vMAJOR.MINOR.PATCH`,
+  the patch after the newest release tagged on that line (`v0.2.0` first). A `feature` label doesn't change the line:
+  only that file does, by pull request.
+- Without the file (every release before 0.2), `vYYYY.MM.DD`, then `.01`, `.02`… the same UTC day.
+- Every reader (`release_train.py`, `release_channels.py`, the launcher, `horizon-server update`, the website) ranks
+  every `vX.Y.Z` tag above every dated one.
 
 ### Labels
 
@@ -158,7 +170,9 @@ runs the game: GitHub's runners have neither a GPU worth the name nor the game f
 
 `tools/release_train.py notes` writes them from the same pull requests:
 
-- the title, `Horizon 2026.10.15.01: <the first pull request titles>` (a day's later releases count .01, .02…, two digits so GitHub's releases page, which sorts them as text, keeps them in order), features first, newest first;
+- the title, `Horizon 0.2.3: <the first pull request titles>` (before 0.2, `Horizon 2026.10.15.01: …`, a day's later releases counting .01, .02…, two digits so GitHub's releases page, which sorts them as text, kept them in order), features first, newest first;
+- a line's first release (`X.Y.0`) opens with a paragraph that says so; 0.2.0's says releases are numbered from now
+  on and how a server that says it is up to date takes it;
 - `### New` (label `feature`) and `### Fixed` (the rest), one line per pull request: its title, its number, the
   issues it closes;
 - `### Known issues`: the bullets of [docs/known-issues.md](known-issues.md);
@@ -275,7 +289,7 @@ While paused, runs still decide and say why in their summary; `force=true` still
 A bad release is withdrawn by turning it back into a draft:
 
 ```sh
-gh release edit v2026.10.15.01 --draft
+gh release edit v0.2.3 --draft
 ```
 
 A beta that is not promoted yet needs no rollback: label an issue about it `release-blocker`. For a stable
@@ -295,23 +309,26 @@ and by hand; pushes to `launcher` and `launcher-*` branches only build.
 - `tools/release_train.py decide --kind launcher` counts the pull requests merged since the last published
   launcher release that changed those paths (not `launcher/links.json`, which the launcher reads from main, nor
   tests or Markdown), with the same settling rule (15 minutes, at most an hour), `release-now`, `skip-release` and `RELEASES_PAUSED`.
-- The tag is `launcher-vX.Y.Z`: the patch after the last launcher tag, or the next minor (`X.Y+1.0`) when one of
-  those pull requests is labelled `feature`.
-- No version-bump commits: the build gets the version in `HORIZON_LAUNCHER_VERSION`, which
-  `launcher/src/backend.rs` reads with `option_env!` (falling back to `Cargo.toml`'s), so `--version`, the window,
-  the User-Agent and the self-update comparison all use it. Each build checks `--version` says it.
+- The tag is `launcher@X.Y.Z` on the release line (`launcher@0.2.0` first; the game and the launcher count their
+  patches separately). Without `.github/release-line.txt`, `launcher-vX.Y.Z`: the patch after the last launcher tag,
+  or the next minor (`X.Y+1.0`) when one of those pull requests is labelled `feature`. `launcher-v0.2.0` was taken
+  long before 0.2, hence the new prefix.
+- No version-bump commits: the build gets the version in `HORIZON_LAUNCHER_VERSION` and the tag in
+  `HORIZON_LAUNCHER_TAG`, which `launcher/src/backend.rs` reads with `option_env!` (falling back to `Cargo.toml`'s),
+  so `--version`, the window, the User-Agent and the self-update comparison all use them. Each build checks
+  `--version` says it.
 - Linux on GitHub `ubuntu-22.04`, Windows on `windows-latest`, macOS on the Mac mini's runner; each runs the
   launcher's tests, checks its libraries, and installs the latest game release with the new launcher.
 - Published with `--latest=false`: the repository's latest release stays a game release. Notes list the pull
   requests under New and Fixed; Kira posts launcher releases without pinging.
 
 Starting by hand, pausing and rolling back work as for the game (`gh workflow run launcher …`,
-`RELEASES_PAUSED`, `gh release edit launcher-vX.Y.Z --draft`). Launchers older than the withdrawn release then
+`RELEASES_PAUSED`, `gh release edit launcher@X.Y.Z --draft`). Launchers older than the withdrawn release then
 see the previous one as the newest; launchers that already updated keep running.
 
 With several game releases a day, the newest launcher release soon falls out of the newest 100 releases the
-launcher and the website read: both then look the newest `launcher-v` tags up one by one
-(`git/matching-refs/tags/launcher-v`, then `releases/tags/<tag>`).
+launcher and the website read: both then look the newest launcher tags up one by one
+(`git/matching-refs/tags/launcher@`, then `launcher-v` if there is none, then `releases/tags/<tag>`).
 
 ## Nightly audit
 
