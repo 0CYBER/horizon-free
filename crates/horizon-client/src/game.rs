@@ -1236,7 +1236,9 @@ struct Game<'a> {
     /// swap just before an attack keeps them, with the new item's enchantments
     /// (attribute swapping).
     attack_item: Option<Arc<str>>,
-    last_hurt_by_player: HashSet<u32>,
+    /// Mobs a player hurt (`LivingEntity.lastHurtByPlayer`), with the guest
+    /// it was by connection (None: the host).
+    last_hurt_by_player: HashMap<u32, Option<u32>>,
     /// Mobs whose death (`LivingEntity.die`) has been handled.
     died: HashSet<u32>,
     /// Client-ticked block-entity animation state (`game/block_entity_anims.rs`).
@@ -6937,7 +6939,8 @@ impl Game<'_> {
                     (actual * 0.5) as u32,
                 );
             }
-            self.last_hurt_by_player.insert(self.mobs[index].id);
+            self.last_hurt_by_player
+                .insert(self.mobs[index].id, self.lan_acting);
             let sound = if crit {
                 "minecraft:entity.player.attack.crit"
             } else if scale > 0.9 {
@@ -11323,7 +11326,7 @@ impl<'a> Game<'a> {
             raiding: Default::default(),
             attack_ticks: 100,
             attack_item: None,
-            last_hurt_by_player: HashSet::new(),
+            last_hurt_by_player: HashMap::new(),
             died: HashSet::new(),
             be_anims: {
                 let mut anims = horizon_client::block_entity_anim::BlockEntityAnims::default();
