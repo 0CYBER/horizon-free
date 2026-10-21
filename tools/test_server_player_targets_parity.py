@@ -11,8 +11,9 @@ vanilla generated first, with Alice and Bob as operators in creative. LocatorBar
 of vanilla's protocol code) and records, step by step, the system chat each receives and what the server changes
 about it: game mode events, teleports, inventory slots, effects, its death (with the death message), the other
 players it is sent or loses and the levels it respawns into. Each player's lines in each step are compared exactly,
-in sorted order (the packets of one step may leave in another order within the tick). The locator bar's waypoints
-and what a death does besides its messages are left to their own harnesses.
+in sorted order (the packets of one step may leave in another order within the tick), with the locator bar's
+waypoints (one manager per level: a player in another level is untracked). What a death does besides its messages
+is left to its own harness.
 """
 import hashlib
 import os
@@ -78,7 +79,6 @@ SCRIPT = [
 ]
 # What the players' locator bars show has its own harness (test_locator_bar_parity), and what a death does
 # besides its messages (drops, the body leaving) the player combat ones: here only the messages of `kill`.
-WAYPOINTS = ('track ', 'untrack ', 'update ')
 DEATH_STEP = 'step=console-kill'
 STEP_SECONDS = 2.5
 
@@ -134,7 +134,7 @@ def run_side(label, server_command, client_command, build, world):
         # At the death, Alice picks up Bob's drops (and gets their advancements) in vanilla.
         death_side = step == DEATH_STEP and (not rest.startswith(('chat ', 'killed '))
                                              or 'chat.type.advancement' in rest)
-        if rest.startswith(WAYPOINTS) or death_side:
+        if death_side:
             continue
         if step != 'step=start':
             steps.setdefault((who, step), []).append(line)

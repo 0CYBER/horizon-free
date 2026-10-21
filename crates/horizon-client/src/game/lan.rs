@@ -59,9 +59,10 @@ pub(super) struct LanHost {
     pub mob_players: HashMap<u32, u32>,
     /// An integrated server's owner (game/integrated.rs).
     pub owner: Option<Owner>,
-    /// The players' locator bars (game/lan_waypoints.rs), and the guests who
-    /// are dead, whose respawn replaces their waypoint.
-    pub waypoints: lan::waypoints::Waypoints,
+    /// The players' locator bars, one waypoint manager per level by
+    /// dimension id (game/lan_waypoints.rs), and the guests who are dead,
+    /// whose respawn replaces their waypoint.
+    pub waypoints: std::collections::HashMap<String, lan::waypoints::Waypoints>,
     pub waypoint_dead: std::collections::HashSet<u128>,
     /// Guests' commands waiting for the hub to be back in `self.lan`, where
     /// a command can reach every player (game/lan_actions.rs).

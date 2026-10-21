@@ -93,9 +93,18 @@ def run_side(label, server_command, client_command, build, world):
     return out.read_text(encoding='utf-8').splitlines()
 
 
+SHOWN = ('add', 'remove', 'respawn', 'track', 'untrack', 'update')
+
+
 def shown(lines):
-    """Each player's adds, removes and respawns, without the waypoints (the locator bar harness has those)."""
-    return [l for l in lines if l.split(' ', 2)[2:3] and l.split(' ', 2)[2].split(' ')[0] in ('add', 'remove', 'respawn')]
+    """Each player's adds, removes, respawns and waypoints, step by step; sorted within a step (the packets of one
+    step may leave in another order within the tick)."""
+    steps = {}
+    for line in lines:
+        parts = line.split(' ', 2)
+        if len(parts) == 3 and parts[2].split(' ')[0] in SHOWN:
+            steps.setdefault((parts[0], parts[1]), []).append(line)
+    return [l for key in steps for l in sorted(steps[key])]
 
 
 def main():
@@ -139,7 +148,7 @@ def main():
         java=subprocess.check_output(['java', '--version'], text=True).splitlines()[0],
         lines=len(vanilla), output_sha256=lab.digest(build / 'horizon.txt', 'sha256'),
         scope='Two players on a dedicated server changing dimensions (Nether, End, back): the other players each '
-              'is sent and loses, and the dimensions it respawns into.'))
+              'is sent and loses, the dimensions it respawns into and its locator bar waypoints.'))
     print(f'server dimension players: {len(vanilla)} lines identical')
 
 
