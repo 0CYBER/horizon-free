@@ -241,7 +241,7 @@ impl Game<'_> {
     /// Ctrl+A/C/V/X: the title box (an `EditBox` of 15) while signing, else
     /// the page (`MultilineTextField.insertText`: line breaks kept, cut to
     /// the 1024 characters left, rejected when it overflows the 14 lines).
-    fn book_shortcut(&mut self, shortcut: horizon_client::clipboard::EditShortcut) {
+    pub(super) fn book_shortcut(&mut self, shortcut: horizon_client::clipboard::EditShortcut) {
         let font = &self.gui.atlas.font;
         match self.book.as_mut() {
             Some(BookScreen::Edit {
@@ -616,16 +616,21 @@ impl Game<'_> {
                     BLACK,
                     false,
                 );
-                let blink = (opened.elapsed().as_millis() / 300) % 2 == 0;
-                let shown = format!("{title}{}", if blink { "_" } else { " " });
-                let tw = HudBatch::text_width(atlas, &shown);
-                batch.text(
+                // The title box: an unbordered, centred EditBox of 114 with
+                // black text and no shadow; the value alone is centred, the
+                // cursor follows it.
+                let x = left + 36.0;
+                let tx = x + ((114.0 - HudBatch::text_width(atlas, title)) / 2.0).floor();
+                horizon_client::ui::append_field(
+                    batch,
                     atlas,
-                    &shown,
-                    left + 36.0 + (114.0 - tw) / 2.0,
-                    50.0,
-                    BLACK,
-                    false,
+                    title,
+                    (tx, 50.0, x + 114.0 - tx),
+                    (BLACK, false),
+                    15,
+                    self.text_selection.covers(BOOK_TITLE, title),
+                    true,
+                    opened.elapsed().as_millis(),
                 );
                 let by = tr("book.byAuthor", "by %1$s").replace("%1$s", super::chat::PLAYER_NAME);
                 let tw = HudBatch::text_width(atlas, &by);

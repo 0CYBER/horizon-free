@@ -8884,7 +8884,7 @@ impl Game<'_> {
                 atlas,
                 search,
                 (ox + 82.0, oy + 6.0, 80.0),
-                u32::MAX,
+                (u32::MAX, true),
                 clipboard::CREATIVE_SEARCH_CHARS,
                 self.text_selection
                     .covers(clipboard::CREATIVE_SEARCH, search),
