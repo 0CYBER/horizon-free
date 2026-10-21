@@ -88,6 +88,9 @@ page `servers.json` (the list), `servers/<name>/` (the servers created there) an
   (`{"discord": "...", "sponsor": "...", "website": "..."}`), so they change without a launcher release. Offline,
   the launcher uses the same values built in; an empty address hides its button.
 
+Long pages, dialogs, the server console and data previews have a visible scrollbar when
+their content overflows. Drag the thumb or click the track to navigate without a mouse wheel.
+
 ## Updates
 
 The launcher looks for a newer Horizon release when it starts and every four hours while it
