@@ -1857,9 +1857,12 @@ impl Game<'_> {
         if self.eye_position().is_none() {
             return;
         }
-        let Some(thrown) =
-            horizon_client::items::take_held_drop(&mut self.inventory[self.selected], all)
-        else {
+        let spectator = self.spectator();
+        let Some(thrown) = horizon_client::items::take_held_drop(
+            &mut self.inventory[self.selected],
+            all,
+            spectator,
+        ) else {
             return;
         };
         self.player_drop(thrown);
