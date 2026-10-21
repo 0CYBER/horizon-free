@@ -20,6 +20,10 @@ pub(super) struct Strike {
     crit: bool,
     from: [f64; 3],
     sweep: Option<[f64; 3]>,
+    /// `causeExtraKnockback`: its strength and direction (the attacker's
+    /// yaw), and whether the hit is a sprinting knockback attack.
+    knockback: (f32, f64, f64),
+    knockback_attack: bool,
     /// The attacker's team, for the victim's `Player.canHarmPlayer`.
     team: Option<horizon_client::scoreboard::Team>,
 }
@@ -51,8 +55,11 @@ impl Game<'_> {
         let Some(mut host) = self.lan.take() else {
             return false;
         };
-        if let Some(strike) = self.pvp_strike() {
-            self.pvp_land(&mut host, Victim::Guest(conn), &strike);
+        if let Some(strike) = self.pvp_strike()
+            && self.pvp_land(&mut host, Victim::Guest(conn), &strike)
+            && strike.knockback.0 > 0.0
+        {
+            self.stop_sprint_after_extra_knockback();
         }
         self.lan = Some(host);
         true
@@ -77,6 +84,8 @@ impl Game<'_> {
         let from = [p.position.x, p.position.y, p.position.z];
         let (amount, scale, crit) = self.melee_damage("minecraft:player");
         let sweep = self.sweep_attack_position(scale, crit);
+        let (strength, knockback_attack) = self.extra_knockback("minecraft:player", scale);
+        let (xd, zd) = self.extra_knockback_direction();
         self.attack_ticks = 0;
         if let Some(p) = self.player.as_mut()
             && !self.creative
@@ -90,12 +99,15 @@ impl Game<'_> {
             crit,
             from,
             sweep,
+            knockback: (strength, xd, zd),
+            knockback_attack,
             team: self.player_team().cloned(),
         })
     }
 
-    /// The hit landing on the victim, then the attacker's attack sound.
-    pub(super) fn pvp_land(&mut self, host: &mut LanHost, victim: Victim, s: &Strike) {
+    /// The hit landing on the victim with its extra knockback, then the
+    /// attacker's attack sound. Whether the victim was hurt.
+    pub(super) fn pvp_land(&mut self, host: &mut LanHost, victim: Victim, s: &Strike) -> bool {
         // ServerPlayer.canHarmPlayer: the pvp game rule, then the victim's
         // team (Player.canHarmPlayer: allies only with friendly fire on).
         let team = match victim {
@@ -106,15 +118,29 @@ impl Game<'_> {
                 .and_then(|g| self.score.board.players_team(&g.name)),
         };
         let harm = horizon_client::scoreboard::teams_allow_damage(team, s.team.as_ref());
+        if s.knockback_attack {
+            self.audio.play(
+                "minecraft:entity.player.attack.knockback",
+                Some(s.from),
+                1.0,
+                1.0,
+            );
+        }
+        // Player.attack: the hurt (with its knockback away from the
+        // attacker), then causeExtraKnockback along the attacker's yaw.
+        let land = |g: &mut Self| {
+            let hurt = g.mob_hits_player(s.amount, s.from, "minecraft:player_attack");
+            let (strength, xd, zd) = s.knockback;
+            if hurt && strength > 0.0 {
+                g.knock_back_player(f64::from(strength), xd, zd);
+            }
+            hurt
+        };
         let hurt = self.ui.rules.bool("pvp")
             && harm
             && match victim {
-                Victim::Host => self.mob_hits_player(s.amount, s.from, "minecraft:player_attack"),
-                Victim::Guest(conn) => self
-                    .guest_hit_by(host, conn, |g| {
-                        g.mob_hits_player(s.amount, s.from, "minecraft:player_attack")
-                    })
-                    .unwrap_or(false),
+                Victim::Host => land(self),
+                Victim::Guest(conn) => self.guest_hit_by(host, conn, land).unwrap_or(false),
             };
         let sound = match (hurt, s.crit, s.scale > 0.9) {
             (false, ..) => "minecraft:entity.player.attack.nodamage",
@@ -127,5 +153,6 @@ impl Game<'_> {
         } else {
             self.audio.play(sound, Some(s.from), 1.0, 1.0);
         }
+        hurt
     }
 }
