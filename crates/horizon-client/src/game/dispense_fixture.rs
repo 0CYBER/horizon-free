@@ -484,7 +484,8 @@ impl Game<'_> {
         Ok(out)
     }
 
-    /// A player three blocks south of `pos` right-clicks its top face holding
+    /// A player three blocks south of `pos`, turned to the case's `yaw`,
+    /// right-clicks its top face (or the case's `face`) holding
     /// the case's item (`use_item_as_player` on that hit): the statistics,
     /// the held stack and the item it started using, as
     /// `VanillaDispenserOracle.useItem` prints them.
@@ -516,7 +517,7 @@ impl Game<'_> {
         }
         player.health.food.food = op["food"].as_i64().unwrap_or(20) as i32;
         self.player = Some(player);
-        self.yaw = 0.0;
+        self.yaw = op["yaw"].as_f64().unwrap_or(0.0) as f32;
         self.pitch = 90.0;
         self.keys.clear();
         if op["sneaking"].as_bool().unwrap_or(false) {
@@ -533,13 +534,23 @@ impl Game<'_> {
             .collect();
         items.dedup();
         let used_before: Vec<_> = items.iter().map(|i| self.stats.get("used", i)).collect();
+        // The top face, or the case's `face`, clicked at its centre.
+        let face = match op["face"].as_str() {
+            Some("down") => [0, -1, 0],
+            Some("north") => [0, 0, -1],
+            Some("south") => [0, 0, 1],
+            Some("west") => [-1, 0, 0],
+            Some("east") => [1, 0, 0],
+            _ => [0, 1, 0],
+        };
+        let centre = |c: i32, f: i32| f64::from(c) + 0.5 + f64::from(f) * 0.5;
         self.forced_hit = Some(super::Hit {
             pos: [pos.x, pos.y, pos.z],
-            face: [0, 1, 0],
+            face,
             point: [
-                f64::from(pos.x) + 0.5,
-                f64::from(pos.y) + 1.0,
-                f64::from(pos.z) + 0.5,
+                centre(pos.x, face[0]),
+                centre(pos.y, face[1]),
+                centre(pos.z, face[2]),
             ],
         });
         self.chat_capture = Some(Vec::new());

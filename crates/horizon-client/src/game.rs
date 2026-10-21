@@ -110,6 +110,7 @@ mod player_equip;
 mod postprocess;
 mod potions;
 mod powder_snow;
+mod pumpkin;
 mod raids;
 mod recipe_book;
 mod remote;
@@ -2983,6 +2984,10 @@ impl Game<'_> {
                 return Ok(true);
             }
             if self.use_decorated_pot(hit.pos, held.as_ref()) {
+                self.swing_arm();
+                return Ok(true);
+            }
+            if self.use_pumpkin(hit.pos, hit.face, held.as_ref())? {
                 self.swing_arm();
                 return Ok(true);
             }

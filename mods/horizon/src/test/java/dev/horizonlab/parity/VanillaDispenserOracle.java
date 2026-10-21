@@ -582,7 +582,8 @@ public final class VanillaDispenserOracle {
     }
 
     /**
-     * A right click on the top of the block at `pos` (`ServerPlayerGameMode.useItemOn`
+     * A right click on the top of the block at `pos`, or on its `face`, by a
+     * player turned to `yaw` (`ServerPlayerGameMode.useItemOn`
      * of the real game mode, survival or creative): the block's `useItemOn` and
      * `useWithoutItem`, then the item's `useOn` (`BlockItem.place`, falling back
      * to eating a consumable), and `useItem` when that passes, for the main
@@ -622,11 +623,14 @@ public final class VanillaDispenserOracle {
         VanillaBlockUpdateOracle.set(Entity.class, player, "position", at);
         VanillaBlockUpdateOracle.set(Entity.class, player, "blockPosition", BlockPos.containing(at));
         VanillaBlockUpdateOracle.set(Entity.class, player, "xRot", 90f);
+        if (use.has("yaw")) VanillaBlockUpdateOracle.set(Entity.class, player, "yRot", use.get("yaw").getAsFloat());
         var gameMode = new net.minecraft.server.level.ServerPlayerGameMode(player);
         VanillaBlockUpdateOracle.set(net.minecraft.server.level.ServerPlayerGameMode.class, gameMode, "gameModeForPlayer",
             player.creative ? net.minecraft.world.level.GameType.CREATIVE : net.minecraft.world.level.GameType.SURVIVAL);
-        var hit = new net.minecraft.world.phys.BlockHitResult(net.minecraft.world.phys.Vec3.atCenterOf(pos).add(0, 0.5, 0),
-            net.minecraft.core.Direction.UP, pos, false);
+        // The top face, or the case's `face`, clicked at its centre.
+        var face = use.has("face") ? net.minecraft.core.Direction.byName(use.get("face").getAsString()) : net.minecraft.core.Direction.UP;
+        var hit = new net.minecraft.world.phys.BlockHitResult(net.minecraft.world.phys.Vec3.atCenterOf(pos)
+            .add(face.getStepX() * 0.5, face.getStepY() * 0.5, face.getStepZ() * 0.5), face, pos, false);
         // Minecraft.startUseItem: each hand in turn clicks the block, then uses
         // its item unless the click succeeded or failed; a success ends it.
         for (var hand : net.minecraft.world.InteractionHand.values()) {

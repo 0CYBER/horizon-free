@@ -1494,20 +1494,7 @@ impl Game<'_> {
                 .default_state("minecraft:carved_pumpkin")
             {
                 let head = [target.0, target.1, target.2];
-                if self.completes_golem(head) {
-                    // CarvedPumpkinBlock.onPlace builds the golem inside
-                    // setBlock; the spot is air again by the time setBlock
-                    // would update neighbours, so it skips them.
-                    let at = Self::pos_of(target);
-                    self.with_level(|b, level, ticks| {
-                        b.set_block(level, ticks, at, pumpkin, 2 | 16)
-                    });
-                    self.process_level_events()?;
-                    self.check_golem_spawn(head)?;
-                } else {
-                    self.level_set(head, pumpkin)?;
-                    self.check_golem_spawn(head)?;
-                }
+                self.set_golem_head(head, pumpkin)?;
                 self.post_block_game_event("minecraft:block_place", head, None, None);
             }
             return Ok((shrink(stack), CLICK));
