@@ -1389,23 +1389,31 @@ def check_xp(host, guest, out):
         g('command', command='xp set @s 0 points')
     # Out of the orbs' way wherever an earlier check left the host (ExperienceOrb follows the
     # nearest player who isn't a spectator).
+    hx, hy, hz = pos_of(host)
     host('command', command='gamemode spectator')
-    guest.wait(10)
-    # `xp set` leaves Player.totalExperience (the score): experience from earlier checks stays in it.
-    total = guest('state')['player']['xp']['total']
-    host_total = host('state')['player']['xp']['total']
-    x, y, z = pos_of(guest)
-    # Three orbs of 7 points 4 blocks east of the guest (out of reach, within the 8 blocks orbs
-    # follow from): they fly to the guest.
-    for _ in range(3):
-        guest('command', command=f'summon minecraft:experience_orb {x + 4:.2f} {y + 0.5:.2f} {z:.2f} {{Value:7s}}')
-    guest.wait(2)
-    seen = remote(guest).get('entities', {}).get('minecraft:experience_orb', 0)
-    guest.shot(out, 'xp-orbs')
-    guest.wait(60)
-    xp = guest('state')['player']['xp']
-    host_xp = host('state')['player']['xp']
-    left = remote(guest).get('entities', {}).get('minecraft:experience_orb', 0)
+    try:
+        guest.wait(10)
+        # `xp set` leaves Player.totalExperience (the score): experience from earlier checks stays in it.
+        total = guest('state')['player']['xp']['total']
+        host_total = host('state')['player']['xp']['total']
+        x, y, z = pos_of(guest)
+        # Three orbs of 7 points 4 blocks east of the guest (out of reach, within the 8 blocks orbs
+        # follow from): they fly to the guest.
+        for _ in range(3):
+            guest('command', command=f'summon minecraft:experience_orb {x + 4:.2f} {y + 0.5:.2f} {z:.2f} {{Value:7s}}')
+        guest.wait(2)
+        seen = remote(guest).get('entities', {}).get('minecraft:experience_orb', 0)
+        guest.shot(out, 'xp-orbs')
+        guest.wait(60)
+        xp = guest('state')['player']['xp']
+        host_xp = host('state')['player']['xp']
+        left = remote(guest).get('entities', {}).get('minecraft:experience_orb', 0)
+    finally:
+        host('command', command='gamemode survival')
+        # Back where it stood: a spectator sinks (Player.travel keeps 0.6 of its fall speed each tick,
+        # about 0.2 blocks from standing), and a later check that makes it survival again would land
+        # it inside the floor, with the guest teleported beside it (swings).
+        host('command', command=f'tp @s {hx:.2f} {hy:.2f} {hz:.2f}')
     detail = {'seen': seen, 'guest': xp, 'host': host_xp, 'left': left}
     # ExperienceOrb.scanForMerges: orbs of one value side by side can merge into one.
     assert 1 <= seen <= 3, f'the guest saw {seen} orbs: {detail}'
