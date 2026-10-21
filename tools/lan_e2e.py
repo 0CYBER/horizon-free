@@ -111,7 +111,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'barter', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
 
 
 class Game:
@@ -1697,6 +1697,61 @@ def check_light(host, guest, out):
     return results
 
 
+def check_barter(host, guest, out):
+    """The guest, in gold boots, drops a gold ingot to a piglin: the piglin stays calm, takes it, and throws its
+    barter toward the nearest player, the guest (PiglinAi.throwItemsTowardPlayer: NEAREST_VISIBLE_PLAYER), who
+    picks it up. The host is nearby on the other side, so a barter thrown at the host misses the guest. A glass
+    corridor (the hollow box) keeps the piglin between them."""
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    cz = z + 4
+    host('command', command='gamemode creative')
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    guest('command', command='effect give @s minecraft:instant_health 1 5')
+    host('command', command=f'fill {x + 1} {y - 1} {cz - 1} {x + 8} {y + 2} {cz + 1} minecraft:glass hollow')
+    host('command', command=f'fill {x + 2} {y - 1} {cz} {x + 7} {y - 1} {cz} minecraft:stone')
+    host('command', command=f'tp @s {x - 0.5} {y} {cz + 0.5} -90 0')
+    guest('command', command=f'tp @s {x + 7.3} {y} {cz + 0.5} 90 30')
+    guest('command', command='item replace entity @s armor.feet with minecraft:golden_boots')
+    guest('command', command='give @s minecraft:gold_ingot 1')
+    host('command', command=f'summon minecraft:piglin {x + 4.5} {y} {cz + 0.5} {{IsImmuneToZombification:1b}}')
+    guest.wait(20)
+    before = remote(guest)['health']
+    kept = dict(guest('inventory')['counts'])
+    try:
+        guest.raw('select', 'minecraft:gold_ingot')
+        guest.raw('key', 'q', 'tap')
+        bought, trace = {}, []
+        for _ in range(20):
+            guest.wait(20)
+            trace.append([(e['type'].split(':')[-1], round(e['pos'][0] - x, 1), round(e['pos'][2] - cz, 1))
+                          for e in host.raw('entities', 24)['entities'] if e['type'] in ('minecraft:item', 'minecraft:piglin')])
+            counts = guest('inventory')['counts']
+            bought = {k: n - kept.get(k, 0) for k, n in counts.items()
+                      if k not in ('minecraft:gold_ingot', 'minecraft:golden_boots') and n > kept.get(k, 0)}
+            if bought:
+                guest.wait(40)
+                break
+        counts = guest('inventory')['counts']
+        bought = {k: n - kept.get(k, 0) for k, n in counts.items()
+                  if k not in ('minecraft:gold_ingot', 'minecraft:golden_boots') and n > kept.get(k, 0)}
+        piglins = [m for m in host.raw('mobs', 20).get('near', []) if m['kind'].split(':')[-1] == 'piglin']
+        health = remote(guest)['health']
+    finally:
+        host('command', command=f'kill @e[type=minecraft:piglin,x={x},y={y - 2},z={cz - 2},dx=10,dy=6,dz=4]')
+        # What lies on the floor, on the host's side of the piglin's start and on the guest's.
+        floor = [host('command', command=f'kill @e[type=minecraft:item,x={x0},y={y - 2},z={cz - 3},dx={dx},dy=6,dz=6]')
+                 ['chat'][0] for x0, dx in ((x - 2, 6.5), (x + 4.5, 6))]
+        host('command', command=f'fill {x + 1} {y - 1} {cz - 1} {x + 8} {y + 2} {cz + 1} minecraft:air')
+        host('command', command=f'fill {x - 8} {y - 1} {z - 8} {x + 8} {y - 1} {z + 8} minecraft:stone')
+        guest('command', command='clear @s')
+        host('command', command='gamemode survival')
+    assert piglins, 'the piglin is gone'
+    assert health >= before, f'the piglin hurt the guest in gold boots: {before} -> {health}'
+    assert bought, f'no barter reached the guest (on the floor, host side then guest side: {floor}; items and the piglin, every second: {trace})'
+    return {'bought': bought, 'floor': floor}
+
+
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
              'chest': check_chest, 'crafting': check_crafting, 'sign': check_sign, 'damage': check_damage,
              'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
@@ -1712,7 +1767,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles,
              'light': check_light, 'plates': check_plates,
              'swings': check_swings, 'cracks': check_cracks,
-             'time': check_time, 'growth': check_growth}
+             'time': check_time, 'growth': check_growth, 'barter': check_barter}
 
 
 def run(ctl, out, resources, checks):
