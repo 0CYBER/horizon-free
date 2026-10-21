@@ -55,6 +55,7 @@ struct Level {
     events: Vec<LevelEvent>,
     biome: &'static str,
     day: i64,
+    block_entities: Vec<(BlockPos, crate::nbt::Compound)>,
 }
 impl LevelAccess for Level {
     fn day_time(&self) -> i64 {
@@ -81,6 +82,9 @@ impl LevelAccess for Level {
     fn biome_name(&self, _pos: BlockPos) -> Option<&str> {
         Some(self.biome)
     }
+    fn load_block_entity(&mut self, pos: BlockPos, nbt: crate::nbt::Compound) {
+        self.block_entities.push((pos, nbt));
+    }
 }
 
 struct World {
@@ -104,6 +108,7 @@ impl World {
                 events: Vec::new(),
                 biome: "minecraft:plains",
                 day: 6000,
+                block_entities: Vec::new(),
             },
             f,
             ticks,
@@ -184,6 +189,32 @@ fn grow(sapling: &str, soil: &str, positions: &[(i32, i32)], log: &str) {
 #[test]
 fn oak_sapling_grows_with_bone_meal() {
     grow("oak_sapling", "grass_block", &[(0, 0)], "oak_log");
+}
+#[test]
+fn a_tree_with_bees_fills_its_nest() {
+    let Some(f) = fixture() else { return };
+    let mut w = World::new(f, 3);
+    w.floor("grass_block", 12);
+    let origin = BlockPos::new(0, 64, 0);
+    let placed = f.behaviours.place_feature(
+        &mut w.level,
+        &mut w.ticks,
+        "minecraft:fancy_oak_bees",
+        origin,
+    );
+    assert_eq!(placed, Some(true));
+    assert_eq!(w.count("bee_nest"), 1);
+    let [(at, nbt)] = &w.level.block_entities[..] else {
+        panic!("one block entity: {:?}", w.level.block_entities);
+    };
+    assert_eq!(w.name(*at), "minecraft:bee_nest");
+    let Some(crate::nbt::Tag::List(bees)) = nbt.get(&"bees".into()) else {
+        panic!("bees: {nbt:?}");
+    };
+    assert!(
+        (2..=3).contains(&bees.len()),
+        "BeehiveDecorator stores 2 or 3 bees"
+    );
 }
 #[test]
 fn single_saplings_grow() {

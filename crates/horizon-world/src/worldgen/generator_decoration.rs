@@ -698,13 +698,12 @@ impl PlacementContext for World<'_> {
         self.set_block_entity(position, nbt)
     }
     /// BeehiveDecorator: `getBlockEntity(pos, BEEHIVE)` then
-    /// `storeBee(Occupant.create(ticks))` for each bee (min ticks in hive 600).
+    /// `storeBee(Occupant.create(ticks))` for each bee.
     fn store_beehive_occupants(
         &mut self,
         position: [i32; 3],
         ticks_in_hive: &[i32],
     ) -> Result<(), PlacementQueryError> {
-        use crate::nbt::Tag;
         let chunk = self.region.chunk(position[0] >> 4, position[2] >> 4)?;
         let state = chunk.block(position[0], position[1], position[2]);
         let registry = self.decoration.bindings.registry();
@@ -714,22 +713,7 @@ impl PlacementContext for World<'_> {
         ) {
             return Ok(());
         }
-        let bees = ticks_in_hive
-            .iter()
-            .map(|&ticks| {
-                let mut entity = crate::nbt::Compound::new();
-                entity.insert("id".into(), Tag::String("minecraft:bee".into()));
-                let mut bee = crate::nbt::Compound::new();
-                bee.insert("entity_data".into(), Tag::Compound(entity));
-                bee.insert("ticks_in_hive".into(), Tag::Int(ticks));
-                bee.insert("min_ticks_in_hive".into(), Tag::Int(600));
-                Tag::Compound(bee)
-            })
-            .collect();
-        let mut nbt = crate::nbt::Compound::new();
-        nbt.insert("id".into(), Tag::String("minecraft:beehive".into()));
-        nbt.insert("bees".into(), Tag::List(bees));
-        self.set_block_entity(position, nbt)
+        self.set_block_entity(position, super::tree::beehive_occupants(ticks_in_hive))
     }
     /// SpawnerBlockEntity.setEntityId: the next spawn data and no potentials.
     fn configure_spawner(
