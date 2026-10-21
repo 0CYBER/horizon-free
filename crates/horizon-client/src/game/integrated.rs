@@ -660,6 +660,6 @@ fn serve(
         }),
     };
     let audio = Audio::silent(&options.resources);
-    let mut server = Game::new(res, pack, gui, options, settings, audio)?;
+    let mut server = Game::new(res, pack, gui, options, settings, audio, None)?;
     server.run_integrated(launch, flags, tasks, ready)
 }

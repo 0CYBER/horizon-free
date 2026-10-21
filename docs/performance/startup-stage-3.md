@@ -16,6 +16,28 @@ The menu still needs its own artwork and renderer before interaction. The core h
 
 Regression coverage publishes menu artwork while a fake core worker is blocked, edits a world draft, replaces fallback artwork without losing it, queues entry and draws progress, and checks that loader failure reaches the app. Additional checks cover server identity and cancelled-entry timing.
 
+## CPU preparation before handoff
+
+The resource loader now prepares the game's entity models, item-frame models,
+painting variants and creative inventory, plus the block-sprite and world-border
+mip chains, before publishing `Loaded`. All startup entity models share one parsed
+`entity-models.json` document. Each loader generation owns its prepared data;
+restarting after a pack change discards that generation's models and uploads.
+Fallible preparation finishes before the world-rest worker starts, so preparation
+failure cannot leave a detached tail writing into the next loader generation.
+
+The event-loop handoff consumes the prepared game data and mip chains. GPU
+pipeline creation, texture uploads, surface operations and audio initialization
+still run on the main thread. Upload buffers are released after construction.
+The handoff uses the current menu settings and title object directly, avoiding
+another options-file read, theme-preference load and temporary title construction.
+Synchronous harnesses and integrated servers prepare their game data inline.
+
+Logs now report worker CPU preparation time and the handoff's total, renderer and
+`start_game` times separately. The reported 245 ms handoff (103 ms renderer,
+118 ms `start_game`) predates this change; the new timings should be compared in
+an otherwise identical build and GPU environment.
+
 ## Render facts assessment
 
 `MeshTables::new` reads names, registry properties, class membership, collision shape flags, fluid and render properties from `BlockFacts`. `LightTables::new/load` reads emission, dampening, occlusion and shape-occlusion flags; geometry comes from `occlusion.nbt`. Neither table needs recipes, item data, AI or the other tail tables.
