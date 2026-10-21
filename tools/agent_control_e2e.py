@@ -244,10 +244,12 @@ def scenario(d, out):
     d('click_slot', slot=log_slot)           # pick up the logs
     d('click_slot', slot=100, right=True)    # put one in the crafting grid
     d('click_slot', slot=log_slot)           # put the rest back
+    d('wait', ticks=2)                       # the server crafts the result (single player's server thread)
     result = next(s for s in d('screen')['slots'] if s['slot'] == 200)
     assert result.get('item') == planks_id and result['count'] == 4, result
     d('click_slot', slot=200, shift=True)    # craft into the inventory
     d('close')
+    d('wait', ticks=2)
     inventory = d('inventory')
     assert inventory['counts'].get(planks_id, 0) >= 4, inventory
 
@@ -329,6 +331,7 @@ def ui_scenario(d, out):
 
     # 3. The inventory's slots are widgets too, with their stacks.
     d('give', item='oak_log', count=2)
+    d('wait', ticks=2)  # single player's server thread gives them
     d('open_inventory')
     tree = widgets(d)
     log = next(w for w in tree.values() if w['kind'] == 'slot' and (w.get('stack') or {}).get('item') == 'minecraft:oak_log')
@@ -336,6 +339,7 @@ def ui_scenario(d, out):
     d('click', id=log['id'])
     d('click', id='slot-100', right=True)
     d('click', id=log['id'])
+    d('wait', ticks=2)
     assert widgets(d)['slot-200']['stack']['item'] == 'minecraft:oak_planks'
     d('close')
     shot = d('screenshot', path=str(out / f'{d.name}-ui.png'))
