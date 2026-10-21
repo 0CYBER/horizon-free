@@ -261,7 +261,7 @@ def main():
     libraries = baking.client_libraries()
     build = lab.LOCAL / 'rust-block-entity-anim-parity'
     build.mkdir(parents=True, exist_ok=True)
-    resources = lab.LOCAL / 'horizon-client' / '26.3'
+    resources = lab.RESOURCES
     chosen = [c for c in cases() if args.filter in c['name']]
     inputs = build / 'inputs.jsonl'
     inputs.write_text(''.join(json.dumps(c) + '\n' for c in chosen))

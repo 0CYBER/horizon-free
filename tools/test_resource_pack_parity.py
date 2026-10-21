@@ -119,7 +119,7 @@ def main():
         def make(build, selection=selection):
             folder = build / "resourcepacks"
             packs(folder)
-            vanilla = lab.LOCAL / "horizon-client" / "26.3"
+            vanilla = lab.RESOURCES
             path = build / "inputs.txt"
             path.write_text(f"root {vanilla} {folder} {' '.join(selection)}".rstrip() + "\n"
                             + "".join(q + "\n" for q in QUERIES))

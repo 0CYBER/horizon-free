@@ -18,7 +18,7 @@ try:
 except ImportError:
     import lab, test_rust_parity as base, test_model_baking_parity as baking
 
-RESOURCES = lab.LOCAL / 'horizon-client/26.3'
+RESOURCES = lab.RESOURCES
 COMMON_SOURCES = [
     lab.ROOT / 'tools/audio_harness.py',
     lab.ROOT / 'tools/test_rust_parity.py',

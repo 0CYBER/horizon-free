@@ -180,7 +180,7 @@ def run_client(binary, build, port, label, token, discovery):
     directory.mkdir()
     report = directory / 'report.json'
     env = dict(os.environ, HORIZON_NO_AUDIO='1', HORIZON_NET_REPORT=str(report), HORIZON_API_DISCOVERY=discovery)
-    command = [binary, '--resources', lab.LOCAL / 'horizon-client/26.3', '--render-distance', 2,
+    command = [binary, '--resources', lab.RESOURCES, '--render-distance', 2,
                '--server', f'127.0.0.1:{port}', '--name', PLAYER]
     if token:
         command += ['--session-file', session_file(directory, token)]

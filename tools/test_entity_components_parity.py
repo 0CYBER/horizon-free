@@ -19,7 +19,7 @@ SPECIES = ('wolf', 'cat', 'frog', 'pig', 'cow', 'chicken')
 def predicates():
     """Every criterion's entity predicate, plus the components alone and
     with the wrong type."""
-    folder = lab.LOCAL / 'horizon-client/26.3/data/minecraft/advancement/husbandry'
+    folder = lab.RESOURCES / 'data/minecraft/advancement/husbandry'
     out = []
     for name in ADVANCEMENTS:
         data = json.loads((folder / f'{name}.json').read_text())
@@ -33,7 +33,7 @@ def predicates():
 
 
 def variants(species):
-    folder = lab.LOCAL / f'horizon-client/26.3/data/minecraft/{species}_variant'
+    folder = lab.RESOURCES / f'data/minecraft/{species}_variant'
     return sorted('minecraft:' + p.stem for p in folder.glob('*.json'))
 
 

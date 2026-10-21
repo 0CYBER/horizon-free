@@ -10,6 +10,11 @@ import os
 from pathlib import Path
 import subprocess
 
+try:
+    from . import lab
+except ImportError:
+    import lab
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -31,7 +36,7 @@ def main():
     mode.add_argument('--test', action='store_true', help='run extracted production upload tests')
     mode.add_argument('--build-only', action='store_true', help='build without measuring')
     parser.add_argument('--label', default='candidate')
-    parser.add_argument('--resources', type=Path, default=ROOT / '.local/horizon-client/26.3')
+    parser.add_argument('--resources', type=Path, default=lab.RESOURCES)
     args = parser.parse_args()
     path = 'crates/horizon-client/src/gfx.rs'
     source = (subprocess.check_output(['git', 'show', f'{args.ref}:{path}'], cwd=ROOT, text=True)

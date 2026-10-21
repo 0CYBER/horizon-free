@@ -11,6 +11,11 @@ import subprocess
 import sys
 
 try:
+    from . import lab
+except ImportError:
+    import lab
+
+try:
     from . import build_mod, build_pack
 except ImportError:
     import build_mod
@@ -59,7 +64,7 @@ def main():
             raise AssertionError(f"Quad reuse changed upstream geometry: {key}")
     output = root / "dist/quad-reuse-integration.json"
     output.write_text(json.dumps({"schema": 1, "platform": platform.platform(), "architecture": platform.machine(),
-        "minecraft": "26.3", "distant_horizons": "3.3.4", "original_mod_sha256": original_sha256, "results": results,
+        "minecraft": lab.VERSION, "distant_horizons": "3.3.4", "original_mod_sha256": original_sha256, "results": results,
         "notes": ["Actual publisher quad builder inside Fabric with generated faces and lighting/material values.",
                   "Opaque/translucent geometry, pooled error flags and every retained quad field match before and after upstream merging.",
                   "Fresh allocations reuse at most one discarded successful-premerge quad; existing pool selection stays upstream.",

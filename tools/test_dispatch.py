@@ -12,6 +12,11 @@ import subprocess
 import sys
 
 try:
+    from . import lab
+except ImportError:
+    import lab
+
+try:
     from . import build_mod, build_pack
     from .test_culling_rays import run_fixture
 except ImportError:
@@ -69,7 +74,7 @@ def main():
         print(json.dumps(report), flush=True)
     output = root / "dist/dispatch-integration.json"
     output.write_text(json.dumps({"schema": 1, "platform": platform.platform(), "architecture": platform.machine(),
-        "minecraft": "26.3", "distant_horizons": "3.3.4", "results": results,
+        "minecraft": lab.VERSION, "distant_horizons": "3.3.4", "results": results,
         "notes": ["Synthetic full physical worker queue; both modes use the actual publisher dispatcher inside Fabric.",
                   "Allocation and CPU measure the submission caller only; retry scheduler activity is excluded.",
                   "Upstream keeps the caller blocked for the requested 200 ms observation window; patched returns earlier.",

@@ -11,6 +11,11 @@ import subprocess
 import sys
 
 try:
+    from . import lab
+except ImportError:
+    import lab
+
+try:
     from . import build_mod, build_pack
 except ImportError:
     import build_mod
@@ -59,7 +64,7 @@ def main():
             raise AssertionError(f"Position redirect changed upstream lookup: {key}")
     output = root / "dist/terrain-position-integration.json"
     output.write_text(json.dumps({"schema": 1, "platform": platform.platform(), "architecture": platform.machine(),
-        "minecraft": "26.3", "distant_horizons": "3.3.4", "original_mod_sha256": original_sha256, "results": results,
+        "minecraft": lab.VERSION, "distant_horizons": "3.3.4", "original_mod_sha256": original_sha256, "results": results,
         "notes": ["Actual public full-data lookup inside Fabric with generated numeric column data.",
                   "Thirty owners span positive/negative origins and six detail levels; output digests and source fingerprints match.",
                   "The actual redirect method is checked in each mode; source column data remains unchanged.",

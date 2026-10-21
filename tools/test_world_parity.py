@@ -96,7 +96,7 @@ def main():
         references.append({"side": side, "jar_sha256": lab.digest(jars[side], "sha256"), **results[0]})
         print(json.dumps(references[-1]), flush=True)
     test_rust_parity.ensure_sources_unchanged(sources, tested_sources)
-    report = {"schema": 1, "minecraft": lock["minecraft"]["version"], "data_version": 5023,
+    report = {"schema": 1, "minecraft": lock["minecraft"]["version"], "data_version": lab.version_info()["world_version"],
               "platform": platform.platform(), "java": run(["java", "--version"]).splitlines()[0],
               "rustc": run(["rustc", "--version"]).strip(), "references": references,
               "sources_sha256": tested_sources,

@@ -31,6 +31,11 @@ import tempfile
 import time
 import urllib.request
 
+try:
+    from . import lab
+except ImportError:
+    import lab
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -330,7 +335,7 @@ def main():
     parser.add_argument('--client', type=Path, required=True)
     parser.add_argument('--relay', type=Path, help='horizon-relay binary (started on a free local port)')
     parser.add_argument('--relay-url', help='--role: a relay already running elsewhere, HOST:PORT')
-    parser.add_argument('--resources', type=Path, default=ROOT / '.local/horizon-client/26.3')
+    parser.add_argument('--resources', type=Path, default=lab.RESOURCES)
     parser.add_argument('--role', choices=['host', 'guest'])
     parser.add_argument('--code')
     parser.add_argument('--path', choices=['relay', 'direct'])

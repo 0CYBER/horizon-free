@@ -13,7 +13,7 @@ try:
 except ImportError:
     import lab, oracle_harness as harness
 
-VERSION = 5023
+VERSION = lab.version_info()['world_version']
 
 # Raw JSON-ish value texts: valid, boundary, wrong-typed, lenient-parser and
 # syntax-error forms. Syntax errors abort the rest of a load, as in vanilla.

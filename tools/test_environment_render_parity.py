@@ -51,7 +51,7 @@ def main():
     args = parser.parse_args()
     lock, jars, libraries = base.verify_artifacts()
     build = lab.LOCAL / 'rust-environment-parity'; build.mkdir(parents=True, exist_ok=True)
-    resources = lab.LOCAL / 'horizon-client' / '26.3'
+    resources = lab.RESOURCES
     inputs = build / 'inputs.txt'; inputs.write_text('\n'.join(cases(resources)) + '\n')
     classes = build / 'classes'; classes.mkdir(exist_ok=True)
     oracle = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaEnvironmentOracle.java'

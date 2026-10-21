@@ -12,6 +12,11 @@ import sys
 import zipfile
 
 try:
+    from . import lab
+except ImportError:
+    import lab
+
+try:
     from . import build_mod, build_pack
     from .test_culling_rays import run_fixture
 except ImportError:
@@ -79,7 +84,7 @@ def main():
                             "additional_builder_and_scratch_bytes": candidate["builder_shallow_bytes"] - control["builder_shallow_bytes"] + candidate["pending_scratch_shallow_bytes"]})
     output = root / "dist/quad-size-integration.json"
     output.write_text(json.dumps({"schema": 1, "platform": platform.platform(), "architecture": platform.machine(),
-        "minecraft": "26.3", "distant_horizons": "3.3.4", "original_mod_sha256": mod_hash,
+        "minecraft": lab.VERSION, "distant_horizons": "3.3.4", "original_mod_sha256": mod_hash,
         "results": results, "differences": differences,
         "notes": ["Instrumentation.getObjectSize measures shallow object sizes inside real applied Fabric clients.",
                   "Four adjacent north-facing quads premerge to one retained geometry quad in each combination.",

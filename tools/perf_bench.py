@@ -63,7 +63,7 @@ except ImportError:
 
 ROOT = lab.ROOT
 WORK = ROOT / ".local/perf-bench"
-VANILLA = ROOT / ".local/minecraft/26.3"
+VANILLA = lab.GAME
 SEED = 1234
 WORLD = "PerfBench"
 # (name, from xyz, to xyz, pitch): straight 192-block flights over fixed
@@ -81,7 +81,7 @@ SCENES = [
 # minimized turns off the 30 FPS limit both games apply after a minute without
 # input. Everything not listed stays at vanilla's default.
 OPTIONS = {
-    "version": "5023",
+    "version": "{data_version}",
     "graphicsPreset": '"custom"',
     "renderDistance": "{distance}",
     "simulationDistance": "12",
@@ -249,8 +249,9 @@ def nvidia_memory_mb(pid):
 
 def write_options(game_dir, distance, version=None):
     game_dir.mkdir(parents=True, exist_ok=True)
+    data_version = lab.version_info()["world_version"]
     options = dict(OPTIONS, version=version) if version else OPTIONS
-    text = "".join(f"{k}:{v.format(distance=distance)}\n" for k, v in options.items())
+    text = "".join(f"{k}:{v.format(distance=distance, data_version=data_version)}\n" for k, v in options.items())
     (game_dir / "options.txt").write_text(text)
     return text
 
@@ -543,7 +544,7 @@ def run_vanilla(args, distance):
                "-cp", os.pathsep.join(map(str, game_jars + fabric)),
                "net.fabricmc.loader.impl.launch.knot.KnotClient",
                "--username", "Bench", "--uuid", "00000000000000000000000000000000", "--accessToken", "0",
-               "--offlineDeveloperMode", "--version", "26.3", "--gameDir", str(game_dir),
+               "--offlineDeveloperMode", "--version", lab.VERSION, "--gameDir", str(game_dir),
                "--assetsDir", str(assets), "--assetIndex", manifest["assetIndex"]["id"],
                "--width", str(args.width), "--height", str(args.height)]
     env = dict(os.environ, ALSOFT_DRIVERS="null")
@@ -784,7 +785,7 @@ def main():
     p.add_argument("--heap", default="2G", help="vanilla -Xmx (the official launcher's default is 2G)")
     p.add_argument("--offscreen", action="store_true",
                    help="Horizon renders into a texture and does not wait for the window (locked macOS sessions)")
-    p.add_argument("--resources", default=str(ROOT / ".local/horizon-client/26.3"))
+    p.add_argument("--resources", default=str(lab.RESOURCES))
     p.add_argument("--build", default=str(ROOT / "target/release"))
     p.add_argument("--repeats", type=int, default=3, help="games per render distance; the report gives means and 95%% CIs")
     p.add_argument("--port-work", help="horizon: also load the mods carried over in this horizon-port-pack work folder")
@@ -830,7 +831,7 @@ def app(args):
     mods = [{"name": "fabric-loader", "version": lock["fabric_loader"]}]
     if args.game == "vanilla-mods":
         mods += [{"name": n, "version": lock["projects"][n]["version"]} for n in PERF_MODS]
-    return {"name": "minecraft", "version": "26.3", "mods": mods}
+    return {"name": "minecraft", "version": lab.VERSION, "mods": mods}
 
 
 if __name__ == "__main__":

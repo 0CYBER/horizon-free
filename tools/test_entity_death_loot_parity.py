@@ -118,7 +118,7 @@ def main():
     if args.prepare:
         lab.prepare()
     lock, jars, libraries = base.verify_artifacts()
-    resources = lab.LOCAL / 'horizon-client/26.3'
+    resources = lab.RESOURCES
     tables = resources / 'data/minecraft/loot_table/entities'
     types = sorted('minecraft:' + p.stem for p in tables.glob('*.json') if p.stem not in SKIPPED)
     oracle = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaEntityDeathLootOracle.java'

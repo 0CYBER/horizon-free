@@ -15,6 +15,11 @@ import subprocess
 import tarfile
 from pathlib import Path
 
+try:
+    from . import lab
+except ImportError:
+    import lab
+
 ROOT = Path(__file__).resolve().parent.parent
 LOCAL = ROOT / '.local'
 # Inputs of the exporters, not read by the game at runtime.
@@ -31,7 +36,7 @@ if [ "$1" = "--install" ]; then
 [Desktop Entry]
 Type=Application
 Name=Horizon
-Comment=Minecraft Java Edition 26.3 in Rust
+Comment=Minecraft Java Edition @MINECRAFT@ in Rust
 Exec="$here/horizon.sh"
 Icon=$here/horizon.png
 Terminal=false
@@ -73,7 +78,7 @@ def add_bytes(tar, name, data, mode=0o644):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--binary', type=Path, help='built horizon-client (default: cargo release target)')
-    parser.add_argument('--resources', type=Path, default=LOCAL / 'horizon-client/26.3')
+    parser.add_argument('--resources', type=Path, default=lab.RESOURCES)
     parser.add_argument('--out', type=Path, default=LOCAL / 'dist')
     args = parser.parse_args()
 
@@ -107,7 +112,7 @@ def main():
         ctl = args.binary.with_name('horizon-ctl')  # built with --bins: scripts and agents play through it
         if ctl.is_file():
             tar.add(ctl, 'horizon/horizon-ctl')
-        add_bytes(tar, 'horizon/horizon.sh', LAUNCHER.encode(), 0o755)
+        add_bytes(tar, 'horizon/horizon.sh', LAUNCHER.replace('@MINECRAFT@', lab.VERSION).encode(), 0o755)
         tar.add(ROOT / 'docs/media/icon-256.png', 'horizon/horizon.png')
         add_bytes(tar, 'horizon/README.txt', README.format(version=version, commit=commit, platform=plat).encode())
         for path in sorted(args.resources.iterdir()):

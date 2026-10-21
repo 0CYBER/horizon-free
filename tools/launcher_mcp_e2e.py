@@ -22,6 +22,11 @@ import sys
 import tempfile
 from pathlib import Path
 
+try:
+    from . import lab
+except ImportError:
+    import lab
+
 ROOT = Path(__file__).resolve().parents[1]
 TAG = 'v2099.1.1'
 
@@ -98,7 +103,7 @@ def main():
     parser.add_argument('--out', default=str(ROOT / '.local/launcher-mcp-e2e'), help='the screenshot goes here')
     args = parser.parse_args()
     bins = Path(args.bin_dir).resolve()
-    resources = (ROOT / '.local/horizon-client/26.3').resolve()
+    resources = (lab.RESOURCES).resolve()
     if not (resources / 'horizon-resources.json').exists():
         sys.exit(f'no prepared resources in {resources}')
     out = Path(args.out)
@@ -108,7 +113,7 @@ def main():
     (version / '.local/horizon-client').mkdir(parents=True)
     for name in ['horizon-client', 'horizon-ctl']:
         os.symlink(bins / name, version / name)
-    os.symlink(resources, version / '.local/horizon-client/26.3')
+    os.symlink(resources, version / '.local/horizon-client' / lab.VERSION)
     (version / '.installed').write_text('')
     env = dict(os.environ, HORIZON_LAUNCHER_HOME=str(work / 'launcher'), HORIZON_HOME=str(work / 'home'),
                HORIZON_NO_AUDIO='1')

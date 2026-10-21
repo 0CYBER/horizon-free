@@ -9,6 +9,11 @@ import shutil
 import sys
 
 try:
+    from . import lab
+except ImportError:
+    import lab
+
+try:
     from . import build_mod, build_pack
     from .test_culling_rays import run_fixture
 except ImportError:
@@ -57,7 +62,7 @@ def main():
     if not (instance / 'saves/Demo_World/level.dat').is_file():
         raise AssertionError('Disposable world was not saved')
     report = {'schema': 1, 'platform': platform.platform(), 'architecture': platform.machine(),
-              'minecraft': '26.3', 'original_mod_sha256': digest, 'launcher_exit_code': run.returncode,
+              'minecraft': lab.VERSION, 'original_mod_sha256': digest, 'launcher_exit_code': run.returncode,
               'requested_backend': args.backend or 'pack_default', 'result': result, 'limits': ['Short report-context check, not FPS or physical M2 performance.',
                   'Graphics context is captured at recording start, not continuously monitored.',
                   'World files and full logs remain private.']}

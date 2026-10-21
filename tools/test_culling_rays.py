@@ -12,6 +12,11 @@ import subprocess
 import sys
 
 try:
+    from . import lab
+except ImportError:
+    import lab
+
+try:
     from . import build_mod, build_pack
 except ImportError:
     import build_mod
@@ -86,7 +91,7 @@ def main():
             raise AssertionError(f"Scratch redirect changed upstream geometry: {key}")
     output = root / "dist/culling-rays-integration.json"
     output.write_text(json.dumps({"schema": 1, "platform": platform.platform(), "architecture": platform.machine(),
-        "minecraft": "26.3", "entity_culling": "1.11.2", "original_mod_sha256": original_sha256, "results": results,
+        "minecraft": lab.VERSION, "entity_culling": "1.11.2", "original_mod_sha256": original_sha256, "results": results,
         "notes": ["Actual upstream culling methods inside Fabric; private fixture invokers do not enter production packs.",
                   "Two interleaved instances and several occluder patterns; matching boolean and query digests.",
                   "Signed zero, tiny/large values, infinities and NaN are exercised directly in ray intersection.",

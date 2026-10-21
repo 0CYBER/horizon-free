@@ -16,10 +16,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+try:
+    from . import lab
+except ImportError:
+    import lab
+
 ROOT = Path(__file__).resolve().parent.parent
 LOCAL = ROOT / '.local'
-RESOURCES = LOCAL / 'horizon-client' / '26.3'
-SERVER = LOCAL / 'minecraft' / '26.3' / 'jars' / 'server.jar'
+RESOURCES = lab.RESOURCES
+SERVER = lab.GAME / 'jars' / 'server.jar'
 
 # Absolute coordinates well above the terrain, inside force-loaded chunks.
 SCENE = [

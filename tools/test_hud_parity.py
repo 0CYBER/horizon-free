@@ -99,7 +99,7 @@ def main():
     lock, jars, _ = base.verify_artifacts()
     libraries = baking.client_libraries()
     build = lab.LOCAL / 'rust-hud-parity'; build.mkdir(parents=True, exist_ok=True)
-    resources = lab.LOCAL / 'horizon-client' / '26.3'
+    resources = lab.RESOURCES
     chosen = cases(args.count, kinds)
     inputs = build / 'inputs.jsonl'; inputs.write_text(''.join(json.dumps(c) + '\n' for c in chosen))
     classes = build / 'classes'; classes.mkdir(exist_ok=True)

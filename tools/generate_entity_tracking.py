@@ -5,11 +5,16 @@ trackDeltas, which ChunkMap.TrackedEntity and ServerEntity use to decide who
 sees an entity and how often its movement is sent), read from the decompiled
 EntityTypes.java.
 
-  generate_entity_tracking.py [--sources .local/minecraft/26.3/sources/client]
+  generate_entity_tracking.py [--sources .local/minecraft/<pinned version>/sources/client]
 """
 import argparse
 import re
 from pathlib import Path
+
+try:
+    from . import lab
+except ImportError:
+    import lab
 
 ROOT = Path(__file__).resolve().parents[1]
 INT_MAX = 2147483647
@@ -34,7 +39,7 @@ def parse(sources):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--sources", type=Path, default=ROOT / ".local/minecraft/26.3/sources/client")
+    parser.add_argument("--sources", type=Path, default=lab.GAME / "sources/client")
     parser.add_argument("--out", type=Path, default=ROOT / "crates/horizon-client/src/lan/tracking.rs")
     args = parser.parse_args()
     rows = parse(args.sources)

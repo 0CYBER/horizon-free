@@ -10,6 +10,11 @@ import subprocess
 import sys
 
 try:
+    from . import lab
+except ImportError:
+    import lab
+
+try:
     from . import build_mod, build_pack
 except ImportError:
     import build_mod
@@ -50,7 +55,7 @@ def main():
         raise AssertionError("Empty shortcut did not apply to actual methods")
     output = root / "dist/culling-empty-integration.json"
     output.write_text(json.dumps({"schema": 1, "platform": platform.platform(), "architecture": platform.machine(),
-        "minecraft": "26.3", "entity_culling": "1.11.2", "results": results,
+        "minecraft": lab.VERSION, "entity_culling": "1.11.2", "results": results,
         "notes": ["Actual publisher whitelist methods inside Fabric; live registration and block-entity callbacks checked.",
                   "Nonempty iteration, callback order, short circuit, null/wrong-type inputs and clearing retain upstream behavior.",
                   "Empty-state iterator counts use a private instrumented set; allocation loop uses normal empty HashSets.",

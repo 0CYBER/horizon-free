@@ -12,7 +12,7 @@ except ImportError:
     import lab
     import test_rust_parity as base
 
-RESOURCES = lab.LOCAL / 'horizon-client' / '26.3'
+RESOURCES = lab.RESOURCES
 PARITY = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity'
 
 

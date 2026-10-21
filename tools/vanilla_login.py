@@ -19,7 +19,10 @@ import time
 import uuid
 import zlib
 
-PROTOCOL = 777  # 26.3
+try:
+    from . import lab
+except ImportError:
+    import lab
 
 
 def offline_uuid(name):
@@ -101,7 +104,7 @@ def parse_varint(data, pos):
 
 def join(host, port, name, seconds):
     c = Connection(host, port)
-    c.send(0, varint(PROTOCOL) + string(host) + struct.pack('>H', port) + varint(2))
+    c.send(0, varint(lab.version_info()['protocol_version']) + string(host) + struct.pack('>H', port) + varint(2))
     c.send(0, string(name) + offline_uuid(name).bytes)
     # Login: compression, then login finished.
     while True:
