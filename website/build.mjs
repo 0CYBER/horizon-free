@@ -12,6 +12,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { markdown, inline, section, escape } from "./src/markdown.js";
 import { releasesHtml } from "./src/releases.js";
+import { isGame, isLauncher, launcherVersion, newestFirst } from "./src/versions.js";
 import { contributorsFrom, contributorsHtml } from "./src/contributors.js";
 
 const site = dirname(fileURLToPath(import.meta.url));
@@ -46,7 +47,7 @@ try {
   if (res.ok) releases = (await res.json()).filter((r) => !r.draft);
   else console.warn(`releases: ${res.status} from GitHub; the page will load them itself`);
   // A day of betas can push the stable release out of the newest 100: it is GitHub's "latest" (betas never are).
-  if (res.ok && !releases.some((r) => /^v\d{4}\./.test(r.tag_name) && !r.prerelease)) {
+  if (res.ok && !releases.some((r) => isGame(r.tag_name) && !r.prerelease)) {
     const latest = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: githubHeaders, signal: AbortSignal.timeout(15000) });
     if (latest.ok) releases.push(await latest.json());
   }
@@ -111,11 +112,11 @@ const parityHeadline = matching === body.length ? "Every subsystem matches vanil
 
 // --- The latest notes -------------------------------------------------
 
-const isGame = (tag) => /^v\d{4}\.\d{1,2}\.\d{1,2}/.test(tag);
-const isLauncher = (tag) => tag.startsWith("launcher-v");
-// Stable releases only: betas become stable 6 hours later (docs/release-flow.md, "Channels").
-const game = releases.filter((r) => isGame(r.tag_name) && !r.prerelease).slice(0, 3);
-const launcher = releases.find((r) => isLauncher(r.tag_name) && !r.prerelease);
+// Stable releases only: betas become stable 6 hours later (docs/release-flow.md, "Channels"). Newest first by
+// tag: every 0.2 tag is newer than the dated ones (src/versions.js).
+const byTag = (a, b) => newestFirst(a.tag_name, b.tag_name);
+const game = releases.filter((r) => isGame(r.tag_name) && !r.prerelease).sort(byTag).slice(0, 3);
+const launcher = releases.filter((r) => isLauncher(r.tag_name) && !r.prerelease).sort(byTag)[0];
 
 // --- The page --------------------------------------------------------------------------
 
@@ -151,7 +152,7 @@ await writeFile(join(dist, "favicon.ico"), Buffer.concat([ico, png32]));
 // The page's modules, fingerprinted; each import of a shared module is rewritten to its name.
 const names = {};
 const rewrite = (code) => code.replace(/"\.\/(\w+\.js)"/g, (all, file) => (names[file] ? `"./${names[file]}"` : all));
-for (const file of ["markdown.js", "releases.js", "contributors.js", "main.js"]) {
+for (const file of ["markdown.js", "releases.js", "contributors.js", "versions.js", "main.js"]) {
   const code = rewrite(await readFile(join(site, "src", file), "utf8"));
   names[file] = `${file.replace(".js", "")}.${fingerprint(code)}.js`;
   await writeFile(join(dist, "assets", names[file]), code);
@@ -195,7 +196,7 @@ const values = {
   PARITY_HEADLINE: parityHeadline,
   SUBSYSTEMS: String(body.length),
   NOTES: notesHtml,
-  LAUNCHER_META: `${launcher ? `Launcher ${escape(launcher.tag_name.replace("launcher-v", ""))} for` : "For"} Linux x86-64, macOS on Apple Silicon and Windows x64.`,
+  LAUNCHER_META: `${launcher ? `Launcher ${escape(launcherVersion(launcher.tag_name))} for` : "For"} Linux x86-64, macOS on Apple Silicon and Windows x64.`,
   DISCORD: escape(links.discord || DEFAULT_LINKS.discord),
   SPONSOR: escape(links.sponsor || DEFAULT_LINKS.sponsor),
   CONTRIBUTORS: contributorsHtml(contributors),
