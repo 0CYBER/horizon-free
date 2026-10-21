@@ -188,3 +188,8 @@ fn linear_fog(d: f32, start: f32, end: f32) -> f32 {
     let color = textureSample(atlas, atlas_sampler, in.uv) * in.color * in.light_color;
     return color;
 }
+
+// RenderPipelines.WATER_MASK: depth only (the pipeline masks the colour off).
+@fragment fn fs_water_mask() -> @location(0) vec4<f32> {
+    return vec4(0.0);
+}
