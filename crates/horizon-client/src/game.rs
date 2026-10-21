@@ -5849,6 +5849,62 @@ impl Game<'_> {
             _ => self.inv_drag = None,
         }
     }
+    /// A press of the pick block button (`keyPickItem`, the middle button by
+    /// default) over an inventory screen: `mouseClicked` with `cloning`
+    /// (infinite materials). An empty hand clones the hovered stack at its
+    /// full size (`CLONE`), a carried stack starts a quick craft drag of type
+    /// 2 that fills every slot it crosses; without infinite materials the
+    /// press does nothing.
+    fn inventory_pick_press(&mut self) {
+        use horizon_client::container_screen::{Button, Target};
+        let (slot, outside) = self.inventory_target();
+        let was_crafting = self.inv_clicks.quick_crafting().is_some();
+        let input = self.inv_clicks.press(
+            &Target::of(slot, outside),
+            Button::Middle,
+            self.carried.is_none(),
+            self.has_shift_down(),
+            self.creative,
+        );
+        match (input, slot) {
+            // Slot -999 (outside the window) clones nothing.
+            (Some(input), Some(slot)) if !outside => {
+                self.menu_click(Some(slot), 2, input);
+            }
+            (None, _) if !was_crafting && self.inv_clicks.quick_crafting().is_some() => {
+                // Item tab display slots take no drags.
+                let first = slot.filter(|&s| {
+                    s != 200 && s < Creative::DISPLAY && self.quick_craft_accepts(s, 2, 0)
+                });
+                self.inv_drag = Some((2, first.into_iter().collect()));
+            }
+            _ => {}
+        }
+    }
+    /// The pick block button's release (`mouseReleased`): ends its quick
+    /// craft drag, cancels another button's, or clones onto the slot under a
+    /// carried stack (`CLONE`, which only an item tab's display slot takes).
+    fn inventory_pick_release(&mut self) {
+        use horizon_client::container_screen::{Button, Release, Target};
+        let (slot, outside) = self.inventory_target();
+        let dragged = self.inv_drag.as_ref().is_some_and(|(_, s)| !s.is_empty());
+        let release = self.inv_clicks.release(
+            &Target::of(slot, outside),
+            Button::Middle,
+            self.carried.is_none(),
+            dragged,
+            self.has_shift_down(),
+            true,
+        );
+        match (release, slot) {
+            (Release::QuickCraft, _) => self.inventory_release(),
+            (Release::Click(input), Some(slot)) if !outside => {
+                self.inv_drag = None;
+                self.menu_click(Some(slot), 2, input);
+            }
+            _ => self.inv_drag = None,
+        }
+    }
     /// Mouse release: finishes a quick craft drag (one slot is a plain click).
     fn inventory_release(&mut self) {
         use horizon_client::menu::Input;
@@ -10441,6 +10497,25 @@ impl ApplicationHandler for Game<'_> {
                                     self.keys.remove(&k);
                                 }
                                 None => {}
+                            }
+                        }
+                        Screen::Inventory | Screen::Creative
+                            if !matches!(button, MouseButton::Left | MouseButton::Right) =>
+                        {
+                            // AbstractContainerScreen: another button clicks
+                            // a slot only as the pick block key (its hotbar
+                            // keys were handled above).
+                            if self.settings.keys.get("key.pickItem")
+                                == horizon_client::keybinds::mouse_name(button)
+                            {
+                                if pressed {
+                                    self.inventory_pick_press();
+                                } else {
+                                    self.inventory_pick_release();
+                                }
+                                if let Some(key) = self.container {
+                                    self.container_changed(key);
+                                }
                             }
                         }
                         Screen::Inventory if pressed => {
