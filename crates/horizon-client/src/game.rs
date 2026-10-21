@@ -4154,8 +4154,11 @@ impl Game<'_> {
             });
             horizon_client::spans::time("tick_particles", || self.tick_particles());
         }
+        // Minecraft.handleKeybinds: held use repeats only while no item is in
+        // use (a raised shield or a drawn bow places and uses nothing).
         if self.right
             && self.use_delay == 0
+            && self.using.is_none()
             && self.screen == Screen::Playing
             && self.sleeping.is_none()
         {
@@ -9830,7 +9833,9 @@ impl Game<'_> {
                 self.toggles
                     .button(3, pressed, false, self.settings.toggle_use);
                 self.right = self.toggles.is_down(3);
-                if pressed {
+                // handleKeybinds consumes use clicks without acting while an
+                // item is in use.
+                if pressed && self.using.is_none() {
                     self.use_with_hand()?;
                     self.use_delay = 4;
                 }
