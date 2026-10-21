@@ -715,9 +715,12 @@ impl Game<'_> {
     /// The hurts and melee attacks each player logged since the last call
     /// (`PlayerMotion::hurt_log`, `attack_log`), taken out.
     fn control_hurt_log(&mut self) -> Value {
-        fn drain(name: &str, p: &mut horizon_client::motion::PlayerMotion) -> Value {
-            let hurts: Vec<Value> = p
-                .hurt_log
+        fn drain(
+            name: &str,
+            hurt_log: &mut Vec<horizon_client::health::HurtRecord>,
+            attack_log: &mut Vec<horizon_client::health::AttackRecord>,
+        ) -> Value {
+            let hurts: Vec<Value> = hurt_log
                 .drain(..)
                 .map(|r| {
                     json!({
@@ -728,8 +731,7 @@ impl Game<'_> {
                     })
                 })
                 .collect();
-            let attacks: Vec<Value> = p
-                .attack_log
+            let attacks: Vec<Value> = attack_log
                 .drain(..)
                 .map(|r| {
                     json!({
@@ -742,13 +744,16 @@ impl Game<'_> {
         }
         let mut players = Vec::new();
         if let Some(p) = self.player.as_mut() {
-            players.push(drain("host", p));
+            players.push(drain("host", &mut p.hurt_log, &mut p.attack_log));
         }
         if let Some(host) = self.lan.as_mut() {
             for g in &mut host.hub.guests {
                 let name = g.name.clone();
                 if let Some(m) = g.motion.as_mut() {
-                    players.push(drain(&name, m));
+                    players.push(drain(&name, &mut m.hurt_log, &mut m.attack_log));
+                } else if let Some((mut hurts, mut attacks)) = g.logs_kept.take() {
+                    // Dead, not yet respawned: what its last body logged.
+                    players.push(drain(&name, &mut hurts, &mut attacks));
                 }
             }
         }

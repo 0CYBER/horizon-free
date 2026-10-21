@@ -200,6 +200,11 @@ impl Game<'_> {
                 host.hub.guests[i].position[2],
             );
             host.hub.guests[i].motion = PlayerMotion::new(self.motion, p).ok().map(Box::new);
+            let kept = host.hub.guests[i].logs_kept.take();
+            if let (Some(m), Some((hurts, attacks))) = (host.hub.guests[i].motion.as_mut(), kept) {
+                m.hurt_log = hurts;
+                m.attack_log = attacks;
+            }
         }
         let mut play = host.play.remove(&conn).unwrap_or_default();
         let g = &mut host.hub.guests[i];
@@ -1336,7 +1341,10 @@ impl Game<'_> {
         g.food = 20;
         g.saturation = 5.0;
         g.sent_health = None;
-        g.motion = None;
+        if let Some(m) = g.motion.take() {
+            let m = *m;
+            g.logs_kept = Some((m.hurt_log, m.attack_log));
+        }
         let mut xp = Experience {
             level: g.xp_level,
             progress: g.xp_progress,
