@@ -213,6 +213,7 @@ impl Game<'_> {
                                 no_gravity,
                                 drop_item,
                                 fall_distance,
+                                stuck: Vec3::ZERO,
                                 damage: horizon_client::falling_block::Damage::from_nbt(
                                     &tag,
                                     self.res.facts().get(state).name.ends_with("anvil"),

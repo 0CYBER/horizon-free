@@ -66,6 +66,7 @@ impl Game<'_> {
                 no_gravity: false,
                 drop_item: false,
                 fall_distance: 0.0,
+                stuck: Vec3::ZERO,
                 damage: Default::default(),
                 saved: None,
             }),

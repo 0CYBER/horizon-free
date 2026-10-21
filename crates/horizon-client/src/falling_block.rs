@@ -1,9 +1,13 @@
-//! FallingBlockEntity's impact damage, anvil wear and saved impact settings.
+//! FallingBlockEntity's impact damage, anvil wear, saved impact settings and
+//! the cobwebs that hold it back.
 use crate::{
     mobs::{Damage as MobDamage, DamageKind, Mob},
     save::{float, number, put},
 };
-use horizon_core::geometry::{Aabb, Vec3};
+use horizon_core::{
+    geometry::{Aabb, Axis, Direction, Vec3, sweep_intersected_blocks},
+    position::BlockPos,
+};
 use horizon_world::{chunk::BlockState, nbt::Tag};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -97,6 +101,65 @@ pub fn bounds(position: Vec3) -> Aabb {
         ),
     )
 }
+/// `WebBlock.entityInside`'s `makeStuckInBlock` multiplier: the next move
+/// goes at a quarter of the speed across, a twentieth down.
+pub fn web_multiplier() -> Vec3 {
+    Vec3::new(0.25, f64::from(0.05_f32), 0.25)
+}
+/// `Entity.applyEffectsFromBlocks` after a falling block's move this tick
+/// (`from` to `to`; `original` the move it asked for, when the move was
+/// recorded): whether `checkInsideBlocks` reaches a cobweb (`is_web`), whose
+/// `entityInside` makes it stuck. Each movement sweeps its axes in
+/// `Direction.axisStepOrder` within 16 iterations, then the end alone.
+pub fn passes_cobweb(
+    from: Vec3,
+    to: Vec3,
+    original: Option<Vec3>,
+    mut is_web: impl FnMut(BlockPos) -> bool,
+) -> bool {
+    let mut stuck = false;
+    // checkInsideBlocks(from, to, ..): the iterations used plus one.
+    let mut check = |from: Vec3, to: Vec3, max: i32| {
+        let d = f64::from(1.0e-5_f32);
+        let target = bounds(to).deflate(Vec3::new(d, d, d));
+        let mut iterations = 0;
+        let _ = sweep_intersected_blocks(from, to, target, 1_000_000, |p, iteration| {
+            if iteration >= max {
+                return false;
+            }
+            iterations = iteration;
+            // getEntityInsideCollisionShape is the whole block for cobwebs.
+            stuck |= is_web(p);
+            true
+        });
+        iterations + 1
+    };
+    let delta = to.subtract(from);
+    let mut budget = 16;
+    match original {
+        Some(original) if delta.length_squared() > 0.0 => {
+            let mut at = from;
+            for axis in Axis::step_order(original) {
+                let step = delta.component(axis);
+                if step != 0.0 {
+                    let positive = match axis {
+                        Axis::X => Direction::East,
+                        Axis::Y => Direction::Up,
+                        Axis::Z => Direction::South,
+                    };
+                    let next = at.relative(positive, step);
+                    budget -= check(at, next, budget);
+                    at = next;
+                }
+            }
+        }
+        _ => budget -= check(from, to, 16),
+    }
+    if budget <= 0 {
+        check(to, to, 1);
+    }
+    stuck
+}
 pub fn hurt_mobs(mobs: &mut [Mob], position: Vec3, amount: f32) {
     if amount <= 0.0 {
         return;
@@ -161,6 +224,41 @@ mod tests {
             }
             assert!(!wear_anvil(&mut state));
         }
+    }
+    #[test]
+    fn a_cobweb_on_the_path_or_at_the_end_holds_a_falling_block() {
+        let web = BlockPos::new(0, 5, 0);
+        let is_web = |p: BlockPos| p == web;
+        let at = |y: f64| Vec3::new(0.5, y, 0.5);
+        // Falling through the web's block in one move, landing in it, resting in it.
+        assert!(passes_cobweb(
+            at(7.2),
+            at(3.1),
+            Some(Vec3::new(0.0, -4.1, 0.0)),
+            is_web
+        ));
+        assert!(passes_cobweb(
+            at(6.5),
+            at(5.5),
+            Some(Vec3::new(0.0, -1.0, 0.0)),
+            is_web
+        ));
+        assert!(passes_cobweb(at(5.5), at(5.5), None, is_web));
+        // Above it, below it, or beside it.
+        assert!(!passes_cobweb(
+            at(8.0),
+            at(6.01),
+            Some(Vec3::new(0.0, -1.99, 0.0)),
+            is_web
+        ));
+        assert!(!passes_cobweb(
+            at(4.0),
+            at(3.0),
+            Some(Vec3::new(0.0, -1.0, 0.0)),
+            is_web
+        ));
+        let beside = Vec3::new(1.5, 5.5, 0.5);
+        assert!(!passes_cobweb(beside, beside, None, is_web));
     }
     #[test]
     #[ignore = "requires prepared entity models/data in HORIZON_TEST_RESOURCES"]
