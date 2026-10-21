@@ -482,6 +482,8 @@ struct GameLevel<'w> {
     player_collision: Option<PlayerCollision>,
     /// Minecart boxes (detector rails).
     cart_boxes: Vec<([f64; 3], [f64; 3])>,
+    /// The other entities that keep blocks from being placed into them.
+    blockers: Blockers<'w>,
     biomes: &'w Biomes,
     seed: i64,
     behaviours: &'w Behaviours,
@@ -505,22 +507,83 @@ struct PlayerCollision {
     main_hand_count: i32,
     leather_boots: bool,
 }
-struct PlayerObstruction(Aabb);
-impl EntityObstructionWorld for PlayerObstruction {
+/// The entities `Entity.blocksBuilding` sets besides the players and
+/// minecarts, borrowed for `Level.isUnobstructed`: living entities (mobs,
+/// armor stands), boats, end crystals, primed TNT and falling blocks.
+#[derive(Clone, Copy)]
+struct Blockers<'w> {
+    mobs: &'w [Mob],
+    armor_stands: &'w [horizon_client::entities::ArmorStand],
+    boats: &'w [boats::Boat],
+    crystals: &'w [dragon::Crystal],
+    tnts: &'w [tnt::PrimedTnt],
+    falling: &'w [FallingBlock],
+}
+/// The boxes of the entities that block building, as obstruction candidates.
+struct BuildingObstruction(Vec<Aabb>);
+impl EntityObstructionWorld for BuildingObstruction {
     type Error = std::convert::Infallible;
     fn obstruction_candidates(
         &mut self,
         _excluded: Option<EntityIdentity>,
-        _bounds: Aabb,
+        bounds: Aabb,
     ) -> std::result::Result<Vec<ObstructionEntity>, Self::Error> {
-        Ok(vec![ObstructionEntity {
-            identity: EntityIdentity(0),
-            root_vehicle: EntityIdentity(0),
-            bounds: self.0,
-            removed: false,
-            spectator: false,
-            blocks_building: true,
-        }])
+        Ok(self
+            .0
+            .iter()
+            .filter(|b| b.intersects(bounds))
+            .enumerate()
+            .map(|(i, &bounds)| ObstructionEntity {
+                identity: EntityIdentity(i as u64),
+                root_vehicle: EntityIdentity(i as u64),
+                bounds,
+                removed: false,
+                spectator: false,
+                blocks_building: true,
+            })
+            .collect())
+    }
+}
+impl GameLevel<'_> {
+    /// Every entity box that blocks building: the players who aren't
+    /// spectators, the minecarts and the `Blockers` (a removed mob or a marker
+    /// armor stand, whose box is empty, doesn't).
+    fn building_blocker_boxes(&self) -> Vec<Aabb> {
+        let boxed = |(lo, hi): &([f64; 3], [f64; 3])| {
+            Aabb::new(
+                Vec3::new(lo[0], lo[1], lo[2]),
+                Vec3::new(hi[0], hi[1], hi[2]),
+            )
+        };
+        let b = self.blockers;
+        self.player_box
+            .iter()
+            .chain(&self.guest_boxes)
+            .chain(&self.cart_boxes)
+            .map(boxed)
+            .chain(b.mobs.iter().filter(|m| !m.removed).map(Mob::bounds))
+            .chain(
+                b.armor_stands
+                    .iter()
+                    .filter(|s| !s.marker)
+                    .map(|s| s.bounds()),
+            )
+            .chain(b.boats.iter().map(boats::Boat::bounds))
+            .chain(b.crystals.iter().map(|c| {
+                // EntityType.END_CRYSTAL: 2 x 2.
+                let p = c.position;
+                Aabb::new(
+                    Vec3::new(p.x - 1.0, p.y, p.z - 1.0),
+                    Vec3::new(p.x + 1.0, p.y + 2.0, p.z + 1.0),
+                )
+            }))
+            .chain(b.tnts.iter().map(tnt::PrimedTnt::bounds))
+            .chain(
+                b.falling
+                    .iter()
+                    .map(|f| horizon_client::falling_block::bounds(f.position)),
+            )
+            .collect()
     }
 }
 impl LevelAccess for GameLevel<'_> {
@@ -639,13 +702,12 @@ impl LevelAccess for GameLevel<'_> {
         self.dimension
     }
     /// `Level.isUnobstructed`: the placed state's collision shape against the player.
+    /// `Level.isUnobstructed(state, pos, CollisionContext.of(player))`: no
+    /// entity that blocks building is in the state's collision shape.
     fn is_unobstructed(&self, pos: BlockPos, state: BlockStateId) -> bool {
-        let Some((lo, hi)) = self.player_box else {
-            return true;
-        };
         let player = self.player_collision.as_ref();
         let context = player.map_or_else(
-            || CollisionContext::position(lo[1]),
+            || CollisionContext::empty(false),
             |player| {
                 CollisionContext::for_entity(
                     CollisionEntity {
@@ -687,10 +749,7 @@ impl LevelAccess for GameLevel<'_> {
             f64::from(pos.z),
         ));
         horizon_world::entity_obstruction::is_unobstructed(
-            &mut PlayerObstruction(Aabb::new(
-                horizon_core::geometry::Vec3::new(lo[0], lo[1], lo[2]),
-                horizon_core::geometry::Vec3::new(hi[0], hi[1], hi[2]),
-            )),
+            &mut BuildingObstruction(self.building_blocker_boxes()),
             None,
             &shape,
         )
@@ -2062,8 +2121,17 @@ impl Game<'_> {
             Dim::End => LevelDimension::End,
         };
         let rules = self.level_rules();
+        let blockers = Blockers {
+            mobs: &self.mobs,
+            armor_stands: &self.armor_stands,
+            boats: &self.boats,
+            crystals: &self.crystals,
+            tnts: &self.tnts,
+            falling: &self.falling,
+        };
         let mut level = GameLevel {
             cart_boxes,
+            blockers,
             world: &mut self.world,
             facts: self.res.facts(),
             collision: self.collision,
