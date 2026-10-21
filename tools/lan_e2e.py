@@ -20,6 +20,7 @@ address. The script then checks, from both sides, what a guest's game used to ge
              drowning and the void (then respawns);
 - pvp:       the guest and the host hit each other with a sword; with the pvp game rule off, or on one
              team without friendly fire, nothing;
+- arrows:    the guest and the host shoot each other with a bow; with the pvp game rule off, nothing (#484);
 - respawn:   a player killed is drawn dead by the other side, and alive again once it respawns (the
              respawned player is a new entity to the others); the host dies, and on the server thread
              the guest too;
@@ -111,7 +112,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
 
 
 class Game:
@@ -610,6 +611,39 @@ def check_pvp(host, guest, out):
     assert hits['pvp off'][1] == hits['pvp off'][0], f'pvp off still hurts: {hits}'
     for name in ('guest hits teammate', 'host hits teammate'):
         assert hits[name][1] == hits[name][0], f'friendly fire off still hurts ({name}): {hits}'
+    return hits
+
+
+def check_arrows(host, guest, out):
+    # A player's arrow on another player (#484): AbstractArrow.onHitEntity, refused by
+    # ServerPlayer.canHarmPlayer with the pvp game rule off (the arrow turns back).
+    for g in (host, guest):
+        g('command', command='gamemode survival')
+        g('command', command='clear @s')
+        g('command', command='item replace entity @s weapon.mainhand with minecraft:bow')
+        g('command', command='give @s minecraft:arrow 16')
+    hits = {}
+    try:
+        for name, rule, shooter in (('guest shoots host', 'true', guest), ('host shoots guest', 'true', host),
+                                    ('pvp off', 'false', guest)):
+            host('command', command=f'gamerule pvp {rule}')
+            for g in (host, guest):
+                g('command', command='effect give @s minecraft:instant_health 1 5')
+            face_each_other(host, guest)
+            shooter.wait(20)
+            victim = (lambda: host('state')['player']['health']) if shooter is guest else (lambda: remote(guest)['health'])
+            before = victim()
+            shooter.raw('use-item', '--hold', 1.3)  # a full draw (BowItem: 20 ticks)
+            shooter.wait(20)
+            hits[name] = (before, victim())
+            shooter.shot(out, 'arrows-' + name.replace(' ', '-'))
+    finally:
+        host('command', command='gamerule pvp true')
+        for g in (host, guest):
+            g('command', command='clear @s')
+    assert hits['guest shoots host'][1] < hits['guest shoots host'][0], f"the guest's arrow did not hurt the host: {hits}"
+    assert hits['host shoots guest'][1] < hits['host shoots guest'][0], f"the host's arrow did not hurt the guest: {hits}"
+    assert hits['pvp off'][1] == hits['pvp off'][0], f'pvp off, an arrow still hurts: {hits}'
     return hits
 
 
@@ -1712,7 +1746,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles,
              'light': check_light, 'plates': check_plates,
              'swings': check_swings, 'cracks': check_cracks,
-             'time': check_time, 'growth': check_growth}
+             'time': check_time, 'growth': check_growth, 'arrows': check_arrows}
 
 
 def run(ctl, out, resources, checks):
