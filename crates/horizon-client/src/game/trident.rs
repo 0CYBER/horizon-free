@@ -122,6 +122,38 @@ impl Game<'_> {
         let sky = self.world.light(x, y + 1, z) >> 4 == 15;
         water || (self.world.weather.raining && sky)
     }
+    /// The living entities a spinning player can touch this tick, for
+    /// `LivingEntity.checkAutoSpinAttack` (none when not spinning).
+    pub(super) fn spin_targets(&self) -> Vec<(u32, Aabb)> {
+        let Some(p) = self
+            .player
+            .as_ref()
+            .filter(|p| p.auto_spin_attack_ticks > 0)
+        else {
+            return Vec::new();
+        };
+        // A spin moves a few blocks a tick at most.
+        let near = p.bounds().inflate(Vec3::new(16.0, 16.0, 16.0));
+        self.mobs
+            .iter()
+            .filter(|m| m.alive() && m.bounds().intersects(near))
+            .map(|m| (m.id, m.bounds()))
+            .collect()
+    }
+    /// `Player.doAutoAttackOnTouch`: the touched entity takes `Player.attack`
+    /// with the spin's damage; once the spin is over its damage is cleared.
+    pub(super) fn end_spin_attack(&mut self, hit: Option<u32>) {
+        if let Some(id) = hit
+            && let Some(index) = self.mobs.iter().position(|m| m.id == id)
+        {
+            self.attack_mob(index);
+        }
+        if let Some(p) = self.player.as_mut()
+            && p.auto_spin_attack_ticks <= 0
+        {
+            p.auto_spin_attack_dmg = 0.0;
+        }
+    }
     /// `TridentItem.releaseUsing`.
     pub(super) fn release_trident(&mut self, ticks: u32) {
         if ticks < 10 {
@@ -152,6 +184,9 @@ impl Game<'_> {
                     p.velocity.y + d[1] * f64::from(strength),
                     p.velocity.z + d[2] * f64::from(strength),
                 );
+                // Player.startAutoSpinAttack(20, 8, stack).
+                p.auto_spin_attack_ticks = 20;
+                p.auto_spin_attack_dmg = 8.0;
                 if p.ground.on_ground {
                     p.position.y += 1.2;
                 }

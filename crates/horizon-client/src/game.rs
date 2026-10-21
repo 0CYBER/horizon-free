@@ -896,6 +896,8 @@ struct WorldRest {
     behaviours: Behaviours,
     player_arm: Option<horizon_client::mobs::Part>,
     player_type: Option<Arc<horizon_client::mobs::MobType>>,
+    /// `SpinAttackEffectModel` (Riptide's spinning boxes).
+    spin_attack: Option<horizon_client::mobs::Part>,
     stations: horizon_client::stations::StationData,
 }
 
@@ -970,6 +972,9 @@ impl Resources {
     }
     fn player_type(&self) -> &Option<Arc<horizon_client::mobs::MobType>> {
         &self.rest().player_type
+    }
+    fn spin_attack(&self) -> &Option<horizon_client::mobs::Part> {
+        &self.rest().spin_attack
     }
     fn stations(&self) -> &horizon_client::stations::StationData {
         &self.rest().stations
@@ -3907,6 +3912,7 @@ impl Game<'_> {
         }
         let riding = self.riding.is_some();
         let ghast_collisions = self.happy_ghast_player_collisions();
+        let spin_targets = self.spin_targets();
         let Some(player) = self.player.as_mut() else {
             // A dedicated server has no local player: the world still runs.
             if self.options.dedicated.is_some() {
@@ -3984,6 +3990,7 @@ impl Game<'_> {
             .any(|s| immune.is_some_and(|t| t.contains(&*s.item)));
         // The dimension's FAST_LAVA: the Nether's lava pushes harder.
         player.fluids.fast_lava = self.dim == Dim::Nether;
+        player.spin_targets = spin_targets;
         let grounded = player.ground.on_ground;
         let before = (
             grounded,
@@ -4006,6 +4013,7 @@ impl Game<'_> {
             }
         }
         let events = std::mem::take(&mut player.events);
+        let spin_hit = player.spin_hit.take();
         let glider_wear = std::mem::take(&mut player.glider_wear);
         if glider_wear > 0
             && !self.creative
@@ -4024,6 +4032,7 @@ impl Game<'_> {
         self.eye += (camera_eye.unwrap_or(eye_height) - self.eye) * 0.5;
         let crouching = player.pose == horizon_client::pose::Pose::Crouching;
         self.tick_avatar(before, riding);
+        self.end_spin_attack(spin_hit);
         self.record_combat(&events);
         for event in events {
             match event {
@@ -6751,7 +6760,13 @@ impl Game<'_> {
     /// enchantments.
     pub(super) fn melee_damage(&mut self, target_kind: &str) -> (f32, f32, bool) {
         let hand_damage = 1.0 + self.attack_item_info().map_or(0.0, |i| i.attack_damage);
-        let damage = hand_damage + self.effect_attack_bonus();
+        // Riptide's spin replaces the attack damage attribute.
+        let spin = self.player.as_ref().map_or(0.0, |p| p.auto_spin_attack_dmg);
+        let damage = if spin > 0.0 {
+            spin
+        } else {
+            hand_damage + self.effect_attack_bonus()
+        };
         let scale = self.attack_strength_scale();
         let mut amount = damage * (0.2 + scale * scale * 0.8);
         // Item.getAttackDamageBonus (a mace's smash), before the critical hit.
@@ -6879,6 +6894,14 @@ impl Game<'_> {
                 return false;
             }
         }
+        self.attack_mob(index);
+        // Minecraft.startAttack swings after the attack.
+        self.swing_arm();
+        true
+    }
+    /// `Player.attack` on a mob: the damage, knockback, sweep, particles and
+    /// sounds.
+    pub(super) fn attack_mob(&mut self, index: usize) {
         let target_kind = self.mobs[index].kind.id.clone();
         let target_kind = format!("minecraft:{}", target_kind.trim_start_matches("minecraft:"));
         let (amount, scale, crit) = self.melee_damage(&target_kind);
@@ -6896,7 +6919,6 @@ impl Game<'_> {
             self.audio
                 .play("minecraft:entity.player.attack.knockback", from, 1.0, 1.0);
         }
-        self.swing_arm();
         // LivingEntity.setLastHurtMob (tamed wolves join in).
         self.combat.last_hurt_mob = Some((self.mobs[index].id, self.world.game_time));
         let old_health = self.mobs[index].health;
@@ -6989,7 +7011,6 @@ impl Game<'_> {
             self.audio
                 .play("minecraft:entity.player.attack.nodamage", from, 1.0, 1.0);
         }
-        true
     }
     /// ServerExplosion: rays from a 16^3 grid lose (resistance + 0.3) * 0.3 per step.
     /// A mob explosion (`Level.ExplosionInteraction.MOB`: drop decay with the
@@ -8489,6 +8510,10 @@ impl Game<'_> {
         }
         let shown = self.hands_to_render();
         let used_hand = self.used_hand();
+        let spinning = self
+            .player
+            .as_ref()
+            .is_some_and(|p| p.auto_spin_attack_ticks > 0);
         for (i, (hand, item)) in Hand::BOTH
             .into_iter()
             .zip(self.visible_hand_items())
@@ -8608,6 +8633,7 @@ impl Game<'_> {
                         ItemPose::Using
                     }
                 }
+                _ if spinning => ItemPose::SpinAttack,
                 _ => ItemPose::Swing,
             };
             let m = to_world
@@ -12052,6 +12078,7 @@ fn load_world_rest(
         player_type: perspective::player_type(root),
         player_arm: horizon_client::mobs::load_model(root, "minecraft:player#main")
             .and_then(|m| m.children.into_iter().find(|c| c.name == "right_arm")),
+        spin_attack: horizon_client::mobs::load_model(root, "minecraft:spin_attack#main"),
     })
 }
 

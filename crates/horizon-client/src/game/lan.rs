@@ -740,7 +740,9 @@ impl Game<'_> {
             equipment,
             health: p.health.health(),
             attributes: horizon_client::lan::attributes::syncable(&p.attributes),
-            living_flags: living_flags(self.using),
+            // Bit 4: Riptide's spin (LivingEntity.isAutoSpinAttack).
+            living_flags: living_flags(self.using)
+                | if p.auto_spin_attack_ticks > 0 { 4 } else { 0 },
             bed: self.sleeping,
         })
     }
