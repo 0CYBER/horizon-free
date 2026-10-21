@@ -187,12 +187,24 @@ def scenario(d, out):
         d('click_button', label='Create New World')
     d('type', field='name', replace=True, text='Agent World')
     d('type', field='seed', text='5')  # spawn near a walkable oak
-    created = d('click_button', label='Create New World')
-    assert created['screen'] == 'playing', created
+    d('click_button', label='Create New World')
+    # The world opens a few frames later: in the frame it is prepared off the UI thread behind the
+    # title screen (world_loading.rs), on the server thread once the server has it.
+    d('wait_for', condition='loaded', timeout=400)
     d('wait_ready', seconds=400)
     state = d('state')
     assert state['gamemode'] == 'survival' and state['player']['health'] > 0, state
     d('command', command='time set day')
+    # The spawn is random within the spawn radius, on the first full top face below the
+    # MOTION_BLOCKING height (PlayerSpawnFinder.getLevelRespawnPos): a tree's leaves too, too high
+    # for goto's drops.
+    x, y, z = state['player']['block_pos']
+    ground = y - 1
+    while ground > y - 16 and d('block', x=x, y=ground, z=z)['block'].endswith(('_leaves', 'air')):
+        ground -= 1
+    if ground < y - 1:
+        d('command', command=f'tp @s {x + 0.5} {ground + 1} {z + 0.5}')
+        d('wait', ticks=5)
 
     # 2. Walk to a tree: the nearest trunk the path finder can reach.
     for _, base, log_id in trunk_bases(d)[:8]:
@@ -276,8 +288,8 @@ def ui_scenario(d, out):
     tree = widgets(d)
     assert tree['game']['kind'] == 'button' and any(w['kind'] == 'field' for w in tree.values()), tree
     d('type', field='name', replace=True, text='UI World')
-    created = d('click', id='create-new-world')
-    assert created['screen'] == 'playing', created
+    d('click', id='create-new-world')
+    d('wait_for', condition='loaded', timeout=400)  # a few frames later, as in the survival scenario
     d('wait_ready', seconds=400)
 
     # 2. Options from the pause menu: a slider set by id moves its value and label.
