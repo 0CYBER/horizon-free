@@ -227,11 +227,18 @@ def scenario(d, out):
         raise Failed('no reachable tree near spawn')
     assert broke['block_before'].startswith(log_id), broke
     assert broke['drops'].get(log_id, 0) >= 1, broke
-    if broke['picked_up'].get(log_id, 0) < 1:
+    # On a client of a server (single player's server thread) the drop and its pickup both come from
+    # the server a few ticks later: wait for the logs in the inventory, or walk to the drop.
+    for _ in range(20):
+        if broke['picked_up'].get(log_id, 0) >= 1 or d('inventory')['counts'].get(log_id, 0) >= 1:
+            break
         items = d('entities', radius=8, type='item')['entities']
-        drop = next(e for e in items if e['item']['item'] == log_id)
-        d('goto', x=drop['pos'][0], y=drop['pos'][1], z=drop['pos'][2], near=1.0, timeout=20)  # pickup reaches a block; the drop may lie under the trunk
-        d('wait', ticks=10)
+        drop = next((e for e in items if e['item']['item'] == log_id), None)
+        if drop is not None:
+            d('goto', x=drop['pos'][0], y=drop['pos'][1], z=drop['pos'][2], near=1.0, timeout=20)  # pickup reaches a block; the drop may lie under the trunk
+            d('wait', ticks=10)
+            break
+        d('wait', ticks=1)
     inventory = d('inventory')
     assert inventory['counts'].get(log_id, 0) >= 1, inventory
 
