@@ -425,6 +425,16 @@ impl Aabb {
             ),
         )
     }
+    /// `AABB.intersects(minX, minY, minZ, maxX, maxY, maxZ)`: `intersects`
+    /// with a box given by its corners, `min` below `max` on every axis.
+    pub fn intersects_corners(self, min: Vec3, max: Vec3) -> bool {
+        self.min.x < max.x
+            && self.max.x > min.x
+            && self.min.y < max.y
+            && self.max.y > min.y
+            && self.min.z < max.z
+            && self.max.z > min.z
+    }
     pub fn intersects(self, other: Self) -> bool {
         self.min.x < other.max.x
             && self.max.x > other.min.x
