@@ -98,12 +98,7 @@ pub fn start_sleeping(m: &mut Mob, p: [i32; 3], w: &MobWorld) -> bool {
     if w.prop(p[0], p[1], p[2], "occupied") == Some("true") {
         return false;
     }
-    m.extra.ints[1] = match w.prop(p[0], p[1], p[2], "facing") {
-        Some("north") => 1,
-        Some("south") => 2,
-        Some("west") => 3,
-        _ => 4,
-    };
+    m.extra.ints[1] = bed_facing_code(w.prop(p[0], p[1], p[2], "facing"));
     m.nav_stop();
     ext_mut(m).last_slept = Some(w.game_time);
     m.velocity = horizon_core::geometry::Vec3::ZERO;
@@ -144,6 +139,15 @@ pub fn stop_sleeping(m: &mut Mob, w: &MobWorld) {
 }
 /// `LivingEntityRenderer.sleepDirectionToRotation` and the bed's direction
 /// (the body is shifted back from the pillow by the standing eye height).
+/// A bed's `facing` as `sleep_pose` keeps it in `ints[1]`.
+pub fn bed_facing_code(facing: Option<&str>) -> i32 {
+    match facing {
+        Some("north") => 1,
+        Some("south") => 2,
+        Some("west") => 3,
+        _ => 4,
+    }
+}
 pub fn sleep_pose(m: &Mob) -> Option<(f32, [f32; 2])> {
     Some(match m.extra.ints[1] {
         1 => (270.0, [0.0, -1.0]),

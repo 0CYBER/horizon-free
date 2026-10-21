@@ -393,11 +393,13 @@ impl ServerEntity {
                 .collect();
             // A value back at its default is left out of the state, but the
             // clients still hold the old one: Entity's shared flags and pose go
-            // back to 0 (a player standing up again, a mob no longer on fire).
+            // back to 0 (a player standing up again, a mob no longer on fire),
+            // a sleeper's bed to none.
             for (index, kind, _) in &self.meta {
                 let default = match (*index, *kind) {
                     (0, serializer::BYTE) => Value::Byte(0),
                     (6, serializer::POSE) => Value::Id(0),
+                    (14, serializer::OPTIONAL_BLOCK_POS) => Value::OptPos(None),
                     _ => continue,
                 };
                 if !e.meta.iter().any(|m| m.0 == *index) {

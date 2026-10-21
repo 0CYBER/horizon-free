@@ -85,6 +85,8 @@ pub struct HostState {
     pub attributes: Vec<play::AttributeSnapshot>,
     /// `LivingEntity.DATA_LIVING_ENTITY_FLAGS` (the item in use).
     pub living_flags: i8,
+    /// The bed the host sleeps in (`LivingEntity.SLEEPING_POS`).
+    pub bed: Option<[i32; 3]>,
 }
 
 /// Everything the hub needs from the game for one tick.
@@ -1467,6 +1469,7 @@ impl Hub {
         on_ground: bool,
         flags: (bool, bool, bool, bool),
         living_flags: i8,
+        bed: Option<[i32; 3]>,
         skin: u8,
         health: f32,
         equipment: Vec<(u8, Option<horizon_protocol::item::Stack>)>,
@@ -1502,6 +1505,11 @@ impl Hub {
         // Always there: the trackers send the entries that changed, and an
         // item no longer in use is a change back to 0.
         meta.push((8, serializer::BYTE, Value::Byte(living_flags)));
+        // LivingEntity.SLEEPING_POS: the others draw the player lying in it,
+        // a player paired later too.
+        if let Some(bed) = bed.filter(|_| sleeping) {
+            meta.push((14, serializer::OPTIONAL_BLOCK_POS, Value::OptPos(Some(bed))));
+        }
         if (health - 1.0).abs() > f32::EPSILON && health != 20.0 {
             meta.push((9, serializer::FLOAT, Value::Float(health)));
         }
@@ -1565,8 +1573,9 @@ impl Hub {
                 h.position,
                 (h.yaw, h.pitch, h.head_yaw),
                 h.on_ground,
-                (h.sneaking, h.sprinting, false, false),
+                (h.sneaking, h.sprinting, false, h.bed.is_some()),
                 h.living_flags,
+                h.bed,
                 0x7F,
                 h.health,
                 equipment,
@@ -1598,6 +1607,7 @@ impl Hub {
                     g.on_ground,
                     (g.sneaking, g.sprinting, g.fall_flying, g.sleeping),
                     g.living_flags,
+                    g.bed,
                     g.info.model_customisation,
                     g.health,
                     equipment,

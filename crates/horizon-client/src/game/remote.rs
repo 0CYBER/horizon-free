@@ -1544,6 +1544,18 @@ impl Game<'_> {
                         }
                     }
                 }
+                // LivingEntity.onSyncedDataUpdated(SLEEPING_POS_ID): another
+                // player lies down in their bed (drawn lying in it), or gets up.
+                if other {
+                    for (index, _, value) in &p.values {
+                        if let (14, Value::OptPos(bed)) = (index, value) {
+                            let code = bed.map_or(0, |b| self.bed_facing(b));
+                            if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
+                                m.extra.ints[1] = code;
+                            }
+                        }
+                    }
+                }
                 // LivingEntity.onSyncedDataUpdated(SLEEPING_POS_ID): this
                 // player lies down in the bed, or gets up.
                 if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) {
@@ -4100,6 +4112,13 @@ impl Game<'_> {
                 .mobs
                 .iter()
                 .filter(|m| r.level_players.contains_key(&(m.id as i32)) && !m.alive())
+                .map(|m| m.id)
+                .collect::<Vec<_>>(),
+            // The other players this client draws lying in a bed (SLEEPING_POS).
+            "lying_players": self
+                .mobs
+                .iter()
+                .filter(|m| r.level_players.contains_key(&(m.id as i32)) && m.extra.ints[1] != 0)
                 .map(|m| m.id)
                 .collect::<Vec<_>>(),
             // The player's own model exists (third person and the inventory draw it).

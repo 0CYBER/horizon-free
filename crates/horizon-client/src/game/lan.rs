@@ -395,6 +395,8 @@ impl Game<'_> {
                     ],
                     "chunks": g.sent_chunks.len(),
                     "tracked": g.tracker.len(),
+                    // Whether the host draws this guest lying in a bed.
+                    "model_lying": h.models.get(&g.conn).map(|m| m.extra.ints[1] != 0),
                     // The armour the host draws on this guest, head to feet.
                     "model_armor": h.models.get(&g.conn).map(|m| {
                         [&m.extra.head, &m.extra.chest, &m.extra.legs, &m.extra.feet]
@@ -735,6 +737,7 @@ impl Game<'_> {
             health: p.health.health(),
             attributes: horizon_client::lan::attributes::syncable(&p.attributes),
             living_flags: living_flags(self.using),
+            bed: self.sleeping,
         })
     }
 
@@ -1207,6 +1210,8 @@ impl Game<'_> {
                 .each_ref()
                 .map(|s| s.as_ref().map(|s| s.item.clone()));
             m.extra.crouching = g.sneaking;
+            // Lying in its bed (LivingEntity.getBedOrientation).
+            m.extra.ints[1] = g.bed.map_or(0, |b| self.bed_facing(b));
             // LivingEntity.updateSwingTime: the arm swing lan_swings started.
             m.anim.attack_anim_o = m.anim.attack_anim;
             horizon_client::mobs::ai::tick_swing(m);
@@ -1216,6 +1221,20 @@ impl Game<'_> {
             m.extra.using_item = using.map_or(0, |(_, ticks)| ticks as i32 + 1);
             m.extra.using_off_hand = using.is_some_and(|(slot, _)| slot == OFFHAND_SLOT);
         }
+    }
+
+    /// The bed at `head` as a sleeping model lies in it (`ints[1]`,
+    /// `villager::sleep_pose`): its `facing`.
+    pub(super) fn bed_facing(&self, head: [i32; 3]) -> i32 {
+        let state = self.world.block(head[0], head[1], head[2]);
+        let facing = self
+            .pack
+            .assets
+            .registry
+            .state(state)
+            .and_then(|s| s.properties.get("facing"))
+            .map(String::as_str);
+        horizon_client::mobs::villager::bed_facing_code(facing)
     }
 
     /// The guests' models for the entity pass.
