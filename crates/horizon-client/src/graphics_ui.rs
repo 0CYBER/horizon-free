@@ -124,7 +124,7 @@ pub fn rows(level: Level) -> Vec<Row> {
             ),
             h(
                 H::CaveCulling,
-                None,
+                Saves,
                 "Skips terrain hidden behind closed sections. Off costs a lot.",
             ),
             h(
@@ -150,7 +150,7 @@ pub fn rows(level: Level) -> Vec<Row> {
             ),
             v(
                 Opt::Mipmaps,
-                Low,
+                None,
                 "Smaller copies of block textures for distant terrain: less shimmer.",
             ),
             v(
@@ -160,7 +160,7 @@ pub fn rows(level: Level) -> Vec<Row> {
             ),
             v(
                 Opt::Clouds,
-                Medium,
+                Low,
                 "Cloud layer: off, flat (fast) or 3D (fancy).",
             ),
             v(Opt::CloudRange, Low, "How far clouds reach, in chunks."),
@@ -170,10 +170,10 @@ pub fn rows(level: Level) -> Vec<Row> {
                 None,
                 "Distance fog. Off shows the edge of the loaded world.",
             ),
-            h(H::Weather, Low, "Draws rain and snow."),
+            h(H::Weather, High, "Draws rain and snow."),
             v(
                 Opt::WeatherRadius,
-                Low,
+                Medium,
                 "How far rain and snow fall around you.",
             ),
             v(Opt::Particles, Medium, "How many particles effects spawn."),
@@ -213,7 +213,7 @@ pub fn rows(level: Level) -> Vec<Row> {
             ),
             h(
                 H::Antialiasing,
-                Low,
+                Medium,
                 "FXAA smooths jagged edges of the world; slightly softer image.",
             ),
             h(

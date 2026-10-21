@@ -1247,7 +1247,8 @@ impl<'a> Ui<'a> {
     }
     /// A settings row with, under its label, a one-line description led by
     /// the setting's frame-time cost (`cost` 0 none .. 3 high, coloured from
-    /// the muted colour to the danger colour). Same height as [`Ui::row`].
+    /// the muted colour to the danger colour; 4 saves time, in the success
+    /// colour). Same height as [`Ui::row`].
     #[allow(clippy::too_many_arguments)]
     pub fn described_row(
         &mut self,
@@ -1276,8 +1277,14 @@ impl<'a> Ui<'a> {
             &value,
         );
         let dy = top + (BODY * 1.45).round();
-        let tint = [0.0, 0.2, 0.55, 1.0][usize::from(cost.0.min(3))];
-        let cost_color = color::mix(color::FAINT, color::DANGER, tint);
+        let cost_color = match cost.0 {
+            4 => color::SUCCESS,
+            n => color::mix(
+                color::FAINT,
+                color::DANGER,
+                [0.0, 0.2, 0.55, 1.0][usize::from(n.min(3))],
+            ),
+        };
         self.text(Face::Medium, SMALL, x, dy, cost_color, cost.1);
         // No cost label: the description starts at the row's edge.
         let used = if cost.1.is_empty() {
