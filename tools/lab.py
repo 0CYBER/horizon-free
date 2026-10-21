@@ -259,14 +259,18 @@ def import_library(artifact, destination_root, minecraft=None):
 
 
 def launcher_assets(manifest, minecraft=None):
-    """The launcher's asset directory and the pinned version's verified asset index."""
+    """The launcher's asset directory and the pinned version's asset index."""
     assets = minecraft_dir(minecraft) / "assets"
     info = manifest["assetIndex"]
     index = assets / "indexes" / f"{info['id']}.json"
     if not index.is_file():
         raise FileNotFoundError(f"Missing {index}. {LAUNCHER_HINT.format(version=manifest['id'])}")
-    if digest(index, "sha1") != info["sha1"]:
-        raise ValueError(f"{index} is not the pinned asset index")
+    checksum = digest(index, "sha1")
+    known = json.loads(LOCK.read_text(encoding="utf-8"))["minecraft"].get("accepted_asset_index_sha1", [])
+    if checksum != info["sha1"] and checksum not in known:
+        # Mojang republishes an index under the same id (#1076); each object is still verified.
+        print(f"{index} is an asset index Horizon does not know yet (sha1 {checksum}); "
+              "using it, every file is still checked against its own SHA-1", file=sys.stderr)
     return assets, index
 
 
