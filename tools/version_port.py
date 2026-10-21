@@ -14,6 +14,8 @@
                                                   oracle (no longer compiles) or fail, and newly failing against
                                                   a run on the pinned version (tools/port_harness.py)
     version_port.py report OLD NEW [--results S]  the ranked port report: diff-OLD-NEW/report.md and .json
+    version_port.py publish OLD NEW [--yes]       the report's work items as GitHub issues (tools/port_publish.py);
+                                                  a dry run without --yes
     version_port.py port NEW [--old OLD]          prepare both, diff, regen, report
     version_port.py gc [--keep VERSION...]        keep the pinned, the newest two others and --keep
 
@@ -39,11 +41,12 @@ import urllib.request
 import zipfile
 
 try:
-    from . import class_index, lab, port_harness, port_regen, port_report, vanilla_map
+    from . import class_index, lab, port_harness, port_publish, port_regen, port_report, vanilla_map
 except ImportError:
     import class_index
     import lab
     import port_harness
+    import port_publish
     import port_regen
     import port_report
     import vanilla_map
@@ -617,6 +620,35 @@ def report(args):
     return 0
 
 
+# --- publish -----------------------------------------------------------------------------------------------
+
+def publish(args):
+    directory = diff_dir(args.old, args.new)
+    if not (directory / "report.json").exists():
+        raise SystemExit(f"No report yet; run version_port.py report {args.old} {args.new}")
+    built = json.loads((directory / "report.json").read_text())
+    result = json.loads((directory / "diff.json").read_text())
+    issues = port_publish.open_version_port_issues() if args.yes or args.check_github else {}
+    actions = port_publish.plan(built, result, directory, issues)
+    creates = sum(1 for a in actions if a[0] == "create")
+    if not args.yes:
+        for action, name, text, number in actions:
+            print(f"would {action}{f' #{number}' if number else ''}: {name}")
+        for action, name, text, number in actions[:args.show]:
+            print(f"\n--- {name}\n{text}")
+        missing = port_publish.missing_labels(args.new) if args.check_github else [port_publish.LABEL,
+                                                                                    f"port-{args.new}"]
+        print(f"\nDry run: {creates} issues to create, {len(actions) - creates} to update"
+              f"{'' if args.check_github else ' (open issues not checked: --check-github)'}; labels to create: "
+              f"{', '.join(missing) or 'none'}; then one Kira card for the tracking issue. Rerun with --yes to do it.")
+        return 0
+    urls = port_publish.apply(actions, built, issues)
+    tracking = urls[actions[-1][1]]
+    card = port_publish.kira_card(args.new, tracking)
+    print(f"Tracking issue {tracking}" + (f"; Kira card {card}" if card else "; Kira card already there"))
+    return 0
+
+
 def port(args):
     """prepare both, diff, regen, report."""
     old = args.old or pinned()
@@ -691,6 +723,13 @@ def main():
     command.add_argument("--results", help="tools/parity.py's state.json from a run against NEW (default: "
                                            "harnesses.json, when version_port.py harnesses ran)")
     command.add_argument("--lines", type=int, default=60, help="how much of report.md to print")
+    command = commands.add_parser("publish", help="the report's work items as GitHub issues (dry run by default)")
+    command.add_argument("old")
+    command.add_argument("new")
+    command.add_argument("--yes", action="store_true", help="create and update the issues, labels and Kira card")
+    command.add_argument("--check-github", action="store_true",
+                         help="dry run: read the open issues and labels to tell creates from updates")
+    command.add_argument("--show", type=int, default=1, help="dry run: print this many issue bodies")
     command = commands.add_parser("port", help="prepare, diff and report in one go")
     command.add_argument("new")
     command.add_argument("--old", help="default: the pinned version")
@@ -705,7 +744,7 @@ def main():
     args = parser.parse_args()
     STORE.mkdir(parents=True, exist_ok=True)
     return {"detect": detect, "prepare": prepare, "diff": diff, "regen": regen, "harnesses": harnesses,
-            "report": report, "port": port, "gc": gc}[args.command](args)
+            "report": report, "publish": publish, "port": port, "gc": gc}[args.command](args)
 
 
 if __name__ == "__main__":
