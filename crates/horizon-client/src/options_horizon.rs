@@ -185,9 +185,17 @@ pub const SECTIONS: &[Section] = &[
     Section {
         name: "Extras",
         blurb: "Optional additions, all off by default: the game stays vanilla until you turn one on.",
-        rows: |_| {
+        // A switch's own settings nest under it and show while it is on, so
+        // the page stays one row per extra until one is turned on.
+        rows: |s| {
             extras::rows()
                 .into_iter()
+                .filter(|r| {
+                    r.map_or(true, |item| {
+                        item.parent()
+                            .is_none_or(|parent| parent.switch(&s.extras) == Some(true))
+                    })
+                })
                 .map(|r| r.map_or_else(HRow::Header, HRow::Extra))
                 .collect()
         },
@@ -870,6 +878,41 @@ mod tests {
         let ui = Ui::dry(atlas, &mut batch, (0.0, 0.0));
         let gui_per_dp = ui.density / ui.batch.scale;
         (point.0 * gui_per_dp, point.1 * gui_per_dp)
+    }
+
+    #[test]
+    fn extras_settings_nest_under_their_switch() {
+        let mut s = Settings::default();
+        let section = SECTIONS.iter().find(|s| s.name == "Extras").unwrap();
+        let items = |s: &Settings| -> Vec<extras::Item> {
+            (section.rows)(s)
+                .iter()
+                .filter_map(|row| match row {
+                    HRow::Extra(item) => Some(*item),
+                    _ => None,
+                })
+                .collect()
+        };
+        // Everything off: one row per extra.
+        assert!(items(&s).iter().all(|item| item.parent().is_none()));
+        s.extras.zoom = true;
+        let zoom_on = items(&s);
+        assert!(zoom_on.contains(&extras::Item::ZoomKey));
+        assert!(zoom_on.contains(&extras::Item::ZoomSensitivity));
+        assert!(!zoom_on.contains(&extras::Item::MinimapSize));
+        // Every setting shows once its switch is on.
+        for item in extras::rows().into_iter().flatten() {
+            if let Some(on) = item.switch(&s.extras)
+                && item.parent().is_none()
+                && !on
+            {
+                item.cycle(&mut s.extras, false);
+            }
+        }
+        assert_eq!(
+            items(&s).len(),
+            extras::rows().into_iter().flatten().count()
+        );
     }
 
     #[test]

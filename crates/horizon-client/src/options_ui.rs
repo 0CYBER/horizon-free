@@ -1209,22 +1209,41 @@ impl OptionsUi {
 
     fn list_rows(&self, s: &Settings) -> Vec<Row> {
         match self.page() {
-            Page::Extras => crate::extras::rows()
-                .into_iter()
-                .map(|row| match row {
-                    Err(header) => Row::Header(header),
-                    Ok(item) => {
-                        let value = format!("{}: {}", item.caption(), item.value(&s.extras));
-                        let label =
-                            if item.key_name().is_some() && self.selected_key == item.key_name() {
-                                Text::literal(format!("> {value} <")).with_color(text::YELLOW)
-                            } else {
-                                Text::literal(value)
-                            };
-                        Row::Buttons(button(0.0, 0.0, 310.0, label, Act::Extra(item)), None)
+            Page::Extras => {
+                // Each section's switches two to a row, as vanilla's
+                // OptionsList.addSmall lays out an options screen.
+                let extra = |item: crate::extras::Item| {
+                    let value = format!("{}: {}", item.caption(), item.value(&s.extras));
+                    let label = if item.key_name().is_some() && self.selected_key == item.key_name()
+                    {
+                        Text::literal(format!("> {value} <")).with_color(text::YELLOW)
+                    } else {
+                        Text::literal(value)
+                    };
+                    button(0.0, 0.0, 150.0, label, Act::Extra(item))
+                };
+                let mut rows = Vec::new();
+                let mut section = Vec::new();
+                let flush = |rows: &mut Vec<Row>, section: &mut Vec<crate::extras::Item>| {
+                    rows.extend(
+                        section
+                            .chunks(2)
+                            .map(|c| Row::Buttons(extra(c[0]), c.get(1).map(|&b| extra(b)))),
+                    );
+                    section.clear();
+                };
+                for row in crate::extras::rows() {
+                    match row {
+                        Err(header) => {
+                            flush(&mut rows, &mut section);
+                            rows.push(Row::Header(header));
+                        }
+                        Ok(item) => section.push(item),
                     }
-                })
-                .collect(),
+                }
+                flush(&mut rows, &mut section);
+                rows
+            }
             Page::Video => {
                 // Horizon's graphics screens, Simple and Advanced.
                 let mut rows = vec![Row::Buttons(

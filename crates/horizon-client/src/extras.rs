@@ -505,7 +505,7 @@ impl Item {
             Item::ZoomKey => "Zoom key",
             Item::ZoomLevel => "Starting zoom",
             Item::ZoomSmooth => "Smooth zoom",
-            Item::ZoomSensitivity => "Lower sensitivity while zoomed",
+            Item::ZoomSensitivity => "Slower turning",
             Item::Fps => "FPS counter",
             Item::FpsCorner | Item::KeystrokesCorner | Item::MinimapCorner => "Corner",
             Item::Minimap => "Minimap",
@@ -522,6 +522,21 @@ impl Item {
             Item::Keystrokes => "Keystrokes",
             Item::KeystrokesCps => "Clicks per second",
         }
+    }
+    /// The switch this setting belongs to: it does nothing while that is off.
+    pub fn parent(self) -> Option<Item> {
+        use Item::*;
+        Some(match self {
+            ZoomKey | ZoomLevel | ZoomSmooth | ZoomSensitivity => Zoom,
+            MinimapCorner | MinimapSize | MinimapShape | MinimapZoom | MinimapRotate => Minimap,
+            FpsCorner | FpsLows => Fps,
+            KeystrokesCorner | KeystrokesCps => Keystrokes,
+            MouseTweaksWheel => MouseTweaks,
+            SortKey => Sort,
+            Fullbright | Zoom | Minimap | Fps | Keystrokes | MouseTweaks | Sort | AutoReconnect => {
+                return None;
+            }
+        })
     }
     /// What the row says under its caption.
     pub fn description(self) -> &'static str {
