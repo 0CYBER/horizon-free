@@ -180,34 +180,39 @@ pub fn tile(quad: &[ColumnVertex; 4], mut emit: impl FnMut([[f32; 3]; 4], [[f32;
             t,
         )
     };
-    let cuts = |a: f32, b: f32| {
-        let mut cuts = vec![a];
-        let mut k = a.floor() + 1.0;
-        while k < b {
-            cuts.push(k);
-            k += 1.0;
-        }
-        cuts.push(b);
-        cuts
-    };
     if !(u1 > u0 && v1 > v0) {
         return;
     }
-    let (us, vs) = (cuts(u0, u1), cuts(v0, v1));
-    for v in vs.windows(2) {
-        let repeat_v = v[0].floor();
-        let (ta, tb) = ((v[0] - v0) / (v1 - v0), (v[1] - v0) / (v1 - v0));
-        let (la, lb) = (v[0] - repeat_v, v[1] - repeat_v);
-        for u in us.windows(2) {
-            let repeat_u = u[0].floor();
-            let (sa, sb) = ((u[0] - u0) / (u1 - u0), (u[1] - u0) / (u1 - u0));
-            let (ka, kb) = (u[0] - repeat_u, u[1] - repeat_u);
+    for (va, vb) in pieces(v0, v1) {
+        let repeat_v = va.floor();
+        let (ta, tb) = ((va - v0) / (v1 - v0), (vb - v0) / (v1 - v0));
+        let (la, lb) = (va - repeat_v, vb - repeat_v);
+        for (ua, ub) in pieces(u0, u1) {
+            let repeat_u = ua.floor();
+            let (sa, sb) = ((ua - u0) / (u1 - u0), (ub - u0) / (u1 - u0));
+            let (ka, kb) = (ua - repeat_u, ub - repeat_u);
             emit(
                 [at(sa, ta), at(sb, ta), at(sb, tb), at(sa, tb)],
                 [[ka, la], [kb, la], [kb, lb], [ka, lb]],
             );
         }
     }
+}
+
+/// `a..b` cut at every whole number in between, as consecutive pairs
+/// (without allocating: this runs for every column of every frame).
+fn pieces(a: f32, b: f32) -> impl Iterator<Item = (f32, f32)> {
+    let first = a.floor() + 1.0;
+    let cuts = move || {
+        std::iter::once(a)
+            .chain(
+                (0..)
+                    .map(move |k| first + k as f32)
+                    .take_while(move |&k| k < b),
+            )
+            .chain(std::iter::once(b))
+    };
+    cuts().zip(cuts().skip(1))
 }
 
 #[cfg(test)]
@@ -254,6 +259,15 @@ mod tests {
         assert_eq!(pieces.len(), 2);
         assert_eq!(pieces[0].1[0], [0.25, 0.0]);
         assert_eq!(pieces[1].1[2], [0.25, 0.5]);
+    }
+
+    #[test]
+    fn pieces_cut_at_whole_numbers() {
+        let all = |a, b| pieces(a, b).collect::<Vec<_>>();
+        assert_eq!(all(0.25, 2.5), [(0.25, 1.0), (1.0, 2.0), (2.0, 2.5)]);
+        assert_eq!(all(1.0, 2.0), [(1.0, 2.0)]);
+        assert_eq!(all(-0.5, 0.5), [(-0.5, 0.0), (0.0, 0.5)]);
+        assert_eq!(all(3.25, 3.75), [(3.25, 3.75)]);
     }
 
     #[test]

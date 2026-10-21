@@ -126,6 +126,8 @@ pub struct Chunk {
     /// the highest non-air block, or `MIN_Y`. Built on the first read; a
     /// `set` that can move a column's surface drops it.
     surface: OnceLock<Box<[i16; 256]>>,
+    /// `Heightmap.Types.MOTION_BLOCKING` per column, kept like `surface`.
+    motion_blocking: OnceLock<Box<[i16; 256]>>,
     pub lit: bool,
     /// Light read from a save with `isLightOn`: no light job is needed.
     pub light_loaded: bool,
@@ -155,6 +157,7 @@ impl Chunk {
                 .map(|_| Arc::new(Section::default()))
                 .collect(),
             surface: OnceLock::new(),
+            motion_blocking: OnceLock::new(),
             lit: false,
             light_loaded: false,
             fresh: false,
@@ -197,13 +200,17 @@ impl Chunk {
             return v;
         }
         let previous = Arc::make_mut(&mut self.sections[s as usize]).set(index(x, y, z), v);
-        // `Heightmap.update`: a write two or more below the surface can't
-        // move it. Any other change rebuilds the map on the next read.
-        if previous != v
-            && let Some(surface) = self.surface.get()
-            && y >= i32::from(surface[column(x, z)]) - 1
-        {
-            self.surface = OnceLock::new();
+        // `Heightmap.update`: a write two or more below a map's height can't
+        // move it. Any other change rebuilds that map on the next read.
+        if previous != v {
+            for map in [&mut self.surface, &mut self.motion_blocking] {
+                if map
+                    .get()
+                    .is_some_and(|heights| y >= i32::from(heights[column(x, z)]) - 1)
+                {
+                    *map = OnceLock::new();
+                }
+            }
         }
         previous
     }
@@ -211,12 +218,19 @@ impl Chunk {
     /// chunk): one above the highest block that isn't `air`, or `MIN_Y`.
     /// Sections must change only through `set` once this has been read.
     pub fn world_surface(&self, x: i32, z: i32, air: impl Fn(u32) -> bool) -> i32 {
-        let surface = self.surface.get_or_init(|| self.prime_surface(air));
+        let surface = self.surface.get_or_init(|| self.prime(|v| !air(v)));
         i32::from(surface[column(x, z)])
     }
-    /// `Heightmap.primeHeightmaps` for WORLD_SURFACE: each section from the
-    /// top, skipping those of one air state, until every column is found.
-    fn prime_surface(&self, air: impl Fn(u32) -> bool) -> Box<[i16; 256]> {
+    /// `getHeight(Heightmap.Types.MOTION_BLOCKING, x, z)` (`x`, `z` within
+    /// the chunk): one above the highest state where `blocks` (a motion
+    /// blocking block or a fluid), or `MIN_Y`. Kept as `world_surface` is.
+    pub fn motion_blocking(&self, x: i32, z: i32, blocks: impl Fn(u32) -> bool) -> i32 {
+        let heights = self.motion_blocking.get_or_init(|| self.prime(blocks));
+        i32::from(heights[column(x, z)])
+    }
+    /// `Heightmap.primeHeightmaps`: each section from the top, skipping
+    /// those of one state that doesn't count, until every column is found.
+    fn prime(&self, counts: impl Fn(u32) -> bool) -> Box<[i16; 256]> {
         let mut surface = Box::new([MIN_Y as i16; 256]);
         let mut found = [false; 256];
         let mut left = 256;
@@ -225,7 +239,7 @@ impl Chunk {
             if left == 0 {
                 break;
             }
-            if section.blocks.uniform().is_some_and(&air) {
+            if section.blocks.uniform().is_some_and(|v| !counts(v)) {
                 continue;
             }
             section.unpack(&mut values);
@@ -234,7 +248,7 @@ impl Chunk {
                 if found[i] {
                     continue;
                 }
-                if let Some(dy) = (0..16).rev().find(|&dy| !air(values[dy << 8 | i])) {
+                if let Some(dy) = (0..16).rev().find(|&dy| counts(values[dy << 8 | i])) {
                     surface[i] = (base + dy as i32 + 1) as i16;
                     found[i] = true;
                     left -= 1;
@@ -357,5 +371,46 @@ mod tests {
         chunk.set(3, before - 1, 3, chunk.get(3, before - 1, 3));
         assert!(chunk.surface.get().is_some());
         assert_eq!(chunk.world_surface(3, 3, |_| unreachable!()), before);
+    }
+    /// MOTION_BLOCKING ignores states that don't count (air, grass) and
+    /// follows writes as the surface map does, both maps kept at once.
+    #[test]
+    fn motion_blocking_follows_writes() {
+        let (air, grass, water, stone) = (0, 3, 5, 1);
+        let blocks = |v: u32| v == water || v == stone;
+        let scan = |c: &Chunk, x: i32, z: i32| {
+            (MIN_Y..MIN_Y + HEIGHT)
+                .rev()
+                .find(|&y| blocks(c.get(x, y, z)))
+                .map_or(MIN_Y, |y| y + 1)
+        };
+        let mut chunk = Chunk::empty(0, 0);
+        assert_eq!(chunk.motion_blocking(5, 5, blocks), MIN_Y);
+        for y in MIN_Y..MIN_Y + 70 {
+            for i in 0..256 {
+                chunk.set(i & 15, y, i >> 4, stone);
+            }
+        }
+        for i in 0..4096 {
+            Arc::make_mut(&mut chunk.sections[8]).set(i, grass);
+        }
+        let mut random = horizon_core::random::LegacyRandom::new(11);
+        use horizon_core::random::RandomSource;
+        for step in 0..4000 {
+            let x = random.next_int_bound(16).unwrap();
+            let z = random.next_int_bound(16).unwrap();
+            let y = MIN_Y + 40 + random.next_int_bound(120).unwrap();
+            let v = [air, grass, water, stone][random.next_int_bound(4).unwrap() as usize];
+            chunk.set(x, y, z, v);
+            if step % 7 == 0 {
+                for i in 0..256 {
+                    assert_eq!(
+                        chunk.motion_blocking(i & 15, i >> 4, blocks),
+                        scan(&chunk, i & 15, i >> 4)
+                    );
+                    chunk.world_surface(i & 15, i >> 4, |v| v == air);
+                }
+            }
+        }
     }
 }
