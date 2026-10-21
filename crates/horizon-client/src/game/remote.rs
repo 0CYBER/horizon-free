@@ -542,70 +542,115 @@ impl Game<'_> {
         let mut out = ItemStack {
             item: self.item_name(s.item),
             count: s.count.max(0) as u32,
-            damage: s.damage().max(0) as u32,
+            damage: 0,
             extra: None,
         };
-        use horizon_protocol::item::{Component, component};
-        if let Some(Component::Int(rgb)) = s.component(component::DYED_COLOR) {
-            out.data_mut().dyed_color = Some(*rgb);
-        }
-        if let Some(Component::Int(id)) = s.component(component::MAP_ID) {
-            out.data_mut().map_id = Some(*id);
-        }
-        if let Some(Component::Int(cost)) = s.component(component::REPAIR_COST) {
-            out.data_mut().repair_cost = (*cost).max(0) as u32;
-        }
-        if let Some(Component::Int(mode)) = s.component(component::MAP_POST_PROCESSING) {
-            out.data_mut().map_post_processing = Some((*mode).clamp(0, 1) as u8);
-        }
-        if let Some(Component::WritableBook(pages)) = s.component(component::WRITABLE_BOOK_CONTENT)
-        {
-            out.data_mut().writable_pages = pages.clone();
-        }
-        if let Some(Component::WrittenBook(b)) = s.component(component::WRITTEN_BOOK_CONTENT) {
-            let lang = self
-                .remote
-                .as_ref()
-                .map(|r| r.lang.clone())
-                .unwrap_or_default();
-            out.data_mut().written = Some(horizon_client::item_data::WrittenBook {
-                title: b.title.clone(),
-                author: b.author.clone(),
-                generation: b.generation.clamp(0, 3) as u8,
-                pages: b.pages.iter().map(|p| plain(p, &lang)).collect(),
-            });
-        }
-        if let Some(Component::Text(name)) = s.component(component::CUSTOM_NAME) {
-            let lang = self
-                .remote
-                .as_ref()
-                .map(|r| r.lang.clone())
-                .unwrap_or_default();
-            out.data_mut().custom_name = Some(plain(name, &lang));
-        }
-        // The enchantments by the server's registry ids.
-        let levels = |list: &[(i32, i32)]| -> Vec<(Arc<str>, u32)> {
-            let names = self.remote.as_ref().map(|r| &r.registries);
-            list.iter()
-                .filter_map(|(id, level)| {
-                    let name = names?.name("minecraft:enchantment", *id)?;
-                    Some((Arc::from(name), (*level).max(0) as u32))
-                })
-                .collect()
-        };
-        if let Some(Component::Enchantments(list)) = s.component(component::ENCHANTMENTS) {
-            out.data_mut().enchantments = levels(list);
-        }
-        if let Some(Component::Enchantments(list)) = s.component(component::STORED_ENCHANTMENTS) {
-            out.data_mut().stored_enchantments = levels(list);
+        // A vanilla `components` compound, then the same decoder the saved
+        // and command item NBT use, so tooltips and models see every field.
+        let components = self.protocol_components(s);
+        let (damage, data) = horizon_client::item_data::decode_components(components.as_ref());
+        out.damage = damage;
+        if let Some(data) = data {
+            *out.data_mut() = *data;
         }
         out.tidy();
-        if let Some(Component::Profile(p)) = s.component(component::PROFILE) {
-            out.data_mut()
-                .other
-                .push(("minecraft:profile".into(), profile_tag(p)));
-        }
         Some(out)
+    }
+    /// The item's patched components as vanilla's `components` compound.
+    fn protocol_components(&self, s: &Stack) -> Option<Tag> {
+        use horizon_protocol::item::{Component, component};
+        let r = self.remote.as_ref()?;
+        let name = |id: i32| r.builtin.get("minecraft:data_component_type")?.name(id);
+        let mut entries: Vec<(&str, Tag)> = Vec::new();
+        for (kind, c) in &s.added {
+            let Some(key) = name(*kind) else {
+                continue;
+            };
+            let value = match c {
+                Component::Int(v) if *kind == component::RARITY => {
+                    let rarity = ["common", "uncommon", "rare", "epic"];
+                    Tag::String(rarity.get(*v as usize).copied().unwrap_or("common").into())
+                }
+                Component::Int(v) => Tag::Int(*v),
+                Component::Unit => Tag::Compound(Default::default()),
+                Component::Bool(v) => Tag::Byte(i8::from(*v)),
+                Component::Text(t) | Component::Nbt(t) => t.clone(),
+                Component::Ident(v) => Tag::String(v.as_str().into()),
+                Component::Lore(lines) => Tag::List(lines.clone()),
+                Component::WritableBook(pages) => Tag::compound([(
+                    "pages",
+                    Tag::List(
+                        pages
+                            .iter()
+                            .map(|p| Tag::String(p.as_str().into()))
+                            .collect(),
+                    ),
+                )]),
+                Component::WrittenBook(b) => Tag::compound([
+                    ("title", Tag::String(b.title.as_str().into())),
+                    ("author", Tag::String(b.author.as_str().into())),
+                    ("generation", Tag::Int(b.generation)),
+                    ("pages", Tag::List(b.pages.clone())),
+                    ("resolved", Tag::Byte(i8::from(b.resolved))),
+                ]),
+                Component::Enchantments(list) => {
+                    let registry = r.builtin.get("minecraft:enchantment");
+                    let levels = list.iter().filter_map(|(id, level)| {
+                        let name = registry?.name(*id)?;
+                        Some((name, Tag::Int(*level)))
+                    });
+                    Tag::compound(levels)
+                }
+                Component::AttackRange(v) => Tag::compound([
+                    ("min_reach", Tag::Float(v[0].to_bits())),
+                    ("max_reach", Tag::Float(v[1].to_bits())),
+                    ("min_attack_momentum", Tag::Float(v[2].to_bits())),
+                    ("max_attack_momentum", Tag::Float(v[3].to_bits())),
+                    ("hitbox_margin", Tag::Float(v[4].to_bits())),
+                    ("mob_factor", Tag::Float(v[5].to_bits())),
+                ]),
+                Component::Profile(p) => profile_tag(p),
+                Component::CustomModelData {
+                    floats,
+                    flags,
+                    strings,
+                    colors,
+                } => Tag::compound([
+                    (
+                        "floats",
+                        Tag::List(floats.iter().map(|f| Tag::Float(f.to_bits())).collect()),
+                    ),
+                    (
+                        "flags",
+                        Tag::List(flags.iter().map(|b| Tag::Byte(i8::from(*b))).collect()),
+                    ),
+                    (
+                        "strings",
+                        Tag::List(
+                            strings
+                                .iter()
+                                .map(|s| Tag::String(s.as_str().into()))
+                                .collect(),
+                        ),
+                    ),
+                    (
+                        "colors",
+                        Tag::List(colors.iter().map(|c| Tag::Int(*c)).collect()),
+                    ),
+                ]),
+                Component::TooltipDisplay { hide, hidden } => {
+                    let hidden = hidden
+                        .iter()
+                        .filter_map(|id| Some(Tag::String(name(*id)?.into())));
+                    Tag::compound([
+                        ("hide_tooltip", Tag::Byte(i8::from(*hide))),
+                        ("hidden_components", Tag::List(hidden.collect())),
+                    ])
+                }
+            };
+            entries.push((key, value));
+        }
+        Some(Tag::compound(entries))
     }
     fn to_network(&self, s: &Option<ItemStack>) -> Option<Stack> {
         let s = s.as_ref()?;
