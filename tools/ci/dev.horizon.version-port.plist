@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The daily version port (docs/version-ports.md, "Detect"). A template: @HOME@ becomes the home folder when it is
+     installed; not installed until Ludovic approves (see the doc for how to turn it on). 16:00 in Zurich is 14:00
+     UTC in summer and 15:00 UTC in winter, after Mojang's usual release hours. -->
+<plist version="1.0"><dict>
+  <key>Label</key><string>dev.horizon.version-port</string>
+  <key>ProgramArguments</key><array>
+    <string>/bin/bash</string><string>@HOME@/code/horizon-parity/version-port-daily.sh</string>
+  </array>
+  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>16</integer><key>Minute</key><integer>0</integer></dict>
+  <key>LowPriorityIO</key><true/>
+  <key>Nice</key><integer>10</integer>
+  <key>StandardOutPath</key><string>@HOME@/Library/Logs/horizon-version-port.log</string>
+  <key>StandardErrorPath</key><string>@HOME@/Library/Logs/horizon-version-port.log</string>
+  <key>EnvironmentVariables</key><dict>
+    <key>HOME</key><string>@HOME@</string>
+    <key>PATH</key><string>@HOME@/.local/bin:@HOME@/.cargo/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>HORIZON_PORT_KIRA_CARD</key><string>28</string>
+  </dict>
+</dict></plist>
