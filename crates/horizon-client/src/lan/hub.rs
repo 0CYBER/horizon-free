@@ -103,6 +103,9 @@ pub struct TickCtx<'a> {
     /// TickRateManager: the tick rate and whether the game is frozen.
     pub tick_rate: f32,
     pub tick_frozen: bool,
+    /// `/tick step`: a count that changes with each step started or
+    /// stopped, and the ticks the frozen game still runs (`FixedStep::step_state`).
+    pub tick_steps: (u32, i32),
     /// Block collisions, for ServerGamePacketListenerImpl's moved-wrongly
     /// check (none: moves are not checked against blocks).
     pub collision: Option<&'a BlockCollisionRegistry<'a>>,
@@ -145,6 +148,8 @@ pub struct Hub {
     last_clock: i64,
     last_rate: f32,
     ticking: (f32, bool),
+    /// The `tick_steps` count last broadcast.
+    stepping: u32,
     weather: (bool, f32, f32),
     /// The clock and weather last sent in the levels not in place, by
     /// dimension (`set_dimension` swaps them with the fields above).
@@ -278,6 +283,7 @@ impl Hub {
             last_clock: i64::MIN,
             last_rate: 0.0,
             ticking: (20.0, false),
+            stepping: 0,
             ops: Default::default(),
             weather: (false, 0.0, 0.0),
             level_sync: Default::default(),
@@ -880,7 +886,9 @@ impl Hub {
         }));
         // TickRateManager.updateJoiningPlayer.
         g.send(&ticking_state(ctx.tick_rate, ctx.tick_frozen));
-        g.send(&raw(ids::TICKING_STEP, vec![0]));
+        g.send(&C::TickingStep(play::TickingStep {
+            steps: ctx.tick_steps.1,
+        }));
     }
 
     /// ServerClockManager.createFullSyncPacket: every clock. Horizon keeps the
@@ -1018,6 +1026,7 @@ impl Hub {
             // (`updateJoiningPlayer`).
             if !self.guests.iter().any(|g| g.placed) {
                 self.ticking = (ctx.tick_rate, ctx.tick_frozen);
+                self.stepping = ctx.tick_steps.0;
             }
             if !self
                 .guests
@@ -1145,6 +1154,13 @@ impl Hub {
         if (ctx.tick_rate, ctx.tick_frozen) != self.ticking {
             self.ticking = (ctx.tick_rate, ctx.tick_frozen);
             self.broadcast(&ticking_state(ctx.tick_rate, ctx.tick_frozen));
+        }
+        // ServerTickRateManager.updateStepTicks: a step started or stopped.
+        if ctx.tick_steps.0 != self.stepping {
+            self.stepping = ctx.tick_steps.0;
+            self.broadcast(&C::TickingStep(play::TickingStep {
+                steps: ctx.tick_steps.1,
+            }));
         }
         let w = &world.weather;
         let (raining, rain, thunder) = self.weather;

@@ -301,6 +301,9 @@ pub struct FixedStep {
     /// A server's client: its level's tick rate only slows the timer down
     /// (`Minecraft.getTickTargetMillis`), since the server runs the ticks.
     client: bool,
+    /// How many times `/tick step` started or stopped a step
+    /// (`ServerTickRateManager.updateStepTicks` broadcasts each one).
+    step_changes: u32,
 }
 
 impl Default for FixedStep {
@@ -316,6 +319,7 @@ impl Default for FixedStep {
             aggregated: 0,
             tick_count: 0,
             client: false,
+            step_changes: 0,
         }
     }
 }
@@ -371,6 +375,12 @@ impl FixedStep {
     /// The partial tick for interpolation (`getGameTimeDeltaPartialTick(false)`).
     pub fn fraction(&self) -> f64 {
         f64::from(self.timer.game_time_delta_partial_tick(false))
+    }
+    /// The camera entity's partial tick (`Camera.getCameraEntityPartialTicks`
+    /// for a player, who is never frozen): `getGameTimeDeltaPartialTick(true)`,
+    /// so the view and the hand stay smooth in a frozen level.
+    pub fn camera_fraction(&self) -> f64 {
+        f64::from(self.timer.game_time_delta_partial_tick(true))
     }
     /// After a frame: whether the game is paused by a screen (the residual
     /// stops accumulating) and whether the level is frozen.
@@ -438,11 +448,21 @@ impl FixedStep {
     }
     /// `stepGameIfPaused`: only works while frozen.
     pub fn start_step(&mut self, ticks: u32) -> bool {
-        self.manager
-            .step_game_if_paused(ticks.min(i32::MAX as u32) as i32)
+        let started = self
+            .manager
+            .step_game_if_paused(ticks.min(i32::MAX as u32) as i32);
+        self.step_changes += u32::from(started);
+        started
     }
     pub fn stop_step(&mut self) -> bool {
-        self.manager.stop_stepping()
+        let stopped = self.manager.stop_stepping();
+        self.step_changes += u32::from(stopped);
+        stopped
+    }
+    /// What `ClientboundTickingStepPacket` carries (`frozenTicksToRun`), and
+    /// a count that changes each time `updateStepTicks` would broadcast it.
+    pub fn step_state(&self) -> (u32, i32) {
+        (self.step_changes, self.manager.base.frozen_ticks_to_run())
     }
     /// Record how long a tick took (`MinecraftServer.tickServer` bookkeeping
     /// and `endTickWork`).
@@ -504,6 +524,30 @@ mod tests {
         }
         m.base.tick();
         assert!(!m.base.runs_normally());
+    }
+    #[test]
+    fn the_camera_keeps_interpolating_in_a_frozen_level() {
+        let mut clock = FixedStep::default();
+        clock.set_frozen(true);
+        clock.world_runs();
+        clock.advance(std::time::Duration::from_millis(25));
+        clock.end_frame(false);
+        assert_eq!(clock.fraction(), 1.0, "frozen entities stay put");
+        assert_eq!(clock.camera_fraction(), 0.5, "the player does not");
+    }
+    #[test]
+    fn only_a_started_or_stopped_step_is_broadcast() {
+        let mut clock = FixedStep::default();
+        assert!(!clock.start_step(5), "not frozen");
+        assert_eq!(clock.step_state(), (0, 0));
+        clock.set_frozen(true);
+        assert!(clock.start_step(5));
+        assert_eq!(clock.step_state(), (1, 5));
+        clock.world_runs();
+        assert_eq!(clock.step_state(), (1, 4), "a step tick is not broadcast");
+        assert!(clock.stop_step());
+        assert!(!clock.stop_step());
+        assert_eq!(clock.step_state(), (2, 0));
     }
     #[test]
     fn a_servers_tick_rate_only_slows_its_client_down() {

@@ -118,6 +118,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             clock_rate: 1.0,
             tick_rate: 20.0,
             tick_frozen: false,
+            tick_steps: (0, 0),
             collision: None,
         };
         for event in hub.tick(&mut ctx) {

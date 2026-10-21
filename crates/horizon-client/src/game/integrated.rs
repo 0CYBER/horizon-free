@@ -362,13 +362,16 @@ impl Game<'_> {
         let mut next = Instant::now();
         while !flags.stop.load(Ordering::Relaxed) {
             self.run_tasks();
-            if flags.paused.load(Ordering::Relaxed) {
+            let paused = flags.paused.load(Ordering::Relaxed);
+            if paused {
                 // Only the connections run.
                 self.tick_server_timed(true)?;
             } else {
                 self.follow_distances(&flags);
                 let started = Instant::now();
                 self.tick_server_timed(false)?;
+                // MinecraftServer.tickServer's tick times, for /tick query.
+                self.clock.record(started.elapsed());
                 self.debug_charts.log_tick(started, started.elapsed());
                 flags.smoothed_tick_ms.store(
                     self.debug_charts.smoothed_tick_ms.to_bits(),
@@ -376,14 +379,7 @@ impl Game<'_> {
                 );
             }
             self.apply_publish();
-            let rate = self.clock.rate().max(1.0);
-            next += Duration::from_secs_f64(1.0 / f64::from(rate));
-            let now = Instant::now();
-            if next > now {
-                std::thread::sleep(next - now);
-            } else if now - next > Duration::from_secs(2) {
-                next = now;
-            }
+            self.wait_for_next_server_tick(&mut next, paused);
         }
         self.stop_integrated()
     }

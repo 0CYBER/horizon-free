@@ -847,6 +847,7 @@ impl Game<'_> {
                     clock_rate,
                     tick_rate: self.clock.rate(),
                     tick_frozen: self.clock.frozen(),
+                    tick_steps: self.clock.step_state(),
                     collision: Some(self.collision),
                 };
                 host.hub.movement_checks = (
@@ -1027,6 +1028,7 @@ impl Game<'_> {
             clock_rate,
             tick_rate: self.clock.rate(),
             tick_frozen: self.clock.frozen(),
+            tick_steps: self.clock.step_state(),
             collision: Some(self.collision),
         };
         host.hub.place_new_player(conn, &mut ctx);
