@@ -73,7 +73,9 @@ def effects(rng, n):
 
 TITLES = [{'text': 'Hello'}, {'text': 'Boss fight!', 'color': 'red', 'bold': True}, {'text': 'Wave 3', 'italic': True},
           {'text': 'A long title over the whole screen'}, {'text': ''}, ['Mixed ', {'text': 'parts', 'color': 'gold'}],
-          {'text': 'Ünïcödé ★'}]
+          {'text': 'Ünïcödé ★'},
+          # Servers send legacy formatting codes inside a component's text; the font applies them:
+          {'text': '§8[§fAny questions? §8] §e§l/support en'}, {'text': '§cRed §rreset §', 'color': 'blue'}]
 
 
 def title(rng, n):

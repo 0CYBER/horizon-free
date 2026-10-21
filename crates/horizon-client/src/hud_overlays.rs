@@ -294,6 +294,7 @@ impl Titles {
         let t = self.overlay_time as f32 - partial;
         let alpha = ((t * 255.0 / 20.0) as i32).min(255);
         if alpha > 0 {
+            let message = message.resolve_legacy();
             out.push(GuiDraw::Push(vec![PoseOp::Translate(
                 (w / 2) as f32,
                 (h - 68) as f32,
@@ -303,16 +304,8 @@ impl Titles {
             } else {
                 crate::hud_layout::argb(alpha as u32, 255, 255, 255)
             };
-            let width = width(font, message);
-            text_with_backdrop(
-                &mut out,
-                message.clone(),
-                -width / 2,
-                -4,
-                width,
-                color,
-                background,
-            );
+            let width = width(font, &message);
+            text_with_backdrop(&mut out, message, -width / 2, -4, width, color, background);
             out.push(GuiDraw::Pop);
         }
         out
@@ -344,16 +337,17 @@ impl Titles {
         }
         let alpha = alpha.clamp(0, 255);
         if alpha > 0 {
+            let title = title.resolve_legacy();
             out.push(GuiDraw::Push(vec![PoseOp::Translate(
                 (w / 2) as f32,
                 (h / 2) as f32,
             )]));
             out.push(GuiDraw::Push(vec![PoseOp::Scale(4.0, 4.0)]));
-            let title_width = width(font, title);
+            let title_width = width(font, &title);
             let color = crate::hud_layout::argb(alpha as u32, 255, 255, 255);
             text_with_backdrop(
                 &mut out,
-                title.clone(),
+                title,
                 -title_width / 2,
                 -10,
                 title_width,
@@ -362,11 +356,12 @@ impl Titles {
             );
             out.push(GuiDraw::Pop);
             if let Some(subtitle) = &self.subtitle {
+                let subtitle = subtitle.resolve_legacy();
                 out.push(GuiDraw::Push(vec![PoseOp::Scale(2.0, 2.0)]));
-                let subtitle_width = width(font, subtitle);
+                let subtitle_width = width(font, &subtitle);
                 text_with_backdrop(
                     &mut out,
-                    subtitle.clone(),
+                    subtitle,
                     -subtitle_width / 2,
                     5,
                     subtitle_width,
@@ -506,10 +501,11 @@ pub fn boss_overlay(w: i32, h: i32, bars: &[BossBar], font: &Font) -> Vec<GuiDra
         if progress > 0 {
             part(&mut out, progress, "progress");
         }
-        let width = width(font, &bar.name);
+        let name = bar.name.resolve_legacy();
+        let width = width(font, &name);
         text(
             &mut out,
-            bar.name.clone(),
+            name,
             w / 2 - width / 2,
             y_offset - 9,
             crate::hud_layout::WHITE,
