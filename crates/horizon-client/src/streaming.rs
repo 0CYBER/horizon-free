@@ -276,6 +276,8 @@ pub struct Streaming {
     /// chunks finish out to `radius + 1` (Chebyshev) and generation reaches
     /// past that as around the player. They are generated and kept but not meshed.
     pub extra: Vec<((i32, i32), i32)>,
+    /// `extra`'s squares as a grid, made again when `extra` changes.
+    cover: Option<ExtraCover>,
     /// Mesh the sections for drawing (false on a server thread).
     pub mesh: bool,
 }
@@ -391,6 +393,7 @@ impl GenerationScan {
                     radius: input.ranges.radius,
                     extra: input.ranges.extra,
                     forced: input.ranges.forced,
+                    cover: input.ranges.cover,
                 };
                 self.remember(ranges, input.world);
             } else {
@@ -562,6 +565,7 @@ impl Streaming {
             meshed_total: 0,
             remote: false,
             extra: Vec::new(),
+            cover: None,
             mesh: true,
         }
     }
@@ -808,6 +812,7 @@ impl Streaming {
         if self.paused {
             return (uploads, Vec::new());
         }
+        ExtraCover::refresh(&mut self.cover, &self.extra);
         self.relight_edits(world);
         let deferred = std::mem::take(&mut self.deferred);
         let received = std::iter::from_fn(|| self.results.try_recv().ok());
@@ -982,6 +987,7 @@ impl Streaming {
                 radius: self.radius,
                 extra: &self.extra,
                 forced: &self.forced,
+                cover: ExtraCover::matching(&self.cover, &self.extra),
             };
             let (protos, generating) = (&self.protos, &self.generating);
             self.decoration_order.retain(|x, z| {
@@ -1109,6 +1115,7 @@ impl Streaming {
                 radius: self.radius,
                 extra: &self.extra,
                 forced: &self.forced,
+                cover: ExtraCover::matching(&self.cover, &self.extra),
             };
             self.waiting.retain(|&(x, sy, z)| {
                 let back = ranges.in_view(x, z);
@@ -1185,6 +1192,7 @@ impl Streaming {
                 radius: self.radius,
                 extra: &self.extra,
                 forced: &self.forced,
+                cover: ExtraCover::matching(&self.cover, &self.extra),
             },
             world,
             generating: &self.generating,
@@ -1280,6 +1288,7 @@ impl Streaming {
             radius: self.radius,
             extra: &self.extra,
             forced: &self.forced,
+            cover: ExtraCover::matching(&self.cover, &self.extra),
         }
     }
     fn near_finished(&self, x: i32, z: i32, reach: i32) -> bool {
@@ -1365,6 +1374,99 @@ struct Ranges<'a> {
     radius: i32,
     extra: &'a [((i32, i32), i32)],
     forced: &'a HashSet<(i32, i32)>,
+    /// `extra` as a grid, when one was made for it: `in_extra` without a
+    /// scan of every area.
+    cover: Option<&'a ExtraCover>,
+}
+/// For every column near the extra areas, how far it lies outside the
+/// nearest one's square (Chebyshev distance less its radius; 0 inside). A server has an area per player, and streaming asks of every
+/// loaded and wanted column whether one reaches it, several times a tick:
+/// with fifty players, a scan of fifty squares per question.
+struct ExtraCover {
+    extra: Vec<((i32, i32), i32)>,
+    x0: i32,
+    z0: i32,
+    width: u32,
+    depth: u32,
+    cells: Box<[i8]>,
+}
+impl ExtraCover {
+    /// The largest margin the grid answers for; beyond it (and outside the
+    /// grid) a column is further than that from every square.
+    const REACH: i32 = 4;
+    /// The largest grid, in columns (a mebibyte).
+    const CELLS: u64 = 1 << 20;
+    fn matching<'a>(
+        cover: &'a Option<ExtraCover>,
+        extra: &[((i32, i32), i32)],
+    ) -> Option<&'a ExtraCover> {
+        cover.as_ref().filter(|c| c.extra == extra)
+    }
+    /// Make the grid again if `extra` changed; none for one area or none
+    /// (a scan is as quick), or areas too far apart.
+    fn refresh(cover: &mut Option<ExtraCover>, extra: &[((i32, i32), i32)]) {
+        if cover.as_ref().is_some_and(|c| c.extra == extra) {
+            return;
+        }
+        *cover = Self::new(extra);
+    }
+    fn new(extra: &[((i32, i32), i32)]) -> Option<Self> {
+        if extra.len() < 2 || extra.iter().any(|&(_, r)| !(0..=64).contains(&r)) {
+            return None;
+        }
+        let k = i64::from(Self::REACH);
+        let (mut x0, mut z0, mut x1, mut z1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
+        for &((x, z), r) in extra {
+            let (x, z, r) = (i64::from(x), i64::from(z), i64::from(r) + k);
+            (x0, z0, x1, z1) = (x0.min(x - r), z0.min(z - r), x1.max(x + r), z1.max(z + r));
+        }
+        let (width, depth) = ((x1 - x0 + 1) as u64, (z1 - z0 + 1) as u64);
+        if width * depth > Self::CELLS || x0 < i64::from(i32::MIN) || x1 > i64::from(i32::MAX) {
+            return None;
+        }
+        let (x0, z0, width, depth) = (x0 as i32, z0 as i32, width as u32, depth as u32);
+        let mut cells = vec![(Self::REACH + 1) as i8; (width * depth) as usize].into_boxed_slice();
+        // Inside a square counts as 0: no margin asked for is below it. Each
+        // row of a square is a run of one value with a slope at either end.
+        let lower = |run: &mut [i8], v: i8| run.iter_mut().for_each(|c| *c = (*c).min(v));
+        for &((cx, cz), r) in extra {
+            let reach = r + Self::REACH;
+            for dz in -reach..=reach {
+                let start = (cz + dz - z0) as usize * width as usize + (cx - x0) as usize;
+                let row = &mut cells[start - reach as usize..=start + reach as usize];
+                let flat = dz.abs().max(r);
+                let centre = reach as usize;
+                lower(
+                    &mut row[centre - flat as usize..=centre + flat as usize],
+                    (flat - r) as i8,
+                );
+                for d in flat + 1..=reach {
+                    let v = (d - r) as i8;
+                    lower(&mut row[centre - d as usize..=centre - d as usize], v);
+                    lower(&mut row[centre + d as usize..=centre + d as usize], v);
+                }
+            }
+        }
+        Some(Self {
+            extra: extra.to_vec(),
+            x0,
+            z0,
+            width,
+            depth,
+            cells,
+        })
+    }
+    /// Whether (x, z) is within `margin` of an area's square, for a
+    /// `margin` up to `REACH`.
+    fn within(&self, x: i32, z: i32, margin: i32) -> bool {
+        let (dx, dz) = (
+            x.wrapping_sub(self.x0) as u32,
+            z.wrapping_sub(self.z0) as u32,
+        );
+        dx < self.width
+            && dz < self.depth
+            && i32::from(self.cells[(dz * self.width + dx) as usize]) <= margin
+    }
 }
 impl Ranges<'_> {
     /// `distance`, or `rings` while the level loading screen is up.
@@ -1441,6 +1543,11 @@ impl Ranges<'_> {
     /// Within `margin` of an extra area's square (Chebyshev distance, as
     /// vanilla's ticket levels spread).
     fn in_extra(&self, x: i32, z: i32, margin: i32) -> bool {
+        if let Some(cover) = self.cover
+            && (0..=ExtraCover::REACH).contains(&margin)
+        {
+            return cover.within(x, z, margin);
+        }
         self.extra
             .iter()
             .any(|&(c, radius)| (x - c.0).abs().max((z - c.1).abs()) <= radius + margin)
@@ -1554,6 +1661,7 @@ mod tests {
                     radius: self.radius,
                     extra: &self.extra,
                     forced: &self.forced,
+                    cover: None,
                 },
                 world: &self.world,
                 generating: &self.generating,
@@ -1866,6 +1974,7 @@ mod tests {
                     radius,
                     extra: &[],
                     forced: &forced,
+                    cover: None,
                 };
                 let square = |x: i32, z: i32, n: i32| {
                     (-n..=n).flat_map(move |dz| (-n..=n).map(move |dx| (x + dx, z + dz)))
@@ -1920,6 +2029,7 @@ mod tests {
             radius: 12,
             extra: &[],
             forced: &forced,
+            cover: None,
         };
         let at = |dx: i32, dz: i32| (2 + dx, -1 + dz);
         let key = |(x, z): (i32, i32), loading| r.priority(x, z, loading);
@@ -1945,6 +2055,7 @@ mod tests {
                     radius,
                     extra: &[((radius * 2 + 9, 3), 4)],
                     forced: &forced,
+                    cover: None,
                 };
                 let span = radius * 3 + 20;
                 for x in -span..=span {
@@ -1984,6 +2095,7 @@ mod tests {
                 radius: 2,
                 extra: &extra,
                 forced: &forced,
+                cover: None,
             };
             let level = |x: i32, z: i32| 31 + ((x - 40).abs().max((z + 9).abs()) - view).max(0);
             for x in 40 - view - 8..=40 + view + 8 {
@@ -2018,6 +2130,129 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod cover_tests {
+    use super::*;
+
+    fn areas(seed: &mut u64, n: usize, spread: i32) -> Vec<((i32, i32), i32)> {
+        let mut next = |m: i32| {
+            *seed ^= *seed << 13;
+            *seed ^= *seed >> 7;
+            *seed ^= *seed << 17;
+            (*seed % (2 * m as u64 + 1)) as i32 - m
+        };
+        (0..n)
+            .map(|_| ((next(spread), next(spread)), 2 + next(14).abs()))
+            .collect()
+    }
+
+    /// Every question streaming asks gets the same answer with the grid.
+    #[test]
+    fn the_grid_answers_as_the_scan() {
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let forced: HashSet<(i32, i32)> = [(40, -40)].into();
+        for case in 0..60 {
+            let extra = areas(&mut seed, 2 + case % 20, [4, 30, 120][case % 3]);
+            let cover = ExtraCover::new(&extra).expect("a grid");
+            let ranges = |cover| Ranges {
+                center: (3, -2),
+                radius: 10,
+                extra: &extra,
+                forced: &forced,
+                cover,
+            };
+            let (scan, grid) = (ranges(None), ranges(Some(&cover)));
+            let span = [4, 30, 120][case % 3] + 40;
+            for z in -span..=span {
+                for x in -span..=span {
+                    for m in 0..=ExtraCover::REACH + 2 {
+                        assert_eq!(
+                            scan.in_extra(x, z, m),
+                            grid.in_extra(x, z, m),
+                            "case {case} ({x}, {z}) {m}"
+                        );
+                    }
+                    for d in [false, true] {
+                        assert_eq!(scan.unloaded(x, z, d), grid.unloaded(x, z, d));
+                        assert_eq!(scan.requested(x, z, d), grid.requested(x, z, d));
+                        assert_eq!(scan.chunk_kept(x, z, d), grid.chunk_kept(x, z, d));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_stale_or_impossible_grid_is_not_used() {
+        let mut cover = None;
+        ExtraCover::refresh(&mut cover, &[((0, 0), 11), ((5, 5), 11)]);
+        assert!(ExtraCover::matching(&cover, &[((0, 0), 11), ((5, 5), 11)]).is_some());
+        assert!(ExtraCover::matching(&cover, &[((0, 0), 11), ((5, 6), 11)]).is_none());
+        // Too far apart for a mebibyte of grid, and one area alone: scans.
+        assert!(ExtraCover::new(&[((0, 0), 11), ((100_000, 0), 11)]).is_none());
+        assert!(ExtraCover::new(&[((0, 0), 11)]).is_none());
+        assert!(ExtraCover::new(&[((i32::MAX - 1, 0), 11), ((i32::MAX - 3, 0), 11)]).is_none());
+    }
+
+    /// cargo test --release -p horizon-client --lib cover_tests::cover_cost -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn cover_cost() {
+        let forced = HashSet::new();
+        for players in [10usize, 25, 50] {
+            // The benchmark's bots: most near spawn, a fifth flying outwards.
+            let extra: Vec<_> = (0..players)
+                .map(|i| {
+                    let a = i as f64 * 2.399;
+                    let d = if i % 5 == 0 { 30.0 } else { 3.0 };
+                    (((a.cos() * d) as i32, (a.sin() * d) as i32), 11)
+                })
+                .collect();
+            let cover = ExtraCover::new(&extra).unwrap();
+            let ranges = |cover| Ranges {
+                center: (0, 0),
+                radius: 10,
+                extra: &extra,
+                forced: &forced,
+                cover,
+            };
+            // The columns streaming asks about: everything kept, and the
+            // generation scan's ring past it.
+            let columns: Vec<(i32, i32)> = (-60..=60)
+                .flat_map(|z| (-60..=60).map(move |x| (x, z)))
+                .filter(|&(x, z)| {
+                    ranges(None).requested(x, z, true) || !ranges(None).unloaded(x, z, true)
+                })
+                .collect();
+            let rounds = 100;
+            let time = |r: &Ranges| {
+                let t = std::time::Instant::now();
+                let mut n = 0usize;
+                for _ in 0..rounds {
+                    for &(x, z) in &columns {
+                        n += usize::from(r.unloaded(x, z, true));
+                        n += usize::from(r.requested(x, z, true));
+                        n += usize::from(r.in_range(x, z, 1));
+                    }
+                }
+                std::hint::black_box(n);
+                t.elapsed().as_secs_f64() * 1e3 / f64::from(rounds)
+            };
+            let t = std::time::Instant::now();
+            for _ in 0..rounds {
+                std::hint::black_box(ExtraCover::new(std::hint::black_box(&extra)));
+            }
+            let build = t.elapsed().as_secs_f64() * 1e3 / f64::from(rounds);
+            println!(
+                "{players} players, {} columns, 3 questions each: scan {:.3} ms, grid {:.3} ms (+ {build:.3} ms to build)",
+                columns.len(),
+                time(&ranges(None)),
+                time(&ranges(Some(&cover))),
+            );
         }
     }
 }
