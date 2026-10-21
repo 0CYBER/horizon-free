@@ -1623,13 +1623,18 @@ impl Mob {
         if !self.alive() || self.removed || self.invulnerable_flag {
             return false;
         }
-        if source.is_fire() && (self.kind.flags.fire_immune) {
+        // Ghast.isReflectedFireball: a fireball a player turned back is
+        // no fire to it, and kills it (Ghast.hurtServer: 1000 damage).
+        let reflected = &*self.kind.id == "minecraft:ghast"
+            && source.kind == DamageKind::Fireball
+            && source.attacker == Some(Who::Player);
+        if source.is_fire() && (self.kind.flags.fire_immune) && !reflected {
             return false;
         }
         if !ai::accepts_damage(self, &source, amount) {
             return false;
         }
-        let mut amount = amount;
+        let mut amount = if reflected { 1000.0 } else { amount };
         if source.kind == DamageKind::FallingBlock
             && !species::body_slot(self.species())
             && self.extra.head.is_some()

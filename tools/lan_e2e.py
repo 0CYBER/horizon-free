@@ -91,6 +91,7 @@ macOS both games render offscreen. Games started here have no audio (HORIZON_NO_
 """
 import argparse
 import json
+import math
 import os
 import re
 import shutil
@@ -111,7 +112,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'deflect', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
 
 
 class Game:
@@ -1697,6 +1698,60 @@ def check_light(host, guest, out):
     return results
 
 
+def check_deflect(host, guest, out):
+    """The host punches a ghast's fireball back: it flies along the host's view and kills the ghast
+    (Player.attack: AIM_DEFLECT on #redirectable_projectile; Ghast.isReflectedFireball). The ghast is caged
+    (a window toward the host); the game runs at 4 ticks a second, and once the fireball is within 4.5 blocks
+    the host looks at the ghast and clicks."""
+    if SERVER_THREAD:
+        # The fireball's position and the host's hurts are read from the host's own level.
+        return 'skipped (in-frame only)'
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    guest('command', command='gamemode creative')
+    host('command', command='gamemode survival')
+    host('command', command='difficulty normal')
+    gx, gz = x, z + 30
+    gy = y + 20
+    host('command', command=f'fill {gx - 3} {gy - 1} {gz - 3} {gx + 24} {gy - 1} {gz + 3} minecraft:glass')
+    host('command', command=f'fill {gx - 3} {gy} {gz - 3} {gx + 24} {gy + 8} {gz + 3} minecraft:air')
+    host('command', command=f'tp @s {gx + 0.5} {gy} {gz + 0.5} -90 0')
+    host.wait(20)
+    host.raw('hurtlog')
+    # The ghast in a glass cage it can't drift out of, a 3 x 3 window toward the host.
+    host('command', command=f'fill {gx + 13} {gy} {gz - 3} {gx + 19} {gy + 6} {gz + 3} minecraft:glass hollow')
+    host('command', command=f'fill {gx + 13} {gy + 2} {gz - 1} {gx + 13} {gy + 4} {gz + 1} minecraft:air')
+    host('command', command=f'summon minecraft:ghast {gx + 16.5} {gy + 1} {gz + 0.5}')
+    eye = (gx + 0.5, gy + 1.62, gz + 0.5)
+    host('command', command='tick rate 4')
+    turned, near, ghast, hurt = None, None, None, []
+    try:
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            balls = [q for q in host.raw('status')['projectiles'] if q['kind'] == 'LargeFireball']
+            near = min((math.dist(q['position'], eye) for q in balls), default=None)
+            if near is not None and near < 4.5:
+                g = [m['pos'] for m in host.raw('mobs', 60).get('near', []) if m['kind'].endswith('ghast')][0]
+                host.raw('look-at', f'{g[0]:.2f}', f'{g[1] + 2:.2f}', f'{g[2]:.2f}')
+                host.raw('mouse', 'left', 'down')
+                host.raw('mouse', 'left', 'up')
+                turned = near
+                break
+        host('command', command='tick rate 20')
+        host.wait(60)
+        ghast = [m for m in host.raw('mobs', 60).get('near', []) if m['kind'].endswith('ghast') and m['health'] > 0]
+        hurt = [h for pl in host.raw('hurtlog')['players'] if pl['name'] == 'host' for h in pl['hurts']
+                if 'fireball' in h['source'] or 'explosion' in h['source']]
+    finally:
+        host('command', command='tick rate 20')
+        host('command', command='kill @e[type=minecraft:ghast]')
+        host('command', command=f'fill {gx - 3} {gy - 1} {gz - 3} {gx + 24} {gy + 8} {gz + 3} minecraft:air')
+        guest('command', command='gamemode survival')
+    assert turned is not None, f'no fireball came within 4.5 blocks (nearest {near})'
+    assert not hurt, f'the host was hit: {hurt}'
+    assert not ghast, f'the ghast lived: the fireball was not turned back ({ghast})'
+    return {'struck_at': round(turned, 2)}
+
+
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
              'chest': check_chest, 'crafting': check_crafting, 'sign': check_sign, 'damage': check_damage,
              'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
@@ -1712,7 +1767,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles,
              'light': check_light, 'plates': check_plates,
              'swings': check_swings, 'cracks': check_cracks,
-             'time': check_time, 'growth': check_growth}
+             'time': check_time, 'growth': check_growth, 'deflect': check_deflect}
 
 
 def run(ctl, out, resources, checks):

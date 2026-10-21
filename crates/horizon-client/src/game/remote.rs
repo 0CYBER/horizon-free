@@ -3468,7 +3468,18 @@ impl Game<'_> {
             return true;
         }
         let mut instant = false;
-        if let Some((i, distance)) = self.mob_hit()
+        // A ghast's fireball or a wind charge nearer than any mob: the
+        // server turns it (game/deflect.rs).
+        if let Some((i, distance)) = self.redirectable_hit()
+            && self.mob_hit().is_none_or(|(_, d)| distance <= d)
+            && self.before_block(distance)
+            && self.creatures.projectiles[i].id != 0
+        {
+            self.send(S::Attack(play::Attack {
+                id: self.creatures.projectiles[i].id as i32,
+            }));
+            self.reset_attack_strength();
+        } else if let Some((i, distance)) = self.mob_hit()
             && self.before_block(distance)
         {
             self.send(S::Attack(play::Attack {

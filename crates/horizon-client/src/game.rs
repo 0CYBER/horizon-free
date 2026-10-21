@@ -34,6 +34,7 @@ mod crossbow;
 mod debug_keys;
 mod decorated_pot;
 mod dedicated;
+mod deflect;
 mod dispense_fixture;
 mod dispenser;
 mod dragon;
@@ -6827,6 +6828,10 @@ impl Game<'_> {
             })
         {
             self.break_painting(i, true);
+            return true;
+        }
+        // A ghast's fireball or a wind charge in front: turned back.
+        if self.attack_redirectable() {
             return true;
         }
         let hand_damage = 1.0
