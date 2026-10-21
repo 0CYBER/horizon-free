@@ -8521,18 +8521,14 @@ impl Game<'_> {
         };
         Some(t < 0.15)
     }
-    /// The first motion-blocking block from the top (Heightmap MOTION_BLOCKING).
-    fn rain_height(&self, x: i32, z: i32, from: i32) -> i32 {
-        let mut y = from;
-        while y > MIN_Y {
-            let s = self.world.block(x, y, z);
-            let f = self.res.facts().get(s);
-            if f.full_collision || f.fluid != Fluid::None || f.name.contains("leaves") {
-                return y + 1;
-            }
-            y -= 1;
-        }
-        MIN_Y
+    /// `getHeight(Heightmap.Types.MOTION_BLOCKING, x, z)`: one above the
+    /// highest block in `blocks_motion_in_heightmap` or holding a fluid.
+    fn rain_height(&self, x: i32, z: i32) -> i32 {
+        use horizon_world::{heightmap::HeightmapType, worldgen::terrain::TerrainBlockStates};
+        let properties = &self.pack.assets.properties;
+        self.world.motion_blocking(x, z, |s| {
+            HeightmapType::MotionBlocking.is_opaque(properties.heightmap_state(s))
+        })
     }
     fn tick_weather_effects(&mut self) {
         if self.flash > 0 {
@@ -8550,7 +8546,7 @@ impl Game<'_> {
                 r.next_int_bound(21).unwrap_or(10) - 10,
             );
             let (x, z) = (eye[0].floor() as i32 + dx, eye[2].floor() as i32 + dz);
-            let top = self.rain_height(x, z, eye[1] as i32 + 10);
+            let top = self.rain_height(x, z);
             if self.precipitation(x, top, z) == Some(false)
                 && (top - eye[1] as i32).abs() < 10
                 && self.world.random.next_int_bound(5).unwrap_or(1) == 0
@@ -8597,7 +8593,7 @@ impl Game<'_> {
         let mut columns = (Vec::new(), Vec::new());
         for z in cz - radius..=cz + radius {
             for x in cx - radius..=cx + radius {
-                let top = self.rain_height(x, z, cy + radius + 10);
+                let top = self.rain_height(x, z);
                 let y0 = (cy - radius).max(top);
                 let y1 = (cy + radius).max(top);
                 if y1 == y0 {

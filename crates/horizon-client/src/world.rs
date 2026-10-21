@@ -294,6 +294,14 @@ impl World {
             chunk.world_surface(x, z, |v| air(BlockStateId(v)))
         })
     }
+    /// `getHeight(Heightmap.Types.MOTION_BLOCKING, x, z)`: one above the
+    /// highest block where `blocks` (motion blocking or holding a fluid),
+    /// or `MIN_Y` (also where the chunk isn't loaded).
+    pub fn motion_blocking(&self, x: i32, z: i32, blocks: impl Fn(BlockStateId) -> bool) -> i32 {
+        self.chunks.get(&(x >> 4, z >> 4)).map_or(MIN_Y, |chunk| {
+            chunk.motion_blocking(x & 15, z & 15, |v| blocks(BlockStateId(v)))
+        })
+    }
     pub fn block(&self, x: i32, y: i32, z: i32) -> BlockStateId {
         self.chunks
             .get(&(x >> 4, z >> 4))
