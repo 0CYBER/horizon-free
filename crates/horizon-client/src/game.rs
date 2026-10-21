@@ -456,6 +456,15 @@ struct Hit {
     face: [i32; 3],
     point: [f64; 3],
 }
+/// What a falling block's tick did (`FallingBlockEntity.tick`).
+enum FallStep {
+    Falling,
+    Gone,
+    /// Gave up falling: drops itself as an item here.
+    Dropped(Vec3),
+    /// Hit the ground in this block.
+    Landed([i32; 3]),
+}
 /// A guest's right click comes as one packet per hand and part
 /// (`Minecraft.startUseItem`): `ServerGamePacketListenerImpl.handleUseItemOn`
 /// does the block's and `ItemStack.useOn`'s part, `handleUseItem` the
@@ -1902,6 +1911,7 @@ impl Game<'_> {
             age: 0,
             pickup_delay,
             bob_offset: bob,
+            ticks: 0,
         });
     }
     /// `Block.getDrops`: the block's loot table, drawing from its server random
@@ -1987,15 +1997,51 @@ impl Game<'_> {
         let mut items = std::mem::take(&mut self.dropped);
         // ServerLevel.tick: only entities in entity-ticking chunks tick.
         let ticking = self.entity_ticking_area();
-        items.retain_mut(|item| {
+        let mut removed = vec![false; items.len()];
+        let mut cells = horizon_client::entities::ItemCells::new(&items);
+        let catalog = self.res.items();
+        let max_stack =
+            |stack: &ItemStack| catalog.get(&stack.item).map_or(64, |i| i.max_stack).max(1);
+        // A LAN or server guest only shows the host's items.
+        let merging = self.remote.is_none();
+        for i in 0..items.len() {
+            if removed[i] {
+                continue;
+            }
+            let item = &mut items[i];
             if !ticking(
                 item.position.x.floor() as i32,
                 item.position.z.floor() as i32,
             ) {
-                return true;
+                continue;
             }
-            if !item.tick(&self.world, self.res.facts(), self.collision) {
-                return false;
+            let alive = item.tick(&self.world, self.res.facts(), self.collision);
+            cells.moved(i, item.previous, item.position);
+            // ItemEntity.tick: merge every 2 ticks while moving between
+            // blocks, every 40 otherwise, before the lifetime check.
+            let block = |v: Vec3| (v.x.floor(), v.y.floor(), v.z.floor());
+            let rate = if block(item.previous) == block(item.position) {
+                40
+            } else {
+                2
+            };
+            if merging
+                && (alive || item.age == 6000 && item.position.y > -128.0)
+                && item.ticks.is_multiple_of(rate)
+            {
+                horizon_client::entities::merge_with_neighbours(
+                    &mut items,
+                    &mut removed,
+                    &mut cells,
+                    i,
+                    &max_stack,
+                );
+            }
+            let item = &mut items[i];
+            if !alive || removed[i] {
+                removed[i] = true;
+                cells.remove(i, item.position);
+                continue;
             }
             let environment = item.environment_tick(
                 &self.world,
@@ -2013,8 +2059,13 @@ impl Game<'_> {
                     pitch,
                 );
             }
-            environment.alive
-        });
+            if !environment.alive {
+                removed[i] = true;
+                cells.remove(i, item.position);
+            }
+        }
+        let mut removed = removed.into_iter();
+        items.retain(|_| !removed.next().unwrap_or(false));
         let Some(p) = self.player.as_ref() else {
             self.dropped = items;
             return;
@@ -2708,154 +2759,162 @@ impl Game<'_> {
     }
     /// FallingBlockEntity.tick: fall with 0.04 gravity and 0.98 drag, then land.
     fn tick_falling(&mut self) -> Result<()> {
-        let mut falling = std::mem::take(&mut self.falling);
-        let mut landed = Vec::new();
-        let mut dropped = Vec::new();
+        let falling = std::mem::take(&mut self.falling);
+        let mut kept = Vec::with_capacity(falling.len());
         let mut collision_error = None;
         let entity_drops = self.ui.rules.bool("entity_drops");
         // ServerLevel.tick: only entities in entity-ticking chunks tick.
         let ticking = self.entity_ticking_area();
-        falling.retain_mut(|f| {
+        // FallingBlockEntity.tick places or drops each block in its own tick,
+        // so a block falling onto one that just landed lands on top of it.
+        for mut f in falling {
             if !ticking(f.position.x.floor() as i32, f.position.z.floor() as i32) {
-                return true;
+                kept.push(f);
+                continue;
             }
             let original = f.clone();
-            f.previous = f.position;
-            f.age = f.age.wrapping_add(1);
-            if !f.no_gravity {
-                f.velocity.y -= 0.04;
-            }
-            let mut wanted = f.velocity;
-            // Entity.move: a cobweb it was in scales this move, which then
-            // starts from rest.
-            if f.stuck.length_squared() > 1.0e-7 {
-                wanted = wanted.multiply(f.stuck);
-                f.stuck = Vec3::ZERO;
-                f.velocity = Vec3::ZERO;
-            }
-            let mut scene = collisions::SceneCollisions {
-                world: &self.world,
-                binding: self.collision,
-                subject: Some(collisions::PowderSnowSubject {
-                    fall_distance: f.fall_distance,
-                    falling_block: true,
-                    ..Default::default()
-                }),
-            };
-            let context = CollisionContext::for_entity(
-                CollisionEntity {
-                    identity: EntityIdentity(0),
-                    y: f.position.y,
-                    descending: wanted.y < 0.0,
-                    main_hand: None,
-                },
-                false,
-            );
-            let movement = match scene.resolve_with_context(
-                horizon_client::falling_block::bounds(f.position),
-                wanted,
-                0.0,
-                false,
-                context,
-            ) {
-                Ok(movement) => movement,
+            match self.fall_step(&mut f, entity_drops) {
+                Ok(FallStep::Falling) => kept.push(f),
+                Ok(FallStep::Gone) => {}
+                Ok(FallStep::Dropped(at)) => self.drop_falling_block(f.state, at),
+                Ok(FallStep::Landed(pos)) => self.finish_falling_block(f, pos),
                 Err(error) => {
-                    *f = original;
+                    kept.push(original);
                     collision_error.get_or_insert(error);
-                    return true;
                 }
-            };
-            let next = Vec3::new(
-                f.position.x + movement.x,
-                f.position.y + movement.y,
-                f.position.z + movement.z,
-            );
-            let on_ground = wanted.y < 0.0 && movement.y != wanted.y;
-            // FallingBlockEntity.tick: off the ground, it gives up after 600
-            // ticks (100 outside the world) and drops itself as an item.
-            let y = next.y.floor() as i32;
-            let outside =
-                y <= horizon_client::chunk::MIN_Y || y >= horizon_client::chunk::MIN_Y + 384;
-            if !on_ground && (f.age > 100 && outside || f.age > 600) {
-                if f.drop_item && entity_drops {
-                    dropped.push((f.state, next));
-                }
-                return false;
-            }
-            if next.y < f.position.y {
-                f.fall_distance += f.position.y - next.y;
-            }
-            let from = f.position;
-            f.position = next;
-            if on_ground {
-                let pos = [
-                    f.position.x.floor() as i32,
-                    f.position.y.floor() as i32,
-                    f.position.z.floor() as i32,
-                ];
-                landed.push((f.clone(), pos));
-                return false;
-            }
-            // applyEffectsFromBlocks: WebBlock.entityInside makes it stuck
-            // (Entity.makeStuckInBlock, which forgets the fall). Entity.move
-            // records the move unless it was blocked short of a tiny one.
-            let moved = movement.length_squared();
-            let recorded = moved > 1.0e-7 || wanted.length_squared() - moved < 1.0e-7;
-            let world = &self.world;
-            let facts = self.res.facts();
-            if horizon_client::falling_block::passes_cobweb(
-                from,
-                f.position,
-                recorded.then_some(wanted),
-                |p| &*facts.get(world.block(p.x, p.y, p.z)).name == "minecraft:cobweb",
-            ) {
-                f.fall_distance = 0.0;
-                f.stuck = horizon_client::falling_block::web_multiplier();
-            }
-            if movement.x != wanted.x {
-                f.velocity.x = 0.0;
-            }
-            if movement.y != wanted.y {
-                f.velocity.y = 0.0;
-            }
-            if movement.z != wanted.z {
-                f.velocity.z = 0.0;
-            }
-            f.velocity = Vec3::new(
-                f.velocity.x * 0.98,
-                f.velocity.y * 0.98,
-                f.velocity.z * 0.98,
-            );
-            true
-        });
-        self.falling = falling;
-        for (state, at) in dropped {
-            // Entity.spawnAtLocation: an item entity where the block was.
-            let item = self.res.facts().get(state).item.clone();
-            if &*item != "minecraft:air" {
-                let r = &mut self.world.random;
-                let v = [
-                    r.next_double() * 0.2 - 0.1,
-                    0.2,
-                    r.next_double() * 0.2 - 0.1,
-                ];
-                let stack = ItemStack {
-                    item,
-                    count: 1,
-                    damage: 0,
-                    extra: None,
-                };
-                self.spawn_item(stack, [at.x, at.y, at.z], v, 10);
             }
         }
-        for (block, pos) in landed {
-            self.finish_falling_block(block, pos);
-        }
+        // Blocks that started falling meanwhile tick from the next tick on.
+        let started = std::mem::replace(&mut self.falling, kept);
+        self.falling.extend(started);
         self.process_level_events()?;
         if let Some(error) = collision_error {
             return Err(error);
         }
         Ok(())
+    }
+    /// One `FallingBlockEntity.tick` move of `f`.
+    fn fall_step(&self, f: &mut FallingBlock, entity_drops: bool) -> Result<FallStep> {
+        f.previous = f.position;
+        f.age = f.age.wrapping_add(1);
+        if !f.no_gravity {
+            f.velocity.y -= 0.04;
+        }
+        let mut wanted = f.velocity;
+        // Entity.move: a cobweb it was in scales this move, which then
+        // starts from rest.
+        if f.stuck.length_squared() > 1.0e-7 {
+            wanted = wanted.multiply(f.stuck);
+            f.stuck = Vec3::ZERO;
+            f.velocity = Vec3::ZERO;
+        }
+        let mut scene = collisions::SceneCollisions {
+            world: &self.world,
+            binding: self.collision,
+            subject: Some(collisions::PowderSnowSubject {
+                fall_distance: f.fall_distance,
+                falling_block: true,
+                ..Default::default()
+            }),
+        };
+        let context = CollisionContext::for_entity(
+            CollisionEntity {
+                identity: EntityIdentity(0),
+                y: f.position.y,
+                descending: wanted.y < 0.0,
+                main_hand: None,
+            },
+            false,
+        );
+        // On an error the caller keeps the block as it was before this tick.
+        let movement = scene.resolve_with_context(
+            horizon_client::falling_block::bounds(f.position),
+            wanted,
+            0.0,
+            false,
+            context,
+        )?;
+        let next = Vec3::new(
+            f.position.x + movement.x,
+            f.position.y + movement.y,
+            f.position.z + movement.z,
+        );
+        let on_ground = wanted.y < 0.0 && movement.y != wanted.y;
+        // FallingBlockEntity.tick: off the ground, it gives up after 600
+        // ticks (100 outside the world) and drops itself as an item.
+        let y = next.y.floor() as i32;
+        let outside = y <= horizon_client::chunk::MIN_Y || y >= horizon_client::chunk::MIN_Y + 384;
+        if !on_ground && (f.age > 100 && outside || f.age > 600) {
+            return Ok(if f.drop_item && entity_drops {
+                FallStep::Dropped(next)
+            } else {
+                FallStep::Gone
+            });
+        }
+        if next.y < f.position.y {
+            f.fall_distance += f.position.y - next.y;
+        }
+        let from = f.position;
+        f.position = next;
+        if on_ground {
+            let pos = [
+                f.position.x.floor() as i32,
+                f.position.y.floor() as i32,
+                f.position.z.floor() as i32,
+            ];
+            return Ok(FallStep::Landed(pos));
+        }
+        // applyEffectsFromBlocks: WebBlock.entityInside makes it stuck
+        // (Entity.makeStuckInBlock, which forgets the fall). Entity.move
+        // records the move unless it was blocked short of a tiny one.
+        let moved = movement.length_squared();
+        let recorded = moved > 1.0e-7 || wanted.length_squared() - moved < 1.0e-7;
+        let world = &self.world;
+        let facts = self.res.facts();
+        if horizon_client::falling_block::passes_cobweb(
+            from,
+            f.position,
+            recorded.then_some(wanted),
+            |p| &*facts.get(world.block(p.x, p.y, p.z)).name == "minecraft:cobweb",
+        ) {
+            f.fall_distance = 0.0;
+            f.stuck = horizon_client::falling_block::web_multiplier();
+        }
+        if movement.x != wanted.x {
+            f.velocity.x = 0.0;
+        }
+        if movement.y != wanted.y {
+            f.velocity.y = 0.0;
+        }
+        if movement.z != wanted.z {
+            f.velocity.z = 0.0;
+        }
+        f.velocity = Vec3::new(
+            f.velocity.x * 0.98,
+            f.velocity.y * 0.98,
+            f.velocity.z * 0.98,
+        );
+        Ok(FallStep::Falling)
+    }
+    /// `Entity.spawnAtLocation`: an item entity where the block was.
+    fn drop_falling_block(&mut self, state: BlockStateId, at: Vec3) {
+        // Entity.spawnAtLocation: an item entity where the block was.
+        let item = self.res.facts().get(state).item.clone();
+        if &*item != "minecraft:air" {
+            let r = &mut self.world.random;
+            let v = [
+                r.next_double() * 0.2 - 0.1,
+                0.2,
+                r.next_double() * 0.2 - 0.1,
+            ];
+            let stack = ItemStack {
+                item,
+                count: 1,
+                damage: 0,
+                extra: None,
+            };
+            self.spawn_item(stack, [at.x, at.y, at.z], v, 10);
+        }
     }
     /// `DecoratedPotBlock.playerWillDestroy`: a pot mined with an item in
     /// `breaks_decorated_pots`, unless an enchantment prevents shattering, is

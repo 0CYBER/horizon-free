@@ -2403,6 +2403,7 @@ impl Game<'_> {
             age: 0,
             pickup_delay: 0,
             bob_offset,
+            ticks: 0,
         });
     }
     fn apply_remote_health(&mut self) {
