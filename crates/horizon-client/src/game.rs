@@ -1209,6 +1209,11 @@ struct Game<'a> {
     sculk: sculk::SculkState,
     raiding: raids::Raiding,
     attack_ticks: u32,
+    /// The main hand's item at the last player tick, whose attack damage and
+    /// speed modifiers apply (`LivingEntity.detectEquipmentUpdates`): a hotbar
+    /// swap just before an attack keeps them, with the new item's enchantments
+    /// (attribute swapping).
+    attack_item: Option<Arc<str>>,
     last_hurt_by_player: HashSet<u32>,
     /// Mobs whose death (`LivingEntity.die`) has been handled.
     died: HashSet<u32>,
@@ -6581,11 +6586,7 @@ impl Game<'_> {
     /// scaled by the attack strength, a mace's smash, the critical hit, then
     /// enchantments.
     pub(super) fn melee_damage(&mut self, target_kind: &str) -> (f32, f32, bool) {
-        let hand_damage = 1.0
-            + self
-                .held()
-                .and_then(|h| self.res.items().get(&h.item))
-                .map_or(0.0, |i| i.attack_damage);
+        let hand_damage = 1.0 + self.attack_item_info().map_or(0.0, |i| i.attack_damage);
         let damage = hand_damage + self.effect_attack_bonus();
         let scale = self.attack_strength_scale();
         let mut amount = damage * (0.2 + scale * scale * 0.8);
@@ -6605,10 +6606,7 @@ impl Game<'_> {
     }
     /// `Player.getAttackStrengthScale(0.5)`.
     fn attack_strength_scale(&self) -> f32 {
-        let speed = self
-            .held()
-            .and_then(|h| self.res.items().get(&h.item))
-            .map_or(0.0, |i| i.attack_speed);
+        let speed = self.attack_item_info().map_or(0.0, |i| i.attack_speed);
         let delay = 20.0 / (4.0 + speed).max(0.1);
         ((self.attack_ticks as f32 + 0.5) / delay).clamp(0.0, 1.0)
     }
@@ -11131,6 +11129,7 @@ impl<'a> Game<'a> {
             sculk: Default::default(),
             raiding: Default::default(),
             attack_ticks: 100,
+            attack_item: None,
             last_hurt_by_player: HashSet::new(),
             died: HashSet::new(),
             be_anims: {

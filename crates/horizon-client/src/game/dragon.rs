@@ -761,10 +761,8 @@ impl Game<'_> {
         if !self.before_block(d) || self.mob_hit().is_some_and(|m| m.1 < d) {
             return false;
         }
-        let held = self.held().cloned();
-        let modifiers = held
-            .as_ref()
-            .and_then(|h| self.res.items().get(&h.item))
+        let modifiers = self
+            .attack_item_info()
             .map(|i| (i.attack_damage, i.attack_speed))
             .unwrap_or((0.0, 0.0));
         let speed = (4.0 + modifiers.1).max(0.1);
