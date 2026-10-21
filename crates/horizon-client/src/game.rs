@@ -89,6 +89,7 @@ mod mob_gear;
 mod mods;
 mod mount_menu;
 mod mounts;
+mod moving_pistons;
 mod music;
 mod names;
 mod natural_spawning;
@@ -2314,7 +2315,20 @@ impl Game<'_> {
             b.run_block_events(level, ticks);
             b.tick_block_entities(level, ticks);
         });
+        self.sync_moving_pistons();
         self.process_level_events()
+    }
+    /// Copies the moving-piston block entities into the world, where the
+    /// collision queries and the renderer read them.
+    fn sync_moving_pistons(&mut self) {
+        let pistons = &mut self.world.moving_pistons;
+        pistons.clear();
+        pistons.extend(
+            self.block_ticks
+                .moving_pistons
+                .iter()
+                .map(|(p, piston)| ([p.x, p.y, p.z], piston.shape_state())),
+        );
     }
     /// `ServerLevel.tick`'s scheduled block then fluid ticks, one at a time:
     /// the side effects of each (a shrieker summoning a warden, drops, game
@@ -6465,6 +6479,7 @@ impl Game<'_> {
                 vertex.color = horizon_client::hud_layout::multiply(vertex.color, tint);
             }
         }
+        self.moving_piston_geometry(camera, alpha, &mut out);
         self.tnt_geometry(camera, alpha, &mut out);
         self.painting_geometry(camera, &mut out);
         self.frame_geometry(camera, &mut out);

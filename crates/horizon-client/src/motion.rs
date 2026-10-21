@@ -2128,6 +2128,68 @@ mod tests {
         assert!(player.position.y < 84.0);
     }
 
+    /// `MovingPistonBlock.getCollisionShape`: a block halfway through a push
+    /// up is solid at its moving position, so a player lands on it.
+    #[test]
+    fn a_player_lands_on_a_block_a_piston_is_moving() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 1).unwrap();
+        let registry = assets.registry;
+        let moving = registry.default_state("minecraft:moving_piston").unwrap();
+        let stone = registry.default_state("minecraft:stone").unwrap();
+        scene.set(20, 4, 20, moving).unwrap();
+        scene.moving_pistons.push((
+            [20, 4, 20],
+            horizon_world::piston_shape::MovingPistonState {
+                moved_state: stone,
+                direction: horizon_core::geometry::Direction::Up,
+                extending: true,
+                source: false,
+                progress: 0.5,
+                previous_progress: 0.0,
+            },
+        ));
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 6.0, 20.5)).unwrap();
+        for _ in 0..30 {
+            MotionWorld {
+                entities: &[],
+                player: &mut player,
+                scene: &mut scene,
+                assets: &assets,
+                collision_binding: &binding,
+                resources: &resources,
+            }
+            .controlled_simulation_tick(Default::default())
+            .unwrap();
+        }
+        assert!(player.ground.on_ground);
+        assert_eq!(player.position.y, 4.5);
+        // Once the block entity is gone, the moving_piston block has no shape.
+        scene.moving_pistons.clear();
+        for _ in 0..10 {
+            MotionWorld {
+                entities: &[],
+                player: &mut player,
+                scene: &mut scene,
+                assets: &assets,
+                collision_binding: &binding,
+                resources: &resources,
+            }
+            .controlled_simulation_tick(Default::default())
+            .unwrap();
+        }
+        assert_eq!(player.position.y, 4.0);
+    }
+
     #[test]
     fn spectator_scroll_speed_controls_horizontal_and_vertical_flight() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))

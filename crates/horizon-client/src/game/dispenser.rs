@@ -317,7 +317,11 @@ impl Game<'_> {
             .cloned()
     }
     /// The same block with other properties (`withProperty`).
-    fn with_props(&self, state: BlockStateId, props: &[(&str, &str)]) -> Option<BlockStateId> {
+    pub(super) fn with_props(
+        &self,
+        state: BlockStateId,
+        props: &[(&str, &str)],
+    ) -> Option<BlockStateId> {
         let mut s = self.pack.assets.registry.state(state)?.clone();
         for (k, v) in props {
             s.properties.insert((*k).to_owned(), (*v).to_owned());
