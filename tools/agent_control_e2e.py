@@ -8,7 +8,9 @@ small JSON-RPC client, and saves a screenshot of each run. The ui scenario drive
 widget id instead: the title screen, the options (a slider set by id) and the inventory's slots;
 the options scenario reads and sets options.txt values by key; the events scenario waits for
 states (wait-for) and reads the event log; the consume scenario eats and drinks consumables (a
-golden apple, milk, honey, chorus fruit) and checks their effects, remainders and teleport.
+golden apple, milk, honey, chorus fruit) and checks their effects, remainders and teleport; the
+pick scenario middle-clicks slots (AbstractContainerScreen's cloning): a full stack in creative, from
+the hotbar and from an item tab, and nothing in survival.
 
     python3 tools/agent_control_e2e.py                 # both modes
     python3 tools/agent_control_e2e.py --mode mcp      # one of them
@@ -46,7 +48,7 @@ POSITIONAL = {
     'wait_for': ['condition', 'value'],
 }
 # Booleans the game takes as bare words.
-BARE = {'click_slot': ['right', 'shift'], 'click': ['right', 'shift']}
+BARE = {'click_slot': ['right', 'shift'], 'click': ['right', 'middle', 'shift']}
 
 
 class Failed(Exception):
@@ -423,8 +425,55 @@ def consume_scenario(d, out):
     return {'teleported': [round(m, 2) for m in moved]}
 
 
+def pick_scenario(d, out):
+    # The pick block button (middle) over a container screen clones only with infinite materials:
+    # AbstractContainerScreen.mouseClicked sends CLONE, which fills the empty hand with a full stack
+    # of the slot's item (#1048: it clicked like the left button and took the slot's stack).
+    d('click', id='singleplayer')
+    if 'game' not in widgets(d):
+        d('click', id='create-new-world')
+    d('type', field='name', replace=True, text='Pick')
+    d('click', id='create-new-world')
+    d('wait_for', condition='loaded', timeout=400)
+    d('command', command='gamemode creative')
+    d('command', command='clear @s')
+    d('give', item='oak_log', count=2)
+
+    def carried():
+        return d('inventory')['carried']
+
+    # 1. An item tab: the hotbar slot's stack is cloned, the slot keeps its 2 logs.
+    assert d('open_inventory')['screen'] == 'creative'
+    tree = widgets(d)
+    assert tree['slot-0']['stack'] == {'item': 'minecraft:oak_log', 'count': 2}, tree['slot-0']
+    d('click', id='slot-0', middle=True)
+    assert carried() == {'item': 'minecraft:oak_log', 'count': 64}, carried()
+    assert widgets(d)['slot-0']['stack']['count'] == 2
+    d('close')
+    d('command', command='clear @s')
+    d('give', item='oak_log', count=2)
+
+    # 2. The tab's own display slot gives a full stack too, not one item.
+    d('open_inventory')
+    shown = widgets(d)['slot-900']['stack']
+    d('click', id='slot-900', middle=True)
+    assert carried() == {'item': shown['item'], 'count': 64}, (shown, carried())
+    d('close')
+
+    # 3. Survival: the middle button over a slot does nothing.
+    d('command', command='gamemode survival')
+    d('command', command='clear @s')
+    d('give', item='oak_log', count=2)
+    assert d('open_inventory')['screen'] == 'inventory'
+    d('click', id='slot-0', middle=True)
+    assert carried() is None, carried()
+    assert widgets(d)['slot-0']['stack'] == {'item': 'minecraft:oak_log', 'count': 2}
+    d('close')
+    return {'cloned': shown['item']}
+
+
 SCENARIOS = {'survival': scenario, 'ui': ui_scenario, 'options': options_scenario, 'events': events_scenario,
-             'consume': consume_scenario}
+             'consume': consume_scenario, 'pick': pick_scenario}
 
 
 def run(mode, ctl, out, resources, which='survival'):

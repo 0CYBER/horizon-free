@@ -77,7 +77,7 @@ Legend: **yes** complete, **part** partial (see note), **no** missing, **—** n
 | Capability | Before | After |
 | --- | --- | --- |
 | Screens: widgets | labelled buttons only | every widget of every screen (`ui`): id, kind, label, bounds, slider value, tab selected, slots with stacks; both menu styles |
-| Screens: act on a widget | `click-button LABEL`, `click-at X Y` | `click ID [right] [shift]`, `set ID VALUE` (sliders), `click` focuses fields |
+| Screens: act on a widget | `click-button LABEL`, `click-at X Y` | `click ID [right\|middle] [shift]`, `set ID VALUE` (sliders), `click` focuses fields |
 | Options | open a page; `render-distance` only | `options-get` all 193 `options.txt` options typed with ranges/choices; `options-set` validates, applies, saves |
 | Waits | `wait TICKS`, `wait-ready` | `wait-for screen\|widget\|loaded\|chat\|event` with timeout errors |
 | Events | none (poll) | `events [--since SEQ]`: screen, chat, death, respawn, item, dimension, world |
@@ -127,11 +127,12 @@ pause, options pages, inventories and stations, chat, death, Horizon-style menus
   unlabelled elements are `<kind>-<n>` in draw order. The id of a slider does not change
   when its value (and so its label) does. World, server and language rows carry their
   names; Horizon-style switches, sliders and segments carry their settings row's caption
-  (`vsync`, `menu-style-horizon`); inventory and menu slots are `slot-<ID>` with their stack.
+  (`vsync`, `menu-style-horizon`); inventory, creative and menu slots are `slot-<ID>` with
+  their stack (an item tab's display slots are `slot-900` up).
 - **Kinds**: `button`, `slider` (`value` 0..1 as drawn), `field` (text box), `row` (list
   entry: world, server, pack, language), `tab` (`selected`), `slot`.
-- **Actions by id**: `click ID [right]` (move the pointer there and click, exactly as a
-  player would), `set ID VALUE` (a slider to a 0..1 position, a click on its track, as vanilla
+- **Actions by id**: `click ID [right|middle]` (move the pointer there and click, exactly as a
+  player would; `middle` is the pick block button, which clones a stack in creative), `set ID VALUE` (a slider to a 0..1 position, a click on its track, as vanilla
   `AbstractSliderButton.onClick` reads the pointer). `type TEXT` keeps typing into the focused
   field; `click` on a field focuses it. After a click or a set, the next `ui`, `click` or
   `set` waits for a redrawn frame, so it never reads the screen the click left.
