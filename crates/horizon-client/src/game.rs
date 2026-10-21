@@ -2852,7 +2852,7 @@ impl Game<'_> {
                 // Block.playerDestroy: the mined statistic, the exhaustion and the drops.
                 self.stats.add("mined", &facts.name, 1);
                 if let Some(p) = self.player.as_mut() {
-                    p.health.food.exhaustion = (p.health.food.exhaustion + 0.005).min(40.0);
+                    p.cause_food_exhaustion(0.005);
                 }
                 let drops = self.block_loot_at(pos, state, held.as_ref());
                 let silk = held
@@ -6514,7 +6514,7 @@ impl Game<'_> {
         if let Some(p) = self.player.as_mut()
             && !self.creative
         {
-            p.health.food.exhaustion = (p.health.food.exhaustion + 0.1).min(40.0);
+            p.cause_food_exhaustion(0.1);
         }
         let player = self.player.as_ref();
         let from = player.map(|p| [p.position.x, p.position.y, p.position.z]);
