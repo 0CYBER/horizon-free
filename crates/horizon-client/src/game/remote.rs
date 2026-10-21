@@ -140,6 +140,8 @@ pub(super) struct Remote {
     tab_players: HashMap<u128, horizon_client::tab_list::TabPlayer>,
     /// Each listed profile's unpacked `textures` property.
     skin_textures: HashMap<u128, horizon_client::skins::Textures>,
+    /// The skin texture each profile's players show, once its download is ready.
+    skins: HashMap<u128, String>,
     listed: std::collections::HashSet<u128>,
     /// `ClientboundLoginPacket.onlineMode`: the player list shows heads.
     online_mode: bool,
@@ -355,6 +357,7 @@ impl Game<'_> {
             players: HashMap::new(),
             tab_players: HashMap::new(),
             skin_textures: HashMap::new(),
+            skins: HashMap::new(),
             listed: Default::default(),
             online_mode: false,
             level_players: HashMap::new(),
@@ -2459,33 +2462,20 @@ impl Game<'_> {
     pub(super) fn remote_tab_players(
         &mut self,
     ) -> Option<(Vec<horizon_client::tab_list::TabPlayer>, bool, Vec<u128>)> {
-        let r = self.remote.as_ref()?;
-        let mut players: Vec<_> = r
-            .listed
-            .iter()
-            .filter_map(|u| r.tab_players.get(u).cloned())
-            .collect();
+        self.update_remote_skins();
+        let mut players: Vec<_> = {
+            let r = self.remote.as_ref()?;
+            r.listed
+                .iter()
+                .filter_map(|u| r.tab_players.get(u).cloned())
+                .collect()
+        };
         for p in &mut players {
-            let Some(textures) = r.skin_textures.get(&p.uuid) else {
-                continue;
-            };
-            // PlayerInfo.createSkinLookup: only the local player's own skin
-            // may be unsigned.
-            let downloads = &mut self.skin_downloads;
-            let skin = horizon_client::skins::lookup(textures, p.uuid != r.profile, |kind, url| {
-                downloads.state(kind, url)
-            });
-            if let Some(skin) = skin {
-                p.skin = skin;
-            }
-        }
-        for (location, rgba) in self.skin_downloads.take_ready() {
-            self.store_skin(location, rgba);
-        }
-        for p in &mut players {
-            if p.skin.starts_with("skins/") && !self.show_skin(&p.skin) {
-                p.skin = horizon_client::tab_list::default_skin(p.uuid).to_owned();
-            }
+            p.skin = self
+                .remote
+                .as_ref()
+                .and_then(|r| r.skins.get(&p.uuid).cloned())
+                .unwrap_or_else(|| horizon_client::tab_list::default_skin(p.uuid).to_owned());
         }
         let r = self.remote.as_ref()?;
         let upside_down = players
@@ -2498,9 +2488,68 @@ impl Game<'_> {
             .collect();
         Some((players, r.online_mode, upside_down))
     }
+    /// `PlayerInfo.getSkin` for every player entity, including NPCs that are
+    /// never in the tab list: resolve each profile's textures and give the
+    /// level's player models their skin.
+    fn update_remote_skins(&mut self) {
+        let Some(r) = self.remote.as_ref() else {
+            return;
+        };
+        let local = r.profile;
+        let entries: Vec<(u128, horizon_client::skins::Textures)> = r
+            .skin_textures
+            .iter()
+            .map(|(uuid, textures)| (*uuid, textures.clone()))
+            .collect();
+        let mut resolved: Vec<(u128, String)> = Vec::new();
+        for (uuid, textures) in entries {
+            // PlayerInfo.createSkinLookup: only the local player's own skin
+            // may be unsigned.
+            let skin = {
+                let mut downloads = self.skin_downloads.borrow_mut();
+                horizon_client::skins::lookup(&textures, uuid != local, |kind, url| {
+                    downloads.state(kind, url)
+                })
+            };
+            if let Some(skin) = skin {
+                resolved.push((uuid, skin));
+            }
+        }
+        resolved.retain(|(_, skin)| !skin.starts_with("skins/") || self.show_skin(skin));
+        let Some((level, skins, own)) = self.remote.as_mut().map(|r| {
+            r.skins = resolved.into_iter().collect();
+            (
+                r.level_players
+                    .iter()
+                    .map(|(id, uuid)| (*id as u32, *uuid))
+                    .collect::<Vec<_>>(),
+                r.skins.clone(),
+                r.skins.get(&r.profile).cloned(),
+            )
+        }) else {
+            return;
+        };
+        for (id, uuid) in level {
+            let Some(skin) = skins.get(&uuid) else {
+                continue;
+            };
+            if let Some(mob) = self
+                .mobs
+                .iter_mut()
+                .find(|m| m.id == id && &*m.kind.id == "minecraft:player")
+            {
+                mob.skin = Some(skin.clone());
+            }
+        }
+        if let Some(skin) = own
+            && let Some(mob) = self.player_model.as_mut()
+        {
+            mob.skin = Some(skin);
+        }
+    }
     /// Puts a downloaded skin in an atlas skin slot: a free one, else the
     /// least recently shown.
-    fn store_skin(&mut self, location: String, rgba: Vec<u8>) {
+    pub(super) fn store_skin(&mut self, location: String, rgba: Vec<u8>) {
         use horizon_client::hud::SKIN_SLOTS;
         let slot = if self.skin_slots.len() < SKIN_SLOTS {
             self.skin_slots.len()

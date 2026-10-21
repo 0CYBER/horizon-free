@@ -214,6 +214,7 @@ use horizon_world::{
     registry::BlockStateId,
 };
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{
@@ -1387,7 +1388,7 @@ struct Game<'a> {
     map_patches: Vec<horizon_client::font::Patch>,
     /// Player skin downloads, and which skin each atlas skin slot holds
     /// (least recently shown first).
-    skin_downloads: horizon_client::skins::Downloader,
+    skin_downloads: RefCell<horizon_client::skins::Downloader>,
     skin_slots: Vec<(String, usize)>,
     cart_models: minecarts::CartModels,
     /// The boat the player rides.
@@ -11627,11 +11628,11 @@ impl<'a> Game<'a> {
             breath_clouds: Vec::new(),
             dragon_model: prepared.dragon_model,
             map_patches: Vec::new(),
-            skin_downloads: horizon_client::skins::Downloader::new(
+            skin_downloads: RefCell::new(horizon_client::skins::Downloader::new(
                 std::env::current_dir()
                     .unwrap_or_default()
                     .join("assets/skins"),
-            ),
+            )),
             skin_slots: Vec::new(),
             cart_models: prepared.cart_models,
             riding: None,

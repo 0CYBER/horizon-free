@@ -599,6 +599,11 @@ impl Game<'_> {
     /// objective.
     pub(super) fn draw_tab_list(&mut self, batch: &mut HudBatch) {
         use horizon_client::tab_list::{self, TabInputs};
+        // Player heads and the player list both draw from the same skin slots.
+        let ready: Vec<_> = self.skin_downloads.borrow_mut().take_ready();
+        for (location, rgba) in ready {
+            self.store_skin(location, rgba);
+        }
         let key = self.screen == super::Screen::Playing
             && self.keys.contains(&winit::keyboard::KeyCode::Tab);
         let (players, online_mode, upside_down) = match self.remote_tab_players() {

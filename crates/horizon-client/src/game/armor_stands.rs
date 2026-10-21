@@ -700,9 +700,15 @@ impl Game<'_> {
                     self.dim == super::Dim::Nether,
                 )),
             };
+            let profile = stack
+                .extra
+                .as_deref()
+                .and_then(|d| d.other.iter().find(|(k, _)| k == "minecraft:profile"))
+                .map(|(_, t)| horizon_client::scoreboard::tag_to_json(t))
+                .unwrap_or(serde_json::Value::Null);
             self.pack.item_renderer.submit_special(
                 &special,
-                &serde_json::Value::Null,
+                &profile,
                 false,
                 pose,
                 &self.gui.atlas.sprites,
