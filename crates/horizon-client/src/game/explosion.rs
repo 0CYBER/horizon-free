@@ -281,7 +281,6 @@ impl Game<'_> {
                 );
                 let amount = damage(dist, exposure);
                 let dir = direction(eye);
-                let power = (1.0 - dist) * f64::from(exposure);
                 let mut hurt = false;
                 let creative = self.creative;
                 if let Some(p) = self.player.as_mut()
@@ -293,11 +292,21 @@ impl Game<'_> {
                             .hurt(&self.motion.health, self.world.health_rules, id, amount)
                             .unwrap_or(false);
                     }
-                    p.velocity = Vec3::new(
-                        p.velocity.x + dir[0] * power,
-                        p.velocity.y + dir[1] * power,
-                        p.velocity.z + dir[2] * power,
-                    );
+                    // Blast protection: `EXPLOSION_KNOCKBACK_RESISTANCE` (0.15 per
+                    // level and piece, so two Blast Protection IV pieces cancel it).
+                    let resistance = p
+                        .attribute("minecraft:explosion_knockback_resistance")
+                        .unwrap_or(0.0);
+                    let power = (1.0 - dist) * f64::from(exposure) * (1.0 - resistance);
+                    // `hitPlayers` skips creative players who are flying: the
+                    // client gets no knockback in the explode packet.
+                    if !(creative && p.flying) {
+                        p.velocity = Vec3::new(
+                            p.velocity.x + dir[0] * power,
+                            p.velocity.y + dir[1] * power,
+                            p.velocity.z + dir[2] * power,
+                        );
+                    }
                 }
                 if hurt && !self.creative {
                     self.hurt_armor(amount);
@@ -328,8 +337,10 @@ impl Game<'_> {
             if hurtable && !m.damage(damage(dist, exposure), source) {
                 continue;
             }
+            // `EXPLOSION_KNOCKBACK_RESISTANCE`, not `KNOCKBACK_RESISTANCE`: its
+            // base is 0 for every mob type, so iron golems and ravagers are pushed.
             let dir = direction(eye);
-            let power = (1.0 - dist) * f64::from(exposure) * (1.0 - m.kind.knockback_resistance);
+            let power = (1.0 - dist) * f64::from(exposure);
             m.velocity = Vec3::new(
                 m.velocity.x + dir[0] * power,
                 m.velocity.y + dir[1] * power,

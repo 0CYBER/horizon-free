@@ -448,10 +448,15 @@ impl Game<'_> {
         ignite
     }
     /// Enchantment attribute modifiers of worn armor (respiration, depth strider...).
+    /// Each piece's modifier id ends with its slot (`EnchantmentAttributeEffect.idForSlot`),
+    /// so the same enchantment on two pieces stacks instead of replacing itself.
     pub(super) fn apply_enchantment_attributes(&mut self) {
         let mut wanted: Vec<(String, String, f64, String)> = Vec::new();
-        for stack in self.armor.iter().flatten() {
-            wanted.extend(self.res.stations().enchantments.attributes(stack));
+        for (stack, slot) in self.armor.iter().zip(["head", "chest", "legs", "feet"]) {
+            let Some(stack) = stack else { continue };
+            for (attr, id, amount, op) in self.res.stations().enchantments.attributes(stack) {
+                wanted.push((attr, format!("{id}/{slot}"), amount, op));
+            }
         }
         let Some(p) = self.player.as_mut() else {
             return;
