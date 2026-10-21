@@ -442,6 +442,16 @@ public final class VanillaChunkGenerationOracle {
                     for (var t : ((net.minecraft.world.ticks.ProtoChunkTicks<net.minecraft.world.level.material.Fluid>) proto.getFluidTicks()).scheduledTicks())
                         w.println("t fluid " + net.minecraft.core.registries.BuiltInRegistries.FLUID.getKey(t.type()) + " " + t.pos().getX() + " " + t.pos().getY() + " " + t.pos().getZ() + " " + t.priority().getValue());
                 }
+                // Postprocessing marks, per section in list order (LevelChunk.postProcessGeneration
+                // ticks their fluids and reshapes their blocks once the chunk is live).
+                var marks = target.getPostProcessing();
+                for (int i = 0; i < marks.length; i++) {
+                    if (marks[i] == null) continue;
+                    for (short packed : marks[i]) {
+                        var p = ProtoChunk.unpackOffsetCoordinates(packed, target.getSectionYFromSectionIndex(i), target.getPos());
+                        w.println("p " + p.getX() + " " + p.getY() + " " + p.getZ());
+                    }
+                }
             }
             }
         }
