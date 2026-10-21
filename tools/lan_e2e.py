@@ -608,7 +608,8 @@ def check_pvp(host, guest, out):
         host('command', command='team remove parity_allies')
     assert hits['guest hits host'][1] < hits['guest hits host'][0], f'the guest did not hurt the host: {hits}'
     assert hits['host hits guest'][1] < hits['host hits guest'][0], f'the host did not hurt the guest: {hits}'
-    assert hits['pvp off'][1] == hits['pvp off'][0], f'pvp off still hurts: {hits}'
+    # Natural regeneration may heal the victim meanwhile.
+    assert hits['pvp off'][1] >= hits['pvp off'][0], f'pvp off still hurts: {hits}'
     for name in ('guest hits teammate', 'host hits teammate'):
         assert hits[name][1] == hits[name][0], f'friendly fire off still hurts ({name}): {hits}'
     return hits
@@ -643,7 +644,7 @@ def check_arrows(host, guest, out):
             g('command', command='clear @s')
     assert hits['guest shoots host'][1] < hits['guest shoots host'][0], f"the guest's arrow did not hurt the host: {hits}"
     assert hits['host shoots guest'][1] < hits['host shoots guest'][0], f"the host's arrow did not hurt the guest: {hits}"
-    assert hits['pvp off'][1] == hits['pvp off'][0], f'pvp off, an arrow still hurts: {hits}'
+    assert hits['pvp off'][1] >= hits['pvp off'][0], f'pvp off, an arrow still hurts: {hits}'
     return hits
 
 
