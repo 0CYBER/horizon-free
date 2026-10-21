@@ -206,19 +206,25 @@ def scenario(d, out):
         d('command', command=f'tp @s {x + 0.5} {ground + 1} {z + 0.5}')
         d('wait', ticks=5)
 
-    # 2. Walk to a tree: the nearest trunk the path finder can reach.
+    # 2. Walk to a tree, the nearest trunk the path finder can reach, and 3. break the log at the
+    # bottom of the trunk (it must end up in the inventory). Low leaves can hide every face of that
+    # log from where the walk stops: then the next tree.
     for _, base, log_id in trunk_bases(d)[:8]:
         x, y, z = base
         try:
             d('goto', x=x + 0.5, y=y, z=z + 0.5, near=2.5, timeout=60)
-            break
         except Failed as e:
             print(f'  cannot reach {log_id} at {base}: {e}')
+            continue
+        try:
+            broke = d('break', x=x, y=y, z=z)
+            break
+        except Failed as e:
+            if 'no face' not in str(e):
+                raise
+            print(f'  {log_id} at {base} is hidden: {e}')
     else:
         raise Failed('no reachable tree near spawn')
-
-    # 3. Break the log at the bottom of the trunk; it must end up in the inventory.
-    broke = d('break', x=x, y=y, z=z)
     assert broke['block_before'].startswith(log_id), broke
     assert broke['drops'].get(log_id, 0) >= 1, broke
     if broke['picked_up'].get(log_id, 0) < 1:
