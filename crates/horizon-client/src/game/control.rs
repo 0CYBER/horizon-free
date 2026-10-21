@@ -769,6 +769,12 @@ impl Game<'_> {
             "pending_observations": self.lod_observe.len(),
             "refined_samples": self.lod.as_ref().map_or(0, |lod| lod.refined_samples()),
         });
+        // The other players' cracks this client draws (LevelRenderer.destroyingBlocks).
+        let destroying: Vec<_> = self
+            .destroying
+            .iter()
+            .map(|(id, (pos, stage, _))| json!({ "id": id, "pos": pos, "stage": stage }))
+            .collect();
         let mut status = json!({
             "screen": self.screen_name(),
             "debug": {
@@ -832,6 +838,7 @@ impl Game<'_> {
         status["lod"]["target_tiles"] = target.into();
         status["lod"]["sampled_target_tiles"] = sampled.into();
         status["pending_uploads"] = self.pending_uploads.len().into();
+        status["destroying"] = json!(destroying);
         status["physical_keys"] = json!(physical_keys);
         // Boats, minecarts, armor stands, item frames and paintings.
         status["objects"] = json!(self.objects_status());

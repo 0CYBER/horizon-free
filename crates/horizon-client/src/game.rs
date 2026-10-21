@@ -1136,6 +1136,9 @@ struct Game<'a> {
     potions: potions::PotionState,
     scratch_slot: Option<ItemStack>,
     mining: Option<Mining>,
+    /// The other players' cracks (`LevelRenderer.destroyingBlocks`): breaker id to the block,
+    /// the stage (0..=9) and the game time it last changed.
+    destroying: HashMap<i32, ([i32; 3], u8, i64)>,
     destroy_delay: u32,
     use_delay: u32,
     creative: bool,
@@ -6433,19 +6436,11 @@ impl Game<'_> {
                     .block_entity_render()
                     .render(&scene, visible, &mut out);
             }
-            if let Some(mining) = &self.mining
-                && mining.progress > 0.0
-                && self.gui.atlas.sprites.contains_key(&format!(
-                    "block/destroy_stage_{}",
-                    ((mining.progress * 10.0) as u32).min(9)
-                ))
-            {
-                let state = self
-                    .world
-                    .block(mining.pos[0], mining.pos[1], mining.pos[2]);
+            for (pos, stage) in self.cracks(camera) {
+                let state = self.world.block(pos[0], pos[1], pos[2]);
                 self.res
                     .block_entity_render()
-                    .render_breaking(&scene, mining.pos, state.0, &mut out);
+                    .render_breaking(&scene, pos, state.0, stage, &mut out);
             }
         }
         // Experience orbs (ExperienceOrbRenderer): pulsing billboards from a 4x4 icon sheet.
@@ -6563,48 +6558,88 @@ impl Game<'_> {
             &|b| world.light(b[0], b[1], b[2]),
             &mut out,
         );
-        let atlas = &self.gui.atlas;
-        // Breaking progress overlay (destroy_stage_0..9).
-        if let Some(m) = &self.mining
-            && m.progress > 0.0
-        {
-            let stage = ((m.progress * 10.0) as u32).min(9);
-            if atlas
-                .sprites
-                .contains_key(&format!("block/destroy_stage_{stage}"))
+        // Breaking progress overlays (destroy_stage_0..9): ours and the other players'.
+        for (pos, stage) in self.cracks(camera) {
+            let o = (glam::DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]))
+                - camera)
+                .as_vec3();
+            let state = self.world.block(pos[0], pos[1], pos[2]);
+            if self.res.facts().get(state).render_shape
+                == horizon_client::blocks::RenderShape::Model
+                && let Ok(models) = self
+                    .pack
+                    .render
+                    .model_catalog
+                    .collect(state, BlockPos::new(pos[0], pos[1], pos[2]))
             {
-                let o = (glam::DVec3::new(
-                    f64::from(m.pos[0]),
-                    f64::from(m.pos[1]),
-                    f64::from(m.pos[2]),
-                ) - camera)
-                    .as_vec3();
-                let state = self.world.block(m.pos[0], m.pos[1], m.pos[2]);
-                if self.res.facts().get(state).render_shape
-                    == horizon_client::blocks::RenderShape::Model
-                    && let Ok(models) = self
-                        .pack
-                        .render
-                        .model_catalog
-                        .collect(state, BlockPos::new(m.pos[0], m.pos[1], m.pos[2]))
-                {
-                    let offset = self
-                        .pack
-                        .context
-                        .tables
-                        .offset(state, m.pos[0], m.pos[2])
-                        .unwrap_or([0.0; 3]);
-                    let origin = o + glam::DVec3::from(offset).as_vec3();
-                    let translucent = models
-                        .iter()
-                        .any(|(_, model)| model.faces.iter().any(|f| f.translucent));
-                    for (_, model) in models {
-                        horizon_client::breaking::geometry(model, origin, translucent, &mut out);
-                    }
+                let offset = self
+                    .pack
+                    .context
+                    .tables
+                    .offset(state, pos[0], pos[2])
+                    .unwrap_or([0.0; 3]);
+                let origin = o + glam::DVec3::from(offset).as_vec3();
+                let translucent = models
+                    .iter()
+                    .any(|(_, model)| model.faces.iter().any(|f| f.translucent));
+                for (_, model) in models {
+                    horizon_client::breaking::geometry(model, origin, translucent, stage, &mut out);
                 }
             }
         }
         out
+    }
+
+    /// `LevelRenderer.destroyBlockProgress`: a player's crack on a block (0..=9), or none
+    /// (any other progress). Cracks not updated for 400 ticks are dropped.
+    pub(crate) fn destroy_block_progress(&mut self, breaker: i32, pos: [i32; 3], progress: i32) {
+        let now = self.world.game_time;
+        self.destroying
+            .retain(|_, c| now.saturating_sub(c.2) <= 400);
+        if (0..10).contains(&progress) {
+            self.destroying.insert(breaker, (pos, progress as u8, now));
+        } else {
+            self.destroying.remove(&breaker);
+        }
+    }
+
+    /// The cracks to draw and their stage sprite's atlas origin: our own mining and the
+    /// other players' (`renderBlockDestroyAnimation`: within 32 blocks of the camera, the
+    /// furthest progress on each block).
+    fn cracks(&self, camera: glam::DVec3) -> Vec<([i32; 3], [f32; 2])> {
+        let mut stages: Vec<([i32; 3], u32)> = Vec::new();
+        let mut add = |pos: [i32; 3], stage: u32| match stages.iter_mut().find(|c| c.0 == pos) {
+            Some(c) => c.1 = c.1.max(stage),
+            None => stages.push((pos, stage)),
+        };
+        if let Some(m) = &self.mining
+            && m.progress > 0.0
+        {
+            add(m.pos, ((m.progress * 10.0) as u32).min(9));
+        }
+        let now = self.world.game_time;
+        for (pos, stage, at) in self.destroying.values() {
+            if now.saturating_sub(*at) <= 400 {
+                add(*pos, u32::from(*stage));
+            }
+        }
+        stages
+            .into_iter()
+            .filter(|(pos, _)| {
+                let d = glam::DVec3::new(f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]))
+                    + 0.5
+                    - camera;
+                d.length_squared() <= 1024.0
+            })
+            .filter_map(|(pos, stage)| {
+                let r = self
+                    .gui
+                    .atlas
+                    .sprites
+                    .get(&format!("block/destroy_stage_{stage}"))?;
+                Some((pos, [r.u0, r.v0]))
+            })
+            .collect()
     }
 
     fn sky_darken(&self) -> i32 {
@@ -9599,14 +9634,10 @@ impl Game<'_> {
             game_time: self.world.game_time as f32,
             shader_game_time: ((self.world.game_time % 24000) as f32 + alpha as f32) / 24000.0,
             crumbling_sprite: self
-                .mining
-                .as_ref()
-                .and_then(|m| {
-                    self.gui.atlas.sprites.get(&format!(
-                        "block/destroy_stage_{}",
-                        ((m.progress * 10.0) as u32).min(9)
-                    ))
-                })
+                .gui
+                .atlas
+                .sprites
+                .get("block/destroy_stage_0")
                 .map_or([0.0; 4], |r| [r.u0, r.v0, r.u1 - r.u0, r.v1 - r.v0]),
             end_portal_sprites: ["environment/end_sky", "entity/end_portal/end_portal"].map(|n| {
                 self.gui
@@ -11148,6 +11179,7 @@ impl<'a> Game<'a> {
             potions: Default::default(),
             scratch_slot: None,
             mining: None,
+            destroying: HashMap::new(),
             destroy_delay: 0,
             use_delay: 0,
             creative,
