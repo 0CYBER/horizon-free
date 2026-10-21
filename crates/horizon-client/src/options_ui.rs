@@ -1016,28 +1016,41 @@ impl OptionsUi {
         if query.is_empty() {
             return rows;
         }
-        rows.into_iter()
-            .flat_map(|row| match row {
-                Row::Big(opt) if lang::get(opt.caption()).to_lowercase().contains(&query) => {
-                    vec![Row::Big(opt)]
+        let mut filtered = Vec::new();
+        let mut pending_header = None;
+        for row in rows {
+            let matches = |opt: Opt| lang::get(opt.caption()).to_lowercase().contains(&query);
+            let visible = match row {
+                Row::Header(key) => {
+                    pending_header = Some(key);
+                    continue;
                 }
-                Row::Pair(a, b) => {
-                    let matches =
-                        |opt: Opt| lang::get(opt.caption()).to_lowercase().contains(&query);
-                    pairs(
-                        &[Some(a), b]
-                            .into_iter()
-                            .flatten()
-                            .filter(|opt| matches(*opt))
-                            .collect::<Vec<_>>(),
-                    )
+                Row::Big(opt) if matches(opt) => vec![Row::Big(opt)],
+                Row::Pair(a, b) => pairs(
+                    &[Some(a), b]
+                        .into_iter()
+                        .flatten()
+                        .filter(|opt| matches(*opt))
+                        .collect::<Vec<_>>(),
+                ),
+                // Keep navigation available regardless of the query.
+                Row::Buttons(a, b) => {
+                    filtered.push(Row::Buttons(a, b));
+                    continue;
                 }
-                // Keep navigation available and omit section headers with no visible options.
-                Row::Buttons(a, b) => vec![Row::Buttons(a, b)],
                 _ => Vec::new(),
-            })
-            .collect()
+            };
+            if !visible.is_empty() {
+                // Emit a section heading only when its first matching option is found.
+                if let Some(key) = pending_header.take() {
+                    filtered.push(Row::Header(key));
+                }
+                filtered.extend(visible);
+            }
+        }
+        filtered
     }
+
     fn list_rows(&self, s: &Settings) -> Vec<Row> {
         match self.page() {
             Page::Extras => crate::extras::rows()
@@ -2724,6 +2737,76 @@ mod tests {
                 bytemuck::cast_slice::<_, u8>(&expected.vertices)
             );
         }
+    }
+
+    #[test]
+    fn classic_video_search_keeps_only_headings_with_matching_options() {
+        let mut ui = OptionsUi::default();
+        ui.show(Page::Video);
+        let settings = Settings::default();
+        let headers = |rows: Vec<Row>| {
+            rows.into_iter()
+                .filter_map(|row| match row {
+                    Row::Header(key) => Some(key),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let all_headers = vec![
+            "options.video.display.header",
+            "options.video.quality.header",
+            "options.video.preferences.header",
+        ];
+        assert_eq!(headers(ui.list_rows(&settings)), all_headers);
+        for (opt, header) in [
+            (Opt::Fullscreen, all_headers[0]),
+            (Opt::RenderDistance, all_headers[1]),
+            (Opt::Preset, all_headers[1]),
+            (Opt::Autosave, all_headers[2]),
+        ] {
+            ui.settings_search
+                .set_value(&lang::get(opt.caption()).to_uppercase());
+            let rows = ui.list_rows(&settings);
+            assert_eq!(headers(ui.list_rows(&settings)), vec![header]);
+            assert!(rows.iter().any(|row| match row {
+                Row::Big(found) => *found == opt,
+                Row::Pair(a, b) => *a == opt || *b == Some(opt),
+                _ => false,
+            }));
+            assert!(rows.iter().any(|row| matches!(row, Row::Buttons(..))));
+        }
+        ui.settings_search.set_value("no matching video setting");
+        let rows = ui.list_rows(&settings);
+        assert!(headers(ui.list_rows(&settings)).is_empty());
+        assert!(rows.iter().all(|row| matches!(row, Row::Buttons(..))));
+        ui.settings_search.set_value("");
+        assert_eq!(headers(ui.list_rows(&settings)), all_headers);
+    }
+
+    #[test]
+    fn classic_search_emits_each_matching_heading_once_in_section_order() {
+        let mut ui = OptionsUi::default();
+        ui.settings_search
+            .set_value(&lang::get(Opt::Fullscreen.caption()));
+        let rows = ui.filter_option_rows(vec![
+            Row::Header("empty"),
+            Row::Header("display"),
+            Row::Pair(Opt::Fullscreen, Some(Opt::Fullscreen)),
+            Row::Big(Opt::Fullscreen),
+            Row::Header("quality"),
+            Row::Big(Opt::Fullscreen),
+            Row::Header("trailing empty"),
+        ]);
+        assert!(matches!(
+            rows.as_slice(),
+            [
+                Row::Header("display"),
+                Row::Pair(Opt::Fullscreen, Some(Opt::Fullscreen)),
+                Row::Big(Opt::Fullscreen),
+                Row::Header("quality"),
+                Row::Big(Opt::Fullscreen),
+            ]
+        ));
     }
 
     #[test]
