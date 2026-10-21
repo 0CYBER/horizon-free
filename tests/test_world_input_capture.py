@@ -49,9 +49,31 @@ use std::cell::Cell;
 #[derive(Clone, Copy, PartialEq)]
 enum Screen { Playing, Paused, Inventory, Chat }
 enum CursorGrabMode { Locked, Confined, None }
+mod winit {
+    pub mod dpi {
+        #[derive(Clone, Copy)]
+        pub struct PhysicalPosition<T> { pub x: T, pub y: T }
+        impl<T> PhysicalPosition<T> { pub fn new(x: T, y: T) -> Self { Self { x, y } } }
+        pub struct PhysicalSize<T> { pub width: T, pub height: T }
+        impl From<PhysicalSize<u32>> for [u32; 2] {
+            fn from(size: PhysicalSize<u32>) -> Self { [size.width, size.height] }
+        }
+    }
+}
+use winit::dpi::{PhysicalPosition, PhysicalSize};
+struct HudBatch { scale: f32 }
+impl HudBatch { fn new(_size: [u32; 2]) -> Self { Self { scale: 2.0 } } }
+struct Config { width: u32, height: u32 }
+struct Renderer { config: Config }
 #[derive(Default)]
-struct Window { grabs: Cell<u32>, visible: Cell<bool>, fail: bool }
+struct Window { grabs: Cell<u32>, visible: Cell<bool>, fail: bool, warps: Cell<u32>, at: Cell<(f64, f64)> }
 impl Window {
+    fn inner_size(&self) -> PhysicalSize<u32> { PhysicalSize { width: 854, height: 480 } }
+    fn set_cursor_position(&self, position: PhysicalPosition<f64>) -> Result<(), ()> {
+        self.warps.set(self.warps.get() + 1);
+        self.at.set((position.x, position.y));
+        Ok(())
+    }
     fn set_cursor_grab(&self, mode: CursorGrabMode) -> Result<(), ()> {
         if !matches!(mode, CursorGrabMode::None) {
             self.grabs.set(self.grabs.get() + 1);
@@ -67,13 +89,14 @@ struct Remote;
 struct Game {
     focused: bool, agent_pointer: bool, window: Option<Window>, mouse: Mouse,
     captured: bool, title: Option<()>, screen: Screen, remote: Option<Remote>,
-    mining: bool, lan_acting: Option<u32>,
+    mining: bool, lan_acting: Option<u32>, renderer: Option<Renderer>, cursor: (f32, f32),
 }
 impl Default for Game {
     fn default() -> Self {
         Self { focused: true, agent_pointer: false, window: Some(Window::default()),
             mouse: Mouse::default(), captured: false, title: None,
-            screen: Screen::Playing, remote: None, mining: false, lan_acting: None }
+            screen: Screen::Playing, remote: None, mining: false, lan_acting: None,
+            renderer: None, cursor: (0.0, 0.0) }
     }
 }
 impl Game {
@@ -136,6 +159,23 @@ fn main() {
     assert_eq!(game.window.as_ref().unwrap().grabs.get(), 0);
     game.remote = None;
     game.screen = Screen::Playing;
+    // Grabbing and releasing put the pointer at the window's centre
+    // (MouseHandler.grabMouse / releaseMouse), in the surface's pixels when it
+    // has one; releasing an already released pointer leaves it where it is.
+    game.renderer = Some(Renderer { config: Config { width: 1000, height: 600 } });
+    game.capture(true);
+    assert!(game.captured);
+    let window = game.window.as_ref().unwrap();
+    assert_eq!((window.warps.get(), window.at.get()), (1, (500.0, 300.0)));
+    game.capture(false);
+    let window = game.window.as_ref().unwrap();
+    assert_eq!(window.warps.get(), 3);
+    assert_eq!(game.cursor, (250.0, 150.0));
+    game.cursor = (1.0, 1.0);
+    game.capture(false);
+    assert_eq!(game.window.as_ref().unwrap().warps.get(), 3);
+    assert_eq!(game.cursor, (1.0, 1.0));
+    game.renderer = None;
     game.window.as_mut().unwrap().fail = true;
     game.capture_loaded_world();
     assert!(!game.captured);
