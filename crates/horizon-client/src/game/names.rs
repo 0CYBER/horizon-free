@@ -124,7 +124,7 @@ impl Game<'_> {
                 team,
                 viewer,
                 self.spectator(),
-                m.has_effect("minecraft:invisibility"),
+                m.invisible || m.has_effect("minecraft:invisibility"),
             );
             // Entity.isDiscrete: a crouching player.
             let discrete = player && m.extra.crouching;
@@ -144,9 +144,16 @@ impl Game<'_> {
                 continue;
             }
             // getDisplayName: the name in the team's prefix, suffix and colour.
+            let member = if player {
+                Text::literal(&name)
+            } else {
+                m.custom_name_text
+                    .clone()
+                    .unwrap_or_else(|| Text::literal(&name))
+            };
             let shown = match team {
-                Some(t) => t.formatted_name(Text::literal(&name)),
-                None => Text::literal(&name),
+                Some(t) => t.formatted_name(member),
+                None => member,
             };
             let mut lines = Vec::new();
             // EntityRenderer.extractNameTags: the score shows within the

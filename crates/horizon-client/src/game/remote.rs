@@ -1709,6 +1709,29 @@ impl Game<'_> {
                 }
             }
             C::SetEntityData(p) => {
+                // Entity.DATA_SHARED_FLAGS_ID, DATA_CUSTOM_NAME and
+                // DATA_CUSTOM_NAME_VISIBLE: server NPCs and holograms rely on
+                // these instead of saved NBT.
+                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
+                    for (index, _, value) in &p.values {
+                        match (index, value) {
+                            (0, Value::Byte(flags)) => m.invisible = flags & 0x20 != 0,
+                            (2, Value::OptText(name)) => {
+                                let text = name.as_ref().map(horizon_client::entity_nbt::name_text);
+                                m.custom_name =
+                                    text.as_ref().map(horizon_client::text::Text::plain);
+                                m.custom_name_text = text;
+                            }
+                            (2, Value::Text(name)) => {
+                                let text = horizon_client::entity_nbt::name_text(name);
+                                m.custom_name = Some(text.plain());
+                                m.custom_name_text = Some(text);
+                            }
+                            (3, Value::Bool(visible)) => m.name_visible = *visible,
+                            _ => {}
+                        }
+                    }
+                }
                 if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
                     && m.species() == horizon_client::mobs::Species::Rabbit
                 {
