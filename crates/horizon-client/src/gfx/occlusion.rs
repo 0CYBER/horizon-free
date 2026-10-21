@@ -173,8 +173,8 @@ impl Graph {
         self.radius = radius;
         self.min_y = columns.min_y;
         self.sections = columns.sections;
-        self.y0 = from.1.min(-1);
-        self.height = from.1.max(columns.sections) - self.y0 + 1;
+        self.y0 = -1;
+        self.height = columns.sections + 2;
         let side = (2 * radius + 1) as usize;
         let size = side * side * self.height as usize;
         self.directions.clear();
@@ -197,11 +197,65 @@ impl Graph {
                 vis[base..base + column.len()].copy_from_slice(column);
             }
         }
-        let start = self.index(from).expect("camera inside the searched box");
-        self.directions[start] = REACHED;
         queue.clear();
-        queue.push_back(start as u32);
+        if (0..columns.sections).contains(&from.1) {
+            let start = self.index(from).expect("camera inside the searched box");
+            self.directions[start] = REACHED;
+            queue.push_back(start as u32);
+        } else {
+            self.seed_outside(camera, queue);
+        }
         self.propagate(queue, camera, true, |i, _| vis[i]);
+    }
+    /// `initializeQueueForFullUpdate` with the camera above or below the
+    /// world (no render section there): every section of the world's top
+    /// layer (bottom layer from below) is entered through its outer face, its
+    /// travelled directions pointing away from the camera's column, sorted
+    /// by the squared distance from the camera's block to the section's
+    /// centre (a stable sort over vanilla's x-then-z loop). Vanilla seeds only
+    /// columns in view distance; this search covers its whole box, as it does
+    /// from inside the world.
+    fn seed_outside(&mut self, camera: DVec3, queue: &mut VecDeque<u32>) {
+        // STEPS indexes: down, up, north, south, west, east.
+        let (y, travel) = if self.from.1 < 0 {
+            (0, 1)
+        } else {
+            (self.sections - 1, 0)
+        };
+        let block = (camera.x.floor() as i64, camera.z.floor() as i64);
+        let mut seeds = Vec::with_capacity(((2 * self.radius + 1) as usize).pow(2));
+        for dx in -self.radius..=self.radius {
+            for dz in -self.radius..=self.radius {
+                let mut directions = REACHED | 1 << travel;
+                directions |= match dx.signum() {
+                    1 => 1 << 5,
+                    -1 => 1 << 4,
+                    _ => 0,
+                };
+                directions |= match dz.signum() {
+                    1 => 1 << 3,
+                    -1 => 1 << 2,
+                    _ => 0,
+                };
+                // The y offset is the same for every seed.
+                let centre = |section: i32| i64::from(section) * 16 + 8;
+                let (ox, oz) = (
+                    block.0 - centre(self.from.0 + dx),
+                    block.1 - centre(self.from.2 + dz),
+                );
+                seeds.push((ox * ox + oz * oz, dx, dz, directions));
+            }
+        }
+        seeds.sort_by_key(|seed| seed.0);
+        for (_, dx, dz, directions) in seeds {
+            let i = self
+                .index((self.from.0 + dx, y, self.from.2 + dz))
+                .expect("seed inside the searched box");
+            self.directions[i] = directions;
+            // Entered through the face opposite the travel (`sourceDirection`).
+            self.entered[i] = 1 << (travel ^ 1);
+            queue.push_back(i as u32);
+        }
     }
     /// Vanilla's `runUpdates`: take nodes from the queue and step through
     /// every face their entry faces connect to, away from the camera. A step
@@ -748,6 +802,55 @@ mod tests {
         );
     }
 
+    /// #1037: from far above or below the world, the search starts from the
+    /// world's top or bottom layer (`initializeQueueForFullUpdate`), so the
+    /// ground stays drawn at any height.
+    #[test]
+    fn a_camera_outside_the_world_sees_it_from_its_top_or_bottom() {
+        for from in [(0, 6, 0), (0, 9, 0), (2, 40, -1), (0, -1, 0), (1, -7, 0)] {
+            let mut o = Occlusion::new(0, 6);
+            o.settle(at(from), 3);
+            for x in -1..=5 {
+                for z in -4..=2 {
+                    for y in 0..6 {
+                        let inside = (x - from.0).abs() <= 3 && (z - from.2).abs() <= 3;
+                        assert_eq!(o.contains((x, y, z)), inside, "{from:?}: {x} {y} {z}");
+                    }
+                }
+            }
+            assert!(
+                !o.contains(from),
+                "{from:?}: the camera's own section is not in the world"
+            );
+        }
+    }
+
+    /// Seeds enter through the outer face and never turn back up (down)
+    /// or towards the camera's column.
+    #[test]
+    fn a_closed_top_layer_hides_the_world_from_above() {
+        let mut o = Occlusion::new(0, 6);
+        for x in -3..=3 {
+            for z in -3..=3 {
+                o.set((x, 5, z), 0);
+            }
+        }
+        o.settle(at((0, 30, 0)), 3);
+        assert!(
+            o.contains((0, 5, 0)) && o.contains((3, 5, -3)),
+            "the top is seen"
+        );
+        assert!(
+            !o.contains((0, 4, 0)) && !o.contains((2, 1, 2)),
+            "nothing under it"
+        );
+        assert!(!o.contains((0, 6, 0)), "seeds don't step back up");
+        // From below, the open bottom layer shows everything up to the lid.
+        o.settle(at((0, -9, 0)), 3);
+        assert!(o.contains((0, 0, 0)) && o.contains((1, 4, 1)) && o.contains((1, 5, 1)));
+        assert!(!o.contains((0, -1, 0)), "seeds don't step back down");
+    }
+
     /// Vanilla's `runUpdates` as written (a map of nodes, a FIFO queue,
     /// `Vector3d` maths), over the same box: whether each cell is reached.
     /// `rays: false` leaves out the distant step test.
@@ -757,8 +860,8 @@ mod tests {
             sources: u8,
         }
         let from = columns.section_of(camera);
-        let y0 = from.1.min(-1);
-        let height = from.1.max(columns.sections) - y0 + 1;
+        let y0 = -1;
+        let height = columns.sections + 2;
         let side = 2 * radius + 1;
         let index = |k: SectionKey| {
             let (dx, dz, dy) = (k.0 - from.0, k.2 - from.2, k.1 - y0);
@@ -770,14 +873,58 @@ mod tests {
         let axis = |d: usize| [1, 2, 0][d / 2];
         let centre = block(from).map(|c| c + 8);
         let mut nodes: HashMap<SectionKey, Node> = HashMap::new();
-        nodes.insert(
-            from,
-            Node {
-                directions: 0,
-                sources: 0,
-            },
-        );
-        let mut queue = VecDeque::from([from]);
+        let mut queue = VecDeque::new();
+        if (0..columns.sections).contains(&from.1) {
+            nodes.insert(
+                from,
+                Node {
+                    directions: 0,
+                    sources: 0,
+                },
+            );
+            queue.push_back(from);
+        } else {
+            // initializeQueueForFullUpdate from outside the world.
+            let above = from.1 >= columns.sections;
+            let (y, travel) = if above {
+                (columns.sections - 1, 0)
+            } else {
+                (0, 1)
+            };
+            let camera_block = [camera.x.floor() as i64, camera.z.floor() as i64];
+            let mut seeds = Vec::new();
+            for x in -radius..=radius {
+                for z in -radius..=radius {
+                    let key = (from.0 + x, y, from.2 + z);
+                    let mut directions = 1 << travel;
+                    if x > 0 {
+                        directions |= 1 << 5;
+                    } else if x < 0 {
+                        directions |= 1 << 4;
+                    }
+                    if z > 0 {
+                        directions |= 1 << 3;
+                    } else if z < 0 {
+                        directions |= 1 << 2;
+                    }
+                    let origin = block(key);
+                    let dx = camera_block[0] - i64::from(origin[0] + 8);
+                    let dz = camera_block[1] - i64::from(origin[2] + 8);
+                    seeds.push((dx * dx + dz * dz, key, directions));
+                }
+            }
+            seeds.sort_by_key(|seed| seed.0);
+            for (_, key, directions) in seeds {
+                nodes.insert(
+                    key,
+                    Node {
+                        directions,
+                        sources: 1 << travel,
+                    },
+                );
+                queue.push_back(key);
+            }
+        }
         while let Some(key) = queue.pop_front() {
             let node = &nodes[&key];
             let (directions, sources) = (node.directions, node.sources);
