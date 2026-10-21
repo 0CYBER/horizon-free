@@ -9262,9 +9262,36 @@ impl Game<'_> {
             .get(&(block[0] >> 4, block[2] >> 4))
             .map(|c| c.biome(block[0], block[1], block[2]))
             .unwrap_or(0);
-        let info = self.res.biomes().get(biome).clone();
         let environment = self.dim_environment();
-        let mut sky = environment.sample(self.world.day_time, info.sky, info.fog);
+        // EnvironmentAttributeProbe: the spatially interpolated biome colours,
+        // Gaussian-weighted over the noise biomes around the camera (plains
+        // where no chunk is loaded, as ClientLevel.getUncachedNoiseBiome).
+        let biomes = self.res.biomes();
+        let weights = {
+            let chunks = &self.world.chunks;
+            let plains = biomes.id("minecraft:plains");
+            horizon_client::biome::gaussian_weights(camera.to_array(), |qx, qy, qz| {
+                chunks
+                    .get(&(qx >> 2, qz >> 2))
+                    .map_or(plains, |c| c.biome(qx * 4, qy * 4, qz * 4))
+            })
+        };
+        let blend = |pick: fn(&horizon_client::biome::BiomeInfo) -> Option<u32>, base: [f32; 3]| {
+            horizon_client::biome::blend_rgb(&weights, |b| {
+                pick(biomes.get(b)).map_or(base, horizon_client::biome::rgb)
+            })
+        };
+        let biome_sky = blend(
+            |b| b.sky,
+            environment.base_rgb("minecraft:visual/sky_color"),
+        );
+        let biome_fog = blend(
+            |b| b.fog,
+            environment.base_rgb("minecraft:visual/fog_color"),
+        );
+        // visual/water_fog_color: no dimension sets it, its default is #050533.
+        let water_fog = blend(|b| Some(b.water_fog), [0.0; 3]);
+        let mut sky = environment.sample(self.world.day_time, Some(biome_sky), Some(biome_fog));
         let (rain, thunder) = if self.dim == Dim::Overworld {
             self.world.weather.levels(alpha as f32)
         } else {
@@ -9435,14 +9462,6 @@ impl Game<'_> {
                 self.weather_geometry(camera, alpha, &mut entities)
             });
         }
-        let water_fog = {
-            let c = info.water_fog;
-            [
-                (c >> 16 & 255) as f32 / 255.0,
-                (c >> 8 & 255) as f32 / 255.0,
-                (c & 255) as f32 / 255.0,
-            ]
-        };
         let border = (!title)
             .then(|| self.border_draw(camera.to_array(), alpha as f32))
             .flatten();
@@ -9467,7 +9486,7 @@ impl Game<'_> {
             cave_culling,
             water_fog,
             fog: Some({
-                let mut fog = self.frame_fog(camera, &sky, biome);
+                let mut fog = self.frame_fog(camera, &sky, biome, water_fog);
                 // Horizon's fog setting: no distance fog (fluids keep theirs).
                 if !self.settings.horizon.fog
                     && !underwater

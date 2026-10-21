@@ -230,16 +230,20 @@ impl Environment {
     fn base(&self, name: &str) -> [f32; 4] {
         self.base.get(name).copied().unwrap_or([0.0, 0.0, 0.0, 1.0])
     }
-    /// Sky state for a time of day, with the biome's sky and fog colours as base values.
-    pub fn sample(&self, ticks: i64, biome_sky: Option<u32>, biome_fog: Option<u32>) -> Sky {
-        let rgb = |c: u32| {
-            [
-                (c >> 16 & 255) as f32 / 255.0,
-                (c >> 8 & 255) as f32 / 255.0,
-                (c & 255) as f32 / 255.0,
-                1.0,
-            ]
-        };
+    /// The dimension's value of an RGB attribute (what biomes without it keep).
+    pub fn base_rgb(&self, name: &str) -> [f32; 3] {
+        let b = self.base(name);
+        [b[0], b[1], b[2]]
+    }
+    /// Sky state for a time of day, with the biomes' (blended) sky and fog
+    /// colours as base values.
+    pub fn sample(
+        &self,
+        ticks: i64,
+        biome_sky: Option<[f32; 3]>,
+        biome_fog: Option<[f32; 3]>,
+    ) -> Sky {
+        let rgb = |c: [f32; 3]| [c[0], c[1], c[2], 1.0];
         let v = |name: &str, base: [f32; 4]| self.value(name, base, ticks);
         let three = |a: [f32; 4]| [a[0], a[1], a[2]];
         let scalar = |name: &str| {
