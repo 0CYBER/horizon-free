@@ -1674,6 +1674,8 @@ packet!(
 );
 packet!(ChangeDifficultyRequest { difficulty: i32 => VarInt });
 packet!(LockDifficulty { locked: bool => Bool });
+// ServerboundPlayerAbilitiesPacket: only whether the player flies (2).
+packet!(PlayerAbilitiesRequest { flags: i8 => Byte });
 packet!(SetGameRule { entries: Vec<GameRuleEntry> => List<GameRuleEntry> });
 packet!(ChunkBatchReceived { chunks_per_tick: f32 => Float });
 packet!(
@@ -1786,6 +1788,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     MovePlayerStatus(MovePlayerStatus) = MOVE_PLAYER_STATUS_ONLY,
     PickItemFromBlock(PickItemFromBlock) = PICK_ITEM_FROM_BLOCK,
     PingRequest(crate::packets::status::Ping) = PING_REQUEST,
+    PlayerAbilities(PlayerAbilitiesRequest) = PLAYER_ABILITIES,
     PlayerAction(PlayerAction) = PLAYER_ACTION,
     PlayerCommand(PlayerCommand) = PLAYER_COMMAND,
     PlayerInput(PlayerInput) = PLAYER_INPUT,
@@ -1804,6 +1807,17 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
 mod tests {
     use super::*;
     use crate::{chunk::BlockEntityInfo, packets::round_trip, text::literal};
+
+    #[test]
+    fn serverbound_abilities_carry_only_flying() {
+        // ServerboundPlayerAbilitiesPacket.write: one byte, 2 when flying.
+        let flying = Serverbound::PlayerAbilities(PlayerAbilitiesRequest { flags: 2 });
+        assert_eq!(
+            flying.encode(),
+            [crate::ids::play::serverbound::PLAYER_ABILITIES as u8, 2]
+        );
+        round_trip(flying, Serverbound::encode, Serverbound::decode);
+    }
 
     #[test]
     fn world_options_packets_match_vanilla_stream_codecs() {

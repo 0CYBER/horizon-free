@@ -74,6 +74,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
              server's game time after the guest's game stalls for a few seconds (#848).
 - growth:    far from the host, the chunks around the guest tick (#890): water placed there flows
              and wheat on farmland grows (random ticks), however the host runs its world.
+- flight:    a player in creative double-taps jump and flies, stays up, and stops flying in survival:
+             the guest, and on the server thread the host's window too, take what may fly from the
+             server's abilities (ClientPacketListener.handlePlayerAbilities).
 - light:     the guest's light matches the host's: around a torch placed near it, under a roof and
              once a block of the roof is removed under the sky, and in the last chunk it tracks next to
              glowstone in a chunk it doesn't (only the server's light updates bring that one).
@@ -111,7 +114,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight']
 
 
 class Game:
@@ -1607,6 +1610,50 @@ def same_light(host, guest, lo, hi, what, ticks=100):
                          f'{h["sky"][i]} block {h["block"][i]}, guest sky {g["sky"][i]} block {g["block"][i]}')
 
 
+def check_flight(host, guest, out):
+    def double_jump(game):
+        # LocalPlayer.aiStep: a second jump press within 7 ticks of the first toggles flight.
+        for hold in (1, 4):
+            game.raw('key', 'space', 'down')
+            game.wait(hold)
+            game.raw('key', 'space', 'up')
+            game.wait(2)
+        game.wait(10)
+        return game('state')['player']
+
+    def set_mode(game, mode):
+        # On a client of a server the mode and its abilities (may fly) come back with the server's
+        # answer, later when the machine is busy: a double jump before them is two plain jumps.
+        game('command', command=f'gamemode {mode}')
+        for _ in range(100):
+            if game('state').get('gamemode') == mode:
+                break
+            game.wait(1)
+        game.wait(10)
+
+    players = [('guest', guest)] + ([('host', host)] if SERVER_THREAD else [])
+    seen = {}
+    try:
+        for name, game in players:
+            set_mode(game, 'creative')
+            ground = game('state')['player']
+            up = double_jump(game)
+            game.wait(20)
+            later = game('state')['player']
+            set_mode(game, 'survival')
+            fell = game('state')['player']
+            seen[name] = {'flying': up['flying'], 'rose': round(up['position'][1] - ground['position'][1], 2),
+                          'stayed': round(later['position'][1] - up['position'][1], 2),
+                          'survival_flying': fell['flying']}
+    finally:
+        for _, game in players:
+            game('command', command='gamemode survival')
+    for name, s in seen.items():
+        assert s['flying'] and s['rose'] > 1 and abs(s['stayed']) < 0.1, f'{name} does not fly in creative: {seen}'
+        assert not s['survival_flying'], f'{name} still flies in survival: {seen}'
+    return seen
+
+
 def check_growth(host, guest, out):
     """Block ticks near a guest 1000 blocks from the host: only the guest's tickets tick them."""
     x0, y0, z0 = pos_of(guest)
@@ -1712,7 +1759,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles,
              'light': check_light, 'plates': check_plates,
              'swings': check_swings, 'cracks': check_cracks,
-             'time': check_time, 'growth': check_growth}
+             'time': check_time, 'growth': check_growth, 'flight': check_flight}
 
 
 def run(ctl, out, resources, checks):
