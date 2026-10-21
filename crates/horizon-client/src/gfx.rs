@@ -2132,7 +2132,7 @@ impl Renderer {
             phase2_pages: Vec::new(),
             block_entities: HashMap::new(),
             block_entity_revision: next_block_entity_revision(),
-            occlusion: occlusion::Occlusion::new(crate::chunk::HEIGHT / 16),
+            occlusion: occlusion::Occlusion::new(crate::chunk::MIN_Y, crate::chunk::HEIGHT / 16),
             world_post,
             pack: None,
             hud,
@@ -2314,8 +2314,7 @@ impl Renderer {
     /// a search this starts runs on its worker while the frame is prepared,
     /// and `render` takes it if it has finished.
     pub fn start_occlusion(&mut self, camera: DVec3, distance: f32) {
-        self.occlusion
-            .update(camera_section(camera), (distance / 16.0) as i32 + 2);
+        self.occlusion.update(camera, (distance / 16.0) as i32 + 2);
     }
     pub fn upload(&mut self, key: SectionKey, mesh: &SectionMesh) {
         self.occlusion.set(key, mesh.visibility);
