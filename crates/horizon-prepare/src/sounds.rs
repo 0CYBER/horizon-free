@@ -9,9 +9,17 @@ use crate::{digest, read_json, Log};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// The launcher's asset directory and the pinned version's verified asset index
-/// (tools/lab.py `launcher_assets`).
-fn launcher_assets(manifest: &Value, minecraft: &Path) -> Result<(PathBuf, PathBuf), String> {
+/// The launcher's asset directory and the pinned version's asset index (tools/lab.py
+/// `launcher_assets`). Mojang republishes a version's index under the same id for translation
+/// fixes, and a launcher keeps only the last one it downloaded (#1076): an index the lock does
+/// not know is still used, with a line in the log, since every object copied from it is
+/// checked against its own SHA-1.
+fn launcher_assets(
+    lock: &Lock,
+    manifest: &Value,
+    minecraft: &Path,
+    log: Log,
+) -> Result<(PathBuf, PathBuf), String> {
     let assets = minecraft.join("assets");
     let info = manifest
         .get("assetIndex")
@@ -34,8 +42,13 @@ fn launcher_assets(manifest: &Value, minecraft: &Path) -> Result<(PathBuf, PathB
             artifacts::launcher_hint(version)
         ));
     }
-    if digest(&index, "sha1")? != sha1 {
-        return Err(format!("{} is not the pinned asset index", index.display()));
+    let checksum = digest(&index, "sha1")?;
+    if checksum != sha1 && !lock.asset_index_accepted(&checksum) {
+        log(&format!(
+            "{} is an asset index Horizon does not know yet (sha1 {checksum}); Mojang may have \
+             republished it. Using it: every file is still checked against its own SHA-1.",
+            index.display()
+        ));
     }
     Ok((assets, index))
 }
@@ -76,7 +89,14 @@ fn is_sound(name: &str) -> bool {
 /// `.local/horizon-client/<version>`; returns that folder. Files already there with the right
 /// SHA-1 are kept.
 pub fn sounds(root: &Path, minecraft: Option<&Path>, log: Log) -> Result<PathBuf, String> {
-    copy_assets(root, minecraft, log, is_sound, "Sound", &[])
+    copy_assets(
+        root,
+        minecraft,
+        log,
+        is_sound,
+        "Sound",
+        &["minecraft/sounds.json"],
+    )
 }
 
 /// Replaces the client JAR's 1x1 title placeholders with the full panorama from the
@@ -119,7 +139,7 @@ fn copy_assets(
     let lock = Lock::read(root)?;
     let minecraft = artifacts::minecraft_dir(minecraft);
     let manifest = artifacts::import_manifest(&lock, &minecraft)?;
-    let (store, index) = launcher_assets(&manifest, &minecraft)?;
+    let (store, index) = launcher_assets(&lock, &manifest, &minecraft, log)?;
     let id = manifest
         .get("id")
         .and_then(Value::as_str)
@@ -307,6 +327,51 @@ mod tests {
         f.run().unwrap();
     }
 
+    /// #1076: the launcher holds an index Mojang republished under the same id, so its SHA-1
+    /// is not the one in the version JSON. A known one is used quietly, an unknown one with a
+    /// line in the log; the sounds come through either way.
+    #[test]
+    fn republished_asset_indexes_still_give_sounds() {
+        let f = Fixture::new("republished");
+        let index = f.minecraft.join("assets/indexes/7.json");
+        let republished = format!("{}\n", fs::read_to_string(&index).unwrap());
+        fs::write(&index, &republished).unwrap();
+        let checksum = sha1_hex(republished.as_bytes());
+        let lock = f.root.join("research-lock.json");
+        let pinned = fs::read_to_string(&lock).unwrap();
+        let sound = f
+            .root
+            .join(".local/horizon-client/9.9/assets/minecraft/sounds/dig/stone1.ogg");
+        for known in [true, false] {
+            let accepted = if known { checksum.as_str() } else { "0" };
+            fs::write(
+                &lock,
+                pinned.replace(
+                    "\"manifest_sha1\"",
+                    &format!("\"accepted_asset_index_sha1\": [\"{accepted}\"], \"manifest_sha1\""),
+                ),
+            )
+            .unwrap();
+            let _ = fs::remove_file(&sound);
+            let lines = std::cell::RefCell::new(Vec::new());
+            sounds(&f.root, Some(&f.minecraft), &|l| {
+                lines.borrow_mut().push(l.to_string())
+            })
+            .unwrap();
+            assert_eq!(fs::read(&sound).unwrap(), b"OggS stone");
+            let lines = lines.into_inner();
+            assert_eq!(lines.last().unwrap(), "Sound assets ready: 3 files, 0.0 MB");
+            assert_eq!(lines.len(), if known { 1 } else { 2 }, "{lines:?}");
+            if !known {
+                assert!(
+                    lines[0].contains(&format!("does not know yet (sha1 {checksum})")),
+                    "{}",
+                    lines[0]
+                );
+            }
+        }
+    }
+
     #[test]
     fn every_object_is_checked() {
         let f = Fixture::new("corrupt");
@@ -412,14 +477,14 @@ mod tests {
     }
 
     #[test]
-    fn the_index_must_be_the_pinned_one() {
+    fn the_index_must_hold_the_sounds() {
         let f = Fixture::new("index");
         let index = f.minecraft.join("assets/indexes/7.json");
         fs::write(&index, "{\"objects\": {}}").unwrap();
-        assert!(f
-            .run()
-            .unwrap_err()
-            .ends_with("is not the pinned asset index"));
+        assert_eq!(
+            f.run().unwrap_err(),
+            "minecraft/sounds.json is missing from the asset index"
+        );
         fs::remove_file(&index).unwrap();
         let error = f.run().unwrap_err();
         assert!(

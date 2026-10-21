@@ -79,12 +79,22 @@ impl Lock {
 
     /// Mojang republishes a version JSON for asset-index changes; every known one is accepted.
     fn manifest_accepted(&self, checksum: &str) -> bool {
-        let game = self.json.get("minecraft");
         self.pin("manifest_sha1").is_ok_and(|pin| pin == checksum)
-            || game
-                .and_then(|g| g.get("accepted_manifest_sha1"))
-                .and_then(Value::as_array)
-                .is_some_and(|list| list.iter().any(|v| v.as_str() == Some(checksum)))
+            || self.listed("accepted_manifest_sha1", checksum)
+    }
+
+    /// The asset indexes of those republished version JSONs: a launcher keeps one
+    /// `indexes/<id>.json`, the last it downloaded, whichever version JSON it reads.
+    pub(crate) fn asset_index_accepted(&self, checksum: &str) -> bool {
+        self.listed("accepted_asset_index_sha1", checksum)
+    }
+
+    fn listed(&self, key: &str, checksum: &str) -> bool {
+        self.json
+            .get("minecraft")
+            .and_then(|g| g.get(key))
+            .and_then(Value::as_array)
+            .is_some_and(|list| list.iter().any(|v| v.as_str() == Some(checksum)))
     }
 }
 
