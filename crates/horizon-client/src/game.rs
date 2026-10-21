@@ -10006,6 +10006,9 @@ impl Game<'_> {
                 (p.position.z.floor() as i32) >> 4,
             );
         }
+        // The loading screen's chunk map fills ring by ring, as vanilla's.
+        self.streaming.loading =
+            self.options.dedicated.is_none() && self.loading_reason().is_some();
         let (uploads, unloaded) =
             horizon_client::spans::time("streaming", || self.streaming.update(&mut self.world));
         if let Some(lod) = &mut self.lod {
