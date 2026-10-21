@@ -171,6 +171,64 @@ impl Game<'_> {
                 discrete,
             });
         }
+        // Armor stands name themselves: an invisible one with a visible name
+        // is a hologram (its model is skipped, its name tag is not).
+        for a in &self.armor_stands {
+            let Some(name) = &a.custom_name else {
+                continue;
+            };
+            if !a.name_visible {
+                continue;
+            }
+            let height = match (a.marker, a.small) {
+                (true, _) => 0.0,
+                (false, true) => 0.9875,
+                (false, false) => 1.975,
+            };
+            let distance_sqr =
+                glam::DVec3::new(a.position.x, a.position.y, a.position.z).distance_squared(camera);
+            if distance_sqr >= 64.0 * 64.0 {
+                continue;
+            }
+            let team = self.mob_team(a.id);
+            let invisible = sb::invisible_to(team, viewer, self.spectator(), false);
+            let view = sb::NameView {
+                discrete: false,
+                distance_sqr,
+                invisible_to_viewer: invisible,
+                hud_hidden: self.ui.hide_gui,
+                is_camera: false,
+                is_vehicle: false,
+            };
+            if !sb::name_shown(team, viewer, view) {
+                continue;
+            }
+            let shown = match team {
+                Some(t) => t.formatted_name(name.clone()),
+                None => name.clone(),
+            };
+            let mut lines = Vec::new();
+            let mut lift = 0.0;
+            let holder = self.persist.uuids.get(&a.id).map(|u| uuid_text(*u));
+            if distance_sqr < 10.0 * 10.0
+                && let Some(score) = holder.and_then(|h| self.below_name_text(&h))
+            {
+                lines.push((score, 0.0));
+                lift = f64::from(9.0f32 * 1.15 * 0.025);
+            }
+            lines.push((shown, lift));
+            let l = self.world.light(
+                a.position.x.floor() as i32,
+                (a.position.y + height).floor() as i32,
+                a.position.z.floor() as i32,
+            );
+            tags.push(NameTag {
+                at: glam::DVec3::new(a.position.x, a.position.y + height + 0.5, a.position.z),
+                lines,
+                light: l,
+                discrete: false,
+            });
+        }
         tags
     }
     /// `SubmitNodeCollection.submitNameTag`: a discrete name is drawn once,
