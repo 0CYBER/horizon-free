@@ -3244,7 +3244,11 @@ impl Game<'_> {
             .and_then(|h| self.res.items().get(&h.item))
             .is_some_and(|i| i.block.is_some());
         if let Some(hit) = self.pick() {
-            let reacts = hand == Hand::Main && self.remote_block_reacts(&hit, held.as_ref());
+            let (reacts, changes) = if hand == Hand::Main {
+                self.remote_block_reacts(&hit, held.as_ref())
+            } else {
+                (false, Vec::new())
+            };
             let seq = self.next_sequence();
             let cursor = [
                 (hit.point[0] - f64::from(hit.pos[0])) as f32,
@@ -3270,6 +3274,9 @@ impl Game<'_> {
                 r.use_target = Some(hit.pos);
                 r.placing = Some((target, ticks));
             }
+            if reacts {
+                self.predict_use(&changes, seq);
+            }
             if held_block {
                 self.with_hand(hand, Game::swing_arm);
                 return true;
@@ -3279,15 +3286,60 @@ impl Game<'_> {
         false
     }
 
+    /// MultiPlayerGameMode.useItemOn inside startPrediction: the blocks the
+    /// use changed on this client's level at once, each kept as predicted
+    /// under the use's sequence until the server acknowledges it (a use the
+    /// server refused goes back). Only the blocks a hand opens or flips: a
+    /// wooden or copper door, trapdoor or fence gate, a lever or a button;
+    /// whatever else the use changes waits for the server.
+    fn predict_use(
+        &mut self,
+        changes: &[(horizon_core::position::BlockPos, BlockStateId)],
+        seq: i32,
+    ) {
+        let facts = self.res.facts();
+        let predicted = |state: BlockStateId| {
+            let name = facts.get(state).name.trim_start_matches("minecraft:");
+            ((name.ends_with("_door") || name.ends_with("_trapdoor")) && !name.starts_with("iron_"))
+                || name.ends_with("_fence_gate")
+                || name.ends_with("_button")
+                || name == "lever"
+        };
+        if changes.is_empty()
+            || !changes
+                .iter()
+                .all(|(p, s)| predicted(*s) && predicted(self.world.block(p.x, p.y, p.z)))
+        {
+            return;
+        }
+        for &(p, state) in changes {
+            let pos = [p.x, p.y, p.z];
+            let before = self.world.block(p.x, p.y, p.z);
+            // BlockStatePredictionHandler.retainKnownServerState.
+            if let Some(r) = self.remote.as_mut() {
+                r.predictions
+                    .entry(pos)
+                    .and_modify(|e| e.0 = seq)
+                    .or_insert((seq, before.0 as i32));
+            }
+            self.set_block(pos, state.0 as i32);
+        }
+    }
+
     /// Whether the block hit takes a main-hand right click with `held`
     /// (`BlockState.useItemOn`, then `useWithoutItem`): a door, a button, a
-    /// container. Vanilla's client runs it on its own level first; this runs
-    /// it on a copy that keeps no change.
-    fn remote_block_reacts(&self, hit: &super::Hit, held: Option<&ItemStack>) -> bool {
+    /// container, and the blocks it changed. Vanilla's client runs it on its
+    /// own level first; this runs it on a copy, and `predict_use` keeps the
+    /// changes it predicts.
+    fn remote_block_reacts(
+        &self,
+        hit: &super::Hit,
+        held: Option<&ItemStack>,
+    ) -> (bool, Vec<(horizon_core::position::BlockPos, BlockStateId)>) {
         // Player.isSecondaryUseActive with something in either hand.
         let hands_full = self.stack_in(self.selected).is_some() || self.offhand.is_some();
         if self.keys.contains(&KeyCode::ShiftLeft) && hands_full {
-            return false;
+            return (false, Vec::new());
         }
         use horizon_core::geometry::Direction;
         let face = match hit.face {
@@ -3303,7 +3355,8 @@ impl Game<'_> {
             changed: HashMap::new(),
             random: horizon_core::random::LegacyRandom::new(0),
         };
-        self.res
+        let reacts = self
+            .res
             .behaviours()
             .use_item_on(
                 &mut level,
@@ -3314,7 +3367,8 @@ impl Game<'_> {
                 self.use_context(),
                 held.map(|s| &*s.item),
             )
-            .consumes_action()
+            .consumes_action();
+        (reacts, level.changed.into_iter().collect())
     }
 
     /// MultiPlayerGameMode.useItem for `hand`, if it holds something: whether
