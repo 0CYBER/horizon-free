@@ -535,7 +535,6 @@ impl Game<'_> {
         if self.fight.crystal_scan >= 100 {
             self.count_crystals();
         }
-        self.tick_crystals();
         self.tick_dragon();
     }
     /// EndSpikeFeature's crystals (with fire under them on the bedrock).
@@ -583,9 +582,12 @@ impl Game<'_> {
             })
             .count() as i32;
     }
-    /// `EndCrystal.tick`: the time and the fire below it in the End.
-    fn tick_crystals(&mut self) {
-        let fire = self.pack.assets.registry.default_state("minecraft:fire");
+    /// `EndCrystal.tick` in every dimension: the time (the spin and bob),
+    /// and fire at its block where there is a dragon fight (the End).
+    pub(super) fn tick_crystals(&mut self) {
+        let fire = (self.dim == Dim::End)
+            .then(|| self.pack.assets.registry.default_state("minecraft:fire"))
+            .flatten();
         for i in 0..self.crystals.len() {
             self.crystals[i].time += 1;
             let p = self.crystals[i].position;

@@ -350,6 +350,7 @@ impl Game<'_> {
             self.tick_fight();
             self.tick_dragon_fireballs();
         }
+        self.tick_crystals();
         self.tick_eyes();
         if self.dim == Dim::End {
             self.end.flash.tick(self.world.game_time);
