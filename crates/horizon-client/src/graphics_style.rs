@@ -14,6 +14,8 @@ pub enum Cost {
     Low,
     Medium,
     High,
+    /// Turning it on makes frames faster (culling).
+    Saves,
 }
 impl Cost {
     pub fn label(self) -> &'static str {
@@ -22,6 +24,7 @@ impl Cost {
             Cost::Low => "Low cost",
             Cost::Medium => "Medium cost",
             Cost::High => "High cost",
+            Cost::Saves => "Saves time",
         }
     }
 }
@@ -42,7 +45,7 @@ pub struct Style {
     pub header_color: u32,
     pub description_color: u32,
     /// Colour of each `Cost`, in its order.
-    pub cost_colors: [u32; 4],
+    pub cost_colors: [u32; 5],
 }
 
 /// `hud::rgba` with full alpha, usable in constants.
@@ -65,6 +68,7 @@ pub const STYLE: Style = Style {
         opaque(170, 220, 120),
         opaque(240, 200, 90),
         opaque(240, 110, 90),
+        opaque(85, 255, 85),
     ],
 };
 
@@ -178,4 +182,19 @@ fn wrap(atlas: &HudAtlas, text: &str, width: f32, indent: f32) -> Vec<String> {
         }
     }
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_cost_has_a_label_and_a_colour() {
+        let all = [Cost::None, Cost::Low, Cost::Medium, Cost::High, Cost::Saves];
+        assert_eq!(all.len(), STYLE.cost_colors.len());
+        for (i, cost) in all.into_iter().enumerate() {
+            assert_eq!(cost as usize, i);
+            assert!(!cost.label().is_empty());
+        }
+    }
 }
