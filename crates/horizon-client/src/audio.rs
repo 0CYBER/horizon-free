@@ -498,6 +498,15 @@ impl Audio {
     }
     fn with_output(root: &Path, output: bool) -> Self {
         let registry = SoundRegistry::load(root);
+        if output && registry.is_empty() {
+            // The game then plays nothing on a working output (#1035, #1076).
+            log::warn!(
+                "Horizon: no sounds in {}: they were not copied from your Minecraft \
+                 install; prepare the game again in the launcher (or run \
+                 horizon-prepare sounds)",
+                root.join("assets").display()
+            );
+        }
         let mixer = Arc::new(Mutex::new(Mixer::default()));
         let opened = if output {
             Self::open(mixer.clone())

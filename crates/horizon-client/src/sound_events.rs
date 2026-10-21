@@ -246,6 +246,11 @@ impl SoundRegistry {
         }
         registry
     }
+    /// No sound event at all: the resources hold no `sounds.json` (sounds not
+    /// imported from the player's launcher when the game was prepared).
+    pub fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
     /// One `sounds.json` (`Preparations.handleRegistration` for each entry).
     /// `exists(namespace, path)` says whether a sound file is present.
     pub fn add_file(&mut self, namespace: &str, text: &[u8], exists: &dyn Fn(&str, &str) -> bool) {
