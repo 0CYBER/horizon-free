@@ -503,7 +503,7 @@ impl Game<'_> {
             .get(&stack.item)
             .map_or(64, |i| i.max_stack)
     }
-    /// `Slot.mayPlace` and `getMaxStackSize` for station and brewing slots.
+    /// `Slot.mayPlace` and `getMaxStackSize` for station slots.
     fn slot_rules(&self, slot: usize, stack: &ItemStack) -> (bool, u32) {
         let data = self.data();
         if slot >= super::mount_menu::SADDLE {
@@ -518,19 +518,6 @@ impl Game<'_> {
         if (300..400).contains(&slot) && !self.brewing_open() && self.refuses(slot, stack) {
             // ShulkerBoxSlot.mayPlace.
             return (false, 64);
-        }
-        if self.brewing_open() && (300..305).contains(&slot) {
-            return match slot - 300 {
-                0..=2 => (data.brewing.is_bottle(stack), 1),
-                3 => (data.brewing.is_reagent(stack), 64),
-                _ => (
-                    self.res
-                        .items()
-                        .get(&stack.item)
-                        .is_some_and(|i| i.brewing_fuel.is_some()),
-                    64,
-                ),
-            };
         }
         let Some(s) = self.station.as_ref() else {
             return (true, 64);
@@ -661,98 +648,104 @@ impl Game<'_> {
     fn player_slots() -> Vec<usize> {
         (9..36).chain(0..9).collect()
     }
-    /// `quickMoveStack` for one slot; returns whether anything moved.
-    fn quick_move(&mut self, slot: usize) -> bool {
+    /// A shift-click: `AbstractContainerMenu.doClick`'s QUICK_MOVE repeats
+    /// `quickMoveStack` while it moves something and the slot still holds the
+    /// same item.
+    fn quick_move(&mut self, slot: usize) {
+        while let Some(item) = self.slot_mut(slot).as_ref().map(|s| s.item.clone())
+            && self.quick_move_once(slot)
+            && self.slot_mut(slot).as_ref().is_some_and(|s| s.item == item)
+        {}
+    }
+    /// The station menu's `quickMoveStack` for one slot (`EnchantmentMenu`,
+    /// `BeaconMenu`, `GrindstoneMenu`, `StonecutterMenu`,
+    /// `CartographyTableMenu`, and `ItemCombinerMenu` with `SmithingMenu`'s
+    /// `canMoveIntoInputSlots`); whether the stack's count changed. Each
+    /// rule that names its target slots moves nowhere else when they are full.
+    fn quick_move_once(&mut self, slot: usize) -> bool {
+        let Some(kind) = self.station.as_ref().map(|s| s.kind) else {
+            return false;
+        };
         let Some(mut stack) = self.slot_mut(slot).take() else {
             return false;
         };
-        let player = Self::player_slots();
-        let moved = if (300..305).contains(&slot) || slot >= INPUT {
-            self.move_to(&mut stack, &player, true)
-        } else if self.brewing_open() {
-            // BrewingStandMenu.quickMoveStack: fuel, ingredient, bottles, then the other half.
-            let data = self.data();
-            let fuel = self
-                .res
-                .items()
-                .get(&stack.item)
-                .is_some_and(|i| i.brewing_fuel.is_some());
-            let (reagent, bottle) = (
-                data.brewing.is_reagent(&stack),
-                data.brewing.is_bottle(&stack),
-            );
-            let mut moved = false;
-            if fuel {
-                moved = self.move_to(&mut stack, &[304], false);
-            }
-            if !moved && reagent {
-                moved = self.move_to(&mut stack, &[303], false);
-            }
-            if !moved && bottle {
-                moved = self.move_to(&mut stack, &[300, 301, 302], false);
-            }
-            if !moved {
-                let other: Vec<usize> = if slot < 9 {
-                    (9..36).collect()
-                } else {
-                    (0..9).collect()
-                };
-                moved = self.move_to(&mut stack, &other, false);
-            }
-            moved
+        let start = stack.count;
+        let empty = |game: &mut Self, i: usize| game.station_slot_mut(INPUT + i).is_none();
+        // The other half of the inventory: main rows to the hotbar and back.
+        let halves: Vec<usize> = if slot < 9 {
+            (9..36).collect()
         } else {
-            let kind = self.station.as_ref().map(|s| s.kind);
-            let mut moved = false;
+            (0..9).collect()
+        };
+        if slot >= INPUT {
+            // An input slot: into the inventory, the hotbar's last slot first
+            // where vanilla moves in reverse.
+            let reverse = matches!(kind, Kind::Enchanting | Kind::Beacon);
+            self.move_to(&mut stack, &Self::player_slots(), reverse);
+        } else {
             match kind {
-                Some(Kind::Enchanting) => {
+                Kind::Enchanting => {
                     if &*stack.item == "minecraft:lapis_lazuli" {
-                        moved = self.move_to(&mut stack, &[INPUT + 1], true);
-                    } else if self.station_slot_mut(INPUT).is_none() {
-                        let one = ItemStack {
+                        self.move_to(&mut stack, &[INPUT + 1], true);
+                    } else if empty(self, 0) {
+                        *self.station_slot_mut(INPUT) = Some(ItemStack {
                             count: 1,
                             ..stack.clone()
-                        };
-                        *self.station_slot_mut(INPUT) = Some(one);
+                        });
                         stack.count -= 1;
-                        moved = true;
                     }
                 }
-                Some(Kind::Grindstone) => {
-                    let both = self
-                        .station
-                        .as_ref()
-                        .is_some_and(|s| s.inputs.iter().all(Option::is_some));
-                    if !both {
-                        moved = self.move_to(&mut stack, &[INPUT, INPUT + 1], false);
+                Kind::Beacon => {
+                    if empty(self, 0) && super::beacon::is_payment(&stack.item) && stack.count == 1
+                    {
+                        self.move_to(&mut stack, &[INPUT], false);
+                    } else {
+                        self.move_to(&mut stack, &halves, false);
                     }
                 }
-                Some(Kind::Merchant | Kind::Loom) => {}
-                Some(Kind::Beacon) => {
-                    // BeaconMenu.quickMoveStack: one payment item into the empty slot.
-                    if super::beacon::is_payment(&stack.item) {
-                        moved = self.move_to(&mut stack, &[INPUT], false);
+                Kind::Grindstone => {
+                    if empty(self, 0) || empty(self, 1) {
+                        self.move_to(&mut stack, &[INPUT, INPUT + 1], false);
+                    } else {
+                        self.move_to(&mut stack, &halves, false);
                     }
                 }
-                Some(Kind::Smithing)
-                | Some(Kind::Anvil)
-                | Some(Kind::Stonecutter)
-                | Some(Kind::Cartography) => {
-                    let n = self.station.as_ref().map_or(0, |s| s.inputs.len());
-                    let inputs: Vec<usize> = (0..n).map(|i| INPUT + i).collect();
-                    moved = self.move_to(&mut stack, &inputs, false);
+                Kind::Stonecutter => {
+                    if self.data().recipes.stonecutter(&stack).is_empty() {
+                        self.move_to(&mut stack, &halves, false);
+                    } else {
+                        self.move_to(&mut stack, &[INPUT], false);
+                    }
                 }
-                None => {}
+                Kind::Cartography => {
+                    if super::maps::map_id(&stack).is_some() {
+                        self.move_to(&mut stack, &[INPUT], false);
+                    } else if matches!(
+                        &*stack.item,
+                        "minecraft:paper" | "minecraft:map" | "minecraft:glass_pane"
+                    ) {
+                        self.move_to(&mut stack, &[INPUT + 1], false);
+                    } else {
+                        self.move_to(&mut stack, &halves, false);
+                    }
+                }
+                Kind::Anvil | Kind::Smithing => {
+                    let inputs: Vec<usize> = (0..kind.inputs()).map(|i| INPUT + i).collect();
+                    // ItemCombinerMenu.canMoveIntoInputSlots: always for the
+                    // anvil; the smithing table needs an empty slot whose
+                    // ingredient test takes the stack.
+                    let into_inputs = kind == Kind::Anvil
+                        || (0..3).any(|i| {
+                            empty(self, i) && self.data().recipes.smithing_accepts(i, &stack)
+                        });
+                    let targets = if into_inputs { &inputs } else { &halves };
+                    self.move_to(&mut stack, targets, false);
+                }
+                // Their clicks run on the menu engine.
+                Kind::Merchant | Kind::Loom => {}
             }
-            if !moved {
-                let other: Vec<usize> = if slot < 9 {
-                    (9..36).collect()
-                } else {
-                    (0..9).collect()
-                };
-                moved = self.move_to(&mut stack, &other, false);
-            }
-            moved
-        };
+        }
+        let moved = stack.count != start;
         if stack.count > 0 {
             *self.slot_mut(slot) = Some(stack);
         }
@@ -1127,9 +1120,10 @@ impl Game<'_> {
         if self
             .station
             .as_ref()
-            .is_some_and(|s| matches!(s.kind, Kind::Loom | Kind::Merchant))
+            .is_none_or(|s| matches!(s.kind, Kind::Loom | Kind::Merchant))
         {
-            // LoomMenu and MerchantMenu clicks run on the verified menu engine.
+            // LoomMenu, MerchantMenu and the brewing stand's BrewingStandMenu
+            // clicks run on the verified menu engine.
             let input = if shift {
                 horizon_client::menu::Input::QuickMove
             } else {
@@ -1144,7 +1138,7 @@ impl Game<'_> {
         }
         if shift {
             self.quick_move(slot);
-        } else if slot >= INPUT || (300..305).contains(&slot) {
+        } else if slot >= INPUT {
             self.click_filtered(slot, right);
         } else {
             return false;
