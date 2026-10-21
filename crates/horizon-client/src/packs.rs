@@ -15,7 +15,7 @@ use std::{
 };
 
 /// SharedConstants resource pack format of 26.3 (major, minor).
-pub const RESOURCE_FORMAT: (i64, i64) = (97, 1);
+pub const RESOURCE_FORMAT: (i64, i64) = horizon_core::version::RESOURCE_PACK_FORMAT;
 
 #[derive(Clone, Debug)]
 pub enum Source {

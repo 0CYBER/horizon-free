@@ -80,7 +80,7 @@ pub fn launcher_entry(exe: &Path) -> String {
          Type=Application\n\
          Name=Horizon\n\
          GenericName=Game launcher\n\
-         Comment=Install, prepare and play Horizon, Minecraft: Java Edition 26.3 rewritten in Rust\n\
+         Comment=Install, prepare and play Horizon, Minecraft: Java Edition {minecraft} rewritten in Rust\n\
          Exec={}\n\
          TryExec={}\n\
          Icon=horizon\n\
@@ -88,7 +88,8 @@ pub fn launcher_entry(exe: &Path) -> String {
          Categories=Game;\n\
          StartupWMClass=horizon-launcher\n",
         quote(exe),
-        exe.display()
+        exe.display(),
+        minecraft = horizon_core::VANILLA_VERSION,
     )
 }
 

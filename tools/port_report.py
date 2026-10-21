@@ -30,6 +30,7 @@ PROTOCOL = "net/minecraft/network/protocol/"
 DATAFIX = "net/minecraft/util/datafix/"
 # Generated tables, what makes them stale, and how to regenerate them (docs/version-ports.md, "Regenerate").
 GENERATORS = [
+    ("crates/horizon-core/src/version.rs", "python3 tools/gen_version_consts.py", lambda d: bool(d["facts"])),
     ("crates/horizon-protocol/src/ids.rs", "python3 tools/generate_packet_ids.py",
      lambda d: bool(d["packets"])),
     ("crates/horizon-client/src/lan/tracking.rs", "python3 tools/generate_entity_tracking.py",

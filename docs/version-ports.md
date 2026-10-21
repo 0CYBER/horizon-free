@@ -25,23 +25,20 @@ to players. Players still prepare their own copy from their official launcher (`
   exporters (`mods/horizon/src/test/java/dev/horizonlab/parity/Vanilla*Exporter.java`) against the jar for block
   behaviours, worldgen bundles and the like. CI does the same through `tools/ci/vanilla-data.sh`, keyed by the
   version in `research-lock.json`.
-- **Version facts baked into the code.** The client jar's own `version.json` states them (26.3: world version 5023,
-  protocol 777, resource pack 97.1, data pack 121.0, Java 25); Horizon copies them by hand today:
-
-  | Where | What |
-  | --- | --- |
-  | `crates/horizon-core/src/lib.rs` | `VANILLA_VERSION` |
-  | `crates/horizon-protocol/src/lib.rs` | `PROTOCOL_VERSION`, `GAME_VERSION` |
-  | `crates/horizon-protocol/src/packets/configuration.rs` | the `minecraft:core` known pack version |
-  | `crates/horizon-world/src/lib.rs`, `crates/horizon-client/src/game/commands/extra.rs` | `DATA_VERSION` (twice) |
-  | `crates/horizon-client/src/save.rs`, `crates/horizon-world/src/datafix/files.rs`, `game/commands/extra.rs` | the version name (three times) |
-  | `crates/horizon-client/src/crash.rs`, `bin/horizon-ctl/launch.rs`, `launcher/src/backend.rs` | `"26.3"` fallbacks |
-  | `tools/perf_bench.py`, `tools/vanilla_client.py` | the vanilla client's `--version` |
+- **Version facts in the code.** The client jar's own `version.json` states them (26.3: world version 5023,
+  protocol 777, resource pack 97.1, data pack 121.0, Java 25). `tools/gen_version_consts.py` writes them into
+  one generated file, `crates/horizon-core/src/version.rs` (`VANILLA_VERSION`, `PROTOCOL_VERSION`,
+  `DATA_VERSION`, the pack formats, Java, `/version`'s build time), and every Rust site reads them from there
+  (`horizon_protocol::PROTOCOL_VERSION`, `horizon_world::DATA_VERSION` and the save's version name are aliases
+  of it; the status, the legacy ping, the crash report, `/version`, the title screens and the default resource
+  folder use it). CI checks the file against the pinned jar (`--check`). Test fixtures that state a version
+  (a level.dat to read, a relay message) keep their literals: they test parsing, not the pin.
 
 - **Generated tables** (each has its generator in `tools/`):
 
   | Output | Generator | Input |
   | --- | --- | --- |
+  | `crates/horizon-core/src/version.rs` | `gen_version_consts.py` | the client jar's `version.json` |
   | `crates/horizon-protocol/src/ids.rs` | `generate_packet_ids.py` | `packets.json` report |
   | `crates/horizon-client/src/lan/tracking.rs` | `generate_entity_tracking.py` | decompiled `EntityTypes` |
   | `crates/horizon-client/src/lan/command_suggestions.rs` | `generate_command_suggestions.py` | `VanillaCommandSuggestionsExporter` |
@@ -298,4 +295,5 @@ python3 tools/vanilla_map.py versions/26.3/classes.json net.minecraft.world.food
 | `detect`, `prepare`, `diff` (facts, packets, registries, blocks, items, commands, data, assets), `gc` | done |
 | Class index (`tools/class_index.py`), class diff with moves, `vanilla_map.json` (`tools/vanilla_map.py`) | done |
 | Port report (`tools/port_report.py`, `report`), `port` | done |
-| Changed-class decompilation, `regen`, `version_consts` refactor, candidate harness run, `publish`, launchd agent | later |
+| `version_consts`: one generated file for the version facts (`tools/gen_version_consts.py`) | done |
+| Changed-class decompilation, `regen`, candidate harness run, `publish`, launchd agent | later |

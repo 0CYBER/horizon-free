@@ -206,12 +206,16 @@ mod tick_parity {
             .map(PathBuf::from)
             .unwrap_or_else(|| {
                 let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-                let local = manifest.join("../../.local/horizon-client/26.3");
+                let local = manifest
+                    .join("../../.local/horizon-client")
+                    .join(horizon_core::VANILLA_VERSION);
                 if local.join("gameplay-facts.json").exists() {
                     local
                 } else {
                     // The branch worktree lives below the main checkout.
-                    manifest.join("../../../../.local/horizon-client/26.3")
+                    manifest
+                        .join("../../../../.local/horizon-client")
+                        .join(horizon_core::VANILLA_VERSION)
                 }
             });
         if !root.join("gameplay-facts.json").exists() {

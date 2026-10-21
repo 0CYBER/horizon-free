@@ -479,7 +479,7 @@ fn read_json(path: &Path) -> Option<serde_json::Value> {
 fn game_version_at(dir: &Path) -> String {
     read_json(&dir.join("research-lock.json"))
         .and_then(|v| v["minecraft"]["version"].as_str().map(String::from))
-        .unwrap_or_else(|| "26.3".into())
+        .unwrap_or_else(|| horizon_core::VANILLA_VERSION.into())
 }
 
 pub fn resources(tag: &str) -> PathBuf {

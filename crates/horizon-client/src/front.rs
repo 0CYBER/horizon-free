@@ -230,7 +230,12 @@ impl Title {
             color::mix(muted, color::TEXT, hover),
             "Quit game",
         );
-        ui.caps(24.0, h - 12.0 - 18.0, muted, "Horizon 26.3");
+        ui.caps(
+            24.0,
+            h - 12.0 - 18.0,
+            muted,
+            &format!("Horizon {}", horizon_core::VANILLA_VERSION),
+        );
     }
     /// Home: the launcher's Play page over the backdrop.
     fn home(&self, ui: &mut Ui, x: f32, w: f32) {
@@ -241,7 +246,10 @@ impl Title {
             x,
             y,
             muted,
-            "Minecraft 26.3  ·  Java Edition, rewritten in Rust",
+            &format!(
+                "Minecraft {}  ·  Java Edition, rewritten in Rust",
+                horizon_core::VANILLA_VERSION
+            ),
         );
         y += 24.0;
         let line = (t::HERO * 1.1).round();
@@ -1189,7 +1197,12 @@ pub mod pause {
             &["Game", "Advancements", "Statistics", "Options"],
             0,
         );
-        ui.caps(24.0, h - 12.0 - 18.0, color::FAINT, "Horizon 26.3");
+        ui.caps(
+            24.0,
+            h - 12.0 - 18.0,
+            color::FAINT,
+            &format!("Horizon {}", horizon_core::VANILLA_VERSION),
+        );
         ui.offset = (0.0, 8.0 * (1.0 - p));
         let x = SIDEBAR + 48.0;
         let cw = (w - x - 48.0).min(760.0);

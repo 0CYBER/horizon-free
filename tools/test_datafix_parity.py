@@ -45,7 +45,7 @@ PARITY_SHARDS = 6
 PARITY_RUST_SCOPE = [
     'crates/horizon-world/src/datafix/', 'crates/horizon-world/src/nbt.rs', 'crates/horizon-world/src/region.rs',
     'crates/horizon-world/src/compression.rs', 'crates/horizon-core/src/position.rs', 'crates/horizon-core/src/position/',
-    'crates/horizon-core/src/geometry/',
+    'crates/horizon-core/src/geometry/', 'crates/horizon-core/src/version.rs',
 ]
 
 IGNORED = {

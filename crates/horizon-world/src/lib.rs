@@ -122,7 +122,7 @@ pub mod world_movement;
 pub mod world_ray;
 pub mod worldgen;
 
-pub const DATA_VERSION: i32 = 5023;
+pub const DATA_VERSION: i32 = horizon_core::version::DATA_VERSION;
 
 pub mod item_stack_refs;
 pub mod simple_container;

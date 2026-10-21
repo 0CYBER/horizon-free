@@ -59,12 +59,7 @@ pub(in crate::game) struct CommandExtras {
     pub results: Option<Vec<(bool, i32)>>,
 }
 
-/// `version.json` of the 26.3 jars.
-const VERSION_ID: &str = "26.3";
-const DATA_VERSION: i32 = 5023;
-const STABLE: bool = true;
-/// `Date.toString()` of the build time in UTC.
-const BUILD_TIME: &str = "Tue Sep 15 11:20:48 UTC 2026";
+use horizon_core::version::{BUILD_TIME, DATA_VERSION, STABLE, VANILLA_VERSION, VERSION_ID};
 
 fn num(n: impl std::fmt::Display) -> Text {
     Text::literal(n.to_string())
@@ -974,7 +969,10 @@ impl Game<'_> {
         let protocol = horizon_protocol::PROTOCOL_VERSION;
         let mut lines: Vec<Text> = [
             ("commands.version.id", vec![Text::literal(VERSION_ID)]),
-            ("commands.version.name", vec![Text::literal(VERSION_ID)]),
+            (
+                "commands.version.name",
+                vec![Text::literal(VANILLA_VERSION)],
+            ),
             ("commands.version.data", vec![num(DATA_VERSION)]),
             ("commands.version.series", vec![Text::literal("main")]),
             (

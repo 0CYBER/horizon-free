@@ -484,7 +484,13 @@ impl Game<'_> {
                 })
             },
         ));
-        log("INFO", "Starting minecraft server version 26.3");
+        log(
+            "INFO",
+            &format!(
+                "Starting minecraft server version {}",
+                horizon_core::VANILLA_VERSION
+            ),
+        );
         log("INFO", "Loading properties");
         let game_mode = props.game_mode;
         log(

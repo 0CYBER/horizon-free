@@ -46,7 +46,7 @@ use std::{
     },
 };
 
-pub const VERSION_NAME: &str = "26.3";
+pub const VERSION_NAME: &str = horizon_core::VANILLA_VERSION;
 
 /// Snapshot live block entities and custom names for a save batch without
 /// mutating the world. Each map is visited once, retaining its iteration order

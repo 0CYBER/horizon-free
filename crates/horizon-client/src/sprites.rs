@@ -415,7 +415,9 @@ mod tests {
 
     #[test]
     fn native_fire_sprites_register_full_animation_sequences() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
         if !root
             .join("assets/minecraft/textures/block/fire_0.png")
             .exists()

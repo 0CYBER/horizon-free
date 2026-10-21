@@ -1,5 +1,5 @@
 //! Behaviour tests over an in-memory level. They need the prepared client
-//! resources (`HORIZON_RESOURCES`, or `.local/horizon-client/26.3` at the
+//! resources (`HORIZON_RESOURCES`, or `.local/horizon-client/<version>` at the
 //! repository root) and are skipped when those are absent.
 use super::*;
 use crate::chunk::BlockState;
@@ -22,7 +22,8 @@ fn fixture() -> Option<&'static Fixture> {
                 .map(PathBuf::from)
                 .unwrap_or_else(|| {
                     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                        .join("../../.local/horizon-client/26.3")
+                        .join("../../.local/horizon-client")
+                        .join(horizon_core::VANILLA_VERSION)
                 });
             if !root.join("block-behaviours.json").exists() {
                 eprintln!("skipping level tests: no resources at {}", root.display());

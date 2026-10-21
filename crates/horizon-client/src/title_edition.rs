@@ -469,13 +469,14 @@ mod tests {
     /// Against the prepared vanilla resources when they are present.
     #[test]
     fn prepared_vanilla_edition() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
-            "../../.local/horizon-client/26.3/assets/minecraft/textures/gui/title/edition.png",
-        );
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION)
+            .join("assets/minecraft/textures/gui/title/edition.png");
         let Ok((w, h, pixels)) = crate::hud::decode(&path) else {
             return;
         };
-        let out = rust_edition(w, h, &pixels).expect("vanilla 26.3's edition.png");
+        let out = rust_edition(w, h, &pixels).expect("vanilla's edition.png");
         assert_eq!(
             columns(&out, EDITION_START..WIDTH),
             columns(&pixels, EDITION_START..WIDTH)

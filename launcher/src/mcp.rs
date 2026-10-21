@@ -31,7 +31,7 @@ fn tools() -> Value {
           "inputSchema": { "type": "object", "properties": { "tag": { "type": "string", "description": "A release tag such as v2026.10.13, or \"latest\"." } }, "required": ["tag"] } },
         { "name": "remove_version", "description": "Remove an installed Horizon version and its prepared resources.",
           "inputSchema": { "type": "object", "properties": { "tag": { "type": "string" } }, "required": ["tag"] } },
-        { "name": "prepare_resources", "description": "Prepare a version's resources from the player's own Minecraft install (needs Minecraft 26.3 played once in the official launcher and Java 25; versions before horizon-prepare also need Python 3.10+). Can take several minutes; returns the end of the log.",
+        { "name": "prepare_resources", "description": "Prepare a version's resources from the player's own Minecraft install (needs the Minecraft release that version is built for, played once in the official launcher, and its Java; versions before horizon-prepare also need Python 3.10+). Can take several minutes; returns the end of the log.",
           "inputSchema": { "type": "object", "properties": { "version": version, "minecraft_dir": { "type": "string", "description": "The game folder of the official launcher, Prism Launcher, MultiMC, the Modrinth App, ATLauncher or GDLauncher. Default: the launcher's setting, then every launcher's default folder." } } } },
         { "name": "launch_client", "description": "Start the Horizon client (a game window on the player's screen) under agent control: the game_* tools then play it. Returns once it has started; game_wait_ready waits for the world.",
           "inputSchema": { "type": "object", "properties": { "version": version,
