@@ -1,8 +1,7 @@
 //! `OminousItemSpawner`: the item an ominous trial spawner drops on its
 //! fight. It floats, growing and turning (`OminousItemSpawnerRenderer`), for
 //! 60 to 120 ticks, then falls as an item or is fired straight down as a
-//! projectile (`spawnItem`). Not saved: a spawner left in an unloaded chunk
-//! is lost.
+//! projectile (`spawnItem`). Saved with its chunk's entities (persist.rs).
 use super::Game;
 use horizon_assets::item_model::DisplayContext;
 use horizon_client::{
@@ -22,10 +21,14 @@ const TICKS_SCALING: f32 = 50.0;
 const ROTATION_SPEED: f32 = 40.0;
 
 pub(super) struct OminousItemSpawner {
-    item: ItemStack,
-    position: [f64; 3],
-    spawn_item_after: i64,
+    pub(super) item: ItemStack,
+    pub(super) position: [f64; 3],
+    pub(super) spawn_item_after: i64,
     tick_count: i64,
+    /// Its UUID, and the compound it was loaded from (fields Horizon doesn't
+    /// model survive a save).
+    pub(super) uuid: [i32; 4],
+    pub(super) raw: Option<Box<horizon_world::nbt::Tag>>,
 }
 
 /// `ProjectileItem.DispenseConfig` of the items fired down: power,
@@ -66,6 +69,26 @@ impl Game<'_> {
             position,
             spawn_item_after: i64::from(delay),
             tick_count: 0,
+            uuid: horizon_client::save::random_uuid(),
+            raw: None,
+        });
+    }
+    /// A saved spawner, as `readAdditionalSaveData` leaves it: its tick
+    /// count starts again from 0.
+    pub(super) fn load_ominous_item_spawner(&mut self, tag: horizon_world::nbt::Tag) {
+        let Some((item, at, spawn_item_after)) =
+            horizon_client::entity_nbt::ominous_item_spawner_from_nbt(&tag)
+        else {
+            return;
+        };
+        self.ominous_spawners.push(OminousItemSpawner {
+            item,
+            position: [at.x, at.y, at.z],
+            spawn_item_after,
+            tick_count: 0,
+            uuid: horizon_client::entity_nbt::uuid(&tag)
+                .unwrap_or_else(horizon_client::save::random_uuid),
+            raw: Some(Box::new(tag)),
         });
     }
     /// Every item spawner's tick: `commonTick`'s count, `tickServer` (the
