@@ -3,6 +3,7 @@
 //! breeding, conversions, drops), projectiles, player interactions
 //! (feeding, shearing, milking, spawn eggs, throwing) and rendering.
 use super::{Dim, Game, view_vector};
+use horizon_assets::item_model::DisplayContext;
 use horizon_client::{
     Result,
     arrows::EntityHit,
@@ -3009,6 +3010,14 @@ impl Game<'_> {
                         out,
                     );
                 }
+                continue;
+            }
+            if let Some(stack) = a.potion_item() {
+                let owner = super::item_draw::owner_at(at, 0.0, "minecraft:splash_potion");
+                let state = self.resolve_item(&stack, DisplayContext::Ground, Some(&owner), 0);
+                let pose = glam::Mat4::from_translation(c)
+                    * glam::Mat4::from_quat(self.camera_orientation());
+                self.submit_item_world(&state, pose, packed, out);
                 continue;
             }
             let Some(name) = a.item_sprite() else {
