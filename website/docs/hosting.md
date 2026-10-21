@@ -4,7 +4,7 @@
 
 There are two ways to run one. The launcher's **Servers** page does everything with buttons and no commands. The command line is for a VPS or a headless machine. Both run the same program and keep the same folder.
 
-> **Next launcher release.** The Servers page is finished but not in a launcher release yet; the launcher updates itself when it comes out. Until then, the command line below works today, and so does starting a server from the launcher's Play page.
+> The **Servers** page is in the launcher since version 0.15. The launcher updates itself, so open it once to get it.
 
 ## Before you start
 

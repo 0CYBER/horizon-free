@@ -39,7 +39,7 @@ The game opens on Horizon's own title screen. Your worlds, options and logs live
 
 ## Stable and beta builds
 
-The launcher installs **stable** builds by default. In **Settings**, **Beta builds** installs new builds the moment they are released, before they have had time to settle. The **Versions** page shows each version's channel. Releases becoming stable by themselves, six hours after they come out, is coming; until then every release counts as stable.
+The launcher installs **stable** builds by default. In **Settings**, **Beta builds** installs new builds the moment they are released, before they have had time to settle. The **Versions** page shows each version's channel. A new release starts as a beta and becomes stable by itself about six hours later, once its smoke test has passed.
 
 ## The Versions page
 
