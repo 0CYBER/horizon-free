@@ -282,7 +282,7 @@ pub(super) struct Dragon {
     random: LegacyRandom,
 }
 /// A player in the fight: the window's own player, or a guest by
-/// connection (a LAN or server player, or a companion).
+/// connection (a LAN or server player).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum FightWho {
     Host,
