@@ -1157,11 +1157,11 @@ impl Game<'_> {
     /// `LightmapRenderStateExtractor`: (brightness taken off the gamma
     /// option, the pulsing light scale).
     pub(super) fn darkness_lighting(&self, partial: f32) -> (f32, f32) {
-        // options.darknessEffectScale is at its default of 100%.
-        let modifier = self.darkness_blend(partial);
+        let scale = self.settings.file.double("darknessEffectScale") as f32;
+        let modifier = self.darkness_blend(partial) * scale;
         let pulse =
             ((self.ticks as f32 - partial) * std::f32::consts::PI * 0.025).cos() * 0.45 * modifier;
-        (modifier, pulse.max(0.0))
+        (modifier, pulse.max(0.0) * scale)
     }
 
     /// `LightmapRenderStateExtractor`: the night vision effect's intensity

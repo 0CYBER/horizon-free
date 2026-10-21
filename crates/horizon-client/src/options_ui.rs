@@ -68,6 +68,22 @@ pub enum Opt {
     HighContrast,
     ShowSubtitles,
     NotificationDisplayTime,
+    Narrator,
+    TextBackground,
+    ChatDelay,
+    DistortionEffects,
+    FovEffects,
+    DarknessPulsing,
+    DamageTilt,
+    GlintSpeed,
+    GlintStrength,
+    HideLightningFlashes,
+    MonochromeLogo,
+    PanoramaSpeed,
+    HideSplashTexts,
+    NarratorHotkey,
+    RotateWithMinecarts,
+    HighContrastBlockOutlines,
     ForceUnicode,
     JapaneseGlyphs,
     /// Horizon's controller settings (`horizon-controller.txt`).
@@ -114,7 +130,72 @@ pub(crate) enum Kind {
     Slider(f32),
     Cycle,
 }
+/// Options shared by the Classic page and Horizon's Accessibility section.
+/// `AccessibilityOptionsScreen.options`, with the Controls link inserted separately.
+pub(crate) const ACCESSIBILITY_OPTIONS: &[Opt] = &[
+    Opt::Narrator,
+    Opt::ShowSubtitles,
+    Opt::HighContrast,
+    Opt::MenuBlur,
+    Opt::TextBackgroundOpacity,
+    Opt::TextBackground,
+    Opt::ChatOpacity,
+    Opt::ChatLineSpacing,
+    Opt::ChatDelay,
+    Opt::NotificationDisplayTime,
+    Opt::ViewBobbing,
+    Opt::DistortionEffects,
+    Opt::FovEffects,
+    Opt::DarknessPulsing,
+    Opt::DamageTilt,
+    Opt::GlintSpeed,
+    Opt::GlintStrength,
+    Opt::HideLightningFlashes,
+    Opt::MonochromeLogo,
+    Opt::PanoramaSpeed,
+    Opt::HideSplashTexts,
+    Opt::NarratorHotkey,
+    Opt::RotateWithMinecarts,
+    Opt::HighContrastBlockOutlines,
+];
 impl Opt {
+    /// Keep controls visible while their underlying systems are still missing.
+    pub(crate) fn available(self) -> bool {
+        !matches!(
+            self,
+            Opt::Narrator
+                | Opt::NarratorHotkey
+                | Opt::ChatDelay
+                | Opt::DistortionEffects
+                | Opt::GlintSpeed
+                | Opt::GlintStrength
+                | Opt::MonochromeLogo
+                | Opt::RotateWithMinecarts
+                | Opt::HighContrastBlockOutlines
+        )
+    }
+    fn file_key(self) -> Option<&'static str> {
+        Some(match self {
+            Opt::Narrator => "narrator",
+            Opt::TextBackground => "backgroundForChatOnly",
+            Opt::ChatDelay => "chatDelay",
+            Opt::DistortionEffects => "screenEffectScale",
+            Opt::FovEffects => "fovEffectScale",
+            Opt::DarknessPulsing => "darknessEffectScale",
+            Opt::DamageTilt => "damageTiltStrength",
+            Opt::GlintSpeed => "glintSpeed",
+            Opt::GlintStrength => "glintStrength",
+            Opt::HideLightningFlashes => "hideLightningFlashes",
+            Opt::MonochromeLogo => "darkMojangStudiosBackground",
+            Opt::PanoramaSpeed => "panoramaScrollSpeed",
+            Opt::HideSplashTexts => "hideSplashTexts",
+            Opt::NarratorHotkey => "narratorHotkey",
+            Opt::RotateWithMinecarts => "rotateWithMinecart",
+            Opt::HighContrastBlockOutlines => "highContrastBlockOutline",
+            _ => return None,
+        })
+    }
+
     pub(crate) fn caption(self) -> &'static str {
         match self {
             Opt::Fov => "options.fov",
@@ -168,6 +249,22 @@ impl Opt {
             Opt::HighContrast => "options.accessibility.high_contrast",
             Opt::ShowSubtitles => "options.showSubtitles",
             Opt::NotificationDisplayTime => "options.notifications.display_time",
+            Opt::Narrator => "options.narrator",
+            Opt::TextBackground => "options.accessibility.text_background",
+            Opt::ChatDelay => "Chat Delay",
+            Opt::DistortionEffects => "options.screenEffectScale",
+            Opt::FovEffects => "options.fovEffectScale",
+            Opt::DarknessPulsing => "options.darknessEffectScale",
+            Opt::DamageTilt => "options.damageTiltStrength",
+            Opt::GlintSpeed => "options.glintSpeed",
+            Opt::GlintStrength => "options.glintStrength",
+            Opt::HideLightningFlashes => "options.hideLightningFlashes",
+            Opt::MonochromeLogo => "options.darkMojangStudiosBackgroundColor",
+            Opt::PanoramaSpeed => "options.accessibility.panorama_speed",
+            Opt::HideSplashTexts => "options.hideSplashTexts",
+            Opt::NarratorHotkey => "options.accessibility.narrator_hotkey",
+            Opt::RotateWithMinecarts => "options.rotateWithMinecart",
+            Opt::HighContrastBlockOutlines => "options.accessibility.high_contrast_block_outline",
             Opt::ForceUnicode => "options.forceUnicodeFont",
             Opt::JapaneseGlyphs => "options.japaneseGlyphVariants",
             // Horizon's own options: English captions (no vanilla keys).
@@ -189,6 +286,14 @@ impl Opt {
     pub(crate) fn kind(self, s: &Settings) -> Kind {
         let unit = |v: f32, lo: f32, hi: f32| Kind::Slider(((v - lo) / (hi - lo)).clamp(0.0, 1.0));
         match self {
+            Opt::FovEffects | Opt::DarknessPulsing => {
+                Kind::Slider(s.file.double(self.file_key().unwrap()).sqrt() as f32)
+            }
+            Opt::DistortionEffects
+            | Opt::DamageTilt
+            | Opt::GlintSpeed
+            | Opt::GlintStrength
+            | Opt::PanoramaSpeed => Kind::Slider(s.file.double(self.file_key().unwrap()) as f32),
             Opt::Fov => unit(s.fov, 30.0, 110.0),
             Opt::RenderDistance => unit(s.render_distance as f32, 2.0, 64.0),
             Opt::SimulationDistance => unit(s.simulation_distance as f32, 5.0, 32.0),
@@ -253,6 +358,21 @@ impl Opt {
     pub fn label(self, s: &Settings) -> Text {
         let c = self.caption();
         match self {
+            Opt::ChatDelay => tr("options.chat.delay_none"),
+            Opt::FovEffects
+            | Opt::DarknessPulsing
+            | Opt::DistortionEffects
+            | Opt::DamageTilt
+            | Opt::GlintSpeed
+            | Opt::GlintStrength => {
+                let value = s.file.double(self.file_key().unwrap()) as f32;
+                if value == 0.0 {
+                    generic(c, tr("options.off"))
+                } else {
+                    percent(c, value)
+                }
+            }
+            Opt::PanoramaSpeed => percent(c, s.file.double("panoramaScrollSpeed") as f32),
             Opt::Fov => match s.fov as i32 {
                 70 => generic(c, tr("options.fov.min")),
                 110 => generic(c, tr("options.fov.max")),
@@ -386,6 +506,19 @@ impl Opt {
     }
     fn value_text(self, s: &Settings) -> Text {
         match self {
+            Opt::TextBackground => tr(if s.file.bool("backgroundForChatOnly") {
+                "options.accessibility.text_background.chat"
+            } else {
+                "options.accessibility.text_background.everywhere"
+            }),
+            Opt::Narrator => tr("options.narrator.off"),
+            Opt::ChatDelay => tr("options.chat.delay_none"),
+            Opt::HideLightningFlashes => on_off(s.file.bool("hideLightningFlashes")),
+            Opt::MonochromeLogo => on_off(s.file.bool("darkMojangStudiosBackground")),
+            Opt::HideSplashTexts => on_off(s.file.bool("hideSplashTexts")),
+            Opt::NarratorHotkey => on_off(s.file.bool("narratorHotkey")),
+            Opt::RotateWithMinecarts => on_off(s.file.bool("rotateWithMinecart")),
+            Opt::HighContrastBlockOutlines => on_off(s.file.bool("highContrastBlockOutline")),
             Opt::InvertY => on_off(s.invert_y),
             Opt::DiscreteScroll => on_off(s.discrete_scroll),
             Opt::ViewBobbing => on_off(s.view_bobbing),
@@ -481,8 +614,20 @@ impl Opt {
     }
     /// Set a slider from its 0..1 position (OptionInstance value sets).
     pub fn set_slider(self, s: &mut Settings, v: f32) {
+        if !self.available() {
+            return;
+        }
+        let v = v.clamp(0.0, 1.0);
         let step = |lo: f32, hi: f32| (lo + v * (hi - lo)).round();
         match self {
+            Opt::FovEffects | Opt::DarknessPulsing => s.file.set(
+                self.file_key().unwrap(),
+                crate::options_file::V::Double(f64::from(v).powi(2)),
+            ),
+            Opt::DamageTilt | Opt::PanoramaSpeed => s.file.set(
+                self.file_key().unwrap(),
+                crate::options_file::V::Double(f64::from(v)),
+            ),
             Opt::Fov => s.fov = step(30.0, 110.0),
             Opt::RenderDistance => s.render_distance = step(2.0, 64.0) as i32,
             Opt::SimulationDistance => s.simulation_distance = step(5.0, 32.0) as i32,
@@ -538,6 +683,9 @@ impl Opt {
     }
     /// Advance a cycle button (CycleButton.cycleValue).
     pub fn cycle(self, s: &mut Settings, back: bool, framebuffer: [i32; 2]) {
+        if !self.available() {
+            return;
+        }
         let next = |n: u8, count: u8| {
             if back {
                 (n + count - 1) % count
@@ -556,6 +704,11 @@ impl Opt {
                 } else {
                     value + 1
                 };
+            }
+            Opt::TextBackground | Opt::HideLightningFlashes | Opt::HideSplashTexts => {
+                let key = self.file_key().unwrap();
+                s.file
+                    .set(key, crate::options_file::V::Bool(!s.file.bool(key)));
             }
             Opt::InvertY => s.invert_y = !s.invert_y,
             Opt::DiscreteScroll => s.discrete_scroll = !s.discrete_scroll,
@@ -896,6 +1049,9 @@ fn inactive(mut w: Widget) -> Widget {
     w
 }
 fn option_widget(s: &Settings, opt: Opt, x: f32, y: f32, w: f32) -> Widget {
+    if !opt.available() {
+        return inactive(button(x, y, w, opt.label(s), Act::Cycle(opt)));
+    }
     match opt.kind(s) {
         Kind::Slider(v) => Widget {
             x,
@@ -1230,19 +1386,20 @@ impl OptionsUi {
                 Opt::AutoSuggestions,
                 Opt::ReducedDebugInfo,
             ]),
-            Page::Accessibility => pairs(&[
-                Opt::ShowSubtitles,
-                Opt::HighContrast,
-                Opt::MenuBlur,
-                Opt::TextBackgroundOpacity,
-                Opt::ChatOpacity,
-                Opt::ChatLineSpacing,
-                Opt::NotificationDisplayTime,
-                Opt::ViewBobbing,
-                Opt::ToggleCrouch,
-                Opt::ToggleSprint,
-                Opt::AutoJump,
-            ]),
+            Page::Accessibility => {
+                let mut rows = vec![Row::Buttons(
+                    option_widget(s, Opt::Narrator, 0.0, 0.0, 150.0),
+                    Some(button(
+                        0.0,
+                        0.0,
+                        150.0,
+                        tr("options.controls"),
+                        Act::Push(Page::Controls),
+                    )),
+                )];
+                rows.extend(pairs(&ACCESSIBILITY_OPTIONS[1..]));
+                rows
+            }
             Page::Font => pairs(&[Opt::ForceUnicode, Opt::JapaneseGlyphs]),
             Page::Mods => {
                 if s.mods.installed.is_empty() {
@@ -1832,6 +1989,17 @@ impl OptionsUi {
                 };
                 if let Some(key) = key.filter(|key| lang::has(key)) {
                     tooltip = Some(atlas.font.split(&tr(&key), 170.0));
+                }
+                if let WKind::Button {
+                    act: Act::Cycle(opt),
+                    ..
+                } = &wd.kind
+                    && !opt.available()
+                {
+                    tooltip = Some(atlas.font.split(
+                        &Text::literal("This feature is not yet available in Horizon."),
+                        170.0,
+                    ));
                 }
                 if let WKind::Button {
                     act: Act::ToggleMod(i),
@@ -2487,6 +2655,90 @@ impl OptionsUi {
 mod tests {
     use super::*;
     use crate::ui_theme::{MenuStyle, set_style, style};
+
+    #[test]
+    fn accessibility_sliders_and_toggles_survive_options_round_trip() {
+        let mut s = Settings::default();
+        for opt in [
+            Opt::FovEffects,
+            Opt::DarknessPulsing,
+            Opt::DamageTilt,
+            Opt::PanoramaSpeed,
+        ] {
+            for position in [0.0, 0.5, 1.0] {
+                opt.set_slider(&mut s, position);
+                let loaded = Settings::parse(&s.serialize());
+                assert_eq!(opt.slider_position(&loaded), Some(position));
+                let expected = if matches!(opt, Opt::FovEffects | Opt::DarknessPulsing) {
+                    f64::from(position).powi(2)
+                } else {
+                    f64::from(position)
+                };
+                assert_eq!(loaded.file.double(opt.file_key().unwrap()), expected);
+            }
+        }
+        for opt in [
+            Opt::TextBackground,
+            Opt::HideLightningFlashes,
+            Opt::HideSplashTexts,
+        ] {
+            let key = opt.file_key().unwrap();
+            let before = s.file.bool(key);
+            opt.cycle(&mut s, false, [854, 480]);
+            assert_eq!(Settings::parse(&s.serialize()).file.bool(key), !before);
+        }
+        Opt::TextBackground.cycle(&mut s, false, [854, 480]);
+        let chat_only = s.text_background(0.0);
+        Opt::TextBackground.cycle(&mut s, false, [854, 480]);
+        assert_ne!(s.text_background(0.0), chat_only);
+    }
+
+    #[test]
+    fn accessibility_has_all_options_and_disabled_placeholders() {
+        let mut s = Settings::default();
+        let mut ui = OptionsUi::default();
+        ui.show(Page::Accessibility);
+        let (widgets, _, _, _) = ui.layout(&s, 480.0, 1200.0);
+        let options: Vec<_> = widgets
+            .iter()
+            .filter_map(|w| match w.kind {
+                WKind::Button {
+                    act: Act::Cycle(opt),
+                    ..
+                }
+                | WKind::Slider { opt, .. } => Some(opt),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(options, ACCESSIBILITY_OPTIONS);
+        for &opt in ACCESSIBILITY_OPTIONS {
+            let widget = widgets
+                .iter()
+                .find(|w| match w.kind {
+                    WKind::Button {
+                        act: Act::Cycle(o), ..
+                    }
+                    | WKind::Slider { opt: o, .. } => o == opt,
+                    _ => false,
+                })
+                .expect("every accessibility option has a control");
+            if !opt.available() {
+                assert!(matches!(widget.kind, WKind::Button { active: false, .. }));
+                let before = s.serialize();
+                opt.cycle(&mut s, false, [854, 480]);
+                opt.set_slider(&mut s, 0.0);
+                assert_eq!(s.serialize(), before);
+            }
+        }
+        assert!(widgets.iter().any(|w| matches!(
+            w.kind,
+            WKind::Button {
+                act: Act::Push(Page::Controls),
+                active: true,
+                ..
+            }
+        )));
+    }
 
     #[test]
     fn render_distance_slider_round_trips_through_extended_options_range() {

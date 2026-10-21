@@ -230,6 +230,21 @@ impl Panorama {
     }
 }
 
+/// `PanoramaRenderer`: accumulate rotation so changing speed does not jump
+/// back to a different point on the cube. `now` is monotonic seconds.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Rotation {
+    last: f32,
+    yaw: f32,
+}
+impl Rotation {
+    pub fn update(&mut self, now: f32, speed: f32) -> f32 {
+        self.yaw = (self.yaw - (now - self.last).max(0.0) * 2.0 * speed) % 360.0;
+        self.last = now;
+        self.yaw
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,6 +295,15 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn rotation_speed_changes_preserve_position() {
+        let mut rotation = Rotation::default();
+        assert_eq!(rotation.update(5.0, 1.0), -10.0);
+        assert_eq!(rotation.update(10.0, 0.0), -10.0);
+        assert_eq!(rotation.update(12.0, 0.5), -12.0);
+        assert_eq!(rotation.update(13.0, 1.0), -14.0);
     }
 
     #[test]
