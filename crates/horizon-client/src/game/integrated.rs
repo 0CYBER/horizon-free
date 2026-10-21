@@ -455,18 +455,23 @@ impl Game<'_> {
             // Commands.performCommand runs in the player's level.
             let (back, theirs) = (self.dim, super::Dim::from_id(&g.dimension));
             let entered = theirs == back || self.enter_level(Some(&mut host), theirs).is_ok();
-            if entered {
+            if entered && let Some(swap) = self.enter_guest(&mut host, conn) {
                 let command = command.trim_start_matches('/').to_owned();
-                let lines = self.as_guest(&mut host, conn, |g| {
-                    g.as_console(|g| {
-                        g.chat_capture = Some(Vec::new());
-                        g.run_command(&command);
-                        g.chat_capture.take().unwrap_or_default()
-                    })
+                // The hub is back in place while the command runs, as for a
+                // guest's own (`run_guest_commands`): selectors see every
+                // player (`team join … @a`), and `defaultgamemode` reaches it.
+                self.lan = Some(host);
+                let lines = self.as_console(|g| {
+                    g.chat_capture = Some(Vec::new());
+                    g.run_command(&command);
+                    g.chat_capture.take().unwrap_or_default()
                 });
+                host = self.lan.take().expect("a command puts the hub back");
+                self.leave_guest(&mut host, swap);
+                host.hub.sync_all_effects();
                 // A teleport into another level happens before its feedback is sent.
                 self.run_level_teleports(&mut host);
-                for line in lines.unwrap_or_default() {
+                for line in lines {
                     out.push(line.plain());
                     host.hub.send_to(
                         conn,
