@@ -11,6 +11,7 @@ horizon-prepare: prepare Horizon's resources from your own Minecraft Java Editio
 Usage: horizon-prepare [--prepare] [--server-jar PATH] [--minecraft-dir PATH] [--root PATH]
        horizon-prepare sounds [--minecraft-dir PATH] [--root PATH]
        horizon-prepare panorama [--minecraft-dir PATH] [--root PATH]
+       horizon-prepare fonts [--minecraft-dir PATH] [--root PATH]
 
   --prepare             Import the pinned game files from your own copy first
   --server-jar PATH     The pinned server jar you downloaded yourself
@@ -25,7 +26,8 @@ research-lock.json pins: JAVA_HOME, else javac and java on the PATH.
 The resources go to <root>/.local/horizon-client/<version>; pass that to horizon-client --resources.
 
 horizon-prepare panorama repairs the classic menu background in existing resources without Java.
-Full preparation also imports these textures after extracting the client JAR's placeholders.
+horizon-prepare fonts adds the GNU Unifont glyphs (characters the bitmap fonts lack) the same way.
+Full preparation also imports both after extracting the client JAR's placeholders.
 
 horizon-prepare sounds copies the pinned version's sounds (about 380 MB) from the official
 launcher's asset store into the same folder, checking every file. It is optional: without it the
@@ -56,7 +58,7 @@ fn main() -> ExitCode {
     };
     let mut root = None;
     let mut args = std::env::args_os().skip(1).peekable();
-    let assets = args.next_if(|a| a == "sounds" || a == "panorama");
+    let assets = args.next_if(|a| a == "sounds" || a == "panorama" || a == "fonts");
     while let Some(arg) = args.next() {
         let text = arg.to_string_lossy().into_owned();
         let (flag, inline) = match text.split_once('=') {
@@ -118,6 +120,9 @@ fn main() -> ExitCode {
         }
         Some("panorama") => {
             horizon_prepare::panorama(&options.root, options.minecraft_dir.as_deref(), &log)
+        }
+        Some("fonts") => {
+            horizon_prepare::fonts(&options.root, options.minecraft_dir.as_deref(), &log)
         }
         _ => horizon_prepare::prepare(&options, &log),
     };
