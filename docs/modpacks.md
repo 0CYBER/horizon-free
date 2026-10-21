@@ -509,8 +509,13 @@ Two cases the oracle fills in:
     Better Witch Huts' log and fence legs are `horizon:yung_pillar`. In the monument at chunk
     (2, 8) (seed 1234), 318,512 blocks of air become water and none is left between y 30 and
     60 (227,034 before); its 5,142 placeholder blocks are gone.
-    Still taken out: Formations' biome replacements, Repurposed's air fix
-    (`close_off_air_sources`), blocks aged or propped up.
+    Repurposed's opposite fix, which walls off the air and other liquids beside its ocean
+    mineshafts' water, is `horizon:close_off_air_sources` (its 4 lists). It runs in the mod's
+    order, so the walls it builds keep the later blocks of the template from the mod's "where
+    the world is air, keep it" rules: around the ocean mineshaft at chunk (-18, -54), seed
+    1234, 650 blocks of air and cave air become prismarine and 614 more template water blocks
+    stay water (1,303 blocks change in its 81 chunks).
+    Still taken out: Formations' biome replacements, blocks aged or propped up.
     In the 128×128-chunk square (seed 1234), every spawner of a mod structure now has its mob:
     in the Overworld 83 Better Dungeons spawners held the template's placeholder pig and 17 of
     Moog's were empty (763 spawners with a mob, up from 628); in the Nether the 52 empty ones
