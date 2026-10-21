@@ -29,9 +29,11 @@ impl AttackStrength {
     /// The attack-strength part of `Player.tick`: both tickers advance, and a
     /// main-hand change to a different item resets them
     /// (`!ItemStack.matches` and `!ItemStack.isSameItem`).
-    pub fn tick(&mut self, main_hand: Option<HeldStack>) {
+    /// Whether they were reset.
+    pub fn tick(&mut self, main_hand: Option<HeldStack>) -> bool {
         self.ticker += 1;
         self.swap_ticker += 1;
+        let mut reset = false;
         if self.last_item != main_hand {
             let same_item = match (&self.last_item, &main_hand) {
                 (Some(a), Some(b)) => a.item == b.item,
@@ -40,9 +42,11 @@ impl AttackStrength {
             };
             if !same_item {
                 self.reset();
+                reset = true;
             }
             self.last_item = main_hand;
         }
+        reset
     }
     /// `resetAttackStrengthTicker`: swinging at nothing, attacking or
     /// stopping a block break.

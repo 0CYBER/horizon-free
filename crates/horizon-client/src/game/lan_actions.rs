@@ -35,6 +35,8 @@ pub(super) struct GuestPlay {
     using: Option<(usize, u32)>,
     use_delay: u32,
     attack_ticks: u32,
+    /// The main hand's item at the guest's last tick (`Game::attack_item`).
+    attack_item: Option<std::sync::Arc<str>>,
     swing: horizon_client::first_person::SwingState,
     /// The block being dug and the face the client aimed at.
     digging: Option<([i32; 3], [i32; 3])>,
@@ -102,6 +104,7 @@ pub(super) struct GuestSwap {
     using: Option<(usize, u32)>,
     use_delay: u32,
     attack_ticks: u32,
+    attack_item: Option<std::sync::Arc<str>>,
     swing: horizon_client::first_person::SwingState,
     left: bool,
     right: bool,
@@ -262,6 +265,7 @@ impl Game<'_> {
         let using = std::mem::replace(&mut self.using, play.using.take());
         let use_delay = std::mem::replace(&mut self.use_delay, play.use_delay);
         let attack_ticks = std::mem::replace(&mut self.attack_ticks, play.attack_ticks);
+        let attack_item = std::mem::replace(&mut self.attack_item, play.attack_item.take());
         let swing = std::mem::replace(&mut self.swing, play.swing);
         let (left, right) = (self.left, self.right);
         self.left = play.digging.is_some();
@@ -327,6 +331,7 @@ impl Game<'_> {
             using,
             use_delay,
             attack_ticks,
+            attack_item,
             swing,
             left,
             right,
@@ -377,6 +382,7 @@ impl Game<'_> {
             using,
             use_delay,
             attack_ticks,
+            attack_item,
             swing,
             left,
             right,
@@ -433,6 +439,7 @@ impl Game<'_> {
         play.using = std::mem::replace(&mut self.using, using);
         play.use_delay = std::mem::replace(&mut self.use_delay, use_delay);
         play.attack_ticks = std::mem::replace(&mut self.attack_ticks, attack_ticks);
+        play.attack_item = std::mem::replace(&mut self.attack_item, attack_item);
         play.swing = std::mem::replace(&mut self.swing, swing);
         self.container = container;
         self.screen = screen;
@@ -1407,6 +1414,20 @@ impl Game<'_> {
                         g.use_delay -= 1;
                     }
                 });
+            }
+            // Player.tick: a different main-hand item resets the attack
+            // strength, and detectEquipmentUpdates gives the guest its modifiers.
+            let g = &host.hub.guests[gi];
+            let held = g
+                .inventory
+                .get(g.selected)
+                .cloned()
+                .flatten()
+                .map(|s| s.item);
+            let play = host.play.entry(conn).or_default();
+            if play.attack_item != held {
+                play.attack_ticks = 0;
+                play.attack_item = held;
             }
             self.guest_delayed_destroy(host, conn);
             self.guest_server_tick(host, conn);

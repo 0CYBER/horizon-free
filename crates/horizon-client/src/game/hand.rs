@@ -209,10 +209,15 @@ impl Game<'_> {
         }
         self.swing.tick();
         let main = self.inventory[self.selected].clone();
-        self.hand_strength.tick(main.as_ref().map(|s| HeldStack {
+        // Player.tick: a different item resets the attack strength, and
+        // detectEquipmentUpdates gives the player its modifiers.
+        if self.hand_strength.tick(main.as_ref().map(|s| HeldStack {
             item: s.item.to_string(),
             rest: format!("{} {} {:?}", s.count, s.damage, s.extra),
-        }));
+        })) {
+            self.attack_ticks = 0;
+        }
+        self.attack_item = main.as_ref().map(|s| s.item.clone());
         let next = [(self.selected, main), (OFFHAND, self.offhand.clone())];
         // shouldInstantlyReplaceVisibleItem: the same stack, or an equal one
         // (matchesIgnoringComponents; every item plays the swap animation).
@@ -286,9 +291,12 @@ impl Game<'_> {
     pub(super) fn main_hand_attack_speed(&self) -> f64 {
         horizon_client::attack_strength::BASE_ATTACK_SPEED
             + self
-                .held()
-                .and_then(|h| self.res.items().get(&h.item))
+                .attack_item_info()
                 .map_or(0.0, |i| f64::from(i.attack_speed))
+    }
+    /// The item whose attack damage and speed modifiers the player has (`attack_item`).
+    pub(super) fn attack_item_info(&self) -> Option<&horizon_client::items::ItemInfo> {
+        self.res.items().get(self.attack_item.as_deref()?)
     }
     /// `evaluateWhichHandsToRender`: which of the main and off hand show.
     pub(super) fn hands_to_render(&self) -> [bool; 2] {
