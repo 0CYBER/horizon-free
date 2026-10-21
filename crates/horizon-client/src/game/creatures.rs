@@ -588,7 +588,11 @@ impl Game<'_> {
         if let Some(host) = self.lan.as_mut()
             && !guests.is_empty()
         {
-            bindings.retain(|id, _| mobs.iter().any(|m| m.id == *id));
+            // A set: a scan of every mob for each binding is quadratic, and a
+            // server's loaded mobs run into the thousands.
+            let live: horizon_client::fast_hash::FxHashSet<u32> =
+                mobs.iter().map(|m| m.id).collect();
+            bindings.retain(|id, _| live.contains(id));
             host.mob_players = bindings;
         }
         self.mobs.append(&mut mobs);
