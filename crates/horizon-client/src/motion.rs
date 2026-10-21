@@ -768,6 +768,12 @@ impl MotionWorld<'_, '_, '_> {
         }
         // LivingEntity.tick fallFlyTicks, then updateFallFlying.
         if self.player.fall_flying {
+            // Entity.checkFallDistanceAccumulation: a glide that isn't diving
+            // (falling slower than 0.5 a tick) keeps the fall distance at 1, so
+            // landing from it hurts no more than a one-block drop.
+            if self.player.velocity.y > -0.5 && self.player.fall_distance > 1.0 {
+                self.player.fall_distance = 1.0;
+            }
             self.player.fall_fly_ticks += 1;
             // canGlide alone: water and lava don't end a glide.
             let still = self.player.glider && !self.player.ground.on_ground && !self.player.flying;
@@ -2481,6 +2487,51 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_glide_that_is_not_diving_keeps_the_fall_distance_at_one() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        // Entity.checkFallDistanceAccumulation: capped above -0.5 a tick, not below.
+        for (dy, capped) in [(-0.3, true), (-0.49, true), (-0.8, false)] {
+            let mut scene = World::test_scene(&assets, &render, 2).unwrap();
+            let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 20.0, 20.5)).unwrap();
+            player.glider = true;
+            player.fall_flying = true;
+            player.velocity = Vec3::new(0.0, dy, 0.6);
+            player.fall_distance = 30.0;
+            let mut w = MotionWorld {
+                entities: &[],
+                player: &mut player,
+                scene: &mut scene,
+                assets: &assets,
+                collision_binding: &binding,
+                resources: &resources,
+            };
+            w.player_movement_tick([0.0, 0.0], false).unwrap();
+            assert!(w.player.fall_flying);
+            if capped {
+                assert!(
+                    w.player.fall_distance < 2.0,
+                    "{dy}: {}",
+                    w.player.fall_distance
+                );
+            } else {
+                assert!(
+                    w.player.fall_distance > 30.0,
+                    "{dy}: {}",
+                    w.player.fall_distance
+                );
+            }
+        }
+    }
     /// Footsteps on the prepared vanilla resources, when they are present:
     /// none while standing (gravity still moves the player every tick), one
     /// per `nextStep` metre while walking.
