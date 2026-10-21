@@ -500,6 +500,15 @@ def pick_scenario(d, out):
     d('give', item='oak_log', count=2)
     assert d('open_inventory')['screen'] == 'inventory'
     d('click', id='slot-0', middle=True)
+    # The clone of step 2 lived only on this client: ItemPickerMenu's carried stack is the
+    # inventoryMenu's, and AbstractContainerMenu.removed clears it only for a ServerPlayer. With a
+    # stack in hand, mouseReleased sends CLONE, the server finds the carried stack it was told about
+    # wrong and sends the empty one back (broadcastChanges). On the server thread that takes a
+    # round trip, as in vanilla; in the frame, closing the menu already put the clone away.
+    for _ in range(20):
+        if carried() is None:
+            break
+        d('wait', ticks=1)
     assert carried() is None, carried()
     assert widgets(d)['slot-0']['stack'] == {'item': 'minecraft:oak_log', 'count': 2}
     d('close')
