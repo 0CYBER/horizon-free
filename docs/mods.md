@@ -11,7 +11,7 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 
 | Part | Where | State |
 |---|---|---|
-| The contract (WIT) | `crates/horizon-mod-sdk/wit/horizon.wit` | 0.1: log, game-read, chat, hud; tick, frame, chat and command hooks |
+| The contract (WIT) | `crates/horizon-mod-sdk/wit/horizon.wit` | 0.1: log, game-read, chat, hud, storage; tick, frame, chat and command hooks |
 | SDK for mod authors | `crates/horizon-mod-sdk` | 0.1 |
 | Example mod | `crates/horizon-mod-sdk/examples/coords-hud` | coordinates, facing and time HUD, `/where`, `/coords` |
 | Runtime | `crates/horizon-mods` | wasmtime 36 LTS, component model |
@@ -82,6 +82,7 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 | `game` | `game-read` | `get-player()`: x y z, yaw, pitch, health, food, dimension; `get-clock()`: game time, day time |
 | `chat` | `chat` | `show(text)`: a line only the local player sees, after the mod's name (8 per call) |
 | `hud` | `hud` | `set-panel(corner, lines)`, `clear()`: up to 16 lines of 256 characters |
+| `storage` | `storage` | `get(key)`, `set(key, value)`, `delete(key)`: a per-mod folder of up to 64 files, 4 MiB total, at most 1 MiB written per call |
 
 | Hook (export) | When |
 |---|---|
@@ -111,7 +112,6 @@ loading. Ordered by what the first native ports need ([research](research/java-m
 | `ui` | widgets: text, item icons, lists, a screen the mod owns, a settings page in Options > Mods | built on `ui_theme` so it matches the menus |
 | `world-read` | blocks and biomes around the player, within the render distance | minimaps, schematics |
 | `render` | world-space lines, boxes and ghost blocks in a per-frame budget | Litematica-style placement, waypoints |
-| `storage` | a per-mod folder of key/value files, quota'd | settings, waypoints |
 | `registries` | new blocks, items, entities and recipes, mostly data: JSON models, textures, loot and recipes in the `.hmod`'s `assets/` and `data/` | server side; see [Multiplayer](#multiplayer) |
 | `server` | world events (block break/place, entity spawn/death, player join), game rules, server commands | runs where the world is simulated |
 | `net` | a mod's own client↔server channel (custom payloads) | only between the two halves of the same mod |
@@ -192,6 +192,10 @@ allocation, next to a healthy mod).
    (`mod.<id>:true`).
 3. A mod that failed to load or stopped shows why, in red, on its row.
 
+Two turned-on mods never share an `id` while running (it is also capability
+`storage`'s directory): the one `find` lists first starts, the other stays
+off with the reason on its row.
+
 Benchmarks (`--benchmark`) never load mods.
 
 ## Making a mod
@@ -208,8 +212,8 @@ cargo horizon-mod build             # again after an edit: the running game relo
 `run` starts `horizon-client` (on `PATH`, or `--game PATH`, or
 `HORIZON_CLIENT`) with `--dev-mod target/horizon-mod/<id>.hmod`. A dev mod is
 always on, and the game checks its file once a second: rebuild and it restarts
-with "Mods reloaded" in chat. Its state starts over (persisted state comes with
-`storage`).
+with "Mods reloaded" in chat. Its in-memory state starts over; whatever it
+saved with capability `storage` survives the reload.
 
 ### Template layout
 
@@ -398,8 +402,9 @@ none.
 
 1. Design (this page) and the Java research.
 2. SDK, example mod, runtime, `cargo horizon-mod`, the game's Mods page: API 0.1.
-3. `keys`, `target`, `inventory-read`, `storage`, `ui`: enough for the first
-   native ports (zoom presets, AppleSkin-style food HUD, Jade-style tooltips).
+3. `storage` (done), `keys`, `target`, `inventory-read`, `ui`: enough for the
+   first native ports (zoom presets, AppleSkin-style food HUD, Jade-style
+   tooltips).
 4. Launcher Mods tab, the index, signatures; the Mods page shows cost and
    update state.
 5. `recipes`, `world-read`, `render`: recipe viewer and schematics ports.
