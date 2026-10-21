@@ -85,6 +85,24 @@ impl Game<'_> {
     pub(super) fn completes_golem(&self, head: [i32; 3]) -> bool {
         self.find_golem(head).is_some() || self.copper_golem_base(head)
     }
+    /// `Level.setBlock` of the golem head `state` at `head`, then
+    /// `CarvedPumpkinBlock.onPlace`. When the head completes a golem, onPlace
+    /// builds it inside setBlock and the spot is air again by the time
+    /// setBlock would update neighbours, so it skips them.
+    pub(super) fn set_golem_head(
+        &mut self,
+        head: [i32; 3],
+        state: horizon_world::registry::BlockStateId,
+    ) -> Result<()> {
+        if self.completes_golem(head) {
+            let at = horizon_core::position::BlockPos::new(head[0], head[1], head[2]);
+            self.with_level(|b, level, ticks| b.set_block(level, ticks, at, state, 2 | 16));
+            self.process_level_events()?;
+        } else {
+            self.level_set(head, state)?;
+        }
+        self.check_golem_spawn(head)
+    }
     /// `EntityType.create(level, TRIGGERED)` and `snapTo`: a built golem or
     /// wither has no spawn finalization and draws nothing from the level.
     pub(super) fn create_triggered(&mut self, kind: &str, at: [f64; 3], yaw: f32) -> Option<u32> {
