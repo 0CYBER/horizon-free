@@ -110,8 +110,13 @@ impl Game<'_> {
                 .filter(|(l, _)| *l == level)
                 .map(|(_, p)| p.clone())
                 .collect();
+            let away: Vec<(u128, u32)> = players
+                .iter()
+                .filter(|(l, _)| *l != level)
+                .filter_map(|(_, p)| Some((p.uuid, p.conn?)))
+                .collect();
             let manager = host.waypoints.entry(level.clone()).or_default();
-            out.extend(manager.tick(&here, &respawned, locator_bar));
+            out.extend(manager.tick_level(&here, &away, &respawned, locator_bar));
             // Nobody left in the level: nothing to remember there.
             if here.is_empty() {
                 host.waypoints.remove(&level);
