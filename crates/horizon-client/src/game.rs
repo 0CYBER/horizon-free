@@ -6172,7 +6172,9 @@ impl Game<'_> {
             && p.fire_ticks > 0
             && !p.spectator
         {
-            let feet = self.previous_position.lerp(p.position, alpha);
+            let feet = self
+                .previous_position
+                .lerp(p.position, self.clock.camera_fraction());
             horizon_client::fire_render::flames(
                 [feet.x, feet.y, feet.z],
                 p.dimensions.width,
@@ -6238,7 +6240,7 @@ impl Game<'_> {
         self.ominous_item_spawner_geometry(camera, alpha, &mut out);
         // Mobs and their projectiles.
         self.mob_geometry(camera, alpha, &mut out);
-        self.player_model_geometry(camera, alpha, &mut out);
+        self.player_model_geometry(camera, self.clock.camera_fraction(), &mut out);
         self.guest_model_geometry(camera, alpha, &mut out);
         self.fangs_geometry(camera, alpha, &mut out);
         let mut see_through = std::mem::take(&mut self.see_through_vertices);
@@ -9212,11 +9214,14 @@ impl Game<'_> {
             return Ok(false);
         };
         let alpha = self.clock.fraction();
+        // Camera.getCameraEntityPartialTicks: the view, the hand and the
+        // player's own model stay smooth while the level is frozen.
+        let camera_alpha = self.clock.camera_fraction();
         let live = self.backdrop_live();
         let view = if live {
             self.backdrop_view()
         } else {
-            self.camera_view(alpha as f32)
+            self.camera_view(camera_alpha as f32)
         };
         let (camera, underwater, view_yaw, view_pitch) = match view {
             Some((c, yaw, pitch)) => {
@@ -9357,12 +9362,12 @@ impl Game<'_> {
         } else if title {
             85.0
         } else {
-            self.fov_degrees(alpha as f32, camera.to_array())
+            self.fov_degrees(camera_alpha as f32, camera.to_array())
         };
         let bob = if title {
             glam::Mat4::IDENTITY
         } else {
-            self.bob_matrix(alpha as f32)
+            self.bob_matrix(camera_alpha as f32)
         };
         let terrain_distance = self.terrain_distance();
         let distance = (terrain_distance * 16) as f32;
@@ -9419,7 +9424,7 @@ impl Game<'_> {
         let hand = if title || self.scoping() {
             Vec::new()
         } else {
-            self.hand_geometry(alpha)
+            self.hand_geometry(camera_alpha)
         };
         let screen = if title {
             Vec::new()
@@ -9512,7 +9517,7 @@ impl Game<'_> {
             },
             stars: stars.filter(|_| self.settings.horizon.sky || title),
             hand: &hand,
-            hand_fov_degrees: self.hud_fov_degrees(alpha as f32, camera.to_array()),
+            hand_fov_degrees: self.hud_fov_degrees(camera_alpha as f32, camera.to_array()),
             screen: &screen,
             border,
             game_time: self.world.game_time as f32,

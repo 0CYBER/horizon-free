@@ -24,7 +24,11 @@ use horizon_client::{
     ticket_levels::ChunkTickets, world::World,
 };
 use horizon_world::level::{LevelEvent, Ticks};
-use std::{collections::HashMap, sync::Arc, time::Instant};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 /// Server ticks a level other than the Overworld stays loaded with no player
 /// in it, before it is saved and closed (vanilla unloads a level's chunks
@@ -320,6 +324,35 @@ impl Game<'_> {
             );
         }
         result
+    }
+
+    /// The end of `MinecraftServer.runServer`'s loop for a server thread: a
+    /// finished `/tick sprint` reports to the operators as the server, then
+    /// the next tick starts one tick length after this one, or straight away
+    /// while the sprint runs (`checkShouldSprintThisTick`).
+    pub(super) fn wait_for_next_server_tick(&mut self, next: &mut Instant, paused: bool) {
+        if let Some(report) = self.clock.take_sprint_report() {
+            // ServerTickRateManager.finishTickSprint: the server's sendSuccess.
+            self.console_broadcast = Some(true);
+            self.sprint_report(&report);
+            self.console_broadcast = None;
+            if let Some(mut host) = self.lan.take() {
+                self.send_admin_feedback(&mut host, None);
+                self.lan = Some(host);
+            }
+            self.admin_feedback.clear();
+        }
+        let now = Instant::now();
+        if !paused && self.clock.sprinting() {
+            *next = now;
+            return;
+        }
+        *next += self.clock.tick_duration();
+        if *next > now {
+            std::thread::sleep(*next - now);
+        } else if now - *next > Duration::from_secs(2) {
+            *next = now;
+        }
     }
 
     /// The levels this server tick runs, in `MinecraftServer.levels` order
