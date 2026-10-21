@@ -2098,15 +2098,21 @@ impl Game<'_> {
                     }
                 },
                 Hit::Block { pos, face, .. } => {
+                    // SmallFireball.onHitBlock: a mob's only with mobGriefing;
+                    // BaseFireBlock.getState placed with updates (the fire
+                    // ticks, ages and goes out where it can't stay).
                     let fire = [pos[0] + face[0], pos[1] + face[1], pos[2] + face[2]];
-                    if self
-                        .res
-                        .facts()
-                        .is_air(self.world.block(fire[0], fire[1], fire[2]))
-                        && let Some(state) =
-                            self.pack.assets.registry.default_state("minecraft:fire")
+                    let mob = matches!(p.owner, Some(Who::Mob(_)));
+                    if (!mob || self.ui.rules.bool("mob_griefing"))
+                        && self
+                            .res
+                            .facts()
+                            .is_air(self.world.block(fire[0], fire[1], fire[2]))
                     {
-                        self.world.set(fire[0], fire[1], fire[2], state)?;
+                        let at = BlockPos::new(fire[0], fire[1], fire[2]);
+                        let state =
+                            self.with_level(|b, level, ticks| b.fire_state_for(level, ticks, at));
+                        self.level_set(fire, state)?;
                     }
                 }
                 Hit::None => {}
