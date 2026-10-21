@@ -24,6 +24,9 @@ pub struct ItemEntity {
     pub age: u32,
     pub pickup_delay: u32,
     pub bob_offset: f32,
+    /// `Entity.tickCount`: ticks since the item entered the level, which
+    /// paces `ItemEntity.mergeWithNeighbours`.
+    pub ticks: u32,
 }
 /// Environment results needed by the entity owner, including lethal lava damage.
 #[derive(Debug)]
@@ -102,6 +105,7 @@ impl ItemEntity {
         facts: &BlockFacts,
         collision: &BlockCollisionRegistry<'_>,
     ) -> bool {
+        self.ticks += 1;
         self.previous = self.position;
         if self.pickup_delay > 0 && self.pickup_delay != u32::MAX {
             self.pickup_delay -= 1;
@@ -174,6 +178,130 @@ impl ItemEntity {
         }
         self.age += 1;
         self.age < 6000 && self.position.y > -128.0
+    }
+    /// `ItemEntity.isMergable` at `age`: a stack below its size whose pickup
+    /// delay isn't infinite, before its lifetime ends.
+    fn mergeable(&self, age: u32, max_stack: u32) -> bool {
+        self.pickup_delay != u32::MAX && age < 6000 && self.stack.count < max_stack
+    }
+}
+/// Dropped items by block cell, for `ItemEntity.mergeWithNeighbours`'s
+/// search around an item. Holds indexes into the tick's item list.
+#[derive(Default)]
+pub struct ItemCells {
+    cells: crate::fast_hash::FxHashMap<(i32, i32, i32), Vec<u32>>,
+}
+impl ItemCells {
+    pub fn new(items: &[ItemEntity]) -> Self {
+        let mut cells = Self::default();
+        for (i, item) in items.iter().enumerate() {
+            cells.add(i, item.position);
+        }
+        cells
+    }
+    fn cell(p: Vec3) -> (i32, i32, i32) {
+        (p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32)
+    }
+    fn add(&mut self, i: usize, at: Vec3) {
+        self.cells.entry(Self::cell(at)).or_default().push(i as u32);
+    }
+    pub fn remove(&mut self, i: usize, at: Vec3) {
+        if let Some(list) = self.cells.get_mut(&Self::cell(at)) {
+            list.retain(|&j| j as usize != i);
+        }
+    }
+    pub fn moved(&mut self, i: usize, from: Vec3, to: Vec3) {
+        if Self::cell(from) != Self::cell(to) {
+            self.remove(i, from);
+            self.add(i, to);
+        }
+    }
+    /// The items whose cells could hold a box meeting `area`, in the order
+    /// they were added (vanilla lists a section's entities in the order they
+    /// entered it).
+    fn near(&self, area: Aabb, out: &mut Vec<u32>) {
+        out.clear();
+        // An item's box reaches 0.125 sideways and 0.25 up from its position.
+        let (min, max) = (area.min_position(), area.max_position());
+        let (lo, hi) = (
+            Self::cell(Vec3::new(min.x - 0.125, min.y - 0.25, min.z - 0.125)),
+            Self::cell(Vec3::new(max.x + 0.125, max.y, max.z + 0.125)),
+        );
+        for x in lo.0..=hi.0 {
+            for y in lo.1..=hi.1 {
+                for z in lo.2..=hi.2 {
+                    if let Some(list) = self.cells.get(&(x, y, z)) {
+                        out.extend_from_slice(list);
+                    }
+                }
+            }
+        }
+        out.sort_unstable();
+    }
+}
+/// `ItemEntity.mergeWithNeighbours` for `items[i]`, which has just moved in
+/// its tick (its `age` already counts this tick; vanilla's doesn't yet): each
+/// mergeable item whose box meets this one's grown by 0.5 sideways takes this
+/// stack or gives it its own, the smaller into the larger
+/// (`ItemEntity.tryToMerge`), until this item is used up. An emptied item is
+/// marked in `removed`.
+pub fn merge_with_neighbours(
+    items: &mut [ItemEntity],
+    removed: &mut [bool],
+    cells: &mut ItemCells,
+    i: usize,
+    max_stack: &dyn Fn(&ItemStack) -> u32,
+) {
+    let age = |items: &[ItemEntity], j: usize| {
+        if j == i {
+            items[j].age - 1
+        } else {
+            items[j].age
+        }
+    };
+    if removed[i] || !items[i].mergeable(age(items, i), max_stack(&items[i].stack)) {
+        return;
+    }
+    let area = items[i].bounds().inflate(Vec3::new(0.5, 0.0, 0.5));
+    let mut near = Vec::new();
+    cells.near(area, &mut near);
+    for j in near {
+        let j = j as usize;
+        if j == i
+            || removed[j]
+            || !items[j].bounds().intersects(area)
+            || !items[j].mergeable(age(items, j), max_stack(&items[j].stack))
+        {
+            continue;
+        }
+        // ItemEntity.areMergable: both fit one stack of the same item and components.
+        let (this, other) = (&items[i].stack, &items[j].stack);
+        if this.count + other.count > max_stack(other) || !this.same_item_same_components(other) {
+            continue;
+        }
+        let (to, from) = if other.count < this.count {
+            (i, j)
+        } else {
+            (j, i)
+        };
+        // ItemEntity.merge(toStack, fromStack, 64).
+        let room = max_stack(&items[to].stack).min(64) - items[to].stack.count;
+        let moved = room.min(items[from].stack.count);
+        items[to].stack.count += moved;
+        items[from].stack.count -= moved;
+        let (delay, from_age, to_age) =
+            (items[from].pickup_delay, age(items, from), age(items, to));
+        let to_item = &mut items[to];
+        to_item.pickup_delay = to_item.pickup_delay.max(delay);
+        // This item's age goes up once its tick ends.
+        to_item.age = to_age.min(from_age) + u32::from(to == i);
+        if items[from].stack.count == 0 {
+            removed[from] = true;
+            cells.remove(from, items[from].position);
+        }
+        if removed[i] {
+            return;
+        }
     }
 }
 /// ExperienceOrb: gravity 0.03, homing towards the player within 8 blocks.
@@ -634,6 +762,7 @@ mod fire_environment_tests {
             age: 0,
             pickup_delay: 0,
             bob_offset: 0.0,
+            ticks: 0,
         };
         let mut wood = make("minecraft:oak_planks");
         let mut metal = make("minecraft:netherite_ingot");
@@ -703,5 +832,181 @@ mod fire_environment_tests {
             assert!(stand.environment_tick(&world, &facts, assets.registry));
         }
         assert_eq!(stand.health, 20.0, "lava does not hurt armor stands");
+    }
+}
+#[cfg(test)]
+mod merge_tests {
+    use super::*;
+
+    fn item(id: &str, count: u32, x: f64, age: u32) -> ItemEntity {
+        let at = Vec3::new(x, 64.0, 0.5);
+        ItemEntity {
+            id: 0,
+            thrower: None,
+            stack: ItemStack {
+                item: std::sync::Arc::from(id),
+                count,
+                damage: 0,
+                extra: None,
+            },
+            health: 5,
+            fire_ticks: 0,
+            position: at,
+            previous: at,
+            velocity: Vec3::ZERO,
+            on_ground: true,
+            age,
+            pickup_delay: 0,
+            bob_offset: 0.0,
+            ticks: age,
+        }
+    }
+    fn max_stack(stack: &ItemStack) -> u32 {
+        if &*stack.item == "minecraft:ender_pearl" {
+            16
+        } else {
+            64
+        }
+    }
+    /// Merges around `items[i]` as its tick would; returns the counts left.
+    fn merge(items: &mut [ItemEntity], i: usize) -> Vec<Option<u32>> {
+        let mut removed = vec![false; items.len()];
+        let mut cells = ItemCells::new(items);
+        merge_with_neighbours(items, &mut removed, &mut cells, i, &max_stack);
+        items
+            .iter()
+            .zip(removed)
+            .map(|(item, gone)| (!gone).then_some(item.stack.count))
+            .collect()
+    }
+
+    #[test]
+    fn the_smaller_stack_goes_into_the_larger() {
+        let mut items = [
+            item("minecraft:sand", 3, 0.5, 41),
+            item("minecraft:sand", 5, 1.2, 7),
+        ];
+        assert_eq!(merge(&mut items, 0), [None, Some(8)]);
+        // ItemEntity.merge keeps the younger age; the ticking item's is
+        // still the one before its tick.
+        assert_eq!(items[1].age, 7);
+        let mut items = [
+            item("minecraft:sand", 5, 0.5, 41),
+            item("minecraft:sand", 3, 1.2, 7),
+        ];
+        assert_eq!(merge(&mut items, 0), [Some(8), None]);
+        assert_eq!(items[0].age, 8, "age 7, plus the rest of this tick");
+    }
+
+    #[test]
+    fn items_merge_only_within_half_a_block_sideways() {
+        // Boxes 0.25 wide grown by 0.5: centres closer than 0.75 meet.
+        let mut items = [
+            item("minecraft:sand", 1, 0.5, 1),
+            item("minecraft:sand", 1, 1.24, 1),
+        ];
+        assert_eq!(merge(&mut items, 0), [None, Some(2)]);
+        let mut items = [
+            item("minecraft:sand", 1, 0.5, 1),
+            item("minecraft:sand", 1, 1.26, 1),
+        ];
+        assert_eq!(merge(&mut items, 0), [Some(1), Some(1)]);
+        let mut items = [
+            item("minecraft:sand", 1, 0.5, 1),
+            item("minecraft:sand", 1, 0.5, 1),
+        ];
+        items[1].position.y += 0.3;
+        assert_eq!(
+            merge(&mut items, 0),
+            [Some(1), Some(1)],
+            "no vertical growth"
+        );
+    }
+
+    #[test]
+    fn different_or_full_stacks_stay_apart() {
+        let mut items = [
+            item("minecraft:sand", 1, 0.5, 1),
+            item("minecraft:gravel", 1, 0.5, 1),
+        ];
+        assert_eq!(merge(&mut items, 0), [Some(1), Some(1)]);
+        let mut items = [
+            item("minecraft:sand", 60, 0.5, 1),
+            item("minecraft:sand", 10, 0.5, 1),
+        ];
+        assert_eq!(
+            merge(&mut items, 0),
+            [Some(60), Some(10)],
+            "70 is over a stack"
+        );
+        let mut items = [
+            item("minecraft:ender_pearl", 10, 0.5, 1),
+            item("minecraft:ender_pearl", 6, 0.5, 1),
+        ];
+        assert_eq!(merge(&mut items, 0), [Some(16), None]);
+        let mut items = [
+            item("minecraft:ender_pearl", 16, 0.5, 1),
+            item("minecraft:ender_pearl", 1, 0.5, 1),
+        ];
+        assert_eq!(
+            merge(&mut items, 0),
+            [Some(16), Some(1)],
+            "a full stack doesn't merge"
+        );
+    }
+
+    #[test]
+    fn unmergeable_items_are_skipped() {
+        let mut items = [
+            item("minecraft:sand", 1, 0.5, 1),
+            item("minecraft:sand", 1, 0.5, 1),
+        ];
+        items[1].pickup_delay = u32::MAX;
+        assert_eq!(merge(&mut items, 0), [Some(1), Some(1)]);
+        // At age 6000 the other item's lifetime is over; this one's tick
+        // started at 5999, so it may still merge into a live item.
+        let mut items = [
+            item("minecraft:sand", 1, 0.5, 6000),
+            item("minecraft:sand", 1, 0.5, 6000),
+        ];
+        assert_eq!(merge(&mut items, 0), [Some(1), Some(1)]);
+        items[1].age = 10;
+        assert_eq!(merge(&mut items, 0), [None, Some(2)]);
+        assert_eq!(items[1].age, 10);
+    }
+
+    #[test]
+    fn a_stack_takes_its_neighbours_in_spawn_order_until_full() {
+        let mut items = [
+            item("minecraft:sand", 40, 0.5, 1),
+            item("minecraft:sand", 20, 0.7, 1),
+            item("minecraft:sand", 10, 0.3, 1),
+            item("minecraft:sand", 3, 0.4, 1),
+        ];
+        // 40 + 20 = 60; 60 + 10 is over 64; then 3 more.
+        assert_eq!(merge(&mut items, 0), [Some(63), None, Some(10), None]);
+        let mut items = [
+            item("minecraft:sand", 1, 0.5, 1),
+            item("minecraft:sand", 1, 0.5, 1),
+        ];
+        items[1].pickup_delay = 30;
+        assert_eq!(merge(&mut items, 0), [None, Some(2)]);
+        assert_eq!(items[1].pickup_delay, 30, "the longer pickup delay stays");
+    }
+
+    #[test]
+    fn the_cells_follow_moves() {
+        let mut items = [
+            item("minecraft:sand", 1, 0.5, 1),
+            item("minecraft:sand", 1, 5.5, 1),
+        ];
+        let mut removed = [false; 2];
+        let mut cells = ItemCells::new(&items);
+        let from = items[1].position;
+        items[1].position.x = 0.9;
+        cells.moved(1, from, items[1].position);
+        merge_with_neighbours(&mut items, &mut removed, &mut cells, 0, &max_stack);
+        assert_eq!(removed, [true, false]);
+        assert_eq!(items[1].stack.count, 2);
     }
 }

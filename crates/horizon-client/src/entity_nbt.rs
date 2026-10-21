@@ -914,6 +914,7 @@ pub fn item_entity_from_nbt(tag: &Tag, id: u32, bob_offset: f32) -> Option<ItemE
         age: number(tag.get("Age")).unwrap_or(0).max(0) as u32,
         pickup_delay: number(tag.get("PickupDelay")).unwrap_or(0).clamp(0, 32767) as u32,
         bob_offset,
+        ticks: 0,
     })
 }
 
@@ -1553,6 +1554,7 @@ mod tests {
             on_ground: true,
             age: 120,
             pickup_delay: 10,
+            ticks: 0,
             bob_offset: 0.0,
         };
         let tag = item_entity_to_nbt(&e, [1, 2, 3, 4], None);
