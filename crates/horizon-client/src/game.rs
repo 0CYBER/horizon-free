@@ -152,6 +152,7 @@ mod villagers;
 mod wandering_trader;
 mod wind;
 mod wither;
+mod world_loading;
 mod zombie_villagers;
 use horizon_client::{
     Result,
@@ -999,6 +1000,7 @@ struct Game<'a> {
     res: Arc<Resources>,
     rest_loader: Option<WorldRestLoader>,
     pending_entry: Option<PendingWorldEntry>,
+    world_loader: Option<world_loading::WorldLoader>,
     pending_pack_reload: bool,
     world_renderer_ready: bool,
     collision: &'a BlockCollisionRegistry<'a>,
@@ -6808,80 +6810,60 @@ impl Game<'_> {
             return self.open_integrated(folder, name, seed, creative, create);
         }
         self.perf.world_opening();
-        horizon_client::save::upgrade_older_world(&save_root)?;
-        horizon_client::save::migrate_legacy(&save_root)?;
-        self.session_lock = None;
-        self.session_lock = Some(horizon_client::save::SessionLock::acquire(&save_root)?);
+        let request = world_loading::WorldRequest {
+            save_root,
+            folder: folder.to_owned(),
+            name: name.map(str::to_owned),
+            seed,
+            creative,
+            create: create.cloned(),
+        };
+        if self.window.is_some() {
+            if self.title.is_none() {
+                self.title = Some(Title::new(
+                    std::env::current_dir()?.join("saves"),
+                    &self.options.resources,
+                ));
+            }
+            self.world_loader = Some(world_loading::WorldLoader::start(
+                request,
+                self.res.clone(),
+                self.pack.clone(),
+                self.options.clone(),
+                self.settings.clone(),
+            )?);
+            return Ok(());
+        }
+        let prepared = request.prepare(&self.res, &self.pack, &self.options, &self.settings)?;
+        self.finish_open_world(prepared)
+    }
+
+    fn finish_open_world(&mut self, prepared: world_loading::PreparedWorld) -> Result<()> {
+        let world_loading::PreparedWorld {
+            save_root,
+            level,
+            world,
+            streaming,
+            save,
+            session_lock,
+            rand_sequences,
+            locator,
+        } = prepared;
+        let dim = Dim::from_id(&level.dimension);
+        horizon_client::crash::set_detail(
+            "World",
+            format!("{} ({})", level.name, save_root.display()),
+        );
+        self.session_lock = Some(session_lock);
+        self.end.set_locator(locator);
         self.score = Default::default();
         self.fns = Default::default();
         self.bosses = Default::default();
         reset_world_progress(&mut self.adv, &mut self.stats);
         self.prefetch_advancement_tree();
         self.restore_player_state = true;
-        // RandomSequences: the world's data/minecraft/random_sequences.dat.
-        self.rand_sequences =
-            horizon_client::save::read_dat(&save_root.join("data/minecraft/random_sequences.dat"))
-                .and_then(|t| t.get("data").cloned())
-                .map(|d| horizon_client::random_sequences::RandomSequences::from_nbt(&d))
-                .unwrap_or_default();
+        self.rand_sequences = rand_sequences;
         self.border = Default::default();
-        let existing = Level::read(&save_root);
-        let created = existing.is_none();
-        let level = existing.unwrap_or_else(|| Level {
-            name: name.unwrap_or(folder).to_owned(),
-            // WorldOptions.randomSeed when no seed was given.
-            seed: seed.unwrap_or_else(|| {
-                let t = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.as_nanos() as u64);
-                (t ^ (t >> 29)).wrapping_mul(0x9E37_79B9_7F4A_7C15) as i64
-            }),
-            creative,
-            day_time: 0,
-            health: 20.0,
-            food: 20,
-            saturation: 5.0,
-            ..Level::default()
-        });
-        let mut level = level;
-        // CreateWorldScreen's choices, before streaming reads the generator.
-        if created && let Some(o) = create {
-            level.hardcore = o.hardcore;
-            level.difficulty = horizon_client::title::DIFFICULTIES[o.difficulty()].into();
-            level.allow_commands = Some(o.commands(creative));
-            horizon_client::save::write_world_gen_settings(&save_root, level.seed, o.world_gen())?;
-        }
-        // Worlds made without the Create New World screen (--world, the
-        // control socket) take its default: commands on for Creative only.
-        if created {
-            level.allow_commands.get_or_insert(creative);
-        }
-        horizon_client::crash::set_detail("World", format!("{} (saves/{folder})", level.name));
-        if let Some(d) = &self.options.dimension {
-            level.dimension = d.clone();
-            level.position = None;
-        }
-        let dim = Dim::from_id(&level.dimension);
-        let (mut streaming, save) = self.make_streaming(&save_root, dim, level.seed)?;
-        streaming.radius = self.settings.render_distance;
-        let mut world = World::new(self.res.facts().air, level.seed);
-        world.fast_lava = dim == Dim::Nether;
-        world.game_time = level.time;
-        world.day_time = self.options.time.unwrap_or(level.day_time);
-        world.weather = level.weather;
-        if let Some(w) = self.options.weather.as_deref() {
-            // /weather: clear, rain or thunder for a long duration.
-            let (rain, thunder) = (w != "clear", w == "thunder");
-            world.weather = horizon_client::world::Weather {
-                clear_time: if w == "clear" { 6000 } else { 0 },
-                rain_time: 6000,
-                thunder_time: 6000,
-                raining: rain,
-                thundering: thunder,
-                rain_level: if rain { (1.0, 1.0) } else { (0.0, 0.0) },
-                thunder_level: if thunder { (1.0, 1.0) } else { (0.0, 0.0) },
-            };
-        }
         self.set_mode_id(level.mode());
         let mut inventory = vec![None; 36];
         self.armor = [None, None, None, None];
@@ -6949,7 +6931,6 @@ impl Game<'_> {
         self.dim = dim;
         self.world_root = save_root.clone();
         self.block_ticks = Ticks::new(self.level.seed as i32);
-        self.install_live_features();
         self.tick_chunks.clear();
         self.clear_entities();
         self.travelling = None;
@@ -6998,10 +6979,6 @@ impl Game<'_> {
         self.apply_settings();
         self.streaming.sky_light = dim != Dim::Nether;
         self.streaming.nether_shading = dim == Dim::Nether;
-        // New worlds get their level.dat right away.
-        if !save_root.join("level.dat").exists() {
-            self.level.write(&save_root)?;
-        }
         self.load_world_state();
         Ok(())
     }
@@ -7012,74 +6989,16 @@ impl Game<'_> {
         dim: Dim,
         seed: i64,
     ) -> Result<(Streaming, Arc<SaveDir>)> {
-        let save = Arc::new(SaveDir::new(horizon_client::save::dimension_dir(
+        let (streaming, save, locator) = world_loading::make_streaming(
+            &self.res,
+            &self.pack,
+            &self.options,
+            &self.settings,
             world_root,
-            dim.id(),
-        )));
-        let (res, pack) = (&*self.res, &self.pack);
-        let flat = (dim == Dim::Overworld)
-            .then(|| horizon_client::save::world_gen_settings(world_root))
-            .flatten()
-            .and_then(|s| {
-                horizon_client::flatgen::FlatTerrain::from_settings(
-                    &s,
-                    pack.assets.registry,
-                    res.biomes(),
-                )
-            });
-        let mut streaming = if let Some(inner) = flat {
-            Streaming::new(
-                Arc::new(Persistent {
-                    inner: Arc::new(inner),
-                    save: save.clone(),
-                    registry: pack.assets.clone(),
-                    biomes: res.biomes().clone(),
-                }),
-                pack.context.clone(),
-                res.threads(),
-            )
-        } else if self.options.test_terrain && dim == Dim::Overworld {
-            let inner = Arc::new(TestTerrain::new(pack.assets.registry, res.biomes())?);
-            Streaming::new(
-                Arc::new(Persistent {
-                    inner,
-                    save: save.clone(),
-                    registry: pack.assets.clone(),
-                    biomes: res.biomes().clone(),
-                }),
-                pack.context.clone(),
-                res.threads(),
-            )
-        } else {
-            // WorldOptions.generateStructures, from the world's settings.
-            let structures =
-                horizon_client::save::WorldGen::read(world_root).is_none_or(|w| w.structures);
-            let inner = Arc::new(VanillaTerrain::for_world(&self.options.resources.join("worldgen"), pack.assets.registry, res.biomes(), seed, dim.id(), structures).map_err(|e| {
-                format!("{e}\nPrepare the worldgen bundle with the launcher, or: horizon-prepare --prepare")
-            })?);
-            self.end.set_locator(Some(inner.clone()));
-            Streaming::new(
-                Arc::new(Persistent {
-                    inner,
-                    save: save.clone(),
-                    registry: pack.assets.clone(),
-                    biomes: res.biomes().clone(),
-                }),
-                pack.context.clone(),
-                res.threads(),
-            )
-        };
-        streaming.radius = self.settings.render_distance;
-        streaming.biome_blend = self.settings.biome_blend;
-        streaming.smooth_lighting = self.settings.smooth_lighting;
-        streaming.cutout_leaves = self.settings.cutout_leaves;
-        streaming.cull_leaves = self.settings.horizon.cull_leaves;
-        streaming.biome_zoom = BiomeZoom::new(obfuscate_seed(seed));
-        streaming.sky_light = dim != Dim::Nether;
-        streaming.nether_shading = dim == Dim::Nether;
-        // A server draws nothing: neither the integrated server nor the
-        // dedicated one meshes sections.
-        streaming.mesh = !self.options.integrated && self.options.dedicated.is_none();
+            dim,
+            seed,
+        )?;
+        self.end.set_locator(locator);
         Ok((streaming, save))
     }
     /// Change dimension through a portal (Entity.changeDimension with
@@ -9115,6 +9034,23 @@ impl Game<'_> {
         Ok(())
     }
     fn render(&mut self) -> Result<bool> {
+        if let Some(loader) = &self.world_loader {
+            if let Some(renderer) = &mut self.renderer {
+                let mut hud = HudBatch::new([renderer.config.width, renderer.config.height]);
+                horizon_client::level_loading::draw_progress(
+                    &mut hud,
+                    &self.gui.atlas,
+                    if loader.cancelled {
+                        "Cancelling world"
+                    } else {
+                        "Opening world"
+                    },
+                    0.0,
+                );
+                return renderer.render(&loading_frame(&hud));
+            }
+            return Ok(false);
+        }
         if self.pending_entry.is_some() {
             if let (Some(renderer), Some(loader)) = (&mut self.renderer, &self.rest_loader) {
                 let mut hud = HudBatch::new([renderer.config.width, renderer.config.height]);
@@ -10103,16 +10039,23 @@ impl ApplicationHandler for Game<'_> {
             // The press state of Horizon-style buttons.
             horizon_client::ui_theme::set_pressed(*state == ElementState::Pressed);
         }
-        if self.pending_entry.is_some()
+        if (self.pending_entry.is_some() || self.world_loader.is_some())
             && matches!(&event, WindowEvent::KeyboardInput { event, .. }
                 if event.state == ElementState::Pressed
                     && event.physical_key == PhysicalKey::Code(KeyCode::Escape))
         {
             self.pending_entry = None;
+            if let Some(loader) = self.world_loader.take() {
+                self.world_loader = Some(if loader.cancelled {
+                    loader
+                } else {
+                    loader.cancel()
+                });
+            }
             self.perf.cancel_world_opening();
             return;
         }
-        if self.pending_entry.is_some()
+        if (self.pending_entry.is_some() || self.world_loader.is_some())
             && !matches!(
                 &event,
                 WindowEvent::CloseRequested
@@ -10872,6 +10815,7 @@ impl<'a> Game<'a> {
             res: res.clone(),
             rest_loader: None,
             pending_entry: None,
+            world_loader: None,
             pending_pack_reload: false,
             world_renderer_ready: false,
             collision: res.collision(),
@@ -11262,7 +11206,7 @@ impl WorldRestLoader {
 impl Game<'_> {
     fn defer_world_entry(&mut self, entry: PendingWorldEntry) -> Result<bool> {
         self.poll_world_rest()?;
-        if self.rest_loader.is_none() {
+        if self.rest_loader.is_none() && self.world_loader.is_none() {
             return Ok(false);
         }
         self.perf.world_opening();
@@ -11279,6 +11223,20 @@ impl Game<'_> {
 
     fn resume_world_entry(&mut self) -> Result<()> {
         self.poll_world_rest()?;
+        if let Some(loader) = &self.world_loader {
+            if !loader.ready() {
+                return Ok(());
+            }
+            let loader = self
+                .world_loader
+                .take()
+                .ok_or("missing world initialization worker")?;
+            let cancelled = loader.cancelled;
+            let prepared = loader.finish();
+            if !cancelled {
+                self.finish_open_world(prepared?)?;
+            }
+        }
         if self.rest_loader.is_some() {
             return Ok(());
         }
@@ -11931,7 +11889,24 @@ fn start_game<'a>(
         }
         Some(folder) => {
             let (seed, creative) = (game.options.seed, game.options.creative);
-            game.open_world(&folder, None, Some(seed), creative, None)?;
+            if std::env::var_os("HORIZON_COMMAND_SCRIPT").is_some() {
+                // The command harness runs before entering the window loop.
+                game.open_world(&folder, None, Some(seed), creative, None)?;
+            } else {
+                // Start after the window is handed over, so --world uses the
+                // same responsive initialization path as the title screen.
+                game.title = Some(Title::new(
+                    std::env::current_dir()?.join("saves"),
+                    &game.options.resources,
+                ));
+                game.pending_entry = Some(PendingWorldEntry::Local {
+                    folder,
+                    name: None,
+                    seed: Some(seed),
+                    creative,
+                    create: None,
+                });
+            }
         }
         None if handoff => {}
         None => {

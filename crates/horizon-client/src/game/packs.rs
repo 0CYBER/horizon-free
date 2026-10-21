@@ -109,7 +109,7 @@ impl Game<'_> {
     pub(super) fn reload_packs(&mut self) {
         // Pack reload updates tail-owned mob metadata. Keep menus responsive
         // until those resources exist, then apply the latest selection once.
-        if self.rest_loader.is_some() {
+        if self.rest_loader.is_some() || self.world_loader.is_some() {
             self.pending_pack_reload = true;
             return;
         }
