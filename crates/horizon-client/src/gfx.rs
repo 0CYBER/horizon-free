@@ -696,6 +696,23 @@ fn check_layers(limits: &wgpu::Limits, layers: u32) -> Result<()> {
     }
     Ok(())
 }
+/// The swapchain format: a non-sRGB target, because vanilla blends and tints in gamma
+/// space, and 8-bit, because wgpu gives `Rgba16Float` the linear `ExtendedSrgb` color
+/// space: the compositor would read these gamma-encoded values as linear light and wash
+/// every colour out.
+fn surface_format(
+    formats: &[wgpu::TextureFormat],
+    default: wgpu::TextureFormat,
+) -> wgpu::TextureFormat {
+    [
+        wgpu::TextureFormat::Bgra8Unorm,
+        wgpu::TextureFormat::Rgba8Unorm,
+    ]
+    .into_iter()
+    .find(|f| formats.contains(f))
+    .or_else(|| formats.iter().copied().find(|f| !f.is_srgb()))
+    .unwrap_or(default)
+}
 /// Opens a device on the first of `backend_order`'s backends that gives one.
 /// Offscreen rendering needs no surface, so it can use a GPU the window's
 /// display cannot present from (a headless compositor).
@@ -893,13 +910,7 @@ impl Renderer {
                 .get_default_config(&adapter, size.width.max(1), size.height.max(1))
                 .ok_or("surface has no supported configuration")?;
             let caps = surface.get_capabilities(&adapter);
-            // Vanilla blends and tints in gamma space: use a non-sRGB target.
-            config.format = caps
-                .formats
-                .iter()
-                .copied()
-                .find(|f| !f.is_srgb())
-                .unwrap_or(config.format);
+            config.format = surface_format(&caps.formats, config.format);
             config.view_formats = vec![config.format.remove_srgb_suffix()];
             // Screenshots copy the presented frame back from the swapchain.
             if caps.usages.contains(wgpu::TextureUsages::COPY_SRC) {
@@ -3787,10 +3798,19 @@ impl Renderer {
         if let Some(timer) = &mut self.gpu_timer {
             timer.end(&mut encoder);
         }
-        let readback = self
-            .screenshot
-            .take()
-            .map(|path| (path, self.copy_frame(&mut encoder, &target_texture)));
+        let readback = self.screenshot.take().and_then(|path| {
+            // The copy and PNG writer both assume 8-bit pixels; a float surface would make
+            // the row stride too small for the copy and abort in validation.
+            if self.config.format.block_copy_size(None) == Some(4) {
+                Some((path, self.copy_frame(&mut encoder, &target_texture)))
+            } else {
+                self.screenshot_result = Some(Err(format!(
+                    "screenshots need a 32-bit surface format, not {:?}",
+                    self.config.format
+                )));
+                None
+            }
+        });
         self.uploads.finish(&encoder);
         if has_section_copies {
             self.section_copy_bytes = 0;
@@ -4041,6 +4061,22 @@ fn frustum(m: Mat4) -> [Vec4; 6] {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn surface_is_8_bit_and_not_srgb() {
+        use super::surface_format;
+        use wgpu::TextureFormat::{Bgra8Unorm, Bgra8UnormSrgb, Rgba8Unorm, Rgba16Float};
+        // RADV's Wayland surfaces list the linear fp16 format first; choosing it makes the
+        // compositor read gamma-encoded values as linear light.
+        assert_eq!(
+            surface_format(&[Rgba16Float, Bgra8UnormSrgb, Bgra8Unorm], Bgra8UnormSrgb),
+            Bgra8Unorm
+        );
+        assert_eq!(
+            surface_format(&[Bgra8UnormSrgb, Rgba8Unorm], Bgra8UnormSrgb),
+            Rgba8Unorm
+        );
+        assert_eq!(surface_format(&[Rgba16Float], Bgra8UnormSrgb), Rgba16Float);
+    }
     #[test]
     fn special_material_batches_preserve_quad_order_and_offsets() {
         let quad = |layer, id| {
