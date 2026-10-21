@@ -1508,8 +1508,9 @@ impl Launcher {
             .flex_col()
             .gap(px(32.))
             .child(hero)
-            .child(actions)
-            .child(rows);
+            .child(actions);
+        // The preparation's progress and error right under the buttons, where the player
+        // looks after pressing Prepare, not below the fold (#666).
         if self.preparing {
             let last = self.prepare_log.back().cloned().unwrap_or_default();
             page = page.child(
@@ -1534,6 +1535,7 @@ impl Launcher {
         if let Some(e) = self.prepare_error.clone() {
             page = page.child(notice(e, &t));
         }
+        page = page.child(rows);
         if let Some(e) = self.client_error.clone() {
             page = page.child(notice(e, &t));
         }
