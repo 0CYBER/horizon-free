@@ -44,8 +44,8 @@ impl Game<'_> {
             });
             return Ok(());
         }
-        if self.integrated.is_some() {
-            self.integrated.as_ref().unwrap().request_stop();
+        if let Some(integrated) = &self.integrated {
+            integrated.request_stop();
             self.pending_save = Some(ClosingSave {
                 quit,
                 close: true,
