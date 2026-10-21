@@ -1912,6 +1912,10 @@ impl Game<'_> {
                 lines.push((line, u32::MAX));
             }
         }
+        // Fireworks / FireworkExplosion.addToTooltip.
+        for line in horizon_client::item_tooltip::firework_lines(stack, &translate) {
+            lines.push((line, rgba(170, 170, 170, 255)));
+        }
         if display.shows("minecraft:potion_contents")
             && (stack.item.ends_with("potion") || &*stack.item == "minecraft:tipped_arrow")
         {

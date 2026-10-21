@@ -204,12 +204,6 @@ impl PatrolLevel for PatrolCx<'_, '_, '_> {
     }
 }
 
-/// `DyeColor.getFireworkColor`.
-const FIREWORK_COLORS: [u32; 16] = [
-    0xF0F0F0, 0xEB8844, 0xC354CD, 0x6689D3, 0xDECF2A, 0x41CD34, 0xD88198, 0x434343, 0xABABAB,
-    0x287697, 0x7B2FBE, 0x253192, 0x51301A, 0x3B511A, 0xB3312C, 0x1E1B1B,
-];
-
 fn block_of(p: Vec3) -> [i32; 3] {
     [p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32]
 }
@@ -1108,7 +1102,7 @@ impl Game<'_> {
             flight,
             vec![horizon_client::particles::FireworkExplosion {
                 shape: horizon_client::particles::FireworkShape::Burst,
-                colors: vec![FIREWORK_COLORS[color & 15]],
+                colors: vec![horizon_client::particles::DYE_FIREWORK_COLORS[color & 15].1],
                 fade: Vec::new(),
                 trail: false,
                 twinkle: false,
