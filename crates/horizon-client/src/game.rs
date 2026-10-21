@@ -12390,6 +12390,10 @@ pub fn run() -> Result<()> {
     if options.dedicated.is_some() && !dedicated::preflight(&mut options)? {
         return Ok(());
     }
+    if options.dedicated.is_some() {
+        // Before any worker starts: on Linux they go behind the server thread.
+        horizon_threads::put_helpers_behind();
+    }
     let started = Instant::now();
     horizon_client::spans::enable(options.spikes.is_some());
     let vanilla_root = options.resources.clone();

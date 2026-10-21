@@ -777,7 +777,11 @@ fn play(c: Connection, shared: &Arc<Shared>, parts: Parts, address: std::net::So
         let (alive, latency, pending) = (alive.clone(), latency.clone(), pending.clone());
         std::thread::Builder::new()
             .name(format!("horizon-lan-out-{conn_id}"))
-            .spawn(move || write_loop(writer, rx, alive, latency, pending))
+            .spawn(move || {
+                // A dedicated server's tick comes first (horizon_threads).
+                horizon_threads::behind_server();
+                write_loop(writer, rx, alive, latency, pending)
+            })
             .ok()
     };
     let joined = Joined {
