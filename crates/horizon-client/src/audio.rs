@@ -157,6 +157,9 @@ pub struct Audio {
     /// Positional sounds played since the last drain, kept while the world
     /// is open to the network so guests hear them too.
     pub capture: Option<Vec<(String, [f64; 3], f32, f32)>>,
+    /// How many times each positional sound played (the control socket's `status`),
+    /// with or without an audio device.
+    pub heard: std::collections::BTreeMap<String, u32>,
 }
 fn decode(path: &Path) -> Option<(Vec<f32>, u32)> {
     use symphonia::core::{
@@ -542,6 +545,7 @@ impl Audio {
             random: LegacyRandom::new(crate::sound_engine::unique_seed()),
             source_override: None,
             capture: None,
+            heard: Default::default(),
         }
     }
     #[cfg(not(feature = "audio"))]
@@ -681,6 +685,9 @@ impl Audio {
     ) {
         if let (Some(capture), Some(at)) = (self.capture.as_mut(), at) {
             capture.push((event.to_owned(), at, volume, pitch));
+        }
+        if at.is_some() {
+            *self.heard.entry(event.to_owned()).or_default() += 1;
         }
         self.sync_volumes();
         let event = crate::sound_events::normalize(event);

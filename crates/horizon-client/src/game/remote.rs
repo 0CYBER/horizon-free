@@ -3247,7 +3247,7 @@ impl Game<'_> {
             let (reacts, changes) = if hand == Hand::Main {
                 self.remote_block_reacts(&hit, held.as_ref())
             } else {
-                (false, Vec::new())
+                (false, DryUse::default())
             };
             let seq = self.next_sequence();
             let cursor = [
@@ -3292,19 +3292,9 @@ impl Game<'_> {
     /// server refused goes back). Only the blocks a hand opens or flips: a
     /// wooden or copper door, trapdoor or fence gate, a lever or a button;
     /// whatever else the use changes waits for the server.
-    fn predict_use(
-        &mut self,
-        changes: &[(horizon_core::position::BlockPos, BlockStateId)],
-        seq: i32,
-    ) {
+    fn predict_use(&mut self, (changes, sounds): &DryUse, seq: i32) {
         let facts = self.res.facts();
-        let predicted = |state: BlockStateId| {
-            let name = facts.get(state).name.trim_start_matches("minecraft:");
-            ((name.ends_with("_door") || name.ends_with("_trapdoor")) && !name.starts_with("iron_"))
-                || name.ends_with("_fence_gate")
-                || name.ends_with("_button")
-                || name == "lever"
-        };
+        let predicted = |state: BlockStateId| hand_operated(&facts.get(state).name);
         if changes.is_empty()
             || !changes
                 .iter()
@@ -3324,6 +3314,21 @@ impl Game<'_> {
             }
             self.set_block(pos, state.0 as i32);
         }
+        // `level.playSound(player, ...)`: the clicker hears it from its own use; the
+        // server sends it to the others only.
+        for (pos, sound, volume, pitch) in sounds {
+            let at = [
+                f64::from(pos.x) + 0.5,
+                f64::from(pos.y) + 0.5,
+                f64::from(pos.z) + 0.5,
+            ];
+            let name = if sound.contains(':') {
+                sound.to_string()
+            } else {
+                format!("minecraft:{sound}")
+            };
+            self.audio.play(&name, Some(at), *volume, *pitch);
+        }
     }
 
     /// Whether the block hit takes a main-hand right click with `held`
@@ -3331,15 +3336,11 @@ impl Game<'_> {
     /// container, and the blocks it changed. Vanilla's client runs it on its
     /// own level first; this runs it on a copy, and `predict_use` keeps the
     /// changes it predicts.
-    fn remote_block_reacts(
-        &self,
-        hit: &super::Hit,
-        held: Option<&ItemStack>,
-    ) -> (bool, Vec<(horizon_core::position::BlockPos, BlockStateId)>) {
+    fn remote_block_reacts(&self, hit: &super::Hit, held: Option<&ItemStack>) -> (bool, DryUse) {
         // Player.isSecondaryUseActive with something in either hand.
         let hands_full = self.stack_in(self.selected).is_some() || self.offhand.is_some();
         if self.keys.contains(&KeyCode::ShiftLeft) && hands_full {
-            return (false, Vec::new());
+            return (false, DryUse::default());
         }
         use horizon_core::geometry::Direction;
         let face = match hit.face {
@@ -3354,6 +3355,7 @@ impl Game<'_> {
             world: &self.world,
             changed: HashMap::new(),
             random: horizon_core::random::LegacyRandom::new(0),
+            sounds: Vec::new(),
         };
         let reacts = self
             .res
@@ -3368,7 +3370,7 @@ impl Game<'_> {
                 held.map(|s| &*s.item),
             )
             .consumes_action();
-        (reacts, level.changed.into_iter().collect())
+        (reacts, (level.changed.into_iter().collect(), level.sounds))
     }
 
     /// MultiPlayerGameMode.useItem for `hand`, if it holds something: whether
@@ -4270,9 +4272,45 @@ struct DryLevel<'w> {
     world: &'w horizon_client::world::World,
     changed: HashMap<horizon_core::position::BlockPos, BlockStateId>,
     random: horizon_core::random::LegacyRandom,
+    /// The sounds the use plays (a door's creak).
+    sounds: Vec<DrySound>,
+}
+
+type DrySound = (
+    horizon_core::position::BlockPos,
+    std::sync::Arc<str>,
+    f32,
+    f32,
+);
+/// What a use on the dry level changed, and the sounds it played.
+type DryUse = (
+    Vec<(horizon_core::position::BlockPos, BlockStateId)>,
+    Vec<DrySound>,
+);
+
+/// The blocks a guest's hand flips that its use predicts (and hears at once): a wooden or
+/// copper door, trapdoor or fence gate, a lever or a button. An iron door or trapdoor has
+/// no hand use.
+pub(super) fn hand_operated(name: &str) -> bool {
+    let name = name.trim_start_matches("minecraft:");
+    ((name.ends_with("_door") || name.ends_with("_trapdoor")) && !name.starts_with("iron_"))
+        || name.ends_with("_fence_gate")
+        || name.ends_with("_button")
+        || name == "lever"
 }
 
 impl horizon_world::level::LevelAccess for DryLevel<'_> {
+    fn emit(&mut self, event: horizon_world::level::LevelEvent) {
+        if let horizon_world::level::LevelEvent::Sound {
+            pos,
+            sound,
+            volume,
+            pitch,
+        } = event
+        {
+            self.sounds.push((pos, sound, volume, pitch));
+        }
+    }
     fn block_state(&self, pos: horizon_core::position::BlockPos) -> BlockStateId {
         self.changed
             .get(&pos)

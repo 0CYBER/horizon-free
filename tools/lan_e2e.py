@@ -53,7 +53,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - sleep:     at night the guest lies down in its own bed (not the host); alone it stays night, it
              gets up with Escape, and once the host sleeps too the night ends and both wake.
 - predict:   with the host frozen, the oak door the guest opens opens on the guest's screen at once (its
-             prediction), and stays open once the server answers; an iron door stays shut (#869).
+             prediction) and creaks there at once, stays open once the server answers, and each side hears
+             it once; an iron door stays shut (#869).
 - push:      a cow standing in the guest pushes it just clear of the cow (the guest's own client
              pushes it, as in vanilla), not ever faster across the ground.
 - eat:       holding right click with bread, the guest's own screen plays the eating (the item in use
@@ -1271,10 +1272,14 @@ def check_predict(host, guest, out):
     guest.wait(20)
     state = lambda game, at: game.raw('block', *at)['state']
     seen = {}
+    creaks = lambda game: sum(n for s, n in game('status')['heard'].items() if 'door' in s)
+    heard = {'guest': creaks(guest), 'host': creaks(host)}
     os.kill(host.pid, signal.SIGSTOP)
     try:
         guest.raw('interact', *wood)
         seen['guest_frozen'] = (state(guest, wood), state(guest, (wood[0], wood[1] + 1, wood[2])))
+        # level.playSound(player, ...): the clicker hears its own door at once.
+        seen['guest_heard_frozen'] = creaks(guest) - heard['guest']
         guest.raw('interact', *iron)
         seen['guest_iron_frozen'] = state(guest, iron)
     finally:
@@ -1283,6 +1288,8 @@ def check_predict(host, guest, out):
     seen['guest_after'] = state(guest, wood)
     seen['host_after'] = state(host, wood)
     seen['iron_after'] = (state(guest, iron), state(host, iron))
+    # ... and not a second time from the server; the host hears it once.
+    seen['heard_after'] = {'guest': creaks(guest) - heard['guest'], 'host': creaks(host) - heard['host']}
     guest.shot(out, 'predict')
     for (bx, by, bz) in (wood, iron):
         host('command', command=f'fill {bx} {by} {bz} {bx} {by + 1} {bz} minecraft:air')
@@ -1290,6 +1297,8 @@ def check_predict(host, guest, out):
     assert 'open=true' in seen['guest_after'] and 'open=true' in seen['host_after'], f'the door did not stay open: {seen}'
     assert 'open=false' in seen['guest_iron_frozen'], f'the guest opened an iron door by hand: {seen}'
     assert all('open=false' in s for s in seen['iron_after']), f'an iron door opened: {seen}'
+    assert seen['guest_heard_frozen'] == 1 and seen['heard_after'] == {'guest': 1, 'host': 1}, \
+        f'the door is not heard once on each side: {seen}'
     return seen
 
 
