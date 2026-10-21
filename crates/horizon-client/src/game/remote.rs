@@ -196,6 +196,30 @@ fn face_direction(face: [i32; 3]) -> u8 {
     }
 }
 
+/// A `minecraft:profile` component as the item data JSON the model reads.
+fn profile_tag(p: &horizon_protocol::item::Profile) -> Tag {
+    let properties = p
+        .properties
+        .iter()
+        .map(|(name, value, signature)| {
+            let mut entries: Vec<(&'static str, Tag)> = vec![
+                ("name", Tag::String(name.as_str().into())),
+                ("value", Tag::String(value.as_str().into())),
+            ];
+            if let Some(signature) = signature {
+                entries.push(("signature", Tag::String(signature.as_str().into())));
+            }
+            Tag::compound(entries)
+        })
+        .collect::<Vec<_>>();
+    let mut entries: Vec<(&'static str, Tag)> = Vec::new();
+    if let Some(name) = &p.name {
+        entries.push(("name", Tag::String(name.as_str().into())));
+    }
+    entries.push(("properties", Tag::List(properties)));
+    Tag::compound(entries)
+}
+
 /// A protocol number format as the scoreboard's.
 fn number_format(f: &play::NumberFormat) -> horizon_client::scoreboard::NumberFormat {
     use horizon_client::scoreboard::{NumberFormat, tag_to_json};
@@ -576,6 +600,11 @@ impl Game<'_> {
             out.data_mut().stored_enchantments = levels(list);
         }
         out.tidy();
+        if let Some(Component::Profile(p)) = s.component(component::PROFILE) {
+            out.data_mut()
+                .other
+                .push(("minecraft:profile".into(), profile_tag(p)));
+        }
         Some(out)
     }
     fn to_network(&self, s: &Option<ItemStack>) -> Option<Stack> {
@@ -2317,6 +2346,7 @@ impl Game<'_> {
                     .then(|| Vec3::new(f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5));
             }
             C::ServerData(p) => self.remote_server_data(p.icon.as_deref()),
+            C::MapItemData(p) => self.remote_map_item_data(&p),
             // handleTickingState / handleTickingStep: the level's TickRateManager.
             C::TickingState(p) => {
                 self.clock.set_rate(p.rate);
