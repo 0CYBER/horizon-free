@@ -9801,7 +9801,7 @@ impl Game<'_> {
             self.fov_degrees(camera_alpha as f32, camera.to_array())
         };
         self.locator_camera =
-            (!live && !title).then_some((camera.to_array(), view_yaw, view_pitch, fov_degrees));
+            (!title).then_some((camera.to_array(), view_yaw, view_pitch, fov_degrees));
         let bob = if title {
             glam::Mat4::IDENTITY
         } else {
