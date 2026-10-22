@@ -1308,31 +1308,67 @@ impl Mob {
 /// `Entity.push` on other mobs acts at once in vanilla: a mob ticking later
 /// moves with it this tick. Takes the `Push` events aimed at mobs out of
 /// `events[from..]` into `pending`, which the caller adds to each mob's
-/// velocity before its tick (and to every mob once all have ticked).
-pub fn take_mob_pushes(events: &mut Vec<MobEvent>, from: usize, pending: &mut Vec<(u32, Vec3)>) {
-    let mut i = from;
-    while i < events.len() {
+/// velocity before its tick (and to every mob once all have ticked). The
+/// other events keep their order.
+pub fn take_mob_pushes(events: &mut Vec<MobEvent>, from: usize, pending: &mut PendingPushes) {
+    // One pass: a crowd's tick holds a push per neighbour, and removing each
+    // in place would shift the rest every time.
+    let mut kept = from;
+    for i in from..events.len() {
         if let MobEvent::Push {
             target: Who::Mob(id),
             velocity,
         } = events[i]
         {
-            pending.push((id, Vec3::new(velocity[0], velocity[1], velocity[2])));
-            events.remove(i);
+            pending.push(id, Vec3::new(velocity[0], velocity[1], velocity[2]));
         } else {
-            i += 1;
+            events.swap(kept, i);
+            kept += 1;
         }
+    }
+    events.truncate(kept);
+}
+/// Pushes waiting for their mob's tick, in push order. A list while short;
+/// past [`PendingPushes::LIST_MAX`] (a crowd pushing each other) one list
+/// per mob, as scanning the whole list for each mob grows with its square.
+#[derive(Default)]
+pub struct PendingPushes {
+    list: Vec<(u32, Vec3)>,
+    by_mob: crate::fast_hash::FxHashMap<u32, Vec<Vec3>>,
+}
+impl PendingPushes {
+    const LIST_MAX: usize = 64;
+    pub fn push(&mut self, id: u32, v: Vec3) {
+        if self.by_mob.is_empty() && self.list.len() < Self::LIST_MAX {
+            self.list.push((id, v));
+            return;
+        }
+        // Older pushes first, so each mob's stay in order.
+        for (id, v) in self.list.drain(..) {
+            self.by_mob.entry(id).or_default().push(v);
+        }
+        self.by_mob.entry(id).or_default().push(v);
     }
 }
 /// Adds the pending pushes aimed at `m` to its velocity, in push order.
-pub fn apply_mob_pushes(m: &mut Mob, pending: &mut Vec<(u32, Vec3)>) {
-    pending.retain(|(id, v)| {
-        if *id != m.id {
-            return true;
-        }
+pub fn apply_mob_pushes(m: &mut Mob, pending: &mut PendingPushes) {
+    let mut add = |v: Vec3| {
         m.velocity = Vec3::new(m.velocity.x + v.x, m.velocity.y + v.y, m.velocity.z + v.z);
-        false
-    });
+    };
+    if !pending.list.is_empty() {
+        pending.list.retain(|(id, v)| {
+            if *id != m.id {
+                return true;
+            }
+            add(*v);
+            false
+        });
+    }
+    if !pending.by_mob.is_empty()
+        && let Some(pushes) = pending.by_mob.remove(&m.id)
+    {
+        pushes.into_iter().for_each(add);
+    }
 }
 /// Applies the brain memories a mob's tick set on other mobs (from event
 /// index `from` on), at once: vanilla sets them on the other entity during
@@ -2130,5 +2166,223 @@ mod elytra_tests {
             wings.tick(false, true, Vec3::ZERO);
         }
         assert!((wings.angles[1] - 0.08726646).abs() < 0.00001);
+    }
+}
+#[cfg(test)]
+mod push_tests {
+    use super::*;
+    use horizon_core::geometry::Vec3;
+    use serde_json::json;
+
+    fn kind() -> Arc<MobType> {
+        Arc::new(MobType {
+            id: "minecraft:cow".into(),
+            species: Species::Cow,
+            width: 0.9,
+            height: 1.4,
+            eye_height: 1.3,
+            category: "creature".into(),
+            max_health: 10.0,
+            speed: 0.2,
+            flying_speed: 0.4,
+            attack_damage: 0.0,
+            attack_knockback: 0.0,
+            follow_range: 16.0,
+            step_height: 0.6,
+            armor: 0.0,
+            armor_toughness: 0.0,
+            knockback_resistance: 0.0,
+            jump_strength: 0.42,
+            attributes: Arc::default(),
+            gravity: 0.08,
+            safe_fall_distance: 3.0,
+            fall_damage_multiplier: 1.0,
+            water_efficiency: 0.0,
+            water_slowdown: 0.8,
+            air_speed: 0.02,
+            baby_scale: 0.5,
+            head_rot_speed: 10.0,
+            max_head_x_rot: 40.0,
+            max_head_y_rot: 75.0,
+            ambient_interval: 120,
+            flags: Flags {
+                animal: true,
+                ..Default::default()
+            },
+            model: Arc::new(Part::parse("root", &json!({}))),
+            layers: HashMap::new(),
+            texture: String::new(),
+            brain: Brain::Passive,
+            anim: Anim::Rabbit,
+            sounds: [""; 3],
+            step_sound: None,
+            food: Arc::default(),
+            tempt: Arc::default(),
+        })
+    }
+
+    /// The pending pushes as one list, scanned for each mob, as before.
+    fn take_old(events: &mut Vec<MobEvent>, from: usize, pending: &mut Vec<(u32, Vec3)>) {
+        let mut i = from;
+        while i < events.len() {
+            if let MobEvent::Push {
+                target: Who::Mob(id),
+                velocity,
+            } = events[i]
+            {
+                pending.push((id, Vec3::new(velocity[0], velocity[1], velocity[2])));
+                events.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
+    fn apply_old(velocity: &mut Vec3, id: u32, pending: &mut Vec<(u32, Vec3)>) {
+        pending.retain(|(to, v)| {
+            if *to != id {
+                return true;
+            }
+            *velocity = Vec3::new(velocity.x + v.x, velocity.y + v.y, velocity.z + v.z);
+            false
+        });
+    }
+    fn mobs(n: u32) -> Vec<Mob> {
+        let kind = kind();
+        (0..n)
+            .map(|id| Mob::new(id, kind.clone(), Vec3::ZERO, 0.0))
+            .collect()
+    }
+    /// A crowd tick: each mob takes its pushes, then pushes every other
+    /// mob (and the player, and hisses now and then); then all take theirs.
+    fn crowd_tick(
+        n: u32,
+        tick: u32,
+        mut on_push: impl FnMut(&mut Vec<MobEvent>, usize),
+        mut on_apply: impl FnMut(u32),
+    ) -> Vec<MobEvent> {
+        let mut events = Vec::new();
+        for i in 0..n {
+            on_apply(i);
+            let from = events.len();
+            for j in 0..n {
+                if j != i && !(i * 31 + j * 17 + tick).is_multiple_of(5) {
+                    let f = f64::from(i * 7 + j + tick) * 0.001;
+                    events.push(MobEvent::Push {
+                        target: Who::Mob(j),
+                        velocity: [f, -f * 0.5, f * 0.25],
+                    });
+                }
+                if j.is_multiple_of(9) {
+                    events.push(MobEvent::Hiss { mob: j });
+                }
+            }
+            events.push(MobEvent::Push {
+                target: Who::Player,
+                velocity: [0.1, 0.0, 0.1],
+            });
+            on_push(&mut events, from);
+        }
+        for i in 0..n {
+            on_apply(i);
+        }
+        events
+    }
+
+    #[test]
+    fn pushes_land_as_with_the_list() {
+        for n in [1u32, 3, 8, 20, 60] {
+            let mut new_mobs = mobs(n);
+            let mut old_v = vec![Vec3::ZERO; n as usize];
+            let mut pending = PendingPushes::default();
+            let mut old_pending = Vec::new();
+            for tick in 0..4 {
+                let new_events = {
+                    let pending = std::cell::RefCell::new(&mut pending);
+                    let mobs = std::cell::RefCell::new(&mut new_mobs);
+                    crowd_tick(
+                        n,
+                        tick,
+                        |e, from| take_mob_pushes(e, from, &mut pending.borrow_mut()),
+                        |i| {
+                            apply_mob_pushes(
+                                &mut mobs.borrow_mut()[i as usize],
+                                &mut pending.borrow_mut(),
+                            )
+                        },
+                    )
+                };
+                let old_events = {
+                    let pending = std::cell::RefCell::new(&mut old_pending);
+                    let v = std::cell::RefCell::new(&mut old_v);
+                    crowd_tick(
+                        n,
+                        tick,
+                        |e, from| take_old(e, from, &mut pending.borrow_mut()),
+                        |i| {
+                            apply_old(
+                                &mut v.borrow_mut()[i as usize],
+                                i,
+                                &mut pending.borrow_mut(),
+                            )
+                        },
+                    )
+                };
+                assert_eq!(format!("{new_events:?}"), format!("{old_events:?}"));
+                for i in 0..n as usize {
+                    let (a, b) = (new_mobs[i].velocity, old_v[i]);
+                    assert_eq!(
+                        (a.x.to_bits(), a.y.to_bits(), a.z.to_bits()),
+                        (b.x.to_bits(), b.y.to_bits(), b.z.to_bits()),
+                        "{n} mobs, tick {tick}, mob {i}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// One tick of a pen of `n` mobs pushing each other.
+    #[test]
+    #[ignore]
+    fn push_cost() {
+        for n in [10u32, 30, 100, 200] {
+            let mut ms = mobs(n);
+            let mut v = vec![Vec3::ZERO; n as usize];
+            let t = std::time::Instant::now();
+            {
+                let pending = std::cell::RefCell::new(Vec::new());
+                let v = std::cell::RefCell::new(&mut v);
+                crowd_tick(
+                    n,
+                    0,
+                    |e, from| take_old(e, from, &mut pending.borrow_mut()),
+                    |i| {
+                        apply_old(
+                            &mut v.borrow_mut()[i as usize],
+                            i,
+                            &mut pending.borrow_mut(),
+                        )
+                    },
+                );
+            }
+            let before = t.elapsed().as_secs_f64() * 1e3;
+            let t = std::time::Instant::now();
+            {
+                let pending = std::cell::RefCell::new(PendingPushes::default());
+                let ms = std::cell::RefCell::new(&mut ms);
+                crowd_tick(
+                    n,
+                    0,
+                    |e, from| take_mob_pushes(e, from, &mut pending.borrow_mut()),
+                    |i| {
+                        apply_mob_pushes(
+                            &mut ms.borrow_mut()[i as usize],
+                            &mut pending.borrow_mut(),
+                        )
+                    },
+                );
+            }
+            let after = t.elapsed().as_secs_f64() * 1e3;
+            println!("{n} mobs pushing each other: {before:.3} ms -> {after:.3} ms");
+        }
     }
 }
