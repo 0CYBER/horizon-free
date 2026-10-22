@@ -36,7 +36,17 @@ cargo horizon-mod run
 
 The launcher's **Mods** page (launcher 0.17 and newer) searches [Modrinth](https://modrinth.com) for what Horizon can load: resource packs, Java shader packs and modpacks. Each result says how well it runs in Horizon (**Works**, **Partly**, or **Doesn't run**), and by default the page shows only what runs. **Install** downloads the file, checks it against the checksum Modrinth lists and refuses anything that does not match, then puts it in the right folder, with the packs it needs. **Update** and **Remove** are there too. A resource pack still has to be turned on in the game's Resource Packs screen, and a shader pack in Video, Shader Packs. A modpack is imported on the [Modpacks page](/docs/modpacks).
 
-The page cannot search CurseForge yet. Java mod jars are never offered, because they do not run. The same things work from a terminal: `horizon-launcher mods search`, `install`, `update` and `remove`.
+The page cannot search CurseForge yet. The same things work from a terminal: `horizon-launcher mods search`, `install`, `update` and `remove`.
+
+## Java mods from the Mods page (next launcher release)
+
+Java code does not run in Horizon, but much of what a mod adds is data: blocks, items, recipes, loot tables, tags, worldgen, textures. From the next launcher release, the Mods page also lists Fabric, NeoForge and Forge mods made for 26.3 and, before offering one, downloads its jar, checks it against Modrinth's checksum and reads it (without running it) to say what of it Horizon runs:
+
+- **Works**: the mod is only content, and all of it carries over.
+- **Partly**: its content carries over; the row lists what does not, such as machines and containers, mobs, blocks or items with behaviour of their own, recipe types of its own, or Mixins.
+- **Doesn't run**: there is nothing to carry over (performance mods, libraries, mods that are all code). It is not offered.
+
+**Install** brings the mod over into `horizon-mods` and turns it on; start the game again to load it. Blocks take the closest vanilla block's shape, hardness and sounds, so a carried-over block can break faster or slower than in Java. Most popular mods today are **Partly** or **Doesn't run**: the verdict is the honest answer for each one.
 
 ## Data packs
 

@@ -24,6 +24,7 @@ fn class(kind: Kind) -> u64 {
         Kind::ResourcePack => 12,
         Kind::ShaderPack => 6552,
         Kind::Modpack => 4471,
+        Kind::Mod => 6,
     }
 }
 
@@ -73,7 +74,7 @@ pub(super) fn search_url(query: &Query) -> String {
         query.offset,
         query.limit.clamp(1, 50),
     );
-    if !query.everything && query.kind == Kind::ResourcePack {
+    if !query.everything && matches!(query.kind, Kind::ResourcePack | Kind::Mod) {
         url.push_str(&format!("&gameVersion={GAME}"));
     }
     if !query.text.is_empty() {

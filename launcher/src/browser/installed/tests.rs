@@ -227,7 +227,7 @@ fn nothing_is_installed_when_a_check_fails() {
     let pack = project("pack", Kind::Modpack);
     assert!(plan(&fake, &pack, false)
         .unwrap_err()
-        .contains("Modpacks page"));
+        .contains("imported, not installed"));
     fs::remove_dir_all(&home).unwrap();
 }
 

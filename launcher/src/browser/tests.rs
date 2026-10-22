@@ -140,6 +140,42 @@ fn modrinth_search_asks_for_what_runs() {
         modrinth::facets(&Query::new("", Kind::Modpack)),
         r#"[["project_type:modpack"]]"#
     );
+    assert_eq!(
+        modrinth::facets(&Query::new("", Kind::Mod)),
+        r#"[["project_type:mod"],["versions:26.3"],["categories:neoforge","categories:fabric","categories:forge","categories:quilt"]]"#
+    );
+}
+
+#[test]
+fn java_mods_are_checked_for_1_21_and_later() {
+    assert_eq!(
+        support(Kind::Mod, &v(&["1.20.1"]), &v(&["forge"])),
+        Support::No("Made for 1.20.1: Horizon ports mods made for 1.21 and later.".into())
+    );
+    assert!(!support(Kind::Mod, &v(&[GAME]), &v(&["rift"])).installable());
+    assert!(matches!(
+        support(Kind::Mod, &v(&["1.21.1"]), &v(&["neoforge"])),
+        Support::Partial(_)
+    ));
+    for (version, ok) in [
+        ("1.21", true),
+        ("1.21.11", true),
+        ("26.3", true),
+        ("1.20.6", false),
+        ("26.1-snapshot-2", false),
+        ("", false),
+    ] {
+        assert_eq!(portable_version(version), ok, "{version}");
+    }
+    let versions = [
+        version("snapshot", &["26.4-snapshot-1"], &["fabric"]),
+        version("shaders", &[GAME], &["iris"]),
+        version("now", &[GAME], &["neoforge"]),
+        version("older", &["1.21.1"], &["neoforge"]),
+    ];
+    assert_eq!(pick(Kind::Mod, &versions, false).unwrap().id, "now");
+    assert_eq!(pick(Kind::Mod, &versions[3..], false), None);
+    assert_eq!(pick(Kind::Mod, &versions[3..], true).unwrap().id, "older");
 }
 
 #[test]
@@ -157,9 +193,16 @@ fn modrinth_answers() {
     assert_eq!(p.page, "https://modrinth.com/resourcepack/fresh-animations");
     assert_eq!(p.support(), Support::Works);
     assert_eq!(p.downloads, 51404735);
-    // A Java mod is never a result.
-    let jar = json!({"project_id": "AANobbMI", "project_type": "mod", "slug": "sodium"});
-    assert!(modrinth::parse_hit(&jar).is_none());
+    // A Java mod is a result, checked before it is offered.
+    let jar = json!({"project_id": "AANobbMI", "project_type": "mod", "slug": "sodium",
+        "versions": ["26.3"], "categories": ["fabric", "optimization"]});
+    let sodium = modrinth::parse_hit(&jar).unwrap();
+    assert_eq!(sodium.kind, Kind::Mod);
+    assert_eq!(sodium.page, "https://modrinth.com/mod/sodium");
+    assert!(matches!(sodium.support(), Support::Partial(_)));
+    // Data packs and plugins are not.
+    let plugin = json!({"project_id": "x", "project_type": "plugin", "slug": "p"});
+    assert!(modrinth::parse_hit(&plugin).is_none());
 
     let project = json!({
         "id": "HVnmMxH1", "project_type": "shader", "slug": "complementary-reimagined",
@@ -243,7 +286,11 @@ fn curseforge_answers() {
     assert_eq!(p.loaders, ["iris", "optifine"]);
     assert_eq!(p.author, "CaptTatsu");
     assert!(p.support().installable());
-    assert!(curseforge::parse_mod(&json!({"id": 1, "classId": 6})).is_none());
+    assert_eq!(
+        curseforge::parse_mod(&json!({"id": 1, "classId": 6})).map(|p| p.kind),
+        Some(Kind::Mod)
+    );
+    assert!(curseforge::parse_mod(&json!({"id": 1, "classId": 17})).is_none());
 
     let file = json!({
         "id": 5000, "displayName": "BSL v10", "fileName": "BSL_v10.zip", "fileLength": 300,

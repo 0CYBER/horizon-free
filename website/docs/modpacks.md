@@ -6,7 +6,7 @@ Java mod jars do not run in Horizon. Instead, the launcher reads a modpack, tell
 
 ## What the Modpacks page does
 
-Open **Modpacks** in the launcher.
+Open **Modpacks** in the launcher. (From the next launcher release, it is the **Modpacks** tab of the **Mods** page.)
 
 1. **Import a pack.** Choose **Import a pack file…** for a Modrinth `.mrpack` or a CurseForge zip, or **Import an instance folder…** for a Prism, MultiMC or CurseForge instance. The **Mods** page can also find a Modrinth modpack and import it for you (see [Mods and data packs](/docs/mods#finding-resource-packs-shader-packs-and-modpacks)).
 2. **Read the coverage report.** For every mod in the pack it says **Ported**, **Partial**, **Not yet** or **Not needed**, with the reason. You can filter the list by status.

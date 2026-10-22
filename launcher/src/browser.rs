@@ -2,12 +2,14 @@
 //! Horizon loads, say how well each result runs, and download a file only after its checksum
 //! matches (docs/mod-browser.md).
 //!
-//! Only what Horizon actually loads is offered: resource packs (`resourcepacks/`), Java shader
-//! packs (`shaderpacks/`, Iris and OptiFine) and modpacks (imported and ported on the Modpacks
-//! page). Java mod jars don't run in Horizon (docs/mods.md), so they are never searched.
+//! Offered: Java mods (Fabric, NeoForge, Forge), whose content Horizon ports and whose jar is
+//! checked before install ([`java`]), modpacks (imported and ported), resource packs
+//! (`resourcepacks/`) and Java shader packs (`shaderpacks/`, Iris and OptiFine). Java code itself
+//! doesn't run in Horizon (docs/mods.md).
 pub mod curseforge;
 pub mod download;
 pub mod installed;
+pub mod java;
 pub mod modrinth;
 
 use serde::{Deserialize, Serialize};
@@ -23,25 +25,34 @@ pub enum Kind {
     ResourcePack,
     ShaderPack,
     Modpack,
+    /// A Java mod: its content is ported ([`java`]).
+    Mod,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 3] = [Kind::ResourcePack, Kind::ShaderPack, Kind::Modpack];
+    pub const ALL: [Kind; 4] = [
+        Kind::Mod,
+        Kind::Modpack,
+        Kind::ResourcePack,
+        Kind::ShaderPack,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
+            Kind::Mod => "Mods",
             Kind::ResourcePack => "Resource packs",
             Kind::ShaderPack => "Shader packs",
             Kind::Modpack => "Modpacks",
         }
     }
 
-    /// The folder beside `options.txt` the file goes in; a modpack is imported instead.
+    /// The folder beside `options.txt` the file goes in; a modpack is imported and a mod
+    /// ported instead.
     pub fn folder(self) -> Option<&'static str> {
         match self {
             Kind::ResourcePack => Some("resourcepacks"),
             Kind::ShaderPack => Some("shaderpacks"),
-            Kind::Modpack => None,
+            Kind::Modpack | Kind::Mod => None,
         }
     }
 }
@@ -256,11 +267,34 @@ pub fn support(kind: Kind, game_versions: &[String], loaders: &[String]) -> Supp
                 ))
             }
         }
-        Kind::Modpack => Support::Partial(
-            "Imported on the Modpacks page: Horizon runs the mods it can port, from your own \
-             downloads."
-                .into(),
-        ),
+        Kind::Modpack => {
+            Support::Partial("Horizon runs the mods it can port, from your own downloads.".into())
+        }
+        Kind::Mod => {
+            if !loaders.iter().any(|l| java::LOADERS.contains(&l.as_str())) {
+                Support::No("Not a Fabric, NeoForge or Forge mod.".into())
+            } else if !game_versions.iter().any(|v| portable_version(v)) {
+                let newest = newest_release(game_versions).unwrap_or("an unknown version");
+                Support::No(format!(
+                    "Made for {newest}: Horizon ports mods made for 1.21 and later."
+                ))
+            } else {
+                Support::Partial(
+                    "Not checked yet: the launcher reads its jar to say what of it ports.".into(),
+                )
+            }
+        }
+    }
+}
+
+/// A Minecraft version whose mods port-pack carries over: 1.21 and later (the data folders
+/// took their current names in 1.21).
+pub fn portable_version(v: &str) -> bool {
+    let parts: Vec<u32> = v.split('.').map_while(|p| p.parse().ok()).collect();
+    match parts.as_slice() {
+        [1, minor, ..] => *minor >= 21 && v.split('.').count() == parts.len(),
+        [year, ..] => *year >= 26 && v.split('.').count() == parts.len(),
+        [] => false,
     }
 }
 
@@ -286,6 +320,20 @@ pub fn pick(kind: Kind, versions: &[Version], everything: bool) -> Option<&Versi
     let mut usable = versions
         .iter()
         .filter(|v| v.blocked.is_none() && v.file().is_some());
+    if kind == Kind::Mod {
+        let java = |v: &&Version| {
+            v.loaders
+                .iter()
+                .any(|l| java::LOADERS.contains(&l.as_str()))
+        };
+        let made_for = |v: &&Version| v.game_versions.iter().any(|g| g == GAME);
+        let ported = |v: &&Version| v.game_versions.iter().any(|g| portable_version(g));
+        return usable
+            .clone()
+            .filter(java)
+            .find(made_for)
+            .or_else(|| usable.filter(java).find(|v| everything && ported(v)));
+    }
     let runs = |v: &&Version| match support(kind, &v.game_versions, &v.loaders) {
         Support::Works => true,
         // A modpack's version is for its own Minecraft; any shader pack Horizon translates.
