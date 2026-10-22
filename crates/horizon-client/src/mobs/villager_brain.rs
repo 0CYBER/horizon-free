@@ -898,8 +898,9 @@ fn poi_matches(m: &Mob, f: PoiFilter, p: Poi) -> bool {
         _ => false,
     }
 }
-/// Tickets taken on a POI: by this villager's memories and by others'.
-fn tickets(m: &Mob, w: &MobWorld, p: [i32; 3]) -> usize {
+/// Tickets taken on a POI: by this villager's memories and by others'
+/// (counted once per search by [`others_tickets`]).
+fn tickets(m: &Mob, others: &crate::fast_hash::FxHashMap<[i32; 3], usize>, p: [i32; 3]) -> usize {
     let mut n = 0;
     if let Some(mm) = mem_ref(m) {
         for s in [
@@ -913,16 +914,22 @@ fn tickets(m: &Mob, w: &MobWorld, p: [i32; 3]) -> usize {
             }
         }
     }
+    n + others.get(&p).copied().unwrap_or(0)
+}
+/// The tickets the other living villagers' POIs take, by POI.
+fn others_tickets(m: &Mob, w: &MobWorld) -> crate::fast_hash::FxHashMap<[i32; 3], usize> {
+    let mut taken = crate::fast_hash::FxHashMap::default();
     for o in w.others {
         if o.id != m.id && o.alive && o.species == Species::Villager {
-            for q in [o.job, o.bed, o.potential_job, o.meeting] {
-                if q == Some(p) {
-                    n += 1;
-                }
+            for q in [o.job, o.bed, o.potential_job, o.meeting]
+                .into_iter()
+                .flatten()
+            {
+                *taken.entry(q).or_insert(0) += 1;
             }
         }
     }
-    n
+    taken
 }
 /// The POIs of chunk `(qx, qz)` from `y0` to `y1` (within the world), in
 /// scan order: y, then z, then x. Only the indexed POI blocks of the sections
@@ -962,6 +969,8 @@ fn pois_in_range(
 ) -> Vec<(Poi, [i32; 3])> {
     let c = block_of(m.position);
     let mut found = Vec::new();
+    // Every candidate asks how taken it is: count the others' once.
+    let mut taken = None;
     let r2 = i64::from(radius) * i64::from(radius);
     let (cx, cz) = (c[0] >> 4, c[2] >> 4);
     let chunks = radius.div_euclid(16) + 1;
@@ -974,7 +983,8 @@ fn pois_in_range(
                     || (p[2] - c[2]).abs() > radius
                     || dist_sqr(p, c) > r2
                     || !poi_matches(m, f, poi)
-                    || tickets(m, w, p) >= poi.max_tickets()
+                    || tickets(m, taken.get_or_insert_with(|| others_tickets(m, w)), p)
+                        >= poi.max_tickets()
                 {
                     return;
                 }
