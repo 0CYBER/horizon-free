@@ -602,8 +602,16 @@ pub(crate) fn clamp(value: f64, min: f64, max: f64) -> f64 {
         java_min(value, max)
     }
 }
+/// `Mth.floor`: truncate, then step down for negative fractions. A truncating
+/// conversion and a compare, where `f64::floor` is a libm call on baseline x86-64.
+#[inline]
 pub(crate) fn floor_i32(value: f64) -> i32 {
-    value.floor() as i32
+    let truncated = value as i32;
+    if value < f64::from(truncated) {
+        truncated.wrapping_sub(1)
+    } else {
+        truncated
+    }
 }
 fn lerp(amount: f64, start: f64, end: f64) -> f64 {
     start + amount * (end - start)
@@ -635,6 +643,30 @@ fn next_down(value: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn floor_i32_is_mths_floor() {
+        for v in [
+            0.0,
+            -0.0,
+            0.5,
+            -0.5,
+            1.0,
+            -1.0,
+            2.999,
+            -2.999,
+            1e-300,
+            -1e-300,
+            16_777_215.5,
+            -16_777_215.5,
+        ] {
+            assert_eq!(floor_i32(v), v.floor() as i32, "{v}");
+        }
+        assert_eq!(floor_i32(f64::NAN), 0);
+        assert_eq!(floor_i32(3e9), i32::MAX);
+        // Java's (int) cast saturates, then the step down wraps.
+        assert_eq!(floor_i32(-3e9), i32::MAX);
+    }
     #[test]
     fn ray_faces_and_half_open_bounds() {
         let b = Aabb::block(BlockPos::new(0, 0, 0));
