@@ -11,6 +11,10 @@ permissions:
 concurrency:
   group: run-parity-${{ github.event.pull_request.number }}
   cancel-in-progress: true
+env:
+  # Test runs never reach the telemetry server: no live-count ping, no uploads (docs/telemetry.md).
+  HORIZON_TELEMETRY_URL: "off"
+
 jobs:
   parity:
     if: github.event.label.name == 'run-parity'

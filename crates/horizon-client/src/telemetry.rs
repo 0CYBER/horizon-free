@@ -33,7 +33,7 @@ pub fn mark_start() {
     STARTED.get_or_init(Instant::now);
 }
 
-/// The menu bundle is ready: the title backdrop can draw. The first writer wins.
+/// The menu bundle is ready: the title screen can draw. The first writer wins.
 pub fn mark_ui_ready() {
     if let Some(started) = STARTED.get() {
         let ms = started.elapsed().as_millis() as u32;

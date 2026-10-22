@@ -6,13 +6,13 @@ You can play with friends from your own world, on your local network, or on a se
 
 This needs no server and no account.
 
-1. In your world, open the pause menu and choose **Invite friends**. Horizon opens the world to your network and shows an **invite code**.
+1. In your world, open the pause menu and choose the **Friends** button (the icon with two people), then **Start Sharing**. Horizon opens the world to your network and shows an **invite code** with **Copy Code**.
 2. Send the code to your friends.
-3. On their side, your friends choose **Join a friend** (on the game's Multiplayer page, or on the launcher's **Play** page), paste the code and choose **Join**.
+3. On their side, your friends choose the **Friends** button on the title screen (or **Join a friend** on the launcher's **Play** page), paste the code and choose **Join**. Pasting the code in **Direct Connection** works too.
 
 There is no Horizon server in the middle. The code holds the host's addresses and a secret key, and the game between you is encrypted with it. A code works for as long as you keep sharing: closing the world or quitting ends it.
 
-**Can your friends reach you?** The pause menu says what the game found:
+**Can your friends reach you?** The Play with Friends screen says what the game found:
 
 - On the same network, or over a VPN such as Tailscale or ZeroTier, it just works.
 - Over the internet, it asks your router to open the port by itself (UPnP). If the router does not allow it, forward TCP port 25580 to your computer.

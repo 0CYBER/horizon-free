@@ -107,6 +107,10 @@ impl Game<'_> {
         let held = self.inventory[self.selected].clone();
         let m = &self.mobs[index];
         let species = m.species();
+        // A server player rides it already (`isVehicle`: no seat, no feeding).
+        if self.ridden_by_guest(m.id) {
+            return false;
+        }
         if matches!(species, Species::Pig | Species::Strider) {
             return self.interact_steerable(index, item);
         }
@@ -246,24 +250,9 @@ impl Game<'_> {
         self.consume_held();
         true
     }
-    /// The rider's input for this tick; returns false when not on a mount.
-    pub(super) fn tick_mount_riding(&mut self, keys: Keys) -> bool {
-        let Some(i) = self.mount_index() else {
-            return false;
-        };
-        if keys.shift || !self.mobs[i].alive() {
-            self.dismount_mount();
-            return true;
-        }
-        let strafe = f32::from(u8::from(keys.left)) - f32::from(u8::from(keys.right));
-        let forward = f32::from(u8::from(keys.forward)) - f32::from(u8::from(keys.backward));
-        // LocalPlayer.aiStep: the riding jump charges while space is held.
-        let held = self.held().map(|s| s.item.clone());
-        let steer = match self.mobs[i].species() {
-            Species::Pig => held.as_deref() == Some("minecraft:carrot_on_a_stick"),
-            Species::Strider => held.as_deref() == Some("minecraft:warped_fungus_on_a_stick"),
-            _ => false,
-        };
+    /// `LocalPlayer.aiStep`'s riding jump: the bar charges while jump is
+    /// held; on release, the jump's strength (0 when there is none).
+    pub(super) fn charge_mount_jump(&mut self, i: usize, keys: Keys) -> f32 {
         // PlayerRideableJumping: horses, camels and nautili (the dash).
         let saddled = self.mobs[i].extra.saddled
             && (equine::is_equine(self.mobs[i].species())
@@ -299,6 +288,27 @@ impl Game<'_> {
             }
             st.was_jumping = keys.jump;
         }
+        jump
+    }
+    /// The rider's input for this tick; returns false when not on a mount.
+    pub(super) fn tick_mount_riding(&mut self, keys: Keys) -> bool {
+        let Some(i) = self.mount_index() else {
+            return false;
+        };
+        if keys.shift || !self.mobs[i].alive() {
+            self.dismount_mount();
+            return true;
+        }
+        let strafe = f32::from(u8::from(keys.left)) - f32::from(u8::from(keys.right));
+        let forward = f32::from(u8::from(keys.forward)) - f32::from(u8::from(keys.backward));
+        // LocalPlayer.aiStep: the riding jump charges while space is held.
+        let held = self.held().map(|s| s.item.clone());
+        let steer = match self.mobs[i].species() {
+            Species::Pig => held.as_deref() == Some("minecraft:carrot_on_a_stick"),
+            Species::Strider => held.as_deref() == Some("minecraft:warped_fungus_on_a_stick"),
+            _ => false,
+        };
+        let jump = self.charge_mount_jump(i, keys);
         let m = &mut self.mobs[i];
         if jump > 0.0 {
             // onPlayerJump: rear while jumping (horses).
@@ -324,7 +334,7 @@ impl Game<'_> {
             pitch: self.pitch,
             jump: if jump > 0.0 { jump } else { pending },
             steer,
-            sprint: self.keys.contains(&winit::keyboard::KeyCode::ControlLeft),
+            sprint: keys.sprint || self.keys.contains(&winit::keyboard::KeyCode::ControlLeft),
             jumping: keys.jump,
         });
         true
