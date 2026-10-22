@@ -1,70 +1,80 @@
-//! The cartography table (`CartographyTableMenu`, `CartographyTableScreen`):
-//! zooming a map out with paper, cloning it with an empty map, locking it
-//! with a glass pane, the post-processing on take (`MapItem.scaleMap`,
-//! `lockMap`) and the preview with its error and lock sprites.
+//! The cartography table (`CartographyTableMenu` on the menu engine,
+//! `CartographyTableScreen`): zooming a map out with paper, cloning it with
+//! an empty map, locking it with a glass pane. The engine reads the level's
+//! maps through `LevelMaps`; the scaled and locked copies a take makes
+//! (`MapItem.scaleMap`, `lockMap`) are registered after the click. The
+//! screen draws the preview with its error and lock sprites.
 use super::{
     Game,
     maps::{MapData, map_id},
-    stations::Station,
 };
-use horizon_client::{hud::HudBatch, items::ItemStack};
+use horizon_client::{hud::HudBatch, items::ItemStack, menu::Maps};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+};
+
+/// The level's maps as a menu sees them (`ContainerLevelAccess`): the
+/// states of the maps the click can reach, and the copies it makes.
+pub(super) struct LevelMaps {
+    states: RefCell<HashMap<i32, (bool, u8)>>,
+    next_id: Cell<i32>,
+    /// (new id, source id, scaled) for each copy made.
+    made: RefCell<Vec<(i32, i32, bool)>>,
+}
+
+impl Maps for LevelMaps {
+    fn state(&self, id: i32) -> Option<(bool, u8)> {
+        self.states.borrow().get(&id).copied()
+    }
+
+    fn derive(&self, id: i32, scale: bool) -> Option<i32> {
+        let (_, s) = self.state(id)?;
+        let new = self.next_id.get();
+        self.next_id.set(new + 1);
+        let made = if scale {
+            (false, (s + 1).min(4))
+        } else {
+            (true, s)
+        };
+        self.states.borrow_mut().insert(new, made);
+        self.made.borrow_mut().push((new, id, scale));
+        Some(new)
+    }
+}
 
 impl Game<'_> {
-    /// `setupResultSlot`.
-    pub(super) fn cartography_result(&self, s: &Station) -> Option<ItemStack> {
-        let (map, extra) = (s.inputs[0].as_ref()?, s.inputs[1].as_ref()?);
-        let data = self.maps.data.get(&map_id(map)?)?;
-        match &*extra.item {
-            "minecraft:paper" if !data.locked && data.scale < 4 => Some(ItemStack {
-                count: 1,
-                ..map.clone()
-            }),
-            "minecraft:glass_pane" if !data.locked => Some(ItemStack {
-                count: 1,
-                ..map.clone()
-            }),
-            "minecraft:map" => Some(ItemStack {
-                count: 2,
-                ..map.clone()
-            }),
-            _ => None,
+    /// The maps of `stacks` (loaded as needed) for a menu over this level.
+    pub(super) fn level_maps<'s>(
+        &mut self,
+        stacks: impl IntoIterator<Item = &'s ItemStack>,
+    ) -> LevelMaps {
+        let ids: Vec<i32> = stacks.into_iter().filter_map(map_id).collect();
+        let mut states = HashMap::new();
+        for id in ids {
+            if let Some(m) = self.map(id) {
+                states.insert(id, (m.locked, m.scale));
+            }
+        }
+        LevelMaps {
+            states: RefCell::new(states),
+            next_id: Cell::new(self.peek_map_id()),
+            made: RefCell::new(Vec::new()),
         }
     }
-    /// `onCraftedPostProcess` for the taken result: a scaled or locked copy
-    /// under a new map id. Also spends the inputs' extra item kind check.
-    pub(super) fn cartography_post(&mut self, mut result: ItemStack) -> ItemStack {
-        let extra = self
-            .station
-            .as_ref()
-            .and_then(|s| s.inputs[1].as_ref())
-            .map(|e| e.item.clone());
-        let Some(id) = map_id(&result) else {
-            return result;
-        };
-        let new = match extra.as_deref() {
-            Some("minecraft:paper") => self.map(id).map(|m| m.scaled()),
-            Some("minecraft:glass_pane") => self.map(id).map(|m| m.locked_copy()),
-            _ => None,
-        };
-        if let Some(data) = new {
-            let new_id = self.new_map_id(data);
-            result.data_mut().map_id = Some(new_id);
+
+    /// The scaled and locked copies a menu made (`level.setMapData`).
+    pub(super) fn register_made_maps(&mut self, maps: LevelMaps) {
+        for (id, source, scale) in maps.made.into_inner() {
+            let Some(data) = self
+                .map(source)
+                .map(|m| if scale { m.scaled() } else { m.locked_copy() })
+            else {
+                continue;
+            };
+            let new = self.new_map_id(data);
+            debug_assert_eq!(new, id, "map ids follow peek_map_id");
         }
-        result
-    }
-    /// The take sound (once per tick).
-    pub(super) fn cartography_taken(&mut self, pos: [i32; 3]) {
-        let at = [
-            f64::from(pos[0]) + 0.5,
-            f64::from(pos[1]) + 0.5,
-            f64::from(pos[2]) + 0.5,
-        ];
-        self.audio.play(
-            "minecraft:ui.cartography_table.take_result",
-            Some(at),
-            1.0,
-            1.0,
-        );
     }
     /// `CartographyTableScreen.extractBackground` after the background.
     pub(super) fn draw_cartography(&mut self, batch: &mut HudBatch, ox: f32, oy: f32) {

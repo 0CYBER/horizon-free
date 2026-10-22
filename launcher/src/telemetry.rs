@@ -1,6 +1,8 @@
 //! Opt-in data collection from the launcher (`horizon_telemetry`): the player's answer, what
 //! would be sent, deleting it, bug reports and benchmark uploads, and sending the outbox when
 //! the launcher starts and closes. The window, the CLI and the MCP server all go through here.
+//! Also the live count's side here: what the "I'm playing" ping holds, in words, and reading
+//! how many play now (`horizon_telemetry::live`).
 use std::path::{Path, PathBuf};
 
 use horizon_telemetry::payload::{Bug, Crash, Perf, System, Timings};
@@ -36,6 +38,33 @@ pub const SWITCHES: [(Kind, &str, &str); 4] = [
 
 /// Never sent, whatever the switches say.
 pub const NEVER: &str = "Never sent: your account name or UUID, world names, server addresses, chat, or your IP address. Each report is dated to the day, under a random install ID you can delete.";
+
+/// The anonymous "I'm playing" ping the game sends whatever the switches say (Ludovic's
+/// decision, 2026-10-22: count everyone, and tell them). Shown on the first-run question, in
+/// Settings, and once on the Play page to players who answered before it existed.
+pub const PING_NAME: &str = "\"I'm playing\" ping";
+pub const PING: &str = "While you play, the game sends an anonymous \"I'm playing\" ping once a minute, so the launcher can show how many people play Horizon right now. It holds: a random number made when the game starts and forgotten when it closes, the Horizon version, your OS (Linux, macOS or Windows), and whether you have a world open to LAN or friends. It doesn't hold: your account, your install ID, world or server names, or anything you do in the game, and the server doesn't keep your IP address. It is sent whatever the switches say.";
+
+/// How many play Horizon now (rounded), if the server says.
+pub fn playing_now() -> Option<u64> {
+    let endpoint = horizon_telemetry::endpoint()?;
+    horizon_telemetry::live::fetch(&endpoint)
+        .ok()
+        .map(|count| count.playing)
+}
+
+/// Sends [`playing_now`] to the window as `Msg::Playing` now and every minute, on its own
+/// thread. Nothing at all when there is no server.
+pub fn watch_playing(tx: std::sync::mpsc::Sender<backend::Msg>) {
+    if horizon_telemetry::endpoint().is_none() {
+        return;
+    }
+    std::thread::spawn(move || {
+        while tx.send(backend::Msg::Playing(playing_now())).is_ok() {
+            std::thread::sleep(horizon_telemetry::live::INTERVAL);
+        }
+    });
+}
 
 pub fn home() -> PathBuf {
     backend::game_home()
@@ -249,6 +278,7 @@ pub fn status_json() -> serde_json::Value {
         "install_id": consent.install_id,
         "waiting": outbox::pending(&home()).len(),
         "server": horizon_telemetry::endpoint(),
+        "ping": PING,
     })
 }
 

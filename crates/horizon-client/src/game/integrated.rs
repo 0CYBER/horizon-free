@@ -6,9 +6,10 @@
 //! the world's options) with [`Integrated::call`], as vanilla's client calls
 //! into its `IntegratedServer`.
 //!
-//! On by default. `--no-server-thread` or `HORIZON_SERVER_THREAD=0` runs
-//! the world in the frame instead (the escape hatch while the network
-//! player's side catches up with the in-frame one).
+//! Opt-in again (`--server-thread` or `HORIZON_SERVER_THREAD=1`): it was the
+//! default for one day, but a server's players can't board, ride or hit
+//! boats and minecarts yet (#1222), and single player's window is one of
+//! them here.
 use super::{
     Game, Options, PackResources, Resources, UiResources,
     lan::{LanSettings, Owner},

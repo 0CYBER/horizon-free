@@ -147,6 +147,8 @@ pub struct Guest {
     pub xp_level: i32,
     pub xp_progress: f32,
     pub xp_total: i32,
+    /// `Player.enchantmentSeed` (the enchanting table's offers).
+    pub xp_seed: i32,
     /// Active status effects (`LivingEntity.activeEffects`).
     pub effects: crate::effects::PlayerEffects,
     /// What the client was told of each effect: id, amplifier, flags, and
@@ -273,6 +275,7 @@ impl Guest {
             xp_level: 0,
             xp_progress: 0.0,
             xp_total: 0,
+            xp_seed: 0,
             effects: Default::default(),
             sent_effects: Vec::new(),
             menu_sent: vec![None; 46],
@@ -416,6 +419,43 @@ pub fn stack_to_network(
             stack.added.push((
                 horizon_protocol::item::component::MAP_ID,
                 horizon_protocol::item::Component::Int(id),
+            ));
+        }
+        if d.repair_cost > 0 {
+            stack.added.push((
+                horizon_protocol::item::component::REPAIR_COST,
+                horizon_protocol::item::Component::Int(d.repair_cost as i32),
+            ));
+        }
+        if let Some(mode) = d.map_post_processing {
+            stack.added.push((
+                horizon_protocol::item::component::MAP_POST_PROCESSING,
+                horizon_protocol::item::Component::Int(i32::from(mode)),
+            ));
+        }
+        // The books a lectern shows and a guest reads.
+        if !d.writable_pages.is_empty() {
+            stack.added.push((
+                horizon_protocol::item::component::WRITABLE_BOOK_CONTENT,
+                horizon_protocol::item::Component::WritableBook(d.writable_pages.clone()),
+            ));
+        }
+        if let Some(w) = &d.written {
+            stack.added.push((
+                horizon_protocol::item::component::WRITTEN_BOOK_CONTENT,
+                horizon_protocol::item::Component::WrittenBook(
+                    horizon_protocol::item::WrittenBook {
+                        title: w.title.clone(),
+                        author: w.author.clone(),
+                        generation: i32::from(w.generation),
+                        pages: w
+                            .pages
+                            .iter()
+                            .map(|p| horizon_protocol::text::literal(p))
+                            .collect(),
+                        resolved: true,
+                    },
+                ),
             ));
         }
     }

@@ -177,7 +177,7 @@ fn roar(m: &mut Mob, w: &MobWorld, events: &mut Vec<MobEvent>) {
             velocity: fling(p.position),
         });
     }
-    for s in w.others.iter() {
+    for s in w.others_near(area) {
         if s.id == m.id || !s.alive || s.species == Species::Ravager || !s.bounds.intersects(area) {
             continue;
         }

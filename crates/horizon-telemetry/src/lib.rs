@@ -6,11 +6,15 @@
 //! connection. Items are small summaries (percentiles and histogram buckets, never raw streams),
 //! dated to the day, with no account, world, server or address in them ([`scrub`]); they leave
 //! in zstd batches ([`batch`]). `docs/telemetry.md` lists every field.
+//!
+//! The one exception is [`live`]: the anonymous "I'm playing" ping the game sends while it
+//! runs, for the live player count. It holds no install ID and nothing about the player.
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub mod batch;
 pub mod consent;
+pub mod live;
 pub mod outbox;
 pub mod payload;
 pub mod scrub;
@@ -29,8 +33,9 @@ pub const SCHEMA: u32 = 1;
 /// and until the player answers nothing new is kept or sent.
 pub const CONSENT_VERSION: u32 = 1;
 
-/// The ingest server, or none while there isn't one: then nothing is ever sent and the outbox
-/// stays within its caps. `HORIZON_TELEMETRY_URL` overrides it (tests, a local server).
+/// The ingest server, or none while there isn't one: then nothing is ever sent (no ping either)
+/// and the outbox stays within its caps. `HORIZON_TELEMETRY_URL` overrides it (tests, a local
+/// server).
 pub const DEFAULT_ENDPOINT: Option<&str> = None;
 
 /// Where items are sent, if anywhere.

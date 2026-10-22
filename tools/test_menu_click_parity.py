@@ -10,7 +10,17 @@ click: QUICK_MOVE on every slot of the clicked slot's container holding the
 item the first click moved) over the player inventory,
 crafting table, chests, hopper, dispenser, shulker box, the furnaces, the
 brewing stand, the crafter (the client's menu, and the server's over the block
-entity with slot state packets), the loom (with its pattern buttons) and the
+entity with slot state packets), the loom (with its pattern buttons), the
+stonecutter (with its recipe buttons), the grindstone (enchanted, damaged and
+cursed tools and books), the anvil (repairs, enchantment merges and renames,
+with the player's levels), the smithing table (upgrades and trims), the
+enchanting table (its button checks against the costs, lapis and levels), the
+beacon (its payment slot and ServerboundSetBeaconPacket against the pyramid's
+levels), the
+cartography table (over a level with locked, scaled and missing maps: its
+results, and the scaled and locked copies a take makes), the lectern (over the
+block entity: its page buttons, clamped to the book's pages, and Take Book,
+with the inventory compared too) and the
 server's furnace menus over their block entities (`*_be`: a new input restarts
 cooking, other clicks keep its progress). After
 every click the slots, carried stack, data slots and drops are compared.
@@ -26,8 +36,9 @@ except ImportError:
 
 MENUS = {'inventory': 46, 'crafting': 46, 'chest1': 45, 'chest2': 54, 'chest3': 63, 'chest4': 72, 'chest5': 81,
          'chest6': 90, 'hopper': 41, 'dispenser': 45, 'shulker': 63, 'furnace': 39, 'blast_furnace': 39, 'smoker': 39, 'brewing': 41, 'crafter': 46,
-         'crafter_be': 46, 'loom': 40, 'furnace_be': 39, 'blast_furnace_be': 39, 'smoker_be': 39}
+         'crafter_be': 46, 'loom': 40, 'stonecutter': 38, 'grindstone': 39, 'anvil': 39, 'smithing': 40, 'enchanting': 38, 'beacon': 37, 'cartography': 39, 'lectern': 1, 'furnace_be': 39, 'blast_furnace_be': 39, 'smoker_be': 39}
 DATA = {'furnace': 4, 'blast_furnace': 4, 'smoker': 4, 'brewing': 4, 'crafter': 10, 'crafter_be': 10, 'loom': 1,
+        'stonecutter': 1, 'enchanting': 10, 'beacon': 3, 'lectern': 1,
         'furnace_be': 4, 'blast_furnace_be': 4, 'smoker_be': 4}
 DYES = ['white', 'orange', 'magenta', 'light_blue', 'yellow', 'lime', 'pink', 'gray', 'light_gray', 'cyan', 'purple',
         'blue', 'brown', 'green', 'red', 'black']
@@ -40,6 +51,27 @@ COMMON = ['stone', 'dirt', 'cobblestone', 'oak_planks', 'stick', 'coal', 'iron_i
           'raw_iron', 'potato', 'beef', 'chicken', 'sticky_piston', 'blaze_rod', 'lava_bucket', 'oak_sapling',
           'white_dye', 'red_dye', 'torch', 'crafting_table', 'furnace', 'chest', 'glass_bottle', 'nether_wart', 'blaze_powder',
           'redstone', 'gunpowder', 'sugar', 'potion', 'splash_potion', 'lingering_potion', 'fermented_spider_eye', 'dragon_breath']
+# Stonecutter inputs (several recipes each), and a block it doesn't cut.
+CUTTABLE = ['stone', 'cobblestone', 'andesite', 'granite', 'copper_block', 'sandstone', 'quartz_block', 'deepslate',
+            'stone_bricks', 'oak_planks']
+# Grindstone inputs: tools and armor, books, and their enchantments (curses too).
+GRINDABLE = ['iron_sword', 'diamond_pickaxe', 'bow', 'iron_helmet', 'elytra', 'shield', 'fishing_rod', 'trident']
+# Beacon powers (BEACON_EFFECTS by level, and one no level gives) and payments.
+POWERS = ['speed', 'haste', 'resistance', 'jump_boost', 'strength', 'regeneration', 'night_vision']
+PAYMENTS = ['iron_ingot', 'gold_ingot', 'emerald', 'diamond', 'netherite_ingot']
+ENCHANTS = ['sharpness', 'unbreaking', 'mending', 'efficiency', 'protection', 'power', 'looting', 'fortune',
+            'binding_curse', 'vanishing_curse']
+
+
+# Anvil renames (ServerboundRenameItemPacket): blank, too long, a section sign, an item's own name.
+NAMES = ['', ' ', 'Blade', 'Iron Sword', 'Diamond Pickaxe', 'Enchanted Book', '\u00a7cRed', 'x' * 50, 'x' * 51]
+# Smithing inputs: templates, bases and additions (trim materials and netherite).
+TEMPLATES = ['netherite_upgrade_smithing_template', 'coast_armor_trim_smithing_template',
+             'sentry_armor_trim_smithing_template', 'bolt_armor_trim_smithing_template']
+BASES = ['diamond_sword', 'diamond_chestplate', 'diamond_pickaxe', 'iron_helmet', 'iron_chestplate', 'netherite_boots',
+         'leather_leggings', 'golden_helmet', 'turtle_helmet', 'diamond_hoe']
+ADDITIONS = ['netherite_ingot', 'iron_ingot', 'gold_ingot', 'emerald', 'redstone', 'quartz', 'amethyst_shard',
+             'lapis_lazuli', 'copper_ingot', 'diamond']
 
 
 def quote(text):
@@ -97,6 +129,96 @@ class Gen:
             return snbt(rng.choice(pool), 1)
         return self.stack()
 
+    def cut_stack(self):
+        """Mostly something the stonecutter cuts, sometimes anything."""
+        rng = self.rng
+        if rng.random() < 0.75:
+            return snbt('minecraft:' + rng.choice(CUTTABLE), rng.choice([1, 1, 2, 3, 10, 63, 64]))
+        return self.stack()
+
+    def grind_stack(self):
+        """Mostly an enchanted or damaged tool or an enchanted book, sometimes anything."""
+        rng = self.rng
+        roll = rng.random()
+        if roll > 0.8:
+            return self.stack()
+        levels = ','.join('"minecraft:%s":%d' % (e, rng.randrange(1, 4))
+                          for e in rng.sample(ENCHANTS, rng.choice([0, 1, 1, 2, 3])))
+        comps = []
+        if roll < 0.25:
+            item = 'minecraft:' + rng.choice(['enchanted_book', 'enchanted_book', 'book'])
+            if levels:
+                comps.append('"minecraft:stored_enchantments":{%s}' % levels)
+            count = 1 if rng.random() < 0.85 else 2
+        else:
+            item = 'minecraft:' + rng.choice(GRINDABLE)
+            info = self.items.get(item, {})
+            if levels:
+                comps.append('"minecraft:enchantments":{%s}' % levels)
+            if info.get('minecraft:max_damage') and rng.random() < 0.6:
+                comps.append('"minecraft:damage":%d' % rng.randrange(0, info['minecraft:max_damage']))
+            count = 1
+        if rng.random() < 0.2:
+            comps.append('"minecraft:repair_cost":%d' % rng.choice([1, 3, 7]))
+        body = ',components:{%s}' % ','.join(comps) if comps else ''
+        return '{id:%s,count:%d%s}' % (quote(item), count, body)
+
+    def anvil_stack(self):
+        """A tool to repair or enchant, an enchanted book, a repair material, a named item or anything."""
+        rng = self.rng
+        roll = rng.random()
+        if roll < 0.45:
+            stack = self.grind_stack()
+        elif roll < 0.65:
+            item = rng.choice(['iron_ingot', 'diamond', 'leather', 'oak_planks', 'phantom_membrane', 'string'])
+            stack = snbt('minecraft:' + item, rng.choice([1, 1, 2, 3, 5, 64]))
+        else:
+            stack = self.stack()
+        if rng.random() < 0.15:
+            name = '"minecraft:custom_name":"%s"' % rng.choice(['Blade', 'Iron Sword', 'Old'])
+            stack = stack.replace(',components:{', ',components:{%s,' % name) if ',components:{' in stack \
+                else stack[:-1] + ',components:{%s}}' % name
+        return stack
+
+    def smith_stack(self, slot=None):
+        """A template, a base or an addition (for `slot`, else any), sometimes anything."""
+        rng = self.rng
+        if rng.random() < 0.15:
+            return self.stack()
+        slot = rng.randrange(3) if slot is None else slot
+        pool = [TEMPLATES, BASES, ADDITIONS][slot]
+        item = 'minecraft:' + rng.choice(pool)
+        count = 1 if slot == 1 else rng.choice([1, 1, 2, 5, 64])
+        if slot == 1 and rng.random() < 0.3:
+            return '{id:%s,count:1,components:{"minecraft:enchantments":{"minecraft:unbreaking":2}}}' % quote(item)
+        return snbt(item, count)
+
+    def carto_stack(self):
+        """A filled map (some ids without data), paper, an empty map, a glass pane or anything."""
+        rng = self.rng
+        roll = rng.random()
+        if roll < 0.4:
+            return '{id:"minecraft:filled_map",count:%d,components:{"minecraft:map_id":%d}}' % (
+                rng.choice([1, 1, 2, 3, 64]), rng.randrange(0, 7))
+        if roll < 0.75:
+            return snbt('minecraft:' + rng.choice(['paper', 'map', 'glass_pane']), rng.choice([1, 1, 2, 5, 64]))
+        if roll < 0.78:
+            # Something else with a map id: the map slot takes it.
+            return '{id:"minecraft:paper",count:1,components:{"minecraft:map_id":%d}}' % rng.randrange(0, 7)
+        return self.stack()
+
+    def book(self):
+        """A written or writable book with a few pages, or something else."""
+        rng = self.rng
+        pages = ','.join('"p%d"' % i for i in range(rng.choice([0, 1, 2, 3, 5])))
+        roll = rng.random()
+        if roll < 0.45:
+            return ('{id:"minecraft:written_book",count:1,components:{"minecraft:written_book_content":'
+                    '{title:"T",author:"A",pages:[%s]}}}' % pages)
+        if roll < 0.85:
+            return '{id:"minecraft:writable_book",count:1,components:{"minecraft:writable_book_content":{pages:[%s]}}}' % pages
+        return self.stack()
+
     def recipe(self, slots, width, start=1):
         """Fills the crafting grid (slots `start`..) with a small known recipe."""
         rng = self.rng
@@ -122,6 +244,50 @@ class Gen:
             if menu == 'loom' and rng.random() < 0.15:
                 # The result: take it, shift it out, throw it.
                 out.append([3, rng.randrange(0, 2), rng.choice(['PICKUP', 'QUICK_MOVE', 'THROW', 'SWAP'])])
+                continue
+            if menu == 'stonecutter' and rng.random() < 0.25:
+                # A recipe button (clickMenuButton), sometimes out of range or the selected one.
+                out.append([rng.choice([0, 0, 1, 2, 3, 5, 10, 30, -1]), 0, 'BUTTON'])
+                continue
+            if menu == 'stonecutter' and rng.random() < 0.2:
+                out.append([1, rng.randrange(0, 2), rng.choice(['PICKUP', 'QUICK_MOVE', 'QUICK_MOVE', 'THROW', 'SWAP'])])
+                continue
+            if menu == 'anvil' and rng.random() < 0.15:
+                out.append([0, 0, 'RENAME', rng.choice(NAMES)])
+                continue
+            if menu in ('anvil', 'smithing') and rng.random() < 0.2:
+                result = 2 if menu == 'anvil' else 3
+                out.append([result, rng.randrange(0, 2), rng.choice(['PICKUP', 'QUICK_MOVE', 'QUICK_MOVE', 'THROW', 'SWAP'])])
+                continue
+            if menu == 'enchanting' and rng.random() < 0.25:
+                # An offer button (clickMenuButton), sometimes out of range.
+                out.append([rng.choice([0, 1, 2, 2, 3, -1]), 0, 'BUTTON'])
+                continue
+            if menu == 'beacon' and rng.random() < 0.3:
+                # ServerboundSetBeaconPacket: powers, valid or not, or none.
+                pick = lambda: 'minecraft:' + rng.choice(POWERS) if rng.random() < 0.8 else None
+                primary, secondary = pick(), pick()
+                if primary is None and secondary not in (None, 'minecraft:regeneration', 'minecraft:night_vision'):
+                    # validateEffects compares a null primary (Holder.equals: a NullPointerException).
+                    primary = secondary
+                out.append([0, 0, 'SET_BEACON', primary, secondary])
+                continue
+            if menu == 'grindstone' and rng.random() < 0.2:
+                out.append([2, rng.randrange(0, 2), rng.choice(['PICKUP', 'QUICK_MOVE', 'QUICK_MOVE', 'THROW', 'SWAP'])])
+                continue
+            if menu == 'cartography' and rng.random() < 0.3:
+                # The result: take it, shift it out, throw it, swap it, clone it.
+                out.append([2, rng.randrange(0, 2), rng.choice(['PICKUP', 'QUICK_MOVE', 'QUICK_MOVE', 'THROW', 'SWAP', 'CLONE'])])
+                continue
+            if menu == 'lectern':
+                # The page buttons, a page jump, Take Book, and buttons it doesn't have; now and
+                # then a click on the book's slot. Not SWAP or the drags: vanilla's bookAccess
+                # hands out the block entity's own stack, which the swapped slot then shares.
+                if rng.random() < 0.7:
+                    out.append([rng.choice([1, 1, 2, 2, 2, 3, 100, 101, 102, 104, 0, 4, 99, -1]), 0, 'BUTTON'])
+                else:
+                    out.append([rng.choice([0, 0, -999]), rng.randrange(0, 2),
+                                rng.choice(['PICKUP', 'THROW', 'QUICK_MOVE', 'CLONE'])])
                 continue
             if menu == 'crafter_be' and rng.random() < 0.2:
                 out.append([rng.choice([0, 1, 4, 8, 8, 9, -1]), rng.randrange(0, 2), 'SLOT_STATE'])
@@ -183,6 +349,58 @@ def main():
             slots[2] = g.loom_stack(0.6) if rng.random() < 0.4 else rng.choice(['-', '-', g.loom_stack()])
             # The result slot follows the inputs; a fixture stack there is rare.
             slots[3] = '-' if rng.random() < 0.9 else g.loom_stack()
+        if menu == 'stonecutter':
+            for i in rng.sample(range(2, size), 8):
+                slots[i] = g.cut_stack()
+            slots[0] = g.cut_stack() if rng.random() < 0.8 else '-'
+            # The result follows the input and the selected recipe; a fixture stack there is rare.
+            slots[1] = '-' if rng.random() < 0.9 else g.cut_stack()
+        if menu == 'grindstone':
+            for i in rng.sample(range(3, size), 10):
+                slots[i] = g.grind_stack()
+            slots[0] = g.grind_stack() if rng.random() < 0.7 else '-'
+            slots[1] = g.grind_stack() if rng.random() < 0.6 else '-'
+            # Two of the same tool, so mergeItems runs.
+            if slots[0] != '-' and rng.random() < 0.3:
+                slots[1] = slots[0] if rng.random() < 0.4 else g.grind_stack()
+            # The result follows the inputs; a fixture stack there is rare.
+            slots[2] = '-' if rng.random() < 0.9 else g.grind_stack()
+        if menu == 'anvil':
+            for i in rng.sample(range(3, size), 10):
+                slots[i] = g.anvil_stack()
+            slots[0] = g.anvil_stack() if rng.random() < 0.8 else '-'
+            slots[1] = g.anvil_stack() if rng.random() < 0.6 else '-'
+            if slots[0] != '-' and rng.random() < 0.25:
+                slots[1] = slots[0]
+            slots[2] = '-' if rng.random() < 0.9 else g.anvil_stack()
+        if menu == 'smithing':
+            for i in rng.sample(range(4, size), 12):
+                slots[i] = g.smith_stack()
+            for i in range(3):
+                slots[i] = g.smith_stack(i) if rng.random() < 0.75 else '-'
+            slots[3] = '-' if rng.random() < 0.9 else g.smith_stack()
+        if menu == 'enchanting':
+            lapis = lambda: snbt('minecraft:lapis_lazuli', rng.choice([1, 2, 3, 5, 64]))
+            enchantable = lambda: snbt('minecraft:' + rng.choice(['iron_sword', 'book', 'diamond_pickaxe', 'bow',
+                                                                  'golden_helmet', 'fishing_rod']), 1)
+            for i in rng.sample(range(2, size), 10):
+                slots[i] = rng.choice([lapis, enchantable, g.grind_stack])()
+            slots[0] = rng.choice([enchantable, enchantable, g.grind_stack, g.stack])() if rng.random() < 0.8 else '-'
+            slots[1] = lapis() if rng.random() < 0.7 else rng.choice(['-', g.stack()])
+        if menu == 'beacon':
+            pay = lambda: snbt('minecraft:' + rng.choice(PAYMENTS), rng.choice([1, 1, 1, 2, 64]))
+            for i in rng.sample(range(1, size), 8):
+                slots[i] = pay()
+            slots[0] = pay() if rng.random() < 0.7 else rng.choice(['-', g.stack()])
+        if menu == 'cartography':
+            for i in rng.sample(range(3, size), 12):
+                slots[i] = g.carto_stack()
+            slots[0] = g.carto_stack() if rng.random() < 0.8 else '-'
+            slots[1] = g.carto_stack() if rng.random() < 0.75 else '-'
+            # The result follows the inputs; a fixture stack there is rare.
+            slots[2] = '-' if rng.random() < 0.9 else g.carto_stack()
+        if menu == 'lectern':
+            slots[0] = g.book() if rng.random() < 0.85 else '-'
         if menu == 'crafter_be':
             slots[45] = '-'
             if rng.random() < 0.6:
@@ -208,13 +426,36 @@ def main():
                 return [rng.choice([0, 37, 1600]), 1600, rng.choice([0, 1, 57, 199]), rng.choice([200, 100])][i]
             if menu in ('crafter', 'crafter_be'):
                 return rng.choice([0, 0, 1])
-            if menu == 'loom':
+            if menu in ('loom', 'stonecutter'):
                 return rng.choice([-1, -1, 0, 0, 1, 2, 3, 30])
+            if menu == 'lectern':
+                return rng.choice([-1, 0, 0, 1, 2, 4, 9])
+            if menu == 'beacon':
+                # the levels, then the powers (encodeEffect: id + 1)
+                return rng.choice([0, 1, 2, 3, 4, 4]) if i == 0 else rng.choice([0, 0, 2, 4, 11])
+            if menu == 'enchanting':
+                # costs, the seed, then the clues
+                return [rng.choice([0, 1, 2, 5, 15, 30]) for _ in range(3)][0] if i < 3 else \
+                    rng.randrange(-2**15, 2**15) if i == 3 else rng.choice([-1, -1, 0, 3, 12])
             return 0
-        carried = (g.loom_stack() if menu == 'loom' else g.stack()) if rng.random() < 0.5 else '-'
+        carried = {'loom': g.loom_stack, 'stonecutter': g.cut_stack, 'grindstone': g.grind_stack,
+                   'anvil': g.anvil_stack, 'smithing': g.smith_stack}.get(menu, g.stack)() if rng.random() < 0.5 else '-'
         if carried_food is not None:
             carried = carried_food
-        cases.append({'menu': menu, 'creative': rng.random() < 0.25, 'slots': slots,
+        if menu == 'lectern':
+            carried = '-'
+        extra = {}
+        if menu == 'cartography':
+            # Maps 0-4 exist (5 and 6 don't): [id, scale, locked].
+            extra['maps'] = [[i, rng.choice([0, 0, 1, 3, 4]), rng.random() < 0.25] for i in range(5)]
+            if rng.random() < 0.5:
+                carried = g.carto_stack()
+        if menu == 'lectern':
+            # The inventory Take Book adds to (full, so the book drops, now and then).
+            density = rng.choice([0.0, 0.3, 1.0])
+            extra['inventory'] = [g.stack() if rng.random() < density else '-' for _ in range(36)]
+        cases.append({'menu': menu, 'creative': rng.random() < 0.25, 'slots': slots, **extra,
+                      'levels': rng.choice([0, 1, 3, 8, 30, 39, 40]),
                       'carried': carried, 'data': [datum(i) for i in range(DATA.get(menu, 0))],
                       'ops': g.ops(size, menu, slots)})
     (work / 'cases.jsonl').write_text(''.join(json.dumps(c) + '\n' for c in cases))

@@ -1305,8 +1305,73 @@ pub fn load_light(tag: &Tag, chunk: &mut Chunk, sky_light: bool) {
         };
         layers[si as usize] = (layer("SkyLight"), layer("BlockLight"));
     }
-    let above = [if sky_light { 15 } else { 0 }; 256];
-    crate::light::light_from_layers(chunk, &layers, above, sky_light);
+    // Uniform saved layers need no expanded allocation. Both nibbles of
+    // each byte must match, not merely the bytes across the layer.
+    let uniform_layer = |layer: &[u8]| {
+        let first = layer[0];
+        (first & 15 == first >> 4 && layer.iter().all(|&v| v == first)).then_some(first & 15)
+    };
+    let mut above = [if sky_light { 15 } else { 0 }; 256];
+    for (si, (sky, block)) in layers.into_iter().enumerate().rev() {
+        let sky = sky.filter(|_| sky_light);
+        let sky_uniform = sky.map_or_else(
+            || above.iter().all(|&v| v == above[0]).then_some(above[0]),
+            uniform_layer,
+        );
+        let block_uniform = block.map_or(Some(0), uniform_layer);
+        let section = Arc::make_mut(&mut chunk.sections[si]);
+        if let (Some(s), Some(b)) = (sky_uniform, block_uniform) {
+            section.light = Light::Uniform(s << 4 | b);
+            above.fill(s);
+        } else {
+            let mut data = Box::new([0u8; 4096]);
+            match (sky, block) {
+                (Some(sky), Some(block)) => {
+                    for ((pair, &s), &b) in
+                        data.as_chunks_mut::<2>().0.iter_mut().zip(sky).zip(block)
+                    {
+                        pair[0] = s << 4 | (b & 15);
+                        pair[1] = (s & 0xf0) | (b >> 4);
+                    }
+                }
+                (Some(sky), None) => {
+                    for (pair, &s) in data.as_chunks_mut::<2>().0.iter_mut().zip(sky) {
+                        pair[0] = s << 4;
+                        pair[1] = s & 0xf0;
+                    }
+                }
+                (None, Some(block)) => {
+                    for (i, (pair, &b)) in data
+                        .as_chunks_mut::<2>()
+                        .0
+                        .iter_mut()
+                        .zip(block)
+                        .enumerate()
+                    {
+                        pair[0] = above[(i * 2) & 255] << 4 | (b & 15);
+                        pair[1] = above[(i * 2 + 1) & 255] << 4 | (b >> 4);
+                    }
+                }
+                (None, None) => {
+                    for layer in data.as_chunks_mut::<256>().0 {
+                        for (v, &s) in layer.iter_mut().zip(&above) {
+                            *v = s << 4;
+                        }
+                    }
+                }
+            }
+            if let Some(sky) = sky {
+                for (pair, &s) in above.as_chunks_mut::<2>().0.iter_mut().zip(sky) {
+                    pair[0] = s & 15;
+                    pair[1] = s >> 4;
+                }
+            }
+            section.light = Light::Full(data);
+        }
+        section.compact();
+    }
+    chunk.lit = true;
+    chunk.light_loaded = true;
 }
 
 type RegionCache = Mutex<HashMap<(i32, i32), Option<Arc<Mutex<RegionFile>>>>>;
@@ -3894,6 +3959,151 @@ mod tests {
             true,
         );
         assert!(!unlit.lit && !unlit.light_loaded);
+    }
+    #[test]
+    fn saved_light_matches_reference_for_layers_and_metadata() {
+        fn reference(tag: &Tag, chunk: &mut Chunk, sky_light: bool) {
+            if tag.get("isLightOn") != Some(&Tag::Byte(1)) {
+                return;
+            }
+            let Some(Tag::List(sections)) = tag.get("sections") else {
+                return;
+            };
+            let mut layers: Vec<(Option<&[u8]>, Option<&[u8]>)> = vec![(None, None); SECTIONS];
+            for section in sections {
+                let Some(y) = number(section.get("Y")) else {
+                    continue;
+                };
+                let si = y as i32 - (MIN_Y >> 4);
+                if !(0..SECTIONS as i32).contains(&si) {
+                    continue;
+                }
+                let layer = |name: &str| match section.get(name) {
+                    Some(Tag::ByteArray(a)) if a.len() == 2048 => Some(&a[..]),
+                    _ => None,
+                };
+                layers[si as usize] = (layer("SkyLight"), layer("BlockLight"));
+            }
+            let above = [if sky_light { 15 } else { 0 }; 256];
+            crate::light::light_from_layers(chunk, &layers, above, sky_light);
+        }
+
+        let section = |y: Tag, sky: Option<Tag>, block: Option<Tag>| {
+            let mut entries = vec![("Y", y)];
+            if let Some(v) = sky {
+                entries.push(("SkyLight", v));
+            }
+            if let Some(v) = block {
+                entries.push(("BlockLight", v));
+            }
+            Tag::compound(entries)
+        };
+        let root = |sections| {
+            Tag::compound([
+                ("isLightOn", Tag::Byte(1)),
+                ("sections", Tag::List(sections)),
+            ])
+        };
+        let check = |tag: &Tag| {
+            for sky_light in [false, true] {
+                let mut expected = Chunk::empty(-3, 5);
+                let s = Arc::make_mut(&mut expected.sections[0]);
+                s.light = Light::Full(Box::new([0xab; 4096]));
+                s.blocks.set(0, 1);
+                s.blocks.set(0, 0);
+                s.biomes.set(0, 1);
+                s.biomes.set(0, 0);
+                let mut actual = expected.clone();
+                reference(tag, &mut expected, sky_light);
+                load_light(tag, &mut actual, sky_light);
+                assert_eq!(
+                    (actual.lit, actual.light_loaded),
+                    (expected.lit, expected.light_loaded)
+                );
+                for (a, b) in actual.sections.iter().zip(&expected.sections) {
+                    assert_eq!(
+                        std::mem::discriminant(&a.light),
+                        std::mem::discriminant(&b.light)
+                    );
+                    assert_eq!(
+                        format!("{:?}", a.blocks.to_wire()),
+                        format!("{:?}", b.blocks.to_wire())
+                    );
+                    assert_eq!(
+                        format!("{:?}", a.biomes.to_wire()),
+                        format!("{:?}", b.biomes.to_wire())
+                    );
+                    for i in 0..4096 {
+                        assert_eq!(a.light(i), b.light(i), "index {i}, sky {sky_light}");
+                    }
+                }
+            }
+        };
+        for tag in [
+            Tag::compound(Vec::<(&str, Tag)>::new()),
+            Tag::compound([("isLightOn", Tag::Byte(0))]),
+            Tag::compound([("isLightOn", Tag::Byte(2))]),
+            Tag::compound([("isLightOn", Tag::Int(1)), ("sections", Tag::List(vec![]))]),
+            Tag::compound([("isLightOn", Tag::Byte(1)), ("sections", Tag::Int(0))]),
+            root(vec![]),
+        ] {
+            check(&tag);
+        }
+        // Cover every repeated byte, including 0xF0/0x0F: a uniform byte
+        // array need not hold uniform nibbles.
+        for byte in 0..=255u8 {
+            check(&root(vec![section(
+                Tag::Byte(19),
+                Some(Tag::ByteArray(vec![byte; 2048])),
+                Some(Tag::ByteArray(vec![255 - byte; 2048])),
+            )]));
+        }
+        // Every pair of uniform sky/block nibble values, with missing
+        // sections below inheriting the stored bottom row.
+        for sky in 0..16u8 {
+            for block in 0..16u8 {
+                check(&root(vec![section(
+                    Tag::Byte(1),
+                    Some(Tag::ByteArray(vec![sky * 17; 2048])),
+                    Some(Tag::ByteArray(vec![block * 17; 2048])),
+                )]));
+            }
+        }
+        for length in [0, 1, 2047, 2048, 2049] {
+            for invalid in [
+                Tag::Int(1),
+                Tag::List(vec![]),
+                Tag::ByteArray(vec![0xf0; length]),
+            ] {
+                check(&root(vec![section(
+                    Tag::Byte(-4),
+                    Some(invalid.clone()),
+                    Some(invalid),
+                )]));
+            }
+        }
+        let varied: Vec<u8> = (0..2048)
+            .map(|i| (i as u8).wrapping_mul(73).wrapping_add(31))
+            .collect();
+        check(&root(vec![
+            section(Tag::Byte(-5), Some(Tag::ByteArray(varied.clone())), None),
+            section(Tag::Byte(20), Some(Tag::ByteArray(varied.clone())), None),
+            section(
+                Tag::String("19".into()),
+                Some(Tag::ByteArray(varied.clone())),
+                None,
+            ),
+            section(Tag::Byte(19), Some(Tag::ByteArray(varied.clone())), None),
+            section(Tag::Byte(17), None, Some(Tag::ByteArray(varied.clone()))),
+            section(Tag::Byte(-4), Some(Tag::ByteArray(varied.clone())), None),
+            // Last duplicate wins, even when its arrays have wrong types.
+            section(
+                Tag::Byte(-4),
+                Some(Tag::Int(15)),
+                Some(Tag::ByteArray(vec![7; 2047])),
+            ),
+            section(Tag::Byte(0), None, Some(Tag::ByteArray(varied))),
+        ]));
     }
     #[test]
     fn level_round_trips_through_the_vanilla_files() {

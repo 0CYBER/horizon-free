@@ -53,6 +53,10 @@ pub(super) struct GuestPlay {
     pub(super) merchant: Option<super::lan_trading::GuestMerchant>,
     /// The inventory menu and the crafting table the guest crafts in.
     pub(super) crafting: super::lan_crafting::GuestCrafting,
+    /// The workstation menu the guest has open (game/lan_stations.rs).
+    pub(super) station: Option<super::lan_stations::GuestStation>,
+    /// The lectern the guest reads (game/lan_stations.rs).
+    pub(super) lectern: Option<super::lan_stations::GuestLectern>,
     /// What the guest's body was given for its effects and enchantments.
     potions: super::potions::BodyPotions,
     /// `ServerPlayer.getStats` and the inventory `inventory_changed` last saw.
@@ -476,7 +480,13 @@ impl Game<'_> {
         self.container = container;
         self.screen = screen;
         self.sign_edit = host_sign;
-        self.book = host_book;
+        // A lectern the guest's use opened (LecternBlock.openScreen).
+        let guest_lectern = match std::mem::replace(&mut self.book, host_book) {
+            Some(super::books::BookScreen::View {
+                lectern: Some(key), ..
+            }) => Some(key),
+            _ => None,
+        };
         self.command_block_screen = host_command_block;
         self.mount_menu = host_mount_menu;
         self.keys = host_keys;
@@ -532,12 +542,14 @@ impl Game<'_> {
             g.health = m.health.health();
             g.food = m.health.food.food;
             g.saturation = m.health.food.saturation;
-            // A teleport (commands) moves the guest.
+            // A teleport (commands, a pearl) moves the guest; a pearl's is
+            // sent even to where they stand (ServerPlayer.teleport).
             let at = [m.position.x, m.position.y, m.position.z];
             m.sprinting = false;
+            let teleported = std::mem::take(&mut m.teleported);
             let moved: f64 = (0..3).map(|k| (at[k] - g.position[k]).powi(2)).sum();
             g.motion = Some(Box::new(m));
-            if moved > 0.0001 || turned {
+            if moved > 0.0001 || turned || teleported {
                 host.hub.teleport(i, Some(at));
             }
         }
@@ -570,6 +582,9 @@ impl Game<'_> {
         }
         if let Some(station) = opened_station {
             self.lan_station_opened(host, conn, station);
+        }
+        if let Some(key) = guest_lectern {
+            self.lan_open_lectern(host, conn, key);
         }
         if opened_table {
             self.lan_open_crafting(host, conn);
@@ -637,6 +652,13 @@ impl Game<'_> {
                 _ => ("minecraft:furnace", "container.furnace"),
             };
             (menu, title, Slots::Block(pos))
+        } else if let Some(BlockEntity::Crafter(_)) = self.world.block_entities.get(&pos) {
+            // CrafterBlock.useWithoutItem: CrafterMenu over the block entity.
+            (
+                "minecraft:crafter_3x3",
+                "container.crafter",
+                Slots::Block(pos),
+            )
         } else if let Some(BlockEntity::Brewing(_)) = self.world.block_entities.get(&pos) {
             // BrewingStandBlock.useWithoutItem: BrewingStandMenu.
             (
@@ -679,6 +701,7 @@ impl Game<'_> {
         };
         // ServerPlayer.openMenu closes the menu that was open.
         self.guest_container_closed(host, conn);
+        self.lan_station_closed(host, conn, None);
         host.hub.open_container(
             conn,
             menu,
@@ -913,6 +936,16 @@ impl Game<'_> {
             S::ContainerClick(p) if self.lan_inventory_click(host, conn, &p) => {}
             S::ContainerClick(p) if self.lan_crafting_click(host, conn, &p) => {}
             S::ContainerClick(p) if self.lan_machine_click(host, conn, &p) => {}
+            S::ContainerClick(p) if self.lan_station_click(host, conn, &p) => {}
+            S::ContainerClick(p) if self.lan_lectern_click(host, conn, &p) => {}
+            S::ContainerButtonClick(p) => {
+                self.lan_station_button(host, conn, p.container, p.button);
+            }
+            S::RenameItem(p) => self.lan_station_rename(host, conn, &p.name),
+            S::ContainerSlotStateChanged(p) => {
+                self.lan_crafter_slot_state(host, conn, p.container, p.slot, p.enabled);
+            }
+            S::SetBeacon(p) => self.lan_station_beacon(host, conn, p.primary, p.secondary),
             S::SelectTrade(p) => self.lan_select_trade(host, conn, p.item),
             S::ContainerClose(p) if self.lan_merchant_closed(host, conn, Some(p.container)) => {
                 let g = &mut host.hub.guests[gi];
@@ -920,7 +953,10 @@ impl Game<'_> {
                     self.drop_guest_items(host, gi, vec![c]);
                 }
             }
-            S::ContainerClose(p) if self.lan_crafting_closed(host, conn, Some(p.container)) => {
+            S::ContainerClose(p)
+                if self.lan_crafting_closed(host, conn, Some(p.container))
+                    || self.lan_station_closed(host, conn, Some(p.container)) =>
+            {
                 let g = &mut host.hub.guests[gi];
                 if let Some(c) = g.carried.take() {
                     self.drop_guest_items(host, gi, vec![c]);
@@ -1438,6 +1474,7 @@ impl Game<'_> {
     /// Per tick, for every guest: dig, use items, pick up drops, die.
     pub(super) fn tick_guests(&mut self, host: &mut LanHost) {
         self.lan_merchant_tick(host);
+        self.lan_stations_tick(host);
         self.announce_guest_advancements(host);
         let conns: Vec<u32> = host
             .hub
@@ -1692,6 +1729,13 @@ impl Game<'_> {
                 if landed.is_err() {
                     break;
                 }
+            }
+            // A ServerPlayer travels on the server too
+            // (MoveSimulationType.AUTHORITATIVE_SIDE_AND_SERVER), so every tick
+            // on a ladder or vine LivingEntity.handleOnClimbable resets its fall
+            // distance: climbing down doesn't hurt where it lands (#1255).
+            if w.climbable().unwrap_or(false) {
+                w.player.fall_distance = 0.0;
             }
             let _ = w.tick_environment_damage();
             let _ = w.apply_fire_contact();
