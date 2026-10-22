@@ -24,7 +24,7 @@ Every release also carries `SHA256SUMS` and a signature, `SHA256SUMS.sig`, if yo
 2. Back on **Play**, the launcher says "Not prepared. Horizon needs the files of your own Minecraft 26.3." Choose **Prepare**. It finds your Minecraft folder by itself in the usual places. If it cannot, it lists where it looked, and **Choose…** next to the Minecraft folder lets you point it at yours.
 3. Wait a few minutes. When it says "Prepared for Minecraft 26.3", choose **Play**.
 
-The game opens on Horizon's own title screen. Your worlds, options and logs live in the game folder, which is not inside a version's folder, so updating or removing a version never touches them:
+The game opens on vanilla's title screen. Your worlds, options and logs live in the game folder, which is not inside a version's folder, so updating or removing a version never touches them:
 
 - Linux: `~/.local/share/horizon`
 - macOS: `~/Library/Application Support/horizon`

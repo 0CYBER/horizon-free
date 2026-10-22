@@ -307,7 +307,7 @@ impl Launcher {
         let server = if horizon_telemetry::endpoint().is_some() {
             format!("{waiting} waiting to be sent")
         } else {
-            "No data server yet: nothing is sent".into()
+            "Sending is turned off here (HORIZON_TELEMETRY_URL=off)".into()
         };
         let confirm = self.collection.confirm_delete;
         let actions = div()

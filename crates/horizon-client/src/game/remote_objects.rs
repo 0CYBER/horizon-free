@@ -52,6 +52,8 @@ impl Game<'_> {
                 invisible: false,
                 check_interval: 0,
             });
+        } else if kind == "minecraft:lightning_bolt" {
+            self.spawn_remote_bolt(id, position);
         } else if kind == "minecraft:painting" {
             // The variant comes with the entity data; until then the
             // registry's first one (VariantUtils.getAny).
@@ -188,7 +190,12 @@ impl Game<'_> {
     /// A move's rotation and ground state for an object.
     pub(super) fn turn_remote_object(&mut self, id: i32, yaw: Option<f32>, on_ground: bool) {
         let id = id as u32;
+        // The boat the player drives turns here (isLocalInstanceAuthoritative).
+        let driven = self.riding;
         if let Some(b) = self.boats.iter_mut().find(|b| b.id == id) {
+            if Some(id) == driven {
+                return;
+            }
             if let Some(yaw) = yaw {
                 b.yaw = yaw;
             }
@@ -213,7 +220,12 @@ impl Game<'_> {
             c.previous_yaw = c.yaw;
             c.position = step(c.id, c.position);
         }
+        // The boat the player drives moves here, not where the server says.
+        let driven = self.riding;
         for b in &mut self.boats {
+            if Some(b.id) == driven {
+                continue;
+            }
             b.previous = b.position;
             b.previous_yaw = b.yaw;
             b.position = step(b.id, b.position);
@@ -274,5 +286,6 @@ impl Game<'_> {
         self.armor_stands.retain(|a| a.id != id);
         self.item_frames.retain(|f| f.id != id);
         self.paintings.retain(|p| p.id != id);
+        self.bolts.retain(|b| b.id != id);
     }
 }
