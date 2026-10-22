@@ -35,7 +35,7 @@ spore_blossom_air totem_of_undying underwater vault_connection warped_spore whit
 sweep_attack glow wax_on wax_off electric_spark scrape squid_ink glow_squid_ink item_slime item_snowball item_cobweb
 sulfur_cube_goo firefly trial_spawner_detection trial_spawner_detection_ominous trial_omen raid_omen ominous_spawning
 spit fishing dust_plume red_poplar_leaves orange_poplar_leaves yellow_poplar_leaves pause_mob_growth
-reset_mob_growth""".split()
+reset_mob_growth sulfur_bubbles""".split()
 
 
 def options(kind, rng):
@@ -77,6 +77,12 @@ def cases(rng):
         for (pos, floor) in starts:
             for vel in velocities:
                 yield dict(type=kind, options=options(kind, rng), pos=pos, vel=vel, floor=floor,
+                           seed=rng.randrange(-2**63, 2**63), ticks=80)
+    # In still water (sources from y 64 to 67): the bubbles rise until they leave it.
+    for kind in ['sulfur_bubbles', 'bubble', 'bubble_column_up']:
+        for (pos, floor) in [([0.3125, 64.046875, -0.40625], True), ([-5.75, 66.59375, 3.125], False)]:
+            for vel in velocities:
+                yield dict(type=kind, options={}, pos=pos, vel=vel, floor=floor, water=True,
                            seed=rng.randrange(-2**63, 2**63), ticks=80)
 
 
@@ -215,10 +221,10 @@ def main():
         client_jar_sha256=lab.digest(jars['client'], 'sha256'), matched_output_lines=matched,
         output_sha256=lab.digest(build / 'rust.txt', 'sha256'), libm_tolerated_lines=tolerance,
         scope=('Real ParticleResources providers for every type Horizon implements, ticked in an air level with an optional '
-               'stone floor: construction (provider, level, SpellParticle and particle-local random draws), per-tick '
+               'stone floor and, for the bubbles, still water: construction (provider, level, SpellParticle and particle-local random draws), per-tick '
                'position, previous position, motion, age, lifetime, removal, onGround, quad size at partial 0 and 0.5, '
                'colour, alpha, roll, sprite, UVs and light at partial 0.5 (unloaded chunk), and the particles and sounds '
-               'requested from the level. Fluids, block light, render layers/facing and the ParticleEngine group limits '
+               'requested from the level. Flowing fluids, block light, render layers/facing and the ParticleEngine group limits '
                'are not exercised.')))
     print(f'{units:,} particle cases match the pinned client ({matched:,} output lines, {tolerance} within '
           f'the libm tolerance): {report}', flush=True)
