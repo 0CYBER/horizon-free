@@ -238,6 +238,31 @@ vec3 iris_modf(vec3 x, out vec3 i) { i = trunc(x); return x - i; }
 vec4 iris_modf(vec4 x, out vec4 i) { i = trunc(x); return x - i; }
 ";
 
+/// A fragment output narrower than four channels (`out vec3 color`,
+/// Steadfast's `final`): the four-channel type it is written through and the
+/// epilogue line that fills it, with alpha 1 and the rest 0. `None` when the
+/// output already has four channels.
+fn widen_output(ty: &str, name: &str) -> Option<(String, String)> {
+    let (wide, one, zero) = match ty {
+        "float" | "vec2" | "vec3" => ("vec4", "1.0", "0.0"),
+        "int" | "ivec2" | "ivec3" => ("ivec4", "1", "0"),
+        "uint" | "uvec2" | "uvec3" => ("uvec4", "1u", "0u"),
+        _ => return None,
+    };
+    let channels = match ty.chars().last() {
+        Some('2') => 2,
+        Some('3') => 3,
+        _ => 1,
+    };
+    let mut parts = vec![name.to_owned()];
+    parts.extend((channels..3).map(|_| zero.to_owned()));
+    parts.push(one.to_owned());
+    Some((
+        wide.to_owned(),
+        format!("iris_out_{name} = {wide}({});", parts.join(", ")),
+    ))
+}
+
 /// `%` as overloads: naga's GLSL front end splats a scalar operand for
 /// `+ - / & ^ |` but not for `%`, and rejects `ivec2(uv) % 256` (Noble).
 fn modulo_helpers() -> String {
@@ -924,8 +949,19 @@ impl<'a> Legaliser<'a> {
                     let at = explicit
                         .map(|l: u32| l + i as u32)
                         .unwrap_or_else(|| self.next_output());
-                    self.header
-                        .push(format!("layout(location = {at}) out {full} {name}{array};"));
+                    if let (Some(widened), "") = (widen_output(&full, name), array.as_str()) {
+                        // GL fills the missing channels of a narrow output;
+                        // wgpu wants every channel of the target written.
+                        let (wide, fill) = widened;
+                        self.header.push(format!("{full} {name};"));
+                        self.header.push(format!(
+                            "layout(location = {at}) out {wide} iris_out_{name};"
+                        ));
+                        self.epilogue.push(fill);
+                    } else {
+                        self.header
+                            .push(format!("layout(location = {at}) out {full} {name}{array};"));
+                    }
                     self.interface.outputs.insert(at, name.clone());
                 } else {
                     self.varying(dir, &interp, &full, name, array);
