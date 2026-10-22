@@ -130,7 +130,7 @@ pub(crate) enum Kind {
     Slider(f32),
     Cycle,
 }
-/// Options shared by the Classic page and Horizon's Accessibility section.
+/// The Accessibility Settings page:
 /// `AccessibilityOptionsScreen.options`, with the Controls link inserted separately.
 pub(crate) const ACCESSIBILITY_OPTIONS: &[Opt] = &[
     Opt::Narrator,

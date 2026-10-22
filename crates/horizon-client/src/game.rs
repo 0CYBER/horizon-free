@@ -4836,6 +4836,9 @@ impl Game<'_> {
         }
         self.draw_chat(&mut batch);
         self.draw_tab_list(&mut batch);
+        // Screen.extractBlurredBackground blurs the world and HUD, while the
+        // screen's background, widgets, toasts and debug overlay stay sharp.
+        batch.blur_at = batch.vertices.len() as u32;
         match self.screen {
             Screen::Paused if self.pause_menu => self.draw_pause_menu(&mut batch),
             // PauseScreen(false): only its title, at the top.
@@ -9772,15 +9775,17 @@ impl Game<'_> {
                 self.entity_geometry(camera, alpha, entities)
             });
         }
+        let bolts = if title {
+            Vec::new()
+        } else {
+            self.bolt_instances()
+        };
         let mut additive = Vec::new();
-        if !title {
-            self.bolt_geometry(camera, &mut additive);
-            if self.dim == Dim::End {
-                let mut dragon = Vec::new();
-                self.dragon_geometry(camera, alpha, &mut dragon, &mut additive);
-                self.dragon_fireball_geometry(camera, alpha, &mut dragon);
-                entities.extend(dragon);
-            }
+        if !title && self.dim == Dim::End {
+            let mut dragon = Vec::new();
+            self.dragon_geometry(camera, alpha, &mut dragon, &mut additive);
+            self.dragon_fireball_geometry(camera, alpha, &mut dragon);
+            entities.extend(dragon);
         }
         // A Java pack's `clouds` replaces the cloud option (`renderClouds`:
         // "false", "fast", "true"), as Iris overrides `getCloudsType`.
@@ -9802,8 +9807,8 @@ impl Game<'_> {
         {
             // Camera.doesMobEffectBlockSky: no sun, moon or stars.
             self.celestial_geometry(&sky)
-        } else if self.dim == Dim::End {
-            (self.end_sky_geometry(), None)
+        } else if self.dim == Dim::End && self.settings.horizon.sky {
+            (self.end_flash_geometry(), None)
         } else {
             (Vec::new(), None)
         };
@@ -9850,6 +9855,12 @@ impl Game<'_> {
             title,
             skybox: self.dim == Dim::Overworld && self.settings.horizon.sky,
             end_sky: self.dim == Dim::End && self.settings.horizon.sky,
+            end_sky_sprite: self
+                .gui
+                .atlas
+                .sprites
+                .get("environment/end_sky")
+                .map(|r| [r.u0, r.v0, r.u1, r.v1]),
             environment_fog: (self.dim == Dim::Nether).then_some((sky.fog_start, sky.fog_end)),
             cave_culling,
             water_fog,
@@ -9892,6 +9903,13 @@ impl Game<'_> {
             }),
             entities: &entities,
             dynamic_lights: &self.dynamic_lights,
+            lightning: horizon_client::gfx::lightning::Input {
+                bolts: &bolts,
+                uv: [
+                    self.gui.atlas.font.white().u0,
+                    self.gui.atlas.font.white().v0,
+                ],
+            },
             additive: &additive,
             see_through: &see_through,
             celestial: if self.settings.horizon.sky || title {
@@ -9990,16 +10008,18 @@ impl Game<'_> {
         };
         level_loading::draw(batch, atlas, Some(&status), Some(self.loading_progress));
     }
-    /// `Screen.extractBlurredBackground` over the panorama: every classic
-    /// screen of the title menus but the title itself (`TitleScreen`
-    /// doesn't blur), when `menuBackgroundBlurriness` is at least 1.
+    /// `Screen.extractBlurredBackground` over the panorama or the world and
+    /// HUD, when `menuBackgroundBlurriness` is at least 1.
     fn menu_blur(&self) -> Option<f32> {
         let loading = self.loading_reason() == Some(horizon_client::level_loading::Reason::Other);
         let blurred = loading
             || self.title.as_ref().is_some_and(|t| {
                 self.screen == Screen::Options
                     || !matches!(t.mode, horizon_client::title::Mode::Main)
-            });
+            })
+            || (self.title.is_none()
+                && self.player.is_some()
+                && self.screen.blurs_background(self.pause_menu));
         let radius = self.settings.menu_blur as f32;
         (blurred && radius >= 1.0).then_some(radius)
     }
@@ -12315,6 +12335,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         title: true,
         skybox: false,
         end_sky: false,
+        end_sky_sprite: None,
         environment_fog: None,
         water_fog: [0.0; 3],
         fog: None,
@@ -12329,6 +12350,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         entities: &[],
         dynamic_lights: &[],
         clouds: None,
+        lightning: Default::default(),
         additive: &[],
         see_through: &[],
         celestial: &[],

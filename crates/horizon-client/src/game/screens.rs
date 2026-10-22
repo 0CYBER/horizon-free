@@ -7,6 +7,28 @@ use horizon_client::{
     ui,
 };
 
+impl Screen {
+    /// Screen.extractBackground for non-isInGameUi screens, and
+    /// PauseScreen.extractBackground only when showPauseMenu is true.
+    pub(super) fn blurs_background(self, pause_menu: bool) -> bool {
+        match self {
+            Self::Paused => pause_menu,
+            Self::Options
+            | Self::Stats
+            | Self::Advancements
+            | Self::WorldOptions
+            | Self::Friends => true,
+            Self::Playing
+            | Self::GameModeSwitcher
+            | Self::Chat
+            | Self::Creative
+            | Self::Inventory
+            | Self::Dead
+            | Self::CommandBlock => false,
+        }
+    }
+}
+
 /// PauseScreen buttons: (x, y, width, label key, action id, active).
 /// https://mcsrc.dev/2/26.3/net/minecraft/client/gui/screens/PauseScreen
 fn pause_buttons(w: f32, h: f32, remote: bool) -> Vec<(f32, f32, f32, &'static str, u8, bool)> {
@@ -314,7 +336,34 @@ impl Game<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::pause_buttons;
+    use super::{Screen, pause_buttons};
+
+    #[test]
+    fn menu_blur_matches_vanilla_screen_backgrounds() {
+        for screen in [
+            Screen::Options,
+            Screen::Stats,
+            Screen::Advancements,
+            Screen::WorldOptions,
+        ] {
+            assert!(screen.blurs_background(false));
+            assert!(screen.blurs_background(true));
+        }
+        assert!(Screen::Paused.blurs_background(true));
+        assert!(!Screen::Paused.blurs_background(false));
+        for screen in [
+            Screen::Playing,
+            Screen::GameModeSwitcher,
+            Screen::Chat,
+            Screen::Creative,
+            Screen::Inventory,
+            Screen::Dead,
+            Screen::CommandBlock,
+        ] {
+            assert!(!screen.blurs_background(true));
+            assert!(!screen.blurs_background(false));
+        }
+    }
 
     #[test]
     fn pause_menu_uses_disconnect_for_servers_and_keeps_world_options() {
