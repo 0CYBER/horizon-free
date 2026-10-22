@@ -1417,6 +1417,8 @@ struct Game<'a> {
     arrow_model: Option<horizon_client::mobs::Part>,
     tnts: Vec<tnt::PrimedTnt>,
     hoppers: HashMap<(i32, i32, i32), machines::HopperState>,
+    /// Where item entities are, while the block entities tick (hoppers).
+    item_columns: Option<machines::ItemColumns>,
     creative_screen: Creative,
     control: Option<horizon_client::control::Server>,
     frame_stats: horizon_client::control::FrameStats,
@@ -11651,6 +11653,7 @@ impl<'a> Game<'a> {
             arrow_model: prepared.arrow_model,
             tnts: Vec::new(),
             hoppers: HashMap::new(),
+            item_columns: None,
             creative_screen: prepared.creative_screen,
             control: None,
             frame_stats: Default::default(),
