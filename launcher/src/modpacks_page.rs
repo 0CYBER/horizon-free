@@ -327,6 +327,9 @@ impl Launcher {
         if let Some(jars) = p.jars() {
             notes.push(jars);
         }
+        for line in &p.left_off {
+            notes.push(format!("Left off: {line}."));
+        }
         if !can_play {
             notes.push("Playing needs a prepared Horizon version (Play page).".into());
         }

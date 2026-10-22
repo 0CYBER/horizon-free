@@ -294,6 +294,11 @@ impl Launcher {
         self.mods.busy = Some((id.clone(), format!("Asking {}…", source.label()), 0.));
         self.mods.updates.remove(&(source, id.clone()));
         let everything = self.mods.everything || self.mods.browse.filters.other_version();
+        // A modpack is ported for the selected version as soon as it is imported.
+        let resources = self
+            .selected()
+            .filter(|tag| backend::is_prepared(tag))
+            .map(|tag| backend::resources(tag));
         let tx = self.mods.tx.clone();
         std::thread::spawn(move || {
             let last = std::cell::Cell::new(-1);
@@ -318,10 +323,10 @@ impl Launcher {
                             progress(&p.title, f)
                         })?;
                         let log = |line: String| progress(&line, 1.);
-                        let pack = modpacks::import(&file, &log)?;
+                        let pack = modpacks::import_and_port(&file, resources.as_deref(), &log)?;
                         return Ok(format!(
-                            "{} is imported: it is listed above, ready to port.",
-                            pack.title()
+                            "{} Play it from the list above.",
+                            modpacks::outcome(&pack)
                         ));
                     }
                     let home = backend::game_home();

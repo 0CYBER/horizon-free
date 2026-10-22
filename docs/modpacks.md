@@ -240,6 +240,10 @@ How the game loads them, without touching vanilla's path:
   when its Java original ships them so (`namespaces = ["kaisyn", "towns_and_towers"]` for Towns
   and Towers, mod id `t_and_t`; docs/mods.md). No namespace has two owners: a mod whose id or
   listed namespace another mod that is on already owns is left out, with both named in the log.
+  `horizon-port-pack` avoids that inside a pack: a namespace two carried mods both claim (YUNG's
+  structure mods all ship files under `yungsapi`, the namespace of YUNG's API, whose own jar isn't
+  carried) is left to none of them, and its files stay outside. The launcher applies the game's
+  rule before it starts a pack (`pipeline::loadable`) and lists what it left off.
 - The overlay is built on the first start with a set of mods and kept for later starts. A stamp
   (`horizon-mod-content.stamp`) hashes the game executable, the base tables and every mod file's
   size and mtime. Adding, removing or editing a mod, or a new build of Horizon, rebuilds it. For
@@ -1046,6 +1050,31 @@ What is missing, ranked by how much a player notices:
    times vanilla's.
 6. **Smaller gaps:** Mo' Structures' mixin that keeps lakes out of its structures and its two
    block-ageing processors, and the 5 missing block models.
+
+### Three packs through the mod browser, measured
+
+2026-10-22, Mac mini M4 Pro (offscreen, a debug launcher, release-profile `horizon-port-pack` and game), while
+other sessions kept the CPU at 85 to 93 %, so times are upper bounds. The two Modrinth packs were imported with
+`horizon-launcher mods install <slug>` (the browser's Import), ATM10 from its CurseForge zip with `modpack import`
+(CurseForge isn't searchable without a key), then each ported with `--resources` for 26.3 and opened as a survival
+world with every ported mod on (horizon-ctl `launch --dev-mod ...`, from a scratch script).
+
+| Pack | Files | Import | Port | Ported mods | Coverage | Declared | World load (resources) | Crashes |
+|---|---|---|---|---|---|---|---|---|
+| Vanilla Perfected 26.3 (Fabric, small) | 108 | 30.4 s | 1.0 s | 2 | 2 partial, 79 not yet, 27 not needed | 0 blocks (a trail effect, a torch-flower texture) | 5.2 s (2.1 s) | none |
+| Slimes Adventure 1.13.4 (Fabric 1.21.1, medium) | 105 | 18.8 s | 22.8 s | 20 | 20 partial, 46 not yet, 39 not needed | 8,208 blocks, 41 items, 1,376 recipes | 23.0 s (15.0 s) | none |
+| All the Mods 10 8.3 (NeoForge 1.21.1, CurseForge zip) | 496 | 3.1 s | 29.4 s | 42 | 42 partial, 333 not yet, 121 not needed | 10,000 blocks, 1,273 items, 4,178 recipes | 38.3 s (28.7 s) | none |
+
+The same world with no mods loads in 5.4 s (resources 1.1 s). Import is the pack download and Modrinth's answers by
+file hash; Vanilla Perfected's 30 s is mostly its 108 lookups and its download. Port is the jars (downloaded for the
+two Modrinth packs; ATM10's 42 copied from a folder, 12 more are on CurseForge only and need its key) and the carry,
+which writes tens of thousands of small files. World load grows with the blocks the pack declares: ATM10 adds
+about 155,000 block states, and loading their models and textures is most of its 28.7 s.
+
+Every world loaded and stayed up, with no panic and no error in the log. Before the namespace fix above, Slimes
+Adventure lost three of YUNG's mods at start ("both use the namespace yungsapi"); after it all 20 load. As a share of
+the mods that need porting (not counting performance mods and libraries), 2 of 81 ported partly, 20 of 66 and 42 of
+375. Every ported mod is Partial: their Java code (block entities, entities, Mixins) doesn't come along.
 
 ## Open questions for Ludovic
 
