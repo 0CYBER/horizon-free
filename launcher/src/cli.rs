@@ -422,10 +422,12 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 } else {
                     " "
                 };
-                let state = if backend::is_prepared(tag) {
+                let state = if !backend::is_prepared(tag) {
+                    "not prepared"
+                } else if backend::has_sounds(tag) {
                     "prepared"
                 } else {
-                    "not prepared"
+                    "prepared, no sounds (prepare again)"
                 };
                 println!("{mark} {tag}  {state}");
             }
