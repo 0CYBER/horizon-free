@@ -97,9 +97,8 @@ real mouse hands control back at once.
 
 Every interactive rectangle a screen draws registers itself as a focus
 target with its kind (`widgets::target_as`): classic buttons, sliders, edit
-boxes and list rows (worlds, servers, languages), every Horizon-style widget
-(`ui_theme::Ui::interact`: sidebar items, switches, segments, sliders,
-fields, buttons), inventory and container slots, creative and recipe-book
+boxes and list rows (worlds, servers, languages), icon buttons (the title's
+and pause menu's Friends button), inventory and container slots, creative and recipe-book
 tabs, and the stations' own buttons (trades, loom patterns, beacon effects,
 enchantments, stonecutter recipes, the recipe book's recipes, pages and
 filter). A screen that registers nothing falls back to the pointer.
@@ -137,16 +136,11 @@ the crafting result, armour to the player's grid.
 - **Where focus lands** when a screen opens: the held hotbar slot in an
   inventory, else the first button.
 
-How it looks follows the menu style:
-
-- **Classic screens** look as vanilla's own keyboard focus does: buttons,
-  sliders and slots show their highlighted sprite (`isHoveredOrFocused`,
-  drawn because the hidden pointer is over them), and list rows and text
-  fields get vanilla's white one-pixel outline (`AbstractSelectionList`'s
-  focused selection, `EditBox`'s highlighted border).
-- **Horizon-style screens** get the design system's focus colour: a two-dp
-  ring in the accent colour around the focused widget, pill-shaped on
-  buttons, tabs and sliders.
+It looks as vanilla's own keyboard focus does: buttons, sliders and slots
+show their highlighted sprite (`isHoveredOrFocused`, drawn because the hidden
+pointer is over them), and list rows and text fields get vanilla's white
+one-pixel outline (`AbstractSelectionList`'s focused selection, `EditBox`'s
+highlighted border).
 
 ### Pointer
 
@@ -183,8 +177,8 @@ Steam + X opens it at any time. "On-Screen Keyboard: Auto / Horizon / Steam"
 Both modes reach every screen through the pointer events. Focus mode
 registers targets on: the title menus (main, world list and its search, create
 and edit world, delete, multiplayer list and its edit screens), every options
-page (classic pages and the Horizon-style sections, key and controller binds,
-language list), pause, death, chat, signs and books (their buttons), the
+page (vanilla's and Horizon Settings with the pages it opens, key and
+controller binds, language list), pause and Play with Friends, death, chat, signs and books (their buttons), the
 survival and creative inventories, every container and station (chests,
 furnaces, brewing, crafter, crafting table with its recipe book, anvil,
 grindstone, smithing, stonecutter, loom, cartography, enchanting, beacon,
@@ -212,8 +206,10 @@ hints, "Press X to dismount") only while the pad is the last-used input.
 
 ## Options and remapping
 
-Controller settings are Horizon's own and live in `horizon-controller.txt`
-next to `options.txt`, like `horizon-graphics.txt`: `options.txt` stays
+Controller settings are Horizon's own: **Options → Controls → Controller
+Settings...** (or **Options → Horizon Settings... → Controller Settings...**),
+a vanilla options list with **Controller Binds...** at the top. They live in
+`horizon-controller.txt` next to `options.txt`, like `horizon-graphics.txt`: `options.txt` stays
 exactly vanilla's, so a vanilla client can share the game folder.
 
 ```
@@ -490,8 +486,8 @@ The first round (input layer, menus, glyphs and options, rumble) shipped in
 PRs #120, #129, #145 and #149. The second round, each shippable alone:
 
 1. **Focus navigation** (this section above): the menu navigation option,
-   focus targets and vanilla's arrow-key step, the focus highlight in both
-   menu styles, the on-screen keyboard.
+   focus targets and vanilla's arrow-key step, vanilla's focus highlight,
+   the on-screen keyboard.
 2. **Button prompts**: contextual hints with the pad's glyphs in menus and
    optionally in game, and rebinding from them.
 3. **DualSense output** (above): the HID output layer and rumble through it

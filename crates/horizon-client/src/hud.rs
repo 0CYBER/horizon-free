@@ -160,7 +160,7 @@ impl HudAtlas {
         )
     }
     /// Empty slots written at run time: map textures (game/maps.rs), the
-    /// minimap, downloaded skins, world icons and the Horizon menu text.
+    /// minimap, downloaded skins, world icons and the on-screen keyboard's text.
     fn slots(images: &mut Vec<PackedImage>) {
         for i in 0..MAP_SLOTS {
             images.push((format!("horizon/map{i}"), 128, 128, vec![0; 128 * 128 * 4]));
@@ -184,7 +184,7 @@ impl HudAtlas {
                 vec![0; 64 * 64 * 4],
             ));
         }
-        // Horizon-style menu text and corner masks (ui_theme), rasterized at run time.
+        // The on-screen keyboard's text and corner masks (ui_theme), rasterized at run time.
         images.push((
             "horizon/ui-text".into(),
             2048,

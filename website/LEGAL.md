@@ -49,10 +49,6 @@ by `scripts/assets.mjs`.
 
 | Files in `public/media/` | Source | What it shows |
 | --- | --- | --- |
-| `menu-title*.webp` | `docs/media/menu-title.png` | Horizon's own title screen (no Minecraft logo or splash text) |
-| `menu-worlds*.webp` | `docs/media/menu-worlds.png` | Horizon's own world list |
-| `menu-options*.webp` | `docs/media/menu-options.png` | Horizon's own options screen |
-| `menu-pause*.webp` | `docs/media/menu-pause.png` | Horizon's own pause screen |
 | `launcher*.webp` | `docs/media/launcher-play.png` | The Horizon launcher's Play page (no background image) |
 | `settings*.webp` | `docs/media/settings-simple.png` | Horizon's own Video settings, Simple view |
 | `sunset*.webp`, `village*.webp`, `survival*.webp`, `nether*.webp`, `night*.webp`, `underwater*.webp` | `docs/media/<name>.jpg` | In-game views of one fixed-seed world; none shows a Mojang logo or splash text |

@@ -188,9 +188,6 @@ jobs:
           retry "$launcher" install latest
           "$launcher" versions --installed
           "$launcher" links --json
-          "$launcher" menu-style classic
-          grep -qx 'menuStyle:classic' "$HORIZON_HOME/horizon.txt"
-          "$launcher" menu-style horizon
           clients=("$HORIZON_LAUNCHER_HOME"/versions/v*/horizon-client*)
           client="${clients[0]}"
           echo "installed client: $client"

@@ -2,20 +2,16 @@
 
 Horizon plays like vanilla out of the box. This page covers the settings that are different or new: graphics, distant terrain, shader packs, resource packs, controllers and a few optional extras.
 
-All of them are in the game's **Options** screen. Horizon's own menus group them in sections: Video, Audio, Controls, Accessibility, Language, Chat, Interface, Extras and Mods.
+The game's menus are vanilla's. Horizon adds its own settings to vanilla's **Options** screen the way mods do: **Horizon Settings...** and **Mods...** take the last two buttons of the grid. **Horizon Settings** opens Graphics, Advanced Graphics, Shader Packs, Controller Settings, Extras and Mods, each a screen of vanilla's buttons and sliders. The graphics and shader pack buttons are also at the top of **Video Settings**, and Controller Settings at the bottom of **Controls**.
 
-## Menu style
-
-Horizon draws its own menus: the title screen, the world list, the options and the pause menu, over a live view of the world. If you prefer vanilla's screens, go to **Options, Interface, Menu style** and choose **Classic**. Classic has no way back inside the game, so to return to Horizon's menus use the launcher's **Settings** page, which has the same switch.
-
-![Horizon's Video settings in their Simple view](/media/settings-800.webp)
+![Horizon's Graphics settings](/media/settings-800.webp)
 
 ## Graphics: presets, Simple and Advanced
 
-**Options, Video** has a **Simple / Advanced** switch at the top, and the game remembers your choice.
+**Options, Video Settings** starts with **Horizon Graphics...** and **Advanced Graphics...** (also in **Options, Horizon Settings**).
 
-- **Simple** has a preset (Performance, Balanced, Quality, Ultra or Custom), render distance, LOD distance, field of view, maximum frame rate, VSync and GUI scale.
-- **Advanced** has every setting, in groups: Rendering, Quality, Display, Preferences, Performance and Overlay.
+- **Horizon Graphics** has a preset (Performance, Balanced, Quality, Ultra or Custom), render distance, LOD distance, field of view, maximum frame rate, VSync and GUI scale.
+- **Advanced Graphics** has every setting, in groups: Rendering, Quality, Display, Preferences, Performance and Overlay.
 
 Every row has a one-line description and its cost in frame time: none, low, medium or high. Changes apply at once, except worker threads, which apply at the next start. A preset sets the quality settings together, and changing one of them turns the preset into **Custom**.
 
@@ -35,7 +31,7 @@ Not available: anisotropic filtering, MSAA (FXAA is there instead) and exclusive
 
 ## Graphics API on Windows
 
-Linux always uses Vulkan and macOS always uses Metal. On Windows there is a choice, in **Options, Video, Advanced, Performance, Graphics API**:
+Linux always uses Vulkan and macOS always uses Metal. On Windows there is a choice, in **Options, Video Settings, Advanced Graphics, Performance, Graphics API**:
 
 - **Auto** (the default) uses Vulkan, and DirectX 12 when Vulkan has no graphics card or driver that works.
 - **Vulkan** and **DirectX 12** force one of the two.
@@ -44,7 +40,7 @@ The change applies at the next start. If Vulkan gives you trouble, try DirectX 1
 
 ## Shader packs
 
-Shader packs are **experimental**. Put a pack's folder in the `shaderpacks` folder of the game folder (see [Install](/docs/install#first-launch) for where that is), then choose it in **Options, Video, Shader Packs**. With no pack selected the game draws exactly what vanilla draws. A pack that fails to load shows why in red and leaves the normal picture on.
+Shader packs are **experimental**. Put a pack's folder in the `shaderpacks` folder of the game folder (see [Install](/docs/install#first-launch) for where that is), then choose it in **Options, Video Settings, Shader Packs** (or **Options, Horizon Settings, Shader Packs**). With no pack selected the game draws exactly what vanilla draws. A pack that fails to load shows why in red and leaves the normal picture on.
 
 Horizon can run the full-screen effects of Java shader packs (OptiFine and Iris packs: colour grading, bloom, sky and fog effects). It does not run their geometry and shadow passes yet, so packs do not look as they do in Iris. Horizon also has its own shader pack format, in WGSL, with a `pack.toml` manifest, options and hot reload. It has full-screen passes too; stages that draw the world's terrain and shadows are planned. The details are in the [shader pack notes](https://github.com/ludovic111/horizon/blob/main/docs/shader-packs.md).
 
@@ -62,14 +58,14 @@ The launcher's **Mods** page can download them from Modrinth (see [Mods and data
 
 Horizon plays with PlayStation (DualShock 4 and DualSense), Xbox (360, One and Series) and Nintendo Switch Pro controllers, and with the Steam Deck's built-in controls. Vanilla has no controller support at all, so this is Horizon's own. With no controller connected, nothing changes.
 
-- Settings are in **Options, Controls, Controller**: on or off, vibration, look sensitivity, inverting the axes, deadzones, button glyphs and remapping.
+- Settings are in **Options, Controls, Controller Settings** (or **Options, Horizon Settings, Controller Settings**): on or off, vibration, look sensitivity, inverting the axes, deadzones, button glyphs and remapping.
 - Menus, the inventory and chat work with a controller, with an on-screen keyboard for text.
 - On a DualSense you can also set adaptive triggers and the lightbar.
 - On the Steam Deck, Steam's default layout works with no setup.
 
 ## Extras
 
-**Options, Extras** holds small, optional conveniences. Every one is off by default, so a fresh install behaves like vanilla: fullbright, zoom, a minimap, an FPS counter, a keystroke display, auto-reconnect, Mouse Tweaks-style inventory controls and inventory sorting. In Alpha builds there is one more, **dynamic lights**: a torch, lantern or other light source that you hold, that lies dropped as an item, or a burning mob, lights the blocks around it. It is client-side only, so other players do not see it.
+**Options, Horizon Settings, Extras** holds small, optional conveniences. Every one is off by default, so a fresh install behaves like vanilla: fullbright, zoom, a minimap, an FPS counter, a keystroke display, auto-reconnect, Mouse Tweaks-style inventory controls and inventory sorting. In Alpha builds there is one more, **dynamic lights**: a torch, lantern or other light source that you hold, that lies dropped as an item, or a burning mob, lights the blocks around it. It is client-side only, so other players do not see it.
 
 ## Where your settings are stored
 

@@ -1,7 +1,7 @@
 //! The labelled widgets and focus targets drawn in the last frame, for the
 //! control socket: a script clicks a button by its label (`horizon-ctl
 //! click-button Respawn`) or any widget by its id in [`tree`] (`horizon-ctl
-//! click done`), whatever screen or menu style drew it.
+//! click done`), whatever screen drew it.
 use std::cell::RefCell;
 
 /// A labelled widget in GUI pixels (the coordinates screens take input in).
@@ -21,7 +21,7 @@ pub struct Widget {
 /// navigation").
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Kind {
-    /// Clicked with A (buttons, switches, segments, sidebar items).
+    /// Clicked with A (buttons, icon buttons, keys).
     Button,
     /// Left and right move the value instead of focus; A does nothing (a
     /// click would jump the handle to the middle). `value` is 0..1 as drawn;
@@ -53,9 +53,8 @@ impl Target {
 thread_local! {
     /// Buttons drawn since the last `end_frame`, and the last frame's.
     static WIDGETS: RefCell<(Vec<Widget>, Vec<Widget>, u64)> = const { RefCell::new((Vec::new(), Vec::new(), 0)) };
-    /// Every interactive rectangle (Horizon-style menus' sidebar items,
-    /// switches, sliders, segments; classic sliders, fields and list rows),
-    /// labelled or not: where a controller can move focus. Drawn since
+    /// Every interactive rectangle (sliders, fields, list rows, the
+    /// on-screen keyboard's keys), labelled or not: where a controller can move focus. Drawn since
     /// `end_frame`, the last frame's, and how many frames rotated.
     static TARGETS: RefCell<(Vec<Target>, Vec<Target>, u64)> = const { RefCell::new((Vec::new(), Vec::new(), 0)) };
 }

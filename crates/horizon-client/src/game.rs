@@ -5,7 +5,6 @@ mod advancements_screen;
 mod agent;
 mod allays;
 mod armor_stands;
-mod backdrop;
 mod banners;
 mod beacon;
 mod beehives;
@@ -455,6 +454,9 @@ enum Screen {
     Advancements,
     /// WorldOptionsScreen (game/lan_screen.rs).
     WorldOptions,
+    /// Play with Friends, from the pause menu's Friends button
+    /// (`friends_screen`, game/friends.rs).
+    Friends,
     /// CommandBlockEditScreen (game/command_blocks.rs).
     CommandBlock,
 }
@@ -1314,10 +1316,6 @@ struct Game<'a> {
     settings: Settings,
     /// Where the options screen returns: true = title, false = pause menu.
     options_from_title: bool,
-    /// The live title backdrop (game/backdrop.rs).
-    backdrop: backdrop::Backdrop,
-    /// When the pause menu opened (Horizon style's entrance).
-    pause_since: Option<Instant>,
     dragging: bool,
     /// `ClientAvatarState`: walked distance and view bob.
     avatar: horizon_client::camera::AvatarBob,
@@ -4452,6 +4450,7 @@ impl Game<'_> {
                     | Screen::Stats
                     | Screen::Advancements
                     | Screen::WorldOptions
+                    | Screen::Friends
                     | Screen::CommandBlock
             ) || self.book.is_some())
     }
@@ -4679,20 +4678,12 @@ impl Game<'_> {
             }
         }
         if let Some(title) = &self.title {
-            if horizon_client::ui_theme::horizon() {
-                let fade = self.backdrop_fade();
-                let mut ui =
-                    horizon_client::ui_theme::Ui::new(&self.gui.atlas, &mut batch, self.cursor);
-                title.draw_horizon(&mut ui, fade);
-                ui.finish();
-            } else {
-                title.draw(
-                    &self.gui.atlas,
-                    &mut batch,
-                    self.cursor,
-                    self.settings.file.bool("hideSplashTexts"),
-                );
-            }
+            title.draw(
+                &self.gui.atlas,
+                &mut batch,
+                self.cursor,
+                self.settings.file.bool("hideSplashTexts"),
+            );
             return batch;
         }
         let atlas_ptr: *const HudAtlas = &self.gui.atlas;
@@ -4709,9 +4700,7 @@ impl Game<'_> {
         // the sleep overlay, debug screen and open screens still draw.
         let spectator = self.spectator();
         let (wi, hi) = (w as i32, h as i32);
-        // Horizon's pause menu sits over the blurred world alone.
-        let horizon_pause = self.horizon_pause();
-        let show_hud = !self.ui.hide_gui && !horizon_pause;
+        let show_hud = !self.ui.hide_gui;
         if show_hud {
             self.draw_spyglass(&mut batch);
             // Hud.extractCrosshair / extractItemHotbar / extractPlayerHealth /
@@ -4845,10 +4834,8 @@ impl Game<'_> {
             let tw = HudBatch::text_width(atlas, text);
             batch.text(atlas, text, (w - tw) / 2.0, h - 59.0, u32::MAX, true);
         }
-        if !horizon_pause {
-            self.draw_chat(&mut batch);
-            self.draw_tab_list(&mut batch);
-        }
+        self.draw_chat(&mut batch);
+        self.draw_tab_list(&mut batch);
         match self.screen {
             Screen::Paused if self.pause_menu => self.draw_pause_menu(&mut batch),
             // PauseScreen(false): only its title, at the top.
@@ -4869,6 +4856,7 @@ impl Game<'_> {
             Screen::Stats => self.draw_stats(&mut batch),
             Screen::Advancements => self.draw_advancements(&mut batch),
             Screen::WorldOptions => self.draw_world_options(&mut batch),
+            Screen::Friends => self.draw_friends_screen(&mut batch),
             Screen::CommandBlock => self.draw_command_block(&mut batch),
             Screen::Inventory => {
                 self.draw_inventory(&mut batch);
@@ -9597,12 +9585,7 @@ impl Game<'_> {
         // Camera.getCameraEntityPartialTicks: the view, the hand and the
         // player's own model stay smooth while the level is frozen.
         let camera_alpha = self.clock.camera_fraction();
-        let live = self.backdrop_live();
-        let view = if live {
-            self.backdrop_view()
-        } else {
-            self.camera_view(camera_alpha as f32)
-        };
+        let view = self.camera_view(camera_alpha as f32);
         let (camera, underwater, view_yaw, view_pitch) = match view {
             Some((c, yaw, pitch)) => {
                 let s =
@@ -9750,9 +9733,7 @@ impl Game<'_> {
         // LevelLoadingScreen (Reason.OTHER) draws the title's panorama.
         let title = self.title.is_some()
             || self.loading_reason() == Some(horizon_client::level_loading::Reason::Other);
-        let (yaw, pitch) = if live {
-            (view_yaw, view_pitch)
-        } else if title {
+        let (yaw, pitch) = if title {
             // PanoramaRenderer: the title cube spins at 0.1 degrees per tick, pitched 10 degrees.
             (
                 self.panorama_rotation.update(
@@ -9764,9 +9745,7 @@ impl Game<'_> {
         } else {
             (view_yaw, view_pitch)
         };
-        let fov_degrees = if live {
-            72.0
-        } else if title {
+        let fov_degrees = if title {
             85.0
         } else {
             self.fov_degrees(camera_alpha as f32, camera.to_array())
@@ -9815,7 +9794,7 @@ impl Game<'_> {
             }
             .to_owned()
         };
-        let (celestial, stars) = if title && !live {
+        let (celestial, stars) = if title {
             (Vec::new(), None)
         } else if self.dim == Dim::Overworld
             && self.potions.effects.get("darkness").is_none()
@@ -9841,7 +9820,7 @@ impl Game<'_> {
         if !title {
             self.end_geometry(camera, &mut entities);
         }
-        if (!title || live) && self.dim == Dim::Overworld && self.settings.horizon.weather {
+        if !title && self.dim == Dim::Overworld && self.settings.horizon.weather {
             horizon_client::spans::time("weather", || {
                 self.weather_geometry(camera, alpha, &mut entities)
             });
@@ -9868,7 +9847,7 @@ impl Game<'_> {
             detail_distance: (self.streaming.radius * 16) as f32,
             depth_far,
             underwater,
-            title: title && !live,
+            title,
             skybox: self.dim == Dim::Overworld && self.settings.horizon.sky,
             end_sky: self.dim == Dim::End && self.settings.horizon.sky,
             environment_fog: (self.dim == Dim::Nether).then_some((sky.fog_start, sky.fog_end)),
@@ -9896,7 +9875,7 @@ impl Game<'_> {
             debug_lines_on_top: &debug_lines_on_top,
             debug_crosshair: &debug_crosshair,
             hud: &hud,
-            clouds: ((!title || live)
+            clouds: (!title
                 && self.dim == Dim::Overworld
                 && horizon_client::clouds::visible(&clouds_mode, sky.cloud_color[3]))
             .then(|| self.gui.atlas.sprites.get("horizon/white"))
@@ -9944,13 +9923,6 @@ impl Game<'_> {
             darkness: self.darkness_lighting(alpha as f32),
             night_vision: self.night_vision_intensity(),
             block_flicker: self.fog.block_light_flicker,
-            post: if live {
-                Some(horizon_client::post::PostGrade::FROST)
-            } else if self.horizon_pause() {
-                Some(horizon_client::post::PostGrade::PAUSE)
-            } else {
-                None
-            },
             menu_blur: self.menu_blur(),
         };
         let result = match self.renderer.as_mut() {
@@ -10023,12 +9995,11 @@ impl Game<'_> {
     /// doesn't blur), when `menuBackgroundBlurriness` is at least 1.
     fn menu_blur(&self) -> Option<f32> {
         let loading = self.loading_reason() == Some(horizon_client::level_loading::Reason::Other);
-        let blurred = !horizon_client::ui_theme::horizon()
-            && (loading
-                || self.title.as_ref().is_some_and(|t| {
-                    self.screen == Screen::Options
-                        || !matches!(t.mode, horizon_client::title::Mode::Main)
-                }));
+        let blurred = loading
+            || self.title.as_ref().is_some_and(|t| {
+                self.screen == Screen::Options
+                    || !matches!(t.mode, horizon_client::title::Mode::Main)
+            });
         let radius = self.settings.menu_blur as f32;
         (blurred && radius >= 1.0).then_some(radius)
     }
@@ -10107,7 +10078,7 @@ impl Game<'_> {
                 }
                 Screen::GameModeSwitcher => self.close_gamemode_switcher(false),
                 Screen::Dead => {}
-                Screen::Stats => self.screen = Screen::Paused,
+                Screen::Stats | Screen::Friends => self.screen = Screen::Paused,
                 Screen::Advancements => self.close_advancements(),
                 Screen::WorldOptions => self.world_options_escape(),
                 Screen::CommandBlock => self.close_command_block(),
@@ -10581,15 +10552,6 @@ impl ApplicationHandler for Game<'_> {
         ) {
             self.last_input = Instant::now();
         }
-        if let WindowEvent::MouseInput {
-            state,
-            button: MouseButton::Left,
-            ..
-        } = &event
-        {
-            // The press state of Horizon-style buttons.
-            horizon_client::ui_theme::set_pressed(*state == ElementState::Pressed);
-        }
         if (self.pending_entry.is_some() || self.world_loader.is_some())
             && matches!(&event, WindowEvent::KeyboardInput { event, .. }
                 if event.state == ElementState::Pressed
@@ -10689,9 +10651,7 @@ impl ApplicationHandler for Game<'_> {
                         if matches!(self.screen, Screen::Inventory | Screen::Creative) {
                             self.inventory_drag_move();
                         }
-                        if let Some(title) = &mut self.title
-                            && !horizon_client::ui_theme::horizon()
-                        {
+                        if let Some(title) = &mut self.title {
                             title.drag(self.cursor, (b.width, b.height));
                             title.drag_field(&self.gui.atlas, self.cursor.0);
                         }
@@ -10717,9 +10677,7 @@ impl ApplicationHandler for Game<'_> {
                         }) * wheel_sensitivity
                     };
                     let d = scaled(raw_y) as f32;
-                    if let Some(title) = &mut self.title
-                        && !horizon_client::ui_theme::horizon()
-                    {
+                    if let Some(title) = &mut self.title {
                         let size = self
                             .window
                             .as_ref()
@@ -10807,21 +10765,13 @@ impl ApplicationHandler for Game<'_> {
                         .as_ref()
                         .map(|r| [r.config.width, r.config.height])
                         .unwrap_or([1, 1]);
-                    let mut b = HudBatch::new(size);
+                    let b = HudBatch::new(size);
                     let atlas = &self.gui.atlas;
                     let shift = self.has_shift_down();
                     let (action, sound) = self.title.as_mut().map_or((Action::None, false), |t| {
-                        if horizon_client::ui_theme::horizon() {
-                            (
-                                t.click_horizon(atlas, &mut b, self.cursor.0, self.cursor.1),
-                                false,
-                            )
-                        } else {
-                            let clicked =
-                                t.click(self.cursor.0, self.cursor.1, (b.width, b.height));
-                            t.press_field(atlas, self.cursor, (b.width, b.height), shift);
-                            clicked
-                        }
+                        let clicked = t.click(self.cursor.0, self.cursor.1, (b.width, b.height));
+                        t.press_field(atlas, self.cursor, (b.width, b.height), shift);
+                        clicked
                     });
                     self.save_title_options();
                     if sound {
@@ -10957,6 +10907,9 @@ impl ApplicationHandler for Game<'_> {
                         Screen::WorldOptions if pressed && button == MouseButton::Left => {
                             self.world_options_click()
                         }
+                        Screen::Friends if pressed && button == MouseButton::Left => {
+                            self.friends_screen_click()
+                        }
                         Screen::CommandBlock if pressed && button == MouseButton::Left => {
                             self.command_block_click()
                         }
@@ -11056,9 +11009,7 @@ impl ApplicationHandler for Game<'_> {
                     }
                 }
                 WindowEvent::KeyboardInput { event, .. } if self.title.is_some() => {
-                    if event.state == ElementState::Pressed
-                        && self.title.as_ref().is_some_and(|t| !t.skip_opening())
-                    {
+                    if event.state == ElementState::Pressed {
                         if let Some(shortcut) = self.edit_shortcut(&event) {
                             self.title_shortcut(shortcut);
                             return Ok(());
@@ -11151,11 +11102,6 @@ impl ApplicationHandler for Game<'_> {
                             + (turn(KeyCode::ArrowDown) - turn(KeyCode::ArrowUp)) * 90.0 * secs)
                             .clamp(-90.0, 90.0);
                     }
-                    self.update_backdrop()?;
-                    horizon_client::ui_theme::set_backdrop(self.backdrop_fade());
-                    if self.screen != Screen::Paused {
-                        self.pause_since = None;
-                    }
                     if self.title.is_none() {
                         horizon_client::spans::time("update_world", || self.update_world());
                         horizon_client::spans::time("spawn_player", || self.spawn_player())?;
@@ -11177,8 +11123,6 @@ impl ApplicationHandler for Game<'_> {
                             }
                             self.tick_ambience();
                             self.tick_fov();
-                        } else if self.title.is_some() {
-                            self.tick_backdrop();
                         }
                         self.tick_music();
                         self.tick_sound_engine();
@@ -11588,8 +11532,6 @@ impl<'a> Game<'a> {
             hand_strength: Default::default(),
             settings,
             options_from_title: false,
-            backdrop: Default::default(),
-            pause_since: None,
             dragging: false,
             avatar: Default::default(),
             flash: 0,
@@ -11961,13 +11903,11 @@ impl Progress {
 /// Harness and dedicated runs keep the fully-synchronous startup so their
 /// output stays byte-identical; only an ordinary launch shows the window first.
 fn synchronous_startup(options: &Options) -> bool {
-    let classic = std::env::var("HORIZON_MENU_STYLE").ok().as_deref() == Some("classic");
     options.frames.is_some()
         || options.world_frames.is_some()
         || options.benchmark.is_some()
         || options.control.is_some()
         || options.dedicated.is_some()
-        || classic
         || std::env::var_os("HORIZON_DISPENSE_FIXTURE").is_some()
         || std::env::var_os("HORIZON_SCULK_FIXTURE").is_some()
         || std::env::var_os("HORIZON_COMMAND_SCRIPT").is_some()
@@ -11988,7 +11928,7 @@ fn load_resources(
     let requested_root = root.clone();
     let threads = settings.horizon.worker_threads();
     // Stage A: the menu bundle (atlas and panorama). With a loading screen it is
-    // published at once so the title backdrop can appear while the world bundle
+    // published at once so the title screen can appear while the world bundle
     // loads; the synchronous launch instead carries it in `Loaded`.
     let mut loaded_gui = None;
     let mut ui_ready = false;
@@ -12405,7 +12345,6 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         darkness: (0.0, 0.0),
         night_vision: 0.0,
         block_flicker: 0.0,
-        post: None,
         menu_blur: None,
         shader: Default::default(),
     }
@@ -12432,18 +12371,8 @@ fn start_game<'a>(
     let handoff = prepared.is_some();
     let mut settings = match settings {
         Some(settings) => settings,
-        None => {
-            horizon_client::ui_theme::load_preferences(&std::env::current_dir()?);
-            Settings::load(&std::env::current_dir()?.join("options.txt"))
-        }
+        None => Settings::load(&std::env::current_dir()?.join("options.txt")),
     };
-    // Scripted and frame-limited runs (the parity harnesses) see vanilla's
-    // screens unless HORIZON_MENU_STYLE asks otherwise.
-    if (options.frames.is_some() || options.control.is_some())
-        && std::env::var_os("HORIZON_MENU_STYLE").is_none()
-    {
-        horizon_client::ui_theme::set_style(horizon_client::ui_theme::MenuStyle::Classic);
-    }
     if let Some(d) = options.distance_override {
         settings.render_distance = d;
     }
@@ -12549,12 +12478,6 @@ fn start_game<'a>(
                 &game.options.resources,
             );
             title.last_server = game.settings.file.string("lastServer");
-            // The launcher's opening, once per session and only in Horizon's style.
-            if horizon_client::ui_theme::horizon() && game.options.frames.is_none() {
-                title
-                    .opening
-                    .set(Some(horizon_client::front::Opening::new()));
-            }
             game.title = Some(title);
         }
     }
@@ -12912,7 +12835,6 @@ fn run_loading(
     pack_error: Option<String>,
     started: Instant,
 ) -> Result<()> {
-    horizon_client::ui_theme::load_preferences(&std::env::current_dir()?);
     let progress = Progress::new();
     let (receiver, loader) =
         startup_menu::spawn_loader(&options, &settings, &vanilla_root, started, &progress)?;

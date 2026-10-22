@@ -1,7 +1,8 @@
 # Play with friends
 
 A player opens their single-player world to friends with one click and gets an **invite code**.
-Friends paste the code (on the multiplayer screen in game, or on the launcher's Play page) and join.
+Friends paste the code (in game: the title screen's Friends button opens Join a Friend, and Direct
+Connection takes a full code too; or on the launcher's Play page) and join.
 There is no Horizon server in the middle and no account: the code itself says where the host is and
 holds the key that encrypts the game between them.
 
@@ -22,7 +23,8 @@ bytes vanilla's protocol would send, between a loopback port on each side.
 
 ## How it works
 
-**Hosting.** "Invite friends" (in Horizon's pause menu) opens the world to LAN if it isn't (Open to
+**Hosting.** The pause menu's Friends button (vanilla's icon, beside Player Reporting) opens **Play
+with Friends** (`friends_screen.rs`); its **Start Sharing** opens the world to LAN if it isn't (Open to
 LAN's defaults), then the host's game, on its own:
 
 1. listens on its **direct port**, TCP 25580 by default (the same port every time, so a port forwarded

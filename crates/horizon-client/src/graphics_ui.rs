@@ -444,7 +444,7 @@ fn max_workers() -> u32 {
 }
 
 impl Item {
-    /// On/off settings, drawn as switches by the Horizon menus.
+    /// On/off settings and their value.
     pub fn switch(self, s: &Settings) -> Option<bool> {
         let g = &s.horizon;
         Some(match self {
