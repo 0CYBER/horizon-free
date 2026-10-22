@@ -122,7 +122,6 @@ struct Launcher {
     settings: Settings,
     /// The Discord, sponsor and website links: built in until links.json on main has been read.
     links: backend::Links,
-    menu_style: backend::MenuStyle,
     preparing: bool,
     prepare_log: VecDeque<String>,
     prepare_error: Option<String>,
@@ -255,7 +254,6 @@ impl Launcher {
             args_focus: cx.focus_handle(),
             settings,
             links: backend::Links::default(),
-            menu_style: backend::menu_style(),
             preparing: false,
             prepare_log: VecDeque::new(),
             prepare_error: None,
@@ -1868,24 +1866,6 @@ impl Launcher {
                 cx.notify();
             }),
         );
-        let this = cx.entity().downgrade();
-        let menus = segments(
-            "menu-style",
-            &[
-                (backend::MenuStyle::Horizon, "Horizon"),
-                (backend::MenuStyle::Classic, "Classic"),
-            ],
-            self.menu_style,
-            &t,
-            move |style, _, cx| {
-                let _ = this.update(cx, |this, cx| {
-                    if backend::set_menu_style(style).is_ok() {
-                        this.menu_style = style;
-                    }
-                    cx.notify();
-                });
-            },
-        );
         let horizon = match (&self.updates.horizon, &self.update_error) {
             (Some(r), _) => format!("{} available", r.tag),
             (None, Some(e)) => e.clone(),
@@ -1981,7 +1961,7 @@ impl Launcher {
             .gap(px(32.))
             .child(page_header(
                 "Settings",
-                "Accounts, updates, menus, and the launcher itself.",
+                "Accounts, updates, and the launcher itself.",
                 &t,
             ))
             .child(
@@ -2023,33 +2003,24 @@ impl Launcher {
                         Some(opening.into_any_element()),
                         &t,
                     ))
+                    .child(self.game_args_row(n + 4, cx))
+                    .child(index_row(n + 5, "Horizon", Some(plain(&horizon)), horizon_action, &t))
                     .child(index_row(
-                        n + 4,
-                        "Game menus",
-                        Some(plain(
-                            "Classic is vanilla's own screens, with no way back inside the game: switch back here. Applies the next time the game starts.",
-                        )),
-                        Some(menus.into_any_element()),
-                        &t,
-                    ))
-                    .child(self.game_args_row(n + 5, cx))
-                    .child(index_row(n + 6, "Horizon", Some(plain(&horizon)), horizon_action, &t))
-                    .child(index_row(
-                        n + 7,
+                        n + 6,
                         "Launcher",
                         Some(plain(&launcher)),
                         launcher_action,
                         &t,
                     ))
                     .child(index_row(
-                        n + 8,
+                        n + 7,
                         "Data folder",
                         Some(mono(short(&backend::data_dir()))),
                         None,
                         &t,
                     ))
                     .child(index_row(
-                        n + 9,
+                        n + 8,
                         "Logs",
                         Some(mono(format!(
                             "{}  ·  crash reports beside it",
@@ -2068,7 +2039,7 @@ impl Launcher {
                     ))
                     .when(cfg!(target_os = "linux"), |d| {
                         d.child(index_row(
-                            n + 10,
+                            n + 9,
                             "Applications menu",
                             Some(plain(if self.settings.desktop_entry() {
                                 "Horizon and its icon are in your desktop's menu."

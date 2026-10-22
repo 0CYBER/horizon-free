@@ -9,12 +9,13 @@ use horizon_assets::item_model::{
 };
 use horizon_client::{
     block_entity_render::{diffuse_lights, vertex_light},
-    hud::HudBatch,
+    hud::{HudBatch, Rect},
     item_render::{self, ItemRenderState, SpecialHost, WorldSink},
     items::ItemStack,
     mesher::Vertex,
 };
 use serde_json::Value;
+use std::{cell::RefCell, collections::HashMap};
 
 /// The game's answers to what the resolver cannot read from the stack.
 pub(super) struct Env<'a, 'g> {
@@ -126,6 +127,8 @@ pub(super) fn local_time(pattern: &str) -> String {
 /// Banner and shield pattern textures from the banner pattern registry.
 pub(super) struct Host<'a> {
     banners: &'a horizon_client::banner::Banners,
+    sprites: &'a HashMap<String, Rect>,
+    skins: &'a RefCell<horizon_client::skins::Downloader>,
 }
 impl SpecialHost for Host<'_> {
     fn banner_texture(&self, pattern: &str) -> Option<String> {
@@ -137,6 +140,18 @@ impl SpecialHost for Host<'_> {
         self.banners
             .pattern(pattern)
             .map(|_| self.banners.shield_texture(pattern))
+    }
+    fn player_skin(&self, profile: &Value) -> Option<String> {
+        // SkullBlockRenderer.getPlayerSkin: SkinManager.getInsecureSkinInformation
+        // accepts a texture property without a signature, unlike the tab list.
+        let url = horizon_client::skins::profile_skin_url(profile)?;
+        let location =
+            horizon_client::skins::skin_location(&horizon_client::skins::texture_hash(&url)?);
+        let _ = self
+            .skins
+            .borrow_mut()
+            .state(horizon_client::skins::Kind::Skin, &url);
+        self.sprites.contains_key(&location).then_some(location)
     }
 }
 
@@ -177,6 +192,8 @@ impl Game<'_> {
     pub(super) fn item_host(&self) -> Host<'_> {
         Host {
             banners: &self.res.stations().banners,
+            sprites: &self.gui.atlas.sprites,
+            skins: &self.skin_downloads,
         }
     }
     /// The client level as item models read it.

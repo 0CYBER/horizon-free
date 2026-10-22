@@ -180,6 +180,27 @@ impl OreFeature {
         let z_start = origin[2].wrapping_sub(spread_ceil).wrapping_sub(max_radius);
         let size_xz = 2 * (spread_ceil + max_radius);
         let size_y = 2 * (2 + max_radius);
+        if let Some(found) = world
+            .any_height_at_least(
+                HeightmapType::OceanFloorWg,
+                [x_start, z_start],
+                size_xz,
+                y_start,
+            )
+            .map_err(FeatureExecutionError::Query)?
+        {
+            return match found {
+                true => self.do_place(
+                    world,
+                    random,
+                    [x0, x1, z0, z1, y0, y1],
+                    [x_start, y_start, z_start],
+                    size_xz,
+                    size_y,
+                ),
+                false => Ok(false),
+            };
+        }
         for x in 0..=size_xz {
             for z in 0..=size_xz {
                 let (px, pz) = (x_start.wrapping_add(x), z_start.wrapping_add(z));
@@ -243,7 +264,8 @@ impl OreFeature {
                 }
             }
         }
-        let mut tested = vec![false; (size_xz as usize) * (size_y as usize) * (size_xz as usize)];
+        let tested_len = (size_xz as usize) * (size_y as usize) * (size_xz as usize);
+        let mut tested = vec![0u64; tested_len.div_ceil(64)];
         let mut placed = 0;
         for [xx, yy, zz, r] in data {
             if r < 0.0 {
@@ -280,16 +302,15 @@ impl OreFeature {
                                 * i64::from(size_xz)
                                 * i64::from(size_y);
                         // The sphere bounds keep indices inside the native BitSet.
-                        let Some(bit) = usize::try_from(index)
-                            .ok()
-                            .and_then(|index| tested.get_mut(index))
+                        let Some(index) = usize::try_from(index).ok().filter(|&i| i < tested_len)
                         else {
                             return Err(FeatureExecutionError::WorkLimit);
                         };
-                        if *bit {
+                        let (word, bit) = (&mut tested[index / 64], 1u64 << (index % 64));
+                        if *word & bit != 0 {
                             continue;
                         }
-                        *bit = true;
+                        *word |= bit;
                         let p = [x, y, z];
                         if !world
                             .ensure_can_write(p)
