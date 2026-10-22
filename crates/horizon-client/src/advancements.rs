@@ -53,6 +53,10 @@ pub struct Tree {
     pub by_id: HashMap<String, usize>,
     /// trigger id -> (advancement index, criterion index).
     pub by_trigger: HashMap<String, Vec<(usize, usize)>>,
+    /// `recipe_unlocked` criteria by the recipe they name (`index_recipes`);
+    /// those naming none in `recipes_any`.
+    by_recipe: HashMap<String, Vec<(usize, usize)>>,
+    recipes_any: Vec<(usize, usize)>,
 }
 fn frame(v: &Value) -> Frame {
     match v.as_str() {
@@ -93,10 +97,109 @@ impl Tree {
                 tree.list.push(a);
             }
         }
+        tree.index_recipes();
         tree
+    }
+    /// Index the `recipe_unlocked` criteria by recipe: a grant that unlocks
+    /// twenty recipes tested every one of the ~1,300 recipe advancements'
+    /// criteria for each (several ms in one tick).
+    pub fn index_recipes(&mut self) {
+        self.by_recipe.clear();
+        self.recipes_any.clear();
+        for &(ai, ci) in self
+            .by_trigger
+            .get("minecraft:recipe_unlocked")
+            .into_iter()
+            .flatten()
+        {
+            match self.list[ai].criteria[ci].conditions["recipes"].as_str() {
+                Some(r) => self
+                    .by_recipe
+                    .entry(r.to_owned())
+                    .or_default()
+                    .push((ai, ci)),
+                None => self.recipes_any.push((ai, ci)),
+            }
+        }
+    }
+    /// The `recipe_unlocked` criteria that could pass for `recipe`, in tree
+    /// order (the others name another recipe).
+    pub fn recipe_criteria(&self, recipe: &str) -> Vec<(usize, usize)> {
+        let mut out = self.recipes_any.clone();
+        out.extend(self.by_recipe.get(recipe).into_iter().flatten());
+        out.sort_unstable();
+        out
     }
     pub fn get(&self, id: &str) -> Option<&Advancement> {
         self.by_id.get(id).map(|&i| &self.list[i])
+    }
+}
+
+/// The `inventory_changed` criteria by the items they need. A criterion whose
+/// item predicates include one limited to some items (an id, a `#tag`, a
+/// list) can only pass with one of those in the inventory, so an inventory
+/// change tests only the criteria of the items it holds, plus those that
+/// need no particular item. The same answers as testing them all: the ~1,300
+/// recipe advancements each have one, and testing every one of them cost a
+/// player 1–4 ms on every tick its inventory changed.
+#[derive(Default)]
+pub struct InventoryIndex {
+    by_item: HashMap<String, Vec<(usize, usize)>>,
+    any: Vec<(usize, usize)>,
+}
+impl InventoryIndex {
+    /// `tag` gives a `#tag`'s item ids (none for a tag that doesn't exist,
+    /// which matches nothing).
+    pub fn build<'t>(tree: &Tree, tag: impl Fn(&str) -> Vec<&'t str>) -> Self {
+        fn ids<'t>(v: &Value, tag: &impl Fn(&str) -> Vec<&'t str>, out: &mut Vec<String>) {
+            match v {
+                Value::String(s) => match s.strip_prefix('#') {
+                    Some(t) => out.extend(tag(t).into_iter().map(str::to_owned)),
+                    None => out.push(s.clone()),
+                },
+                Value::Array(a) => a.iter().for_each(|x| ids(x, tag, out)),
+                _ => {}
+            }
+        }
+        let mut index = Self::default();
+        let Some(list) = tree.by_trigger.get("minecraft:inventory_changed") else {
+            return index;
+        };
+        for &(ai, ci) in list {
+            let items = &tree.list[ai].criteria[ci].conditions["items"];
+            // `id_matches`: only a string or a list limits the items.
+            let limited = items.as_array().and_then(|a| {
+                a.iter()
+                    .map(|p| &p["items"])
+                    .find(|v| v.is_string() || v.is_array())
+            });
+            match limited {
+                Some(v) => {
+                    let mut out = Vec::new();
+                    ids(v, &tag, &mut out);
+                    out.sort();
+                    out.dedup();
+                    for id in out {
+                        index.by_item.entry(id).or_default().push((ai, ci));
+                    }
+                }
+                None => index.any.push((ai, ci)),
+            }
+        }
+        index
+    }
+    /// The criteria an inventory holding these item ids could pass, in
+    /// tree order.
+    pub fn candidates<'a>(&self, held: impl IntoIterator<Item = &'a str>) -> Vec<(usize, usize)> {
+        let mut out = self.any.clone();
+        for id in held {
+            if let Some(list) = self.by_item.get(id) {
+                out.extend_from_slice(list);
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
     }
 }
 fn collect(root: &Path, dir: &Path, ns: &str, out: &mut Vec<(String, std::path::PathBuf)>) {
@@ -992,6 +1095,77 @@ impl Tree {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The criteria an inventory change and a recipe unlock test, on vanilla's tree:
+    /// `cargo test -p horizon-client --lib -- --ignored --nocapture index_on_vanilla_tree`
+    /// with HORIZON_RESOURCES set to the prepared resources.
+    #[test]
+    #[ignore = "needs the prepared resources"]
+    fn index_on_vanilla_tree() {
+        let Some(root) = std::env::var_os("HORIZON_RESOURCES").map(std::path::PathBuf::from) else {
+            return;
+        };
+        let data = root.join("data");
+        let t = std::time::Instant::now();
+        let tree = Tree::load(&data);
+        let load = t.elapsed();
+        let tags = data.join("minecraft/tags/item");
+        let tag_items: HashMap<String, Vec<String>> = std::fs::read_dir(&tags)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| {
+                let v: Value =
+                    serde_json::from_str(&std::fs::read_to_string(e.path()).ok()?).ok()?;
+                let name = format!("minecraft:{}", e.path().file_stem()?.to_string_lossy());
+                let values = v["values"]
+                    .as_array()?
+                    .iter()
+                    .filter_map(|x| x.as_str().map(str::to_owned));
+                Some((name, values.collect()))
+            })
+            .collect();
+        let t = std::time::Instant::now();
+        let index = InventoryIndex::build(&tree, |tag| {
+            tag_items
+                .get(tag)
+                .map(|v| v.iter().map(String::as_str).collect())
+                .unwrap_or_default()
+        });
+        let build = t.elapsed();
+        let all = tree
+            .by_trigger
+            .get("minecraft:inventory_changed")
+            .map_or(0, Vec::len);
+        let held = [
+            "minecraft:iron_ingot",
+            "minecraft:oak_log",
+            "minecraft:cobblestone",
+            "minecraft:diamond_pickaxe",
+            "minecraft:bread",
+            "minecraft:torch",
+            "minecraft:oak_planks",
+            "minecraft:stick",
+            "minecraft:coal",
+        ];
+        let t = std::time::Instant::now();
+        let mut candidates = 0;
+        for _ in 0..1000 {
+            candidates = index.candidates(held).len();
+        }
+        let per_change = t.elapsed() / 1000;
+        let recipes = tree
+            .by_trigger
+            .get("minecraft:recipe_unlocked")
+            .map_or(0, Vec::len);
+        let per_recipe = tree.recipe_criteria("minecraft:iron_pickaxe").len();
+        eprintln!(
+            "tree {load:?}; inventory_changed: {all} criteria, index built in {build:?}, \
+             a 9-stack inventory tests {candidates} (looked up in {per_change:?}); \
+             recipe_unlocked: {recipes} criteria, iron_pickaxe tests {per_recipe}"
+        );
+        assert!(candidates < all / 10);
+    }
     struct Flat;
     impl World for Flat {
         fn dimension(&self) -> &str {
@@ -1089,6 +1263,94 @@ mod tests {
             ));
             stack.id = "minecraft:tnt".into();
         }
+    }
+    /// Only the criteria the held items could pass are tested; those that
+    /// need no particular item always are.
+    #[test]
+    fn inventory_index_keeps_the_criteria_the_items_could_pass() {
+        let criteria = [
+            serde_json::json!({"items": [{"items": "minecraft:diamond"}]}),
+            serde_json::json!({"items": [{"items": "#minecraft:planks"}]}),
+            serde_json::json!({"items": [{"count": {"min": 2}}]}),
+            serde_json::json!({"items": [{"count": 1}, {"items": ["minecraft:stick", "minecraft:apple"]}]}),
+            serde_json::json!({"slots": {"empty": 0}}),
+            serde_json::json!({"items": [{"items": "#minecraft:no_such_tag"}]}),
+        ];
+        let mut tree = Tree::default();
+        for (i, conditions) in criteria.into_iter().enumerate() {
+            tree.list.push(Advancement {
+                id: format!("test:{i}"),
+                parent: None,
+                display: None,
+                criteria: vec![Criterion {
+                    name: "c".into(),
+                    trigger: "minecraft:inventory_changed".into(),
+                    conditions,
+                }],
+                requirements: vec![vec!["c".into()]],
+                rewards: Rewards::default(),
+            });
+            tree.by_trigger
+                .entry("minecraft:inventory_changed".into())
+                .or_default()
+                .push((i, 0));
+        }
+        let index = InventoryIndex::build(&tree, |tag| match tag {
+            "minecraft:planks" => vec!["minecraft:oak_planks", "minecraft:birch_planks"],
+            _ => Vec::new(),
+        });
+        let found = |held: &[&str]| -> Vec<usize> {
+            index
+                .candidates(held.iter().copied())
+                .into_iter()
+                .map(|(ai, _)| ai)
+                .collect()
+        };
+        assert_eq!(found(&[]), [2, 4]);
+        assert_eq!(found(&["minecraft:dirt"]), [2, 4]);
+        assert_eq!(
+            found(&["minecraft:oak_planks", "minecraft:diamond"]),
+            [0, 1, 2, 4]
+        );
+        assert_eq!(found(&["minecraft:apple", "minecraft:apple"]), [2, 3, 4]);
+    }
+    /// A recipe unlocked tests only the criteria that name it.
+    #[test]
+    fn recipe_index_keeps_the_criteria_of_the_recipe() {
+        let mut tree = Tree::default();
+        for (i, conditions) in [
+            serde_json::json!({"recipes": "minecraft:oak_planks"}),
+            serde_json::json!({"recipes": "minecraft:stick"}),
+            serde_json::json!({}),
+            serde_json::json!({"recipes": "minecraft:oak_planks"}),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            tree.list.push(Advancement {
+                id: format!("test:{i}"),
+                parent: None,
+                display: None,
+                criteria: vec![Criterion {
+                    name: "c".into(),
+                    trigger: "minecraft:recipe_unlocked".into(),
+                    conditions,
+                }],
+                requirements: vec![vec!["c".into()]],
+                rewards: Rewards::default(),
+            });
+            tree.by_trigger
+                .entry("minecraft:recipe_unlocked".into())
+                .or_default()
+                .push((i, 0));
+        }
+        tree.index_recipes();
+        assert_eq!(
+            tree.recipe_criteria("minecraft:oak_planks"),
+            [(0, 0), (2, 0), (3, 0)]
+        );
+        assert_eq!(tree.recipe_criteria("minecraft:stick"), [(1, 0), (2, 0)]);
+        assert_eq!(tree.recipe_criteria("minecraft:torch"), [(2, 0)]);
     }
     #[test]
     fn bucket_axolotl_block_advancements_require_the_placed_block() {

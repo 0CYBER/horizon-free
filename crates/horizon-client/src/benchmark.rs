@@ -145,6 +145,8 @@ fn run(control: &Control, setup: Setup) -> Result<PathBuf, String> {
 
     replace_world(&setup.game_dir)?;
     control.call(&format!("open {WORLD} {SEED} creative"))?;
+    // The world opens on a worker: its folder may not exist yet when `open` replies.
+    std::fs::create_dir_all(setup.game_dir.join("saves").join(WORLD)).map_err(|e| e.to_string())?;
     std::fs::write(
         setup.game_dir.join("saves").join(WORLD).join(MARKER),
         "Created by horizon-client --benchmark; replaced by the next run.\n",

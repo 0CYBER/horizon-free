@@ -78,8 +78,8 @@ pub enum Screen {
         name: String,
         lines: std::cell::Cell<usize>,
     },
-    /// Join a friend's world with its invite code (Horizon's own, reached
-    /// from Horizon's multiplayer page).
+    /// Join a friend's world with its invite code (Horizon's own, behind the
+    /// title screen's Friends button).
     Friend {
         code: String,
         /// The relay for short codes (optional; saved on Join).
@@ -373,13 +373,6 @@ impl Screen {
         }
     }
 
-    /// The address of list row `row` (saved servers, then LAN games).
-    pub fn address_of(&self, row: usize) -> Option<String> {
-        match self {
-            Self::List { servers, lan, .. } => entry_address(servers, lan, row),
-            _ => None,
-        }
-    }
     pub fn list(saves: &Path) -> Self {
         let servers = servers::load(&servers_file(saves));
         let pings: Pings = Arc::default();
@@ -1162,7 +1155,7 @@ impl Screen {
             ) => *self = Self::list(saves),
             (Self::Disconnected { retry, .. }, Some(55)) => *retry = None,
             (Self::Direct { address }, Some(52)) => {
-                return Outcome::Connect(address.trim().to_owned());
+                return Outcome::Connect(direct_address(address));
             }
             (Self::Friend { code, relay, .. }, Some(56)) => {
                 if horizon_friends::invite::parse(code).is_some() {
@@ -1326,6 +1319,19 @@ impl Screen {
     }
 }
 
+/// Direct Connection's address; a full invite code pasted there joins the
+/// friend (a short relay code could be a host name, so it needs Join a Friend).
+fn direct_address(address: &str) -> String {
+    let code: String = address.chars().filter(|c| !c.is_whitespace()).collect();
+    if matches!(
+        horizon_friends::invite::parse(&code),
+        Some(horizon_friends::invite::Parsed::Long(_))
+    ) {
+        format!("{}{code}", crate::net::FRIEND)
+    } else {
+        address.trim().to_owned()
+    }
+}
 /// Greedy word wrap to a pixel width.
 pub fn wrap(text: &str, width: f32, atlas: &HudAtlas) -> Vec<String> {
     let mut lines = Vec::new();
@@ -1352,6 +1358,24 @@ pub fn wrap(text: &str, width: f32, atlas: &HudAtlas) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn direct_connection_joins_a_pasted_invite_and_keeps_host_names() {
+        let invite = horizon_friends::invite::Invite {
+            secret: *b"0123456789",
+            port: 25580,
+            endpoints: vec!["192.168.1.20:25580".parse().unwrap()],
+            relay: None,
+        }
+        .encode();
+        assert_eq!(
+            direct_address(&format!(" {invite} ")),
+            format!("{}{invite}", crate::net::FRIEND)
+        );
+        for host in ["localhost", "example.org:25566", "abcdefgh", "[::1]:25568"] {
+            assert_eq!(direct_address(host), host);
+        }
+    }
 
     #[test]
     fn ping_tooltip_follows_only_visible_status_bars_and_current_ping() {

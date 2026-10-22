@@ -5,7 +5,7 @@ Download the launcher, let it install Horizon, then prepare the game from your o
 ## What you need
 
 - **Minecraft: Java Edition 26.3, played once.** Install it with the official Minecraft launcher (or Prism Launcher, MultiMC, the Modrinth App, ATLauncher or GDLauncher) and start 26.3 once, so it downloads its files. Horizon reads them from there and never copies them anywhere else.
-- **Java 25, a JDK.** For example [Eclipse Temurin 25](https://adoptium.net/temurin/releases/?version=25). Only the one-time preparation uses it. The game itself needs no Java.
+- **Java 25, a JDK**, for the one-time preparation only (the game itself needs no Java). Nothing to install: the launcher uses the Java the Minecraft launcher downloaded for 26.3, or downloads that same Java from Mojang. A JDK you installed yourself (for example [Eclipse Temurin 25](https://adoptium.net/temurin/releases/?version=25)) works too.
 - **A computer on the [supported list](/docs/#supported-systems).** On Linux and Windows that means a graphics card with Vulkan (or DirectX 12 on Windows).
 
 ## Download the launcher
@@ -24,7 +24,7 @@ Every release also carries `SHA256SUMS` and a signature, `SHA256SUMS.sig`, if yo
 2. Back on **Play**, the launcher says "Not prepared. Horizon needs the files of your own Minecraft 26.3." Choose **Prepare**. It finds your Minecraft folder by itself in the usual places. If it cannot, it lists where it looked, and **Choose…** next to the Minecraft folder lets you point it at yours.
 3. Wait a few minutes. When it says "Prepared for Minecraft 26.3", choose **Play**.
 
-The game opens on Horizon's own title screen. Your worlds, options and logs live in the game folder, which is not inside a version's folder, so updating or removing a version never touches them:
+The game opens on vanilla's title screen. Your worlds, options and logs live in the game folder, which is not inside a version's folder, so updating or removing a version never touches them:
 
 - Linux: `~/.local/share/horizon`
 - macOS: `~/Library/Application Support/horizon`
@@ -37,9 +37,16 @@ The game opens on Horizon's own title screen. Your worlds, options and logs live
 - **Horizon.** The launcher looks for a new release when it starts and every four hours while it is open. With **Install new versions automatically** on (the default), it installs one and moves you to it if you were on the newest. New releases come out many times a day, and old versions stay installed until you remove them on the **Versions** page.
 - **The launcher.** It updates itself from its own releases, then shows **Restart** in its footer. A launcher from before 0.2 (0.16 or older) updates twice in a row: first to 0.17, then to 0.2. Then it installs Horizon 0.2 like any update.
 
-## Stable and beta builds
+## Stable and Alpha
 
-The launcher installs **stable** builds by default. In **Settings**, **Beta builds** installs new builds the moment they are released, before they have had time to settle. The **Versions** page shows each version's channel. A new release starts as a beta and becomes stable by itself about six hours later, once its smoke test has passed.
+> **Next launcher release.** The Updates switch below is merged but not in a launcher release yet. Launcher 0.17 has a **Beta builds** switch in Settings instead, which installs every new build at once, as Alpha does.
+
+In **Settings**, **Updates** picks which builds install by themselves:
+
+- **Stable** (the default): a tested build about once a day.
+- **Alpha**: every change as soon as it is built, several times a day. It can break. A launcher left open looks for new builds every 30 minutes, instead of every four hours.
+
+Every new release is an Alpha build first. Once a day (20:00 UTC, 21:00 in Paris in winter), the newest one that has been out for six hours, passed its smoke test and has no known blocker becomes Stable. Alpha builds come out many times a day, and Horizon as a whole is still in beta; Stable is the tested ones. The **Versions** page shows each version's channel, and you can install any of them by hand.
 
 ## The Versions page
 

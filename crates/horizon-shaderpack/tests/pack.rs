@@ -121,6 +121,69 @@ fn preprocesses_with_defaults_and_with_values() {
     );
 }
 
+/// JCPP lets a `#define` replace a macro (Bloop's `TILT_ANGLE`); the added
+/// `#undef`s don't move the lines errors name.
+#[test]
+fn a_define_replaces_an_earlier_one() {
+    use horizon_shaderpack::{include::Inlined, preprocess::preprocess};
+    let text = "#define TILT 5.0\nfloat a = TILT;\n  #  define TILT 1.5 // radians\nfloat b = TILT;\n#define F(x) x\n#define F(x) (x * 2)\nfloat c = F(1);\n#if\n";
+    let source = Inlined {
+        text: text.into(),
+        origin: (1..=8).map(|l| ("lib/specular.glsl".into(), l)).collect(),
+    };
+    let error = preprocess(&source, &env()).unwrap_err();
+    assert!(error.starts_with("lib/specular.glsl:8:"), "{error}");
+    let source = Inlined {
+        text: text.replace("#if\n", ""),
+        ..source
+    };
+    let out = preprocess(&source, &env()).unwrap().text;
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines[1], "float a = 5.0 ;");
+    assert_eq!(lines[3], "float b = 1.5 ;");
+    assert_eq!(lines[6], "float c = ( 1 * 2 ) ;");
+}
+
+/// Conditions as JCPP reads them: an empty macro counts as 0 (Bloop's
+/// `#if MC_GL_VENDOR_INTEL || MC_GL_VENDOR_OTHER` with Iris's empty vendor
+/// macro, its `#define TAA_USE_YCOCG`), a float as its integer part; a
+/// quoted `#error` lexes, and an `#if` may run to the end.
+#[test]
+fn conditions_read_as_jcpp_does() {
+    use horizon_shaderpack::{include::Inlined, preprocess::preprocess};
+    let mut env = env();
+    env.define("MC_GL_VENDOR_OTHER", "");
+    let text = "#define TAA_USE_YCOCG
+#define LEVEL 0.5
+#if MC_GL_VENDOR_INTEL || MC_GL_VENDOR_OTHER
+float gather = 0.0;
+#else
+float gather = 1.0;
+#endif
+#if TAA_USE_YCOCG
+float ycocg = 1.0;
+#endif
+#if defined TAA_USE_YCOCG && defined(MC_GL_VENDOR_OTHER) && LEVEL == 0
+float both = 1.0;
+#endif
+#ifndef TAA_USE_YCOCG
+#error \"This program should be disabled\"
+#endif
+#ifdef TAA_USE_YCOCG
+float open = 1.0;
+";
+    let source = Inlined {
+        text: text.into(),
+        origin: Vec::new(),
+    };
+    let out = preprocess(&source, &env).unwrap().text;
+    let words: Vec<&str> = out.split_whitespace().collect();
+    assert_eq!(
+        words.join(" "),
+        "float gather = 1.0 ; float both = 1.0 ; float open = 1.0 ;"
+    );
+}
+
 #[test]
 fn reports_missing_includes_and_cycles() {
     let pack = JavaPack::open(&mini()).unwrap();

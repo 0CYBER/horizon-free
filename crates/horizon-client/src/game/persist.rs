@@ -274,6 +274,7 @@ impl Game<'_> {
                             self.carts.push(c);
                         }
                     }
+                    "minecraft:ominous_item_spawner" => self.load_ominous_item_spawner(tag),
                     "minecraft:ender_dragon" => {
                         let seed = self.world.random.next_long();
                         if self.dragon.is_none()
@@ -685,6 +686,19 @@ impl Game<'_> {
                     .push(c.to_nbt(uuid, raw.as_ref()));
             }
         }
+        for s in &self.ominous_spawners {
+            let at = Vec3::new(s.position[0], s.position[1], s.position[2]);
+            if keys.contains(&chunk_of(at)) {
+                let tag = entity_nbt::ominous_item_spawner_to_nbt(
+                    &s.item,
+                    at,
+                    s.spawn_item_after,
+                    s.uuid,
+                    s.raw.as_deref(),
+                );
+                out.entry(chunk_of(at)).or_default().push(tag);
+            }
+        }
         for c in &self.carts {
             if keys.contains(&chunk_of(c.position)) {
                 let uuid = self
@@ -774,6 +788,8 @@ impl Game<'_> {
                 keep
             });
             self.crystals.retain(|c| !gone(c.position));
+            self.ominous_spawners
+                .retain(|s| !gone(Vec3::new(s.position[0], s.position[1], s.position[2])));
             if self.dragon.as_ref().is_some_and(|d| gone(d.position)) {
                 self.dragon = None;
             }

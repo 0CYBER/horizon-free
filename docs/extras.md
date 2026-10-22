@@ -1,6 +1,6 @@
 # Horizon extras
 
-Optional conveniences built into the client: fullbright, zoom, a minimap, an FPS counter, a
+Optional conveniences built into the client: fullbright, dynamic lights, zoom, a minimap, an FPS counter, a
 keystroke overlay, auto-reconnect, Mouse Tweaks-style inventory controls and
 inventory sorting. **Every one is off by default**: a fresh
 install looks and behaves exactly like vanilla 26.3, and turning an extra off
@@ -12,13 +12,19 @@ again restores vanilla's behaviour completely.
 |---|---|
 | Settings, parsing and saving | `crates/horizon-client/src/extras.rs` |
 | Zoom curve, FPS and click counters | `extras.rs` (pure logic, unit tested) |
+| Dynamic lights: item glow, nearest sources | `crates/horizon-client/src/dynamic_light.rs` (unit tested), `game/dynamic_lights.rs`, `terrain.wgsl` and `entity.wgsl` (`dynamic_block_light`) |
 | HUD drawing (FPS, keystrokes, minimap frame) | `crates/horizon-client/src/extras_hud.rs` |
 | Minimap colours, tiles and image | `crates/horizon-client/src/minimap.rs` |
 | Reconnect policy and backoff | `crates/horizon-client/src/reconnect.rs` |
 | Game glue (input hooks, per-frame update) | `crates/horizon-client/src/game/extras.rs` |
 | Mouse Tweaks-style controls, sort buttons | `crates/horizon-client/src/game/tweaks.rs` |
 | Sort order and its clicks | `crates/horizon-client/src/inv_sort.rs` (pure, unit tested) |
-| The settings page | `options_horizon.rs`: the **Extras** section of Horizon's Options |
+| The settings page | `options_ui.rs` (`Page::Extras`): **Options → Horizon Settings... → Extras...** |
+
+The settings are grouped by extra, under a header each, two buttons to a row as
+vanilla's options lists are, and each says what it does in its tooltip. An
+extra's own settings (its key, corner, size...) are greyed out while its switch
+is off (`Item::parent`).
 
 `game.rs` only gets one-line hooks (key, wheel, mouse, frame, HUD), so the
 extras stay out of the way of other input and options work.
@@ -41,6 +47,21 @@ Horizon category in Controls, and adding one would put a non-vanilla mapping int
 - Turning it off restores the normal lightmap using the current brightness,
   time of day and effects. The brightness slider keeps its normal range.
 
+### Dynamic lights (`dynamicLights`, default off)
+- A light source held by a player or mob (main or off hand), dropped as an item, or an entity on
+  fire lights the blocks, entities and hand around it, as LambDynamicLights and OptiFine do. Not
+  in vanilla; the idea is ported, not a mod's code (issue #814).
+- An item glows like its block's default state (`getLightEmission`): torches 14, lanterns,
+  glowstone, sea lanterns and jack o'lanterns 15, soul torches 10, a redstone torch 7; a lava bucket
+  15. An entity on fire gives 15.
+- Client-only, at render time: the light engine, meshes, saves and other players never see it.
+  Each frame the game picks the 16 sources nearest the camera (within 96 blocks,
+  `dynamic_light::select`); terrain.wgsl and entity.wgsl raise each vertex's block light to the
+  source's level minus its distance in blocks when that is brighter, then light it through the
+  lightmap as usual. The light doesn't stop at walls.
+- Off: nothing is gathered and the shaders' loop runs zero times (the count is 0), so it costs
+  nothing measurable (numbers in the pull request, #814).
+
 ### Zoom (`zoom`, default off)
 - Hold the zoom key (default **Z**, unused by every vanilla 26.3 key mapping; C
   is `key.saveToolbarActivator`) to zoom. The key does nothing while zoom is off.
@@ -58,7 +79,7 @@ Horizon category in Controls, and adding one would put a non-vanilla mapping int
   Off applies the zoom to the final FOV with no easing.
 - While scoping with a spyglass the zoom does nothing: the spyglass view and its
   overlay stay exactly vanilla's.
-- **Lower sensitivity** (default on) divides mouse turning by the zoom factor.
+- **Slower turning** (default on) divides mouse turning by the zoom factor.
 - With zoom off (or the key up) the FOV target and mouse are vanilla's, bit for
   bit; the FOV harness covers this.
 

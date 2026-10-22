@@ -232,11 +232,15 @@ fn visibility(pad: &Padded, info: &[Info]) -> u64 {
 #[cfg(test)]
 mod leaf_culling_tests;
 #[cfg(test)]
+mod particle_tests;
+#[cfg(test)]
 mod visibility_tests;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tint {
     None,
     Grass,
+    /// `BlockTintSources.grassBlock`: grass in the world, none on its particles.
+    GrassBlock,
     TallGrassUpper,
     Foliage,
     DryFoliage,
@@ -353,9 +357,10 @@ impl MeshTables {
                         ([Tint::Grass; 2], 1)
                     }
                 }
-                "fern" | "short_grass" | "potted_fern" | "bush" | "grass_block" | "sugar_cane" => {
+                "fern" | "short_grass" | "potted_fern" | "bush" | "sugar_cane" => {
                     ([Tint::Grass; 2], 1)
                 }
+                "grass_block" => ([Tint::GrassBlock; 2], 1),
                 "pink_petals" | "wildflowers" => ([Tint::None, Tint::Grass], 2),
                 "spruce_leaves" => ([Tint::Constant(0x61_9961); 2], 1),
                 "birch_leaves" => ([Tint::Constant(0x80_A755); 2], 1),
@@ -466,6 +471,28 @@ impl MeshTables {
             overlay: i.overlay,
             tint_sources: i.tint_count,
         })
+    }
+    /// `TerrainParticle`'s colour: tint source 0's `colorAsTerrainParticle`,
+    /// which is the in-world (biome-blended) colour except on grass blocks,
+    /// whose dirt crumbs stay untinted. `None` when the state has no source.
+    /// `region[dz][dx]` are the chunks around `pos`'s chunk (centre 1,1).
+    pub fn terrain_particle_tint(
+        &self,
+        state: BlockStateId,
+        pos: [i32; 3],
+        region: &[[Option<&Chunk>; 3]; 3],
+        biomes: &Biomes,
+        zoom: BiomeZoom,
+        blend_radius: i32,
+    ) -> Option<u32> {
+        let info = self.info.get(state.0 as usize)?;
+        if info.tints[0] == Tint::GrassBlock {
+            return None;
+        }
+        let [x, y, z] = pos;
+        let origin = [x >> 4, z >> 4, y & !15];
+        let mut tints = Tints::new(region, biomes, zoom, blend_radius, origin);
+        Mesher::tint(info, 0, &mut tints, [x & 15, y & 15, z & 15])
     }
     /// `BlockState.getOffset` for blocks with a random model offset.
     pub fn offset(&self, state: BlockStateId, x: i32, z: i32) -> Option<[f64; 3]> {
@@ -791,7 +818,7 @@ impl Mesher<'_> {
         }
         Some(match state.tints[(index as usize).min(1)] {
             Tint::None => return None,
-            Tint::Grass => tints.get(Resolver::Grass, x, y, z),
+            Tint::Grass | Tint::GrassBlock => tints.get(Resolver::Grass, x, y, z),
             Tint::TallGrassUpper => tints.get(Resolver::Grass, x, y, z),
             Tint::Foliage => tints.get(Resolver::Foliage, x, y, z),
             Tint::DryFoliage => tints.get(Resolver::Dry, x, y, z),

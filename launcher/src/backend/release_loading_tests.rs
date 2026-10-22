@@ -17,7 +17,7 @@ fn fixture() -> String {
         })
         .collect();
     list.push(serde_json::json!({
-        "tag_name": "launcher-v99.0.0", "name": "Launcher", "body": "Notes",
+        "tag_name": "launcher@99.0.0", "name": "Launcher", "body": "Notes",
         "assets": [{"name": LAUNCHER_ASSET.unwrap_or("unsupported"),
             "browser_download_url": "https://example.test/launcher", "size": 6789}]
     }));
@@ -45,7 +45,7 @@ fn baseline(load: impl Fn() -> Result<serde_json::Value, String>) -> (Vec<Releas
 fn shared(load: impl FnOnce() -> Result<serde_json::Value, String>) -> (Vec<Release>, Updates) {
     let mut releases = None;
     let updates = releases_and_updates_with(
-        false,
+        UpdateChannel::Stable,
         load,
         installed_fixture,
         |list| parse_releases(list, LAUNCHER_ASSET, is_launcher_tag),
@@ -82,7 +82,7 @@ fn errors_reach_releases_and_updates_without_fallback() {
     ] {
         let mut published = None;
         let result = releases_and_updates_with(
-            false,
+            UpdateChannel::Stable,
             || Err(error.into()),
             || panic!("no installed scan after failure"),
             |_| panic!("no fallback after failure"),
@@ -97,7 +97,7 @@ fn errors_reach_releases_and_updates_without_fallback() {
 fn publish_games_before_older_launcher_fallback() {
     let events = RefCell::new(Vec::new());
     let result = releases_and_updates_with(
-        false,
+        UpdateChannel::Stable,
         || Ok(serde_json::json!([{"tag_name": "v2026.10.14", "assets": []}])),
         Vec::new,
         |list| {
@@ -105,10 +105,10 @@ fn publish_games_before_older_launcher_fallback() {
                 assert_eq!(events.borrow().first(), Some(&"releases"));
                 events.borrow_mut().push("fallback");
                 if url.contains("matching-refs") {
-                    Ok(serde_json::json!([{"ref": "refs/tags/launcher-v99.0.0"}]))
+                    Ok(serde_json::json!([{"ref": "refs/tags/launcher@99.0.0"}]))
                 } else {
                     Ok(
-                        serde_json::json!({"tag_name": "launcher-v99.0.0", "assets": [{
+                        serde_json::json!({"tag_name": "launcher@99.0.0", "assets": [{
                             "name": LAUNCHER_ASSET.unwrap_or("unsupported"),
                             "browser_download_url": "u", "size": 1
                         }]}),
@@ -132,7 +132,7 @@ fn failed_launcher_fallback_keeps_game_result_and_checks_stay_fresh() {
     for day in [14, 15] {
         let mut published = None;
         let updates = releases_and_updates_with(
-            false,
+            UpdateChannel::Stable,
             || {
                 requests.fetch_add(1, Ordering::Relaxed);
                 Ok(serde_json::json!([{"tag_name": format!("v2026.10.{day}")}]))

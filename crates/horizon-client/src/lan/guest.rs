@@ -71,6 +71,13 @@ pub struct Guest {
     /// The permission level (0 none, 2 game masters, 4 owners).
     pub permission: u8,
     pub sneaking: bool,
+    /// The last `ServerboundPlayerInputPacket` flags (forward 1, backward 2,
+    /// left 4, right 8, jump 16, shift 32, sprint 64).
+    pub input: u8,
+    /// The boat or minecart the player rides (`Entity.getVehicle`).
+    pub vehicle: Option<u32>,
+    /// `ServerGamePacketListenerImpl.lastGoodX/Y/Z` of the vehicle it controls.
+    pub vehicle_good: Option<[f64; 3]>,
     pub sprinting: bool,
     pub fall_flying: bool,
     pub flying: bool,
@@ -122,6 +129,13 @@ pub struct Guest {
     pub tracker: Tracker,
     // Player state the gameplay code reads and writes.
     pub motion: Option<Box<PlayerMotion>>,
+    /// The hurt and attack logs of the body it had before it respawned,
+    /// until the new body takes them over (the control socket's `hurtlog`
+    /// reads across a death).
+    pub logs_kept: Option<(
+        Vec<crate::health::HurtRecord>,
+        Vec<crate::health::AttackRecord>,
+    )>,
     /// The 36 inventory slots (hotbar first), armor (head..feet) and off hand.
     pub inventory: Vec<Option<ItemStack>>,
     pub armor: [Option<ItemStack>; 4],
@@ -140,6 +154,8 @@ pub struct Guest {
     pub xp_level: i32,
     pub xp_progress: f32,
     pub xp_total: i32,
+    /// `Player.enchantmentSeed` (the enchanting table's offers).
+    pub xp_seed: i32,
     /// Active status effects (`LivingEntity.activeEffects`).
     pub effects: crate::effects::PlayerEffects,
     /// What the client was told of each effect: id, amplifier, flags, and
@@ -224,6 +240,9 @@ impl Guest {
             game_mode: SURVIVAL,
             permission: 0,
             sneaking: false,
+            input: 0,
+            vehicle: None,
+            vehicle_good: None,
             sprinting: false,
             fall_flying: false,
             flying: false,
@@ -251,6 +270,7 @@ impl Guest {
             batch_quota: 0.0,
             tracker: Tracker::default(),
             motion: None,
+            logs_kept: None,
             inventory: vec![None; 36],
             armor: [None, None, None, None],
             offhand: None,
@@ -265,6 +285,7 @@ impl Guest {
             xp_level: 0,
             xp_progress: 0.0,
             xp_total: 0,
+            xp_seed: 0,
             effects: Default::default(),
             sent_effects: Vec::new(),
             menu_sent: vec![None; 46],
@@ -408,6 +429,43 @@ pub fn stack_to_network(
             stack.added.push((
                 horizon_protocol::item::component::MAP_ID,
                 horizon_protocol::item::Component::Int(id),
+            ));
+        }
+        if d.repair_cost > 0 {
+            stack.added.push((
+                horizon_protocol::item::component::REPAIR_COST,
+                horizon_protocol::item::Component::Int(d.repair_cost as i32),
+            ));
+        }
+        if let Some(mode) = d.map_post_processing {
+            stack.added.push((
+                horizon_protocol::item::component::MAP_POST_PROCESSING,
+                horizon_protocol::item::Component::Int(i32::from(mode)),
+            ));
+        }
+        // The books a lectern shows and a guest reads.
+        if !d.writable_pages.is_empty() {
+            stack.added.push((
+                horizon_protocol::item::component::WRITABLE_BOOK_CONTENT,
+                horizon_protocol::item::Component::WritableBook(d.writable_pages.clone()),
+            ));
+        }
+        if let Some(w) = &d.written {
+            stack.added.push((
+                horizon_protocol::item::component::WRITTEN_BOOK_CONTENT,
+                horizon_protocol::item::Component::WrittenBook(
+                    horizon_protocol::item::WrittenBook {
+                        title: w.title.clone(),
+                        author: w.author.clone(),
+                        generation: i32::from(w.generation),
+                        pages: w
+                            .pages
+                            .iter()
+                            .map(|p| horizon_protocol::text::literal(p))
+                            .collect(),
+                        resolved: true,
+                    },
+                ),
             ));
         }
     }

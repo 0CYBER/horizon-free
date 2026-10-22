@@ -63,11 +63,11 @@ impl Game<'_> {
         camera: glam::DVec3,
         sky: &horizon_client::environment::Sky,
         biome: u16,
+        water_fog_color: [f32; 3],
     ) -> FogData {
         let forward = self.forward();
         let at = [camera.x, camera.y, camera.z];
         let fog_type = fog_type(&self.world, self.res.facts(), at, forward);
-        let water = self.res.biomes().get(biome).water_fog;
         let (rain, thunder) = if self.dim == Dim::Overworld {
             self.world.weather.levels(self.clock.fraction() as f32)
         } else {
@@ -85,11 +85,7 @@ impl Game<'_> {
             &FogInputs {
                 fog_type,
                 sky,
-                water_fog_color: [
-                    (water >> 16 & 255) as f32 / 255.0,
-                    (water >> 8 & 255) as f32 / 255.0,
-                    (water & 255) as f32 / 255.0,
-                ],
+                water_fog_color,
                 biome,
                 render_distance_chunks: self.terrain_distance(),
                 distant_terrain: self.lod.is_some(),
@@ -188,7 +184,8 @@ impl Game<'_> {
                 && f.solid_render
                 && f.full_collision
             {
-                block_overlay = self.particle_sprite(state).map(|(name, _)| name);
+                // ScreenEffectRenderer: the block's particle material.
+                block_overlay = Self::block_particle_sprite(&self.pack, state);
                 break;
             }
         }
@@ -292,11 +289,12 @@ impl Game<'_> {
         };
         let marker = marker_particle_target(self.mode, self.stack_in(self.selected));
         let marker_options = |state| {
-            let (sprite, tint) = Self::block_particle_sprite(&self.pack, self.res.facts(), state)?;
+            // BlockMarker: the particle sprite, untinted.
+            let sprite = Self::block_particle_sprite(&self.pack, state)?;
             Some(ParticleOptions::block(
                 ParticleType::BlockMarker,
                 sprite,
-                tint,
+                0xFFFFFF,
             ))
         };
         let world = &self.world;

@@ -312,15 +312,10 @@ impl Game<'_> {
                 .map_or_else(String::new, |(end, start)| {
                     format!(", cpu {:.1} ms", (end - start).as_secs_f32() * 1000.0)
                 });
-            let list: Vec<String> = spans
-                .iter()
-                .filter(|(_, ms)| *ms >= 0.5)
-                .map(|(n, ms)| format!("{n} {ms:.1}"))
-                .collect();
             log::info!(
                 "Horizon: slow tick {wall:.1} ms{cpu} ({} mobs): {}",
                 self.mobs.len(),
-                list.join(", ")
+                horizon_client::spans::describe(&spans)
             );
         }
         result

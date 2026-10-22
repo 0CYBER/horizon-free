@@ -179,4 +179,43 @@ mod tests {
         );
         assert_eq!(vendor_name(0, "Apple M4 Pro"), "Apple");
     }
+
+    /// The packs in `HORIZON_TEST_SHADERPACKS` (folders or zips) load as the
+    /// game loads them, with their default options: the compatibility table
+    /// of docs/shader-packs.md. Skipped when the variable isn't set.
+    #[test]
+    fn real_packs_load() {
+        let Some(dir) = std::env::var_os("HORIZON_TEST_SHADERPACKS") else {
+            return;
+        };
+        let mut entries: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| is_java_pack(p))
+            .collect();
+        entries.sort();
+        let mut failures = Vec::new();
+        for path in entries {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            match load(&path, &BTreeMap::new(), "Apple", "Apple M4 Pro") {
+                Ok(pack) => {
+                    let folders: Vec<String> = pack
+                        .folders
+                        .iter()
+                        .map(|f| {
+                            let n = f.passes.len() + usize::from(f.final_pass.is_some());
+                            format!("{} {n} passes", f.folder)
+                        })
+                        .collect();
+                    println!("{name}: loads ({})", folders.join(", "));
+                }
+                Err(e) => {
+                    println!("{name}: {e}");
+                    failures.push(name);
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{failures:?}");
+    }
 }

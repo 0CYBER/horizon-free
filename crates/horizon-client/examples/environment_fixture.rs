@@ -30,7 +30,11 @@ fn main() -> horizon_client::Result<()> {
                 ),
             };
         let info = biomes.get(biomes.id(&format!("minecraft:{}", f[4])));
-        let mut sky = environment.sample(f[1].parse()?, info.sky, info.fog);
+        let mut sky = environment.sample(
+            f[1].parse()?,
+            info.sky.map(horizon_client::biome::rgb),
+            info.fog.map(horizon_client::biome::rgb),
+        );
         if dimension == "overworld" {
             apply_weather(&mut sky, f[2].parse()?, f[3].parse()?);
         }

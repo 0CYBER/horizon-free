@@ -329,16 +329,71 @@ fn pick(
     })
 }
 
-/// Whether the release `tag` is newer than `than`: releases are tagged `vYYYY.MM.DD[.N]`, compared
-/// number by number. A tag that isn't one (an archive installed by hand) is never older than a release.
-pub fn newer(tag: &str, than: &str) -> bool {
-    let numbers = |t: &str| -> Option<Vec<u64>> {
-        t.strip_prefix('v')?
-            .split('.')
-            .map(|n| n.parse().ok())
-            .collect()
+/// Where a release tag stands among Horizon's releases (docs/versioning.md). Releases before 0.2 were
+/// tagged `vYYYY.MM.DD[.N]` (any `v` and numbers: `Dated`), compared number by number; from 0.2 they are
+/// `vMAJOR.MINOR.PATCH[-PRE]` (`Semver`), and every one of those is newer than every dated one, so
+/// v0.2.0 follows v2026.10.19.15. A pre-release (`v0.3.0-rc.1`) comes before its release, as in semver.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum TagOrder {
+    Dated(Vec<u64>),
+    Semver([u64; 3], Prerelease),
+}
+
+/// A pre-release's place: (is a release, its identifiers). A release has none and follows every
+/// pre-release of its version; identifiers compare one by one, numbers before words, and a shorter
+/// list first when one starts the other.
+type Prerelease = (bool, Vec<Identifier>);
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Identifier {
+    Number(u64),
+    Word(String),
+}
+
+/// Semver's majors stay below this; a date tag's first number is a year.
+const FIRST_YEAR: u64 = 1000;
+
+fn tag_order(tag: &str) -> Option<TagOrder> {
+    let rest = tag.strip_prefix('v')?;
+    let (core, pre) = match rest.split_once('-') {
+        Some((core, pre)) => (core, Some(pre)),
+        None => (rest, None),
     };
-    match (numbers(tag), numbers(than)) {
+    let numbers: Vec<u64> = core
+        .split('.')
+        .map(|n| n.parse().ok())
+        .collect::<Option<_>>()?;
+    match (numbers.as_slice(), pre) {
+        (&[major, minor, patch], pre) if major < FIRST_YEAR => {
+            let pre = match pre {
+                None => (true, Vec::new()),
+                Some(pre) => (
+                    false,
+                    pre.split('.')
+                        .map(|id| {
+                            if id.is_empty() {
+                                None
+                            } else {
+                                Some(id.parse().map_or_else(
+                                    |_| Identifier::Word(id.to_owned()),
+                                    Identifier::Number,
+                                ))
+                            }
+                        })
+                        .collect::<Option<_>>()?,
+                ),
+            };
+            Some(TagOrder::Semver([major, minor, patch], pre))
+        }
+        (_, None) => Some(TagOrder::Dated(numbers)),
+        (_, Some(_)) => None,
+    }
+}
+
+/// Whether the release `tag` is newer than `than` ([`TagOrder`]). A tag that isn't a release (an
+/// archive installed by hand) is never newer than one, and every release is newer than it.
+pub fn newer(tag: &str, than: &str) -> bool {
+    match (tag_order(tag), tag_order(than)) {
         (Some(a), Some(b)) => a > b,
         (Some(_), None) => true,
         _ => false,
@@ -762,6 +817,62 @@ mod tests {
         // An archive installed by hand: any release is newer, and it is never newer than one.
         assert!(newer("v2026.10.19", "local"));
         assert!(!newer("local", "v2026.10.19"));
+    }
+
+    #[test]
+    fn semver_tags_follow_every_date_tag() {
+        // 0.2 follows the last date tags, whatever their numbers.
+        assert!(newer("v0.2.0", "v2026.10.19.15"));
+        assert!(newer("v0.2.0", "v2026.10.21"));
+        assert!(!newer("v2026.10.19.15", "v0.2.0"));
+        assert!(!newer("v2099.12.31.99", "v0.2.0"));
+        // Within 0.2: patch, minor, and numbers compared as numbers.
+        assert!(newer("v0.2.1", "v0.2.0"));
+        assert!(!newer("v0.2.0", "v0.2.1"));
+        assert!(newer("v0.2.10", "v0.2.9"));
+        assert!(newer("v0.3.0", "v0.2.57"));
+        assert!(newer("v1.0.0", "v0.99.0"));
+        assert!(!newer("v0.2.0", "v0.2.0"));
+        // A semver tag is a release: an archive installed by hand is older.
+        assert!(newer("v0.2.0", "local"));
+        assert!(!newer("local", "v0.2.0"));
+    }
+
+    #[test]
+    fn prereleases_come_before_their_release() {
+        assert!(newer("v0.3.0", "v0.3.0-rc.1"));
+        assert!(newer("v0.3.0-rc.1", "v0.2.9"));
+        assert!(newer("v0.3.0-beta.2", "v0.3.0-beta.1"));
+        assert!(newer("v0.3.0-beta.11", "v0.3.0-beta.2"));
+        assert!(newer("v0.3.0-rc.1", "v0.3.0-beta.9"));
+        assert!(newer("v0.3.0-beta.1", "v0.3.0-beta"));
+        // Numbers come before words; any pre-release still follows every date tag.
+        assert!(newer("v0.3.0-alpha", "v0.3.0-1"));
+        assert!(newer("v0.2.1-beta.1", "v2026.10.21"));
+        assert!(!newer("v0.2.1-beta.1", "v0.2.1"));
+        // Not tags: a date tag with a suffix, an empty identifier.
+        assert!(newer("v0.2.0", "v2026.10.21-x"));
+        assert!(newer("v0.2.0", "v0.3.0-"));
+        assert!(newer("v0.2.0", "v0.3.0-rc..1"));
+    }
+
+    #[test]
+    fn pruning_orders_dated_and_semver_releases() {
+        // `prune` sorts with `newer`: semver releases first, then the dated ones.
+        let mut tags = vec!["v2026.10.19.15", "v0.2.1", "v2026.10.21", "v0.2.0", "local"];
+        tags.sort_by(|a, b| {
+            if newer(a, b) {
+                std::cmp::Ordering::Less
+            } else if newer(b, a) {
+                std::cmp::Ordering::Greater
+            } else {
+                b.cmp(a)
+            }
+        });
+        assert_eq!(
+            tags,
+            ["v0.2.1", "v0.2.0", "v2026.10.21", "v2026.10.19.15", "local"]
+        );
     }
 
     #[test]

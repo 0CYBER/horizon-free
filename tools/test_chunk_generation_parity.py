@@ -93,7 +93,7 @@ def parse(path):
         if line.startswith('chunk '):
             _, x, z = line.split()
             current = (int(x), int(z))
-            chunks[current] = {'q': {}, 'y': {}, 'be': {}, 't': []}
+            chunks[current] = {'q': {}, 'y': {}, 'be': {}, 't': [], 'p': []}
         elif line.startswith('q '):
             _, q, row = line.split(' ', 2)
             chunks[current]['q'][int(q)] = row
@@ -102,6 +102,8 @@ def parse(path):
             chunks[current]['y'][int(y)] = row
         elif line.startswith('t '):
             chunks[current]['t'].append(line[2:])
+        elif line.startswith('p '):
+            chunks[current]['p'].append(line[2:])
         elif line.startswith('be '):
             head, *forms = line.split('\t')
             parts = head.split(' ')
@@ -241,6 +243,17 @@ def compare(vanilla, rust, names, label, limit=6, quiet=False):
             first = next((i for i, (u, v) in enumerate(zip(ta, tb)) if u != v), min(len(ta), len(tb)))
             block_diffs.append((pos[0] * 16, 0, pos[1] * 16, f'{len(ta)} ticks, #{first}: {ta[first] if first < len(ta) else "-"}',
                                 f'{len(tb)} ticks, #{first}: {tb[first] if first < len(tb) else "-"}'))
+        # Postprocessing marks: their fluids tick and their blocks are reshaped once the chunk is live.
+        if a.get('p', []) != b.get('p', []):
+            pa, pb = a.get('p', []), b.get('p', [])
+            first = next((i for i, (u, v) in enumerate(zip(pa, pb)) if u != v), min(len(pa), len(pb)))
+            extra = Counter(pb) - Counter(pa)
+            missing = Counter(pa) - Counter(pb)
+            block_diffs.append((pos[0] * 16, 0, pos[1] * 16,
+                                f'{len(pa)} postprocessing marks, #{first}: {pa[first] if first < len(pa) else "-"}'
+                                f' ({sum(missing.values())} not in Horizon, e.g. {next(iter(missing), "-")})',
+                                f'{len(pb)} marks, #{first}: {pb[first] if first < len(pb) else "-"}'
+                                f' ({sum(extra.values())} not in vanilla, e.g. {next(iter(extra), "-")})'))
         if block_diffs or biome_diffs or entity_diffs:
             chunks += 1
             blocks += len(block_diffs)

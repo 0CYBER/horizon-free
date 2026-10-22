@@ -184,6 +184,7 @@ impl Server {
             equipment: Default::default(),
             health: 20.0,
             attributes: Vec::new(),
+            bed: None,
             living_flags: 0,
         };
         let mut ctx = TickCtx {

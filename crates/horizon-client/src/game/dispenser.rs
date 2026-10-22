@@ -317,7 +317,11 @@ impl Game<'_> {
             .cloned()
     }
     /// The same block with other properties (`withProperty`).
-    fn with_props(&self, state: BlockStateId, props: &[(&str, &str)]) -> Option<BlockStateId> {
+    pub(super) fn with_props(
+        &self,
+        state: BlockStateId,
+        props: &[(&str, &str)],
+    ) -> Option<BlockStateId> {
         let mut s = self.pack.assets.registry.state(state)?.clone();
         for (k, v) in props {
             s.properties.insert((*k).to_owned(), (*v).to_owned());
@@ -1732,7 +1736,9 @@ impl Game<'_> {
         mob.head_pitch = old.head_pitch;
         mob.persistent = old.persistent;
         mob.custom_name = old.custom_name.clone();
+        mob.custom_name_text = old.custom_name_text.clone();
         mob.name_visible = old.name_visible;
+        mob.invisible = old.invisible;
         mob.no_ai = old.no_ai;
         mob.silent = old.silent;
         mob.no_gravity = old.no_gravity;

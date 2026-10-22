@@ -292,6 +292,20 @@ fn main() -> Result<(), Error> {
                         p.x, p.y, p.z, t.priority as i32
                     )?;
                 }
+                // Postprocessing marks, per section in list order.
+                let base = chunk.terrain.min_y() >> 4;
+                for (i, marks) in chunk.terrain.postprocessing().iter().enumerate() {
+                    for &packed in marks {
+                        let p = i32::from(packed);
+                        writeln!(
+                            w,
+                            "p {} {} {}",
+                            x * 16 + (p & 15),
+                            (base + i as i32) * 16 + ((p >> 4) & 15),
+                            z * 16 + ((p >> 8) & 15)
+                        )?;
+                    }
+                }
             }
         }
     }

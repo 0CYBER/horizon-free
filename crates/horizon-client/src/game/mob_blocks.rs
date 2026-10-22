@@ -220,7 +220,7 @@ impl Game<'_> {
         self.held_item_geometry(mob, camera, alpha, light, true, out);
         if mob.species() == Species::Enderman
             && let Some(state) = mob.extra.carried
-            && let Some((sprite, tint)) = self.particle_sprite(state)
+            && let Some((sprite, tint)) = self.block_face_sprite(state)
         {
             // CarriedBlockLayer: OverlayTexture.NO_OVERLAY, never the hurt tint.
             let base = render::base_transform(mob, alpha as f32, camera);

@@ -257,6 +257,13 @@ impl StateModels {
         // Blocks use their position seed; contained/displayed blocks can supply one.
         self.collect_seeded(state, position_seed(position))
     }
+    /// `BlockStateModel.particleMaterial`: the particle sprite layer of the
+    /// state's first variant (see `CompiledChoices::particle_variant`).
+    pub fn particle(&self, state: BlockStateId) -> Option<u32> {
+        let (choice, selected) = self.states.get(&state)?;
+        let variant = self.choices[*choice].particle_variant(selected)?;
+        self.baked.get(&key(variant))?.particle
+    }
     pub fn collect_seeded(
         &self,
         state: BlockStateId,

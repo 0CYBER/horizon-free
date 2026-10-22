@@ -130,7 +130,7 @@ impl Session {
             "initialize" => Ok(json!({
                 "protocolVersion": params.get("protocolVersion").and_then(Value::as_str).unwrap_or(PROTOCOL),
                 "capabilities": { "tools": {} },
-                "serverInfo": { "name": "horizon-ctl", "version": env!("CARGO_PKG_VERSION") },
+                "serverInfo": { "name": "horizon-ctl", "version": horizon_core::release::VERSION },
                 "instructions": "Play Horizon, a Rust reimplementation of Minecraft Java Edition. Start with launch (it finds the game installed by the Horizon launcher and opens or creates a world), then read the world with state, inventory, screen, entities and find_block, and act with goto, look_at_block, break, place, interact, click_slot and click_button. Actions block until they finish and report what happened. Coordinates are block coordinates; yaw 0 faces south (+Z).",
             })),
             "ping" => Ok(json!({})),

@@ -2,13 +2,16 @@
 //! `Consumable`), throwing splash/lingering potions (`ThrownSplashPotion`),
 //! filling glass bottles (`BottleItem`), the per-tick effect application,
 //! effect attribute modifiers and the HUD effect icons (`Hud.extractEffects`).
-use super::{Game, Screen};
+use super::{Game, Screen, item_draw::owner_at};
+use horizon_assets::item_model::DisplayContext;
 use horizon_client::{
+    block_entity_render::vertex_light,
     brewing,
     effects::{EffectAction, EffectInstance, PlayerEffects},
     hud::HudBatch,
     hud_layout, hud_overlays, inventory_effects,
     items::ItemStack,
+    mesher::Vertex,
 };
 use horizon_core::{geometry::Vec3, random::RandomSource};
 
@@ -16,6 +19,8 @@ use horizon_core::{geometry::Vec3, random::RandomSource};
 #[derive(Clone, Debug)]
 pub(super) struct ThrownPotion {
     stack: ItemStack,
+    /// The position before the last tick, for drawing between ticks.
+    previous: Vec3,
     position: Vec3,
     velocity: Vec3,
     age: u32,
@@ -43,6 +48,7 @@ impl Game<'_> {
     pub(super) fn launch_thrown(&mut self, stack: ItemStack, position: Vec3, velocity: Vec3) {
         self.potions.thrown.push(ThrownPotion {
             stack,
+            previous: position,
             position,
             velocity,
             age: 0,
@@ -411,6 +417,7 @@ impl Game<'_> {
         let mut landed = Vec::new();
         thrown.retain_mut(|t| {
             t.age += 1;
+            t.previous = t.position;
             let next = Vec3::new(
                 t.position.x + t.velocity.x,
                 t.position.y + t.velocity.y,
@@ -461,31 +468,54 @@ impl Game<'_> {
             );
             t.age < 1200 && t.position.y > -128.0
         });
-        // ThrownItemRenderer stand-in: a short-lived sprite of the potion at its position.
-        for t in &thrown {
-            let sprite = match &*t.stack.item {
-                "minecraft:lingering_potion" => "item/lingering_potion",
-                "minecraft:experience_bottle" => "item/experience_bottle",
-                _ => "item/splash_potion",
-            };
-            let mut fixed = horizon_core::random::LegacyRandom::new(0);
-            let mut p = horizon_client::particles::Particle::terrain(
-                &mut fixed,
-                [t.position.x, t.position.y, t.position.z],
-                [0.0; 3],
-                sprite.into(),
-                0xFFFFFF,
-            );
-            p.velocity = [0.0; 3];
-            p.gravity = 0.0;
-            p.lifetime = 2;
-            p.size = 0.25;
-            p.uv = [0.0, 0.0, 1.0, 1.0];
-            self.particles.push(p);
-        }
         self.potions.thrown = thrown;
         for (stack, at) in landed {
             self.splash(&stack, at);
+        }
+    }
+    /// `ThrownItemRenderer` for thrown splash and lingering potions and
+    /// experience bottles: the item (GROUND) facing the camera at scale 1,
+    /// lit at the light probe (the eye, 0.85 of the 0.25 height).
+    pub(super) fn thrown_potion_geometry(
+        &self,
+        camera: glam::DVec3,
+        alpha: f64,
+        out: &mut Vec<Vertex>,
+    ) {
+        let orientation = glam::Mat4::from_quat(self.camera_orientation());
+        for t in &self.potions.thrown {
+            let previous = glam::DVec3::new(t.previous.x, t.previous.y, t.previous.z);
+            let position = glam::DVec3::new(t.position.x, t.position.y, t.position.z);
+            // ThrowableProjectile.shouldRenderAtSqrDistance: hidden for its
+            // first two ticks within 3.5 blocks (not in the thrower's face).
+            if t.age < 2 && position.distance_squared(camera) < 12.25 {
+                continue;
+            }
+            if !self.standing_entity_in_view(
+                camera,
+                super::entity_culling::at(t.previous),
+                super::entity_culling::at(t.position),
+                alpha,
+                0.25,
+                0.25,
+                64.0,
+                0.0,
+            ) {
+                continue;
+            }
+            let p = previous.lerp(position, alpha);
+            let owner = owner_at(p.to_array(), 0.0, &t.stack.item);
+            let state = self.resolve_item(&t.stack, DisplayContext::Ground, Some(&owner), 0);
+            if state.is_empty() {
+                continue;
+            }
+            let pose = glam::Mat4::from_translation((p - camera).as_vec3()) * orientation;
+            let light = self.world.light(
+                p.x.floor() as i32,
+                (p.y + 0.2125).floor() as i32,
+                p.z.floor() as i32,
+            );
+            self.submit_item_world(&state, pose, vertex_light(light), out);
         }
     }
     /// A splash potion's effects on the player in place, by their distance.

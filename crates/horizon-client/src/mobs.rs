@@ -690,6 +690,8 @@ pub struct Extra {
     pub blocking: bool,
     pub fall_flying: bool,
     pub fall_fly_ticks: i32,
+    /// `LivingEntity.isAutoSpinAttack` (Riptide).
+    pub auto_spin_attack: bool,
     pub main_hand_left: bool,
     pub elytra: ElytraAnimation,
     pub swim: SwimAnimation,
@@ -805,7 +807,11 @@ pub struct Mob {
     pub persistent: bool,
     /// `CustomName` (plain text) and `CustomNameVisible`.
     pub custom_name: Option<String>,
+    /// The styled `CustomName`, when it came from a component.
+    pub custom_name_text: Option<crate::text::Text>,
     pub name_visible: bool,
+    /// `Entity.DATA_SHARED_FLAGS_ID` bit 0x20: the model is hidden.
+    pub invisible: bool,
     pub random: LegacyRandom,
     pub ai: Box<ai::Ai>,
     pub extra: Extra,
@@ -844,6 +850,9 @@ pub struct Mob {
     /// from the game), handed over with the next tick's events or drained
     /// by the game.
     pub outbox: Vec<MobEvent>,
+    /// The skin texture of a player mob (`PlayerInfo.getSkin`), which
+    /// replaces the type's default when its download is ready.
+    pub skin: Option<String>,
 }
 /// Events a mob tick asks the game to act on.
 #[derive(Clone, Debug)]
@@ -1308,31 +1317,67 @@ impl Mob {
 /// `Entity.push` on other mobs acts at once in vanilla: a mob ticking later
 /// moves with it this tick. Takes the `Push` events aimed at mobs out of
 /// `events[from..]` into `pending`, which the caller adds to each mob's
-/// velocity before its tick (and to every mob once all have ticked).
-pub fn take_mob_pushes(events: &mut Vec<MobEvent>, from: usize, pending: &mut Vec<(u32, Vec3)>) {
-    let mut i = from;
-    while i < events.len() {
+/// velocity before its tick (and to every mob once all have ticked). The
+/// other events keep their order.
+pub fn take_mob_pushes(events: &mut Vec<MobEvent>, from: usize, pending: &mut PendingPushes) {
+    // One pass: a crowd's tick holds a push per neighbour, and removing each
+    // in place would shift the rest every time.
+    let mut kept = from;
+    for i in from..events.len() {
         if let MobEvent::Push {
             target: Who::Mob(id),
             velocity,
         } = events[i]
         {
-            pending.push((id, Vec3::new(velocity[0], velocity[1], velocity[2])));
-            events.remove(i);
+            pending.push(id, Vec3::new(velocity[0], velocity[1], velocity[2]));
         } else {
-            i += 1;
+            events.swap(kept, i);
+            kept += 1;
         }
+    }
+    events.truncate(kept);
+}
+/// Pushes waiting for their mob's tick, in push order. A list while short;
+/// past [`PendingPushes::LIST_MAX`] (a crowd pushing each other) one list
+/// per mob, as scanning the whole list for each mob grows with its square.
+#[derive(Default)]
+pub struct PendingPushes {
+    list: Vec<(u32, Vec3)>,
+    by_mob: crate::fast_hash::FxHashMap<u32, Vec<Vec3>>,
+}
+impl PendingPushes {
+    const LIST_MAX: usize = 64;
+    pub fn push(&mut self, id: u32, v: Vec3) {
+        if self.by_mob.is_empty() && self.list.len() < Self::LIST_MAX {
+            self.list.push((id, v));
+            return;
+        }
+        // Older pushes first, so each mob's stay in order.
+        for (id, v) in self.list.drain(..) {
+            self.by_mob.entry(id).or_default().push(v);
+        }
+        self.by_mob.entry(id).or_default().push(v);
     }
 }
 /// Adds the pending pushes aimed at `m` to its velocity, in push order.
-pub fn apply_mob_pushes(m: &mut Mob, pending: &mut Vec<(u32, Vec3)>) {
-    pending.retain(|(id, v)| {
-        if *id != m.id {
-            return true;
-        }
+pub fn apply_mob_pushes(m: &mut Mob, pending: &mut PendingPushes) {
+    let mut add = |v: Vec3| {
         m.velocity = Vec3::new(m.velocity.x + v.x, m.velocity.y + v.y, m.velocity.z + v.z);
-        false
-    });
+    };
+    if !pending.list.is_empty() {
+        pending.list.retain(|(id, v)| {
+            if *id != m.id {
+                return true;
+            }
+            add(*v);
+            false
+        });
+    }
+    if !pending.by_mob.is_empty()
+        && let Some(pushes) = pending.by_mob.remove(&m.id)
+    {
+        pushes.into_iter().for_each(add);
+    }
 }
 /// Applies the brain memories a mob's tick set on other mobs (from event
 /// index `from` on), at once: vanilla sets them on the other entity during
@@ -1404,6 +1449,7 @@ pub struct PlayerView {
     /// (`EntitySelector.pushableBy` on the client).
     pub remote: bool,
 }
+#[derive(Clone)]
 pub struct MobWorld<'a> {
     pub world: &'a World,
     pub registry: &'a horizon_world::registry::BlockRegistry,
@@ -1418,6 +1464,8 @@ pub struct MobWorld<'a> {
     pub others: &'a [Seen],
     /// `others` by position, when the caller keeps one (the mob ticks).
     pub others_grid: Option<&'a seen_grid::SeenGrid>,
+    /// Where each id stands in `others`, when the caller keeps one.
+    pub others_index: Option<&'a crate::fast_hash::FxHashMap<u32, u32>>,
     pub daylight: bool,
     pub game_time: i64,
     pub day_time: i64,
@@ -1436,22 +1484,23 @@ pub struct MobWorld<'a> {
     pub world_seed: i64,
     /// `Level.getSeaLevel` (63 in the overworld, -63 in a flat world).
     pub sea_level: i32,
-    /// The scoreboard teams of the player and the mobs (collision rules).
-    pub teams: Teams,
+    /// The scoreboard teams of the player and the mobs (collision rules),
+    /// shared: the mob ticks build them once a tick, not once a mob.
+    pub teams: std::sync::Arc<Teams<'a>>,
     /// Item data (max stack sizes), when the host has it.
     pub items: Option<&'a crate::items::Items>,
 }
 /// `Entity.getTeam` of the player and of the mobs on a team.
 #[derive(Clone, Debug, Default)]
-pub struct Teams {
-    pub player: Option<crate::scoreboard::Team>,
-    pub mobs: HashMap<u32, crate::scoreboard::Team>,
+pub struct Teams<'a> {
+    pub player: Option<&'a crate::scoreboard::Team>,
+    pub mobs: HashMap<u32, &'a crate::scoreboard::Team>,
 }
-impl Teams {
-    pub fn of(&self, who: Who) -> Option<&crate::scoreboard::Team> {
+impl<'a> Teams<'a> {
+    pub fn of(&self, who: Who) -> Option<&'a crate::scoreboard::Team> {
         match who {
-            Who::Player => self.player.as_ref(),
-            Who::Mob(id) => self.mobs.get(&id),
+            Who::Player => self.player,
+            Who::Mob(id) => self.mobs.get(&id).copied(),
         }
     }
 }
@@ -1513,10 +1562,13 @@ impl Mob {
             last_damage: None,
             removed: false,
             custom_name: None,
+            custom_name_text: None,
             name_visible: false,
+            invisible: false,
             anim: anim::AnimState::default(),
             rider: None,
             outbox: Vec::new(),
+            skin: None,
             attrs: Attrs {
                 speed: kind.speed,
                 attack_damage: kind.attack_damage,
@@ -1623,13 +1675,18 @@ impl Mob {
         if !self.alive() || self.removed || self.invulnerable_flag {
             return false;
         }
-        if source.is_fire() && (self.kind.flags.fire_immune) {
+        // Ghast.isReflectedFireball: a fireball a player turned back is
+        // no fire to it, and kills it (Ghast.hurtServer: 1000 damage).
+        let reflected = &*self.kind.id == "minecraft:ghast"
+            && source.kind == DamageKind::Fireball
+            && source.attacker == Some(Who::Player);
+        if source.is_fire() && (self.kind.flags.fire_immune) && !reflected {
             return false;
         }
         if !ai::accepts_damage(self, &source, amount) {
             return false;
         }
-        let mut amount = amount;
+        let mut amount = if reflected { 1000.0 } else { amount };
         if source.kind == DamageKind::FallingBlock
             && !species::body_slot(self.species())
             && self.extra.head.is_some()
@@ -2130,5 +2187,506 @@ mod elytra_tests {
             wings.tick(false, true, Vec3::ZERO);
         }
         assert!((wings.angles[1] - 0.08726646).abs() < 0.00001);
+    }
+}
+#[cfg(test)]
+mod teams_tests {
+    use super::*;
+    use crate::save::uuid_text;
+    use crate::scoreboard::{Scoreboard, Team};
+
+    /// A board where every other mob is on the player's team, as with a
+    /// datapack that colours its mobs' names.
+    fn board(mobs: u32) -> (Scoreboard, HashMap<u32, [i32; 4]>) {
+        let mut board = Scoreboard::default();
+        board.add_team("red");
+        board.add_to_team("Steve", "red");
+        let uuids: HashMap<u32, [i32; 4]> = (0..mobs)
+            .map(|id| (id, [id as i32, 7, -(id as i32), 11]))
+            .collect();
+        for (id, uuid) in &uuids {
+            if id % 2 == 0 {
+                board.add_to_team(&uuid_text(*uuid), "red");
+            }
+        }
+        (board, uuids)
+    }
+    /// `Game::mob_teams` as built for each mob before: owned clones of the teams.
+    fn owned(board: &Scoreboard, uuids: &HashMap<u32, [i32; 4]>) -> HashMap<u32, Team> {
+        uuids
+            .iter()
+            .filter_map(|(id, u)| Some((*id, board.players_team(&uuid_text(*u))?.clone())))
+            .collect()
+    }
+    fn borrowed<'a>(board: &'a Scoreboard, uuids: &HashMap<u32, [i32; 4]>) -> Teams<'a> {
+        Teams {
+            player: board.players_team("Steve"),
+            mobs: uuids
+                .iter()
+                .filter_map(|(id, u)| Some((*id, board.players_team(&uuid_text(*u))?)))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn borrowed_teams_answer_as_the_clones() {
+        let (board, uuids) = board(40);
+        let teams = borrowed(&board, &uuids);
+        let old = owned(&board, &uuids);
+        for id in 0..41 {
+            assert_eq!(teams.of(Who::Mob(id)), old.get(&id), "mob {id}");
+        }
+        assert_eq!(teams.of(Who::Player).map(|t| t.name.as_str()), Some("red"));
+    }
+
+    /// One tick's worth of team building: once per mob (before) against once.
+    #[test]
+    #[ignore]
+    fn teams_cost() {
+        for mobs in [100u32, 250, 500] {
+            let (board, uuids) = board(mobs);
+            let t = std::time::Instant::now();
+            for _ in 0..mobs {
+                std::hint::black_box(owned(&board, &uuids));
+            }
+            let before = t.elapsed();
+            let t = std::time::Instant::now();
+            let reps = 20;
+            for _ in 0..reps {
+                std::hint::black_box(borrowed(&board, &uuids));
+            }
+            let after = t.elapsed() / reps;
+            println!(
+                "{mobs} mobs, half on a team: per tick {:.3} ms -> {:.3} ms",
+                before.as_secs_f64() * 1e3,
+                after.as_secs_f64() * 1e3
+            );
+        }
+    }
+}
+#[cfg(test)]
+mod sensor_scan_tests {
+    use super::*;
+    use horizon_core::geometry::Vec3;
+    use serde_json::json;
+
+    fn kind() -> Arc<MobType> {
+        Arc::new(MobType {
+            id: "minecraft:cow".into(),
+            species: Species::Cow,
+            width: 0.9,
+            height: 1.4,
+            eye_height: 1.3,
+            category: "creature".into(),
+            max_health: 10.0,
+            speed: 0.2,
+            flying_speed: 0.4,
+            attack_damage: 0.0,
+            attack_knockback: 0.0,
+            follow_range: 16.0,
+            step_height: 0.6,
+            armor: 0.0,
+            armor_toughness: 0.0,
+            knockback_resistance: 0.0,
+            jump_strength: 0.42,
+            attributes: Arc::default(),
+            gravity: 0.08,
+            safe_fall_distance: 3.0,
+            fall_damage_multiplier: 1.0,
+            water_efficiency: 0.0,
+            water_slowdown: 0.8,
+            air_speed: 0.02,
+            baby_scale: 0.5,
+            head_rot_speed: 10.0,
+            max_head_x_rot: 40.0,
+            max_head_y_rot: 75.0,
+            ambient_interval: 120,
+            flags: Flags {
+                animal: true,
+                ..Default::default()
+            },
+            model: Arc::new(Part::parse("root", &json!({}))),
+            layers: HashMap::new(),
+            texture: String::new(),
+            brain: Brain::Passive,
+            anim: Anim::Rabbit,
+            sounds: [""; 3],
+            step_sound: None,
+            food: Arc::default(),
+            tempt: Arc::default(),
+        })
+    }
+    /// `n` mobs in pens of 20 spread over a square of `side` blocks, as on a
+    /// server's farms; their snapshot and its grid.
+    fn herd(n: u32, side: f64) -> (Vec<Seen>, seen_grid::SeenGrid) {
+        let kind = kind();
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = |range: f64| {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            (seed >> 11) as f64 / (1u64 << 53) as f64 * range
+        };
+        let mut pen = Vec3::ZERO;
+        let seen: Vec<Seen> = (0..n)
+            .map(|id| {
+                if id % 20 == 0 {
+                    pen = Vec3::new(next(side), 64.0, next(side));
+                }
+                let at = Vec3::new(pen.x + next(8.0), 64.0, pen.z + next(8.0));
+                Mob::new(id, kind.clone(), at, 0.0).seen(None)
+            })
+            .collect();
+        let grid = seen_grid::SeenGrid::new(seen.iter().map(|s| s.bounds));
+        (seen, grid)
+    }
+    /// `NearestLivingEntitySensor` over every mob, as the brains ran it.
+    fn scan(seen: &[Seen], me: &Seen, area: Aabb) -> Vec<u32> {
+        seen.iter()
+            .filter(|o| o.id != me.id && o.alive && o.bounds.intersects(area))
+            .map(|o| o.id)
+            .collect()
+    }
+    fn indexed(seen: &[Seen], grid: &seen_grid::SeenGrid, me: &Seen, area: Aabb) -> Vec<u32> {
+        let mut near = Vec::new();
+        assert!(grid.candidates(area, &mut near));
+        near.iter()
+            .map(|&i| &seen[i as usize])
+            .filter(|o| o.id != me.id && o.alive && o.bounds.intersects(area))
+            .map(|o| o.id)
+            .collect()
+    }
+
+    #[test]
+    fn the_grid_finds_what_the_scan_finds() {
+        let (seen, grid) = herd(600, 160.0);
+        for me in &seen {
+            let area = me.bounds.inflate(Vec3::new(16.0, 16.0, 16.0));
+            assert_eq!(indexed(&seen, &grid, me, area), scan(&seen, me, area));
+        }
+    }
+
+    /// `MobWorld::seen` once per mob (a target, a breeding partner...), by
+    /// scan as before and by the tick's id index.
+    #[test]
+    #[ignore]
+    fn lookup_cost() {
+        for n in [500u32, 1000, 2000] {
+            let (seen, _) = herd(n, 256.0);
+            let index: crate::fast_hash::FxHashMap<u32, u32> = seen
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (s.id, i as u32))
+                .collect();
+            let wanted: Vec<u32> = (0..n).map(|i| (i * 7919) % n).collect();
+            let t = std::time::Instant::now();
+            let a: usize = wanted
+                .iter()
+                .filter_map(|&id| seen.iter().find(|s| s.id == id))
+                .map(|s| s.id as usize)
+                .sum();
+            let before = t.elapsed().as_secs_f64() * 1e3;
+            let t = std::time::Instant::now();
+            let b: usize = wanted
+                .iter()
+                .filter_map(|&id| index.get(&id).map(|&i| &seen[i as usize]))
+                .map(|s| s.id as usize)
+                .sum();
+            let after = t.elapsed().as_secs_f64() * 1e3;
+            assert_eq!(a, b);
+            println!(
+                "{n} lookups over {n} mobs ({} B each): {before:.3} ms -> {after:.3} ms",
+                std::mem::size_of::<Seen>()
+            );
+        }
+    }
+
+    /// Natural spawning's `isUnobstructed` box test against every mob (real
+    /// `Mob`s), by scan and by a grid built once for the pass.
+    #[test]
+    #[ignore]
+    fn spawn_box_cost() {
+        let kind = kind();
+        for n in [500u32, 1000, 2000] {
+            let (seen, _) = herd(n, 384.0);
+            let mobs: Vec<Mob> = seen
+                .iter()
+                .map(|s| Mob::new(s.id, kind.clone(), s.position, 0.0))
+                .collect();
+            let mut seed = 7u64;
+            let mut next = |range: f64| {
+                seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                (seed >> 11) as f64 / (1u64 << 53) as f64 * range
+            };
+            let queries: Vec<Aabb> = (0..100)
+                .map(|_| {
+                    let (x, z) = (next(384.0), next(384.0));
+                    Aabb::new(Vec3::new(x, 64.0, z), Vec3::new(x + 0.9, 65.4, z + 0.9))
+                })
+                .collect();
+            let t = std::time::Instant::now();
+            let a: Vec<bool> = queries
+                .iter()
+                .map(|&q| {
+                    mobs.iter()
+                        .any(|m| m.alive() && !m.removed && m.bounds().intersects(q))
+                })
+                .collect();
+            let before = t.elapsed().as_secs_f64() * 1e3;
+            let t = std::time::Instant::now();
+            let boxes: Vec<Aabb> = mobs.iter().map(|m| m.bounds()).collect();
+            let grid = seen_grid::SeenGrid::new(boxes.iter().copied());
+            let build = t.elapsed().as_secs_f64() * 1e3;
+            let mut near = Vec::new();
+            let b: Vec<bool> = queries
+                .iter()
+                .map(|&q| {
+                    assert!(grid.candidates(q, &mut near));
+                    near.iter().any(|&i| boxes[i as usize].intersects(q))
+                })
+                .collect();
+            let after = t.elapsed().as_secs_f64() * 1e3;
+            assert_eq!(a, b);
+            println!(
+                "{n} mobs, 100 spawn box tests: {before:.3} ms -> {after:.3} ms (grid build {build:.3} ms included)"
+            );
+        }
+    }
+
+    /// One tick of sensing: a twentieth of the mobs fire their sensor.
+    #[test]
+    #[ignore]
+    fn sensor_cost() {
+        for (n, side) in [(500u32, 256.0), (1000, 384.0), (2000, 512.0)] {
+            let (seen, grid) = herd(n, side);
+            let time = |f: &dyn Fn(&Seen, Aabb) -> usize| {
+                let t = std::time::Instant::now();
+                let mut found = 0;
+                for me in &seen {
+                    found += f(me, me.bounds.inflate(Vec3::new(16.0, 16.0, 16.0)));
+                }
+                (t.elapsed().as_secs_f64() * 1e3 / 20.0, found)
+            };
+            let (before, a) = time(&|me, area| scan(&seen, me, area).len());
+            let (after, b) = time(&|me, area| indexed(&seen, &grid, me, area).len());
+            assert_eq!(a, b);
+            println!("{n} mobs: per tick {before:.3} ms -> {after:.3} ms");
+        }
+    }
+}
+#[cfg(test)]
+mod push_tests {
+    use super::*;
+    use horizon_core::geometry::Vec3;
+    use serde_json::json;
+
+    fn kind() -> Arc<MobType> {
+        Arc::new(MobType {
+            id: "minecraft:cow".into(),
+            species: Species::Cow,
+            width: 0.9,
+            height: 1.4,
+            eye_height: 1.3,
+            category: "creature".into(),
+            max_health: 10.0,
+            speed: 0.2,
+            flying_speed: 0.4,
+            attack_damage: 0.0,
+            attack_knockback: 0.0,
+            follow_range: 16.0,
+            step_height: 0.6,
+            armor: 0.0,
+            armor_toughness: 0.0,
+            knockback_resistance: 0.0,
+            jump_strength: 0.42,
+            attributes: Arc::default(),
+            gravity: 0.08,
+            safe_fall_distance: 3.0,
+            fall_damage_multiplier: 1.0,
+            water_efficiency: 0.0,
+            water_slowdown: 0.8,
+            air_speed: 0.02,
+            baby_scale: 0.5,
+            head_rot_speed: 10.0,
+            max_head_x_rot: 40.0,
+            max_head_y_rot: 75.0,
+            ambient_interval: 120,
+            flags: Flags {
+                animal: true,
+                ..Default::default()
+            },
+            model: Arc::new(Part::parse("root", &json!({}))),
+            layers: HashMap::new(),
+            texture: String::new(),
+            brain: Brain::Passive,
+            anim: Anim::Rabbit,
+            sounds: [""; 3],
+            step_sound: None,
+            food: Arc::default(),
+            tempt: Arc::default(),
+        })
+    }
+
+    /// The pending pushes as one list, scanned for each mob, as before.
+    fn take_old(events: &mut Vec<MobEvent>, from: usize, pending: &mut Vec<(u32, Vec3)>) {
+        let mut i = from;
+        while i < events.len() {
+            if let MobEvent::Push {
+                target: Who::Mob(id),
+                velocity,
+            } = events[i]
+            {
+                pending.push((id, Vec3::new(velocity[0], velocity[1], velocity[2])));
+                events.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
+    fn apply_old(velocity: &mut Vec3, id: u32, pending: &mut Vec<(u32, Vec3)>) {
+        pending.retain(|(to, v)| {
+            if *to != id {
+                return true;
+            }
+            *velocity = Vec3::new(velocity.x + v.x, velocity.y + v.y, velocity.z + v.z);
+            false
+        });
+    }
+    fn mobs(n: u32) -> Vec<Mob> {
+        let kind = kind();
+        (0..n)
+            .map(|id| Mob::new(id, kind.clone(), Vec3::ZERO, 0.0))
+            .collect()
+    }
+    /// A crowd tick: each mob takes its pushes, then pushes every other
+    /// mob (and the player, and hisses now and then); then all take theirs.
+    fn crowd_tick(
+        n: u32,
+        tick: u32,
+        mut on_push: impl FnMut(&mut Vec<MobEvent>, usize),
+        mut on_apply: impl FnMut(u32),
+    ) -> Vec<MobEvent> {
+        let mut events = Vec::new();
+        for i in 0..n {
+            on_apply(i);
+            let from = events.len();
+            for j in 0..n {
+                if j != i && !(i * 31 + j * 17 + tick).is_multiple_of(5) {
+                    let f = f64::from(i * 7 + j + tick) * 0.001;
+                    events.push(MobEvent::Push {
+                        target: Who::Mob(j),
+                        velocity: [f, -f * 0.5, f * 0.25],
+                    });
+                }
+                if j.is_multiple_of(9) {
+                    events.push(MobEvent::Hiss { mob: j });
+                }
+            }
+            events.push(MobEvent::Push {
+                target: Who::Player,
+                velocity: [0.1, 0.0, 0.1],
+            });
+            on_push(&mut events, from);
+        }
+        for i in 0..n {
+            on_apply(i);
+        }
+        events
+    }
+
+    #[test]
+    fn pushes_land_as_with_the_list() {
+        for n in [1u32, 3, 8, 20, 60] {
+            let mut new_mobs = mobs(n);
+            let mut old_v = vec![Vec3::ZERO; n as usize];
+            let mut pending = PendingPushes::default();
+            let mut old_pending = Vec::new();
+            for tick in 0..4 {
+                let new_events = {
+                    let pending = std::cell::RefCell::new(&mut pending);
+                    let mobs = std::cell::RefCell::new(&mut new_mobs);
+                    crowd_tick(
+                        n,
+                        tick,
+                        |e, from| take_mob_pushes(e, from, &mut pending.borrow_mut()),
+                        |i| {
+                            apply_mob_pushes(
+                                &mut mobs.borrow_mut()[i as usize],
+                                &mut pending.borrow_mut(),
+                            )
+                        },
+                    )
+                };
+                let old_events = {
+                    let pending = std::cell::RefCell::new(&mut old_pending);
+                    let v = std::cell::RefCell::new(&mut old_v);
+                    crowd_tick(
+                        n,
+                        tick,
+                        |e, from| take_old(e, from, &mut pending.borrow_mut()),
+                        |i| {
+                            apply_old(
+                                &mut v.borrow_mut()[i as usize],
+                                i,
+                                &mut pending.borrow_mut(),
+                            )
+                        },
+                    )
+                };
+                assert_eq!(format!("{new_events:?}"), format!("{old_events:?}"));
+                for i in 0..n as usize {
+                    let (a, b) = (new_mobs[i].velocity, old_v[i]);
+                    assert_eq!(
+                        (a.x.to_bits(), a.y.to_bits(), a.z.to_bits()),
+                        (b.x.to_bits(), b.y.to_bits(), b.z.to_bits()),
+                        "{n} mobs, tick {tick}, mob {i}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// One tick of a pen of `n` mobs pushing each other.
+    #[test]
+    #[ignore]
+    fn push_cost() {
+        for n in [10u32, 30, 100, 200] {
+            let mut ms = mobs(n);
+            let mut v = vec![Vec3::ZERO; n as usize];
+            let t = std::time::Instant::now();
+            {
+                let pending = std::cell::RefCell::new(Vec::new());
+                let v = std::cell::RefCell::new(&mut v);
+                crowd_tick(
+                    n,
+                    0,
+                    |e, from| take_old(e, from, &mut pending.borrow_mut()),
+                    |i| {
+                        apply_old(
+                            &mut v.borrow_mut()[i as usize],
+                            i,
+                            &mut pending.borrow_mut(),
+                        )
+                    },
+                );
+            }
+            let before = t.elapsed().as_secs_f64() * 1e3;
+            let t = std::time::Instant::now();
+            {
+                let pending = std::cell::RefCell::new(PendingPushes::default());
+                let ms = std::cell::RefCell::new(&mut ms);
+                crowd_tick(
+                    n,
+                    0,
+                    |e, from| take_mob_pushes(e, from, &mut pending.borrow_mut()),
+                    |i| {
+                        apply_mob_pushes(
+                            &mut ms.borrow_mut()[i as usize],
+                            &mut pending.borrow_mut(),
+                        )
+                    },
+                );
+            }
+            let after = t.elapsed().as_secs_f64() * 1e3;
+            println!("{n} mobs pushing each other: {before:.3} ms -> {after:.3} ms");
+        }
     }
 }

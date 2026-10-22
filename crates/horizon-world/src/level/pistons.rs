@@ -31,6 +31,17 @@ pub struct MovingPiston {
     pub id: u64,
 }
 impl MovingPiston {
+    /// What collision and rendering need from this block entity.
+    pub fn shape_state(&self) -> crate::piston_shape::MovingPistonState {
+        crate::piston_shape::MovingPistonState {
+            moved_state: self.moved_state,
+            direction: self.direction,
+            extending: self.extending,
+            source: self.source,
+            progress: self.progress,
+            previous_progress: self.progress_o,
+        }
+    }
     pub fn movement_direction(&self) -> Direction {
         if self.extending {
             self.direction

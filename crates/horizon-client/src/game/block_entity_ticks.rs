@@ -24,6 +24,7 @@ impl Game<'_> {
         let ticking = self.block_ticking_area();
         let mut spawners = Vec::new();
         let mut trial_spawners = Vec::new();
+        self.item_columns = Some(Default::default());
         for slot in self.world.block_entity_tickers() {
             let pos = slot.0;
             // Ticks before this one can remove it (`TickingBlockEntity.isRemoved`).
@@ -56,6 +57,8 @@ impl Game<'_> {
                 _ => {}
             }
         }
+        // Items move between passes: the columns hold for this one only.
+        self.item_columns = None;
         self.update_song_volumes();
         self.scan_for_hearts();
         // The client ticks (particles, sounds, the turning mob) are for a

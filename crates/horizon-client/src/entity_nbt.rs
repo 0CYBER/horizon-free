@@ -13,6 +13,7 @@ use crate::{
         doubles, float, floats, item_from_nbt, item_to_nbt, number, put, read_doubles, text,
         uuid_from_tag,
     },
+    text::Text,
 };
 use horizon_core::geometry::Vec3;
 use horizon_world::nbt::{Compound, Tag};
@@ -555,6 +556,14 @@ fn custom_name(tag: &Tag) -> Option<String> {
         _ => None,
     }
 }
+/// `CustomName` as text: a string keeps its legacy formatting codes, anything
+/// else is a component (`ComponentSerialization`).
+pub fn name_text(tag: &Tag) -> Text {
+    match tag {
+        Tag::String(s) => Text::legacy(&s.to_string_lossy()),
+        t => crate::scoreboard::comp_text(&crate::scoreboard::tag_to_json(t)),
+    }
+}
 pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -> Option<Mob> {
     let kind = types.get(&self::kind(tag)?)?.clone();
     let position = position(tag)?;
@@ -606,6 +615,7 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     m.persistent = flag(tag, "PersistenceRequired");
     m.extra.pick_up_loot = flag(tag, "CanPickUpLoot");
     m.custom_name = custom_name(tag);
+    m.custom_name_text = tag.get("CustomName").map(name_text);
     if m.kind.category == "creature" {
         m.extra.age = number(tag.get("Age")).unwrap_or(0) as i32;
         m.extra.forced_age = number(tag.get("ForcedAge")).unwrap_or(0) as i32;
@@ -914,7 +924,45 @@ pub fn item_entity_from_nbt(tag: &Tag, id: u32, bob_offset: f32) -> Option<ItemE
         age: number(tag.get("Age")).unwrap_or(0).max(0) as u32,
         pickup_delay: number(tag.get("PickupDelay")).unwrap_or(0).clamp(0, 32767) as u32,
         bob_offset,
+        ticks: 0,
     })
+}
+
+/// `OminousItemSpawner.addAdditionalSaveData`: its item (left out when
+/// empty) and `spawn_item_after_ticks`. Its tick count is the entity's
+/// `tickCount`, which isn't saved: a reloaded spawner counts from 0 again.
+pub fn ominous_item_spawner_to_nbt(
+    item: &crate::items::ItemStack,
+    position: Vec3,
+    spawn_item_after: i64,
+    uuid: [i32; 4],
+    raw: Option<&Tag>,
+) -> Tag {
+    let base = Base {
+        id: "minecraft:ominous_item_spawner",
+        uuid,
+        position,
+        motion: Vec3::ZERO,
+        rotation: [0.0, 0.0],
+        on_ground: false,
+        fall_distance: 0.0,
+    };
+    let mut tag = base.tag(raw);
+    put(&mut tag, "item", item_to_nbt(item));
+    put(
+        &mut tag,
+        "spawn_item_after_ticks",
+        Tag::Long(spawn_item_after),
+    );
+    tag
+}
+/// `OminousItemSpawner.readAdditionalSaveData`: the item, where it floats
+/// and `spawn_item_after_ticks` (0 when absent). None without an item:
+/// such a spawner would spawn nothing.
+pub fn ominous_item_spawner_from_nbt(tag: &Tag) -> Option<(crate::items::ItemStack, Vec3, i64)> {
+    let item = tag.get("item").and_then(item_from_nbt)?;
+    let after = number(tag.get("spawn_item_after_ticks")).unwrap_or(0);
+    Some((item, position(tag)?, after))
 }
 
 /// `ExperienceOrb`: Health, Age, Value, Count.
@@ -1228,6 +1276,21 @@ pub fn armor_stand_to_nbt(a: &ArmorStand, uuid: [i32; 4], raw: Option<&Tag>) -> 
     } else if let Tag::Compound(map) = &mut tag {
         map.remove(&"Marker".into());
     }
+    if a.name_visible {
+        put(&mut tag, "CustomNameVisible", Tag::Byte(1));
+    } else if let Tag::Compound(map) = &mut tag {
+        map.remove(&"CustomNameVisible".into());
+    }
+    // A name from the save keeps its own shape unless it changed.
+    if let Some(name) = &a.custom_name
+        && !tag.get("CustomName").is_some_and(|t| name_text(t) == *name)
+    {
+        put(
+            &mut tag,
+            "CustomName",
+            crate::scoreboard::json_to_tag(&name.component()),
+        );
+    }
     put(&mut tag, "Health", Tag::Float(a.health.to_bits()));
     put(&mut tag, "Fire", Tag::Short(a.fire_ticks as i16));
     // LivingEntity.addAdditionalSaveData and ArmorStand's own fields.
@@ -1256,6 +1319,8 @@ pub fn armor_stand_from_nbt(tag: &Tag, id: u32) -> Option<ArmorStand> {
     a.velocity = motion(tag);
     a.health = float(tag.get("Health")).unwrap_or(20.0) as f32;
     a.fire_ticks = number(tag.get("Fire")).unwrap_or(0) as i32;
+    a.custom_name = tag.get("CustomName").map(name_text);
+    a.name_visible = flag(tag, "CustomNameVisible");
     if let Some(eq) = tag.get("equipment") {
         for (i, slot) in ArmorStand::SLOTS.iter().enumerate() {
             a.equipment[i] = eq.get(slot).and_then(item_from_nbt);
@@ -1504,6 +1569,63 @@ mod tests {
     use super::*;
     use crate::items::ItemStack;
 
+    /// The item, the spawn delay and the fields Horizon doesn't model come
+    /// back; a compound without an item is no spawner.
+    #[test]
+    fn ominous_item_spawner_round_trip() {
+        let item = ItemStack {
+            item: Arc::from("minecraft:ominous_trial_key"),
+            count: 1,
+            damage: 0,
+            extra: None,
+        };
+        let raw = Tag::compound([("CustomName", string("kept"))]);
+        let at = Vec3::new(10.5, 64.25, -3.5);
+        let tag = ominous_item_spawner_to_nbt(&item, at, 97, [1, 2, 3, 4], Some(&raw));
+        assert_eq!(
+            kind(&tag).as_deref(),
+            Some("minecraft:ominous_item_spawner")
+        );
+        assert_eq!(uuid(&tag), Some([1, 2, 3, 4]));
+        assert!(matches!(
+            tag.get("spawn_item_after_ticks"),
+            Some(Tag::Long(97))
+        ));
+        assert!(tag.get("CustomName").is_some());
+        let (back, pos, after) = ominous_item_spawner_from_nbt(&tag).unwrap();
+        assert_eq!(
+            (back.item.as_ref(), back.count),
+            ("minecraft:ominous_trial_key", 1)
+        );
+        assert_eq!((pos, after), (at, 97));
+        assert!(ominous_item_spawner_from_nbt(&raw).is_none());
+    }
+
+    #[test]
+    fn armor_stand_names_keep_their_formatting_across_a_save() {
+        let tag = Tag::compound([
+            (
+                "Pos",
+                Tag::List(vec![
+                    Tag::Double(0.0f64.to_bits()),
+                    Tag::Double(64.0f64.to_bits()),
+                    Tag::Double(0.0f64.to_bits()),
+                ]),
+            ),
+            ("CustomName", string("§6Hello")),
+            ("CustomNameVisible", Tag::Byte(1)),
+        ]);
+        let a = armor_stand_from_nbt(&tag, 7).unwrap();
+        let name = a.custom_name.as_ref().unwrap();
+        assert_eq!(name.plain(), "Hello");
+        assert!(name.spans[0].style.color.is_some());
+        assert!(a.name_visible);
+        let saved = armor_stand_to_nbt(&a, [0; 4], Some(&tag));
+        let restored = armor_stand_from_nbt(&saved, 7).unwrap();
+        assert_eq!(restored.custom_name, a.custom_name);
+        assert!(restored.name_visible);
+    }
+
     #[test]
     fn falling_block_round_trip_keeps_impact_distance_and_settings() {
         let state = Tag::compound([("Name", string("minecraft:damaged_anvil"))]);
@@ -1553,6 +1675,7 @@ mod tests {
             on_ground: true,
             age: 120,
             pickup_delay: 10,
+            ticks: 0,
             bob_offset: 0.0,
         };
         let tag = item_entity_to_nbt(&e, [1, 2, 3, 4], None);

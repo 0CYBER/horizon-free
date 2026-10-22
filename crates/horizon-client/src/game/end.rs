@@ -138,47 +138,12 @@ impl Game<'_> {
         }
     }
 
-    /// SkyRenderer.buildEndSky: six faces of end_sky.png tiled 16 times,
-    /// tinted 0x282828. The atlas does not wrap, so each face is 16×16 quads.
-    pub(super) fn end_sky_geometry(&self) -> Vec<Vertex> {
-        let mut out = Vec::with_capacity(6 * 256 * 4);
-        let Some(r) = self.gui.atlas.sprites.get("environment/end_sky").copied() else {
+    /// SkyRenderer.renderEndFlash, drawn after the renderer's resident sky mesh.
+    pub(super) fn end_flash_geometry(&self) -> Vec<Vertex> {
+        let mut out = Vec::new();
+        // The old combined sky/flash draw also skipped the flash without a sky sprite.
+        if !self.gui.atlas.sprites.contains_key("environment/end_sky") {
             return out;
-        };
-        use std::f32::consts::FRAC_PI_2;
-        let faces = [
-            glam::Mat4::IDENTITY,
-            glam::Mat4::from_rotation_x(FRAC_PI_2),
-            glam::Mat4::from_rotation_x(-FRAC_PI_2),
-            glam::Mat4::from_rotation_x(std::f32::consts::PI),
-            glam::Mat4::from_rotation_z(FRAC_PI_2),
-            glam::Mat4::from_rotation_z(-FRAC_PI_2),
-        ];
-        let step = 200.0 / 16.0;
-        for pose in faces {
-            for a in 0..16 {
-                for b in 0..16 {
-                    let (x0, z0) = (-100.0 + step * a as f32, -100.0 + step * b as f32);
-                    let (x1, z1) = (x0 + step, z0 + step);
-                    let corners = [
-                        (x0, z0, [r.u0, r.v0]),
-                        (x0, z1, [r.u0, r.v1]),
-                        (x1, z1, [r.u1, r.v1]),
-                        (x1, z0, [r.u1, r.v0]),
-                    ];
-                    for (x, z, uv) in corners {
-                        let p = pose.transform_point3(glam::Vec3::new(x, -100.0, z));
-                        out.push(Vertex {
-                            normal: [0; 4],
-                            pos: p.to_array(),
-                            uv,
-                            layer: 2,
-                            color: 0xFF28_2828,
-                            light: 0,
-                        });
-                    }
-                }
-            }
         }
         // SkyRenderer.renderEndFlash: the end_flash sprite at height 100, scale 60.
         let intensity = self.end.flash.intensity(self.clock.fraction() as f32);
@@ -350,6 +315,7 @@ impl Game<'_> {
             self.tick_fight();
             self.tick_dragon_fireballs();
         }
+        self.tick_crystals();
         self.tick_eyes();
         if self.dim == Dim::End {
             self.end.flash.tick(self.world.game_time);

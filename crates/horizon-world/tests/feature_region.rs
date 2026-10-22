@@ -385,3 +385,46 @@ fn retained_upgrade_status_allows_old_biome_reads() {
         }
     }
 }
+#[test]
+fn spread_out_regions_route_like_dense_ones() {
+    // Chunks too far apart for a grid over their bounding box (fixtures put
+    // one at the far edge of the world beside the origin's neighbours).
+    let registry = registry();
+    let context = WorldGenerationContext::new(0, 16, 8);
+    let chunk =
+        |x, z| TerrainChunk::new(ChunkPos::new(x, z), 0, 16, &registry, Properties).unwrap();
+    for far in [4_194_304, -4_194_304] {
+        let mut region = TerrainRegion::new(
+            vec![chunk(0, 0), chunk(far, 0), chunk(1, -1), chunk(-1, 1)],
+            context,
+        )
+        .unwrap();
+        let x = far * 16 + 3;
+        region
+            .set_block_worldgen([x, 7, 5], BlockStateId(2))
+            .unwrap();
+        assert_eq!(region.block([x, 7, 5]).unwrap(), BlockStateId(2));
+        assert_eq!(region.block([3, 7, 5]).unwrap(), BlockStateId(0));
+        assert_eq!(region.block([16, 7, -1]).unwrap(), BlockStateId(0));
+        assert!(matches!(
+            region.block([x + 16, 7, 5]),
+            Err(RegionError::MissingChunk([_, 0]))
+        ));
+        assert!(matches!(
+            region.block([0, 7, 16]),
+            Err(RegionError::MissingChunk([0, 1]))
+        ));
+        let order: Vec<_> = region
+            .into_chunks()
+            .iter()
+            .map(|c| (c.position().x, c.position().z))
+            .collect();
+        let mut sorted = order.clone();
+        sorted.sort();
+        assert_eq!(order, sorted, "into_chunks is ordered by X then Z");
+        // A position twice is refused either way.
+        assert!(
+            TerrainRegion::new(vec![chunk(0, 0), chunk(far, 0), chunk(far, 0)], context).is_err()
+        );
+    }
+}

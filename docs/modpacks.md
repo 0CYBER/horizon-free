@@ -302,6 +302,22 @@ cargo run -p horizon-port-pack -- report ~/.horizon/ports/pack        # coverage
 cargo run -p horizon-port-pack -- port ~/Downloads/pack.zip ~/.horizon/ports/pack [--from <folder>] [--resources <root>]
 ```
 
+`check <jar> <out>` takes one mod jar on its own, as the launcher's mod browser installs it
+([mod-browser.md](mod-browser.md)): it carries the jar into `<out>/carry/` and reads its class
+files (constant pool, superclass, declared methods; no decompiling) for what the carry can't
+take, then writes the verdict to `<out>/check.json`. **Works**: content only, and the code just
+registers it. **Partly**: the content ports, and the code features listed don't (block entities,
+menus, entities, blocks and items with behaviour of their own, recipe types, Mixins, game events).
+**Doesn't run**: nothing to port, or a jar made for 1.20 or older. Each mod class is followed up to
+the first game class it extends; a block subclass that only overrides how it looks or is placed
+(`getStateForPlacement`, `rotate`...) is registration. Game classes are read by Mojang's names
+(26.1 and later, and NeoForge since 1.20.5); older Fabric jars name them in intermediary, so a
+class extending one counts as code that can't be read. On ten 26.3 jars (2026-10-22): Macaw's
+Fences, Windows and Furniture, Ecologics, Compressed Blocks, More Decorative Blocks and Moog's
+Nether Structures are Partly; Sodium and GeckoLib don't run (Mixins, renderers, nothing to port);
+Fabric API doesn't run (its id has a dash, which content mods can't use). A check takes 0.2 s to
+3 s, and 24 s for Compressed Blocks (18 MB, 9,360 recipes, writing the carry dominates).
+
 `fetch` gets each jar the player's way, never from us: copied from a folder they have (matched
 by SHA-1, or through a CurseForge app instance's `minecraftinstance.json`), else downloaded from
 the link the pack itself gives (a `.mrpack`'s, on the format's hosts only) or, for a CurseForge
@@ -444,6 +460,18 @@ Two cases the oracle fills in:
     also spreads its structures 1.65 times as far apart as its files say, which carry now
     applies. MVS went from 829 starts to 90 in a 128×128-chunk square (seed 1234): 294 from the
     spacing, the rest from the start checks.
+  - **Mo' Structures** (LGPL-3.0; 38 files). Its `mostructures:generic` is vanilla's jigsaw
+    that starts only where the terrain under the 5×5 chunks around it varies by no more than
+    its `heightRange`: carry writes `minecraft:jigsaw` with `horizon:start_checks`
+    (`terrain_radius` 2, `terrain_range`). Its placement `mostructures:type` takes spacing and
+    separation from the mod's config, not its files; carry writes the config's defaults
+    (keyed by `config_key`) and the sets it avoids within 3 chunks as `horizon:exclusion_zone`
+    with `"their_zones": false`: like the mod, the game tests those sets by their spread and
+    frequency alone, not by their own exclusion zones. Its two block-ageing processors
+    (`jungle_rot_processor`, `simple_cobblestone`, 3 uses) are still dropped, as is its
+    mixin that keeps lakes out of its structures. Over chunks -64..63 that adds 13 starts at
+    seed 1234 (pirate ships, churches, a tavern, the castle in the sky...) and 16 at seed 2,
+    and every other start stays as it was.
   - **Processors written in Java** are taken out of their lists (#822). The game, like
     vanilla, refuses a list holding a type it does not know, and with it every pool naming the
     list. The structures now generate undecorated (no pillars under them, spawners as the
@@ -482,7 +510,11 @@ Two cases the oracle fills in:
     plus the name's hash, at the block, piece or structure). In a CTOV plains village at seed
     1234 the farms now grow carrots, potatoes and beetroot besides wheat, and 1,655
     cobblestone blocks become paths, grass, mossy cobblestone and planks. No Lithostitched processor is
-    dropped now (130 before), only CTOV's compat hooks for other mods inside them (142 copies).
+    dropped now (130 before). CTOV's compat hooks for other mods inside them (its
+    `modular_compat`, 142 copies) run a list of their own only when the mod they name is
+    loaded: carry writes that list in when the mod is ported along and takes the hook out (a
+    no-op, as in the mod) when it is not. In ATM10 all 142 name Nature's Spirit, which the
+    pack does not have.
     The processors that build outside their template are carried too: Repurposed's and
     Moog's pillar processors become the game's `horizon:pillar` (a column from a placeholder
     block down to the ground, with the processor list they run on each of its blocks written
@@ -517,6 +549,11 @@ Two cases the oracle fills in:
     the world is air, keep it" rules: around the ocean mineshaft at chunk (-18, -54), seed
     1234, 650 blocks of air and cave air become prismarine and 614 more template water blocks
     stay water (1,303 blocks change in its 81 chunks).
+    Its mineshafts' sky view processor (71 lists) is `horizon:mineshaft_sky_view`: a block
+    of the template at or above the world's `OCEAN_FLOOR_WG` height in its column is not
+    placed, so a mineshaft cut by a valley or a ravine is not built in the open, except
+    plain rails over a block that can occlude, which stay (waterlogged where the world holds
+    water). Repurposed's dropped processors go from 253 to 182.
     Still taken out: Formations' biome replacements, blocks aged or propped up.
     In the 128×128-chunk square (seed 1234), every spawner of a mod structure now has its mob:
     in the Overworld 83 Better Dungeons spawners held the template's placeholder pig and 17 of
@@ -622,12 +659,10 @@ Two cases the oracle fills in:
   - When Dungeons Arise, Structory and Towns and Towers use vanilla's types already (T&T's
     namespaces are carried since the namespaces rule above).
   - Still lost, written in Java:
-    - Formations' pieced structure (1, its one jigsaw-like type);
     - Repurposed's mineshafts, mansions and monuments, Better Mineshafts and two Better
       Dungeons types: Java structure types;
     - the block processors written in Java
       (YUNG's banners and decorations, Better Strongholds' legs, Lithostitched's block swaps);
-    - MO Structures (38; its library is only on CurseForge).
   - **Formations** (Overworld and Nether: 50 structures, 128 pool elements) places one
     template per start at a height found in the noise columns under its corners and centre: on
     the surface, on water or lava, or in a cave (on its floor, under its ceiling, buried in
@@ -638,6 +673,13 @@ Two cases the oracle fills in:
     39 Overworld and 672 Nether starts at seed 1234 (51 and 643 at seed 2), and leaves every
     other start as it was. Its processors (biome replacements, aged blocks, bed colours,
     plants) are still dropped, so its structures keep their templates' blocks.
+    Its one PiecedStructure, the fountain, starts the same way and then lays out the element's
+    jigsaw children with vanilla's jigsaw: carry writes it as `horizon:formations` with
+    `horizon:pieced` (`max_depth`, `max_distance_from_center`), and the game's assembler takes
+    the placed start piece (`jigsaw::add_children`), the children kept within that distance of
+    the start's centre, one block above the height found. It shares Formations' "uncommon"
+    structure set, so where the set now picks it, it takes the place of a statue or a house:
+    1 fountain at seed 1234 and 3 at seed 2 in chunks -64..63, one with a child piece.
 
   With every structure PR above, the same square (seed 1234, chunks -64..63) holds 362
   overworld starts with 22,026 pieces. CTOV has 7, Better Dungeons 72 and Better Ocean
@@ -958,6 +1000,52 @@ behaviour callbacks and server events (0.3), block entities, menus, capabilities
 (0.4), the first agent-ported logic-tier mod as the pilot of step 5, then machines. Porting all
 of ATM10 is a campaign. Each step publishes its coverage number; we make no claim beyond what
 the report shows.
+
+### Where ATM10's data mods stand (2026-10-22)
+
+Measured with #1175, #1176, #1177 and #1191 on main, over the 42 data-tier mods carried from
+ATM10 (the launcher's `--dev-mod` carries), seeds 1234 and 2.
+
+- **Structures.** The carries define 687 structures in 25 mods. 419 of them start somewhere in
+  chunks -128..127 of the Overworld, the Nether or the End at one of the two seeds, and 264 in
+  chunks -64..63 (249 on 2026-10-19). Most of the rest are biome-bound and rare: no desert lies
+  in either square, and ChoiceTheorem's Overhauled Village (25 of 78) and Towns and Towers (15
+  of 60) have a variant per biome. 27 never start because their type is written in Java:
+  Better Mineshafts 13, Repurposed Structures' mansions 8, monuments 4 and End mineshaft 1, and
+  one Better Dungeons type.
+- **Processors.** 1,560 carried and 605 dropped (1,347 and 818 on 2026-10-19). The dropped ones
+  by mod: Formations 227 (Overworld 182, Nether 45), Repurposed Structures 182, Better Dungeons
+  69, Better Jungle Temples 50, Better Strongholds 41, Better Desert Temples 14, Villages and
+  Pillages 10, Better Fortresses 5, Better Witch Huts 3, Mo' Structures 3, Moog's Nether
+  Structures 1.
+- **Content.** 190,550 block states and 12,931 items load. 5 block models are missing (4 of
+  Macaw's Doors' cherry waffle door, Regions Unexplored's blue crystalite): those blocks draw
+  the missing model.
+- **Load time** (Mac mini M4 Pro, offscreen, render distance 12). The first start builds the
+  content root: about 25 to 35 s, and again after every game update, since the root's stamp
+  includes the executable. Later starts: 6.6 to 8.2 s to "resources loaded", against 1.3 to
+  2.5 s for vanilla.
+- **Play.** No crash at either seed: spawn, Mo' Structures' pirate ship, castle in the sky,
+  barn house and villager tower, CTOV villages, Formations' fountains (one with its chamber),
+  the Nether.
+
+What is missing, ranked by how much a player notices:
+
+1. **Code mods.** 333 of ATM10's 496 mods (machines, magic, mobs, tools, storage): the pack's
+   gameplay. They need behaviour APIs (0.3 and later) and a port per mod.
+2. **The 12 mods only on CurseForge**, which the carry has not fetched.
+3. **Plainer structures.** The 605 dropped processors are what makes structures look aged,
+   overgrown or fitted to their biome in Java: Formations' biome swaps and block ageing (its
+   tables are All Rights Reserved code), Repurposed Structures' random and noise replacements
+   and floating-block removal, and YUNG's decorations (Better Dungeons, Jungle Temples,
+   Strongholds).
+4. **Structures that never generate:** the 27 Java types above. Repurposed Structures' mansions
+   and monuments are about 3,000 lines of LGPL layout code; whether to port them into this MIT
+   repository is a licence question.
+5. **The first start after installing or updating:** 25 to 35 s. Later starts are about four
+   times vanilla's.
+6. **Smaller gaps:** Mo' Structures' mixin that keeps lakes out of its structures and its two
+   block-ageing processors, and the 5 missing block models.
 
 ## Open questions for Ludovic
 

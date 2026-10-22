@@ -84,7 +84,8 @@ impl Imported {
             (How::Present, "already here"),
             (
                 How::NeedsKey,
-                "only on CurseForge (needs its API key: choose your installed instance instead)",
+                "only on CurseForge (CurseForge downloads coming soon: choose your installed \
+                 instance instead)",
             ),
             (How::NotFound, "not found"),
             (How::Failed, "failed"),

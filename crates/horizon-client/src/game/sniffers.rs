@@ -79,7 +79,8 @@ impl Game<'_> {
             }
             let head = sniffer::head_block(m);
             let below = self.world.block(head[0], head[1] - 1, head[2]);
-            let Some((sprite, tint)) = self.particle_sprite(below) else {
+            let Some((sprite, tint)) = self.particle_sprite(below, [head[0], head[1] - 1, head[2]])
+            else {
                 continue;
             };
             let dust = [

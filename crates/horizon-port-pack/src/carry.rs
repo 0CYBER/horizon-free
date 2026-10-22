@@ -37,6 +37,10 @@ pub struct Report {
     pub worldgen: usize,
     /// Recipes left as they were: custom types, NeoForge conditions.
     pub recipes_kept: Vec<String>,
+    /// Recipes whose result is one of the mod's own items that isn't declared (its block was
+    /// left out), moved to `outside/`: vanilla refuses a recipe for an unknown item, and the
+    /// game would craft air.
+    pub recipes_unregistered: Vec<String>,
     pub item_definitions_added: usize,
     /// Templates and properties came from the NeoForge oracle's facts, not
     /// from guesses.
@@ -707,7 +711,8 @@ pub fn carry(
     let mut biome_conventions = BTreeSet::new();
     let set_tags = crate::worldgen::structure_set_tags(&mut zip);
     let piece_counts = crate::worldgen::piece_counts(&mut zip);
-    let processor_data = crate::processors::ProcessorData::read(&mut zip);
+    let mut processor_data = crate::processors::ProcessorData::read(&mut zip);
+    processor_data.mark_loaded(loaded);
     report.namespaces = extra_namespaces(&mut zip, id, pack.mods);
     let owned: Vec<&str> = std::iter::once(id.as_str())
         .chain(report.namespaces.iter().map(String::as_str))
@@ -1082,6 +1087,9 @@ pub fn carry(
             report.items += 1;
         }
     }
+    let owned: Vec<String> = owned.iter().map(|n| n.to_string()).collect();
+    let owned: Vec<&str> = owned.iter().map(String::as_str).collect();
+    unregistered_recipes(&inside, &outside, id, &owned, &mut report)?;
     let q = |s: &str| toml::Value::String(s.to_owned()).to_string();
     let name = if info.name.is_empty() { id } else { &info.name };
     let mut manifest = format!(
@@ -1106,6 +1114,88 @@ pub fn carry(
         &serde_json::to_vec_pretty(&report).unwrap_or_default(),
     )?;
     Ok(report)
+}
+
+/// The item a recipe makes: `result.id` (1.21 and later), `result.item` or a bare id.
+fn recipe_result(recipe: &Value) -> Option<&str> {
+    let r = &recipe["result"];
+    r.as_str()
+        .or_else(|| r["id"].as_str())
+        .or_else(|| r["item"].as_str())
+}
+
+/// Moves the recipes whose result is an undeclared item of the mod's own namespaces from
+/// `inside` to `outside` ([`Report::recipes_unregistered`]). The declared items are the blocks
+/// with their item and the items under `data/<id>/horizon/`.
+fn unregistered_recipes(
+    inside: &Path,
+    outside: &Path,
+    id: &str,
+    owned: &[&str],
+    report: &mut Report,
+) -> Result<(), String> {
+    let decl = inside.join(format!("data/{id}/horizon"));
+    let mut declared = BTreeSet::new();
+    for kind in ["block", "item"] {
+        for f in fs::read_dir(decl.join(kind))
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let path = f.path();
+            let Some(name) = path.file_stem().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let has_item = kind == "item"
+                || fs::read(&path)
+                    .ok()
+                    .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+                    .is_none_or(|v| v["item"] != json!(false));
+            if has_item {
+                declared.insert(format!("{id}:{name}"));
+            }
+        }
+    }
+    for ns in owned {
+        let dir = inside.join(format!("data/{ns}/recipe"));
+        let mut stack = vec![dir.clone()];
+        while let Some(d) = stack.pop() {
+            for f in fs::read_dir(&d).into_iter().flatten().flatten() {
+                let path = f.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                let Some(recipe) = fs::read(&path)
+                    .ok()
+                    .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+                else {
+                    continue;
+                };
+                let Some(result) = recipe_result(&recipe) else {
+                    continue;
+                };
+                let unknown = result
+                    .split_once(':')
+                    .is_some_and(|(n, _)| owned.contains(&n) && !declared.contains(result));
+                if !unknown {
+                    continue;
+                }
+                let rel = path.strip_prefix(inside).map_err(|e| e.to_string())?;
+                let to = outside.join(rel);
+                if let Some(parent) = to.parent() {
+                    fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+                }
+                fs::rename(&path, &to).map_err(|e| format!("{}: {e}", to.display()))?;
+                report.copied = report.copied.saturating_sub(1);
+                report
+                    .recipes_unregistered
+                    .push(rel.to_string_lossy().into_owned());
+            }
+        }
+    }
+    report.recipes_unregistered.sort();
+    Ok(())
 }
 
 /// The tags a recipe's ingredients name (`#ns:path` or `{"tag": ...}`).

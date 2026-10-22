@@ -433,6 +433,7 @@ impl Game<'_> {
         });
         self.level_events.clear();
         self.sculk.known = self.world.chunks.keys().copied().collect();
+        self.sculk.known_revision = Some(self.world.chunks.membership_revision());
         self.sculk_sync_index();
         let mut names: HashMap<u32, String> = HashMap::new();
         let mut sources: Vec<u32> = Vec::new();
@@ -665,7 +666,7 @@ impl Game<'_> {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
                         m.damage(amount, horizon_client::mobs::Damage::player(at));
                     }
-                    self.last_hurt_by_player.insert(id);
+                    self.last_hurt_by_player.insert(id, self.lan_acting);
                 }
                 "set" => {
                     let n = |i: usize| words[i].parse::<i32>().unwrap_or(0);

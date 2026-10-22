@@ -56,11 +56,11 @@ In part. Horizon runs the full-screen effects of Java shader packs, not their ge
 
 ## Does Horizon collect data?
 
-Only if you say yes, and each kind has its own switch. Everything is off by default. See [Privacy](/privacy).
+Only if you say yes, and each kind has its own switch. Everything is off by default. The one thing sent without asking is an anonymous "I'm playing" ping, for the count of how many play right now: it holds a random number made each time the game starts, the version, your OS and whether a world is open to LAN, and nothing about you. See [Privacy](/privacy).
 
 ## How often does it update?
 
-Often. Every change players can see is released automatically after it is merged, so new versions can come out several times a day. The launcher installs them for you, or only stable ones if you leave **Beta builds** off. See [Install](/docs/install#updating).
+Often. Every change players can see is released automatically after it is merged, so new versions can come out several times a day. On the **Alpha** channel the launcher installs each one as soon as it is built; on **Stable**, the default, it installs a tested build about once a day. See [Install](/docs/install#updating).
 
 ## What do the version numbers mean?
 

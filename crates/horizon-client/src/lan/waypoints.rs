@@ -153,6 +153,9 @@ pub struct Waypoints {
 /// One tick's players, and the packets for their connections.
 struct Tick<'a> {
     players: HashMap<u128, &'a Player>,
+    /// The connections of the players in other levels: one who just left this level is
+    /// still told of the waypoints it loses (`removePlayer` disconnects them).
+    away: &'a [(u128, u32)],
     view: HashMap<u128, ([i32; 2], i32)>,
     /// Players a respawn replaced this tick: a new ServerPlayer, on its first tick.
     fresh: &'a [u128],
@@ -169,7 +172,17 @@ impl<'a> Tick<'a> {
         icon: &Icon,
         target: WaypointTarget,
     ) {
-        let Some(conn) = self.players.get(&receiver).and_then(|p| p.conn) else {
+        let Some(conn) = self
+            .players
+            .get(&receiver)
+            .and_then(|p| p.conn)
+            .or_else(|| {
+                self.away
+                    .iter()
+                    .find(|(uuid, _)| *uuid == receiver)
+                    .map(|&(_, conn)| conn)
+            })
+        else {
             return;
         };
         self.out
@@ -450,8 +463,21 @@ impl Waypoints {
         respawned: &[u128],
         locator_bar: bool,
     ) -> Vec<(u32, C)> {
+        self.tick_level(players, &[], respawned, locator_bar)
+    }
+
+    /// [`Self::tick`] for one level of several: `away` are the connections of the players
+    /// in the other levels, for the untracks owed to one who has just left this one.
+    pub fn tick_level(
+        &mut self,
+        players: &[Player],
+        away: &[(u128, u32)],
+        respawned: &[u128],
+        locator_bar: bool,
+    ) -> Vec<(u32, C)> {
         let mut t = Tick {
             players: players.iter().map(|p| (p.uuid, p)).collect(),
+            away,
             view: HashMap::default(),
             fresh: respawned,
             enabled: locator_bar,
@@ -630,6 +656,29 @@ mod tests {
         ));
         let out = w.tick(&[b.clone()], &[], true);
         assert_eq!(to(&out, 20), [(1, WaypointTarget::Empty)]);
+    }
+
+    #[test]
+    fn a_player_leaving_the_level_loses_its_waypoints() {
+        let (a, b) = (
+            player(1, 10, [0.5, 64.0, 0.5]),
+            player(2, 20, [4.5, 64.0, 0.5]),
+        );
+        let mut w = Waypoints::default();
+        w.tick(&[a.clone(), b.clone()], &[], true);
+        let mut moved = b.clone();
+        moved.position = [5.5, 64.0, 0.5];
+        w.tick(&[a.clone(), moved], &[], true);
+        // B goes to another level: A loses B, and B (reached through `away`) loses A.
+        let out = w.tick_level(std::slice::from_ref(&a), &[(2, 20)], &[], true);
+        assert_eq!(
+            to(&out, 10),
+            vec![(waypoint_operation::UNTRACK, WaypointTarget::Empty)]
+        );
+        assert_eq!(
+            to(&out, 20),
+            vec![(waypoint_operation::UNTRACK, WaypointTarget::Empty)]
+        );
     }
 
     #[test]

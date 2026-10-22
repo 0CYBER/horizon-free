@@ -1612,11 +1612,16 @@ impl Game<'_> {
             {
                 return Err(err("commands.summon.failed.peaceful", &[]));
             }
-            let Some(target) = self.summon_with_nbt(&format!("minecraft:{short}"), pos, &nbt)?
-            else {
-                return Err(err("commands.summon.failed", &[]));
+            let before = self.spawned_mark();
+            let name = match self.summon_with_nbt(&format!("minecraft:{short}"), pos, &nbt)? {
+                Some(target) => self.target_name(target),
+                // Spawned as a kind no command target stands for (primed
+                // TNT, falling blocks, projectiles): its type's name.
+                None if self.spawned_mark() != before => {
+                    Text::translate(&format!("entity.minecraft.{short}"), &[])
+                }
+                None => return Err(err("commands.summon.failed", &[])),
             };
-            let name = self.target_name(target);
             self.feedback(Text::translate("commands.summon.success", &[name]));
             return Ok(1);
         }
@@ -1669,15 +1674,30 @@ impl Game<'_> {
                 }
                 // SummonCommand.createEntity: any other type from an empty compound.
                 _ => {
-                    let Some(target) = self.summon_with_nbt(&kind, pos, "{}")? else {
-                        return Err(err("commands.summon.failed", &[]));
+                    let before = self.spawned_mark();
+                    name = match self.summon_with_nbt(&kind, pos, "{}")? {
+                        Some(target) => self.target_name(target),
+                        // Spawned as a kind no command target stands for
+                        // (primed TNT, falling blocks, projectiles).
+                        None if self.spawned_mark() != before => {
+                            Text::translate(&format!("entity.minecraft.{short}"), &[])
+                        }
+                        None => return Err(err("commands.summon.failed", &[])),
                     };
-                    name = self.target_name(target);
                 }
             }
         }
         self.feedback(Text::translate("commands.summon.success", &[name]));
         Ok(1)
+    }
+    /// What changes when an entity spawns, kinds that take their id only
+    /// when first tracked (primed TNT, falling blocks, projectiles)
+    /// included: a summon compares it before and after.
+    fn spawned_mark(&self) -> (u32, usize) {
+        (
+            self.next_entity,
+            self.tnts.len() + self.falling.len() + self.creatures.projectiles.len(),
+        )
     }
     /// BlockStateArgument -> registry state.
     pub(super) fn block_state(&self, b: &BlockInput) -> R<BlockStateId> {

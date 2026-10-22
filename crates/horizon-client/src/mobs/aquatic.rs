@@ -46,6 +46,9 @@ pub fn register(m: &mut Mob) {
             };
             m.ai.look.kind = super::control::LookKind::SmoothSwimming(20.0);
             m.ai.nav.kind = NavKind::Amphibious;
+            // `Axolotl()`: water costs nothing, so swim targets in water pass
+            // DefaultRandomPos's malus check.
+            m.set_malus(super::path::PathType::Water, 0.0);
             super::animal_brain::init(m, i64::from(m.id));
         }
         S::Tadpole => {
@@ -438,7 +441,7 @@ impl Goal for PufferfishPuff {
                 .as_ref()
                 .is_some_and(|p| p.alive && !p.creative && area.intersects(p.bounds));
         // TARGETING_CONDITIONS: not other fish (not_scary_for_pufferfish) and alive.
-        let mob = cx.w.others.iter().any(|s| {
+        let mob = cx.w.others_near(area).any(|s| {
             s.id != m.id
                 && s.alive
                 && !matches!(

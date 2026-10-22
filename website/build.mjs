@@ -11,7 +11,10 @@ import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { markdown, inline, section, escape } from "./src/markdown.js";
-import { releasesHtml } from "./src/releases.js";
+import { recentHtml, releasesPageHtml } from "./src/releases.js";
+import { machinesHtml, playersHtml } from "./src/bench.js";
+import { CPUS, GPUS, singleThread } from "./src/hardware.js";
+import { isGame, isLauncher, launcherVersion, newestFirst } from "./src/versions.js";
 import { contributorsFrom, contributorsHtml } from "./src/contributors.js";
 
 const site = dirname(fileURLToPath(import.meta.url));
@@ -40,13 +43,20 @@ try {
 
 // An optional token (a Railway variable, or `gh auth token` locally) lifts the rate limit.
 const githubHeaders = { Accept: "application/vnd.github+json", ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}) };
+// Every release (the Releases page lists them all), a page of 100 at a time.
 let releases = [];
 try {
-  const res = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=100`, { headers: githubHeaders, signal: AbortSignal.timeout(15000) });
-  if (res.ok) releases = (await res.json()).filter((r) => !r.draft);
-  else console.warn(`releases: ${res.status} from GitHub; the page will load them itself`);
+  let res;
+  for (let page = 1; page <= 5; page++) {
+    res = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=100&page=${page}`, { headers: githubHeaders, signal: AbortSignal.timeout(15000) });
+    if (!res.ok) break;
+    const batch = await res.json();
+    releases.push(...batch.filter((r) => !r.draft));
+    if (batch.length < 100) break;
+  }
+  if (!res.ok) console.warn(`releases: ${res.status} from GitHub; the pages will load them themselves`);
   // A day of betas can push the stable release out of the newest 100: it is GitHub's "latest" (betas never are).
-  if (res.ok && !releases.some((r) => /^v\d{4}\./.test(r.tag_name) && !r.prerelease)) {
+  if (res.ok && !releases.some((r) => isGame(r.tag_name) && !r.prerelease)) {
     const latest = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: githubHeaders, signal: AbortSignal.timeout(15000) });
     if (latest.ok) releases.push(await latest.json());
   }
@@ -109,13 +119,20 @@ const parityCells = body
 const matching = body.filter(([, score]) => Number(score) === 1).length;
 const parityHeadline = matching === body.length ? "Every subsystem matches vanilla." : `${matching} of ${body.length} subsystems match vanilla.`;
 
-// --- The latest notes -------------------------------------------------
+// --- The releases ----------------------------------------------------------------------
 
-const isGame = (tag) => /^v\d{4}\.\d{1,2}\.\d{1,2}/.test(tag);
-const isLauncher = (tag) => tag.startsWith("launcher-v");
-// Stable releases only: betas become stable 6 hours later (docs/release-flow.md, "Channels").
-const game = releases.filter((r) => isGame(r.tag_name) && !r.prerelease).slice(0, 3);
-const launcher = releases.find((r) => isLauncher(r.tag_name) && !r.prerelease);
+// Newest first by tag: every 0.2 tag is newer than the dated ones (src/versions.js). Alpha builds are GitHub
+// pre-releases, Stable the others (docs/release-flow.md, "Channels").
+const byTag = (a, b) => newestFirst(a.tag_name, b.tag_name);
+const ours = releases.filter((r) => isGame(r.tag_name) || isLauncher(r.tag_name)).sort(byTag);
+const game = ours.filter((r) => isGame(r.tag_name));
+const launcher = releases.filter((r) => isLauncher(r.tag_name) && !r.prerelease).sort(byTag)[0];
+
+// --- The benchmarks ----------------------------------------------------------------------
+
+// public/benchmarks.json: our measurements (scripts/benchmarks.mjs from data/benchmarks/fleet.json) and, once the
+// telemetry server has some, players' groups. The page shows it baked and asks the server for newer player results.
+const benchSummary = JSON.parse(await readFile(join(site, "public", "benchmarks.json"), "utf8"));
 
 // --- The page --------------------------------------------------------------------------
 
@@ -151,7 +168,9 @@ await writeFile(join(dist, "favicon.ico"), Buffer.concat([ico, png32]));
 // The page's modules, fingerprinted; each import of a shared module is rewritten to its name.
 const names = {};
 const rewrite = (code) => code.replace(/"\.\/(\w+\.js)"/g, (all, file) => (names[file] ? `"./${names[file]}"` : all));
-for (const file of ["markdown.js", "releases.js", "contributors.js", "main.js"]) {
+// Dependencies before what imports them.
+const modules = ["markdown.js", "versions.js", "chrome.js", "hardware.js", "estimate.js", "releases.js", "contributors.js", "bench.js", "main.js", "releases-page.js", "benchmarks-page.js"];
+for (const file of modules) {
   const code = rewrite(await readFile(join(site, "src", file), "utf8"));
   names[file] = `${file.replace(".js", "")}.${fingerprint(code)}.js`;
   await writeFile(join(dist, "assets", names[file]), code);
@@ -179,9 +198,53 @@ const baked = {
   })),
 };
 
-const notesHtml =
-  releasesHtml(game) ||
-  `<p class="lede">The release notes could not be loaded here.</p><a class="button secondary" href="https://github.com/${REPO}/releases">Read them on GitHub</a>`;
+const unavailable = `<p class="lede">The release notes could not be loaded here.</p><a class="button secondary" href="https://github.com/${REPO}/releases">Read them on GitHub</a>`;
+
+// The top bar and the footer of the pages beside the home page (Releases, Benchmarks).
+const navLinks = [["/#about", "About"], ["/releases", "Releases"], ["/benchmarks", "Benchmarks"], ["/docs/", "Docs"]];
+const siteNav = (current) => `    <header class="nav is-scrolled" id="top">
+      <div class="nav-inner">
+        <a class="nav-mark" href="/" aria-label="Horizon, home"><svg class="mark" viewBox="0 0 16 16" aria-hidden="true"><path class="mark-stem" d="M4 3h2v4H4zM10 3h2v4h-2z"/><path class="mark-low" d="M4 8h2v4H4zM10 8h2v4h-2z"/><path class="mark-line" d="M1 7h14v1H1z"/></svg>Horizon</a>
+        <nav class="nav-links" aria-label="Pages">
+${navLinks.map(([href, label]) => `          <a href="${href}"${href === current ? ' aria-current="page"' : ""}>${label}</a>`).join("\n")}
+        </nav>
+        <div class="nav-end">
+          <button class="theme-toggle" type="button" aria-label="Switch between light and dark"><span data-theme-label>Dark</span></button>
+          <a class="nav-github" href="https://github.com/${REPO}">GitHub</a>
+          <a class="button primary small" href="/docs/install">Download</a>
+          <button class="menu-button" type="button" aria-expanded="false" aria-controls="menu"><span class="menu-label">Menu</span><span class="menu-icon" aria-hidden="true"></span></button>
+        </div>
+      </div>
+    </header>
+    <div class="menu" id="menu" hidden>
+      <nav aria-label="Pages">
+        <a href="/">Home</a>
+${navLinks.map(([href, label]) => `        <a href="${href}">${label}</a>`).join("\n")}
+      </nav>
+      <div class="menu-foot">
+        <a class="button secondary large" href="https://github.com/${REPO}">GitHub</a>
+        <p>Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft.</p>
+      </div>
+    </div>`;
+const siteFooter = `    <footer class="footer">
+      <div class="container">
+        <div class="footer-bar">
+          <span class="footer-mark">Made in the open, in Rust.</span>
+          <nav class="footer-links" aria-label="Elsewhere"><a href="/">Home</a><a href="/releases">Releases</a><a href="/benchmarks">Benchmarks</a><a href="/docs/">Docs</a><a href="https://github.com/${REPO}">GitHub</a><a href="/privacy">Privacy</a><a href="/LEGAL.md">Assets</a></nav>
+        </div>
+      </div>
+      <p class="footer-word" aria-hidden="true">horizon</p>
+    </footer>`;
+
+const fixed = (x, n) => Number(x).toFixed(n);
+const specTable =
+  `<table class="bench-table spec"><thead><tr><th scope="col">Graphics card</th><th scope="col">FP32 TFLOPS</th><th scope="col">Bandwidth, GB/s</th></tr></thead><tbody>` +
+  GPUS.map((g) => `<tr><th scope="row">${escape(g.name)}</th><td class="num">${fixed(g.tflops, 1)}</td><td class="num">${g.gbps}</td></tr>`).join("") +
+  `</tbody></table><table class="bench-table spec"><thead><tr><th scope="col">Processor</th><th scope="col">Boost, GHz</th><th scope="col">Generation factor</th><th scope="col">Single-thread score</th></tr></thead><tbody>` +
+  CPUS.map((c) => `<tr><th scope="row">${escape(c.name)}</th><td class="num">${fixed(c.ghz, 2)}</td><td class="num">${fixed(c.ipc, 2)}</td><td class="num">${fixed(singleThread(c), 2)}</td></tr>`).join("") +
+  `</tbody></table>`;
+const options = (list, selected) => list.map((x) => `<option${x.name === selected ? " selected" : ""}>${escape(x.name)}</option>`).join("");
+const playersGroups = benchSummary.groups.filter((g) => g.source === "players");
 
 const values = {
   CSS: `/assets/${cssName}`,
@@ -194,8 +257,22 @@ const values = {
   PARITY_CELLS: parityCells,
   PARITY_HEADLINE: parityHeadline,
   SUBSYSTEMS: String(body.length),
-  NOTES: notesHtml,
-  LAUNCHER_META: `${launcher ? `Launcher ${escape(launcher.tag_name.replace("launcher-v", ""))} for` : "For"} Linux x86-64, macOS on Apple Silicon and Windows x64.`,
+  RECENT: recentHtml(game) || unavailable,
+  SITE_NAV: "",
+  SITE_FOOTER: siteFooter,
+  RELEASES_JS: `/assets/${names["releases-page.js"]}`,
+  RELEASE_LIST: releasesPageHtml(ours) || unavailable,
+  RELEASE_COUNT: ours.length ? `${ours.length} releases` : "",
+  NEWEST_TAG: escape(ours[0]?.tag_name || ""),
+  BENCH_JS: `/assets/${names["benchmarks-page.js"]}`,
+  MACHINES: machinesHtml(benchSummary),
+  PLAYERS: playersHtml(benchSummary),
+  PLAYERS_SOURCE: `${playersGroups.length ? `${playersGroups.length} groups` : "No groups yet"}, as of ${benchSummary.generated.slice(0, 10)}. The page asks the telemetry server for newer ones.`,
+  GPU_OPTIONS: options(GPUS, "NVIDIA GeForce RTX 4060"),
+  CPU_OPTIONS: options(CPUS, "AMD Ryzen 5 5600X"),
+  SPEC_TABLE: specTable,
+  BENCH_DATA: JSON.stringify(benchSummary).replace(/</g, "\\u003c"),
+  LAUNCHER_META: `${launcher ? `Launcher ${escape(launcherVersion(launcher.tag_name))} for` : "For"} Linux x86-64, macOS on Apple Silicon and Windows x64.`,
   DISCORD: escape(links.discord || DEFAULT_LINKS.discord),
   SPONSOR: escape(links.sponsor || DEFAULT_LINKS.sponsor),
   CONTRIBUTORS: contributorsHtml(contributors),
@@ -276,12 +353,14 @@ const docPages = renderedDocs.map((d, i) => {
   };
 });
 
-const pages = ["index.html", "404.html", "privacy.html"];
+const pages = ["index.html", "404.html", "privacy.html", "releases.html", "benchmarks.html"];
+const currentPath = { "releases.html": "/releases", "benchmarks.html": "/benchmarks" };
 for (const page of pages) {
   let html = await readFile(join(site, "src", page), "utf8");
+  const own = { ...values, SITE_NAV: siteNav(currentPath[page]) };
   html = html.replace(/\{\{(\w+)\}\}/g, (all, key) => {
-    if (!(key in values)) throw new Error(`${page}: unknown placeholder ${all}`);
-    return values[key];
+    if (!(key in own)) throw new Error(`${page}: unknown placeholder ${all}`);
+    return own[key];
   });
   html = html.replace(/href="\/(favicon\.svg|favicon-32\.png|apple-touch-icon\.png)"/g, (all, icon) => `href="/${icon}?v=${iconVersions[icon]}"`);
   await writeFile(join(dist, page), html);
@@ -305,7 +384,7 @@ const hashes = (re) => [...new Set([...allHtml.matchAll(re)].map((m) => `'sha256
 await writeFile(join(dist, ".csp-script"), hashes(/<script>([\s\S]*?)<\/script>/g));
 await writeFile(join(dist, ".csp-style"), hashes(/<style>([\s\S]*?)<\/style>/g));
 
-const urls = ["/", ...docs.map((d) => d.path), "/privacy"];
+const urls = ["/", "/releases", "/benchmarks", ...docs.map((d) => d.path), "/privacy"];
 await writeFile(
   join(dist, "sitemap.xml"),
   `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.map((u) => `  <url><loc>https://playhorizon.dev${u}</loc></url>`).join("\n")}\n</urlset>\n`,
@@ -313,5 +392,5 @@ await writeFile(
 
 console.log(
   `built dist/ from ${readmeFrom}: ${body.length} subsystems, ${percent}, ${harnesses} harnesses, ` +
-    `${game.length} game releases baked${launcher ? `, launcher ${launcher.tag_name}` : ""}, ${contributors.length} contributors, ${docs.length} docs pages`,
+    `${ours.length} releases (${game.length} game)${launcher ? `, launcher ${launcher.tag_name}` : ""}, ${benchSummary.groups.length} benchmark rows, ${contributors.length} contributors, ${docs.length} docs pages`,
 );

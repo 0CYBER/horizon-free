@@ -6,7 +6,7 @@
 //! so `#if` blocks pick the directives that apply.
 
 use crate::options::{OptionSet, OptionValues};
-use crate::preprocess::Environment;
+use crate::preprocess::{Environment, is_condition, is_float, jcpp_integer, rewrite_condition};
 use pp_rs::{pp::Preprocessor, token::TokenValue};
 use std::collections::BTreeMap;
 
@@ -120,9 +120,32 @@ const DIRECTIVES: &[&str] = &[
     "#warning", "#pragma", "#line", "#include",
 ];
 
+/// An `#if`/`#elif` line with its floats as JCPP reads them (Steadfast tests
+/// `#if ATMOSPHERE_FOG_STRENGTH_NOON == 0.75` with the option at 0.5, which
+/// Iris reads as `0 == 0`): float literals and the options set to a float
+/// become their integer part.
+fn jcpp_condition(line: &str, options: &OptionSet, values: &OptionValues) -> String {
+    rewrite_condition(line, |word| {
+        let value = match options.strings.get(word) {
+            Some(o) => values.strings.get(word).unwrap_or(&o.default).as_str(),
+            None => word,
+        };
+        is_float(value)
+            .then(|| jcpp_integer(value))
+            .flatten()
+            .map(|n| n.to_string())
+    })
+}
+
+/// What backslashes are while the macros expand, as in Iris: the
+/// preprocessor must not join a `\`-continued value with the directive on
+/// the next line (Photon ends an `#if`'d value with `) \` before `#else`).
+const BACKSLASH: &str = "IRIS_PASSTHROUGHBACKSLASH";
+
 /// `PropertiesPreprocessor.preprocessSource`: comment lines dropped, other
-/// `#`s removed, then the macros expanded. Tokens keep their source spelling
-/// and spacing (`0.50` stays `0.50`, `<empty>` stays one word).
+/// `#`s removed, then the macros expanded with the backslashes hidden.
+/// Tokens keep their source spelling and spacing (`0.50` stays `0.50`,
+/// `<empty>` stays one word).
 pub fn preprocess(
     text: &str,
     env: &Environment,
@@ -132,7 +155,6 @@ pub fn preprocess(
     let filtered: String = text
         .lines()
         .map(str::trim)
-        .filter(|l| !l.is_empty())
         .map(|l| match l.starts_with('#') {
             // JCPP lets a #define replace a macro (Complementary sets
             // COLORED_LIGHTING 0 on macOS); pp-rs refuses, so undefine first.
@@ -142,11 +164,12 @@ pub fn preprocess(
                     None => l.to_owned(),
                 }
             }
+            true if is_condition(l) => jcpp_condition(l, options, values),
             true if DIRECTIVES.iter().any(|d| l.starts_with(d)) => l.to_owned(),
             true => String::new(),
             false => l.replace('#', ""),
         })
-        .map(|l| l + "\n")
+        .map(|l| l.replace('\\', BACKSLASH) + "\n")
         .collect();
     let mut pp = Preprocessor::new(&filtered);
     let mut define = |name: &str, value: &str| {
@@ -202,7 +225,7 @@ pub fn preprocess(
         });
     }
     out.push('\n');
-    Ok(out)
+    Ok(out.replace(BACKSLASH, "\\"))
 }
 
 /// One element of an option screen (`OptionMenuElement`).
@@ -695,6 +718,39 @@ mod tests {
                 ("d", "A\\z"),
                 ("empty", "")
             ]
+        );
+    }
+
+    #[test]
+    fn floats_in_conditions_count_as_their_integer_part() {
+        assert_eq!(
+            [".5", "0.75", "1.0", "2.5f", "1.5e1", "7", "0x10"].map(jcpp_integer),
+            [Some(0), Some(0), Some(1), Some(2), Some(10), Some(7), None]
+        );
+        // Steadfast's fog strength: the option is 0.5, so Iris takes the
+        // 0.75 branch (0 == 0).
+        let set = options(&["#define FOG 0.5 // [0.0 0.5 0.75 1.0]"]);
+        let text = "\
+#if FOG == 1.0
+a = 1
+#elif FOG == 0.75
+a = 0.75
+#else
+a = 0.5
+#endif
+#if(FOG<1e1)
+b = 1
+#endif
+";
+        let env = Environment {
+            defines: Vec::new(),
+        };
+        let values = OptionValues::default();
+        let out = preprocess(text, &env, &set, &values).unwrap();
+        assert_eq!(out, "a = 0.75\nb = 1\n");
+        assert_eq!(
+            jcpp_condition("#elif FOG == 0.75 && X > 2.5", &set, &values),
+            "#elif 0 == 0 && X > 2"
         );
     }
 
