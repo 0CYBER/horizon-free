@@ -226,7 +226,13 @@ impl MobWorld<'_> {
             .chain(all.into_iter().flatten())
     }
     pub fn seen(&self, id: u32) -> Option<&Seen> {
-        self.others.iter().find(|s| s.id == id)
+        match self.others_index {
+            Some(index) => index
+                .get(&id)
+                .and_then(|&i| self.others.get(i as usize))
+                .filter(|s| s.id == id),
+            None => self.others.iter().find(|s| s.id == id),
+        }
     }
     /// Living mobs of the given species within `range` of `from`, nearest first.
     pub fn nearby<'s>(
@@ -235,9 +241,15 @@ impl MobWorld<'_> {
         range: f64,
         pred: impl Fn(&Seen) -> bool + 's,
     ) -> impl Iterator<Item = &'s Seen> + 's {
+        // A position within `range` puts the box's bottom face in this area
+        // (one block wider, as the box test is strict).
+        let r = range + 1.0;
+        let area = Aabb::new(
+            Vec3::new(from.x - r, from.y - r, from.z - r),
+            Vec3::new(from.x + r, from.y + r, from.z + r),
+        );
         let mut v: Vec<&Seen> = self
-            .others
-            .iter()
+            .others_near(area)
             .filter(|s| {
                 s.alive
                     && (s.position.x - from.x).abs() <= range

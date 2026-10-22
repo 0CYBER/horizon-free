@@ -403,6 +403,7 @@ impl Game<'_> {
             Screen::Stats => "stats",
             Screen::Advancements => "advancements",
             Screen::WorldOptions => "world-options",
+            Screen::Friends => "friends",
             Screen::CommandBlock => "command-block",
         }
     }

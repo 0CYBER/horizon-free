@@ -20,6 +20,7 @@ struct Cells {
     cells: HashMap<BlockPos, BlockStateId>,
     air: BlockStateId,
     random: LegacyRandom,
+    obstructed: bool,
 }
 impl LevelAccess for Cells {
     fn block_state(&self, pos: BlockPos) -> BlockStateId {
@@ -36,6 +37,9 @@ impl LevelAccess for Cells {
     }
     fn game_time(&self) -> i64 {
         0
+    }
+    fn is_unobstructed(&self, _pos: BlockPos, _state: BlockStateId) -> bool {
+        !self.obstructed
     }
 }
 
@@ -68,6 +72,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cells,
             air,
             random: LegacyRandom::new(case["seed"].as_i64().unwrap()),
+            obstructed: case["obstructed"].as_bool().unwrap_or(false),
         };
         let mut ticks = Ticks::new(0);
         for x in -2..=2 {

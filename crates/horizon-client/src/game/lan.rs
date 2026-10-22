@@ -807,7 +807,13 @@ impl Game<'_> {
             if has_guests {
                 let host_entity = state.as_ref().map(|s| s.entity_id);
                 self.lan_assign_ids();
-                self.lan_riding(host_entity, &mut host.hub.riding);
+                let guests: Vec<(u32, i32)> = host
+                    .hub
+                    .guests
+                    .iter()
+                    .filter_map(|g| Some((g.vehicle?, g.entity_id)))
+                    .collect();
+                self.lan_riding(host_entity, &guests, &mut host.hub.riding);
                 self.lan_entities(host_entity, &mut host.hub, &mut states);
             } else {
                 states.clear();

@@ -39,7 +39,7 @@ impl PerlinNoise {
         )
     }
 
-    fn gradients(&self, cell: [i32; 3]) -> [[i32; 3]; 8] {
+    fn gradients(&self, cell: [i32; 3]) -> [[f32; 3]; 8] {
         self.gradients_at(
             self.table.permute(cell[0]),
             self.table.permute(cell[0].wrapping_add(1)),
@@ -52,7 +52,7 @@ impl PerlinNoise {
     /// resolved. `add_volume` reuses one X column across every Y, so hoisting
     /// the two X permutes out of that loop avoids repeating them per Y.
     #[inline]
-    fn gradients_at(&self, p: i32, q: i32, cell_y: i32, cell_z: i32) -> [[i32; 3]; 8] {
+    fn gradients_at(&self, p: i32, q: i32, cell_y: i32, cell_z: i32) -> [[f32; 3]; 8] {
         let lower = self.table.permute(p.wrapping_add(cell_y));
         let upper = self.table.permute(p.wrapping_add(cell_y).wrapping_add(1));
         let lower_x = self.table.permute(q.wrapping_add(cell_y));
@@ -66,7 +66,7 @@ impl PerlinNoise {
         })
     }
 
-    fn corner_values(gradients: [[i32; 3]; 8], point: [f32; 3]) -> [f32; 8] {
+    fn corner_values(gradients: [[f32; 3]; 8], point: [f32; 3]) -> [f32; 8] {
         std::array::from_fn(|i| {
             dot(
                 gradients[i],
@@ -99,7 +99,7 @@ impl PerlinNoise {
         let values = Self::corner_values(gradients, point);
         let fade = point.map(smoothstep);
         let gradient =
-            std::array::from_fn::<_, 3, _>(|axis| lerp3(fade, gradients.map(|g| g[axis] as f32)));
+            std::array::from_fn::<_, 3, _>(|axis| lerp3(fade, gradients.map(|g| g[axis])));
         let changes = [
             lerp2(
                 fade[1],
@@ -164,6 +164,31 @@ impl PerlinNoise {
             return Err(DensityError::BufferTooShort);
         }
         let [size_x, size_y, size_z] = volume.sizes();
+        // Every X/Z column walks the same Y coordinates, so their cells, offsets
+        // and fades are computed once per volume instead of once per column.
+        let mut stack = [YSample::default(); STACK_Y];
+        let mut heap = Vec::new();
+        let ys = if size_y <= STACK_Y {
+            &mut stack[..size_y]
+        } else {
+            heap.resize(size_y, YSample::default());
+            &mut heap[..]
+        };
+        for (y, sample) in ys.iter_mut().enumerate() {
+            let input_y = f64::from(volume.coordinate(1, y)) * y_scale;
+            let shifted_y = wrap(input_y) + self.table.offsets[1];
+            let cell = floor_i32(shifted_y);
+            let dy = shifted_y - f64::from(cell);
+            *sample = YSample {
+                cell,
+                fade: smoothstep(dy as f32),
+                offset: match fudge_y_scale {
+                    Some(scale) => (dy - compute_fudge_y(input_y, dy, scale)) as f32,
+                    None => dy as f32,
+                },
+            };
+        }
+        let ys = &*ys;
         let mut index = 0;
         for z in 0..size_z {
             let shifted_z =
@@ -182,35 +207,38 @@ impl PerlinNoise {
                 let mut previous_y = i32::MIN;
                 let mut xz_dots = [0.0_f32; 8];
                 let mut y_gradients = [0.0_f32; 8];
-                for y in 0..size_y {
-                    let input_y = f64::from(volume.coordinate(1, y)) * y_scale;
-                    let shifted_y = wrap(input_y) + self.table.offsets[1];
-                    let cell_y = floor_i32(shifted_y);
-                    let dy = shifted_y - f64::from(cell_y);
-                    let fade_y = smoothstep(dy as f32);
-                    if previous_y != cell_y {
-                        let gradients = self.gradients_at(p, q, cell_y, cell_z);
+                for (sample, out) in ys.iter().zip(&mut buffer[index..index + size_y]) {
+                    if previous_y != sample.cell {
+                        let gradients = self.gradients_at(p, q, sample.cell, cell_z);
                         for i in 0..8 {
-                            xz_dots[i] = gradients[i][0] as f32 * (dx - (i & 1) as f32)
-                                + gradients[i][2] as f32 * (dz - ((i >> 2) & 1) as f32);
-                            y_gradients[i] = gradients[i][1] as f32;
+                            xz_dots[i] = gradients[i][0] * (dx - (i & 1) as f32)
+                                + gradients[i][2] * (dz - ((i >> 2) & 1) as f32);
+                            y_gradients[i] = gradients[i][1];
                         }
-                        previous_y = cell_y;
+                        previous_y = sample.cell;
                     }
-                    let dy = match fudge_y_scale {
-                        Some(scale) => (dy - compute_fudge_y(input_y, dy, scale)) as f32,
-                        None => dy as f32,
-                    };
+                    let dy = sample.offset;
                     let values = std::array::from_fn(|i| {
                         xz_dots[i] + y_gradients[i] * (dy - ((i >> 1) & 1) as f32)
                     });
-                    buffer[index] += amplitude * lerp3([fade_x, fade_y, fade_z], values);
-                    index += 1;
+                    *out += amplitude * lerp3([fade_x, sample.fade, fade_z], values);
                 }
+                index += size_y;
             }
         }
         Ok(())
     }
+}
+
+/// Y columns up to this height keep their per-Y samples on the stack.
+const STACK_Y: usize = 64;
+
+#[derive(Clone, Copy, Default)]
+struct YSample {
+    cell: i32,
+    fade: f32,
+    /// The Y offset inside the cell used for the corner values, after any fudge.
+    offset: f32,
 }
 
 #[derive(Clone, Debug)]

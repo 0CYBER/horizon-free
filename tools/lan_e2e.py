@@ -114,6 +114,17 @@ address. The script then checks, from both sides, what a guest's game used to ge
              server's game time after the guest's game stalls for a few seconds (#848).
 - growth:    far from the host, the chunks around the guest tick (#890): water placed there flows
              and wheat on farmland grows (random ticks), however the host runs its world.
+- ladder:    the guest climbs down ten blocks of ladder and lands unhurt: the server resets its fall
+             distance on a ladder every tick, as LivingEntity.handleOnClimbable does (#1255).
+- boats:     the host (single player, on its server thread or not) and the guest each right-click a
+             boat on water and ride it, paddle it forward (the other side sees it move), sneak out,
+             and break it with their fists (#1222).
+- minecarts: the host and the guest each get into a minecart on rails, sneak out beside it, and break
+             it (#1222).
+- frames:    the host and the guest each put a diamond in an item frame and turn it, and put a
+             helmet on an armor stand and take it back (#1222).
+- lightning: a bolt summoned beside the host, then the guest: both sides get the bolt and flash the
+             sky (on its server thread the host's window is a client of it too).
 - flight:    a player in creative double-taps jump and flies, stays up, and stops flying in survival:
              the guest, and on the server thread the host's window too, take what may fly from the
              server's abilities (ClientPacketListener.handlePlayerAbilities).
@@ -155,7 +166,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning']
 
 
 class Game:
@@ -2279,6 +2290,252 @@ def check_flight(host, guest, out):
     return seen
 
 
+
+def check_ladder(host, guest, out):
+    """#1255: climbing down a ladder doesn't hurt where the guest lands."""
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    lx, lz = x + 6, z
+    guest('command', command='gamemode survival')
+    guest('command', command=f'fill {lx - 2} {y} {lz - 2} {lx + 2} {y + 12} {lz + 2} minecraft:air')
+    guest('command', command=f'fill {lx - 2} {y - 1} {lz - 2} {lx + 2} {y - 1} {lz + 2} minecraft:stone')
+    guest('command', command=f'fill {lx} {y} {lz + 1} {lx} {y + 10} {lz + 1} minecraft:stone')
+    guest('command', command=f'fill {lx} {y} {lz} {lx} {y + 10} {lz} minecraft:ladder[facing=north]')
+    guest.wait(10)
+    try:
+        before = remote(guest)['health']
+        # No input on a ladder: the guest slides down at 0.15 a tick (LivingEntity.handleOnClimbable).
+        guest('command', command=f'tp @s {lx + 0.5} {y + 10} {lz + 0.4} 0 0')
+        for _ in range(40):
+            guest.wait(5)
+            if pos_of(guest)[1] < y + 0.01:
+                break
+        guest.wait(20)
+        landed, after = pos_of(guest), remote(guest)['health']
+        assert landed[1] < y + 0.01, f'the guest stayed on the ladder at {landed}'
+        assert after >= before, f'climbing down ten blocks of ladder took the guest from {before} to {after} health'
+        return {'landed': landed, 'health': after}
+    finally:
+        guest('command', command=f'fill {lx} {y} {lz} {lx} {y + 10} {lz + 1} minecraft:air')
+        guest('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+
+
+def apart(host, guest):
+    """The host where it stands and the guest 12 blocks east, each on a stone floor with room
+    around: neither stands in the other's way (a ray from inside a player's box hits that player)."""
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    spots = {}
+    for label, player, dx in (('host', host, 0), ('guest', guest, 12)):
+        px = x + dx
+        host('command', command=f'fill {px - 3} {y - 1} {z - 3} {px + 4} {y - 1} {z + 6} minecraft:stone')
+        host('command', command=f'fill {px - 3} {y} {z - 3} {px + 4} {y + 3} {z + 6} minecraft:air')
+        player('command', command=f'tp @s {px + 0.5} {y} {z + 0.5} 0 0')
+        spots[label] = (px, y, z)
+    host.wait(10)
+    guest.wait(10)
+    return spots
+
+
+def board(player, kind, at):
+    """Right-click the `kind` object near `at` and check `player` rides it."""
+    found = [o for o in player('status')['objects'] if o['kind'].endswith(kind)
+             and abs(o['position'][0] - at[0]) < 2 and abs(o['position'][2] - at[2]) < 2]
+    assert found, f'no {kind} near {at}'
+    vehicle = found[0]
+    vp = vehicle['position']
+    player.raw('look-at', f'{vp[0]:.2f}', f'{vp[1] + 0.3:.2f}', f'{vp[2]:.2f}')
+    player.raw('mouse', 'right', 'click')
+    player.wait(10)
+    riding = player('status').get('riding')
+    assert riding == vehicle['id'], f'right-clicking the {kind} {vehicle["id"]}: riding {riding}'
+    return vehicle
+
+
+def leave_vehicle(player, kind):
+    player.raw('key', 'shift', 'down')
+    player.wait(10)
+    player.raw('key', 'shift', 'up')
+    player.wait(10)
+    riding = player('status').get('riding')
+    assert riding is None, f'sneaking out of the {kind}: riding {riding}'
+
+
+def break_vehicle(player, vehicle_id, kind):
+    """Hit it with fists until it breaks: VehicleEntity.tick takes 1 off its damage every tick."""
+    for _ in range(10):
+        here = [o for o in player('status')['objects'] if o['id'] == vehicle_id]
+        if not here:
+            return
+        vp = here[0]['position']
+        player.raw('look-at', f'{vp[0]:.2f}', f'{vp[1] + 0.3:.2f}', f'{vp[2]:.2f}')
+        player.raw('mouse', 'left', 'click')
+        player.wait(2)
+    raise AssertionError(f'ten hits left the {kind} in place')
+
+
+def check_boats(host, guest, out):
+    """#1222: the host (single player, on its server thread or not) and the guest each board a boat
+    on water with a right click, paddle it forward (the other side sees it move), sneak out, and
+    break it with their fists."""
+    result = {}
+    spots = apart(host, guest)
+    for label, player, other in (('host', host, guest), ('guest', guest, host)):
+        x, y, z = spots[label]
+        bx = x + 3
+        player('command', command='gamemode survival')
+        # A pool ten blocks long in a stone basin (the world may float), with a path beside it to
+        # walk back to the boat.
+        player('command', command=f'fill {bx - 3} {y} {z - 2} {bx + 2} {y + 3} {z + 10} minecraft:air')
+        player('command', command=f'fill {bx - 3} {y - 2} {z - 2} {bx + 2} {y - 1} {z + 10} minecraft:stone')
+        player('command', command=f'fill {bx - 1} {y - 1} {z - 1} {bx + 1} {y - 1} {z + 9} minecraft:water')
+        player('command', command=f'summon minecraft:oak_boat {bx + 0.5} {y - 0.1} {z + 0.5}')
+        player.wait(30)
+        try:
+            boat = board(player, 'oak_boat', (bx + 0.5, y, z + 0.5))
+            start = boat['position']
+            # The summoned boat faces south: forward paddles it along the pool.
+            player.raw('key', 'w', 'down')
+            player.wait(30)
+            player.raw('key', 'w', 'up')
+            player.wait(20)
+            mine = [o for o in player('status')['objects'] if o['id'] == boat['id']]
+            assert mine, f'the {label} lost its boat'
+            moved = math.dist(start, mine[0]['position'])
+            assert moved > 0.5, f'paddling forward moved the {label}\'s boat {moved:.2f} blocks'
+            # The other side sees the boat where its rider took it (the server accepted its moves).
+            theirs = [o for o in objects_near(other, mine[0]['position'], 'objects')
+                      if o['kind'].endswith('oak_boat')]
+            assert theirs, f'the other side sees no boat near the {label}\'s'
+            far = min(math.dist(o['position'], mine[0]['position']) for o in theirs)
+            assert far < 1.0, f'the other side sees the {label}\'s boat {far:.2f} blocks off'
+            leave_vehicle(player, 'boat')
+            player('command', command=f'tp @s {bx - 1.5} {y} {mine[0]["position"][2]:.2f}')
+            player.wait(5)
+            break_vehicle(player, boat['id'], 'boat')
+            result[label] = {'boat': boat['id'], 'paddled': round(moved, 2), 'broken': True}
+        finally:
+            player('command', command=f'kill @e[type=minecraft:oak_boat,x={bx},y={y},z={z + 4},distance=..10]')
+            player('command', command=f'fill {bx - 1} {y - 1} {z - 1} {bx + 1} {y - 1} {z + 9} minecraft:stone')
+            player('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+            player.wait(5)
+    return result
+
+
+def check_minecarts(host, guest, out):
+    """#1222: the host and the guest each get into a minecart on rails with a right click, sneak out
+    beside it, and break it with their fists."""
+    result = {}
+    spots = apart(host, guest)
+    for label, player in (('host', host), ('guest', guest)):
+        x, y, z = spots[label]
+        cx = x + 3
+        player('command', command='gamemode survival')
+        player('command', command=f'fill {cx - 2} {y} {z - 2} {cx + 2} {y + 3} {z + 6} minecraft:air')
+        player('command', command=f'fill {cx - 2} {y - 1} {z - 2} {cx + 2} {y - 1} {z + 6} minecraft:stone')
+        player('command', command=f'fill {cx} {y} {z} {cx} {y} {z + 4} minecraft:rail')
+        player('command', command=f'summon minecraft:minecart {cx + 0.5} {y} {z + 0.5}')
+        player.wait(30)
+        try:
+            cart = board(player, 'minecart', (cx + 0.5, y, z + 0.5))
+            seated = pos_of(player)
+            assert abs(seated[0] - (cx + 0.5)) < 0.6, f'the {label} sits at {seated}, not in the cart'
+            leave_vehicle(player, 'minecart')
+            out_at = pos_of(player)
+            assert math.dist(out_at, seated) > 0.3, f'the {label} stayed in its seat at {out_at}'
+            player.wait(5)
+            break_vehicle(player, cart['id'], 'minecart')
+            result[label] = {'cart': cart['id'], 'out_at': [round(v, 2) for v in out_at], 'broken': True}
+        finally:
+            player('command', command=f'kill @e[type=minecraft:minecart,x={cx},y={y},z={z},distance=..8]')
+            player('command', command=f'kill @e[type=minecraft:item,x={cx},y={y},z={z},distance=..8]')
+            player('command', command=f'fill {cx} {y} {z} {cx} {y} {z + 4} minecraft:air')
+            player('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+            player.wait(5)
+    return result
+
+
+def check_frames(host, guest, out):
+    """#1222: the host and the guest each put a diamond in an item frame and turn it, and put a
+    helmet on an armor stand and take it back, with right clicks."""
+    result = {}
+    spots = apart(host, guest)
+    for label, player, other in (('host', host, guest), ('guest', guest, host)):
+        x, y, z = spots[label]
+        player('command', command='gamemode survival')
+        # Within a survival player's 3 blocks of reach: a frame on a wall, an armor stand beside it.
+        player('command', command=f'fill {x - 2} {y} {z + 1} {x + 2} {y + 2} {z + 2} minecraft:air')
+        player('command', command=f'fill {x - 2} {y} {z + 3} {x + 2} {y + 2} {z + 3} minecraft:stone')
+        player('command', command=f'summon minecraft:item_frame {x + 0.5} {y + 1.5} {z + 2.97} '
+               f'{{block_pos:[I;{x},{y + 1},{z + 2}],Facing:2b}}')
+        player('command', command=f'summon minecraft:armor_stand {x - 1.5} {y} {z + 1.5}')
+        player('command', command='clear @s')
+        player('command', command='item replace entity @s weapon.mainhand with minecraft:diamond')
+        player.wait(30)
+        try:
+            frame = [o for o in player('status')['objects'] if o['kind'].endswith('item_frame')
+                     and o['position'] == [x, y + 1, z + 2]]
+            assert frame, f'the {label} sees no item frame at {[x, y + 1, z + 2]}'
+            player.raw('look-at', f'{x + 0.5:.2f}', f'{y + 1.5:.2f}', f'{z + 2.95:.2f}')
+            player.raw('mouse', 'right', 'click')
+            player.wait(10)
+            player.raw('mouse', 'right', 'click')
+            player.wait(10)
+            frame = [o for o in player('status')['objects'] if o['id'] == frame[0]['id']][0]
+            assert frame['item'] == 'minecraft:diamond', f'the {label}\'s frame holds {frame["item"]}'
+            assert frame['rotation'] == 1, f'the {label}\'s frame turned to {frame["rotation"]}'
+            theirs = [o for o in other('status')['objects'] if o['kind'].endswith('item_frame')
+                      and o['position'] == [x, y + 1, z + 2]]
+            assert theirs and theirs[0]['item'] == 'minecraft:diamond' and theirs[0]['rotation'] == 1, \
+                f'the other side sees the {label}\'s frame as {theirs}'
+            player('command', command='item replace entity @s weapon.mainhand with minecraft:iron_helmet')
+            player.wait(5)
+            stand = [o for o in player('status')['objects'] if o['kind'] == 'minecraft:armor_stand'
+                     and abs(o['position'][0] - (x - 1.5)) < 0.5 and abs(o['position'][2] - (z + 1.5)) < 0.5]
+            assert stand, f'the {label} sees no armor stand'
+            player.raw('look-at', f'{x - 1.5:.2f}', f'{y + 1.7:.2f}', f'{z + 1.5:.2f}')
+            player.raw('mouse', 'right', 'click')
+            player.wait(10)
+            worn = [o for o in player('status')['objects'] if o['id'] == stand[0]['id']][0]['equipment']
+            assert 'minecraft:iron_helmet' in worn, f'the {label}\'s armor stand wears {worn}'
+            player.raw('look-at', f'{x - 1.5:.2f}', f'{y + 1.7:.2f}', f'{z + 1.5:.2f}')
+            player.raw('mouse', 'right', 'click')
+            player.wait(10)
+            worn = [o for o in player('status')['objects'] if o['id'] == stand[0]['id']][0]['equipment']
+            assert 'minecraft:iron_helmet' not in worn, f'taking the helmet back left {worn}'
+            result[label] = {'frame': 'diamond, turned', 'stand': 'helmet on and off'}
+        finally:
+            player('command', command=f'kill @e[type=!minecraft:player,x={x - 3},y={y - 1},z={z},dx=6,dy=4,dz=6]')
+            player('command', command=f'fill {x - 2} {y} {z + 3} {x + 2} {y + 2} {z + 3} minecraft:air')
+            player('command', command='clear @s')
+    return result
+
+
+def check_lightning(host, guest, out):
+    """A bolt summoned beside each player: both sides get the bolt entity and flash the sky (the
+    host's window too on its server thread, FEATURES 4z(f))."""
+    result = {}
+    for label, player in (('host', host), ('guest', guest)):
+        x, y, z = (int(v // 1) for v in pos_of(player))
+        before = {g.name: g('status')['lightning'] for g in (host, guest)}
+        # No fire where it strikes: on stone with nothing around.
+        player('command', command=f'fill {x + 4} {y - 1} {z - 2} {x + 8} {y - 1} {z + 2} minecraft:stone')
+        player('command', command=f'fill {x + 4} {y} {z - 2} {x + 8} {y + 3} {z + 2} minecraft:air')
+        player('command', command=f'summon minecraft:lightning_bolt {x + 6.5} {y} {z + 0.5}')
+        seen = {}
+        for _ in range(40):
+            player.wait(1)
+            seen = {g.name: g('status')['lightning'] for g in (host, guest)}
+            if all(seen[n]['struck'] > before[n]['struck'] and seen[n]['flashes'] > before[n]['flashes']
+                   for n in seen):
+                break
+        player('command', command=f'fill {x + 4} {y} {z - 2} {x + 8} {y + 3} {z + 2} minecraft:air')
+        for n in seen:
+            assert seen[n]['struck'] > before[n]['struck'], f"{label}'s bolt: the {n} got no bolt ({seen[n]})"
+            assert seen[n]['flashes'] > before[n]['flashes'], f"{label}'s bolt: the {n}'s sky didn't flash ({seen[n]})"
+        result[label] = {n: {'bolts': seen[n]['struck'] - before[n]['struck'],
+                             'flashes': seen[n]['flashes'] - before[n]['flashes']} for n in seen}
+    return result
+
+
 def check_growth(host, guest, out):
     """Block ticks near a guest 1000 blocks from the host: only the guest's tickets tick them."""
     x0, y0, z0 = pos_of(guest)
@@ -2591,7 +2848,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles, 'blast': check_blast,
              'light': check_light, 'plates': check_plates,
              'swings': check_swings, 'cracks': check_cracks,
-             'time': check_time, 'growth': check_growth, 'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect, 'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'arrows': check_arrows, 'predict': check_predict}
+             'time': check_time, 'growth': check_growth, 'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect, 'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'arrows': check_arrows, 'predict': check_predict, 'ladder': check_ladder, 'boats': check_boats, 'minecarts': check_minecarts, 'frames': check_frames, 'lightning': check_lightning}
 
 
 def run(ctl, out, resources, checks):
