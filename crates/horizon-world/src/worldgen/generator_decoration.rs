@@ -816,6 +816,19 @@ impl PlacementContext for World<'_> {
             .is_face_sturdy(self, state, position, direction, SupportType::Center)
             .map_err(query)
     }
+    fn can_occlude(&mut self, state: BlockStateId) -> Result<bool, PlacementQueryError> {
+        if let Some(behaviours) = self.behaviours {
+            return Ok(behaviours.has_flag(state, crate::level::data::state_flags::CAN_OCCLUDE));
+        }
+        let properties = &self.blocks()?.properties;
+        let name = properties
+            .registry()
+            .state(state)
+            .ok_or(PlacementQueryError::Unavailable)?
+            .name
+            .clone();
+        Ok(properties.definition(&name).is_some_and(|d| d.can_occlude))
+    }
     fn collision_full_block(
         &mut self,
         state: BlockStateId,

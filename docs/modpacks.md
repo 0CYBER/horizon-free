@@ -494,7 +494,11 @@ Two cases the oracle fills in:
     plus the name's hash, at the block, piece or structure). In a CTOV plains village at seed
     1234 the farms now grow carrots, potatoes and beetroot besides wheat, and 1,655
     cobblestone blocks become paths, grass, mossy cobblestone and planks. No Lithostitched processor is
-    dropped now (130 before), only CTOV's compat hooks for other mods inside them (142 copies).
+    dropped now (130 before). CTOV's compat hooks for other mods inside them (its
+    `modular_compat`, 142 copies) run a list of their own only when the mod they name is
+    loaded: carry writes that list in when the mod is ported along and takes the hook out (a
+    no-op, as in the mod) when it is not. In ATM10 all 142 name Nature's Spirit, which the
+    pack does not have.
     The processors that build outside their template are carried too: Repurposed's and
     Moog's pillar processors become the game's `horizon:pillar` (a column from a placeholder
     block down to the ground, with the processor list they run on each of its blocks written
@@ -529,6 +533,11 @@ Two cases the oracle fills in:
     the world is air, keep it" rules: around the ocean mineshaft at chunk (-18, -54), seed
     1234, 650 blocks of air and cave air become prismarine and 614 more template water blocks
     stay water (1,303 blocks change in its 81 chunks).
+    Its mineshafts' sky view processor (71 lists) is `horizon:mineshaft_sky_view`: a block
+    of the template at or above the world's `OCEAN_FLOOR_WG` height in its column is not
+    placed, so a mineshaft cut by a valley or a ravine is not built in the open, except
+    plain rails over a block that can occlude, which stay (waterlogged where the world holds
+    water). Repurposed's dropped processors go from 253 to 182.
     Still taken out: Formations' biome replacements, blocks aged or propped up.
     In the 128×128-chunk square (seed 1234), every spawner of a mod structure now has its mob:
     in the Overworld 83 Better Dungeons spawners held the template's placeholder pig and 17 of
