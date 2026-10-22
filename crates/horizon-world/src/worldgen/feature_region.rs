@@ -22,7 +22,7 @@ use horizon_core::{
     },
 };
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::Arc,
 };
 
@@ -60,11 +60,8 @@ impl From<RegionError> for PlacementQueryError {
 pub struct TerrainRegion<'r, B: TerrainBlockStates> {
     /// Ordered by X then Z.
     chunks: Vec<TerrainChunk<'r, B>>,
-    /// Each chunk's index in `chunks` over the chunks' bounding box, row by
-    /// row from `origin` (`u32::MAX`: none): every block access looks one up.
-    grid: Vec<u32>,
-    origin: (i32, i32),
-    columns: i32,
+    /// Each chunk's index in `chunks`: every block access looks one up.
+    index: ChunkIndex,
     min_y: i32,
     height: i32,
     generation: WorldGenerationContext,
@@ -73,6 +70,77 @@ pub struct TerrainRegion<'r, B: TerrainBlockStates> {
     next_tick_order: i64,
     block_queries: Option<RegionBlockQueries>,
     world_seed: Option<i64>,
+}
+/// Where each chunk of a region sits in its list: a grid over the chunks'
+/// bounding box while it is small (the usual square of neighbours), else a
+/// map (chunks spread far apart).
+enum ChunkIndex {
+    Grid {
+        origin: (i32, i32),
+        columns: i64,
+        rows: i64,
+        /// Row by row from `origin`; `u32::MAX` where no chunk is.
+        cells: Vec<u32>,
+    },
+    Sparse(HashMap<(i32, i32), u32>),
+}
+impl ChunkIndex {
+    /// The largest grid, in chunk columns.
+    const GRID_CELLS: i64 = 1 << 20;
+    /// `None` when two chunks share a position.
+    fn new(positions: &[(i32, i32)]) -> Option<Self> {
+        let x0 = positions.iter().map(|p| p.0).min()?;
+        let z0 = positions.iter().map(|p| p.1).min()?;
+        let columns = i64::from(positions.iter().map(|p| p.0).max()?) - i64::from(x0) + 1;
+        let rows = i64::from(positions.iter().map(|p| p.1).max()?) - i64::from(z0) + 1;
+        if columns * rows > Self::GRID_CELLS {
+            let mut map = HashMap::with_capacity(positions.len());
+            for (i, &p) in positions.iter().enumerate() {
+                if map.insert(p, i as u32).is_some() {
+                    return None;
+                }
+            }
+            return Some(Self::Sparse(map));
+        }
+        let mut cells = vec![u32::MAX; (columns * rows) as usize];
+        for (i, &(x, z)) in positions.iter().enumerate() {
+            let cell = (i64::from(z) - i64::from(z0)) * columns + (i64::from(x) - i64::from(x0));
+            let cell = &mut cells[cell as usize];
+            if *cell != u32::MAX {
+                return None;
+            }
+            *cell = i as u32;
+        }
+        Some(Self::Grid {
+            origin: (x0, z0),
+            columns,
+            rows,
+            cells,
+        })
+    }
+    fn get(&self, x: i32, z: i32) -> Option<usize> {
+        match self {
+            Self::Grid {
+                origin,
+                columns,
+                rows,
+                cells,
+            } => {
+                let (dx, dz) = (
+                    i64::from(x) - i64::from(origin.0),
+                    i64::from(z) - i64::from(origin.1),
+                );
+                if !(0..*columns).contains(&dx) || !(0..*rows).contains(&dz) {
+                    return None;
+                }
+                match cells[(dz * columns + dx) as usize] {
+                    u32::MAX => None,
+                    i => Some(i as usize),
+                }
+            }
+            Self::Sparse(map) => map.get(&(x, z)).map(|&i| i as usize),
+        }
+    }
 }
 impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
     pub fn new(
@@ -91,30 +159,14 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
         }
         let mut chunks = chunks;
         chunks.sort_by_key(|c| (c.position().x, c.position().z));
-        let (xs, zs) = (
-            chunks.iter().map(|c| c.position().x),
-            chunks.iter().map(|c| c.position().z),
-        );
-        let origin = (xs.clone().min().unwrap(), zs.clone().min().unwrap());
-        let columns = i64::from(xs.max().unwrap()) - i64::from(origin.0) + 1;
-        let rows = i64::from(zs.max().unwrap()) - i64::from(origin.1) + 1;
-        if columns * rows > 1 << 20 {
-            return Err(RegionError::InvalidChunks);
-        }
-        let mut grid = vec![u32::MAX; (columns * rows) as usize];
-        for (i, chunk) in chunks.iter().enumerate() {
-            let p = chunk.position();
-            let cell = (p.z - origin.1) as usize * columns as usize + (p.x - origin.0) as usize;
-            if grid[cell] != u32::MAX {
-                return Err(RegionError::InvalidChunks);
-            }
-            grid[cell] = i as u32;
-        }
+        let positions: Vec<(i32, i32)> = chunks
+            .iter()
+            .map(|c| (c.position().x, c.position().z))
+            .collect();
+        let index = ChunkIndex::new(&positions).ok_or(RegionError::InvalidChunks)?;
         Ok(Self {
             chunks,
-            grid,
-            origin,
-            columns: columns as i32,
+            index,
             sea_level: generator.sea_level,
             game_time: 0,
             next_tick_order: 0,
@@ -212,17 +264,7 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
         self.chunks.iter()
     }
     fn index(&self, x: i32, z: i32) -> Option<usize> {
-        let (dx, dz) = (x.wrapping_sub(self.origin.0), z.wrapping_sub(self.origin.1));
-        if dx < 0 || dz < 0 || dx >= self.columns {
-            return None;
-        }
-        match *self
-            .grid
-            .get(dz as usize * self.columns as usize + dx as usize)?
-        {
-            u32::MAX => None,
-            i => Some(i as usize),
-        }
+        self.index.get(x, z)
     }
     pub fn chunk(&self, x: i32, z: i32) -> Result<&TerrainChunk<'r, B>, RegionError> {
         match self.index(x, z) {
