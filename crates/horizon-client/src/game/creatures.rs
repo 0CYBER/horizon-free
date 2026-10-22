@@ -390,6 +390,7 @@ impl Game<'_> {
             player,
             others,
             others_grid: None,
+            others_index: None,
             daylight: self.dim != Dim::Nether && self.sky_darken() < 4,
             game_time: self.world.game_time,
             day_time: self.world.day_time,
@@ -402,7 +403,7 @@ impl Game<'_> {
             end: self.dim == Dim::End,
             world_seed: self.level.seed,
             sea_level: if self.dim == Dim::Nether { 32 } else { 63 },
-            teams: self.mob_teams(),
+            teams: std::sync::Arc::new(self.mob_teams()),
             items: Some(self.res.items()),
             difficulty: self.local_difficulty(
                 self.player
@@ -503,9 +504,22 @@ impl Game<'_> {
             let mut keep = Vec::with_capacity(mobs.len());
             let mut grid =
                 horizon_client::mobs::seen_grid::SeenGrid::new(snapshot.iter().map(|s| s.bounds));
+            // All but the snapshot is the same for every mob of the tick, so
+            // build it once: the player view and the teams scan every UUID.
+            let base = self.mob_world_base(&[]);
+            // Each mob keeps its snapshot slot all tick; the first slot of an
+            // id answers, as a scan would.
+            let mut index = horizon_client::fast_hash::FxHashMap::<u32, u32>::default();
+            for (i, s) in snapshot.iter().enumerate() {
+                index.entry(s.id).or_insert(i as u32);
+            }
             for i in 0..mobs.len() {
-                let mut w = self.mob_world_base(&snapshot);
-                w.others_grid = Some(&grid);
+                let mut w = MobWorld {
+                    others: &snapshot,
+                    others_grid: Some(&grid),
+                    others_index: Some(&index),
+                    ..base.clone()
+                };
                 let m = &mut mobs[i];
                 w.nearest_player = super::natural_spawning::nearest_player(
                     &players,
@@ -589,7 +603,11 @@ impl Game<'_> {
         if let Some(host) = self.lan.as_mut()
             && !guests.is_empty()
         {
-            bindings.retain(|id, _| mobs.iter().any(|m| m.id == *id));
+            // A set: a scan of every mob for each binding is quadratic, and a
+            // server's loaded mobs run into the thousands.
+            let live: horizon_client::fast_hash::FxHashSet<u32> =
+                mobs.iter().map(|m| m.id).collect();
+            bindings.retain(|id, _| live.contains(id));
             host.mob_players = bindings;
         }
         self.mobs.append(&mut mobs);

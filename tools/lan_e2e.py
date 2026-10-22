@@ -116,6 +116,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              and wheat on farmland grows (random ticks), however the host runs its world.
 - ladder:    the guest climbs down ten blocks of ladder and lands unhurt: the server resets its fall
              distance on a ladder every tick, as LivingEntity.handleOnClimbable does (#1255).
+- boats:     the host (single player, on its server thread with --server-thread) right-clicks a
+             boat on water and rides it, sneaks out, and breaks it with its fists (#1222).
 - flight:    a player in creative double-taps jump and flies, stays up, and stops flying in survival:
              the guest, and on the server thread the host's window too, take what may fly from the
              server's abilities (ClientPacketListener.handlePlayerAbilities).
@@ -157,7 +159,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats']
 
 
 class Game:
@@ -2309,6 +2311,52 @@ def check_ladder(host, guest, out):
         guest('command', command=f'fill {lx} {y} {lz} {lx} {y + 10} {lz + 1} minecraft:air')
         guest('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
 
+
+def check_boats(host, guest, out):
+    """#1222: the single player boards a boat on water with a right click, sneaks out, and breaks it."""
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    bx = x + 3
+    host('command', command='gamemode survival')
+    host('command', command=f'fill {bx - 1} {y} {z - 1} {bx + 1} {y + 3} {z + 1} minecraft:air')
+    host('command', command=f'fill {bx - 1} {y - 1} {z - 1} {bx + 1} {y - 1} {z + 1} minecraft:water')
+    host('command', command=f'summon minecraft:oak_boat {bx + 0.5} {y - 0.1} {z + 0.5}')
+    host.wait(30)
+    boats = [o for o in host('status')['objects'] if o['kind'].endswith('oak_boat')
+             and abs(o['position'][0] - (bx + 0.5)) < 2 and abs(o['position'][2] - (z + 0.5)) < 2]
+    try:
+        assert boats, 'the host sees no boat on the water'
+        boat = boats[0]
+        bp = boat['position']
+        host.raw('look-at', f'{bp[0]:.2f}', f'{bp[1] + 0.3:.2f}', f'{bp[2]:.2f}')
+        host.raw('mouse', 'right', 'click')
+        host.wait(10)
+        riding = host('status').get('riding')
+        assert riding == boat['id'], f'right-clicking the boat {boat["id"]}: riding {riding}'
+        host.raw('key', 'shift', 'down')
+        host.wait(10)
+        host.raw('key', 'shift', 'up')
+        host.wait(10)
+        riding = host('status').get('riding')
+        assert riding is None, f'sneaking out of the boat: riding {riding}'
+        host('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+        host.wait(5)
+        gone = False
+        for _ in range(10):
+            here = [o for o in host('status')['objects'] if o['id'] == boat['id']]
+            if not here:
+                gone = True
+                break
+            bp = here[0]['position']
+            host.raw('look-at', f'{bp[0]:.2f}', f'{bp[1] + 0.3:.2f}', f'{bp[2]:.2f}')
+            host.raw('mouse', 'left', 'click')
+            # VehicleEntity.tick takes 1 off the damage every tick: hit fast.
+            host.wait(2)
+        assert gone, 'ten hits left the boat in place'
+        return {'boat': boat['id'], 'rode': True, 'broken': True}
+    finally:
+        host('command', command=f'kill @e[type=minecraft:oak_boat,x={bx},y={y},z={z},distance=..6]')
+        host('command', command=f'fill {bx - 1} {y - 1} {z - 1} {bx + 1} {y - 1} {z + 1} minecraft:stone')
+
 def check_growth(host, guest, out):
     """Block ticks near a guest 1000 blocks from the host: only the guest's tickets tick them."""
     x0, y0, z0 = pos_of(guest)
@@ -2621,13 +2669,18 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles, 'blast': check_blast,
              'light': check_light, 'plates': check_plates,
              'swings': check_swings, 'cracks': check_cracks,
-             'time': check_time, 'growth': check_growth, 'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect, 'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'arrows': check_arrows, 'predict': check_predict, 'ladder': check_ladder}
+             'time': check_time, 'growth': check_growth, 'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect, 'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'arrows': check_arrows, 'predict': check_predict, 'ladder': check_ladder, 'boats': check_boats}
 
 
 def run(ctl, out, resources, checks):
     host, guest = Game('host', ctl, resources), Game('guest', ctl, resources)
-    # Either way explicitly: the game's default is the server thread.
-    host.d.env['HORIZON_SERVER_THREAD'] = '1' if SERVER_THREAD else '0'
+    # Without --server-thread the host runs the game's default, the world in the frame, as players
+    # get it (`boats` fails there if the default goes back to the server thread before it has
+    # vehicles, #1222).
+    if SERVER_THREAD:
+        host.d.env['HORIZON_SERVER_THREAD'] = '1'
+    else:
+        host.d.env.pop('HORIZON_SERVER_THREAD', None)
     results = {}
     try:
         host.pid = host('launch', wait=False, offscreen=sys.platform == 'darwin')['pid']
