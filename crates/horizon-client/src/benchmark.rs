@@ -140,7 +140,22 @@ fn run(control: &Control, setup: Setup) -> Result<PathBuf, String> {
         driver: text(&renderer["driver"]),
         backend: text(&renderer["backend"]).to_lowercase(),
         kind: text(&renderer["device_type"]),
+        vram_mb: None,
     });
+    if let Some(gpu) = report.hardware.gpu.as_mut() {
+        let vendor = horizon_telemetry::system::gpu_vendor(&gpu.name, 0);
+        let vendor = if gpu.vendor.is_empty() {
+            vendor
+        } else {
+            gpu.vendor.as_str()
+        }
+        .to_owned();
+        if gpu.kind.contains("iscrete") {
+            gpu.vram_mb = horizon_telemetry::system::vram_mb(&vendor);
+        }
+    }
+    report.hardware.storage =
+        horizon_telemetry::system::storage(&setup.game_dir).map(str::to_owned);
     report.hardware.display = serde_json::from_value(title["display"].clone()).ok();
 
     replace_world(&setup.game_dir)?;

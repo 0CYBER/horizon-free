@@ -10501,6 +10501,14 @@ impl ApplicationHandler for Game<'_> {
                 return;
             }
         };
+        if let Some(m) = window.current_monitor() {
+            horizon_client::telemetry::set_display(
+                m.size().width,
+                m.size().height,
+                m.refresh_rate_millihertz().map_or(0, |r| r.div_ceil(1000)),
+                m.scale_factor(),
+            );
+        }
         match self.new_renderer(window.clone()) {
             Ok(r) => {
                 self.renderer = Some(r);
@@ -12592,6 +12600,14 @@ impl Loading {
                 return;
             }
         };
+        if let Some(m) = window.current_monitor() {
+            horizon_client::telemetry::set_display(
+                m.size().width,
+                m.size().height,
+                m.refresh_rate_millihertz().map_or(0, |r| r.div_ceil(1000)),
+                m.scale_factor(),
+            );
+        }
         let offscreen = self.options.as_ref().is_some_and(|o| o.offscreen);
         match loading_renderer(
             window.clone(),

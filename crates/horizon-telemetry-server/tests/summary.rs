@@ -148,6 +148,7 @@ async fn uploads_come_back_grouped_and_anonymous() {
     assert_eq!(origin.as_deref(), Some("https://playhorizon.dev"));
     let s: Value = serde_json::from_str(&body).unwrap();
     assert_eq!(s["groups"], expected()["groups"]);
+    assert_eq!(s["groups"][0]["breakdowns"]["vram"][0]["installs"], 3);
     let generated = s["generated"].as_str().unwrap();
     assert!(
         generated.len() == 20 && generated.ends_with('Z'),
@@ -160,6 +161,9 @@ async fn uploads_come_back_grouped_and_anonymous() {
         "secret-driver",
         "20394",
         "ram_mb",
+        "vram_mb",
+        "16376",
+        "32768",
     ] {
         assert!(!body.contains(secret), "{secret} in {body}");
     }

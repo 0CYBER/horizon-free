@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { aggregatePlayers, median, ourRows, rejection, round, summary } from "./benchmarks.mjs";
+import { aggregatePlayers, median, osClass, ourRows, ramClass, rejection, round, storageClass, summary, vramClass, gpuKindClass } from "./benchmarks.mjs";
 
 const fixture = (name) => new URL(`./fixtures/benchmarks/${name}`, import.meta.url);
 const items = readFileSync(fixture("items.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
@@ -17,13 +17,37 @@ test("players' items give the expected groups", () => {
 
 test("nothing that identifies an install is published", () => {
   const text = JSON.stringify(aggregatePlayers(items, { minInstalls: 1 }));
-  for (const secret of ["a1", "a2", "install_id", "secret-os-version", "secret-driver", "20394", "ram_mb", "2560"]) assert.ok(!text.includes(secret), secret);
+  for (const secret of ["a1", "a2", "install_id", "secret-os-version", "secret-driver", "20394", "ram_mb", "2560", "16376", "32768", "vram_mb"]) assert.ok(!text.includes(secret), secret);
 });
 
 test("a group needs three installs, not three runs", () => {
   const one = items.filter((i) => i.install_id === "a1");
   assert.equal(aggregatePlayers([...one, ...one, ...one]).length, 0);
   assert.equal(aggregatePlayers(items, { minInstalls: 2 }).length, 2);
+});
+
+test("hardware classes are coarse, as the server's", () => {
+  assert.equal(ramClass(15.6), "16 GB");
+  assert.equal(ramClass(31), "32 GB");
+  assert.equal(ramClass(64), "64 GB or more");
+  assert.equal(ramClass(0), null);
+  assert.equal(vramClass(16376, "discrete"), "16 GB");
+  assert.equal(vramClass(8192, "DiscreteGpu"), "8 GB");
+  assert.equal(vramClass(0, "integrated"), "shared");
+  assert.equal(vramClass(0, ""), null);
+  assert.equal(storageClass("nvme"), "nvme");
+  assert.equal(storageClass("tape"), null);
+  assert.equal(osClass("windows"), "windows");
+  assert.equal(gpuKindClass("virtual"), null);
+});
+
+test("a breakdown cell needs three installs too", () => {
+  const [group] = aggregatePlayers(items);
+  assert.equal(group.breakdowns.ram, undefined); // 32 GB has two installs, 16 GB one
+  assert.equal(group.breakdowns.storage, undefined);
+  const [all] = aggregatePlayers(items, { minInstalls: 1 });
+  assert.deepEqual(all.breakdowns.ram, [{ class: "32 GB", installs: 2 }, { class: "16 GB", installs: 1 }]);
+  assert.deepEqual(all.breakdowns.storage, [{ class: "nvme", installs: 2 }, { class: "ssd", installs: 1 }]);
 });
 
 test("only comparable runs count", () => {
