@@ -140,37 +140,39 @@ Geist (400, 500, 600) and Geist Mono (400), bundled under the SIL Open Font Lice
   landscape banner with the hero, the version picker and Play; Mods holds the resource pack,
   shader pack and modpack tabs; Versions and Patch notes are lists of panels; Settings is
   grouped panels of rows. Dark by default, Light or System in Settings (Appearance).
-- **Website** (`website/`): the same page structure as before (what it is, screenshots,
-  parity, launcher, patch notes, community), each section a `micro` mono label, a `display`
-  heading and a short paragraph, its content an index list. Screenshots stay as images (radius
-  12, no frame). Light and dark follow the system, with a toggle. A giant faint wordmark sits
-  above the footer. No hero photograph: the first screen is the headline, one paragraph, the
-  download button and the parity score as an index row.
+- **Website** (`website/`): the Blocks look below. The same page structure as before (what it
+  is, screenshots, parity, launcher, patch notes, community), headings in Pixelify Sans, lists as
+  stacks of panels, the stone texture behind the page and Horizon's pixel landscape (a dawn or a
+  sunset) behind the hero. Light and dark follow the system, with a toggle. A giant wordmark in
+  pixels sits in the footer.
 - **Game**: vanilla's screens. The on-screen keyboard is a rounded plate of keys in the page
   colour, the focused key in the accent.
 
-## Blocks (the launcher)
+## Blocks
 
-The launcher's look since the gaming redesign: Minecraft's inventory rather than a document.
-Its tokens are `horizon_theme::Blocks` (`BLOCKS_DARK`, `BLOCKS_LIGHT`); the palettes above stay
-what the game's menus read.
+A blocky, Minecraft-like look in Horizon's purple, for the website and the redesigned launcher:
+Minecraft's inventory rather than a document. Its colours are `horizon_theme::Blocks`
+(`BLOCKS_LIGHT`, `BLOCKS_DARK`), which `tokens.css` carries under the same names as before plus
+`--panel`, `--raised`, `--button`, `--well`, `--bevel`, `--lip`, `--outline` and the `--face`
+of the main action. The game's menus keep `LIGHT` and `DARK`.
 
-- **Pixel type for what you act on.** Headings, tabs, buttons, badges and the wordmark use Pixelify
-  Sans (Medium, SemiBold, Bold); paragraphs, details and numbers stay in Geist and Geist Mono so long
-  text reads easily.
-- **Blocks, not rounded cards.** Every surface is a square panel: a 2 px dark outline, a 2 px light
-  bevel along the top and a darker lip along the bottom. The main action (Play, Install) is the
-  violet `face` with its own bevel and a 4 px lip; secondary buttons are raised `button` blocks;
-  fields and tracks are sunk `well`s.
+- **Pixel type for what names and what you act on.** Headings, navigation, buttons and the
+  wordmark use Pixelify Sans (OFL; Medium, SemiBold, Bold); paragraphs and numbers stay in Geist
+  and Geist Mono so long text reads easily.
+- **Blocks, not rounded cards.** Every surface is square: a 2 px dark outline, a 2 px light bevel
+  along the top and a darker lip along the bottom. The main action is the violet face with its own
+  bevel and a 4 px lip; it sinks a pixel when pressed. Code and fields are sunk wells.
 - **Inventory tabs** switch the kinds in Mods: the open tab joins the panel under it.
 - **Slots** hold pictures: a mod's or pack's own icon and gallery images from its source,
   downloaded when first shown and kept on disk (`launcher/src/browser/images.rs`); the launcher
   ships no third-party pictures. The Horizon instance shows a grass block drawn from the player's
   own prepared Minecraft textures. Sources are named in text ("from Modrinth"): Modrinth's logo is
   all rights reserved, so it is not shown.
-- **Pixel art made in code** (`launcher/src/art.rs`): the stone behind the pages (16 texel tiles in
-  five shades of the page colour) and the landscape behind Home (a sunset in dark, a dawn in light),
-  baked at the window's scale so each texel covers whole device pixels.
+- **Pixel art drawn in code.** The stone behind the pages is close shades of the page colour
+  (`TILE_SHADES`), never Minecraft's stone; the landscape is a banded sky, a sun cut in slices like
+  the mark, hills and square trees (a sunset in dark, a dawn in light). The launcher bakes them in
+  `launcher/src/art.rs` at the window's scale so each texel covers whole device pixels; the website
+  draws them in `website/scripts/art.mjs`.
 - **Icons**: Pixelarticons (MIT), 24 unit pixel SVGs in `crates/horizon-theme/icons/pixel/`, tinted
   with the text colour.
 - **Contrast**: every text colour meets WCAG AA (4.5:1) on the panels, the page and the lightest

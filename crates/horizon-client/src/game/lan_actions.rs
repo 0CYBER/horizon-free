@@ -49,6 +49,8 @@ pub(super) struct GuestPlay {
     /// Swings the guest's actions started this tick, for the players around
     /// (`LivingEntity.swing` sends ClientboundSwingAnimationPacket).
     swings: u32,
+    /// The guest's riding jump charge (`LocalPlayer.jumpRidingTicks`).
+    mount: super::mounts::MountState,
     /// The trading screen the guest has open.
     pub(super) merchant: Option<super::lan_trading::GuestMerchant>,
     /// The inventory menu and the crafting table the guest crafts in.
@@ -289,6 +291,7 @@ impl Game<'_> {
         let attack_ticks = std::mem::replace(&mut self.attack_ticks, play.attack_ticks);
         let attack_item = std::mem::replace(&mut self.attack_item, play.attack_item.take());
         let swing = std::mem::replace(&mut self.swing, play.swing);
+        std::mem::swap(&mut self.mount, &mut play.mount);
         let (left, right) = (self.left, self.right);
         self.left = play.digging.is_some();
         self.right = play.using.is_some() || self.using.is_some();
@@ -478,6 +481,7 @@ impl Game<'_> {
         play.attack_ticks = std::mem::replace(&mut self.attack_ticks, attack_ticks);
         play.attack_item = std::mem::replace(&mut self.attack_item, attack_item);
         play.swing = std::mem::replace(&mut self.swing, swing);
+        std::mem::swap(&mut self.mount, &mut play.mount);
         self.container = container;
         self.screen = screen;
         self.sign_edit = host_sign;

@@ -800,6 +800,16 @@ impl Game<'_> {
             self.send_admin_feedback(&mut host, None);
         }
         let state = self.lan_host_state(&host);
+        // An animal whose rider left the game (or the level) stops taking
+        // its input.
+        for m in &mut self.mobs {
+            if m.rider.is_some()
+                && self.riding != Some(m.id)
+                && !host.hub.guests.iter().any(|g| g.vehicle == Some(m.id))
+            {
+                m.rider = None;
+            }
+        }
         // A dedicated server runs the hub without a host player.
         if state.is_some() || host.hub.config.dedicated {
             let has_guests = !host.hub.guests.is_empty();

@@ -123,6 +123,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
              it (#1222).
 - frames:    the host and the guest each put a diamond in an item frame and turn it, and put a
              helmet on an armor stand and take it back (#1222).
+- riding:    the host and the guest each saddle and ride a horse (walk, jump), a pig and a strider
+             (with their sticks), a camel and a donkey, sit on a llama and fly a happy ghast, and
+             get off by sneaking; the other side sees the animal move.
 - lightning: a bolt summoned beside the host, then the guest: both sides get the bolt and flash the
              sky (on its server thread the host's window is a client of it too).
 - flight:    a player in creative double-taps jump and flies, stays up, and stops flying in survival:
@@ -166,7 +169,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning', 'riding']
 
 
 class Game:
@@ -2509,6 +2512,132 @@ def check_frames(host, guest, out):
     return result
 
 
+# Animals a player rides: (kind, summon NBT, what readies it, what is held to ride, the test
+# while riding). `move` walks forward, `jump` charges the horse's jump bar, `rise` holds jump on
+# a happy ghast, `sit` only rides (a llama goes where it likes).
+RIDES = [
+    ('horse', '{Tame:1b}', 'minecraft:saddle', None, 'move jump'),
+    ('pig', '', 'minecraft:saddle', 'minecraft:carrot_on_a_stick', 'move'),
+    ('strider', '', 'minecraft:saddle', 'minecraft:warped_fungus_on_a_stick', 'move'),
+    ('camel', '', 'minecraft:saddle', None, 'move'),
+    ('donkey', '{Tame:1b}', 'minecraft:saddle', None, 'move'),
+    ('llama', '{Tame:1b}', None, None, 'sit'),
+    ('happy_ghast', '', 'minecraft:white_harness', None, 'rise'),
+]
+HEIGHTS = {'horse': 1.6, 'donkey': 1.5, 'pig': 0.9, 'strider': 1.7, 'camel': 2.375, 'llama': 1.87,
+           'happy_ghast': 4.0}
+
+
+def mob_seen(game, mob_id):
+    found = [m for m in game.raw('mobs', 96).get('near', []) if m['id'] == mob_id]
+    return found[0] if found else None
+
+
+def hold(game, key, ticks):
+    game.raw('key', key, 'down')
+    game.wait(ticks)
+    game.raw('key', key, 'up')
+
+
+def ride(player, other, label, spot, kind, nbt, ready, stick, test):
+    """Summon `kind` in front of `player`, ready it (saddle, harness), get on with a right click,
+    run `test`, and get off by sneaking. The other side sees the animal move."""
+    x, y, z = spot
+    # In reach (3 blocks), clear of the player: a happy ghast is 4 blocks wide.
+    at = (x + 0.5, z + {'happy_ghast': 3.2, 'camel': 3.0}.get(kind, 2.5))
+    # The first item in hand before it appears: a happy ghast drifts out of reach quickly.
+    player('command', command=f'item replace entity @s weapon.mainhand with {ready or stick or "minecraft:air"}')
+    player('command', command=f'summon minecraft:{kind} {at[0]} {y} {at[1]} {nbt}')
+    player.wait(3)
+    found = [m for m in player.raw('mobs', 16).get('near', []) if m['kind'].endswith(kind) and m['health'] > 0]
+    assert found, f'the {label} sees no {kind}'
+    mob = found[0]
+    def click(item):
+        player('command', command=f'item replace entity @s weapon.mainhand with {item or "minecraft:air"}')
+        player.wait(2)
+        m = mob_seen(player, mob['id'])
+        assert m, f'the {label} lost its {kind}'
+        p = m['pos']
+        # Back in front of it if it wandered off (a happy ghast drifts away fast).
+        if abs(p[0] - (x + 0.5)) > 0.5 or abs(p[2] - at[1]) > 0.5:
+            player('command', command=f'tp @s {p[0]:.2f} {y} {p[2] - (at[1] - z - 0.5):.2f} 0 0')
+            player.wait(1)
+        player.raw('look-at', f'{p[0]:.2f}', f'{p[1] + HEIGHTS[kind] / 2:.2f}', f'{p[2]:.2f}')
+        player.raw('mouse', 'right', 'click')
+        player.wait(5)
+    try:
+        if ready:
+            click(ready)
+        click(stick)
+        riding = player('status').get('riding')
+        assert riding == mob['id'], f'the {label} right-clicked the {kind} {mob["id"]}: riding {riding}'
+        result = {'rode': True}
+        # South, along the cleared floor.
+        player.raw('look-at', f'{x + 0.5:.2f}', f'{y + 1.6:.2f}', f'{z + 40.5:.2f}')
+        player.wait(5)
+        start = mob_seen(player, mob['id'])['pos']
+        if 'move' in test:
+            hold(player, 'w', 60)
+            player.wait(5)
+            mine = mob_seen(player, mob['id'])['pos']
+            theirs = mob_seen(other, mob['id'])
+            moved = math.dist(start, mine)
+            assert moved > 1.0, f"the {label}'s {kind} moved {moved:.2f} blocks in 3 s of forward"
+            assert theirs and math.dist(theirs['pos'], mine) < 1.5, \
+                f"the other side sees the {label}'s {kind} at {theirs and theirs['pos']}, not {mine}"
+            seated = pos_of(player)
+            assert math.dist(seated[::2], mine[::2]) < 1.5, f'the {label} sits at {seated}, its {kind} at {mine}'
+            result['moved'] = round(moved, 2)
+        if 'jump' in test:
+            base = mob_seen(player, mob['id'])['pos'][1]
+            player.raw('key', 'space', 'down')
+            player.wait(10)
+            player.raw('key', 'space', 'up')
+            top = base
+            for _ in range(10):
+                player.wait(2)
+                top = max(top, mob_seen(player, mob['id'])['pos'][1])
+            assert top - base > 0.4, f"the {label}'s {kind} jumped {top - base:.2f} blocks"
+            result['jumped'] = round(top - base, 2)
+        if 'rise' in test:
+            base = mob_seen(player, mob['id'])['pos'][1]
+            hold(player, 'space', 40)
+            player.wait(5)
+            rose = mob_seen(player, mob['id'])['pos'][1] - base
+            assert rose > 0.5, f"the {label}'s {kind} rose {rose:.2f} blocks while it held jump"
+            result['rose'] = round(rose, 2)
+        hold(player, 'shift', 10)
+        player.wait(10)
+        riding = player('status').get('riding')
+        assert riding is None, f'sneaking off the {kind}: the {label} still rides {riding}'
+        return result
+    finally:
+        player('command', command=f'kill @e[type=minecraft:{kind},x={x},y={y},z={z},distance=..48]')
+        player('command', command=f'tp @s {x + 0.5} {y} {z + 0.5} 0 0')
+        player.wait(5)
+
+
+def check_riding(host, guest, out):
+    """The host (single player, on its server thread or not) and the guest each saddle and ride a
+    horse (walk and jump), a pig and a strider (with their sticks), a camel and a donkey, sit on a
+    llama, and harness and fly a happy ghast; they get off by sneaking."""
+    spots = apart(host, guest)
+    result = {}
+    for label, player, other in (('host', host, guest), ('guest', guest, host)):
+        x, y, z = spots[label]
+        player('command', command='gamemode survival')
+        player('command', command=f'fill {x - 3} {y - 1} {z - 3} {x + 4} {y - 1} {z + 40} minecraft:stone')
+        player('command', command=f'fill {x - 3} {y} {z - 3} {x + 4} {y + 12} {z + 40} minecraft:air')
+        player.wait(10)
+        result[label] = {}
+        # LAN_E2E_RIDES=pig,horse picks some of them.
+        only = [k for k in os.environ.get('LAN_E2E_RIDES', '').split(',') if k]
+        for kind, nbt, ready, stick, test in (r for r in RIDES if not only or r[0] in only):
+            result[label][kind] = ride(player, other, label, (x, y, z), kind, nbt, ready, stick, test)
+        player('command', command='item replace entity @s weapon.mainhand with minecraft:air')
+    return result
+
+
 def check_lightning(host, guest, out):
     """A bolt summoned beside each player: both sides get the bolt entity and flash the sky (the
     host's window too on its server thread, FEATURES 4z(f))."""
@@ -2848,7 +2977,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles, 'blast': check_blast,
              'light': check_light, 'plates': check_plates,
              'swings': check_swings, 'cracks': check_cracks,
-             'time': check_time, 'growth': check_growth, 'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect, 'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'arrows': check_arrows, 'predict': check_predict, 'ladder': check_ladder, 'boats': check_boats, 'minecarts': check_minecarts, 'frames': check_frames, 'lightning': check_lightning}
+             'time': check_time, 'growth': check_growth, 'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect, 'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'arrows': check_arrows, 'predict': check_predict, 'ladder': check_ladder, 'boats': check_boats, 'minecarts': check_minecarts, 'frames': check_frames, 'lightning': check_lightning, 'riding': check_riding}
 
 
 def run(ctl, out, resources, checks):

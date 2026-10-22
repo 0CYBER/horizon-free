@@ -474,6 +474,41 @@ impl Palette {
     }
 }
 
+impl Blocks {
+    /// Every colour by its CSS name. The website reads the Blocks palettes; the first twelve keep
+    /// the names of [`Palette::named`] (`plate-soft` is `raised`, `plate` is `button`, `surface`
+    /// is `panel`, `on-accent` is `on_face`), so styles written for those still apply.
+    pub fn named(&self) -> [(&'static str, u32); 25] {
+        [
+            ("page", self.page),
+            ("plate-soft", self.raised),
+            ("plate", self.button),
+            ("surface", self.panel),
+            ("rule", self.rule),
+            ("ink", self.ink),
+            ("ink-soft", self.ink_soft),
+            ("muted", self.muted),
+            ("accent", self.accent),
+            ("on-accent", self.on_face),
+            ("danger", self.danger),
+            ("success", self.success),
+            ("warn", self.warn),
+            ("side", self.side),
+            ("panel", self.panel),
+            ("raised", self.raised),
+            ("button", self.button),
+            ("button-bevel", self.button_bevel),
+            ("well", self.well),
+            ("bevel", self.bevel),
+            ("lip", self.lip),
+            ("outline", self.outline),
+            ("face", self.face),
+            ("face-bevel", self.face_bevel),
+            ("face-lip", self.face_lip),
+        ]
+    }
+}
+
 /// The WCAG 2 contrast ratio of two colours.
 pub fn contrast(a: u32, b: u32) -> f32 {
     fn luminance(c: u32) -> f32 {
@@ -499,10 +534,12 @@ pub fn css() -> String {
         let t = format!("{v:.3}");
         t.trim_end_matches('0').trim_end_matches('.').to_string()
     };
-    let colors = |s: &mut String, p: &Palette| {
+    // The website wears the launcher's Blocks look; the game's menus keep LIGHT and DARK.
+    let colors = |s: &mut String, p: &Blocks| {
         for (name, c) in p.named() {
             let _ = writeln!(s, "  --{name}: #{c:06x};");
         }
+        let _ = writeln!(s, "  --on-face: #{:06x};", p.on_face);
         let _ = writeln!(
             s,
             "  color-scheme: {};",
@@ -513,11 +550,18 @@ pub fn css() -> String {
         "/* Generated from crates/horizon-theme by `cargo run -p xtask -- tokens`; do not edit.\n   \
          docs/design-system.md describes the tokens. */\n\n:root {\n",
     );
-    colors(&mut s, &LIGHT);
+    colors(&mut s, &BLOCKS_LIGHT);
     let _ = writeln!(
         s,
-        "  --font: \"{FONT}\", ui-sans-serif, system-ui, sans-serif;\n  --mono: \"{MONO}\", ui-monospace, monospace;"
+        "  --font: \"{FONT}\", ui-sans-serif, system-ui, sans-serif;\n  --mono: \"{MONO}\", ui-monospace, monospace;\n  --pixel: \"{PIXEL}\", \"{FONT}\", ui-sans-serif, sans-serif;"
     );
+    for (name, v) in [
+        ("block-outline", BLOCK_OUTLINE),
+        ("block-bevel", BLOCK_BEVEL),
+        ("block-lip", BLOCK_LIP),
+    ] {
+        let _ = writeln!(s, "  --{name}: {}px;", num(v));
+    }
     for step in TYPE {
         let size = match step.web {
             Web::Fixed => format!("{}px", num(step.px)),
@@ -576,7 +620,7 @@ pub fn css() -> String {
         "}\n\n@media (prefers-color-scheme: dark) {\n  :root:not([data-theme=\"light\"]) {\n",
     );
     let mut dark = String::new();
-    colors(&mut dark, &DARK);
+    colors(&mut dark, &BLOCKS_DARK);
     for line in dark.lines() {
         let _ = writeln!(s, "  {line}");
     }

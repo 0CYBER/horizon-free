@@ -338,15 +338,21 @@ pub fn ridden_step(m: &mut Mob) {
         // Pig/Strider: always forward along the rider's look, at a fraction
         // of the movement speed, boosted by the stick.
         m.head_pitch = r.pitch * 0.5;
-        m.ai.xxa = 0.0;
-        m.ai.zza = 1.0;
+        // Strider.getRiddenSpeed: slower while it shivers out of the warmth.
         let factor = if m.species() == Species::Pig {
             0.225
+        } else if super::strider::suffocating(m) {
+            0.35
         } else {
             0.55
         };
         let boost = boost_factor(m);
-        m.set_speed((m.attrs.speed * factor) as f32 * boost);
+        // travelRidden: setSpeed(getRiddenSpeed), then travel(getRiddenInput);
+        // the input is set after the speed (Mob.setSpeed also sets zza).
+        // getAttributeValue(MOVEMENT_SPEED): with the cold strider's modifier.
+        m.set_speed((m.movement_speed() * factor) as f32 * boost);
+        m.ai.xxa = 0.0;
+        m.ai.zza = 1.0;
         return;
     }
     if super::camel::is_camel(m.species()) {
@@ -366,14 +372,14 @@ pub fn ridden_step(m: &mut Mob) {
         } else {
             r.forward
         };
-        m.ai.xxa = r.strafe * 0.5;
-        m.ai.zza = forward;
         let bonus = if r.sprint && m.extra.anim_ticks == 0 {
             0.1
         } else {
             0.0
         };
-        m.set_speed(m.attrs.speed as f32 + bonus);
+        m.set_speed(m.movement_speed() as f32 + bonus);
+        m.ai.xxa = r.strafe * 0.5;
+        m.ai.zza = forward;
         if r.jump > 0.0 {
             let mut ev = Vec::new();
             super::camel::dash(m, r.jump, &mut ev);
@@ -394,10 +400,10 @@ pub fn ridden_step(m: &mut Mob) {
     } else {
         r.forward
     };
+    let speed = m.movement_speed() as f32;
+    m.set_speed(speed);
     m.ai.xxa = r.strafe * 0.5;
     m.ai.zza = forward;
-    let speed = m.attrs.speed as f32;
-    m.set_speed(speed);
     if m.on_ground && r.jump > 0.0 {
         // executeRidersJump
         let impulse = m.extra.vector[0] as f32 * r.jump;
