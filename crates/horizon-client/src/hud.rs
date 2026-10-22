@@ -18,11 +18,35 @@ pub struct Rect {
     pub w: u32,
     pub h: u32,
 }
+/// `TextureMetadataSection`'s `blur` and `clamp`: how vanilla samples a
+/// standalone texture (`ReloadableTexture.setSampler`: linear rather than
+/// nearest filtering, clamp-to-edge rather than repeat addressing).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TextureFlags {
+    pub blur: bool,
+    pub clamp: bool,
+}
+impl TextureFlags {
+    /// The `texture` section of a `.png.mcmeta` file, if it sets either flag.
+    pub fn from_mcmeta(json: &str) -> Option<Self> {
+        let meta: serde_json::Value = serde_json::from_str(json).ok()?;
+        let section = meta.get("texture")?;
+        let flag = |key| section.get(key).and_then(serde_json::Value::as_bool) == Some(true);
+        let flags = Self {
+            blur: flag("blur"),
+            clamp: flag("clamp"),
+        };
+        (flags != Self::default()).then_some(flags)
+    }
+}
 pub struct HudAtlas {
     pub pixels: Vec<u8>,
     pub width: u32,
     pub height: u32,
     pub sprites: HashMap<String, Rect>,
+    /// Sprites whose `.png.mcmeta` sets `blur` or `clamp`; the others
+    /// sample as vanilla's defaults (nearest, repeat).
+    pub flags: HashMap<String, TextureFlags>,
     pub fire_animations: Vec<(Rect, crate::sprites::SpriteAnimation)>,
     /// The default font (bitmap sheets in this atlas, unifont rasterized on demand).
     pub font: crate::font::Font,
@@ -211,7 +235,7 @@ impl HudAtlas {
             let s = p.to_string_lossy();
             !s.contains("title/background") && !s.contains("realms") && !s.contains("presets")
         });
-        let decode_one = |path: &PathBuf| -> Option<(String, u32, u32, Vec<u8>)> {
+        let decode_one = |path: &PathBuf| -> Option<(PackedImage, Option<TextureFlags>)> {
             let name = path
                 .strip_prefix(&textures)
                 .ok()?
@@ -226,11 +250,15 @@ impl HudAtlas {
             } else {
                 pixels
             };
-            (w <= 1024 && (h <= 512 || name.starts_with("font/"))).then_some((name, w, h, pixels))
+            let flags = fs::read_to_string(path.with_extension("png.mcmeta"))
+                .ok()
+                .and_then(|json| TextureFlags::from_mcmeta(&json));
+            (w <= 1024 && (h <= 512 || name.starts_with("font/")))
+                .then_some(((name, w, h, pixels), flags))
         };
         let threads = std::thread::available_parallelism().map_or(2, |n| n.get());
         let chunk = files.len().div_ceil(threads).max(1);
-        let mut images: Vec<_> = std::thread::scope(|scope| {
+        let decoded: Vec<_> = std::thread::scope(|scope| {
             let handles: Vec<_> = files
                 .chunks(chunk)
                 .map(|part| {
@@ -242,6 +270,14 @@ impl HudAtlas {
                 .flat_map(|h| h.join().unwrap_or_default())
                 .collect()
         });
+        let mut flags = HashMap::new();
+        let mut images: Vec<PackedImage> = Vec::with_capacity(decoded.len());
+        for (image, image_flags) in decoded {
+            if let Some(f) = image_flags {
+                flags.insert(image.0.clone(), f);
+            }
+            images.push(image);
+        }
         if full {
             images.extend(atlas_sprites(root, &images));
         }
@@ -337,6 +373,7 @@ impl HudAtlas {
             width,
             height,
             sprites,
+            flags,
             fire_animations,
             font,
             white,
