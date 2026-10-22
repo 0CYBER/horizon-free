@@ -10,7 +10,7 @@ use horizon_client::{
         self, Lan, MAX_PLAYERS, NetConfig,
         chunks::ChunkEncoder,
         data::SyncData,
-        entity::EntityState,
+        entity::{EntityState, States},
         hub::{HostEvent, HostState, Hub, HubConfig, TickCtx},
         playerdata,
     },
@@ -69,6 +69,9 @@ pub(super) struct LanHost {
     /// Guests' commands waiting for the hub to be back in `self.lan`, where
     /// a command can reach every player (game/lan_actions.rs).
     pub commands: Vec<super::lan_actions::GuestCommand>,
+    /// The entities the guests track, described again every tick
+    /// (`lan_entities`) over last tick's states.
+    states: lan::entity::States,
 }
 
 /// The player who owns an integrated server's world: a guest whose state is
@@ -136,8 +139,7 @@ fn baby_index(kind: &str) -> Option<u8> {
 /// A mob's synched data as ServerEntity sends it (only the values that differ
 /// from the defaults the client constructs), with vanilla's entry indices:
 /// Entity 0..=7, LivingEntity 8..=14, Mob 15, then the subclasses.
-fn mob_meta(m: &Mob, hub: &Hub) -> Vec<(u8, i32, Value)> {
-    let mut meta = Vec::new();
+fn mob_meta(m: &Mob, hub: &Hub, meta: &mut Vec<(u8, i32, Value)>) {
     let kind = m.kind.id.as_str();
     if m.fire_ticks > 0 {
         meta.push((0, serializer::BYTE, Value::Byte(1)));
@@ -280,14 +282,16 @@ fn mob_meta(m: &Mob, hub: &Hub) -> Vec<(u8, i32, Value)> {
         }
         _ => {}
     }
-    meta
 }
 
 /// The equipment a mob shows (ClientboundSetEquipmentPacket slots: main hand,
 /// off hand, feet, legs, chest, head, body, saddle).
-fn mob_equipment(m: &Mob, hub: &mut Hub) -> Vec<(u8, Option<horizon_protocol::item::Stack>)> {
+fn mob_equipment(
+    m: &Mob,
+    hub: &mut Hub,
+    out: &mut Vec<(u8, Option<horizon_protocol::item::Stack>)>,
+) {
     let e = &m.extra;
-    let mut out = Vec::new();
     let slots = [
         (0u8, &e.main_hand),
         (1, &e.off_hand),
@@ -316,7 +320,6 @@ fn mob_equipment(m: &Mob, hub: &mut Hub) -> Vec<(u8, Option<horizon_protocol::it
         });
         out.push((7, hub.stack(&Some(stack))));
     }
-    out
 }
 
 pub const HELP: &[&str] = &[
@@ -537,6 +540,7 @@ impl Game<'_> {
             waypoints: Default::default(),
             waypoint_dead: Default::default(),
             commands: Vec::new(),
+            states: Default::default(),
         });
         self.audio.capture = Some(Vec::new());
         Ok(())
@@ -748,71 +752,36 @@ impl Game<'_> {
     }
 
     /// The entities guests track: mobs, items and the rest (game/lan_entities.rs).
-    fn lan_entities(&self, host_entity: Option<i32>, hub: &mut Hub) -> Vec<EntityState> {
-        let mut out = Vec::with_capacity(self.mobs.len() + self.dropped.len() + self.orbs.len());
+    fn lan_entities(&self, host_entity: Option<i32>, hub: &mut Hub, out: &mut States) {
+        out.clear();
         for m in self.mobs.iter().filter(|m| !m.removed) {
-            let kind = m.kind.id.as_str();
-            let meta = mob_meta(m, hub);
-            let equipment = mob_equipment(m, hub);
-            let attributes = self.mob_attributes(m);
-            let (yaw, pitch) = (m.yaw, m.head_pitch);
-            out.push(EntityState {
-                id: m.id as i32,
-                uuid: entity_uuid(m.id),
-                kind: kind.to_owned(),
-                position: [m.position.x, m.position.y, m.position.z],
-                yaw,
-                pitch,
-                head_yaw: m.head_yaw,
-                on_ground: m.on_ground,
-                velocity: [m.velocity.x, m.velocity.y, m.velocity.z],
-                data: 0,
-                meta,
-                equipment,
-                attributes,
-                precise: false,
-            });
+            let e = out.add(m.id as i32, entity_uuid(m.id), m.kind.id.as_str());
+            e.position = [m.position.x, m.position.y, m.position.z];
+            (e.yaw, e.pitch, e.head_yaw) = (m.yaw, m.head_pitch, m.head_yaw);
+            e.on_ground = m.on_ground;
+            e.velocity = [m.velocity.x, m.velocity.y, m.velocity.z];
+            mob_meta(m, hub, &mut e.meta);
+            mob_equipment(m, hub, &mut e.equipment);
+            self.mob_attributes(m, &mut e.attributes);
         }
         for d in &self.dropped {
             let stack = hub.stack(&Some(d.stack.clone()));
-            out.push(EntityState {
-                id: d.id as i32,
-                uuid: entity_uuid(d.id),
-                kind: "minecraft:item".to_owned(),
-                position: [d.position.x, d.position.y, d.position.z],
-                yaw: 0.0,
-                pitch: 0.0,
-                head_yaw: 0.0,
-                on_ground: d.on_ground,
-                velocity: [d.velocity.x, d.velocity.y, d.velocity.z],
-                data: 0,
-                meta: vec![(8, serializer::ITEM_STACK, Value::Item(stack))],
-                equipment: Vec::new(),
-                attributes: Vec::new(),
-                precise: false,
-            });
+            let e = out.add(d.id as i32, entity_uuid(d.id), "minecraft:item");
+            e.position = [d.position.x, d.position.y, d.position.z];
+            e.on_ground = d.on_ground;
+            e.velocity = [d.velocity.x, d.velocity.y, d.velocity.z];
+            e.meta.push((8, serializer::ITEM_STACK, Value::Item(stack)));
         }
         for o in &self.orbs {
-            out.push(EntityState {
-                id: o.id as i32,
-                uuid: entity_uuid(o.id),
-                kind: "minecraft:experience_orb".to_owned(),
-                position: [o.position.x, o.position.y, o.position.z],
-                yaw: 0.0,
-                pitch: 0.0,
-                head_yaw: 0.0,
-                on_ground: o.on_ground,
-                velocity: [o.velocity.x, o.velocity.y, o.velocity.z],
-                data: 0,
-                // ExperienceOrb.DATA_VALUE.
-                meta: vec![(8, serializer::INT, Value::Int(o.value as i32))],
-                equipment: Vec::new(),
-                attributes: Vec::new(),
-                precise: false,
-            });
+            let e = out.add(o.id as i32, entity_uuid(o.id), "minecraft:experience_orb");
+            e.position = [o.position.x, o.position.y, o.position.z];
+            e.on_ground = o.on_ground;
+            e.velocity = [o.velocity.x, o.velocity.y, o.velocity.z];
+            // ExperienceOrb.DATA_VALUE.
+            e.meta
+                .push((8, serializer::INT, Value::Int(o.value as i32)));
         }
-        self.lan_object_states(host_entity, hub, &mut out);
-        out
+        self.lan_object_states(host_entity, hub, out);
     }
 
     /// Run the hub for this tick and apply what the guests did.
@@ -834,21 +803,23 @@ impl Game<'_> {
         // A dedicated server runs the hub without a host player.
         if state.is_some() || host.hub.config.dedicated {
             let has_guests = !host.hub.guests.is_empty();
-            let entities = if has_guests {
+            let mut states = std::mem::take(&mut host.states);
+            if has_guests {
                 let host_entity = state.as_ref().map(|s| s.entity_id);
                 self.lan_assign_ids();
                 self.lan_riding(host_entity, &mut host.hub.riding);
-                self.lan_entities(host_entity, &mut host.hub)
+                self.lan_entities(host_entity, &mut host.hub, &mut states);
             } else {
-                Vec::new()
-            };
+                states.clear();
+            }
+            let entities = states.as_slice();
             let spawn = self.spawn.map_or([0.5, 80.0, 0.5], |s| [s.x, s.y, s.z]);
             let events = {
                 let clock_rate = self.network_clock_rate();
                 let mut ctx = TickCtx {
                     world: &mut self.world,
                     host: state.as_ref(),
-                    entities: &entities,
+                    entities,
                     next_entity: &mut self.next_entity,
                     spawn,
                     difficulty: i32::from(self.ui.difficulty),
@@ -889,7 +860,7 @@ impl Game<'_> {
                         self.lan_log_event(event);
                     }
                     HostEvent::Joined(conn) => {
-                        self.lan_guest_joined(&mut host, conn, state.as_ref(), &entities, spawn);
+                        self.lan_guest_joined(&mut host, conn, state.as_ref(), entities, spawn);
                         if self.options.dedicated.is_some()
                             && let Some(g) = host.hub.guest(conn)
                         {
@@ -954,6 +925,7 @@ impl Game<'_> {
                     }
                 }
             }
+            host.states = states;
         }
         self.lan_flush_effects(&mut host);
         self.tick_guests(&mut host);
@@ -1013,15 +985,15 @@ impl Game<'_> {
             g.dimension = in_place;
         }
         self.load_guest_records(host, conn);
-        let theirs;
+        let mut theirs = States::default();
         let entities = if elsewhere {
             if let Err(e) = self.enter_level(Some(host), level) {
                 log::error!("could not open {}: {e}", level.id());
                 return;
             }
             // A dedicated server has no host player.
-            theirs = self.lan_entities(None, &mut host.hub);
-            &theirs[..]
+            self.lan_entities(None, &mut host.hub, &mut theirs);
+            theirs.as_slice()
         } else {
             entities
         };
