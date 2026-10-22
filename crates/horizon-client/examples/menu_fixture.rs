@@ -44,11 +44,13 @@ fn main() -> horizon_client::Result<()> {
     let recipes = Recipes::load(root, &items)?;
     let brewing = horizon_client::brewing::Brewing::load(root, &items);
     let banners = horizon_client::banner::Banners::load(root);
+    let station_recipes = horizon_client::stations::StationRecipes::load(root, &items);
     let env = Env {
         items: &items,
         recipes: &recipes,
         brewing: &brewing,
         banners: &banners,
+        station_recipes: &station_recipes,
         trade: None,
     };
     let mut out = String::new();

@@ -13,7 +13,6 @@ use horizon_client::{
     stations::{self, AnvilResult, EnchantOffers},
 };
 use horizon_core::random::{LegacyRandom, RandomSource};
-use std::sync::Arc;
 
 /// Slot ids of the open station: inputs from 600, the result at 650.
 pub(super) const INPUT: usize = 600;
@@ -137,11 +136,11 @@ pub(super) struct Station {
     anvil: AnvilResult,
     /// Anvil rename box text.
     pub(super) name: String,
-    /// Stonecutter: recipe indices for the input, selection and first shown index.
-    recipes: Vec<usize>,
-    selected: Option<usize>,
+    /// Stonecutter: the menu's recipe list (horizon_client::menu), its
+    /// `selectedRecipeIndex` and the screen's first shown index.
+    pub(super) stone: horizon_client::menu::Stonecutter,
+    pub(super) selected: Option<usize>,
     start: usize,
-    input_item: Option<Arc<str>>,
     /// Anvil: the input the rename box was last filled from.
     anvil_last: Option<ItemStack>,
     /// When the screen opened: the rename box has the focus from then.
@@ -165,10 +164,9 @@ impl Station {
             bookcases: 0,
             anvil: AnvilResult::default(),
             name: String::new(),
-            recipes: Vec::new(),
+            stone: Default::default(),
             selected: None,
             start: 0,
-            input_item: None,
             anvil_last: None,
             opened: std::time::Instant::now(),
             last_sound: 0,
@@ -179,6 +177,13 @@ impl Station {
     }
     pub(super) fn new_kind(kind: Kind, pos: [i32; 3]) -> Self {
         Self::new(kind, pos)
+    }
+    /// `StonecutterScreen.containerChanged`: without recipes to show, the
+    /// list scrolls back to the top.
+    pub(super) fn stonecutter_changed(&mut self) {
+        if self.inputs[0].is_none() || self.stone.recipes.is_empty() {
+            self.start = 0;
+        }
     }
 }
 
@@ -476,32 +481,8 @@ impl Game<'_> {
             Kind::Cartography => s.result = self.cartography_result(&s),
             // The menu engine keeps the loom's state (Game::menu_session).
             Kind::Loom => {}
-            Kind::Stonecutter => {
-                let item = s.inputs[0].as_ref().map(|i| i.item.clone());
-                if item != s.input_item {
-                    s.input_item = item;
-                    s.selected = None;
-                    s.start = 0;
-                    s.recipes = match &s.inputs[0] {
-                        Some(input) => data
-                            .recipes
-                            .stonecutting
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, r)| r.input.test(input))
-                            .map(|(i, _)| i)
-                            .collect(),
-                        None => Vec::new(),
-                    };
-                }
-                s.result = match (s.selected, &s.inputs[0]) {
-                    (Some(i), Some(_)) => s
-                        .recipes
-                        .get(i)
-                        .map(|&r| data.recipes.stonecutting[r].result.clone()),
-                    _ => None,
-                };
-            }
+            // The menu engine keeps the stonecutter's state (Game::menu_session).
+            Kind::Stonecutter => {}
         }
         self.station = Some(s);
     }
@@ -718,13 +699,6 @@ impl Game<'_> {
                         self.move_to(&mut stack, &halves, false);
                     }
                 }
-                Kind::Stonecutter => {
-                    if self.data().recipes.stonecutter(&stack).is_empty() {
-                        self.move_to(&mut stack, &halves, false);
-                    } else {
-                        self.move_to(&mut stack, &[INPUT], false);
-                    }
-                }
                 Kind::Cartography => {
                     if super::maps::map_id(&stack).is_some() {
                         self.move_to(&mut stack, &[INPUT], false);
@@ -750,7 +724,7 @@ impl Game<'_> {
                     self.move_to(&mut stack, targets, false);
                 }
                 // Their clicks run on the menu engine.
-                Kind::Merchant | Kind::Loom => {}
+                Kind::Merchant | Kind::Loom | Kind::Stonecutter => {}
             }
         }
         let moved = stack.count != start;
@@ -886,19 +860,7 @@ impl Game<'_> {
                 let pitch = self.world.random.next_float() * 0.1 + 0.9;
                 self.play_at("minecraft:block.smithing_table.use", pos, 1.0, pitch);
             }
-            Kind::Stonecutter => {
-                if let Some(x) = s.inputs[0].as_mut() {
-                    x.count -= 1;
-                    if x.count == 0 {
-                        s.inputs[0] = None;
-                    }
-                }
-                if s.last_sound != self.ticks {
-                    s.last_sound = self.ticks;
-                    self.play_at("minecraft:ui.stonecutter.take_result", pos, 1.0, 1.0);
-                }
-            }
-            Kind::Merchant => {}
+            Kind::Merchant | Kind::Stonecutter => {}
             Kind::Beacon => {}
             Kind::Cartography => {
                 for slot in &mut s.inputs {
@@ -1044,7 +1006,7 @@ impl Game<'_> {
                 })
                 .collect(),
             Kind::Stonecutter if s.inputs[0].is_some() => (s.start
-                ..(s.start + 12).min(s.recipes.len()))
+                ..(s.start + 12).min(s.stone.recipes.len()))
                 .map(|index| {
                     let p = index - s.start;
                     [
@@ -1097,29 +1059,8 @@ impl Game<'_> {
                     }
                 }
             }
-            if kind == Kind::Stonecutter
-                && let Some(s) = self.station.as_ref()
-                && s.inputs[0].is_some()
-            {
-                for index in s.start..(s.start + 12).min(s.recipes.len()) {
-                    let p = index - s.start;
-                    let (x, y) = (52.0 + (p % 4) as f32 * 16.0, 14.0 + (p / 4) as f32 * 18.0);
-                    if inside(local, x, y, 16.0, 18.0) {
-                        if s.selected != Some(index) {
-                            if let Some(st) = self.station.as_mut() {
-                                st.selected = Some(index);
-                            }
-                            self.audio.play(
-                                "minecraft:ui.stonecutter.select_recipe",
-                                None,
-                                1.0,
-                                1.0,
-                            );
-                            self.station_changed();
-                        }
-                        return true;
-                    }
-                }
+            if kind == Kind::Stonecutter && self.stonecutter_click(local) {
+                return true;
             }
         }
         let Some(slot) = self.slot_at(&batch, self.cursor.0, self.cursor.1) else {
@@ -1128,10 +1069,10 @@ impl Game<'_> {
         if self
             .station
             .as_ref()
-            .is_none_or(|s| matches!(s.kind, Kind::Loom | Kind::Merchant))
+            .is_none_or(|s| matches!(s.kind, Kind::Loom | Kind::Merchant | Kind::Stonecutter))
         {
-            // LoomMenu, MerchantMenu and the brewing stand's BrewingStandMenu
-            // clicks run on the verified menu engine.
+            // LoomMenu, MerchantMenu, StonecutterMenu and the brewing stand's
+            // BrewingStandMenu clicks run on the verified menu engine.
             let input = if shift {
                 horizon_client::menu::Input::QuickMove
             } else {
@@ -1172,16 +1113,49 @@ impl Game<'_> {
         }
         self.station_changed();
     }
+    /// `StonecutterScreen.mouseClicked` on its recipe grid: `clickMenuButton`
+    /// with the cell's index (an empty cell's too), and the select sound when
+    /// the menu took it.
+    fn stonecutter_click(&mut self, local: (f32, f32)) -> bool {
+        let Some(start) = self
+            .station
+            .as_ref()
+            .filter(|s| s.inputs[0].is_some() && !s.stone.recipes.is_empty())
+            .map(|s| s.start)
+        else {
+            return false;
+        };
+        for index in start..start + 12 {
+            let p = index - start;
+            let (x, y) = (52.0 + (p % 4) as f32 * 16.0, 14.0 + (p / 4) as f32 * 18.0);
+            if !inside(local, x, y, 16.0, 18.0) {
+                continue;
+            }
+            let mut taken = false;
+            let flag = &mut taken;
+            self.menu_session(|menu, env, _| {
+                *flag = menu.button(env, index as i32);
+                Some(*flag)
+            });
+            if taken {
+                self.audio
+                    .play("minecraft:ui.stonecutter.select_recipe", None, 1.0, 1.0);
+                self.remote_station_button(index as i32);
+                return true;
+            }
+        }
+        false
+    }
     pub(super) fn station_scroll(&mut self, d: f32) {
         self.merchant_scroll(d);
         self.loom_scroll(d);
         let Some(s) = self.station.as_mut() else {
             return;
         };
-        if s.kind != Kind::Stonecutter || s.recipes.len() <= 12 {
+        if s.kind != Kind::Stonecutter || s.stone.recipes.len() <= 12 {
             return;
         }
-        let rows = s.recipes.len().div_ceil(4) - 3;
+        let rows = s.stone.recipes.len().div_ceil(4) - 3;
         let first_row = (s.start / 4) as i32 - d.signum() as i32;
         s.start = first_row.clamp(0, rows as i32) as usize * 4;
     }
@@ -1748,9 +1722,9 @@ impl Game<'_> {
                 }
                 Kind::Merchant | Kind::Beacon | Kind::Cartography | Kind::Loom => {}
                 Kind::Stonecutter => {
-                    let display = s.inputs[0].is_some() && !s.recipes.is_empty();
-                    let active = display && s.recipes.len() > 12;
-                    let rows = s.recipes.len().div_ceil(4).saturating_sub(3).max(1);
+                    let display = s.inputs[0].is_some() && !s.stone.recipes.is_empty();
+                    let active = display && s.stone.recipes.len() > 12;
+                    let rows = s.stone.recipes.len().div_ceil(4).saturating_sub(3).max(1);
                     let offs = if active {
                         (s.start / 4) as f32 / rows as f32
                     } else {
@@ -1771,13 +1745,14 @@ impl Game<'_> {
                         let (start, selected) = (s.start, s.selected);
                         // graphics.item: the icon only, without the count.
                         let shown: Vec<(usize, ItemStack)> = (start
-                            ..(start + 12).min(s.recipes.len()))
+                            ..(start + 12).min(s.stone.recipes.len()))
                             .map(|i| {
                                 (
                                     i,
                                     ItemStack {
                                         count: 1,
-                                        ..self.res.stations().recipes.stonecutting[s.recipes[i]]
+                                        ..self.res.stations().recipes.stonecutting
+                                            [s.stone.recipes[i]]
                                             .result
                                             .clone()
                                     },
@@ -2090,7 +2065,7 @@ impl Game<'_> {
             "bookcases": s.bookcases,
             "anvil_cost": s.anvil.cost,
             "result": s.result.as_ref().map(|r| format!("{} x{}", r.item, r.count)),
-            "recipes": s.recipes.iter().map(|&i| recipes[i].id.clone()).collect::<Vec<_>>(),
+            "recipes": s.stone.recipes.iter().map(|&i| recipes[i].id.clone()).collect::<Vec<_>>(),
             "selected": s.selected,
         })
     }

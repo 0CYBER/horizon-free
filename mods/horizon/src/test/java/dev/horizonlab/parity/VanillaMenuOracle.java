@@ -178,6 +178,7 @@ public final class VanillaMenuOracle {
                 }
             }
             case "loom" -> new LoomMenu(0, inv);
+            case "stonecutter" -> new StonecutterMenu(0, inv);
             default -> throw new IllegalArgumentException(kind);
         };
     }

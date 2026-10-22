@@ -450,6 +450,7 @@ pub struct Stonecutting {
     pub input: Ingredient,
     pub result: ItemStack,
 }
+#[derive(Default)]
 pub struct StationRecipes {
     pub smithing: Vec<Smithing>,
     /// Sorted by recipe id, the registry order vanilla lists them in.

@@ -34,6 +34,7 @@ pub(super) struct GuestStation {
 fn menu_of(kind: StationKind) -> Option<(&'static str, Kind, std::ops::Range<usize>)> {
     Some(match kind {
         StationKind::Loom => ("minecraft:loom", Kind::Loom, 0..3),
+        StationKind::Stonecutter => ("minecraft:stonecutter", Kind::Stonecutter, 0..1),
         _ => return None,
     })
 }

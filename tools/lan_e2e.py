@@ -39,6 +39,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - loom:      a loom opens on the guest's screen; the banner and dye the guest shift-clicks go to their
              slots, a pattern button the guest clicks makes the server's result, and the guest takes the
              patterned banner (#868);
+- stonecutter: a stonecutter opens on the guest's screen with the recipes of the stone the guest puts
+             in; the guest picks the slab and shift-clicks the result, and the server has cut every
+             stone into slabs (#868);
 - feedback:  the guest's command feedback names the guest and shows the numbers;
 - chat:      a line the host sends reaches the guest's event log (`wait-for chat`), and on the
              server thread the host window's too;
@@ -133,7 +136,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
 
 
 class Game:
@@ -945,6 +948,48 @@ def check_loom(host, guest, out):
             'made': ('minecraft:white_banner', 1), 'left': {}, 'layer': True,
             'counts': {'minecraft:white_banner': 1}}
     assert seen == want, f'the loom on the guest: {seen}'
+    return seen
+
+
+def server_count(guest, item):
+    """How many of `item` the server says the guest has (`clear` with a count of 0 only counts)."""
+    since = guest.raw('events')['last']
+    guest('command', command=f'clear @s minecraft:{item} 0')
+    for n in range(0, 65):
+        reply = guest.raw('events', '--since', since)
+        lines = [e.get('text', '') for e in reply['events'] if e.get('event') == 'chat']
+        for line in lines:
+            if 'matching item' in line or 'No items were found' in line:
+                return 0 if 'No items' in line else int(line.split('Found ')[1].split(' ')[0])
+        guest.wait(2)
+    raise Failed(f'no answer to clear for {item}')
+
+
+def check_stonecutter(host, guest, out):
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    guest('command', command='give @s minecraft:stone 3')
+    at = open_station(guest, 'stonecutter', out, 'stonecutter')
+    # StonecutterMenu.quickMoveStack: stone has recipes, so it goes to the input.
+    guest.raw('click-slot', hotbar_slot(guest, 'minecraft:stone'), 'shift')
+    guest.wait(10)
+    recipes = guest.raw('menu')['info']['recipes']
+    index = recipes.index('minecraft:stone_slab_from_stone_stonecutting')
+    # StonecutterScreen's recipe grid: four columns of 16x18 cells from (52, 14).
+    guest.raw('click-gui', 52 + index % 4 * 16 + 8, 14 + index // 4 * 18 + 9)
+    guest.wait(10)
+    picked = (guest.raw('menu')['info']['selected'], station_slots(guest).get(650))
+    guest.shot(out, 'stonecutter-recipe')
+    # A shift-click on the result cuts while there is stone (doClick repeats quickMoveStack).
+    guest.raw('click-slot', 650, 'shift')
+    guest.wait(10)
+    left = station_slots(guest)
+    close_station(guest, at)
+    seen = {'picked': picked, 'left': left,
+            'server': {item: server_count(guest, item) for item in ('stone_slab', 'stone')}}
+    want = {'picked': (index, ('minecraft:stone_slab', 2)), 'left': {},
+            'server': {'stone_slab': 6, 'stone': 0}}
+    assert seen == want, f'the stonecutter on the guest: {seen}'
     return seen
 
 
@@ -2140,6 +2185,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'machines': check_machines,
              'brewing': check_brewing,
              'loom': check_loom,
+             'stonecutter': check_stonecutter,
              'hurt': check_hurt,
              'commands': check_commands,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,

@@ -10,7 +10,8 @@ click: QUICK_MOVE on every slot of the clicked slot's container holding the
 item the first click moved) over the player inventory,
 crafting table, chests, hopper, dispenser, shulker box, the furnaces, the
 brewing stand, the crafter (the client's menu, and the server's over the block
-entity with slot state packets), the loom (with its pattern buttons) and the
+entity with slot state packets), the loom (with its pattern buttons), the
+stonecutter (with its recipe buttons) and the
 server's furnace menus over their block entities (`*_be`: a new input restarts
 cooking, other clicks keep its progress). After
 every click the slots, carried stack, data slots and drops are compared.
@@ -26,8 +27,9 @@ except ImportError:
 
 MENUS = {'inventory': 46, 'crafting': 46, 'chest1': 45, 'chest2': 54, 'chest3': 63, 'chest4': 72, 'chest5': 81,
          'chest6': 90, 'hopper': 41, 'dispenser': 45, 'shulker': 63, 'furnace': 39, 'blast_furnace': 39, 'smoker': 39, 'brewing': 41, 'crafter': 46,
-         'crafter_be': 46, 'loom': 40, 'furnace_be': 39, 'blast_furnace_be': 39, 'smoker_be': 39}
+         'crafter_be': 46, 'loom': 40, 'stonecutter': 38, 'furnace_be': 39, 'blast_furnace_be': 39, 'smoker_be': 39}
 DATA = {'furnace': 4, 'blast_furnace': 4, 'smoker': 4, 'brewing': 4, 'crafter': 10, 'crafter_be': 10, 'loom': 1,
+        'stonecutter': 1,
         'furnace_be': 4, 'blast_furnace_be': 4, 'smoker_be': 4}
 DYES = ['white', 'orange', 'magenta', 'light_blue', 'yellow', 'lime', 'pink', 'gray', 'light_gray', 'cyan', 'purple',
         'blue', 'brown', 'green', 'red', 'black']
@@ -40,6 +42,9 @@ COMMON = ['stone', 'dirt', 'cobblestone', 'oak_planks', 'stick', 'coal', 'iron_i
           'raw_iron', 'potato', 'beef', 'chicken', 'sticky_piston', 'blaze_rod', 'lava_bucket', 'oak_sapling',
           'white_dye', 'red_dye', 'torch', 'crafting_table', 'furnace', 'chest', 'glass_bottle', 'nether_wart', 'blaze_powder',
           'redstone', 'gunpowder', 'sugar', 'potion', 'splash_potion', 'lingering_potion', 'fermented_spider_eye', 'dragon_breath']
+# Stonecutter inputs (several recipes each), and a block it doesn't cut.
+CUTTABLE = ['stone', 'cobblestone', 'andesite', 'granite', 'copper_block', 'sandstone', 'quartz_block', 'deepslate',
+            'stone_bricks', 'oak_planks']
 
 
 def quote(text):
@@ -97,6 +102,13 @@ class Gen:
             return snbt(rng.choice(pool), 1)
         return self.stack()
 
+    def cut_stack(self):
+        """Mostly something the stonecutter cuts, sometimes anything."""
+        rng = self.rng
+        if rng.random() < 0.75:
+            return snbt('minecraft:' + rng.choice(CUTTABLE), rng.choice([1, 1, 2, 3, 10, 63, 64]))
+        return self.stack()
+
     def recipe(self, slots, width, start=1):
         """Fills the crafting grid (slots `start`..) with a small known recipe."""
         rng = self.rng
@@ -122,6 +134,13 @@ class Gen:
             if menu == 'loom' and rng.random() < 0.15:
                 # The result: take it, shift it out, throw it.
                 out.append([3, rng.randrange(0, 2), rng.choice(['PICKUP', 'QUICK_MOVE', 'THROW', 'SWAP'])])
+                continue
+            if menu == 'stonecutter' and rng.random() < 0.25:
+                # A recipe button (clickMenuButton), sometimes out of range or the selected one.
+                out.append([rng.choice([0, 0, 1, 2, 3, 5, 10, 30, -1]), 0, 'BUTTON'])
+                continue
+            if menu == 'stonecutter' and rng.random() < 0.2:
+                out.append([1, rng.randrange(0, 2), rng.choice(['PICKUP', 'QUICK_MOVE', 'QUICK_MOVE', 'THROW', 'SWAP'])])
                 continue
             if menu == 'crafter_be' and rng.random() < 0.2:
                 out.append([rng.choice([0, 1, 4, 8, 8, 9, -1]), rng.randrange(0, 2), 'SLOT_STATE'])
@@ -183,6 +202,12 @@ def main():
             slots[2] = g.loom_stack(0.6) if rng.random() < 0.4 else rng.choice(['-', '-', g.loom_stack()])
             # The result slot follows the inputs; a fixture stack there is rare.
             slots[3] = '-' if rng.random() < 0.9 else g.loom_stack()
+        if menu == 'stonecutter':
+            for i in rng.sample(range(2, size), 8):
+                slots[i] = g.cut_stack()
+            slots[0] = g.cut_stack() if rng.random() < 0.8 else '-'
+            # The result follows the input and the selected recipe; a fixture stack there is rare.
+            slots[1] = '-' if rng.random() < 0.9 else g.cut_stack()
         if menu == 'crafter_be':
             slots[45] = '-'
             if rng.random() < 0.6:
@@ -208,10 +233,10 @@ def main():
                 return [rng.choice([0, 37, 1600]), 1600, rng.choice([0, 1, 57, 199]), rng.choice([200, 100])][i]
             if menu in ('crafter', 'crafter_be'):
                 return rng.choice([0, 0, 1])
-            if menu == 'loom':
+            if menu in ('loom', 'stonecutter'):
                 return rng.choice([-1, -1, 0, 0, 1, 2, 3, 30])
             return 0
-        carried = (g.loom_stack() if menu == 'loom' else g.stack()) if rng.random() < 0.5 else '-'
+        carried = {'loom': g.loom_stack, 'stonecutter': g.cut_stack}.get(menu, g.stack)() if rng.random() < 0.5 else '-'
         if carried_food is not None:
             carried = carried_food
         cases.append({'menu': menu, 'creative': rng.random() < 0.25, 'slots': slots,

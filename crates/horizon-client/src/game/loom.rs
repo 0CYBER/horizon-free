@@ -68,8 +68,9 @@ impl Game<'_> {
         }
         l.last_inputs = inputs;
     }
-    /// A sound the loom menu played: the result's once per tick.
-    pub(super) fn loom_sound(&mut self, sound: &str) {
+    /// A sound the loom or stonecutter menu played: the result's once per
+    /// tick (`lastSoundTime`).
+    pub(super) fn station_sound(&mut self, sound: &str) {
         let ticks = self.ticks;
         let Some(s) = self.station.as_mut() else {
             return;

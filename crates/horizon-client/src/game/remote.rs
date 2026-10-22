@@ -1236,6 +1236,7 @@ impl Game<'_> {
         use super::stations::Kind;
         Some(match menu {
             "minecraft:loom" => Kind::Loom,
+            "minecraft:stonecutter" => Kind::Stonecutter,
             _ => return None,
         })
     }

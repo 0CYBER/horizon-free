@@ -255,6 +255,7 @@ impl Game<'_> {
             recipes: self.res.recipes(),
             brewing: &self.res.stations().brewing,
             banners: &self.res.stations().banners,
+            station_recipes: &self.res.stations().recipes,
             trade: Some(&trade_env),
         };
         let mut menu = Menu::new(Kind::Merchant);

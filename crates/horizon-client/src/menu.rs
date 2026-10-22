@@ -3,8 +3,8 @@
 //! craft drags, pickup all) for the player inventory, the crafting table, the
 //! chest family, hoppers, dispensers, shulker boxes, the furnaces, the brewing
 //! stand, the crafter (its client menu and the block entity's server menu with
-//! `setSlotState`), the loom (`clickMenuButton`, `slotsChanged`) and the
-//! merchant (`MerchantMenu` over a `merchant::Session`: payment slots, the
+//! `setSlotState`), the loom (`clickMenuButton`, `slotsChanged`), the
+//! stonecutter (its recipe buttons and result) and the merchant (`MerchantMenu` over a `merchant::Session`: payment slots, the
 //! result slot's trade, `tryMoveItems`).
 //! `tools/test_menu_click_parity.py` compares every click with vanilla's menu
 //! classes.
@@ -24,6 +24,8 @@ pub struct Env<'a> {
     pub recipes: &'a Recipes,
     pub brewing: &'a Brewing,
     pub banners: &'a Banners,
+    /// The stonecutter's recipes.
+    pub station_recipes: &'a crate::stations::StationRecipes,
     /// What a merchant menu needs for offers made while it is open (level-ups).
     pub trade: Option<&'a crate::merchant::TradeEnv<'a>>,
 }
@@ -71,6 +73,8 @@ pub enum Kind {
     /// result follows the grid, and filling a disabled slot enables it.
     CrafterBlock,
     Loom,
+    /// `StonecutterMenu`: the input, the result, then the inventory.
+    Stonecutter,
     /// `MerchantMenu`: two payment slots, the result, then the inventory.
     Merchant,
     /// `CreativeModeInventoryScreen.ItemPickerMenu`: an item tab's 45
@@ -96,6 +100,7 @@ impl Kind {
             "crafter" => Self::Crafter,
             "crafter_be" => Self::CrafterBlock,
             "loom" => Self::Loom,
+            "stonecutter" => Self::Stonecutter,
             "merchant" => Self::Merchant,
             "item_picker" => Self::ItemPicker,
             _ => return None,
@@ -133,6 +138,8 @@ enum Role {
     LoomResult,
     /// `MerchantResultSlot`.
     MerchantResult,
+    /// The stonecutter's result slot (`onTake` uses up one input).
+    StoneResult,
     /// `CustomCreativeSlot`: a creative tab's display slot, which the
     /// screen clicks itself; drags and PICKUP_ALL pass it by.
     CreativeDisplay,
@@ -182,6 +189,19 @@ pub struct Menu {
     pub equipped: Vec<(&'static str, Option<ItemStack>)>,
     /// The merchant a merchant menu trades with.
     pub merchant: Option<Box<crate::merchant::Session>>,
+    /// The stonecutter's recipe list (`recipesForInput`).
+    pub stone: Stonecutter,
+}
+
+/// `StonecutterMenu`'s state besides its slots and `selectedRecipeIndex`.
+#[derive(Clone, Default, Debug, PartialEq)]
+pub struct Stonecutter {
+    /// `recipesForInput`: indices into `StationRecipes.stonecutting`.
+    pub recipes: Vec<usize>,
+    /// The item the list was made for (`input`; None for nothing).
+    pub input: Option<Arc<str>>,
+    /// `ResultContainer.recipeUsed`.
+    pub used: Option<usize>,
 }
 
 fn same_item(a: &ItemStack, b: &ItemStack) -> bool {
@@ -318,6 +338,18 @@ impl Menu {
                 player(&mut slots);
                 data = 1;
             }
+            Kind::Stonecutter => {
+                containers[MAIN] = vec![None; 1];
+                slots.extend(main(1, Role::Plain));
+                slots.push(Slot {
+                    container: RESULT,
+                    index: 0,
+                    role: Role::StoneResult,
+                });
+                player(&mut slots);
+                // selectedRecipeIndex: DataSlot.standalone() starts at 0.
+                data = 1;
+            }
             Kind::ItemPicker => {
                 containers[MAIN] = vec![None; 45];
                 slots.extend(main(45, Role::CreativeDisplay));
@@ -403,6 +435,7 @@ impl Menu {
             crafted: Vec::new(),
             equipped: Vec::new(),
             merchant: None,
+            stone: Stonecutter::default(),
         }
     }
 
@@ -410,8 +443,20 @@ impl Menu {
         self.kind
     }
 
-    /// `clickMenuButton`: the loom's pattern buttons. False when refused.
+    /// `clickMenuButton`: the loom's pattern buttons and the stonecutter's
+    /// recipes. False when refused.
     pub fn button(&mut self, env: &Env, id: i32) -> bool {
+        if self.kind == Kind::Stonecutter {
+            // StonecutterMenu.clickMenuButton: an invalid index is taken too.
+            if self.data[0] == id {
+                return false;
+            }
+            if id >= 0 && (id as usize) < self.stone.recipes.len() {
+                self.data[0] = id;
+                self.stone_setup_result(env, id);
+            }
+            return true;
+        }
         if self.kind != Kind::Loom || id < 0 || id as usize >= self.loom_patterns.len() {
             return false;
         }
@@ -510,8 +555,42 @@ impl Menu {
         }
     }
 
+    /// `StonecutterMenu.slotsChanged`: a new input item lists its recipes
+    /// (`setupRecipeList`), with none selected and no result.
+    fn stone_changed(&mut self, env: &Env) {
+        let input = self.containers[MAIN][0].as_ref().map(|s| s.item.clone());
+        if input == self.stone.input {
+            return;
+        }
+        self.stone.input = input;
+        self.data[0] = -1;
+        self.containers[RESULT][0] = None;
+        self.stone.recipes = match &self.containers[MAIN][0] {
+            Some(stack) => env
+                .station_recipes
+                .stonecutting
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| r.input.test(stack))
+                .map(|(i, _)| i)
+                .collect(),
+            None => Vec::new(),
+        };
+    }
+
+    /// `StonecutterMenu.setupResultSlot`.
+    fn stone_setup_result(&mut self, env: &Env, index: i32) {
+        let recipe = usize::try_from(index)
+            .ok()
+            .and_then(|i| self.stone.recipes.get(i).copied());
+        self.stone.used = recipe;
+        self.containers[RESULT][0] =
+            recipe.map(|r| env.station_recipes.stonecutting[r].result.clone());
+    }
+
     /// `Slot.setChanged` on slot `s`: the loom recomputes from its inputs,
-    /// the block crafter refreshes its result.
+    /// the stonecutter lists its recipes, the block crafter refreshes its
+    /// result.
     fn slot_changed(&mut self, env: &Env, s: usize) {
         // MerchantContainer.setChanged: every slot of it, the result too.
         if self.kind == Kind::Merchant && self.slots[s].container != PLAYER {
@@ -523,6 +602,7 @@ impl Menu {
         }
         match self.kind {
             Kind::Loom => self.loom_changed(env),
+            Kind::Stonecutter => self.stone_changed(env),
             Kind::CrafterBlock => self.crafter_result(env),
             _ => {}
         }
@@ -634,7 +714,7 @@ impl Menu {
             Role::LoomBanner => Self::is_banner(stack),
             Role::LoomDye => env.banners.loom_dye(env.items, stack).is_some(),
             Role::LoomPattern => env.banners.is_pattern_item(env.items, stack),
-            Role::LoomResult | Role::MerchantResult => false,
+            Role::LoomResult | Role::MerchantResult | Role::StoneResult => false,
         }
     }
 
@@ -763,7 +843,7 @@ impl Menu {
         }
         // SimpleContainer.removeItem calls setChanged when it took something;
         // MerchantContainer.removeItem updates the result after a payment slot.
-        if out.is_some() && matches!(self.kind, Kind::Loom | Kind::Merchant) {
+        if out.is_some() && matches!(self.kind, Kind::Loom | Kind::Merchant | Kind::Stonecutter) {
             self.slot_changed(env, s);
         }
         out
@@ -785,6 +865,19 @@ impl Menu {
     fn on_take(&mut self, env: &Env, s: usize) {
         if self.slots[s].role == Role::MerchantResult {
             self.merchant_take(env);
+            return;
+        }
+        if self.slots[s].role == Role::StoneResult {
+            // StonecutterMenu's result onTake: awardUsedRecipes, one input
+            // used up, the result again for the selected recipe.
+            if let Some(r) = self.stone.used {
+                self.crafted
+                    .push(env.station_recipes.stonecutting[r].id.clone());
+            }
+            if self.remove(env, 0, 1).is_some() {
+                self.stone_setup_result(env, self.data[0]);
+            }
+            self.sounds.push("minecraft:ui.stonecutter.take_result");
             return;
         }
         if self.slots[s].role == Role::LoomResult {
@@ -1231,6 +1324,34 @@ impl Menu {
                     return None;
                 }
             }
+            Kind::Stonecutter => {
+                after_take = true;
+                if index == 1 {
+                    if !self.move_to(env, &mut stack, 2, 38, true) {
+                        return None;
+                    }
+                } else if index == 0 {
+                    if !self.move_to(env, &mut stack, 2, 38, false) {
+                        return None;
+                    }
+                } else if env
+                    .station_recipes
+                    .stonecutting
+                    .iter()
+                    .any(|r| r.input.test(&stack))
+                {
+                    if !self.move_to(env, &mut stack, 0, 1, false) {
+                        return None;
+                    }
+                } else if (2..29).contains(&index) {
+                    if !self.move_to(env, &mut stack, 29, 38, false) {
+                        return None;
+                    }
+                } else if (29..38).contains(&index) && !self.move_to(env, &mut stack, 2, 29, false)
+                {
+                    return None;
+                }
+            }
             Kind::Merchant => {
                 after_take = true;
                 if index == 2 {
@@ -1369,7 +1490,10 @@ impl Menu {
         if after_take || matches!(self.kind, Kind::Inventory | Kind::Crafting) {
             self.on_take(env, index);
         }
-        if index == 0 && matches!(self.kind, Kind::Inventory | Kind::Crafting) {
+        // What the result slot's move left over is dropped.
+        if (index == 0 && matches!(self.kind, Kind::Inventory | Kind::Crafting))
+            || (index == 1 && self.kind == Kind::Stonecutter)
+        {
             self.drop_stack(&stack);
         }
         Some(clicked)
@@ -2023,11 +2147,13 @@ pub(crate) mod tests {
         let recipes = Recipes::load(&root, &items).unwrap();
         let brewing = Brewing::load(&root, &items);
         let banners = Banners::load(&root);
+        let station_recipes = crate::stations::StationRecipes::load(&root, &items);
         let env = Env {
             items: &items,
             recipes: &recipes,
             brewing: &brewing,
             banners: &banners,
+            station_recipes: &station_recipes,
             trade: None,
         };
         let mut menu = Menu::new(kind);

@@ -5425,6 +5425,10 @@ impl Game<'_> {
             .station
             .as_ref()
             .is_some_and(|s| s.kind == stations::Kind::Merchant);
+        let stonecutter_open = self
+            .station
+            .as_ref()
+            .is_some_and(|s| s.kind == stations::Kind::Stonecutter);
         let (kind, game_of): (Kind, Vec<Option<usize>>) = if self.creative_tab_open() {
             // ItemPickerMenu: the display slots (clicked by the screen), then the hotbar.
             let mut v = vec![None; 45];
@@ -5451,6 +5455,11 @@ impl Game<'_> {
             v.push(Some(stations::RESULT));
             v.extend((9..36).chain(0..9).map(Some));
             (Kind::Loom, v)
+        } else if stonecutter_open {
+            // StonecutterMenu: the input, the result, then the inventory.
+            let mut v = vec![Some(stations::INPUT), Some(stations::RESULT)];
+            v.extend((9..36).chain(0..9).map(Some));
+            (Kind::Stonecutter, v)
         } else {
             let (kind, map) = if self.container.is_some() {
                 let size = self.container_size();
@@ -5533,6 +5542,10 @@ impl Game<'_> {
                 s.loom.patterns.clone(),
             )
         });
+        let stone = self
+            .station
+            .as_ref()
+            .map(|s| (s.selected.map_or(-1, |i| i as i32), s.stone.clone()));
         let crafter_data = match self.container_kind() {
             Some(BlockEntity::Crafter(c)) => Some((c.disabled, c.triggered)),
             _ => None,
@@ -5564,6 +5577,7 @@ impl Game<'_> {
             recipes: self.res.recipes(),
             brewing: &self.res.stations().brewing,
             banners: &self.res.stations().banners,
+            station_recipes: &self.res.stations().recipes,
             trade: Some(&trade_env),
         };
         menu.creative = creative;
@@ -5584,6 +5598,14 @@ impl Game<'_> {
             menu.data[0] = selected;
             menu.loom_patterns = patterns;
             menu.set_slot(&env, 3, before[3].clone());
+        }
+        if kind == Kind::Stonecutter
+            && let Some((selected, state)) = stone
+        {
+            // The same: the list and selection between clicks, then the result.
+            menu.data[0] = selected;
+            menu.stone = state;
+            menu.set_slot(&env, 1, before[1].clone());
         }
         if let Some((disabled, triggered)) = crafter_data {
             for (i, d) in disabled.iter().enumerate() {
@@ -5641,9 +5663,18 @@ impl Game<'_> {
             }
             // A server's loom plays its own sounds (the client's menu has no level).
             for sound in sounds.into_iter().filter(|_| !predicting) {
-                self.loom_sound(sound);
+                self.station_sound(sound);
             }
             self.loom_screen_changed();
+        } else if kind == Kind::Stonecutter {
+            if let Some(s) = self.station.as_mut() {
+                s.selected = usize::try_from(menu.data[0]).ok();
+                s.stone = std::mem::take(&mut menu.stone);
+                s.stonecutter_changed();
+            }
+            for sound in sounds.into_iter().filter(|_| !predicting) {
+                self.station_sound(sound);
+            }
         }
         if kind == Kind::CrafterBlock
             && let Some(BlockEntity::Crafter(c)) = self
