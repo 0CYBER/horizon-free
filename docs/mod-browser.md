@@ -30,6 +30,31 @@ never offered for install.
   else removes the part file and installs nothing.
 - A file whose source lists no checksum is refused.
 
+## Installing, updating, removing
+
+`mod-browser.json` beside `options.txt` lists every file the browser installed: its source, project, version, file
+and the checksum it was checked against. The browser replaces or removes only the files it lists; a file of the
+same name the player put there is never overwritten.
+
+- **Install** picks the newest version that runs, then its required dependencies, checked before any download: a
+  dependency that isn't a pack Horizon loads (a Java mod) stops the install. Dependencies go in first. A resource
+  pack still has to be turned on in the game's Resource Packs screen, and a shader pack in Video Settings > Shader
+  Packs, as in vanilla and Iris.
+- **Update** installs the newer version and removes the old file.
+- **Remove** deletes the file and its entry. Packs installed as dependencies stay.
+- **A modpack** is downloaded (checked the same way) into `ports/downloads/` and imported on the Modpacks page,
+  which says what of it Horizon runs and ports it.
+
+From a terminal (or an agent):
+
+```sh
+horizon-launcher mods search faithful                 # --kind resource|shader|modpack, --everything, --source
+horizon-launcher mods install faithful-32x            # id or slug; a modpack is imported
+horizon-launcher mods list                            # --json
+horizon-launcher mods update [faithful-32x] [--check]
+horizon-launcher mods remove faithful-32x
+```
+
 ## Sources
 
 **Modrinth.** The public API (`api.modrinth.com/v2`) needs no key. The launcher names itself in its user agent, as
