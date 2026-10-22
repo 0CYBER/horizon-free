@@ -275,6 +275,37 @@ impl Game<'_> {
         }
         self.maps.data.get_mut(&id)
     }
+    /// `ClientboundMapItemDataPacket.handle`: the server's colours for a map
+    /// this client does not own (lobby map art, a framed map on a wall).
+    pub(super) fn remote_map_item_data(
+        &mut self,
+        p: &horizon_protocol::packets::play::MapItemData,
+    ) {
+        let dimension = self.dimension_id();
+        let map = self
+            .maps
+            .data
+            .entry(p.map_id)
+            .or_insert_with(|| MapData::fresh(0.0, 0.0, p.scale.max(0) as u8, dimension));
+        map.locked = p.locked;
+        let Some(patch) = &p.patch else {
+            map.dirty = false;
+            return;
+        };
+        for x in 0..patch.width {
+            for y in 0..patch.height {
+                let Some(&color) = patch.colors.get((x + y * patch.width) as usize) else {
+                    continue;
+                };
+                let (px, py) = (patch.start_x + x, patch.start_y + y);
+                if (0..128).contains(&px) && (0..128).contains(&py) {
+                    map.update_color(px, py, color);
+                }
+            }
+        }
+        // The server owns a remote map: only the texture has to change.
+        map.dirty = false;
+    }
     fn next_map_id(&mut self) -> i32 {
         let last = *self.maps.last_id.get_or_insert_with(|| {
             horizon_client::save::read_dat(&self.world_root.join("data/minecraft/maps/last_id.dat"))

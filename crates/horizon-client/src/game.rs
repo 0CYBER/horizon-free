@@ -214,6 +214,7 @@ use horizon_world::{
     registry::BlockStateId,
 };
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{
@@ -272,9 +273,10 @@ struct Options {
     benchmark: Option<String>,
     /// `--dev-mod PATH` (repeatable): mods always on and reloaded when rebuilt.
     dev_mods: Vec<PathBuf>,
-    /// Single player runs on an integrated server thread (game/integrated.rs),
-    /// as vanilla's does: the default. `--no-server-thread` or
-    /// `HORIZON_SERVER_THREAD=0` runs the world in the frame instead.
+    /// `--server-thread` or `HORIZON_SERVER_THREAD=1`: single player runs on an
+    /// integrated server thread (game/integrated.rs), as vanilla's does. Off by
+    /// default again until a server's players can board, ride and hit
+    /// vehicles (#1222); `--no-server-thread` keeps it off.
     server_thread: bool,
     /// Set on the integrated server's own options: it draws nothing, so it skips meshing.
     integrated: bool,
@@ -331,7 +333,7 @@ impl Options {
             dev_mods: Vec::new(),
             // The command harness (HORIZON_COMMAND_SCRIPT) drives the world
             // itself, without the event loop: it stays in the frame.
-            server_thread: std::env::var("HORIZON_SERVER_THREAD").map_or(true, |v| v != "0")
+            server_thread: std::env::var("HORIZON_SERVER_THREAD").is_ok_and(|v| v == "1")
                 && std::env::var_os("HORIZON_COMMAND_SCRIPT").is_none(),
             integrated: false,
         };
@@ -341,7 +343,7 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Horizon — Minecraft Java Edition {} in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --world-frames N        Exit after N frames drawn in the world (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --dev-mod PATH          A Horizon mod (.hmod or folder) to develop: always on, reloaded when rebuilt\n  --no-server-thread      Run single player's world in the frame, not on its server thread\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause.",
+                        "Horizon — Minecraft Java Edition {} in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --world-frames N        Exit after N frames drawn in the world (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --dev-mod PATH          A Horizon mod (.hmod or folder) to develop: always on, reloaded when rebuilt\n  --server-thread         Run single player's world on its server thread (no vehicles yet)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause.",
                         horizon_core::VANILLA_VERSION
                     );
                     return Ok(None);
@@ -1388,7 +1390,7 @@ struct Game<'a> {
     map_patches: Vec<horizon_client::font::Patch>,
     /// Player skin downloads, and which skin each atlas skin slot holds
     /// (least recently shown first).
-    skin_downloads: horizon_client::skins::Downloader,
+    skin_downloads: RefCell<horizon_client::skins::Downloader>,
     skin_slots: Vec<(String, usize)>,
     cart_models: minecarts::CartModels,
     /// The boat the player rides.
@@ -1418,6 +1420,8 @@ struct Game<'a> {
     arrow_model: Option<horizon_client::mobs::Part>,
     tnts: Vec<tnt::PrimedTnt>,
     hoppers: HashMap<(i32, i32, i32), machines::HopperState>,
+    /// Where item entities are, while the block entities tick (hoppers).
+    item_columns: Option<machines::ItemColumns>,
     creative_screen: Creative,
     control: Option<horizon_client::control::Server>,
     frame_stats: horizon_client::control::FrameStats,
@@ -4486,10 +4490,17 @@ impl Game<'_> {
         };
         if capture {
             self.mouse.set_ignore_first_move();
+            // macOS warps by re-associating the mouse with the pointer,
+            // which undoes a Locked grab and leaves the pointer free: warp
+            // first there. Wayland moves a pointer only while it is locked,
+            // so everywhere else warp after grabbing.
+            #[cfg(target_os = "macos")]
+            warp(window);
             self.captured = window
                 .set_cursor_grab(CursorGrabMode::Locked)
                 .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined))
                 .is_ok();
+            #[cfg(not(target_os = "macos"))]
             if self.captured && self.focused {
                 warp(window);
             }
@@ -4839,6 +4850,9 @@ impl Game<'_> {
             self.draw_chat(&mut batch);
             self.draw_tab_list(&mut batch);
         }
+        // Screen.extractBlurredBackground blurs the world and HUD, while the
+        // screen's background, widgets, toasts and debug overlay stay sharp.
+        batch.blur_at = batch.vertices.len() as u32;
         match self.screen {
             Screen::Paused if self.pause_menu => self.draw_pause_menu(&mut batch),
             // PauseScreen(false): only its title, at the top.
@@ -9778,15 +9792,17 @@ impl Game<'_> {
                 self.entity_geometry(camera, alpha, entities)
             });
         }
+        let bolts = if title {
+            Vec::new()
+        } else {
+            self.bolt_instances()
+        };
         let mut additive = Vec::new();
-        if !title {
-            self.bolt_geometry(camera, &mut additive);
-            if self.dim == Dim::End {
-                let mut dragon = Vec::new();
-                self.dragon_geometry(camera, alpha, &mut dragon, &mut additive);
-                self.dragon_fireball_geometry(camera, alpha, &mut dragon);
-                entities.extend(dragon);
-            }
+        if !title && self.dim == Dim::End {
+            let mut dragon = Vec::new();
+            self.dragon_geometry(camera, alpha, &mut dragon, &mut additive);
+            self.dragon_fireball_geometry(camera, alpha, &mut dragon);
+            entities.extend(dragon);
         }
         // A Java pack's `clouds` replaces the cloud option (`renderClouds`:
         // "false", "fast", "true"), as Iris overrides `getCloudsType`.
@@ -9808,8 +9824,8 @@ impl Game<'_> {
         {
             // Camera.doesMobEffectBlockSky: no sun, moon or stars.
             self.celestial_geometry(&sky)
-        } else if self.dim == Dim::End {
-            (self.end_sky_geometry(), None)
+        } else if self.dim == Dim::End && self.settings.horizon.sky {
+            (self.end_flash_geometry(), None)
         } else {
             (Vec::new(), None)
         };
@@ -9859,6 +9875,12 @@ impl Game<'_> {
             title: title && !live,
             skybox: self.dim == Dim::Overworld && self.settings.horizon.sky,
             end_sky: self.dim == Dim::End && self.settings.horizon.sky,
+            end_sky_sprite: self
+                .gui
+                .atlas
+                .sprites
+                .get("environment/end_sky")
+                .map(|r| [r.u0, r.v0, r.u1, r.v1]),
             environment_fog: (self.dim == Dim::Nether).then_some((sky.fog_start, sky.fog_end)),
             cave_culling,
             water_fog,
@@ -9901,6 +9923,13 @@ impl Game<'_> {
             }),
             entities: &entities,
             dynamic_lights: &self.dynamic_lights,
+            lightning: horizon_client::gfx::lightning::Input {
+                bolts: &bolts,
+                uv: [
+                    self.gui.atlas.font.white().u0,
+                    self.gui.atlas.font.white().v0,
+                ],
+            },
             additive: &additive,
             see_through: &see_through,
             celestial: if self.settings.horizon.sky || title {
@@ -10006,9 +10035,8 @@ impl Game<'_> {
         };
         level_loading::draw(batch, atlas, Some(&status), Some(self.loading_progress));
     }
-    /// `Screen.extractBlurredBackground` over the panorama: every classic
-    /// screen of the title menus but the title itself (`TitleScreen`
-    /// doesn't blur), when `menuBackgroundBlurriness` is at least 1.
+    /// `Screen.extractBlurredBackground` over the panorama or the world and
+    /// HUD, when `menuBackgroundBlurriness` is at least 1.
     fn menu_blur(&self) -> Option<f32> {
         let loading = self.loading_reason() == Some(horizon_client::level_loading::Reason::Other);
         let blurred = !horizon_client::ui_theme::horizon()
@@ -10016,7 +10044,10 @@ impl Game<'_> {
                 || self.title.as_ref().is_some_and(|t| {
                     self.screen == Screen::Options
                         || !matches!(t.mode, horizon_client::title::Mode::Main)
-                }));
+                })
+                || (self.title.is_none()
+                    && self.player.is_some()
+                    && self.screen.blurs_background(self.pause_menu)));
         let radius = self.settings.menu_blur as f32;
         (blurred && radius >= 1.0).then_some(radius)
     }
@@ -11627,11 +11658,11 @@ impl<'a> Game<'a> {
             breath_clouds: Vec::new(),
             dragon_model: prepared.dragon_model,
             map_patches: Vec::new(),
-            skin_downloads: horizon_client::skins::Downloader::new(
+            skin_downloads: RefCell::new(horizon_client::skins::Downloader::new(
                 std::env::current_dir()
                     .unwrap_or_default()
                     .join("assets/skins"),
-            ),
+            )),
             skin_slots: Vec::new(),
             cart_models: prepared.cart_models,
             riding: None,
@@ -11651,6 +11682,7 @@ impl<'a> Game<'a> {
             arrow_model: prepared.arrow_model,
             tnts: Vec::new(),
             hoppers: HashMap::new(),
+            item_columns: None,
             creative_screen: prepared.creative_screen,
             control: None,
             frame_stats: Default::default(),
@@ -12365,6 +12397,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         title: true,
         skybox: false,
         end_sky: false,
+        end_sky_sprite: None,
         environment_fog: None,
         water_fog: [0.0; 3],
         fog: None,
@@ -12379,6 +12412,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         entities: &[],
         dynamic_lights: &[],
         clouds: None,
+        lightning: Default::default(),
         additive: &[],
         see_through: &[],
         celestial: &[],

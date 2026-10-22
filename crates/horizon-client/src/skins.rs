@@ -112,6 +112,24 @@ pub fn unpack(value: &str, signature: Signature, valid_uris: &[&str]) -> Texture
     out
 }
 
+/// The skin URL of a `minecraft:profile` component's property list. Player
+/// heads and mannequins read their profile this way, and `SkinManager` lets
+/// those textures be unsigned (`getInsecureSkinInformation`).
+pub fn profile_skin_url(profile: &serde_json::Value) -> Option<String> {
+    let value = profile
+        .get("properties")?
+        .as_array()?
+        .iter()
+        .find_map(|p| {
+            if p.get("name")?.as_str()? == "textures" {
+                p.get("value")?.as_str()
+            } else {
+                None
+            }
+        })?;
+    unpack(value, Signature::Unsigned, &TEXTURE_URIS).skin
+}
+
 /// `MinecraftProfileTexture.getHash`: the base name of the URL's path.
 pub fn texture_hash(url: &str) -> Option<String> {
     let rest = url.split_once("://")?.1;
@@ -393,6 +411,21 @@ pub fn sha1(data: &[u8]) -> [u8; 20] {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn profile_components_supply_unsigned_head_skins() {
+        let value = "eyJ0ZXh0dXJlcyI6IHsiU0tJTiI6IHsidXJsIjogImh0dHBzOi8vdGV4dHVyZXMubWluZWNyYWZ0Lm5ldC90ZXh0dXJlL2FiYzEyMyJ9fX0=";
+        let profile = serde_json::json!({"properties": [{"name": "textures", "value": value}]});
+        assert_eq!(
+            super::profile_skin_url(&profile).as_deref(),
+            Some("https://textures.minecraft.net/texture/abc123")
+        );
+        let other = serde_json::json!({"properties": [{"name": "other", "value": value}]});
+        assert_eq!(super::profile_skin_url(&other), None);
+        let bad = serde_json::json!({"properties": [{"name": "textures", "value": "not base64"}]});
+        assert_eq!(super::profile_skin_url(&bad), None);
+        assert_eq!(super::profile_skin_url(&serde_json::json!({})), None);
+    }
+
     /// Textures come over plain HTTP too (a local server here; https is the
     /// same request through rustls), and only 2xx answers count.
     #[test]

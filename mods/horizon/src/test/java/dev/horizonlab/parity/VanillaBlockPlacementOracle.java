@@ -27,7 +27,7 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 /**
  * Native BlockItem placement-state selection (BlockPlaceContext resolution,
  * updatePlacementContext and getPlacementState) over generated neighbourhoods.
- * Entities never obstruct; nothing is written to the world.
+ * Entity obstruction can be scripted; nothing is written to the world.
  */
 public final class VanillaBlockPlacementOracle {
     static Object unsafe;
@@ -67,6 +67,7 @@ public final class VanillaBlockPlacementOracle {
     static final class World extends net.minecraft.server.level.ServerLevel {
         Map<BlockPos, BlockState> cells;
         RandomSource random;
+        boolean obstructed;
         World() {
             super(null, null, null, null, null, null, false, 0L, List.of(), false);
         }
@@ -77,7 +78,7 @@ public final class VanillaBlockPlacementOracle {
         @Override public RandomSource getRandom() { return random; }
         @Override public int getMinY() { return -64; }
         @Override public int getHeight() { return 384; }
-        @Override public boolean isUnobstructed(BlockState state, BlockPos pos, CollisionContext context) { return true; }
+        @Override public boolean isUnobstructed(BlockState state, BlockPos pos, CollisionContext context) { return !obstructed; }
         @Override public boolean isUnobstructed(Entity entity) { return true; }
         @Override public void scheduleTick(BlockPos pos, Block block, int delay) { }
         @Override public net.minecraft.core.RegistryAccess registryAccess() { return RegistryAccess.fromRegistryOfRegistries(BuiltInRegistries.REGISTRY); }
@@ -116,6 +117,7 @@ public final class VanillaBlockPlacementOracle {
                     world.cells.put(new BlockPos(c.get(0).getAsInt(), c.get(1).getAsInt(), c.get(2).getAsInt()), Block.stateById(c.get(3).getAsInt()));
                 }
                 world.random = new LegacyRandomSource(f.get("seed").getAsLong());
+                world.obstructed = f.has("obstructed") && f.get("obstructed").getAsBoolean();
                 var player = make(FakePlayer.class);
                 player.world = world;
                 player.yaw = f.get("yaw").getAsFloat();

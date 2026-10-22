@@ -285,10 +285,15 @@ pub fn snow_column(
 /// The constructor's 32x32 table of horizontal column half-widths, indexed
 /// relative to the camera block. The camera's own column divides 0 by 0.
 fn column_size(index: usize) -> (f32, f32) {
-    let delta_x = (index % 32) as f32 - 16.0;
-    let delta_z = (index / 32) as f32 - 16.0;
-    let distance = f64::from(delta_x * delta_x + delta_z * delta_z).sqrt() as f32;
-    (-delta_z / distance, delta_x / distance)
+    static SIZES: std::sync::LazyLock<[(f32, f32); 32 * 32]> = std::sync::LazyLock::new(|| {
+        std::array::from_fn(|index| {
+            let delta_x = (index % 32) as f32 - 16.0;
+            let delta_z = (index / 32) as f32 - 16.0;
+            let distance = f64::from(delta_x * delta_x + delta_z * delta_z).sqrt() as f32;
+            (-delta_z / distance, delta_x / distance)
+        })
+    });
+    SIZES[index]
 }
 
 /// `prepareInstances` for one column: rain uses `max_alpha` 1, snow 0.8.
@@ -389,6 +394,27 @@ fn pieces(a: f32, b: f32) -> impl Iterator<Item = (f32, f32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn column_size_table_matches_original_arithmetic() {
+        for z in 0..32 {
+            for x in 0..32 {
+                let delta_x = x as f32 - 16.0;
+                let delta_z = z as f32 - 16.0;
+                let distance = f64::from(delta_x * delta_x + delta_z * delta_z).sqrt() as f32;
+                let expected = [-delta_z / distance, delta_x / distance];
+                let actual = column_size(z * 32 + x);
+                for (actual, expected) in [actual.0, actual.1].into_iter().zip(expected) {
+                    if x == 16 && z == 16 {
+                        assert!(expected.is_nan());
+                        assert!(actual.is_nan());
+                    } else {
+                        assert_eq!(actual.to_bits(), expected.to_bits(), "column ({x}, {z})");
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn cached_parameters_match_original_random_draws() {
@@ -529,6 +555,10 @@ mod tests {
             light_coords: 0,
         };
         let quad = column_quad(&column, [0.5, 70.0, 0.5], 1.0, 10, 1.0);
-        assert!(quad[0].pos[0].is_nan());
+        for vertex in quad {
+            assert!(vertex.pos[0].is_nan());
+            assert!(vertex.pos[2].is_nan());
+            assert!(vertex.pos[1].is_finite());
+        }
     }
 }
