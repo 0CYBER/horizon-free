@@ -12,10 +12,10 @@ use std::sync::{Arc, Weak};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Sections(u32);
 impl Sections {
-    /// Whether the section starting at block `min_y` is in the set.
-    pub fn contains(self, min_y: i32) -> bool {
-        let index = (min_y - MIN_Y) >> 4;
-        (0..SECTIONS as i32).contains(&index) && self.0 >> index & 1 != 0
+    /// The minimum Y of the lowest section in the set from block `min_y` up.
+    pub fn from(self, min_y: i32) -> Option<i32> {
+        let index = ((min_y - MIN_Y) >> 4).max(0) as u32;
+        Sections(self.0 & u32::MAX.checked_shl(index).unwrap_or(0)).next()
     }
 }
 impl Iterator for Sections {
@@ -183,6 +183,27 @@ mod tests {
                 .get_with((0, 0), &chunk, |id| id == 299)
                 .collect::<Vec<_>>(),
             [MIN_Y, MIN_Y + 9 * 16, MIN_Y + (SECTIONS as i32 - 1) * 16]
+        );
+        let sections = cache.get_with((0, 0), &chunk, |id| id == 299);
+        let top = MIN_Y + (SECTIONS as i32 - 1) * 16;
+        let from = |y| sections.from(y);
+        assert_eq!(
+            [
+                from(MIN_Y - 16),
+                from(MIN_Y),
+                from(MIN_Y + 16),
+                from(MIN_Y + 9 * 16)
+            ],
+            [
+                Some(MIN_Y),
+                Some(MIN_Y),
+                Some(MIN_Y + 9 * 16),
+                Some(MIN_Y + 9 * 16)
+            ]
+        );
+        assert_eq!(
+            [from(top), from(top + 16), from(top + 1000)],
+            [Some(top), None, None]
         );
     }
 }
@@ -359,19 +380,21 @@ mod tick_parity {
             for (x, z) in lit(&original) {
                 // Vanilla's rule, asked as each section is reached: any of its
                 // 4,096 blocks ticks randomly.
-                let reference = |level: &mut Level, min_y: i32| {
+                let reference = |level: &mut Level, from: i32| {
                     let chunk = &level.chunks[&(x, z)];
-                    (0..16).any(|y| {
-                        (0..16).any(|z| (0..16).any(|x| random(chunk.get(x, min_y + y, z))))
-                    })
+                    (from..MIN_Y + SECTIONS as i32 * 16)
+                        .step_by(16)
+                        .find(|&min_y| {
+                            (0..16).any(|y| {
+                                (0..16).any(|z| (0..16).any(|x| random(chunk.get(x, min_y + y, z))))
+                            })
+                        })
                 };
                 behaviours.tick_chunk_random(&mut original, &mut a, ChunkPos::new(x, z), reference);
             }
             for (x, z) in lit(&cached) {
-                let memoized = |level: &mut Level, min_y| {
-                    cache
-                        .get((x, z), &level.chunks[&(x, z)], &facts)
-                        .contains(min_y)
+                let memoized = |level: &mut Level, from| {
+                    cache.get((x, z), &level.chunks[&(x, z)], &facts).from(from)
                 };
                 behaviours.tick_chunk_random(&mut cached, &mut b, ChunkPos::new(x, z), memoized);
             }

@@ -677,37 +677,43 @@ impl PalettedContainer {
     /// Whether any entry satisfies `predicate`. Unlike [`Self::maybe_has`],
     /// palette entries no entry uses any more don't count.
     pub fn has(&self, mut predicate: impl FnMut(u32) -> bool) -> bool {
-        let matching: Vec<bool> = match &self.palette {
+        let list = match &self.palette {
             Palette::Single(value) => return predicate(*value),
-            Palette::List(list) => list.iter().map(|&v| predicate(v)).collect(),
-            Palette::Global => Vec::new(),
+            Palette::List(list) => list,
+            Palette::Global => {
+                return (0..self.strategy.entries()).any(|i| predicate(self.raw(i) as u32));
+            }
         };
-        if matches!(self.palette, Palette::List(_)) {
-            if !matching.contains(&true) {
-                return false;
-            }
-            if !matching.contains(&false) {
-                return true;
-            }
+        let matching: Vec<bool> = list.iter().map(|&v| predicate(v)).collect();
+        let count = matching.iter().filter(|&&m| m).count();
+        if count == 0 || count == list.len() {
+            return count != 0;
         }
-        let bits = usize::from(self.bits);
+        let (bits, entries) = (usize::from(self.bits), self.strategy.entries());
         let per = 64 / bits;
-        let m = mask(self.bits);
-        let mut left = self.strategy.entries();
-        for &word in &self.words {
-            for slot in 0..per.min(left) {
-                let id = ((word >> (slot * bits)) & m) as usize;
-                let hit = match self.palette {
-                    Palette::Global => predicate(id as u32),
-                    _ => matching[id],
-                };
-                if hit {
-                    return true;
-                }
-            }
-            left = left.saturating_sub(per);
+        // The words whose fields all hold entries; the last may be partial.
+        let full = entries / per;
+        if count <= 4 {
+            // A field-wise zero test of each word XORed with the matching
+            // index in every field: `(v - lo) & !v & hi` is non-zero exactly
+            // when some field of `v` is zero.
+            let lo = (0..per).fold(0u64, |a, f| a | 1 << (f * bits));
+            let hi = lo << (bits - 1);
+            let words = &self.words[..full];
+            let found = matching
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| **m)
+                .any(|(i, _)| {
+                    let pattern = lo * i as u64;
+                    words.iter().any(|&w| {
+                        let v = w ^ pattern;
+                        v.wrapping_sub(lo) & !v & hi != 0
+                    })
+                });
+            return found || (full * per..entries).any(|i| matching[self.raw(i)]);
         }
-        false
+        (0..entries).any(|i| matching[self.raw(i)])
     }
     /// Heap bytes held by the palette and the storage.
     pub fn heap_bytes(&self) -> usize {
@@ -812,6 +818,53 @@ mod tests {
                     plain.iter().any(|&v| v == wanted || v == wanted + 7),
                     "has {wanted} in {distinct} values"
                 );
+            }
+        }
+    }
+    #[test]
+    fn has_matches_a_scan_at_every_width() {
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        for (strategy, distinct) in [
+            (BLOCKS, 2u32),
+            (BLOCKS, 3),
+            (BLOCKS, 17),
+            (BLOCKS, 33),
+            (BLOCKS, 65),
+            (BLOCKS, 129),
+            (BIOMES, 2),
+            (BIOMES, 3),
+            (BIOMES, 5),
+        ] {
+            let entries = strategy.entries();
+            let mut c = PalettedContainer::new(strategy, 0);
+            let mut plain = vec![0u32; entries];
+            for i in 0..entries {
+                let v = (rng(&mut state) % u64::from(distinct)) as u32;
+                c.set(i, v);
+                plain[i] = v;
+            }
+            // Take some values away again (stale entries), the last index too.
+            for gone in [0, 1, distinct - 1] {
+                for i in 0..entries {
+                    if plain[i] == gone {
+                        c.set(i, distinct);
+                        plain[i] = distinct;
+                    }
+                }
+                for m in [3, 5, 7] {
+                    let hit = |v: u32| v % m == gone % m;
+                    assert_eq!(c.has(hit), plain.iter().any(|&v| hit(v)));
+                }
+                for wanted in 0..=distinct {
+                    for other in [wanted, wanted + 1, wanted + 2, wanted + 3, wanted + 4] {
+                        let hit = |v: u32| v == wanted || v == other;
+                        assert_eq!(
+                            c.has(hit),
+                            plain.iter().any(|&v| hit(v)),
+                            "{distinct} values, {wanted}/{other}, without {gone}"
+                        );
+                    }
+                }
             }
         }
     }

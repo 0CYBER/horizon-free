@@ -99,7 +99,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         &mut level,
                         &mut ticks,
                         ChunkPos::new(0, 0),
-                        |_, min_y| cache.get((0, 0), &chunk, &facts).contains(min_y),
+                        |_, from| cache.get((0, 0), &chunk, &facts).from(from),
                     );
                     for pos in level.reads.borrow().iter() {
                         let state = chunk.block(pos.x, pos.y, pos.z);

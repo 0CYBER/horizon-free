@@ -69,7 +69,7 @@
 //! level.time += 1;
 //! behaviours.tick_scheduled(&mut level, &mut ticks);
 //! for chunk in ticking_chunks {
-//!     behaviours.tick_chunk_random(&mut level, &mut ticks, chunk, |level, min_y| level.randomly_ticking(chunk, min_y));
+//!     behaviours.tick_chunk_random(&mut level, &mut ticks, chunk, |level, from| level.next_ticking_section(chunk, from));
 //! }
 //! behaviours.run_block_events(&mut level, &mut ticks);
 //! /* tick entities */

@@ -2427,7 +2427,7 @@ impl Game<'_> {
                 let mut read = None;
                 let mut sections = Default::default();
                 let pos = horizon_core::position::ChunkPos::new(x, z);
-                b.tick_chunk_random(level, ticks, pos, |level, min_y| {
+                b.tick_chunk_random(level, ticks, pos, |level, from| {
                     if read != Some(level.world.revision) {
                         read = Some(level.world.revision);
                         sections = level
@@ -2438,7 +2438,7 @@ impl Game<'_> {
                                 level.random_tick_sections.get((x, z), chunk, level.facts)
                             });
                     }
-                    sections.contains(min_y)
+                    sections.from(from)
                 });
             }
             b.run_block_events(level, ticks);
