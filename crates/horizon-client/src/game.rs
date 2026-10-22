@@ -12439,7 +12439,13 @@ fn start_game<'a>(
         game.mods.dev = game.options.dev_mods.clone();
         game.start_mods();
     }
-    if let Some(path) = &game.options.control {
+    if game.options.control.is_some() && game.settings.extras.no_ai {
+        // No AI turns agent control off: the socket is never opened.
+        log::warn!(
+            "Horizon: control socket not opened: {}",
+            horizon_core::no_ai::REFUSAL
+        );
+    } else if let Some(path) = &game.options.control {
         let server = horizon_client::control::Server::start(path)
             .map_err(|e| format!("control socket {}: {e}", path.display()))?;
         log::info!("Horizon: control socket {}", server.path().display());

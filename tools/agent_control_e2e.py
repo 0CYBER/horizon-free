@@ -11,7 +11,9 @@ states (wait-for) and reads the event log; the consume scenario eats and drinks 
 golden apple, milk, honey, chorus fruit) and checks their effects, remainders and teleport; the
 pick scenario middle-clicks slots (AbstractContainerScreen's cloning): a full stack in creative, from
 the hotbar and from an item tab, and nothing in survival; the suggestions scenario checks
-slash-command Tab completion on single player's connected client after a fresh launch.
+slash-command Tab completion on single player's connected client after a fresh launch; the no-ai
+scenario turns No AI on in a scratch game home and checks that horizon-ctl, its MCP server and the
+game's control socket all refuse.
 
     python3 tools/agent_control_e2e.py                 # both modes
     python3 tools/agent_control_e2e.py --mode mcp      # one of them
@@ -571,13 +573,73 @@ SCENARIOS = {'survival': scenario, 'ui': ui_scenario, 'options': options_scenari
              'consume': consume_scenario, 'pick': pick_scenario, 'suggestions': suggestions_scenario}
 
 
-def run(mode, ctl, out, resources, which='survival'):
+REFUSAL = "AI features are off: turn off No AI in the launcher's settings"
+
+
+def scratch(mode, resources):
+    """A scratch game home with the prepared resources, and the game's environment for it."""
     work = Path(tempfile.mkdtemp(prefix=f'hzac-{mode}-'))
     (work / '.local').mkdir()
     (work / '.local/horizon-client').mkdir()
     os.symlink(resources, work / '.local/horizon-client' / lab.VERSION)
+    # horizon-ctl reads No AI in the game home: this one, not the player's.
+    env = dict(game_env(os.environ.get('VSCREEN', 'agent-control')), HORIZON_HOME=str(work))
+    return work, env
+
+
+def no_ai_check(mode, ctl, resources):
+    """No AI on: horizon-ctl refuses (exit 4, kind denied), so does its MCP server, and the game
+    started with --control-socket never opens it."""
+    work, env = scratch(mode, resources)
     socket = work / 'c.sock'
-    env = game_env(os.environ.get('VSCREEN', 'agent-control'))
+    try:
+        (work / 'horizon-extras.txt').write_text('fps:true\nnoAi:true\n')
+        if mode == 'cli':
+            for words in (['state'], ['launch', '--world', 'NoAi'], ['logs']):
+                r = subprocess.run([str(ctl), '--socket', str(socket), *words], cwd=work, env=env,
+                                   capture_output=True, text=True, timeout=60)
+                reply = json.loads(r.stdout.strip().splitlines()[-1])
+                log(mode, words, reply)
+                assert r.returncode == 4 and reply == {'error': REFUSAL, 'kind': 'denied'}, (r.returncode, reply)
+            client = ctl.with_name('horizon-client')
+            args = [str(client), '--control-socket', str(socket), '--world', 'NoAi', '--world-frames', '30']
+            if sys.platform == 'darwin':
+                args.append('--offscreen')
+            r = subprocess.run(args, cwd=work, env=env, capture_output=True, text=True, timeout=600)
+            text = r.stdout + r.stderr + ''.join(
+                p.read_text(errors='replace') for p in (work / 'logs').glob('latest.log'))
+            assert r.returncode == 0, f'game exit {r.returncode}: {text[-2000:]}'
+            assert 'control socket not opened' in text and REFUSAL in text, text[-2000:]
+            assert not socket.exists(), 'the game opened its control socket under No AI'
+        else:
+            r = subprocess.run([str(ctl), '--socket', str(socket), 'mcp'], cwd=work, env=env, input='',
+                               capture_output=True, text=True, timeout=60)
+            log(mode, ['mcp'], {'exit': r.returncode, 'stderr': r.stderr.strip()})
+            assert r.returncode == 4 and r.stderr.strip() == f'horizon-ctl mcp: {REFUSAL}', r
+            # Turned on during a session: the next call refuses.
+            (work / 'horizon-extras.txt').write_text('noAi:false\n')
+            m = Mcp(ctl, socket, work, env)
+            (work / 'horizon-extras.txt').write_text('noAi:true\n')
+            try:
+                m('state')
+                raise AssertionError('state ran under No AI')
+            except Failed as e:
+                assert REFUSAL in str(e) and 'denied' in str(e), e
+            m.close()
+        print(f'[{mode}] PASS: no-ai')
+        return True
+    except (Failed, AssertionError, json.JSONDecodeError, IndexError, subprocess.TimeoutExpired) as e:
+        print(f'[{mode}] FAIL: no-ai: {e!r}')
+        return False
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def run(mode, ctl, out, resources, which='survival'):
+    if which == 'no-ai':
+        return no_ai_check(mode, ctl, resources)
+    work, env = scratch(mode, resources)
+    socket = work / 'c.sock'
     driver = (Cli if mode == 'cli' else Mcp)(ctl, socket, work, env)
     started = time.time()
     try:
@@ -604,7 +666,7 @@ def run(mode, ctl, out, resources, which='survival'):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--mode', choices=['cli', 'mcp', 'both'], default='both')
-    parser.add_argument('--scenario', choices=[*SCENARIOS, 'all'], default='all')
+    parser.add_argument('--scenario', choices=[*SCENARIOS, 'no-ai', 'all'], default='all')
     parser.add_argument('--bin-dir', help='prebuilt horizon-client and horizon-ctl (default: build with the fast profile)')
     parser.add_argument('--out', default=str(ROOT / '.local/agent-control-e2e'), help='screenshots go here')
     args = parser.parse_args()
@@ -622,7 +684,7 @@ def main():
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     modes = ['cli', 'mcp'] if args.mode == 'both' else [args.mode]
-    scenarios = list(SCENARIOS) if args.scenario == 'all' else [args.scenario]
+    scenarios = [*SCENARIOS, 'no-ai'] if args.scenario == 'all' else [args.scenario]
     results = {f'{m}/{s}': run(m, bins / 'horizon-ctl', out, resources, s) for m in modes for s in scenarios}
     print(json.dumps(results))
     sys.exit(0 if all(results.values()) else 1)

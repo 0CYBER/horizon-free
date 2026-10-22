@@ -439,6 +439,10 @@ impl Session {
                 }
                 Ok(json!({ "tools": list }))
             }
+            // No AI turned on during the session: nothing more runs.
+            "tools/call" if backend::no_ai() => {
+                Err((-32000, horizon_core::no_ai::REFUSAL.to_string()))
+            }
             "tools/call" => {
                 let name = params
                     .get("name")
