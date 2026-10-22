@@ -15,8 +15,9 @@ use horizon_world::{
     entity_obstruction::EntityIdentity,
     fluid::{FluidKind, FluidState},
     liquid_collision::LiquidCollisionWorld,
+    piston_shape::PistonCollisionWorld,
     powder_snow_collision::{PowderSnowEntity, PowderSnowWorld},
-    registry::{BlockRegistry, BlockTableFile},
+    registry::{BlockRegistry, BlockStateId, BlockTableFile},
     world_movement::{
         CollisionCheckRequest, EntityMovementWorld, MovementRequest, no_world_collision,
         resolve_world_movement,
@@ -259,8 +260,30 @@ impl DynamicSupportWorld for SceneCollisions<'_, '_> {
     fn shulker_is_closed(&mut self, _: [i32; 3]) -> io::Result<Option<bool>> {
         Ok(None)
     }
-    fn moving_piston_shape(&mut self, _: [i32; 3]) -> io::Result<Option<VoxelShape>> {
-        Ok(None)
+    /// `MovingPistonBlock.getCollisionShape`: the block entity's moving shape
+    /// (`PistonMovingBlockEntity.getCollisionShape`), outside any push.
+    fn moving_piston_shape(&mut self, p: [i32; 3]) -> io::Result<Option<VoxelShape>> {
+        let Some(&(_, piston)) = self.world.moving_pistons.iter().find(|(q, _)| *q == p) else {
+            return Ok(None);
+        };
+        let binding = self.binding;
+        let Some(pistons) = binding.pistons() else {
+            return Ok(None);
+        };
+        pistons
+            .collision_shape(self, p, piston, None)
+            .map(Some)
+            .map_err(io::Error::other)
+    }
+}
+impl PistonCollisionWorld for SceneCollisions<'_, '_> {
+    type Error = io::Error;
+    /// `BlockState.getCollisionShape(level, pos)` of the moved state.
+    fn collision_shape(&mut self, state: BlockStateId, p: [i32; 3]) -> io::Result<VoxelShape> {
+        let binding = self.binding;
+        binding
+            .collision_shape(self, state, p)
+            .map_err(io::Error::other)
     }
 }
 impl DynamicCollisionWorld for SceneCollisions<'_, '_> {

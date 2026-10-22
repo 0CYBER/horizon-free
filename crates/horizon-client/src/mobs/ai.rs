@@ -1240,10 +1240,10 @@ pub fn walk_target_value(m: &Mob, w: &MobWorld, p: [i32; 3]) -> f32 {
             0.0
         };
     }
-    // AbstractNautilus and Creaking.getWalkTargetValue: everywhere alike.
+    // AbstractNautilus, Axolotl and Creaking.getWalkTargetValue: everywhere alike.
     if matches!(
         m.species(),
-        Species::Nautilus | Species::ZombieNautilus | Species::Creaking
+        Species::Nautilus | Species::ZombieNautilus | Species::Axolotl | Species::Creaking
     ) {
         return 0.0;
     }
@@ -1405,6 +1405,12 @@ pub fn do_hurt_target(m: &mut Mob, who: Who, cx: &mut Cx) {
     // Mob.doHurtTarget ends with playAttackSound once the hit landed.
     if super::creaking::is_creaking(m) {
         m.voice("entity.creaking.attack", cx.events);
+    }
+    // Axolotl.playAttackSound: playSound(AXOLOTL_ATTACK, 1.0, 1.0).
+    if m.species() == Species::Axolotl {
+        let at = [m.position.x, m.position.y, m.position.z];
+        cx.events
+            .push(MobEvent::Sound("entity.axolotl.attack", at, 1.0, 1.0));
     }
     let _ = Fluid::None;
 }

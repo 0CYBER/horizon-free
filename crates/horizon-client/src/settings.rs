@@ -48,7 +48,10 @@ pub fn sound_source(event: &str) -> usize {
         "zombified_piglin",
         "wither_skeleton",
     ];
-    if e.starts_with("music_disc.") {
+    if e == "block.potent_sulfur.noxious_gas" {
+        // PotentSulfurBlock.animateTick, its only caller, plays it as AMBIENT.
+        index("ambient")
+    } else if e.starts_with("music_disc.") {
         index("record")
     } else if e.starts_with("music.") {
         index("music")

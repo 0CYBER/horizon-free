@@ -6,7 +6,7 @@ use horizon_client::{
     items::ItemStack,
     mobs::{Species, Who, piglin::ADMIRE},
 };
-use horizon_core::random::RandomSource;
+use horizon_core::{geometry::Vec3, random::RandomSource};
 
 impl Game<'_> {
     fn piglin_loved(&self, item: &str) -> bool {
@@ -132,12 +132,29 @@ impl Game<'_> {
         } else {
             vec![ItemStack::new(&item, 1)]
         };
-        // BehaviorUtils.throwItem toward the nearest visible player, else nearby.
-        let target = self
+        // BehaviorUtils.throwItem toward the nearest visible player
+        // (NEAREST_VISIBLE_PLAYER: within 16, alive, no spectators; the
+        // guests count as much as the host), else nearby.
+        let at = m.position;
+        let host = self
             .player
             .as_ref()
-            .filter(|p| p.position.distance_squared(m.position) < 256.0)
-            .map(|p| [p.position.x, p.position.y + 1.0, p.position.z]);
+            .filter(|p| !p.health.dead_or_dying() && !self.spectator())
+            .map(|p| [p.position.x, p.position.y, p.position.z]);
+        let guests = self.lan.iter().flat_map(|h| {
+            h.hub
+                .guests
+                .iter()
+                .filter(|g| h.hub.here(g) && g.loaded && !g.dead && !g.spectator())
+                .map(|g| g.position)
+        });
+        let d = |p: &[f64; 3]| at.distance_squared(Vec3::new(p[0], p[1], p[2]));
+        let target = host
+            .into_iter()
+            .chain(guests)
+            .filter(|p| d(p) < 256.0)
+            .min_by(|a, b| d(a).total_cmp(&d(b)))
+            .map(|p| [p[0], p[1] + 1.0, p[2]]);
         for stack in items {
             let to = target.unwrap_or_else(|| {
                 let r = &mut self.world.random;

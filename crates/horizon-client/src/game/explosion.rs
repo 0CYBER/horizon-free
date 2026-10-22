@@ -226,6 +226,102 @@ impl Game<'_> {
     }
     /// `ServerExplosion.hurtEntities` (player, mobs, items, primed TNT);
     /// the player takes `damage_type`.
+    /// `ServerExplosion.hurtEntities` for the player: damage scaled by
+    /// distance and exposure, through a raised shield (`hurtServer` blocks
+    /// explosions like any attack from where the blast is), then the push
+    /// (less with explosion knockback resistance; none for spectators or a
+    /// creative player flying).
+    pub(super) fn explosion_hurt_player(
+        &mut self,
+        center: [f64; 3],
+        radius: f32,
+        damage_type: &str,
+        exploding: Option<u32>,
+    ) {
+        let diameter = f64::from(radius * 2.0);
+        // Blast protection: `EXPLOSION_KNOCKBACK_RESISTANCE` (0.15 per level and
+        // piece, so two Blast Protection IV pieces cancel it).
+        let resistance = self
+            .player
+            .as_mut()
+            .and_then(|p| p.attribute("minecraft:explosion_knockback_resistance").ok())
+            .unwrap_or(0.0);
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        let feet = [p.position.x, p.position.y, p.position.z];
+        let dist = ((feet[0] - center[0]).powi(2)
+            + (feet[1] - center[1]).powi(2)
+            + (feet[2] - center[2]).powi(2))
+        .sqrt()
+            / diameter;
+        if dist > 1.0 || p.health.dead_or_dying() {
+            return;
+        }
+        let w = f64::from(p.dimensions.width) / 2.0;
+        let h = f64::from(p.dimensions.height);
+        let eye = [
+            feet[0],
+            feet[1] + f64::from(p.dimensions.eye_height),
+            feet[2],
+        ];
+        let exposure = self.seen_percent(
+            center,
+            [feet[0] - w, feet[1], feet[2] - w],
+            [feet[0] + w, feet[1] + h, feet[2] + w],
+        );
+        let pow = (1.0 - dist) * f64::from(exposure);
+        let amount = ((pow * pow + pow) / 2.0 * 7.0 * diameter + 1.0) as f32;
+        let d = [eye[0] - center[0], eye[1] - center[1], eye[2] - center[2]];
+        let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        let dir = if l < 1.0e-4 {
+            [0.0; 3]
+        } else {
+            [d[0] / l, d[1] / l, d[2] / l]
+        };
+        let power = pow * (1.0 - resistance);
+        // `source.doTeamsAllowDamage(entity)`.
+        let hurtable = exploding.is_none_or(|id| {
+            horizon_client::scoreboard::teams_allow_damage(self.mob_team(id), self.player_team())
+        });
+        let blocking = self.player_blocking(Some(center), damage_type, false);
+        let raised = blocking.is_some();
+        let (creative, spectator) = (self.creative, self.spectator());
+        let flying = self.player.as_ref().is_some_and(|p| p.flying);
+        let mut outcome = horizon_client::health::BlockOutcome::default();
+        if let Some(p) = self.player.as_mut()
+            && let Some(id) = self.motion.health.damage.id(damage_type)
+        {
+            // Creative players are invulnerable to explosions.
+            if !creative
+                && !spectator
+                && hurtable
+                && let Ok(o) = p.hurt_blocking(
+                    &self.motion.health,
+                    self.world.health_rules,
+                    id,
+                    amount,
+                    blocking,
+                )
+            {
+                outcome = o;
+            }
+            if !spectator && !(creative && flying) {
+                p.velocity = Vec3::new(
+                    p.velocity.x + dir[0] * power,
+                    p.velocity.y + dir[1] * power,
+                    p.velocity.z + dir[2] * power,
+                );
+            }
+        }
+        if outcome.hurt && !creative {
+            self.hurt_armor(amount);
+        }
+        if raised {
+            self.after_block(outcome, amount, None, false);
+        }
+    }
+
     fn explosion_hurt_entities(&mut self, center: [f64; 3], radius: f32, damage_type: &str) {
         if radius < 1.0e-5 {
             return;
@@ -261,57 +357,23 @@ impl Game<'_> {
                 horizon_client::scoreboard::teams_allow_damage(g.mob_team(id), victim)
             })
         };
-        let player_hurtable = teams_allow(self, self.player_team());
-        // Player.
-        if let Some(p) = self.player.as_ref() {
-            let feet = [p.position.x, p.position.y, p.position.z];
-            let dist = distance(feet) / diameter;
-            if dist <= 1.0 && !p.health.dead_or_dying() {
-                let w = f64::from(p.dimensions.width) / 2.0;
-                let h = f64::from(p.dimensions.height);
-                let eye = [
-                    feet[0],
-                    feet[1] + f64::from(p.dimensions.eye_height),
-                    feet[2],
-                ];
-                let exposure = self.seen_percent(
-                    center,
-                    [feet[0] - w, feet[1], feet[2] - w],
-                    [feet[0] + w, feet[1] + h, feet[2] + w],
-                );
-                let amount = damage(dist, exposure);
-                let dir = direction(eye);
-                let mut hurt = false;
-                let creative = self.creative;
-                if let Some(p) = self.player.as_mut()
-                    && let Some(id) = self.motion.health.damage.id(damage_type)
-                {
-                    // Creative players are invulnerable to explosions.
-                    if !creative && player_hurtable {
-                        hurt = p
-                            .hurt(&self.motion.health, self.world.health_rules, id, amount)
-                            .unwrap_or(false);
-                    }
-                    // Blast protection: `EXPLOSION_KNOCKBACK_RESISTANCE` (0.15 per
-                    // level and piece, so two Blast Protection IV pieces cancel it).
-                    let resistance = p
-                        .attribute("minecraft:explosion_knockback_resistance")
-                        .unwrap_or(0.0);
-                    let power = (1.0 - dist) * f64::from(exposure) * (1.0 - resistance);
-                    // `hitPlayers` skips creative players who are flying: the
-                    // client gets no knockback in the explode packet.
-                    if !(creative && p.flying) {
-                        p.velocity = Vec3::new(
-                            p.velocity.x + dir[0] * power,
-                            p.velocity.y + dir[1] * power,
-                            p.velocity.z + dir[2] * power,
-                        );
-                    }
-                }
-                if hurt && !self.creative {
-                    self.hurt_armor(amount);
-                }
+        // The player, then every other player in the level (LAN guests),
+        // each swapped in as the player.
+        self.explosion_hurt_player(center, radius, damage_type, exploding);
+        if let Some(mut host) = self.lan.take() {
+            let guests: Vec<u32> = host
+                .hub
+                .guests
+                .iter()
+                .filter(|g| host.hub.here(g) && g.loaded && !g.dead)
+                .map(|g| g.conn)
+                .collect();
+            for conn in guests {
+                self.guest_hit_by(&mut host, conn, |g| {
+                    g.explosion_hurt_player(center, radius, damage_type, exploding);
+                });
             }
+            self.lan = Some(host);
         }
         // Mobs.
         let mut mobs = std::mem::take(&mut self.mobs);

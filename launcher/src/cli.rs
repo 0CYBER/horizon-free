@@ -156,6 +156,68 @@ enum ModpackCmd {
 }
 
 #[derive(Subcommand)]
+enum ModsCmd {
+    /// What the browser installed (the default)
+    List,
+    /// Search for packs Horizon loads
+    Search {
+        text: Vec<String>,
+        #[arg(long, value_enum, default_value_t = KindArg::Resource)]
+        kind: KindArg,
+        /// Also what was made for other versions or runs only partly, each marked
+        #[arg(long)]
+        everything: bool,
+        #[arg(long, value_enum, default_value_t = SourceArg::Modrinth)]
+        source: SourceArg,
+    },
+    /// Install a pack and what it needs, by its id or slug (checksums checked); a modpack is
+    /// imported on the Modpacks page
+    Install {
+        project: String,
+        /// Allow a version made for another Minecraft version
+        #[arg(long)]
+        everything: bool,
+        #[arg(long, value_enum, default_value_t = SourceArg::Modrinth)]
+        source: SourceArg,
+    },
+    /// Update what the browser installed (or one pack)
+    Update {
+        project: Option<String>,
+        /// Only say what is newer
+        #[arg(long)]
+        check: bool,
+    },
+    /// Remove a pack the browser installed
+    Remove { project: String },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum KindArg {
+    Resource,
+    Shader,
+    Modpack,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum SourceArg {
+    Modrinth,
+    Curseforge,
+}
+
+impl SourceArg {
+    fn get(self) -> Result<Box<dyn horizon_launcher::browser::Source>, String> {
+        use horizon_launcher::browser::{self, SourceId};
+        let id = match self {
+            SourceArg::Modrinth => SourceId::Modrinth,
+            SourceArg::Curseforge => SourceId::CurseForge,
+        };
+        browser::source(id).ok_or_else(|| {
+            "CurseForge needs an API key: HORIZON_CURSEFORGE_API_KEY (docs/mod-browser.md).".into()
+        })
+    }
+}
+
+#[derive(Subcommand)]
 enum Cmd {
     /// List Horizon releases, or the installed versions
     Versions {
@@ -256,6 +318,12 @@ enum Cmd {
     Modpack {
         #[command(subcommand)]
         action: Option<ModpackCmd>,
+    },
+    /// The mod browser: resource packs, shader packs and modpacks from Modrinth (and CurseForge
+    /// with a key), each file checked against its checksum (docs/mod-browser.md)
+    Mods {
+        #[command(subcommand)]
+        action: Option<ModsCmd>,
     },
     /// Servers hosted with horizon-server (the Servers page): list them, create one, or run any
     /// horizon-server command on one
@@ -523,6 +591,7 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             }
         }
         Cmd::Modpack { action } => modpack(action.unwrap_or(ModpackCmd::List), as_json)?,
+        Cmd::Mods { action } => mods(action.unwrap_or(ModsCmd::List), as_json)?,
         Cmd::Servers { action } => servers(action.unwrap_or(ServersCmd::List), as_json)?,
         Cmd::Mcp => unreachable!(),
     }
@@ -816,6 +885,148 @@ fn servers(action: ServersCmd, as_json: bool) -> Result<(), String> {
                 entry.name,
                 entry.dir.display()
             );
+        }
+    }
+    Ok(())
+}
+
+fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
+    use horizon_launcher::browser::{installed, Kind, Query};
+    use horizon_launcher::modpacks;
+    let home = backend::game_home();
+    let entry_json = |e: &installed::Entry| serde_json::to_value(e).unwrap_or_default();
+    let line = |label: &str, f: f32| progress(label.to_string())(f);
+    match action {
+        ModsCmd::List => {
+            let list = installed::Installed::load(&home).entries;
+            if as_json {
+                json(list.iter().map(entry_json).collect());
+            } else if list.is_empty() {
+                println!(
+                    "Nothing installed from the browser yet: horizon-launcher mods search <text>"
+                );
+            }
+            for e in list.iter().filter(|_| !as_json) {
+                println!(
+                    "{}  {}  ({}, {})\n  {}  {}",
+                    e.title,
+                    e.number,
+                    e.source.label(),
+                    e.slug,
+                    e.file,
+                    e.checksum
+                );
+            }
+        }
+        ModsCmd::Search {
+            text,
+            kind,
+            everything,
+            source,
+        } => {
+            let kind = match kind {
+                KindArg::Resource => Kind::ResourcePack,
+                KindArg::Shader => Kind::ShaderPack,
+                KindArg::Modpack => Kind::Modpack,
+            };
+            let query = Query {
+                everything,
+                ..Query::new(&text.join(" "), kind)
+            };
+            let found = source.get()?.search(&query)?;
+            if as_json {
+                json(found.iter().map(|p| {
+                    let support = p.support();
+                    serde_json::json!({
+                        "id": p.id, "slug": p.slug, "title": p.title, "summary": p.summary,
+                        "author": p.author, "downloads": p.downloads, "page": p.page,
+                        "license": p.license, "support": support.label(), "reason": support.reason(),
+                    })
+                }).collect());
+            } else {
+                for p in &found {
+                    let support = p.support();
+                    println!(
+                        "{}  ({})  {} · {} downloads\n  {}",
+                        p.title,
+                        p.slug,
+                        support.label(),
+                        p.downloads,
+                        p.summary
+                    );
+                    if let Some(why) = support.reason() {
+                        println!("  {why}");
+                    }
+                }
+            }
+        }
+        ModsCmd::Install {
+            project,
+            everything,
+            source,
+        } => {
+            let source = source.get()?;
+            let p = source.project(&project)?;
+            if p.kind == Kind::Modpack {
+                let folder = modpacks::ports_dir().join("downloads");
+                let file =
+                    installed::fetch_modpack(&*source, &p, &folder, &progress(p.title.clone()))?;
+                let log = &|line: String| eprintln!("{line}");
+                let pack = modpacks::import(&file, log)?;
+                println!(
+                    "Imported {} ({}): horizon-launcher modpack port {}",
+                    pack.title(),
+                    pack.summary(),
+                    pack.slug
+                );
+                return Ok(());
+            }
+            let done = installed::install(&*source, &p, everything, &home, &line)?;
+            if as_json {
+                json(done.iter().map(entry_json).collect());
+            }
+            for e in done.iter().filter(|_| !as_json) {
+                println!("{} {}: {} ({})", e.title, e.number, e.file, e.checksum);
+            }
+        }
+        ModsCmd::Update { project, check } => {
+            let list = installed::Installed::load(&home).entries;
+            let chosen: Vec<_> = list
+                .iter()
+                .filter(|e| {
+                    project
+                        .as_deref()
+                        .is_none_or(|n| e.project == n || e.slug == n)
+                })
+                .collect();
+            if chosen.is_empty() {
+                return Err(match project {
+                    Some(n) => format!("{n} wasn't installed by the browser."),
+                    None => "Nothing installed from the browser yet.".into(),
+                });
+            }
+            for e in chosen {
+                let Some(source) = horizon_launcher::browser::source(e.source) else {
+                    println!("{}: {} isn't available here.", e.title, e.source.label());
+                    continue;
+                };
+                match installed::update_for(&*source, e)? {
+                    None => println!("{} {}: up to date.", e.title, e.number),
+                    Some(v) if check => {
+                        println!("{} {}: {} is available.", e.title, e.number, v.number)
+                    }
+                    Some(_) => {
+                        let p = source.project(&e.project)?;
+                        for done in installed::install(&*source, &p, true, &home, &line)? {
+                            println!("{} {}: {}", done.title, done.number, done.file);
+                        }
+                    }
+                }
+            }
+        }
+        ModsCmd::Remove { project } => {
+            let e = installed::remove(&home, &project)?;
+            println!("Removed {} ({}).", e.title, e.file);
         }
     }
     Ok(())

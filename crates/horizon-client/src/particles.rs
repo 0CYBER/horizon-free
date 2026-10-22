@@ -73,6 +73,7 @@ particle_types! {
     Splash = "splash",
     Rain = "rain",
     Bubble = "bubble",
+    SulfurBubbles = "sulfur_bubbles",
     BubblePop = "bubble_pop",
     BubbleColumnUp = "bubble_column_up",
     CurrentDown = "current_down",
@@ -352,6 +353,14 @@ enum Behaviour {
     },
     WaterDrop,
     Bubble,
+    /// `SulfurBubbleParticle`: rises three blocks through still water,
+    /// growing to 0.15.
+    SulfurBubble {
+        y_start: f64,
+        y_end: f64,
+        size_start: f32,
+        y_prev: f64,
+    },
     BubblePop,
     BubbleColumnUp,
     CurrentDown {
@@ -1098,6 +1107,11 @@ impl ParticleLevel<'_> {
             f64::from(s.fluid_level) / 9.0
         };
         (s.fluid, height)
+    }
+    /// The fluid at a block and whether it is a source (`FluidState.isSource`).
+    fn fluid_source(&self, b: [i32; 3]) -> (Fluid, bool) {
+        let s = self.facts.get(self.world.block(b[0], b[1], b[2]));
+        (s.fluid, s.fluid_level == 8 && !s.fluid_falling)
     }
     /// `getCollisionShape(...).max(Y, x, z)` for cached shapes.
     fn collision_top(&self, b: [i32; 3], fx: f64, fz: f64) -> f64 {
@@ -1931,6 +1945,27 @@ impl ParticleEngine {
                     q.lifetime = (40.0 / (f64::from(r.next_float()) * 0.8 + 0.2)) as i32;
                     q.behaviour = Behaviour::BubbleColumnUp;
                 }
+                q
+            }
+            T::SulfurBubbles => {
+                let mut q = Particle::at(r, ty, p);
+                q.gravity = -0.04;
+                q.friction = 0.85;
+                q.set_size(0.02, 0.02);
+                q.velocity[0] =
+                    v[0] * f64::from(0.2f32) + f64::from((r.next_float() * 2.0 - 1.0) * 0.02);
+                // The provider passes `yAux` as `za`, so the Z speed comes from Y.
+                q.velocity[2] =
+                    v[1] * f64::from(0.2f32) + f64::from((r.next_float() * 2.0 - 1.0) * 0.02);
+                let size_start = 0.02 + 0.02 * r.next_float();
+                q.size = size_start;
+                q.lifetime = i32::MAX;
+                q.behaviour = Behaviour::SulfurBubble {
+                    y_start: p[1],
+                    y_end: p[1] + 4.0 - 1.0,
+                    size_start,
+                    y_prev: p[1],
+                };
                 q
             }
             T::BubblePop => {
@@ -3171,6 +3206,40 @@ impl ParticleEngine {
                 if level.fluid(ParticleLevel::block_at(p.position)).0 != Fluid::Water {
                     p.removed = true;
                 }
+            }
+            Behaviour::SulfurBubble {
+                y_start,
+                y_end,
+                size_start,
+                y_prev,
+            } => {
+                p.base_tick(level);
+                let (fluid, source) = level.fluid_source(ParticleLevel::block_at(p.position));
+                if !p.removed && !(fluid == Fluid::Water && source) {
+                    p.removed = true;
+                }
+                if !p.removed && p.position[1] >= y_end {
+                    p.removed = true;
+                }
+                if !p.removed && p.position[1] <= y_prev {
+                    p.removed = true;
+                }
+                // randomHorizontalWiggling, then a second, horizontal move.
+                let wiggle = |r: &mut LegacyRandom| {
+                    let f = r.next_float() * 0.003;
+                    f64::from(if r.next_boolean() { f } else { -f }) * 0.5
+                };
+                p.velocity[0] += wiggle(&mut p.random);
+                p.velocity[2] += wiggle(&mut p.random);
+                p.move_by(level, [p.velocity[0], 0.0, p.velocity[2]]);
+                let progress = ((p.position[1] - y_start) / (y_end - y_start)) as f32;
+                p.size = size_start + progress * (0.15 - size_start);
+                p.behaviour = Behaviour::SulfurBubble {
+                    y_start,
+                    y_end,
+                    size_start,
+                    y_prev: p.position[1],
+                };
             }
             Behaviour::BubbleColumnUp => {
                 p.base_tick(level);

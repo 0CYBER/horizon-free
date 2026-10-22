@@ -20,6 +20,10 @@ address. The script then checks, from both sides, what a guest's game used to ge
              drowning and the void (then respawns);
 - pvp:       the guest and the host hit each other with a sword; with the pvp game rule off, or on one
              team without friendly fire, nothing;
+- kills:     a pig the guest kills counts in the guest's killed statistic, not the host's (#484);
+
+
+- arrows:    the guest and the host shoot each other with a bow; with the pvp game rule off, nothing (#484);
 - respawn:   a player killed is drawn dead by the other side, and alive again once it respawns (the
              respawned player is a new entity to the others); the host dies, and on the server thread
              the guest too;
@@ -52,6 +56,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
              its crafting grid and gathers a stack with a double click; the server has each.
 - sleep:     at night the guest lies down in its own bed (not the host); alone it stays night, it
              gets up with Escape, and once the host sleeps too the night ends and both wake.
+- predict:   with the host frozen, the oak door the guest opens opens on the guest's screen at once (its
+             prediction) and creaks there at once, stays open once the server answers, and each side hears
+             it once; an iron door stays shut (#869).
 - push:      a cow standing in the guest pushes it just clear of the cow (the guest's own client
              pushes it, as in vanilla), not ever faster across the ground.
 - eat:       holding right click with bread, the guest's own screen plays the eating (the item in use
@@ -64,6 +71,17 @@ address. The script then checks, from both sides, what a guest's game used to ge
              guest as the host has them (kind, place, rotation, what they hold or wear, the variant).
 - projectiles: primed TNT (one falling), an end crystal and an arrow that lands reach the guest where
              the host has them; a falling block lands on both sides.
+- fireball:  a fire charge a dispenser shoots onto stone lights a fire both sides see, and the fire
+             goes out on its own within a minute (it ticks: FireBlock.tick on a floor that doesn't burn)
+
+
+- blast:     primed TNT going off beside a guest in survival hurts the guest and pushes it away
+             (ServerExplosion.hurtEntities takes every player); facing it behind a raised shield, the
+             guest takes nothing.
+
+
+- worn:      iron armour the guest puts on in its inventory protects it: a 10-damage blow takes 6
+             (armour 15, LivingEntity.getDamageAfterArmorAbsorb), and the full 10 without it.
 - plates:    a stone pressure plate the guest steps on is pressed on both sides, and comes up once
              the guest steps off (#848).
 - swings:    each side sees the other's arm swing while it mines a block, and the guest sees its own
@@ -94,6 +112,7 @@ macOS both games render offscreen. Games started here have no audio (HORIZON_NO_
 """
 import argparse
 import json
+import math
 import os
 import re
 import shutil
@@ -114,7 +133,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight']
 
 
 class Game:
@@ -637,9 +656,73 @@ def check_pvp(host, guest, out):
         host('command', command='team remove parity_allies')
     assert hits['guest hits host'][1] < hits['guest hits host'][0], f'the guest did not hurt the host: {hits}'
     assert hits['host hits guest'][1] < hits['host hits guest'][0], f'the host did not hurt the guest: {hits}'
-    assert hits['pvp off'][1] == hits['pvp off'][0], f'pvp off still hurts: {hits}'
+    # Natural regeneration may heal the victim meanwhile.
+    assert hits['pvp off'][1] >= hits['pvp off'][0], f'pvp off still hurts: {hits}'
     for name in ('guest hits teammate', 'host hits teammate'):
         assert hits[name][1] == hits[name][0], f'friendly fire off still hurts ({name}): {hits}'
+    return hits
+
+
+def check_kills(host, guest, out):
+    # A mob the guest kills is the guest's kill (#484): LivingEntity.die credits lastHurtByPlayer, so the
+    # killed statistic (and its scoreboard criterion) counts for the guest, not the host.
+    host('command', command='scoreboard objectives add parity_kills minecraft.killed:minecraft.pig')
+    for g in (host, guest):
+        g('command', command='gamemode survival')
+    guest('command', command='item replace entity @s weapon.mainhand with minecraft:iron_sword')
+    face_each_other(host, guest)
+    hx, hy, hz = pos_of(host)
+    try:
+        # Between the two, in front of the guest, with one health left.
+        host('command', command=f'summon minecraft:pig {hx + 1.5:.2f} {hy:.2f} {hz:.2f} {{NoAI:1b,Health:1.0f}}')
+        guest.wait(30)
+        guest.raw('look-at', f'{hx + 1.5:.2f}', f'{hy + 0.5:.2f}', f'{hz:.2f}')
+        guest.wait(10)
+        guest.raw('attack')
+        guest.wait(20)
+        host('command', command=f'scoreboard players get {GUEST_NAME} parity_kills')
+        host('command', command=f'scoreboard players get {host.player} parity_kills')
+        host.wait(10)
+        chat = host.raw('messages', 10)['chat']
+        guest.shot(out, 'kills')
+    finally:
+        host('command', command='kill @e[type=minecraft:pig]')
+        host('command', command='scoreboard objectives remove parity_kills')
+    assert any(f'{GUEST_NAME} has 1 [parity_kills]' in line for line in chat), f"the guest's kill is not theirs: {chat}"
+    assert not any(f'{host.player} has 1 [parity_kills]' in line for line in chat), f"the host got the guest's kill: {chat}"
+    return chat
+
+
+def check_arrows(host, guest, out):
+    # A player's arrow on another player (#484): AbstractArrow.onHitEntity, refused by
+    # ServerPlayer.canHarmPlayer with the pvp game rule off (the arrow turns back).
+    for g in (host, guest):
+        g('command', command='gamemode survival')
+        g('command', command='clear @s')
+        g('command', command='item replace entity @s weapon.mainhand with minecraft:bow')
+        g('command', command='give @s minecraft:arrow 16')
+    hits = {}
+    try:
+        for name, rule, shooter in (('guest shoots host', 'true', guest), ('host shoots guest', 'true', host),
+                                    ('pvp off', 'false', guest)):
+            host('command', command=f'gamerule pvp {rule}')
+            for g in (host, guest):
+                g('command', command='effect give @s minecraft:instant_health 1 5')
+            face_each_other(host, guest)
+            shooter.wait(20)
+            victim = (lambda: host('state')['player']['health']) if shooter is guest else (lambda: remote(guest)['health'])
+            before = victim()
+            shooter.raw('use-item', '--hold', 1.3)  # a full draw (BowItem: 20 ticks)
+            shooter.wait(20)
+            hits[name] = (before, victim())
+            shooter.shot(out, 'arrows-' + name.replace(' ', '-'))
+    finally:
+        host('command', command='gamerule pvp true')
+        for g in (host, guest):
+            g('command', command='clear @s')
+    assert hits['guest shoots host'][1] < hits['guest shoots host'][0], f"the guest's arrow did not hurt the host: {hits}"
+    assert hits['host shoots guest'][1] < hits['host shoots guest'][0], f"the host's arrow did not hurt the guest: {hits}"
+    assert hits['pvp off'][1] >= hits['pvp off'][0], f'pvp off, an arrow still hurts: {hits}'
     return hits
 
 
@@ -1285,6 +1368,50 @@ def check_sleep(host, guest, out):
     assert lying['host'] and lying['guest'], f'a sleeping player is drawn standing: {detail}'
     assert not lying['after'], f'a player up again is still drawn lying: {detail}'
     return detail
+def check_predict(host, guest, out):
+    # MultiPlayerGameMode.useItemOn under startPrediction (#869): the guest's door opens on its own screen
+    # at once, with the host (the server) frozen, and the server's answer later agrees; an iron door
+    # (no hand use) stays shut on both sides.
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    wood, iron = (x - 1, y, z + 2), (x + 1, y, z + 2)
+    for (bx, by, bz), kind in ((wood, 'oak_door'), (iron, 'iron_door')):
+        for half, dy in (('lower', 0), ('upper', 1)):
+            host('command', command=f'setblock {bx} {by + dy} {bz} minecraft:{kind}[facing=north,hinge=right,half={half}]')
+    guest.wait(20)
+    state = lambda game, at: game.raw('block', *at)['state']
+    seen = {}
+    creaks = lambda game: sum(n for s, n in game('status')['heard'].items() if 'door' in s)
+    heard = {'guest': creaks(guest), 'host': creaks(host)}
+    os.kill(host.pid, signal.SIGSTOP)
+    try:
+        guest.raw('interact', *wood)
+        seen['guest_frozen'] = (state(guest, wood), state(guest, (wood[0], wood[1] + 1, wood[2])))
+        # level.playSound(player, ...): the clicker hears its own door at once.
+        seen['guest_heard_frozen'] = creaks(guest) - heard['guest']
+        guest.raw('interact', *iron)
+        seen['guest_iron_frozen'] = state(guest, iron)
+    finally:
+        os.kill(host.pid, signal.SIGCONT)
+    guest.wait(20)
+    seen['guest_after'] = state(guest, wood)
+    seen['host_after'] = state(host, wood)
+    seen['iron_after'] = (state(guest, iron), state(host, iron))
+    # ... and not a second time from the server; the host hears it once.
+    seen['heard_after'] = {'guest': creaks(guest) - heard['guest'], 'host': creaks(host) - heard['host']}
+    guest.shot(out, 'predict')
+    for (bx, by, bz) in (wood, iron):
+        host('command', command=f'fill {bx} {by} {bz} {bx} {by + 1} {bz} minecraft:air')
+    assert all('open=true' in s for s in seen['guest_frozen']), f'the door waited for the server: {seen}'
+    assert 'open=true' in seen['guest_after'] and 'open=true' in seen['host_after'], f'the door did not stay open: {seen}'
+    assert 'open=false' in seen['guest_iron_frozen'], f'the guest opened an iron door by hand: {seen}'
+    assert all('open=false' in s for s in seen['iron_after']), f'an iron door opened: {seen}'
+    assert seen['guest_heard_frozen'] == 1 and seen['heard_after'] == {'guest': 1, 'host': 1}, \
+        f'the door is not heard once on each side: {seen}'
+    return seen
+
+
 def check_push(host, guest, out):
     guest('command', command='gamemode survival')
     x, y, z = (int(v // 1) + 0.5 for v in pos_of(guest))
@@ -1614,6 +1741,56 @@ def check_projectiles(host, guest, out):
     return f'{len(theirs)} identical, fuses (host, guest) {fuses}'
 
 
+def check_blast(host, guest, out):
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    host('command', command='gamemode creative')
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    gx, gz = x + 6, z
+    floor = f'fill {gx - 6} {y - 1} {gz - 4} {gx + 6} {y - 1} {gz + 4} minecraft:bedrock'
+    detail = {}
+    try:
+        for shielded in (False, True):
+            if remote(guest)['health'] <= 0:
+                guest.raw('respawn')
+                guest.wait(40)
+            host('command', command=floor)
+            host('command', command=f'fill {gx - 6} {y} {gz - 4} {gx + 6} {y + 3} {gz + 4} minecraft:air')
+            guest('command', command=f'tp @s {gx + 0.5} {y} {gz + 0.5}')
+            guest('command', command='effect give @s minecraft:instant_health 1 5')
+            guest.wait(30)
+            hold = None
+            if shielded:
+                guest('command', command='item replace entity @s weapon.offhand with minecraft:shield')
+                guest.wait(5)
+                guest.raw('look-at', gx + 5.5, y + 0.5, gz + 0.5)
+                hold = threading.Thread(target=guest.raw, args=('use-item', '--hold', 2.5))
+                hold.start()
+                time.sleep(0.5)
+            before = remote(guest)['health']
+            at = pos_of(guest)
+            # Five blocks off: a blast that hurts without killing (about 14 at full exposure).
+            host('command', command=f'summon minecraft:tnt {gx + 5.5} {y} {gz + 0.5} {{fuse:10s}}')
+            # The guest's own controller is busy holding the shield up: the host waits.
+            host.wait(14)
+            after = remote(guest)['health']
+            moved = pos_of(guest)
+            if hold:
+                hold.join()
+            guest.shot(out, f'blast-{"shield" if shielded else "open"}')
+            detail['shield' if shielded else 'open'] = {
+                'before': before, 'after': after, 'pushed': round(at[0] - moved[0], 2)}
+    finally:
+        host('command', command='gamemode survival')
+        guest('command', command='clear @s')
+        host('command', command=floor)
+    open_, shield = detail['open'], detail['shield']
+    assert open_['after'] < open_['before'], f'the blast never hurt the guest: {detail}'
+    assert open_['pushed'] > 0, f'the blast never pushed the guest away: {detail}'
+    assert shield['after'] >= shield['before'], f'the shield did not stop the blast: {detail}'
+    return detail
+
+
 def light_differences(host, guest, lo, hi):
     """Positions of the box loaded on both sides, and those whose sky or block light differ."""
     h, g = host.raw('light', *lo, *hi), guest.raw('light', *lo, *hi)
@@ -1771,6 +1948,203 @@ def check_light(host, guest, out):
     return results
 
 
+def check_fireball(host, guest, out):
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    fx, fz = x + 4, z
+    # A stone floor, a dispenser facing down three blocks over it, a fire charge in it, powered.
+    host('command', command=f'fill {fx - 2} {y - 1} {fz - 2} {fx + 2} {y - 1} {fz + 2} minecraft:stone')
+    host('command', command=f'fill {fx - 2} {y} {fz - 2} {fx + 2} {y + 4} {fz + 2} minecraft:air')
+    host('command', command=f'setblock {fx} {y + 3} {fz} minecraft:dispenser[facing=down]')
+    host('command', command=f'item replace block {fx} {y + 3} {fz} container.0 with minecraft:fire_charge')
+    seen, gone = {}, None
+    try:
+        host('command', command=f'setblock {fx} {y + 4} {fz} minecraft:redstone_block')
+        host.wait(10)
+        seen = {'host': host.raw('block', fx, y, fz).get('block'),
+                'guest': guest.raw('block', fx, y, fz).get('block')}
+        # FireBlock.tick every 30-39 ticks ages it by one a third of the time; past age 3 it goes.
+        for waited in range(40, 1240, 40):
+            host.wait(40)
+            if host.raw('block', fx, y, fz).get('block') == 'minecraft:air':
+                gone = waited
+                break
+        guest.wait(5)
+        seen['guest_after'] = guest.raw('block', fx, y, fz).get('block')
+    finally:
+        host('command', command=f'fill {fx - 2} {y} {fz - 2} {fx + 2} {y + 4} {fz + 2} minecraft:air')
+    assert seen.get('host') == 'minecraft:fire' and seen.get('guest') == 'minecraft:fire', \
+        f'no fire where the fire charge landed: {seen}'
+    assert gone is not None, f'the fire on stone never went out (1200 ticks): {seen}'
+    assert seen['guest_after'] == 'minecraft:air', f'the guest still sees the fire: {seen}'
+    return {'out_after_ticks': gone, **seen}
+
+
+def check_deflect(host, guest, out):
+    """The host punches a ghast's fireball back: it flies along the host's view and kills the ghast
+    (Player.attack: AIM_DEFLECT on #redirectable_projectile; Ghast.isReflectedFireball). The ghast is caged
+    (a window toward the host); the game runs at 4 ticks a second, and once the fireball is within 4.5 blocks
+    the host looks at the ghast and clicks."""
+    if SERVER_THREAD:
+        # The fireball's position and the host's hurts are read from the host's own level.
+        return 'skipped (in-frame only)'
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    guest('command', command='gamemode creative')
+    host('command', command='gamemode survival')
+    host('command', command='difficulty normal')
+    gx, gz = x, z + 30
+    gy = y + 20
+    host('command', command=f'fill {gx - 3} {gy - 1} {gz - 3} {gx + 24} {gy - 1} {gz + 3} minecraft:glass')
+    host('command', command=f'fill {gx - 3} {gy} {gz - 3} {gx + 24} {gy + 8} {gz + 3} minecraft:air')
+    host('command', command=f'tp @s {gx + 0.5} {gy} {gz + 0.5} -90 0')
+    host.wait(20)
+    host.raw('hurtlog')
+    # The ghast in a glass cage it can't drift out of, a 3 x 3 window toward the host.
+    host('command', command=f'fill {gx + 13} {gy} {gz - 3} {gx + 19} {gy + 6} {gz + 3} minecraft:glass hollow')
+    host('command', command=f'fill {gx + 13} {gy + 2} {gz - 1} {gx + 13} {gy + 4} {gz + 1} minecraft:air')
+    host('command', command=f'summon minecraft:ghast {gx + 16.5} {gy + 1} {gz + 0.5}')
+    eye = (gx + 0.5, gy + 1.62, gz + 0.5)
+    host('command', command='tick rate 4')
+    turned, near, ghast, hurt = None, None, None, []
+    try:
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            balls = [q for q in host.raw('status')['projectiles'] if q['kind'] == 'LargeFireball']
+            near = min((math.dist(q['position'], eye) for q in balls), default=None)
+            if near is not None and near < 4.5:
+                g = [m['pos'] for m in host.raw('mobs', 60).get('near', []) if m['kind'].endswith('ghast')][0]
+                host.raw('look-at', f'{g[0]:.2f}', f'{g[1] + 2:.2f}', f'{g[2]:.2f}')
+                host.raw('mouse', 'left', 'down')
+                host.raw('mouse', 'left', 'up')
+                turned = near
+                break
+        host('command', command='tick rate 20')
+        host.wait(60)
+        ghast = [m for m in host.raw('mobs', 60).get('near', []) if m['kind'].endswith('ghast') and m['health'] > 0]
+        hurt = [h for pl in host.raw('hurtlog')['players'] if pl['name'] == 'host' for h in pl['hurts']
+                if 'fireball' in h['source'] or 'explosion' in h['source']]
+    finally:
+        host('command', command='tick rate 20')
+        host('command', command='kill @e[type=minecraft:ghast]')
+        host('command', command=f'fill {gx - 3} {gy - 1} {gz - 3} {gx + 24} {gy + 8} {gz + 3} minecraft:air')
+        guest('command', command='gamemode survival')
+    assert turned is not None, f'no fireball came within 4.5 blocks (nearest {near})'
+    assert not hurt, f'the host was hit: {hurt}'
+    assert not ghast, f'the ghast lived: the fireball was not turned back ({ghast})'
+    return {'struck_at': round(turned, 2)}
+
+
+def check_barter(host, guest, out):
+    """The guest, in gold boots, drops a gold ingot to a piglin: the piglin stays calm, takes it, and throws its
+    barter toward the nearest player, the guest (PiglinAi.throwItemsTowardPlayer: NEAREST_VISIBLE_PLAYER), who
+    picks it up. The host is nearby on the other side, so a barter thrown at the host misses the guest. A glass
+    corridor (the hollow box) keeps the piglin between them."""
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    cz = z + 4
+    host('command', command='gamemode creative')
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    guest('command', command='effect give @s minecraft:instant_health 1 5')
+    host('command', command=f'fill {x + 1} {y - 1} {cz - 1} {x + 8} {y + 2} {cz + 1} minecraft:glass hollow')
+    host('command', command=f'fill {x + 2} {y - 1} {cz} {x + 7} {y - 1} {cz} minecraft:stone')
+    host('command', command=f'tp @s {x - 0.5} {y} {cz + 0.5} -90 0')
+    guest('command', command=f'tp @s {x + 7.3} {y} {cz + 0.5} 90 30')
+    guest('command', command='item replace entity @s armor.feet with minecraft:golden_boots')
+    guest('command', command='give @s minecraft:gold_ingot 1')
+    host('command', command=f'summon minecraft:piglin {x + 4.5} {y} {cz + 0.5} {{IsImmuneToZombification:1b}}')
+    guest.wait(20)
+    before = remote(guest)['health']
+    kept = dict(guest('inventory')['counts'])
+    try:
+        guest.raw('select', 'minecraft:gold_ingot')
+        guest.raw('key', 'q', 'tap')
+        bought, trace = {}, []
+        for _ in range(20):
+            guest.wait(20)
+            trace.append([(e['type'].split(':')[-1], round(e['pos'][0] - x, 1), round(e['pos'][2] - cz, 1))
+                          for e in host.raw('entities', 24)['entities'] if e['type'] in ('minecraft:item', 'minecraft:piglin')])
+            counts = guest('inventory')['counts']
+            bought = {k: n - kept.get(k, 0) for k, n in counts.items()
+                      if k not in ('minecraft:gold_ingot', 'minecraft:golden_boots') and n > kept.get(k, 0)}
+            if bought:
+                guest.wait(40)
+                break
+        counts = guest('inventory')['counts']
+        bought = {k: n - kept.get(k, 0) for k, n in counts.items()
+                  if k not in ('minecraft:gold_ingot', 'minecraft:golden_boots') and n > kept.get(k, 0)}
+        piglins = [m for m in host.raw('mobs', 20).get('near', []) if m['kind'].split(':')[-1] == 'piglin']
+        health = remote(guest)['health']
+    finally:
+        host('command', command=f'kill @e[type=minecraft:piglin,x={x},y={y - 2},z={cz - 2},dx=10,dy=6,dz=4]')
+        # What lies on the floor, on the host's side of the piglin's start and on the guest's.
+        floor = [host('command', command=f'kill @e[type=minecraft:item,x={x0},y={y - 2},z={cz - 3},dx={dx},dy=6,dz=6]')
+                 ['chat'][0] for x0, dx in ((x - 2, 6.5), (x + 4.5, 6))]
+        host('command', command=f'fill {x + 1} {y - 1} {cz - 1} {x + 8} {y + 2} {cz + 1} minecraft:air')
+        host('command', command=f'fill {x - 8} {y - 1} {z - 8} {x + 8} {y - 1} {z + 8} minecraft:stone')
+        guest('command', command='clear @s')
+        host('command', command='gamemode survival')
+    assert piglins, 'the piglin is gone'
+    assert health >= before, f'the piglin hurt the guest in gold boots: {before} -> {health}'
+    assert bought, f'no barter reached the guest (on the floor, host side then guest side: {floor}; items and the piglin, every second: {trace})'
+    return {'bought': bought, 'floor': floor}
+
+
+def check_worn(host, guest, out):
+    pieces = ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'iron_boots']
+    guest('command', command='gamemode survival')
+    taken = {}
+    try:
+        for worn in (False, True):
+            guest('command', command='clear @s')
+            if remote(guest)['health'] <= 0:
+                guest.raw('respawn')
+                guest.wait(40)
+            if worn:
+                for piece in pieces:
+                    guest('command', command=f'give @s minecraft:{piece}')
+                guest.wait(10)
+                # Shift-clicked from the hotbar onto the body in the inventory menu (the hub moves them).
+                guest.raw('key', 'e', 'tap')
+                guest.raw('wait-for', 'screen', 'inventory')
+                for piece in pieces:
+                    guest.raw('click-slot', hotbar_slot(guest, f'minecraft:{piece}'), 'shift')
+                    guest.wait(2)
+                guest.raw('key', 'esc', 'tap')
+                guest.wait(5)
+            guest('command', command='effect give @s minecraft:instant_health 1 5')
+            guest.wait(30)
+            before = remote(guest)['health']
+            if not SERVER_THREAD:
+                host.raw('hurtlog')
+            # A mob's blow (no attacker: no difficulty scaling); armour counts against it.
+            guest('command', command='damage @s 10 minecraft:mob_attack')
+            if SERVER_THREAD:
+                # The server's hurt log isn't on a control socket here: the health the guest is
+                # sent, read as soon as it drops (natural regeneration heals it again after).
+                health = before
+                for _ in range(40):
+                    guest.wait(1)
+                    health = remote(guest)['health']
+                    if health < before:
+                        break
+                taken['worn' if worn else 'bare'] = [round(before - health, 2)]
+                continue
+            guest.wait(10)
+            log = [h for p in host.raw('hurtlog')['players'] if p['name'] == GUEST_NAME for h in p['hurts']]
+            taken['worn' if worn else 'bare'] = [(h['amount'], h['armor'], round(h['taken'], 2)) for h in log]
+    finally:
+        guest('command', command='clear @s')
+        guest('command', command='effect give @s minecraft:instant_health 1 5')
+    if SERVER_THREAD:
+        # Natural regeneration may heal up to a point before the health arrives.
+        assert len(taken['bare']) == 1 and 9.0 <= taken['bare'][0] <= 10.0, f'10 damage on no armour: {taken}'
+        assert len(taken['worn']) == 1 and 5.0 <= taken['worn'][0] <= 6.0, \
+            f'10 damage through iron armour (15) should take 6: {taken}'
+        return taken
+    assert taken['bare'] == [(10.0, 0.0, 10.0)], f'10 damage on no armour: {taken}'
+    assert taken['worn'] == [(10.0, 15.0, 6.0)], f'10 damage through iron armour (15) should take 6: {taken}'
+    return taken
+
+
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
              'chest': check_chest, 'crafting': check_crafting, 'sign': check_sign, 'damage': check_damage,
              'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
@@ -1783,10 +2157,10 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,
              'effects': check_effects, 'portals': check_portals, 'distance': check_distance, 'clicks': check_clicks,
              'sleep': check_sleep, 'push': check_push, 'eat': check_eat, 'eating': check_eating,
-             'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles,
+             'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles, 'blast': check_blast,
              'light': check_light, 'plates': check_plates,
              'swings': check_swings, 'cracks': check_cracks,
-             'time': check_time, 'growth': check_growth, 'flight': check_flight}
+             'time': check_time, 'growth': check_growth, 'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect, 'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'arrows': check_arrows, 'predict': check_predict}
 
 
 def run(ctl, out, resources, checks):
@@ -1795,7 +2169,7 @@ def run(ctl, out, resources, checks):
     host.d.env['HORIZON_SERVER_THREAD'] = '1' if SERVER_THREAD else '0'
     results = {}
     try:
-        host('launch', wait=False, offscreen=sys.platform == 'darwin')
+        host.pid = host('launch', wait=False, offscreen=sys.platform == 'darwin')['pid']
         # Guests' commands need the world's Allow Commands as well as the LAN's (#372): a creative
         # world has them; everyone plays in survival.
         host.raw('open', 'Lan', 5, 'creative')

@@ -914,6 +914,7 @@ impl Game<'_> {
         status["pending_uploads"] = self.pending_uploads.len().into();
         status["destroying"] = json!(destroying);
         status["physical_keys"] = json!(physical_keys);
+        status["heard"] = json!(self.audio.heard);
         // Boats, minecarts, armor stands, item frames and paintings.
         status["objects"] = json!(self.objects_status());
         // Primed TNT, falling blocks, projectiles, tridents and end crystals.

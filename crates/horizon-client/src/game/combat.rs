@@ -25,6 +25,9 @@ pub(super) struct CombatTracker {
     pub(super) last_hurt_mob: Option<(u32, i64)>,
     /// The mob whose projectile is hitting the player now.
     pub(super) projectile_owner: Option<u32>,
+    /// The projectile hitting the player now is another player's that
+    /// `ServerPlayer.canHarmPlayer` refuses (the `pvp` rule, an ally).
+    pub(super) refuse_player_hit: bool,
     /// The mob exploding now (`ServerExplosion.source`): its team's friendly
     /// fire decides whom the blast may hurt.
     pub(super) explosion_source: Option<u32>,
