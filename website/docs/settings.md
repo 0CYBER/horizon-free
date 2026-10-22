@@ -4,14 +4,16 @@ Horizon plays like vanilla out of the box. This page covers the settings that ar
 
 The game's menus are vanilla's. Horizon adds its own settings to vanilla's **Options** screen the way mods do: **Horizon Settings...** and **Mods...** take the last two buttons of the grid. **Horizon Settings** opens Graphics, Advanced Graphics, Shader Packs, Controller Settings, Extras and Mods, each a screen of vanilla's buttons and sliders. The graphics and shader pack buttons are also at the top of **Video Settings**, and Controller Settings at the bottom of **Controls**.
 
-![Horizon's Graphics settings](/media/settings-800.webp)
+![Video Settings, with Horizon's graphics buttons at the top](/media/settings-800.webp)
 
 ## Graphics: presets, Simple and Advanced
 
 **Options, Video Settings** starts with **Horizon Graphics...** and **Advanced Graphics...** (also in **Options, Horizon Settings**).
 
-- **Horizon Graphics** has a preset (Performance, Balanced, Quality, Ultra or Custom), render distance, LOD distance, field of view, maximum frame rate, VSync and GUI scale.
-- **Advanced Graphics** has every setting, in groups: Rendering, Quality, Display, Preferences, Performance and Overlay.
+- **Horizon Graphics** has a preset (Performance, Balanced, Quality, Ultra or Custom) and LOD distance.
+- **Advanced Graphics** has every Horizon setting, in groups: Rendering, Quality, Display, Preferences, Performance and Overlay.
+
+Vanilla's own settings (render distance, field of view, frame rate, VSync, GUI scale and the rest) stay on Video Settings, where vanilla has them.
 
 Every row has a one-line description and its cost in frame time: none, low, medium or high. Changes apply at once, except worker threads, which apply at the next start. A preset sets the quality settings together, and changing one of them turns the preset into **Custom**.
 

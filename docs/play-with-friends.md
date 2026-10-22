@@ -61,7 +61,8 @@ port closes, the router mapping is deleted). Sharing again makes a new secret.
 
 ## When friends can't reach the host
 
-The host's panel says what to expect, from what the game found:
+Play with Friends says what to expect, from what the game found; when friends on the internet can't
+reach the host, its **Troubleshooting...** button (beside Done) opens this section in the browser:
 
 | What the game found | What the host reads |
 | --- | --- |

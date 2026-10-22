@@ -4,13 +4,15 @@
 
 Horizon's graphics settings are two screens built from vanilla's widgets, opened from the top of **Video Settings** (**Horizon Graphics...** and **Advanced Graphics...**, beside **Shader Packs...**, where Sodium and Iris put theirs) or from **Options → Horizon Settings...**:
 
-- **Graphics** (Simple): a preset (Performance, Balanced, Quality, Ultra or Custom), render distance, LOD distance, FOV, max framerate, VSync and GUI scale.
-- **Advanced Graphics**: every setting, grouped under Rendering, Quality, Display, Preferences, Performance and Overlay.
+- **Graphics** (Simple): a preset (Performance, Balanced, Quality, Ultra or Custom) and LOD distance.
+- **Advanced Graphics**: every Horizon setting, grouped under Rendering, Quality, Display, Preferences, Performance and Overlay.
+
+Vanilla's own settings (render distance, FOV, framerate, VSync, GUI scale, smooth lighting...) stay where vanilla has them, in Video Settings; both screens leave them out.
 
 Every row has a one-line description and its cost in frame time (none, low, medium, high, or saves time for culling that makes frames faster), and applies at once, except worker threads, which apply at the next start. A preset sets the quality settings together; changing one of them turns it into Custom. Display preferences (FOV, framerate, VSync, GUI scale, fullscreen, present mode, pacing) leave the preset as it is.
 
-![Simple](media/settings-simple.png)
-![Advanced](media/settings-advanced.png)
+![Video Settings, with Horizon's buttons at the top](media/settings-simple.png)
+![Advanced Graphics](media/settings-advanced.png)
 
 | Group | Setting | Stored in |
 | --- | --- | --- |

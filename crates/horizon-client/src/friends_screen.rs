@@ -38,6 +38,8 @@ pub enum Action {
     Share,
     Copy,
     Stop,
+    /// Open the troubleshooting page.
+    Help,
     Done,
 }
 
@@ -108,9 +110,6 @@ fn layout(
             // for something) when only the LAN and VPNs can.
             let tint = if view.reachable { grey() } else { WHITE };
             add(&mut lines, &view.status, tint, &mut y);
-            if let Some(help) = &view.help {
-                add(&mut lines, &format!("Help: {help}"), grey(), &mut y);
-            }
             y += 4.0;
         }
         let here = if view.guests.is_empty() {
@@ -122,7 +121,10 @@ fn layout(
         if let Some(notice) = &view.notice {
             add(&mut lines, notice, WHITE, &mut y);
         }
-        add(&mut lines, HINT, grey(), &mut y);
+        // Where friends paste the code, while it fits above the footer.
+        if y + 10.0 * wrap(HINT, width, atlas).len() as f32 <= h - 33.0 {
+            add(&mut lines, HINT, grey(), &mut y);
+        }
     } else {
         add(
             &mut lines,
@@ -141,15 +143,35 @@ fn layout(
             active: view.shown,
         });
     }
-    // HeaderAndFooterLayout's footer: Done.
-    buttons.push(Button {
-        x: cx - 100.0,
-        y: h - 27.0,
-        w: 200.0,
-        label: "gui.done",
-        action: Action::Done,
-        active: true,
-    });
+    // HeaderAndFooterLayout's footer: Done, beside Troubleshooting when
+    // friends on the internet can't reach the host.
+    if view.sharing && view.help.is_some() {
+        buttons.push(Button {
+            x: cx - 154.0,
+            y: h - 27.0,
+            w: 150.0,
+            label: "Troubleshooting...",
+            action: Action::Help,
+            active: true,
+        });
+        buttons.push(Button {
+            x: cx + 4.0,
+            y: h - 27.0,
+            w: 150.0,
+            label: "gui.done",
+            action: Action::Done,
+            active: true,
+        });
+    } else {
+        buttons.push(Button {
+            x: cx - 100.0,
+            y: h - 27.0,
+            w: 200.0,
+            label: "gui.done",
+            action: Action::Done,
+            active: true,
+        });
+    }
     (lines, buttons)
 }
 /// The code's groups packed into lines of at most `width`.
@@ -251,11 +273,17 @@ mod tests {
         let copy = buttons.iter().find(|b| b.action == Action::Copy).unwrap();
         assert!(!copy.active, "nothing to copy before the code");
         let with_code = FriendsView {
-            code: Some("ABCD-EFGH-IJKL".into()),
+            code: Some("0B33K-Q405Q-1Z5CV-X6NHY-R12N0-VK8T1-60N00-RA134-952PE-1HA08-910P0-K5M01-ST1NB-JDTB6-K4W1P-0".into()),
+            status: "Friends on your network or VPN can join. For friends on the internet: turn on UPnP on your router, or forward TCP port 25580 to 10.0.0.2, or use a relay, or a VPN such as Tailscale or ZeroTier (the code already holds your VPN address).".into(),
+            help: Some("https://example.invalid/help".into()),
             ..sharing
         };
-        let (_, buttons) = layout(&atlas, size, &with_code);
-        for action in [Action::Copy, Action::Stop, Action::Done] {
+        let (lines, buttons) = layout(&atlas, size, &with_code);
+        assert!(
+            lines.iter().all(|(_, _, y)| y + 9.0 <= size.1 - 27.0),
+            "the text stays above the footer"
+        );
+        for action in [Action::Copy, Action::Stop, Action::Help, Action::Done] {
             let b = buttons.iter().find(|b| b.action == action).unwrap();
             assert_eq!(
                 click(&atlas, size, (b.x + 1.0, b.y + 1.0), &with_code),

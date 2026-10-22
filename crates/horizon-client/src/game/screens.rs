@@ -105,6 +105,15 @@ impl Game<'_> {
         for (i, (x, y, sprite)) in pause_icons(w, h).into_iter().enumerate() {
             let active = i == FRIENDS_ICON && friends;
             let hover = ui::hovered(self.cursor, x, y, 20.0, 20.0);
+            // The icon has no label: name it for controller focus and the
+            // control socket's widget tree.
+            if i == FRIENDS_ICON {
+                horizon_client::widgets::record(
+                    horizon_client::friends_screen::TITLE,
+                    [x, y, 20.0, 20.0],
+                    active,
+                );
+            }
             ui::button(
                 batch,
                 atlas,
