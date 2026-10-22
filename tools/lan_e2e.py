@@ -2382,9 +2382,10 @@ def check_boats(host, guest, out):
         x, y, z = spots[label]
         bx = x + 3
         player('command', command='gamemode survival')
-        # A pool ten blocks long, with a path beside it to walk back to the boat.
-        player('command', command=f'fill {bx - 3} {y} {z - 1} {bx + 1} {y + 3} {z + 9} minecraft:air')
-        player('command', command=f'fill {bx - 3} {y - 1} {z - 1} {bx - 2} {y - 1} {z + 9} minecraft:stone')
+        # A pool ten blocks long in a stone basin (the world may float), with a path beside it to
+        # walk back to the boat.
+        player('command', command=f'fill {bx - 3} {y} {z - 2} {bx + 2} {y + 3} {z + 10} minecraft:air')
+        player('command', command=f'fill {bx - 3} {y - 2} {z - 2} {bx + 2} {y - 1} {z + 10} minecraft:stone')
         player('command', command=f'fill {bx - 1} {y - 1} {z - 1} {bx + 1} {y - 1} {z + 9} minecraft:water')
         player('command', command=f'summon minecraft:oak_boat {bx + 0.5} {y - 0.1} {z + 0.5}')
         player.wait(30)
