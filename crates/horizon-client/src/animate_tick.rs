@@ -61,6 +61,8 @@ enum Animate {
     Fire,
     /// An active sculk sensor.
     SculkSensor,
+    /// Potent sulfur that is not dry.
+    PotentSulfur,
 }
 fn step(facing: &str) -> [i32; 3] {
     match facing {
@@ -128,6 +130,9 @@ fn classify(name: &str, prop: &dyn Fn(&str) -> Option<String>) -> Animate {
             }
         }
         "respawn_anchor" if prop("charges").is_some_and(|c| c != "0") => Animate::RespawnAnchor,
+        "potent_sulfur" if prop("potent_sulfur_state").is_some_and(|s| s != "dry") => {
+            Animate::PotentSulfur
+        }
         "bubble_column" => Animate::BubbleColumn {
             drag: prop("drag").as_deref() == Some("true"),
         },
@@ -816,6 +821,26 @@ fn block_animate_tick(
                         let p = [fx + off(d[0], r), fy + off(d[1], r), fz + off(d[2], r)];
                         add(engine, T::DrippingObsidianTear, p, [0.0; 3]);
                     }
+                }
+            }
+        }
+        Animate::PotentSulfur => {
+            // PotentSulfurBlock.animateTick: under a water source, two
+            // bubbles and, one time in ten, the noxious gas.
+            let above = ctx.facts.get(ctx.state([pos[0], pos[1] + 1, pos[2]]));
+            if above.fluid == Fluid::Water && above.fluid_level == 8 && !above.fluid_falling {
+                for _ in 0..2 {
+                    let r = engine.random();
+                    let p = [
+                        fx + f64::from(r.next_float()),
+                        fy + 1.0 + f64::from(r.next_float()),
+                        fz + f64::from(r.next_float()),
+                    ];
+                    add(engine, T::SulfurBubbles, p, [0.0; 3]);
+                }
+                if next_int(engine.random(), 10) == 0 {
+                    let name = "minecraft:block.potent_sulfur.noxious_gas";
+                    sound(engine, name, [fx, fy, fz], 1.0, 1.0);
                 }
             }
         }

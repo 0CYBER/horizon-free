@@ -8,6 +8,7 @@ mod internet;
 mod markdown;
 mod mcp;
 mod modpacks_page;
+mod mods_page;
 mod perf;
 mod scrollbar;
 mod servers_page;
@@ -35,6 +36,7 @@ use theme::Theme;
 enum Page {
     Play,
     Versions,
+    Mods,
     Modpacks,
     Servers,
     Notes,
@@ -42,9 +44,10 @@ enum Page {
 }
 
 impl Page {
-    const ALL: [(Page, &'static str); 6] = [
+    const ALL: [(Page, &'static str); 7] = [
         (Page::Play, "Play"),
         (Page::Versions, "Versions"),
+        (Page::Mods, "Mods"),
         (Page::Modpacks, "Modpacks"),
         (Page::Servers, "Servers"),
         (Page::Notes, "Patch notes"),
@@ -181,6 +184,8 @@ struct Launcher {
     pack_error: Option<String>,
     /// The game starting now plays this pack's profile (its work folder).
     starting_pack: Option<std::path::PathBuf>,
+    /// The Mods page: the browser's search, installs and updates (`mods_page.rs`).
+    mods: mods_page::Mods,
 }
 
 impl Launcher {
@@ -291,6 +296,7 @@ impl Launcher {
             pack_log: VecDeque::new(),
             pack_error: None,
             starting_pack: None,
+            mods: mods_page::Mods::new(cx),
         };
         if this.bench.is_some() {
             this.perf.keep_local_log(false);
@@ -595,6 +601,7 @@ impl Launcher {
             }
         }
         changed |= self.servers_tick();
+        changed |= self.mods_tick();
         if let Some(sign_in) = &self.sign_in {
             let state = sign_in.state();
             let changed_state = format!("{state:?}") != format!("{:?}", self.sign_in_state);
@@ -2687,10 +2694,12 @@ impl Render for Launcher {
         self.perf.frame();
         self.servers.note_focus(window);
         self.friend_focused = self.friend_focus.is_focused(window);
+        self.mods.note_focus(window);
         self.args_focused = self.args_focus.is_focused(window);
         let content = match self.page {
             Page::Play => self.play_page(cx),
             Page::Versions => self.versions_page(cx),
+            Page::Mods => self.mods_page(cx),
             Page::Modpacks => self.modpacks_page(cx),
             Page::Servers => self.servers_page(cx),
             Page::Notes => self.notes_page(cx),

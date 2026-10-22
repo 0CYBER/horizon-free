@@ -689,6 +689,19 @@ impl Projectile {
         }
         damage as f32
     }
+    /// The item a thrown potion is drawn as (`ThrownItemRenderer`): the
+    /// splash potion `Witch.performRangedAttack` makes for the effect.
+    pub fn potion_item(&self) -> Option<crate::items::ItemStack> {
+        let ProjectileKind::Potion { effect, .. } = self.kind else {
+            return None;
+        };
+        let potion = match effect {
+            "minecraft:instant_health" => "minecraft:healing",
+            "minecraft:instant_damage" => "minecraft:harming",
+            other => other,
+        };
+        Some(crate::items::ItemStack::new("minecraft:splash_potion", 1).with_potion(potion))
+    }
     /// The item sprite drawn for thrown projectiles (ThrownItemRenderer).
     pub fn item_sprite(&self) -> Option<&'static str> {
         Some(match self.kind {

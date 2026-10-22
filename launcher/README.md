@@ -24,6 +24,12 @@ The opening, then Play ([clip](docs/opening.webm)):
   preparation reuses checksum-verified game jars and libraries from the current
   or another installed Horizon version, so the original Minecraft install is
   only required when no valid imported copy exists.
+- **Mods**: search Modrinth (and CurseForge once the launcher has its API key) for resource
+  packs, Iris/OptiFine shader packs and modpacks, each marked Works, Partly or Doesn't run in
+  Horizon; Java mod jars are never offered. Install puts a pack and what it needs in
+  `resourcepacks/` or `shaderpacks/` only after its SHA-512 (SHA-1 on CurseForge) matches, and a
+  modpack goes to the Modpacks page; installed packs show their source and checksum, with Update
+  and Remove ([docs/mod-browser.md](../docs/mod-browser.md)).
 - **Modpacks**: import a Java modpack (a Modrinth `.mrpack`, a CurseForge zip, or a Prism,
   MultiMC or CurseForge instance folder) and see its coverage report: per mod, ported, partial,
   not yet or not needed, with the reason ([docs/modpacks.md](../docs/modpacks.md)). **Port**
@@ -139,6 +145,11 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher modpack port <pack> [--from <dir>] [--version <tag>]   get the jars and carry them over
     horizon-launcher modpack play <pack> [--version <tag>]                 play it as its own profile
     horizon-launcher modpack remove <pack>
+    horizon-launcher mods [list]                    what the mod browser installed (docs/mod-browser.md)
+    horizon-launcher mods search <text> [--kind resource|shader|modpack] [--everything] [--source modrinth|curseforge]
+    horizon-launcher mods install <id or slug>      checksum checked, with what it needs; a modpack is imported
+    horizon-launcher mods update [<pack>] [--check]
+    horizon-launcher mods remove <pack>
     horizon-launcher servers [list]                 the servers hosted from the launcher, and whether they run
     horizon-launcher servers create [--name N] [--seed S | --copy-world DIR] [--mode M] [--difficulty D]
                      [--max-players N] [--open] [--check-accounts] [--player NAME]... --accept-eula

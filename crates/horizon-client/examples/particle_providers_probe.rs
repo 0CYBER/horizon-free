@@ -112,21 +112,26 @@ fn state(s: &ParticleSnapshot) -> String {
     }
     out
 }
-fn world(assets: &Assets, facts: &BlockFacts, floor: bool) -> Result<World> {
+fn world(assets: &Assets, facts: &BlockFacts, floor: bool, water: bool) -> Result<World> {
     let mut world = World::new(facts.air, 0);
-    let stone = assets
-        .registry
-        .default_state("minecraft:stone")
-        .ok_or("missing stone")?;
+    let state = |name: &str| assets.registry.default_state(name).ok_or("missing block");
+    let (stone, still) = (state("minecraft:stone")?, state("minecraft:water")?);
     for cz in -3..=2 {
         for cx in -3..=2 {
             world
                 .chunks
                 .insert((cx, cz), Arc::new(Chunk::empty(cx, cz)));
-            if floor {
-                for z in 0..16 {
-                    for x in 0..16 {
-                        world.set(cx * 16 + x, 63, cz * 16 + z, stone)?;
+            for z in 0..16 {
+                for x in 0..16 {
+                    let (x, z) = (cx * 16 + x, cz * 16 + z);
+                    if floor {
+                        world.set(x, 63, z, stone)?;
+                    }
+                    // The oracle's water: still sources from y 64 to 67.
+                    if water {
+                        for y in 64..=67 {
+                            world.set(x, y, z, still)?;
+                        }
                     }
                 }
             }
@@ -142,8 +147,10 @@ fn main() -> Result<()> {
     let facts = BlockFacts::load(root, assets.registry)?;
     let collision = collisions::load(root, assets.registry)?;
     let worlds = [
-        world(&assets, &facts, false)?,
-        world(&assets, &facts, true)?,
+        world(&assets, &facts, false, false)?,
+        world(&assets, &facts, true, false)?,
+        world(&assets, &facts, false, true)?,
+        world(&assets, &facts, true, true)?,
     ];
     let mut engine = ParticleEngine::new(root, &HashMap::new());
     for (ty, item) in [
@@ -174,7 +181,8 @@ fn main() -> Result<()> {
         engine.requested = Some(Vec::new());
         engine.sounds.clear();
         let level = ParticleLevel {
-            world: &worlds[usize::from(case["floor"].as_bool() == Some(true))],
+            world: &worlds[usize::from(case["floor"].as_bool() == Some(true))
+                + 2 * usize::from(case["water"].as_bool() == Some(true))],
             facts: &facts,
             collision: &collision,
             player: None,

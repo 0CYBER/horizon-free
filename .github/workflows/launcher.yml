@@ -116,6 +116,9 @@ jobs:
       # Horizon's Azure app for Microsoft sign-in (docs/microsoft-account.md): a repository
       # variable, not a secret. Unset, the launcher says sign-in is not configured.
       HORIZON_MSA_CLIENT_ID: ${{ vars.HORIZON_MSA_CLIENT_ID }}
+      # The mod browser's CurseForge source (docs/mod-browser.md#curseforge): a repository secret. Unset, the
+      # launcher searches Modrinth only.
+      HORIZON_CURSEFORGE_API_KEY: ${{ secrets.HORIZON_CURSEFORGE_API_KEY }}
       # The release's version and tag, built in (launcher/src/backend.rs VERSION and own_tag: the tag says which
       # line it is on, docs/versioning.md); a launcher branch's build keeps Cargo.toml's.
       HORIZON_LAUNCHER_VERSION: ${{ (github.event_name != 'push' || github.ref == 'refs/heads/main') && needs.decide.outputs.version || '' }}

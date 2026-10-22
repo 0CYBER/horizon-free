@@ -17,7 +17,8 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 | Runtime | `crates/horizon-mods` | wasmtime 36 LTS, component model |
 | Authoring tool | `crates/cargo-horizon-mod` | `cargo horizon-mod new / build / run` |
 | In the game | `crates/horizon-client/src/game/mods.rs`, Options > Mods | client mods |
-| Launcher mod browser, signing, server mods, registries | this page, [Roadmap](#roadmap) | planned |
+| Launcher mod browser (Modrinth, CurseForge with a key) | [mod-browser.md](mod-browser.md) | resource packs, shader packs, modpacks |
+| `.hmod` index, signing, server mods, registries | this page, [Roadmap](#roadmap) | planned |
 
 ## Design goals
 
