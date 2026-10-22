@@ -46,6 +46,9 @@ pub fn register(m: &mut Mob) {
             };
             m.ai.look.kind = super::control::LookKind::SmoothSwimming(20.0);
             m.ai.nav.kind = NavKind::Amphibious;
+            // `Axolotl()`: water costs nothing, so swim targets in water pass
+            // DefaultRandomPos's malus check.
+            m.set_malus(super::path::PathType::Water, 0.0);
             super::animal_brain::init(m, i64::from(m.id));
         }
         S::Tadpole => {
