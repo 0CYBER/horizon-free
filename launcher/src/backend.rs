@@ -993,31 +993,45 @@ fn download_for_owner(
     }
 }
 
-/// The home of a JDK of at least `major`: one horizon-prepare finds (JAVA_HOME, the PATH, an
-/// installed JDK) or the Java the official launcher downloaded into one of the `games`
-/// folders, else Minecraft's own Java downloaded from Mojang into Horizon's game folder, the
-/// runtime the version JSON at `manifest` names (Mojang's runtimes are whole JDKs).
+/// A JDK of at least `major` for the preparation. `None` when horizon-prepare finds one by
+/// itself (JAVA_HOME, the PATH, an installed JDK): the preparation then runs as before, in an
+/// unchanged environment (a JDK found on the PATH can be a stub such as macOS's
+/// /usr/bin/javac, whose folder is no Java home: `JAVA_HOME=/usr` makes it call itself
+/// forever). Else the home of the Java the official launcher downloaded into one of the
+/// `games` folders, else of Minecraft's own Java downloaded from Mojang into Horizon's game
+/// folder, the runtime the version JSON at `manifest` names (Mojang's runtimes are whole JDKs).
 fn java(
     major: i64,
     games: &[PathBuf],
     manifest: &Path,
     log: &dyn Fn(String),
-) -> Result<PathBuf, String> {
-    let runtimes = || -> Vec<PathBuf> {
-        let mut homes: Vec<PathBuf> = games
-            .iter()
-            .flat_map(|game| horizon_prepare::java::minecraft_runtimes(&game.join("runtime")))
-            .collect();
-        homes.dedup();
-        homes
-    };
-    let missing = match horizon_prepare::java::find(major, &runtimes()) {
-        Ok(jdk) => return Ok(jdk.home()),
+) -> Result<Option<PathBuf>, String> {
+    if horizon_prepare::java::find(major, &[]).is_ok() {
+        return Ok(None);
+    }
+    let mut runtimes: Vec<PathBuf> = Vec::new();
+    for home in games
+        .iter()
+        .flat_map(|game| horizon_prepare::java::minecraft_runtimes(&game.join("runtime")))
+    {
+        if !runtimes.contains(&home) {
+            runtimes.push(home);
+        }
+    }
+    let missing = match horizon_prepare::java::find(major, &runtimes) {
+        Ok(jdk) => return Ok(Some(jdk.home())),
         Err(e) => e,
     };
     let component = read_json(manifest)
         .and_then(|json| json["javaVersion"]["component"].as_str().map(String::from))
         .ok_or_else(|| missing.clone())?;
+    // Mojang builds its Linux Java for glibc: without glibc's loader (NixOS without nix-ld,
+    // musl distributions) it cannot start, so don't download it.
+    if cfg!(all(target_os = "linux", target_arch = "x86_64")) && !Path::new(GLIBC_LOADER).exists() {
+        return Err(format!(
+            "{missing}\n  • Minecraft's own Java from Mojang needs glibc ({GLIBC_LOADER} is missing; on NixOS, enable programs.nix-ld), so install a JDK instead."
+        ));
+    }
     let fetch = |url: &str| -> Result<Vec<u8>, String> {
         let mut body = Vec::new();
         get(url)?
@@ -1030,8 +1044,11 @@ fn java(
     let home = mojang::java_runtime(&component, &runtime, 8, &fetch, log).map_err(|e| {
         format!("{missing}\n  • Horizon also tried to download Minecraft's own Java from Mojang, but: {e}")
     })?;
-    horizon_prepare::java::find(major, &[home]).map(|jdk| jdk.home())
+    horizon_prepare::java::find(major, &[home]).map(|jdk| Some(jdk.home()))
 }
+
+/// The dynamic loader glibc programs on x86-64 Linux start through.
+const GLIBC_LOADER: &str = "/lib64/ld-linux-x86-64.so.2";
 
 /// Runs `cmd` with the JDK at `home`: JAVA_HOME names it and its `bin` leads the PATH, as the
 /// versions' own preparers look for Java.
@@ -1150,12 +1167,14 @@ pub fn preparer(
                 import: !reused,
                 minecraft_dir: Some(minecraft.clone()),
                 server_jar: (!reused).then_some(jar),
-                java_home: Some(java_home),
+                java_home: java_home.clone(),
             };
             return Ok((Preparer::InProcess(options), minecraft));
         }
         let mut cmd = Command::new(binary);
-        with_java(&mut cmd, &java_home);
+        if let Some(home) = &java_home {
+            with_java(&mut cmd, home);
+        }
         cmd.current_dir(&dir).arg("--root").arg(&dir);
         if !reused {
             cmd.args(["--prepare", "--server-jar"]).arg(&jar);
@@ -1164,7 +1183,9 @@ pub fn preparer(
         return Ok((Preparer::Process(cmd), minecraft));
     }
     let mut cmd = Command::new(python.unwrap());
-    with_java(&mut cmd, &java_home);
+    if let Some(home) = &java_home {
+        with_java(&mut cmd, home);
+    }
     cmd.current_dir(&dir)
         .args(["-u", "tools/prepare_native_client.py"]);
     if !reused {
