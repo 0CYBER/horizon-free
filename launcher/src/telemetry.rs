@@ -54,7 +54,7 @@ pub fn playing_now() -> Option<u64> {
 }
 
 /// Sends [`playing_now`] to the window as `Msg::Playing` now and every minute, on its own
-/// thread. Nothing at all when there is no server.
+/// thread. Nothing at all when sending is turned off.
 pub fn watch_playing(tx: std::sync::mpsc::Sender<backend::Msg>) {
     if horizon_telemetry::endpoint().is_none() {
         return;
@@ -151,7 +151,9 @@ pub fn delete_my_data() -> Result<String, String> {
     outbox::clear(&home).map_err(|e| e.to_string())?;
     let remote = match horizon_telemetry::endpoint() {
         _ if consent.install_id.is_empty() => "Nothing was ever sent from here.",
-        None => "Nothing was sent: there is no data server yet.",
+        None => {
+            "Sending is turned off here (HORIZON_TELEMETRY_URL=off), so the server was not asked."
+        }
         Some(url) => {
             upload::delete_remote(&url, &consent.install_id)
                 .map_err(|e| format!("The server could not be reached ({e}). Try again later."))?;
@@ -230,7 +232,7 @@ pub fn submit(item: &Item) -> Result<String, String> {
     Ok(match send() {
         Flush::Sent { .. } => "Sent. Thank you.".into(),
         Flush::Nothing if horizon_telemetry::endpoint().is_none() => {
-            "Kept to be sent once the data server is up.".into()
+            "Kept; sending is turned off here (HORIZON_TELEMETRY_URL=off).".into()
         }
         _ => "Kept; it will be sent the next time the launcher starts.".into(),
     })

@@ -198,14 +198,30 @@ async fn an_address_is_rate_limited() {
         s.post(&install(9), vec![perf("x", 8)]).await,
         StatusCode::TOO_MANY_REQUESTS
     );
+    let from = |forwarded: &str, real: Option<&str>| {
+        let body = batch::encode(&Batch::new(&install(9), vec![perf("x", 8)]));
+        let mut req = Request::post("/v1/batch")
+            .header("x-forwarded-for", forwarded)
+            .header("content-encoding", "zstd");
+        if let Some(ip) = real {
+            req = req.header("x-real-ip", ip);
+        }
+        req.body(Body::from(body)).unwrap()
+    };
+    // A client can't pick its address: the proxy adds the real one last, or sets X-Real-IP.
+    assert_eq!(
+        s.send(from("198.51.100.7, 203.0.113.9", None)).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        s.send(from("198.51.100.7", Some("203.0.113.9"))).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
     // Another address has its own allowance.
-    let body = batch::encode(&Batch::new(&install(9), vec![perf("x", 8)]));
-    let req = Request::post("/v1/batch")
-        .header("x-forwarded-for", "198.51.100.7, 10.0.0.1")
-        .header("content-encoding", "zstd")
-        .body(Body::from(body))
-        .unwrap();
-    assert_eq!(s.send(req).await.0, StatusCode::NO_CONTENT);
+    assert_eq!(
+        s.send(from("203.0.113.9, 198.51.100.7", None)).await.0,
+        StatusCode::NO_CONTENT
+    );
 }
 
 #[tokio::test]

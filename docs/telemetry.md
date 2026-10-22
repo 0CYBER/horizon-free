@@ -45,7 +45,8 @@ Never sent: account names or UUIDs, world names, server or LAN addresses, chat, 
 - `telemetry/outbox/` holds one JSON file per item, `<day>-<kind>-<random>.json`. It never holds more than 200 items or 2 MiB, and the oldest go first. `kept.json` counts today's items per kind against the caps above.
 - The launcher sends the outbox when it starts and when it closes. Items go as one JSON batch (`{"schema":1,"install_id":…,"items":[…]}`, up to 64 items and 1 MiB), compressed with zstd: `POST /v1/batch` with `Content-Encoding: zstd`. A day's perf summaries are under 2 KB on the wire.
 - After a failure the launcher waits a minute, doubling up to a day, and sends at most 8 batches a day. A batch the server refuses with a 4xx (not 429) is dropped.
-- `HORIZON_TELEMETRY_URL` sets the server. There is none by default: until there is, nothing is sent and the outbox stays within its caps.
+- The server is `https://telemetry.playhorizon.dev` (`DEFAULT_ENDPOINT`), on Railway in the EU (`europe-west4`, Amsterdam). `HORIZON_TELEMETRY_URL` names another one (a local server); `HORIZON_TELEMETRY_URL=off` sends nothing at all, no ping either. Tests, CI and the benchmark and test harnesses set `off`.
+- What is sent still depends on the switches: with every switch off nothing but the ping leaves, and the outbox stays empty.
 - `SCHEMA` versions the format. New optional fields keep it. A field that changes meaning or goes bumps it, and the server keeps reading the older ones.
 
 ## The "I'm playing" ping
@@ -68,13 +69,14 @@ The server keeps sessions in memory only, never on disk, and never with the send
 { "playing": 1240, "lan": 85, "versions": { "v2026.10.22": 1100, "other": 140 }, "platforms": { "linux": 300, "macos": 240, "windows": 700 } }
 ```
 
-The launcher reads it when it opens and every minute after, and shows "N playing now" on the Play page. It shows nothing when the server can't be reached. Like the rest, there is no server by default (`HORIZON_TELEMETRY_URL`): until there is one, the game sends no ping and the launcher shows no count. `HORIZON_NO_HEARTBEAT=1` keeps automated runs out of the count.
+The launcher reads it when it opens and every minute after, and shows "N playing now" on the Play page. It shows nothing when the server can't be reached. `HORIZON_TELEMETRY_URL=off` turns both off; `HORIZON_NO_HEARTBEAT=1` keeps a single automated run out of the count.
 
 ## Server
 
 - `POST /v1/batch`
 - `DELETE /v1/installs/<install_id>`: deletes everything sent under that ID.
 - `GET /v1/aggregate`: the anonymous totals the website's results page reads.
+- `GET /v1/benchmarks/summary`: players' benchmark uploads grouped by GPU, CPU, render distance and game for playhorizon.dev/benchmarks. A group shows only with at least 3 different installs, and only its medians and counts: no install ID, day, OS version, driver, memory or screen. Uploads are never published one by one.
 - `POST /v1/live` and `GET /v1/live`: the "I'm playing" ping and the live count.
 
-`crates/horizon-telemetry-server` is the server. Its [README](../crates/horizon-telemetry-server/README.md) covers storage (about 190 bytes per play session), retention (180 days of raw rows, anonymous daily totals kept), rate limits and hosting.
+`crates/horizon-telemetry-server` is the server, at `https://telemetry.playhorizon.dev` on Railway (one SQLite file on a volume, region `europe-west4`). Its [README](../crates/horizon-telemetry-server/README.md) covers storage (about 190 bytes per play session), retention (180 days of raw rows, anonymous daily totals kept), rate limits and hosting.
