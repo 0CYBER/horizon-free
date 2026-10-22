@@ -314,7 +314,7 @@ fn separate_draws_match_combined_celestial_pixels() {
                 visible_flash_cases += usize::from(expected != no_flash);
                 assert_eq!(actual, expected, "yaw={yaw} pitch={pitch} flash={level}");
                 assert!(
-                    actual.chunks_exact(4).any(|p| p[..3] != [0; 3]),
+                    actual.as_chunks::<4>().0.iter().any(|p| p[..3] != [0; 3]),
                     "empty frame"
                 );
                 assert_eq!(resident.mesh.as_ref().unwrap().1, first);
