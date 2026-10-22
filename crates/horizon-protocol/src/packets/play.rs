@@ -672,6 +672,11 @@ packet!(
     /// ClientboundSetPassengersPacket: a vehicle and every entity riding it.
     SetPassengers { vehicle: i32 => VarInt, passengers: Vec<i32> => List<VarInt> }
 );
+packet!(
+    /// ClientboundMoveVehiclePacket: the server puts a vehicle its rider
+    /// controls back where it was (PositionAndRotation: x, y, z, yRot, xRot).
+    MoveVehicle { position: [f64; 3] => Vec3d, yaw: f32 => Float, pitch: f32 => Float }
+);
 /// ClientboundSetEquipmentPacket: (EquipmentSlot ordinal, stack) pairs.
 pub struct Equipment;
 impl Codec<Vec<(u8, Option<Stack>)>> for Equipment {
@@ -1529,6 +1534,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     SetHeldSlot(SetHeldSlot) = SET_HELD_SLOT,
     SetObjective(SetObjective) = SET_OBJECTIVE,
     SetPassengers(SetPassengers) = SET_PASSENGERS,
+    MoveVehicle(MoveVehicle) = MOVE_VEHICLE,
     ProjectilePower(ProjectilePower) = PROJECTILE_POWER,
     SetPlayerInventory(SetPlayerInventory) = SET_PLAYER_INVENTORY,
     SetPlayerTeam(SetPlayerTeam) = SET_PLAYER_TEAM,
@@ -1802,6 +1808,15 @@ packet!(
 packet!(MovePlayerPosRot { x: f64 => Double, y: f64 => Double, z: f64 => Double, yaw: f32 => Float, pitch: f32 => Float, flags: u8 => UByte });
 packet!(MovePlayerRot { yaw: f32 => Float, pitch: f32 => Float, flags: u8 => UByte });
 packet!(MovePlayerStatus { flags: u8 => UByte });
+packet!(
+    /// ServerboundMoveVehiclePacket: where the rider moved the vehicle it
+    /// controls (PositionAndRotation, then onGround).
+    MoveVehicleRequest { position: [f64; 3] => Vec3d, yaw: f32 => Float, pitch: f32 => Float, on_ground: bool => Bool }
+);
+packet!(
+    /// ServerboundPaddleBoatPacket: the boat's left and right paddles.
+    PaddleBoat { left: bool => Bool, right: bool => Bool }
+);
 packet!(PickItemFromBlock { pos: [i32; 3] => Pos, include_data: bool => Bool });
 packet!(
     /// ServerboundPlayerActionPacket.Action: 0 start destroy, 1 change destroy
@@ -1869,6 +1884,8 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     MovePlayerPosRot(MovePlayerPosRot) = MOVE_PLAYER_POS_ROT,
     MovePlayerRot(MovePlayerRot) = MOVE_PLAYER_ROT,
     MovePlayerStatus(MovePlayerStatus) = MOVE_PLAYER_STATUS_ONLY,
+    MoveVehicle(MoveVehicleRequest) = MOVE_VEHICLE,
+    PaddleBoat(PaddleBoat) = PADDLE_BOAT,
     PickItemFromBlock(PickItemFromBlock) = PICK_ITEM_FROM_BLOCK,
     PingRequest(crate::packets::status::Ping) = PING_REQUEST,
     PlayerAbilities(PlayerAbilitiesRequest) = PLAYER_ABILITIES,
