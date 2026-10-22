@@ -4487,10 +4487,17 @@ impl Game<'_> {
         };
         if capture {
             self.mouse.set_ignore_first_move();
+            // macOS warps by re-associating the mouse with the pointer,
+            // which undoes a Locked grab and leaves the pointer free: warp
+            // first there. Wayland moves a pointer only while it is locked,
+            // so everywhere else warp after grabbing.
+            #[cfg(target_os = "macos")]
+            warp(window);
             self.captured = window
                 .set_cursor_grab(CursorGrabMode::Locked)
                 .or_else(|_| window.set_cursor_grab(CursorGrabMode::Confined))
                 .is_ok();
+            #[cfg(not(target_os = "macos"))]
             if self.captured && self.focused {
                 warp(window);
             }
