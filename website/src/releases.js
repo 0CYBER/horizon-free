@@ -4,7 +4,7 @@ import { markdown, escape } from "./markdown.js";
 
 const REPO = "ludovic111/horizon";
 
-// "Horizon 2026.10.13: 100% of harnessed vanilla parity" reads as the version and its line.
+// "Horizon 0.2.3: Cave culling, weather" (before 0.2, "Horizon 2026.10.13: …") reads as the version and its line.
 function parts(r) {
   const version = r.tag_name.replace(/^v/, "");
   const name = r.name || "";
