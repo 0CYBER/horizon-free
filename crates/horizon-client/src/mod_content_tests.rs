@@ -148,6 +148,35 @@ fn content_root_loads_with_every_table() {
         new.default_state("ruby:ruby_glass"),
         Some(BlockStateId(n + 65))
     );
+    // Network ids: the new items and blocks follow vanilla's in the registries report, which
+    // the game and its server both read (a missing one travels as air).
+    let report = |root: &Path| {
+        horizon_protocol::registry::Builtin::load(&root.join("registries.json")).unwrap()
+    };
+    let (vanilla_ids, ids) = (report(&base), report(&root));
+    let item = |b: &horizon_protocol::registry::Builtin, name: &str| {
+        b.get("minecraft:item").and_then(|r| r.id(name))
+    };
+    let vanilla_items = (0..)
+        .take_while(|&i| vanilla_ids.get("minecraft:item").unwrap().name(i).is_some())
+        .count() as i32;
+    assert_eq!(
+        item(&ids, "minecraft:stone"),
+        item(&vanilla_ids, "minecraft:stone")
+    );
+    let ruby_item = item(&ids, "ruby:ruby_block").unwrap();
+    assert!(ruby_item >= vanilla_items, "{ruby_item} < {vanilla_items}");
+    assert_eq!(
+        ids.get("minecraft:item").unwrap().name(ruby_item),
+        Some("ruby:ruby_block")
+    );
+    assert!(item(&ids, "ruby:ruby_glass").is_none(), "no item declared");
+    assert!(
+        ids.get("minecraft:block")
+            .unwrap()
+            .id("ruby:ruby_glass")
+            .is_some()
+    );
 
     let old_facts = BlockFacts::load(&base, old).unwrap();
     let facts = BlockFacts::load(&root, new).unwrap();
