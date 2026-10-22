@@ -2947,6 +2947,10 @@ impl Game<'_> {
         let scale = f64::from(self.settings.entity_distance);
         for mob in &self.mobs {
             let entity_start = out.len();
+            // Entity.DATA_SHARED_FLAGS_ID invisible: only the name tag draws.
+            if mob.invisible {
+                continue;
+            }
             let d = glam::DVec3::new(mob.position.x, mob.position.y, mob.position.z) - camera;
             // Entity.shouldRenderAtSqrDistance: 64 times the bounding box's
             // mean edge, scaled by the entity distance option.

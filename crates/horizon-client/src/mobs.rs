@@ -807,7 +807,11 @@ pub struct Mob {
     pub persistent: bool,
     /// `CustomName` (plain text) and `CustomNameVisible`.
     pub custom_name: Option<String>,
+    /// The styled `CustomName`, when it came from a component.
+    pub custom_name_text: Option<crate::text::Text>,
     pub name_visible: bool,
+    /// `Entity.DATA_SHARED_FLAGS_ID` bit 0x20: the model is hidden.
+    pub invisible: bool,
     pub random: LegacyRandom,
     pub ai: Box<ai::Ai>,
     pub extra: Extra,
@@ -846,6 +850,9 @@ pub struct Mob {
     /// from the game), handed over with the next tick's events or drained
     /// by the game.
     pub outbox: Vec<MobEvent>,
+    /// The skin texture of a player mob (`PlayerInfo.getSkin`), which
+    /// replaces the type's default when its download is ready.
+    pub skin: Option<String>,
 }
 /// Events a mob tick asks the game to act on.
 #[derive(Clone, Debug)]
@@ -1519,10 +1526,13 @@ impl Mob {
             last_damage: None,
             removed: false,
             custom_name: None,
+            custom_name_text: None,
             name_visible: false,
+            invisible: false,
             anim: anim::AnimState::default(),
             rider: None,
             outbox: Vec::new(),
+            skin: None,
             attrs: Attrs {
                 speed: kind.speed,
                 attack_damage: kind.attack_damage,
