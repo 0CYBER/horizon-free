@@ -7,6 +7,28 @@ use horizon_client::{
     ui,
 };
 
+impl Screen {
+    /// Screen.extractBackground for non-isInGameUi screens, and
+    /// PauseScreen.extractBackground only when showPauseMenu is true.
+    pub(super) fn blurs_background(self, pause_menu: bool) -> bool {
+        match self {
+            Self::Paused => pause_menu,
+            Self::Options
+            | Self::Stats
+            | Self::Advancements
+            | Self::WorldOptions
+            | Self::Friends => true,
+            Self::Playing
+            | Self::GameModeSwitcher
+            | Self::Chat
+            | Self::Creative
+            | Self::Inventory
+            | Self::Dead
+            | Self::CommandBlock => false,
+        }
+    }
+}
+
 /// PauseScreen buttons: (x, y, width, label key, action id, active).
 /// https://mcsrc.dev/2/26.3/net/minecraft/client/gui/screens/PauseScreen
 fn pause_buttons(w: f32, h: f32, remote: bool) -> Vec<(f32, f32, f32, &'static str, u8, bool)> {
@@ -43,6 +65,9 @@ fn pause_buttons(w: f32, h: f32, remote: bool) -> Vec<(f32, f32, f32, &'static s
 }
 
 /// The icon row: report bugs, feedback, friends, player reporting.
+/// `FRIENDS_ICON` (vanilla's `CommonButtons.friends`) opens Horizon's
+/// Play with Friends; the others stay inactive.
+const FRIENDS_ICON: usize = 2;
 fn pause_icons(w: f32, h: f32) -> [(f32, f32, &'static str); 4] {
     let x0 = ((w - 212.0) * 0.5).floor() + 60.0;
     let y = ((h - 166.0) * 0.25).floor() + 98.0;
@@ -69,41 +94,8 @@ impl Game<'_> {
     pub(super) fn external_server(&self) -> bool {
         self.remote.is_some() && self.integrated.is_none()
     }
-    /// Whether the pause menu is drawn in Horizon's style (over a blurred world).
-    pub(super) fn horizon_pause(&self) -> bool {
-        self.screen == Screen::Paused
-            && self.pause_menu
-            && self.title.is_none()
-            && horizon_client::ui_theme::horizon()
-    }
-    fn pause_labels(&self) -> (String, &'static str) {
-        if let Some(server) = &self.integrated {
-            return (server.world_name.clone(), "Save and quit");
-        }
-        if self.external_server() {
-            ("Multiplayer".to_owned(), "Disconnect")
-        } else {
-            (self.level.name.clone(), "Save and quit")
-        }
-    }
     pub(super) fn draw_pause_menu(&mut self, batch: &mut HudBatch) {
-        if horizon_client::ui_theme::horizon() {
-            let opened = *self.pause_since.get_or_insert_with(std::time::Instant::now);
-            let (world, quit) = self.pause_labels();
-            self.tick_friends();
-            let friends = self.friends_view();
-            let mut ui = horizon_client::ui_theme::Ui::new(&self.gui.atlas, batch, self.cursor);
-            horizon_client::front::pause::draw(
-                &mut ui,
-                &world,
-                quit,
-                opened,
-                &friends,
-                self.external_server(),
-            );
-            ui.finish();
-            return;
-        }
+        let friends = self.friends_view().shown;
         let atlas = &self.gui.atlas;
         let (w, h) = (batch.width, batch.height);
         ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
@@ -131,12 +123,41 @@ impl Game<'_> {
                 hover,
             );
         }
-        for (x, y, sprite) in pause_icons(w, h) {
-            ui::button(batch, atlas, x, y, 20.0, 20.0, &Text::empty(), false, false);
+        let mut tooltip = None;
+        for (i, (x, y, sprite)) in pause_icons(w, h).into_iter().enumerate() {
+            let active = i == FRIENDS_ICON && friends;
+            let hover = ui::hovered(self.cursor, x, y, 20.0, 20.0);
+            // The icon has no label: name it for controller focus and the
+            // control socket's widget tree.
+            if i == FRIENDS_ICON {
+                horizon_client::widgets::record(
+                    horizon_client::friends_screen::TITLE,
+                    [x, y, 20.0, 20.0],
+                    active,
+                );
+            }
+            ui::button(
+                batch,
+                atlas,
+                x,
+                y,
+                20.0,
+                20.0,
+                &Text::empty(),
+                active,
+                active && hover,
+            );
             // SpriteIconButton.CenteredIcon: the 15x15 sprite at
             // x + width / 2 - 15 / 2 in integer pixels, untinted even
             // when the button is inactive.
             batch.sprite_scaled(atlas, sprite, x + 3.0, y + 3.0, 15.0, 15.0, u32::MAX);
+            if i == FRIENDS_ICON && hover {
+                tooltip = Some(Text::literal(horizon_client::friends_screen::TITLE));
+            }
+        }
+        // SpriteIconButton.withTootip: the label as a tooltip.
+        if let Some(tip) = tooltip {
+            ui::tooltip(batch, atlas, &[tip], self.cursor);
         }
     }
     pub(super) fn pause_click(&mut self) -> Result<()> {
@@ -148,29 +169,16 @@ impl Game<'_> {
             let b = HudBatch::new(size);
             (b.width, b.height)
         };
-        let hit = if horizon_client::ui_theme::horizon() {
-            let size = self
-                .renderer
-                .as_ref()
-                .map_or([1, 1], |r| [r.config.width, r.config.height]);
-            let mut b = HudBatch::new(size);
-            let (world, quit) = self.pause_labels();
-            horizon_client::front::pause::click(
-                &self.gui.atlas,
-                &mut b,
-                self.cursor.0,
-                self.cursor.1,
-                &world,
-                quit,
-                &self.friends_view(),
-                self.external_server(),
-            )
-        } else {
-            pause_buttons(w, h, self.external_server())
-                .into_iter()
-                .find(|b| b.5 && ui::hovered(self.cursor, b.0, b.1, b.2, 20.0))
-                .map(|b| b.4)
-        };
+        let friends = pause_icons(w, h)[FRIENDS_ICON];
+        let hit = pause_buttons(w, h, self.external_server())
+            .into_iter()
+            .find(|b| b.5 && ui::hovered(self.cursor, b.0, b.1, b.2, 20.0))
+            .map(|b| b.4)
+            .or_else(|| {
+                (self.friends_view().shown
+                    && ui::hovered(self.cursor, friends.0, friends.1, 20.0, 20.0))
+                .then_some(10)
+            });
         match hit {
             Some(0) => {
                 self.screen = Screen::Playing;
@@ -180,17 +188,11 @@ impl Game<'_> {
             Some(3) => self.open_stats(),
             Some(4) => self.open_advancements(true),
             Some(9) => self.open_world_options(),
-            Some(10) => {
-                if let Err(e) = self.friends_start() {
-                    self.system_message(Text::literal(format!("Couldn't share the world: {e}")));
-                }
-            }
-            Some(11) => self.friends_copy(),
-            Some(12) => self.friends_stop(),
+            Some(10) => self.screen = Screen::Friends,
             Some(2) => self.close_world()?,
             _ => {}
         }
-        if hit.is_some() && !horizon_client::ui_theme::horizon() {
+        if hit.is_some() {
             self.audio.play_button_click();
         }
         Ok(())
@@ -334,7 +336,34 @@ impl Game<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::pause_buttons;
+    use super::{Screen, pause_buttons};
+
+    #[test]
+    fn menu_blur_matches_vanilla_screen_backgrounds() {
+        for screen in [
+            Screen::Options,
+            Screen::Stats,
+            Screen::Advancements,
+            Screen::WorldOptions,
+        ] {
+            assert!(screen.blurs_background(false));
+            assert!(screen.blurs_background(true));
+        }
+        assert!(Screen::Paused.blurs_background(true));
+        assert!(!Screen::Paused.blurs_background(false));
+        for screen in [
+            Screen::Playing,
+            Screen::GameModeSwitcher,
+            Screen::Chat,
+            Screen::Creative,
+            Screen::Inventory,
+            Screen::Dead,
+            Screen::CommandBlock,
+        ] {
+            assert!(!screen.blurs_background(true));
+            assert!(!screen.blurs_background(false));
+        }
+    }
 
     #[test]
     fn pause_menu_uses_disconnect_for_servers_and_keeps_world_options() {

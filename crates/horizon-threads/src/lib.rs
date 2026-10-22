@@ -7,10 +7,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// threads, as vanilla's `MinecraftServer.spin` does for its server thread
 /// (`Thread.setPriority(8)` when there are more than four processors), so
 /// world generation and chunk encoding on every other core don't hold a tick
-/// back: user-interactive quality of service on macOS, above-normal priority
-/// on Windows. Nothing elsewhere: Linux lets an unprivileged thread lower its
-/// priority but not raise it (and the JVM leaves it there too). Whether the
-/// OS took it.
+/// back (the client asks the same for its render thread, so they don't hold
+/// a frame back either): user-interactive quality of service on macOS,
+/// above-normal priority on Windows. Nothing elsewhere: Linux lets an
+/// unprivileged thread lower its priority but not raise it (and the JVM
+/// leaves it there too). Whether the OS took it.
 pub fn favour_current() -> bool {
     if std::thread::available_parallelism().map_or(1, |n| n.get()) <= 4 {
         return false;
@@ -40,30 +41,30 @@ fn favour() -> bool {
     false
 }
 
-/// Set once by a dedicated server, before its helper threads start: they
-/// then go behind its server thread (`behind_server`).
+/// Set once as the game starts, before its helper threads do: they then go
+/// behind the server thread and the render thread (`behind_server`).
 static HELPERS_BEHIND: AtomicBool = AtomicBool::new(false);
 
 /// How many nice levels a helper thread goes below the process on Linux.
 #[cfg(target_os = "linux")]
 const BEHIND: i32 = 10;
 
-/// A dedicated server: from now on, the helper threads that call
-/// `behind_server` as they start go behind the server thread. Call it
-/// before they start.
+/// From now on, the helper threads that call `behind_server` as they start
+/// go behind the server thread (a dedicated server's or single player's)
+/// and the render thread. Call it before they start.
 pub fn put_helpers_behind() {
     HELPERS_BEHIND.store(true, Ordering::Relaxed);
 }
 
-/// Called by a helper thread as it starts (world generation and lighting,
-/// a connection's packet writer): work the tick never waits for. In a
-/// dedicated server (`put_helpers_behind`) on Linux, where the server thread
-/// can't be raised (`favour_current`), the helper lowers itself instead,
-/// which an unprivileged thread may: 10 nice levels below the process, or,
-/// where nice runs out (a server started under nice 10 or more), the idle
-/// class, which runs the thread only when no ordinary thread wants its core.
-/// The server thread then gets a core when its tick starts instead of
-/// waiting behind them. Nothing elsewhere. Whether the OS took it.
+/// Called by a helper thread as it starts (world generation, lighting and
+/// meshing, a connection's packet writer): work no tick or frame waits for.
+/// Once `put_helpers_behind` was called, on Linux, where the server and
+/// render threads can't be raised (`favour_current`), the helper lowers
+/// itself instead, which an unprivileged thread may: 10 nice levels below
+/// the process, or, where nice runs out (a game started under nice 10 or
+/// more), the idle class, which runs the thread only when no ordinary thread
+/// wants its core. A tick or a frame then gets a core when it starts instead
+/// of waiting behind them. Nothing elsewhere. Whether the OS took it.
 pub fn behind_server() -> bool {
     HELPERS_BEHIND.load(Ordering::Relaxed) && behind()
 }

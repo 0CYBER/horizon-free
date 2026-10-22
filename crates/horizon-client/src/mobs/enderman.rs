@@ -391,12 +391,11 @@ impl Goal for LeaveBlock {
         let target = cx.w.world.block(x, y, z);
         let below = cx.w.world.block(x, y - 1, z);
         let bf = cx.w.facts.get(below);
-        let free = !cx.w.others.iter().any(|s| {
-            s.bounds.intersects(Aabb::new(
-                Vec3::new(f64::from(x), f64::from(y), f64::from(z)),
-                Vec3::new(f64::from(x + 1), f64::from(y + 1), f64::from(z + 1)),
-            ))
-        });
+        let block = Aabb::new(
+            Vec3::new(f64::from(x), f64::from(y), f64::from(z)),
+            Vec3::new(f64::from(x + 1), f64::from(y + 1), f64::from(z + 1)),
+        );
+        let free = !cx.w.others_near(block).any(|s| s.bounds.intersects(block));
         if cx.w.facts.is_air(target)
             && !cx.w.facts.is_air(below)
             && &*bf.name != "minecraft:bedrock"

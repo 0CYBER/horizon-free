@@ -1,8 +1,9 @@
 # Horizon's design system
 
-One design language for the launcher, the website and the game's own menus (what "Menu style:
-Horizon" draws). Vanilla's classic screens and the HUD are not part of it: they stay exactly
-vanilla, because parity is the point of the game.
+One design language for the launcher, the website and the few overlays the game draws that
+vanilla has no screen for (the on-screen keyboard a controller types with). Every game screen
+and the HUD are not part of it: they are vanilla's, because parity is the point of the game, and
+Horizon's own settings are pages built from vanilla's widgets, the way mods add theirs.
 
 The tokens live in one place, `crates/horizon-theme`. The launcher (`launcher/src/theme.rs`)
 and the game (`crates/horizon-client/src/ui_theme.rs`) read them as Rust constants, and the
@@ -139,16 +140,35 @@ Geist (400, 500, 600) and Geist Mono (400), bundled under the SIL Open Font Lice
   are index lists with the release name as the title; Settings is an index list of switches and
   values. The opening is the faint wordmark drawn letter by letter, then the interface arrives.
   The sunset photograph is gone: the window is the page colour, light or dark with the system.
-- **Website** (`website/`): the same page structure as before (what it is, screenshots,
-  parity, launcher, patch notes, community), each section a `micro` mono label, a `display`
-  heading and a short paragraph, its content an index list. Screenshots stay as images (radius
-  12, no frame). Light and dark follow the system, with a toggle. A giant faint wordmark sits
-  above the footer. No hero photograph: the first screen is the headline, one paragraph, the
-  download button and the parity score as an index row.
-- **Game menus** (Horizon style): the title backdrop under a page-colour veil; text sidebar;
-  index lists for worlds and servers; options pages as index lists of rows (label left, value
-  in mono, the control right). The pause menu is a centred column of plain rows over a darker
-  veil.
+- **Website** (`website/`): the Blocks look below. The same page structure as before (what it
+  is, screenshots, parity, launcher, patch notes, community), headings in Pixelify Sans, lists as
+  stacks of panels, the stone texture behind the page and Horizon's pixel landscape (a dawn or a
+  sunset) behind the hero. Light and dark follow the system, with a toggle. A giant wordmark in
+  pixels sits in the footer.
+- **Game**: vanilla's screens. The on-screen keyboard is a rounded plate of keys in the page
+  colour, the focused key in the accent.
+
+## Blocks
+
+A blocky, Minecraft-like look in Horizon's purple, for the website and the redesigned launcher:
+Minecraft's inventory rather than a document. Its colours are `horizon_theme::Blocks`
+(`BLOCKS_LIGHT`, `BLOCKS_DARK`), which `tokens.css` carries under the same names as before plus
+`--panel`, `--raised`, `--button`, `--well`, `--bevel`, `--lip`, `--outline` and the `--face`
+of the main action. The game's menus keep `LIGHT` and `DARK`.
+
+- **Pixel type for what names and what you act on.** Headings, navigation, buttons and the
+  wordmark use Pixelify Sans (OFL; Medium, SemiBold, Bold); paragraphs and numbers stay in Geist
+  and Geist Mono so long text reads easily.
+- **Blocks, not rounded cards.** Every surface is square: a 2 px dark outline, a 2 px light bevel
+  along the top and a darker lip along the bottom. The main action is the violet face with its own
+  bevel and a 4 px lip; it sinks a pixel when pressed. Code and fields are sunk wells.
+- **Pixel art drawn in code.** The stone behind the pages is 64 texels of the page colour in five
+  close shades (`TILE_SHADES`), never Minecraft's stone; the landscape is a banded sky, a sun cut in
+  slices like the mark, hills and square trees. `website/scripts/art.mjs` draws both.
+- **Icons** (the launcher): Pixelarticons (MIT), 24 unit pixel SVGs in
+  `crates/horizon-theme/icons/pixel/`.
+- **Contrast**: every text colour meets WCAG AA (4.5:1) on the panels, the page and the lightest
+  stone shade in both palettes (`blocks_text_meets_wcag_aa_in_both_appearances`).
 
 ## The mark
 

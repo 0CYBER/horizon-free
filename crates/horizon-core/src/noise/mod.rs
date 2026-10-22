@@ -61,8 +61,8 @@ impl GradientTable {
         i32::from(self.permutations[(index & 255) as usize])
     }
 
-    fn gradient(&self, index: i32) -> [i32; 3] {
-        GRADIENTS[(self.permute(index) & 15) as usize]
+    fn gradient(&self, index: i32) -> [f32; 3] {
+        PERLIN_GRADIENTS[(self.permute(index) & 15) as usize]
     }
 }
 
@@ -87,8 +87,24 @@ const GRADIENTS: [[i32; 3]; 16] = [
     [0, -1, -1],
 ];
 
-fn dot(gradient: [i32; 3], point: [f32; 3]) -> f32 {
-    gradient[0] as f32 * point[0] + gradient[1] as f32 * point[1] + gradient[2] as f32 * point[2]
+/// [`GRADIENTS`] as floats, so a dot product needs no conversions: every
+/// component is -1, 0 or 1, which a float holds exactly.
+const PERLIN_GRADIENTS: [[f32; 3]; 16] = {
+    let mut out = [[0.0; 3]; 16];
+    let mut i = 0;
+    while i < 16 {
+        out[i] = [
+            GRADIENTS[i][0] as f32,
+            GRADIENTS[i][1] as f32,
+            GRADIENTS[i][2] as f32,
+        ];
+        i += 1;
+    }
+    out
+};
+
+fn dot(gradient: [f32; 3], point: [f32; 3]) -> f32 {
+    gradient[0] * point[0] + gradient[1] * point[1] + gradient[2] * point[2]
 }
 
 /// Vanilla's periodic coordinate reduction with the normal Far Lands flag off.

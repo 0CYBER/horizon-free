@@ -69,6 +69,16 @@ def cases(count):
                     'history': rng.sample(HISTORY, rng.randint(0, len(HISTORY))), 'autoSuggest': rng.random() < 0.85,
                     'chatOnly': rng.random() < 0.7, 'opacity': rng.choice([0.0, 0.5, 1.0]), 'actions': actions,
                     'mouse': list(mouse), 'blink': rng.choice([0, 100, 400, 650])})
+    # Always exercise registry-backed suggestions and their replacement ranges,
+    # before and after Tab, including the redirect through execute's root.
+    for text in ['/give @s diamond_sw', '/setblock ~ ~ ~ sto', '/fill ~ ~ ~ ~1 ~1 ~1 sto',
+                 '/setblock ~ ~ ~ oak_stairs[fa', '/clear @s diamond_sw',
+                 '/execute run give @s diamond_sw', '/fill ']:
+        for keys in [[], ['tab'], ['tab', 'tab', 'shift+tab']]:
+            out.append({'width': 640, 'height': 360, 'initial': '', 'history': [], 'autoSuggest': True,
+                        'chatOnly': True, 'opacity': 0.5, 'mouse': [0, 0], 'blink': 0,
+                        'actions': [{'type': 'type', 'text': text}]
+                                   + [{'type': 'key', 'key': key} for key in keys]})
     return out
 
 

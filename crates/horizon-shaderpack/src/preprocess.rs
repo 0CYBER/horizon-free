@@ -6,8 +6,9 @@
 use crate::include::Inlined;
 use pp_rs::{
     pp::Preprocessor,
-    token::{Punct, TokenValue},
+    token::{PreprocessorError, Punct, TokenValue},
 };
+use std::collections::HashMap;
 
 /// The version of Minecraft packs are told they run on (`MC_VERSION`,
 /// Iris's `formatVersionString("26.3")`).
@@ -286,14 +287,176 @@ fn mark_comments(text: &str) -> (String, Vec<String>) {
     (out, comments)
 }
 
+/// Whether trimmed `line` is an `#if` or `#elif` directive.
+pub(crate) fn is_condition(line: &str) -> bool {
+    line.strip_prefix('#')
+        .map(str::trim_start)
+        .and_then(|d| d.strip_prefix("elif").or_else(|| d.strip_prefix("if")))
+        .is_some_and(|r| !r.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_'))
+}
+
+/// Whether `word` is a float literal.
+pub(crate) fn is_float(word: &str) -> bool {
+    word.starts_with(|c: char| c.is_ascii_digit() || c == '.')
+        && !word.starts_with("0x")
+        && !word.starts_with("0X")
+        && word.contains(['.', 'e', 'E'])
+}
+
+/// What JCPP's `#if` makes of a number (`Preprocessor.expr` takes
+/// `NumericValue.longValue`): a float counts as its integer part, so
+/// `0.75` is 0 and `1.5e1` is 10. `None` for a non-number.
+pub(crate) fn jcpp_integer(number: &str) -> Option<i64> {
+    let number = number.trim_end_matches(['f', 'F', 'l', 'L', 'u', 'U']);
+    let (mantissa, exponent) = match number.find(['e', 'E']) {
+        Some(i) => (&number[..i], number[i + 1..].parse::<i32>().ok()?),
+        None => (number, 0),
+    };
+    let integer = mantissa.split('.').next()?;
+    let value = if integer.is_empty() {
+        0
+    } else {
+        integer.parse::<i64>().ok()?
+    };
+    Some((value as f64 * 10f64.powi(exponent)) as i64)
+}
+
+/// `line` with each word (identifier or number, with an exponent's sign:
+/// `1e-3`) replaced by what `f` returns for it, if anything. The directive's
+/// name and the names after `defined` are kept.
+pub(crate) fn rewrite_condition(line: &str, f: impl Fn(&str) -> Option<String>) -> String {
+    let mut out = String::with_capacity(line.len());
+    let (mut rest, mut first, mut after_defined) = (line, true, false);
+    while let Some(c) = rest.chars().next() {
+        if !(c.is_ascii_alphanumeric() || c == '_' || c == '.') {
+            if !c.is_whitespace() && c != '(' && c != '#' {
+                after_defined = false;
+            }
+            out.push(c);
+            rest = &rest[c.len_utf8()..];
+            continue;
+        }
+        let bytes = rest.as_bytes();
+        let mut len = 0;
+        while let Some(&b) = bytes.get(len) {
+            let sign = (b == b'+' || b == b'-')
+                && bytes[0].is_ascii_digit()
+                && matches!(bytes[len - 1], b'e' | b'E');
+            if !(b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || sign) {
+                break;
+            }
+            len += 1;
+        }
+        let word = &rest[..len];
+        let kept = first || after_defined;
+        match (!kept).then(|| f(word)).flatten() {
+            Some(replacement) => out.push_str(&replacement),
+            None => out.push_str(word),
+        }
+        after_defined = word == "defined";
+        first = false;
+        rest = &rest[len..];
+    }
+    out
+}
+
+/// Make pp-rs read `text` as JCPP, Iris's preprocessor, does:
+/// - a `#define` replaces an earlier macro (`Preprocessor.addMacro`; Bloop
+///   and Steadfast redefine theirs), where pp-rs refuses a different
+///   redefinition: an `#undef` line goes before every `#define`;
+/// - in `#if`/`#elif`, a float counts as its integer part, and so does a
+///   macro always defined as the same float (an option: `#define LEVEL 0.5`);
+///   a macro always defined empty (Iris's `MC_GL_VENDOR_OTHER`, Bloop's
+///   `#define TAA_USE_YCOCG`) counts as 0: JCPP reports the missing operand
+///   and goes on with 0. pp-rs stops on both;
+/// - `#error "..."` (Photon's guard in programs it disables) lexes: pp-rs
+///   has no string tokens and fails on the quote, even in a skipped block.
+///
+/// Returns the text and the added lines' 1-based numbers in it.
+fn jcpp_compatible(text: &str, env: &Environment) -> (String, Vec<u32>) {
+    // A `#define` line's name and body.
+    let define = |l: &str| {
+        let rest = l
+            .trim_start()
+            .strip_prefix('#')?
+            .trim_start()
+            .strip_prefix("define")
+            .filter(|rest| rest.starts_with([' ', '\t']))?
+            .trim_start();
+        let end = rest
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(rest.len());
+        let (name, body) = rest.split_at(end);
+        let body = body.split("//").next().unwrap_or("").trim();
+        (!name.is_empty()).then(|| (name.to_owned(), body.to_owned()))
+    };
+    // Each macro's body, if every definition has the same one.
+    let mut bodies: HashMap<String, Option<String>> = HashMap::new();
+    let definitions = env
+        .defines
+        .iter()
+        .cloned()
+        .chain(text.lines().filter_map(define));
+    for (name, body) in definitions {
+        bodies
+            .entry(name)
+            .and_modify(|b| {
+                if b.as_ref() != Some(&body) {
+                    *b = None;
+                }
+            })
+            .or_insert(Some(body));
+    }
+    let number = |word: &str| -> Option<String> {
+        let word = match bodies.get(word) {
+            Some(Some(body)) if body.is_empty() => return Some("0".into()),
+            Some(Some(body)) => body.as_str(),
+            Some(None) => return None,
+            None => word,
+        };
+        is_float(word)
+            .then(|| jcpp_integer(word))
+            .flatten()
+            .map(|n| n.to_string())
+    };
+    let mut out = String::with_capacity(text.len() + text.len() / 16);
+    let mut added = Vec::new();
+    let (mut line, mut continued) = (1, false);
+    for l in text.split_inclusive('\n') {
+        if !continued && let Some((name, _)) = define(l) {
+            out.push_str(&format!("#undef {name}\n"));
+            added.push(line);
+            line += 1;
+        }
+        let directive = l.trim_start().strip_prefix('#').map(str::trim_start);
+        if !continued
+            && directive.is_some_and(|d| d.starts_with("error") || d.starts_with("warning"))
+        {
+            out.push_str(&l.replace(['"', '\''], ""));
+        } else if !continued && is_condition(l.trim_start()) {
+            out.push_str(&rewrite_condition(l, number));
+        } else {
+            out.push_str(l);
+        }
+        continued = l.trim_end().ends_with('\\');
+        line += 1;
+    }
+    (out, added)
+}
+
 /// Expand `source` with `env`'s macros. Errors name the file and line.
 pub fn preprocess(source: &Inlined, env: &Environment) -> Result<Preprocessed, String> {
     let (marked, comments) = mark_comments(&source.text);
-    let text = &marked;
+    let (text, added) = jcpp_compatible(&marked, env);
+    let text = &text;
     let line_starts: Vec<usize> = std::iter::once(0)
         .chain(text.match_indices('\n').map(|(i, _)| i + 1))
         .collect();
-    let line_of = |offset: u32| line_starts.partition_point(|&s| s <= offset as usize) as u32;
+    // Lines of the source: the added `#undef` lines don't count.
+    let line_of = |offset: u32| {
+        let line = line_starts.partition_point(|&s| s <= offset as usize) as u32;
+        line - added.partition_point(|&a| a < line) as u32
+    };
     let mut pp = Preprocessor::new(text);
     for (name, value) in &env.defines {
         pp.add_define(name, value)
@@ -307,8 +470,15 @@ pub fn preprocess(source: &Inlined, env: &Environment) -> Result<Preprocessed, S
     };
     let mut line = 1;
     for item in pp {
-        let token =
-            item.map_err(|(e, at)| format!("{}: {e:?}", source.locate(line_of(at.start))))?;
+        let token = match item {
+            // JCPP lets an `#if` run to the end of the input (Bloop's
+            // taa.fsh never closes its `#ifdef TAA`); pp-rs says so there,
+            // after the last token.
+            Err((PreprocessorError::UnfinishedBlock, _)) => break,
+            item => {
+                item.map_err(|(e, at)| format!("{}: {e:?}", source.locate(line_of(at.start))))?
+            }
+        };
         let at = line_of(token.location.start);
         let piece = match token.value {
             TokenValue::Version(v) => {

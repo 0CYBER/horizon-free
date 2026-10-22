@@ -585,6 +585,10 @@ impl Game<'_> {
                 (false, false) => (0.5, 1.975),
             };
             let edge = (width + height + width) / 3.0 * 4.0;
+            // 26.3 compares the size with RenderSystem.DEFAULT_DEPTH_CLEAR_VALUE,
+            // which is 0.0 (reverse Z; the bytecode is `dconst_0`): an empty
+            // marker box falls back to 4, so a visible marker stand draws.
+            // Holograms stay hidden through the invisible flag instead.
             let range = if edge == 0.0 { 4.0 } else { edge } * 64.0;
             let dragon = a.equipment[5]
                 .as_ref()
@@ -869,9 +873,15 @@ impl Game<'_> {
                     self.dim == super::Dim::Nether,
                 )),
             };
+            let profile = stack
+                .extra
+                .as_deref()
+                .and_then(|d| d.other.iter().find(|(k, _)| k == "minecraft:profile"))
+                .map(|(_, t)| horizon_client::scoreboard::tag_to_json(t))
+                .unwrap_or(serde_json::Value::Null);
             self.pack.item_renderer.submit_special(
                 &special,
-                &serde_json::Value::Null,
+                &profile,
                 false,
                 pose,
                 &self.gui.atlas.sprites,

@@ -8,6 +8,7 @@ use horizon_client::{
     containers::Crafter,
     hud::{HudBatch, rgba},
 };
+use horizon_protocol::packets::play::{self, Serverbound as S};
 use serde_json::Value;
 
 /// `CrafterBlock`'s crafting animation length.
@@ -323,6 +324,15 @@ impl Game<'_> {
             menu.set_slot_state(i, enabled);
             Some(true)
         });
+        if let Some((container, _)) = self.remote.as_ref().and_then(|r| r.menu.clone()) {
+            self.send(S::ContainerSlotStateChanged(
+                play::ContainerSlotStateChanged {
+                    slot: i as i32,
+                    container,
+                    enabled,
+                },
+            ));
+        }
         let pitch = if enabled { 1.0 } else { 0.75 };
         self.audio
             .play("minecraft:ui.button.click", None, 0.4, pitch);

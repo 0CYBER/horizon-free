@@ -49,10 +49,16 @@ pub(super) struct GuestPlay {
     /// Swings the guest's actions started this tick, for the players around
     /// (`LivingEntity.swing` sends ClientboundSwingAnimationPacket).
     swings: u32,
+    /// The guest's riding jump charge (`LocalPlayer.jumpRidingTicks`).
+    mount: super::mounts::MountState,
     /// The trading screen the guest has open.
     pub(super) merchant: Option<super::lan_trading::GuestMerchant>,
     /// The inventory menu and the crafting table the guest crafts in.
     pub(super) crafting: super::lan_crafting::GuestCrafting,
+    /// The workstation menu the guest has open (game/lan_stations.rs).
+    pub(super) station: Option<super::lan_stations::GuestStation>,
+    /// The lectern the guest reads (game/lan_stations.rs).
+    pub(super) lectern: Option<super::lan_stations::GuestLectern>,
     /// What the guest's body was given for its effects and enchantments.
     potions: super::potions::BodyPotions,
     /// `ServerPlayer.getStats` and the inventory `inventory_changed` last saw.
@@ -285,10 +291,12 @@ impl Game<'_> {
         let attack_ticks = std::mem::replace(&mut self.attack_ticks, play.attack_ticks);
         let attack_item = std::mem::replace(&mut self.attack_item, play.attack_item.take());
         let swing = std::mem::replace(&mut self.swing, play.swing);
+        std::mem::swap(&mut self.mount, &mut play.mount);
         let (left, right) = (self.left, self.right);
         self.left = play.digging.is_some();
         self.right = play.using.is_some() || self.using.is_some();
-        let riding = self.riding.take();
+        // The guest's vehicle (Entity.vehicle) for its turn.
+        let riding = std::mem::replace(&mut self.riding, g.vehicle);
         let host_station = self.station.take();
         // The guest's bed, sleep counter and respawn point; the host's
         // respawn point, anchor and action bar stay theirs.
@@ -463,7 +471,7 @@ impl Game<'_> {
         (self.respawn_config, self.level.spawn) = respawn;
         // ServerPlayer.displayClientMessage(_, true): the guest's action bar.
         let guest_message = std::mem::replace(&mut self.message, message);
-        self.riding = riding;
+        let guest_vehicle = std::mem::replace(&mut self.riding, riding);
         self.left = left;
         self.right = right;
         play.mining = std::mem::replace(&mut self.mining, mining);
@@ -473,14 +481,26 @@ impl Game<'_> {
         play.attack_ticks = std::mem::replace(&mut self.attack_ticks, attack_ticks);
         play.attack_item = std::mem::replace(&mut self.attack_item, attack_item);
         play.swing = std::mem::replace(&mut self.swing, swing);
+        std::mem::swap(&mut self.mount, &mut play.mount);
         self.container = container;
         self.screen = screen;
         self.sign_edit = host_sign;
-        self.book = host_book;
+        // A lectern the guest's use opened (LecternBlock.openScreen).
+        let guest_lectern = match std::mem::replace(&mut self.book, host_book) {
+            Some(super::books::BookScreen::View {
+                lectern: Some(key), ..
+            }) => Some(key),
+            _ => None,
+        };
         self.command_block_screen = host_command_block;
         self.mount_menu = host_mount_menu;
         self.keys = host_keys;
         let g = &mut host.hub.guests[i];
+        let left_vehicle = g.vehicle.filter(|_| guest_vehicle.is_none());
+        if guest_vehicle.is_none() {
+            g.vehicle_good = None;
+        }
+        g.vehicle = guest_vehicle;
         let fell_asleep = bed.is_some() && g.bed.is_none();
         (g.bed, g.sleep_timer, g.spawn) = (bed, guest_sleep_timer, guest_spawn);
         g.sleeping = g.bed.is_some();
@@ -532,12 +552,31 @@ impl Game<'_> {
             g.health = m.health.health();
             g.food = m.health.food.food;
             g.saturation = m.health.food.saturation;
-            // A teleport (commands) moves the guest.
+            // A teleport (commands, a pearl) moves the guest; a pearl's is
+            // sent even to where they stand (ServerPlayer.teleport).
             let at = [m.position.x, m.position.y, m.position.z];
             m.sprinting = false;
+            let teleported = std::mem::take(&mut m.teleported);
             let moved: f64 = (0..3).map(|k| (at[k] - g.position[k]).powi(2)).sum();
             g.motion = Some(Box::new(m));
-            if moved > 0.0001 || turned {
+            // Entity.teleportTo takes a rider out of its vehicle.
+            let left_vehicle = match g.vehicle.filter(|_| teleported) {
+                Some(v) => {
+                    (g.vehicle, g.vehicle_good) = (None, None);
+                    Some(v)
+                }
+                None => left_vehicle,
+            };
+            // ServerPlayer.dismountTo: the client hears it is out of the
+            // vehicle before the teleport beside it. A rider sits where its
+            // vehicle puts it (lan_vehicles.rs), with no teleport.
+            if let Some(vehicle) = left_vehicle {
+                g.send(&C::SetPassengers(play::SetPassengers {
+                    vehicle: vehicle as i32,
+                    passengers: Vec::new(),
+                }));
+            }
+            if g.vehicle.is_none() && (moved > 0.0001 || turned || teleported) {
                 host.hub.teleport(i, Some(at));
             }
         }
@@ -570,6 +609,9 @@ impl Game<'_> {
         }
         if let Some(station) = opened_station {
             self.lan_station_opened(host, conn, station);
+        }
+        if let Some(key) = guest_lectern {
+            self.lan_open_lectern(host, conn, key);
         }
         if opened_table {
             self.lan_open_crafting(host, conn);
@@ -637,6 +679,13 @@ impl Game<'_> {
                 _ => ("minecraft:furnace", "container.furnace"),
             };
             (menu, title, Slots::Block(pos))
+        } else if let Some(BlockEntity::Crafter(_)) = self.world.block_entities.get(&pos) {
+            // CrafterBlock.useWithoutItem: CrafterMenu over the block entity.
+            (
+                "minecraft:crafter_3x3",
+                "container.crafter",
+                Slots::Block(pos),
+            )
         } else if let Some(BlockEntity::Brewing(_)) = self.world.block_entities.get(&pos) {
             // BrewingStandBlock.useWithoutItem: BrewingStandMenu.
             (
@@ -679,6 +728,7 @@ impl Game<'_> {
         };
         // ServerPlayer.openMenu closes the menu that was open.
         self.guest_container_closed(host, conn);
+        self.lan_station_closed(host, conn, None);
         host.hub.open_container(
             conn,
             menu,
@@ -877,16 +927,22 @@ impl Game<'_> {
             }
             S::Attack(p) => self.guest_attack(host, conn, p.id),
             S::Interact(p) => {
-                if let Some((position, eye)) = self.look_at_entity(host, gi, p.id) {
-                    let _ = (position, eye);
+                let before = host.hub.guests[gi].vehicle;
+                if self
+                    .look_at_entity(host, gi, p.id, Some(p.location))
+                    .is_some()
+                {
                     let swung = self.as_guest(host, conn, |g| {
                         let swings = g.swings_started;
                         let _ = g.use_item();
                         g.swings_started != swings
                     });
                     self.lan_swing_back(host, conn, swung);
+                    self.guest_boarded(host, conn, before);
                 }
             }
+            S::MoveVehicle(p) => self.guest_move_vehicle(host, conn, &p),
+            S::PaddleBoat(p) => self.guest_paddle_boat(host, conn, [p.left, p.right]),
             S::SetCreativeModeSlot(p) => {
                 let g = &mut host.hub.guests[gi];
                 if !g.creative() || !(0..46).contains(&p.slot) {
@@ -913,6 +969,16 @@ impl Game<'_> {
             S::ContainerClick(p) if self.lan_inventory_click(host, conn, &p) => {}
             S::ContainerClick(p) if self.lan_crafting_click(host, conn, &p) => {}
             S::ContainerClick(p) if self.lan_machine_click(host, conn, &p) => {}
+            S::ContainerClick(p) if self.lan_station_click(host, conn, &p) => {}
+            S::ContainerClick(p) if self.lan_lectern_click(host, conn, &p) => {}
+            S::ContainerButtonClick(p) => {
+                self.lan_station_button(host, conn, p.container, p.button);
+            }
+            S::RenameItem(p) => self.lan_station_rename(host, conn, &p.name),
+            S::ContainerSlotStateChanged(p) => {
+                self.lan_crafter_slot_state(host, conn, p.container, p.slot, p.enabled);
+            }
+            S::SetBeacon(p) => self.lan_station_beacon(host, conn, p.primary, p.secondary),
             S::SelectTrade(p) => self.lan_select_trade(host, conn, p.item),
             S::ContainerClose(p) if self.lan_merchant_closed(host, conn, Some(p.container)) => {
                 let g = &mut host.hub.guests[gi];
@@ -920,7 +986,10 @@ impl Game<'_> {
                     self.drop_guest_items(host, gi, vec![c]);
                 }
             }
-            S::ContainerClose(p) if self.lan_crafting_closed(host, conn, Some(p.container)) => {
+            S::ContainerClose(p)
+                if self.lan_crafting_closed(host, conn, Some(p.container))
+                    || self.lan_station_closed(host, conn, Some(p.container)) =>
+            {
                 let g = &mut host.hub.guests[gi];
                 if let Some(c) = g.carried.take() {
                     self.drop_guest_items(host, gi, vec![c]);
@@ -1111,19 +1180,39 @@ impl Game<'_> {
         }
     }
 
-    /// Aim the swapped-in player at an entity; returns its centre and the eye.
+    /// Aim the swapped-in player at an entity; returns where it aims and the
+    /// eye. A boat, minecart, armor stand, item frame or painting is aimed at
+    /// the point the client hit (the interact packet's location) when that
+    /// is on it, else at its centre.
     fn look_at_entity(
         &mut self,
         host: &mut LanHost,
         gi: usize,
         id: i32,
+        location: Option<[f64; 3]>,
     ) -> Option<([f64; 3], [f64; 3])> {
+        let object = || {
+            let (lo, hi, origin) = self.object_target(id)?;
+            let middle = [0, 1, 2].map(|k| (lo[k] + hi[k]) / 2.0);
+            let Some(l) = location else {
+                return Some(middle);
+            };
+            let point = [0, 1, 2].map(|k| origin[k] + l[k]);
+            // A little inside the box, so the ray from the eye meets it.
+            let inside = [0, 1, 2].map(|k| {
+                let margin = ((hi[k] - lo[k]) / 2.0).min(0.01);
+                point[k].clamp(lo[k] + margin, hi[k] - margin)
+            });
+            let on = (0..3).all(|k| (point[k] - inside[k]).abs() < 0.1);
+            Some(if on { inside } else { middle })
+        };
         let centre = match self.mobs.iter().find(|m| m.id as i32 == id) {
             Some(m) => [
                 m.position.x,
                 m.position.y + m.kind.height * 0.5,
                 m.position.z,
             ],
+            None if self.object_target(id).is_some() => object()?,
             // A dragon part or an end crystal (game/dragon.rs).
             None => {
                 let b = self.tracked_special_box(id)?;
@@ -1174,7 +1263,7 @@ impl Game<'_> {
             return;
         }
         let (old_yaw, old_pitch) = (host.hub.guests[gi].yaw, host.hub.guests[gi].pitch);
-        if self.look_at_entity(host, gi, id).is_none() {
+        if self.look_at_entity(host, gi, id, None).is_none() {
             return;
         }
         self.as_guest(host, conn, |g| {
@@ -1438,6 +1527,7 @@ impl Game<'_> {
     /// Per tick, for every guest: dig, use items, pick up drops, die.
     pub(super) fn tick_guests(&mut self, host: &mut LanHost) {
         self.lan_merchant_tick(host);
+        self.lan_stations_tick(host);
         self.announce_guest_advancements(host);
         let conns: Vec<u32> = host
             .hub
@@ -1639,6 +1729,7 @@ impl Game<'_> {
     /// regeneration and the food tick (ServerPlayer.doTick). Their hurt
     /// sounds are heard at the guest.
     fn guest_server_tick(&mut self, host: &mut LanHost, conn: u32) {
+        self.guest_vehicle_tick(host, conn);
         let Some(g) = host.hub.guest_mut(conn) else {
             return;
         };
@@ -1692,6 +1783,13 @@ impl Game<'_> {
                 if landed.is_err() {
                     break;
                 }
+            }
+            // A ServerPlayer travels on the server too
+            // (MoveSimulationType.AUTHORITATIVE_SIDE_AND_SERVER), so every tick
+            // on a ladder or vine LivingEntity.handleOnClimbable resets its fall
+            // distance: climbing down doesn't hurt where it lands (#1255).
+            if w.climbable().unwrap_or(false) {
+                w.player.fall_distance = 0.0;
             }
             let _ = w.tick_environment_damage();
             let _ = w.apply_fire_contact();

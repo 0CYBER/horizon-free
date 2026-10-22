@@ -68,6 +68,14 @@ IGNORED = {
     # differently (no worldgen heightmaps, entities in entities/) is accepted.
     r'^chunk\.promoted\.(Status|Heightmaps\.(OCEAN_FLOOR_WG|WORLD_SURFACE_WG)|entities)$':
         'a proto chunk vanilla left at its view distance, finished by Horizon',
+    # Single player's server thread sends the chunks its player tracks (view distance 6
+    # and its outer ring), as vanilla's integrated server does, so it finishes some that
+    # vanilla's server (view distance 4) left before their terrain: those had no blocks,
+    # light or heightmaps to compare yet.
+    r'^chunk\.blank\.':
+        'a chunk vanilla left before its terrain (no blocks yet), finished by Horizon',
+    r'^chunk\.unlit\.':
+        'a chunk vanilla left before its light, finished (and lit) by Horizon',
     # Horizon keeps simulating between loading and saving (it needs a few seconds of
     # chunk generation first), so counters and positions of live things move on.
     r'^chunk\.block_entities\.\(2, -60, 5\)\.(cooking_time_spent|lit_time_remaining|Items\[\]\.count)$':
@@ -464,6 +472,13 @@ def normalize_chunk(root):
     return out, sections
 
 
+# ChunkStatus before NOISE: nothing has filled the chunk's blocks yet.
+BLANK_STATUSES = {'minecraft:empty', 'minecraft:structure_starts', 'minecraft:structure_references',
+                  'minecraft:biomes'}
+# ChunkStatus LIGHT and later: the chunk's light is saved.
+LIT_STATUSES = {'minecraft:light', 'minecraft:spawn', 'minecraft:full'}
+
+
 def compare_chunks(vanilla, horizon, report):
     for key in sorted(set(vanilla) | set(horizon)):
         if key not in horizon:
@@ -476,9 +491,10 @@ def compare_chunks(vanilla, horizon, report):
         ha, hs = normalize_chunk(horizon[key])
         out = []
         diff(va, ha, 'chunk', out)
-        if va.get('Status') != 'minecraft:full' and ha.get('Status') == 'minecraft:full':
-            promoted = re.compile(r'^chunk\.(Status|Heightmaps\.\w+_WG|entities)$')
-            out = [(path.replace('chunk.', 'chunk.promoted.', 1) if promoted.match(path) else path, p, q)
+        promoted = va.get('Status') != 'minecraft:full' and ha.get('Status') == 'minecraft:full'
+        if promoted:
+            rule = re.compile(r'^chunk\.(Status|Heightmaps\.\w+_WG|entities)$')
+            out = [(path.replace('chunk.', 'chunk.promoted.', 1) if rule.match(path) else path, p, q)
                    for path, p, q in out]
         for y in sorted(set(vs) | set(hs)):
             empty = {'blocks': ['minecraft:air'] * 4096, 'biomes': None, 'BlockLight': None, 'SkyLight': None}
@@ -493,6 +509,16 @@ def compare_chunks(vanilla, horizon, report):
                 if a[light] != b[light]:
                     out.append((f'chunk.sections.{light}[{y}]', None if a[light] is None else 'present',
                                 None if b[light] is None else 'present'))
+        # Before its terrain a chunk has no blocks, light or heightmaps yet.
+        if promoted and va.get('Status') in BLANK_STATUSES:
+            blank = re.compile(r'^chunk\.(Heightmaps|sections)\.')
+            out = [(path.replace('chunk.', 'chunk.blank.', 1) if blank.match(path) else path, p, q)
+                   for path, p, q in out]
+        # Before its light step a chunk saves no light; Horizon lights what it finishes.
+        elif promoted and va.get('Status') not in LIT_STATUSES:
+            unlit = re.compile(r'^chunk\.sections\.(SkyLight|BlockLight)\[')
+            out = [(path.replace('chunk.', 'chunk.unlit.', 1) if unlit.match(path) else path, p, q)
+                   for path, p, q in out]
         for path, p, q in out:
             report.append((f'{path} @{key}', p, q))
 
