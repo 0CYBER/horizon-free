@@ -45,6 +45,7 @@ jobs:
     outputs:
       release: ${{ steps.decide.outputs.release }}
       tag: ${{ steps.decide.outputs.tag }}
+      version: ${{ steps.decide.outputs.version }}
       head: ${{ steps.decide.outputs.head }}
       dry_run: ${{ steps.mode.outputs.dry_run }}
     steps:
@@ -65,6 +66,9 @@ jobs:
         run: |
           python3 tools/release_train.py decide --kind game ${HEAD_SHA:+--head "$HEAD_SHA"} ${FORCE:+--force} | tee decision.json
           echo "### $(jq -r '.reason' decision.json)" >> "$GITHUB_STEP_SUMMARY"
+          # The version the programs are built with (docs/versioning.md): the tag without its v.
+          tag=$(jq -r '.tag' decision.json)
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
           # A dry run builds whatever the decision, to test the builds.
           if [[ "${{ steps.mode.outputs.dry_run }}" == true ]]; then echo "release=true" >> "$GITHUB_OUTPUT"; fi
 
@@ -99,6 +103,9 @@ jobs:
     timeout-minutes: ${{ matrix.mac && 60 || 40 }}
     env:
       RUSTFLAGS: ${{ matrix.rustflags }}
+      # The release's version, built in (horizon_core::release): --version, user agents, crash reports and
+      # telemetry say it. No version-bump commits.
+      HORIZON_VERSION: ${{ needs.decide.outputs.version }}
     defaults:
       run:
         shell: bash
@@ -162,9 +169,13 @@ jobs:
           bin=target/release
           "$bin/horizon-client${{ matrix.exe }}" --help | grep -q -- '--resources'
           "$bin/horizon-ctl${{ matrix.exe }}" --help > /dev/null
-          "$bin/horizon-prepare${{ matrix.exe }}" --version
           "$bin/horizon-prepare${{ matrix.exe }}" --help | grep -q -- '--minecraft-dir'
-          "$bin/horizon-server${{ matrix.exe }}" --version
+          # The version is the release's.
+          for binary in horizon-prepare horizon-server; do
+            out=$("$bin/$binary${{ matrix.exe }}" --version | tr -d '\r')
+            echo "$out"
+            [[ "$out" == "$binary $HORIZON_VERSION" ]] || { echo "::error::expected $binary $HORIZON_VERSION"; exit 1; }
+          done
       - name: Tools from the runner
         if: runner.environment == 'self-hosted'
         run: bash tools/ci/runner-env.sh
@@ -245,7 +256,7 @@ jobs:
           folder="dist/${{ matrix.server_dir }}"
           python3 tools/check_imports.py --server "$folder/horizon-engine" "$folder/horizon-server" "$folder/horizon-prepare"
           "$folder/horizon-engine" --help | grep -q -- '--resources'
-          "$folder/horizon-server" --version
+          [[ "$("$folder/horizon-server" --version)" == "horizon-server $HORIZON_VERSION" ]]
           cd dist
           rm -f "${{ matrix.server_asset }}"
           tar czf "${{ matrix.server_asset }}" "${{ matrix.server_dir }}"

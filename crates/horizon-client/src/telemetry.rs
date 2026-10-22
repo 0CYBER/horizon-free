@@ -75,7 +75,7 @@ pub fn system() -> System {
     system
 }
 
-/// The release (`v2026.10.15`), or the client's crate version for a build from source.
+/// The release (`v0.2.3`), or the client's crate version for a build from source.
 pub fn version() -> String {
     crate::crash::release_tag().unwrap_or_else(|| format!("dev {}", env!("CARGO_PKG_VERSION")))
 }
