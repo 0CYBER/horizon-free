@@ -2,17 +2,17 @@
 
 ## Settings
 
-In the Horizon menu style, the Options screen's **Video** section holds the graphics settings, with a Simple / Advanced switch at the top (remembered between sessions):
+Horizon's graphics settings are two screens built from vanilla's widgets, opened from the top of **Video Settings** (**Horizon Graphics...** and **Advanced Graphics...**, beside **Shader Packs...**, where Sodium and Iris put theirs) or from **Options → Horizon Settings...**:
 
-- **Simple**: a preset (Performance, Balanced, Quality, Ultra or Custom), render distance, LOD distance, FOV, max framerate, VSync and GUI scale.
-- **Advanced**: every setting, grouped under Rendering, Quality, Display, Preferences, Performance and Overlay.
+- **Graphics** (Simple): a preset (Performance, Balanced, Quality, Ultra or Custom) and LOD distance.
+- **Advanced Graphics**: every Horizon setting, grouped under Rendering, Quality, Display, Preferences, Performance and Overlay.
 
-In the Classic style, Video Settings starts with two buttons opening the same settings as vanilla-looking screens.
+Vanilla's own settings (render distance, FOV, framerate, VSync, GUI scale, smooth lighting...) stay where vanilla has them, in Video Settings; both screens leave them out.
 
 Every row has a one-line description and its cost in frame time (none, low, medium, high, or saves time for culling that makes frames faster), and applies at once, except worker threads, which apply at the next start. A preset sets the quality settings together; changing one of them turns it into Custom. Display preferences (FOV, framerate, VSync, GUI scale, fullscreen, present mode, pacing) leave the preset as it is.
 
-![Simple](media/settings-simple.png)
-![Advanced](media/settings-advanced.png)
+![Video Settings, with Horizon's buttons at the top](media/settings-simple.png)
+![Advanced Graphics](media/settings-advanced.png)
 
 | Group | Setting | Stored in |
 | --- | --- | --- |
@@ -29,7 +29,7 @@ Every row has a one-line description and its cost in frame time (none, low, medi
 
 **Battery mode** (Performance, off by default) is for laptops and handhelds: at most 60 frames per second in a world, 30 in menus without a world or while another window has focus, and half the automatic worker threads (chunks load slower). It changes only when frames are drawn: what they show and the game's 20 ticks per second stay as they are.
 
-Which settings each level shows, their descriptions and costs are in `crates/horizon-client/src/graphics_ui.rs` (`rows`); the Horizon shell draws them in `options_horizon.rs` with `ui_theme::described_row`, and the Classic screens use `graphics_style.rs`.
+Which settings each screen shows, their descriptions and costs are in `crates/horizon-client/src/graphics_ui.rs` (`rows`); `graphics_style.rs` draws them.
 
 ## Distant terrain
 

@@ -119,7 +119,7 @@ game accepts, test hooks included.
   `place X Y Z [--item ITEM]`, `interact X Y Z` (doors, chests, crafting
   tables), `use-item [--hold S]` (eat, drink, throw), `select SLOT|ITEM`, `drop`.
 - **Widgets:** `ui` lists every widget of the open screen (title menus, pause,
-  options pages in both menu styles, inventories and menus): an id, its kind
+  options pages, inventories and menus): an id, its kind
   (`button`, `slider` with its 0..1 `value`, `field`, `row`, `tab` with
   `selected`, `slot` with its stack), the label and its bounds. Ids come from
   labels (`FOV: 70` is `fov`, `Video Settings...` is `video-settings`, a
@@ -144,7 +144,7 @@ game accepts, test hooks included.
 - **Screens:** `open-inventory`, `click-slot SLOT [right] [shift]` (0-8 hotbar,
   9-35 inventory, 100+ crafting grid, 200 result, 300+ containers, 500-503
   armor, 504 offhand, 600+ stations), `close`, `click-button LABEL` (any
-  button of any screen or title menu, classic or Horizon style, by its label),
+  button of any screen or title menu, by its label),
   `click-at X Y`, `type TEXT` (on the create-world screen `--field name|seed
   --replace`), `chat`, `command`, `respawn`, `pause`, `resume`.
 - **World:** `tp`, `give`, `time`, `setblock`, `summon`, `wait TICKS`, and the

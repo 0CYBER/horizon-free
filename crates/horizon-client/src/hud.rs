@@ -30,8 +30,10 @@ pub struct HudAtlas {
 }
 /// Atlas rows reserved for glyphs rasterized at run time.
 pub const GLYPH_ROWS: u32 = 512;
-/// 128x128 atlas slots for map textures.
-pub const MAP_SLOTS: usize = 16;
+/// 128x128 atlas slots for map textures. A lobby paints its signs as walls of
+/// framed maps, so the pool holds a wall; too few slots re-upload every map
+/// every frame. 26.3's `MapTextureManager` keeps a texture per map instead.
+pub const MAP_SLOTS: usize = 256;
 /// The atlas slot the minimap extra draws into.
 pub const MINIMAP_SPRITE: &str = "horizon/minimap";
 /// Atlas slots for downloaded player skins (`skins/<sha1>`), 64x64 each.
@@ -158,7 +160,7 @@ impl HudAtlas {
         )
     }
     /// Empty slots written at run time: map textures (game/maps.rs), the
-    /// minimap, downloaded skins, world icons and the Horizon menu text.
+    /// minimap, downloaded skins, world icons and the on-screen keyboard's text.
     fn slots(images: &mut Vec<PackedImage>) {
         for i in 0..MAP_SLOTS {
             images.push((format!("horizon/map{i}"), 128, 128, vec![0; 128 * 128 * 4]));
@@ -182,7 +184,7 @@ impl HudAtlas {
                 vec![0; 64 * 64 * 4],
             ));
         }
-        // Horizon-style menu text and corner masks (ui_theme), rasterized at run time.
+        // The on-screen keyboard's text and corner masks (ui_theme), rasterized at run time.
         images.push((
             "horizon/ui-text".into(),
             2048,
@@ -363,6 +365,8 @@ pub struct HudBatch {
     pub patches: Vec<crate::font::Patch>,
     /// Vertex ranges with another blend or depth/scissor state, in order.
     pub blends: Vec<(std::ops::Range<u32>, Blend)>,
+    /// Screen's first vertex: the preceding HUD is part of its blurred background.
+    pub blur_at: u32,
 }
 /// How a run of HUD vertices blends and tests depth.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -398,6 +402,7 @@ impl HudBatch {
             height: (window[1] as f32 / scale as f32).ceil(),
             patches: Vec::new(),
             blends: Vec::new(),
+            blur_at: 0,
         }
     }
     /// Draw the vertices added since `start` with the inverting blend.
@@ -449,6 +454,14 @@ impl HudBatch {
             out.push((at..end, Blend::Alpha));
         }
         out
+    }
+    fn runs_in(&self, vertices: std::ops::Range<u32>) -> Vec<(std::ops::Range<u32>, Blend)> {
+        let mut runs = self.runs();
+        for (range, _) in &mut runs {
+            *range = range.start.max(vertices.start)..range.end.min(vertices.end);
+        }
+        runs.retain(|(range, _)| !range.is_empty());
+        runs
     }
     /// `AbstractContainerScreen.init`: center in integer GUI coordinates.
     pub fn centered_origin(&self, width: f32, height: f32) -> (f32, f32) {
@@ -1078,7 +1091,26 @@ impl HudRenderer {
         batch: &HudBatch,
         size: [u32; 2],
     ) {
-        if batch.vertices.is_empty() || size.contains(&0) {
+        self.draw_range(
+            encoder,
+            target,
+            depth,
+            batch,
+            size,
+            0..batch.vertices.len() as u32,
+        );
+    }
+    /// Draw part of the prepared batch, preserving its blend/depth runs.
+    pub fn draw_range(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        batch: &HudBatch,
+        size: [u32; 2],
+        vertices: std::ops::Range<u32>,
+    ) {
+        if vertices.is_empty() || size.contains(&0) {
             return;
         }
         let attachments = [Some(wgpu::RenderPassColorAttachment {
@@ -1090,7 +1122,7 @@ impl HudRenderer {
                 store: wgpu::StoreOp::Store,
             },
         })];
-        let runs = batch.runs();
+        let runs = batch.runs_in(vertices);
         let mut at = 0;
         while at < runs.len() {
             let clip = match runs[at].1 {
@@ -1329,6 +1361,33 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn blur_boundary_splits_blend_runs_without_losing_or_repeating_vertices() {
+        let mut batch = HudBatch::new([854, 480]);
+        for _ in 0..5 {
+            batch.quad([[0.0; 2]; 4], [[0.0; 2]; 4], 0);
+        }
+        batch.blends = vec![
+            (6..18, Blend::Invert),
+            (18..24, Blend::Depth([0, 0, 10, 10])),
+        ];
+        for split in [0, 6, 12, 18, 24, 30] {
+            let before = batch.runs_in(0..split);
+            let after = batch.runs_in(split..30);
+            let actual: Vec<_> = before
+                .into_iter()
+                .chain(after)
+                .flat_map(|(range, blend)| range.map(move |v| (v, blend)))
+                .collect();
+            let expected: Vec<_> = batch
+                .runs()
+                .into_iter()
+                .flat_map(|(range, blend)| range.map(move |v| (v, blend)))
+                .collect();
+            assert_eq!(actual, expected, "blur at {split}");
+        }
+    }
     #[test]
     fn container_origins_use_java_integer_division() {
         // Odd scaled dimensions, odd image sizes and an oversized panel.
@@ -1340,6 +1399,7 @@ mod tests {
                 height: height as f32,
                 patches: Vec::new(),
                 blends: Vec::new(),
+                blur_at: 0,
             };
             for (image_width, image_height) in [(195, 136), (176, 166), (176, 222)] {
                 assert_eq!(

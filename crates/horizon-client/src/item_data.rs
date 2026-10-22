@@ -302,7 +302,10 @@ fn filterable_text(t: &Tag) -> Option<String> {
 fn read_text(t: &Tag) -> Option<String> {
     match t {
         Tag::String(s) => Some(s.to_string_lossy()),
-        Tag::Compound(_) => t.get("text").and_then(string),
+        // A component's root `text` may be empty with the visible words in
+        // `extra` (every legacy display name ViaVersion produces looks like
+        // this), so flatten the whole component instead of reading one key.
+        Tag::Compound(_) => Some(crate::entity_nbt::name_text(t).plain()),
         _ => None,
     }
 }
@@ -858,6 +861,26 @@ mod tests {
         assert_eq!(back.enchantment_level("minecraft:unbreaking"), 2);
         assert_eq!(back.repair_cost(), 3);
         assert_eq!(back.custom_name(), Some("Blade"));
+    }
+
+    #[test]
+    fn custom_name_reads_the_extra_spans() {
+        let name = Tag::compound([
+            (
+                "extra",
+                Tag::List(vec![
+                    Tag::compound([("text", Tag::String("Games ".into()))]),
+                    Tag::compound([("text", Tag::String("Right click".into()))]),
+                ]),
+            ),
+            ("text", Tag::String("".into())),
+        ]);
+        let components = Tag::compound([("minecraft:custom_name", name)]);
+        let (_, extra) = decode_components(Some(&components));
+        assert_eq!(
+            extra.and_then(|d| d.custom_name.clone()).as_deref(),
+            Some("Games Right click")
+        );
     }
 
     #[test]

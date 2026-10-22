@@ -104,7 +104,10 @@ pub fn body(m: &Mob) -> (String, String) {
         }
     };
     if &*m.kind.id == "minecraft:player" {
-        return ("main".into(), m.kind.texture.to_string());
+        return (
+            "main".into(),
+            m.skin.clone().unwrap_or_else(|| m.kind.texture.clone()),
+        );
     }
     match m.species() {
         S::Llama | S::TraderLlama => {

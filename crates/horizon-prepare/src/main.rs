@@ -62,6 +62,7 @@ fn main() -> ExitCode {
         import: false,
         minecraft_dir: None,
         server_jar: None,
+        java_home: None,
     };
     let mut root = None;
     let mut args = std::env::args_os().skip(1).peekable();
