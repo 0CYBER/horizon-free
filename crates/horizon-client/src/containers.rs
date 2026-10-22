@@ -528,7 +528,7 @@ impl Furnace {
         let has_fuel = self.items[1].is_some();
         if lit || has_fuel && has_ingredient {
             if let Some(ingredient) = self.items[0].clone() {
-                if let Some(recipe) = recipes.cook(self.kind.recipe_type(), &ingredient).cloned() {
+                if let Some(recipe) = recipes.cook(self.kind.recipe_type(), &ingredient) {
                     if self.cooking_timer == 0 {
                         self.cooking_total = total_time(recipe.time, self.speed);
                     }

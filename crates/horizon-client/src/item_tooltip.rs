@@ -486,8 +486,26 @@ pub fn lines(
     translate: &dyn Fn(&str) -> Option<String>,
 ) -> Vec<String> {
     let mut lines = vec![name_line(stack, translate)];
+    if TooltipDisplay::for_stack(stack).shows("minecraft:lore") {
+        lines.extend(lore_lines(stack));
+    }
     lines.extend(detail_lines(stack, info, translate));
     lines
+}
+
+/// `LoreComponent.addToTooltip`: the saved component lines, as plain text.
+fn lore_lines(stack: &ItemStack) -> Vec<String> {
+    let Some(Tag::List(entries)) = stack.data().and_then(|d| d.other("minecraft:lore")) else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .map(|entry| {
+            let json = crate::scoreboard::tag_to_json(entry);
+            let text = crate::component::to_text(&json, &mut |s| crate::text::Text::literal(s));
+            text.plain()
+        })
+        .collect()
 }
 
 #[cfg(test)]

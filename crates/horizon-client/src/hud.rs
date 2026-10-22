@@ -30,8 +30,10 @@ pub struct HudAtlas {
 }
 /// Atlas rows reserved for glyphs rasterized at run time.
 pub const GLYPH_ROWS: u32 = 512;
-/// 128x128 atlas slots for map textures.
-pub const MAP_SLOTS: usize = 16;
+/// 128x128 atlas slots for map textures. A lobby paints its signs as walls of
+/// framed maps, so the pool holds a wall; too few slots re-upload every map
+/// every frame. 26.3's `MapTextureManager` keeps a texture per map instead.
+pub const MAP_SLOTS: usize = 256;
 /// The atlas slot the minimap extra draws into.
 pub const MINIMAP_SPRITE: &str = "horizon/minimap";
 /// Atlas slots for downloaded player skins (`skins/<sha1>`), 64x64 each.
