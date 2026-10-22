@@ -557,6 +557,22 @@ fn upgrade_types(
                 v["type"] = "horizon:formations".into();
                 true
             }
+            // Its PiecedStructure: the same start, then vanilla's jigsaw
+            // (`horizon:pieced`).
+            Some("formations:pieced") => {
+                let Some(o) = v.as_object_mut() else {
+                    return false;
+                };
+                let pool = o.remove("start_pool").unwrap_or_default();
+                let mut pieced = serde_json::Map::new();
+                for k in ["max_depth", "max_distance_from_center"] {
+                    pieced.insert(k.into(), o.remove(k).unwrap_or_default());
+                }
+                o.insert("template".into(), pool);
+                o.insert("horizon:pieced".into(), pieced.into());
+                o.insert("type".into(), "horizon:formations".into());
+                true
+            }
             Some(t) if !t.starts_with("minecraft:") => {
                 unsupported(t);
                 false
@@ -1300,6 +1316,21 @@ mod tests {
     const NO_TAGS: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
     #[test]
+    fn formations_pieced_structure_keeps_its_jigsaw() {
+        let mut v = json!({"type": "formations:pieced", "start_pool": "fo:fountain/fountains",
+            "max_depth": 2, "max_distance_from_center": 116, "placement": "surface"});
+        let mut report = Upgrade::default();
+        assert!(upgrade("structure", &mut v, &mut report, &BTreeMap::new()));
+        assert_eq!(
+            v,
+            json!({"type": "horizon:formations", "template": "fo:fountain/fountains",
+                "placement": "surface",
+                "horizon:pieced": {"max_depth": 2, "max_distance_from_center": 116}})
+        );
+        assert!(report.unsupported.is_empty());
+    }
+
+    #[test]
     fn formations_become_the_games() {
         let mut report = Upgrade::default();
         let mut s = json!({"type": "formations:simple", "template": "f:campsites",
@@ -1324,12 +1355,7 @@ mod tests {
             (json!(6), json!(1))
         );
         assert!(e(0).get("ground_level").is_none());
-        // The pieced structure stays out.
-        let mut pieced = json!({"type": "formations:pieced", "start_pool": "f:p", "max_depth": 2,
-            "max_distance_from_center": 40, "placement": "surface", "biomes": "#f:x"});
-        assert!(!upgrade("structure", &mut pieced, &mut report, &NO_TAGS));
-        assert_eq!(report.unsupported.get("formations:pieced"), Some(&1));
-        assert_eq!(report.unsupported.len(), 1);
+        assert!(report.unsupported.is_empty());
     }
 
     #[test]

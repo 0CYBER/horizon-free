@@ -643,7 +643,6 @@ Two cases the oracle fills in:
   - When Dungeons Arise, Structory and Towns and Towers use vanilla's types already (T&T's
     namespaces are carried since the namespaces rule above).
   - Still lost, written in Java:
-    - Formations' pieced structure (1, its one jigsaw-like type);
     - Repurposed's mineshafts, mansions and monuments, Better Mineshafts and two Better
       Dungeons types: Java structure types;
     - the block processors written in Java
@@ -658,6 +657,13 @@ Two cases the oracle fills in:
     39 Overworld and 672 Nether starts at seed 1234 (51 and 643 at seed 2), and leaves every
     other start as it was. Its processors (biome replacements, aged blocks, bed colours,
     plants) are still dropped, so its structures keep their templates' blocks.
+    Its one PiecedStructure, the fountain, starts the same way and then lays out the element's
+    jigsaw children with vanilla's jigsaw: carry writes it as `horizon:formations` with
+    `horizon:pieced` (`max_depth`, `max_distance_from_center`), and the game's assembler takes
+    the placed start piece (`jigsaw::add_children`), the children kept within that distance of
+    the start's centre, one block above the height found. It shares Formations' "uncommon"
+    structure set, so where the set now picks it, it takes the place of a statue or a house:
+    1 fountain at seed 1234 and 3 at seed 2 in chunks -64..63, one with a child piece.
 
   With every structure PR above, the same square (seed 1234, chunks -64..63) holds 362
   overworld starts with 22,026 pieces. CTOV has 7, Better Dungeons 72 and Better Ocean
