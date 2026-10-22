@@ -39,7 +39,7 @@ impl PerlinNoise {
         )
     }
 
-    fn gradients(&self, cell: [i32; 3]) -> [[i32; 3]; 8] {
+    fn gradients(&self, cell: [i32; 3]) -> [[f32; 3]; 8] {
         self.gradients_at(
             self.table.permute(cell[0]),
             self.table.permute(cell[0].wrapping_add(1)),
@@ -52,7 +52,7 @@ impl PerlinNoise {
     /// resolved. `add_volume` reuses one X column across every Y, so hoisting
     /// the two X permutes out of that loop avoids repeating them per Y.
     #[inline]
-    fn gradients_at(&self, p: i32, q: i32, cell_y: i32, cell_z: i32) -> [[i32; 3]; 8] {
+    fn gradients_at(&self, p: i32, q: i32, cell_y: i32, cell_z: i32) -> [[f32; 3]; 8] {
         let lower = self.table.permute(p.wrapping_add(cell_y));
         let upper = self.table.permute(p.wrapping_add(cell_y).wrapping_add(1));
         let lower_x = self.table.permute(q.wrapping_add(cell_y));
@@ -66,7 +66,7 @@ impl PerlinNoise {
         })
     }
 
-    fn corner_values(gradients: [[i32; 3]; 8], point: [f32; 3]) -> [f32; 8] {
+    fn corner_values(gradients: [[f32; 3]; 8], point: [f32; 3]) -> [f32; 8] {
         std::array::from_fn(|i| {
             dot(
                 gradients[i],
@@ -99,7 +99,7 @@ impl PerlinNoise {
         let values = Self::corner_values(gradients, point);
         let fade = point.map(smoothstep);
         let gradient =
-            std::array::from_fn::<_, 3, _>(|axis| lerp3(fade, gradients.map(|g| g[axis] as f32)));
+            std::array::from_fn::<_, 3, _>(|axis| lerp3(fade, gradients.map(|g| g[axis])));
         let changes = [
             lerp2(
                 fade[1],
@@ -211,9 +211,9 @@ impl PerlinNoise {
                     if previous_y != sample.cell {
                         let gradients = self.gradients_at(p, q, sample.cell, cell_z);
                         for i in 0..8 {
-                            xz_dots[i] = gradients[i][0] as f32 * (dx - (i & 1) as f32)
-                                + gradients[i][2] as f32 * (dz - ((i >> 2) & 1) as f32);
-                            y_gradients[i] = gradients[i][1] as f32;
+                            xz_dots[i] = gradients[i][0] * (dx - (i & 1) as f32)
+                                + gradients[i][2] * (dz - ((i >> 2) & 1) as f32);
+                            y_gradients[i] = gradients[i][1];
                         }
                         previous_y = sample.cell;
                     }
