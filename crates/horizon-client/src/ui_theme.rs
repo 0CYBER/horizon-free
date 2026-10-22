@@ -23,13 +23,7 @@
 //! rows (`HRow`), so new settings only need rows.
 use crate::hud::{HudAtlas, HudBatch, Rect};
 use ab_glyph::{Font as _, FontRef, PxScale, ScaleFont as _};
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    path::Path,
-    sync::atomic::{AtomicU8, Ordering},
-    time::Instant,
-};
+use std::{cell::RefCell, collections::HashMap, path::Path, sync::atomic::Ordering, time::Instant};
 
 /// Which drawing the front-end screens use.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,9 +32,20 @@ pub enum MenuStyle {
     /// Vanilla's screens, exactly as the parity harnesses expect them.
     Classic,
 }
-static STYLE: AtomicU8 = AtomicU8::new(1);
+/// 1 for Classic. Unit tests run in parallel threads and switch the style to
+/// lay out a page in it (#802), so under test each thread keeps its own.
+#[cfg(not(test))]
+static STYLE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(1);
+#[cfg(test)]
+thread_local! {
+    static STYLE: std::cell::Cell<u8> = const { std::cell::Cell::new(1) };
+}
 pub fn style() -> MenuStyle {
-    if STYLE.load(Ordering::Relaxed) == 1 {
+    #[cfg(not(test))]
+    let flag = STYLE.load(Ordering::Relaxed);
+    #[cfg(test)]
+    let flag = STYLE.with(std::cell::Cell::get);
+    if flag == 1 {
         MenuStyle::Classic
     } else {
         MenuStyle::Horizon
@@ -50,7 +55,11 @@ pub fn horizon() -> bool {
     style() == MenuStyle::Horizon
 }
 pub fn set_style(s: MenuStyle) {
-    STYLE.store(u8::from(s == MenuStyle::Classic), Ordering::Relaxed);
+    let flag = u8::from(s == MenuStyle::Classic);
+    #[cfg(not(test))]
+    STYLE.store(flag, Ordering::Relaxed);
+    #[cfg(test)]
+    STYLE.with(|style| style.set(flag));
 }
 /// Horizon-only preferences live in `horizon.txt` beside `options.txt`, so
 /// vanilla's options file stays exactly as vanilla writes it.
@@ -1427,6 +1436,17 @@ pub const fn id(name: &str, index: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_test_switching_the_style_leaves_other_tests_classic() {
+        set_style(MenuStyle::Horizon);
+        assert_eq!(
+            std::thread::spawn(style).join().unwrap(),
+            MenuStyle::Classic
+        );
+        assert_eq!(style(), MenuStyle::Horizon);
+        set_style(MenuStyle::Classic);
+    }
 
     #[test]
     fn classic_is_the_default_and_explicit_menu_preferences_are_preserved() {
