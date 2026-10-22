@@ -1,0 +1,17 @@
+[
+  {
+    "machine": "Mac mini (M4 Pro)",
+    "reports": ["macmini/horizon-macmini-rd12.json"],
+    "version": "v2026.10.22.04",
+    "capped_fps": 144,
+    "note": "On macOS this Horizon build presents its frames in step with the 144 Hz display even with VSync off, so its average frame rate here is capped at 144: compare the 1% lows and frame times instead. The Mac mini was also running other jobs during the runs (CI, simulators; 1-minute load average 20 to 56 on 14 threads), which costs both games, vanilla more at render distance 32."
+  },
+  {
+    "machine": "Mac mini (M4 Pro)",
+    "reports": ["macmini/horizon-macmini-rd32.json"],
+    "version": "v2026.10.22.04",
+    "capped_fps": 144
+  },
+  { "machine": "Mac mini (M4 Pro)", "reports": ["macmini/vanilla-macmini-rd12.json"] },
+  { "machine": "Mac mini (M4 Pro)", "reports": ["macmini/vanilla-macmini-rd32.json"] }
+]
