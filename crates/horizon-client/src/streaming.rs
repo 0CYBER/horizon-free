@@ -1421,7 +1421,8 @@ impl ExtraCover {
             (x0, z0, x1, z1) = (x0.min(x - r), z0.min(z - r), x1.max(x + r), z1.max(z + r));
         }
         let (width, depth) = ((x1 - x0 + 1) as u64, (z1 - z0 + 1) as u64);
-        if width * depth > Self::CELLS || x0 < i64::from(i32::MIN) || x1 > i64::from(i32::MAX) {
+        let fits = |lo: i64, hi: i64| lo >= i64::from(i32::MIN) && hi <= i64::from(i32::MAX);
+        if width * depth > Self::CELLS || !fits(x0, x1) || !fits(z0, z1) {
             return None;
         }
         let (x0, z0, width, depth) = (x0 as i32, z0 as i32, width as u32, depth as u32);
@@ -2196,6 +2197,8 @@ mod cover_tests {
         assert!(ExtraCover::new(&[((0, 0), 11), ((100_000, 0), 11)]).is_none());
         assert!(ExtraCover::new(&[((0, 0), 11)]).is_none());
         assert!(ExtraCover::new(&[((i32::MAX - 1, 0), 11), ((i32::MAX - 3, 0), 11)]).is_none());
+        assert!(ExtraCover::new(&[((0, i32::MAX - 1), 11), ((0, i32::MAX - 3), 11)]).is_none());
+        assert!(ExtraCover::new(&[((0, i32::MIN + 1), 11), ((0, i32::MIN + 3), 11)]).is_none());
     }
 
     /// cargo test --release -p horizon-client --lib cover_tests::cover_cost -- --ignored --nocapture
