@@ -3,8 +3,9 @@
 //! Vanilla draws each column as one camera-facing quad whose texture
 //! coordinates run past 0..1 (`v` advances a quarter of the texture per block,
 //! so `rain.png` repeats every 4 blocks) and relies on a repeating sampler.
-//! Horizon samples the sprite from its atlas, so [`tile`] splits a quad at
-//! every whole texture repeat into pieces that stay inside the sprite.
+//! The live renderer repeats UVs inside the atlas sprite in its shader, using
+//! cached coordinate-only [`Parameters`]. The reference [`tile`] path splits
+//! at whole repeats and remains available for CPU callers and parity probes.
 use horizon_core::random::{LegacyRandom, RandomSource};
 
 /// `WeatherEffectRenderer.ColumnInstance`.
@@ -45,6 +46,176 @@ pub fn column_seed(x: i32, z: i32) -> i32 {
 /// The column's random source, seeded as `random.setSeed(seed)`.
 pub fn column_random(x: i32, z: i32) -> LegacyRandom {
     LegacyRandom::new(i64::from(column_seed(x, z)))
+}
+
+/// Coordinate-only random values. Keep the snow bases as doubles: rounding them
+/// before adding the float drift changes vanilla's UVs at rounding boundaries.
+#[derive(Clone, Copy, Debug)]
+pub struct Parameters {
+    pub rain_speed: f32,
+    pub rain_tick_offset: f32,
+    pub snow_base: [f64; 2],
+    pub snow_drift: [f32; 2],
+}
+impl Parameters {
+    pub fn new(x: i32, z: i32) -> Self {
+        let rain_speed = 3.0 + column_random(x, z).next_float();
+        let mut random = column_random(x, z);
+        let u = random.next_double();
+        let du = random.next_gaussian() as f32;
+        let v = random.next_double();
+        let dv = random.next_gaussian() as f32;
+        Self {
+            rain_speed,
+            rain_tick_offset: (x
+                .wrapping_mul(x)
+                .wrapping_mul(3121)
+                .wrapping_add(x.wrapping_mul(45_238_971))
+                .wrapping_add(z.wrapping_mul(z).wrapping_mul(418_711))
+                .wrapping_add(z.wrapping_mul(13761))
+                & 255) as f32,
+            snow_base: [u, v],
+            snow_drift: [du, dv],
+        }
+    }
+
+    /// CPU reference for fixtures and GPU differential tests. The public random
+    /// source helpers below retain their original draw/advancement semantics.
+    #[allow(clippy::too_many_arguments)]
+    pub fn column(
+        self,
+        snow: bool,
+        ticks: i64,
+        x: i32,
+        bottom_y: i32,
+        top_y: i32,
+        z: i32,
+        light_coords: i32,
+        partial: f32,
+    ) -> Column {
+        let time = (ticks & 131_071) as f32 + partial;
+        let (u_offset, v_offset, light_coords) = if snow {
+            let u = (self.snow_base[0] + f64::from(time * 0.01 * self.snow_drift[0])) as f32;
+            let v = (self.snow_base[1] + f64::from(time * self.snow_drift[1] * 0.001)) as f32;
+            let fall = -((ticks & 511) as f32 + partial) / 512.0;
+            let (block, sky) = (light_coords >> 4 & 15, light_coords >> 20 & 15);
+            (
+                u,
+                fall + v,
+                ((block * 3 + 15) / 4) << 4 | ((sky * 3 + 15) / 4) << 20,
+            )
+        } else {
+            let offset = -(((ticks & 131_071) as f32 + self.rain_tick_offset) + partial) / 32.0
+                * self.rain_speed;
+            (0.0, offset % 32.0, light_coords)
+        };
+        Column {
+            x,
+            z,
+            bottom_y,
+            top_y,
+            u_offset,
+            v_offset,
+            light_coords,
+        }
+    }
+}
+
+/// Direct-mapped 32x32 cache: at most 1024 coordinate keys, including after
+/// teleports or radius changes. Full keys disambiguate collisions and wrapping.
+/// Nothing world-dependent is cached, so dimension/biome/pack changes need no
+/// invalidation; the caller still samples heights, precipitation and light.
+pub struct ParameterCache {
+    entries: Box<[Option<((i32, i32), Parameters)>]>,
+}
+impl Default for ParameterCache {
+    fn default() -> Self {
+        Self {
+            entries: vec![None; 32 * 32].into_boxed_slice(),
+        }
+    }
+}
+impl ParameterCache {
+    pub fn get(&mut self, x: i32, z: i32) -> Parameters {
+        let index = ((z as u32 & 31) * 32 + (x as u32 & 31)) as usize;
+        let entry = &mut self.entries[index];
+        if let Some((key, parameters)) = entry
+            && *key == (x, z)
+        {
+            return *parameters;
+        }
+        let parameters = Parameters::new(x, z);
+        *entry = Some(((x, z), parameters));
+        parameters
+    }
+}
+
+/// One unsplit camera-relative weather vertex. UV animation and atlas-local
+/// repetition happen in the weather shader, rather than rebuilding tiled quads.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Vertex {
+    pub pos: [f32; 3],
+    pub uv: [f32; 2],
+    pub rect: [f32; 4],
+    pub animation: [f32; 4],
+    pub bases: [u32; 4],
+    pub color: u32,
+    pub light: u32,
+    pub snow: u32,
+}
+
+/// Current ticks are masked on the CPU before conversion to float, including
+/// negative/large tick values. Do not use the renderer's unbounded game_time.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct Time {
+    pub values: [f32; 4],
+}
+impl Time {
+    pub fn new(ticks: i64, partial: f32) -> Self {
+        Self {
+            values: [(ticks & 131_071) as f32, (ticks & 511) as f32, partial, 0.0],
+        }
+    }
+}
+
+/// Emit a single quad, retaining column_quad's position, fade, UV rounding and
+/// light semantics. The zero phase leaves the shader to animate both UV axes.
+pub fn vertices(
+    column: &Column,
+    parameters: Parameters,
+    snow: bool,
+    camera: [f64; 3],
+    radius: i32,
+    intensity: f32,
+    rect: [f32; 4],
+) -> [Vertex; 4] {
+    let quad = column_quad(
+        column,
+        camera,
+        if snow { 0.8 } else { 1.0 },
+        radius,
+        intensity,
+    );
+    let lc = column.light_coords;
+    let light = ((lc >> 20 & 15) * 16) as u32 | (((lc >> 4 & 15) * 16) as u32) << 8;
+    let [u, v] = parameters.snow_base.map(f64::to_bits);
+    quad.map(|q| Vertex {
+        pos: q.pos,
+        uv: q.uv,
+        rect,
+        animation: [
+            parameters.rain_speed,
+            parameters.rain_tick_offset,
+            parameters.snow_drift[0],
+            parameters.snow_drift[1],
+        ],
+        bases: [u as u32, (u >> 32) as u32, v as u32, (v >> 32) as u32],
+        color: q.color,
+        light,
+        snow: u32::from(snow),
+    })
 }
 
 /// `createRainColumnInstance`.
@@ -140,8 +311,8 @@ pub fn column_quad(
     let t = (distance_sq / radius_sq).min(1.0);
     let alpha = (max_alpha + t * (0.5 - max_alpha)) * intensity;
     let color = ((alpha * 255.0).floor() as i32 as u32) << 24 | 0xFF_FFFF;
-    let index =
-        (column.z - camera[2].floor() as i32 + 16) * 32 + column.x - camera[0].floor() as i32 + 16;
+    let index = (column.z - camera[2].floor() as i32 + 16) * 32
+        + (column.x - camera[0].floor() as i32 + 16);
     let (size_x, size_z) = column_size(index as usize);
     let (half_x, half_z) = (size_x / 2.0, size_z / 2.0);
     let (x0, x1) = (relative_x - half_x, relative_x + half_x);
@@ -241,6 +412,82 @@ mod tests {
                         assert_eq!(actual.to_bits(), expected.to_bits(), "column ({x}, {z})");
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn cached_parameters_match_original_random_draws() {
+        let mut cache = ParameterCache::default();
+        for i in 0..2048i32 {
+            let x = i.wrapping_mul(45_238_971);
+            let z = i.wrapping_mul(-418_711).wrapping_add(i32::MIN);
+            for ticks in [i64::MIN, -1, 0, 511, 512, 131_071, 131_072, i64::MAX] {
+                for partial in [0.0, 0.5, 0.999] {
+                    for snow in [false, true] {
+                        let mut random = column_random(x, z);
+                        let reference = if snow {
+                            snow_column(&mut random, ticks, x, -64, 320, z, 0xf000f0, partial)
+                        } else {
+                            rain_column(&mut random, ticks, x, -64, 320, z, 0xf000f0, partial)
+                        };
+                        assert_eq!(
+                            cache
+                                .get(x, z)
+                                .column(snow, ticks, x, -64, 320, z, 0xf000f0, partial),
+                            reference
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn parameter_cache_reuses_full_keys_and_stays_bounded() {
+        let mut cache = ParameterCache::default();
+        let expected = cache.get(-1, i32::MAX);
+        // A changed entry proves that a hit does not regenerate random values.
+        let index = 31 * 32 + 31;
+        cache.entries[index].as_mut().unwrap().1.rain_speed = 123.0;
+        assert_eq!(cache.get(-1, i32::MAX).rain_speed, 123.0);
+        // Colliding positions must replace the entry, rather than reuse it.
+        cache.get(31, -1);
+        assert_eq!(cache.get(-1, i32::MAX).rain_speed, expected.rain_speed);
+        for i in 0..100_000i32 {
+            cache.get(i.wrapping_mul(3121), i.wrapping_mul(418_711));
+        }
+        assert_eq!(cache.entries.len(), 1024);
+        assert!(cache.entries.iter().flatten().count() <= 1024);
+    }
+
+    #[test]
+    fn unsplit_vertices_keep_live_geometry_light_and_atlas_inputs() {
+        let x = i32::MAX - 5;
+        let z = i32::MIN + 5;
+        let parameters = Parameters::new(x, z);
+        let camera = [f64::from(x) - 2.25, 80.75, f64::from(z) + 0.25];
+        for (bottom_y, top_y, light_coords, radius, intensity, rect) in [
+            (64, 90, 0, 5, 0.25, [0.1, 0.2, 0.03, 0.04]),
+            (85, 95, 0xf000f0, 10, 1.0, [0.5, 0.5, 0.1, 0.2]),
+        ] {
+            let column = Column {
+                x,
+                z,
+                bottom_y,
+                top_y,
+                light_coords,
+                u_offset: 0.0,
+                v_offset: 0.0,
+            };
+            let quad = column_quad(&column, camera, 1.0, radius, intensity);
+            let vertices = vertices(&column, parameters, false, camera, radius, intensity, rect);
+            for (a, b) in vertices.iter().zip(quad) {
+                assert_eq!(a.pos, b.pos);
+                assert_eq!(a.uv, b.uv);
+                assert_eq!(a.color, b.color);
+                assert_eq!(a.rect, rect);
+                assert_eq!(a.light, if light_coords == 0 { 0 } else { 0xf0f0 });
             }
         }
     }
