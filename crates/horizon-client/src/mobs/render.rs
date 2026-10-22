@@ -749,7 +749,8 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
         let ticks = (m.age as f32 + alpha).floor();
         body += (f64::from(ticks * 3.25).cos() * std::f64::consts::PI * 0.4) as f32;
     }
-    let sleep = (m.species() == Species::Villager)
+    // A sleeping villager, or another player lying in their bed.
+    let sleep = (m.species() == Species::Villager || m.kind.id == "minecraft:player")
         .then(|| super::villager::sleep_pose(m))
         .flatten();
     let rotation = match sleep {

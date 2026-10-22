@@ -1221,6 +1221,11 @@ def check_sleep(host, guest, out):
     asleep = {'guest': guest('state').get('sleeping'), 'host': host('state').get('sleeping'),
               'server': lan_guest(host).get('sleeping')}
     guest.shot(out, 'sleep-guest')
+    # The host draws the guest lying in its bed (#1045): in frame its model, on the server thread its
+    # client's (SLEEPING_POS), and a client pairing with the sleeper later too.
+    host.wait(5)
+    lying = {'host': lan_guest(host).get('model_lying') if not SERVER_THREAD else bool(remote(host)['lying_players'])}
+    host.shot(out, 'sleep-host-sees-guest')
     # Alone in bed: still night 120 ticks later (everyone must sleep).
     guest.wait(120)
     night = host('state')['time']['time_of_day']
@@ -1230,19 +1235,25 @@ def check_sleep(host, guest, out):
     up = guest('state').get('sleeping')
     guest.raw('interact', *guest_bed)
     host.raw('interact', *host_bed)
-    host.wait(130)
+    host.wait(5)
+    # Both in bed: the guest draws the host lying too.
+    lying['guest'] = bool(remote(guest)['lying_players'])
+    host.wait(125)
     after = {'guest': guest('state').get('sleeping'), 'host': host('state').get('sleeping'),
              'time': host('state')['time']['time_of_day']}
+    lying['after'] = bool(remote(guest)['lying_players'])
     guest.shot(out, 'sleep-morning')
     for at in (guest_bed, host_bed):
         guest('command', command=f'fill {at[0] - 1} {at[1]} {at[2]} {at[0]} {at[1]} {at[2]} minecraft:air')
     host('command', command='time set day')
-    detail = {'asleep': asleep, 'night': night, 'up': up, 'after': after}
+    detail = {'asleep': asleep, 'night': night, 'up': up, 'after': after, 'lying': lying}
     assert asleep['guest'] == guest_bed and asleep['server'] == guest_bed, f'the guest is not in its bed: {detail}'
     assert asleep['host'] is None, f'the guest\'s bed put the host to sleep: {detail}'
     assert 13000 < night < 23000, f'one of two players asleep ended the night: {detail}'
     assert up is None, f'Escape did not get the guest up: {detail}'
     assert after['guest'] is None and after['host'] is None and after['time'] < 1000, f'no morning: {detail}'
+    assert lying['host'] and lying['guest'], f'a sleeping player is drawn standing: {detail}'
+    assert not lying['after'], f'a player up again is still drawn lying: {detail}'
     return detail
 def check_push(host, guest, out):
     guest('command', command='gamemode survival')
