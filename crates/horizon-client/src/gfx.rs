@@ -4167,6 +4167,34 @@ mod tests {
         );
         assert_eq!(surface_format(&[Rgba16Float], Bgra8UnormSrgb), Rgba16Float);
     }
+    /// A Wayland surface on a compositor with colour management, as wgpu lists it (Mesa 26.2
+    /// ANV on an Intel HD 620 under weston 16): wide formats first. The pre-#1075 choice,
+    /// the first non-sRGB format, took `Rgba16Float` and the window looked washed out, as if
+    /// under a white overlay (#1007); XWayland lists no such format, which is why it looked fine.
+    #[test]
+    fn a_colour_managed_wayland_surface_still_gets_8_bit() {
+        use super::surface_format;
+        use wgpu::TextureFormat::*;
+        let wayland = [
+            Rgba16Float,
+            Rgba16Unorm,
+            Rgb10a2Unorm,
+            Bgra8UnormSrgb,
+            Bgra8Unorm,
+            Rgba8UnormSrgb,
+            Rgba8Unorm,
+        ];
+        assert_eq!(surface_format(&wayland, Bgra8UnormSrgb), Bgra8Unorm);
+        // Without Bgra8: Rgba8, still not a 16- or 10-bit format.
+        let without_bgra = [
+            Rgba16Float,
+            Rgba16Unorm,
+            Rgb10a2Unorm,
+            Rgba8UnormSrgb,
+            Rgba8Unorm,
+        ];
+        assert_eq!(surface_format(&without_bgra, Rgba8UnormSrgb), Rgba8Unorm);
+    }
     #[test]
     fn special_material_batches_preserve_quad_order_and_offsets() {
         let quad = |layer, id| {
