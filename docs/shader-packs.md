@@ -380,8 +380,9 @@ cutout blocks; `shadow_water` or `shadow` for the translucent one), it draws a s
   (the moon at night) with the pack's `sunPathRotation`, snapped to `shadowIntervalSize`; `shadowProjection` is
   orthographic, `shadowDistance` each way, between `shadowNearPlane` and `shadowFarPlane` (Iris's defaults when the
   pack sets none); the shadow programs get them as `gl_ModelViewMatrix` and `gl_ProjectionMatrix`;
-- the renderer draws every section inside that box from its own list (not the camera's: cave culling is off as in
-  Iris, and no face is culled), solid then translucent, instanced draws only;
+- the renderer draws every section inside that box whose shadow can reach the camera's view (the box swept away
+  from the light against the view's planes, as Iris's advanced shadow culling), from its own list (cave culling is
+  off as in Iris, and no face is culled), solid then translucent, instanced draws only;
 - `shadowtex0` holds all of it, `shadowtex1` the depth before translucent terrain; both are bound as depth textures
   for `sampler2DShadow` (linear comparison, Iris's hardware filtering) and as float copies for `sampler2D` reads;
 - `shadowcolor0..7` are `shadowMapResolution` square in their `shadowcolor<N>Format`, cleared each frame to

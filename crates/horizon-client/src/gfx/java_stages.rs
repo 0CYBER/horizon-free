@@ -2852,8 +2852,22 @@ mod tests {
         close(
             projection,
             Mat4::from_cols_array(&[
-                0.03125, 0.0, 0.0, 0.0, 0.0, 0.03125, 0.0, 0.0, 0.0, 0.0, -0.007_814_026, 0.0, 0.0,
-                0.0, -1.000_390_6, 1.0,
+                0.03125,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.03125,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                -0.007_814_026,
+                0.0,
+                0.0,
+                0.0,
+                -1.000_390_6,
+                1.0,
             ]),
         );
         // Noon: the light looks straight down (up is toward it, +z).
@@ -2862,7 +2876,10 @@ mod tests {
         let directives = Directives::default();
         let (snapped, _) = shadow_matrices(&directives, 0.25, Vec3::new(5.5, 0.0, 0.0));
         let (plain, _) = shadow_matrices(&directives, 0.25, Vec3::ZERO);
-        close(snapped, plain * Mat4::from_translation(Vec3::new(1.5, 0.0, 0.0)));
+        close(
+            snapped,
+            plain * Mat4::from_translation(Vec3::new(1.5, 0.0, 0.0)),
+        );
     }
 
     #[test]

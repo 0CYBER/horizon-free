@@ -3232,10 +3232,10 @@ impl Renderer {
             ),
             _ => None,
         };
-        if let Some((view, [half, near, far])) = shadow_view {
+        if let Some((light_view, [half, near, far])) = shadow_view {
             // Inside when `plane · (p, 1) >= 0`: |x|, |y| <= half and the
             // eye depth between the near and far planes (GL looks down -z).
-            let (x, y, z) = (view.row(0), view.row(1), view.row(2));
+            let (x, y, z) = (light_view.row(0), light_view.row(1), light_view.row(2));
             let planes = [
                 Vec4::W * half - x,
                 Vec4::W * half + x,
@@ -3244,12 +3244,23 @@ impl Renderer {
                 -z - Vec4::W * near,
                 z + Vec4::W * far,
             ];
+            // Toward the light: the light's view looks down its -z.
+            let light = z.truncate().normalize_or_zero();
+            let casts = |k: SectionKey| {
+                let min = DVec3::new(
+                    f64::from(k.0 * 16),
+                    f64::from(crate::chunk::MIN_Y + k.1 * 16),
+                    f64::from(k.2 * 16),
+                ) - camera;
+                let min = min.as_vec3();
+                view.casts_into(min, min + Vec3::splat(16.0), light)
+            };
             crate::spans::time("shadow visibility", || {
                 self.sections.visible(
                     camera,
                     (frame.detail_distance / 16.0) as i32,
                     &Frustum { planes },
-                    |_| true,
+                    casts,
                     |_, _| false,
                     &mut shadow_visible,
                 )
@@ -4413,6 +4424,21 @@ impl Frustum {
             p.truncate().dot(v) + p.w < 0.0
         })
     }
+    /// Whether the camera-relative box `min..max`, lit from the direction
+    /// `light` (toward the light), can cast a shadow inside: its shadow is
+    /// the box swept away from the light, which stays outside a plane the
+    /// box is outside of unless the sweep crosses it (Iris's advanced
+    /// shadow culling, conservatively).
+    pub fn casts_into(&self, min: Vec3, max: Vec3, light: Vec3) -> bool {
+        !self.planes.iter().any(|p| {
+            let v = Vec3::new(
+                if p.x >= 0.0 { max.x } else { min.x },
+                if p.y >= 0.0 { max.y } else { min.y },
+                if p.z >= 0.0 { max.z } else { min.z },
+            );
+            p.truncate().dot(v) + p.w < 0.0 && p.truncate().dot(light) >= 0.0
+        })
+    }
 }
 /// Vanilla's `Projection`: reversed depth (near maps to 1, far to 0, tests
 /// are GREATER_THAN_OR_EQUAL), which keeps far faces a hair apart, like
@@ -4505,6 +4531,31 @@ fn frustum(m: Mat4) -> [Vec4; 6] {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shadow_casters_are_the_boxes_whose_shadow_can_reach_the_view() {
+        use glam::Vec3;
+        // Looking north (-z) from the origin, level.
+        let m = super::world_projection(70.0, 16.0 / 9.0, 256.0)
+            * crate::camera::view_matrix(180.0, 0.0);
+        let view = super::Frustum {
+            planes: super::frustum(m),
+        };
+        let cube =
+            |x: f32, y: f32, z: f32| (Vec3::new(x, y, z), Vec3::new(x + 16.0, y + 16.0, z + 16.0));
+        let noon = Vec3::Y;
+        // In view: casts.
+        let (min, max) = cube(-8.0, -8.0, -64.0);
+        assert!(view.intersects(min, max) && view.casts_into(min, max, noon));
+        // Far above the view, the sun overhead: its shadow falls into it.
+        let (min, max) = cube(-8.0, 200.0, -64.0);
+        assert!(!view.intersects(min, max) && view.casts_into(min, max, noon));
+        // Behind the camera: its shadow falls straight down, behind it too.
+        let (min, max) = cube(-8.0, -8.0, 32.0);
+        assert!(!view.casts_into(min, max, noon));
+        // The same box with a low sun behind the camera (south): it does.
+        assert!(view.casts_into(min, max, Vec3::new(0.0, 0.2, 1.0).normalize()));
+    }
+
     #[test]
     fn surface_is_8_bit_and_not_srgb() {
         use super::surface_format;
