@@ -71,6 +71,8 @@ pub(super) struct GameLevel<'g, 'a> {
     pub(super) w: MobWorld<'g>,
     /// Every player in the level ([`Game::level_players`]).
     pub(super) players: Vec<LevelPlayer>,
+    /// Where the non-spectators among them are (`getNearestPlayer`).
+    pub(super) nearest: Vec<[f64; 3]>,
     /// Boxes of the mobs this pass created, not yet in the game's list.
     pub(super) pending: std::cell::RefCell<Vec<Aabb>>,
     /// The types and boxes of what a spawner created this tick.
@@ -190,14 +192,8 @@ impl NaturalLevel for GameLevel<'_, '_> {
     fn structure_spawns(&self) -> &StructureSpawns {
         StructureSpawns::shared(&self.game.options.resources)
     }
-    fn nearest_player_distance_sqr(&self, x: f64, y: f64, z: f64) -> Option<f64> {
-        // The nearest player's distance (`nearest_player`), without finding
-        // which player it is: every spawn attempt asks.
-        self.players
-            .iter()
-            .filter(|p| !p.spectator)
-            .map(|p| p.distance_sqr(x, y, z))
-            .reduce(f64::min)
+    fn nearest_player_positions(&self) -> &[[f64; 3]] {
+        &self.nearest
     }
     fn respawn(&self) -> Option<[i32; 3]> {
         // The world spawn point lives in the overworld.
@@ -305,10 +301,17 @@ impl horizon_client::mobs::spawner::SpawnerLevel for GameLevel<'_, '_> {
 }
 impl<'a> Game<'a> {
     pub(super) fn natural_level(&self) -> GameLevel<'_, 'a> {
+        let players = self.level_players();
+        let nearest = players
+            .iter()
+            .filter(|p| !p.spectator)
+            .map(|p| [p.position.x, p.position.y, p.position.z])
+            .collect();
         GameLevel {
             game: self,
             w: self.mob_world_base(&[]),
-            players: self.level_players(),
+            players,
+            nearest,
             pending: Default::default(),
             pending_ids: Default::default(),
         }
