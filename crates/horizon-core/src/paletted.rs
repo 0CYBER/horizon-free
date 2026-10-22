@@ -577,14 +577,21 @@ impl PalettedContainer {
         if list.len() == 1 << self.bits {
             return Ok(());
         }
-        for i in 0..self.strategy.entries() {
-            let index = read(&self.words, self.bits, i);
-            if index as usize >= list.len() {
-                return Err(PaletteError::BadIndex {
-                    index,
-                    palette: list.len(),
-                });
+        let per = 64 / usize::from(self.bits);
+        let mut remaining = self.strategy.entries();
+        let mask = mask(self.bits);
+        for &word in &self.words {
+            let count = remaining.min(per);
+            for slot in 0..count {
+                let index = ((word >> (slot * usize::from(self.bits))) & mask) as u32;
+                if index as usize >= list.len() {
+                    return Err(PaletteError::BadIndex {
+                        index,
+                        palette: list.len(),
+                    });
+                }
             }
+            remaining -= count;
         }
         Ok(())
     }
@@ -644,6 +651,18 @@ impl PalettedContainer {
                 actual: data.len(),
             });
         }
+        if let Config::List(bits) = config {
+            // List palettes already use the saved indices as resident storage.
+            // Validate them without allocating an unpacked copy that is unused.
+            let container = Self {
+                strategy,
+                bits,
+                words: data.to_vec(),
+                palette: Palette::List(palette),
+            };
+            container.check_indices()?;
+            return Ok(container);
+        }
         let mut ids = Vec::with_capacity(entries);
         for i in 0..entries {
             let index = read(data, disc_bits, i);
@@ -655,15 +674,7 @@ impl PalettedContainer {
             }
             ids.push(index);
         }
-        Ok(match config {
-            Config::List(bits) => Self {
-                strategy,
-                bits,
-                words: data.to_vec(),
-                palette: Palette::List(palette),
-            },
-            _ => Self::build(strategy, palette, &ids),
-        })
+        Ok(Self::build(strategy, palette, &ids))
     }
     /// Whether any palette entry satisfies `predicate` (`maybeHas`): entries
     /// no longer used by any position still count.
@@ -794,6 +805,113 @@ mod tests {
         assert!(PalettedContainer::from_wire(BLOCKS, 0, vec![1, 2], vec![]).is_err());
         assert!(PalettedContainer::from_wire(BIOMES, 2, vec![1, 2, 3, 4, 5], vec![0; 4]).is_err());
         assert!(PalettedContainer::from_wire(BLOCKS, 0, vec![9], vec![]).is_ok());
+    }
+    #[test]
+    fn saved_validation_matches_entrywise_reference() {
+        // Keep the previous loader as an independent entry-at-a-time reference:
+        // errors, resident palette order and unused storage bits must all agree.
+        fn reference(
+            strategy: Strategy,
+            palette: Vec<u32>,
+            data: Option<&[u64]>,
+        ) -> Result<PalettedContainer, PaletteError> {
+            if palette.is_empty() {
+                return Err(PaletteError::BadPalette { len: 0 });
+            }
+            let config = strategy.config(ceil_log2(palette.len()));
+            let entries = strategy.entries();
+            let bits = match config {
+                Config::Single => return Ok(PalettedContainer::new(strategy, palette[0])),
+                Config::List(bits) => bits,
+                Config::Global => ceil_log2(palette.len()),
+            };
+            let expected = storage_len(bits, entries);
+            let data = data.ok_or(PaletteError::BadStorage {
+                expected,
+                actual: 0,
+            })?;
+            if data.len() != expected {
+                return Err(PaletteError::BadStorage {
+                    expected,
+                    actual: data.len(),
+                });
+            }
+            let mut ids = Vec::with_capacity(entries);
+            for i in 0..entries {
+                let index = read(data, bits, i);
+                if index as usize >= palette.len() {
+                    return Err(PaletteError::BadIndex {
+                        index,
+                        palette: palette.len(),
+                    });
+                }
+                ids.push(index);
+            }
+            Ok(match config {
+                Config::List(bits) => PalettedContainer {
+                    strategy,
+                    bits,
+                    palette: Palette::List(palette),
+                    words: data.to_vec(),
+                },
+                _ => PalettedContainer::build(strategy, palette, &ids),
+            })
+        }
+        fn compare(strategy: Strategy, palette: &[u32], data: Option<&[u64]>) {
+            let expected = reference(strategy, palette.to_vec(), data);
+            let actual = PalettedContainer::from_packed(strategy, palette.to_vec(), data);
+            match (actual, expected) {
+                (Ok(a), Ok(b)) => {
+                    assert_eq!(a.strategy, b.strategy);
+                    assert_eq!(a.bits, b.bits);
+                    assert_eq!(a.palette, b.palette);
+                    assert_eq!(a.words, b.words);
+                }
+                (Err(a), Err(b)) => assert_eq!(a, b),
+                (a, b) => panic!("loader disagreement: {a:?} vs {b:?}"),
+            }
+        }
+        for strategy in [BLOCKS, BIOMES] {
+            for len in [
+                0, 1, 2, 3, 4, 5, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129, 255,
+                256, 257, 511, 512, 513, 1023, 1024, 1025, 2047, 2048, 2049, 4096, 4097,
+            ] {
+                let palette: Vec<u32> = (0..len).map(|i| (i as u32 * 7) % 127).collect();
+                compare(strategy, &palette, None);
+                compare(strategy, &palette, Some(&[]));
+                if len <= 1 {
+                    compare(strategy, &palette, Some(&[u64::MAX]));
+                    continue;
+                }
+                let bits = match strategy.config(ceil_log2(len)) {
+                    Config::List(bits) => bits,
+                    _ => ceil_log2(len),
+                };
+                let entries = strategy.entries();
+                let mut words = pack_words(bits, entries, (0..entries).map(|i| (i % len) as u32));
+                compare(strategy, &palette, Some(&words));
+                compare(strategy, &palette, Some(&words[..words.len() - 1]));
+                // Nonzero padding in every word and in the final partial word
+                // is legal and must be preserved by resident list palettes.
+                let per = 64 / usize::from(bits);
+                for (word, positions) in words.iter_mut().zip((0..entries).step_by(per)) {
+                    let used = (entries - positions).min(per) * usize::from(bits);
+                    if used < 64 {
+                        *word |= u64::MAX << used;
+                    }
+                }
+                compare(strategy, &palette, Some(&words));
+                if len < 1usize << bits {
+                    for i in [0, per - 1, per, entries / 2, entries - 1] {
+                        let mut invalid = words.clone();
+                        write(&mut invalid, bits, i, len as u32);
+                        // A second invalid entry verifies first-error ordering.
+                        write(&mut invalid, bits, entries - 1, mask(bits) as u32);
+                        compare(strategy, &palette, Some(&invalid));
+                    }
+                }
+            }
+        }
     }
     #[test]
     fn division_magic_is_exact() {
