@@ -187,6 +187,11 @@ def remote(guest):
     return guest('status')['server']
 
 
+def dead(guest):
+    """Whether the guest is dead: its death screen (the last health it was sent can stay above 0)."""
+    return guest('state').get('screen') == 'dead' or remote(guest)['health'] <= 0
+
+
 def back_to_game(game):
     """Close whatever screen a failed check left open, without opening the pause menu."""
     try:
@@ -246,9 +251,15 @@ def check_armour(host, guest, out):
     face_each_other(host, guest)
     host.shot(out, 'armour')
     guest.shot(out, 'armour')
-    seen = lan_guest(host).get('model_armor')
-    assert seen == [None, 'minecraft:diamond_chestplate', 'minecraft:diamond_leggings', None], \
-        f'the host draws the guest in {seen}'
+    if SERVER_THREAD:
+        # The host's window is a client of its server thread: what it draws is what it was sent.
+        seen = [e for e in remote(host).get('player_equipment', [])]
+        assert all(any(item in json.dumps(e) for e in seen) for item in
+                   ('diamond_chestplate', 'diamond_leggings')), f'the host draws the guest in {seen}'
+    else:
+        seen = lan_guest(host).get('model_armor')
+        assert seen == [None, 'minecraft:diamond_chestplate', 'minecraft:diamond_leggings', None], \
+            f'the host draws the guest in {seen}'
     host_gear = [e for e in remote(guest).get('player_equipment', [])]
     assert any('golden_chestplate' in json.dumps(e) for e in host_gear), f'the guest sees the host in {host_gear}'
     return 'each in their own'
@@ -578,7 +589,7 @@ def check_hazards(host, guest, out):
     x, y, z = hx + 3, hy, hz
     for name, fill, ticks in (('lava', 'minecraft:lava', 60), ('wall', 'minecraft:stone', 60),
                               ('drowning', 'minecraft:water', 500), ('void', None, 60)):
-        if remote(guest)['health'] <= 0:
+        if dead(guest):
             guest.raw('respawn')
             guest.wait(40)
         # A stone box around the guest holds the lava and the water in.
@@ -601,7 +612,7 @@ def check_hazards(host, guest, out):
         host('command', command=f'fill {x - 1} {y - 1} {z - 1} {x + 1} {y + 2} {z + 1} minecraft:air')
         host('command', command=f'fill {x - 1} {y - 1} {z - 1} {x + 1} {y - 1} {z + 1} minecraft:stone')
     guest.wait(20)
-    if remote(guest)['health'] <= 0:
+    if dead(guest):
         guest.raw('respawn')
         guest.wait(40)
     # [food, saturation, exhaustion]: 8 s of sprint-jumping is about 2 of exhaustion; every 4
@@ -614,6 +625,9 @@ def check_hazards(host, guest, out):
 
 
 def check_pvp(host, guest, out):
+    if dead(guest):
+        guest.raw('respawn')
+        guest.wait(40)
     for g in (host, guest):
         g('command', command='gamemode survival')
         g('command', command='item replace entity @s weapon.mainhand with minecraft:iron_sword')
@@ -1187,7 +1201,7 @@ def check_walls(host, guest, out):
     for g in (host, guest):
         back_to_game(g)
     # The trial spawner's zombies may have killed the guest.
-    if guest('state').get('screen') == 'dead' or remote(guest)['health'] <= 0:
+    if dead(guest):
         guest.raw('respawn')
         guest.wait(40)
     face_each_other(host, guest)
@@ -2151,8 +2165,8 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
 
 def run(ctl, out, resources, checks):
     host, guest = Game('host', ctl, resources), Game('guest', ctl, resources)
-    if SERVER_THREAD:
-        host.d.env['HORIZON_SERVER_THREAD'] = '1'
+    # Either way explicitly: the game's default is the server thread.
+    host.d.env['HORIZON_SERVER_THREAD'] = '1' if SERVER_THREAD else '0'
     results = {}
     try:
         host.pid = host('launch', wait=False, offscreen=sys.platform == 'darwin')['pid']
