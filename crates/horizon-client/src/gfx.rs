@@ -239,8 +239,6 @@ pub struct Frame<'a> {
     pub night_vision: f32,
     /// Torch flicker added to the block light factor of 1.4.
     pub block_flicker: f32,
-    /// Blur and grade the frame under a Horizon-style menu (`post`).
-    pub post: Option<crate::post::PostGrade>,
     /// `Screen.extractBlurredBackground`: blur the frame by this radius
     /// (`menuBackgroundBlurriness`) before the screen is drawn over it.
     pub menu_blur: Option<f32>,
@@ -450,8 +448,6 @@ pub struct Renderer {
     /// The selected shader pack's stages (Horizon setting; none by default).
     pack: Option<Pack>,
     pub hud: HudRenderer,
-    /// The menus' backdrop blur, made on first use.
-    post: Option<crate::post::Post>,
     /// Vanilla's menu background blur, made on first use.
     menu_blur: Option<crate::menu_blur::MenuBlur>,
     pub info: wgpu::AdapterInfo,
@@ -2223,7 +2219,6 @@ impl Renderer {
             world_post,
             pack: None,
             hud,
-            post: None,
             menu_blur: None,
             info,
             suspended: size.width == 0 || size.height == 0,
@@ -3945,23 +3940,6 @@ impl Renderer {
                     &view_target,
                     [self.config.width, self.config.height],
                     radius,
-                );
-        }
-        if let Some(grade) = &frame.post
-            && self.config.usage.contains(wgpu::TextureUsages::COPY_SRC)
-        {
-            let format = self.config.format;
-            let device = &self.device;
-            self.post
-                .get_or_insert_with(|| crate::post::Post::new(device, format))
-                .apply(
-                    &self.device,
-                    &self.queue,
-                    &mut encoder,
-                    &target_texture,
-                    &view_target,
-                    [self.config.width, self.config.height],
-                    grade,
                 );
         }
         self.hud.draw_range(
