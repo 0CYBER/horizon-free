@@ -41,7 +41,11 @@ use horizon_protocol::{
     text::{Language, format_java, plain},
 };
 use horizon_world::{nbt::Tag, registry::BlockStateId};
-use std::{collections::HashMap, sync::Arc, time::Instant};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use winit::{event::MouseButton, keyboard::KeyCode};
 
 /// A text component the server sent, for the HUD.
@@ -158,7 +162,21 @@ pub(super) struct Remote {
     clock_game_time: i64,
     /// `ClientChunkCache.Storage`'s view centre (ClientboundSetChunkCacheCenterPacket).
     chunk_center: (i32, i32),
+    /// Received events a frame left for the next one, in order, and when
+    /// the oldest of them first waited (`poll_remote`).
+    backlog: VecDeque<Event>,
+    backlog_since: Option<Instant>,
 }
+
+/// The time a frame spends on chunk packets before it leaves the rest of
+/// the received events for the next frame. A batch of 25 to 60 columns
+/// (0.1 ms each on an M4 Pro) all in one frame was a 3 to 8 ms frame every
+/// time the player crossed a chunk border at 32 chunks.
+const CHUNK_PACKETS_PER_FRAME: Duration = Duration::from_millis(1);
+/// Events that have waited this long are all handled in the next frame,
+/// whatever their cost: the packets after a slow machine's chunks never
+/// wait more than a tick.
+const BACKLOG_LIMIT: Duration = Duration::from_millis(50);
 
 fn face_direction(face: [i32; 3]) -> u8 {
     match face {
@@ -350,6 +368,8 @@ impl Game<'_> {
             clock_partial: 0.0,
             clock_game_time: 0,
             chunk_center: (0, 0),
+            backlog: VecDeque::new(),
+            backlog_since: None,
         });
         // The level's TickRateManager follows the server's ticking packets.
         self.clock = horizon_client::clock::FixedStep::client();
@@ -544,12 +564,34 @@ impl Game<'_> {
         Some(r.chat.iter().rev().take(n).map(|l| l.0.clone()).collect())
     }
 
-    /// Process everything the network thread received (once per frame, like
-    /// the client's packet processor).
+    /// Received events left for the next frame (`poll_remote`): until they
+    /// are handled, the terrain the server sent is not all there.
+    pub(super) fn remote_backlog(&self) -> usize {
+        self.remote.as_ref().map_or(0, |r| r.backlog.len())
+    }
+    /// Process what the network thread received (once per frame, like the
+    /// client's packet processor), in order. Chunk packets get
+    /// `CHUNK_PACKETS_PER_FRAME`: once a frame has spent it, the events from
+    /// the next chunk packet on wait for the next frame, unless they have
+    /// already waited `BACKLOG_LIMIT`.
     pub(super) fn poll_remote(&mut self) -> Result<()> {
-        let Some(r) = &self.remote else { return Ok(()) };
-        let events = r.session.poll();
-        for event in events {
+        let Some(r) = self.remote.as_mut() else {
+            return Ok(());
+        };
+        let mut events = std::mem::take(&mut r.backlog);
+        events.extend(r.session.poll());
+        let overdue = r
+            .backlog_since
+            .is_some_and(|since| since.elapsed() >= BACKLOG_LIMIT);
+        let mut chunks = Duration::ZERO;
+        while let Some(event) = events.pop_front() {
+            let chunk =
+                matches!(&event, Event::Packet(p) if matches!(**p, C::LevelChunkWithLight(_)));
+            if chunk && !overdue && chunks >= CHUNK_PACKETS_PER_FRAME {
+                events.push_front(event);
+                break;
+            }
+            let started = chunk.then(Instant::now);
             match event {
                 Event::Status(s) => {
                     if let Some(r) = self.remote.as_mut() {
@@ -595,9 +637,18 @@ impl Game<'_> {
                 }
                 Event::Packet(packet) => self.handle_packet(*packet)?,
             }
+            chunks += started.map_or(Duration::ZERO, |t| t.elapsed());
             if self.remote.is_none() {
                 break;
             }
+        }
+        if let Some(r) = self.remote.as_mut() {
+            r.backlog_since = if events.is_empty() {
+                None
+            } else {
+                Some(r.backlog_since.unwrap_or_else(Instant::now))
+            };
+            r.backlog = events;
         }
         self.send_suggestion_request();
         Ok(())
