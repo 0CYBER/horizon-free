@@ -52,6 +52,10 @@ fn corner(origin: vec3<f32>, c: u32) -> vec3<f32> {
 // section fail the depth test against the final depth, which is only nearer.
 @vertex
 fn vs_box(@builtin(vertex_index) v: u32, @builtin(instance_index) t: u32) -> Box {
+    return box_vertex(v, t);
+}
+
+fn box_vertex(v: u32, t: u32) -> Box {
     let origin = origins[tests[t].x].xyz;
     var out: Box;
     out.test = t;
@@ -86,16 +90,36 @@ fn vs_box(@builtin(vertex_index) v: u32, @builtin(instance_index) t: u32) -> Box
     return out;
 }
 
-// Runs only for fragments that pass the depth test (forced early).
-@fragment
-@early_depth_test(force)
-fn fs_box(in: Box) -> @location(0) vec4<f32> {
-    if results[in.test] != params.stamp {
-        results[in.test] = params.stamp;
-        let test = tests[in.test];
+// The same box in OpenGL's layout, for a Java shader pack's terrain depth
+// (gfx/java_stages.rs): y flipped, depth from 0 near to 1 far.
+@vertex
+fn vs_box_gl(@builtin(vertex_index) v: u32, @builtin(instance_index) t: u32) -> Box {
+    var out = box_vertex(v, t);
+    out.position = vec4(out.position.x, -out.position.y, out.position.w - out.position.z, out.position.w);
+    return out;
+}
+
+fn seen(index: u32) {
+    if results[index] != params.stamp {
+        results[index] = params.stamp;
+        let test = tests[index];
         for (var k = 0u; k < test.z; k++) {
             phase2[(test.y + k) * 5u + 1u] = 1u;
         }
     }
+}
+
+// Runs only for fragments that pass the depth test (forced early).
+@fragment
+@early_depth_test(force)
+fn fs_box(in: Box) -> @location(0) vec4<f32> {
+    seen(in.test);
     return vec4(0.0);
+}
+
+// fs_box in a pass without colour targets.
+@fragment
+@early_depth_test(force)
+fn fs_box_depth(in: Box) {
+    seen(in.test);
 }

@@ -13,7 +13,7 @@
 //! into the pack's targets right after, against the world's depth, and its
 //! `gbuffers_water` draws the translucent terrain after `deferred`, as in
 //! Iris. `depthtex1` and `depthtex2` then hold the depth before it.
-use super::java_terrain::{Atlas, JavaWorld, TerrainPipelines};
+use super::java_terrain::{Atlas, JavaWorld, Layer, TerrainPipelines};
 use super::pack_stages::FrameUniform;
 use crate::java_pack::{JavaFolder, JavaPasses};
 use glam::{Mat3, Mat4, Vec3, Vec4};
@@ -1748,28 +1748,38 @@ impl PassGpu {
                 Some(color_attachment(side, None))
             })
             .collect();
-        let mut render = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some(&self.program),
-            color_attachments: &attachments,
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: depth,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
+        let pipelines = TerrainPipelines {
+            instanced: &self.pipeline,
+            flat: self.flat_pipeline.as_ref(),
+            group,
+        };
+        let draw = |encoder: &mut wgpu::CommandEncoder, layer| {
+            let mut render = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(&self.program),
+                color_attachments: &attachments,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
                 }),
-                stencil_ops: None,
-            }),
-            ..Default::default()
-        });
-        (world.draw)(
-            &mut render,
-            translucent,
-            &TerrainPipelines {
-                instanced: &self.pipeline,
-                flat: self.flat_pipeline.as_ref(),
-                group,
-            },
-        );
+                ..Default::default()
+            });
+            (world.draw)(&mut render, layer, &pipelines);
+        };
+        if translucent {
+            draw(encoder, Layer::Translucent);
+            return;
+        }
+        draw(encoder, Layer::Solid);
+        // Occlusion culling: the sections left out, tested against what
+        // phase 1 drew, then the ones in sight.
+        if let Some(test) = world.occlusion {
+            test(encoder, depth);
+            draw(encoder, Layer::Revealed);
+        }
     }
 
     /// Draw into the targets of `draw_buffers`, on the side it doesn't read.

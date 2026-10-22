@@ -76,6 +76,8 @@ struct Group {
 
 pub struct Cull {
     pipeline: wgpu::RenderPipeline,
+    /// [`Self::test_gl`]'s: a depth-only pass in OpenGL's layout.
+    gl_pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     group: Option<Group>,
     params: wgpu::Buffer,
@@ -187,43 +189,63 @@ impl Cull {
             bind_group_layouts: &[Some(&layout)],
             ..Default::default()
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Section culling"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: Some("vs_box"),
-                compilation_options: Default::default(),
-                buffers: &[],
-            },
-            primitive: wgpu::PrimitiveState {
-                cull_mode: Some(wgpu::Face::Back),
-                ..Default::default()
-            },
-            // The world pass's reversed depth test, without writes.
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some("fs_box"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: color,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::empty(),
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipeline = |label, gl: bool, targets: &[Option<wgpu::ColorTargetState>]| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some(if gl { "vs_box_gl" } else { "vs_box" }),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                // OpenGL's layout flips y, and with it the faces' winding.
+                primitive: wgpu::PrimitiveState {
+                    cull_mode: Some(wgpu::Face::Back),
+                    front_face: if gl {
+                        wgpu::FrontFace::Cw
+                    } else {
+                        wgpu::FrontFace::Ccw
+                    },
+                    ..Default::default()
+                },
+                // The pass's depth test (reversed in the world pass, OpenGL's
+                // in a Java pack's), without writes.
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(if gl {
+                        wgpu::CompareFunction::LessEqual
+                    } else {
+                        wgpu::CompareFunction::GreaterEqual
+                    }),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &module,
+                    entry_point: Some(if gl { "fs_box_depth" } else { "fs_box" }),
+                    compilation_options: Default::default(),
+                    targets,
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let gl_pipeline = pipeline("Section culling, OpenGL layout", true, &[]);
+        let pipeline = pipeline(
+            "Section culling",
+            false,
+            &[Some(wgpu::ColorTargetState {
+                format: color,
+                blend: None,
+                write_mask: wgpu::ColorWrites::empty(),
+            })],
+        );
         Self {
             pipeline,
+            gl_pipeline,
             layout,
             group: None,
             params: buffer(
@@ -409,6 +431,34 @@ impl Cull {
             return;
         }
         pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, group, &[]);
+        pass.draw(0..36, 0..self.test_data.len() as u32);
+    }
+
+    /// [`Self::test`] for a Java shader pack that draws the terrain
+    /// (`gfx/java_stages.rs`): in a pass of its own against `depth`, the
+    /// pack's depth after phase 1 in OpenGL's layout (y up, 0 near).
+    pub fn test_gl(&self, encoder: &mut wgpu::CommandEncoder, depth: &wgpu::TextureView) {
+        let Some(Group { group, .. }) = &self.group else {
+            return;
+        };
+        if self.test_data.is_empty() {
+            return;
+        }
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Section culling, Java shader pack"),
+            color_attachments: &[],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        });
+        pass.set_pipeline(&self.gl_pipeline);
         pass.set_bind_group(0, group, &[]);
         pass.draw(0..36, 0..self.test_data.len() as u32);
     }
