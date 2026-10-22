@@ -13,7 +13,7 @@ Both are off by default. With no pack selected the renderer draws exactly what i
 | Part | State |
 | --- | --- |
 | Renderer layout (below) | today's code |
-| Horizon shader packs: `composite` stage, uniforms, hot reload, Shader Packs screen | first slice planned |
+| Horizon shader packs: `composite` stage, uniforms, hot reload, Shader Packs page | done (the page: list, pick, open the folder) |
 | Horizon shader packs: `deferred`, `gbuffer`, `shadow` stages, custom textures | planned |
 | Java shader packs: preprocessing + GLSL parse coverage | spike done: 450 of 470 programs reach valid WGSL (below) |
 | Java shader packs: preprocessor (`crates/horizon-shaderpack`: includes, options, Iris's macros, JCPP's `#if` and `#define` rules) | done: every program of the three test packs preprocesses; ten packs tested (Compatibility, below) |
@@ -56,15 +56,19 @@ The lightmap, fog and sky colours are computed on the CPU (`environment.rs`, `fo
 ### Where packs live and how one is picked
 
 - Packs go in `shaderpacks/` beside `options.txt` in the game folder (the same folder Iris uses, so one folder
-  holds both kinds). A pack is a folder (zips planned). A pack with a `pack.toml` at its root is a Horizon pack; a pack
-  with a `shaders/` folder is a Java pack.
-- **Options → Video Settings → Shader Packs...** (Classic screens, laid out like Iris's: the packs on the left with
-  "(off)" first, Apply and Done, *Open Shader Pack Folder*, *Shader Pack Settings...*) and a **Shader Packs** row in
-  the Horizon menus' Video section open the same list.
+  holds both kinds). That is the game home the launcher starts the game in (`%APPDATA%\horizon` on Windows,
+  `~/Library/Application Support/horizon` on macOS, `~/.local/share/horizon` on Linux), not the launcher's version
+  folder. A pack with a `pack.toml` at its root is a Horizon pack; a folder with `shaders/`, or a `.zip`, is a Java
+  pack.
+- The **Shader Packs** page lists them: a sidebar section in the Horizon menus, **Video Settings → Shader Packs...**
+  in the Classic ones, and the Shader Pack row of the graphics settings leads to it. It shows the folder's full path
+  and an *Open Folder* button (the folder is made if it is missing), then one switch per pack: turning one on picks
+  it, turning it off is the vanilla picture. With no pack, it says so under the path. The list is read again every
+  second while the page is open, so a pack dropped into the folder shows up.
 - The choice is kept in `horizon-graphics.txt` (`shaderPack:<folder or zip name>`, empty = off). A pack's option
   values are kept in `shaderpacks/<pack>.txt`, as Iris does.
-- A pack that fails to load or compile leaves the vanilla picture on and shows why, in red, on its row (and in the
-  log). Nothing a pack does can stop the game from starting.
+- A pack that fails to load or compile leaves the vanilla picture (or the last pack that worked) on and says why on
+  its row ("Failed", with the error), in chat and in the log. Nothing a pack does can stop the game from starting.
 - Benchmarks (`--benchmark`) and the parity harnesses never load a pack.
 
 ### Layout

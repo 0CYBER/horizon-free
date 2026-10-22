@@ -37,11 +37,8 @@ impl ShaderPacks {
     }
 }
 
-/// `shaderpacks/` beside `options.txt`.
 pub(super) fn dir() -> PathBuf {
-    std::env::current_dir()
-        .unwrap_or_default()
-        .join(shader_pack::DIR)
+    shader_pack::folder()
 }
 
 impl Game<'_> {
@@ -77,6 +74,7 @@ impl Game<'_> {
             return self.shader_pack_error(&id, &e.to_string());
         }
         self.shader_packs.pack = pack;
+        self.ui.options.shader_pack_error = None;
     }
     /// Give the loaded pack to the renderer (also after it is rebuilt).
     pub(super) fn apply_shader_pack(&mut self) -> horizon_client::Result<()> {
@@ -105,6 +103,11 @@ impl Game<'_> {
     }
     fn shader_pack_error(&mut self, id: &str, error: &str) {
         log::warn!("Horizon: shader pack {id}: {error}");
+        // The Shader Packs page says why on the pack's row: the first line,
+        // since translator errors go on with a drawn source excerpt.
+        let first = error.lines().map(str::trim).find(|l| !l.is_empty());
+        self.ui.options.shader_pack_error =
+            Some((id.to_owned(), first.unwrap_or(error).to_owned()));
         self.system_message(Text::literal(format!("Shader pack {id}: {error}")));
     }
 }
