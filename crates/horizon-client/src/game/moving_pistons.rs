@@ -88,7 +88,9 @@ impl Game<'_> {
         light: u32,
         out: &mut Vec<Vertex>,
     ) {
-        let tint = self.particle_sprite(state).map(|(_, tint)| tint);
+        let tint = self
+            .particle_sprite(state, [seed.x, seed.y, seed.z])
+            .map(|(_, tint)| tint);
         let start = out.len();
         self.block_model_vertices(
             state,
