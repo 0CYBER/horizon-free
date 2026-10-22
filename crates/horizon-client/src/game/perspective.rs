@@ -223,6 +223,14 @@ impl Game<'_> {
             .riding
             .and_then(|id| self.mobs.iter().find(|m| m.id == id))
             .map(|_| (1.0, 4.0));
+        // AbstractBoat.positionRider turns a passenger by the boat's
+        // deltaRotation after its yRotO was saved, and LocalPlayer.getViewYRot
+        // interpolates a passenger's yaw: the boat's turn is spread over the
+        // frames of a tick.
+        let ride_turn = self
+            .riding
+            .and_then(|id| self.boats.iter().find(|b| b.id == id))
+            .map_or(0.0, |b| b.delta_rotation);
         let entity = CameraEntity {
             position: [p.position.x, p.position.y, p.position.z],
             previous: [
@@ -235,7 +243,7 @@ impl Game<'_> {
             x_rot: self.pitch,
             y_rot: self.yaw,
             x_rot_o: self.pitch,
-            y_rot_o: self.yaw,
+            y_rot_o: self.yaw - ride_turn,
             eye_height: p.dimensions.eye_height,
             living: Some(LivingCamera {
                 scale,
