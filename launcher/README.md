@@ -84,7 +84,8 @@ page `servers.json` (the list), `servers/<name>/` (the servers created there) an
   and update state.
 - **Updates**: **Stable** (the default) installs a tested build about once a day, the betas that
   `promote.yml` makes stable; **Nightly** installs every release as soon as it is built, several
-  times a day, and can break (docs/release-flow.md, "Channels"). Kept as `update_channel` in
+  times a day, and can break (docs/release-flow.md, "Channels"). While it is open, the launcher
+  looks for new releases every 4 hours on Stable and every 30 minutes on Nightly. Kept as `update_channel` in
   `settings.json`; a `beta_builds: true` from launchers before 0.2 reads as Nightly.
   `horizon-launcher update-channel [stable|nightly]` shows or sets it. The **Versions** page
   shows each release's channel. The launcher's own updates don't depend on it.

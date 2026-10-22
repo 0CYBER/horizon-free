@@ -7,7 +7,7 @@
     python3 tools/release_channels.py promote --dry-run         # say what would happen, change nothing
 
 Every game release goes out as a beta (a GitHub pre-release): launchers on the Nightly channel install it at once.
-Stable moves once a day, at PROMOTE_AT (19:00 UTC). A beta is due for stable when:
+Stable moves once a day, at PROMOTE_AT (20:00 UTC). A beta is due for stable when:
 - it is newer than the stable release (GitHub's "latest", which launchers and servers install by default),
 - it had been out PROMOTE_AFTER (6 hours) at the day's promotion time, so every run until the next one picks the
   same beta and a run GitHub starts late (or a second try) never promotes twice; by hand (--tag) skips the wait,
@@ -42,8 +42,8 @@ from tools.release_train import is_game_tag, tag_key  # noqa: E402  (vYYYY.MM.DD
 
 REPO = os.environ.get("GITHUB_REPOSITORY", "ludovic111/horizon")
 PROMOTE_AFTER = dt.timedelta(hours=6)
-# The daily promotion (21:00 in Paris in summer time, 20:00 in winter); promote.yml's schedule runs just after it.
-PROMOTE_AT = dt.time(19, 0)
+# The daily promotion (21:00 in Paris in winter time, 22:00 in summer); promote.yml's schedule runs just after it.
+PROMOTE_AT = dt.time(20, 0)
 SMOKE_ASSET = "smoke-test.json"
 BLOCKER = "release-blocker"
 STALL_AFTER = dt.timedelta(hours=30)

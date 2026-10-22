@@ -92,9 +92,6 @@ fn ease_out_cubic(x: f32) -> f32 {
     horizon_theme::ease_out_cubic(x)
 }
 
-/// How often the launcher looks for new releases while it is open.
-const CHECK_EVERY: Duration = Duration::from_secs(4 * 3600);
-
 enum Load<T> {
     Loading,
     Ready(T),
@@ -613,7 +610,8 @@ impl Launcher {
                 changed = true;
             }
         }
-        if self.checked.is_some_and(|at| at.elapsed() > CHECK_EVERY) {
+        let every = self.settings.update_channel.check_every();
+        if self.checked.is_some_and(|at| at.elapsed() > every) {
             self.check_updates();
         }
         if changed {

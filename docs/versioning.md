@@ -24,7 +24,7 @@ game and the launcher of the 0.2 line.
   and launcher counted separately (the game releases more often, so `v0.2.14` can go with `launcher@0.2.3`).
 - **Betas** are not separate tags. As before, every game release is published as a GitHub pre-release (a beta, what
   the launcher's Nightly channel installs) under its final tag and promoted in place to stable in the daily
-  promotion at 19:00 UTC, once it has been out 6 hours ([Channels](release-flow.md#channels)). `v0.2.4` is the same
+  promotion at 20:00 UTC, once it has been out 6 hours ([Channels](release-flow.md#channels)). `v0.2.4` is the same
   build whether it is still a beta or already stable.
 - **Pre-release tags** (`v0.3.0-rc.1`, `v0.3.0-beta.2`) are semver's and are reserved for a hand-made preview of a
   new line; the train never makes them. Every reader orders them before their release and after the release
@@ -137,7 +137,7 @@ Run by the orchestrator, in this order. Until step 3, nothing is published.
    # with launcher-v0.17.0's binary:  update --check --json  ->  "launcher": "0.2.0", "horizon": "v0.2.0" (with Beta builds on)
    ```
    and `gh release view v0.2.0 --json assets`, `horizon-server --version` in the Linux server archive.
-7. `v0.2.0` becomes stable in the first daily promotion (19:00 UTC) it has been out 6 hours for (or
+7. `v0.2.0` becomes stable in the first daily promotion (20:00 UTC) it has been out 6 hours for (or
    `gh workflow run promote -f tag=v0.2.0`). While it is a beta, *latest*
    stays the bridge, so keeping it in beta for longer catches more servers (Ludovic's call). From then on everything
    is automatic again: `v0.2.1`, `launcher@0.2.1`, ….

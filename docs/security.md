@@ -54,7 +54,7 @@ and some are waiting for Ludovic:
   the only `verify` a change can have is one that ran. Main requires it, from GitHub Actions only, for everyone,
   admins included.
 - **Beta, then stable.** Every release is first a **beta**. It becomes **stable**, the version launchers and
-  servers install by themselves, in the daily promotion (19:00 UTC), only after it has been out 6 hours and passed its
+  servers install by themselves, in the daily promotion (20:00 UTC), only after it has been out 6 hours and passed its
   smoke test (the game started and drew a world on the Mac mini), and only while no issue labelled `release-blocker`
   is open. If a beta misses a promotion it was due for, an issue says so. Players who want the newest builds at once
   pick **Nightly** under Updates in the launcher's Settings. Discord announces stable releases only.

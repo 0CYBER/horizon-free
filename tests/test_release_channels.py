@@ -4,8 +4,8 @@ import unittest
 from tools import release_channels as channels
 from tools import release_train as train
 
-# Just after the daily promotion (PROMOTE_AT, 19:00 UTC): a beta is due when it had been out 6 hours by 19:00.
-NOW = dt.datetime(2026, 10, 19, 19, 30, tzinfo=dt.timezone.utc)
+# Just after the daily promotion (PROMOTE_AT, 20:00 UTC): a beta is due when it had been out 6 hours by 20:00.
+NOW = dt.datetime(2026, 10, 19, 20, 30, tzinfo=dt.timezone.utc)
 
 
 def release(tag, hours_ago, prerelease=True, smoke=True, draft=False):
@@ -31,18 +31,18 @@ class ReleaseChannelTests(unittest.TestCase):
 
     def test_nothing_is_due_before_six_hours(self):
         chosen, why = channels.choose([STABLE, release("v2026.10.19", 6)], [], NOW)
-        self.assertIsNone(chosen, "out 5 h 30 min at 19:00")
-        self.assertIn("the one at 2026-10-20 19:00 UTC takes it", why)
+        self.assertIsNone(chosen, "out 5 h 30 min at 20:00")
+        self.assertIn("the one at 2026-10-20 20:00 UTC takes it", why)
         late = channels.choose([STABLE, release("v2026.10.19", 0.5)], [], NOW)[1]
-        self.assertIn("the one at 2026-10-20 19:00 UTC takes it", late, "out after 19:00: 6 h by the next one")
+        self.assertIn("the one at 2026-10-20 20:00 UTC takes it", late, "out after 20:00: 6 h by the next one")
 
     def test_stable_moves_once_a_day_whenever_the_run_starts(self):
         hour = dt.timedelta(hours=1)
         releases = [STABLE, release("v2026.10.19", 9), release("v2026.10.19.01", 6)]
-        # Before 19:00 nothing new is due, even what has been out 6 hours by now.
+        # Before 20:00 nothing new is due, even what has been out 6 hours by now.
         before = channels.choose(releases, [], NOW - hour)
         self.assertIsNone(before[0], before[1])
-        # The 19:00 run and a late one or a retry pick the same beta; once it is stable, the evening's later runs
+        # The 20:00 run and a late one or a retry pick the same beta; once it is stable, the evening's later runs
         # promote nothing, though v2026.10.19.01 has been out 6 hours by then.
         for late in (0, 1, 3):
             self.assertEqual(channels.choose(releases, [], NOW + late * hour)[0]["tag_name"], "v2026.10.19")
@@ -52,8 +52,8 @@ class ReleaseChannelTests(unittest.TestCase):
         self.assertEqual(channels.choose(releases, [], NOW + 20 * hour)[0]["tag_name"], "v2026.10.19")
         # The next day's promotion takes the one that came out too late for today's.
         self.assertEqual(channels.choose(promoted, [], NOW + 24 * hour)[0]["tag_name"], "v2026.10.19.01")
-        self.assertEqual(channels.promotion_time(NOW), dt.datetime(2026, 10, 19, 19, 0, tzinfo=dt.timezone.utc))
-        self.assertEqual(channels.promotion_time(NOW - hour), dt.datetime(2026, 10, 18, 19, 0, tzinfo=dt.timezone.utc))
+        self.assertEqual(channels.promotion_time(NOW), dt.datetime(2026, 10, 19, 20, 0, tzinfo=dt.timezone.utc))
+        self.assertEqual(channels.promotion_time(NOW - hour), dt.datetime(2026, 10, 18, 20, 0, tzinfo=dt.timezone.utc))
 
     def test_a_beta_without_its_smoke_test_waits_for_a_hand(self):
         releases = [STABLE, release("v2026.10.19", 8, smoke=False)]
@@ -120,7 +120,7 @@ class ReleaseChannelTests(unittest.TestCase):
         self.assertIsNone(channels.choose([bridge, launcher], [], NOW)[0], "launcher releases are never game betas")
 
     def test_a_stall_is_reported_once_the_oldest_waiting_beta_missed_a_daily_promotion(self):
-        # Out at 13:31 yesterday: just too late for yesterday's 19:00, so 29 h 59 min of waiting is a normal day.
+        # Out at 14:31 yesterday: just too late for yesterday's 20:00, so 29 h 59 min of waiting is a normal day.
         self.assertIsNone(channels.stalled([STABLE, release("v2026.10.19", 29.99), release("v2026.10.19.01", 2)], NOW))
         releases = [STABLE, release("v2026.10.19", 31), release("v2026.10.19.01", 2)]
         oldest, age = channels.stalled(releases, NOW)

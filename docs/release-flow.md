@@ -103,7 +103,7 @@ flowchart LR
     end
     build --> publish["publish vX.Y.Z as a beta<br/>notes from the merged PRs"]
     publish --> beta(["launchers on Nightly install it"])
-    publish --> promote{"promote.yml, daily at 19:00 UTC:<br/>6 h old by then, smoke test, no release-blocker"}
+    publish --> promote{"promote.yml, daily at 20:00 UTC:<br/>6 h old by then, smoke test, no release-blocker"}
     promote --> stable["stable and latest<br/>notes since the last stable"]
     stable --> launcher(["every launcher and server installs it"])
     stable --> kira(["Kira posts it;<br/>pings only with ### New"])
@@ -191,17 +191,17 @@ Every game release is published as a **beta**, a GitHub pre-release, so GitHub's
 
 - **Stable**, the default: a tested build about once a day, the betas promoted below.
 - **Nightly**: every beta as soon as it is built, many times a day; it can break. "Nightly" is a name, not a
-  schedule. Launchers from before 0.2 had a "Beta builds" switch instead; on, it reads as Nightly.
+  schedule. An open launcher looks for releases every 30 minutes on Nightly (4 hours on Stable). Launchers from before 0.2 had a "Beta builds" switch instead; on, it reads as Nightly.
 
 `horizon-server update` installs stable builds (`--version <beta>` takes one by name), and Kira announces a release
 when it becomes stable: Discord's #releases only ever shows stable ones.
 
-`.github/workflows/promote.yml` runs `tools/release_channels.py promote` once a day at 19:00 UTC (21:00 in Paris in
-summer time, 20:00 in winter), with retries until 20:37 for a run GitHub starts late or skips. It promotes the newest
+`.github/workflows/promote.yml` runs `tools/release_channels.py promote` once a day at 20:00 UTC (21:00 in Paris in
+winter time, 22:00 in summer), with retries until 21:37 for a run GitHub starts late or skips. It promotes the newest
 beta that
 
 - is newer than the stable release,
-- had been out 6 hours at 19:00 UTC (published by 13:00 UTC that day; one published later waits for the next day),
+- had been out 6 hours at 20:00 UTC (published by 14:00 UTC that day; one published later waits for the next day),
   so every run of the evening picks the same beta and stable moves once a day,
 - passed its release smoke test: the macOS build attaches `smoke-test.json` (the offscreen game run's report) only
   when the game drew a world on the Mac mini, so a release built while `MAC_RUNNER` sends macOS to GitHub waits
@@ -224,7 +224,7 @@ release (`release_train.py notes --stable`), so players who skipped the betas se
 betas. By hand, from a phone too (GitHub app: Actions, promote, Run workflow):
 
 ```sh
-gh workflow run promote -f tag=v0.2.3                 # that beta now: no wait for 19:00, still no blocker
+gh workflow run promote -f tag=v0.2.3                 # that beta now: no wait for 20:00, still no blocker
 gh workflow run promote -f tag=v0.2.3 -f force=true   # even blocked or without a smoke test
 gh workflow run promote -f dry_run=true               # what would be promoted now
 ```

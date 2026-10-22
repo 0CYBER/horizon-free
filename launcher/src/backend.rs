@@ -395,6 +395,15 @@ impl UpdateChannel {
         self == UpdateChannel::Nightly || !release.beta
     }
 
+    /// How often a launcher left open looks for new releases: Nightly's come many times a day,
+    /// Stable's once.
+    pub fn check_every(self) -> std::time::Duration {
+        std::time::Duration::from_secs(match self {
+            UpdateChannel::Stable => 4 * 3600,
+            UpdateChannel::Nightly => 30 * 60,
+        })
+    }
+
     /// The channel a release is on when it is listed: betas are Nightly's only.
     pub fn of(release: &Release) -> Self {
         if release.beta {
@@ -2466,6 +2475,10 @@ mod tests {
         for c in [UpdateChannel::Stable, UpdateChannel::Nightly] {
             assert_eq!(UpdateChannel::parse(c.name()), Some(c));
         }
+        // An open launcher looks again every 4 hours on Stable, every 30 minutes on Nightly.
+        let minutes = |c: UpdateChannel| c.check_every().as_secs() / 60;
+        assert_eq!(minutes(UpdateChannel::Stable), 240);
+        assert_eq!(minutes(UpdateChannel::Nightly), 30);
     }
 
     #[test]
