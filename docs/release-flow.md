@@ -180,8 +180,10 @@ runs the game: GitHub's runners have neither a GPU worth the name nor the game f
 - `### Known issues`: the bullets of [docs/known-issues.md](known-issues.md);
 - thanks to outside contributors, how to install, the disclaimer.
 
-Kira posts every published release in #releases and pings the releases role only when the notes have a
-`### New` section.
+Kira posts every release in Discord's #releases. A Nightly (a game pre-release) is posted silently: no ping and
+Discord's @silent flag, so nobody gets a notification. When the same release becomes Stable it is posted again, and
+that post pings the releases role when the notes have a `### New` section (at most once every 6 hours). Launcher
+releases post without a ping.
 
 ### Channels
 
@@ -193,8 +195,8 @@ Every game release is published as a **beta**, a GitHub pre-release, so GitHub's
 - **Nightly**: every beta as soon as it is built, many times a day; it can break. "Nightly" is a name, not a
   schedule. An open launcher looks for releases every 30 minutes on Nightly (4 hours on Stable). Launchers from before 0.2 had a "Beta builds" switch instead; on, it reads as Nightly.
 
-`horizon-server update` installs stable builds (`--version <beta>` takes one by name), and Kira announces a release
-when it becomes stable: Discord's #releases only ever shows stable ones.
+`horizon-server update` installs stable builds (`--version <beta>` takes one by name). In Discord's #releases every
+Nightly is posted silently and only Stable posts notify (above).
 
 `.github/workflows/promote.yml` runs `tools/release_channels.py promote` once a day at 20:00 UTC (21:00 in Paris in
 winter time, 22:00 in summer), with retries until 21:37 for a run GitHub starts late or skips. It promotes the newest
