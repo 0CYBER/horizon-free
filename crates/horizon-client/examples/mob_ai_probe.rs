@@ -1027,6 +1027,7 @@ fn main() -> horizon_client::Result<()> {
                     nearest_player: player.as_ref().filter(|p| !p.spectator).map(|p| p.position),
                     others: $snapshot,
                     others_grid: $grid,
+                    others_index: None,
                     daylight: (world.day_time.rem_euclid(24000)) < 12000,
                     game_time: world.game_time,
                     day_time: world.day_time,
@@ -1132,7 +1133,7 @@ fn main() -> horizon_client::Result<()> {
             }
             #[allow(unused_mut)] // filled only with the rng-trace feature
             let mut traces: Vec<String> = Vec::new();
-            let mut pushes = Vec::new();
+            let mut pushes = horizon_client::mobs::PendingPushes::default();
             let mut born = Vec::new();
             for i in 0..mobs.len() {
                 if mobs[i].removed {

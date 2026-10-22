@@ -84,7 +84,7 @@ and characters per line, for 360 to 1920 px wide and a 1250×700 window.
 
 ## Railway
 
-The service deploys the `website` branch and answers on https://playhorizon.dev. Its
+The service deploys `main` (Railway's GitHub integration; there is no `website` branch any more) when `/website/**`, `README.md` or `launcher/links.json` change, and answers on https://playhorizon.dev. Its
 `*.up.railway.app` address redirects there with a 301 (the Caddyfile), so search engines index
 one URL; the page also names it as canonical, in its Open Graph tags and in `sitemap.xml`.
 Railway's healthcheck reaches `$PORT` under its own host name and is served normally.

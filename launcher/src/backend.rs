@@ -346,7 +346,7 @@ pub fn latest(releases: &[Release]) -> Option<&Release> {
     releases.iter().find(|r| r.asset.is_some())
 }
 
-/// The releases a launcher installs by itself: stable ones, and betas too on the Nightly channel.
+/// The releases a launcher installs by itself: stable ones, and betas too on the Alpha channel.
 pub fn channel(releases: &[Release], channel: UpdateChannel) -> Vec<Release> {
     releases
         .iter()
@@ -362,15 +362,17 @@ pub enum UpdateChannel {
     /// A tested build about once a day: the betas promote.yml makes stable.
     #[default]
     Stable,
-    /// Every release as soon as it is built, betas included.
-    Nightly,
+    /// Every release as soon as it is built, pre-releases included. It was called "nightly"
+    /// while the channels were new: that name is still read.
+    #[serde(alias = "nightly")]
+    Alpha,
 }
 
 impl UpdateChannel {
     pub fn name(self) -> &'static str {
         match self {
             UpdateChannel::Stable => "stable",
-            UpdateChannel::Nightly => "nightly",
+            UpdateChannel::Alpha => "alpha",
         }
     }
 
@@ -378,36 +380,36 @@ impl UpdateChannel {
     pub fn label(self) -> &'static str {
         match self {
             UpdateChannel::Stable => "Stable",
-            UpdateChannel::Nightly => "Nightly",
+            UpdateChannel::Alpha => "Alpha",
         }
     }
 
     pub fn parse(name: &str) -> Option<Self> {
         match name {
             "stable" => Some(UpdateChannel::Stable),
-            "nightly" => Some(UpdateChannel::Nightly),
+            "alpha" | "nightly" => Some(UpdateChannel::Alpha),
             _ => None,
         }
     }
 
-    /// Whether this channel installs `release`: betas only reach Nightly.
+    /// Whether this channel installs `release`: betas only reach Alpha.
     pub fn takes(self, release: &Release) -> bool {
-        self == UpdateChannel::Nightly || !release.beta
+        self == UpdateChannel::Alpha || !release.beta
     }
 
-    /// How often a launcher left open looks for new releases: Nightly's come many times a day,
+    /// How often a launcher left open looks for new releases: Alpha's come many times a day,
     /// Stable's once.
     pub fn check_every(self) -> std::time::Duration {
         std::time::Duration::from_secs(match self {
             UpdateChannel::Stable => 4 * 3600,
-            UpdateChannel::Nightly => 30 * 60,
+            UpdateChannel::Alpha => 30 * 60,
         })
     }
 
-    /// The channel a release is on when it is listed: betas are Nightly's only.
+    /// The channel a release is on when it is listed: betas are Alpha's only.
     pub fn of(release: &Release) -> Self {
         if release.beta {
-            UpdateChannel::Nightly
+            UpdateChannel::Alpha
         } else {
             UpdateChannel::Stable
         }
@@ -993,6 +995,78 @@ fn download_for_owner(
     }
 }
 
+/// A JDK of at least `major` for the preparation. `None` when horizon-prepare finds one by
+/// itself (JAVA_HOME, the PATH, an installed JDK): the preparation then runs as before, in an
+/// unchanged environment (a JDK found on the PATH can be a stub such as macOS's
+/// /usr/bin/javac, whose folder is no Java home: `JAVA_HOME=/usr` makes it call itself
+/// forever). Else the home of the Java the official launcher downloaded into one of the
+/// `games` folders, else of Minecraft's own Java downloaded from Mojang into Horizon's game
+/// folder, the runtime the version JSON at `manifest` names (Mojang's runtimes are whole JDKs).
+fn java(
+    major: i64,
+    games: &[PathBuf],
+    manifest: &Path,
+    log: &dyn Fn(String),
+) -> Result<Option<PathBuf>, String> {
+    if horizon_prepare::java::find(major, &[]).is_ok() {
+        return Ok(None);
+    }
+    let mut runtimes: Vec<PathBuf> = Vec::new();
+    for home in games
+        .iter()
+        .flat_map(|game| horizon_prepare::java::minecraft_runtimes(&game.join("runtime")))
+    {
+        if !runtimes.contains(&home) {
+            runtimes.push(home);
+        }
+    }
+    let missing = match horizon_prepare::java::find(major, &runtimes) {
+        Ok(jdk) => return Ok(Some(jdk.home())),
+        Err(e) => e,
+    };
+    let component = read_json(manifest)
+        .and_then(|json| json["javaVersion"]["component"].as_str().map(String::from))
+        .ok_or_else(|| missing.clone())?;
+    // Mojang builds its Linux Java for glibc: without glibc's loader (NixOS without nix-ld,
+    // musl distributions) it cannot start, so don't download it.
+    if cfg!(all(target_os = "linux", target_arch = "x86_64")) && !Path::new(GLIBC_LOADER).exists() {
+        return Err(format!(
+            "{missing}\n  • Minecraft's own Java from Mojang needs glibc ({GLIBC_LOADER} is missing; on NixOS, enable programs.nix-ld), so install a JDK instead."
+        ));
+    }
+    let fetch = |url: &str| -> Result<Vec<u8>, String> {
+        let mut body = Vec::new();
+        get(url)?
+            .into_reader()
+            .read_to_end(&mut body)
+            .map_err(|e| e.to_string())?;
+        Ok(body)
+    };
+    let runtime = data_dir().join("minecraft").join("runtime");
+    let home = mojang::java_runtime(&component, &runtime, 8, &fetch, log).map_err(|e| {
+        format!("{missing}\n  • Horizon also tried to download Minecraft's own Java from Mojang, but: {e}")
+    })?;
+    horizon_prepare::java::find(major, &[home]).map(|jdk| Some(jdk.home()))
+}
+
+/// The dynamic loader glibc programs on x86-64 Linux start through.
+const GLIBC_LOADER: &str = "/lib64/ld-linux-x86-64.so.2";
+
+/// Runs `cmd` with the JDK at `home`: JAVA_HOME names it and its `bin` leads the PATH, as the
+/// versions' own preparers look for Java.
+fn with_java(cmd: &mut Command, home: &Path) {
+    let mut path = vec![home.join("bin")];
+    path.extend(
+        std::env::var_os("PATH")
+            .iter()
+            .flat_map(std::env::split_paths),
+    );
+    cmd.env("JAVA_HOME", home);
+    if let Ok(path) = std::env::join_paths(path) {
+        cmd.env("PATH", path);
+    }
+}
+
 /// Checks what the preparation needs and picks how to run it. PLAY.txt describes the same
 /// steps: the player's own launcher install, the server jar from that version's own json, and
 /// Java (and Python, for versions before horizon-prepare). Also returns the Minecraft folder
@@ -1006,6 +1080,7 @@ pub fn preparer(
     let version = game_version(tag);
     let dir = version_dir(tag);
     let reused = horizon_prepare::artifacts::reuse_imported(&dir, &|line| log(line.to_string()))?;
+    let chosen = minecraft.to_path_buf();
     let minecraft = if reused {
         minecraft.to_path_buf()
     } else {
@@ -1042,25 +1117,27 @@ pub fn preparer(
         .join(&version)
         .join(format!("{version}.json"));
     let binary = preparer_binary(&dir);
-    let python = if binary.is_some() {
-        // The JDK the version pins, found as horizon-prepare finds it, so a missing one is
-        // reported before the server jar is downloaded.
-        let major = read_json(&dir.join("research-lock.json"))
-            .and_then(|lock| lock["minecraft"]["java_major"].as_i64())
-            .ok_or("The version's research-lock.json has no java_major")?;
-        horizon_prepare::java::find(major)?;
-        None
-    } else {
-        let python = python()
-            .ok_or("This version prepares with Python: Python 3.10 or newer is needed. Install it, or pick a newer version.")?;
-        if !found("java", "-version") {
-            return Err(
-                "Java 25 is needed (a JDK, e.g. Eclipse Temurin 25). Install it and try again."
-                    .into(),
-            );
-        }
-        Some(python)
+    let python = match binary {
+        Some(_) => None,
+        None => Some(python().ok_or(
+            "This version prepares with Python: Python 3.10 or newer is needed. Install it, or pick a newer version.",
+        )?),
     };
+    // The JDK the version pins, found as horizon-prepare finds it, so a missing one is
+    // reported (or downloaded) before the server jar is downloaded. Versions from before
+    // java_major ran Java 25.
+    let major = read_json(&dir.join("research-lock.json"))
+        .and_then(|lock| lock["minecraft"]["java_major"].as_i64())
+        .unwrap_or(25);
+    let mut games = vec![chosen, minecraft.clone(), data_dir().join("minecraft")];
+    games.extend(
+        sources::Folders::current()
+            .map(|f| sources::known_folders(sources::Os::current(), &f))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(_, dir)| dir),
+    );
+    let java_home = java(major, &games, &manifest, log)?;
     let jar = data_dir()
         .join("server-jars")
         .join(format!("{version}.jar"));
@@ -1092,10 +1169,14 @@ pub fn preparer(
                 import: !reused,
                 minecraft_dir: Some(minecraft.clone()),
                 server_jar: (!reused).then_some(jar),
+                java_home: java_home.clone(),
             };
             return Ok((Preparer::InProcess(options), minecraft));
         }
         let mut cmd = Command::new(binary);
+        if let Some(home) = &java_home {
+            with_java(&mut cmd, home);
+        }
         cmd.current_dir(&dir).arg("--root").arg(&dir);
         if !reused {
             cmd.args(["--prepare", "--server-jar"]).arg(&jar);
@@ -1104,6 +1185,9 @@ pub fn preparer(
         return Ok((Preparer::Process(cmd), minecraft));
     }
     let mut cmd = Command::new(python.unwrap());
+    if let Some(home) = &java_home {
+        with_java(&mut cmd, home);
+    }
     cmd.current_dir(&dir)
         .args(["-u", "tools/prepare_native_client.py"]);
     if !reused {
@@ -2214,7 +2298,7 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub game_args: String,
     /// Which releases install by themselves: Stable by default. Launchers before 0.2 had a "Beta
-    /// builds" switch instead; [`Settings::parse`] reads its `beta_builds: true` as Nightly.
+    /// builds" switch instead; [`Settings::parse`] reads its `beta_builds: true` as Alpha.
     #[serde(default)]
     pub update_channel: UpdateChannel,
     /// The player has read what the "I'm playing" ping holds (`telemetry::PING`): on the
@@ -2232,11 +2316,11 @@ impl Settings {
             return Self::default();
         };
         if let Some(fields) = value.as_object_mut() {
-            // The switch from before 0.2: on meant every release at once, the Nightly channel.
+            // The switch from before 0.2: on meant every release at once, the Alpha channel.
             if fields.remove("beta_builds") == Some(serde_json::Value::Bool(true)) {
                 fields
                     .entry("update_channel")
-                    .or_insert_with(|| UpdateChannel::Nightly.name().into());
+                    .or_insert_with(|| UpdateChannel::Alpha.name().into());
             }
             // A channel this launcher doesn't know is Stable, not a reason to lose every setting.
             if fields
@@ -2458,10 +2542,10 @@ mod tests {
         assert_eq!(offered(&["v2026.10.15.1", "v2026.10.14"]), None);
     }
 
-    /// Betas (GitHub pre-releases) install by themselves only on the Nightly channel; Stable waits
+    /// Betas (GitHub pre-releases) install by themselves only on the Alpha channel; Stable waits
     /// for promote.yml's daily promotion (docs/release-flow.md, "Channels").
     #[test]
-    fn updates_follow_the_stable_channel_unless_nightly_is_picked() {
+    fn updates_follow_the_stable_channel_unless_alpha_is_picked() {
         let asset = ASSET.unwrap_or("horizon-linux-x86_64.tar.gz");
         let list = serde_json::json!([
             {"tag_name": "v2026.10.19.02", "prerelease": true, "assets": [{"name": asset, "browser_download_url": "b", "size": 1}]},
@@ -2472,10 +2556,10 @@ mod tests {
             releases.iter().map(|r| r.beta).collect::<Vec<_>>(),
             [true, false]
         );
-        let offered = |nightly: bool, installed: &[&str]| {
+        let offered = |alpha: bool, installed: &[&str]| {
             let installed: Vec<String> = installed.iter().map(|t| t.to_string()).collect();
-            let on = if nightly {
-                UpdateChannel::Nightly
+            let on = if alpha {
+                UpdateChannel::Alpha
             } else {
                 UpdateChannel::Stable
             };
@@ -2491,12 +2575,12 @@ mod tests {
         assert_eq!(offered(false, &["v2026.10.19.02"]), None);
         assert_eq!(
             releases.iter().map(UpdateChannel::of).collect::<Vec<_>>(),
-            [UpdateChannel::Nightly, UpdateChannel::Stable]
+            [UpdateChannel::Alpha, UpdateChannel::Stable]
         );
     }
 
     #[test]
-    fn the_update_channel_is_stored_by_name_and_the_old_beta_switch_reads_as_nightly() {
+    fn the_update_channel_is_stored_by_name_and_the_old_beta_switch_reads_as_alpha() {
         let read = |text: &str| Settings::parse(text).update_channel;
         assert_eq!(read(""), UpdateChannel::Stable);
         assert_eq!(read("{}"), UpdateChannel::Stable);
@@ -2504,12 +2588,15 @@ mod tests {
             read(r#"{"update_channel": "stable"}"#),
             UpdateChannel::Stable
         );
+        assert_eq!(read(r#"{"update_channel": "alpha"}"#), UpdateChannel::Alpha);
+        // The channel's first name, from launchers built while it was called Nightly.
         assert_eq!(
             read(r#"{"update_channel": "nightly"}"#),
-            UpdateChannel::Nightly
+            UpdateChannel::Alpha
         );
-        // Launchers before 0.2: "Beta builds" on is Nightly, off is Stable.
-        assert_eq!(read(r#"{"beta_builds": true}"#), UpdateChannel::Nightly);
+        assert_eq!(UpdateChannel::parse("nightly"), Some(UpdateChannel::Alpha));
+        // Launchers before 0.2: "Beta builds" on is Alpha, off is Stable.
+        assert_eq!(read(r#"{"beta_builds": true}"#), UpdateChannel::Alpha);
         assert_eq!(read(r#"{"beta_builds": false}"#), UpdateChannel::Stable);
         // Once a channel is picked, it wins over a switch left behind.
         let both = r#"{"beta_builds": true, "update_channel": "stable"}"#;
@@ -2522,19 +2609,19 @@ mod tests {
         // Saved as a name, without the old switch.
         let mut settings = Settings::parse(r#"{"selected": "v0.2.0", "beta_builds": true}"#);
         let saved = serde_json::to_value(&settings).unwrap();
-        assert_eq!(saved["update_channel"], "nightly");
+        assert_eq!(saved["update_channel"], "alpha");
         assert!(saved.get("beta_builds").is_none());
         assert_eq!(saved["selected"], "v0.2.0");
         settings.update_channel = UpdateChannel::Stable;
         let text = serde_json::to_string(&settings).unwrap();
         assert_eq!(read(&text), UpdateChannel::Stable);
-        for c in [UpdateChannel::Stable, UpdateChannel::Nightly] {
+        for c in [UpdateChannel::Stable, UpdateChannel::Alpha] {
             assert_eq!(UpdateChannel::parse(c.name()), Some(c));
         }
-        // An open launcher looks again every 4 hours on Stable, every 30 minutes on Nightly.
+        // An open launcher looks again every 4 hours on Stable, every 30 minutes on Alpha.
         let minutes = |c: UpdateChannel| c.check_every().as_secs() / 60;
         assert_eq!(minutes(UpdateChannel::Stable), 240);
-        assert_eq!(minutes(UpdateChannel::Nightly), 30);
+        assert_eq!(minutes(UpdateChannel::Alpha), 30);
     }
 
     #[test]
@@ -2665,8 +2752,8 @@ mod tests {
         let releases = parse_releases(&list, Some(asset), is_game_tag);
         let installed = ["v2026.10.19.15".to_string(), "v2026.10.12".to_string()];
         let offered = |on| horizon_update(&channel(&releases, on), &installed).map(|r| r.tag);
-        // A beta 0.2.0 reaches launchers on Nightly; Stable ones wait for its promotion.
-        assert_eq!(offered(UpdateChannel::Nightly), Some("v0.2.0".into()));
+        // A beta 0.2.0 reaches launchers on Alpha; Stable ones wait for its promotion.
+        assert_eq!(offered(UpdateChannel::Alpha), Some("v0.2.0".into()));
         assert_eq!(offered(UpdateChannel::Stable), None);
         let mut sorted = vec![
             "v2026.10.19.15".to_string(),

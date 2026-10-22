@@ -583,6 +583,10 @@ pub struct ArmorStand {
     pub no_base_plate: bool,
     pub invisible: bool,
     pub marker: bool,
+    /// `CustomName`: the text of a hologram.
+    pub custom_name: Option<crate::text::Text>,
+    /// `CustomNameVisible`.
+    pub name_visible: bool,
     /// Game time of the last hit (the wobble and the second-hit window).
     pub last_hit: i64,
 }
@@ -603,6 +607,8 @@ impl ArmorStand {
             no_base_plate: false,
             invisible: false,
             marker: false,
+            custom_name: None,
+            name_visible: false,
             last_hit: i64::MIN / 2,
         }
     }
