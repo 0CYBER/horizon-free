@@ -10933,6 +10933,10 @@ impl ApplicationHandler for Game<'_> {
                 WindowEvent::RedrawRequested => {
                     self.observe_fullscreen();
                     let now = Instant::now();
+                    let frame_cpu = self
+                        .options
+                        .spikes
+                        .and_then(|_| horizon_client::spans::thread_cpu());
                     let elapsed = now.duration_since(self.previous);
                     self.frame_ticks = elapsed.as_secs_f32() * 20.0;
                     self.previous = now;
@@ -10999,15 +11003,16 @@ impl ApplicationHandler for Game<'_> {
                         let cpu = now.elapsed().saturating_sub(r.last_wait).as_secs_f32() * 1000.0;
                         let spans = horizon_client::spans::take();
                         if cpu > threshold {
-                            let list: Vec<String> = spans
-                                .iter()
-                                .filter(|(_, ms)| *ms >= 0.5)
-                                .map(|(n, ms)| format!("{n} {ms:.1}"))
-                                .collect();
+                            // The render thread's own CPU time in the frame:
+                            // far below the wall time, the frame waited.
+                            let worked = horizon_client::spans::thread_cpu()
+                                .zip(frame_cpu)
+                                .map_or_else(String::new, |(end, start)| {
+                                    format!(", cpu {:.1} ms", (end - start).as_secs_f32() * 1000.0)
+                                });
                             log::info!(
-                                "Horizon: slow frame {cpu:.1} ms ({} ticks): {}",
-                                steps,
-                                list.join(", ")
+                                "Horizon: slow frame {cpu:.1} ms{worked} ({steps} ticks): {}",
+                                horizon_client::spans::describe(&spans)
                             );
                         }
                     }
