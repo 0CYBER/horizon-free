@@ -433,6 +433,7 @@ impl Game<'_> {
         });
         self.level_events.clear();
         self.sculk.known = self.world.chunks.keys().copied().collect();
+        self.sculk.known_revision = Some(self.world.chunks.membership_revision());
         self.sculk_sync_index();
         let mut names: HashMap<u32, String> = HashMap::new();
         let mut sources: Vec<u32> = Vec::new();
