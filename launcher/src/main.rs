@@ -1388,6 +1388,8 @@ impl Launcher {
                 ));
         };
         let prepared = backend::is_prepared(&tag);
+        // Prepared without sounds (#1035): Prepare again is the fix, so it stands out.
+        let silent = prepared && !backend::has_sounds(&tag);
         let version = backend::game_version(&tag);
         let hero = self.hero(&tag, &version, prepared, cx);
         let running = self.client.is_some() || self.starting_client.is_some();
@@ -1429,15 +1431,13 @@ impl Launcher {
 
         let resources_value = if self.preparing {
             "Preparing…".to_string()
-        } else if prepared {
-            format!("Prepared for Minecraft {version}")
         } else {
-            format!("Not prepared. Horizon needs the files of your own Minecraft {version}.")
+            backend::resources_summary(prepared, !silent, &version)
         };
         let mut prepare = button(
             "prepare",
             if prepared { "Prepare again" } else { "Prepare" },
-            if prepared {
+            if prepared && !silent {
                 Kind::Ghost
             } else {
                 Kind::Secondary
