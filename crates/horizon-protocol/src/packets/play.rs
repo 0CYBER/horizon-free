@@ -1715,6 +1715,10 @@ packet!(
     /// (the loom's patterns, the stonecutter's recipes, the enchanting table's offers).
     ContainerButtonClick { container: i32 => VarInt, button: i32 => VarInt }
 );
+packet!(
+    /// ServerboundRenameItemPacket: `AnvilMenu.setItemName`.
+    RenameItem { name: String => Str }
+);
 packet!(Interact { id: i32 => VarInt, hand: i32 => VarInt, location: [f64; 3] => LpVec3, secondary: bool => Bool });
 packet!(
     /// ServerboundMovePlayerPacket flags: 1 on ground, 2 horizontal collision.
@@ -1797,6 +1801,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     PlayerInput(PlayerInput) = PLAYER_INPUT,
     PlayerLoaded(Empty) = PLAYER_LOADED,
     Pong(Ping) = PONG,
+    RenameItem(RenameItem) = RENAME_ITEM,
     Punch(Empty) = PUNCH,
     ResourcePack(ResourcePackResponse) = RESOURCE_PACK,
     SelectTrade(SelectTrade) = SELECT_TRADE,
@@ -2373,6 +2378,12 @@ mod tests {
         });
         assert_eq!(&button.encode()[1..], &[3, 0xC8, 1]);
         round_trip(button, Serverbound::encode, Serverbound::decode);
+        // The name, a UTF-8 string with its VarInt length.
+        let rename = Serverbound::RenameItem(RenameItem {
+            name: "Blade".into(),
+        });
+        assert_eq!(&rename.encode()[1..], &[5, b'B', b'l', b'a', b'd', b'e']);
+        round_trip(rename, Serverbound::encode, Serverbound::decode);
     }
 
     #[test]

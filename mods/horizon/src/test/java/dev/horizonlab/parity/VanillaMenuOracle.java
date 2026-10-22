@@ -180,6 +180,8 @@ public final class VanillaMenuOracle {
             case "loom" -> new LoomMenu(0, inv);
             case "stonecutter" -> new StonecutterMenu(0, inv);
             case "grindstone" -> new GrindstoneMenu(0, inv);
+            case "anvil" -> new AnvilMenu(0, inv);
+            case "smithing" -> new SmithingMenu(0, inv);
             default -> throw new IllegalArgumentException(kind);
         };
     }
@@ -227,6 +229,9 @@ public final class VanillaMenuOracle {
                     player.advancements = make(net.minecraft.server.PlayerAdvancements.class);
                     set(player.advancements, net.minecraft.server.PlayerAdvancements.class, "activeTriggers", new java.util.IdentityHashMap<>());
                     set(player, ServerPlayer.class, "connection", make(Connection.class));
+                    // AnvilMenu.onTake filters a new name; the anvil's result needs the levels.
+                    set(player, ServerPlayer.class, "textFilter", net.minecraft.server.network.TextFilter.DUMMY);
+                    player.experienceLevel = f.has("levels") ? f.get("levels").getAsInt() : 0;
                     var inv = new Inventory(player, new EntityEquipment());
                     player.inv = inv;
                     AbstractContainerMenu menu = menu(f.get("menu").getAsString(), player, inv);
@@ -250,6 +255,12 @@ public final class VanillaMenuOracle {
                         if (kind.equals("BUTTON")) {
                             // ServerGamePacketListenerImpl.handleContainerButtonClick
                             if (menu.clickMenuButton(player, slot)) menu.broadcastChanges();
+                            out.println(clickState(menu, inv));
+                            continue;
+                        }
+                        if (kind.equals("RENAME")) {
+                            // ServerGamePacketListenerImpl.handleRenameItem: AnvilMenu.setItemName
+                            if (menu instanceof AnvilMenu anvil) anvil.setItemName(op.get(3).getAsString());
                             out.println(clickState(menu, inv));
                             continue;
                         }

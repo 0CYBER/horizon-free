@@ -48,11 +48,12 @@ impl Game<'_> {
     /// `Slot.set` runs its container's `setChanged`, so the loom lists the
     /// patterns its inputs allow and the stonecutter the recipes of its input.
     pub(super) fn remote_station_slot_changed(&mut self, internal: usize) {
-        if !self
-            .station
-            .as_ref()
-            .is_some_and(|s| matches!(s.kind, Kind::Loom | Kind::Stonecutter | Kind::Grindstone))
-        {
+        if !self.station.as_ref().is_some_and(|s| {
+            matches!(
+                s.kind,
+                Kind::Loom | Kind::Stonecutter | Kind::Grindstone | Kind::Anvil | Kind::Smithing
+            )
+        }) {
             return;
         }
         self.menu_session(|menu, env, to_menu| {
@@ -61,6 +62,9 @@ impl Game<'_> {
             menu.set_slot(env, i, stack);
             Some(true)
         });
+        // AnvilScreen.slotChanged: the box shows the new input's name, which
+        // its responder sends.
+        self.remote_anvil_rename();
     }
 
     /// `AbstractContainerMenu.setData` from the server.
@@ -73,8 +77,34 @@ impl Game<'_> {
             (Kind::Loom, 0) => s.loom.selected = usize::try_from(value).ok(),
             // StonecutterMenu.selectedRecipeIndex.
             (Kind::Stonecutter, 0) => s.selected = usize::try_from(value).ok(),
+            // AnvilMenu.cost.
+            (Kind::Anvil, 0) => s.anvil.cost = i32::from(value),
             _ => {}
         }
+    }
+
+    /// `AnvilScreen.onNameChanged` on a server: the rename box's text (blank
+    /// when it is the input's own name) goes to the server when the menu's
+    /// `setItemName` takes it.
+    pub(super) fn remote_anvil_rename(&mut self) {
+        if self.remote.is_none() {
+            return;
+        }
+        let Some(s) = self
+            .station
+            .as_ref()
+            .filter(|s| s.kind == Kind::Anvil && s.inputs[0].is_some())
+        else {
+            return;
+        };
+        let name = self.anvil_item_name(s);
+        if s.anvil_sent.as_deref() == Some(&name) {
+            return;
+        }
+        if let Some(s) = self.station.as_mut() {
+            s.anvil_sent = Some(name.clone());
+        }
+        self.send(S::RenameItem(play::RenameItem { name }));
     }
 
     /// `MultiPlayerGameMode.handleInventoryButtonClick`: the screen already

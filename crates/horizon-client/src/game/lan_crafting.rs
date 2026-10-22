@@ -55,6 +55,7 @@ fn load_player(menu: &mut Menu, g: &Guest) {
     menu.set_player_item(OFFHAND, g.offhand.clone());
     menu.selected = g.selected;
     menu.creative = g.creative();
+    menu.levels = g.xp_level;
     menu.carried = g.carried.clone();
 }
 
@@ -91,6 +92,7 @@ impl Game<'_> {
             banners: &self.res.stations().banners,
             station_recipes: &self.res.stations().recipes,
             enchantments: &self.res.stations().enchantments,
+            names: &self.pack.names,
             trade: None,
         }
     }

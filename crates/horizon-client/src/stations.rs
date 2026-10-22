@@ -198,8 +198,10 @@ pub fn anvil_result(
     let mut repair_item_count_cost = 0;
     let mut naming_cost = 0;
     if let Some(addition) = addition {
-        // addition.has(STORED_ENCHANTMENTS): only enchanted books carry that component.
-        let using_book = &*addition.item == "minecraft:enchanted_book";
+        // addition.has(STORED_ENCHANTMENTS): an enchanted book (its default
+        // component), or any item given stored enchantments.
+        let using_book = &*addition.item == "minecraft:enchanted_book"
+            || !addition.stored_enchantments().is_empty();
         if is_damageable(items, &result) && is_valid_repair_item(e, items, input, addition) {
             let max = max_damage(items, &result);
             let mut repair = (result.damage as i32).min(max / 4);

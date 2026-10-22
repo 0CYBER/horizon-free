@@ -36,6 +36,8 @@ fn menu_of(kind: StationKind) -> Option<(&'static str, Kind, std::ops::Range<usi
         StationKind::Loom => ("minecraft:loom", Kind::Loom, 0..3),
         StationKind::Stonecutter => ("minecraft:stonecutter", Kind::Stonecutter, 0..1),
         StationKind::Grindstone => ("minecraft:grindstone", Kind::Grindstone, 0..2),
+        StationKind::Anvil => ("minecraft:anvil", Kind::Anvil, 0..2),
+        StationKind::Smithing => ("minecraft:smithing", Kind::Smithing, 0..3),
         _ => return None,
     })
 }
@@ -98,10 +100,46 @@ impl Game<'_> {
             if let Some(amount) = gs.menu.ground.take() {
                 self.grindstone_taken(gs.pos, amount);
             }
+            self.lan_station_combined(host, conn, &mut gs);
         }
         host.play.entry(conn).or_default().station = Some(gs);
         self.lan_send_station(host, conn);
         true
+    }
+
+    /// The rest of a taken anvil or smithing result's `onTake`: the guest
+    /// pays the levels, the anvil wears (level event 1030 or 1029), the
+    /// smithing table sounds (1044).
+    fn lan_station_combined(&mut self, host: &mut LanHost, conn: u32, gs: &mut GuestStation) {
+        let change = std::mem::take(&mut gs.menu.level_change);
+        if change != 0 {
+            self.as_guest(host, conn, |g| g.give_levels(change));
+        }
+        if !std::mem::take(&mut gs.menu.combined) {
+            return;
+        }
+        if gs.kind == StationKind::Smithing {
+            self.level_event_at(1044, gs.pos, 0);
+        } else {
+            let creative = gs.menu.creative;
+            // A broken anvil closes the menu on the next stillValid check.
+            self.anvil_used(gs.pos, creative);
+        }
+    }
+
+    /// `ServerGamePacketListenerImpl.handleRenameItem`: the guest's anvil
+    /// takes the name (`AnvilMenu.setItemName`).
+    pub(super) fn lan_station_rename(&mut self, host: &mut LanHost, conn: u32, name: &str) {
+        let anvil = host
+            .play
+            .get(&conn)
+            .and_then(|p| p.station.as_ref())
+            .is_some_and(|s| s.kind == StationKind::Anvil);
+        if anvil {
+            self.lan_station_op(host, conn, None, |menu, env| {
+                menu.rename(env, name);
+            });
+        }
     }
 
     /// The sounds the menu played, at the station (heard by everyone around,

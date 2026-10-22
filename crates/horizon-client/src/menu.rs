@@ -26,8 +26,11 @@ pub struct Env<'a> {
     pub banners: &'a Banners,
     /// The stonecutter's recipes.
     pub station_recipes: &'a crate::stations::StationRecipes,
-    /// The grindstone's curse and cost rules.
+    /// The grindstone's and the anvil's enchantment rules.
     pub enchantments: &'a crate::enchant::Enchantments,
+    /// Item display names: the anvil compares the rename box with the
+    /// input's hover name.
+    pub names: &'a crate::creative::Names,
     /// What a merchant menu needs for offers made while it is open (level-ups).
     pub trade: Option<&'a crate::merchant::TradeEnv<'a>>,
 }
@@ -79,6 +82,10 @@ pub enum Kind {
     Stonecutter,
     /// `GrindstoneMenu`: two inputs, the result, then the inventory.
     Grindstone,
+    /// `AnvilMenu`: two inputs, the result, then the inventory.
+    Anvil,
+    /// `SmithingMenu`: template, base, addition, the result, then the inventory.
+    Smithing,
     /// `MerchantMenu`: two payment slots, the result, then the inventory.
     Merchant,
     /// `CreativeModeInventoryScreen.ItemPickerMenu`: an item tab's 45
@@ -106,6 +113,8 @@ impl Kind {
             "loom" => Self::Loom,
             "stonecutter" => Self::Stonecutter,
             "grindstone" => Self::Grindstone,
+            "anvil" => Self::Anvil,
+            "smithing" => Self::Smithing,
             "merchant" => Self::Merchant,
             "item_picker" => Self::ItemPicker,
             _ => return None,
@@ -149,6 +158,10 @@ enum Role {
     GrindInput,
     /// The grindstone's result slot (`onTake` clears both inputs).
     GrindResult,
+    /// A smithing table input: its recipe property set (template, base, addition).
+    SmithInput(usize),
+    /// `ItemCombinerMenu`'s result slot (the anvil's and the smithing table's).
+    CombineResult,
     /// `CustomCreativeSlot`: a creative tab's display slot, which the
     /// screen clicks itself; drags and PICKUP_ALL pass it by.
     CreativeDisplay,
@@ -204,6 +217,27 @@ pub struct Menu {
     /// set when the result was taken: the caller (with a level) awards the
     /// orbs and plays level event 1042.
     pub ground: Option<i32>,
+    /// `Player.experienceLevel`, which the anvil's result needs.
+    pub levels: i32,
+    /// The levels the menu gave the player (`giveExperienceLevels`), for the caller.
+    pub level_change: i32,
+    /// `AnvilMenu`'s state besides its slots and its cost data slot.
+    pub anvil: Anvil,
+    /// The anvil's or the smithing table's result was taken: the caller (with
+    /// a level) runs the rest of its `onTake` (the anvil's wear and level
+    /// event 1030 or 1029, the smithing table's 1044).
+    pub combined: bool,
+}
+
+/// `AnvilMenu`'s state besides its slots and `cost`.
+#[derive(Clone, Default, Debug, PartialEq)]
+pub struct Anvil {
+    /// `itemName`: the rename box's text (`ServerboundRenameItemPacket`).
+    pub name: Option<String>,
+    /// `repairItemCountCost`.
+    pub repair_count: u32,
+    /// `onlyRenaming`.
+    pub only_renaming: bool,
 }
 
 /// `StonecutterMenu`'s state besides its slots and `selectedRecipeIndex`.
@@ -373,6 +407,34 @@ impl Menu {
                 });
                 player(&mut slots);
             }
+            Kind::Anvil => {
+                containers[MAIN] = vec![None; 2];
+                slots.extend(main(2, Role::Plain));
+                slots.push(Slot {
+                    container: RESULT,
+                    index: 0,
+                    role: Role::CombineResult,
+                });
+                player(&mut slots);
+                // cost: DataSlot.standalone() starts at 0.
+                data = 1;
+            }
+            Kind::Smithing => {
+                containers[MAIN] = vec![None; 3];
+                slots.extend((0..3).map(|index| Slot {
+                    container: MAIN,
+                    index,
+                    role: Role::SmithInput(index),
+                }));
+                slots.push(Slot {
+                    container: RESULT,
+                    index: 0,
+                    role: Role::CombineResult,
+                });
+                player(&mut slots);
+                // hasRecipeError.
+                data = 1;
+            }
             Kind::ItemPicker => {
                 containers[MAIN] = vec![None; 45];
                 slots.extend(main(45, Role::CreativeDisplay));
@@ -460,6 +522,10 @@ impl Menu {
             merchant: None,
             stone: Stonecutter::default(),
             ground: None,
+            levels: 0,
+            level_change: 0,
+            anvil: Anvil::default(),
+            combined: false,
         }
     }
 
@@ -621,6 +687,11 @@ impl Menu {
             self.merchant_update(env);
             return;
         }
+        // SmithingMenu.slotsChanged runs for its result container too.
+        if self.kind == Kind::Smithing && self.slots[s].container == RESULT {
+            self.smith_error();
+            return;
+        }
         if self.slots[s].container != MAIN {
             return;
         }
@@ -637,8 +708,75 @@ impl Menu {
                 );
             }
             Kind::CrafterBlock => self.crafter_result(env),
+            Kind::Anvil => self.anvil_result(env),
+            Kind::Smithing => {
+                self.smith_result(env);
+                self.smith_error();
+            }
             _ => {}
         }
+    }
+
+    /// `AnvilMenu.createResult`.
+    fn anvil_result(&mut self, env: &Env) {
+        let hover = self.containers[MAIN][0]
+            .as_ref()
+            .map(|i| crate::stations::hover_name(&|id| env.names.item(id), i))
+            .unwrap_or_default();
+        let out = crate::stations::anvil_result(
+            env.enchantments,
+            env.items,
+            self.containers[MAIN][0].as_ref(),
+            self.containers[MAIN][1].as_ref(),
+            self.anvil.name.as_deref(),
+            &hover,
+            self.creative,
+        );
+        // onlyRenaming is reset, repairItemCountCost only where an input is.
+        self.anvil.only_renaming = out.only_renaming;
+        if self.containers[MAIN][0].is_some() {
+            self.anvil.repair_count = out.repair_item_count_cost;
+        }
+        self.data[0] = out.cost;
+        self.containers[RESULT][0] = out.result;
+    }
+
+    /// `AnvilMenu.setItemName` (`ServerboundRenameItemPacket`): false when
+    /// the name is refused or unchanged.
+    pub fn rename(&mut self, env: &Env, name: &str) -> bool {
+        // StringUtil.filterText, then validateName's length limit.
+        let name: String = name
+            .chars()
+            .filter(|&c| c != '\u{a7}' && c >= ' ' && c != '\u{7f}')
+            .collect();
+        if self.kind != Kind::Anvil
+            || name.encode_utf16().count() > 50
+            || self.anvil.name.as_deref() == Some(&name)
+        {
+            return false;
+        }
+        if let Some(result) = self.containers[RESULT][0].as_mut() {
+            result.data_mut().custom_name = (!name.trim().is_empty()).then(|| name.clone());
+            result.tidy();
+        }
+        self.anvil.name = Some(name);
+        self.anvil_result(env);
+        true
+    }
+
+    /// `SmithingMenu.createResult`.
+    fn smith_result(&mut self, env: &Env) {
+        let [a, b, c] = [0, 1, 2].map(|i| self.containers[MAIN][i].as_ref());
+        self.containers[RESULT][0] = env
+            .station_recipes
+            .smithing_result(env.enchantments, a, b, c);
+    }
+
+    /// `SmithingMenu.slotsChanged`'s `hasRecipeError`: every input filled and no result.
+    fn smith_error(&mut self) {
+        let error = self.containers[MAIN].iter().all(Option::is_some)
+            && self.containers[RESULT][0].is_none();
+        self.data[0] = i32::from(error);
     }
 
     pub fn slot_count(&self) -> usize {
@@ -748,9 +886,12 @@ impl Menu {
             Role::LoomDye => env.banners.loom_dye(env.items, stack).is_some(),
             Role::LoomPattern => env.banners.is_pattern_item(env.items, stack),
             Role::GrindInput => crate::stations::grindstone_accepts(env.items, stack),
-            Role::LoomResult | Role::MerchantResult | Role::StoneResult | Role::GrindResult => {
-                false
-            }
+            Role::SmithInput(i) => env.station_recipes.smithing_accepts(i, stack),
+            Role::LoomResult
+            | Role::MerchantResult
+            | Role::StoneResult
+            | Role::GrindResult
+            | Role::CombineResult => false,
         }
     }
 
@@ -762,6 +903,10 @@ impl Menu {
     fn may_pickup(&self, env: &Env, s: usize) -> bool {
         match self.slots[s].role {
             Role::Inert => false,
+            // AnvilMenu.mayPickup: the levels to pay, and a price.
+            Role::CombineResult if self.kind == Kind::Anvil => {
+                (self.creative || self.levels >= self.data[0]) && self.data[0] > 0
+            }
             Role::MerchantResult => self
                 .merchant
                 .as_ref()
@@ -882,12 +1027,47 @@ impl Menu {
         if out.is_some()
             && matches!(
                 self.kind,
-                Kind::Loom | Kind::Merchant | Kind::Stonecutter | Kind::Grindstone
+                Kind::Loom
+                    | Kind::Merchant
+                    | Kind::Stonecutter
+                    | Kind::Grindstone
+                    | Kind::Anvil
+                    | Kind::Smithing
             )
         {
             self.slot_changed(env, s);
         }
         out
+    }
+
+    /// `AnvilMenu.onTake`: the levels, the material used up, then the input.
+    fn anvil_take(&mut self, env: &Env) {
+        let cost = self.data[0];
+        if !self.creative {
+            // Player.giveExperienceLevels(-cost).
+            self.level_change -= cost;
+            self.drops.push(format!(
+                "levels{}{}",
+                if cost <= 0 { "+" } else { "" },
+                -cost
+            ));
+        }
+        let repair = self.anvil.repair_count;
+        if repair > 0 {
+            let addition = self.containers[MAIN][1]
+                .clone()
+                .filter(|a| a.count > repair)
+                .map(|mut a| {
+                    a.count -= repair;
+                    a
+                });
+            self.put(env, 1, addition);
+        } else if !self.anvil.only_renaming {
+            self.put(env, 1, None);
+        }
+        self.data[0] = 0;
+        self.put(env, 0, None);
+        self.combined = true;
     }
 
     /// `CraftingMenu.slotChangedCraftingGrid`.
@@ -931,6 +1111,21 @@ impl Menu {
             ));
             self.put(env, 0, None);
             self.put(env, 1, None);
+            return;
+        }
+        if self.slots[s].role == Role::CombineResult && self.kind == Kind::Anvil {
+            self.anvil_take(env);
+            return;
+        }
+        if self.slots[s].role == Role::CombineResult {
+            // SmithingMenu.onTake: awardUsedRecipes, then one of each input.
+            for i in 0..3 {
+                if let Some(mut stack) = self.containers[MAIN][i].clone() {
+                    stack.count -= 1;
+                    self.put(env, i, Some(stack));
+                }
+            }
+            self.combined = true;
             return;
         }
         if self.slots[s].role == Role::LoomResult {
@@ -1430,6 +1625,39 @@ impl Menu {
                     return None;
                 }
             }
+            Kind::Anvil | Kind::Smithing => {
+                // ItemCombinerMenu.quickMoveStack.
+                after_take = true;
+                let result = if self.kind == Kind::Anvil { 2 } else { 3 };
+                let (start, use_row) = (result + 1, result + 28);
+                let end = result + 37;
+                let into_inputs = self.kind == Kind::Anvil
+                    || (0..3).any(|i| {
+                        self.containers[MAIN][i].is_none()
+                            && env.station_recipes.smithing_accepts(i, &stack)
+                    });
+                if index == result {
+                    if !self.move_to(env, &mut stack, start, end, true) {
+                        return None;
+                    }
+                } else if index < result {
+                    if !self.move_to(env, &mut stack, start, end, false) {
+                        return None;
+                    }
+                } else if into_inputs && (start..end).contains(&index) {
+                    if !self.move_to(env, &mut stack, 0, result, false) {
+                        return None;
+                    }
+                } else if (start..use_row).contains(&index) {
+                    if !self.move_to(env, &mut stack, use_row, end, false) {
+                        return None;
+                    }
+                } else if (use_row..end).contains(&index)
+                    && !self.move_to(env, &mut stack, start, use_row, false)
+                {
+                    return None;
+                }
+            }
             Kind::Merchant => {
                 after_take = true;
                 if index == 2 {
@@ -1900,12 +2128,14 @@ impl Menu {
     }
 
     /// The PICKUP_ALL branch (double click).
-    /// `canTakeItemForPickAll`: never the result slots (the loom's is a
-    /// plain slot), MerchantMenu's or an item tab's display slots.
+    /// `canTakeItemForPickAll`: never the result slots of the menus that
+    /// override it (crafting, smithing, stonecutter, cartography), MerchantMenu's
+    /// or an item tab's display slots.
     fn can_take_for_pick_all(&self, t: usize) -> bool {
         self.kind != Kind::Merchant
             && self.slots[t].role != Role::CreativeDisplay
-            && (self.slots[t].container != RESULT || self.kind == Kind::Loom)
+            && (self.slots[t].container != RESULT
+                || matches!(self.kind, Kind::Loom | Kind::Grindstone | Kind::Anvil))
     }
 
     /// `AbstractContainerScreen.mouseReleased` on a Shift double click:
@@ -2227,6 +2457,7 @@ pub(crate) mod tests {
         let banners = Banners::load(&root);
         let station_recipes = crate::stations::StationRecipes::load(&root, &items);
         let enchantments = crate::enchant::Enchantments::default();
+        let names = crate::creative::Names::default();
         let env = Env {
             items: &items,
             recipes: &recipes,
@@ -2234,6 +2465,7 @@ pub(crate) mod tests {
             banners: &banners,
             station_recipes: &station_recipes,
             enchantments: &enchantments,
+            names: &names,
             trade: None,
         };
         let mut menu = Menu::new(kind);

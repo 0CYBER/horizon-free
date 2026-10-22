@@ -45,6 +45,11 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - grindstone: a grindstone opens on the guest's screen; the enchanted sword the guest shift-clicks in
              shows the server's result, and the guest takes it with only its curse left and the
              experience orbs the server awards (#868);
+- anvil:     an anvil opens on the guest's screen; the guest repairs a sword with iron ingots and
+             renames it (ServerboundRenameItemPacket), takes it for the server's level cost, and the
+             server has the repaired, renamed sword (#868);
+- smithing:  a smithing table opens on the guest's screen; the guest upgrades a diamond sword to
+             netherite and the server has it (#868);
 - feedback:  the guest's command feedback names the guest and shows the numbers;
 - chat:      a line the host sends reaches the guest's event log (`wait-for chat`), and on the
              server thread the host window's too;
@@ -139,7 +144,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
 
 
 class Game:
@@ -1038,6 +1043,69 @@ def check_grindstone(host, guest, out):
     want = {'loaded': {600: ('minecraft:iron_sword', 1), 650: ('minecraft:iron_sword', 1)}, 'left': {},
             'curse kept': True, 'sharpness gone': True, 'damage': True, 'xp': True}
     assert seen == want, f'the grindstone on the guest: {seen} ({sword!r}, {xp!r})'
+    return seen
+
+
+def check_anvil(host, guest, out):
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    guest('command', command='xp set @s 5 levels')
+    guest('command', command='give @s minecraft:iron_sword[minecraft:damage=200]')
+    guest('command', command='give @s minecraft:iron_ingot 3')
+    at = open_station(guest, 'anvil', out, 'anvil')
+    # ItemCombinerMenu.quickMoveStack: into the first input that takes it.
+    for item in ('iron_sword', 'iron_ingot'):
+        guest.raw('click-slot', hotbar_slot(guest, f'minecraft:{item}'), 'shift')
+        guest.wait(5)
+    # The box shows "Iron Sword": erase it and type the new name.
+    for _ in range(len('Iron Sword')):
+        guest.raw('type-back')
+    guest.raw('type', 'Blade')
+    guest.wait(10)
+    menu = guest.raw('menu')
+    offered = (menu['info']['anvil_cost'], station_slots(guest).get(650))
+    guest.shot(out, 'anvil-rename')
+    guest.raw('click-slot', 650, 'shift')
+    guest.wait(10)
+    left = station_slots(guest)
+    close_station(guest, at)
+    sword = server_reply(guest, 'data get entity @s Inventory[{id:"minecraft:iron_sword"}].components',
+                         'minecraft:damage')
+    levels = server_reply(guest, 'xp query @s levels', 'experience levels')
+    seen = {'offered': offered, 'left': left, 'name': 'Blade' in sword,
+            'damage': re.search(r'minecraft:damage"?: 14\b', sword) is not None,
+            'levels': int(re.search(r'has (\d+) experience', levels).group(1)),
+            'ingots': server_count(guest, 'iron_ingot')}
+    # Three ingots repair 62 each (a quarter of 250), plus the name: four levels.
+    want = {'offered': (4, ('minecraft:iron_sword', 1)), 'left': {}, 'name': True, 'damage': True,
+            'levels': 1, 'ingots': 0}
+    assert seen == want, f'the anvil on the guest: {seen} ({sword!r})'
+    return seen
+
+
+def check_smithing(host, guest, out):
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    for item in ('netherite_upgrade_smithing_template', 'diamond_sword', 'netherite_ingot'):
+        guest('command', command=f'give @s minecraft:{item}')
+    at = open_station(guest, 'smithing_table', out, 'smithing')
+    # SmithingMenu.canMoveIntoInputSlots: each to the slot whose recipe test takes it.
+    for item in ('netherite_upgrade_smithing_template', 'diamond_sword', 'netherite_ingot'):
+        guest.raw('click-slot', hotbar_slot(guest, f'minecraft:{item}'), 'shift')
+        guest.wait(5)
+    guest.wait(5)
+    loaded = station_slots(guest)
+    guest.shot(out, 'smithing-result')
+    guest.raw('click-slot', 650, 'shift')
+    guest.wait(10)
+    left = station_slots(guest)
+    close_station(guest, at)
+    seen = {'loaded': loaded, 'left': left,
+            'server': {item: server_count(guest, item) for item in ('netherite_sword', 'diamond_sword', 'netherite_ingot')}}
+    want = {'loaded': {600: ('minecraft:netherite_upgrade_smithing_template', 1), 601: ('minecraft:diamond_sword', 1),
+                       602: ('minecraft:netherite_ingot', 1), 650: ('minecraft:netherite_sword', 1)},
+            'left': {}, 'server': {'netherite_sword': 1, 'diamond_sword': 0, 'netherite_ingot': 0}}
+    assert seen == want, f'the smithing table on the guest: {seen}'
     return seen
 
 
@@ -2235,6 +2303,8 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'loom': check_loom,
              'stonecutter': check_stonecutter,
              'grindstone': check_grindstone,
+             'anvil': check_anvil,
+             'smithing': check_smithing,
              'hurt': check_hurt,
              'commands': check_commands,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,

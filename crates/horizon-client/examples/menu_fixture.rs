@@ -46,6 +46,7 @@ fn main() -> horizon_client::Result<()> {
     let banners = horizon_client::banner::Banners::load(root);
     let station_recipes = horizon_client::stations::StationRecipes::load(root, &items);
     let enchantments = horizon_client::enchant::Enchantments::load(root);
+    let names = horizon_client::creative::Names::load(root);
     let env = Env {
         items: &items,
         recipes: &recipes,
@@ -53,6 +54,7 @@ fn main() -> horizon_client::Result<()> {
         banners: &banners,
         station_recipes: &station_recipes,
         enchantments: &enchantments,
+        names: &names,
         trade: None,
     };
     let mut out = String::new();
@@ -74,6 +76,7 @@ fn main() -> horizon_client::Result<()> {
         .ok_or("menu kind")?;
         let mut menu = Menu::new(kind);
         menu.creative = case["creative"].as_bool().unwrap_or(false);
+        menu.levels = case["levels"].as_i64().unwrap_or(0) as i32;
         for (i, slot) in case["slots"].as_array().ok_or("slots")?.iter().enumerate() {
             menu.set_slot(&env, i, parse_stack(slot.as_str().unwrap_or("-"))?);
         }
@@ -101,6 +104,12 @@ fn main() -> horizon_client::Result<()> {
                 // ServerboundContainerButtonClickPacket: clickMenuButton.
                 "BUTTON" => {
                     menu.button(&env, slot);
+                    out += &format!("{}\n", state(&menu));
+                    continue;
+                }
+                // ServerboundRenameItemPacket: AnvilMenu.setItemName.
+                "RENAME" => {
+                    menu.rename(&env, op[3].as_str().unwrap_or_default());
                     out += &format!("{}\n", state(&menu));
                     continue;
                 }

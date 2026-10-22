@@ -281,6 +281,7 @@ impl Game<'_> {
                 banners: &self.res.stations().banners,
                 station_recipes: &self.res.stations().recipes,
                 enchantments: &self.res.stations().enchantments,
+                names: &self.pack.names,
                 trade: None,
             };
             for i in 0..36 {

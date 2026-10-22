@@ -1266,6 +1266,8 @@ impl Game<'_> {
             "minecraft:loom" => Kind::Loom,
             "minecraft:stonecutter" => Kind::Stonecutter,
             "minecraft:grindstone" => Kind::Grindstone,
+            "minecraft:anvil" => Kind::Anvil,
+            "minecraft:smithing" => Kind::Smithing,
             _ => return None,
         })
     }

@@ -239,6 +239,7 @@ fn main() -> horizon_client::Result<()> {
     let vanilla = fs::read_to_string(args.get(3).ok_or(usage)?)?;
     let items = Items::catalog(root)?;
     let enchantments = Enchantments::load(root);
+    let names = horizon_client::creative::Names::default();
     let trades = Trades::load(root);
     let recipes = horizon_client::crafting::Recipes::load(root, &items)?;
     let brewing = horizon_client::brewing::Brewing::load(root, &items);
@@ -381,6 +382,7 @@ fn main() -> horizon_client::Result<()> {
                     banners: &banners,
                     station_recipes: &station_recipes,
                     enchantments: &enchantments,
+                    names: &names,
                     trade: Some(&env_trade),
                 };
                 trade(&mut out, name, &kv, &mut world, &env, origin)?;

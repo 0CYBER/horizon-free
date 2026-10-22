@@ -2550,6 +2550,7 @@ impl Game<'_> {
                         1031 => Some(("minecraft:block.anvil.land", 0.3)),
                         1505 => Some(("minecraft:item.bone_meal.use", 1.0)),
                         1042 => Some(("minecraft:block.grindstone.use", 1.0)),
+                        1044 => Some(("minecraft:block.smithing_table.use", 1.0)),
                         _ => None,
                     };
                     if let Some((name, volume)) = sound {
@@ -2559,7 +2560,7 @@ impl Game<'_> {
                                     - self.world.random.next_float())
                                     * 0.8
                             }
-                            1042 => self.world.random.next_float() * 0.1 + 0.9,
+                            1029 | 1030 | 1042 | 1044 => self.world.random.next_float() * 0.1 + 0.9,
                             _ => 1.0,
                         };
                         self.audio.play(name, c, volume, pitch);
@@ -5433,10 +5434,10 @@ impl Game<'_> {
             .station
             .as_ref()
             .is_some_and(|s| s.kind == stations::Kind::Stonecutter);
-        let grindstone_open = self
-            .station
-            .as_ref()
-            .is_some_and(|s| s.kind == stations::Kind::Grindstone);
+        let station_kind = self.station.as_ref().map(|s| s.kind);
+        let grindstone_open = station_kind == Some(stations::Kind::Grindstone);
+        let anvil_open = station_kind == Some(stations::Kind::Anvil);
+        let smithing_open = station_kind == Some(stations::Kind::Smithing);
         let (kind, game_of): (Kind, Vec<Option<usize>>) = if self.creative_tab_open() {
             // ItemPickerMenu: the display slots (clicked by the screen), then the hotbar.
             let mut v = vec![None; 45];
@@ -5477,6 +5478,21 @@ impl Game<'_> {
             ];
             v.extend((9..36).chain(0..9).map(Some));
             (Kind::Grindstone, v)
+        } else if anvil_open || smithing_open {
+            // ItemCombinerMenu: the inputs, the result, then the inventory.
+            let inputs = if anvil_open { 2 } else { 3 };
+            let mut v: Vec<Option<usize>> =
+                (0..inputs).map(|i| Some(stations::INPUT + i)).collect();
+            v.push(Some(stations::RESULT));
+            v.extend((9..36).chain(0..9).map(Some));
+            (
+                if anvil_open {
+                    Kind::Anvil
+                } else {
+                    Kind::Smithing
+                },
+                v,
+            )
         } else {
             let (kind, map) = if self.container.is_some() {
                 let size = self.container_size();
@@ -5596,10 +5612,16 @@ impl Game<'_> {
             banners: &self.res.stations().banners,
             station_recipes: &self.res.stations().recipes,
             enchantments: &self.res.stations().enchantments,
+            names: &self.pack.names,
             trade: Some(&trade_env),
         };
         menu.creative = creative;
         menu.selected = self.selected;
+        menu.levels = self.experience.level;
+        if anvil_open {
+            // The rename box as AnvilScreen.onNameChanged gives it to the menu.
+            menu.anvil.name = self.station.as_ref().map(|s| self.anvil_item_name(s));
+        }
         for (i, stack) in before.iter().enumerate() {
             menu.set_slot(&env, i, stack.clone());
         }
@@ -5698,6 +5720,9 @@ impl Game<'_> {
             && let Some(pos) = self.station.as_ref().map(|s| s.pos)
         {
             self.grindstone_taken(pos, amount);
+        }
+        if kind == Kind::Anvil || kind == Kind::Smithing {
+            self.combiner_session_end(&menu, predicting);
         }
         if kind == Kind::CrafterBlock
             && let Some(BlockEntity::Crafter(c)) = self

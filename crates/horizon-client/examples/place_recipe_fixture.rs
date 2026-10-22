@@ -40,6 +40,7 @@ fn main() -> horizon_client::Result<()> {
     let banners = horizon_client::banner::Banners::default();
     let station_recipes = horizon_client::stations::StationRecipes::default();
     let enchantments = horizon_client::enchant::Enchantments::default();
+    let names = horizon_client::creative::Names::default();
     let env = Env {
         items: &items,
         recipes: &recipes,
@@ -47,6 +48,7 @@ fn main() -> horizon_client::Result<()> {
         banners: &banners,
         station_recipes: &station_recipes,
         enchantments: &enchantments,
+        names: &names,
         trade: None,
     };
     let mut out = String::new();

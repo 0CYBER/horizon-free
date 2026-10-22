@@ -920,6 +920,7 @@ impl Game<'_> {
             S::ContainerButtonClick(p) => {
                 self.lan_station_button(host, conn, p.container, p.button);
             }
+            S::RenameItem(p) => self.lan_station_rename(host, conn, &p.name),
             S::SelectTrade(p) => self.lan_select_trade(host, conn, p.item),
             S::ContainerClose(p) if self.lan_merchant_closed(host, conn, Some(p.container)) => {
                 let g = &mut host.hub.guests[gi];
