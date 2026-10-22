@@ -307,7 +307,12 @@ def poll(control, check, limit, interval=0.05):
 QUIET_MESHES_PER_S = 100
 
 
-def wait_loaded(control, near, limit):
+def view_chunks(distance):
+    """80% of the view circle (pi x RD^2): Horizon keeps 637 columns at RD 12 and 3725 at RD 32."""
+    return int(0.8 * math.pi * distance ** 2)
+
+
+def wait_loaded(control, near, limit, min_chunks=0):
     """Waits until the player is spawned (near(position)), nothing is queued, the
     resident and generated chunk counts have not changed for a second, as the
     vanilla driver does, and the last sections are drawn; returns when the last
@@ -320,6 +325,10 @@ def wait_loaded(control, near, limit):
     already taken, and sections waiting for their neighbours' light.)"""
     deadline = time.time() + limit
     last, changed, previous, meshing = None, time.time(), None, time.time()
+    # Right after a teleport (and at spawn) Horizon reports nothing queued and steady counts for over a second
+    # before it starts loading: the counts must change once, or stay full for 5 s, and the resident chunks reach
+    # min_chunks, before "steady" means loaded.
+    first, moved, began = None, False, time.time()
     while time.time() < deadline:
         try:
             s = control("status", timeout=10)
@@ -331,6 +340,12 @@ def wait_loaded(control, near, limit):
             last, changed, previous, meshing = None, now, None, now
         else:
             counts = (s["chunks"], s["generated_chunks"])
+            first = first or counts
+            moved = moved or counts != first or (s["chunks"] >= min_chunks > 0 and now - began > 5)
+            if not moved or s["chunks"] < min_chunks:
+                last, changed, previous, meshing = None, now, None, now
+                time.sleep(0.05)
+                continue
             if counts != last:
                 last, changed = counts, now
             stages = s.get("streaming")
@@ -392,7 +407,7 @@ def run_horizon(args, distance):
         result["renderer"] = title["renderer"]
         result["startup"] = {"title_s": at - started}
         control(f"open {WORLD} {SEED} creative")
-        result["startup"]["world_s"] = wait_loaded(control, lambda p: True, args.timeout) - started
+        result["startup"]["world_s"] = wait_loaded(control, lambda p: True, args.timeout, view_chunks(distance)) - started
         for name, start, end, pitch in scene_list(args):
             control("time 6000")
             meshed = control("status")["meshed_sections"]
@@ -402,7 +417,7 @@ def run_horizon(args, distance):
             control("fly {0} {1} {2} {0} {1} {2} 0.1 {3}".format(*start, pitch))
             control(f"look {yaw(start, end):.3f} {pitch}")
             near = lambda p: sum((a - b) ** 2 for a, b in zip(p, start)) < 4.0
-            scene = {"load_s": wait_loaded(control, near, args.timeout) - tp}
+            scene = {"load_s": wait_loaded(control, near, args.timeout, view_chunks(distance)) - tp}
             # Section meshes built while loading and while flying (Horizon only).
             loaded_meshes = control("status")["meshed_sections"]
             scene["meshes_load"] = loaded_meshes - meshed
