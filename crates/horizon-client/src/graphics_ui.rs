@@ -2,7 +2,7 @@
 //! they show, in what groups, with what description and cost, and their
 //! input. How they look comes from `graphics_style`.
 use crate::{
-    graphics::{GraphicsApi, Overlay, Pacing, PresentMode, Preset},
+    graphics::{FarDetail, GraphicsApi, Overlay, Pacing, PresentMode, Preset},
     graphics_style::{Cost, STYLE},
     hud::{HudAtlas, HudBatch},
     options_ui::Opt,
@@ -22,6 +22,7 @@ pub enum Level {
 pub enum H {
     Preset,
     LodDistance,
+    FarDetail,
     CaveCulling,
     CullLeaves,
     EntityCulling,
@@ -85,6 +86,16 @@ pub fn rows(level: Level) -> Vec<Row> {
         Medium,
         "Coarse distant terrain in local worlds. Integrated GPUs stop at 128 chunks.",
     );
+    // Suggested, never switched on, where far terrain costs the GPU most.
+    let far = h(
+        H::FarDetail,
+        Medium,
+        if crate::graphics::reduced_far_detail_suggested() {
+            "Reduced draws far terrain coarser: faster on this integrated GPU."
+        } else {
+            "Reduced draws far terrain coarser, for GPUs it slows down."
+        },
+    );
     let fov = v(
         Opt::Fov,
         Low,
@@ -107,11 +118,12 @@ pub fn rows(level: Level) -> Vec<Row> {
         "Sets the options below together. Changing one makes it Custom.",
     );
     let mut rows = match level {
-        Level::Simple => vec![preset, render, lod, fov, fps, vsync, gui],
+        Level::Simple => vec![preset, render, lod, far, fov, fps, vsync, gui],
         Level::Advanced => vec![
             Row::Header("Rendering"),
             render,
             lod,
+            far,
             v(
                 Opt::SimulationDistance,
                 Medium,
@@ -335,6 +347,7 @@ impl H {
                 0 => labelled("LOD Distance", "Off"),
                 n => labelled("LOD Distance", format!("{n} chunks")),
             },
+            H::FarDetail => labelled("Far Detail", g.far_detail.label()),
             H::CaveCulling => labelled("Cave Culling", on_off(g.cave_culling)),
             H::CullLeaves => labelled("Cull Leaves", on_off(g.cull_leaves)),
             H::EntityCulling => labelled("Entity Culling", on_off(g.entity_culling)),
@@ -410,6 +423,9 @@ impl H {
         match self {
             H::LodDistance => {
                 g.lod_distance = step(&[0, 64, 128, 256, 512, 1024], g.lod_distance, back)
+            }
+            H::FarDetail => {
+                g.far_detail = step(&[FarDetail::Full, FarDetail::Reduced], g.far_detail, back)
             }
             H::CaveCulling => g.cave_culling = !g.cave_culling,
             H::CullLeaves => g.cull_leaves = !g.cull_leaves,
