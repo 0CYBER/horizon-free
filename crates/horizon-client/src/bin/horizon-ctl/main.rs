@@ -183,6 +183,18 @@ impl Session {
                 thread::sleep(Duration::from_secs_f64(seconds.max(0.0)));
                 self.game(&format!("key {key} up"))
             }
+            "interact-entity" => {
+                let id = match words {
+                    [_, id] if id.parse::<i64>().is_ok() => id,
+                    _ => return Err(Failure::usage(format!("usage: {}", usage(name)))),
+                };
+                self.game(&format!("look-at entity {id}"))?;
+                self.game("mouse right click")?;
+                self.game("wait 2")?;
+                let mut screen = self.game("screen")?;
+                screen["ok"] = json!(true);
+                Ok(screen)
+            }
             "logs" => logs(&horizon_client::logging::game_home(), &words[1..]),
             "wait-ready" => {
                 let limit = if words.len() > 1 {
@@ -415,6 +427,10 @@ fn main() -> ExitCode {
     let status = match name.as_deref() {
         None | Some("-h" | "--help") => {
             print!("{}", commands::overview());
+            0
+        }
+        Some("help") if args.get(1).is_some_and(|a| a == "--markdown") => {
+            print!("{}", commands::markdown());
             0
         }
         Some("help") if args.get(1).is_none_or(|a| a != "--game") => match args.get(1) {

@@ -15,7 +15,7 @@ use std::{
 mod create_world;
 #[cfg(test)]
 mod tests;
-mod world_management;
+pub mod world_management;
 pub use create_world::{DIFFICULTIES, WorldOptions};
 
 /// SelectWorldScreen's `HeaderAndFooterLayout(8 + 9 + 8 + 20 + 4, 60)`.
@@ -500,6 +500,14 @@ impl Title {
         }
     }
     /// The worlds, newest first, cached for two seconds (drawn every frame).
+    /// Saves changed behind the screens' back (agent control renamed or deleted a world): the
+    /// list shows them again.
+    pub fn worlds_changed(&mut self) {
+        if matches!(self.mode, Mode::Select { .. }) {
+            self.return_to_list(None);
+        }
+        *self.recent.borrow_mut() = None;
+    }
     pub fn recent_worlds(&self) -> Vec<WorldEntry> {
         let mut recent = self.recent.borrow_mut();
         match &*recent {

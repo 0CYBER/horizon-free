@@ -165,6 +165,9 @@ impl Game<'_> {
         if let Some(value) = self.events_command(&words, reply)? {
             return Ok(value);
         }
+        if let Some(value) = self.saves_control(&words, line, reply)? {
+            return Ok(value);
+        }
         if let Some(value) = self.options_control(&words, line)? {
             return Ok(Some(value));
         }
@@ -192,6 +195,7 @@ impl Game<'_> {
                 .chain(super::ui_control::HELP)
                 .chain(super::options::CONTROL_HELP)
                 .chain(super::events::HELP)
+                .chain(super::saves_control::HELP)
                 .chain(super::pad::HELP)
                 .collect::<Vec<_>>() }))),
             "setblock" | "fill" | "particle" | "signedit" => self.render_command(&words),
