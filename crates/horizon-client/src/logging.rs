@@ -12,7 +12,7 @@ use std::collections::VecDeque;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, mpsc};
 
 use chrono::{DateTime, Local, NaiveDate};
 
@@ -201,16 +201,74 @@ pub fn open_latest(dir: &Path) -> io::Result<Option<Latest>> {
     Ok(Some(Latest { file, _lock: lock }))
 }
 
-struct State {
+/// What the writer thread is told.
+enum Out {
+    /// Lines for the file, dated, and the message for stderr (Horizon's own).
+    Write {
+        date: NaiveDate,
+        lines: Vec<String>,
+        stderr: Option<String>,
+    },
+    /// Answer once everything before is written.
+    Flush(mpsc::SyncSender<()>),
+}
+
+/// The file side of the log, on its own thread: a line costs the thread that logs it a
+/// format and a channel send, never a write that can wait (a full stderr pipe, a slow disk):
+/// written on the game thread, a line could hold the tick for milliseconds while the CPU sat
+/// idle.
+struct Writer {
     file: Option<Latest>,
     dir: PathBuf,
     /// The day the open file's lines belong to.
     date: NaiveDate,
-    recent: VecDeque<String>,
+}
+
+impl Writer {
+    fn run(mut self, out: mpsc::Receiver<Out>) {
+        let stderr = io::stderr();
+        for msg in out {
+            match msg {
+                Out::Write {
+                    date,
+                    lines,
+                    stderr: message,
+                } => {
+                    if let Some(message) = message {
+                        let _ = writeln!(stderr.lock(), "{message}");
+                    }
+                    if date != self.date {
+                        if let Some(latest) = &mut self.file
+                            && let Err(e) = roll(&mut latest.file, &self.dir, self.date)
+                        {
+                            let _ = writeln!(
+                                stderr.lock(),
+                                "Horizon: could not roll over the log: {e}"
+                            );
+                        }
+                        self.date = date;
+                    }
+                    if let Some(latest) = &mut self.file {
+                        let mut text = lines.join("\n");
+                        text.push('\n');
+                        let _ = latest.file.write_all(text.as_bytes());
+                    }
+                }
+                Out::Flush(done) => {
+                    if let Some(latest) = &mut self.file {
+                        let _ = latest.file.flush();
+                    }
+                    let _ = done.send(());
+                }
+            }
+        }
+    }
 }
 
 struct Logger {
-    state: Mutex<State>,
+    out: mpsc::Sender<Out>,
+    /// The last lines, kept here (not on the writer) so a crash report has them at once.
+    recent: Mutex<VecDeque<String>>,
     /// What the main thread is called in the log: "Render thread", or "Server thread" for the
     /// dedicated server, as in vanilla.
     main_thread: &'static str,
@@ -233,52 +291,65 @@ impl log::Log for Logger {
             return;
         }
         let message = record.args().to_string();
-        if ours(record.target()) {
-            eprintln!("{message}");
-        }
         let current = std::thread::current();
         let thread = match current.name() {
             Some("main") => self.main_thread,
             Some(name) => name,
             None => "unnamed",
         };
-        self.write(thread, record.level(), &message);
+        let stderr = ours(record.target()).then(|| message.clone());
+        self.send(thread, record.level(), &message, stderr);
     }
 
+    /// Waits (a second at most) until every line logged before is in the file.
     fn flush(&self) {
-        if let Some(latest) = &mut self.state.lock().unwrap_or_else(|e| e.into_inner()).file {
-            let _ = latest.file.flush();
+        let (done, wait) = mpsc::sync_channel(1);
+        if self.out.send(Out::Flush(done)).is_ok() {
+            let _ = wait.recv_timeout(std::time::Duration::from_secs(1));
         }
     }
 }
 
 impl Logger {
     fn write(&self, thread: &str, level: log::Level, message: &str) {
+        self.send(thread, level, message, None);
+    }
+
+    fn send(&self, thread: &str, level: log::Level, message: &str, stderr: Option<String>) {
         let now = Local::now();
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        let state = &mut *state;
-        if now.date_naive() != state.date {
-            if let Some(latest) = &mut state.file
-                && let Err(e) = roll(&mut latest.file, &state.dir, state.date)
-            {
-                eprintln!("Horizon: could not roll over the log: {e}");
-            }
-            state.date = now.date_naive();
-        }
         // As log4j writes a multi-line message: the pattern once, the rest as it is.
-        for (i, line) in message.lines().enumerate() {
-            let line = if i == 0 {
-                format_line(&now, thread, level, line)
-            } else {
-                line.to_owned()
-            };
-            if let Some(latest) = &mut state.file {
-                let _ = writeln!(latest.file, "{line}");
+        let lines: Vec<String> = message
+            .lines()
+            .enumerate()
+            .map(|(i, line)| {
+                if i == 0 {
+                    format_line(&now, thread, level, line)
+                } else {
+                    line.to_owned()
+                }
+            })
+            .collect();
+        {
+            let mut recent = self.recent.lock().unwrap_or_else(|e| e.into_inner());
+            for line in &lines {
+                if recent.len() == RECENT {
+                    recent.pop_front();
+                }
+                recent.push_back(line.clone());
             }
-            state.recent.push_back(line);
-            if state.recent.len() > RECENT {
-                state.recent.pop_front();
-            }
+        }
+        let msg = Out::Write {
+            date: now.date_naive(),
+            lines,
+            stderr,
+        };
+        if let Err(mpsc::SendError(Out::Write {
+            stderr: Some(message),
+            ..
+        })) = self.out.send(msg)
+        {
+            // No writer (it could not start): the terminal still gets Horizon's messages.
+            eprintln!("{message}");
         }
     }
 }
@@ -304,14 +375,24 @@ pub fn init(home: &Path, main_thread: &'static str) {
             None
         }
     };
-    let logger = LOGGER.get_or_init(|| Logger {
-        state: Mutex::new(State {
+    let logger = LOGGER.get_or_init(|| {
+        let (out, receive) = mpsc::channel();
+        let writer = Writer {
             file,
             dir,
             date: Local::now().date_naive(),
-            recent: VecDeque::new(),
-        }),
-        main_thread,
+        };
+        if let Err(e) = std::thread::Builder::new()
+            .name("Log writer".into())
+            .spawn(move || writer.run(receive))
+        {
+            eprintln!("Horizon: could not start the log writer: {e}");
+        }
+        Logger {
+            out,
+            recent: Mutex::new(VecDeque::new()),
+            main_thread,
+        }
     });
     if log::set_logger(logger).is_ok() {
         log::set_max_level(log::LevelFilter::Info);
@@ -341,10 +422,9 @@ pub fn write_as(thread: &str, level: log::Level, message: &str) {
 /// The last lines written, oldest first (for crash reports).
 pub fn recent_lines() -> Vec<String> {
     LOGGER.get().map_or_else(Vec::new, |l| {
-        l.state
+        l.recent
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .recent
             .iter()
             .cloned()
             .collect()
