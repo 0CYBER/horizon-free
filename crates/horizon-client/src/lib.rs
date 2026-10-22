@@ -179,6 +179,7 @@ pub mod ticket_levels;
 pub mod title;
 pub mod title_edition;
 pub mod toasts;
+pub mod trims;
 pub mod ui;
 pub mod ui_theme;
 pub mod vanillagen;

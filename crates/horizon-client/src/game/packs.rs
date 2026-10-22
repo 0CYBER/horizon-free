@@ -171,6 +171,7 @@ impl Game<'_> {
             }
         };
         // Everything loaded: switch over.
+        self.armor_stand_assets.reload_trims(root);
         self.random_tick_sections.clear();
         self.portals.sections.clear();
         self.options.resources = root.to_path_buf();
