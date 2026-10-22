@@ -3,6 +3,7 @@
 //! chunkgen_bench <client resource dir> [--seed S] [--size N] [--threads T]
 //!     [--center CX CZ] [--verify <material-stage parity dir>] [--no-decorate]
 //!     [--dimension overworld|the_nether|the_end]
+//!     [--warmup] [--json] [--no-map]
 use horizon_core::position::ChunkPos;
 use horizon_world::{
     DATA_VERSION,
@@ -275,6 +276,7 @@ fn main() -> Result<(), Error> {
     let (mut seed, mut size, mut threads, mut center) = (0i64, 16i32, 2usize, (0, 0));
     let mut parity = None;
     let mut decorate = true;
+    let (mut warmup, mut json, mut map) = (false, false, true);
     let mut dimension = String::from("minecraft:overworld");
     let mut starts: Option<(i32, i32, i32, i32, PathBuf)> = None;
     while let Some(arg) = args.next() {
@@ -286,6 +288,9 @@ fn main() -> Result<(), Error> {
             "--center" => center = (next().parse()?, next().parse()?),
             "--verify" => parity = Some(PathBuf::from(next())),
             "--no-decorate" => decorate = false,
+            "--warmup" => warmup = true,
+            "--json" => json = true,
+            "--no-map" => map = false,
             "--dimension" => {
                 let d = next();
                 dimension = if d.contains(':') {
@@ -326,6 +331,16 @@ fn main() -> Result<(), Error> {
         dump_starts(&generator, seed, [x0, z0, x1, z1], &out)?;
         return Ok(());
     }
+    if warmup {
+        let mut worker = generator.worker();
+        for z in -4..=4 {
+            for x in -4..=4 {
+                std::hint::black_box(
+                    worker.generate_proto(ChunkPos::new(center.0 + 64 + x, center.1 + 64 + z))?,
+                );
+            }
+        }
+    }
     let (x0, z0) = (center.0 - size / 2, center.1 - size / 2);
     let count = (size * size) as usize;
     let next = AtomicUsize::new(0);
@@ -353,6 +368,7 @@ fn main() -> Result<(), Error> {
         handles.into_iter().try_for_each(|h| h.join().unwrap())
     })?;
     let elapsed = start.elapsed();
+    let cpu_elapsed = cpu_seconds() - cpu;
     println!(
         "generated {count} proto chunks with {threads} threads in {elapsed:.2?}: {:.1} chunks/s ({:.1} ms/chunk/thread)",
         count as f64 / elapsed.as_secs_f64(),
@@ -360,7 +376,7 @@ fn main() -> Result<(), Error> {
     );
     println!(
         "  cpu time {:.1} ms/chunk",
-        (cpu_seconds() - cpu) * 1000. / count as f64
+        cpu_elapsed * 1000. / count as f64
     );
     let timings = timings.into_inner().unwrap();
     let per_chunk = |f: fn(&StageTimings) -> std::time::Duration| {
@@ -379,6 +395,16 @@ fn main() -> Result<(), Error> {
         per_chunk(|t| t.surface),
         per_chunk(|t| t.carvers)
     );
+    if json {
+        println!(
+            "BENCH {}",
+            serde_json::json!({"phase": "proto", "chunks": count,
+            "threads": threads, "wall_s": elapsed.as_secs_f64(), "cpu_s": cpu_elapsed,
+            "biomes_ms_chunk": per_chunk(|t| t.biomes), "noise_ms_chunk": per_chunk(|t| t.noise),
+            "structures_ms_chunk": per_chunk(|t| t.structures),
+            "surface_ms_chunk": per_chunk(|t| t.surface), "carvers_ms_chunk": per_chunk(|t| t.carvers)})
+        );
+    }
     let mut chunks: Vec<Option<ProtoChunk>> = slots
         .into_iter()
         .map(|slot| slot.into_inner().unwrap())
@@ -441,6 +467,13 @@ fn main() -> Result<(), Error> {
             }
         }
         let elapsed = start.elapsed();
+        if json {
+            println!(
+                "BENCH {}",
+                serde_json::json!({"phase": "decorate", "chunks": decorated,
+                "wall_s": elapsed.as_secs_f64()})
+            );
+        }
         let totals = totals.into_inner().unwrap();
         println!(
             "decorated {decorated} chunks in {elapsed:.2?}: {:.1} chunks/s; feature roots placed {}, unsupported {}, failed {}",
@@ -491,6 +524,9 @@ fn main() -> Result<(), Error> {
                 );
             }
         }
+    }
+    if !map {
+        return Ok(());
     }
     let mut legend = BTreeMap::<char, BTreeMap<String, usize>>::new();
     let step = (size * 16 / 96).max(1);
