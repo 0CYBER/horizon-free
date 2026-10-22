@@ -421,6 +421,20 @@ def check_portals(host, guest, out):
     if not SERVER_THREAD:
         return 'skipped (needs --server-thread)'
     x, y, z = (int(v // 1) for v in pos_of(guest))
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    try:
+        return portals(host, guest, out, x, y, z, hx, hy, hz)
+    finally:
+        # The guest comes home into its portal's frame (an obsidian ceiling three blocks up) and the
+        # host onto its End portal at spawn: take both away so the next checks start in the open.
+        home = 'execute in minecraft:overworld run'
+        guest('command', command=f'{home} fill {x - 1} {y} {z + 3} {x + 2} {y + 3} {z + 3} minecraft:air')
+        host('command', command=f'{home} setblock {hx} {hy} {hz} minecraft:air')
+        guest('command', command=f'{home} tp @s {x + 0.5} {y} {z + 0.5}')
+        guest.wait(20)
+
+
+def portals(host, guest, out, x, y, z, hx, hy, hz):
     nether_portal(guest, x, y, z + 3)
     guest.wait(5)
     guest('command', command=f'tp @s {x + 0.5} {y} {z + 3.5}')
@@ -435,7 +449,6 @@ def check_portals(host, guest, out):
     below = guest.raw('block', arrived[0], arrived[1] - 1, arrived[2])
     assert below.get('loaded') and below.get('block') != 'minecraft:air', f'under the guest in the Nether: {below}'
     # The host takes an End portal while the guest is in the Nether: three levels at once.
-    hx, hy, hz = (int(v // 1) for v in pos_of(host))
     host('command', command=f'setblock {hx} {hy} {hz} minecraft:end_portal')
     end = wait_dimension(host, 'minecraft:the_end', 600)
     host.wait(40)
