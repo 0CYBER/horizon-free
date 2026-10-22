@@ -1102,7 +1102,11 @@ pub struct Recipes {
     facts: HashMap<Arc<str>, Facts>,
     /// The `#minecraft:curse` enchantments.
     curses: HashSet<String>,
+    /// The first cooking recipe of each kind taking each item, built at the
+    /// first lookup (furnaces look theirs up every tick).
+    cook_index: std::sync::OnceLock<CookIndex>,
 }
+type CookIndex = HashMap<String, crate::fast_hash::FxHashMap<String, usize>>;
 /// `MinMaxBounds.Ints` as (min, max) with the given defaults.
 fn bounds(v: Option<&Value>, default: (i64, i64), open: (i64, i64)) -> (i64, i64) {
     match v {
@@ -1421,6 +1425,7 @@ impl Recipes {
             meta,
             facts,
             curses,
+            cook_index: Default::default(),
         })
     }
     /// Match a `size`x`size` grid (row-major) against the crafting recipes.
@@ -1606,6 +1611,22 @@ impl Recipes {
         out
     }
     pub fn cook(&self, kind: &str, input: &ItemStack) -> Option<&Cooking> {
+        let index = self.cook_index.get_or_init(|| {
+            let mut index = CookIndex::new();
+            for (i, c) in self.cooking.iter().enumerate() {
+                let of_kind = index.entry(c.kind.clone()).or_default();
+                for item in &c.ingredient.0 {
+                    of_kind.entry(item.clone()).or_insert(i);
+                }
+            }
+            index
+        });
+        let i = *index.get(kind)?.get(&*input.item)?;
+        self.cooking.get(i)
+    }
+    /// `cook` by scanning every recipe, as it was before the index.
+    #[cfg(test)]
+    fn cook_scan(&self, kind: &str, input: &ItemStack) -> Option<&Cooking> {
         self.cooking
             .iter()
             .find(|c| c.kind == kind && c.ingredient.test(input))
@@ -1625,6 +1646,80 @@ mod tests {
         s.data_mut().banner_patterns = vec![BannerLayer::new("minecraft:cross", "red")];
         s
     }
+    /// About vanilla's count of cooking recipes: four kinds, ingredients of
+    /// one to twelve items, overlapping (several recipes take some items).
+    fn cooking_book() -> Recipes {
+        let kinds = ["smelting", "blasting", "smoking", "campfire_cooking"];
+        let cooking = (0..320usize)
+            .map(|i| Cooking {
+                id: format!("r{i}"),
+                category: "misc".into(),
+                group: String::new(),
+                kind: kinds[i % 4].into(),
+                ingredient: ingredient(
+                    &(0..1 + i % 12)
+                        .map(|k| format!("minecraft:item_{}", (i * 7 + k * 13) % 400))
+                        .collect::<Vec<_>>()
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>(),
+                ),
+                result: ItemStack::new("minecraft:stone", 1),
+                experience: 0.1,
+                time: 200,
+            })
+            .collect();
+        Recipes {
+            crafting: Vec::new(),
+            cooking,
+            meta: HashMap::new(),
+            facts: HashMap::new(),
+            curses: HashSet::new(),
+            cook_index: Default::default(),
+        }
+    }
+    #[test]
+    fn cook_finds_the_first_recipe_the_scan_finds() {
+        let recipes = cooking_book();
+        for kind in [
+            "smelting",
+            "blasting",
+            "smoking",
+            "campfire_cooking",
+            "other",
+        ] {
+            for n in 0..420 {
+                let stack = ItemStack::new(&format!("minecraft:item_{n}"), 1);
+                let a = recipes.cook(kind, &stack).map(|c| &c.id);
+                let b = recipes.cook_scan(kind, &stack).map(|c| &c.id);
+                assert_eq!(a, b, "{kind} item_{n}");
+            }
+        }
+    }
+    /// A furnace's recipe lookup, once per lit furnace per tick.
+    #[test]
+    #[ignore]
+    fn cook_cost() {
+        let recipes = cooking_book();
+        let stacks: Vec<ItemStack> = (0..1000)
+            .map(|n| ItemStack::new(&format!("minecraft:item_{}", n % 400), 1))
+            .collect();
+        let t = std::time::Instant::now();
+        let a = stacks
+            .iter()
+            .filter(|s| recipes.cook_scan("smelting", s).cloned().is_some())
+            .count();
+        let before = t.elapsed().as_secs_f64() * 1e3;
+        recipes.cook("smelting", &stacks[0]);
+        let t = std::time::Instant::now();
+        let b = stacks
+            .iter()
+            .filter(|s| recipes.cook("smelting", s).is_some())
+            .count();
+        let after = t.elapsed().as_secs_f64() * 1e3;
+        assert_eq!(a, b);
+        println!("1000 furnace lookups (scan and clone -> index): {before:.3} ms -> {after:.3} ms");
+    }
     fn run(special: &Special, cells: &[ItemStack]) -> Option<ItemStack> {
         let recipes = Recipes {
             crafting: Vec::new(),
@@ -1632,6 +1727,7 @@ mod tests {
             meta: HashMap::new(),
             facts: HashMap::new(),
             curses: HashSet::new(),
+            cook_index: Default::default(),
         };
         let ctx = Context {
             recipes: &recipes,
