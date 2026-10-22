@@ -582,6 +582,18 @@ fn extra_namespaces(
     claimed
 }
 
+/// The namespaces besides `id` the mod in `jar` would own ([`extra_namespaces`]), for the
+/// pack to find the ones several mods claim.
+pub fn namespaces_claimed(
+    jar: &Path,
+    id: &str,
+    pack_mod: &dyn Fn(&str) -> bool,
+) -> Result<Vec<String>, String> {
+    let file = fs::File::open(jar).map_err(|e| format!("{}: {e}", jar.display()))?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("{}: {e}", jar.display()))?;
+    Ok(extra_namespaces(&mut zip, id, pack_mod))
+}
+
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
 }

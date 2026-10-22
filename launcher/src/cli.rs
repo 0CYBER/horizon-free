@@ -1036,13 +1036,13 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                 let file =
                     installed::fetch_modpack(&*source, &p, &folder, &progress(p.title.clone()))?;
                 let log = &|line: String| eprintln!("{line}");
-                let pack = modpacks::import(&file, log)?;
-                println!(
-                    "Imported {} ({}): horizon-launcher modpack port {}",
-                    pack.title(),
-                    pack.summary(),
-                    pack.slug
-                );
+                let resources = backend::resolve_version(None)
+                    .ok()
+                    .filter(|t| backend::is_prepared(t))
+                    .map(|t| backend::resources(&t));
+                let pack = modpacks::import_and_port(&file, resources.as_deref(), log)?;
+                println!("{} ({})", modpacks::outcome(&pack), pack.summary());
+                println!("Play it: horizon-launcher modpack play {}", pack.slug);
                 return Ok(());
             }
             let done = installed::install(&*source, &p, everything, &home, &line)?;

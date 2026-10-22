@@ -150,7 +150,16 @@ pub fn carry(
         })
         .flatten()
         .collect();
-    let in_pack = |m: &str| in_pack.contains(m);
+    // A namespace two carried mods both claim (a library's they both use, such as YUNG's API's
+    // `yungsapi`, whose own jar isn't read) is neither's: either would refuse the other in the
+    // game. Its files stay outside both.
+    let claims = records.iter().filter(|r| chosen(r)).filter_map(|r| {
+        let (jar, info) = (r.jar.as_ref()?, r.info.as_ref()?);
+        let owned = carry::namespaces_claimed(jar, &info.mod_id, &|m| in_pack.contains(m)).ok()?;
+        Some((r.key.as_str(), owned))
+    });
+    let shared = shared_namespaces(claims, log);
+    let in_pack = |m: &str| in_pack.contains(m) || shared.contains(m);
     let pack = carry::Pack {
         loaded: &loaded,
         mods: &in_pack,
@@ -219,6 +228,61 @@ pub fn carry(
     Ok(done)
 }
 
+/// Which carried-over mods (`mods/<key>/carry` folders) the game loads together, in the order
+/// given: as the game does, the first of two owning one namespace stays on. Returns the ones on,
+/// and a line for each one left off.
+pub fn loadable(mods: &[std::path::PathBuf]) -> (Vec<std::path::PathBuf>, Vec<String>) {
+    let mut on: Vec<(std::path::PathBuf, String, Vec<String>)> = Vec::new();
+    let mut off = Vec::new();
+    for path in mods {
+        let manifest = fs::read_to_string(path.join(horizon_mods::manifest::MANIFEST))
+            .map_err(|e| e.to_string())
+            .and_then(|t| horizon_mods::Manifest::parse(&t));
+        let m = match manifest {
+            Ok(m) => m,
+            Err(e) => {
+                off.push(format!("{}: {e}", path.display()));
+                continue;
+            }
+        };
+        let owned: Vec<String> = std::iter::once(m.id.clone())
+            .chain(m.namespaces.iter().cloned())
+            .collect();
+        let clash = on
+            .iter()
+            .find_map(|(_, id, ns)| horizon_mods::content::clash((id, ns), (&m.id, &owned)));
+        match clash {
+            Some(why) => off.push(format!("{} not loaded: {why}", m.id)),
+            None => on.push((path.clone(), m.id, owned)),
+        }
+    }
+    (on.into_iter().map(|(p, _, _)| p).collect(), off)
+}
+
+/// The namespaces more than one mod claims, from each mod's (key, claimed namespaces).
+fn shared_namespaces<'a>(
+    claims: impl Iterator<Item = (&'a str, Vec<String>)>,
+    log: Log,
+) -> BTreeSet<String> {
+    let mut by_namespace: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+    for (key, owned) in claims {
+        for ns in owned {
+            by_namespace.entry(ns).or_default().push(key);
+        }
+    }
+    by_namespace
+        .into_iter()
+        .filter(|(_, mods)| mods.len() > 1)
+        .map(|(ns, mods)| {
+            log(format!(
+                "namespace {ns} is claimed by {}: left to none of them",
+                mods.join(", ")
+            ));
+            ns
+        })
+        .collect()
+}
+
 /// The pack's title as the report heads it.
 pub fn title(pack: &import::Pack) -> String {
     format!(
@@ -278,4 +342,52 @@ pub fn port(
         carry(work, resources, &only, log)?;
     }
     Ok((fetched, report(work, log)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_namespace_two_mods_claim_is_neither_s() {
+        let claims = [
+            ("betterdungeons", vec!["yungsapi".to_owned()]),
+            ("betterfortresses", vec!["yungsapi".to_owned()]),
+            (
+                "towns_and_towers",
+                vec!["kaisyn".to_owned(), "towns_and_towers".to_owned()],
+            ),
+        ];
+        let shared = shared_namespaces(claims.into_iter(), &|_| {});
+        assert_eq!(shared.into_iter().collect::<Vec<_>>(), ["yungsapi"]);
+    }
+
+    #[test]
+    fn the_first_of_two_mods_owning_a_namespace_loads() {
+        let root = std::env::temp_dir().join(format!("port-pack-loadable-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let carry = |key: &str, namespaces: &str| {
+            let dir = root.join(key).join("carry");
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(
+                dir.join("horizon-mod.toml"),
+                format!(
+                    "id = \"{key}\"\nname = \"{key}\"\nversion = \"1\"\napi = \"0.2\"\n\
+                     capabilities = [\"registries\"]\nnamespaces = [{namespaces}]\n"
+                ),
+            )
+            .unwrap();
+            dir
+        };
+        let mods = [
+            carry("betterdungeons", "\"yungsapi\""),
+            carry("betterfortresses", "\"yungsapi\""),
+            carry("ruby", ""),
+        ];
+        let (on, off) = loadable(&mods);
+        assert_eq!(on, [mods[0].clone(), mods[2].clone()]);
+        assert_eq!(off.len(), 1);
+        assert!(off[0].starts_with("betterfortresses not loaded"), "{off:?}");
+        fs::remove_dir_all(&root).unwrap();
+    }
 }

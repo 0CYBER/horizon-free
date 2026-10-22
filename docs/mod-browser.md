@@ -131,15 +131,20 @@ same name the player put there is never overwritten.
   Packs, as in vanilla and Iris.
 - **Update** installs the newer version and removes the old file.
 - **Remove** deletes the file and its entry. Packs installed as dependencies stay.
-- **A modpack** is downloaded (checked the same way) into `ports/downloads/` and imported; the Modpacks tab says
-  what of it Horizon runs and ports it.
+- **A modpack** is downloaded (checked the same way) into `ports/downloads/`, imported, and ported straight away
+  for the selected version when it is prepared (`modpacks::import_and_port`): the jars of the mods Horizon can carry
+  over come from the pack's links or Modrinth, and the message says how many of its files play. **Play** on the
+  Modpacks tab starts it with every ported mod on together. A ported mod that owns a namespace an earlier one owns
+  (the game would refuse it) is left off before the game starts and listed under the pack ("Left off: ..."); the
+  coverage list says why each mod that didn't port didn't. A port that fails leaves the pack imported, with **Port**
+  to try again. Measured on three packs in [modpacks.md](modpacks.md#three-packs-through-the-mod-browser-measured).
 
 From a terminal (or an agent):
 
 ```sh
 horizon-launcher mods search faithful                 # --kind mod|modpack|resource|shader, --everything, --source
 horizon-launcher mods check macaws-fences-and-walls   # a Java mod's verdict, what ports and what doesn't (--json)
-horizon-launcher mods install faithful-32x            # id or slug; a Java mod is ported, a modpack imported
+horizon-launcher mods install faithful-32x            # id or slug; a Java mod is ported, a modpack imported and ported
 horizon-launcher mods list                            # --json
 horizon-launcher mods update [faithful-32x] [--check]
 horizon-launcher mods remove faithful-32x

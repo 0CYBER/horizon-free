@@ -45,6 +45,9 @@ pub struct Imported {
     pub fetched: Fetched,
     /// The carried-over mods the profile loads.
     pub mods: Vec<PathBuf>,
+    /// Mods left off, with why: a ported one an earlier one owns a namespace of, or one whose
+    /// jar only CurseForge serves (CurseForge downloads coming soon).
+    pub left_off: Vec<String>,
     /// The mods the port step gets and carries over (content, data tier).
     pub portable: usize,
 }
@@ -105,6 +108,15 @@ pub fn load(work: &Path) -> Result<Imported, String> {
     let rows: Vec<Row> = pipeline::read_json(&work.join("coverage.json")).unwrap_or_default();
     let records: Vec<horizon_port_pack::inventory::Record> =
         pipeline::read_json(&work.join("inventory.json")).unwrap_or_default();
+    let (mods, mut left_off) = pipeline::loadable(&carried(work));
+    let fetched = Fetched::load(work);
+    left_off.extend(
+        fetched
+            .files
+            .iter()
+            .filter(|o| o.how == How::NeedsKey)
+            .map(|o| format!("{}: CurseForge downloads coming soon", o.key)),
+    );
     Ok(Imported {
         slug: work
             .file_name()
@@ -113,8 +125,9 @@ pub fn load(work: &Path) -> Result<Imported, String> {
         work: work.to_path_buf(),
         pack,
         rows,
-        fetched: Fetched::load(work),
-        mods: carried(work),
+        fetched,
+        mods,
+        left_off,
         portable: records.iter().filter(|r| pipeline::portable(r)).count(),
     })
 }
@@ -176,6 +189,47 @@ pub fn port(
     load(work)
 }
 
+/// What the mod browser does with a modpack: imports it, then ports what this computer can
+/// (from the pack's links and Modrinth), so it plays straight away. A port that fails leaves the
+/// pack imported; the error says so.
+pub fn import_and_port(
+    path: &Path,
+    resources: Option<&Path>,
+    log: Log,
+) -> Result<Imported, String> {
+    let pack = import(path, log)?;
+    if pack.portable == 0 {
+        return Ok(pack);
+    }
+    port(&pack.work, resources, None, log)
+        .map_err(|e| format!("{} is imported, but porting it failed: {e}", pack.title()))
+}
+
+/// One line on what an import and port gave: the mods carried over and the ones that weren't.
+pub fn outcome(pack: &Imported) -> String {
+    let not = pack.count(Status::NotYet);
+    format!(
+        "{} is imported{}: {} of its {} files play in Horizon ({} ported, {} partly), {} don't \
+         yet, {} aren't needed{}. Its list says why.",
+        pack.title(),
+        if pack.mods.is_empty() {
+            ""
+        } else {
+            " and ported"
+        },
+        pack.count(Status::Ported) + pack.count(Status::Partial),
+        pack.rows.len(),
+        pack.count(Status::Ported),
+        pack.count(Status::Partial),
+        not,
+        pack.count(Status::NotNeeded),
+        match pack.left_off.len() {
+            0 => String::new(),
+            n => format!("; {n} are left off (listed under the pack)"),
+        },
+    )
+}
+
 /// Removes an imported pack: its jars, ports and the profile's saves.
 pub fn remove(work: &Path) -> Result<(), String> {
     if work.parent() != Some(ports_dir().as_path()) {
@@ -192,7 +246,8 @@ pub fn profile_home(work: &Path) -> PathBuf {
 /// Turns the game's command into this pack's profile: its own home (the player's options.txt
 /// copied in the first time, so keys and video settings carry over) and its carried-over mods.
 pub fn apply_profile(cmd: &mut Command, work: &Path) -> Result<(), String> {
-    let mods = carried(work);
+    // Only mods that load together: the game would refuse the later of two sharing a namespace.
+    let (mods, _) = pipeline::loadable(&carried(work));
     if mods.is_empty() {
         return Err("Nothing is ported yet: port the pack first.".into());
     }
@@ -222,6 +277,34 @@ mod tests {
     }
 
     #[test]
+    fn jars_only_curseforge_serves_are_left_off_as_coming_soon() {
+        use horizon_port_pack::fetch::Outcome;
+        let work = std::env::temp_dir().join(format!("horizon-launcher-cf-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&work);
+        fs::create_dir_all(&work).unwrap();
+        pipeline::write_json(&work.join("pack.json"), &Pack::default()).unwrap();
+        let fetched = Fetched {
+            files: vec![Outcome {
+                key: "allthemodium".into(),
+                file: "mods/allthemodium.jar".into(),
+                how: How::NeedsKey,
+                detail: String::new(),
+            }],
+        };
+        pipeline::write_json(&work.join("fetch.json"), &fetched).unwrap();
+        let pack = load(&work).unwrap();
+        assert_eq!(
+            pack.left_off,
+            ["allthemodium: CurseForge downloads coming soon"]
+        );
+        assert!(pack
+            .jars()
+            .unwrap()
+            .contains("CurseForge downloads coming soon"));
+        fs::remove_dir_all(&work).unwrap();
+    }
+
+    #[test]
     fn a_profile_has_its_own_home_and_mods() {
         let root =
             std::env::temp_dir().join(format!("horizon-launcher-pack-{}", std::process::id()));
@@ -229,12 +312,19 @@ mod tests {
         let work = root.join("ports/small");
         let mut cmd = Command::new("true");
         assert!(apply_profile(&mut cmd, &work).is_err());
-        for id in ["a", "b"] {
+        for (id, namespaces) in [("a", ""), ("b", ""), ("d", "\"a\"")] {
             let carry = work.join("mods").join(id).join("carry");
             fs::create_dir_all(&carry).unwrap();
-            fs::write(carry.join("horizon-mod.toml"), "").unwrap();
+            fs::write(
+                carry.join("horizon-mod.toml"),
+                format!(
+                    "id = \"{id}\"\nname = \"{id}\"\nversion = \"1\"\napi = \"0.2\"\n\
+                     capabilities = [\"registries\"]\nnamespaces = [{namespaces}]\n"
+                ),
+            )
+            .unwrap();
         }
-        // Left out: no manifest.
+        // Left out: no manifest (c), and one owning a namespace of an earlier mod (d).
         fs::create_dir_all(work.join("mods/c/carry")).unwrap();
         apply_profile(&mut cmd, &work).unwrap();
         let args: Vec<String> = cmd
