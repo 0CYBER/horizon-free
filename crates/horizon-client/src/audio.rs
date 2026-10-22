@@ -2,7 +2,7 @@
 //! small mixer standing in for OpenAL: one channel per source with its gain,
 //! pitch, linear distance attenuation (`AL_LINEAR_DISTANCE`, reference 0,
 //! rolloff 1), looping, relative flag and source state, Ogg/Vorbis decoding
-//! (streams on a worker thread) and stereo panning.
+//! (streams on a worker thread) and OpenAL Soft's stereo panning.
 use crate::Result;
 use crate::sound_engine::{
     Attenuation, Backend, Bound, ChannelId, InstanceId, PlayResult, SoundEngine, SoundInstance,
@@ -45,6 +45,7 @@ struct Mixer {
     channels: HashMap<ChannelId, Channel>,
     listener: [f64; 3],
     listener_yaw: f32,
+    listener_pitch: f32,
     limiter_peak: f32,
 }
 /// A sound the player could have heard (`SoundEventListener.onPlaySound`):
@@ -331,6 +332,32 @@ impl Backend for MixerBackend {
             .unwrap_or(true)
     }
 }
+/// OpenAL Soft's stereo gains `[left, right]` for a mono source in a
+/// direction given in listener space (right, up, forward; any length).
+/// Vanilla's context (`Library.createAttributes`: HRTF off) on a stereo
+/// output renders pairwise: front azimuths are stretched by 1.5
+/// (`ScaleAzimuthFront`, so 60 degrees off-centre pans fully) and the
+/// direction is decoded by the first-order stereo decoder, 0.5 W, 0.5 Y and
+/// 0.0957 X in this scaling. A centred source gets 0.596 on each side, one
+/// behind 0.404, one above or below 0.5, one at the source's own position
+/// is panned to the front. Matches OpenAL Soft 1.25.2 (LWJGL 3.4.3, the
+/// pinned client's) rendered through `ALC_SOFT_loopback` within 1e-5.
+fn stereo_gains(right: f32, up: f32, forward: f32) -> [f32; 2] {
+    let length = (right * right + up * up + forward * forward).sqrt();
+    if length <= f32::EPSILON {
+        return stereo_gains(0.0, 0.0, 1.0);
+    }
+    let elevation = (up / length).clamp(-1.0, 1.0).asin();
+    let mut azimuth = right.atan2(forward);
+    if azimuth.abs() < std::f32::consts::FRAC_PI_2 {
+        azimuth = (azimuth.abs() * 1.5)
+            .min(std::f32::consts::FRAC_PI_2)
+            .copysign(azimuth);
+    }
+    let side = azimuth.sin() * elevation.cos();
+    let front = azimuth.cos() * elevation.cos() * 0.095_660_8;
+    [0.5 - 0.5 * side + front, 0.5 + 0.5 * side + front]
+}
 /// The gain OpenAL applies for distance (`AL_LINEAR_DISTANCE` with reference
 /// distance 0 and rolloff 1: the distance clamps to the max distance).
 fn distance_gain(linear: Option<f32>, distance: f32) -> f32 {
@@ -345,9 +372,30 @@ fn distance_gain(linear: Option<f32>, distance: f32) -> f32 {
 fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
     data.fill(0.0);
     let listener = mixer.listener;
-    let yaw = mixer.listener_yaw.to_radians();
+    // The camera's forward and up vectors (`Camera.forwardVector`/`upVector`)
+    // and OpenAL's right = forward x up.
+    let (yaw, pitch) = (
+        f64::from(mixer.listener_yaw.to_radians()),
+        f64::from(mixer.listener_pitch.to_radians()),
+    );
+    let forward = [
+        -yaw.sin() * pitch.cos(),
+        -pitch.sin(),
+        yaw.cos() * pitch.cos(),
+    ];
+    let up = [
+        -yaw.sin() * pitch.sin(),
+        pitch.cos(),
+        yaw.cos() * pitch.sin(),
+    ];
+    let right = [
+        forward[1] * up[2] - forward[2] * up[1],
+        forward[2] * up[0] - forward[0] * up[2],
+        forward[0] * up[1] - forward[1] * up[0],
+    ];
+    let dot = |a: [f64; 3], b: [f64; 3]| (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) as f32;
     // Gains and pans per source for this buffer.
-    let mut voices: Vec<(ChannelId, f32, f32, f64)> = Vec::new();
+    let mut voices: Vec<(ChannelId, [f32; 3], f64)> = Vec::new();
     for (id, c) in &mixer.channels {
         let Some((_, source_rate)) = &c.samples else {
             continue;
@@ -366,19 +414,17 @@ fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
         };
         let distance = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() as f32;
         let gain = c.gain.clamp(0.0, 1.0) * distance_gain(c.linear, distance);
-        // The listener's right vector for a Minecraft yaw.
-        let side = if c.relative {
-            (d[0] as f32) / distance.max(0.001)
+        // Relative sources are already in OpenAL's listener space (-Z ahead).
+        let [left, right] = if c.relative {
+            stereo_gains(d[0] as f32, d[1] as f32, -d[2] as f32)
         } else {
-            (-(yaw.cos()) as f64 * d[0] - (yaw.sin()) as f64 * d[2]) as f32 / distance.max(0.001)
-        };
-        let pan = side.clamp(-1.0, 1.0);
-        let left = gain * (1.0 - pan.max(0.0) * 0.6);
-        let right = gain * (1.0 + pan.min(0.0) * 0.6);
+            stereo_gains(dot(d, right), dot(d, up), dot(d, forward))
+        }
+        .map(|pan| gain * pan);
         let step = f64::from(*source_rate) / f64::from(rate) * f64::from(c.pitch.max(0.0));
-        voices.push((*id, left, right, step));
+        voices.push((*id, [left, right, gain], step));
     }
-    for (id, left, right, step) in voices {
+    for (id, [left, right, gain], step) in voices {
         let Some(c) = mixer.channels.get_mut(&id) else {
             continue;
         };
@@ -402,16 +448,19 @@ fn mix(mixer: &mut Mixer, data: &mut [f32], channels: usize, rate: u32) {
                 frame[0] += s * left;
                 frame[1] += s * right;
             } else {
-                frame[0] += s * (left + right) / 2.0;
+                // A mono output has no panning: the source's own gain.
+                frame[0] += s * gain;
             }
             c.position += step;
         }
     }
     // Limit the whole buffer together, preserving waveform and stereo balance
-    // instead of flattening each overloaded sample; release over 50 ms.
+    // instead of flattening each overloaded sample; release over 200 ms
+    // (OpenAL Soft's output limiter, `ALC_OUTPUT_LIMITER_SOFT`, releases
+    // over 0.2 s).
     let peak = data.iter().fold(1.0f32, |peak, s| peak.max(s.abs()));
     mixer.limiter_peak = mixer.limiter_peak.max(peak);
-    let release = (-1.0 / (0.05 * rate as f32)).exp();
+    let release = (-1.0 / (0.2 * rate as f32)).exp();
     for frame in data.chunks_mut(channels) {
         let gain = mixer.limiter_peak.recip();
         for s in frame {
@@ -591,13 +640,15 @@ impl Audio {
             backend: &mut self.backend,
         }
     }
-    /// `SoundManager.updateSource`: the camera position and yaw.
-    pub fn set_listener(&mut self, position: [f64; 3], yaw: f32) {
+    /// `SoundManager.updateSource`: the camera position and rotation
+    /// (`Listener.setTransform` takes its forward and up vectors).
+    pub fn set_listener(&mut self, position: [f64; 3], yaw: f32, pitch: f32) {
         self.listener = position;
         self.listener_yaw = yaw;
         if let Ok(mut m) = self.backend.mixer.lock() {
             m.listener = position;
             m.listener_yaw = yaw;
+            m.listener_pitch = pitch;
         }
     }
     /// Sync the volume options, refreshing the categories that changed
@@ -908,8 +959,9 @@ mod tests {
         }
         let mut data = [0.0; 16];
         mix(&mut m, &mut data, 2, 48_000);
+        // West of a listener facing south: fully on the right.
         for (frame, sample) in data.as_chunks::<2>().0.iter().zip(wave) {
-            assert!((frame[0] - sample * 0.4).abs() < 1e-6, "{frame:?}");
+            assert!(frame[0].abs() < 1e-6, "{frame:?}");
             assert!((frame[1] - sample).abs() < 1e-6, "{frame:?}");
         }
         assert!(data.iter().all(|s| s.abs() <= 1.0));
@@ -920,9 +972,10 @@ mod tests {
         let mut m = Mixer::default();
         m.channels
             .insert(1, channel(vec![0.25; 2], None, [0.0; 3], true));
+        let quiet = 0.25 * stereo_gains(0.0, 0.0, 1.0)[0];
         let mut data = [0.0; 16];
         mix(&mut m, &mut data, 2, 48_000);
-        assert_eq!(data, [0.25; 16]);
+        assert_eq!(data, [quiet; 16]);
 
         for id in 2..=5 {
             m.channels
@@ -935,7 +988,7 @@ mod tests {
         mix(&mut m, &mut recovery, 2, 48_000);
         assert!(recovery[0] > 0.0 && recovery[0] < 0.1);
         assert!(recovery.windows(2).all(|w| w[1] >= w[0]));
-        assert_eq!(*recovery.last().unwrap(), 0.25);
+        assert_eq!(*recovery.last().unwrap(), quiet);
     }
 
     #[test]
@@ -952,5 +1005,61 @@ mod tests {
         // Mono sum of the two at the first frame: the far one is half as loud.
         let first = data[0] + data[1];
         assert!(first > 1.4 && first < 3.1, "{first}");
+    }
+
+    #[test]
+    fn stereo_panning_matches_openal_soft() {
+        // OpenAL Soft 1.25.2 (LWJGL 3.4.3's macOS build), stereo loopback
+        // device with vanilla's attributes, 1 kHz sine 4 blocks away.
+        let cases = [
+            ((0.0, 0.0, 1.0), [0.5957, 0.5957]),
+            ((-1.0, 0.0, 0.0), [1.0, 0.0]),
+            ((1.0, 0.0, 0.0), [0.0, 1.0]),
+            ((0.0, 0.0, -1.0), [0.4043, 0.4043]),
+            ((0.0, 1.0, 0.0), [0.5, 0.5]),
+            ((0.0, -1.0, 0.0), [0.5, 0.5]),
+            ((-1.0, 0.0, 1.0), [0.9985, 0.0747]),
+            ((-1.0, 0.0, -1.0), [0.7859, 0.0788]),
+            ((0.0, 0.0, 0.0), [0.5957, 0.5957]),
+        ];
+        for ((right, up, forward), expected) in cases {
+            let gains = stereo_gains(right, up, forward);
+            for (g, e) in gains.into_iter().zip(expected) {
+                assert!((g - e).abs() < 1e-4, "{right} {up} {forward}: {gains:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn panning_follows_the_camera_rotation() {
+        let gains = |yaw: f32, pitch: f32, at: [f32; 3]| {
+            let mut m = Mixer {
+                listener_yaw: yaw,
+                listener_pitch: pitch,
+                ..Mixer::default()
+            };
+            m.channels.insert(1, channel(vec![1.0; 4], None, at, true));
+            let mut data = [0.0; 2];
+            mix(&mut m, &mut data, 2, 48_000);
+            data
+        };
+        let close =
+            |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 1e-4 && (a[1] - b[1]).abs() < 1e-4;
+        // Facing south (yaw 0), east is on the left; facing north, on the right.
+        assert!(close(gains(0.0, 0.0, [1.0, 0.0, 0.0]), [1.0, 0.0]));
+        assert!(close(gains(180.0, 0.0, [1.0, 0.0, 0.0]), [0.0, 1.0]));
+        // Looking straight down, a source below is ahead and one south is above.
+        assert!(close(gains(0.0, 90.0, [0.0, -1.0, 0.0]), [0.5957, 0.5957]));
+        assert!(close(gains(0.0, 90.0, [0.0, 0.0, 1.0]), [0.5, 0.5]));
+    }
+
+    #[test]
+    fn a_mono_output_plays_sources_unpanned() {
+        let mut m = Mixer::default();
+        m.channels
+            .insert(1, channel(vec![0.5; 4], None, [0.0, 0.0, -3.0], true));
+        let mut data = [0.0; 2];
+        mix(&mut m, &mut data, 1, 48_000);
+        assert_eq!(data, [0.5; 2]);
     }
 }
