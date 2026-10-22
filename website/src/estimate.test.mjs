@@ -55,3 +55,10 @@ test("a base held to its display's refresh rate gives only a floor for the avera
   // The lows sit under the cap: still a range.
   assert.ok(e.low_1pct_fps.high > e.low_1pct_fps.low);
 });
+
+test("a release title of issue numbers falls back to its notes", async () => {
+  const { parts } = await import("./releases.js");
+  const r = { tag_name: "v2026.10.22.07", name: "Horizon 2026.10.22.07: #1255, mob pushes, fix, #1222", body: "### Fixed\n- Fix #1222: single player runs in the frame again (#1257, fixes #1222)\n- Mob pushes: one list per mob (#1205)\n" };
+  assert.equal(parts(r).line, "Single player runs in the frame again and 1 more");
+  assert.equal(parts({ ...r, name: "Horizon 2026.10.22.05: Hoppers, mob tick, server tick" }).line, "Hoppers, mob tick, server tick");
+});

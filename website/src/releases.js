@@ -15,7 +15,24 @@ export function parts(r) {
   const version = launcherVersion(r.tag_name) ?? r.tag_name.replace(/^v/, "");
   const name = (r.name || "").trim();
   let line = name.includes(": ") ? name.slice(name.indexOf(": ") + 2) : name.replace(/^Horizon( launcher)?\s*/i, "").replace(version, "").trim();
+  if (junk(line)) line = fromNotes(r.body) || line;
   return { version, line: line.charAt(0).toUpperCase() + line.slice(1), date: (r.published_at || "").slice(0, 10) };
+}
+
+// A title made of issue numbers and "fix" ("#1255, mob pushes, fix, #1222") says nothing.
+const junk = (line) => {
+  const bits = line.split(",").map((b) => b.trim()).filter(Boolean);
+  return bits.length > 1 && bits.filter((b) => /^(#\d+|fix(es)?|fixed)$/i.test(b)).length * 2 >= bits.length;
+};
+
+// The first item that isn't a bare "Fix #123:" prefix, as the line: "Mob pushes: one list per mob… and 3 more fixes".
+function fromNotes(body) {
+  const s = sections(body);
+  const items = [...s.filter((x) => /^new|what's new/i.test(x.title)), ...s.filter((x) => /^fixed/i.test(x.title))].flatMap((x) => x.items).map(plainItem);
+  const clean = items.map((i) => i.replace(/^(fix|fixes)\s+#\d+:\s*/i, "").replace(/^\w+\([^)]*\):\s*/, "")).filter(Boolean);
+  if (!clean.length) return "";
+  const first = clean[0].replace(/[.]$/, "");
+  return clean.length > 1 ? `${first} and ${clean.length - 1} more` : first;
 }
 
 // The notes' "### Heading" sections and their top-level items, in order.
