@@ -57,6 +57,8 @@ pub(super) struct GuestPlay {
     pub(super) crafting: super::lan_crafting::GuestCrafting,
     /// The workstation menu the guest has open (game/lan_stations.rs).
     pub(super) station: Option<super::lan_stations::GuestStation>,
+    /// The mount inventory the guest has open (game/lan_mount_menu.rs).
+    pub(super) mount_window: Option<super::lan_mount_menu::GuestMount>,
     /// The lectern the guest reads (game/lan_stations.rs).
     pub(super) lectern: Option<super::lan_stations::GuestLectern>,
     /// What the guest's body was given for its effects and enchantments.
@@ -493,7 +495,9 @@ impl Game<'_> {
             _ => None,
         };
         self.command_block_screen = host_command_block;
-        self.mount_menu = host_mount_menu;
+        // A mount inventory the guest's action opened (shift + use, or the
+        // inventory key while riding).
+        let guest_mount = std::mem::replace(&mut self.mount_menu, host_mount_menu).opened_mob();
         self.keys = host_keys;
         let g = &mut host.hub.guests[i];
         let left_vehicle = g.vehicle.filter(|_| guest_vehicle.is_none());
@@ -615,6 +619,9 @@ impl Game<'_> {
         }
         if opened_table {
             self.lan_open_crafting(host, conn);
+        }
+        if let Some(mob) = guest_mount {
+            self.lan_open_mount(host, conn, mob);
         }
     }
 
@@ -971,6 +978,14 @@ impl Game<'_> {
             S::ContainerClick(p) if self.lan_machine_click(host, conn, &p) => {}
             S::ContainerClick(p) if self.lan_station_click(host, conn, &p) => {}
             S::ContainerClick(p) if self.lan_lectern_click(host, conn, &p) => {}
+            S::ContainerClick(p) if self.lan_mount_click(host, conn, &p) => {}
+            // ServerboundPlayerCommandPacket OPEN_INVENTORY: the ridden
+            // mount's inventory (`HasCustomInventoryScreen`).
+            S::PlayerCommand(p) if p.action == 5 => {
+                self.as_guest(host, conn, |g| {
+                    g.open_ridden_mount_menu();
+                });
+            }
             S::ContainerButtonClick(p) => {
                 self.lan_station_button(host, conn, p.container, p.button);
             }
@@ -988,7 +1003,8 @@ impl Game<'_> {
             }
             S::ContainerClose(p)
                 if self.lan_crafting_closed(host, conn, Some(p.container))
-                    || self.lan_station_closed(host, conn, Some(p.container)) =>
+                    || self.lan_station_closed(host, conn, Some(p.container))
+                    || self.lan_mount_closed(host, conn, Some(p.container)) =>
             {
                 let g = &mut host.hub.guests[gi];
                 if let Some(c) = g.carried.take() {
@@ -1528,6 +1544,7 @@ impl Game<'_> {
     pub(super) fn tick_guests(&mut self, host: &mut LanHost) {
         self.lan_merchant_tick(host);
         self.lan_stations_tick(host);
+        self.tick_lan_mount_menus(host);
         self.announce_guest_advancements(host);
         let conns: Vec<u32> = host
             .hub
