@@ -17,7 +17,7 @@ fn fixture() -> String {
         })
         .collect();
     list.push(serde_json::json!({
-        "tag_name": "launcher-v99.0.0", "name": "Launcher", "body": "Notes",
+        "tag_name": "launcher@99.0.0", "name": "Launcher", "body": "Notes",
         "assets": [{"name": LAUNCHER_ASSET.unwrap_or("unsupported"),
             "browser_download_url": "https://example.test/launcher", "size": 6789}]
     }));
@@ -105,10 +105,10 @@ fn publish_games_before_older_launcher_fallback() {
                 assert_eq!(events.borrow().first(), Some(&"releases"));
                 events.borrow_mut().push("fallback");
                 if url.contains("matching-refs") {
-                    Ok(serde_json::json!([{"ref": "refs/tags/launcher-v99.0.0"}]))
+                    Ok(serde_json::json!([{"ref": "refs/tags/launcher@99.0.0"}]))
                 } else {
                     Ok(
-                        serde_json::json!({"tag_name": "launcher-v99.0.0", "assets": [{
+                        serde_json::json!({"tag_name": "launcher@99.0.0", "assets": [{
                             "name": LAUNCHER_ASSET.unwrap_or("unsupported"),
                             "browser_download_url": "u", "size": 1
                         }]}),

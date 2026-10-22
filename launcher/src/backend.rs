@@ -12,10 +12,14 @@ use std::sync::{Arc, Mutex};
 pub const REPO: &str = "ludovic111/horizon";
 pub const README_URL: &str = "https://github.com/ludovic111/horizon/blob/main/launcher/README.md";
 /// This launcher's version: the release workflow sets `HORIZON_LAUNCHER_VERSION` from the
-/// `launcher-vX.Y.Z` tag it builds (no version-bump commits); other builds say Cargo.toml's.
+/// tag it builds (no version-bump commits); other builds say Cargo.toml's.
 pub const VERSION: &str = version_or(option_env!("HORIZON_LAUNCHER_VERSION"));
-/// Launcher releases are tagged `launcher-vX.Y.Z`; Horizon's own are `vYYYY.MM.DD`.
-pub const LAUNCHER_TAG_PREFIX: &str = "launcher-v";
+/// Launcher releases are tagged `launcher@X.Y.Z` from 0.2 on (docs/versioning.md), and Horizon's
+/// own `vX.Y.Z`. Before 0.2 they were `launcher-vX.Y.Z` and `vYYYY.MM.DD[.N]`: every 0.2 tag is
+/// newer than every one of those ([`release_order`]).
+pub const LAUNCHER_TAG_PREFIX: &str = "launcher@";
+/// The launcher tags from before 0.2 (`launcher-v0.16.0`).
+pub const OLD_LAUNCHER_TAG_PREFIX: &str = "launcher-v";
 
 const fn version_or(injected: Option<&'static str>) -> &'static str {
     match injected {
@@ -105,33 +109,120 @@ pub fn is_game_tag(tag: &str) -> bool {
         .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
 }
 
-/// The launcher version in a `launcher-vX.Y.Z` tag, or None for any other tag.
+/// The launcher version in a `launcher@X.Y.Z` (or `launcher-vX.Y.Z`) tag, or None for any other tag.
 pub fn launcher_version(tag: &str) -> Option<&str> {
     tag.strip_prefix(LAUNCHER_TAG_PREFIX)
+        .or_else(|| tag.strip_prefix(OLD_LAUNCHER_TAG_PREFIX))
         .filter(|v| v.starts_with(|c: char| c.is_ascii_digit()))
 }
 
-/// The numeric parts of a version or tag: `v2026.10.13` and `2026.10.13` give [2026, 10, 13].
-/// Anything after a `-` (a pre-release) is ignored.
-fn version_parts(v: &str) -> Vec<u64> {
-    let v = v
-        .trim_start_matches(LAUNCHER_TAG_PREFIX)
-        .trim_start_matches('v');
-    v.split('-')
-        .next()
-        .unwrap_or("")
-        .split('.')
-        .map(|p| p.parse().unwrap_or(0))
-        .collect()
+/// The tag this launcher was released as. launcher.yml gives it (`HORIZON_LAUNCHER_TAG`); a release
+/// built before it did gave only the version, of a `launcher-v` tag; a build from source is
+/// Cargo.toml's version on the 0.2 line.
+pub fn own_tag() -> String {
+    own_tag_of(
+        option_env!("HORIZON_LAUNCHER_TAG"),
+        option_env!("HORIZON_LAUNCHER_VERSION"),
+    )
 }
 
-/// Compares two versions part by part, missing parts counting as zero (1.2 == 1.2.0).
+fn own_tag_of(tag: Option<&str>, injected: Option<&str>) -> String {
+    match (
+        tag.filter(|t| !t.is_empty()),
+        injected.filter(|v| !v.is_empty()),
+    ) {
+        (Some(tag), _) => tag.to_string(),
+        (None, Some(version)) => format!("{OLD_LAUNCHER_TAG_PREFIX}{version}"),
+        (None, None) => format!("{LAUNCHER_TAG_PREFIX}{}", env!("CARGO_PKG_VERSION")),
+    }
+}
+
+/// Where a tag or version stands among Horizon's releases (docs/versioning.md): the tags from
+/// before 0.2 (`vYYYY.MM.DD[.N]`, `launcher-vX.Y.Z`) and bare versions first, compared number by
+/// number with missing parts as zero and anything after a `-` ignored, as launchers always did;
+/// then the 0.2 tags (`vX.Y.Z`, `launcher@X.Y.Z`) in semver's order, a pre-release
+/// (`v0.3.0-rc.1`) before its release.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ReleaseOrder {
+    /// Numbers without trailing zeros, so 1.2 and 1.2.0 are equal.
+    Before02(Vec<u64>),
+    Semver([u64; 3], Prerelease),
+}
+
+/// (is a release, the pre-release's identifiers): a release follows every pre-release of its
+/// version; identifiers compare one by one, numbers before words, a shorter list first.
+pub type Prerelease = (bool, Vec<Identifier>);
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Identifier {
+    Number(u64),
+    Word(String),
+}
+
+/// Semver's majors stay below this; a date tag's first number is a year.
+const FIRST_YEAR: u64 = 1000;
+
+pub fn release_order(tag: &str) -> ReleaseOrder {
+    let semver = tag
+        .strip_prefix(LAUNCHER_TAG_PREFIX)
+        .or_else(|| tag.strip_prefix('v'))
+        .and_then(semver_order);
+    semver.unwrap_or_else(|| {
+        let v = tag
+            .strip_prefix(OLD_LAUNCHER_TAG_PREFIX)
+            .or_else(|| tag.strip_prefix(LAUNCHER_TAG_PREFIX))
+            .unwrap_or(tag);
+        let v = v.strip_prefix('v').unwrap_or(v);
+        let mut parts: Vec<u64> = v
+            .split('-')
+            .next()
+            .unwrap_or("")
+            .split('.')
+            .map(|p| p.parse().unwrap_or(0))
+            .collect();
+        while parts.last() == Some(&0) {
+            parts.pop();
+        }
+        ReleaseOrder::Before02(parts)
+    })
+}
+
+/// `MAJOR.MINOR.PATCH[-PRE]` with a major below [`FIRST_YEAR`], or None.
+fn semver_order(version: &str) -> Option<ReleaseOrder> {
+    let (core, pre) = match version.split_once('-') {
+        Some((core, pre)) => (core, Some(pre)),
+        None => (version, None),
+    };
+    let numbers: Vec<u64> = core
+        .split('.')
+        .map(|n| n.parse().ok())
+        .collect::<Option<_>>()?;
+    let &[major, minor, patch] = numbers.as_slice() else {
+        return None;
+    };
+    if major >= FIRST_YEAR {
+        return None;
+    }
+    let pre = match pre {
+        None => (true, Vec::new()),
+        Some(pre) => (
+            false,
+            pre.split('.')
+                .map(|id| {
+                    (!id.is_empty()).then(|| {
+                        id.parse()
+                            .map_or_else(|_| Identifier::Word(id.to_string()), Identifier::Number)
+                    })
+                })
+                .collect::<Option<_>>()?,
+        ),
+    };
+    Some(ReleaseOrder::Semver([major, minor, patch], pre))
+}
+
+/// Compares two tags or versions by [`release_order`].
 pub fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
-    let (a, b) = (version_parts(a), version_parts(b));
-    (0..a.len().max(b.len()))
-        .map(|i| a.get(i).unwrap_or(&0).cmp(b.get(i).unwrap_or(&0)))
-        .find(|o| o.is_ne())
-        .unwrap_or(std::cmp::Ordering::Equal)
+    release_order(a).cmp(&release_order(b))
 }
 
 /// Every published release of the repository, both kinds, as GitHub's JSON.
@@ -195,7 +286,8 @@ pub fn launcher_releases() -> Result<Vec<Release>, String> {
 
 /// The launcher releases in `list` (the newest 100 releases). Game releases come out several times
 /// a day, so the newest launcher release can be older than all of those: then the newest
-/// `launcher-v` tags are looked up one by one (a draft's tag is skipped: it has no public release).
+/// `launcher@` and `launcher-v` tags are looked up one by one (a draft's tag is skipped: it has no
+/// public release).
 fn launcher_releases_in(list: &serde_json::Value) -> Vec<Release> {
     launcher_releases_in_with(list, |url| {
         get(&url)?.into_json().map_err(|e| e.to_string())
@@ -211,12 +303,16 @@ fn launcher_releases_in_with(
         return found;
     }
     let api = format!("https://api.github.com/repos/{REPO}");
-    let Ok(refs) = json(format!(
-        "{api}/git/matching-refs/tags/{LAUNCHER_TAG_PREFIX}"
-    )) else {
-        return found;
-    };
-    for tag in newest_launcher_tags(&refs).into_iter().take(3) {
+    let mut tags = Vec::new();
+    for prefix in [LAUNCHER_TAG_PREFIX, OLD_LAUNCHER_TAG_PREFIX] {
+        // Every `launcher@` tag is newer than every `launcher-v` one: those only when there is none.
+        if tags.is_empty() {
+            if let Ok(refs) = json(format!("{api}/git/matching-refs/tags/{prefix}")) {
+                tags = newest_launcher_tags(&refs);
+            }
+        }
+    }
+    for tag in tags.into_iter().take(3) {
         if let Ok(release) = json(format!("{api}/releases/tags/{tag}")) {
             let one = parse_releases(
                 &serde_json::json!([release]),
@@ -231,7 +327,7 @@ fn launcher_releases_in_with(
     found
 }
 
-/// The `launcher-vX.Y.Z` tags in GitHub's matching-refs answer, newest first.
+/// The launcher tags in GitHub's matching-refs answer, newest first.
 fn newest_launcher_tags(refs: &serde_json::Value) -> Vec<String> {
     let mut tags: Vec<String> = refs
         .as_array()
@@ -1507,12 +1603,17 @@ pub fn horizon_update(releases: &[Release], installed: &[String]) -> Option<Rele
     newer.then(|| newest.clone())
 }
 
-/// The newest launcher release with an archive for this platform, if newer than this launcher.
+/// The newest launcher release with an archive for this platform, if newer than this launcher
+/// ([`own_tag`]: a launcher from before 0.2 takes any `launcher@` release).
 pub fn launcher_update(releases: &[Release]) -> Option<Release> {
+    launcher_update_from(releases, &own_tag())
+}
+
+fn launcher_update_from(releases: &[Release], own: &str) -> Option<Release> {
     releases
         .iter()
         .find(|r| r.asset.is_some())
-        .filter(|r| compare_versions(launcher_version(&r.tag).unwrap_or("0"), VERSION).is_gt())
+        .filter(|r| compare_versions(&r.tag, own).is_gt())
         .cloned()
 }
 
@@ -2174,6 +2275,10 @@ mod tests {
         assert!(!is_game_tag("launcher-v0.2.0"));
         assert!(!is_game_tag("vnext"));
         assert_eq!(launcher_version("launcher-v0.2.0"), Some("0.2.0"));
+        assert_eq!(launcher_version("launcher@0.2.0"), Some("0.2.0"));
+        assert!(!is_game_tag("launcher@0.2.0"));
+        assert!(is_game_tag("v0.2.0"));
+        assert!(is_launcher_tag("launcher@0.2.0"));
         assert_eq!(launcher_version("v2026.10.13"), None);
         assert_eq!(launcher_version("launcher-vx"), None);
         let list = serde_json::json!([
@@ -2270,10 +2375,164 @@ mod tests {
             asset: Some(("u".into(), 1)),
             beta: false,
         };
-        assert!(launcher_update(&[r(format!("{LAUNCHER_TAG_PREFIX}{VERSION}"))]).is_none());
+        assert!(launcher_update(&[r(own_tag())]).is_none());
+        assert_eq!(launcher_version(&own_tag()), Some(VERSION));
         assert_eq!(
             parse_version_output(&format!("horizon-launcher {VERSION}\n")),
             Some(VERSION)
+        );
+    }
+
+    #[test]
+    fn a_launcher_knows_which_line_it_was_released_on() {
+        // launcher.yml gives the tag; before it did, a release had only its `launcher-v` version.
+        assert_eq!(
+            own_tag_of(Some("launcher@0.2.3"), Some("0.2.3")),
+            "launcher@0.2.3"
+        );
+        assert_eq!(
+            own_tag_of(Some("launcher-v0.17.0"), Some("0.17.0")),
+            "launcher-v0.17.0"
+        );
+        assert_eq!(own_tag_of(None, Some("0.16.0")), "launcher-v0.16.0");
+        assert_eq!(own_tag_of(Some(""), Some("0.16.0")), "launcher-v0.16.0");
+        // A build from source is on the 0.2 line.
+        assert_eq!(
+            own_tag_of(None, None),
+            format!("launcher@{}", env!("CARGO_PKG_VERSION"))
+        );
+    }
+
+    /// The update path to 0.2 (docs/versioning.md): launchers from before it take the last
+    /// `launcher-v` release, which takes every `launcher@` one.
+    #[test]
+    fn launchers_from_before_0_2_update_to_it() {
+        let r = |tag: &str| Release {
+            tag: tag.into(),
+            name: String::new(),
+            body: String::new(),
+            date: String::new(),
+            asset: Some(("u".into(), 1)),
+            beta: false,
+        };
+        let mut list = vec![
+            r("launcher-v0.16.0"),
+            r("launcher@0.2.0"),
+            r("launcher-v0.17.0"),
+            r("launcher@0.2.1"),
+        ];
+        list.sort_by(|a, b| compare_versions(&b.tag, &a.tag));
+        let tags: Vec<_> = list.iter().map(|r| r.tag.as_str()).collect();
+        assert_eq!(
+            tags,
+            [
+                "launcher@0.2.1",
+                "launcher@0.2.0",
+                "launcher-v0.17.0",
+                "launcher-v0.16.0"
+            ]
+        );
+        let offered = |own: &str| launcher_update_from(&list, own).map(|r| r.tag);
+        assert_eq!(offered("launcher-v0.16.0"), Some("launcher@0.2.1".into()));
+        assert_eq!(offered("launcher-v0.17.0"), Some("launcher@0.2.1".into()));
+        assert_eq!(offered("launcher@0.2.0"), Some("launcher@0.2.1".into()));
+        assert_eq!(offered("launcher@0.2.1"), None);
+        assert_eq!(offered("launcher@0.3.0-rc.1"), None);
+        // The old launchers' own check only sees `launcher-v` tags: 0.17.0 is their way over.
+        let old_scheme: Vec<_> = list
+            .iter()
+            .filter(|r| r.tag.starts_with(OLD_LAUNCHER_TAG_PREFIX))
+            .cloned()
+            .collect();
+        assert_eq!(
+            launcher_update_from(&old_scheme, "launcher-v0.16.0").map(|r| r.tag),
+            Some("launcher-v0.17.0".into())
+        );
+    }
+
+    #[test]
+    fn game_0_2_follows_every_date_release() {
+        assert_eq!(compare_versions("v0.2.0", "v2026.10.19.15"), Greater);
+        assert_eq!(compare_versions("v0.2.0", "v2026.10.21"), Greater);
+        assert_eq!(compare_versions("v2099.12.31.9", "v0.2.0"), Less);
+        assert_eq!(compare_versions("v0.2.1", "v0.2.0"), Greater);
+        assert_eq!(compare_versions("v0.2.10", "v0.2.9"), Greater);
+        assert_eq!(compare_versions("v0.3.0", "v0.2.57"), Greater);
+        assert_eq!(compare_versions("v0.2.0", "v0.2.0"), Equal);
+        // Pre-releases come before their release and after the one before.
+        assert_eq!(compare_versions("v0.3.0-rc.1", "v0.3.0"), Less);
+        assert_eq!(compare_versions("v0.3.0-rc.1", "v0.2.9"), Greater);
+        assert_eq!(compare_versions("v0.3.0-beta.11", "v0.3.0-beta.2"), Greater);
+        assert_eq!(compare_versions("v0.3.0-rc.1", "v0.3.0-beta.9"), Greater);
+        assert_eq!(compare_versions("v0.3.0-beta.1", "v0.3.0-beta"), Greater);
+        assert_eq!(compare_versions("v0.3.0-alpha", "v0.3.0-1"), Greater);
+        assert_eq!(compare_versions("v0.2.1-beta.1", "v2026.10.21"), Greater);
+        // Launcher and game tags of 0.2 compare alike; old launcher tags stay below.
+        assert_eq!(
+            compare_versions("launcher@0.2.0", "launcher-v0.16.0"),
+            Greater
+        );
+        assert_eq!(compare_versions("launcher@0.2.0", "v0.2.0"), Equal);
+
+        let asset = ASSET.unwrap_or("horizon-linux-x86_64.tar.gz");
+        let list = serde_json::json!([
+            {"tag_name": "v0.2.0", "prerelease": true, "assets": [{"name": asset, "browser_download_url": "b", "size": 1}]},
+            {"tag_name": "v2026.10.21", "prerelease": true, "assets": [{"name": asset, "browser_download_url": "d", "size": 1}]},
+            {"tag_name": "v2026.10.19.15", "assets": [{"name": asset, "browser_download_url": "s", "size": 1}]},
+        ]);
+        let releases = parse_releases(&list, Some(asset), is_game_tag);
+        let installed = ["v2026.10.19.15".to_string(), "v2026.10.12".to_string()];
+        let offered = |beta| horizon_update(&channel(&releases, beta), &installed).map(|r| r.tag);
+        // A beta 0.2.0 reaches launchers with Beta builds on; stable ones wait for its promotion.
+        assert_eq!(offered(true), Some("v0.2.0".into()));
+        assert_eq!(offered(false), None);
+        let mut sorted = vec![
+            "v2026.10.19.15".to_string(),
+            "v0.2.1".into(),
+            "v0.2.0".into(),
+            "v2026.10.21".into(),
+        ];
+        sorted.sort_by(|a, b| compare_versions(b, a));
+        assert_eq!(
+            sorted,
+            ["v0.2.1", "v0.2.0", "v2026.10.21", "v2026.10.19.15"]
+        );
+    }
+
+    #[test]
+    fn the_fallback_looks_for_0_2_launchers_first() {
+        let asset = LAUNCHER_ASSET.unwrap_or("unsupported");
+        let release = |tag: &str| serde_json::json!({"tag_name": tag, "assets": [{"name": asset, "browser_download_url": "u", "size": 1}]});
+        let asked = std::cell::RefCell::new(Vec::new());
+        let lookup = |with_new: bool| {
+            asked.borrow_mut().clear();
+            launcher_releases_in_with(&serde_json::json!([]), |url| {
+                asked
+                    .borrow_mut()
+                    .push(url.rsplit('/').next().unwrap_or("").to_string());
+                if url.ends_with("matching-refs/tags/launcher@") {
+                    Ok(serde_json::json!(if with_new {
+                        vec![serde_json::json!({"ref": "refs/tags/launcher@0.2.0"})]
+                    } else {
+                        Vec::new()
+                    }))
+                } else if url.ends_with("matching-refs/tags/launcher-v") {
+                    Ok(serde_json::json!([{"ref": "refs/tags/launcher-v0.17.0"}]))
+                } else {
+                    Ok(release(url.rsplit('/').next().unwrap_or("")))
+                }
+            })
+            .into_iter()
+            .map(|r| r.tag)
+            .collect::<Vec<_>>()
+        };
+        assert_eq!(lookup(true), ["launcher@0.2.0"]);
+        assert_eq!(*asked.borrow(), ["launcher@", "launcher@0.2.0"]);
+        // Before the first `launcher@` release, the `launcher-v` ones.
+        assert_eq!(lookup(false), ["launcher-v0.17.0"]);
+        assert_eq!(
+            *asked.borrow(),
+            ["launcher@", "launcher-v", "launcher-v0.17.0"]
         );
     }
 
@@ -2285,10 +2544,16 @@ mod tests {
             {"ref": "refs/tags/launcher-vnext"},
             {"ref": "refs/tags/v2026.10.15"},
             {"ref": "refs/tags/launcher-v0.2.0"},
+            {"ref": "refs/tags/launcher@0.2.0"},
         ]);
         assert_eq!(
             newest_launcher_tags(&refs),
-            ["launcher-v0.2.0", "launcher-v0.1.10", "launcher-v0.1.9"]
+            [
+                "launcher@0.2.0",
+                "launcher-v0.2.0",
+                "launcher-v0.1.10",
+                "launcher-v0.1.9"
+            ]
         );
     }
 
@@ -2319,7 +2584,8 @@ mod tests {
         );
         assert!(horizon_update(&releases, &["v2026.10.13".into()]).is_none());
         assert!(launcher_update(&[r("launcher-v0.0.1")]).is_none());
-        assert!(launcher_update(&[r("launcher-v99.0.0")]).is_some());
+        assert!(launcher_update(&[r("launcher@99.0.0")]).is_some());
+        assert!(launcher_update_from(&[r("launcher-v99.0.0")], "launcher-v0.16.0").is_some());
         let installed = ["v2026.10.12".to_string(), "v2026.10.1".to_string()];
         assert!(select_after_update(Some("v2026.10.12"), &installed));
         assert!(!select_after_update(Some("v2026.10.1"), &installed));
