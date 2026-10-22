@@ -1082,12 +1082,23 @@ impl Game<'_> {
         gi: usize,
         id: i32,
     ) -> Option<([f64; 3], [f64; 3])> {
-        let m = self.mobs.iter().find(|m| m.id as i32 == id)?;
-        let centre = [
-            m.position.x,
-            m.position.y + m.kind.height * 0.5,
-            m.position.z,
-        ];
+        let centre = match self.mobs.iter().find(|m| m.id as i32 == id) {
+            Some(m) => [
+                m.position.x,
+                m.position.y + m.kind.height * 0.5,
+                m.position.z,
+            ],
+            // A dragon part or an end crystal (game/dragon.rs).
+            None => {
+                let b = self.tracked_special_box(id)?;
+                let (lo, hi) = (b.min_position(), b.max_position());
+                [
+                    (lo.x + hi.x) / 2.0,
+                    (lo.y + hi.y) / 2.0,
+                    (lo.z + hi.z) / 2.0,
+                ]
+            }
+        };
         let g = &mut host.hub.guests[gi];
         let eye = [g.position[0], g.position[1] + g.eye_height(), g.position[2]];
         let d = [centre[0] - eye[0], centre[1] - eye[1], centre[2] - eye[2]];

@@ -406,6 +406,7 @@ impl Game<'_> {
             }
             out.push(e);
         }
+        out.extend(self.lan_dragon_state());
     }
 }
 
