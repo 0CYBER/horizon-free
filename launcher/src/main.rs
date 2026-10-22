@@ -1706,9 +1706,11 @@ impl Launcher {
             _ => None,
         };
         let title = "Horizon";
+        // Never squeezed by the rows below: the ping notice can make it tall.
         let mut hero =
             div()
                 .flex()
+                .flex_none()
                 .flex_col()
                 .gap(px(14.))
                 .pt(px(24.))
@@ -1782,9 +1784,11 @@ impl Launcher {
             hero = hero.child(
                 plate(&t)
                     .flex()
+                    .flex_none()
                     .flex_col()
                     .gap(px(8.))
                     .p(px(16.))
+                    .w_full()
                     .max_w(px(640.))
                     .child(
                         text(theme::UI)

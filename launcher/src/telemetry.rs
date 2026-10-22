@@ -278,6 +278,7 @@ pub fn status_json() -> serde_json::Value {
         "install_id": consent.install_id,
         "waiting": outbox::pending(&home()).len(),
         "server": horizon_telemetry::endpoint(),
+        "ping": PING,
     })
 }
 
