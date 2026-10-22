@@ -403,6 +403,7 @@ impl Game<'_> {
             Screen::Stats => "stats",
             Screen::Advancements => "advancements",
             Screen::WorldOptions => "world-options",
+            Screen::Friends => "friends",
             Screen::CommandBlock => "command-block",
         }
     }
@@ -1840,11 +1841,21 @@ impl Game<'_> {
                 if self.ticks < *report_tick && !timed_out {
                     return None;
                 }
-                let after = pos.map(|p| self.block_json(p));
                 let changed = match (*pos, *before) {
                     (Some(p), Some(b)) => self.world.block(p[0], p[1], p[2]) != b,
                     _ => false,
                 };
+                // A client of a server (single player's server thread, a LAN
+                // guest) sees the block once the server's answer comes.
+                if *place
+                    && !changed
+                    && self.remote.is_some()
+                    && self.ticks < *report_tick + 20
+                    && !timed_out
+                {
+                    return None;
+                }
+                let after = pos.map(|p| self.block_json(p));
                 let used = delta(inventory, &self.inventory_counts());
                 let mut v = json!({
                     "ok": !*place || changed,

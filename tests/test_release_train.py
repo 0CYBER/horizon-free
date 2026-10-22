@@ -120,15 +120,15 @@ class ReleaseTrainTests(unittest.TestCase):
     def test_decision(self):
         minute = dt.timedelta(minutes=1)
         decide = lambda prs, **kw: train.decision("game", prs, NOW, **kw)[0]
-        self.assertTrue(decide([pr(1, merged=16 * minute)]), "settled for the debounce")
-        self.assertFalse(decide([pr(1, merged=5 * minute)]), "merged moments ago")
-        self.assertFalse(decide([pr(1, merged=40 * minute), pr(2, merged=5 * minute)]), "a burst still merging")
-        self.assertTrue(decide([pr(1, merged=61 * minute), pr(2, merged=2 * minute)]), "merges that never pause still ship")
+        self.assertTrue(decide([pr(1, merged=6 * minute)]), "settled for the debounce")
+        self.assertFalse(decide([pr(1, merged=2 * minute)]), "merged moments ago")
+        self.assertFalse(decide([pr(1, merged=15 * minute), pr(2, merged=2 * minute)]), "a burst still merging")
+        self.assertTrue(decide([pr(1, merged=21 * minute), pr(2, merged=minute)]), "merges that never pause still ship")
         self.assertTrue(decide([pr(1, labels=["release-now"], merged=minute)]))
         self.assertFalse(decide([pr(1, paths=[])]), "nothing players run")
         self.assertFalse(decide([pr(1, labels=["skip-release"])]))
         self.assertFalse(decide([pr(1, labels=["release-now", "skip-release"])]))
-        self.assertFalse(decide([pr(1, merged=5 * minute), pr(2, labels=["skip-release"], merged=minute)]), "the settled one waits for nothing")
+        self.assertFalse(decide([pr(1, merged=3 * minute), pr(2, labels=["skip-release"], merged=minute)]), "the settled one waits for nothing")
         self.assertFalse(decide([pr(1)], paused=True))
         self.assertTrue(decide([], paused=True, force=True))
 

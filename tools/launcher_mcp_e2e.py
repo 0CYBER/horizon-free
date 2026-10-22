@@ -116,7 +116,7 @@ def main():
     os.symlink(resources, version / '.local/horizon-client' / lab.VERSION)
     (version / '.installed').write_text('')
     env = dict(os.environ, HORIZON_LAUNCHER_HOME=str(work / 'launcher'), HORIZON_HOME=str(work / 'home'),
-               HORIZON_NO_AUDIO='1')
+               HORIZON_NO_AUDIO='1', HORIZON_TELEMETRY_URL='off')
     m = Mcp(Path(args.launcher).resolve(), env)
     try:
         summary = scenario(m, out)

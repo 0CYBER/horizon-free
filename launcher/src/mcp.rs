@@ -49,8 +49,8 @@ fn tools() -> Value {
         { "name": "patch_notes", "description": "A release's patch notes as markdown.",
           "inputSchema": { "type": "object", "properties": { "tag": { "type": "string", "description": "Default: the newest release." } } } },
         { "name": "links", "description": "The Horizon links: the Discord invite, the GitHub Sponsors page and the website (an empty one is not offered).", "inputSchema": none },
-        { "name": "menu_style", "description": "Show or set the game's menu style. \"horizon\" is Horizon's own menus, \"classic\" is vanilla's screens, which have no way back inside the game. The game reads it when it starts.",
-          "inputSchema": { "type": "object", "properties": { "style": { "type": "string", "enum": ["horizon", "classic"], "description": "Omit to show the current style." } } } },
+        { "name": "update_channel", "description": "Show or set which Horizon releases install by themselves. \"stable\" (the default) is a tested build about once a day; \"alpha\" is every release as soon as it is built, several times a day, and can break. Only when the player asks to change it.",
+          "inputSchema": { "type": "object", "properties": { "channel": { "type": "string", "enum": ["stable", "alpha"], "description": "Omit to show the current channel." } } } },
         { "name": "logs", "description": "Read the game's log: the last lines of logs/latest.log in the game folder, or with crash the newest crash report (what the game wrote when it last crashed). Read-only.",
           "inputSchema": { "type": "object", "properties": { "lines": { "type": "integer", "minimum": 1, "maximum": 5000, "description": "How many lines of latest.log (default 100)." }, "crash": { "type": "boolean", "description": "Return the newest crash report instead." } } } },
         { "name": "accounts", "description": "The Microsoft accounts signed in to the launcher (names and UUIDs, never tokens), which one the game plays as (none = offline), and how a sign-in started with sign_in is going.", "inputSchema": none },
@@ -85,7 +85,7 @@ impl Session {
             "list_versions" => {
                 let installed = backend::installed();
                 let mut out = json!({
-                    "installed": installed.iter().map(|t| json!({ "tag": t, "prepared": backend::is_prepared(t) })).collect::<Vec<_>>(),
+                    "installed": installed.iter().map(|t| json!({ "tag": t, "prepared": backend::is_prepared(t), "sounds": backend::has_sounds(t) })).collect::<Vec<_>>(),
                     "selected": backend::resolve_version(None).ok(),
                 });
                 if !args
@@ -95,7 +95,7 @@ impl Session {
                 {
                     out["releases"] = backend::releases()?
                         .iter()
-                        .map(|r| json!({ "tag": r.tag, "name": r.name, "date": r.date, "channel": if r.beta { "beta" } else { "stable" }, "available_here": r.asset.is_some() }))
+                        .map(|r| json!({ "tag": r.tag, "name": r.name, "date": r.date, "channel": backend::UpdateChannel::of(r).name(), "available_here": r.asset.is_some() }))
                         .collect();
                 }
                 Ok(serde_json::to_string_pretty(&out).unwrap())
@@ -277,13 +277,17 @@ impl Session {
                 let (path, text) = backend::read_logs(lines.clamp(1, 5000) as usize, crash)?;
                 Ok(format!("{}\n\n{text}", path.display()))
             }
-            "menu_style" => {
-                if let Some(name) = arg_str(args, "style") {
-                    let style = backend::MenuStyle::parse(name)
-                        .ok_or("style is \"horizon\" or \"classic\"")?;
-                    backend::set_menu_style(style)?;
+            "update_channel" => {
+                let mut settings = backend::Settings::load();
+                if let Some(name) = arg_str(args, "channel") {
+                    settings.update_channel = backend::UpdateChannel::parse(name)
+                        .ok_or("channel is \"stable\" or \"alpha\"")?;
+                    settings.save();
                 }
-                Ok(format!("Menu style: {}", backend::menu_style().name()))
+                Ok(format!(
+                    "Update channel: {}",
+                    settings.update_channel.name()
+                ))
             }
             "data_collection" => Ok(serde_json::to_string_pretty(&telemetry::status_json())
                 .map_err(|e| e.to_string())?),

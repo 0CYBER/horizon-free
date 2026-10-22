@@ -14,6 +14,7 @@ pub enum Pose {
     Crouching,
     Swimming,
     FallFlying,
+    SpinAttack,
 }
 impl Pose {
     pub fn name(self) -> &'static str {
@@ -22,13 +23,14 @@ impl Pose {
             Self::Crouching => "CROUCHING",
             Self::Swimming => "SWIMMING",
             Self::FallFlying => "FALL_FLYING",
+            Self::SpinAttack => "SPIN_ATTACK",
         }
     }
     pub fn dimensions(self, scale: f32) -> Dimensions {
         let (height, eye_height) = match self {
             Self::Standing => (1.8, 1.62),
             Self::Crouching => (1.5, 1.27),
-            Self::Swimming | Self::FallFlying => (0.6, 0.4),
+            Self::Swimming | Self::FallFlying | Self::SpinAttack => (0.6, 0.4),
         };
         Dimensions {
             width: 0.6 * scale,
@@ -98,11 +100,13 @@ impl MotionWorld<'_, '_, '_> {
         if !self.can_fit_pose(Pose::Swimming)? {
             return Ok(());
         }
-        // Player.getDesiredPose: swimming before gliding.
+        // Player.getDesiredPose: swimming, gliding, Riptide's spin.
         let desired = if self.player.swimming {
             Pose::Swimming
         } else if self.player.fall_flying {
             Pose::FallFlying
+        } else if self.player.auto_spin_attack_ticks > 0 {
+            Pose::SpinAttack
         } else if self.player.shift_key_down && !self.player.flying {
             Pose::Crouching
         } else {

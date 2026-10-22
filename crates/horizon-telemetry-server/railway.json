@@ -1,0 +1,21 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "crates/horizon-telemetry-server/Dockerfile",
+    "watchPatterns": [
+      "/crates/horizon-telemetry/**",
+      "/crates/horizon-telemetry-server/**",
+      "/Cargo.toml"
+    ]
+  },
+  "deploy": {
+    "healthcheckPath": "/healthz",
+    "healthcheckTimeout": 60,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 5,
+    "multiRegionConfig": {
+      "europe-west4-drams3a": { "numReplicas": 1 }
+    }
+  }
+}

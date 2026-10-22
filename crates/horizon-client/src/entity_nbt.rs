@@ -13,6 +13,7 @@ use crate::{
         doubles, float, floats, item_from_nbt, item_to_nbt, number, put, read_doubles, text,
         uuid_from_tag,
     },
+    text::Text,
 };
 use horizon_core::geometry::Vec3;
 use horizon_world::nbt::{Compound, Tag};
@@ -555,6 +556,14 @@ fn custom_name(tag: &Tag) -> Option<String> {
         _ => None,
     }
 }
+/// `CustomName` as text: a string keeps its legacy formatting codes, anything
+/// else is a component (`ComponentSerialization`).
+pub fn name_text(tag: &Tag) -> Text {
+    match tag {
+        Tag::String(s) => Text::legacy(&s.to_string_lossy()),
+        t => crate::scoreboard::comp_text(&crate::scoreboard::tag_to_json(t)),
+    }
+}
 pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -> Option<Mob> {
     let kind = types.get(&self::kind(tag)?)?.clone();
     let position = position(tag)?;
@@ -606,6 +615,7 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
     m.persistent = flag(tag, "PersistenceRequired");
     m.extra.pick_up_loot = flag(tag, "CanPickUpLoot");
     m.custom_name = custom_name(tag);
+    m.custom_name_text = tag.get("CustomName").map(name_text);
     if m.kind.category == "creature" {
         m.extra.age = number(tag.get("Age")).unwrap_or(0) as i32;
         m.extra.forced_age = number(tag.get("ForcedAge")).unwrap_or(0) as i32;
@@ -1266,6 +1276,21 @@ pub fn armor_stand_to_nbt(a: &ArmorStand, uuid: [i32; 4], raw: Option<&Tag>) -> 
     } else if let Tag::Compound(map) = &mut tag {
         map.remove(&"Marker".into());
     }
+    if a.name_visible {
+        put(&mut tag, "CustomNameVisible", Tag::Byte(1));
+    } else if let Tag::Compound(map) = &mut tag {
+        map.remove(&"CustomNameVisible".into());
+    }
+    // A name from the save keeps its own shape unless it changed.
+    if let Some(name) = &a.custom_name
+        && !tag.get("CustomName").is_some_and(|t| name_text(t) == *name)
+    {
+        put(
+            &mut tag,
+            "CustomName",
+            crate::scoreboard::json_to_tag(&name.component()),
+        );
+    }
     put(&mut tag, "Health", Tag::Float(a.health.to_bits()));
     put(&mut tag, "Fire", Tag::Short(a.fire_ticks as i16));
     // LivingEntity.addAdditionalSaveData and ArmorStand's own fields.
@@ -1294,6 +1319,8 @@ pub fn armor_stand_from_nbt(tag: &Tag, id: u32) -> Option<ArmorStand> {
     a.velocity = motion(tag);
     a.health = float(tag.get("Health")).unwrap_or(20.0) as f32;
     a.fire_ticks = number(tag.get("Fire")).unwrap_or(0) as i32;
+    a.custom_name = tag.get("CustomName").map(name_text);
+    a.name_visible = flag(tag, "CustomNameVisible");
     if let Some(eq) = tag.get("equipment") {
         for (i, slot) in ArmorStand::SLOTS.iter().enumerate() {
             a.equipment[i] = eq.get(slot).and_then(item_from_nbt);
@@ -1572,6 +1599,31 @@ mod tests {
         );
         assert_eq!((pos, after), (at, 97));
         assert!(ominous_item_spawner_from_nbt(&raw).is_none());
+    }
+
+    #[test]
+    fn armor_stand_names_keep_their_formatting_across_a_save() {
+        let tag = Tag::compound([
+            (
+                "Pos",
+                Tag::List(vec![
+                    Tag::Double(0.0f64.to_bits()),
+                    Tag::Double(64.0f64.to_bits()),
+                    Tag::Double(0.0f64.to_bits()),
+                ]),
+            ),
+            ("CustomName", string("§6Hello")),
+            ("CustomNameVisible", Tag::Byte(1)),
+        ]);
+        let a = armor_stand_from_nbt(&tag, 7).unwrap();
+        let name = a.custom_name.as_ref().unwrap();
+        assert_eq!(name.plain(), "Hello");
+        assert!(name.spans[0].style.color.is_some());
+        assert!(a.name_visible);
+        let saved = armor_stand_to_nbt(&a, [0; 4], Some(&tag));
+        let restored = armor_stand_from_nbt(&saved, 7).unwrap();
+        assert_eq!(restored.custom_name, a.custom_name);
+        assert!(restored.name_visible);
     }
 
     #[test]

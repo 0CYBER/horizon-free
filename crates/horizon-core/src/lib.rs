@@ -17,6 +17,7 @@ pub mod storage;
 pub mod text;
 pub mod ticks;
 
+pub mod release;
 pub mod version;
 
 pub use version::VANILLA_VERSION;

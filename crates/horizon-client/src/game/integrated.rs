@@ -6,9 +6,10 @@
 //! the world's options) with [`Integrated::call`], as vanilla's client calls
 //! into its `IntegratedServer`.
 //!
-//! Opt-in for now (`--server-thread` or `HORIZON_SERVER_THREAD=1`): the
-//! player joins as a network player, and the server side of a network player
-//! does not do everything single player does yet.
+//! Opt-in again (`--server-thread` or `HORIZON_SERVER_THREAD=1`): it was the
+//! default for one day, but a server's players can't board, ride or hit
+//! boats and minecarts yet (#1222), and single player's window is one of
+//! them here.
 use super::{
     Game, Options, PackResources, Resources, UiResources,
     lan::{LanSettings, Owner},

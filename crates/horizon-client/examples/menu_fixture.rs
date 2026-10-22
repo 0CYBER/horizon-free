@@ -11,8 +11,41 @@ use horizon_client::{
     items::Items,
     menu::{Env, Input, Kind, Menu},
 };
+use horizon_protocol::registry::Ids;
 use serde_json::Value;
-use std::{fs, path::Path};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    fs,
+    path::Path,
+};
+
+/// The case's maps: (locked, scale) by id, and the next free id.
+#[derive(Default)]
+struct CaseMaps {
+    maps: RefCell<HashMap<i32, (bool, u8)>>,
+    next: Cell<i32>,
+}
+
+impl horizon_client::menu::Maps for CaseMaps {
+    fn state(&self, id: i32) -> Option<(bool, u8)> {
+        self.maps.borrow().get(&id).copied()
+    }
+
+    /// `MapItemSavedData.scaled` (unlocked, one scale up) or `locked`.
+    fn derive(&self, id: i32, scale: bool) -> Option<i32> {
+        let (_, s) = self.state(id)?;
+        let new = self.next.get();
+        self.next.set(new + 1);
+        let made = if scale {
+            (false, (s + 1).min(4))
+        } else {
+            (true, s)
+        };
+        self.maps.borrow_mut().insert(new, made);
+        Some(new)
+    }
+}
 
 fn state(menu: &Menu) -> String {
     let slots: Vec<String> = (0..menu.slot_count())
@@ -24,13 +57,21 @@ fn state(menu: &Menu) -> String {
         .iter()
         .map(|(slot, stack)| format!("{slot}:{}", canon_stack(stack.as_ref())))
         .collect();
-    format!(
+    let line = format!(
         "{} | {} |{data} | {} | {}",
         slots.join(" "),
         canon_stack(menu.carried.as_ref()),
         menu.drops.join(";"),
         equipped.join(";")
-    )
+    );
+    if menu.kind() != Kind::Lectern {
+        return line;
+    }
+    // No inventory slots: the inventory Take Book fills.
+    let items: String = (0..36)
+        .map(|i| format!(" {}", canon_stack(menu.player_item(i))))
+        .collect();
+    format!("{line} | inv{items}")
 }
 
 fn main() -> horizon_client::Result<()> {
@@ -44,13 +85,28 @@ fn main() -> horizon_client::Result<()> {
     let recipes = Recipes::load(root, &items)?;
     let brewing = horizon_client::brewing::Brewing::load(root, &items);
     let banners = horizon_client::banner::Banners::load(root);
+    let station_recipes = horizon_client::stations::StationRecipes::load(root, &items);
+    let enchantments = horizon_client::enchant::Enchantments::load(root);
+    let names = horizon_client::creative::Names::load(root);
+    let case_maps = CaseMaps::default();
     let env = Env {
         items: &items,
         recipes: &recipes,
         brewing: &brewing,
         banners: &banners,
+        station_recipes: &station_recipes,
+        enchantments: &enchantments,
+        names: &names,
         trade: None,
+        maps: Some(&case_maps),
     };
+    // The mob effects' network ids (BeaconMenu.encodeEffect).
+    let builtin = horizon_protocol::registry::Builtin::find(root)
+        .and_then(|p| horizon_protocol::registry::Builtin::load(&p).ok());
+    let effects = builtin
+        .as_ref()
+        .and_then(|b| b.get("minecraft:mob_effect"))
+        .cloned();
     let mut out = String::new();
     for line in input.lines() {
         let case: Value = serde_json::from_str(line)?;
@@ -68,15 +124,41 @@ fn main() -> horizon_client::Result<()> {
                 .unwrap_or(name),
         )
         .ok_or("menu kind")?;
+        // [id, scale, locked] each; the level's new maps from 1000.
+        case_maps.next.set(1000);
+        *case_maps.maps.borrow_mut() = case["maps"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|m| {
+                let id = m[0].as_i64().unwrap_or(0) as i32;
+                (
+                    id,
+                    (
+                        m[2].as_bool().unwrap_or(false),
+                        m[1].as_u64().unwrap_or(0) as u8,
+                    ),
+                )
+            })
+            .collect();
         let mut menu = Menu::new(kind);
         menu.creative = case["creative"].as_bool().unwrap_or(false);
+        menu.levels = case["levels"].as_i64().unwrap_or(0) as i32;
         for (i, slot) in case["slots"].as_array().ok_or("slots")?.iter().enumerate() {
             menu.set_slot(&env, i, parse_stack(slot.as_str().unwrap_or("-"))?);
         }
         menu.carried = parse_stack(case["carried"].as_str().unwrap_or("-"))?;
+        for (i, item) in case["inventory"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            menu.set_player_item(i, parse_stack(item.as_str().unwrap_or("-"))?);
+        }
         menu.settle(&env);
         for (i, v) in case["data"].as_array().ok_or("data")?.iter().enumerate() {
-            menu.data[i] = v.as_i64().unwrap_or(0) as i32;
+            menu.set_data(i, v.as_i64().unwrap_or(0) as i32);
         }
         let mut furnace = furnace_kind.map(|kind| Furnace {
             kind,
@@ -97,6 +179,26 @@ fn main() -> horizon_client::Result<()> {
                 // ServerboundContainerButtonClickPacket: clickMenuButton.
                 "BUTTON" => {
                     menu.button(&env, slot);
+                    out += &format!("{}\n", state(&menu));
+                    continue;
+                }
+                // ServerboundRenameItemPacket: AnvilMenu.setItemName.
+                "RENAME" => {
+                    menu.rename(&env, op[3].as_str().unwrap_or_default());
+                    out += &format!("{}\n", state(&menu));
+                    continue;
+                }
+                // ServerboundSetBeaconPacket: BeaconMenu.updateEffects.
+                "SET_BEACON" => {
+                    fn power<'a>(ids: Option<&Ids>, v: &'a Value) -> Option<(i32, &'a str)> {
+                        let name = v.as_str()?;
+                        Some((ids?.id(name)?, name))
+                    }
+                    let (primary, secondary) = (
+                        power(effects.as_ref(), &op[3]),
+                        power(effects.as_ref(), &op[4]),
+                    );
+                    menu.beacon_update(&env, primary, secondary);
                     out += &format!("{}\n", state(&menu));
                     continue;
                 }

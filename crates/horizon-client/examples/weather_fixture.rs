@@ -11,6 +11,7 @@ fn bits(value: f32) -> String {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().collect();
     let mut output = String::new();
+    let mut parameters = weather::ParameterCache::default();
     for (case, line) in fs::read_to_string(&args[1])?.lines().enumerate() {
         let p: Vec<&str> = line.split_whitespace().collect();
         let int = |i: usize| p[i].parse::<i32>().unwrap();
@@ -38,6 +39,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             bits(column.v_offset),
             column.light_coords
         )?;
+        assert_eq!(
+            parameters
+                .get(x, z)
+                .column(kind != 0, ticks, x, bottom, top, z, light, partial),
+            column,
+            "cached parameters differ from original random source at case {case}"
+        );
         let max_alpha = if kind == 0 { 1.0 } else { 0.8 };
         for v in weather::column_quad(&column, camera, max_alpha, radius, intensity) {
             write!(

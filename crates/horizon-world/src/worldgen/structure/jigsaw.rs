@@ -690,24 +690,52 @@ pub fn assemble(
         let [h, v] = config.max_distance;
         let low_y = (cy - v).max(context.min_y() + config.padding[0]);
         let high_y = (cy + v + 1).min(context.max_y() + 1 - config.padding[1]);
-        let free = Rc::new(RefCell::new(Free {
-            container: BoundingBox::new([cx - h, low_y, cz - h], [cx + h, high_y - 1, cz + h]),
-            removed: vec![pieces[0].bounding_box],
-        }));
-        let mut placer = Placer {
+        let container = BoundingBox::new([cx - h, low_y, cz - h], [cx + h, high_y - 1, cz + h]);
+        add_children(
             config,
+            context,
             pools,
             resources,
             bindings,
-            pieces: &mut pieces,
-            queue: BTreeMap::new(),
-        };
-        placer.children(0, free, 0, context, random);
-        while let Some(state) = placer.next() {
-            placer.children(state.piece, state.free, state.depth, context, random);
-        }
+            random,
+            &mut pieces,
+            container,
+        );
     }
     Some(([cx, cy, cz], pieces))
+}
+
+/// The inner JigsawPlacement.addPieces: lays out the children of
+/// `pieces[0]`, a start piece already placed, to `config.max_depth`,
+/// within `container` (inclusive) less the start's box. A structure with
+/// its own start (Formations' pieced one) reaches the jigsaw layout here.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn add_children(
+    config: &JigsawConfig<'_>,
+    context: &mut impl JigsawContext,
+    pools: &Pools,
+    resources: &StructureResources,
+    bindings: &FeatureBlockBindings<'_>,
+    random: &mut impl RandomSource,
+    pieces: &mut Vec<PoolPiece>,
+    container: BoundingBox,
+) {
+    let free = Rc::new(RefCell::new(Free {
+        container,
+        removed: vec![pieces[0].bounding_box],
+    }));
+    let mut placer = Placer {
+        config,
+        pools,
+        resources,
+        bindings,
+        pieces,
+        queue: BTreeMap::new(),
+    };
+    placer.children(0, free, 0, context, random);
+    while let Some(state) = placer.next() {
+        placer.children(state.piece, state.free, state.depth, context, random);
+    }
 }
 struct Placer<'a, 'p> {
     config: &'a JigsawConfig<'a>,

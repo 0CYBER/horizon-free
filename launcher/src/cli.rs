@@ -271,11 +271,12 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<AccountCmd>,
     },
-    /// Show or set the game's menu style (classic is vanilla's own screens)
-    MenuStyle {
-        /// Omit to show the current style
-        #[arg(value_parser = ["horizon", "classic"])]
-        style: Option<String>,
+    /// Show or set which Horizon releases install by themselves: stable (a tested build about once
+    /// a day) or alpha (every release as soon as it is built; can break)
+    UpdateChannel {
+        /// Omit to show the current channel
+        #[arg(value_parser = ["stable", "alpha"])]
+        channel: Option<String>,
     },
     /// Show or set the extra arguments the game starts with (for example --server-thread);
     /// quotes group a word with spaces in it
@@ -394,7 +395,7 @@ fn attached(mut cmd: Command) -> Result<(), String> {
 
 fn release_json(r: &Release) -> serde_json::Value {
     serde_json::json!({
-        "tag": r.tag, "name": r.name, "date": r.date, "channel": if r.beta { "beta" } else { "stable" },
+        "tag": r.tag, "name": r.name, "date": r.date, "channel": backend::UpdateChannel::of(r).name(),
         "available_here": r.asset.is_some(), "installed": backend::installed().contains(&r.tag),
     })
 }
@@ -422,10 +423,12 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 } else {
                     " "
                 };
-                let state = if backend::is_prepared(tag) {
+                let state = if !backend::is_prepared(tag) {
+                    "not prepared"
+                } else if backend::has_sounds(tag) {
                     "prepared"
                 } else {
-                    "not prepared"
+                    "prepared, no sounds (prepare again)"
                 };
                 println!("{mark} {tag}  {state}");
             }
@@ -443,8 +446,8 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                     (false, true) => "",
                     (false, false) => "no build for this platform",
                 };
-                let channel = if r.beta { "beta" } else { "stable" };
-                println!("{:<15} {}  {:<6}  {}", r.tag, r.date, channel, state);
+                let channel = backend::UpdateChannel::of(r).name();
+                println!("{:<15} {}  {:<7}  {}", r.tag, r.date, channel, state);
             }
         }
         Cmd::Install { tag } => {
@@ -539,15 +542,17 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 }
             }
         }
-        Cmd::MenuStyle { style } => {
-            if let Some(style) = style.as_deref().and_then(backend::MenuStyle::parse) {
-                backend::set_menu_style(style)?;
+        Cmd::UpdateChannel { channel } => {
+            let mut settings = backend::Settings::load();
+            if let Some(channel) = channel.as_deref().and_then(backend::UpdateChannel::parse) {
+                settings.update_channel = channel;
+                settings.save();
             }
-            let style = backend::menu_style().name();
+            let channel = settings.update_channel.name();
             if as_json {
-                json(serde_json::json!({ "menu_style": style }));
+                json(serde_json::json!({ "update_channel": channel }));
             } else {
-                println!("Menu style: {style}");
+                println!("Update channel: {channel}");
             }
         }
         Cmd::GameArgs { args } => {
@@ -749,7 +754,7 @@ fn data(action: DataCmd, as_json: bool) -> Result<(), String> {
             println!("Waiting to be sent: {}", status["waiting"]);
             match horizon_telemetry::endpoint() {
                 Some(url) => println!("Server: {url}"),
-                None => println!("Server: none yet, nothing is sent"),
+                None => println!("Server: turned off (HORIZON_TELEMETRY_URL=off), nothing is sent"),
             }
         }
         DataCmd::Allow { kinds } => {

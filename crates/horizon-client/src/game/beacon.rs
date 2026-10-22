@@ -15,6 +15,7 @@ use horizon_client::{
     mesher::Vertex,
     mobs::render::{DYE, DYE_NAMES},
 };
+use horizon_protocol::packets::play::{self, Serverbound as S};
 
 /// The beacon screen is 54 px wider than the 176-px menus it shares an origin with.
 pub(super) const SHIFT: f32 = -27.0;
@@ -35,9 +36,6 @@ const PAYMENT: [&str; 5] = [
     "minecraft:diamond",
     "minecraft:netherite_ingot",
 ];
-pub(super) fn is_payment(item: &str) -> bool {
-    PAYMENT.contains(&item)
-}
 /// `BeaconMenu.PaymentSlot` and the player inventory, relative to the 176 origin.
 pub(super) fn slot_position(i: usize) -> Option<(f32, f32)> {
     Some(match i {
@@ -171,7 +169,7 @@ impl Game<'_> {
             }
         }
     }
-    fn beacon_sound(&mut self, p: [i32; 3], sound: &str) {
+    pub(super) fn beacon_sound(&mut self, p: [i32; 3], sound: &str) {
         let at = [
             f64::from(p[0]) + 0.5,
             f64::from(p[1]) + 0.5,
@@ -255,9 +253,13 @@ impl Game<'_> {
         }
     }
     fn beacon_levels(&self) -> i32 {
-        let Some(pos) = self.station.as_ref().map(|s| s.pos) else {
+        let Some(s) = self.station.as_ref() else {
             return 0;
         };
+        if let Some(levels) = s.beacon_levels {
+            return levels;
+        }
+        let pos = s.pos;
         match self.world.block_entities.get(&(pos[0], pos[1], pos[2])) {
             Some(BlockEntity::Beacon(b)) => b.levels,
             _ => 0,
@@ -346,8 +348,16 @@ impl Game<'_> {
         self.screen = super::Screen::Playing;
         self.capture(true);
     }
-    /// `BeaconMenu.updateEffects`: spend the payment and set the powers.
+    /// `BeaconMenu.updateEffects`: spend the payment and set the powers. On
+    /// a server, `BeaconScreen`'s confirm button sends them
+    /// (`ServerboundSetBeaconPacket`) and the server's menu does it.
     fn confirm_beacon(&mut self, sel: [Option<usize>; 2]) {
+        if self.remote.is_some() {
+            let id = |e: Option<usize>| e.and_then(|e| self.remote_effect_network_id(EFFECTS[e].0));
+            let (primary, secondary) = (id(sel[0]), id(sel[1]));
+            self.send(S::SetBeacon(play::SetBeacon { primary, secondary }));
+            return;
+        }
         let Some(s) = self.station.as_mut() else {
             return;
         };
