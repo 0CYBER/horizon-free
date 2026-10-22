@@ -64,6 +64,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              guest as the host has them (kind, place, rotation, what they hold or wear, the variant).
 - projectiles: primed TNT (one falling), an end crystal and an arrow that lands reach the guest where
              the host has them; a falling block lands on both sides.
+- fireball:  a fire charge a dispenser shoots onto stone lights a fire both sides see, and the fire
+             goes out on its own within a minute (it ticks: FireBlock.tick on a floor that doesn't burn)
 - plates:    a stone pressure plate the guest steps on is pressed on both sides, and comes up once
              the guest steps off (#848).
 - swings:    each side sees the other's arm swing while it mines a block, and the guest sees its own
@@ -111,7 +113,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
 
 
 class Game:
@@ -1697,6 +1699,37 @@ def check_light(host, guest, out):
     return results
 
 
+def check_fireball(host, guest, out):
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    fx, fz = x + 4, z
+    # A stone floor, a dispenser facing down three blocks over it, a fire charge in it, powered.
+    host('command', command=f'fill {fx - 2} {y - 1} {fz - 2} {fx + 2} {y - 1} {fz + 2} minecraft:stone')
+    host('command', command=f'fill {fx - 2} {y} {fz - 2} {fx + 2} {y + 4} {fz + 2} minecraft:air')
+    host('command', command=f'setblock {fx} {y + 3} {fz} minecraft:dispenser[facing=down]')
+    host('command', command=f'item replace block {fx} {y + 3} {fz} container.0 with minecraft:fire_charge')
+    seen, gone = {}, None
+    try:
+        host('command', command=f'setblock {fx} {y + 4} {fz} minecraft:redstone_block')
+        host.wait(10)
+        seen = {'host': host.raw('block', fx, y, fz).get('block'),
+                'guest': guest.raw('block', fx, y, fz).get('block')}
+        # FireBlock.tick every 30-39 ticks ages it by one a third of the time; past age 3 it goes.
+        for waited in range(40, 1240, 40):
+            host.wait(40)
+            if host.raw('block', fx, y, fz).get('block') == 'minecraft:air':
+                gone = waited
+                break
+        guest.wait(5)
+        seen['guest_after'] = guest.raw('block', fx, y, fz).get('block')
+    finally:
+        host('command', command=f'fill {fx - 2} {y} {fz - 2} {fx + 2} {y + 4} {fz + 2} minecraft:air')
+    assert seen.get('host') == 'minecraft:fire' and seen.get('guest') == 'minecraft:fire', \
+        f'no fire where the fire charge landed: {seen}'
+    assert gone is not None, f'the fire on stone never went out (1200 ticks): {seen}'
+    assert seen['guest_after'] == 'minecraft:air', f'the guest still sees the fire: {seen}'
+    return {'out_after_ticks': gone, **seen}
+
+
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
              'chest': check_chest, 'crafting': check_crafting, 'sign': check_sign, 'damage': check_damage,
              'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
@@ -1712,7 +1745,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles,
              'light': check_light, 'plates': check_plates,
              'swings': check_swings, 'cracks': check_cracks,
-             'time': check_time, 'growth': check_growth}
+             'time': check_time, 'growth': check_growth, 'fireball': check_fireball}
 
 
 def run(ctl, out, resources, checks):
