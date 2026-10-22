@@ -278,10 +278,10 @@ enum Cmd {
         style: Option<String>,
     },
     /// Show or set which Horizon releases install by themselves: stable (a tested build about once
-    /// a day) or nightly (every release as soon as it is built; can break)
+    /// a day) or alpha (every release as soon as it is built; can break)
     UpdateChannel {
         /// Omit to show the current channel
-        #[arg(value_parser = ["stable", "nightly"])]
+        #[arg(value_parser = ["stable", "alpha"])]
         channel: Option<String>,
     },
     /// Show or set the extra arguments the game starts with (for example --server-thread);

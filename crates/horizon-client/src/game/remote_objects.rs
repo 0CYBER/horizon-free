@@ -123,6 +123,14 @@ impl Game<'_> {
             } else if let Some(a) = self.armor_stands.iter_mut().find(|a| a.id == id) {
                 match (index, value) {
                     (0, Value::Byte(flags)) => a.invisible = flags & 0x20 != 0,
+                    // Entity.DATA_CUSTOM_NAME and DATA_CUSTOM_NAME_VISIBLE.
+                    (2, Value::OptText(name)) => {
+                        a.custom_name = name.as_ref().map(horizon_client::entity_nbt::name_text);
+                    }
+                    (2, Value::Text(name)) => {
+                        a.custom_name = Some(horizon_client::entity_nbt::name_text(name));
+                    }
+                    (3, Value::Bool(visible)) => a.name_visible = *visible,
                     (9, Value::Float(health)) => a.health = *health,
                     // ArmorStand.DATA_CLIENT_FLAGS.
                     (15, Value::Byte(flags)) => {

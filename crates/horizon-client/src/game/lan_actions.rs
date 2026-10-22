@@ -1730,6 +1730,13 @@ impl Game<'_> {
                     break;
                 }
             }
+            // A ServerPlayer travels on the server too
+            // (MoveSimulationType.AUTHORITATIVE_SIDE_AND_SERVER), so every tick
+            // on a ladder or vine LivingEntity.handleOnClimbable resets its fall
+            // distance: climbing down doesn't hurt where it lands (#1255).
+            if w.climbable().unwrap_or(false) {
+                w.player.fall_distance = 0.0;
+            }
             let _ = w.tick_environment_damage();
             let _ = w.apply_fire_contact();
             let _ = w.server_hazards_tick(in_wall);

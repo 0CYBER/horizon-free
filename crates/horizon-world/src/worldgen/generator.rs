@@ -995,6 +995,46 @@ where
         worker.terrain_context = context;
         result
     }
+    /// With the native End source there are no badlands/iceberg extensions.
+    /// Disabled aquifers with air as their default fluid can only add lava or
+    /// air to the default solid, so this constant rule would rewrite each solid
+    /// with the state it already has. Check their imported material flags too.
+    /// Noise filling already built the WG maps; these writes add no fluid marks.
+    fn identity_end_surface(&self, pos: ChunkPos) -> bool {
+        if !matches!(self.source, ResolvedBiomeSource::End(_))
+            // At wrapped block coordinates the ordinary biome-region lookup
+            // can fail; retain that lookup and its error outside this range.
+            || ![pos.x, pos.z].into_iter().all(|c| {
+                c.checked_mul(16).is_some_and(|b| {
+                    b.checked_sub(16).is_some() && b.checked_add(31).is_some()
+                })
+            })
+            || self.aquifer.is_some()
+            || Some(self.settings.default_block)
+                != self.data.registry.default_state("minecraft:end_stone")
+            || Some(self.settings.default_fluid)
+                != self.data.registry.default_state("minecraft:air")
+            || !self.data.states.get(self.settings.default_fluid).air
+            || !self
+                .data
+                .registry
+                .default_state("minecraft:lava")
+                .is_some_and(|lava| self.data.states.get(lava).fluid)
+        {
+            return false;
+        }
+        let mut rule = &self.rule;
+        // Restrict the shortcut to shallow block references; other rules still
+        // run their normal compilation, queries and error handling.
+        for _ in 0..32 {
+            match rule {
+                MaterialRule::Reference(next) => rule = next,
+                MaterialRule::Block(state) => return *state == self.settings.default_block,
+                _ => return false,
+            }
+        }
+        false
+    }
     fn generate_with_context(
         &self,
         worker: &mut WorkerState,
@@ -1103,27 +1143,29 @@ where
         .map_err(stage("noise"))?;
         let generation = self.generation();
         worker.timings.noise += lap(&mut clock);
-        build_surface(
-            &mut chunk,
-            self.rule.clone(),
-            SurfaceInputs::<R, _> {
-                generation,
-                noise_volume: volume,
-                root: self.root.clone(),
-                surface: SurfaceQueries {
-                    pipeline: self,
-                    temperatures: &mut worker.temperatures,
-                    biome: Biomes::Region(&biomes),
-                    possible: Some(possible),
+        if !self.identity_end_surface(pos) {
+            build_surface(
+                &mut chunk,
+                self.rule.clone(),
+                SurfaceInputs::<R, _> {
+                    generation,
+                    noise_volume: volume,
+                    root: self.root.clone(),
+                    surface: SurfaceQueries {
+                        pipeline: self,
+                        temperatures: &mut worker.temperatures,
+                        biome: Biomes::Region(&biomes),
+                        possible: Some(possible),
+                    },
+                    preliminary_surface: self.preliminary.clone(),
+                    density_context: context,
+                    write_min_y: min,
+                    write_max_y: min + height - 1,
                 },
-                preliminary_surface: self.preliminary.clone(),
-                density_context: context,
-                write_min_y: min,
-                write_max_y: min + height - 1,
-            },
-            &self.extensions,
-        )
-        .map_err(stage("surface"))?;
+                &self.extensions,
+            )
+            .map_err(stage("surface"))?;
+        }
         worker.timings.surface += lap(&mut clock);
         let carvers = &data.biome_carvers;
         let mask = generate_carving_mask(self.seed, pos, generation, false, |origin| {
@@ -2407,6 +2449,108 @@ impl GeneratorWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn end_identity_surface_matches_normal_surface_and_rejects_custom_rules() {
+        let root = std::env::var_os("HORIZON_TEST_RESOURCES")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/horizon-client/26.3")
+            });
+        if !root.join("worldgen/world_presets.json").exists() {
+            eprintln!("skipping: no worldgen bundle at {}", root.display());
+            return;
+        }
+        let registry = Box::leak(Box::new(crate::level::data::load_registry(&root).unwrap()));
+        let data = GeneratorData::load(&root.join("worldgen"), registry).unwrap();
+        let preset: Value = serde_json::from_str(&data.world_presets["minecraft:normal"]).unwrap();
+        let settings: Value = serde_json::from_str(&data.settings["minecraft:end"]).unwrap();
+        let mut pipeline = Pipeline::new(
+            data.clone(),
+            12345,
+            LegacyRandom::new(12345),
+            &preset["dimensions"]["minecraft:the_end"]["generator"],
+            &settings,
+            false,
+            None,
+        )
+        .unwrap();
+        let mut worker = OverworldGenerator::for_world(
+            data.clone(),
+            12345,
+            "minecraft:normal",
+            "minecraft:the_end",
+            false,
+        )
+        .unwrap()
+        .worker();
+        assert!(pipeline.identity_end_surface(ChunkPos::new(0, 0)));
+        for pos in [
+            ChunkPos::new(0, 0),
+            ChunkPos::new(128, 128),
+            ChunkPos::new(-128, 192),
+            ChunkPos::new(1_875_000, -1_875_000),
+        ] {
+            let actual = pipeline.generate(&mut worker.state, pos).unwrap();
+            let rule = pipeline.rule.clone();
+            // A singleton sequence evaluates the same block rule through the full surface path.
+            pipeline.rule = MaterialRule::Sequence(vec![rule.clone()]);
+            assert!(!pipeline.identity_end_surface(ChunkPos::new(0, 0)));
+            let expected = pipeline.generate(&mut worker.state, pos).unwrap();
+            pipeline.rule = rule;
+            assert_eq!(
+                actual.terrain.generation_stage(),
+                expected.terrain.generation_stage()
+            );
+            for section in 0..actual.terrain.height() as usize / 16 {
+                assert_eq!(
+                    actual.terrain.section(section).unwrap().to_nbt().unwrap(),
+                    expected.terrain.section(section).unwrap().to_nbt().unwrap()
+                );
+            }
+            for kind in HeightmapType::ALL {
+                assert_eq!(
+                    actual.terrain.heightmap(kind).map(|m| m.raw_data()),
+                    expected.terrain.heightmap(kind).map(|m| m.raw_data())
+                );
+            }
+            assert_eq!(
+                actual.terrain.postprocessing(),
+                expected.terrain.postprocessing()
+            );
+            assert_eq!(
+                actual.terrain.block_ticks().pack(0),
+                expected.terrain.block_ticks().pack(0)
+            );
+            assert_eq!(
+                actual.terrain.fluid_ticks().pack(0),
+                expected.terrain.fluid_ticks().pack(0)
+            );
+            assert_eq!(actual.block_entities, expected.block_entities);
+            assert_eq!(actual.entities, expected.entities);
+            assert_eq!(actual.structures(), expected.structures());
+        }
+        assert!(!pipeline.identity_end_surface(ChunkPos::new(i32::MAX, 0)));
+        let old_rule = pipeline.rule.clone();
+        pipeline.rule = MaterialRule::Block(registry.default_state("minecraft:stone").unwrap());
+        assert!(!pipeline.identity_end_surface(ChunkPos::new(0, 0)));
+        pipeline.rule = old_rule;
+        let old_fluid = pipeline.settings.default_fluid;
+        pipeline.settings.default_fluid = registry.default_state("minecraft:stone").unwrap();
+        assert!(!pipeline.identity_end_surface(ChunkPos::new(0, 0)));
+        pipeline.settings.default_fluid = old_fluid;
+        let old_source = std::mem::replace(
+            &mut pipeline.source,
+            ResolvedBiomeSource::Fixed(super::super::biome_source::FixedBiomeSource {
+                biome: "minecraft:the_end".into(),
+            }),
+        );
+        assert!(!pipeline.identity_end_surface(ChunkPos::new(0, 0)));
+        pipeline.source = old_source;
+        pipeline.aquifer = Some(std::array::from_fn(|_| {
+            pipeline.router.get(RouterField::Erosion).clone()
+        }));
+        assert!(!pipeline.identity_end_surface(ChunkPos::new(0, 0)));
+    }
 
     #[test]
     fn far_surface_matches_undecorated_land_and_keeps_end_void() {

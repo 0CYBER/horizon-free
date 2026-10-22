@@ -193,6 +193,8 @@ impl Enchantments {
                     || k.starts_with("item.minecraft.splash_potion")
                     || k.starts_with("item.minecraft.lingering_potion")
                     || k.starts_with("item.minecraft.tipped_arrow")
+                    || k.starts_with("item.minecraft.firework_rocket.")
+                    || k.starts_with("item.minecraft.firework_star.")
                     || k.starts_with("trim_")
                     || k.starts_with("potion.")
                     || k.starts_with("container.")

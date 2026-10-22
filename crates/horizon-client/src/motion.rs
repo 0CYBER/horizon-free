@@ -716,7 +716,8 @@ impl MotionWorld<'_, '_, '_> {
             supporting_block: self.player.ground.supporting_block,
         }
     }
-    fn climbable(&mut self) -> Result<bool> {
+    /// `LivingEntity.onClimbable` at the player's feet (it remembers the block).
+    pub fn climbable(&mut self) -> Result<bool> {
         if self.player.spectator {
             return Ok(false);
         }

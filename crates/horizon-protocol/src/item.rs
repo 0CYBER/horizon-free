@@ -25,7 +25,10 @@ pub mod component {
     pub const REPAIR_COST: i32 = 19;
     pub const CREATIVE_SLOT_LOCK: i32 = 20;
     pub const ENCHANTMENT_GLINT_OVERRIDE: i32 = 21;
+    /// `AttackRange`: six floats, in the record's field order.
+    pub const ATTACK_RANGE: i32 = 30;
     pub const STORED_ENCHANTMENTS: i32 = 45;
+    pub const PROFILE: i32 = 72;
     pub const DYED_COLOR: i32 = 47;
     pub const MAP_ID: i32 = 48;
     pub const MAP_POST_PROCESSING: i32 = 50;
@@ -57,6 +60,8 @@ pub enum Component {
     Ident(String),
     Lore(Vec<Tag>),
     Enchantments(Vec<(i32, i32)>),
+    AttackRange([f32; 6]),
+    Profile(Profile),
     CustomModelData {
         floats: Vec<f32>,
         flags: Vec<bool>,
@@ -80,6 +85,15 @@ fn filterable<T>(r: &mut Reader, value: impl Fn(&mut Reader) -> Result<T>) -> Re
         value(r)?;
     }
     Ok(raw)
+}
+
+/// `ResolvableProfile`: an optional name and UUID and the profile's property
+/// list, followed by `PlayerSkin.Patch`'s four optional textures.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Profile {
+    pub name: Option<String>,
+    pub id: Option<u128>,
+    pub properties: Vec<(String, String, Option<String>)>,
 }
 impl Component {
     fn read(kind: i32, r: &mut Reader) -> Result<Self> {
@@ -129,6 +143,56 @@ impl Component {
                         .collect::<Result<_>>()?,
                 )
             }
+            ATTACK_RANGE => {
+                let mut values = [0.0f32; 6];
+                for v in &mut values {
+                    *v = r.f32()?;
+                }
+                Self::AttackRange(values)
+            }
+            PROFILE => {
+                fn properties(r: &mut Reader) -> Result<Vec<(String, String, Option<String>)>> {
+                    let n = r.count(1024)?;
+                    let mut out = Vec::with_capacity(n);
+                    for _ in 0..n {
+                        let name = r.string(32767)?;
+                        let value = r.string(32767)?;
+                        let signature = if r.bool()? {
+                            Some(r.string(32767)?)
+                        } else {
+                            None
+                        };
+                        out.push((name, value, signature));
+                    }
+                    Ok(out)
+                }
+                // Either<GameProfile, Partial>: the partial form carries
+                // optional fields, the resolved one a UUID, a name and the
+                // properties.
+                let (name, id, properties) = if r.u8()? == 0 {
+                    let name = if r.bool()? { Some(r.string(64)?) } else { None };
+                    let id = if r.bool()? { Some(r.uuid()?) } else { None };
+                    (name, id, properties(r)?)
+                } else {
+                    let id = Some(r.uuid()?);
+                    let name = Some(r.string(64)?);
+                    (name, id, properties(r)?)
+                };
+                // PlayerSkin.Patch: body, cape, elytra and model, each absent
+                // in the profiles servers send for heads.
+                for _ in 0..4 {
+                    if r.bool()? {
+                        // ClientAsset.ResourceTexture: its id and its texture path.
+                        r.string(32767)?;
+                        r.string(32767)?;
+                    }
+                }
+                Self::Profile(Profile {
+                    name,
+                    id,
+                    properties,
+                })
+            }
             CUSTOM_MODEL_DATA => {
                 let n = r.count(r.remaining())?;
                 let floats = (0..n).map(|_| r.f32()).collect::<Result<_>>()?;
@@ -173,6 +237,30 @@ impl Component {
                 for (e, level) in list {
                     w.varint(*e);
                     w.varint(*level);
+                }
+            }
+            Self::AttackRange(values) => values.iter().for_each(|v| w.f32(*v)),
+            Self::Profile(p) => {
+                w.u8(0);
+                w.bool(p.name.is_some());
+                if let Some(name) = &p.name {
+                    w.string(name);
+                }
+                w.bool(p.id.is_some());
+                if let Some(id) = p.id {
+                    w.uuid(id);
+                }
+                w.varint(p.properties.len() as i32);
+                for (name, value, signature) in &p.properties {
+                    w.string(name);
+                    w.string(value);
+                    w.bool(signature.is_some());
+                    if let Some(signature) = signature {
+                        w.string(signature);
+                    }
+                }
+                for _ in 0..4 {
+                    w.bool(false);
                 }
             }
             Self::CustomModelData {
@@ -470,5 +558,51 @@ mod tests {
     fn unknown_components_are_errors() {
         let bytes = [1, 5, 1, 0, 99];
         assert!(Slot::read(&mut Reader::new(&bytes)).is_err());
+    }
+
+    #[test]
+    fn attack_range_and_profiles_round_trip() {
+        let mut sword = Stack::new(900, 1);
+        sword.added.push((
+            component::ATTACK_RANGE,
+            Component::AttackRange([0.0, 3.0, 0.0, 4.0, 0.1, 1.0]),
+        ));
+        sword.added.push((
+            component::PROFILE,
+            Component::Profile(Profile {
+                name: Some("Player53470".into()),
+                id: Some(0x7a5d_6a1a_30d7_4187_88c5_efe9_1201_8922),
+                properties: vec![("textures".into(), "dGV4dHVyZXM=".into(), None)],
+            }),
+        ));
+        round::<Option<Stack>, Slot>(Some(sword));
+    }
+
+    #[test]
+    fn a_partial_profile_decodes_from_the_wire() {
+        // count 1, item 1, one added component of kind 72 (profile): a partial
+        // profile with an empty name, a UUID, one unsigned texture property
+        // and an empty skin patch.
+        let uuid = [
+            0x7a, 0x5d, 0x6a, 0x1a, 0x30, 0xd7, 0x41, 0x87, 0x88, 0xc5, 0xef, 0xe9, 0x12, 0x01,
+            0x89, 0x22,
+        ];
+        let mut bytes = vec![1, 1, 1, 0, 72, 0, 1, 0, 1];
+        bytes.extend_from_slice(&uuid);
+        bytes.extend_from_slice(&[1, 8]);
+        bytes.extend_from_slice(b"textures");
+        bytes.extend_from_slice(&[1, b'x', 0, 0, 0, 0, 0]);
+        let mut r = Reader::new(&bytes);
+        let stack = Slot::read(&mut r).unwrap().unwrap();
+        assert_eq!(r.remaining(), 0);
+        let Some(Component::Profile(profile)) = stack.component(component::PROFILE) else {
+            panic!("the profile component did not decode");
+        };
+        assert_eq!(profile.name.as_deref(), Some(""));
+        assert_eq!(profile.id, Some(0x7a5d_6a1a_30d7_4187_88c5_efe9_1201_8922));
+        assert_eq!(
+            profile.properties,
+            [("textures".to_owned(), "x".to_owned(), None)]
+        );
     }
 }
