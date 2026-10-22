@@ -63,6 +63,7 @@ mod arena;
 mod cull;
 mod flat;
 mod java_stages;
+pub mod lightning;
 mod lod;
 mod occlusion;
 mod pack_stages;
@@ -193,7 +194,9 @@ pub struct Frame<'a> {
     pub dynamic_lights: &'a [[f32; 4]],
     /// Cloud mesh inputs; geometry and GPU storage are retained by the renderer.
     pub clouds: Option<crate::clouds::Input<'a>>,
-    /// Additive translucent geometry after the entities (lightning, dragon rays).
+    /// Retained lightning bolts, drawn before the other additive entities.
+    pub lightning: lightning::Input<'a>,
+    /// Additive translucent geometry after lightning (dragon rays).
     pub additive: &'a [Vertex],
     /// Name tags over everything, without depth (`TEXT_SEE_THROUGH`).
     pub see_through: &'a [Vertex],
@@ -334,6 +337,8 @@ pub struct Renderer {
     cloud_uniform: wgpu::Buffer,
     cloud_group: wgpu::BindGroup,
     additive_pipeline: wgpu::RenderPipeline,
+    lightning_pipeline: wgpu::RenderPipeline,
+    lightning: lightning::Renderer,
     see_through_pipeline: wgpu::RenderPipeline,
     celestial_pipeline: wgpu::RenderPipeline,
     celestial_buffer: wgpu::Buffer,
@@ -1664,8 +1669,17 @@ impl Renderer {
             alpha_blend,
             false,
         );
+        let lightning_attributes = wgpu::vertex_attr_array![6=>Float32x3];
+        let lightning_vertex = [
+            entity_vertex[0].clone(),
+            Some(wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<[f32; 3]>() as u64,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &lightning_attributes,
+            }),
+        ];
         // BlendFunction.LIGHTNING: src alpha, one; no depth writes.
-        let additive_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let additive_descriptor = wgpu::RenderPipelineDescriptor {
             label: Some("Additive entities"),
             layout: Some(&entity_layout),
             vertex: wgpu::VertexState {
@@ -1709,6 +1723,16 @@ impl Renderer {
             }),
             multiview_mask: None,
             cache: None,
+        };
+        let additive_pipeline = device.create_render_pipeline(&additive_descriptor);
+        let lightning_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Lightning"),
+            vertex: wgpu::VertexState {
+                entry_point: Some("vs_lightning"),
+                buffers: &lightning_vertex,
+                ..additive_descriptor.vertex.clone()
+            },
+            ..additive_descriptor
         });
         let celestial_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Celestial bodies"),
@@ -2110,6 +2134,8 @@ impl Renderer {
             cloud_uniform,
             cloud_group,
             additive_pipeline,
+            lightning_pipeline,
+            lightning: lightning::Renderer::new(),
             see_through_pipeline,
             celestial_pipeline,
             celestial_buffer,
@@ -3279,6 +3305,13 @@ impl Renderer {
         } else {
             0
         };
+        self.lightning.prepare(
+            &self.device,
+            &mut self.uploads,
+            &mut encoder,
+            &frame.lightning,
+            camera,
+        );
         let all_entities = &self.entity_batch.combined;
         let hand_quads = (frame.hand.len() / 4) as u32;
         let additive_quads = (frame.additive.len() / 4) as u32;
@@ -3318,8 +3351,13 @@ impl Renderer {
                 bytemuck::cast_slice(&frame.celestial[..celestial_vertices]),
             );
         }
-        let max_quads =
-            (world_quads + additive_quads + hand_quads + see_through_quads).max(cloud_quads);
+        let max_quads = (world_quads + additive_quads + hand_quads + see_through_quads)
+            .max(cloud_quads)
+            .max(if frame.lightning.bolts.is_empty() {
+                0
+            } else {
+                lightning::QUADS
+            });
         if max_quads > self.index_quads {
             self.index_quads = max_quads.next_power_of_two();
             self.indices = Self::quad_indices(&self.device, self.index_quads);
@@ -3620,6 +3658,12 @@ impl Renderer {
                     ((entity_quads + crumbling_quads + translucent_crumbling_quads) * 4) as i32,
                     0..1,
                 );
+                pass.set_bind_group(0, &self.group, &[]);
+            }
+            if !frame.lightning.bolts.is_empty() {
+                pass.set_pipeline(&self.lightning_pipeline);
+                pass.set_bind_group(0, &self.entity_group, &[]);
+                self.lightning.draw(&mut pass, &frame.lightning);
                 pass.set_bind_group(0, &self.group, &[]);
             }
             if additive_quads > 0 {

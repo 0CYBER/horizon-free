@@ -5,14 +5,8 @@
 //! witches, mooshroom colours, turtles, burnt items), lightning rods, the sky
 //! flash, the sounds and the branching additive bolt.
 use super::Game;
-use horizon_client::{
-    mesher::Vertex,
-    mobs::{Damage, DamageKind, MobEvent, SpawnSetup, Species},
-};
-use horizon_core::{
-    position::BlockPos,
-    random::{LegacyRandom, RandomSource},
-};
+use horizon_client::mobs::{Damage, DamageKind, MobEvent, SpawnSetup, Species};
+use horizon_core::{position::BlockPos, random::RandomSource};
 
 pub(super) struct Bolt {
     at: [f64; 3],
@@ -349,71 +343,14 @@ impl Game<'_> {
                 || e.stack.item.contains("netherite")
         });
     }
-    /// `LightningBoltRenderer`: 4 layers of a trunk and two branches, 8
-    /// segments of 16 blocks, from the bolt's seed.
-    pub(super) fn bolt_geometry(&self, camera: glam::DVec3, out: &mut Vec<Vertex>) {
-        let white = self.gui.atlas.font.white();
-        let uv = [white.u0, white.v0];
-        // ARGB 0.45, 0.45, 0.5 at 0.3 alpha, packed RGBA.
-        let color = (76u32 << 24) | (127 << 16) | (114 << 8) | 114;
-        for b in &self.bolts {
-            let o = (glam::DVec3::from_array(b.at) - camera).as_vec3();
-            let mut random = LegacyRandom::new(b.seed);
-            let (mut xs, mut zs) = ([0f32; 8], [0f32; 8]);
-            let (mut x_off, mut z_off) = (0f32, 0f32);
-            for i in (0..8).rev() {
-                xs[i] = x_off;
-                zs[i] = z_off;
-                x_off += (random.next_int_bound(11).unwrap_or(5) - 5) as f32;
-                z_off += (random.next_int_bound(11).unwrap_or(5) - 5) as f32;
-            }
-            for layer in 0..4 {
-                let mut random = LegacyRandom::new(b.seed);
-                for branch in 0..3 {
-                    let trunk = branch == 0;
-                    let start = 7 - branch;
-                    let end = if trunk { 0 } else { start - 3 + 1 };
-                    let mut sx = xs[start] - x_off;
-                    let mut sz = zs[start] - z_off;
-                    for segment in (end..=start).rev() {
-                        let (ex, ez) = (sx, sz);
-                        let spread = if trunk { 11 } else { 31 };
-                        sx += (random.next_int_bound(spread).unwrap_or(0) - spread / 2) as f32;
-                        sz += (random.next_int_bound(spread).unwrap_or(0) - spread / 2) as f32;
-                        let mut top = 0.1 + layer as f32 * 0.2;
-                        let mut bottom = top;
-                        if trunk {
-                            top *= segment as f32 * 0.1 + 1.0;
-                            bottom *= (segment as f32 - 1.0) * 0.1 + 1.0;
-                        }
-                        for (rx, rz, lx, lz) in [
-                            (false, false, true, false),
-                            (true, false, true, true),
-                            (true, true, false, true),
-                            (false, true, false, false),
-                        ] {
-                            let s = |p: bool, r: f32| if p { r } else { -r };
-                            let y0 = segment as f32 * 16.0;
-                            let corners = [
-                                [sx + s(rx, bottom), y0, sz + s(rz, bottom)],
-                                [ex + s(rx, top), y0 + 16.0, ez + s(rz, top)],
-                                [ex + s(lx, top), y0 + 16.0, ez + s(lz, top)],
-                                [sx + s(lx, bottom), y0, sz + s(lz, bottom)],
-                            ];
-                            for c in corners {
-                                out.push(Vertex {
-                                    normal: [0; 4],
-                                    pos: (o + glam::Vec3::from_array(c)).to_array(),
-                                    uv,
-                                    layer: 2,
-                                    color,
-                                    light: 240 | 240 << 8,
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    /// Simulation-order render inputs; seeded geometry lives in the renderer.
+    pub(super) fn bolt_instances(&self) -> Vec<horizon_client::gfx::lightning::Bolt> {
+        self.bolts
+            .iter()
+            .map(|b| horizon_client::gfx::lightning::Bolt {
+                at: b.at,
+                seed: b.seed,
+            })
+            .collect()
     }
 }
