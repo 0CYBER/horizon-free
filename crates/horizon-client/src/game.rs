@@ -4849,6 +4849,9 @@ impl Game<'_> {
             self.draw_chat(&mut batch);
             self.draw_tab_list(&mut batch);
         }
+        // Screen.extractBlurredBackground blurs the world and HUD, while the
+        // screen's background, widgets, toasts and debug overlay stay sharp.
+        batch.blur_at = batch.vertices.len() as u32;
         match self.screen {
             Screen::Paused if self.pause_menu => self.draw_pause_menu(&mut batch),
             // PauseScreen(false): only its title, at the top.
@@ -10018,9 +10021,8 @@ impl Game<'_> {
         };
         level_loading::draw(batch, atlas, Some(&status), Some(self.loading_progress));
     }
-    /// `Screen.extractBlurredBackground` over the panorama: every classic
-    /// screen of the title menus but the title itself (`TitleScreen`
-    /// doesn't blur), when `menuBackgroundBlurriness` is at least 1.
+    /// `Screen.extractBlurredBackground` over the panorama or the world and
+    /// HUD, when `menuBackgroundBlurriness` is at least 1.
     fn menu_blur(&self) -> Option<f32> {
         let loading = self.loading_reason() == Some(horizon_client::level_loading::Reason::Other);
         let blurred = !horizon_client::ui_theme::horizon()
@@ -10028,7 +10030,10 @@ impl Game<'_> {
                 || self.title.as_ref().is_some_and(|t| {
                     self.screen == Screen::Options
                         || !matches!(t.mode, horizon_client::title::Mode::Main)
-                }));
+                })
+                || (self.title.is_none()
+                    && self.player.is_some()
+                    && self.screen.blurs_background(self.pause_menu)));
         let radius = self.settings.menu_blur as f32;
         (blurred && radius >= 1.0).then_some(radius)
     }
