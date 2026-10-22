@@ -61,6 +61,7 @@ pub fn outline_vertices(edges: &[[f64; 6]], camera: glam::DVec3) -> Vec<[f32; 6]
 
 mod arena;
 mod cull;
+mod end_sky;
 mod flat;
 mod java_stages;
 mod lod;
@@ -163,8 +164,10 @@ pub struct Frame<'a> {
     pub title: bool,
     /// Dimensions without a skybox (the Nether) clear to the fog colour.
     pub skybox: bool,
-    /// The End: clear to black and draw `celestial` (the End sky box) behind the world.
+    /// The End: clear to black and draw the resident sky box behind the world.
     pub end_sky: bool,
+    /// End sky atlas bounds (u0, v0, u1, v1); absent when the sprite is missing.
+    pub end_sky_sprite: Option<[f32; 4]>,
     /// Environmental fog start/end (Nether 10..96), if any.
     pub environment_fog: Option<(f32, f32)>,
     pub water_fog: [f32; 3],
@@ -197,8 +200,8 @@ pub struct Frame<'a> {
     pub additive: &'a [Vertex],
     /// Name tags over everything, without depth (`TEXT_SEE_THROUGH`).
     pub see_through: &'a [Vertex],
-    /// Camera-relative sun and moon, or the End sky box (drawn behind
-    /// everything, additive).
+    /// Camera-relative sun and moon, or the animated End flash (additive,
+    /// behind everything and after the resident End sky box).
     pub celestial: &'a [Vertex],
     /// The stars, drawn from their static buffer after the sun and moon:
     /// the sky's rotation (camera-relative world from star space) and the
@@ -337,6 +340,7 @@ pub struct Renderer {
     see_through_pipeline: wgpu::RenderPipeline,
     celestial_pipeline: wgpu::RenderPipeline,
     celestial_buffer: wgpu::Buffer,
+    end_sky: end_sky::EndSky,
     stars: stars::Stars,
     panorama: panorama::Panorama,
     /// `RenderPipelines.WORLD_BORDER` and its buffers.
@@ -2113,6 +2117,7 @@ impl Renderer {
             see_through_pipeline,
             celestial_pipeline,
             celestial_buffer,
+            end_sky: end_sky::EndSky::default(),
             stars,
             panorama,
             border_pipeline,
@@ -3310,6 +3315,9 @@ impl Renderer {
             );
         }
         let celestial_vertices = frame.celestial.len().min(2048 * 4);
+        if frame.end_sky && !frame.title {
+            self.end_sky.prepare(&self.device, frame.end_sky_sprite);
+        }
         if celestial_vertices > 0 {
             self.uploads.buffer(
                 &mut encoder,
@@ -3510,12 +3518,17 @@ impl Renderer {
                 if frame.title {
                     self.panorama.draw(&mut pass);
                     pass.set_bind_group(0, &self.group, &[]);
-                } else if celestial_vertices > 0 {
+                } else if celestial_vertices > 0 || frame.end_sky {
                     pass.set_pipeline(&self.celestial_pipeline);
                     pass.set_bind_group(0, &self.entity_group, &[]);
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.set_vertex_buffer(0, self.celestial_buffer.slice(..));
-                    pass.draw_indexed(0..(celestial_vertices as u32 / 4) * 6, 0, 0..1);
+                    if frame.end_sky {
+                        self.end_sky.draw(&mut pass);
+                    }
+                    if celestial_vertices > 0 {
+                        pass.set_vertex_buffer(0, self.celestial_buffer.slice(..));
+                        pass.draw_indexed(0..(celestial_vertices as u32 / 4) * 6, 0, 0..1);
+                    }
                     pass.set_bind_group(0, &self.group, &[]);
                 }
                 if !frame.title && frame.stars.is_some() {
