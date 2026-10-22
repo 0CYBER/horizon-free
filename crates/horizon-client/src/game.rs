@@ -11008,6 +11008,8 @@ impl ApplicationHandler for Game<'_> {
                     }
                     let updated = Instant::now();
                     self.track_toggle_screens();
+                    // For the "I'm playing" ping: an atomic, sent on when it changes.
+                    horizon_client::heartbeat::set_lan(self.is_published());
                     let steps = self.clock.advance(elapsed);
                     for _ in 0..steps {
                         let started = Instant::now();
@@ -12814,6 +12816,16 @@ pub fn run() -> Result<()> {
         // cores, and a frame that gave its core up (in a GPU submit) waited
         // 10 to 200 ms to get one back.
         horizon_threads::favour_current();
+    }
+    // Someone is playing: the anonymous ping behind the launcher's "N playing now". Not for a
+    // server, a benchmark or a run that quits by itself.
+    if options.dedicated.is_none()
+        && options.benchmark.is_none()
+        && !options.offscreen
+        && options.frames.is_none()
+        && options.world_frames.is_none()
+    {
+        horizon_client::heartbeat::start();
     }
     let started = Instant::now();
     horizon_client::spans::enable(options.spikes.is_some());

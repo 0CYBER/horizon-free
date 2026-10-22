@@ -163,6 +163,8 @@ struct Launcher {
     args_focus: FocusHandle,
     /// Opt-in data collection: the player's answer and Settings' section (`collection`).
     collection: collection::Collection,
+    /// How many play Horizon now, while the server answers ("N playing now" on the Play page).
+    playing: Option<u64>,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
     _appearance: Subscription,
@@ -280,6 +282,7 @@ impl Launcher {
             friend_focus: cx.focus_handle(),
             joining: None,
             collection: collection::Collection::load(),
+            playing: None,
             tx,
             rx,
             _appearance: appearance,
@@ -317,6 +320,7 @@ impl Launcher {
         this.fetch_links();
         // What the game and the launcher kept, if the player allows it and there is a server.
         telemetry::send_in_background();
+        telemetry::watch_playing(this.tx.clone());
         this
     }
 
@@ -426,6 +430,7 @@ impl Launcher {
                 // The page reads is_prepared when drawn; `changed` redraws it.
                 Msg::Reused(_) => self.installed = backend::installed(),
                 Msg::Keychain(persistent) => self.keychain = persistent,
+                Msg::Playing(playing) => self.playing = playing,
                 Msg::Session(session) => {
                     if let Some(tag) = self.starting_client.take() {
                         let mut cmd = backend::client_command(&tag);
@@ -1146,6 +1151,19 @@ fn centered(text_: &str, t: &Theme) -> Div {
         .child(text(theme::UI).text_color(t.muted).child(text_.to_string()))
 }
 
+/// `1234` as `1,234`.
+fn thousands(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// A mono line in upper case: the status above a title, the footer's links.
 fn caps(s: impl AsRef<str>) -> Div {
     text(theme::MICRO).child(s.as_ref().to_uppercase())
@@ -1688,9 +1706,11 @@ impl Launcher {
             _ => None,
         };
         let title = "Horizon";
+        // Never squeezed by the rows below: the ping notice can make it tall.
         let mut hero =
             div()
                 .flex()
+                .flex_none()
                 .flex_col()
                 .gap(px(14.))
                 .pt(px(24.))
@@ -1704,7 +1724,18 @@ impl Launcher {
                         .child(
                             caps(if prepared { "Ready" } else { "Needs preparing" })
                                 .text_color(if prepared { t.success } else { t.muted }),
-                        ),
+                        )
+                        .children(self.playing.map(|n| {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(10.))
+                                .child(div().size(px(4.)).rounded_full().bg(t.rule))
+                                .child(
+                                    caps(format!("{} playing now", thousands(n)))
+                                        .text_color(t.muted),
+                                )
+                        })),
                 )
                 .child(text(theme::DISPLAY).text_color(t.ink).child(title))
                 .child(text(theme::BODY).max_w(px(560.)).text_color(t.muted).child(
@@ -1746,6 +1777,45 @@ impl Launcher {
                         })),
                 ),
             });
+        }
+        // Players who answered the first-run question before the ping existed read about it
+        // once here.
+        if !self.settings.ping_notice_seen && !self.collection.consent.needs_asking() {
+            hero = hero.child(
+                plate(&t)
+                    .flex()
+                    .flex_none()
+                    .flex_col()
+                    .gap(px(8.))
+                    .p(px(16.))
+                    .w_full()
+                    .max_w(px(640.))
+                    .child(
+                        text(theme::UI)
+                            .text_color(t.ink)
+                            .child(telemetry::PING_NAME),
+                    )
+                    .child(
+                        text(theme::CAPTION)
+                            .text_color(t.muted)
+                            .child(telemetry::PING),
+                    )
+                    .child(
+                        div()
+                            .id("ping-notice-ok")
+                            .text_size(px(theme::UI.px))
+                            .text_color(t.accent)
+                            .font_weight(FontWeight::MEDIUM)
+                            .cursor_pointer()
+                            .hover(|s| s.opacity(0.8))
+                            .child("Got it")
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.settings.ping_notice_seen = true;
+                                this.settings.save();
+                                cx.notify();
+                            })),
+                    ),
+            );
         }
         hero
     }
@@ -2917,4 +2987,16 @@ fn main() {
         .detach();
         cx.activate(true);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn counts_get_thousands_separators() {
+        let shown: Vec<String> = [0, 7, 999, 1000, 12_300, 1_234_500]
+            .into_iter()
+            .map(super::thousands)
+            .collect();
+        assert_eq!(shown, ["0", "7", "999", "1,000", "12,300", "1,234,500"]);
+    }
 }

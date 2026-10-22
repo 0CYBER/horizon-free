@@ -56,7 +56,7 @@ In part. Horizon runs the full-screen effects of Java shader packs, not their ge
 
 ## Does Horizon collect data?
 
-Only if you say yes, and each kind has its own switch. Everything is off by default. See [Privacy](/privacy).
+Only if you say yes, and each kind has its own switch. Everything is off by default. The one thing sent without asking is an anonymous "I'm playing" ping, for the count of how many play right now: it holds a random number made each time the game starts, the version, your OS and whether a world is open to LAN, and nothing about you. See [Privacy](/privacy).
 
 ## How often does it update?
 
