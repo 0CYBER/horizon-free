@@ -67,10 +67,12 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - portals:   (--server-thread) the server holds a level per dimension: the guest goes to the Nether
              through a portal while the host stays, then the host goes to the End while the guest is in
              the Nether, and both come back.
-- levels:    (--server-thread) the host and the guest each in a level of their own: `execute in` builds
-             and teleports into another level, mobs fall in two levels at once with ids unique across
-             them, the guest rejoins in the Nether, dies there and respawns in the Overworld, the host
-             takes a Nether portal alone, the guest takes an End portal and the exit portal alone, and the host saves, quits and reopens with the guest in the Nether.
+- levels:    (--server-thread) the host and the guest each in a level of their own: `execute in`
+             teleports into another level, and `execute in` and `at` change and test blocks there;
+             mobs fall in two levels at once, with ids unique across them; the guest rejoins in the
+             Nether, dies there and respawns in the Overworld; the host takes a Nether portal alone;
+             the guest takes an End portal and the exit portal alone; and the host saves, quits and
+             reopens with the guest in the Nether.
 - commands:  the guest's chat completes commands and their arguments over the server's command
              tree (Tab), and runs what it completed;
 - recipes:   the guest's recipe book lists the planks recipe the logs unlock, and clicking it
@@ -591,12 +593,29 @@ def dims(host, guest):
 
 
 def level_execute(host, guest, out):
-    """`execute in the_nether run tp` takes the guest alone."""
+    """`execute in the_nether run tp` takes the guest alone. From the Nether, the guest's commands
+    reach the host's level (CommandSourceStack.getLevel): `execute in overworld` and `execute at`
+    the host put a block beside the host, and `execute if block` reads it."""
     x, z = (int(v // 1) for v in pos_of(guest)[::2])
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
     there = into_level(guest, NETHER, x, 100, z)
     below = guest.raw('block', x, 99, z)
+    gold = f'{hx} {hy} {hz + 2} minecraft:gold_block'
+    try:
+        guest('command', command=f'execute in {OVERWORLD} run setblock {gold}')
+        guest('command', command=f'execute at {host.player} run setblock ~ ~ ~-2 minecraft:diamond_block')
+        guest('command', command=f'execute in {OVERWORLD} if block {gold} in {NETHER} '
+                                  f'run setblock {x} 99 {z} minecraft:gold_block')
+        host.wait(10)
+        placed = [host.raw('block', hx, hy, hz + 2), host.raw('block', hx, hy, hz - 2)]
+        found = guest.raw('block', x, 99, z)
+    finally:
+        host('command', command=f'fill {hx} {hy} {hz - 2} {hx} {hy} {hz + 2} minecraft:air')
     assert dims(host, guest) == (OVERWORLD, NETHER), f'host, guest in {dims(host, guest)}'
     assert there.get('dimension') == NETHER and below.get('block') == 'minecraft:obsidian', f'{there} on {below}'
+    assert [p.get('block') for p in placed] == ['minecraft:gold_block', 'minecraft:diamond_block'], \
+        f'beside the host: {placed}'
+    assert found.get('block') == 'minecraft:gold_block', f'execute in overworld if block: {found}'
     return {'guest': pos_of(guest)}
 
 
