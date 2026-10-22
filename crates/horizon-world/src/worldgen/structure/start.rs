@@ -149,11 +149,22 @@ pub struct StructureSet {
     /// and none within `chunk_count` chunks of any of several sets
     /// (`"horizon:exclusion_zone"`: `other_sets`, `chunk_count`).
     min_distance: Option<i64>,
-    avoid: Option<(Vec<String>, i32)>,
+    avoid: Option<Avoid>,
     /// `"horizon:ring_sections"`: starts only in odd rings around the origin.
     rings: Option<RingSections>,
     /// `"horizon:avoid_biomes"`: no start with one of these biomes near.
     avoid_biomes: Option<AvoidBiomes>,
+}
+
+/// `"horizon:exclusion_zone"`: no start within `chunk_count` chunks of a
+/// start of any of `sets`. With `"their_zones": false` those sets' own
+/// exclusion zones are not checked (Mo' Structures' ModStructurePlacement
+/// tests the sets it avoids by their spread and frequency alone).
+#[derive(Debug, Clone)]
+struct Avoid {
+    sets: Vec<String>,
+    chunk_count: i32,
+    their_zones: bool,
 }
 
 /// YUNG's Better Strongholds' placement (BetterStrongholdsPlacement
@@ -444,16 +455,15 @@ impl StructureRegistry {
                 min_distance: p
                     .get("horizon:min_distance_from_world_origin")
                     .and_then(Value::as_i64),
-                avoid: p.get("horizon:exclusion_zone").map(|z| {
-                    (
-                        z["other_sets"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(|s| Some(s.as_str()?.to_owned()))
-                            .collect(),
-                        z["chunk_count"].as_i64().unwrap_or(0) as i32,
-                    )
+                avoid: p.get("horizon:exclusion_zone").map(|z| Avoid {
+                    sets: z["other_sets"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|s| Some(s.as_str()?.to_owned()))
+                        .collect(),
+                    chunk_count: z["chunk_count"].as_i64().unwrap_or(0) as i32,
+                    their_zones: z["their_zones"].as_bool().unwrap_or(true),
                 }),
                 rings: p.get("horizon:ring_sections").map(RingSections::decode),
                 avoid_biomes: p
@@ -535,6 +545,19 @@ impl StructureRegistry {
         z: i32,
         rings: &Rings,
     ) -> bool {
+        self.structure_chunk(set, seed, x, z, rings, true)
+    }
+    /// [`Self::is_structure_chunk`]; without the set's exclusion zones when
+    /// `zones` is false.
+    fn structure_chunk(
+        &self,
+        set: &StructureSet,
+        seed: i64,
+        x: i32,
+        z: i32,
+        rings: &Rings,
+        zones: bool,
+    ) -> bool {
         let placed = match set.placement {
             Placement::RandomSpread {
                 spacing,
@@ -576,24 +599,28 @@ impl StructureRegistry {
                 return false;
             }
         }
-        if let Some((others, range)) = &set.avoid {
-            if others
-                .iter()
-                .any(|other| self.has_start_in_range(other, seed, x, z, *range, rings))
-            {
+        if let Some(avoid) = set.avoid.as_ref().filter(|_| zones) {
+            if avoid.sets.iter().any(|other| {
+                let range = avoid.chunk_count;
+                self.has_start_in_range(other, seed, x, z, range, rings, avoid.their_zones)
+            }) {
                 return false;
             }
         }
         if set.frequency < 1. && !reduce(set.reduction, seed, set.salt, x, z, set.frequency) {
             return false;
         }
-        match &set.exclusion {
-            Some((other, range)) => !self.has_start_in_range(other, seed, x, z, *range, rings),
+        match set.exclusion.as_ref().filter(|_| zones) {
+            Some((other, range)) => {
+                !self.has_start_in_range(other, seed, x, z, *range, rings, true)
+            }
             None => true,
         }
     }
     /// ChunkGeneratorStructureState.hasStructureChunkInRange: whether set
-    /// `other` places a structure within `range` chunks of (`x`, `z`).
+    /// `other` places a structure within `range` chunks of (`x`, `z`),
+    /// checking its own exclusion zones when `zones` is true.
+    #[allow(clippy::too_many_arguments)]
     fn has_start_in_range(
         &self,
         other: &str,
@@ -602,12 +629,14 @@ impl StructureRegistry {
         z: i32,
         range: i32,
         rings: &Rings,
+        zones: bool,
     ) -> bool {
         let Some(other) = self.sets.iter().find(|s| s.name == other) else {
             return false;
         };
         (x - range..=x + range).any(|tx| {
-            (z - range..=z + range).any(|tz| self.is_structure_chunk(other, seed, tx, tz, rings))
+            (z - range..=z + range)
+                .any(|tz| self.structure_chunk(other, seed, tx, tz, rings, zones))
         })
     }
 }
@@ -1427,6 +1456,41 @@ mod tests {
                 ("yung:temple", false)
             ]
         );
+    }
+
+    #[test]
+    fn exclusion_zones_may_skip_the_other_sets_own() {
+        let set = |avoid: Value| {
+            json!({"structures": [{"structure": "t:s", "weight": 1}],
+                "placement": {"type": "minecraft:random_spread", "spacing": 1, "separation": 0,
+                    "salt": 1, "horizon:exclusion_zone": avoid}})
+        };
+        let r = registry(
+            &[("t:s", json!({"type": "minecraft:igloo", "biomes": []}))],
+            &[
+                ("t:c", set(json!({"other_sets": [], "chunk_count": 0}))),
+                // Every chunk is b's spread chunk, and c keeps b out of all.
+                ("t:b", set(json!({"other_sets": ["t:c"], "chunk_count": 1}))),
+                (
+                    "t:full",
+                    set(json!({"other_sets": ["t:b"], "chunk_count": 1})),
+                ),
+                (
+                    "t:spread",
+                    set(json!({"other_sets": ["t:b"], "chunk_count": 1, "their_zones": false})),
+                ),
+            ],
+        );
+        let chunk = |name: &str| {
+            let s = r.sets.iter().find(|s| s.name == name).unwrap();
+            r.is_structure_chunk(s, 0, 5, -3, &Rings::new())
+        };
+        assert!(!chunk("t:b"));
+        assert!(
+            chunk("t:full"),
+            "b places nothing once its own zone is checked"
+        );
+        assert!(!chunk("t:spread"), "b's spread alone is in range");
     }
 
     #[test]
