@@ -1,5 +1,5 @@
-//! The Modpacks page: import a pack, read its coverage report, port what this computer can and
-//! play it as its own profile (`horizon_launcher::modpacks`).
+//! Imported modpacks, on the Mods page's Modpacks tab: import a pack, read its coverage report,
+//! port what this computer can and play it as its own profile (`horizon_launcher::modpacks`).
 use super::*;
 use horizon_launcher::modpacks::{self, Imported};
 use horizon_port_pack::report::Status;
@@ -124,7 +124,8 @@ impl Launcher {
         self.start_client(tag);
     }
 
-    pub(super) fn modpacks_page(&mut self, cx: &mut Context<Self>) -> Div {
+    /// The imported packs, above the Modpacks tab's search.
+    pub(super) fn imported_packs(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         if self.packs_loaded.is_none() {
             self.packs = modpacks::list();
@@ -133,12 +134,6 @@ impl Launcher {
             }
             self.packs_loaded = Some(Instant::now());
         }
-        let header = page_header(
-            "Modpacks",
-            "Bring a Java modpack: see what Horizon runs of it, port that on this computer from \
-             your own downloads, and play it as its own profile. Nothing is uploaded or shared.",
-            &t,
-        );
         let busy = self.pack_busy;
         let pick = |id: &'static str, label: &'static str, folder: bool| {
             let b = button(id, label, Kind::Secondary, &t);
@@ -159,14 +154,11 @@ impl Launcher {
             .child(pick("import-file", "Import a pack file…", false))
             .child(pick("import-folder", "Import an instance folder…", true))
             .child(text(theme::CAPTION).text_color(t.muted).child(
-                ".mrpack (Modrinth), .zip (CurseForge), or a Prism, MultiMC or CurseForge instance",
+                ".mrpack (Modrinth), .zip (CurseForge), or a Prism, MultiMC or CurseForge instance. \
+                 Horizon ports what it can on this computer, from your own downloads, and plays \
+                 the pack as its own profile. Nothing is uploaded or shared.",
             ));
-        let mut page = div()
-            .flex()
-            .flex_col()
-            .gap(px(32.))
-            .child(header)
-            .child(actions);
+        let mut page = div().flex().flex_col().gap(px(32.)).child(actions);
         if busy || !self.pack_log.is_empty() {
             page = page.child(self.pack_log_plate(&t));
         }
@@ -174,10 +166,11 @@ impl Launcher {
             page = page.child(notice(e.clone(), &t));
         }
         if self.packs.is_empty() {
-            return page.child(centered(
-                "No modpack yet. Import one to see what Horizon can run of it.",
-                &t,
-            ));
+            return page.child(
+                text(theme::CAPTION)
+                    .text_color(t.muted)
+                    .child("No modpack imported yet: import one, or find one below."),
+            );
         }
         if self.packs.len() > 1 {
             let mut list = div().flex().flex_col().border_t_1().border_color(t.rule);

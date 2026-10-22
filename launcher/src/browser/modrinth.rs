@@ -13,6 +13,7 @@ fn project_type(kind: Kind) -> &'static str {
         Kind::ResourcePack => "resourcepack",
         Kind::ShaderPack => "shader",
         Kind::Modpack => "modpack",
+        Kind::Mod => "mod",
     }
 }
 
@@ -32,7 +33,16 @@ pub(super) fn facets(query: &Query) -> String {
                 all.push(vec!["categories:iris".into(), "categories:optifine".into()])
             }
             Kind::Modpack => {}
+            Kind::Mod => all.push(vec![format!("versions:{GAME}")]),
         }
+    }
+    if query.kind == Kind::Mod {
+        all.push(
+            super::java::LOADERS
+                .iter()
+                .map(|l| format!("categories:{l}"))
+                .collect(),
+        );
     }
     serde_json::to_string(&all).unwrap_or_default()
 }

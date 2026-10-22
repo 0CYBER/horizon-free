@@ -1,23 +1,26 @@
-//! The Mods page: search Modrinth (and CurseForge with a key) for resource packs, shader packs
-//! and modpacks Horizon loads, see where each comes from and how well it runs, install it with
-//! its checksum checked, and update or remove what was installed (`horizon_launcher::browser`).
+//! The Mods page: search Modrinth (CurseForge: coming soon) for Java mods, modpacks, resource
+//! packs and shader packs, see where each comes from and how well it runs (a Java mod's jar is
+//! checked first), install it with its checksum checked, and update or remove what was installed
+//! (`horizon_launcher::browser`). Imported modpacks are listed on its Modpacks tab.
 use super::servers_page::{type_key, Key};
 use super::*;
 use horizon_launcher::browser::{
-    self, curseforge::CurseForge, installed, Kind as PackKind, Project, Query, SourceId, Support,
+    self, installed, java, Kind as PackKind, Project, Query, SourceId, Support,
 };
 use horizon_launcher::modpacks;
+use horizon_port_pack::check::Check;
 use std::collections::HashMap;
 
-const KINDS: [(PackKind, &str); 3] = [
+const KINDS: [(PackKind, &str); 4] = [
+    (PackKind::Mod, "Mods"),
+    (PackKind::Modpack, "Modpacks"),
     (PackKind::ResourcePack, "Resource packs"),
     (PackKind::ShaderPack, "Shader packs"),
-    (PackKind::Modpack, "Modpacks"),
 ];
-const SOURCES: [(SourceId, &str); 2] = [
-    (SourceId::Modrinth, "Modrinth"),
-    (SourceId::CurseForge, "CurseForge"),
-];
+/// Java mods checked at once.
+const CHECKING: usize = 2;
+/// The sources to pick from; CurseForge is shown beside them as coming soon.
+const SOURCES: [(SourceId, &str); 1] = [(SourceId::Modrinth, "Modrinth")];
 const PAGE: usize = 20;
 
 pub(super) enum Event {
@@ -26,12 +29,20 @@ pub(super) enum Event {
     Progress(String, f32),
     Done(Result<String, String>, bool),
     Updates(HashMap<(SourceId, String), String>),
+    /// A Java mod's check: its jar read, or why it couldn't be.
+    Checked((SourceId, String), Result<Box<Check>, String>),
+}
+
+/// Where a Java mod's check is.
+pub(super) enum Checking {
+    Running,
+    Done(Box<Check>),
+    Failed(String),
 }
 
 pub(super) struct Mods {
     kind: PackKind,
     source: SourceId,
-    curseforge: bool,
     text: String,
     focus: FocusHandle,
     pub(super) focused: bool,
@@ -50,6 +61,8 @@ pub(super) struct Mods {
     message: Option<Result<String, String>>,
     updates: HashMap<(SourceId, String), String>,
     confirm_remove: Option<String>,
+    /// Java mods' checks, by source and project.
+    checks: HashMap<(SourceId, String), Checking>,
     tx: Sender<Event>,
     rx: Receiver<Event>,
 }
@@ -58,9 +71,8 @@ impl Mods {
     pub(super) fn new(cx: &mut App) -> Self {
         let (tx, rx) = channel();
         Self {
-            kind: PackKind::ResourcePack,
+            kind: PackKind::Mod,
             source: SourceId::Modrinth,
-            curseforge: CurseForge::from_env().is_some(),
             text: String::new(),
             focus: cx.focus_handle().tab_index(0).tab_stop(true),
             focused: false,
@@ -77,6 +89,7 @@ impl Mods {
             message: None,
             updates: HashMap::new(),
             confirm_remove: None,
+            checks: HashMap::new(),
             tx,
             rx,
         }
@@ -90,6 +103,19 @@ impl Mods {
         self.installed
             .iter()
             .find(|e| e.source == p.source && e.project == p.id)
+    }
+
+    /// How well a result runs: a Java mod's from its check once it has one.
+    fn support(&self, p: &Project) -> Support {
+        let metadata = p.support();
+        if p.kind != PackKind::Mod || !metadata.installable() {
+            return metadata;
+        }
+        match self.checks.get(&(p.source, p.id.clone())) {
+            Some(Checking::Done(c)) => java::support_of(c),
+            Some(Checking::Failed(e)) => Support::Partial(format!("Not checked: {e}")),
+            _ => Support::Partial("Checking its jar…".into()),
+        }
     }
 }
 
@@ -115,6 +141,7 @@ impl Launcher {
     /// Called with the launcher's other work: what the background sent.
     pub(super) fn mods_tick(&mut self) -> bool {
         let mut changed = false;
+        let mut to_check = Vec::new();
         while let Ok(event) = self.mods.rx.try_recv() {
             changed = true;
             let m = &mut self.mods;
@@ -126,8 +153,9 @@ impl Launcher {
                         Ok(found) => {
                             m.more = found.len() == PAGE;
                             m.results.truncate(offset);
-                            m.results.extend(found);
+                            m.results.extend(found.iter().cloned());
                             m.error = None;
+                            to_check.extend(found);
                         }
                         Err(e) => m.error = Some(e),
                     }
@@ -149,8 +177,16 @@ impl Launcher {
                     }
                 }
                 Event::Updates(found) => m.updates = found,
+                Event::Checked(key, result) => {
+                    let state = match result {
+                        Ok(c) => Checking::Done(c),
+                        Err(e) => Checking::Failed(e),
+                    };
+                    m.checks.insert(key, state);
+                }
             }
         }
+        self.mods_check(to_check);
         changed
     }
 
@@ -174,6 +210,43 @@ impl Launcher {
                 .ok_or_else(|| format!("{} isn't set up.", source.label()))
                 .and_then(|s| s.search(&query));
             let _ = tx.send(Event::Found(search, offset, result));
+        });
+    }
+
+    /// Checks the Java mods among `found` that aren't checked yet, a few at a time, on threads:
+    /// a cached check answers at once, else the jar is downloaded and read.
+    fn mods_check(&mut self, found: Vec<Project>) {
+        let m = &mut self.mods;
+        let todo: Vec<Project> = found
+            .into_iter()
+            .filter(|p| p.kind == PackKind::Mod && p.support().installable())
+            .filter(|p| !m.checks.contains_key(&(p.source, p.id.clone())))
+            .collect();
+        if todo.is_empty() {
+            return;
+        }
+        for p in &todo {
+            m.checks.insert((p.source, p.id.clone()), Checking::Running);
+        }
+        let (tx, everything) = (m.tx.clone(), m.everything);
+        let queue = std::sync::Mutex::new(todo.into_iter());
+        std::thread::spawn(move || {
+            let home = backend::game_home();
+            std::thread::scope(|s| {
+                for _ in 0..CHECKING {
+                    s.spawn(|| {
+                        while let Some(p) = queue.lock().ok().and_then(|mut q| q.next()) {
+                            let result = browser::source(p.source)
+                                .ok_or_else(|| format!("{} isn't set up.", p.source.label()))
+                                .and_then(|source| {
+                                    java::check_project(&home, &*source, &p, everything, &|_| {})
+                                })
+                                .map(|(_, c)| Box::new(c));
+                            let _ = tx.send(Event::Checked((p.source, p.id), result));
+                        }
+                    });
+                }
+            });
         });
     }
 
@@ -233,7 +306,7 @@ impl Launcher {
                         let log = |line: String| progress(&line, 1.);
                         let pack = modpacks::import(&file, &log)?;
                         return Ok(format!(
-                            "{} is imported: open it on the Modpacks page to port it.",
+                            "{} is imported: it is listed above, ready to port.",
                             pack.title()
                         ));
                     }
@@ -243,6 +316,19 @@ impl Launcher {
                         .iter()
                         .map(|e| format!("{} {}", e.title, e.number))
                         .collect();
+                    if p.kind == PackKind::Mod {
+                        let skipped = done.last().map_or(0, |e| e.skipped.len());
+                        return Ok(format!(
+                            "Ported {} into horizon-mods and turned on (Options > Mods in the \
+                             game).{}",
+                            names.join(", "),
+                            if skipped > 0 {
+                                " What didn't port is listed under Installed."
+                            } else {
+                                ""
+                            }
+                        ));
+                    }
                     let turn_on = match p.kind {
                         PackKind::ShaderPack => "Video Settings > Shader Packs",
                         _ => "Options > Resource Packs",
@@ -330,8 +416,10 @@ impl Launcher {
         }
         let header = page_header(
             "Mods",
-            "Resource packs, shader packs and modpacks that Horizon loads. Each file is checked \
-             against its source's checksum before it reaches your game folder.",
+            "Java mods, modpacks, resource packs and shader packs. Horizon ports what a Java mod \
+             carries (blocks, items, recipes, worldgen) and says before you install what runs. \
+             Each file is checked against its source's checksum before it reaches your game \
+             folder.",
             &t,
         );
         let this = cx.entity().downgrade();
@@ -365,8 +453,14 @@ impl Launcher {
                 this.mods_search(0);
                 cx.notify();
             }));
-        let source_note = if self.mods.curseforge {
-            segments("mods-source", &SOURCES, self.mods.source, &t, {
+        // CurseForge support is coming soon: shown, inert, never searched (like the Microsoft
+        // account's "Coming soon").
+        let source_note = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(px(8.))
+            .child(segments("mods-source", &SOURCES, self.mods.source, &t, {
                 let this = this.clone();
                 move |source, _, cx| {
                     let _ = this.update(cx, |this, cx| {
@@ -377,14 +471,13 @@ impl Launcher {
                         cx.notify();
                     });
                 }
-            })
-            .into_any_element()
-        } else {
-            text(theme::CAPTION)
-                .text_color(t.muted)
-                .child("From Modrinth. CurseForge comes once the launcher has its API key.")
-                .into_any_element()
-        };
+            }))
+            .child(disabled(button(
+                "mods-source-curseforge",
+                "CurseForge (coming soon)",
+                Kind::Ghost,
+                &t,
+            )));
         let controls = div()
             .flex()
             .flex_col()
@@ -435,6 +528,9 @@ impl Launcher {
             }
             Some(Err(e)) => page = page.child(notice(e.clone(), &t)),
             None => {}
+        }
+        if self.mods.kind == PackKind::Modpack {
+            page = page.child(self.imported_packs(cx));
         }
         if let Some(list) = self.mods_installed_list(cx) {
             page = page.child(list);
@@ -512,7 +608,11 @@ impl Launcher {
                 .flex()
                 .flex_col()
                 .child(format!(
-                    "{} · from {}{} · {}",
+                    "{}{} · from {}{} · {}",
+                    e.verdict
+                        .as_ref()
+                        .map(|v| format!("{v} · "))
+                        .unwrap_or_default(),
                     e.number,
                     e.source.label(),
                     if e.dependency {
@@ -522,6 +622,11 @@ impl Launcher {
                     },
                     e.file
                 ))
+                .children(e.skipped.iter().map(|s| {
+                    div()
+                        .text_color(t.ink_soft)
+                        .child(format!("Not ported: {s}"))
+                }))
                 .child(
                     div()
                         .font_family(theme::MONO)
@@ -564,7 +669,13 @@ impl Launcher {
         let busy = m.busy.as_ref().map(|b| b.0.as_str());
         let mut list = div().flex().flex_col().border_t_1().border_color(t.rule);
         for (i, p) in m.results.iter().enumerate() {
-            let support = p.support();
+            let support = m.support(p);
+            let checking = p.kind == PackKind::Mod
+                && matches!(
+                    m.checks.get(&(p.source, p.id.clone())),
+                    None | Some(Checking::Running)
+                )
+                && p.support().installable();
             let color = match support {
                 Support::Works => t.success,
                 Support::Partial(_) => t.accent,
@@ -591,6 +702,8 @@ impl Launcher {
                 right = right.child(caps("Installing").text_color(t.accent));
             } else if m.entry(p).is_some() {
                 right = right.child(caps("Installed").text_color(t.muted));
+            } else if checking {
+                right = right.child(caps("Checking").text_color(t.muted));
             } else if support.installable() {
                 let label = if p.kind == PackKind::Modpack {
                     "Import"
