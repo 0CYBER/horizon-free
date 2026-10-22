@@ -1114,6 +1114,11 @@ where
                     pipeline: self,
                     temperatures: &mut worker.temperatures,
                     biome: Biomes::Region(&biomes),
+                    uniform_biomes: Some(UniformSurfaceBiomes::new(
+                        pos,
+                        self.settings.level_min_y,
+                        self.settings.level_height,
+                    )),
                     possible: Some(possible),
                 },
                 preliminary_surface: self.preliminary.clone(),
@@ -1149,6 +1154,7 @@ where
                         pipeline: self,
                         temperatures: &mut worker.temperatures,
                         biome: Biomes::Resolver(&mut resolver, &mut biome_context),
+                        uniform_biomes: None,
                         possible: None,
                     },
                     preliminary_surface: self.preliminary.clone(),
@@ -1393,6 +1399,63 @@ enum Biomes<'a, 'b> {
         &'a mut SamplerContext,
     ),
 }
+// Lazy equality proofs for the eight quart corners of a block-biome cell.
+// Adjacent blocks share these candidates even though their zoom distances differ.
+struct UniformSurfaceBiomes {
+    origin: [i32; 3],
+    height: i32,
+    cells: Vec<Option<Option<BiomeId>>>,
+}
+impl UniformSurfaceBiomes {
+    fn new(pos: ChunkPos, min_y: i32, height: i32) -> Self {
+        let height = (height >> 2) + 1;
+        Self {
+            origin: [
+                pos.x.wrapping_shl(4).wrapping_sub(2) >> 2,
+                min_y.wrapping_sub(2) >> 2,
+                pos.z.wrapping_shl(4).wrapping_sub(2) >> 2,
+            ],
+            height,
+            cells: vec![None; 25 * height as usize],
+        }
+    }
+    fn get(&mut self, region: &BiomeRegion<BiomeId>, p: BlockPos) -> Option<BiomeId> {
+        let base = [p.x, p.y, p.z].map(|v| v.wrapping_sub(2) >> 2);
+        let d: [i32; 3] = std::array::from_fn(|i| base[i].wrapping_sub(self.origin[i]));
+        if !(0..5).contains(&d[0]) || !(0..self.height).contains(&d[1]) || !(0..5).contains(&d[2]) {
+            return None;
+        }
+        let slot = &mut self.cells[((d[0] * 5 + d[2]) * self.height + d[1]) as usize];
+        if let Some(value) = slot {
+            return *value;
+        }
+        let value = (|| {
+            // These are immutable stored lookups. A missing candidate prevents
+            // the shortcut; only the original selected lookup may report errors.
+            let first = *region.noise_biome(base).ok()?;
+            for x in 0..2 {
+                for y in 0..2 {
+                    for z in 0..2 {
+                        if *region
+                            .noise_biome([
+                                base[0].wrapping_add(x),
+                                base[1].wrapping_add(y),
+                                base[2].wrapping_add(z),
+                            ])
+                            .ok()?
+                            != first
+                        {
+                            return None;
+                        }
+                    }
+                }
+            }
+            Some(first)
+        })();
+        *slot = Some(value);
+        value
+    }
+}
 /// Material-rule world queries for one chunk: shared seed-bound noises, the
 /// worker's temperature caches and either stored or raw-resolver biomes.
 struct SurfaceQueries<'a, 'b, R: RandomSource> {
@@ -1400,6 +1463,7 @@ struct SurfaceQueries<'a, 'b, R: RandomSource> {
     temperatures: &'a mut [BiomeTemperature],
     biome: Biomes<'a, 'b>,
     possible: Option<BTreeSet<String>>,
+    uniform_biomes: Option<UniformSurfaceBiomes>,
 }
 impl<R: RandomSource> SurfaceQueries<'_, '_, R> {
     fn temperature(&mut self, name: &str) -> Result<&mut BiomeTemperature, MaterialRuleError> {
@@ -1437,9 +1501,16 @@ impl<R: RandomSource> MaterialSurfaceQueries for SurfaceQueries<'_, '_, R> {
     fn biome(&mut self, p: BlockPos) -> Result<Option<Arc<str>>, MaterialRuleError> {
         let data = &self.pipeline.data;
         let id = match &mut self.biome {
-            Biomes::Region(region) => *region
-                .biome(p)
-                .map_err(|_| MaterialRuleError::MissingBiome)?,
+            Biomes::Region(region) => match self
+                .uniform_biomes
+                .as_mut()
+                .and_then(|cache| cache.get(region, p))
+            {
+                Some(id) => id,
+                None => *region
+                    .biome(p)
+                    .map_err(|_| MaterialRuleError::MissingBiome)?,
+            },
             Biomes::Resolver(resolver, context) => {
                 let name = resolver
                     .sample(context, self.pipeline.zoom.quart_at_block(p))
@@ -1778,6 +1849,7 @@ where
             pipeline: self,
             temperatures: &mut worker.temperatures,
             biome: Biomes::Resolver(&mut resolver, &mut biome_context),
+            uniform_biomes: None,
             possible: None,
         };
         let sources = MaterialDensitySources::new(
@@ -1944,6 +2016,7 @@ where
             pipeline: self,
             temperatures: &mut worker.temperatures,
             biome: Biomes::Resolver(&mut resolver, &mut biome_context),
+            uniform_biomes: None,
             possible: None,
         };
         let sources = MaterialDensitySources::new(
@@ -2407,6 +2480,89 @@ impl GeneratorWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uniform_surface_biomes_preserve_zoom_and_missing_corner_errors() {
+        use super::super::biome_chunk::BiomeChunk;
+        use std::convert::Infallible;
+
+        for pos in [
+            ChunkPos::new(0, 0),
+            ChunkPos::new(-17, 23),
+            ChunkPos::new(i32::MIN >> 4, i32::MAX >> 4),
+        ] {
+            for seed in [0, -1, i64::MIN] {
+                for mixed in [false, true] {
+                    let mut chunks = Vec::new();
+                    for dz in -1..=1 {
+                        for dx in -1..=1 {
+                            let mut chunk = BiomeChunk::new(
+                                ChunkPos::new(pos.x + dx, pos.z + dz),
+                                -64,
+                                128,
+                                BiomeId(7),
+                            )
+                            .unwrap();
+                            chunk
+                                .fill(-64, 63, |[x, y, z]| {
+                                    Ok::<_, Infallible>(if mixed {
+                                        BiomeId(
+                                            (x.div_euclid(3) + y.div_euclid(4) + z.div_euclid(2))
+                                                .rem_euclid(5)
+                                                as u32,
+                                        )
+                                    } else {
+                                        BiomeId(7)
+                                    })
+                                })
+                                .unwrap();
+                            chunks.push(chunk);
+                        }
+                    }
+                    let region = BiomeRegion::new(chunks, seed).unwrap();
+                    let mut cache = UniformSurfaceBiomes::new(pos, -64, 128);
+                    let mut hits = 0;
+                    for x in 0..16 {
+                        for z in 0..16 {
+                            // Include clamped Y, out-of-cache Y, and revisit each
+                            // cached proof in the ordinary descending traversal.
+                            for y in (-70..70).rev() {
+                                let p = BlockPos::new(pos.x * 16 + x, y, pos.z * 16 + z);
+                                let shortcut = cache.get(&region, p);
+                                hits += usize::from(shortcut.is_some());
+                                let actual = shortcut.map_or_else(|| region.biome(p).copied(), Ok);
+                                assert_eq!(actual, region.biome(p).copied());
+                            }
+                        }
+                    }
+                    if !mixed && pos.x != i32::MIN >> 4 {
+                        assert!(hits > 0);
+                    }
+                }
+            }
+        }
+
+        // Some unselected corners are missing. Probing them must neither invent
+        // an error nor hide the original selected-corner error.
+        let pos = ChunkPos::new(0, 0);
+        let region =
+            BiomeRegion::new(vec![BiomeChunk::new(pos, 0, 16, BiomeId(7)).unwrap()], -1).unwrap();
+        let mut cache = UniformSurfaceBiomes::new(pos, 0, 16);
+        let mut successes = 0;
+        let mut failures = 0;
+        for x in -2..18 {
+            for z in -2..18 {
+                let p = BlockPos::new(x, 7, z);
+                let actual = cache
+                    .get(&region, p)
+                    .map_or_else(|| region.biome(p).copied(), Ok);
+                assert_eq!(actual, region.biome(p).copied());
+                successes += usize::from(actual.is_ok());
+                failures += usize::from(actual.is_err());
+            }
+        }
+        assert!(successes > 0 && failures > 0);
+    }
 
     #[test]
     fn far_surface_matches_undecorated_land_and_keeps_end_void() {
