@@ -832,6 +832,8 @@ impl Game<'_> {
                     ],
                 };
                 let hand = if p.hand == 1 { Hand::Off } else { Hand::Main };
+                let logged = self.world.block_log.as_ref().map_or(0, Vec::len);
+                let heard = self.audio.capture.as_ref().map_or(0, Vec::len);
                 let swung = self.as_guest(host, conn, |g| {
                     g.forced_hit = Some(hit);
                     g.guest_use = Some(GuestUse::OnBlock(hand));
@@ -842,6 +844,7 @@ impl Game<'_> {
                     g.swings_started != swings
                 });
                 self.lan_swing_back(host, conn, swung);
+                self.guest_use_sounds(host, conn, logged, heard);
                 // The client predicted a result: correct it with what really is.
                 for pos in [
                     p.pos,
@@ -2002,6 +2005,33 @@ impl Game<'_> {
                 Collector::Guest(id as u32),
                 target,
             );
+        }
+    }
+
+    /// `level.playSound(player, ...)` of a guest's use it predicted (`remote::hand_operated`
+    /// blocks only, as the guest decides): the others hear it now, the guest already did.
+    fn guest_use_sounds(&mut self, host: &mut LanHost, conn: u32, logged: usize, heard: usize) {
+        let changed: Vec<(i32, i32, i32)> = self
+            .world
+            .block_log
+            .as_ref()
+            .map_or(&[][..], |log| log.get(logged..).unwrap_or(&[]))
+            .to_vec();
+        let facts = self.res.facts();
+        if changed.is_empty()
+            || !changed.iter().all(|&(x, y, z)| {
+                super::remote::hand_operated(&facts.get(self.world.block(x, y, z)).name)
+            })
+        {
+            return;
+        }
+        let Some(capture) = self.audio.capture.as_mut() else {
+            return;
+        };
+        let sounds: Vec<_> = capture.drain(heard.min(capture.len())..).collect();
+        for (name, at, volume, pitch) in sounds {
+            let source = horizon_client::settings::sound_source(&name) as i32;
+            host.hub.sound(&name, at, volume, pitch, source, Some(conn));
         }
     }
 

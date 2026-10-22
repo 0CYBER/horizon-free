@@ -56,6 +56,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
              its crafting grid and gathers a stack with a double click; the server has each.
 - sleep:     at night the guest lies down in its own bed (not the host); alone it stays night, it
              gets up with Escape, and once the host sleeps too the night ends and both wake.
+- predict:   with the host frozen, the oak door the guest opens opens on the guest's screen at once (its
+             prediction) and creaks there at once, stays open once the server answers, and each side hears
+             it once; an iron door stays shut (#869).
 - push:      a cow standing in the guest pushes it just clear of the cow (the guest's own client
              pushes it, as in vanilla), not ever faster across the ground.
 - eat:       holding right click with bread, the guest's own screen plays the eating (the item in use
@@ -127,7 +130,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
 
 
 class Game:
@@ -1335,6 +1338,50 @@ def check_sleep(host, guest, out):
     assert lying['host'] and lying['guest'], f'a sleeping player is drawn standing: {detail}'
     assert not lying['after'], f'a player up again is still drawn lying: {detail}'
     return detail
+def check_predict(host, guest, out):
+    # MultiPlayerGameMode.useItemOn under startPrediction (#869): the guest's door opens on its own screen
+    # at once, with the host (the server) frozen, and the server's answer later agrees; an iron door
+    # (no hand use) stays shut on both sides.
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    wood, iron = (x - 1, y, z + 2), (x + 1, y, z + 2)
+    for (bx, by, bz), kind in ((wood, 'oak_door'), (iron, 'iron_door')):
+        for half, dy in (('lower', 0), ('upper', 1)):
+            host('command', command=f'setblock {bx} {by + dy} {bz} minecraft:{kind}[facing=north,hinge=right,half={half}]')
+    guest.wait(20)
+    state = lambda game, at: game.raw('block', *at)['state']
+    seen = {}
+    creaks = lambda game: sum(n for s, n in game('status')['heard'].items() if 'door' in s)
+    heard = {'guest': creaks(guest), 'host': creaks(host)}
+    os.kill(host.pid, signal.SIGSTOP)
+    try:
+        guest.raw('interact', *wood)
+        seen['guest_frozen'] = (state(guest, wood), state(guest, (wood[0], wood[1] + 1, wood[2])))
+        # level.playSound(player, ...): the clicker hears its own door at once.
+        seen['guest_heard_frozen'] = creaks(guest) - heard['guest']
+        guest.raw('interact', *iron)
+        seen['guest_iron_frozen'] = state(guest, iron)
+    finally:
+        os.kill(host.pid, signal.SIGCONT)
+    guest.wait(20)
+    seen['guest_after'] = state(guest, wood)
+    seen['host_after'] = state(host, wood)
+    seen['iron_after'] = (state(guest, iron), state(host, iron))
+    # ... and not a second time from the server; the host hears it once.
+    seen['heard_after'] = {'guest': creaks(guest) - heard['guest'], 'host': creaks(host) - heard['host']}
+    guest.shot(out, 'predict')
+    for (bx, by, bz) in (wood, iron):
+        host('command', command=f'fill {bx} {by} {bz} {bx} {by + 1} {bz} minecraft:air')
+    assert all('open=true' in s for s in seen['guest_frozen']), f'the door waited for the server: {seen}'
+    assert 'open=true' in seen['guest_after'] and 'open=true' in seen['host_after'], f'the door did not stay open: {seen}'
+    assert 'open=false' in seen['guest_iron_frozen'], f'the guest opened an iron door by hand: {seen}'
+    assert all('open=false' in s for s in seen['iron_after']), f'an iron door opened: {seen}'
+    assert seen['guest_heard_frozen'] == 1 and seen['heard_after'] == {'guest': 1, 'host': 1}, \
+        f'the door is not heard once on each side: {seen}'
+    return seen
+
+
 def check_push(host, guest, out):
     guest('command', command='gamemode survival')
     x, y, z = (int(v // 1) + 0.5 for v in pos_of(guest))
@@ -2039,7 +2086,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles, 'blast': check_blast,
              'light': check_light, 'plates': check_plates,
              'swings': check_swings, 'cracks': check_cracks,
-             'time': check_time, 'growth': check_growth, 'fireball': check_fireball, 'deflect': check_deflect, 'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'arrows': check_arrows}
+             'time': check_time, 'growth': check_growth, 'fireball': check_fireball, 'deflect': check_deflect, 'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'arrows': check_arrows, 'predict': check_predict}
 
 
 def run(ctl, out, resources, checks):
@@ -2048,7 +2095,7 @@ def run(ctl, out, resources, checks):
         host.d.env['HORIZON_SERVER_THREAD'] = '1'
     results = {}
     try:
-        host('launch', wait=False, offscreen=sys.platform == 'darwin')
+        host.pid = host('launch', wait=False, offscreen=sys.platform == 'darwin')['pid']
         # Guests' commands need the world's Allow Commands as well as the LAN's (#372): a creative
         # world has them; everyone plays in survival.
         host.raw('open', 'Lan', 5, 'creative')
