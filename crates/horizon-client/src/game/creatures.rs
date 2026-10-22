@@ -330,6 +330,10 @@ impl Game<'_> {
                     "held": m.extra.main_hand.as_deref(),
                     "mount": m.extra.mount,
                     "rider": m.extra.rider,
+                    // A player's input this tick, and whether it steers.
+                    "ridden": m.rider.map(|r| r.steer),
+                    "controlled": horizon_client::mobs::equine::controlled(m),
+                    "saddled": m.extra.saddled,
                     "enchants": horizon_client::mobs::gear::gear(m).map(|g| g.slots.iter().map(|s| s.iter().map(|(e, l)| format!("{e}:{l}")).collect::<Vec<_>>()).collect::<Vec<_>>()),
                     "ints": m.extra.ints,
                     "pois": [m.extra.home, m.extra.bed, m.extra.meeting],

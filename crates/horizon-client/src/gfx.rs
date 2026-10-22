@@ -33,6 +33,7 @@ fn entity_shader() -> String {
 }
 
 mod entity_batch;
+mod weather;
 use entity_batch::EntityBatch;
 pub use entity_batch::WATER_MASK_OVERLAY;
 
@@ -193,6 +194,8 @@ pub struct Frame<'a> {
     pub nether_lighting: bool,
     /// Camera-relative entity geometry textured from the shared atlas.
     pub entities: &'a [Vertex],
+    pub weather: &'a [crate::weather::Vertex],
+    pub weather_time: crate::weather::Time,
     /// Horizon Extras' dynamic lights, nearest first (`dynamic_light::select`); empty when off.
     pub dynamic_lights: &'a [[f32; 4]],
     /// Cloud mesh inputs; geometry and GPU storage are retained by the renderer.
@@ -236,8 +239,6 @@ pub struct Frame<'a> {
     pub night_vision: f32,
     /// Torch flicker added to the block light factor of 1.4.
     pub block_flicker: f32,
-    /// Blur and grade the frame under a Horizon-style menu (`post`).
-    pub post: Option<crate::post::PostGrade>,
     /// `Screen.extractBlurredBackground`: blur the frame by this radius
     /// (`menuBackgroundBlurriness`) before the screen is drawn over it.
     pub menu_blur: Option<f32>,
@@ -330,6 +331,7 @@ pub struct Renderer {
     crosshair_group: wgpu::BindGroup,
     crosshair_globals: wgpu::Buffer,
     entity_pipeline: wgpu::RenderPipeline,
+    weather: weather::Weather,
     crumbling_pipeline: wgpu::RenderPipeline,
     /// `RenderPipelines.WATER_MASK`: depth writes only, no colour.
     water_mask_pipeline: wgpu::RenderPipeline,
@@ -446,8 +448,6 @@ pub struct Renderer {
     /// The selected shader pack's stages (Horizon setting; none by default).
     pack: Option<Pack>,
     pub hud: HudRenderer,
-    /// The menus' backdrop blur, made on first use.
-    post: Option<crate::post::Post>,
     /// Vanilla's menu background blur, made on first use.
     menu_blur: Option<crate::menu_blur::MenuBlur>,
     pub info: wgpu::AdapterInfo,
@@ -1454,6 +1454,12 @@ impl Renderer {
                 ),
             ],
         });
+        let weather = weather::Weather::new(
+            &device,
+            config.format.remove_srgb_suffix(),
+            &entity_bindings,
+            &entity_shader,
+        );
         let atlas_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("Atlas"),
             ..Default::default()
@@ -2129,6 +2135,7 @@ impl Renderer {
             crosshair_group,
             crosshair_globals,
             entity_pipeline,
+            weather,
             crumbling_pipeline,
             water_mask_pipeline,
             cloud_pipeline,
@@ -2212,7 +2219,6 @@ impl Renderer {
             world_post,
             pack: None,
             hud,
-            post: None,
             menu_blur: None,
             info,
             suspended: size.width == 0 || size.height == 0,
@@ -3260,6 +3266,13 @@ impl Renderer {
                 bytemuck::cast_slice(&all),
             );
         }
+        self.weather.prepare(
+            &self.device,
+            &mut encoder,
+            &mut self.uploads,
+            frame.weather,
+            frame.weather_time,
+        );
         let outline_edges = frame.outline.len().min(MAX_OUTLINE_EDGES as usize);
         if outline_edges > 0 {
             let lines = outline_vertices(&frame.outline[..outline_edges], camera);
@@ -3277,6 +3290,7 @@ impl Renderer {
             frame.hand,
             frame.see_through,
         );
+        let weather_quads = frame.weather.len() as u32 / 4;
         let world_quads =
             entity_quads + crumbling_quads + translucent_crumbling_quads + water_mask_quads;
         let cloud_quads = if let Some(input) = &frame.clouds {
@@ -3365,7 +3379,8 @@ impl Renderer {
                 0
             } else {
                 lightning::QUADS
-            });
+            })
+            .max(weather_quads);
         if max_quads > self.index_quads {
             self.index_quads = max_quads.next_power_of_two();
             self.indices = Self::quad_indices(&self.device, self.index_quads);
@@ -3653,6 +3668,8 @@ impl Renderer {
                 pass.draw_indexed(0..entity_quads * 6, 0, 0..1);
                 pass.set_bind_group(0, &self.group, &[]);
             }
+            self.weather.draw(&mut pass, &self.entity_group);
+            pass.set_bind_group(0, &self.group, &[]);
             if crumbling_quads > 0 {
                 pass.set_pipeline(&self.crumbling_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
@@ -3923,23 +3940,6 @@ impl Renderer {
                     &view_target,
                     [self.config.width, self.config.height],
                     radius,
-                );
-        }
-        if let Some(grade) = &frame.post
-            && self.config.usage.contains(wgpu::TextureUsages::COPY_SRC)
-        {
-            let format = self.config.format;
-            let device = &self.device;
-            self.post
-                .get_or_insert_with(|| crate::post::Post::new(device, format))
-                .apply(
-                    &self.device,
-                    &self.queue,
-                    &mut encoder,
-                    &target_texture,
-                    &view_target,
-                    [self.config.width, self.config.height],
-                    grade,
                 );
         }
         self.hud.draw_range(
