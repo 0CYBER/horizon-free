@@ -818,6 +818,20 @@ impl Hub {
 
     /// ServerGamePacketListenerImpl.teleport: move the client and wait for its confirmation.
     pub fn teleport(&mut self, i: usize, position: Option<[f64; 3]>) {
+        self.teleport_relative(i, position, 0);
+    }
+
+    /// A teleport to `position` that keeps the player's motion and look
+    /// (`Relative.DELTA` and `Relative.ROTATION`: an End gateway's).
+    pub fn teleport_keeping_motion(&mut self, i: usize, position: [f64; 3]) {
+        use play::relative::{DELTA_X, DELTA_Y, DELTA_Z, ROTATE_DELTA, X_ROT, Y_ROT};
+        let relatives = Y_ROT | X_ROT | DELTA_X | DELTA_Y | DELTA_Z | ROTATE_DELTA;
+        self.teleport_relative(i, Some(position), relatives);
+    }
+
+    /// ServerGamePacketListenerImpl.teleport with `relatives`: the rotation
+    /// and motion they name are sent as zero changes.
+    fn teleport_relative(&mut self, i: usize, position: Option<[f64; 3]>, relatives: i32) {
         let ticks = self.ticks;
         let g = &mut self.guests[i];
         g.teleport_tick = ticks;
@@ -828,13 +842,14 @@ impl Hub {
         g.teleport_counter = (g.teleport_counter + 1) & 0x7FFF_FFFF;
         let id = g.teleport_counter;
         g.awaiting_teleport = Some((id, g.position));
+        let turn = relatives & (play::relative::Y_ROT | play::relative::X_ROT) != 0;
         g.send(&C::PlayerPosition(play::PlayerPosition {
             teleport: id,
             position: g.position,
             delta: [0.0; 3],
-            yaw: g.yaw,
-            pitch: g.pitch,
-            relatives: 0,
+            yaw: if turn { 0.0 } else { g.yaw },
+            pitch: if turn { 0.0 } else { g.pitch },
+            relatives,
         }));
     }
 
