@@ -78,6 +78,17 @@ export function machineHtml(name, rows) {
   const javaWins = METRICS.flatMap((m) =>
     distances.filter((rd) => compareRows(m, pick(rows, "horizon", rd), pick(rows, "vanilla", rd))?.wins === "java").map((rd) => `${m.label.toLowerCase()} at ${rd}`),
   );
+  // Per scene too: an average that Horizon wins can hide a scene where Java is faster.
+  const sceneName = { village: "the village", forest: "the forest", ocean: "the ocean", mountain: "the mountain" };
+  for (const rd of distances) {
+    const h = pick(rows, "horizon", rd);
+    const j = pick(rows, "vanilla", rd);
+    for (const [scene, js] of Object.entries(j?.scenes || {})) {
+      const hs = h?.scenes?.[scene];
+      if (!hs?.avg_fps || !js?.avg_fps || (h.capped_fps && hs.avg_fps >= h.capped_fps * 0.97)) continue;
+      if (js.avg_fps > hs.avg_fps * 1.05) javaWins.push(`average FPS over ${sceneName[scene] || scene} at ${rd} (${format("fps", js.avg_fps)} against ${format("fps", hs.avg_fps)})`);
+    }
+  }
   const facts = [
     ["CPU", first.cpu],
     ["GPU", first.gpu],
