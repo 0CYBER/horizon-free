@@ -154,7 +154,15 @@ pub fn dimension_dir(world: &Path, dimension: &str) -> PathBuf {
 }
 /// `DirectoryLock`: `session.lock` holds "\u{2603}" (UTF-16BE) under an exclusive
 /// file lock for as long as the world is open, so two instances cannot share it.
-pub struct SessionLock(#[allow(dead_code)] fs::File);
+pub struct SessionLock(fs::File);
+impl Drop for SessionLock {
+    /// `DirectoryLock.close`: release the lock, then close the file. Closing
+    /// alone keeps the lock while any copy of the descriptor lives on, such as
+    /// the one a process spawned on another thread holds until its `exec`.
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
 impl SessionLock {
     pub fn acquire(world: &Path) -> Result<Self> {
         use std::io::Write;
@@ -3703,6 +3711,19 @@ mod tests {
         );
         drop(first);
         assert!(super::SessionLock::acquire(&dir).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    /// #749: a copy of the lock's descriptor (a child process spawned on
+    /// another thread holds one until it execs) must not keep a released
+    /// world locked.
+    #[test]
+    fn session_lock_releases_while_a_descriptor_copy_lives() {
+        let dir = std::env::temp_dir().join(format!("horizon-lock-copy-{}", std::process::id()));
+        let lock = super::SessionLock::acquire(&dir).expect("first lock");
+        let copy = lock.0.try_clone().unwrap();
+        drop(lock);
+        assert!(super::SessionLock::acquire(&dir).is_ok());
+        drop(copy);
         let _ = std::fs::remove_dir_all(&dir);
     }
     #[test]
