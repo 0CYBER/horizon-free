@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>Horizon: a Rust rewrite for Minecraft: Java Edition 26.3</title>
     <meta name="description" content="Horizon is an unofficial Rust rewrite of the Minecraft: Java Edition 26.3 client and game logic, checked against vanilla by {{HARNESSES}} differential harnesses. Not an official Minecraft product.">
-    <meta name="theme-color" content="#fafafc" media="(prefers-color-scheme: light)">
-    <meta name="theme-color" content="#0d0e13" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#ece7f7" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#0f0d17" media="(prefers-color-scheme: dark)">
     <meta name="color-scheme" content="light dark">
     <link rel="canonical" href="https://playhorizon.dev/">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -27,6 +27,7 @@
     <link rel="preconnect" href="https://raw.githubusercontent.com" crossorigin>
     <link rel="preload" href="/fonts/Geist-Medium.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="preload" href="/fonts/Geist-Regular.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="/fonts/PixelifySans-Bold.woff2" as="font" type="font/woff2" crossorigin>
     <style>{{STYLE}}</style>
     <script>document.documentElement.classList.replace("no-js", "js"); try { const t = localStorage.getItem("theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t } catch {}</script>
     <script type="module" src="{{JS}}"></script>
@@ -84,6 +85,9 @@
             <a class="button secondary large" href="https://github.com/ludovic111/horizon">View on GitHub</a>
           </div>
           <p class="download-meta reveal" data-download-meta>For Linux x86-64, macOS on Apple Silicon and Windows x64.</p>
+        </div>
+      </section>
+      <div class="container hero-after">
           <ol class="index hero-index" aria-label="At a glance">
             <li class="row reveal"><a href="#parity"><span class="row-index">01</span><span class="row-name">Matches vanilla</span><span class="row-meta">{{PERCENT}}</span></a></li>
             <li class="row reveal"><a href="#parity"><span class="row-index">02</span><span class="row-name">Differential harnesses</span><span class="row-meta">{{HARNESSES}}</span></a></li>
@@ -91,8 +95,7 @@
             <li class="row reveal"><a href="#patch-notes"><span class="row-index">04</span><span class="row-name">What changed</span><span class="row-meta">Notes</span></a></li>
           </ol>
           <p class="disclaimer reveal">Unofficial. Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft.</p>
-        </div>
-      </section>
+      </div>
 
       <section id="about" class="section about" aria-labelledby="about-title">
         <div class="container">
