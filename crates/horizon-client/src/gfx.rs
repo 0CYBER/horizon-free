@@ -3841,9 +3841,19 @@ impl Renderer {
             let first = debug_depth + debug_top;
             pass.draw(0..4, first..first + crosshair);
         }
-        if let Some(radius) = frame.menu_blur
-            && self.config.usage.contains(wgpu::TextureUsages::COPY_SRC)
-        {
+        let menu_blur = frame
+            .menu_blur
+            .filter(|_| self.config.usage.contains(wgpu::TextureUsages::COPY_SRC));
+        let blur_at = menu_blur.map_or(0, |_| frame.hud.blur_at);
+        self.hud.draw_range(
+            &mut encoder,
+            &view_target,
+            &self.depth,
+            frame.hud,
+            [self.config.width, self.config.height],
+            0..blur_at,
+        );
+        if let Some(radius) = menu_blur {
             let format = self.config.format;
             let device = &self.device;
             self.menu_blur
@@ -3875,12 +3885,13 @@ impl Renderer {
                     grade,
                 );
         }
-        self.hud.draw(
+        self.hud.draw_range(
             &mut encoder,
             &view_target,
             &self.depth,
             frame.hud,
             [self.config.width, self.config.height],
+            blur_at..frame.hud.vertices.len() as u32,
         );
         if culling && let Some(cull) = &mut self.cull {
             cull.end(&self.device, &mut encoder);
