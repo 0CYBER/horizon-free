@@ -67,6 +67,10 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - portals:   (--server-thread) the server holds a level per dimension: the guest goes to the Nether
              through a portal while the host stays, then the host goes to the End while the guest is in
              the Nether, and both come back.
+- levels:    (--server-thread) the host and the guest each in a level of their own: `execute in` builds
+             and teleports into another level, mobs fall in two levels at once with ids unique across
+             them, the guest rejoins in the Nether, dies there and respawns in the Overworld, the host
+             takes a Nether portal alone, the guest takes an End portal and the exit portal alone, and the host saves, quits and reopens with the guest in the Nether.
 - commands:  the guest's chat completes commands and their arguments over the server's command
              tree (Tab), and runs what it completed;
 - recipes:   the guest's recipe book lists the planks recipe the logs unlock, and clicking it
@@ -155,7 +159,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'levels']
 
 
 class Game:
@@ -523,6 +527,209 @@ def portals(host, guest, out, x, y, z, hx, hy, hz):
     assert home.get('dimension') == 'minecraft:overworld', f'the host stayed in {home.get("dimension")}'
     assert back.get('dimension') == 'minecraft:overworld', f'the guest stayed in {back.get("dimension")}'
     return {'guest_nether': arrived, 'host_end': [ex, ey, ez], 'back': pos_of(guest)}
+
+
+NETHER, END, OVERWORLD = 'minecraft:the_nether', 'minecraft:the_end', 'minecraft:overworld'
+
+
+def check_levels(host, guest, out):
+    """(--server-thread) Each player in its own level (MinecraftServer.levels), the host and the guest
+    apart: the steps run in order, each reported, and the check fails if any did."""
+    if not SERVER_THREAD:
+        return 'skipped (needs --server-thread)'
+    start = {g.name: pos_of(g) for g in (host, guest)}
+    steps, failed = {}, []
+    guest('command', command='gamemode creative')
+    try:
+        for name, step in LEVEL_STEPS:
+            try:
+                steps[name] = step(host, guest, out)
+            except (Failed, AssertionError, StopIteration, KeyError) as e:
+                steps[name], failed = repr(e), failed + [name]
+                for g in (host, guest):
+                    back_to_game(g)
+            print(f'[lan] levels {name}: {"FAIL" if name in failed else "PASS"} {steps[name]}')
+    finally:
+        for g in (host, guest):
+            back_to_game(g)
+            if g('state').get('screen') == 'dead':
+                g.raw('respawn')
+                g.wait(20)
+            x, y, z = start[g.name]
+            g('command', command=f'execute in {OVERWORLD} run tp @s {x:.2f} {y:.2f} {z:.2f}')
+        guest('command', command='gamemode survival')
+        guest.wait(40)
+    assert not failed, f'failed: {failed}; {steps}'
+    return steps
+
+
+def level_floor(game, x, y, z):
+    """An obsidian floor under x y z with air above it, in the level `game` is in (fill needs the
+    chunks loaded: ServerLevel.hasChunksAt)."""
+    game('command', command=f'fill {x - 4} {y - 1} {z - 4} {x + 4} {y - 1} {z + 4} minecraft:obsidian')
+    game('command', command=f'fill {x - 4} {y} {z - 4} {x + 4} {y + 4} {z + 4} minecraft:air')
+
+
+def into_level(game, dimension, x, y, z):
+    """`execute in DIMENSION run tp` to x y z, onto a floor built once the level has loaded around it."""
+    game('command', command=f'execute in {dimension} run tp @s {x + 0.5} {y} {z + 0.5}')
+    state = wait_dimension(game, dimension, 400)
+    game.wait(20)
+    level_floor(game, x, y, z)
+    game('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+    game.wait(20)
+    return state
+
+
+def dims(host, guest):
+    return host('state').get('dimension'), guest('state').get('dimension')
+
+
+def level_execute(host, guest, out):
+    """`execute in the_nether run tp` takes the guest alone."""
+    x, z = (int(v // 1) for v in pos_of(guest)[::2])
+    there = into_level(guest, NETHER, x, 100, z)
+    below = guest.raw('block', x, 99, z)
+    assert dims(host, guest) == (OVERWORLD, NETHER), f'host, guest in {dims(host, guest)}'
+    assert there.get('dimension') == NETHER and below.get('block') == 'minecraft:obsidian', f'{there} on {below}'
+    return {'guest': pos_of(guest)}
+
+
+def level_ticking(host, guest, out):
+    """Mobs and objects fall in both levels at once (each level with a player ticks); every entity
+    has its own id across the levels."""
+    gx, gy, gz = pos_of(guest)
+    hx, hy, hz = pos_of(host)
+    # A floor of its own beside the host (earlier checks may have broken the open one there).
+    bx, by, bz = int(hx // 1), int(hy // 1), int(hz // 1)
+    host('command', command=f'fill {bx - 4} {by - 1} {bz - 4} {bx + 4} {by - 1} {bz - 2} minecraft:stone')
+    host('command', command=f'fill {bx - 4} {by} {bz - 4} {bx + 4} {by + 4} {bz - 2} minecraft:air')
+    guest('command', command=f'summon minecraft:pig {gx + 2.5:.2f} {gy + 3:.2f} {gz:.2f}')
+    guest('command', command=f'summon minecraft:armor_stand {gx - 2.5:.2f} {gy + 3:.2f} {gz:.2f}')
+    host('command', command=f'summon minecraft:pig {hx + 2.5:.2f} {hy + 3:.2f} {hz - 3:.2f}')
+    host('command', command=f'summon minecraft:armor_stand {hx - 2.5:.2f} {hy + 3:.2f} {hz - 3:.2f}')
+    try:
+        guest.wait(60)
+        seen = {}
+        for name, g, floor in (('guest', guest, gy), ('host', host, hy)):
+            mobs = [m for m in g.raw('mobs', 8)['near'] if m['kind'] == 'minecraft:pig']
+            stands = [o for o in g('status')['objects'] if o['kind'] == 'minecraft:armor_stand']
+            seen[name] = {'pigs': [(m['id'], round(m['pos'][1], 2)) for m in mobs],
+                          'stands': [(o['id'], round(o['position'][1], 2)) for o in stands], 'floor': floor}
+    finally:
+        guest('command', command='kill @e[type=!minecraft:player,distance=..8]')
+        host('command', command='kill @e[type=!minecraft:player,distance=..8]')
+    for name, s in seen.items():
+        heights = [y for _, y in s['pigs'] + s['stands']]
+        assert len(s['pigs']) == 1 and len(s['stands']) == 1, f'{name} sees {s}'
+        assert all(abs(y - s['floor']) < 0.1 for y in heights), f"{name}'s did not fall to the floor: {seen}"
+    ids = [i for s in seen.values() for i, _ in s['pigs'] + s['stands']]
+    assert len(set(ids)) == len(ids), f'ids shared across the levels: {seen}'
+    return seen
+
+
+def level_rejoin(host, guest, out):
+    """The guest leaves in the Nether and joins again there (its player data keeps its level)."""
+    before = pos_of(guest)
+    port = host.raw('lan', 'status')['port']
+    guest.raw('disconnect')
+    time.sleep(2)
+    guest.raw('connect', f'127.0.0.1:{port}', GUEST_NAME)
+    guest.raw('wait-for', 'loaded', '--timeout', 300)
+    guest.wait(20)
+    after = pos_of(guest)
+    assert dims(host, guest) == (OVERWORLD, NETHER), f'host, guest in {dims(host, guest)}'
+    assert all(abs(a - b) < 1 for a, b in zip(before, after)), f'left at {before}, back at {after}'
+    return {'at': after}
+
+
+def level_death(host, guest, out):
+    """The guest dies in the Nether and respawns in the Overworld; the host stays where it is."""
+    guest('command', command='kill @s')
+    guest.wait(20)
+    guest.raw('respawn')
+    back = wait_dimension(guest, OVERWORLD, 400)
+    guest.wait(20)
+    assert back.get('dimension') == OVERWORLD, f'the guest respawned in {back.get("dimension")}'
+    assert dims(host, guest) == (OVERWORLD, OVERWORLD), f'host, guest in {dims(host, guest)}'
+    return {'respawned': back['player']['position']}
+
+
+def level_host_nether(host, guest, out):
+    """The host goes through a Nether portal while the guest stays in the Overworld."""
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    nether_portal(host, hx, hy, hz - 3)
+    try:
+        host('command', command=f'tp @s {hx + 0.5} {hy} {hz - 2.5}')
+        there = wait_dimension(host, NETHER, 600)
+        host.wait(20)
+        result = dims(host, guest)
+        assert there.get('dimension') == NETHER, f'the host is in {there.get("dimension")}'
+        assert result == (NETHER, OVERWORLD), f'host, guest in {result}'
+        return {'host': there['player']['position']}
+    finally:
+        host('command', command=f'execute in {OVERWORLD} run fill {hx - 1} {hy} {hz - 3} {hx + 2} {hy + 3} {hz - 3} '
+                                'minecraft:air')
+        host('command', command=f'execute in {OVERWORLD} run tp @s {hx + 0.5} {hy} {hz + 0.5}')
+        wait_dimension(host, OVERWORLD, 400)
+
+
+def level_guest_end(host, guest, out):
+    """The guest steps into an End portal alone and lands on the obsidian platform; an exit portal
+    takes it back to the Overworld."""
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    guest('command', command=f'setblock {x + 2} {y} {z} minecraft:end_portal')
+    try:
+        guest('command', command=f'tp @s {x + 2.5} {y} {z + 0.5}')
+        wait_dimension(guest, END, 600)
+        # The arrival waits for the platform's chunks; its portal cooldown (10 ticks) runs out after,
+        # and a player who stands in a portal while it runs stays (Entity.setAsInsidePortal).
+        guest.wait(60)
+        landed = pos_of(guest)
+        assert dims(host, guest) == (OVERWORLD, END), f'host, guest in {dims(host, guest)}'
+        assert [int(v // 1) for v in landed] == [100, 49, 0], f'the guest landed at {landed}'
+    finally:
+        guest('command', command=f'execute in {OVERWORLD} run setblock {x + 2} {y} {z} minecraft:air')
+    ex, ey, ez = (int(v // 1) for v in landed)
+    guest('command', command=f'setblock {ex + 2} {ey} {ez} minecraft:end_portal')
+    guest('command', command=f'tp @s {ex + 2.5} {ey} {ez + 0.5}')
+    home = wait_dimension(guest, OVERWORLD, 600)
+    guest.wait(20)
+    assert dims(host, guest) == (OVERWORLD, OVERWORLD), f'host, guest in {dims(host, guest)}'
+    return {'landed': landed, 'home': home['player']['position']}
+
+
+def level_reload(host, guest, out):
+    """The host saves and quits with the guest in the Nether, opens the world again and opens it to the
+    LAN; the guest joins again where it was, in the Nether."""
+    x, z = (int(v // 1) for v in pos_of(guest)[::2])
+    into_level(guest, NETHER, x, 100, z)
+    before = pos_of(guest)
+    host.raw('disconnect')
+    # The world saves on its server thread before the title screen shows.
+    for attempt in range(60):
+        time.sleep(1)
+        try:
+            host.raw('open', 'Lan')
+            break
+        except Failed:
+            if attempt == 59:
+                raise
+    host('wait_ready', seconds=400)
+    port = host.raw('lan', 'open', 0, 'commands')['port']
+    back_to_game(guest)
+    guest.raw('connect', f'127.0.0.1:{port}', GUEST_NAME)
+    guest.raw('wait-for', 'loaded', '--timeout', 300)
+    guest.wait(20)
+    after = pos_of(guest)
+    assert dims(host, guest) == (OVERWORLD, NETHER), f'host, guest in {dims(host, guest)}'
+    assert all(abs(a - b) < 1 for a, b in zip(before, after)), f'left at {before}, back at {after}'
+    return {'at': after}
+
+
+LEVEL_STEPS = [('execute', level_execute), ('ticking', level_ticking), ('rejoin', level_rejoin),
+               ('death', level_death), ('host_nether', level_host_nether),
+               ('guest_end', level_guest_end), ('reload', level_reload)]
 
 
 def check_damage(host, guest, out):
@@ -2591,7 +2798,8 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles, 'blast': check_blast,
              'light': check_light, 'plates': check_plates,
              'swings': check_swings, 'cracks': check_cracks,
-             'time': check_time, 'growth': check_growth, 'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect, 'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'arrows': check_arrows, 'predict': check_predict}
+             'time': check_time, 'growth': check_growth, 'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect, 'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'arrows': check_arrows, 'predict': check_predict,
+             'levels': check_levels}
 
 
 def run(ctl, out, resources, checks):
