@@ -6881,7 +6881,24 @@ impl Game<'_> {
             Some(f) => self.attack_source(f),
             None => horizon_client::mobs::Damage::of(horizon_client::mobs::DamageKind::Generic),
         };
-        if self.hurt_by_player(index, amount, source) {
+        let landed = self.hurt_by_player(index, amount, source);
+        if let Some(p) = self.player.as_mut() {
+            if p.attack_log.len() >= 64 {
+                p.attack_log.remove(0);
+            }
+            p.attack_log.push(horizon_client::health::AttackRecord {
+                game_time: p.health.game_time(),
+                target: target_kind.clone(),
+                id: self.mobs[index].id,
+                killed: landed && !self.mobs[index].alive(),
+                amount,
+                scale,
+                crit,
+                landed,
+                dealt: old_health - self.mobs[index].health,
+            });
+        }
+        if landed {
             if knockback > 0.0 {
                 let (xd, zd) = self.extra_knockback_direction();
                 self.mobs[index].knockback(f64::from(knockback), xd, zd);

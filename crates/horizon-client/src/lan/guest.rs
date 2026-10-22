@@ -122,6 +122,13 @@ pub struct Guest {
     pub tracker: Tracker,
     // Player state the gameplay code reads and writes.
     pub motion: Option<Box<PlayerMotion>>,
+    /// The hurt and attack logs of the body it had before it respawned,
+    /// until the new body takes them over (the control socket's `hurtlog`
+    /// reads across a death).
+    pub logs_kept: Option<(
+        Vec<crate::health::HurtRecord>,
+        Vec<crate::health::AttackRecord>,
+    )>,
     /// The 36 inventory slots (hotbar first), armor (head..feet) and off hand.
     pub inventory: Vec<Option<ItemStack>>,
     pub armor: [Option<ItemStack>; 4],
@@ -251,6 +258,7 @@ impl Guest {
             batch_quota: 0.0,
             tracker: Tracker::default(),
             motion: None,
+            logs_kept: None,
             inventory: vec![None; 36],
             armor: [None, None, None, None],
             offhand: None,
