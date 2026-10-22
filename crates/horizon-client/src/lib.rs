@@ -80,6 +80,7 @@ pub mod graphics;
 pub mod graphics_style;
 pub mod graphics_ui;
 pub mod health;
+pub mod heartbeat;
 pub mod hotbar;
 pub mod hud;
 pub mod hud_layout;

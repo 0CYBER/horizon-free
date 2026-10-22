@@ -690,6 +690,8 @@ pub struct Extra {
     pub blocking: bool,
     pub fall_flying: bool,
     pub fall_fly_ticks: i32,
+    /// `LivingEntity.isAutoSpinAttack` (Riptide).
+    pub auto_spin_attack: bool,
     pub main_hand_left: bool,
     pub elytra: ElytraAnimation,
     pub swim: SwimAnimation,

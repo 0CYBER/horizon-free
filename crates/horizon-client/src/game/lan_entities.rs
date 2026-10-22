@@ -5,7 +5,7 @@
 //! synched data that differs from the defaults), and who rides what.
 use super::Game;
 use horizon_client::lan::{
-    entity::{EntityState, Riding},
+    entity::{EntityState, Riding, States},
     hub::Hub,
 };
 use horizon_protocol::entity_data::{Value, serializer};
@@ -107,7 +107,7 @@ impl Game<'_> {
         &self,
         host_entity: Option<i32>,
         hub: &mut Hub,
-        out: &mut Vec<EntityState>,
+        out: &mut States,
     ) {
         for b in &self.boats {
             let p = b.position;
@@ -268,12 +268,7 @@ impl Game<'_> {
 
     /// Primed TNT, falling blocks, projectiles, tridents, firework rockets and
     /// end crystals, as guests track them.
-    fn lan_projectile_states(
-        &self,
-        host_entity: Option<i32>,
-        hub: &mut Hub,
-        out: &mut Vec<EntityState>,
-    ) {
+    fn lan_projectile_states(&self, host_entity: Option<i32>, hub: &mut Hub, out: &mut States) {
         let owner = |who: Option<horizon_client::mobs::Who>| match who {
             Some(horizon_client::mobs::Who::Mob(id)) => id as i32,
             Some(horizon_client::mobs::Who::Player) => host_entity.unwrap_or(0),

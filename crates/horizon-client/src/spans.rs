@@ -1,8 +1,10 @@
 //! Named timings within a frame, for finding what makes a frame slow:
 //! `HORIZON_SPIKES=MS` prints the spans of every frame whose CPU time
 //! exceeds MS milliseconds, and of every server tick (dedicated or
-//! integrated) longer than MS. Costs one clock read per span when enabled
-//! and a relaxed load otherwise.
+//! integrated) longer than MS. Each span keeps its wall time and the
+//! thread's CPU time inside it, so a span that waited (for a lock, the GPU
+//! or a core on a busy machine) shows apart from one that worked. Costs two
+//! clock reads per span when enabled and a relaxed load otherwise.
 use std::{
     cell::RefCell,
     sync::atomic::{AtomicBool, Ordering},
@@ -11,7 +13,15 @@ use std::{
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
 thread_local! {
-    static SPANS: RefCell<Vec<(&'static str, f32)>> = const { RefCell::new(Vec::new()) };
+    static SPANS: RefCell<Vec<Span>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A named timing: wall milliseconds and the thread's CPU milliseconds in it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Span {
+    pub name: &'static str,
+    pub ms: f32,
+    pub cpu_ms: f32,
 }
 
 pub fn enable(on: bool) {
@@ -23,10 +33,13 @@ pub fn time<T>(name: &'static str, f: impl FnOnce() -> T) -> T {
     if !ENABLED.load(Ordering::Relaxed) {
         return f();
     }
-    let started = Instant::now();
+    let (started, cpu) = (Instant::now(), thread_cpu());
     let out = f();
     let ms = started.elapsed().as_secs_f32() * 1000.0;
-    SPANS.with(|s| s.borrow_mut().push((name, ms)));
+    let cpu_ms = thread_cpu()
+        .zip(cpu)
+        .map_or(ms, |(end, start)| (end - start).as_secs_f32() * 1000.0);
+    SPANS.with(|s| s.borrow_mut().push(Span { name, ms, cpu_ms }));
     out
 }
 /// The CPU time this thread has used, where the platform tells it: a tick
@@ -42,21 +55,84 @@ pub fn thread_cpu() -> Option<Duration> {
     None
 }
 /// The frame's spans, summed by name, slowest first; clears them.
-pub fn take() -> Vec<(&'static str, f32)> {
+pub fn take() -> Vec<Span> {
     let spans = SPANS.with(|s| std::mem::take(&mut *s.borrow_mut()));
-    let mut sums: Vec<(&'static str, f32)> = Vec::new();
-    for (name, ms) in spans {
-        match sums.iter_mut().find(|(n, _)| *n == name) {
-            Some(entry) => entry.1 += ms,
-            None => sums.push((name, ms)),
+    let mut sums: Vec<Span> = Vec::new();
+    for span in spans {
+        match sums.iter_mut().find(|s| s.name == span.name) {
+            Some(sum) => {
+                sum.ms += span.ms;
+                sum.cpu_ms += span.cpu_ms;
+            }
+            None => sums.push(span),
         }
     }
-    sums.sort_by(|a, b| b.1.total_cmp(&a.1));
+    sums.sort_by(|a, b| b.ms.total_cmp(&a.ms));
     sums
+}
+/// `name wall` for spans of at least 0.5 ms, with `/cpu` when the thread
+/// worked for less than nine tenths of it: the slow-frame and slow-tick lines.
+pub fn describe(spans: &[Span]) -> String {
+    let list: Vec<String> = spans
+        .iter()
+        .filter(|s| s.ms >= 0.5)
+        .map(|s| {
+            if s.cpu_ms < s.ms * 0.9 {
+                format!("{} {:.1}/{:.1}", s.name, s.ms, s.cpu_ms)
+            } else {
+                format!("{} {:.1}", s.name, s.ms)
+            }
+        })
+        .collect();
+    list.join(", ")
 }
 
 #[cfg(test)]
 mod tests {
+    use super::Span;
+
+    /// Spans of one name add up; a span the thread spent mostly waiting
+    /// shows its CPU time after the wall time, short ones are left out.
+    #[test]
+    fn spans_sum_by_name_and_show_waits() {
+        super::SPANS.with(|s| {
+            s.borrow_mut().extend([
+                Span {
+                    name: "tick",
+                    ms: 2.0,
+                    cpu_ms: 2.0,
+                },
+                Span {
+                    name: "submit",
+                    ms: 30.0,
+                    cpu_ms: 0.2,
+                },
+                Span {
+                    name: "tick",
+                    ms: 3.0,
+                    cpu_ms: 2.9,
+                },
+                Span {
+                    name: "hud",
+                    ms: 0.3,
+                    cpu_ms: 0.3,
+                },
+            ]);
+        });
+        let spans = super::take();
+        assert_eq!(
+            spans[0],
+            Span {
+                name: "submit",
+                ms: 30.0,
+                cpu_ms: 0.2
+            }
+        );
+        assert_eq!((spans[1].name, spans[1].ms), ("tick", 5.0));
+        assert_eq!(super::describe(&spans), "submit 30.0/0.2, tick 5.0");
+        assert!(super::take().is_empty());
+    }
+
     /// The thread's CPU clock moves with work done on it, not with time
     /// spent asleep.
     #[cfg(unix)]

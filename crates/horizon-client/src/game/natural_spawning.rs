@@ -191,7 +191,13 @@ impl NaturalLevel for GameLevel<'_, '_> {
         StructureSpawns::shared(&self.game.options.resources)
     }
     fn nearest_player_distance_sqr(&self, x: f64, y: f64, z: f64) -> Option<f64> {
-        nearest_player(&self.players, x, y, z).map(|p| p.distance_sqr(x, y, z))
+        // The nearest player's distance (`nearest_player`), without finding
+        // which player it is: every spawn attempt asks.
+        self.players
+            .iter()
+            .filter(|p| !p.spectator)
+            .map(|p| p.distance_sqr(x, y, z))
+            .reduce(f64::min)
     }
     fn respawn(&self) -> Option<[i32; 3]> {
         // The world spawn point lives in the overworld.

@@ -7,10 +7,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// threads, as vanilla's `MinecraftServer.spin` does for its server thread
 /// (`Thread.setPriority(8)` when there are more than four processors), so
 /// world generation and chunk encoding on every other core don't hold a tick
-/// back: user-interactive quality of service on macOS, above-normal priority
-/// on Windows. Nothing elsewhere: Linux lets an unprivileged thread lower its
-/// priority but not raise it (and the JVM leaves it there too). Whether the
-/// OS took it.
+/// back (the client asks the same for its render thread, so they don't hold
+/// a frame back either): user-interactive quality of service on macOS,
+/// above-normal priority on Windows. Nothing elsewhere: Linux lets an
+/// unprivileged thread lower its priority but not raise it (and the JVM
+/// leaves it there too). Whether the OS took it.
 pub fn favour_current() -> bool {
     if std::thread::available_parallelism().map_or(1, |n| n.get()) <= 4 {
         return false;

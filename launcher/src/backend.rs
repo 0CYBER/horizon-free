@@ -650,6 +650,32 @@ pub fn is_prepared(tag: &str) -> bool {
     resources(tag).join(RESOURCES_MANIFEST).exists()
 }
 
+/// Whether a version's resources hold Minecraft's sounds, which `sounds` copies from the player's own
+/// install beside the preparation. A version prepared while that copy failed (Mojang's republished 26.3
+/// asset index, #1076), or one that reused such a version's resources, plays no sound at all (#1035).
+pub fn has_sounds(tag: &str) -> bool {
+    sounds_in(&resources(tag))
+}
+
+fn sounds_in(resources: &Path) -> bool {
+    // What the game's sound registry reads (horizon-client sound_events.rs).
+    resources.join("assets/minecraft/sounds.json").is_file()
+}
+
+/// What the Play page says of a version's resources.
+pub fn resources_summary(prepared: bool, sounds: bool, version: &str) -> String {
+    match (prepared, sounds) {
+        (false, _) => {
+            format!("Not prepared. Horizon needs the files of your own Minecraft {version}.")
+        }
+        (true, true) => format!("Prepared for Minecraft {version}"),
+        (true, false) => format!(
+            "Prepared for Minecraft {version}, without its sounds: the game will be silent. \
+             Prepare again to copy them from your Minecraft install."
+        ),
+    }
+}
+
 /// Whether the resources `from` prepared are the ones preparing `to` would make. The output
 /// depends on the Horizon version, not only on Minecraft's: the manifest records the hashes of
 /// the vanilla exporters it was made with (mods/horizon/src/test/java/.../parity), and the
@@ -2098,6 +2124,8 @@ pub enum Msg {
     PackLine(String),
     /// A modpack step ended: the pack as it now is.
     PackDone(Result<Box<crate::modpacks::Imported>, String>),
+    /// How many play Horizon now, or none when the server can't be reached (`telemetry`).
+    Playing(Option<u64>),
 }
 
 /// A running process; its output arrives as `Msg::Line`, its end as `Msg::Exit`.
@@ -2189,6 +2217,10 @@ pub struct Settings {
     /// builds" switch instead; [`Settings::parse`] reads its `beta_builds: true` as Nightly.
     #[serde(default)]
     pub update_channel: UpdateChannel,
+    /// The player has read what the "I'm playing" ping holds (`telemetry::PING`): on the
+    /// first-run question, or on the Play page once if they answered that before it existed.
+    #[serde(default)]
+    pub ping_notice_seen: bool,
 }
 
 impl Settings {
@@ -2241,6 +2273,30 @@ mod release_loading_tests;
 mod tests {
     use super::*;
     use std::cmp::Ordering::*;
+
+    #[test]
+    fn resources_without_sounds_are_reported() {
+        let dir = std::env::temp_dir().join(format!("horizon-no-sounds-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("assets/minecraft/textures")).unwrap();
+        fs::write(dir.join(RESOURCES_MANIFEST), "{}").unwrap();
+        assert!(!sounds_in(&dir));
+        fs::write(dir.join("assets/minecraft/sounds.json"), "{}").unwrap();
+        assert!(sounds_in(&dir));
+        fs::remove_dir_all(&dir).unwrap();
+
+        assert_eq!(
+            resources_summary(true, true, "26.3"),
+            "Prepared for Minecraft 26.3"
+        );
+        let silent = resources_summary(true, false, "26.3");
+        assert!(silent.contains("without its sounds") && silent.contains("Prepare again"));
+        // Not prepared says only that, sounds or not.
+        assert_eq!(
+            resources_summary(false, false, "26.3"),
+            resources_summary(false, true, "26.3")
+        );
+    }
 
     #[test]
     fn the_game_plays_under_its_own_audio_stream_name() {

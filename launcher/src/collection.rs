@@ -45,6 +45,41 @@ fn kind_id(prefix: &str, kind: DataKind) -> &'static str {
     }
 }
 
+/// Where a switch would be: the ping has none.
+fn always_on(t: &Theme) -> Div {
+    caps("Always on").flex_none().text_color(t.muted)
+}
+
+/// The "I'm playing" ping on the first-run question, laid out as the switches' rows.
+fn ping_row(t: &Theme) -> Div {
+    div()
+        .flex()
+        .items_start()
+        .gap(px(16.))
+        .py(px(10.))
+        .border_b_1()
+        .border_color(t.rule)
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .gap(px(2.))
+                .child(
+                    text(theme::UI)
+                        .text_color(t.ink)
+                        .child(telemetry::PING_NAME),
+                )
+                .child(
+                    text(theme::CAPTION)
+                        .text_color(t.muted)
+                        .child(telemetry::PING),
+                ),
+        )
+        .child(always_on(t))
+}
+
 /// The exact JSON, in mono, scrolling inside a plate.
 fn json_view(view: &(String, String), t: &Theme, scroll: &Scrollbar) -> Div {
     div()
@@ -86,6 +121,11 @@ impl Launcher {
         match telemetry::answer(choices) {
             Ok(consent) => self.collection.consent = consent,
             Err(e) => self.collection.note = Some(format!("Could not save your choice: {e}")),
+        }
+        // The question and Settings say what the "I'm playing" ping holds, beside the switches.
+        if !self.settings.ping_notice_seen {
+            self.settings.ping_notice_seen = true;
+            self.settings.save();
         }
         self.collection.view = None;
     }
@@ -148,9 +188,17 @@ impl Launcher {
                     .child("Help make Horizon faster and steadier?"),
             )
             .child(text(theme::UI).text_color(t.muted).child(
-                "Horizon can send a few things to its developers. Everything is off until you turn it on, and Settings can change it any time.",
+                "Horizon can send a few things to its developers. Each switch is off until you turn it on, and Settings can change it any time.",
             ))
-            .child(div().flex().flex_col().border_t_1().border_color(t.rule).children(rows))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .border_t_1()
+                    .border_color(t.rule)
+                    .children(rows)
+                    .child(ping_row(&t)),
+            )
             .child(text(theme::CAPTION).text_color(t.muted).child(telemetry::NEVER))
             .child(
                 div()
@@ -244,6 +292,13 @@ impl Launcher {
                 &t,
             ));
         }
+        list = list.child(index_row(
+            telemetry::SWITCHES.len() + 1,
+            telemetry::PING_NAME,
+            Some(div().child(telemetry::PING).into_any_element()),
+            Some(always_on(&t).into_any_element()),
+            &t,
+        ));
         let waiting = horizon_telemetry::outbox::pending(&telemetry::home()).len();
         let id = match consent.install_id.as_str() {
             "" => "No install ID: nothing has been collected".to_string(),
@@ -299,7 +354,7 @@ impl Launcher {
                 })),
             );
         list = list.child(index_row(
-            telemetry::SWITCHES.len() + 1,
+            telemetry::SWITCHES.len() + 2,
             "Your data",
             Some(
                 div()
@@ -316,7 +371,7 @@ impl Launcher {
             .gap(px(16.))
             .child(text(theme::HEADING).text_color(t.ink).child("Data collection"))
             .child(text(theme::UI).max_w(px(600.)).text_color(t.muted).child(
-                "Off unless you turn it on. What each switch sends is below it; the privacy page on playhorizon.dev says how long it is kept.",
+                "Each switch is off unless you turn it on. What it sends is below it; the privacy page on playhorizon.dev says how long it is kept.",
             ))
             .child(list)
             .child(text(theme::CAPTION).text_color(t.muted).child(telemetry::NEVER))
