@@ -171,6 +171,7 @@ impl Game<'_> {
             }
         };
         // Everything loaded: switch over.
+        self.waypoint_styles = horizon_client::locator_bar::WaypointStyles::load(root);
         self.random_tick_sections.clear();
         self.portals.sections.clear();
         self.options.resources = root.to_path_buf();

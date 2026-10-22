@@ -102,6 +102,7 @@ pub mod landing;
 pub mod lang;
 pub mod level_loading;
 pub mod light;
+pub mod locator_bar;
 pub mod lod;
 pub mod logging;
 pub mod menu;
