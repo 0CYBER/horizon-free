@@ -114,6 +114,10 @@ pub enum Kind {
     Lectern,
     /// `MerchantMenu`: two payment slots, the result, then the inventory.
     Merchant,
+    /// `HorseInventoryMenu`: the saddle and body armour slots (`ArmorSlot`s
+    /// of the mount, whose entity type is `Menu::mount`), a chest of three
+    /// rows of this many columns (`getInventoryColumns`), then the inventory.
+    Mount(usize),
     /// `CreativeModeInventoryScreen.ItemPickerMenu`: an item tab's 45
     /// display slots, then the hotbar.
     ItemPicker,
@@ -123,6 +127,9 @@ impl Kind {
     pub fn parse(name: &str) -> Option<Self> {
         if let Some(rows) = name.strip_prefix("chest") {
             return rows.parse().ok().map(Self::Chest);
+        }
+        if let Some(columns) = name.strip_prefix("mount") {
+            return columns.parse().ok().map(Self::Mount);
         }
         Some(match name {
             "inventory" => Self::Inventory,
@@ -207,6 +214,9 @@ enum Role {
     /// `CustomCreativeSlot`: a creative tab's display slot, which the
     /// screen clicks itself; drags and PICKUP_ALL pass it by.
     CreativeDisplay,
+    /// An `ArmorSlot` of a mount for this `EquipmentSlot` ("saddle" or
+    /// "body"): `isEquippableInSlot` for `Menu::mount`, one item.
+    MountEquip(&'static str),
 }
 
 #[derive(Clone, Copy)]
@@ -298,6 +308,9 @@ pub struct Menu {
     pub enchant_button: Option<usize>,
     /// `Player.mayBuild` (not adventure mode): the lectern's Take Book.
     pub may_build: bool,
+    /// A mount menu's entity type (`minecraft:horse`): what its saddle and
+    /// body slots take.
+    pub mount: Option<String>,
 }
 
 /// `AnvilMenu`'s state besides its slots and `cost`.
@@ -560,6 +573,22 @@ impl Menu {
                 // The open page (LecternBlockEntity.dataAccess).
                 data = 1;
             }
+            Kind::Mount(columns) => {
+                containers[MAIN] = vec![None; 2 + columns * 3];
+                for (index, slot) in ["saddle", "body"].into_iter().enumerate() {
+                    slots.push(Slot {
+                        container: MAIN,
+                        index,
+                        role: Role::MountEquip(slot),
+                    });
+                }
+                slots.extend((2..2 + columns * 3).map(|index| Slot {
+                    container: MAIN,
+                    index,
+                    role: Role::Plain,
+                }));
+                player(&mut slots);
+            }
             Kind::ItemPicker => {
                 containers[MAIN] = vec![None; 45];
                 slots.extend(main(45, Role::CreativeDisplay));
@@ -654,6 +683,7 @@ impl Menu {
             enchant_changed: false,
             enchant_button: None,
             may_build: true,
+            mount: None,
         }
         .with_initial_data()
     }
@@ -1186,6 +1216,15 @@ impl Menu {
                     Some(slot == eq && allowed)
                 })
                 .unwrap_or(false),
+            // LivingEntity.isEquippableInSlot: the item's equippable slot,
+            // and the mount among its allowed entities.
+            Role::MountEquip(slot) => env.items.get(&stack.item).is_some_and(|i| {
+                i.equip_slot.as_deref() == Some(slot)
+                    && self
+                        .mount
+                        .as_deref()
+                        .is_some_and(|m| i.equip_allowed.as_ref().is_none_or(|a| a.contains(m)))
+            }),
             Role::Shulker => Self::fits_inside(stack),
             Role::Fuel => Self::is_fuel(env, stack) || Self::is_bucket(stack),
             Role::Output | Role::CraftResult | Role::Inert => false,
@@ -1257,7 +1296,7 @@ impl Menu {
                     );
                     o.satisfied_by(env.items, a, b) || o.satisfied_by(env.items, b, a)
                 }),
-            Role::Armor(_) => match self.slot(s) {
+            Role::Armor(_) | Role::MountEquip(_) => match self.slot(s) {
                 Some(stack) => {
                     self.creative || stack.enchantment_level("minecraft:binding_curse") == 0
                 }
@@ -1270,7 +1309,11 @@ impl Menu {
     /// `Slot.getMaxStackSize(stack)`.
     fn slot_max(&self, env: &Env, s: usize, stack: &ItemStack) -> u32 {
         let own = match self.slots[s].role {
-            Role::Armor(_) | Role::Potion | Role::EnchantItem | Role::BeaconPay => 1,
+            Role::Armor(_)
+            | Role::MountEquip(_)
+            | Role::Potion
+            | Role::EnchantItem
+            | Role::BeaconPay => 1,
             // The lectern's bookAccess holds one.
             Role::Plain if self.kind == Kind::Lectern && self.slots[s].container == MAIN => 1,
             Role::Fuel if Self::is_bucket(stack) => return 1,
@@ -2026,6 +2069,38 @@ impl Menu {
             }
             // LecternMenu.quickMoveStack moves nothing.
             Kind::Lectern => return None,
+            Kind::Mount(columns) => {
+                // AbstractMountInventoryMenu.quickMoveStack: no count check
+                // and no onTake.
+                check_count = false;
+                let start = 2 + columns * 3;
+                if index < start {
+                    if !self.move_to(env, &mut stack, start, total, true) {
+                        return None;
+                    }
+                } else if self.may_place(env, 1, &stack) && self.containers[MAIN][1].is_none() {
+                    if !self.move_to(env, &mut stack, 1, 2, false) {
+                        return None;
+                    }
+                } else if self.may_place(env, 0, &stack) && self.containers[MAIN][0].is_none() {
+                    if !self.move_to(env, &mut stack, 0, 1, false) {
+                        return None;
+                    }
+                } else if columns == 0 || !self.move_to(env, &mut stack, 2, start, false) {
+                    // Between the inventory and the hotbar: the stack shrinks
+                    // in its slot and EMPTY is returned either way.
+                    let (main_end, hotbar_end) = (start + 27, start + 36);
+                    if (main_end..hotbar_end).contains(&index) {
+                        self.move_to(env, &mut stack, start, main_end, false);
+                    } else if (start..main_end).contains(&index) {
+                        self.move_to(env, &mut stack, main_end, hotbar_end, false);
+                    }
+                    let slot = self.slots[index];
+                    self.containers[slot.container][slot.index] =
+                        (stack.count > 0).then(|| stack.clone());
+                    return None;
+                }
+            }
             Kind::Beacon => {
                 // BeaconMenu.quickMoveStack.
                 after_take = true;
@@ -2944,6 +3019,65 @@ pub(crate) mod tests {
         let mut menu = Menu::new(kind);
         menu.creative = true;
         test(&env, &mut menu);
+    }
+
+    /// `HorseInventoryMenu`: a shift-click wears horse armour, then saddles,
+    /// then fills the chest; the body slot takes only what the mount may wear.
+    #[test]
+    fn mount_menu_slots_take_what_the_mount_wears() {
+        with_menu(Kind::Mount(5), |env, menu| {
+            menu.creative = false;
+            menu.mount = Some("minecraft:donkey".into());
+            // 2 saddle and body, 15 chest, then the inventory from 17.
+            assert_eq!(menu.slot_count(), 2 + 15 + 36);
+            let hotbar = 17 + 27;
+            menu.set_slot(env, hotbar, stack("iron_horse_armor", 1));
+            menu.click(env, hotbar as i32, 0, Input::QuickMove).unwrap();
+            // A donkey wears no horse armour: it goes in the chest.
+            assert_eq!(menu.slot(1), None);
+            assert_eq!(
+                menu.slot(2).map(|s| &*s.item),
+                Some("minecraft:iron_horse_armor")
+            );
+            menu.set_slot(env, hotbar, stack("saddle", 1));
+            menu.click(env, hotbar as i32, 0, Input::QuickMove).unwrap();
+            assert_eq!(menu.slot(0).map(|s| &*s.item), Some("minecraft:saddle"));
+            // Back out of the mount: to the inventory, from the hotbar's end.
+            menu.click(env, 0, 0, Input::QuickMove).unwrap();
+            assert_eq!(menu.slot(0), None);
+            assert_eq!(
+                menu.slot(17 + 35).map(|s| &*s.item),
+                Some("minecraft:saddle")
+            );
+        });
+        with_menu(Kind::Mount(0), |env, menu| {
+            menu.creative = false;
+            menu.mount = Some("minecraft:horse".into());
+            let hotbar = 2 + 27;
+            menu.set_slot(env, hotbar, stack("diamond_horse_armor", 1));
+            menu.click(env, hotbar as i32, 0, Input::QuickMove).unwrap();
+            assert_eq!(
+                menu.slot(1).map(|s| &*s.item),
+                Some("minecraft:diamond_horse_armor")
+            );
+            // No chest: dirt goes between the hotbar and the inventory.
+            menu.set_slot(env, hotbar, stack("dirt", 3));
+            menu.click(env, hotbar as i32, 0, Input::QuickMove).unwrap();
+            assert_eq!(
+                menu.slot(2).map(|s| (&*s.item, s.count)),
+                Some(("minecraft:dirt", 3))
+            );
+            assert_eq!(menu.slot(hotbar), None);
+            // Placing by hand: a saddle doesn't go in the body slot.
+            menu.carried = stack("saddle", 1);
+            menu.click(env, 1, 0, Input::Pickup).unwrap();
+            assert_eq!(
+                menu.slot(1).map(|s| &*s.item),
+                Some("minecraft:diamond_horse_armor")
+            );
+            menu.click(env, 0, 0, Input::Pickup).unwrap();
+            assert_eq!(menu.slot(0).map(|s| &*s.item), Some("minecraft:saddle"));
+        });
     }
 
     /// `onEquipItem` runs from the armour and off-hand slots' `setByPlayer`
