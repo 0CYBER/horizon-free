@@ -107,13 +107,16 @@ struct Globals {
     fog_ends: [f32; 4],
     /// Atlas rects (u0, v0, width, height) of end_sky.png and end_portal.png.
     end_portal_sprites: [[f32; 4]; 2],
-    /// x: vanilla's `GameTime` uniform; y: nether cardinal lighting, zw unused.
+    /// x: vanilla's `GameTime` uniform; y: nether cardinal lighting; z: how many
+    /// `dynamic_lights` are set; w unused.
     time: [f32; 4],
     /// Atlas rect of a destroy stage (entity.wgsl takes only its size: every stage's is the same,
     /// and each crack carries its own stage's origin).
     crumbling_sprite: [f32; 4],
     /// Framebuffer size, selection stroke width, perspective layering scale.
     outline_params: [f32; 4],
+    /// Horizon Extras' dynamic lights: camera-relative position and level (`dynamic_light`).
+    dynamic_lights: [[f32; 4]; crate::dynamic_light::MAX],
 }
 pub type SectionKey = (i32, i32, i32);
 struct SectionGpu {
@@ -186,6 +189,8 @@ pub struct Frame<'a> {
     pub nether_lighting: bool,
     /// Camera-relative entity geometry textured from the shared atlas.
     pub entities: &'a [Vertex],
+    /// Horizon Extras' dynamic lights, nearest first (`dynamic_light::select`); empty when off.
+    pub dynamic_lights: &'a [[f32; 4]],
     /// Cloud mesh inputs; geometry and GPU storage are retained by the renderer.
     pub clouds: Option<crate::clouds::Input<'a>>,
     /// Additive translucent geometry after the entities (lightning, dragon rays).
@@ -2908,10 +2913,17 @@ impl Renderer {
             time: [
                 frame.shader_game_time,
                 f32::from(frame.nether_lighting),
-                0.0,
+                frame.dynamic_lights.len().min(crate::dynamic_light::MAX) as f32,
                 0.0,
             ],
             outline_params: outline_params(self.config.width, self.config.height),
+            dynamic_lights: {
+                let mut lights = [[0.0; 4]; crate::dynamic_light::MAX];
+                for (to, from) in lights.iter_mut().zip(frame.dynamic_lights) {
+                    *to = *from;
+                }
+                lights
+            },
         };
         self.uploads
             .buffer(&mut encoder, &self.globals, 0, bytemuck::bytes_of(&globals));
@@ -4154,6 +4166,34 @@ mod tests {
             Rgba8Unorm
         );
         assert_eq!(surface_format(&[Rgba16Float], Bgra8UnormSrgb), Rgba16Float);
+    }
+    /// A Wayland surface on a compositor with colour management, as wgpu lists it (Mesa 26.2
+    /// ANV on an Intel HD 620 under weston 16): wide formats first. The pre-#1075 choice,
+    /// the first non-sRGB format, took `Rgba16Float` and the window looked washed out, as if
+    /// under a white overlay (#1007); XWayland lists no such format, which is why it looked fine.
+    #[test]
+    fn a_colour_managed_wayland_surface_still_gets_8_bit() {
+        use super::surface_format;
+        use wgpu::TextureFormat::*;
+        let wayland = [
+            Rgba16Float,
+            Rgba16Unorm,
+            Rgb10a2Unorm,
+            Bgra8UnormSrgb,
+            Bgra8Unorm,
+            Rgba8UnormSrgb,
+            Rgba8Unorm,
+        ];
+        assert_eq!(surface_format(&wayland, Bgra8UnormSrgb), Bgra8Unorm);
+        // Without Bgra8: Rgba8, still not a 16- or 10-bit format.
+        let without_bgra = [
+            Rgba16Float,
+            Rgba16Unorm,
+            Rgb10a2Unorm,
+            Rgba8UnormSrgb,
+            Rgba8Unorm,
+        ];
+        assert_eq!(surface_format(&without_bgra, Rgba8UnormSrgb), Rgba8Unorm);
     }
     #[test]
     fn special_material_batches_preserve_quad_order_and_offsets() {

@@ -879,7 +879,9 @@ impl Game<'_> {
             "tridents": self.tridents.len(),
             "rockets": self.rockets.len(),
             "fight": self.dragon_status(),
-            "carts": self.carts.iter().map(|c| serde_json::json!({"kind": c.kind.id(), "position": [c.position.x, c.position.y, c.position.z], "velocity": [c.velocity.x, c.velocity.y, c.velocity.z]})).collect::<Vec<_>>(),
+            // A client of a server (single player's server thread) knows the
+            // carts it was sent.
+            "carts": self.remote_carts().unwrap_or_else(|| self.carts.iter().map(|c| serde_json::json!({"kind": c.kind.id(), "position": [c.position.x, c.position.y, c.position.z], "velocity": [c.velocity.x, c.velocity.y, c.velocity.z]})).collect::<Vec<_>>()),
             "riding": self.riding,
             "using": self.using,
             "render_distance": self.streaming.radius,

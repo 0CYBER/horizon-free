@@ -14,11 +14,13 @@ struct Globals {
     // Atlas rects (u0, v0, width, height) of end_sky.png and end_portal.png.
     end_portal_sprites: array<vec4<f32>, 2>,
     // x: vanilla's GameTime ((game time % 24000 + partial tick) / 24000)
-    // y: Nether cardinal lighting.
+    // y: Nether cardinal lighting, z: how many dynamic_lights are set.
     time: vec4<f32>,
     crumbling_sprite: vec4<f32>,
     // Selection outline parameters (read by terrain.wgsl).
     outline_params: vec4<f32>,
+    // Horizon Extras' dynamic lights: camera-relative position and level (dynamic_light.rs).
+    dynamic_lights: array<vec4<f32>, 16>,
 }
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var atlas: texture_2d<f32>;
@@ -58,13 +60,25 @@ fn overlay_texel(overlay: u32) -> vec4<f32> {
     if overlay >= 16u && overlay < 32u { return vec4(1.0, 1.0, 1.0, WHITE_OVERLAY_ALPHA[overlay - 16u]); }
     return vec4(1.0);
 }
+// Horizon Extras' dynamic lights (dynamic_light.rs): the block light, in the vertex's units
+// (16 per level), a vertex at camera-relative `pos` gets from the frame's light sources, one
+// level less per block. time.z of them are set: none when the extra is off, so no loop runs.
+fn dynamic_block_light(pos: vec3<f32>) -> f32 {
+    let count = min(u32(globals.time.z), 16u);
+    var level = 0.0;
+    for (var i = 0u; i < count; i++) {
+        let l = globals.dynamic_lights[i];
+        level = max(level, l.w - distance(pos, l.xyz));
+    }
+    return level * 16.0;
+}
 fn entity_vertex(position: vec3<f32>, uv: vec2<f32>,
     overlay: u32, color: vec4<f32>, light: vec4<u32>, normal: vec4<f32>) -> Out {
     var out: Out;
     out.clip = globals.view_proj * vec4(position, 1.0);
     out.proj = vec4(out.clip.xy * 0.5 + out.clip.w * 0.5, out.clip.zw);
     out.uv = uv;
-    let l = vec2(f32(light.y), f32(light.x));
+    let l = vec2(max(f32(light.y), dynamic_block_light(position)), f32(light.x));
     let lm = textureSampleLevel(lightmap, lightmap_sampler,
         clamp(l / 256.0 + 0.5 / 16.0, vec2(0.5 / 16.0), vec2(15.5 / 16.0)), 0.0);
     // Celestial bodies, clouds, beacon beams, End portals and breaking cracks are unlit.

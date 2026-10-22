@@ -34,7 +34,7 @@ pub fn changed_attributes(
 }
 
 /// What the game says about one entity this tick.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct EntityState {
     pub id: i32,
     pub uuid: u128,
@@ -59,6 +59,72 @@ pub struct EntityState {
     /// `Entity.getRequiresPrecisePosition` (primed TNT and falling blocks
     /// touching a block): moves are sent as full position syncs.
     pub precise: bool,
+}
+
+impl EntityState {
+    /// The entity `id` of type `kind` as a fresh state has it: at the origin,
+    /// at rest, with no data, equipment or attributes. Keeps the allocations
+    /// of the strings and vectors it held.
+    pub fn reset(&mut self, id: i32, uuid: u128, kind: &str) {
+        self.id = id;
+        self.uuid = uuid;
+        self.kind.clear();
+        self.kind.push_str(kind);
+        self.position = [0.0; 3];
+        (self.yaw, self.pitch, self.head_yaw) = (0.0, 0.0, 0.0);
+        self.on_ground = false;
+        self.velocity = [0.0; 3];
+        self.data = 0;
+        self.meta.clear();
+        self.equipment.clear();
+        self.attributes.clear();
+        self.precise = false;
+    }
+}
+
+/// The states a level describes its entities with, kept from tick to tick:
+/// each tick's are written over the last tick's in place, so the strings and
+/// vectors in them are reused instead of being made and freed again for every
+/// entity on every tick.
+#[derive(Default)]
+pub struct States {
+    list: Vec<EntityState>,
+    len: usize,
+}
+
+impl States {
+    /// Start a new tick's states.
+    pub fn clear(&mut self) {
+        self.len = 0;
+    }
+    /// The next entity's state, reset (`EntityState::reset`).
+    pub fn add(&mut self, id: i32, uuid: u128, kind: &str) -> &mut EntityState {
+        if self.len == self.list.len() {
+            self.list.push(EntityState::default());
+        }
+        let e = &mut self.list[self.len];
+        self.len += 1;
+        e.reset(id, uuid, kind);
+        e
+    }
+    pub fn push(&mut self, e: EntityState) {
+        match self.list.get_mut(self.len) {
+            Some(slot) => *slot = e,
+            None => self.list.push(e),
+        }
+        self.len += 1;
+    }
+    pub fn as_slice(&self) -> &[EntityState] {
+        &self.list[..self.len]
+    }
+}
+
+impl Extend<EntityState> for States {
+    fn extend<I: IntoIterator<Item = EntityState>>(&mut self, states: I) {
+        for e in states {
+            self.push(e);
+        }
+    }
 }
 
 /// `AbstractArrow`: every update sends its position and rotation.
@@ -790,6 +856,31 @@ mod tests {
             attributes: Vec::new(),
             precise: false,
         }
+    }
+
+    #[test]
+    fn states_are_written_over_last_ticks_in_place() {
+        let mut states = States::default();
+        let e = states.add(1, 1, "minecraft:zombie");
+        e.position = [1.0, 2.0, 3.0];
+        e.meta.push((9, serializer::FLOAT, Value::Float(20.0)));
+        e.equipment.push((0, None));
+        let (kind, meta) = (e.kind.as_ptr(), e.meta.as_ptr());
+        states.push(state(2.0));
+        states.clear();
+        let e = states.add(3, 3, "minecraft:husk");
+        // Nothing of the last tick's state is left, but its allocations are.
+        let fresh = EntityState {
+            id: 3,
+            uuid: 3,
+            kind: "minecraft:husk".into(),
+            ..EntityState::default()
+        };
+        assert_eq!(*e, fresh);
+        assert_eq!((e.kind.as_ptr(), e.meta.as_ptr()), (kind, meta));
+        assert_eq!(states.as_slice(), std::slice::from_ref(&fresh));
+        states.extend([state(5.0), state(6.0)]);
+        assert_eq!(states.as_slice(), [fresh, state(5.0), state(6.0)]);
     }
 
     /// The entity as added this tick, then its updates (one a tick).

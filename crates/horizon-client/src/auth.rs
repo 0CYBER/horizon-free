@@ -174,7 +174,7 @@ pub fn discovery_url() -> String {
 fn agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(15))
-        .user_agent(concat!("Horizon/", env!("CARGO_PKG_VERSION")))
+        .user_agent(&format!("Horizon/{}", horizon_core::release::VERSION))
         .build()
 }
 

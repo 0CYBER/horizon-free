@@ -85,7 +85,7 @@ impl Session {
             "list_versions" => {
                 let installed = backend::installed();
                 let mut out = json!({
-                    "installed": installed.iter().map(|t| json!({ "tag": t, "prepared": backend::is_prepared(t) })).collect::<Vec<_>>(),
+                    "installed": installed.iter().map(|t| json!({ "tag": t, "prepared": backend::is_prepared(t), "sounds": backend::has_sounds(t) })).collect::<Vec<_>>(),
                     "selected": backend::resolve_version(None).ok(),
                 });
                 if !args

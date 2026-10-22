@@ -771,6 +771,11 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
             .sqrt()
             .min(1.0);
         base *= glam::Mat4::from_rotation_z(f * flip_degrees(m).to_radians());
+    } else if m.extra.auto_spin_attack {
+        // Riptide: lying along the look direction, spinning 75 degrees a tick.
+        let pitch = m.previous_head_pitch + (m.head_pitch - m.previous_head_pitch) * alpha;
+        base *= glam::Mat4::from_rotation_x((-90.0 - pitch).to_radians())
+            * glam::Mat4::from_rotation_y(((m.age as f32 + alpha) * -75.0).to_radians());
     } else if matches!(m.custom_name.as_deref(), Some("Dinnerbone" | "Grumm")) {
         // isEntityUpsideDown
         base *= glam::Mat4::from_translation(glam::Vec3::new(0.0, m.height() + 0.1, 0.0))
@@ -781,7 +786,9 @@ pub fn base_transform_at(m: &Mob, alpha: f32, origin: glam::Mat4) -> glam::Mat4 
         let ticks = m.extra.fall_fly_ticks as f32 + alpha;
         let scale = (ticks * ticks / 100.0).min(1.0);
         let pitch = m.previous_head_pitch + (m.head_pitch - m.previous_head_pitch) * alpha;
-        base *= glam::Mat4::from_rotation_x((scale * (-90.0 - pitch)).to_radians());
+        if !m.extra.auto_spin_attack {
+            base *= glam::Mat4::from_rotation_x((scale * (-90.0 - pitch)).to_radians());
+        }
         let yaw = m.previous_head_yaw + wrap(m.head_yaw - m.previous_head_yaw) * alpha;
         let (look_x, look_z) = (-(yaw.to_radians()).msin(), (yaw.to_radians()).mcos());
         let v = m.velocity;

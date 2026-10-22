@@ -52,4 +52,4 @@ A Horizon bug is any place where it differs from vanilla 26.3, so "vanilla does 
 
 ## Data the launcher can send
 
-The launcher can send performance statistics, crash reports, bug reports and benchmarks, but only the kinds you allow, and everything is off until you say yes. See [Privacy](/privacy) for what is sent, how long it is kept and how to delete it.
+The launcher can send performance statistics, crash reports, bug reports and benchmarks, but only the kinds you allow, and everything is off until you say yes. The game also sends an anonymous "I'm playing" ping while it runs, for the live player count. See [Privacy](/privacy) for what is sent, how long it is kept and how to delete it.

@@ -307,7 +307,7 @@ pub fn benchmark(repeats: usize) -> Result<PathBuf, String> {
     if let Ok(data) = serde_json::to_value(report.for_upload()) {
         let item = horizon_telemetry::Item::new(
             horizon_telemetry::Source::Launcher,
-            env!("CARGO_PKG_VERSION"),
+            crate::backend::VERSION,
             horizon_telemetry::Payload::Benchmark(data),
         );
         let _ = horizon_telemetry::outbox::push(&crate::backend::game_home(), &item);
@@ -320,7 +320,7 @@ pub fn benchmark(repeats: usize) -> Result<PathBuf, String> {
 fn app() -> App {
     App {
         name: "horizon-launcher".into(),
-        version: env!("CARGO_PKG_VERSION").into(),
+        version: crate::backend::VERSION.into(),
         ..App::default()
     }
 }

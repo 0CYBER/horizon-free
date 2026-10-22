@@ -1872,6 +1872,7 @@ impl Hub {
             // (handlePlayerKnownMovement), PlayerInput once loaded.
             let acted = match &packet {
                 S::AcceptTeleportation(_)
+                | S::PlayerAbilities(_)
                 | S::MovePlayerStatus(_)
                 | S::MovePlayerRot(_)
                 | S::PlayerLoaded(_)
@@ -1908,6 +1909,11 @@ impl Hub {
                         let rot = (p.yaw, p.pitch);
                         self.position_change(i, [p.x, p.y, p.z], rot, 0, ctx, events);
                     }
+                }
+                // handlePlayerAbilities: the client flies only if it may.
+                S::PlayerAbilities(p) => {
+                    let g = &mut self.guests[i];
+                    g.flying = p.flags & 2 != 0 && (g.creative() || g.spectator());
                 }
                 S::MovePlayerPos(p) => {
                     self.move_player(i, Some([p.x, p.y, p.z]), None, p.flags, ctx, events);
@@ -2183,6 +2189,13 @@ impl Hub {
             return;
         };
         g.game_mode = mode;
+        // GameType.updatePlayerAbilities: a spectator flies, survival and
+        // adventure don't, creative keeps what it had.
+        if g.spectator() {
+            g.flying = true;
+        } else if !g.creative() {
+            g.flying = false;
+        }
         let uuid = g.uuid;
         g.send(&C::GameEvent(play::GameEvent {
             event: game_event::CHANGE_GAME_MODE,

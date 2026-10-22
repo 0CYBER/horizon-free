@@ -211,6 +211,13 @@ pub trait PlacementContext {
     fn water_at(&mut self, _position: [i32; 3]) -> Result<bool, PlacementQueryError> {
         Err(PlacementQueryError::Unavailable)
     }
+    /// `BlockState.canOcclude()` of a state.
+    fn can_occlude(
+        &mut self,
+        _state: crate::registry::BlockStateId,
+    ) -> Result<bool, PlacementQueryError> {
+        Err(PlacementQueryError::Unavailable)
+    }
     /// Multiface attachment: neighbor support, then empty-context collision.
     fn attachment_at(
         &mut self,

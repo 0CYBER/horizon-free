@@ -16,11 +16,14 @@ struct Globals {
     fog_ends: vec4<f32>,
     // Atlas rects (u0, v0, width, height) of end_sky.png and end_portal.png.
     end_portal_sprites: array<vec4<f32>, 2>,
-    // x: vanilla's GameTime ((game time % 24000 + partial tick) / 24000)
+    // x: vanilla's GameTime ((game time % 24000 + partial tick) / 24000), z: how many
+    // dynamic_lights are set
     time: vec4<f32>,
     // Atlas rect of the current destroy stage (read by entity.wgsl).
     crumbling_sprite: vec4<f32>,
     outline_params: vec4<f32>,
+    // Horizon Extras' dynamic lights: camera-relative position and level (dynamic_light.rs).
+    dynamic_lights: array<vec4<f32>, 16>,
 }
 @group(0) @binding(0) var<uniform> globals: Globals;
 @group(0) @binding(1) var sprites: texture_2d_array<f32>;
@@ -67,6 +70,18 @@ struct TerrainOut {
     @location(3) spherical: f32,
     @location(4) cylindrical: f32,
 }
+// Horizon Extras' dynamic lights (dynamic_light.rs): the block light, in the vertex's units
+// (16 per level), a vertex at camera-relative `pos` gets from the frame's light sources, one
+// level less per block. time.z of them are set: none when the extra is off, so no loop runs.
+fn dynamic_block_light(pos: vec3<f32>) -> f32 {
+    let count = min(u32(globals.time.z), 16u);
+    var level = 0.0;
+    for (var i = 0u; i < count; i++) {
+        let l = globals.dynamic_lights[i];
+        level = max(level, l.w - distance(pos, l.xyz));
+    }
+    return level * 16.0;
+}
 fn sample_lightmap(sky: f32, block: f32) -> vec4<f32> {
     let uv = vec2(block, sky) * 16.0;
     return textureSampleLevel(lightmap, lightmap_sampler,
@@ -105,7 +120,8 @@ fn terrain_vertex(position: vec3<f32>, uv: vec2<f32>, layer: u32, color: vec4<f3
     out.clip = globals.view_proj * vec4(pos, 1.0);
     out.uv = uv;
     out.layer = layer;
-    out.color = color * sample_lightmap(f32(light.x) / 16.0, f32(light.y) / 16.0);
+    let block = max(f32(light.y), dynamic_block_light(pos));
+    out.color = color * sample_lightmap(f32(light.x) / 16.0, block / 16.0);
     out.spherical = length(pos);
     out.cylindrical = max(length(pos.xz), abs(pos.y));
     return out;

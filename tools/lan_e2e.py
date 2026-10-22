@@ -92,6 +92,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
              server's game time after the guest's game stalls for a few seconds (#848).
 - growth:    far from the host, the chunks around the guest tick (#890): water placed there flows
              and wheat on farmland grows (random ticks), however the host runs its world.
+- flight:    a player in creative double-taps jump and flies, stays up, and stops flying in survival:
+             the guest, and on the server thread the host's window too, take what may fly from the
+             server's abilities (ClientPacketListener.handlePlayerAbilities).
 - light:     the guest's light matches the host's: around a torch placed near it, under a roof and
              once a block of the roof is removed under the sky, and in the last chunk it tracks next to
              glowstone in a chunk it doesn't (only the server's light updates bring that one).
@@ -130,7 +133,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight']
 
 
 class Game:
@@ -182,6 +185,11 @@ class Game:
 def remote(guest):
     """The guest's view of the server (`status`'s server part)."""
     return guest('status')['server']
+
+
+def dead(guest):
+    """Whether the guest is dead: its death screen (the last health it was sent can stay above 0)."""
+    return guest('state').get('screen') == 'dead' or remote(guest)['health'] <= 0
 
 
 def back_to_game(game):
@@ -243,9 +251,15 @@ def check_armour(host, guest, out):
     face_each_other(host, guest)
     host.shot(out, 'armour')
     guest.shot(out, 'armour')
-    seen = lan_guest(host).get('model_armor')
-    assert seen == [None, 'minecraft:diamond_chestplate', 'minecraft:diamond_leggings', None], \
-        f'the host draws the guest in {seen}'
+    if SERVER_THREAD:
+        # The host's window is a client of its server thread: what it draws is what it was sent.
+        seen = [e for e in remote(host).get('player_equipment', [])]
+        assert all(any(item in json.dumps(e) for e in seen) for item in
+                   ('diamond_chestplate', 'diamond_leggings')), f'the host draws the guest in {seen}'
+    else:
+        seen = lan_guest(host).get('model_armor')
+        assert seen == [None, 'minecraft:diamond_chestplate', 'minecraft:diamond_leggings', None], \
+            f'the host draws the guest in {seen}'
     host_gear = [e for e in remote(guest).get('player_equipment', [])]
     assert any('golden_chestplate' in json.dumps(e) for e in host_gear), f'the guest sees the host in {host_gear}'
     return 'each in their own'
@@ -437,6 +451,20 @@ def check_portals(host, guest, out):
     if not SERVER_THREAD:
         return 'skipped (needs --server-thread)'
     x, y, z = (int(v // 1) for v in pos_of(guest))
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    try:
+        return portals(host, guest, out, x, y, z, hx, hy, hz)
+    finally:
+        # The guest comes home into its portal's frame (an obsidian ceiling three blocks up) and the
+        # host onto its End portal at spawn: take both away so the next checks start in the open.
+        home = 'execute in minecraft:overworld run'
+        guest('command', command=f'{home} fill {x - 1} {y} {z + 3} {x + 2} {y + 3} {z + 3} minecraft:air')
+        host('command', command=f'{home} setblock {hx} {hy} {hz} minecraft:air')
+        guest('command', command=f'{home} tp @s {x + 0.5} {y} {z + 0.5}')
+        guest.wait(20)
+
+
+def portals(host, guest, out, x, y, z, hx, hy, hz):
     nether_portal(guest, x, y, z + 3)
     guest.wait(5)
     guest('command', command=f'tp @s {x + 0.5} {y} {z + 3.5}')
@@ -451,7 +479,6 @@ def check_portals(host, guest, out):
     below = guest.raw('block', arrived[0], arrived[1] - 1, arrived[2])
     assert below.get('loaded') and below.get('block') != 'minecraft:air', f'under the guest in the Nether: {below}'
     # The host takes an End portal while the guest is in the Nether: three levels at once.
-    hx, hy, hz = (int(v // 1) for v in pos_of(host))
     host('command', command=f'setblock {hx} {hy} {hz} minecraft:end_portal')
     end = wait_dimension(host, 'minecraft:the_end', 600)
     host.wait(40)
@@ -562,7 +589,7 @@ def check_hazards(host, guest, out):
     x, y, z = hx + 3, hy, hz
     for name, fill, ticks in (('lava', 'minecraft:lava', 60), ('wall', 'minecraft:stone', 60),
                               ('drowning', 'minecraft:water', 500), ('void', None, 60)):
-        if remote(guest)['health'] <= 0:
+        if dead(guest):
             guest.raw('respawn')
             guest.wait(40)
         # A stone box around the guest holds the lava and the water in.
@@ -585,7 +612,7 @@ def check_hazards(host, guest, out):
         host('command', command=f'fill {x - 1} {y - 1} {z - 1} {x + 1} {y + 2} {z + 1} minecraft:air')
         host('command', command=f'fill {x - 1} {y - 1} {z - 1} {x + 1} {y - 1} {z + 1} minecraft:stone')
     guest.wait(20)
-    if remote(guest)['health'] <= 0:
+    if dead(guest):
         guest.raw('respawn')
         guest.wait(40)
     # [food, saturation, exhaustion]: 8 s of sprint-jumping is about 2 of exhaustion; every 4
@@ -598,6 +625,9 @@ def check_hazards(host, guest, out):
 
 
 def check_pvp(host, guest, out):
+    if dead(guest):
+        guest.raw('respawn')
+        guest.wait(40)
     for g in (host, guest):
         g('command', command='gamemode survival')
         g('command', command='item replace entity @s weapon.mainhand with minecraft:iron_sword')
@@ -1171,7 +1201,7 @@ def check_walls(host, guest, out):
     for g in (host, guest):
         back_to_game(g)
     # The trial spawner's zombies may have killed the guest.
-    if guest('state').get('screen') == 'dead' or remote(guest)['health'] <= 0:
+    if dead(guest):
         guest.raw('respawn')
         guest.wait(40)
     face_each_other(host, guest)
@@ -1784,6 +1814,50 @@ def same_light(host, guest, lo, hi, what, ticks=100):
                          f'{h["sky"][i]} block {h["block"][i]}, guest sky {g["sky"][i]} block {g["block"][i]}')
 
 
+def check_flight(host, guest, out):
+    def double_jump(game):
+        # LocalPlayer.aiStep: a second jump press within 7 ticks of the first toggles flight.
+        for hold in (1, 4):
+            game.raw('key', 'space', 'down')
+            game.wait(hold)
+            game.raw('key', 'space', 'up')
+            game.wait(2)
+        game.wait(10)
+        return game('state')['player']
+
+    def set_mode(game, mode):
+        # On a client of a server the mode and its abilities (may fly) come back with the server's
+        # answer, later when the machine is busy: a double jump before them is two plain jumps.
+        game('command', command=f'gamemode {mode}')
+        for _ in range(100):
+            if game('state').get('gamemode') == mode:
+                break
+            game.wait(1)
+        game.wait(10)
+
+    players = [('guest', guest)] + ([('host', host)] if SERVER_THREAD else [])
+    seen = {}
+    try:
+        for name, game in players:
+            set_mode(game, 'creative')
+            ground = game('state')['player']
+            up = double_jump(game)
+            game.wait(20)
+            later = game('state')['player']
+            set_mode(game, 'survival')
+            fell = game('state')['player']
+            seen[name] = {'flying': up['flying'], 'rose': round(up['position'][1] - ground['position'][1], 2),
+                          'stayed': round(later['position'][1] - up['position'][1], 2),
+                          'survival_flying': fell['flying']}
+    finally:
+        for _, game in players:
+            game('command', command='gamemode survival')
+    for name, s in seen.items():
+        assert s['flying'] and s['rose'] > 1 and abs(s['stayed']) < 0.1, f'{name} does not fly in creative: {seen}'
+        assert not s['survival_flying'], f'{name} still flies in survival: {seen}'
+    return seen
+
+
 def check_growth(host, guest, out):
     """Block ticks near a guest 1000 blocks from the host: only the guest's tickets tick them."""
     x0, y0, z0 = pos_of(guest)
@@ -2086,13 +2160,13 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles, 'blast': check_blast,
              'light': check_light, 'plates': check_plates,
              'swings': check_swings, 'cracks': check_cracks,
-             'time': check_time, 'growth': check_growth, 'fireball': check_fireball, 'deflect': check_deflect, 'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'arrows': check_arrows, 'predict': check_predict}
+             'time': check_time, 'growth': check_growth, 'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect, 'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'arrows': check_arrows, 'predict': check_predict}
 
 
 def run(ctl, out, resources, checks):
     host, guest = Game('host', ctl, resources), Game('guest', ctl, resources)
-    if SERVER_THREAD:
-        host.d.env['HORIZON_SERVER_THREAD'] = '1'
+    # Either way explicitly: the game's default is the server thread.
+    host.d.env['HORIZON_SERVER_THREAD'] = '1' if SERVER_THREAD else '0'
     results = {}
     try:
         host.pid = host('launch', wait=False, offscreen=sys.platform == 'darwin')['pid']

@@ -16,6 +16,12 @@
 //!   `condition` become the game's `horizon:apply_random` and
 //!   `horizon:condition`, with the lists inside them carried the same way,
 //!   and its `set_block` (simple or weighted states) `horizon:set_block`.
+//! - Repurposed Structures' mineshaft sky view becomes the game's
+//!   `horizon:mineshaft_sky_view`.
+//! - Choice Theorem's Overhauled Village's `modular_compat` runs another
+//!   list only when the mod it names is loaded: that list is written in its
+//!   place when the mod is ported along, and it is taken out (a no-op, as in
+//!   the mod) when it is not.
 //!
 //! What is not here is taken out of its list later and counted
 //! (`worldgen::upgrade`). The entity NBT is written in 26.3's shape (an
@@ -37,9 +43,37 @@ pub struct ProcessorData {
     pub replace_vanilla: BTreeSet<(String, String)>,
     /// The mod's processor lists by id, for Lithostitched's references.
     pub lists: BTreeMap<String, Value>,
+    /// The mods named by its `ctov:modular_compat` processors that are
+    /// ported along ([`Self::mark_loaded`]).
+    pub compat_loaded: BTreeSet<String>,
 }
 
+/// Choice Theorem's Overhauled Village's processor that runs the list
+/// `reference` when mod `modid` is loaded (ModularCompatProcessor).
+const MODULAR_COMPAT: &str = "ctov:modular_compat";
+
 impl ProcessorData {
+    /// Notes which mods its compat processors name are `loaded`.
+    pub fn mark_loaded(&mut self, loaded: &dyn Fn(&str) -> bool) {
+        fn walk(v: &Value, out: &mut BTreeSet<String>) {
+            match v {
+                Value::Object(o) => {
+                    if o.get("processor_type").and_then(Value::as_str) == Some(MODULAR_COMPAT) {
+                        if let Some(id) = o.get("modid").and_then(Value::as_str) {
+                            out.insert(id.to_owned());
+                        }
+                    }
+                    o.values().for_each(|v| walk(v, out));
+                }
+                Value::Array(a) => a.iter().for_each(|v| walk(v, out)),
+                _ => {}
+            }
+        }
+        let mut named = BTreeSet::new();
+        self.lists.values().for_each(|l| walk(l, &mut named));
+        self.compat_loaded = named.into_iter().filter(|m| loaded(m)).collect();
+    }
+
     pub fn read<R: Read + Seek>(zip: &mut zip::ZipArchive<R>) -> Self {
         let mut out = Self::default();
         for i in 0..zip.len() {
@@ -408,6 +442,17 @@ fn references(
     let mut out = Vec::with_capacity(list.len());
     let mut changed = false;
     for p in list {
+        if p["processor_type"] == MODULAR_COMPAT && depth < 8 {
+            *carried.entry(MODULAR_COMPAT.into()).or_default() += 1;
+            changed = true;
+            let loaded = p["modid"]
+                .as_str()
+                .is_some_and(|m| data.compat_loaded.contains(m));
+            if let Some(inner) = loaded.then(|| referenced(&p["reference"], data)).flatten() {
+                out.extend(references(inner, data, carried, depth + 1).0);
+            }
+            continue;
+        }
         let named = (p["processor_type"] == "lithostitched:reference" && depth < 8)
             .then(|| referenced(&p["processor_lists"], data))
             .flatten();
@@ -490,6 +535,10 @@ fn as_data(kind: &str, p: &Value, data: &ProcessorData) -> Option<Vec<Value>> {
         // Wet where the world holds water, dry where it does not.
         "repurposed_structures:waterlogging_when_replacing_water_processor" => {
             vec![json!({"processor_type": "horizon:waterlog_in_world_water"})]
+        }
+        // Its mineshafts: nothing above the ocean floor but grounded rails.
+        "repurposed_structures:mineshaft_sky_view_processor" => {
+            vec![json!({"processor_type": "horizon:mineshaft_sky_view"})]
         }
         "moogs_structures:vanilla_loot_swap_processor" => {
             let key = (
@@ -1344,7 +1393,8 @@ mod tests {
     #[test]
     fn repurposed_waterlogging_follows_the_world() {
         let mut list = json!({"processors": [{"processor_type":
-            "repurposed_structures:waterlogging_when_replacing_water_processor"}]});
+            "repurposed_structures:waterlogging_when_replacing_water_processor"},
+            {"processor_type": "repurposed_structures:mineshaft_sky_view_processor"}]});
         let mut carried = BTreeMap::new();
         assert!(carry(
             "processor_list",
@@ -1354,7 +1404,8 @@ mod tests {
         ));
         assert_eq!(
             list["processors"],
-            json!([{"processor_type": "horizon:waterlog_in_world_water"}])
+            json!([{"processor_type": "horizon:waterlog_in_world_water"},
+                {"processor_type": "horizon:mineshaft_sky_view"}])
         );
     }
 
@@ -1389,6 +1440,27 @@ mod tests {
         );
         // A map that is not one stays Java (dropped later).
         assert_eq!(p[1]["processor_type"], "lithostitched:block_swap");
+    }
+
+    #[test]
+    fn modular_compat_runs_its_list_only_with_its_mod() {
+        let mut data = ProcessorData::default();
+        let swap = json!({"processor_type": "minecraft:rule", "rules": []});
+        data.lists
+            .insert("v:house_ns".into(), json!({"processors": [swap.clone()]}));
+        let compat = |m: &str| json!({"processor_type": "ctov:modular_compat", "modid": m, "reference": "v:house_ns"});
+        let gravity = json!({"processor_type": "minecraft:gravity"});
+        data.lists.insert(
+            "v:house".into(),
+            json!({"processors": [compat("ns"), compat("absent"), gravity.clone()]}),
+        );
+        data.mark_loaded(&|m| m == "ns");
+        assert_eq!(data.compat_loaded, BTreeSet::from(["ns".to_owned()]));
+        let mut v = json!({"processors": [compat("ns"), compat("absent"), gravity.clone()]});
+        let mut carried = BTreeMap::new();
+        assert!(carry("processor_list", &mut v, &data, &mut carried));
+        assert_eq!(v, json!({"processors": [swap, gravity]}));
+        assert_eq!(carried["ctov:modular_compat"], 2);
     }
 
     #[test]
