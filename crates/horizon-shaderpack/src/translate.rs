@@ -1855,7 +1855,9 @@ impl<'a> Legaliser<'a> {
             && !matches!(args[1].content, ast::ExprData::Variable(_))
         {
             // `modf(x, v.y)` (Photon): WGSL can't point at a vector
-            // component, so no `out` parameter: `(v.y = trunc(x), x - trunc(x))`.
+            // component, so no `out` parameter: `+(v.y = trunc(x), x - trunc(x))`
+            // (the unary `+` has the comma printed in brackets, also in an
+            // initialiser).
             let (x, whole) = (args[0].clone(), args[1].clone());
             let assign = ast::ExprData::Assignment(
                 Box::new(whole),
@@ -1869,7 +1871,9 @@ impl<'a> Legaliser<'a> {
                 Box::new(call("trunc", vec![x])),
             )
             .into_node();
-            *e = ast::ExprData::Comma(Box::new(assign), Box::new(fraction)).into_node();
+            let comma = ast::ExprData::Comma(Box::new(assign), Box::new(fraction)).into_node();
+            *e = ast::ExprData::Unary(ast::UnaryOpData::Add.into_node(), Box::new(comma))
+                .into_node();
             return;
         }
         if let Some((_, new)) = LEGACY_CALLS.iter().find(|(old, _)| *old == name) {
