@@ -532,12 +532,14 @@ impl Game<'_> {
             g.health = m.health.health();
             g.food = m.health.food.food;
             g.saturation = m.health.food.saturation;
-            // A teleport (commands) moves the guest.
+            // A teleport (commands, a pearl) moves the guest; a pearl's is
+            // sent even to where they stand (ServerPlayer.teleport).
             let at = [m.position.x, m.position.y, m.position.z];
             m.sprinting = false;
+            let teleported = std::mem::take(&mut m.teleported);
             let moved: f64 = (0..3).map(|k| (at[k] - g.position[k]).powi(2)).sum();
             g.motion = Some(Box::new(m));
-            if moved > 0.0001 || turned {
+            if moved > 0.0001 || turned || teleported {
                 host.hub.teleport(i, Some(at));
             }
         }

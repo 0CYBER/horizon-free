@@ -270,6 +270,10 @@ pub struct PlayerMotion {
     pub steps: MovementDistances,
     pub needs_sync: bool,
     pub sync_position: bool,
+    /// Moved by an ender pearl (`ServerPlayer.teleport`): a server sends the
+    /// position packet even when the player lands where they stood. The
+    /// server takes it at the end of a guest's turn.
+    pub teleported: bool,
     pub events: Vec<MotionEvent>,
     pub attributes: LiveAttributes<Box<dyn FnMut() -> i32>>,
     pub impulse: ImpulseContext,
@@ -440,6 +444,7 @@ impl PlayerMotion {
             },
             needs_sync: false,
             sync_position: false,
+            teleported: false,
             events: Vec::new(),
             attributes,
             fluids: PlayerFluids::default(),
