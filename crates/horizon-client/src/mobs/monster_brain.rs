@@ -299,7 +299,7 @@ fn sense_living(m: &mut Mob, w: &MobWorld) {
     let r = m.attrs.follow_range;
     let area = m.bounds().inflate(Vec3::new(r, r, r));
     let mut found: Vec<(Who, f64)> = Vec::new();
-    for o in w.others {
+    for o in w.others_near(area) {
         if o.id != m.id && o.alive && o.bounds.intersects(area) {
             found.push((Who::Mob(o.id), m.distance_sqr(o.position)));
         }

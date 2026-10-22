@@ -285,7 +285,7 @@ pub fn rows(level: Level) -> Vec<Row> {
 
 const UPLOAD_STEPS: [u32; 8] = [0, 256, 512, 1024, 2048, 4096, 8192, 16384];
 
-/// Classic's submenus supplement the vanilla options on their parent screens.
+/// Horizon's graphics screens supplement the vanilla options on Video Settings.
 fn extra_rows(level: Level) -> Vec<Row> {
     let mut rows = rows(level);
     rows.retain(|row| !matches!(row, Row::Setting(s) if matches!(s.item, Item::Vanilla(_))));
@@ -444,7 +444,7 @@ fn max_workers() -> u32 {
 }
 
 impl Item {
-    /// On/off settings, drawn as switches by the Horizon menus.
+    /// On/off settings and their value.
     pub fn switch(self, s: &Settings) -> Option<bool> {
         let g = &s.horizon;
         Some(match self {

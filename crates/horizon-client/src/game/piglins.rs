@@ -34,6 +34,9 @@ impl Game<'_> {
         if !self.ui.rules.bool("mob_griefing") {
             return;
         }
+        // Whether each item is piglin-loved, kept until an item is added or
+        // removed (added ones are pushed at the end under a new id).
+        let mut loved: (Option<(usize, Option<u32>)>, Vec<bool>) = (None, Vec::new());
         for i in 0..self.mobs.len() {
             let m = &self.mobs[i];
             if m.species() != Species::Piglin
@@ -46,11 +49,20 @@ impl Game<'_> {
                 continue;
             }
             let pos = m.position;
+            let key = (self.dropped.len(), self.dropped.last().map(|e| e.id));
+            if loved.0 != Some(key) {
+                loved.0 = Some(key);
+                loved.1 = self
+                    .dropped
+                    .iter()
+                    .map(|e| self.piglin_loved(&e.stack.item))
+                    .collect();
+            }
             let best = self
                 .dropped
                 .iter()
                 .enumerate()
-                .filter(|(_, e)| self.piglin_loved(&e.stack.item))
+                .filter(|&(j, _)| loved.1[j])
                 .map(|(j, e)| (j, e.position.distance_squared(pos)))
                 .filter(|(_, d)| *d <= 81.0)
                 .min_by(|a, b| a.1.total_cmp(&b.1));
