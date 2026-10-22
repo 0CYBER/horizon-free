@@ -33,6 +33,7 @@ fn entity_shader() -> String {
 }
 
 mod entity_batch;
+mod weather;
 use entity_batch::EntityBatch;
 pub use entity_batch::WATER_MASK_OVERLAY;
 
@@ -61,8 +62,10 @@ pub fn outline_vertices(edges: &[[f64; 6]], camera: glam::DVec3) -> Vec<[f32; 6]
 
 mod arena;
 mod cull;
+mod end_sky;
 mod flat;
 mod java_stages;
+pub mod lightning;
 mod lod;
 mod occlusion;
 mod pack_stages;
@@ -163,8 +166,10 @@ pub struct Frame<'a> {
     pub title: bool,
     /// Dimensions without a skybox (the Nether) clear to the fog colour.
     pub skybox: bool,
-    /// The End: clear to black and draw `celestial` (the End sky box) behind the world.
+    /// The End: clear to black and draw the resident sky box behind the world.
     pub end_sky: bool,
+    /// End sky atlas bounds (u0, v0, u1, v1); absent when the sprite is missing.
+    pub end_sky_sprite: Option<[f32; 4]>,
     /// Environmental fog start/end (Nether 10..96), if any.
     pub environment_fog: Option<(f32, f32)>,
     pub water_fog: [f32; 3],
@@ -189,16 +194,20 @@ pub struct Frame<'a> {
     pub nether_lighting: bool,
     /// Camera-relative entity geometry textured from the shared atlas.
     pub entities: &'a [Vertex],
+    pub weather: &'a [crate::weather::Vertex],
+    pub weather_time: crate::weather::Time,
     /// Horizon Extras' dynamic lights, nearest first (`dynamic_light::select`); empty when off.
     pub dynamic_lights: &'a [[f32; 4]],
     /// Cloud mesh inputs; geometry and GPU storage are retained by the renderer.
     pub clouds: Option<crate::clouds::Input<'a>>,
-    /// Additive translucent geometry after the entities (lightning, dragon rays).
+    /// Retained lightning bolts, drawn before the other additive entities.
+    pub lightning: lightning::Input<'a>,
+    /// Additive translucent geometry after lightning (dragon rays).
     pub additive: &'a [Vertex],
     /// Name tags over everything, without depth (`TEXT_SEE_THROUGH`).
     pub see_through: &'a [Vertex],
-    /// Camera-relative sun and moon, or the End sky box (drawn behind
-    /// everything, additive).
+    /// Camera-relative sun and moon, or the animated End flash (additive,
+    /// behind everything and after the resident End sky box).
     pub celestial: &'a [Vertex],
     /// The stars, drawn from their static buffer after the sun and moon:
     /// the sky's rotation (camera-relative world from star space) and the
@@ -324,6 +333,7 @@ pub struct Renderer {
     crosshair_group: wgpu::BindGroup,
     crosshair_globals: wgpu::Buffer,
     entity_pipeline: wgpu::RenderPipeline,
+    weather: weather::Weather,
     crumbling_pipeline: wgpu::RenderPipeline,
     /// `RenderPipelines.WATER_MASK`: depth writes only, no colour.
     water_mask_pipeline: wgpu::RenderPipeline,
@@ -334,9 +344,12 @@ pub struct Renderer {
     cloud_uniform: wgpu::Buffer,
     cloud_group: wgpu::BindGroup,
     additive_pipeline: wgpu::RenderPipeline,
+    lightning_pipeline: wgpu::RenderPipeline,
+    lightning: lightning::Renderer,
     see_through_pipeline: wgpu::RenderPipeline,
     celestial_pipeline: wgpu::RenderPipeline,
     celestial_buffer: wgpu::Buffer,
+    end_sky: end_sky::EndSky,
     stars: stars::Stars,
     panorama: panorama::Panorama,
     /// `RenderPipelines.WORLD_BORDER` and its buffers.
@@ -1445,6 +1458,12 @@ impl Renderer {
                 ),
             ],
         });
+        let weather = weather::Weather::new(
+            &device,
+            config.format.remove_srgb_suffix(),
+            &entity_bindings,
+            &entity_shader,
+        );
         let atlas_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("Atlas"),
             ..Default::default()
@@ -1664,8 +1683,17 @@ impl Renderer {
             alpha_blend,
             false,
         );
+        let lightning_attributes = wgpu::vertex_attr_array![6=>Float32x3];
+        let lightning_vertex = [
+            entity_vertex[0].clone(),
+            Some(wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<[f32; 3]>() as u64,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &lightning_attributes,
+            }),
+        ];
         // BlendFunction.LIGHTNING: src alpha, one; no depth writes.
-        let additive_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let additive_descriptor = wgpu::RenderPipelineDescriptor {
             label: Some("Additive entities"),
             layout: Some(&entity_layout),
             vertex: wgpu::VertexState {
@@ -1709,6 +1737,16 @@ impl Renderer {
             }),
             multiview_mask: None,
             cache: None,
+        };
+        let additive_pipeline = device.create_render_pipeline(&additive_descriptor);
+        let lightning_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Lightning"),
+            vertex: wgpu::VertexState {
+                entry_point: Some("vs_lightning"),
+                buffers: &lightning_vertex,
+                ..additive_descriptor.vertex.clone()
+            },
+            ..additive_descriptor
         });
         let celestial_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Celestial bodies"),
@@ -2101,6 +2139,7 @@ impl Renderer {
             crosshair_group,
             crosshair_globals,
             entity_pipeline,
+            weather,
             crumbling_pipeline,
             water_mask_pipeline,
             cloud_pipeline,
@@ -2110,9 +2149,12 @@ impl Renderer {
             cloud_uniform,
             cloud_group,
             additive_pipeline,
+            lightning_pipeline,
+            lightning: lightning::Renderer::new(),
             see_through_pipeline,
             celestial_pipeline,
             celestial_buffer,
+            end_sky: end_sky::EndSky::default(),
             stars,
             panorama,
             border_pipeline,
@@ -3229,6 +3271,13 @@ impl Renderer {
                 bytemuck::cast_slice(&all),
             );
         }
+        self.weather.prepare(
+            &self.device,
+            &mut encoder,
+            &mut self.uploads,
+            frame.weather,
+            frame.weather_time,
+        );
         let outline_edges = frame.outline.len().min(MAX_OUTLINE_EDGES as usize);
         if outline_edges > 0 {
             let lines = outline_vertices(&frame.outline[..outline_edges], camera);
@@ -3246,6 +3295,7 @@ impl Renderer {
             frame.hand,
             frame.see_through,
         );
+        let weather_quads = frame.weather.len() as u32 / 4;
         let world_quads =
             entity_quads + crumbling_quads + translucent_crumbling_quads + water_mask_quads;
         let cloud_quads = if let Some(input) = &frame.clouds {
@@ -3279,6 +3329,13 @@ impl Renderer {
         } else {
             0
         };
+        self.lightning.prepare(
+            &self.device,
+            &mut self.uploads,
+            &mut encoder,
+            &frame.lightning,
+            camera,
+        );
         let all_entities = &self.entity_batch.combined;
         let hand_quads = (frame.hand.len() / 4) as u32;
         let additive_quads = (frame.additive.len() / 4) as u32;
@@ -3310,6 +3367,9 @@ impl Renderer {
             );
         }
         let celestial_vertices = frame.celestial.len().min(2048 * 4);
+        if frame.end_sky && !frame.title {
+            self.end_sky.prepare(&self.device, frame.end_sky_sprite);
+        }
         if celestial_vertices > 0 {
             self.uploads.buffer(
                 &mut encoder,
@@ -3318,8 +3378,14 @@ impl Renderer {
                 bytemuck::cast_slice(&frame.celestial[..celestial_vertices]),
             );
         }
-        let max_quads =
-            (world_quads + additive_quads + hand_quads + see_through_quads).max(cloud_quads);
+        let max_quads = (world_quads + additive_quads + hand_quads + see_through_quads)
+            .max(cloud_quads)
+            .max(if frame.lightning.bolts.is_empty() {
+                0
+            } else {
+                lightning::QUADS
+            })
+            .max(weather_quads);
         if max_quads > self.index_quads {
             self.index_quads = max_quads.next_power_of_two();
             self.indices = Self::quad_indices(&self.device, self.index_quads);
@@ -3510,12 +3576,17 @@ impl Renderer {
                 if frame.title {
                     self.panorama.draw(&mut pass);
                     pass.set_bind_group(0, &self.group, &[]);
-                } else if celestial_vertices > 0 {
+                } else if celestial_vertices > 0 || frame.end_sky {
                     pass.set_pipeline(&self.celestial_pipeline);
                     pass.set_bind_group(0, &self.entity_group, &[]);
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.set_vertex_buffer(0, self.celestial_buffer.slice(..));
-                    pass.draw_indexed(0..(celestial_vertices as u32 / 4) * 6, 0, 0..1);
+                    if frame.end_sky {
+                        self.end_sky.draw(&mut pass);
+                    }
+                    if celestial_vertices > 0 {
+                        pass.set_vertex_buffer(0, self.celestial_buffer.slice(..));
+                        pass.draw_indexed(0..(celestial_vertices as u32 / 4) * 6, 0, 0..1);
+                    }
                     pass.set_bind_group(0, &self.group, &[]);
                 }
                 if !frame.title && frame.stars.is_some() {
@@ -3602,6 +3673,8 @@ impl Renderer {
                 pass.draw_indexed(0..entity_quads * 6, 0, 0..1);
                 pass.set_bind_group(0, &self.group, &[]);
             }
+            self.weather.draw(&mut pass, &self.entity_group);
+            pass.set_bind_group(0, &self.group, &[]);
             if crumbling_quads > 0 {
                 pass.set_pipeline(&self.crumbling_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
@@ -3620,6 +3693,12 @@ impl Renderer {
                     ((entity_quads + crumbling_quads + translucent_crumbling_quads) * 4) as i32,
                     0..1,
                 );
+                pass.set_bind_group(0, &self.group, &[]);
+            }
+            if !frame.lightning.bolts.is_empty() {
+                pass.set_pipeline(&self.lightning_pipeline);
+                pass.set_bind_group(0, &self.entity_group, &[]);
+                self.lightning.draw(&mut pass, &frame.lightning);
                 pass.set_bind_group(0, &self.group, &[]);
             }
             if additive_quads > 0 {
@@ -3841,9 +3920,19 @@ impl Renderer {
             let first = debug_depth + debug_top;
             pass.draw(0..4, first..first + crosshair);
         }
-        if let Some(radius) = frame.menu_blur
-            && self.config.usage.contains(wgpu::TextureUsages::COPY_SRC)
-        {
+        let menu_blur = frame
+            .menu_blur
+            .filter(|_| self.config.usage.contains(wgpu::TextureUsages::COPY_SRC));
+        let blur_at = menu_blur.map_or(0, |_| frame.hud.blur_at);
+        self.hud.draw_range(
+            &mut encoder,
+            &view_target,
+            &self.depth,
+            frame.hud,
+            [self.config.width, self.config.height],
+            0..blur_at,
+        );
+        if let Some(radius) = menu_blur {
             let format = self.config.format;
             let device = &self.device;
             self.menu_blur
@@ -3875,12 +3964,13 @@ impl Renderer {
                     grade,
                 );
         }
-        self.hud.draw(
+        self.hud.draw_range(
             &mut encoder,
             &view_target,
             &self.depth,
             frame.hud,
             [self.config.width, self.config.height],
+            blur_at..frame.hud.vertices.len() as u32,
         );
         if culling && let Some(cull) = &mut self.cull {
             cull.end(&self.device, &mut encoder);

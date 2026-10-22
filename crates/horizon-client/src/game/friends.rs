@@ -52,10 +52,12 @@ impl Game<'_> {
         if self.friends.is_some() {
             return Ok(());
         }
-        if self.remote.is_some() || self.title.is_some() {
+        // Single player on its server thread shares that server, as Open to
+        // LAN publishes it; another server can't be shared.
+        if self.title.is_some() || (self.remote.is_some() && self.integrated.is_none()) {
             return Err("open a singleplayer world first".into());
         }
-        let opened_lan = self.lan.is_none();
+        let opened_lan = self.lan_port().is_none();
         if opened_lan {
             // ShareToLanScreen's defaults, as the world options screen offers them.
             self.lan_open(LanSettings {
@@ -171,14 +173,20 @@ impl Game<'_> {
 
     /// What the pause menu shows.
     pub(super) fn friends_view(&self) -> FriendsView {
-        let guests = self
-            .lan
-            .as_ref()
-            .map(|h| h.hub.guests.iter().map(|g| g.name.clone()).collect())
-            .unwrap_or_default();
+        let guests = match &self.lan {
+            Some(h) => h.hub.guests.iter().map(|g| g.name.clone()).collect(),
+            // On the server thread: the other players the server lists.
+            None if self.integrated.is_some() => {
+                let me = self.options.player_name();
+                let mut names = self.remote_online_names().unwrap_or_default();
+                names.retain(|n| *n != me);
+                names
+            }
+            None => Vec::new(),
+        };
         let Some(s) = &self.friends else {
             return FriendsView {
-                shown: self.remote.is_none(),
+                shown: self.remote.is_none() || self.integrated.is_some(),
                 ..FriendsView::default()
             };
         };

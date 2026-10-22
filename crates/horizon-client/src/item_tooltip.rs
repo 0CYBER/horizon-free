@@ -610,6 +610,65 @@ mod tests {
     }
 
     #[test]
+    fn fireworks_use_loaded_tooltip_translations() {
+        let root = std::env::temp_dir().join(format!(
+            "horizon-firework-tooltip-language-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        let dir = root.join("assets/minecraft/lang");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("en_us.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "item.minecraft.firework_rocket.flight_duration": "Flight Duration: %s",
+                "item.minecraft.firework_rocket.multiple_stars": "%s x %s",
+                "item.minecraft.firework_star.shape.small_ball": "Small Ball",
+                "item.minecraft.firework_star.red": "Red",
+                "item.minecraft.firework_star.custom_color": "Custom",
+                "item.minecraft.firework_star.fade_to": "Fade to",
+                "item.minecraft.firework_star.trail": "Trail",
+                "item.minecraft.firework_star.flicker": "Twinkle",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let enchantments = crate::enchant::Enchantments::load(&root);
+        std::fs::remove_dir_all(&root).unwrap();
+        let translate = |key: &str| enchantments.translate(key).map(str::to_owned);
+        let mut rocket = ItemStack::new("minecraft:firework_rocket", 1);
+        assert_eq!(firework_lines(&rocket, &translate), ["Flight Duration: 1"]);
+        let explosion = crate::particles::FireworkExplosion {
+            colors: vec![0xB3312C],
+            fade: vec![0x123456],
+            trail: true,
+            twinkle: true,
+            ..Default::default()
+        };
+        rocket.data_mut().fireworks = Some((3, vec![explosion.clone(), explosion.clone()]));
+        assert_eq!(
+            firework_lines(&rocket, &translate),
+            [
+                "Flight Duration: 3",
+                "2 x Small Ball",
+                "  Red",
+                "  Fade to Custom",
+                "  Trail",
+                "  Twinkle",
+            ]
+        );
+        let mut star = ItemStack::new("minecraft:firework_star", 1);
+        star.data_mut().firework_explosion = Some(explosion);
+        assert_eq!(
+            firework_lines(&star, &translate),
+            ["Small Ball", "Red", "Fade to Custom", "Trail", "Twinkle"]
+        );
+    }
+
+    #[test]
     fn amounts_use_two_decimals_at_most() {
         assert_eq!(format_amount(8.0), "8");
         assert_eq!(format_amount(3.2000000953674316), "3.2");

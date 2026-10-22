@@ -76,6 +76,7 @@ mod lan_pvp;
 mod lan_screen;
 mod lan_stations;
 mod lan_trading;
+mod lan_vehicles;
 mod lan_waypoints;
 mod leads;
 mod level_particles;
@@ -121,6 +122,7 @@ mod remote;
 mod remote_objects;
 mod remote_projectiles;
 mod remote_stations;
+mod remote_vehicles;
 mod render_control;
 mod render_tick;
 mod respawn_anchor;
@@ -1111,6 +1113,7 @@ struct Game<'a> {
     /// `FogRenderer`'s evolving state.
     fog: horizon_client::fog::FogState,
     screen_fx: horizon_client::screen_effects::ScreenEffects,
+    weather_parameters: horizon_client::weather::ParameterCache,
     panorama_rotation: horizon_client::gfx::panorama::Rotation,
     world: World,
     streaming: Streaming,
@@ -1321,6 +1324,8 @@ struct Game<'a> {
     /// `ClientAvatarState`: walked distance and view bob.
     avatar: horizon_client::camera::AvatarBob,
     flash: u32,
+    /// Bolts that struck here and sky flashes they made, in total (`status`).
+    lightning_seen: [u32; 2],
     /// The head of the bed while sleeping; the visual timer also survives waking.
     sleeping: Option<[i32; 3]>,
     sleep_timer: u32,
@@ -4848,6 +4853,9 @@ impl Game<'_> {
             self.draw_chat(&mut batch);
             self.draw_tab_list(&mut batch);
         }
+        // Screen.extractBlurredBackground blurs the world and HUD, while the
+        // screen's background, widgets, toasts and debug overlay stay sharp.
+        batch.blur_at = batch.vertices.len() as u32;
         match self.screen {
             Screen::Paused if self.pause_menu => self.draw_pause_menu(&mut batch),
             // PauseScreen(false): only its title, at the top.
@@ -8952,89 +8960,84 @@ impl Game<'_> {
         }
     }
     /// WeatherEffectRenderer: rain and snow columns within the weather radius.
-    fn weather_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
+    fn weather_geometry(
+        &mut self,
+        camera: glam::DVec3,
+        alpha: f64,
+    ) -> Vec<horizon_client::weather::Vertex> {
         use horizon_client::weather;
         let (intensity, _) = self.world.weather.levels(alpha as f32);
         if intensity <= 0.0 {
-            return;
+            return Vec::new();
         }
         let atlas = &self.gui.atlas;
         let (Some(rain_tex), Some(snow_tex)) = (
             atlas.sprites.get("environment/rain").copied(),
             atlas.sprites.get("environment/snow").copied(),
         ) else {
-            return;
+            return Vec::new();
         };
         let (cx, cy, cz) = (
             camera.x.floor() as i32,
             camera.y.floor() as i32,
             camera.z.floor() as i32,
         );
-        let radius = self.settings.weather_radius;
-        let ticks = self.world.game_time;
-        let partial = alpha as f32;
-        let eye = [camera.x, camera.y, camera.z];
-        // Vanilla draws every rain column before the snow ones.
-        let mut columns = (Vec::new(), Vec::new());
-        for z in cz - radius..=cz + radius {
-            for x in cx - radius..=cx + radius {
+        // The 32x32 direction table supports at most a 15-block radius.
+        let radius = self.settings.weather_radius.clamp(0, 15);
+        let eye = camera.to_array();
+        let mut rain = Vec::new();
+        let mut snow_vertices = Vec::new();
+        // Saturation keeps extreme camera coordinates from overflowing the loop.
+        for z in cz.saturating_sub(radius)..=cz.saturating_add(radius) {
+            for x in cx.saturating_sub(radius)..=cx.saturating_add(radius) {
                 let top = self.rain_height(x, z);
-                let y0 = (cy - radius).max(top);
-                let y1 = (cy + radius).max(top);
+                let y0 = cy.saturating_sub(radius).max(top);
+                let y1 = cy.saturating_add(radius).max(top);
                 if y1 == y0 {
                     continue;
                 }
                 let Some(snow) = self.precipitation(x, cy, z) else {
                     continue;
                 };
-                let mut random = weather::column_random(x, z);
+                let parameters = self.weather_parameters.get(x, z);
                 let light = self.world.light(x, top.max(cy), z);
                 let coords = i32::from(light & 15) << 4 | i32::from(light >> 4) << 20;
-                if snow {
-                    columns.1.push(weather::snow_column(
-                        &mut random,
-                        ticks,
-                        x,
-                        y0,
-                        y1,
-                        z,
-                        coords,
-                        partial,
-                    ));
+                // Only light brightening is needed here; UV phases stay zero.
+                let lc = if snow {
+                    let (block, sky) = (coords >> 4 & 15, coords >> 20 & 15);
+                    ((block * 3 + 15) / 4) << 4 | ((sky * 3 + 15) / 4) << 20
                 } else {
-                    columns.0.push(weather::rain_column(
-                        &mut random,
-                        ticks,
-                        x,
-                        y0,
-                        y1,
-                        z,
-                        coords,
-                        partial,
-                    ));
+                    coords
+                };
+                let column = weather::Column {
+                    x,
+                    z,
+                    bottom_y: y0,
+                    top_y: y1,
+                    u_offset: 0.0,
+                    v_offset: 0.0,
+                    light_coords: lc,
+                };
+                let r = if snow { snow_tex } else { rain_tex };
+                let vertices = weather::vertices(
+                    &column,
+                    parameters,
+                    snow,
+                    eye,
+                    radius,
+                    intensity,
+                    [r.u0, r.v0, r.u1 - r.u0, r.v1 - r.v0],
+                );
+                if snow {
+                    snow_vertices.extend(vertices);
+                } else {
+                    rain.extend(vertices);
                 }
             }
         }
-        let rain = columns.0.iter().map(|c| (c, 1.0, rain_tex));
-        let snow = columns.1.iter().map(|c| (c, 0.8, snow_tex));
-        for (column, max_alpha, r) in rain.chain(snow) {
-            let quad = weather::column_quad(column, eye, max_alpha, radius, intensity);
-            let color = quad[0].color;
-            let lc = quad[0].light_coords;
-            let light = ((lc >> 20 & 15) * 16) as u32 | (((lc >> 4 & 15) * 16) as u32) << 8;
-            weather::tile(&quad, |pos, uvs| {
-                for (p, [u, v]) in pos.into_iter().zip(uvs) {
-                    out.push(Vertex {
-                        normal: [0; 4],
-                        pos: p,
-                        uv: [r.u0 + (r.u1 - r.u0) * u, r.v0 + (r.v1 - r.v0) * v],
-                        layer: 0,
-                        color,
-                        light,
-                    });
-                }
-            });
-        }
+        // Vanilla draws every rain column before the snow ones.
+        rain.extend(snow_vertices);
+        rain
     }
     /// Player.startSleepInBed: night or thunder, no monsters within 8 blocks;
     /// the bed becomes the respawn point either way.
@@ -9792,15 +9795,17 @@ impl Game<'_> {
                 self.entity_geometry(camera, alpha, entities)
             });
         }
+        let bolts = if title {
+            Vec::new()
+        } else {
+            self.bolt_instances()
+        };
         let mut additive = Vec::new();
-        if !title {
-            self.bolt_geometry(camera, &mut additive);
-            if self.dim == Dim::End {
-                let mut dragon = Vec::new();
-                self.dragon_geometry(camera, alpha, &mut dragon, &mut additive);
-                self.dragon_fireball_geometry(camera, alpha, &mut dragon);
-                entities.extend(dragon);
-            }
+        if !title && self.dim == Dim::End {
+            let mut dragon = Vec::new();
+            self.dragon_geometry(camera, alpha, &mut dragon, &mut additive);
+            self.dragon_fireball_geometry(camera, alpha, &mut dragon);
+            entities.extend(dragon);
         }
         // A Java pack's `clouds` replaces the cloud option (`renderClouds`:
         // "false", "fast", "true"), as Iris overrides `getCloudsType`.
@@ -9822,8 +9827,8 @@ impl Game<'_> {
         {
             // Camera.doesMobEffectBlockSky: no sun, moon or stars.
             self.celestial_geometry(&sky)
-        } else if self.dim == Dim::End {
-            (self.end_sky_geometry(), None)
+        } else if self.dim == Dim::End && self.settings.horizon.sky {
+            (self.end_flash_geometry(), None)
         } else {
             (Vec::new(), None)
         };
@@ -9840,11 +9845,12 @@ impl Game<'_> {
         if !title {
             self.end_geometry(camera, &mut entities);
         }
-        if (!title || live) && self.dim == Dim::Overworld && self.settings.horizon.weather {
-            horizon_client::spans::time("weather", || {
-                self.weather_geometry(camera, alpha, &mut entities)
-            });
-        }
+        let weather =
+            if (!title || live) && self.dim == Dim::Overworld && self.settings.horizon.weather {
+                horizon_client::spans::time("weather", || self.weather_geometry(camera, alpha))
+            } else {
+                Vec::new()
+            };
         let border = (!title)
             .then(|| self.border_draw(camera.to_array(), alpha as f32))
             .flatten();
@@ -9855,6 +9861,8 @@ impl Game<'_> {
             self.gather_dynamic_lights(camera, alpha);
         }
         let frame = Frame {
+            weather: &weather,
+            weather_time: horizon_client::weather::Time::new(self.world.game_time, alpha as f32),
             shader: self.shader_inputs(camera, alpha as f32),
             nether_lighting: self.dim == Dim::Nether,
             camera,
@@ -9870,6 +9878,12 @@ impl Game<'_> {
             title: title && !live,
             skybox: self.dim == Dim::Overworld && self.settings.horizon.sky,
             end_sky: self.dim == Dim::End && self.settings.horizon.sky,
+            end_sky_sprite: self
+                .gui
+                .atlas
+                .sprites
+                .get("environment/end_sky")
+                .map(|r| [r.u0, r.v0, r.u1, r.v1]),
             environment_fog: (self.dim == Dim::Nether).then_some((sky.fog_start, sky.fog_end)),
             cave_culling,
             water_fog,
@@ -9912,6 +9926,13 @@ impl Game<'_> {
             }),
             entities: &entities,
             dynamic_lights: &self.dynamic_lights,
+            lightning: horizon_client::gfx::lightning::Input {
+                bolts: &bolts,
+                uv: [
+                    self.gui.atlas.font.white().u0,
+                    self.gui.atlas.font.white().v0,
+                ],
+            },
             additive: &additive,
             see_through: &see_through,
             celestial: if self.settings.horizon.sky || title {
@@ -10017,9 +10038,8 @@ impl Game<'_> {
         };
         level_loading::draw(batch, atlas, Some(&status), Some(self.loading_progress));
     }
-    /// `Screen.extractBlurredBackground` over the panorama: every classic
-    /// screen of the title menus but the title itself (`TitleScreen`
-    /// doesn't blur), when `menuBackgroundBlurriness` is at least 1.
+    /// `Screen.extractBlurredBackground` over the panorama or the world and
+    /// HUD, when `menuBackgroundBlurriness` is at least 1.
     fn menu_blur(&self) -> Option<f32> {
         let loading = self.loading_reason() == Some(horizon_client::level_loading::Reason::Other);
         let blurred = !horizon_client::ui_theme::horizon()
@@ -10027,7 +10047,10 @@ impl Game<'_> {
                 || self.title.as_ref().is_some_and(|t| {
                     self.screen == Screen::Options
                         || !matches!(t.mode, horizon_client::title::Mode::Main)
-                }));
+                })
+                || (self.title.is_none()
+                    && self.player.is_some()
+                    && self.screen.blurs_background(self.pause_menu)));
         let radius = self.settings.menu_blur as f32;
         (blurred && radius >= 1.0).then_some(radius)
     }
@@ -11448,6 +11471,7 @@ impl<'a> Game<'a> {
             gui,
             fog: Default::default(),
             screen_fx: Default::default(),
+            weather_parameters: Default::default(),
             panorama_rotation: Default::default(),
             world,
             streaming,
@@ -11592,6 +11616,7 @@ impl<'a> Game<'a> {
             dragging: false,
             avatar: Default::default(),
             flash: 0,
+            lightning_seen: [0; 2],
             sleeping: None,
             sleep_timer: 0,
             dim: Dim::Overworld,
@@ -12360,6 +12385,8 @@ fn loading_renderer(
 /// A title-shaped frame: black clear and panorama, only the HUD is drawn.
 fn loading_frame(hud: &HudBatch) -> Frame<'_> {
     Frame {
+        weather: &[],
+        weather_time: horizon_client::weather::Time::new(0, 0.0),
         camera: glam::DVec3::new(0.5, 100.0, 0.5),
         yaw: 0.0,
         pitch: 10.0,
@@ -12374,6 +12401,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         title: true,
         skybox: false,
         end_sky: false,
+        end_sky_sprite: None,
         environment_fog: None,
         water_fog: [0.0; 3],
         fog: None,
@@ -12388,6 +12416,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         entities: &[],
         dynamic_lights: &[],
         clouds: None,
+        lightning: Default::default(),
         additive: &[],
         see_through: &[],
         celestial: &[],
