@@ -112,6 +112,14 @@ impl Game<'_> {
         let Some(id) = self.riding else {
             return false;
         };
+        if let Some(i) = self.mobs.iter().position(|m| m.id == id) {
+            // An animal moves on the server with the rider's input
+            // (PlayerInput); here the jump bar charges for the HUD and the
+            // rider sits where `positionRider` puts it.
+            self.charge_mount_jump(i, keys);
+            self.position_rider();
+            return true;
+        }
         let seat = if let Some(i) = self.boats.iter().position(|b| b.id == id) {
             // AbstractBoat.tick on the controlling client: steer and move.
             let mut b = self.boats[i].clone();
