@@ -26,6 +26,7 @@ pub(super) fn input_keys(flags: u8) -> Keys {
         right: flags & 8 != 0,
         jump: flags & 16 != 0,
         shift: flags & 32 != 0,
+        sprint: flags & 64 != 0,
         ..Keys::default()
     }
 }
@@ -96,9 +97,10 @@ impl Game<'_> {
         let (keys, dead) = (input_keys(g.input), g.dead || g.health <= 0.0);
         let boat = self.boats.iter().position(|b| b.id == vehicle);
         let cart = self.carts.iter().any(|c| c.id == vehicle);
+        let mount = self.mobs.iter().any(|m| m.id == vehicle);
         // The vehicle is gone (broken, in another level) or the rider died:
         // its client drops it with the entity or the death screen.
-        if dead || (boat.is_none() && !cart) {
+        if dead || (boat.is_none() && !cart && !mount) {
             let g = &mut host.hub.guests[gi];
             (g.vehicle, g.vehicle_good) = (None, None);
             return;
@@ -122,8 +124,12 @@ impl Game<'_> {
                 return Some([p.x, p.y + SEAT, p.z]);
             }
             // The minecart moves with the rider's input, and lets it out when
-            // it sneaks or the cart breaks.
-            game.tick_cart_riding(keys);
+            // it sneaks or the cart breaks. An animal takes the rider's input
+            // for its own tick (`travelRidden`), or lets it off.
+            if !game.tick_cart_riding(keys) && game.tick_mount_riding(keys) {
+                game.riding?;
+                game.position_rider();
+            }
             game.riding?;
             let p = game.player.as_ref()?.position;
             Some([p.x, p.y, p.z])
@@ -163,11 +169,25 @@ impl Game<'_> {
                     .find(|c| c.id == vehicle)
                     .map(|c| c.position)
             });
-        let g = &mut host.hub.guests[gi];
         if let Some(p) = at {
+            let g = &mut host.hub.guests[gi];
             g.vehicle_good = Some([p.x, p.y, p.z]);
             g.previous_position = g.position;
             g.position = [p.x, p.y + SEAT, p.z];
+            g.on_ground = false;
+            return;
+        }
+        // An animal: the rider sits where `positionRider` puts it.
+        let seat = self.as_guest(host, conn, |game| {
+            game.position_rider();
+            game.player
+                .as_ref()
+                .map(|p| [p.position.x, p.position.y, p.position.z])
+        });
+        if let Some(Some(at)) = seat {
+            let g = &mut host.hub.guests[gi];
+            g.previous_position = g.position;
+            g.position = at;
             g.on_ground = false;
         }
     }
