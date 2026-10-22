@@ -6,7 +6,8 @@ name: release
 # RELEASES_PAUSED=1 (repository variable) stops them.
 # Builds Linux (an older Ubuntu, so the binary runs on any recent distribution and on NixOS through nix-ld) and
 # Windows on GitHub, macOS on the Mac mini's runner (MAC_RUNNER=macos-latest sends it to GitHub), then
-# publishes vYYYY.MM.DD[.N] with notes from the merged pull requests, as a beta (a pre-release) that promote.yml makes
+# publishes vX.Y.Z on the release line in .github/release-line.txt (docs/versioning.md; without it, the dated
+# vYYYY.MM.DD[.N] from before 0.2) with notes from the merged pull requests, as a beta (a pre-release) that promote.yml makes
 # stable after 6 hours. macOS: with the repository variable MACOS_SIGN_IDENTITY set, the programs are signed with
 # Developer ID and the hardened runtime and the zip is notarized, from the runner's signing keychain
 # (packaging/macos/README.md); unset (forks), ad hoc.

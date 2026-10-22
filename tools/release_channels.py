@@ -29,27 +29,20 @@ import datetime as dt
 import json
 import os
 from pathlib import Path
-import re
 import subprocess
 import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from tools.release_train import is_game_tag, tag_key  # noqa: E402  (vYYYY.MM.DD[.N] and v0.2.0: docs/versioning.md)
+
 REPO = os.environ.get("GITHUB_REPOSITORY", "ludovic111/horizon")
 PROMOTE_AFTER = dt.timedelta(hours=6)
 SMOKE_ASSET = "smoke-test.json"
 BLOCKER = "release-blocker"
 STALL_AFTER = dt.timedelta(hours=24)
 STALLED = "Promotion to stable has stalled"
-GAME_TAG = re.compile(r"v\d{4}\.\d{2}\.\d{2}(?:\.\d+)?")
-
-
-def tag_key(tag):
-    """A game tag's numbers, four of them (v2026.10.19 is (2026, 10, 19, 0)), so tags compare."""
-    version = tuple(int(part) for part in re.findall(r"\d+", tag))
-    return version + (0,) * (4 - len(version))
-
-
 def parse_time(text):
     return dt.datetime.fromisoformat(text.replace("Z", "+00:00")) if text else None
 
@@ -90,7 +83,7 @@ def reasons_against(release, current, blockers, now, by_hand=False):
 
 def choose(releases, blockers, now, tag=None, force=False):
     """(the beta to promote or None, a line saying why) for the game releases `releases`."""
-    games = [r for r in releases if not r["draft"] and GAME_TAG.fullmatch(r["tag_name"])]
+    games = [r for r in releases if not r["draft"] and is_game_tag(r["tag_name"])]
     current = stable(games)
     if tag:
         release = next((r for r in games if r["tag_name"] == tag), None)
@@ -116,7 +109,7 @@ def choose(releases, blockers, now, tag=None, force=False):
 
 def stalled(releases, now):
     """(the oldest beta newer than the stable release, how long it has waited) once that is STALL_AFTER, else None."""
-    games = [r for r in releases if not r["draft"] and GAME_TAG.fullmatch(r["tag_name"])]
+    games = [r for r in releases if not r["draft"] and is_game_tag(r["tag_name"])]
     current = stable(games)
     waiting = [r for r in games if r["prerelease"] and (not current or tag_key(r["tag_name"]) > tag_key(current["tag_name"]))]
     if not waiting:
@@ -129,7 +122,7 @@ def stalled(releases, now):
 def stall_issue(releases, stall, reason):
     """The title and body of the issue saying promotion has stalled."""
     oldest, age = stall
-    current = stable([r for r in releases if not r["draft"] and GAME_TAG.fullmatch(r["tag_name"])])
+    current = stable([r for r in releases if not r["draft"] and is_game_tag(r["tag_name"])])
     hours = int(age.total_seconds() // 3600)
     body = (f"Opened by .github/workflows/promote.yml, not by a person.\n\n"
             f"No beta has become stable for {hours} hours: {oldest['tag_name']} has waited since "
