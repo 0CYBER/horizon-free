@@ -1719,6 +1719,11 @@ packet!(
     /// ServerboundRenameItemPacket: `AnvilMenu.setItemName`.
     RenameItem { name: String => Str }
 );
+packet!(
+    /// ServerboundSetBeaconPacket: `BeaconMenu.updateEffects`, each power an
+    /// optional `mob_effect` id.
+    SetBeacon { primary: Option<i32> => Opt<VarInt>, secondary: Option<i32> => Opt<VarInt> }
+);
 packet!(Interact { id: i32 => VarInt, hand: i32 => VarInt, location: [f64; 3] => LpVec3, secondary: bool => Bool });
 packet!(
     /// ServerboundMovePlayerPacket flags: 1 on ground, 2 horizontal collision.
@@ -1805,6 +1810,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     Punch(Empty) = PUNCH,
     ResourcePack(ResourcePackResponse) = RESOURCE_PACK,
     SelectTrade(SelectTrade) = SELECT_TRADE,
+    SetBeacon(SetBeacon) = SET_BEACON,
     SetCarriedItem(SetCarriedItem) = SET_CARRIED_ITEM,
     SetCreativeModeSlot(SetCreativeModeSlot) = SET_CREATIVE_MODE_SLOT,
     UseItem(UseItem) = USE_ITEM,
@@ -2384,6 +2390,13 @@ mod tests {
         });
         assert_eq!(&rename.encode()[1..], &[5, b'B', b'l', b'a', b'd', b'e']);
         round_trip(rename, Serverbound::encode, Serverbound::decode);
+        // Two optional mob effect ids: a presence byte, then the VarInt.
+        let beacon = Serverbound::SetBeacon(SetBeacon {
+            primary: Some(2),
+            secondary: None,
+        });
+        assert_eq!(&beacon.encode()[1..], &[1, 2, 0]);
+        round_trip(beacon, Serverbound::encode, Serverbound::decode);
     }
 
     #[test]

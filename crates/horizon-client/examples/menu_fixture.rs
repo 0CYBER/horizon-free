@@ -11,6 +11,7 @@ use horizon_client::{
     items::Items,
     menu::{Env, Input, Kind, Menu},
 };
+use horizon_protocol::registry::Ids;
 use serde_json::Value;
 use std::{fs, path::Path};
 
@@ -57,6 +58,13 @@ fn main() -> horizon_client::Result<()> {
         names: &names,
         trade: None,
     };
+    // The mob effects' network ids (BeaconMenu.encodeEffect).
+    let builtin = horizon_protocol::registry::Builtin::find(root)
+        .and_then(|p| horizon_protocol::registry::Builtin::load(&p).ok());
+    let effects = builtin
+        .as_ref()
+        .and_then(|b| b.get("minecraft:mob_effect"))
+        .cloned();
     let mut out = String::new();
     for line in input.lines() {
         let case: Value = serde_json::from_str(line)?;
@@ -110,6 +118,20 @@ fn main() -> horizon_client::Result<()> {
                 // ServerboundRenameItemPacket: AnvilMenu.setItemName.
                 "RENAME" => {
                     menu.rename(&env, op[3].as_str().unwrap_or_default());
+                    out += &format!("{}\n", state(&menu));
+                    continue;
+                }
+                // ServerboundSetBeaconPacket: BeaconMenu.updateEffects.
+                "SET_BEACON" => {
+                    fn power<'a>(ids: Option<&Ids>, v: &'a Value) -> Option<(i32, &'a str)> {
+                        let name = v.as_str()?;
+                        Some((ids?.id(name)?, name))
+                    }
+                    let (primary, secondary) = (
+                        power(effects.as_ref(), &op[3]),
+                        power(effects.as_ref(), &op[4]),
+                    );
+                    menu.beacon_update(&env, primary, secondary);
                     out += &format!("{}\n", state(&menu));
                     continue;
                 }

@@ -147,7 +147,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
 
 
 class Game:
@@ -1138,6 +1138,47 @@ def check_enchanting(host, guest, out):
             'lapis': server_count(guest, 'lapis_lazuli')}
     want = {'offered': True, 'enchanted': True, 'left': ('minecraft:lapis_lazuli', 2), 'levels': 29, 'lapis': 2}
     assert seen == want, f'the enchanting table on the guest: {seen} ({costs}, {sword!r})'
+    return seen
+
+
+def check_beacon(host, guest, out):
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    guest('command', command='effect clear @s')
+    guest('command', command='give @s minecraft:iron_ingot')
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    at = (x, y, z + 2)
+    # A one-level pyramid under the beacon; its levels come with the first base check (80 ticks).
+    guest('command', command=f'fill {x - 1} {y - 1} {z + 1} {x + 1} {y - 1} {z + 3} minecraft:iron_block')
+    guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:beacon')
+    guest.wait(100)
+    guest.raw('interact', *at)
+    guest.raw('wait-for', 'screen', 'station', '--timeout', 10)
+    guest.wait(10)
+    # BeaconMenu.quickMoveStack: the ingot to the payment slot.
+    guest.raw('click-slot', hotbar_slot(guest, 'minecraft:iron_ingot'), 'shift')
+    guest.wait(10)
+    paid = station_slots(guest).get(600)
+    # BeaconScreen (54 px wider, 27 to the left): Haste, the first level's second power, then Done,
+    # which sends ServerboundSetBeaconPacket and closes the menu.
+    guest.raw('click-gui', 77 - 27 + 11, 22 + 11)
+    guest.wait(5)
+    guest.shot(out, 'beacon')
+    guest.raw('click-gui', 164 - 27 + 11, 107 + 11)
+    guest.wait(10)
+    screen = guest('state').get('screen')
+    effects = []
+    # BeaconBlockEntity.applyEffects runs every 80 ticks.
+    for _ in range(12):
+        guest.wait(20)
+        effects = effect_ids(guest)
+        if 'haste' in effects:
+            break
+    seen = {'paid': paid, 'haste': 'haste' in effects, 'ingots': server_count(guest, 'iron_ingot'),
+            'screen': screen}
+    guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:air')
+    want = {'paid': ('minecraft:iron_ingot', 1), 'haste': True, 'ingots': 0, 'screen': 'playing'}
+    assert seen == want, f'the beacon on the guest: {seen} ({effects})'
     return seen
 
 
@@ -2338,6 +2379,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'anvil': check_anvil,
              'smithing': check_smithing,
              'enchanting': check_enchanting,
+             'beacon': check_beacon,
              'hurt': check_hurt,
              'commands': check_commands,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,

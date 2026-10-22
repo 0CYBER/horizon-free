@@ -89,6 +89,9 @@ pub enum Kind {
     /// `EnchantmentMenu`: the item, the lapis, then the inventory; its data
     /// slots are the three costs, the seed and the clues.
     Enchanting,
+    /// `BeaconMenu`: the payment slot, then the inventory; its data slots are
+    /// the pyramid's levels and the two powers (`encodeEffect`: id + 1).
+    Beacon,
     /// `MerchantMenu`: two payment slots, the result, then the inventory.
     Merchant,
     /// `CreativeModeInventoryScreen.ItemPickerMenu`: an item tab's 45
@@ -119,6 +122,7 @@ impl Kind {
             "anvil" => Self::Anvil,
             "smithing" => Self::Smithing,
             "enchanting" => Self::Enchanting,
+            "beacon" => Self::Beacon,
             "merchant" => Self::Merchant,
             "item_picker" => Self::ItemPicker,
             _ => return None,
@@ -170,6 +174,8 @@ enum Role {
     EnchantItem,
     /// The enchanting table's lapis slot.
     Lapis,
+    /// `BeaconMenu.PaymentSlot`: one beacon payment item.
+    BeaconPay,
     /// `CustomCreativeSlot`: a creative tab's display slot, which the
     /// screen clicks itself; drags and PICKUP_ALL pass it by.
     CreativeDisplay,
@@ -180,6 +186,26 @@ struct Slot {
     container: usize,
     index: usize,
     role: Role,
+}
+
+/// `BeaconBlockEntity.BEACON_EFFECTS`: the powers of each pyramid level.
+pub const BEACON_EFFECTS: [&[&str]; 4] = [
+    &["minecraft:speed", "minecraft:haste"],
+    &["minecraft:resistance", "minecraft:jump_boost"],
+    &["minecraft:strength"],
+    &["minecraft:regeneration"],
+];
+
+/// `BeaconBlockEntity.getRequiredLevelsFor`: 0 for no power, `i32::MAX`
+/// for one no level gives.
+pub fn beacon_required_levels(effect: Option<&str>) -> i32 {
+    let Some(effect) = effect else {
+        return 0;
+    };
+    BEACON_EFFECTS
+        .iter()
+        .position(|tier| tier.contains(&effect))
+        .map_or(i32::MAX, |i| i as i32 + 1)
 }
 
 /// The containers a menu spans.
@@ -465,6 +491,13 @@ impl Menu {
                 player(&mut slots);
                 // costs[3], enchantmentSeed, enchantClue[3], levelClue[3].
                 data = 10;
+            }
+            Kind::Beacon => {
+                containers[MAIN] = vec![None; 1];
+                slots.extend(main(1, Role::BeaconPay));
+                player(&mut slots);
+                // levels, primary, secondary.
+                data = 3;
             }
             Kind::ItemPicker => {
                 containers[MAIN] = vec![None; 45];
@@ -827,6 +860,38 @@ impl Menu {
 
     /// `AnvilMenu.setItemName` (`ServerboundRenameItemPacket`): false when
     /// the name is refused or unchanged.
+    /// `BeaconMenu.updateEffects` (`ServerboundSetBeaconPacket`): with a
+    /// payment, powers `BeaconBlockEntity.validateEffects` allows for the
+    /// pyramid's levels (data 0) become data 1 and 2 and the payment is used.
+    /// Each power is its `mob_effect` id and name. False when refused.
+    pub fn beacon_update(
+        &mut self,
+        env: &Env,
+        primary: Option<(i32, &str)>,
+        secondary: Option<(i32, &str)>,
+    ) -> bool {
+        if self.kind != Kind::Beacon || self.containers[MAIN][0].is_none() {
+            return false;
+        }
+        let levels = self.data[0];
+        let (p, s) = (
+            beacon_required_levels(primary.map(|e| e.1)),
+            beacon_required_levels(secondary.map(|e| e.1)),
+        );
+        let valid = !(secondary.is_some() && levels < 4)
+            && p <= levels
+            && s <= levels
+            && p < 4
+            && !(s != 0 && s < 4 && primary.map(|e| e.0) != secondary.map(|e| e.0));
+        if !valid {
+            return false;
+        }
+        self.data[1] = primary.map_or(0, |e| e.0 + 1);
+        self.data[2] = secondary.map_or(0, |e| e.0 + 1);
+        self.remove(env, 0, 1);
+        true
+    }
+
     pub fn rename(&mut self, env: &Env, name: &str) -> bool {
         // StringUtil.filterText, then validateName's length limit.
         let name: String = name
@@ -973,6 +1038,11 @@ impl Menu {
             Role::SmithInput(i) => env.station_recipes.smithing_accepts(i, stack),
             Role::EnchantItem => true,
             Role::Lapis => &*stack.item == "minecraft:lapis_lazuli",
+            Role::BeaconPay => env
+                .items
+                .item_tags
+                .get("minecraft:beacon_payment_items")
+                .is_some_and(|t| t.contains(&*stack.item)),
             Role::LoomResult
             | Role::MerchantResult
             | Role::StoneResult
@@ -1017,7 +1087,7 @@ impl Menu {
     /// `Slot.getMaxStackSize(stack)`.
     fn slot_max(&self, env: &Env, s: usize, stack: &ItemStack) -> u32 {
         let own = match self.slots[s].role {
-            Role::Armor(_) | Role::Potion | Role::EnchantItem => 1,
+            Role::Armor(_) | Role::Potion | Role::EnchantItem | Role::BeaconPay => 1,
             Role::Fuel if Self::is_bucket(stack) => return 1,
             _ => CONTAINER_MAX,
         };
@@ -1034,6 +1104,10 @@ impl Menu {
             && let Some(st) = stack.as_mut()
         {
             st.count = st.count.min(CONTAINER_MAX.min(Self::max_stack(env, st)));
+            // The beacon's container holds one item (getMaxStackSize 1).
+            if self.kind == Kind::Beacon {
+                st.count = st.count.min(1);
+            }
         }
         // CrafterBlockEntity.setItem: filling a disabled (empty) slot enables it.
         if self.kind == Kind::CrafterBlock
@@ -1709,6 +1783,32 @@ impl Menu {
                         return None;
                     }
                 } else if !self.move_to(env, &mut stack, 0, 2, false) {
+                    return None;
+                }
+            }
+            Kind::Beacon => {
+                // BeaconMenu.quickMoveStack.
+                after_take = true;
+                if index == 0 {
+                    if !self.move_to(env, &mut stack, 1, 37, true) {
+                        return None;
+                    }
+                } else if self.containers[MAIN][0].is_none()
+                    && self.may_place(env, 0, &stack)
+                    && stack.count == 1
+                {
+                    if !self.move_to(env, &mut stack, 0, 1, false) {
+                        return None;
+                    }
+                } else if (1..28).contains(&index) {
+                    if !self.move_to(env, &mut stack, 28, 37, false) {
+                        return None;
+                    }
+                } else if (28..37).contains(&index) {
+                    if !self.move_to(env, &mut stack, 1, 28, false) {
+                        return None;
+                    }
+                } else if !self.move_to(env, &mut stack, 1, 37, false) {
                     return None;
                 }
             }

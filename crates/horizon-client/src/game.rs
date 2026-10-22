@@ -5439,6 +5439,7 @@ impl Game<'_> {
         let anvil_open = station_kind == Some(stations::Kind::Anvil);
         let smithing_open = station_kind == Some(stations::Kind::Smithing);
         let enchanting_open = station_kind == Some(stations::Kind::Enchanting);
+        let beacon_open = station_kind == Some(stations::Kind::Beacon);
         let (kind, game_of): (Kind, Vec<Option<usize>>) = if self.creative_tab_open() {
             // ItemPickerMenu: the display slots (clicked by the screen), then the hotbar.
             let mut v = vec![None; 45];
@@ -5484,6 +5485,11 @@ impl Game<'_> {
             let mut v = vec![Some(stations::INPUT), Some(stations::INPUT + 1)];
             v.extend((9..36).chain(0..9).map(Some));
             (Kind::Enchanting, v)
+        } else if beacon_open {
+            // BeaconMenu: the payment, then the inventory.
+            let mut v = vec![Some(stations::INPUT)];
+            v.extend((9..36).chain(0..9).map(Some));
+            (Kind::Beacon, v)
         } else if anvil_open || smithing_open {
             // ItemCombinerMenu: the inputs, the result, then the inventory.
             let inputs = if anvil_open { 2 } else { 3 };

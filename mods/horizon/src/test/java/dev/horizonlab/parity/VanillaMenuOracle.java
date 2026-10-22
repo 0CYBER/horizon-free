@@ -183,8 +183,17 @@ public final class VanillaMenuOracle {
             case "anvil" -> new AnvilMenu(0, inv);
             case "smithing" -> new SmithingMenu(0, inv);
             case "enchanting" -> new EnchantmentMenu(0, inv);
+            case "beacon" -> new BeaconMenu(0, inv);
             default -> throw new IllegalArgumentException(kind);
         };
+    }
+
+    /** A SET_BEACON power: a mob effect's name, or null for none. */
+    static Optional<net.minecraft.core.Holder<net.minecraft.world.effect.MobEffect>> effect(JsonElement name) {
+        if (name.isJsonNull()) return Optional.empty();
+        return net.minecraft.core.registries.BuiltInRegistries.MOB_EFFECT
+            .get(net.minecraft.resources.Identifier.parse(name.getAsString()))
+            .map(h -> (net.minecraft.core.Holder<net.minecraft.world.effect.MobEffect>) h);
     }
 
     static String state(AbstractContainerMenu menu, Inventory inv) throws Exception {
@@ -264,6 +273,12 @@ public final class VanillaMenuOracle {
                         if (kind.equals("RENAME")) {
                             // ServerGamePacketListenerImpl.handleRenameItem: AnvilMenu.setItemName
                             if (menu instanceof AnvilMenu anvil) anvil.setItemName(op.get(3).getAsString());
+                            out.println(clickState(menu, inv));
+                            continue;
+                        }
+                        if (kind.equals("SET_BEACON")) {
+                            // ServerGamePacketListenerImpl.handleSetBeaconPacket: BeaconMenu.updateEffects
+                            if (menu instanceof BeaconMenu beacon) beacon.updateEffects(effect(op.get(3)), effect(op.get(4)));
                             out.println(clickState(menu, inv));
                             continue;
                         }

@@ -152,6 +152,8 @@ pub(super) struct Station {
     pub(super) merchant: Option<Box<super::trading::MerchantState>>,
     /// Beacon menu: the selected primary and secondary power (EFFECTS index).
     pub(super) beacon: [Option<usize>; 2],
+    /// A server's beacon menu: the pyramid's levels (its data slot 0).
+    pub(super) beacon_levels: Option<i32>,
     /// The loom's patterns, selection and scroller (game/loom.rs).
     pub(super) loom: super::loom::LoomState,
 }
@@ -175,6 +177,7 @@ impl Station {
             last_sound: 0,
             merchant: None,
             beacon: [None; 2],
+            beacon_levels: None,
             loom: Default::default(),
         }
     }
@@ -531,7 +534,6 @@ impl Game<'_> {
         }
         let i = slot - INPUT;
         match s.kind {
-            Kind::Beacon => (super::beacon::is_payment(&stack.item), 1),
             Kind::Loom => (false, 64),
             Kind::Cartography if i == 0 => (super::maps::map_id(stack).is_some(), 64),
             Kind::Cartography => (
@@ -667,7 +669,6 @@ impl Game<'_> {
             return false;
         };
         let start = stack.count;
-        let empty = |game: &mut Self, i: usize| game.station_slot_mut(INPUT + i).is_none();
         // The other half of the inventory: main rows to the hotbar and back.
         let halves: Vec<usize> = if slot < 9 {
             (9..36).collect()
@@ -675,20 +676,10 @@ impl Game<'_> {
             (0..9).collect()
         };
         if slot >= INPUT {
-            // An input slot: into the inventory, the hotbar's last slot first
-            // where vanilla moves in reverse.
-            let reverse = kind == Kind::Beacon;
-            self.move_to(&mut stack, &Self::player_slots(), reverse);
+            // An input slot: into the inventory.
+            self.move_to(&mut stack, &Self::player_slots(), false);
         } else {
             match kind {
-                Kind::Beacon => {
-                    if empty(self, 0) && super::beacon::is_payment(&stack.item) && stack.count == 1
-                    {
-                        self.move_to(&mut stack, &[INPUT], false);
-                    } else {
-                        self.move_to(&mut stack, &halves, false);
-                    }
-                }
                 Kind::Cartography => {
                     if super::maps::map_id(&stack).is_some() {
                         self.move_to(&mut stack, &[INPUT], false);
@@ -708,7 +699,8 @@ impl Game<'_> {
                 | Kind::Grindstone
                 | Kind::Anvil
                 | Kind::Smithing
-                | Kind::Enchanting => {}
+                | Kind::Enchanting
+                | Kind::Beacon => {}
             }
         }
         let moved = stack.count != start;
@@ -1062,10 +1054,11 @@ impl Game<'_> {
                     | Kind::Anvil
                     | Kind::Smithing
                     | Kind::Enchanting
+                    | Kind::Beacon
             )
         }) {
             // LoomMenu, MerchantMenu, StonecutterMenu, GrindstoneMenu, AnvilMenu,
-            // SmithingMenu and the brewing stand's
+            // SmithingMenu, EnchantmentMenu, BeaconMenu and the brewing stand's
             // BrewingStandMenu clicks run on the verified menu engine.
             let input = if shift {
                 horizon_client::menu::Input::QuickMove

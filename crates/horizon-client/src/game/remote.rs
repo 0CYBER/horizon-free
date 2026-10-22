@@ -446,8 +446,15 @@ impl Game<'_> {
                 .unwrap_or("minecraft:air"),
         )
     }
+    /// The server's network id of a mob effect (`brewing::EFFECTS` id).
+    pub(super) fn remote_effect_network_id(&self, effect: &str) -> Option<i32> {
+        let r = self.remote.as_ref()?;
+        r.builtin
+            .get("minecraft:mob_effect")?
+            .id(&format!("minecraft:{effect}"))
+    }
     /// A mob effect's network id as the effect (`brewing::EFFECTS` id).
-    fn remote_effect_id(&self, effect: i32) -> Option<&'static str> {
+    pub(super) fn remote_effect_id(&self, effect: i32) -> Option<&'static str> {
         let r = self.remote.as_ref()?;
         let name = r.builtin.get("minecraft:mob_effect")?.name(effect)?;
         horizon_client::brewing::effect(name).map(|d| d.id)
@@ -1269,6 +1276,7 @@ impl Game<'_> {
             "minecraft:anvil" => Kind::Anvil,
             "minecraft:smithing" => Kind::Smithing,
             "minecraft:enchantment" => Kind::Enchanting,
+            "minecraft:beacon" => Kind::Beacon,
             _ => return None,
         })
     }

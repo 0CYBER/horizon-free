@@ -11,6 +11,7 @@ use super::{
     stations::{Kind as StationKind, Station},
 };
 use horizon_client::{
+    containers::BlockEntity,
     items::ItemStack,
     menu::{Kind, Menu},
 };
@@ -40,6 +41,7 @@ fn menu_of(kind: StationKind) -> Option<(&'static str, Kind, std::ops::Range<usi
         StationKind::Anvil => ("minecraft:anvil", Kind::Anvil, 0..2),
         StationKind::Smithing => ("minecraft:smithing", Kind::Smithing, 0..3),
         StationKind::Enchanting => ("minecraft:enchantment", Kind::Enchanting, 0..2),
+        StationKind::Beacon => ("minecraft:beacon", Kind::Beacon, 0..1),
         _ => return None,
     })
 }
@@ -73,6 +75,9 @@ impl Game<'_> {
                 g.xp_seed = self.world.random.next_int();
             }
             menu.data[3] = g.xp_seed;
+        }
+        if kind == Kind::Beacon {
+            menu.data = self.beacon_data(host, station.pos).to_vec();
         }
         host.play.entry(conn).or_default().station = Some(GuestStation {
             window,
@@ -329,11 +334,90 @@ impl Game<'_> {
         };
         // AbstractContainerMenu.removed: the carried stack first, then the inputs.
         let mut back: Vec<ItemStack> = host.hub.guests[gi].carried.take().into_iter().collect();
-        back.extend(station_inputs(&gs));
+        let inputs = station_inputs(&gs);
+        if gs.kind == StationKind::Beacon {
+            // BeaconMenu.removed drops the payment (player.drop).
+            if !back.is_empty() {
+                self.lan_place_back(host, gi, std::mem::take(&mut back));
+            }
+            self.drop_guest_items(host, gi, inputs);
+        } else {
+            back.extend(inputs);
+        }
         if !back.is_empty() {
             self.lan_place_back(host, gi, back);
         }
         true
+    }
+
+    /// `BeaconBlockEntity.dataAccess`: the pyramid's levels and the powers
+    /// (`BeaconMenu.encodeEffect`: the `mob_effect` id + 1, 0 for none).
+    fn beacon_data(&self, host: &LanHost, pos: [i32; 3]) -> [i32; 3] {
+        let Some(BlockEntity::Beacon(b)) = self.world.block_entities.get(&(pos[0], pos[1], pos[2]))
+        else {
+            return [0; 3];
+        };
+        let encode = |e: &Option<String>| {
+            e.as_deref()
+                .and_then(|n| host.hub.registry_id("minecraft:mob_effect", n))
+                .map_or(0, |id| id + 1)
+        };
+        [b.levels, encode(&b.primary), encode(&b.secondary)]
+    }
+
+    /// `ServerGamePacketListenerImpl.handleSetBeaconPacket`: the guest's
+    /// beacon menu takes the powers (`BeaconMenu.updateEffects`), and they
+    /// become the block entity's (`dataAccess.set`: the power_select sound
+    /// while the beam is up).
+    pub(super) fn lan_station_beacon(
+        &mut self,
+        host: &mut LanHost,
+        conn: u32,
+        primary: Option<i32>,
+        secondary: Option<i32>,
+    ) {
+        let Some(pos) = host
+            .play
+            .get(&conn)
+            .and_then(|p| p.station.as_ref())
+            .filter(|s| s.kind == StationKind::Beacon)
+            .map(|s| s.pos)
+        else {
+            return;
+        };
+        // An id the registry doesn't have fails the packet's codec.
+        let mut powers: [Option<(i32, String)>; 2] = [None, None];
+        for (k, id) in [primary, secondary].into_iter().enumerate() {
+            if let Some(id) = id {
+                let Some(name) = host.hub.registry_name("minecraft:mob_effect", id) else {
+                    return;
+                };
+                powers[k] = Some((id, name.to_owned()));
+            }
+        }
+        let data = self.beacon_data(host, pos);
+        let mut updated = false;
+        self.lan_station_op(host, conn, None, |menu, env| {
+            menu.data.copy_from_slice(&data);
+            let power = |k: usize| powers[k].as_ref().map(|(id, n)| (*id, n.as_str()));
+            updated = menu.beacon_update(env, power(0), power(1));
+        });
+        if !updated {
+            return;
+        }
+        let [primary, secondary] = powers.map(|p| p.map(|(_, n)| n));
+        let mut select_sound = false;
+        if let Some(BlockEntity::Beacon(b)) =
+            self.world.block_entities.get_mut(&(pos[0], pos[1], pos[2]))
+        {
+            b.primary = primary;
+            b.secondary = secondary;
+            select_sound = !b.sections.is_empty();
+        }
+        if select_sound {
+            self.beacon_sound(pos, "minecraft:block.beacon.power_select");
+        }
+        self.world.modified.insert((pos[0] >> 4, pos[2] >> 4));
     }
 
     /// `ServerPlayer.doTick`'s `stillValid`: a guest's station closes once its
@@ -375,6 +459,15 @@ impl Game<'_> {
                     conn,
                     &C::ContainerClose(play::ContainerClose { container: window }),
                 );
+            } else if gs.kind == StationKind::Beacon {
+                // The beacon's data slots follow its block entity.
+                let data = self.beacon_data(host, gs.pos);
+                if let Some(gs) = host.play.get_mut(&conn).and_then(|p| p.station.as_mut())
+                    && gs.menu.data[..] != data[..]
+                {
+                    gs.menu.data.copy_from_slice(&data);
+                    self.lan_send_station(host, conn);
+                }
             }
         }
     }

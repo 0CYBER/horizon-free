@@ -311,6 +311,11 @@ impl Hub {
         self.sync.id(registry, name)
     }
 
+    /// The name of a network id in a built-in registry.
+    pub fn registry_name(&self, registry: &str, id: i32) -> Option<&str> {
+        self.sync.builtin.get(registry)?.name(id)
+    }
+
     pub fn item_id(&mut self, item: &Arc<str>) -> i32 {
         if let Some(id) = self.item_ids.get(item) {
             return *id;

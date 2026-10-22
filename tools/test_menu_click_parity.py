@@ -14,7 +14,9 @@ entity with slot state packets), the loom (with its pattern buttons), the
 stonecutter (with its recipe buttons), the grindstone (enchanted, damaged and
 cursed tools and books), the anvil (repairs, enchantment merges and renames,
 with the player's levels), the smithing table (upgrades and trims), the
-enchanting table (its button checks against the costs, lapis and levels) and the
+enchanting table (its button checks against the costs, lapis and levels), the
+beacon (its payment slot and ServerboundSetBeaconPacket against the pyramid's
+levels) and the
 server's furnace menus over their block entities (`*_be`: a new input restarts
 cooking, other clicks keep its progress). After
 every click the slots, carried stack, data slots and drops are compared.
@@ -30,9 +32,9 @@ except ImportError:
 
 MENUS = {'inventory': 46, 'crafting': 46, 'chest1': 45, 'chest2': 54, 'chest3': 63, 'chest4': 72, 'chest5': 81,
          'chest6': 90, 'hopper': 41, 'dispenser': 45, 'shulker': 63, 'furnace': 39, 'blast_furnace': 39, 'smoker': 39, 'brewing': 41, 'crafter': 46,
-         'crafter_be': 46, 'loom': 40, 'stonecutter': 38, 'grindstone': 39, 'anvil': 39, 'smithing': 40, 'enchanting': 38, 'furnace_be': 39, 'blast_furnace_be': 39, 'smoker_be': 39}
+         'crafter_be': 46, 'loom': 40, 'stonecutter': 38, 'grindstone': 39, 'anvil': 39, 'smithing': 40, 'enchanting': 38, 'beacon': 37, 'furnace_be': 39, 'blast_furnace_be': 39, 'smoker_be': 39}
 DATA = {'furnace': 4, 'blast_furnace': 4, 'smoker': 4, 'brewing': 4, 'crafter': 10, 'crafter_be': 10, 'loom': 1,
-        'stonecutter': 1, 'enchanting': 10,
+        'stonecutter': 1, 'enchanting': 10, 'beacon': 3,
         'furnace_be': 4, 'blast_furnace_be': 4, 'smoker_be': 4}
 DYES = ['white', 'orange', 'magenta', 'light_blue', 'yellow', 'lime', 'pink', 'gray', 'light_gray', 'cyan', 'purple',
         'blue', 'brown', 'green', 'red', 'black']
@@ -50,6 +52,9 @@ CUTTABLE = ['stone', 'cobblestone', 'andesite', 'granite', 'copper_block', 'sand
             'stone_bricks', 'oak_planks']
 # Grindstone inputs: tools and armor, books, and their enchantments (curses too).
 GRINDABLE = ['iron_sword', 'diamond_pickaxe', 'bow', 'iron_helmet', 'elytra', 'shield', 'fishing_rod', 'trident']
+# Beacon powers (BEACON_EFFECTS by level, and one no level gives) and payments.
+POWERS = ['speed', 'haste', 'resistance', 'jump_boost', 'strength', 'regeneration', 'night_vision']
+PAYMENTS = ['iron_ingot', 'gold_ingot', 'emerald', 'diamond', 'netherite_ingot']
 ENCHANTS = ['sharpness', 'unbreaking', 'mending', 'efficiency', 'protection', 'power', 'looting', 'fortune',
             'binding_curse', 'vanishing_curse']
 
@@ -228,6 +233,15 @@ class Gen:
                 # An offer button (clickMenuButton), sometimes out of range.
                 out.append([rng.choice([0, 1, 2, 2, 3, -1]), 0, 'BUTTON'])
                 continue
+            if menu == 'beacon' and rng.random() < 0.3:
+                # ServerboundSetBeaconPacket: powers, valid or not, or none.
+                pick = lambda: 'minecraft:' + rng.choice(POWERS) if rng.random() < 0.8 else None
+                primary, secondary = pick(), pick()
+                if primary is None and secondary not in (None, 'minecraft:regeneration', 'minecraft:night_vision'):
+                    # validateEffects compares a null primary (Holder.equals: a NullPointerException).
+                    primary = secondary
+                out.append([0, 0, 'SET_BEACON', primary, secondary])
+                continue
             if menu == 'grindstone' and rng.random() < 0.2:
                 out.append([2, rng.randrange(0, 2), rng.choice(['PICKUP', 'QUICK_MOVE', 'QUICK_MOVE', 'THROW', 'SWAP'])])
                 continue
@@ -329,6 +343,11 @@ def main():
                 slots[i] = rng.choice([lapis, enchantable, g.grind_stack])()
             slots[0] = rng.choice([enchantable, enchantable, g.grind_stack, g.stack])() if rng.random() < 0.8 else '-'
             slots[1] = lapis() if rng.random() < 0.7 else rng.choice(['-', g.stack()])
+        if menu == 'beacon':
+            pay = lambda: snbt('minecraft:' + rng.choice(PAYMENTS), rng.choice([1, 1, 1, 2, 64]))
+            for i in rng.sample(range(1, size), 8):
+                slots[i] = pay()
+            slots[0] = pay() if rng.random() < 0.7 else rng.choice(['-', g.stack()])
         if menu == 'crafter_be':
             slots[45] = '-'
             if rng.random() < 0.6:
@@ -356,6 +375,9 @@ def main():
                 return rng.choice([0, 0, 1])
             if menu in ('loom', 'stonecutter'):
                 return rng.choice([-1, -1, 0, 0, 1, 2, 3, 30])
+            if menu == 'beacon':
+                # the levels, then the powers (encodeEffect: id + 1)
+                return rng.choice([0, 1, 2, 3, 4, 4]) if i == 0 else rng.choice([0, 0, 2, 4, 11])
             if menu == 'enchanting':
                 # costs, the seed, then the clues
                 return [rng.choice([0, 1, 2, 5, 15, 30]) for _ in range(3)][0] if i < 3 else \

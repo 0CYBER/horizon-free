@@ -97,6 +97,17 @@ impl Game<'_> {
                     *level = value.max(0) as u32;
                 }
             }
+            // BeaconMenu: the levels, then the powers (BeaconScreen's
+            // dataChanged shows the menu's).
+            (Kind::Beacon, 0) => s.beacon_levels = Some(i32::from(value)),
+            (Kind::Beacon, 1 | 2) => {
+                let effect = self.remote_effect_id(i32::from(value) - 1);
+                let index =
+                    effect.and_then(|e| super::beacon::EFFECTS.iter().position(|(n, _)| *n == e));
+                if let Some(s) = self.station.as_mut() {
+                    s.beacon[id - 1] = index;
+                }
+            }
             _ => {}
         }
     }
