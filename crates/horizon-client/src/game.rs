@@ -38,6 +38,7 @@ mod deflect;
 mod dispense_fixture;
 mod dispenser;
 mod dragon;
+mod dynamic_lights;
 mod enchant_effects;
 mod end;
 mod entity_culling;
@@ -1184,6 +1185,10 @@ struct Game<'a> {
     renderer: Option<Renderer>,
     /// CPU geometry storage retained across frames, including empty/title frames.
     entity_vertices: Vec<Vertex>,
+    /// Horizon Extras' dynamic lights this frame (`dynamic_lights.rs`), and how brightly each
+    /// item glows (built the first time the extra is on).
+    dynamic_lights: Vec<[f32; 4]>,
+    luminance: Option<horizon_client::dynamic_light::Luminance>,
     /// Name tags drawn over everything (`RenderPipelines.TEXT_SEE_THROUGH`).
     see_through_vertices: Vec<Vertex>,
     started: Instant,
@@ -9665,6 +9670,11 @@ impl Game<'_> {
             .then(|| self.border_draw(camera.to_array(), alpha as f32))
             .flatten();
         let see_through = std::mem::take(&mut self.see_through_vertices);
+        if title {
+            self.dynamic_lights.clear();
+        } else {
+            self.gather_dynamic_lights(camera, alpha);
+        }
         let frame = Frame {
             shader: self.shader_inputs(camera, alpha as f32),
             nether_lighting: self.dim == Dim::Nether,
@@ -9722,6 +9732,7 @@ impl Game<'_> {
                 color: sky.cloud_color,
             }),
             entities: &entities,
+            dynamic_lights: &self.dynamic_lights,
             additive: &additive,
             see_through: &see_through,
             celestial: if self.settings.horizon.sky || title {
@@ -11312,6 +11323,8 @@ impl<'a> Game<'a> {
             window: None,
             renderer: None,
             entity_vertices: Vec::new(),
+            dynamic_lights: Vec::new(),
+            luminance: None,
             see_through_vertices: Vec::new(),
             health_hud: hud_layout::HealthHud::default(),
             started: now,
@@ -12185,6 +12198,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         hud,
         nether_lighting: false,
         entities: &[],
+        dynamic_lights: &[],
         clouds: None,
         additive: &[],
         see_through: &[],
