@@ -326,8 +326,8 @@ Fabric API doesn't run (its id has a dash, which content mods can't use). A chec
 by SHA-1, or through a CurseForge app instance's `minecraftinstance.json`), else downloaded from
 the link the pack itself gives (a `.mrpack`'s, on the format's hosts only) or, for a CurseForge
 pack, the same file on Modrinth's public CDN, found by its SHA-1. A jar is kept only when its
-hash matches. A file only CurseForge has is listed as needing a CurseForge API key (Ludovic's
-decision; open question below), with the player's installed instance as the way round it.
+hash matches. A file only CurseForge has is listed as "CurseForge downloads coming soon" (its API
+needs a paid key; Ludovic, 2026-10-22), with the player's installed instance as the way round it.
 `<work>/fetch.json` says what happened to each file. On All the Mods 10 8.3's CurseForge zip
 (2026-10-17): of the 54 data-tier content mods, 42 come from Modrinth's CDN (84 MB) and 12 need
 the key or the instance; `port` then carries the 42 over (0 ported, 42 partial: the harness is a
@@ -1056,7 +1056,7 @@ What is missing, ranked by how much a player notices:
 2026-10-22, Mac mini M4 Pro (offscreen, a debug launcher, release-profile `horizon-port-pack` and game), while
 other sessions kept the CPU at 85 to 93 %, so times are upper bounds. The two Modrinth packs were imported with
 `horizon-launcher mods install <slug>` (the browser's Import), ATM10 from its CurseForge zip with `modpack import`
-(CurseForge isn't searchable without a key), then each ported with `--resources` for 26.3 and opened as a survival
+(CurseForge support is coming soon), then each ported with `--resources` for 26.3 and opened as a survival
 world with every ported mod on (horizon-ctl `launch --dev-mod ...`, from a scratch script).
 
 | Pack | Files | Import | Port | Ported mods | Coverage | Declared | World load (resources) | Crashes |
@@ -1067,7 +1067,7 @@ world with every ported mod on (horizon-ctl `launch --dev-mod ...`, from a scrat
 
 The same world with no mods loads in 5.4 s (resources 1.1 s). Import is the pack download and Modrinth's answers by
 file hash; Vanilla Perfected's 30 s is mostly its 108 lookups and its download. Port is the jars (downloaded for the
-two Modrinth packs; ATM10's 42 copied from a folder, 12 more are on CurseForge only and need its key) and the carry,
+two Modrinth packs; ATM10's 42 copied from a folder, 12 more are on CurseForge only: CurseForge downloads coming soon) and the carry,
 which writes tens of thousands of small files. World load grows with the blocks the pack declares: ATM10 adds
 about 155,000 block states, and loading their models and textures is most of its 28.7 s.
 
@@ -1081,5 +1081,5 @@ the mods that need porting (not counting performance mods and libraries), 2 of 8
 - Contacting authors of permissively licensed mods to publish ports (none contacted).
 - Whether players should run code-port agents themselves (their own Claude Code or Codex
   login, as Zenith does) or only download published ports.
-- A CurseForge API key for the launcher (CurseForge grants them to launchers on request). Until
-  then, CurseForge packs import from an installed instance.
+- CurseForge: dropped for now (its API needs a paid key; Ludovic, 2026-10-22), shown as coming
+  soon. CurseForge packs import from their zip or an installed instance.

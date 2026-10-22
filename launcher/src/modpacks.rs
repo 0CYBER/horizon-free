@@ -45,7 +45,8 @@ pub struct Imported {
     pub fetched: Fetched,
     /// The carried-over mods the profile loads.
     pub mods: Vec<PathBuf>,
-    /// Carried-over mods left off because an earlier one owns a namespace of theirs, with why.
+    /// Mods left off, with why: a ported one an earlier one owns a namespace of, or one whose
+    /// jar only CurseForge serves (CurseForge downloads coming soon).
     pub left_off: Vec<String>,
     /// The mods the port step gets and carries over (content, data tier).
     pub portable: usize,
@@ -107,7 +108,15 @@ pub fn load(work: &Path) -> Result<Imported, String> {
     let rows: Vec<Row> = pipeline::read_json(&work.join("coverage.json")).unwrap_or_default();
     let records: Vec<horizon_port_pack::inventory::Record> =
         pipeline::read_json(&work.join("inventory.json")).unwrap_or_default();
-    let (mods, left_off) = pipeline::loadable(&carried(work));
+    let (mods, mut left_off) = pipeline::loadable(&carried(work));
+    let fetched = Fetched::load(work);
+    left_off.extend(
+        fetched
+            .files
+            .iter()
+            .filter(|o| o.how == How::NeedsKey)
+            .map(|o| format!("{}: CurseForge downloads coming soon", o.key)),
+    );
     Ok(Imported {
         slug: work
             .file_name()
@@ -116,7 +125,7 @@ pub fn load(work: &Path) -> Result<Imported, String> {
         work: work.to_path_buf(),
         pack,
         rows,
-        fetched: Fetched::load(work),
+        fetched,
         mods,
         left_off,
         portable: records.iter().filter(|r| pipeline::portable(r)).count(),
@@ -216,7 +225,7 @@ pub fn outcome(pack: &Imported) -> String {
         pack.count(Status::NotNeeded),
         match pack.left_off.len() {
             0 => String::new(),
-            n => format!("; {n} ported mods are left off, sharing a namespace with another"),
+            n => format!("; {n} are left off (listed under the pack)"),
         },
     )
 }
@@ -265,6 +274,34 @@ mod tests {
         assert_eq!(slug("All the Mods 10"), "all-the-mods-10");
         assert_eq!(slug("Create: Above & Beyond!"), "create-above-beyond");
         assert_eq!(slug("  "), "pack");
+    }
+
+    #[test]
+    fn jars_only_curseforge_serves_are_left_off_as_coming_soon() {
+        use horizon_port_pack::fetch::Outcome;
+        let work = std::env::temp_dir().join(format!("horizon-launcher-cf-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&work);
+        fs::create_dir_all(&work).unwrap();
+        pipeline::write_json(&work.join("pack.json"), &Pack::default()).unwrap();
+        let fetched = Fetched {
+            files: vec![Outcome {
+                key: "allthemodium".into(),
+                file: "mods/allthemodium.jar".into(),
+                how: How::NeedsKey,
+                detail: String::new(),
+            }],
+        };
+        pipeline::write_json(&work.join("fetch.json"), &fetched).unwrap();
+        let pack = load(&work).unwrap();
+        assert_eq!(
+            pack.left_off,
+            ["allthemodium: CurseForge downloads coming soon"]
+        );
+        assert!(pack
+            .jars()
+            .unwrap()
+            .contains("CurseForge downloads coming soon"));
+        fs::remove_dir_all(&work).unwrap();
     }
 
     #[test]
