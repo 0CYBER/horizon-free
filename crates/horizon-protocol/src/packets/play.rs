@@ -458,6 +458,9 @@ move_entity!(MoveEntityPos, pos: true, rot: false);
 move_entity!(MoveEntityPosRot, pos: true, rot: true);
 move_entity!(MoveEntityRot, pos: false, rot: true);
 packet!(OpenScreen { container: i32 => VarInt, menu: i32 => VarInt, title: Tag => Nbt });
+// ClientboundMountScreenOpenPacket: a horse's or llama's inventory, with its
+// chest's columns (`getInventoryColumns`).
+packet!(MountScreenOpen { container: i32 => VarInt, columns: i32 => VarInt, entity: i32 => Int });
 packet!(PlayerAbilities { flags: i8 => Byte, flying_speed: f32 => Float, walking_speed: f32 => Float });
 /// MessageSignature.Packed: an index into the last-seen cache or a full signature.
 pub struct PackedSignature;
@@ -1497,6 +1500,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     MoveEntityPosRot(MoveEntityPosRot) = MOVE_ENTITY_POS_ROT,
     MoveEntityRot(MoveEntityRot) = MOVE_ENTITY_ROT,
     MerchantOffers(MerchantOffers) = MERCHANT_OFFERS,
+    MountScreenOpen(MountScreenOpen) = MOUNT_SCREEN_OPEN,
     OpenScreen(OpenScreen) = OPEN_SCREEN,
     Ping(Ping) = PING,
     PongResponse(crate::packets::status::Ping) = PONG_RESPONSE,
@@ -2178,6 +2182,11 @@ mod tests {
                 container: 1,
                 menu: 2,
                 title: literal("Chest"),
+            }),
+            Clientbound::MountScreenOpen(MountScreenOpen {
+                container: 4,
+                columns: 5,
+                entity: 300,
             }),
             Clientbound::MerchantOffers(MerchantOffers {
                 container: 3,

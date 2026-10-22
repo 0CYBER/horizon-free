@@ -183,6 +183,9 @@ const CHUNK_PACKETS_PER_FRAME: Duration = Duration::from_millis(1);
 /// whatever their cost: the packets after a slow machine's chunks never
 /// wait more than a tick.
 const BACKLOG_LIMIT: Duration = Duration::from_millis(50);
+/// The open menu name of a server's horse inventory, then its chest's
+/// columns (the packet names no `MenuType`).
+const MOUNT_MENU: &str = "horizon:mount";
 
 fn face_direction(face: [i32; 3]) -> u8 {
     match face {
@@ -1440,6 +1443,19 @@ impl Game<'_> {
             // CrafterMenu: the grid, the inventory, then the result (the
             // client's own).
             "minecraft:crafter_3x3" => slots(9),
+            // HorseInventoryMenu: the saddle, the body armour, the chest,
+            // then the inventory.
+            m if m.starts_with(MOUNT_MENU) => {
+                let n = m[MOUNT_MENU.len()..].parse::<usize>().ok()? * 3;
+                match s {
+                    0 => Some(super::mount_menu::SADDLE),
+                    1 => Some(super::mount_menu::ARMOR),
+                    _ if s < 2 + n => Some(super::mount_menu::CHEST + s - 2),
+                    _ if s < 2 + n + 27 => Some(9 + s - 2 - n),
+                    _ if s < 2 + n + 36 => Some(s - 2 - n - 27),
+                    _ => None,
+                }
+            }
             // A workstation: its inputs, its result, then the inventory.
             m => {
                 let kind = Self::remote_station_kind(m)?;
@@ -2204,6 +2220,7 @@ impl Game<'_> {
                 }
             }
             C::OpenScreen(p) => self.remote_open_screen(p),
+            C::MountScreenOpen(p) => self.remote_open_mount(p),
             C::RecipeBookAdd(p) => self.remote_recipe_book_add(p),
             C::RecipeBookRemove(p) => self.remote_recipe_book_remove(p),
             C::RecipeBookSettings(p) => self.remote_recipe_book_settings(p),
@@ -4099,6 +4116,18 @@ impl Game<'_> {
                 }
                 Ok(true)
             }
+            // MultiPlayerGameMode.isServerControlledInventory: riding a
+            // horse or llama, the server opens its inventory
+            // (ServerboundPlayerCommandPacket OPEN_INVENTORY).
+            KeyCode::KeyE if self.riding_mount_with_menu() => {
+                let id = self.remote.as_ref().map_or(0, |r| r.entity_id);
+                self.send(S::PlayerCommand(play::PlayerCommand {
+                    id,
+                    action: 5,
+                    data: 0,
+                }));
+                Ok(true)
+            }
             KeyCode::KeyE => {
                 // The inventory opens without telling the server.
                 self.screen = if self.creative {
@@ -4343,6 +4372,7 @@ impl Game<'_> {
             r.menu = None;
             r.menu_title = None;
         }
+        self.mount_menu_reset();
         // The client's menu has no level access: what it holds is the server's.
         self.station = None;
         self.craft_size = 2;
@@ -4526,6 +4556,21 @@ impl Game<'_> {
         }
         self.screen = Screen::Inventory;
         self.capture(false);
+    }
+    /// `ClientPacketListener.handleMountScreenOpen`: a horse's or llama's
+    /// inventory; for another entity the window is closed again.
+    fn remote_open_mount(&mut self, p: play::MountScreenOpen) {
+        let columns = usize::try_from(p.columns).unwrap_or(0).min(5);
+        if !self.open_remote_mount_menu(p.entity as u32, columns) {
+            self.send(S::ContainerClose(play::ContainerClose {
+                container: p.container,
+            }));
+            return;
+        }
+        if let Some(r) = self.remote.as_mut() {
+            r.menu = Some((p.container, format!("{MOUNT_MENU}{columns}")));
+            r.menu_title = None;
+        }
     }
     /// The type of the menu a server opened (`MenuType`'s id).
     pub(super) fn remote_menu_type(&self) -> Option<&str> {
