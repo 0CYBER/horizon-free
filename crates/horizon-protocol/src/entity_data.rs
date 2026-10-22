@@ -5,7 +5,7 @@
 use crate::{
     Result,
     buf::{Codec, Reader, Writer},
-    item::{Slot, Stack},
+    item::{Slot, Stack, Template},
 };
 use horizon_world::nbt::Tag;
 
@@ -32,8 +32,11 @@ pub enum Value {
     /// Rendered nowhere (the client spawns no world particles yet); decoded
     /// so the rest of an entry list survives a particle slot.
     Particle(Particle),
+    /// A particle list (PARTICLES: a VarInt count, then each particle).
+    Particles(Vec<Particle>),
 }
-/// The optional data of one particle type (26.3 registry order).
+/// One `ParticleTypes.STREAM_CODEC` value: the `minecraft:particle_type` id,
+/// then the data its type carries (26.3 registry order).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Particle {
     pub id: i32,
@@ -44,35 +47,131 @@ pub enum ParticleData {
     /// Block state id (block, block_marker, falling_dust, dust_pillar,
     /// block_crumble).
     State(i32),
-    /// Geometry-wide or ARGB color (effect, entity_effect, tinted_leaves,
-    /// flash); flame family colors keep the top bits in one Int.
-    Color(#[allow(dead_code)] i32),
-    /// Dust family: color then scale.
+    /// ARGB color (entity_effect, tinted_leaves, flash).
+    Color(i32),
+    /// Dust: color then scale.
     ColorScale(i32, f32),
     /// Dust color transition: from color, to color, scale.
     ColorScale2(i32, i32, f32),
-    /// Effect family: color then power.
+    /// Spell (effect, instant_effect): color then power.
     ColorPower(i32, f32),
     /// A bare float (dragon_breath power, sculk_charge roll).
     Scalar(f32),
     /// Delay in ticks (shriek).
     Delay(i32),
-    /// A position plus ticks (trail): 3 doubles, ARGB color, duration.
+    /// Trail: target (3 doubles), ARGB color, duration.
     Trail([f64; 3], i32, i32),
-    /// An item stack (item).
-    Item(Option<Stack>),
-    /// One generic Int (geyser water blocks) or Int then Float
-    /// (geyser_base, geyser_poof); plus the tick count of a vibration.
-    Ints(Vec<f32>),
-    /// Side effect: which registered particle carries which data shape.
-    Vibration {
-        #[allow(dead_code)]
-        source: i32,
-        #[allow(dead_code)]
-        eye: Option<f32>,
-        #[allow(dead_code)]
-        ticks: i32,
-    },
+    /// An item (ItemStackTemplate: item, count, patch).
+    Item(Stack),
+    /// Geyser and geyser_plume: water blocks.
+    Geyser(i32),
+    /// Geyser_base and geyser_poof: water blocks, then the burst impulse.
+    GeyserBase(i32, f32),
+    /// Vibration: where it travels to, then its arrival time in ticks.
+    Vibration { source: PositionSource, ticks: i32 },
+}
+/// `PositionSource.STREAM_CODEC`: a `minecraft:position_source_type` id
+/// (block 0, entity 1), then that type's data.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PositionSource {
+    Block([i32; 3]),
+    Entity { id: i32, y_offset: f32 },
+}
+impl Particle {
+    pub fn read(r: &mut Reader) -> Result<Particle> {
+        let id = r.varint()?;
+        // `minecraft:particle_type` registry order as of 26.3.
+        let data = match id {
+            1 | 2 | 36 | 121 | 125 => Some(ParticleData::State(r.varint()?)),
+            28 | 46 | 52 => Some(ParticleData::Color(r.i32()?)),
+            21 => {
+                let color = r.i32()?;
+                Some(ParticleData::ColorScale(color, r.f32()?))
+            }
+            22 => {
+                let from = r.i32()?;
+                let to = r.i32()?;
+                Some(ParticleData::ColorScale2(from, to, r.f32()?))
+            }
+            23 | 56 => {
+                let color = r.i32()?;
+                Some(ParticleData::ColorPower(color, r.f32()?))
+            }
+            15 | 48 => Some(ParticleData::Scalar(r.f32()?)),
+            115 => Some(ParticleData::Delay(r.varint()?)),
+            59 => {
+                let at = [r.f64()?, r.f64()?, r.f64()?];
+                let color = r.i32()?;
+                Some(ParticleData::Trail(at, color, r.varint()?))
+            }
+            57 => Some(ParticleData::Item(Template::read(r)?)),
+            58 => {
+                let source = match r.varint()? {
+                    0 => PositionSource::Block(crate::buf::Pos::read(r)?),
+                    1 => {
+                        let id = r.varint()?;
+                        PositionSource::Entity {
+                            id,
+                            y_offset: r.f32()?,
+                        }
+                    }
+                    kind => return Err(crate::Error::new(format!("position source type {kind}"))),
+                };
+                Some(ParticleData::Vibration {
+                    source,
+                    ticks: r.varint()?,
+                })
+            }
+            7 | 10 => Some(ParticleData::Geyser(r.i32()?)),
+            8 | 9 => {
+                let water = r.i32()?;
+                Some(ParticleData::GeyserBase(water, r.f32()?))
+            }
+            // Every other registered particle carries no data.
+            _ => None,
+        };
+        Ok(Particle { id, data })
+    }
+    pub fn write(&self, w: &mut Writer) {
+        w.varint(self.id);
+        let Some(data) = &self.data else { return };
+        match data {
+            ParticleData::State(s) | ParticleData::Delay(s) => w.varint(*s),
+            ParticleData::Color(c) | ParticleData::Geyser(c) => w.i32(*c),
+            ParticleData::ColorScale(c, f)
+            | ParticleData::ColorPower(c, f)
+            | ParticleData::GeyserBase(c, f) => {
+                w.i32(*c);
+                w.f32(*f);
+            }
+            ParticleData::ColorScale2(a, b, f) => {
+                w.i32(*a);
+                w.i32(*b);
+                w.f32(*f);
+            }
+            ParticleData::Scalar(f) => w.f32(*f),
+            ParticleData::Trail(at, c, d) => {
+                at.iter().for_each(|v| w.f64(*v));
+                w.i32(*c);
+                w.varint(*d);
+            }
+            ParticleData::Item(s) => Template::write(s, w),
+            ParticleData::Vibration { source, ticks } => {
+                match source {
+                    PositionSource::Block(pos) => {
+                        w.varint(0);
+                        crate::buf::Pos::write(pos, w);
+                    }
+                    PositionSource::Entity { id, y_offset } => {
+                        w.varint(1);
+                        w.varint(*id);
+                        w.f32(*y_offset);
+                    }
+                }
+                w.varint(*ticks);
+            }
+        }
+    }
 }
 /// Serializer ids in EntityDataSerializers registration order.
 pub mod serializer {
@@ -158,63 +257,14 @@ fn read_value(kind: i32, r: &mut Reader) -> Result<Option<Value>> {
         | PAINTING_VARIANT..=WEATHERING_COPPER_STATE
         | HUMANOID_ARM
         | DYE_COLOR => Value::Id(r.varint()?),
-        PARTICLE | PARTICLES => {
-            let id = r.varint()?;
-            // `minecraft:particle_type` registry order as of 26.3.
-            let data = match id {
-                1 | 2 | 36 | 121 | 125 => Some(ParticleData::State(r.varint()?)),
-                28 | 46 | 52 => Some(ParticleData::Color(r.i32()?)),
-                21 => {
-                    let color = r.i32()?;
-                    let scale = r.f32()?;
-                    Some(ParticleData::ColorScale(color, scale))
-                }
-                22 => {
-                    let from = r.i32()?;
-                    let to = r.i32()?;
-                    let scale = r.f32()?;
-                    Some(ParticleData::ColorScale2(from, to, scale))
-                }
-                23 | 56 => {
-                    let color = r.i32()?;
-                    let power = r.f32()?;
-                    Some(ParticleData::ColorPower(color, power))
-                }
-                15 | 48 => Some(ParticleData::Scalar(r.f32()?)),
-                115 => Some(ParticleData::Delay(r.varint()?)),
-                59 => {
-                    let x = r.f64()?;
-                    let y = r.f64()?;
-                    let z = r.f64()?;
-                    let color = r.i32()?;
-                    let duration = r.varint()?;
-                    Some(ParticleData::Trail([x, y, z], color, duration))
-                }
-                57 => Some(ParticleData::Item(Slot::read(r)?)),
-                58 => {
-                    let source = r.varint()?;
-                    let mut eye = None;
-                    if source == 0 {
-                        let _ = crate::buf::Pos::read(r)?;
-                    } else {
-                        let _ = r.varint()?;
-                        eye = Some(r.f32()?);
-                    }
-                    let ticks = r.varint()?;
-                    Some(ParticleData::Vibration { source, eye, ticks })
-                }
-                7..=10 => {
-                    let mut ints = vec![r.i32()? as f32];
-                    if id == 8 || id == 9 {
-                        ints.push(r.f32()?);
-                    }
-                    Some(ParticleData::Ints(ints))
-                }
-                // Every other registered particle carries no data.
-                _ => None,
-            };
-            // Not into Ok(Some(..)): the match arm is inside the outer Option.
-            Value::Particle(Particle { id, data })
+        PARTICLE => Value::Particle(Particle::read(r)?),
+        PARTICLES => {
+            let n = r.count(65536)?;
+            let mut list = Vec::with_capacity(n.min(64));
+            for _ in 0..n {
+                list.push(Particle::read(r)?);
+            }
+            Value::Particles(list)
         }
         _ => return Ok(None),
     }))
@@ -250,52 +300,10 @@ fn write_value(kind: i32, v: &Value, w: &mut Writer) {
                 w.uuid(*u);
             }
         }
-        Value::Particle(p) => {
-            w.varint(p.id);
-            if let Some(data) = &p.data {
-                match data {
-                    ParticleData::State(s) => w.varint(*s),
-                    ParticleData::Color(c) => w.i32(*c),
-                    ParticleData::ColorScale(c, s) => {
-                        w.i32(*c);
-                        w.f32(*s);
-                    }
-                    ParticleData::ColorScale2(a, b, s) => {
-                        w.i32(*a);
-                        w.i32(*b);
-                        w.f32(*s);
-                    }
-                    ParticleData::ColorPower(c, p) => {
-                        w.i32(*c);
-                        w.f32(*p);
-                    }
-                    ParticleData::Scalar(f) => w.f32(*f),
-                    ParticleData::Delay(d) => w.varint(*d),
-                    ParticleData::Trail(at, c, d) => {
-                        at.iter().for_each(|v| w.f64(*v));
-                        w.i32(*c);
-                        w.varint(*d);
-                    }
-                    ParticleData::Item(s) => Slot::write(s, w),
-                    ParticleData::Ints(ints) => {
-                        let mut iter = ints.iter();
-                        if let Some(v) = iter.next() {
-                            w.i32(*v as i32);
-                        }
-                        for v in iter {
-                            w.f32(*v);
-                        }
-                    }
-                    ParticleData::Vibration { source, eye, ticks } => {
-                        w.varint(*source);
-                        let _ = source;
-                        if let Some(eye) = eye {
-                            w.f32(*eye);
-                        }
-                        w.varint(*ticks);
-                    }
-                }
-            }
+        Value::Particle(p) => p.write(w),
+        Value::Particles(list) => {
+            w.varint(list.len() as i32);
+            list.iter().for_each(|p| p.write(w));
         }
     }
     let _ = kind;
@@ -377,6 +385,74 @@ mod tests {
         assert_eq!(
             EntityData::read(&mut Reader::new(&w.data)).unwrap(),
             entries
+        );
+    }
+
+    /// Every particle data shape (26.3 codecs) round-trips, and a PARTICLES
+    /// list is a VarInt count then each particle, so the entry after it
+    /// still decodes.
+    #[test]
+    fn particles_round_trip() {
+        let all = [
+            (1, Some(ParticleData::State(2))),
+            (7, Some(ParticleData::Geyser(5))),
+            (8, Some(ParticleData::GeyserBase(3, 0.5))),
+            (15, Some(ParticleData::Scalar(1.0))),
+            (21, Some(ParticleData::ColorScale(0xff0000, 1.5))),
+            (22, Some(ParticleData::ColorScale2(1, 2, 0.75))),
+            (23, Some(ParticleData::ColorPower(-1, 2.0))),
+            (28, Some(ParticleData::Color(0x7f00ff00))),
+            (
+                57,
+                Some(ParticleData::Item(Stack {
+                    item: 42,
+                    count: 3,
+                    added: Vec::new(),
+                    removed: vec![7],
+                })),
+            ),
+            (
+                58,
+                Some(ParticleData::Vibration {
+                    source: PositionSource::Block([-12, 64, 300]),
+                    ticks: 20,
+                }),
+            ),
+            (
+                58,
+                Some(ParticleData::Vibration {
+                    source: PositionSource::Entity {
+                        id: 99,
+                        y_offset: 1.25,
+                    },
+                    ticks: 8,
+                }),
+            ),
+            (59, Some(ParticleData::Trail([1.5, -2.0, 3.25], 9, 40))),
+            (115, Some(ParticleData::Delay(6))),
+            (0, None),
+        ]
+        .map(|(id, data)| Particle { id, data });
+        let mut entries: Vec<_> = all
+            .iter()
+            .map(|p| (10u8, serializer::PARTICLE, Value::Particle(p.clone())))
+            .collect();
+        entries.push((11, serializer::PARTICLES, Value::Particles(all.to_vec())));
+        entries.push((12, serializer::BYTE, Value::Byte(4)));
+        let mut w = Writer::new();
+        EntityData::write(&entries, &mut w);
+        assert_eq!(
+            EntityData::read(&mut Reader::new(&w.data)).unwrap(),
+            entries
+        );
+        // Wire shape: an empty list is one 0 byte, then the next entry.
+        let bytes = [11, serializer::PARTICLES as u8, 0, 12, 0, 4, 0xFF];
+        assert_eq!(
+            EntityData::read(&mut Reader::new(&bytes)).unwrap(),
+            vec![
+                (11, serializer::PARTICLES, Value::Particles(Vec::new())),
+                (12, serializer::BYTE, Value::Byte(4)),
+            ]
         );
     }
 }

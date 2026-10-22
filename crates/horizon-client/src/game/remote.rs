@@ -594,9 +594,11 @@ impl Game<'_> {
                     ("resolved", Tag::Byte(i8::from(b.resolved))),
                 ]),
                 Component::Enchantments(list) => {
-                    let registry = r.builtin.get("minecraft:enchantment");
+                    // Enchantments are a synced (data-driven) registry: the
+                    // ids index the server's RegistryData, not the builtin
+                    // report, so a datapack enchantment names correctly.
                     let levels = list.iter().filter_map(|(id, level)| {
-                        let name = registry?.name(*id)?;
+                        let name = r.registries.name("minecraft:enchantment", *id)?;
                         Some((name, Tag::Int(*level)))
                     });
                     Tag::compound(levels)

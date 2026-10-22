@@ -432,10 +432,11 @@ impl Game<'_> {
                 (false, false) => (0.5, 1.975),
             };
             let edge = (width + height + width) / 3.0 * 4.0;
-            // A marker's empty box gives a range of zero: vanilla's
-            // `distance < 0` never holds, so marker stands never draw.
-            let edge = if edge == 1.0 { 4.0 } else { edge };
-            let range = edge * 64.0;
+            // 26.3 compares the size with RenderSystem.DEFAULT_DEPTH_CLEAR_VALUE,
+            // which is 0.0 (reverse Z; the bytecode is `dconst_0`): an empty
+            // marker box falls back to 4, so a visible marker stand draws.
+            // Holograms stay hidden through the invisible flag instead.
+            let range = if edge == 0.0 { 4.0 } else { edge } * 64.0;
             let dragon = a.equipment[5]
                 .as_ref()
                 .is_some_and(|i| &*i.item == "minecraft:dragon_head");
