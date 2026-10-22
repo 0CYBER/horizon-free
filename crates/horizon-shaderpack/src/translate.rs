@@ -364,9 +364,10 @@ pub fn translate(
         stage: naga_stage,
         defines: Default::default(),
     };
-    let module = naga::front::glsl::Frontend::default()
+    let mut module = naga::front::glsl::Frontend::default()
         .parse(&options, &glsl)
         .map_err(|e| first_lines(&e.emit_to_string(&glsl)))?;
+    unpad_private_arrays(&mut module);
     let info = naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::all(),
@@ -491,6 +492,79 @@ fn negative_constant(e: &ast::Expr) -> bool {
     }
 }
 
+/// naga's GLSL front end lays every struct out as std140, so an array field
+/// of a struct that never reaches a buffer (Photon's ACES spline parameters,
+/// `float[6]`) gets a stride of 16, and constructing it from a `float[6](..)`
+/// (stride 4) fails validation. Give such fields their natural stride.
+fn unpad_private_arrays(module: &mut naga::Module) {
+    use naga::TypeInner as T;
+    let mut shared = HashSet::new();
+    let mut stack: Vec<_> = module
+        .global_variables
+        .iter()
+        .filter(|(_, v)| {
+            matches!(
+                v.space,
+                naga::AddressSpace::Uniform
+                    | naga::AddressSpace::Storage { .. }
+                    | naga::AddressSpace::Immediate
+            )
+        })
+        .map(|(_, v)| v.ty)
+        .collect();
+    while let Some(ty) = stack.pop() {
+        if !shared.insert(ty) {
+            continue;
+        }
+        match &module.types[ty].inner {
+            T::Struct { members, .. } => stack.extend(members.iter().map(|m| m.ty)),
+            T::Array { base, .. } | T::BindingArray { base, .. } => stack.push(*base),
+            _ => {}
+        }
+    }
+    let mut layouter = naga::proc::Layouter::default();
+    if layouter.update(module.to_ctx()).is_err() {
+        return;
+    }
+    let structs: Vec<_> = module
+        .types
+        .iter()
+        .filter(|(h, t)| !shared.contains(h) && matches!(t.inner, T::Struct { .. }))
+        .map(|(h, _)| h)
+        .collect();
+    for ty in structs {
+        let mut new = module.types[ty].clone();
+        let T::Struct { members, .. } = &mut new.inner else {
+            continue;
+        };
+        let mut changed = false;
+        for m in members.iter_mut() {
+            let T::Array { base, size, stride } = module.types[m.ty].inner else {
+                continue;
+            };
+            let natural = layouter[base].to_stride();
+            if stride != natural {
+                let span = module.types.get_span(m.ty);
+                m.ty = module.types.insert(
+                    naga::Type {
+                        name: None,
+                        inner: T::Array {
+                            base,
+                            size,
+                            stride: natural,
+                        },
+                    },
+                    span,
+                );
+                changed = true;
+            }
+        }
+        if changed {
+            module.types.replace(ty, new);
+        }
+    }
+}
+
 fn first_lines(s: &str) -> String {
     s.lines().take(8).collect::<Vec<_>>().join("\n")
 }
@@ -506,6 +580,8 @@ enum Local {
 struct Legaliser<'a> {
     stage: Stage,
     link: &'a mut Link,
+    /// Struct types declared so far: their fields (type, name, array).
+    structs: HashMap<String, Vec<(String, String, String)>>,
     interface: Interface,
     /// Global samplers: name → combined type.
     /// Sampler uniforms: their combined type and sampler variable.
@@ -532,6 +608,8 @@ struct Legaliser<'a> {
     /// helpers go in.
     modulo: bool,
     nan: bool,
+    /// `textureGather` was used: [`GATHER`] is added.
+    gather: bool,
     /// Constants turned into globals ([`needs_runtime`]).
     runtime_constants: HashSet<String>,
 }
@@ -546,6 +624,94 @@ fn call(name: &str, args: Vec<ast::Expr>) -> ast::Expr {
         args,
     )
     .into_node()
+}
+
+/// `textureGather(sampler2D, uv, comp)`: component `comp` of the four texels
+/// bilinear filtering at `uv` would blend, in GL's order, read with
+/// `texelFetch` (edges clamped).
+const GATHER: &str = "\
+vec4 iris_gather(texture2D t, sampler s, vec2 uv, int c) {
+    ivec2 hi = textureSize(sampler2D(t, s), 0) - 1;
+    ivec2 i = ivec2(floor(uv * vec2(hi + 1) - 0.5));
+    vec4 a = texelFetch(sampler2D(t, s), clamp(i + ivec2(0, 1), ivec2(0), hi), 0);
+    vec4 b = texelFetch(sampler2D(t, s), clamp(i + ivec2(1, 1), ivec2(0), hi), 0);
+    vec4 d = texelFetch(sampler2D(t, s), clamp(i + ivec2(1, 0), ivec2(0), hi), 0);
+    vec4 e = texelFetch(sampler2D(t, s), clamp(i, ivec2(0), hi), 0);
+    return vec4(a[c], b[c], d[c], e[c]);
+}
+";
+
+/// GL converts a `bool` given to a numeric constructor (`vec3(r < radius)`,
+/// Photon's sun disc); naga refuses. A comparison or logical expression
+/// passed to one becomes `(cond ? 1.0 : 0.0)` (or `1`/`1u`).
+fn bool_to_number(e: &mut ast::Expr) {
+    use ast::BinaryOpData as B;
+    let ast::ExprData::FunCall(f, args) = &mut e.content else {
+        return;
+    };
+    let Some(name) = callee(f) else { return };
+    let base = name.trim_start_matches('d');
+    let (one, zero) = if base.starts_with("ivec") || name == "int" {
+        (ast::ExprData::IntConst(1), ast::ExprData::IntConst(0))
+    } else if base.starts_with("uvec") || name == "uint" {
+        (ast::ExprData::UIntConst(1), ast::ExprData::UIntConst(0))
+    } else if base.starts_with("vec") || base.starts_with("mat") || name == "float" {
+        (
+            ast::ExprData::FloatConst(1.0),
+            ast::ExprData::FloatConst(0.0),
+        )
+    } else {
+        return;
+    };
+    for a in args.iter_mut() {
+        let boolean = match &a.content {
+            ast::ExprData::Binary(op, ..) => matches!(
+                op.content,
+                B::Or | B::Xor | B::And | B::Equal | B::NonEqual | B::Lt | B::Gt | B::Lte | B::Gte
+            ),
+            ast::ExprData::Unary(op, _) => op.content == ast::UnaryOpData::Not,
+            _ => false,
+        };
+        if boolean {
+            let cond = std::mem::replace(a, var("_"));
+            *a = ast::ExprData::Ternary(
+                Box::new(cond),
+                Box::new(one.clone().into_node()),
+                Box::new(zero.clone().into_node()),
+            )
+            .into_node();
+        }
+    }
+}
+
+/// Outside fragment shaders there are no derivatives, so GL samples level 0
+/// where `texture` and its kin would pick one; naga refuses them there (the
+/// vertex programs of Chocapic13', MakeUp and Bliss). Turn them into their
+/// `Lod` forms at level 0 (a bias is dropped), also inside `vec4(..)` as
+/// legacy shadow lookups are wrapped.
+fn explicit_lod(e: &mut ast::Expr) {
+    let ast::ExprData::FunCall(f, args) = &mut e.content else {
+        return;
+    };
+    let Some(name) = callee(f) else { return };
+    if name == "vec4" && args.len() == 1 {
+        return explicit_lod(&mut args[0]);
+    }
+    // (implicit, explicit, where the level goes, how many arguments without a bias)
+    let (lod, at, plain) = match name.as_str() {
+        "texture" => ("textureLod", 2, 2),
+        "textureProj" => ("textureProjLod", 2, 2),
+        "textureOffset" => ("textureLodOffset", 2, 3),
+        "textureProjOffset" => ("textureProjLodOffset", 2, 3),
+        _ => return,
+    };
+    if args.len() < plain {
+        return;
+    }
+    args.truncate(plain);
+    let zero = ast::ExprData::FloatConst(0.0).into_node();
+    args.insert(at, zero);
+    *f = ast::FunIdentifierData::Expr(Box::new(var(lod))).into_node();
 }
 
 /// The name a call is made by: a function, or a constructor's type.
@@ -713,6 +879,7 @@ impl<'a> Legaliser<'a> {
         Self {
             stage,
             link,
+            structs: HashMap::new(),
             interface: Interface::default(),
             samplers: HashMap::new(),
             sampler_vars: HashSet::new(),
@@ -728,6 +895,7 @@ impl<'a> Legaliser<'a> {
             constant: false,
             modulo: false,
             nan: false,
+            gather: false,
             runtime_constants: HashSet::new(),
         }
     }
@@ -812,6 +980,25 @@ impl<'a> Legaliser<'a> {
     }
 
     fn global_list(&mut self, list: &mut ast::InitDeclaratorList) -> Result<bool, String> {
+        if let ast::TypeSpecifierNonArrayData::Struct(st) = &list.head.ty.ty.ty.content
+            && let Some(name) = &st.name
+        {
+            let fields = st
+                .fields
+                .iter()
+                .flat_map(|f| {
+                    let ty = type_text(&f.ty);
+                    f.identifiers.iter().map(move |i| {
+                        (
+                            ty.clone(),
+                            i.ident.as_str().to_owned(),
+                            array_text(&i.array_spec),
+                        )
+                    })
+                })
+                .collect();
+            self.structs.insert(name.as_str().to_owned(), fields);
+        }
         let qualifier = list.head.ty.qualifier.clone();
         let storage = storage(&qualifier);
         let has = |s: ast::StorageQualifierData| storage.contains(&s);
@@ -934,6 +1121,24 @@ impl<'a> Legaliser<'a> {
                 "out"
             };
             let interp = interpolation(&qualifier);
+            if varying
+                && ty_array.is_empty()
+                && let Some(fields) = self.structs.get(&ty).cloned()
+            {
+                // The struct global stays where it is declared (after its
+                // type), without its qualifiers; its fields travel.
+                for (name, array) in &names {
+                    if array.is_empty() {
+                        self.struct_varying(dir, &interp, &ty, name, fields.clone());
+                    } else {
+                        self.errors.push(format!(
+                            "varying {name}: arrays of structs are not supported"
+                        ));
+                    }
+                }
+                list.head.ty.qualifier = None;
+                return Ok(true);
+            }
             let explicit = layout_ids(&qualifier)
                 .into_iter()
                 .find(|(k, _)| k == "location")
@@ -1061,6 +1266,73 @@ impl<'a> Legaliser<'a> {
         }
     }
 
+    /// A struct varying (Photon's `CloudsParameters`): a varying per field,
+    /// matrix column or array element, copied from or into a private global
+    /// of the struct type.
+    fn struct_varying(
+        &mut self,
+        dir: &str,
+        interp: &str,
+        ty: &str,
+        name: &str,
+        fields: Vec<(String, String, String)>,
+    ) {
+        let _ = ty;
+        for (field_ty, field, array) in fields {
+            let count: Option<usize> = array
+                .strip_prefix('[')
+                .and_then(|a| a.strip_suffix(']'))
+                .and_then(|n| n.parse().ok());
+            let element = format!("{name}.{field}");
+            let parts: Vec<(String, String, String)> = match (matrix_columns(&field_ty), count) {
+                (None, None) if !self.structs.contains_key(&field_ty) => {
+                    vec![(format!("{name}#{field}"), field_ty.clone(), element)]
+                }
+                (Some((cols, column)), None) => (0..cols)
+                    .map(|c| {
+                        (
+                            format!("{name}#{field}#{c}"),
+                            column.clone(),
+                            format!("{element}[{c}]"),
+                        )
+                    })
+                    .collect(),
+                (None, Some(n)) if matrix_columns(&field_ty).is_none() => (0..n)
+                    .map(|e| {
+                        (
+                            format!("{name}#{field}#{e}"),
+                            field_ty.clone(),
+                            format!("{element}[{e}]"),
+                        )
+                    })
+                    .collect(),
+                _ => {
+                    self.errors.push(format!(
+                        "varying {name}: field {field} ({field_ty}{array}) is not supported"
+                    ));
+                    return;
+                }
+            };
+            for (key, part_ty, element) in parts {
+                let at = Link::location(&mut self.link.varyings, &key);
+                let part = key.replace('#', "_iris_");
+                let flat = if is_integer(&part_ty) && !interp.contains("flat") {
+                    "flat "
+                } else {
+                    ""
+                };
+                self.header.push(format!(
+                    "layout(location = {at}) {flat}{interp}{dir} {part_ty} {part};"
+                ));
+                if dir == "out" {
+                    self.epilogue.push(format!("{part} = {element};"));
+                } else {
+                    self.prologue.push(format!("{element} = {part};"));
+                }
+            }
+        }
+    }
+
     fn sized(&mut self, list: &mut ast::InitDeclaratorList) {
         let head_ty = list.head.ty.ty.clone();
         let head = &mut list.head.content;
@@ -1117,7 +1389,23 @@ impl<'a> Legaliser<'a> {
         }
         let mut locals = Vec::new();
         let mut params = Vec::with_capacity(p.parameters.len());
-        for param in std::mem::take(&mut p.parameters) {
+        for mut param in std::mem::take(&mut p.parameters) {
+            // `const in float x` (Bliss): naga's front end takes no `const`
+            // on parameters, and it changes nothing for the caller.
+            match &mut param.content {
+                ast::FunctionParameterDeclarationData::Named(q, _)
+                | ast::FunctionParameterDeclarationData::Unnamed(q, _) => {
+                    if let Some(list) = q {
+                        list.qualifiers.retain(|q| {
+                            !matches!(&q.content, ast::TypeQualifierSpecData::Storage(s)
+                                if s.content == ast::StorageQualifierData::Const)
+                        });
+                        if list.qualifiers.is_empty() {
+                            *q = None;
+                        }
+                    }
+                }
+            }
             let (ty, name) = match &param.content {
                 ast::FunctionParameterDeclarationData::Named(_, d) => {
                     (type_text(&d.ty), Some(d.ident.ident.as_str().to_owned()))
@@ -1544,12 +1832,56 @@ impl<'a> Legaliser<'a> {
             self.nan = true;
             return;
         }
+        if name == "textureGather"
+            && (2..=3).contains(&args.len())
+            && let ast::ExprData::FunCall(g, inner) = &args[0].content
+            && inner.len() == 2
+            && callee(g).as_deref() == Some("sampler2D")
+        {
+            // naga's GLSL front end has no `textureGather`.
+            let mut call_args = inner.clone();
+            call_args.push(args[1].clone());
+            call_args.push(
+                args.get(2)
+                    .cloned()
+                    .unwrap_or_else(|| ast::ExprData::IntConst(0).into_node()),
+            );
+            *e = call("iris_gather", call_args);
+            self.gather = true;
+            return;
+        }
+        if name == "modf"
+            && args.len() == 2
+            && !matches!(args[1].content, ast::ExprData::Variable(_))
+        {
+            // `modf(x, v.y)` (Photon): WGSL can't point at a vector
+            // component, so no `out` parameter: `(v.y = trunc(x), x - trunc(x))`.
+            let (x, whole) = (args[0].clone(), args[1].clone());
+            let assign = ast::ExprData::Assignment(
+                Box::new(whole),
+                ast::AssignmentOpData::Equal.into_node(),
+                Box::new(call("trunc", vec![x.clone()])),
+            )
+            .into_node();
+            let fraction = ast::ExprData::Binary(
+                ast::BinaryOpData::Sub.into_node(),
+                Box::new(x.clone()),
+                Box::new(call("trunc", vec![x])),
+            )
+            .into_node();
+            *e = ast::ExprData::Comma(Box::new(assign), Box::new(fraction)).into_node();
+            return;
+        }
         if let Some((_, new)) = LEGACY_CALLS.iter().find(|(old, _)| *old == name) {
             *f = ast::FunIdentifierData::Expr(Box::new(var(new))).into_node();
         } else if let Some((_, new)) = SHADOW_CALLS.iter().find(|(old, _)| *old == name) {
             let args = std::mem::take(args);
             *e = call("vec4", vec![call(new, args)]);
         }
+        if self.stage != Stage::Fragment {
+            explicit_lod(e);
+        }
+        bool_to_number(e);
     }
 
     /// The legalised source: header, the rewritten program, then a `main`
@@ -1585,6 +1917,9 @@ impl<'a> Legaliser<'a> {
         out.push_str(HELPERS);
         if self.modulo {
             out.push_str(&modulo_helpers());
+        }
+        if self.gather {
+            out.push_str(GATHER);
         }
         if self.nan {
             out.push_str("float iris_sqrt(float x) { return sqrt(x); }\n");
