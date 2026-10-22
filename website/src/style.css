@@ -1,8 +1,7 @@
 /* Horizon's design language (docs/design-system.md), set as a page. The tokens come from
    crates/horizon-theme through src/tokens.css, which build.mjs puts before this file: the
-   same palette, type, spacing and motion as the launcher and the game's menus. Type is the
-   interface; content is numbered index lists with one-pixel rules; one violet accent for the
-   main action, links and focus; space instead of borders; quiet motion. */
+   launcher's Blocks palettes, type, spacing and motion. The base below lays out the page; the
+   "Blocks" section at the end gives it the launcher's blocky, Minecraft-like look. */
 
 @font-face { font-family: "Geist"; src: url("/fonts/Geist-Regular.woff2") format("woff2"); font-weight: 400; font-display: swap; }
 @font-face { font-family: "Geist"; src: url("/fonts/Geist-Medium.woff2") format("woff2"); font-weight: 500; font-display: swap; }
@@ -301,12 +300,7 @@ figcaption span { font-family: var(--mono); font-size: var(--text-micro); letter
 .screen-caption { margin-top: 12px; font-size: var(--text-caption); color: var(--muted); }
 
 /* Patch notes. */
-.release-latest { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 48px; padding-top: 32px; border-top: 1px solid var(--rule); }
-.release-head { position: sticky; top: calc(var(--nav) + 24px); align-self: start; display: flex; flex-direction: column; gap: 12px; }
 .eyebrow { text-transform: uppercase; }
-.release-version { font-size: var(--text-display); line-height: var(--text-display-line); letter-spacing: var(--text-display-tracking); font-weight: 500; }
-.release-line { color: var(--muted); max-width: 36ch; }
-.release-body { font-size: var(--text-ui); }
 .prose h2, .prose h3, .prose h4 { font-size: var(--text-heading); line-height: var(--text-heading-line); color: var(--ink); margin-top: 28px; }
 .prose ul, .prose ol { padding-left: 18px; list-style: disc; }
 .prose li + li { margin-top: 6px; }
@@ -314,8 +308,6 @@ figcaption span { font-family: var(--mono); font-size: var(--text-micro); letter
 .prose strong { color: var(--ink); font-weight: 500; }
 .prose pre { padding: 16px; border-radius: var(--radius-plate); background: var(--plate-soft); overflow-x: auto; }
 .prose pre code { background: none; padding: 0; }
-.release-older { margin-top: 64px; }
-.release-older-title { font: var(--text-micro) / var(--text-micro-line) var(--mono); letter-spacing: var(--text-micro-tracking); color: var(--muted); text-transform: uppercase; margin-bottom: 12px; }
 .release { border-top: 1px solid var(--rule); }
 .release:last-of-type { border-bottom: 1px solid var(--rule); }
 .release summary {
@@ -405,9 +397,9 @@ figcaption span { font-family: var(--mono); font-size: var(--text-micro); letter
 /* --- Narrow screens ------------------------------------------------------------------------ */
 
 @media (max-width: 900px) {
-  .section-head, .parity-hero, .launcher-grid, .release-latest { grid-template-columns: minmax(0, 1fr); }
+  .section-head, .parity-hero, .launcher-grid { grid-template-columns: minmax(0, 1fr); }
   .section-head { gap: 16px; }
-  .screens, .release-head { position: static; }
+  .screens { position: static; }
   .fact { grid-template-columns: var(--index) minmax(0, 1fr); row-gap: 6px; }
   .fact p { grid-column: 2; }
   .mosaic { grid-template-columns: minmax(0, 1fr); }
@@ -499,3 +491,253 @@ figcaption span { font-family: var(--mono); font-size: var(--text-micro); letter
 @media (pointer: coarse) {
   .docs-nav li a, .docs-toc a, .docs-bar-title, .docs-bar-link { display: flex; align-items: center; min-height: 44px; }
 }
+
+/* --- Blocks: the launcher's look on the page (docs/design-system.md, "Blocks") -------------
+   Pixel type for headings and controls, square panels with a dark outline, a light bevel on top
+   and a darker lip below, the violet face for the main action, sunk wells, a stone texture
+   behind the page and Horizon's pixel landscape behind the hero. The art is drawn in code
+   (scripts/art.mjs, like launcher/src/art.rs); nothing in it comes from Minecraft. */
+
+@font-face { font-family: "Pixelify Sans"; src: url("/fonts/PixelifySans-Medium.woff2") format("woff2"); font-weight: 500; font-display: swap; }
+@font-face { font-family: "Pixelify Sans"; src: url("/fonts/PixelifySans-SemiBold.woff2") format("woff2"); font-weight: 600; font-display: swap; }
+@font-face { font-family: "Pixelify Sans"; src: url("/fonts/PixelifySans-Bold.woff2") format("woff2"); font-weight: 700; font-display: swap; }
+
+:root {
+  --stone: url("/media/stone-light.png");
+  --scene: url("/media/scene-light.png");
+  --sky: #8d7fd8;
+  --panel-edges: inset 0 var(--block-bevel) 0 var(--bevel), inset 0 calc(-1 * var(--block-bevel)) 0 var(--lip);
+  --radius: 0px; --radius-plate: 0px; --radius-pill: 0px;
+}
+:root[data-theme="dark"] { --stone: url("/media/stone-dark.png"); --scene: url("/media/scene-dark.png"); --sky: #0a0f2c; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --stone: url("/media/stone-dark.png"); --scene: url("/media/scene-dark.png"); --sky: #0a0f2c; }
+}
+
+/* The stone: 64 texels of the page colour in close shades, each texel 4 px. */
+body { position: relative; isolation: isolate; }
+body::before {
+  content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background: var(--stone) 0 0 / 256px 256px repeat; image-rendering: pixelated;
+}
+
+/* Pixel type for what names and what you act on; paragraphs stay in Geist. */
+.display, .title, .statement, .row-name, .card-title, .release-tag, .count,
+.fact h3, .features h3, .system h3, .contributors-title, .footer-disclaimer, .footer-word,
+.nav-mark, .docs-prose h2, .docs-prose h3, .prose h2, .prose h3, .prose h4, .menu nav a {
+  font-family: var(--pixel); font-weight: 600; letter-spacing: 0;
+}
+.display, .count, .footer-word { font-weight: 700; }
+.nav-mark { font-size: 18px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+code { border-radius: 0; background: var(--well); box-shadow: 0 0 0 1px var(--outline); }
+
+/* Buttons: blocks with an outline, a bevel and a lip; they sink a pixel when pressed. */
+.button {
+  border: var(--block-outline) solid var(--outline); border-radius: 0;
+  font: 500 var(--text-ui) / 1 var(--pixel);
+  box-shadow: inset 0 var(--block-bevel) 0 var(--button-bevel), inset 0 calc(-1 * var(--block-lip)) 0 var(--lip);
+  padding-bottom: 2px;
+}
+.button.large { font-size: 18px; }
+.button.primary { background: var(--face); color: var(--on-face); box-shadow: inset 0 var(--block-bevel) 0 var(--face-bevel), inset 0 calc(-1 * var(--block-lip)) 0 var(--face-lip); }
+.button.primary:hover { opacity: 1; filter: brightness(1.08); }
+.button.secondary { background: var(--button); }
+.button.secondary:hover { background: var(--button); filter: brightness(1.06); }
+.button.ghost { border-color: transparent; box-shadow: none; }
+.button:active { opacity: 1; transform: translateY(1px); box-shadow: inset 0 var(--block-bevel) 0 var(--lip); }
+:focus-visible { border-radius: 0; }
+
+/* The top bar: the sidebar colour with an outline under it, tabs with an accent underline. */
+.nav.is-scrolled, .nav.is-menu { background: var(--side); -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: 0 var(--block-outline) 0 var(--outline); }
+.nav-links a, .nav-github, .theme-toggle { border-radius: 0; font-family: var(--pixel); font-weight: 500; font-size: 15px; }
+.nav-links a:hover, .nav-github:hover, .theme-toggle:hover { background: var(--raised); }
+.nav-links a[aria-current] { background: var(--raised); box-shadow: inset 0 -3px 0 var(--accent); }
+.theme-toggle { text-transform: none; letter-spacing: 0; }
+.menu { background: var(--side); }
+.menu nav a { border-bottom: 0; }
+
+/* Lists become stacks of panels. */
+.index, .systems, .contributors-list { border-top: 0; display: grid; gap: 8px; }
+.row, .system, .release, .release:last-of-type, .contributor { border-bottom: 0; border-top: 0; }
+.row > a, .row.card, .fact.row, .features li, .system, .release, .contributor, .docs-pager a {
+  background: var(--panel); border: var(--block-outline) solid var(--outline); box-shadow: var(--panel-edges);
+  border-radius: 0;
+}
+.row > a, .row.card, .fact.row, .features li, .system { padding-left: 20px; padding-right: 20px; }
+.row > a::before, .row.card::before { display: none; }
+.row > a:hover, .row.card:hover, .contributor:hover, .docs-pager a:hover { background: var(--raised); }
+.row > a:hover .row-index { color: var(--accent); }
+.row-name { font-size: clamp(20px, 2.2vw, 28px); }
+.release { padding: 0 20px; }
+.release + .release { margin-top: 8px; }
+.release .prose { padding-left: 12rem; }
+.contributor { padding: 12px 14px; }
+.contributors-list { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.contributor-avatar { border-radius: 0; box-shadow: 0 0 0 2px var(--outline); image-rendering: pixelated; }
+.system.is-full .system-state { color: var(--success); }
+
+/* Screenshots and the launcher's screens: square, outlined. */
+.zoom, .screen, .lightbox, .prose pre, .docs-prose figure img { border-radius: 0; box-shadow: 0 0 0 var(--block-outline) var(--outline); }
+.tabs { border-radius: 0; background: var(--well); box-shadow: 0 0 0 var(--block-outline) var(--outline); }
+.tabs button { border-radius: 0; font-family: var(--pixel); font-weight: 500; font-size: 15px; }
+.tabs button[aria-selected="true"] { color: var(--on-face); }
+.tab-pill { border-radius: 0; background: var(--face); box-shadow: inset 0 var(--block-bevel) 0 var(--face-bevel), inset 0 calc(-1 * var(--block-bevel)) 0 var(--face-lip); }
+
+/* The hero: Horizon's landscape under a veil of the page colour, the words on the left. */
+.hero {
+  position: relative; isolation: isolate; overflow: hidden;
+  background: var(--scene) 70% 100% / clamp(1200px, 135vw, 2400px) auto no-repeat, var(--sky); image-rendering: pixelated;
+  border-bottom: var(--block-outline) solid var(--outline);
+}
+.hero::before {
+  content: ""; position: absolute; inset: 0; z-index: -1;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--page) 92%, transparent) 0%, color-mix(in srgb, var(--page) 78%, transparent) 45%, color-mix(in srgb, var(--page) 0%, transparent) 78%),
+    linear-gradient(180deg, color-mix(in srgb, var(--page) 0%, transparent) 55%, color-mix(in srgb, var(--page) 70%, transparent) 100%);
+}
+.hero .kicker span, .hero .kicker { color: var(--ink-soft); }
+.hero .lede { color: var(--ink-soft); }
+.hero { padding-bottom: clamp(160px, 18vw, 280px); }
+.hero-after { padding-top: 40px; }
+.hero-after .hero-index { margin-top: 0; max-width: 860px; }
+.hero-after .disclaimer { margin-top: 24px; }
+@media (max-width: 900px) {
+  .hero::before { background: color-mix(in srgb, var(--page) 84%, transparent); }
+}
+
+/* Documentation. */
+.docs-bar { background: var(--side); -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: 0 var(--block-outline) 0 var(--outline); }
+.docs-nav li a { border-radius: 0; }
+.docs-nav li a[aria-current] { background: var(--raised); box-shadow: inset 4px 0 0 var(--accent); }
+.docs-toc a { border-radius: 0; background: var(--button); box-shadow: 0 0 0 var(--block-outline) var(--outline); }
+.docs-pager a { box-shadow: var(--panel-edges); }
+.docs-prose h2 { border-top: var(--block-outline) solid var(--outline); }
+.docs-prose blockquote { border-left: 4px solid var(--accent); background: var(--panel); padding: 10px 16px; box-shadow: 0 0 0 var(--block-outline) var(--outline); }
+
+/* The footer: the giant wordmark in pixels. */
+.footer { background: var(--side); border-top: var(--block-outline) solid var(--outline); margin-top: 48px; }
+.footer-word { color: var(--raised); letter-spacing: 0.02em; }
+:root[data-theme="dark"] .footer-word { color: var(--panel); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .footer-word { color: var(--panel); } }
+
+/* --- Releases and Benchmarks pages, and the home page's "Recently added" ------------------ */
+
+/* Pixelify Sans' "fi" ligature draws as "A" ("8 Axes"): no common ligatures anywhere. */
+:root { font-variant-ligatures: no-common-ligatures; }
+
+.page-main { padding-top: calc(var(--nav) + clamp(40px, 6vw, 80px)); }
+.page-title { max-width: 18ch; margin-bottom: 20px; }
+.page-main > .container > .lede { font-size: var(--text-body); }
+.page-main .disclaimer { margin-top: 48px; }
+
+/* Channel and source badges: small square tags. */
+.badge {
+  display: inline-flex; align-items: center; height: 22px; padding: 0 8px; margin-right: 10px; vertical-align: 2px;
+  font: 500 12px / 1 var(--pixel); letter-spacing: 0.02em; text-transform: uppercase; white-space: nowrap;
+  border: var(--block-outline) solid var(--outline); background: var(--well); color: var(--ink-soft);
+}
+.badge-stable { background: color-mix(in srgb, var(--success) 22%, var(--panel)); color: var(--ink); }
+.badge-alpha { background: color-mix(in srgb, var(--warn) 24%, var(--panel)); color: var(--ink); }
+.badge-launcher { background: color-mix(in srgb, var(--accent) 20%, var(--panel)); color: var(--ink); }
+.badge-us { background: color-mix(in srgb, var(--accent) 20%, var(--panel)); color: var(--ink); }
+.badge-players { background: color-mix(in srgb, var(--success) 22%, var(--panel)); color: var(--ink); }
+.badge-estimate { background: color-mix(in srgb, var(--warn) 24%, var(--panel)); color: var(--ink); }
+
+/* Home: the newest releases on a line each, then what they added. */
+.recent-list .row > a { grid-template-columns: 8.5rem minmax(0, 13rem) minmax(0, 1fr) auto; align-items: baseline; }
+.recent-line { color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-list .row-name { font-size: clamp(18px, 1.8vw, 22px); }
+.recent-list .badge { margin-right: 0; }
+.recent-picks { margin-top: 32px; }
+.recent-picks .eyebrow { margin-bottom: 12px; }
+.highlights { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.highlight {
+  display: flex; flex-direction: column; justify-content: space-between; gap: 16px; padding: 18px 20px;
+  background: var(--panel); border: var(--block-outline) solid var(--outline); box-shadow: var(--panel-edges);
+}
+.highlight p { color: var(--ink); }
+.highlight-from { font: var(--text-micro) / 1 var(--mono); letter-spacing: var(--text-micro-tracking); color: var(--muted); }
+.highlight-from:hover { color: var(--accent); }
+
+/* Releases: a filter, then every release as a panel that opens. */
+.release-filter { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 32px; }
+.release-filter .button[aria-pressed="true"] { background: var(--face); color: var(--on-face); box-shadow: inset 0 var(--block-bevel) 0 var(--face-bevel), inset 0 calc(-1 * var(--block-lip)) 0 var(--face-lip); }
+.release-count { margin: 16px 0 12px; }
+.release-list { display: grid; gap: 8px; }
+.release-list .release + .release { margin-top: 0; }
+.release-entry summary { grid-template-columns: minmax(0, 11rem) minmax(0, 1fr) auto; }
+.release-entry .release-sub { display: flex; align-items: baseline; flex-wrap: wrap; row-gap: 4px; }
+.release-detail { padding: 0 0 24px 11rem; margin-left: 16px; display: grid; gap: 20px; max-width: calc(11rem + 16px + var(--measure) + 120px); }
+.release-detail .prose { padding: 0; margin: 0; font-size: var(--text-ui); max-width: none; }
+.release-overview { padding: 16px 18px; background: var(--well); box-shadow: 0 0 0 var(--block-outline) var(--outline); }
+.release-counts { font-family: var(--pixel); font-weight: 600; color: var(--ink); margin-bottom: 8px; }
+.release-overview ul { list-style: square; padding-left: 18px; color: var(--ink-soft); font-size: var(--text-ui); }
+.release-overview li + li { margin-top: 4px; }
+.release-downloads ul { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; margin-top: 8px; }
+.release-downloads li { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; background: var(--button); box-shadow: 0 0 0 var(--block-outline) var(--outline); }
+.release-downloads li a { font-weight: 500; }
+.release-downloads li span { font: var(--text-micro) / 1.4 var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+.release-github { font-size: var(--text-caption); }
+.release-entry:target { box-shadow: var(--panel-edges), 0 0 0 3px var(--accent); }
+
+/* Benchmarks. */
+.bench-section { margin-top: clamp(64px, 8vw, 112px); }
+.bench-section > .title { margin-bottom: 16px; }
+.bench-section > .lede { margin-bottom: 32px; }
+.machines { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; }
+.machine { min-width: 0; padding: 24px; background: var(--panel); border: var(--block-outline) solid var(--outline); box-shadow: var(--panel-edges); }
+.machine-head { display: grid; gap: 10px; margin-bottom: 20px; }
+.machine-name { font-family: var(--pixel); font-weight: 600; font-size: var(--text-title); line-height: var(--text-title-line); }
+.machine-facts { display: flex; flex-wrap: wrap; gap: 6px 28px; margin: 0; }
+.machine-facts div { display: flex; gap: 8px; min-width: 0; }
+.machine-facts dt { font: var(--text-micro) / 1.6 var(--mono); letter-spacing: var(--text-micro-tracking); text-transform: uppercase; color: var(--muted); }
+.machine-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; font-size: var(--text-caption); color: var(--ink-soft); }
+.machine-note { font-size: var(--text-caption); color: var(--muted); max-width: 90ch; }
+/* relative: the screen-reader-only labels inside are absolute and would escape the scroll box otherwise. */
+.table-wrap { position: relative; overflow-x: auto; }
+.bench-table { width: 100%; border-collapse: collapse; font-size: var(--text-ui); }
+.bench-table th, .bench-table td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--rule); vertical-align: baseline; }
+.bench-table thead th { font: var(--text-micro) / 1.4 var(--mono); letter-spacing: var(--text-micro-tracking); text-transform: uppercase; color: var(--muted); font-weight: 400; }
+.bench-table thead tr:first-child th { color: var(--ink); }
+.bench-table tbody th { font-weight: 500; color: var(--ink); }
+.bench-table td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bench-table td.wins { color: var(--ink); font-weight: 600; }
+.bench-table td.vs { font-size: var(--text-caption); white-space: nowrap; }
+.vs-horizon { color: var(--success); }
+.vs-java { color: var(--danger); }
+.vs-tie, .vs-none { color: var(--muted); }
+.capped { font: var(--text-micro) / 1 var(--mono); color: var(--warn); cursor: help; }
+.metric-hint { display: block; font: var(--text-micro) / 1.4 var(--mono); color: var(--muted); font-weight: 400; }
+.java-wins { margin-top: 16px; font-size: var(--text-caption); color: var(--ink-soft); }
+.picker { display: flex; flex-wrap: wrap; gap: 16px 24px; align-items: end; padding: 20px; background: var(--panel); border: var(--block-outline) solid var(--outline); box-shadow: var(--panel-edges); }
+.picker label { display: grid; gap: 6px; }
+.picker label > span, .picker legend { font: var(--text-micro) / 1.4 var(--mono); letter-spacing: var(--text-micro-tracking); text-transform: uppercase; color: var(--muted); }
+.picker select {
+  min-width: min(320px, 80vw); height: var(--control); padding: 0 10px; font: inherit; font-size: var(--text-ui); color: var(--ink);
+  background: var(--well); border: var(--block-outline) solid var(--outline); border-radius: 0;
+}
+.picker-rd { display: flex; gap: 16px; align-items: center; border: 0; padding: 0; margin: 0; }
+.picker-rd legend { margin-bottom: 6px; }
+.picker-rd label { display: inline-flex; align-items: center; gap: 6px; font-family: var(--pixel); font-weight: 500; height: var(--control); }
+.picker-rd input { accent-color: var(--accent); width: 18px; height: 18px; }
+.pick-result { margin-top: 16px; padding: 20px; background: var(--panel); border: var(--block-outline) solid var(--outline); box-shadow: var(--panel-edges); }
+.pick-head { margin-bottom: 12px; font-size: var(--text-caption); color: var(--ink-soft); line-height: 1.8; }
+.pick-result .meta { margin-top: 12px; }
+.empty { color: var(--muted); }
+.prose-section .prose { max-width: 80ch; }
+.spec-table { margin-top: 24px; }
+.spec-table summary { cursor: pointer; font-family: var(--pixel); font-weight: 600; }
+.spec-table .bench-table { margin-top: 16px; max-width: 760px; }
+
+@media (max-width: 900px) {
+  .recent-list .row > a { grid-template-columns: minmax(0, 1fr) auto; row-gap: 4px; }
+  .recent-list .row-index { grid-column: 1; grid-row: 1; }
+  .recent-list .row-name { grid-column: 1; grid-row: 2; }
+  .recent-line { grid-column: 1 / -1; grid-row: 3; white-space: normal; }
+  .recent-list .row-meta { grid-column: 2; grid-row: 1; }
+  .highlights { grid-template-columns: minmax(0, 1fr); }
+  .release-entry summary { grid-template-columns: minmax(0, 1fr) auto; }
+  .release-detail { padding-left: 0; margin-left: 0; }
+  .machine { padding: 16px; }
+}
+.older-runs { margin-top: 16px; max-width: 90ch; padding: 16px 20px; background: var(--well); box-shadow: 0 0 0 var(--block-outline) var(--outline); font-size: var(--text-caption); }

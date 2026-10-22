@@ -24,6 +24,7 @@ fn class(kind: Kind) -> u64 {
         Kind::ResourcePack => 12,
         Kind::ShaderPack => 6552,
         Kind::Modpack => 4471,
+        Kind::Mod => 6,
     }
 }
 
@@ -68,12 +69,15 @@ impl CurseForge {
 
 pub(super) fn search_url(query: &Query) -> String {
     let mut url = format!(
-        "{API}/mods/search?gameId={MINECRAFT}&classId={}&sortField=2&sortOrder=desc&index={}&pageSize={}",
+        "{API}/mods/search?gameId={MINECRAFT}&classId={}&sortField={}&sortOrder=desc&index={}&pageSize={}",
         class(query.kind),
+        query.filters.sort(&query.text).curseforge(),
         query.offset,
         query.limit.clamp(1, 50),
     );
-    if !query.everything && query.kind == Kind::ResourcePack {
+    if let Some(v) = &query.filters.game_version {
+        url.push_str(&format!("&gameVersion={}", encode(v)));
+    } else if !query.everything && matches!(query.kind, Kind::ResourcePack | Kind::Mod) {
         url.push_str(&format!("&gameVersion={GAME}"));
     }
     if !query.text.is_empty() {

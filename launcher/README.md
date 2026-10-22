@@ -24,10 +24,10 @@ The opening, then Play ([clip](docs/opening.webm)):
   preparation reuses checksum-verified game jars and libraries from the current
   or another installed Horizon version, so the original Minecraft install is
   only required when no valid imported copy exists.
-- **Mods**: search Modrinth (and CurseForge once the launcher has its API key) for resource
+- **Mods**: search Modrinth (CurseForge support is coming soon) for resource
   packs, Iris/OptiFine shader packs and modpacks, each marked Works, Partly or Doesn't run in
   Horizon; Java mod jars are never offered. Install puts a pack and what it needs in
-  `resourcepacks/` or `shaderpacks/` only after its SHA-512 (SHA-1 on CurseForge) matches, and a
+  `resourcepacks/` or `shaderpacks/` only after its SHA-512 matches, and a
   modpack goes to the Modpacks page; installed packs show their source and checksum, with Update
   and Remove ([docs/mod-browser.md](../docs/mod-browser.md)).
 - **Modpacks**: import a Java modpack (a Modrinth `.mrpack`, a CurseForge zip, or a Prism,
@@ -35,8 +35,8 @@ The opening, then Play ([clip](docs/opening.webm)):
   not yet or not needed, with the reason ([docs/modpacks.md](../docs/modpacks.md)). **Port**
   gets the jars of what this computer can port today (content mods with data and assets only)
   the player's own way: copied from a folder they have, or downloaded from the pack's own links
-  or the same file on Modrinth's CDN, hash checked; files only CurseForge has need its API key, so
-  they come from your installed instance. It carries them over for the selected version, and
+  or the same file on Modrinth's CDN, hash checked; files only CurseForge has come from your
+  installed instance (CurseForge downloads are coming soon). It carries them over for the selected version, and
   **Play** starts the game as the pack's own profile (`ports/<pack>/home/` in the game's home:
   its own saves and options) with those mods. Nothing is uploaded or shared: mod jars and ports
   stay on this computer.
@@ -79,9 +79,8 @@ page `servers.json` (the list), `servers/<name>/` (the servers created there) an
 
 - **Settings**: install new Horizon versions automatically (on unless you turn it off; the
   selected version only moves to the new one if you were on the newest), which ones (Updates,
-  below), the opening animation,
-  the game's menu style, the game's extra command-line arguments, and the launcher's own version
-  and update state.
+  below), the opening animation, the game's extra command-line arguments, and the launcher's own
+  version and update state.
 - **Updates**: **Stable** (the default) installs a tested build about once a day, the betas that
   `promote.yml` makes stable; **Alpha** installs every release as soon as it is built, several
   times a day, and can break (docs/release-flow.md, "Channels"). While it is open, the launcher
@@ -94,10 +93,6 @@ page `servers.json` (the list), `servers/<name>/` (the servers created there) an
   launcher's own arguments, kept as `game_args` in `settings.json`, and apply the next time the
   game starts. `horizon-launcher game-args "<line>"` sets them too, and `play --arg <ARG>` passes
   one for a single run.
-- **Menu style**: Horizon's own menus or Classic (vanilla's screens). Classic has no way back
-  inside the game, so the launcher is where you return to Horizon's. It is the `menuStyle:` line
-  of `horizon.txt` in the game's home folder (`HORIZON_HOME`, else `horizon` in the data
-  directory), which the game reads when it starts.
 - **Links**: the Discord invite, the Sponsors page and the website come from `launcher/links.json` on main
   (`{"discord": "...", "sponsor": "...", "website": "..."}`), so they change without a launcher release. Offline,
   the launcher uses the same values built in; an empty address hides its button.
@@ -139,7 +134,6 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher server [--dir <dir>] [--version <tag>] [--accept-eula]
     horizon-launcher notes [<tag>]                  patch notes as plain text
     horizon-launcher links                          the Discord, sponsor and website links
-    horizon-launcher menu-style [horizon|classic]   show or set the game's menu style
     horizon-launcher update-channel [stable|alpha]     show or set which releases install by themselves
     horizon-launcher game-args [<line>]             show or set the extra arguments the game starts with
     horizon-launcher update [--check]               Horizon and the launcher
@@ -155,7 +149,7 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher modpack play <pack> [--version <tag>]                 play it as its own profile
     horizon-launcher modpack remove <pack>
     horizon-launcher mods [list]                    what the mod browser installed (docs/mod-browser.md)
-    horizon-launcher mods search <text> [--kind resource|shader|modpack] [--everything] [--source modrinth|curseforge]
+    horizon-launcher mods search <text> [--kind resource|shader|modpack] [--everything] [--source modrinth]
     horizon-launcher mods install <id or slug>      checksum checked, with what it needs; a modpack is imported
     horizon-launcher mods update [<pack>] [--check]
     horizon-launcher mods remove <pack>
@@ -174,7 +168,7 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher data benchmark <report.json>   upload a benchmark report, printed first
 
 `--json` prints JSON where there is something to report (`versions`, `install`, `notes`,
-`next`, `links`, `menu-style`, `update-channel`, `game-args`, `update --check`, `logs`, `account`, `benchmark`, `data`, `modpack`). Errors go to stderr with exit code 1. `server` runs in the terminal,
+`next`, `links`, `update-channel`, `game-args`, `update --check`, `logs`, `account`, `benchmark`, `data`, `modpack`). Errors go to stderr with exit code 1. `server` runs in the terminal,
 so lines you type reach its console. `HORIZON_LAUNCHER_HOME` replaces the data folder (for
 scripts and tests).
 
@@ -186,7 +180,7 @@ scripts and tests).
 
 (with the full path to the binary if it is not on your `PATH`). Its tools: `list_versions`,
 `install_version`, `remove_version`, `prepare_resources`, `launch_client`, `start_server`,
-`server_command`, `server_log`, `stop_server`, `patch_notes`, `links`, `menu_style`, `update_channel`, `logs`,
+`server_command`, `server_log`, `stop_server`, `patch_notes`, `links`, `update_channel`, `logs`,
 `check_updates`, `accounts`, `sign_in` (returns the link and code for the player; the sign-in
 finishes in the background), `sign_out`, `select_account`, and for data collection
 `data_collection`, `set_data_collection`, `data_preview`, `delete_my_data` and `report_bug`
@@ -265,9 +259,9 @@ workflow builds all three platforms on every push to the `launcher` branch (or a
 client starts (`--help`) and that the binaries import only system libraries (Windows).
 
     cargo test --lib    # tag separation, version order, update selection, notes as text,
-                        # the auto-install default, the links fallback, the menu style file
+                        # the auto-install default, the links fallback
 
-Geist and Geist Mono (SIL Open Font License, `crates/horizon-theme/fonts/OFL-*.txt`, shared with the game's menus) are
+Geist and Geist Mono (SIL Open Font License, `crates/horizon-theme/fonts/OFL-*.txt`, shared with the game's on-screen keyboard) are
 bundled so the type is the same on every platform.
 
 

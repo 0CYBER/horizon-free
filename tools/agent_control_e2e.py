@@ -64,7 +64,7 @@ class Failed(Exception):
 
 def game_env(screen):
     if sys.platform == 'darwin':
-        return dict(os.environ, HORIZON_NO_AUDIO='1')
+        return dict(os.environ, HORIZON_NO_AUDIO='1', HORIZON_TELEMETRY_URL='off')
     env = dict(os.environ, VSCREEN=screen)
     subprocess.run(['vscreen', 'up'], env=env, check=False, capture_output=True)
     text = subprocess.run(['vscreen', 'env'], env=env, capture_output=True, text=True, check=True).stdout
@@ -72,6 +72,7 @@ def game_env(screen):
     for match in re.finditer(r'(\w+)=(\S+)', text.split('unset')[0]):
         env[match.group(1)] = match.group(2)
     env['HORIZON_NO_AUDIO'] = '1'
+    env['HORIZON_TELEMETRY_URL'] = 'off'  # no live-count ping from test games
     if LAVAPIPE.exists():
         env['VK_ICD_FILENAMES'] = str(LAVAPIPE)
     return env
