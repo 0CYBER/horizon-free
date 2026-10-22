@@ -114,6 +114,18 @@ pub(super) struct Create {
     eula_missing: bool,
 }
 
+/// What the sidebar shows of the Servers page: its list once the page has read it, and whether
+/// a server answers.
+impl Servers {
+    pub(super) fn sidebar_list(&self) -> Option<&[Entry]> {
+        self.loaded.then_some(&self.list[..])
+    }
+
+    pub(super) fn is_up(&self, dir: &std::path::Path) -> bool {
+        self.statuses.get(dir).is_some_and(|s| s.phase == "running")
+    }
+}
+
 pub(super) struct Servers {
     list: Vec<Entry>,
     loaded: bool,

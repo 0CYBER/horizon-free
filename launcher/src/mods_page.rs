@@ -11,11 +11,12 @@ use horizon_launcher::modpacks;
 use horizon_port_pack::check::Check;
 use std::collections::HashMap;
 
-const KINDS: [(PackKind, &str); 4] = [
-    (PackKind::Mod, "Mods"),
-    (PackKind::Modpack, "Modpacks"),
-    (PackKind::ResourcePack, "Resource packs"),
-    (PackKind::ShaderPack, "Shader packs"),
+/// The kinds, as the Mods page's tabs: name and icon.
+const KINDS: [(PackKind, &str, &str); 4] = [
+    (PackKind::Mod, "Mods", "box"),
+    (PackKind::Modpack, "Modpacks", "archive"),
+    (PackKind::ResourcePack, "Resource packs", "image"),
+    (PackKind::ShaderPack, "Shader packs", "zap"),
 ];
 /// Java mods checked at once.
 const CHECKING: usize = 2;
@@ -72,10 +73,19 @@ pub(super) struct Mods {
 }
 
 impl Mods {
+    /// Whether the Modpacks tab is open (the sidebar marks the pack shown there).
+    pub(super) fn on_modpacks(&self) -> bool {
+        self.kind == PackKind::Modpack
+    }
+
     pub(super) fn new(cx: &mut App) -> Self {
         let (tx, rx) = channel();
         Self {
-            kind: PackKind::Mod,
+            kind: if std::env::var("HORIZON_LAUNCHER_PAGE").as_deref() == Ok("modpacks") {
+                PackKind::Modpack
+            } else {
+                PackKind::Mod
+            },
             source: SourceId::Modrinth,
             text: String::new(),
             focus: cx.focus_handle().tab_index(0).tab_stop(true),
@@ -143,6 +153,23 @@ fn short_sum(checksum: &str) -> String {
 }
 
 impl Launcher {
+    /// Opens the Mods page on its Modpacks tab, with the pack `slug` open when given (the
+    /// sidebar's packs and its + button).
+    pub(super) fn show_modpack(&mut self, slug: Option<String>) {
+        self.go(Page::Mods);
+        if slug.is_some() {
+            self.pack_open = slug;
+        }
+        if self.mods.kind != PackKind::Modpack {
+            self.mods.kind = PackKind::Modpack;
+            self.mods.browse.filters = Default::default();
+            self.mods.browse.open = None;
+            if self.mods.loaded {
+                self.mods_search(0);
+            }
+        }
+    }
+
     /// Called with the launcher's other work: what the background sent.
     pub(super) fn mods_tick(&mut self) -> bool {
         let mut changed = false;
@@ -374,16 +401,17 @@ impl Launcher {
             .track_focus(&m.focus)
             .flex()
             .items_center()
+            .gap(px(10.))
             .w(px(320.))
-            .h(px(theme::FIELD))
+            .h(px(theme::FIELD + 4.))
             .px(px(12.))
             .overflow_hidden()
-            .rounded(px(theme::RADIUS))
-            .border_1()
-            .border_color(if focused { t.accent } else { t.rule })
-            .bg(t.surface)
+            .border_2()
+            .border_color(if focused { t.accent } else { t.outline })
+            .bg(t.well)
             .text_size(px(theme::UI.px))
             .cursor_text()
+            .child(blocks::icon("search", 18., t.muted))
             .child(if m.text.is_empty() && !focused {
                 div().text_color(t.muted).child("Search, then Enter")
             } else {
@@ -442,7 +470,7 @@ impl Launcher {
             &t,
         );
         let this = cx.entity().downgrade();
-        let kinds = segments("mods-kind", &KINDS, self.mods.kind, &t, {
+        let kinds = blocks::tabs("mods-kind", &KINDS, self.mods.kind, &t, {
             let this = this.clone();
             move |kind, _, cx| {
                 let _ = this.update(cx, |this, cx| {
@@ -477,29 +505,7 @@ impl Launcher {
             }));
         // CurseForge support is coming soon: shown, inert, never searched (like the Microsoft
         // account's "Coming soon").
-        let source_note = div()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap(px(8.))
-            .child(segments("mods-source", &SOURCES, self.mods.source, &t, {
-                let this = this.clone();
-                move |source, _, cx| {
-                    let _ = this.update(cx, |this, cx| {
-                        if this.mods.source != source {
-                            this.mods.source = source;
-                            this.mods_search(0);
-                        }
-                        cx.notify();
-                    });
-                }
-            }))
-            .child(disabled(button(
-                "mods-source-curseforge",
-                "CurseForge (coming soon)",
-                Kind::Ghost,
-                &t,
-            )));
+        let source_note = div().flex().child(source_switch(&t));
         let controls = div()
             .flex()
             .flex_col()
@@ -510,35 +516,36 @@ impl Launcher {
                     .flex_wrap()
                     .items_center()
                     .gap(px(12.))
-                    .child(kinds)
                     .child(self.mods_field(cx))
                     .child(toggle),
             )
             .child(source_note)
             .child(self.mods_filters(cx));
-        if let Some(project) = self.mods_project_page(cx) {
-            return div()
+        // The kinds are inventory tabs on the panel that holds the open one.
+        let body = blocks::panel(&t).flex().flex_col().gap(px(24.)).p(px(20.));
+        let page = |body: Div| {
+            div()
                 .flex()
                 .flex_col()
                 .gap(px(32.))
                 .child(header)
-                .children(self.mods_busy_plate())
-                .child(project);
+                .child(div().flex().flex_col().child(kinds).child(body))
+        };
+        if let Some(project) = self.mods_project_page(cx) {
+            return page(body.children(self.mods_busy_plate()).child(project));
         }
-        let mut page = div()
-            .flex()
-            .flex_col()
-            .gap(px(32.))
-            .child(header)
-            .child(controls);
-        page = page.children(self.mods_busy_plate());
+        let mut body = body.children(self.mods_busy_plate());
         if self.mods.kind == PackKind::Modpack {
-            page = page.child(self.imported_packs(cx));
+            body = body
+                .child(self.imported_packs(cx))
+                .child(div().h(px(2.)).bg(t.rule))
+                .child(section_title("Browse modpacks", "search", &t));
         }
+        body = body.child(controls);
         if let Some(list) = self.mods_installed_list(cx) {
-            page = page.child(list);
+            body = body.child(list);
         }
-        page.child(self.mods_results(cx))
+        page(body.child(self.mods_results(cx)))
     }
 
     /// The install under way and the last install's answer.
@@ -589,7 +596,7 @@ impl Launcher {
             return None;
         }
         let busy = self.mods.busy.is_some();
-        let mut list = div().flex().flex_col().border_t_1().border_color(t.rule);
+        let mut list = div().flex().flex_col();
         for (i, e) in entries.into_iter().enumerate() {
             let key = (e.source, e.project.clone());
             let mut right = div().flex().items_center().gap(px(8.));
@@ -691,7 +698,7 @@ impl Launcher {
     fn mods_results(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let found = self.mods.results.clone();
-        let icons: Vec<AnyElement> = found.iter().map(|p| self.mods_icon(p, 40.)).collect();
+        let icons: Vec<AnyElement> = found.iter().map(|p| self.mods_icon(p, 56.)).collect();
         let m = &self.mods;
         if let Some(e) = &m.error {
             return div().child(notice(e.clone(), &t));
@@ -708,7 +715,7 @@ impl Launcher {
         }
         let busy = m.busy.as_ref().map(|b| b.0.as_str());
         let mut icons = icons.into_iter();
-        let mut list = div().flex().flex_col().border_t_1().border_color(t.rule);
+        let mut list = div().flex().flex_col();
         for (i, p) in m.results.iter().enumerate() {
             let support = m.support(p);
             let checking = p.kind == PackKind::Mod
@@ -719,14 +726,14 @@ impl Launcher {
                 && p.support().installable();
             let color = match support {
                 Support::Works => t.success,
-                Support::Partial(_) => t.accent,
+                Support::Partial(_) => t.warn,
                 Support::No(_) => t.muted,
             };
-            let mut right = div()
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .child(caps(support.label()).flex_none().text_color(color));
+            let mut right = div().flex().items_center().gap(px(8.)).child(blocks::badge(
+                support.label(),
+                color,
+                &t,
+            ));
             let page_url = p.page.clone();
             if !page_url.is_empty() {
                 right = right.child(
@@ -824,6 +831,31 @@ impl Launcher {
         }
         out
     }
+}
+
+/// The source switch while Modrinth is the only source: Modrinth chosen, CurseForge shown as
+/// coming soon and not clickable, like the Microsoft account's "Coming soon".
+fn source_switch(t: &Theme) -> Stateful<Div> {
+    let soon = div()
+        .flex()
+        .items_center()
+        .h(px(theme::SEGMENT))
+        .px(px(14.))
+        .pb(px(2.))
+        .opacity(theme::DISABLED)
+        .child(
+            blocks::pixel(14., FontWeight::MEDIUM)
+                .text_color(t.muted)
+                .child("CurseForge (coming soon)"),
+        );
+    segments(
+        "mods-source",
+        &SOURCES,
+        SourceId::Modrinth,
+        t,
+        |_, _, _| {},
+    )
+    .child(soon)
 }
 
 #[cfg(test)]

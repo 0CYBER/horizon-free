@@ -2195,6 +2195,17 @@ pub fn spawn(job: Job, mut cmd: Command, tx: Sender<Msg>) -> Result<Running, Str
     Ok(Running { child, stdin })
 }
 
+/// The launcher's appearance, as the player picks it in Settings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Appearance {
+    #[default]
+    Dark,
+    Light,
+    /// Follow the system's light or dark.
+    System,
+}
+
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Settings {
     pub selected: Option<String>,
@@ -2219,6 +2230,9 @@ pub struct Settings {
     /// builds" switch instead; [`Settings::parse`] reads its `beta_builds: true` as Alpha.
     #[serde(default)]
     pub update_channel: UpdateChannel,
+    /// Dark, Light, or the system's: the launcher's look. Dark by default.
+    #[serde(default)]
+    pub appearance: Appearance,
     /// The player has read what the "I'm playing" ping holds (`telemetry::PING`): on the
     /// first-run question, or on the Play page once if they answered that before it existed.
     #[serde(default)]
@@ -2246,6 +2260,13 @@ impl Settings {
                 .is_some_and(|c| c.as_str().and_then(UpdateChannel::parse).is_none())
             {
                 fields.remove("update_channel");
+            }
+            // The same for an appearance from a newer launcher.
+            if fields
+                .get("appearance")
+                .is_some_and(|a| serde_json::from_value::<Appearance>(a.clone()).is_err())
+            {
+                fields.remove("appearance");
             }
         }
         serde_json::from_value(value).unwrap_or_default()
@@ -2495,6 +2516,24 @@ mod tests {
             releases.iter().map(UpdateChannel::of).collect::<Vec<_>>(),
             [UpdateChannel::Alpha, UpdateChannel::Stable]
         );
+    }
+
+    #[test]
+    fn the_appearance_is_dark_unless_picked_and_an_unknown_one_keeps_the_rest() {
+        assert_eq!(Settings::parse("{}").appearance, Appearance::Dark);
+        let light = Settings::parse(r#"{"appearance": "light", "game_args": "--x"}"#);
+        assert_eq!(light.appearance, Appearance::Light);
+        let future = Settings::parse(r#"{"appearance": "sepia", "game_args": "--x"}"#);
+        assert_eq!(
+            (future.appearance, future.game_args.as_str()),
+            (Appearance::Dark, "--x")
+        );
+        let settings = Settings {
+            appearance: Appearance::System,
+            ..Settings::default()
+        };
+        let text = serde_json::to_string(&settings).unwrap();
+        assert!(text.contains(r#""appearance":"system""#), "{text}");
     }
 
     #[test]
