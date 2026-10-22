@@ -94,7 +94,7 @@ impl Game<'_> {
     }
 
     /// Runs `op` on the guest's menu with their inventory copied in and back.
-    fn guest_menu_op<R>(
+    pub(super) fn guest_menu_op<R>(
         &mut self,
         host: &mut LanHost,
         gi: usize,
@@ -331,6 +331,7 @@ impl Game<'_> {
     /// The guest opened a crafting table (`CraftingTableBlock.getMenuProvider`).
     pub(super) fn lan_open_crafting(&mut self, host: &mut LanHost, conn: u32) {
         self.lan_crafting_closed(host, conn, None);
+        self.lan_station_closed(host, conn, None);
         // The container it replaces loses its opener.
         self.guest_container_closed(host, conn);
         let title = horizon_protocol::text::translatable("container.crafting", &[]);
@@ -430,22 +431,35 @@ impl Game<'_> {
                 None => return false,
             }
         };
-        if grid.is_empty() {
-            return true;
+        if !grid.is_empty() {
+            self.lan_place_back(host, gi, grid);
         }
-        let mut menu = Menu::new(Kind::Inventory);
-        self.guest_menu_op(host, gi, &mut menu, |menu, env| place_back(menu, env, grid));
         true
     }
 
-    /// A guest left: what their crafting grids held goes back into their
+    /// `Inventory.placeItemBackInInventory` of `stacks` for guest `gi`, what
+    /// doesn't fit dropped (`clearContainer`).
+    pub(super) fn lan_place_back(&mut self, host: &mut LanHost, gi: usize, stacks: Vec<ItemStack>) {
+        let mut menu = Menu::new(Kind::Inventory);
+        self.guest_menu_op(host, gi, &mut menu, |menu, env| {
+            place_back(menu, env, stacks)
+        });
+    }
+
+    /// A guest left: what their crafting grids and workstation held goes back into their
     /// inventory before it is saved (dropped where they stood if full).
     pub(super) fn lan_crafting_left(&mut self, host: &mut LanHost, g: &mut Guest) {
-        let table = host.play.remove(&g.conn).and_then(|p| p.crafting.table);
+        let play = host.play.remove(&g.conn);
         let mut grid: Vec<ItemStack> = g.craft_grid.iter_mut().filter_map(Option::take).collect();
         g.craft_result = None;
-        if let Some((_, _, menu)) = table {
-            grid.extend((1..10).filter_map(|s| menu.slot(s).cloned()));
+        if let Some(play) = play {
+            if let Some((_, _, menu)) = play.crafting.table {
+                grid.extend((1..10).filter_map(|s| menu.slot(s).cloned()));
+            }
+            // A workstation's inputs too.
+            if let Some(station) = &play.station {
+                grid.extend(super::lan_stations::station_inputs(station));
+            }
         }
         if grid.is_empty() {
             return;

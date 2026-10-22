@@ -53,6 +53,8 @@ pub(super) struct GuestPlay {
     pub(super) merchant: Option<super::lan_trading::GuestMerchant>,
     /// The inventory menu and the crafting table the guest crafts in.
     pub(super) crafting: super::lan_crafting::GuestCrafting,
+    /// The workstation menu the guest has open (game/lan_stations.rs).
+    pub(super) station: Option<super::lan_stations::GuestStation>,
     /// What the guest's body was given for its effects and enchantments.
     potions: super::potions::BodyPotions,
     /// `ServerPlayer.getStats` and the inventory `inventory_changed` last saw.
@@ -679,6 +681,7 @@ impl Game<'_> {
         };
         // ServerPlayer.openMenu closes the menu that was open.
         self.guest_container_closed(host, conn);
+        self.lan_station_closed(host, conn, None);
         host.hub.open_container(
             conn,
             menu,
@@ -913,6 +916,10 @@ impl Game<'_> {
             S::ContainerClick(p) if self.lan_inventory_click(host, conn, &p) => {}
             S::ContainerClick(p) if self.lan_crafting_click(host, conn, &p) => {}
             S::ContainerClick(p) if self.lan_machine_click(host, conn, &p) => {}
+            S::ContainerClick(p) if self.lan_station_click(host, conn, &p) => {}
+            S::ContainerButtonClick(p) => {
+                self.lan_station_button(host, conn, p.container, p.button);
+            }
             S::SelectTrade(p) => self.lan_select_trade(host, conn, p.item),
             S::ContainerClose(p) if self.lan_merchant_closed(host, conn, Some(p.container)) => {
                 let g = &mut host.hub.guests[gi];
@@ -920,7 +927,10 @@ impl Game<'_> {
                     self.drop_guest_items(host, gi, vec![c]);
                 }
             }
-            S::ContainerClose(p) if self.lan_crafting_closed(host, conn, Some(p.container)) => {
+            S::ContainerClose(p)
+                if self.lan_crafting_closed(host, conn, Some(p.container))
+                    || self.lan_station_closed(host, conn, Some(p.container)) =>
+            {
                 let g = &mut host.hub.guests[gi];
                 if let Some(c) = g.carried.take() {
                     self.drop_guest_items(host, gi, vec![c]);
@@ -1438,6 +1448,7 @@ impl Game<'_> {
     /// Per tick, for every guest: dig, use items, pick up drops, die.
     pub(super) fn tick_guests(&mut self, host: &mut LanHost) {
         self.lan_merchant_tick(host);
+        self.lan_stations_tick(host);
         self.announce_guest_advancements(host);
         let conns: Vec<u32> = host
             .hub

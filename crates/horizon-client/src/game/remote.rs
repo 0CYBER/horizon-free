@@ -108,9 +108,9 @@ pub(super) struct Remote {
     /// only replace the remembered state; then the block takes it.
     predictions: HashMap<[i32; 3], (i32, i32)>,
     /// Open container: (window id, menu name).
-    menu: Option<(i32, String)>,
+    pub(super) menu: Option<(i32, String)>,
     /// The open menu's title as the server named it.
-    menu_title: Option<String>,
+    pub(super) menu_title: Option<String>,
     state_id: i32,
     use_target: Option<[i32; 3]>,
     entities: HashMap<i32, Tracked>,
@@ -1216,8 +1216,28 @@ impl Game<'_> {
             "minecraft:hopper" => slots(5),
             "minecraft:generic_3x3" => slots(9),
             "minecraft:brewing_stand" => slots(5),
-            _ => None,
+            // A workstation: its inputs, its result, then the inventory.
+            m => {
+                let kind = Self::remote_station_kind(m)?;
+                let inputs = kind.inputs();
+                let own = inputs + usize::from(kind.has_result());
+                match s {
+                    _ if s < inputs => Some(super::stations::INPUT + s),
+                    _ if s < own => Some(super::stations::RESULT),
+                    _ if s < own + 27 => Some(9 + s - own),
+                    _ if s < own + 36 => Some(s - own - 27),
+                    _ => None,
+                }
+            }
         }
+    }
+    /// The workstation screen of a menu type a server opens.
+    pub(super) fn remote_station_kind(menu: &str) -> Option<super::stations::Kind> {
+        use super::stations::Kind;
+        Some(match menu {
+            "minecraft:loom" => Kind::Loom,
+            _ => return None,
+        })
     }
     fn open_menu_name(&self, container: i32) -> String {
         match self.remote.as_ref().and_then(|r| r.menu.as_ref()) {
@@ -1237,6 +1257,9 @@ impl Game<'_> {
             return; // the result slot is recomputed from the grid
         }
         *self.slot_mut(internal) = item;
+        if internal >= super::stations::INPUT && self.station.is_some() {
+            self.remote_station_slot_changed(internal);
+        }
     }
 
     fn handle_packet(&mut self, packet: C) -> Result<()> {
@@ -1880,6 +1903,9 @@ impl Game<'_> {
                     _ => {}
                 }
                 self.remote_synced();
+            }
+            C::ContainerSetData(p) if self.remote_station_open(p.container) => {
+                self.remote_station_data(usize::try_from(p.id).unwrap_or(usize::MAX), p.value);
             }
             C::ContainerSetData(p) => {
                 let v = i32::from(p.value);
@@ -3884,13 +3910,8 @@ impl Game<'_> {
             r.menu = None;
             r.menu_title = None;
         }
-        if self
-            .station
-            .as_ref()
-            .is_some_and(|s| s.kind == super::stations::Kind::Merchant)
-        {
-            self.station = None;
-        }
+        // The client's menu has no level access: what it holds is the server's.
+        self.station = None;
         self.craft_size = 2;
         if let Some(key) = self.container.take() {
             // Server containers stay renderable but lose their copied slots.
@@ -3964,6 +3985,19 @@ impl Game<'_> {
             .as_ref()
             .and_then(|r| r.use_target)
             .map(|t| (t[0], t[1], t[2]));
+        if let Some(kind) = Self::remote_station_kind(&menu) {
+            let title = plain(
+                &p.title,
+                &self
+                    .remote
+                    .as_ref()
+                    .map(|r| r.lang.clone())
+                    .unwrap_or_default(),
+            );
+            let pos = target.map_or([0, 0, 0], |t| [t.0, t.1, t.2]);
+            self.remote_open_station(p.container, menu, kind, title, pos);
+            return;
+        }
         if menu == "minecraft:merchant" {
             // A trading window: its offers follow in a MerchantOffers packet.
             let title = plain(

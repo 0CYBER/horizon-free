@@ -73,6 +73,7 @@ mod lan_entities;
 mod lan_mobs;
 mod lan_pvp;
 mod lan_screen;
+mod lan_stations;
 mod lan_trading;
 mod lan_waypoints;
 mod leads;
@@ -118,6 +119,7 @@ mod recipe_book;
 mod remote;
 mod remote_objects;
 mod remote_projectiles;
+mod remote_stations;
 mod render_control;
 mod render_tick;
 mod respawn_anchor;
@@ -5637,7 +5639,8 @@ impl Game<'_> {
                 s.loom.selected = usize::try_from(menu.data[0]).ok();
                 s.loom.patterns = std::mem::take(&mut menu.loom_patterns);
             }
-            for sound in sounds {
+            // A server's loom plays its own sounds (the client's menu has no level).
+            for sound in sounds.into_iter().filter(|_| !predicting) {
                 self.loom_sound(sound);
             }
             self.loom_screen_changed();

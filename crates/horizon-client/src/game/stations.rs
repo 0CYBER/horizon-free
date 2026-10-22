@@ -36,7 +36,7 @@ pub(super) enum Kind {
     Loom,
 }
 impl Kind {
-    fn from_block(name: &str) -> Option<Self> {
+    pub(super) fn from_block(name: &str) -> Option<Self> {
         Some(match name {
             "minecraft:enchanting_table" => Self::Enchanting,
             "minecraft:anvil" | "minecraft:chipped_anvil" | "minecraft:damaged_anvil" => {
@@ -51,7 +51,7 @@ impl Kind {
             _ => return None,
         })
     }
-    fn inputs(self) -> usize {
+    pub(super) fn inputs(self) -> usize {
         match self {
             Self::Smithing | Self::Loom => 3,
             Self::Stonecutter | Self::Beacon => 1,
@@ -71,7 +71,7 @@ impl Kind {
             Self::Loom => "gui/container/loom",
         }
     }
-    fn title_key(self) -> &'static str {
+    pub(super) fn title_key(self) -> &'static str {
         match self {
             Self::Enchanting => "container.enchant",
             Self::Anvil => "container.repair",
@@ -107,6 +107,10 @@ impl Kind {
             Self::Loom => &[(13.0, 26.0), (33.0, 26.0), (23.0, 45.0)],
         };
         table[i.min(table.len() - 1)]
+    }
+    /// Whether the menu has a result slot after its inputs.
+    pub(super) fn has_result(self) -> bool {
+        self.result_pos().is_some()
     }
     fn result_pos(self) -> Option<(f32, f32)> {
         match self {
@@ -323,6 +327,10 @@ impl Game<'_> {
         let Some(mut station) = self.station.take() else {
             return;
         };
+        if self.remote.is_some() && station.kind != Kind::Merchant {
+            // A server's workstation: its removed() gives the inputs back.
+            return;
+        }
         if let Some(m) = station.merchant.as_mut() {
             self.merchant_closed(m);
         }

@@ -98,6 +98,7 @@ impl Game<'_> {
         if taken {
             self.audio
                 .play("minecraft:ui.loom.select_pattern", None, 1.0, 1.0);
+            self.remote_station_button(index as i32);
         }
         taken
     }

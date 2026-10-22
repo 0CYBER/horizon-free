@@ -1710,6 +1710,11 @@ packet!(
     }
 );
 packet!(SelectTrade { item: i32 => VarInt });
+packet!(
+    /// ServerboundContainerButtonClickPacket: `AbstractContainerMenu.clickMenuButton`
+    /// (the loom's patterns, the stonecutter's recipes, the enchanting table's offers).
+    ContainerButtonClick { container: i32 => VarInt, button: i32 => VarInt }
+);
 packet!(Interact { id: i32 => VarInt, hand: i32 => VarInt, location: [f64; 3] => LpVec3, secondary: bool => Bool });
 packet!(
     /// ServerboundMovePlayerPacket flags: 1 on ground, 2 horizontal collision.
@@ -1775,6 +1780,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     ClientInformation(ClientInformation) = CLIENT_INFORMATION,
     ClientTickEnd(Empty) = CLIENT_TICK_END,
     ConfigurationAcknowledged(Empty) = CONFIGURATION_ACKNOWLEDGED,
+    ContainerButtonClick(ContainerButtonClick) = CONTAINER_BUTTON_CLICK,
     ContainerClick(ContainerClick) = CONTAINER_CLICK,
     ContainerClose(ContainerClose) = CONTAINER_CLOSE,
     CustomPayload(CustomPayload) = CUSTOM_PAYLOAD,
@@ -2360,6 +2366,13 @@ mod tests {
             Serverbound::encode,
             Serverbound::decode,
         );
+        // CONTAINER_ID and the button, both VarInts.
+        let button = Serverbound::ContainerButtonClick(ContainerButtonClick {
+            container: 3,
+            button: 200,
+        });
+        assert_eq!(&button.encode()[1..], &[3, 0xC8, 1]);
+        round_trip(button, Serverbound::encode, Serverbound::decode);
     }
 
     #[test]

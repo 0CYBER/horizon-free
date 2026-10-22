@@ -36,6 +36,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - brewing:   a brewing stand opens on the guest's screen; blaze powder, nether wart and a bottle the
              guest shift-clicks go to the fuel, ingredient and bottle slots, and the stand's fuel shows
              (#848);
+- loom:      a loom opens on the guest's screen; the banner and dye the guest shift-clicks go to their
+             slots, a pattern button the guest clicks makes the server's result, and the guest takes the
+             patterned banner (#868);
 - feedback:  the guest's command feedback names the guest and shows the numbers;
 - chat:      a line the host sends reaches the guest's event log (`wait-for chat`), and on the
              server thread the host window's too;
@@ -130,7 +133,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
 
 
 class Game:
@@ -884,6 +887,64 @@ def check_brewing(host, guest, out):
     seen = {'size': size, 'items': items, 'fuel': info and info.get('fuel')}
     want = {'size': 5, 'items': {0: 'minecraft:glass_bottle', 3: 'minecraft:nether_wart'}, 'fuel': 20}
     assert seen == want, f'the brewing stand on the guest: {seen}'
+    return seen
+
+
+def open_station(guest, block, out, label):
+    """Place `block` two blocks south of the guest and open it: the station's position."""
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    at = (x, y, z + 2)
+    guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:{block}')
+    guest.wait(10)
+    guest.raw('interact', *at)
+    guest.raw('wait-for', 'screen', 'station', '--timeout', 10)
+    guest.wait(10)
+    guest.shot(out, label)
+    return at
+
+
+def station_slots(guest):
+    """The open station's stacks: input slots 600 and up, the result at 650."""
+    menu = guest.raw('menu')
+    return {s['slot']: (s['stack']['item'], s['stack']['count']) for s in menu['slots'] if s['slot'] >= 600}
+
+
+def close_station(guest, at):
+    guest.raw('key', 'esc', 'tap')
+    guest.wait(10)
+    guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:air')
+
+
+def check_loom(host, guest, out):
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    for item in ('white_banner', 'red_dye'):
+        guest('command', command=f'give @s minecraft:{item}')
+    at = open_station(guest, 'loom', out, 'loom')
+    # LoomMenu.quickMoveStack: a banner to the banner slot, a dye to the dye slot.
+    for item in ('white_banner', 'red_dye'):
+        guest.raw('click-slot', hotbar_slot(guest, f'minecraft:{item}'), 'shift')
+        guest.wait(5)
+    loaded = station_slots(guest)
+    # LoomScreen's first pattern button (clickMenuButton 0): the server makes the result.
+    guest.raw('click-gui', 67, 20)
+    guest.wait(10)
+    made = station_slots(guest).get(650)
+    guest.shot(out, 'loom-pattern')
+    guest.raw('click-slot', 650, 'shift')
+    guest.wait(10)
+    left = station_slots(guest)
+    close_station(guest, at)
+    # The server's copy of the banner the guest took has the red layer.
+    since = guest.raw('events')['last']
+    guest('command', command='data get entity @s Inventory[{id:"minecraft:white_banner"}].components')
+    layer = guest.raw('wait-for', 'chat', 'color: "red"', '--timeout', 10, '--since', since).get('ok')
+    counts = guest('inventory')['counts']
+    seen = {'loaded': loaded, 'made': made, 'left': left, 'layer': layer, 'counts': counts}
+    want = {'loaded': {600: ('minecraft:white_banner', 1), 601: ('minecraft:red_dye', 1)},
+            'made': ('minecraft:white_banner', 1), 'left': {}, 'layer': True,
+            'counts': {'minecraft:white_banner': 1}}
+    assert seen == want, f'the loom on the guest: {seen}'
     return seen
 
 
@@ -2078,6 +2139,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'containers': check_containers, 'feedback': check_feedback, 'titles': check_titles, 'chat': check_chat,
              'machines': check_machines,
              'brewing': check_brewing,
+             'loom': check_loom,
              'hurt': check_hurt,
              'commands': check_commands,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,
