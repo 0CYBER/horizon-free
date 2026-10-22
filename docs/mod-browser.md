@@ -71,6 +71,41 @@ report, **Port** and **Play** ([modpacks.md](modpacks.md)). Installed packs are 
 file and the checksum they were checked against, with **Update to …** when a newer version runs and **Remove**
 (asked twice).
 
+### Project pages, filters and icons
+
+A result's title opens its page inside the launcher, not in a web browser: its icon, authors, downloads, followers,
+last update, licence and source, how well it runs (for a Java mod, what ports and what doesn't, from its check) with
+**Install** or **Import**, the project's links (its page on the source, source code, issues, wiki, Discord,
+donations; `https://` only, opened in the system browser), then three tabs: **Description** (the project's Markdown,
+drawn by the launcher's renderer), **Gallery** and **Versions** (each version's date, loaders, game versions, file
+and size, and the verdict of any version already checked). The data is `browser::details` (`Source::details`; on
+Modrinth `GET /project/{id}` and `/project/{id}/members`, then `/project/{id}/version`).
+
+**Filters** sit above the results: the order (best match, relevance, downloads, follows, newest, updated) and, under
+**Filters**, the loader, game version, environment (client, server) and categories, with the values the source lists
+for the kind (Modrinth's `/tag/category`, `/tag/loader`, `/tag/game_version`, asked once per run). A loader or version
+picked replaces the default (Java mod loaders and 26.3 for mods); a version other than 26.3 checks and installs the
+newest file for 1.21 or later, as **Show everything** does. Changing tabs clears the filters. CurseForge support
+is coming soon; its source already maps the order and the game version.
+
+**Icons and gallery images** are the projects' own, fetched at run time from the source's image server
+(`browser::images`): HTTPS from `cdn.modrinth.com` (or CurseForge's `media.forgecdn.net` / `edge.forgecdn.net`) only,
+at most 8 MB each, decoded (PNG, JPEG, WebP, GIF, at most 8192 pixels a side), scaled (icons 128 px, gallery 960 px)
+and kept as PNGs in `mod-browser/images/` under the game folder, which is kept under 128 MB by dropping the oldest
+files. A plate with the project's initial stands in until the icon arrives. Nothing of a project's art is in the
+launcher or the repository.
+
+**Vanilla Minecraft** is marked with a grass block drawn at run time from the player's own prepared game files
+(`assets/minecraft/textures/block/grass_block_*.png`, tinted with the plains grass colour): the game-version filter
+shows it. No Mojang file or logo is in the launcher or the repository.
+
+**Source logos.** Modrinth's logo is not shown: Modrinth's own repository says its branding is all rights reserved and
+"the use of Modrinth branding elements, including but not limited to the wrench-in-labyrinth logo, ... is strictly
+prohibited without explicit written permission from Rinth, Inc." (`packages/assets/COPYING.md` in
+[modrinth/code](https://github.com/modrinth/code/blob/main/packages/assets/COPYING.md)), and its
+[terms](https://modrinth.com/legal/terms) ask for prior written permission to use its marks. Results name their source
+in text ("from Modrinth") until Rinth, Inc. agrees. CurseForge support, and so its logo, is coming soon.
+
 ## Installing, updating, removing
 
 `mod-browser.json` beside `options.txt` lists every file the browser installed: its source, project, version, file

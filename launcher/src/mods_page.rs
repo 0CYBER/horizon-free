@@ -31,6 +31,8 @@ pub(super) enum Event {
     Updates(HashMap<(SourceId, String), String>),
     /// A Java mod's check: its jar read, or why it couldn't be.
     Checked((SourceId, String), Result<Box<Check>, String>),
+    /// A project page's part, an image or a filter's values (`mods_project`).
+    Loaded(super::mods_project::Loaded),
 }
 
 /// Where a Java mod's check is.
@@ -41,8 +43,8 @@ pub(super) enum Checking {
 }
 
 pub(super) struct Mods {
-    kind: PackKind,
-    source: SourceId,
+    pub(super) kind: PackKind,
+    pub(super) source: SourceId,
     text: String,
     focus: FocusHandle,
     pub(super) focused: bool,
@@ -57,13 +59,15 @@ pub(super) struct Mods {
     installed: Vec<installed::Entry>,
     loaded: bool,
     /// The project being installed, and the line and fraction of its download.
-    busy: Option<(String, String, f32)>,
+    pub(super) busy: Option<(String, String, f32)>,
     message: Option<Result<String, String>>,
     updates: HashMap<(SourceId, String), String>,
     confirm_remove: Option<String>,
     /// Java mods' checks, by source and project.
-    checks: HashMap<(SourceId, String), Checking>,
-    tx: Sender<Event>,
+    pub(super) checks: HashMap<(SourceId, String), Checking>,
+    /// The project page, filters and images.
+    pub(super) browse: super::mods_project::Browse,
+    pub(super) tx: Sender<Event>,
     rx: Receiver<Event>,
 }
 
@@ -90,6 +94,7 @@ impl Mods {
             updates: HashMap::new(),
             confirm_remove: None,
             checks: HashMap::new(),
+            browse: Default::default(),
             tx,
             rx,
         }
@@ -99,14 +104,14 @@ impl Mods {
         self.focused = self.focus.is_focused(window);
     }
 
-    fn entry(&self, p: &Project) -> Option<&installed::Entry> {
+    pub(super) fn entry(&self, p: &Project) -> Option<&installed::Entry> {
         self.installed
             .iter()
             .find(|e| e.source == p.source && e.project == p.id)
     }
 
     /// How well a result runs: a Java mod's from its check once it has one.
-    fn support(&self, p: &Project) -> Support {
+    pub(super) fn support(&self, p: &Project) -> Support {
         let metadata = p.support();
         if p.kind != PackKind::Mod || !metadata.installable() {
             return metadata;
@@ -142,6 +147,7 @@ impl Launcher {
     pub(super) fn mods_tick(&mut self) -> bool {
         let mut changed = false;
         let mut to_check = Vec::new();
+        let mut loaded = Vec::new();
         while let Ok(event) = self.mods.rx.try_recv() {
             changed = true;
             let m = &mut self.mods;
@@ -184,13 +190,17 @@ impl Launcher {
                     };
                     m.checks.insert(key, state);
                 }
+                Event::Loaded(l) => loaded.push(l),
             }
         }
         self.mods_check(to_check);
+        for l in loaded {
+            self.mods_loaded(l);
+        }
         changed
     }
 
-    fn mods_search(&mut self, offset: usize) {
+    pub(super) fn mods_search(&mut self, offset: usize) {
         let m = &mut self.mods;
         m.search += 1;
         m.searching = true;
@@ -202,6 +212,7 @@ impl Launcher {
             everything: m.everything,
             offset,
             limit: PAGE,
+            filters: m.browse.filters.clone(),
             ..Query::new(&m.text, m.kind)
         };
         let (tx, search, source) = (m.tx.clone(), m.search, m.source);
@@ -228,7 +239,9 @@ impl Launcher {
         for p in &todo {
             m.checks.insert((p.source, p.id.clone()), Checking::Running);
         }
-        let (tx, everything) = (m.tx.clone(), m.everything);
+        // A version other than 26.3 asked for: check the newest file for 1.21 and later.
+        let everything = m.everything || m.browse.filters.other_version();
+        let tx = m.tx.clone();
         let queue = std::sync::Mutex::new(todo.into_iter());
         std::thread::spawn(move || {
             let home = backend::game_home();
@@ -273,14 +286,15 @@ impl Launcher {
 
     /// Installs (or updates) a project on a thread: a pack into its folder, a modpack into
     /// Modpacks. `known` is the project when the page has it; else it is asked for first.
-    fn mods_install(&mut self, source: SourceId, id: String, known: Option<Project>) {
+    pub(super) fn mods_install(&mut self, source: SourceId, id: String, known: Option<Project>) {
         if self.mods.busy.is_some() {
             return;
         }
         self.mods.message = None;
         self.mods.busy = Some((id.clone(), format!("Asking {}…", source.label()), 0.));
         self.mods.updates.remove(&(source, id.clone()));
-        let (tx, everything) = (self.mods.tx.clone(), self.mods.everything);
+        let everything = self.mods.everything || self.mods.browse.filters.other_version();
+        let tx = self.mods.tx.clone();
         std::thread::spawn(move || {
             let last = std::cell::Cell::new(-1);
             let progress = |line: &str, f: f32| {
@@ -429,6 +443,9 @@ impl Launcher {
                 let _ = this.update(cx, |this, cx| {
                     if this.mods.kind != kind {
                         this.mods.kind = kind;
+                        // Categories and loaders differ by kind.
+                        this.mods.browse.filters = Default::default();
+                        this.mods.browse.open = None;
                         this.mods_search(0);
                     }
                     cx.notify();
@@ -492,15 +509,39 @@ impl Launcher {
                     .child(self.mods_field(cx))
                     .child(toggle),
             )
-            .child(source_note);
+            .child(source_note)
+            .child(self.mods_filters(cx));
+        if let Some(project) = self.mods_project_page(cx) {
+            return div()
+                .flex()
+                .flex_col()
+                .gap(px(32.))
+                .child(header)
+                .children(self.mods_busy_plate())
+                .child(project);
+        }
         let mut page = div()
             .flex()
             .flex_col()
             .gap(px(32.))
             .child(header)
             .child(controls);
+        page = page.children(self.mods_busy_plate());
+        if self.mods.kind == PackKind::Modpack {
+            page = page.child(self.imported_packs(cx));
+        }
+        if let Some(list) = self.mods_installed_list(cx) {
+            page = page.child(list);
+        }
+        page.child(self.mods_results(cx))
+    }
+
+    /// The install under way and the last install's answer.
+    pub(super) fn mods_busy_plate(&self) -> Vec<Div> {
+        let t = self.theme;
+        let mut out = Vec::new();
         if let Some((_, line, f)) = &self.mods.busy {
-            page = page.child(
+            out.push(
                 plate(&t)
                     .flex()
                     .flex_col()
@@ -517,25 +558,17 @@ impl Launcher {
             );
         }
         match &self.mods.message {
-            Some(Ok(done)) => {
-                page = page.child(
-                    plate(&t)
-                        .p(px(16.))
-                        .text_size(px(theme::UI.px))
-                        .text_color(t.ink)
-                        .child(done.clone()),
-                )
-            }
-            Some(Err(e)) => page = page.child(notice(e.clone(), &t)),
+            Some(Ok(done)) => out.push(
+                plate(&t)
+                    .p(px(16.))
+                    .text_size(px(theme::UI.px))
+                    .text_color(t.ink)
+                    .child(done.clone()),
+            ),
+            Some(Err(e)) => out.push(notice(e.clone(), &t)),
             None => {}
         }
-        if self.mods.kind == PackKind::Modpack {
-            page = page.child(self.imported_packs(cx));
-        }
-        if let Some(list) = self.mods_installed_list(cx) {
-            page = page.child(list);
-        }
-        page.child(self.mods_results(cx))
+        out
     }
 
     fn mods_installed_list(&self, cx: &mut Context<Self>) -> Option<Div> {
@@ -650,8 +683,10 @@ impl Launcher {
         )
     }
 
-    fn mods_results(&self, cx: &mut Context<Self>) -> Div {
+    fn mods_results(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
+        let found = self.mods.results.clone();
+        let icons: Vec<AnyElement> = found.iter().map(|p| self.mods_icon(p, 40.)).collect();
         let m = &self.mods;
         if let Some(e) = &m.error {
             return div().child(notice(e.clone(), &t));
@@ -667,6 +702,7 @@ impl Launcher {
             return centered(line, &t);
         }
         let busy = m.busy.as_ref().map(|b| b.0.as_str());
+        let mut icons = icons.into_iter();
         let mut list = div().flex().flex_col().border_t_1().border_color(t.rule);
         for (i, p) in m.results.iter().enumerate() {
             let support = m.support(p);
@@ -746,9 +782,22 @@ impl Launcher {
                         .reason()
                         .map(|r| div().text_color(t.ink_soft).child(r.to_string())),
                 );
+            let open = p.clone();
+            let name = div()
+                .id(SharedString::from(format!("mods-open-{}", p.id)))
+                .flex()
+                .items_center()
+                .gap(px(12.))
+                .cursor_pointer()
+                .child(icons.next().expect("one icon per result"))
+                .child(div().hover(|s| s.underline()).child(p.title.clone()))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.mods_open(open.clone());
+                    cx.notify();
+                }));
             list = list.child(index_row(
                 i + 1,
-                p.title.clone(),
+                name,
                 Some(detail.into_any_element()),
                 Some(right.into_any_element()),
                 &t,
