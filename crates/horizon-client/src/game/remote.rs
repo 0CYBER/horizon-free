@@ -7,7 +7,7 @@
 //! client predicts its own movement; the server stays authoritative for
 //! everything else.
 use super::{Dim, Game, Mining, Screen};
-use horizon_client::first_person::Hand;
+use horizon_client::first_person::{Hand, SwingAnimation};
 use horizon_client::{
     Result,
     chunk::{BIOME_STRATEGY, Chunk, Light, MIN_Y, SECTIONS, Section, block_strategy},
@@ -3983,23 +3983,26 @@ impl Game<'_> {
                 Ok(true)
             }
             KeyCode::KeyQ => {
+                if self.spectator() {
+                    return Ok(true);
+                }
                 let all = self.keys.contains(&KeyCode::ControlLeft);
+                // MultiPlayerGameMode.dropItem: predict removal before sending
+                // the action, then swing only if a nonempty stack was removed.
+                let dropped = horizon_client::items::take_held_drop(
+                    &mut self.inventory[self.selected],
+                    all,
+                    false,
+                );
                 self.send(S::PlayerAction(play::PlayerAction {
                     action: if all { 4 } else { 5 },
                     pos: [0; 3],
                     direction: 0,
                     sequence: 0,
                 }));
-                // Inventory.removeFromSelected (prediction).
-                let slot = &mut self.inventory[self.selected];
-                if let Some(s) = slot {
-                    if all || s.count <= 1 {
-                        *slot = None;
-                    } else {
-                        s.count -= 1;
-                    }
+                if dropped.is_some() {
+                    self.swing_hand(Hand::Main, SwingAnimation::DEFAULT);
                 }
-                self.swing_arm();
                 Ok(true)
             }
             KeyCode::KeyE => {
