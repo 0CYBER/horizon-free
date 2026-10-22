@@ -20,6 +20,10 @@ again restores vanilla's behaviour completely.
 | Sort order and its clicks | `crates/horizon-client/src/inv_sort.rs` (pure, unit tested) |
 | The settings page | `options_horizon.rs`: the **Extras** section of Horizon's Options |
 
+The settings are grouped by extra. On Horizon's page an extra's own settings
+(its key, corner, size...) show under its switch while it is on (`Item::parent`);
+Classic's Horizon Extras screen lists them all, two buttons to a row.
+
 `game.rs` only gets one-line hooks (key, wheel, mouse, frame, HUD), so the
 extras stay out of the way of other input and options work.
 
@@ -58,7 +62,7 @@ Horizon category in Controls, and adding one would put a non-vanilla mapping int
   Off applies the zoom to the final FOV with no easing.
 - While scoping with a spyglass the zoom does nothing: the spyglass view and its
   overlay stay exactly vanilla's.
-- **Lower sensitivity** (default on) divides mouse turning by the zoom factor.
+- **Slower turning** (default on) divides mouse turning by the zoom factor.
 - With zoom off (or the key up) the FOV target and mouse are vanilla's, bit for
   bit; the FOV harness covers this.
 
