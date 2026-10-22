@@ -1,7 +1,11 @@
 //! Vanilla's `GoalSelector` (priorities, MOVE/LOOK/JUMP/TARGET control flags,
 //! interruption) and the shared goals of `net.minecraft.world.entity.ai.goal`.
 use super::{Mob, MobEvent, MobWorld, Seen, Species, Who, world::TargetInfo};
-use horizon_core::{geometry::Vec3, jmath, random::RandomSource};
+use horizon_core::{
+    geometry::{Aabb, Vec3},
+    jmath,
+    random::RandomSource,
+};
 use std::sync::Arc;
 
 pub const MOVE: u8 = 1;
@@ -970,8 +974,7 @@ impl Goal for LookAtPlayer {
         let (id, only) = (m.id, self.only);
         let at = Vec3::new(m.position.x, m.eye_y(), m.position.z);
         let candidates: Vec<(u32, Vec3)> =
-            cx.w.others
-                .iter()
+            cx.w.others_near(area)
                 .filter(|s| s.id != id && s.alive && s.bounds.intersects(area))
                 .filter(|s| only.is_none_or(|o| s.species == o))
                 .map(|s| (s.id, s.position))
@@ -1902,7 +1905,12 @@ impl Goal for FollowParent {
         let species = m.species();
         let pos = m.position;
         let mut best: Option<(u32, f64)> = None;
-        for s in cx.w.others.iter().filter(|s| {
+        // Every position in range puts the box's bottom face in this area.
+        let area = Aabb::new(
+            Vec3::new(pos.x - 9.0, pos.y - 5.0, pos.z - 9.0),
+            Vec3::new(pos.x + 9.0, pos.y + 5.0, pos.z + 9.0),
+        );
+        for s in cx.w.others_near(area).filter(|s| {
             s.alive
                 && s.species == species
                 && !s.baby

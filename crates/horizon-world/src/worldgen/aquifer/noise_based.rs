@@ -120,6 +120,7 @@ pub struct NoiseBasedAquifer<P, F, B> {
     statuses: Vec<Option<FluidStatus>>,
     locations: Vec<i64>,
     surfaces: HashMap<i64, i32>,
+    neighborhood: Option<([i32; 3], [(usize, BlockPos); 12])>,
     skip_above_y: i32,
     schedule: bool,
 }
@@ -180,6 +181,7 @@ impl<P: FluidPicker, F: PositionalRandom, B: AquiferBlockStates> NoiseBasedAquif
             statuses,
             locations,
             surfaces: HashMap::new(),
+            neighborhood: None,
             skip_above_y: 0,
             schedule: false,
         };
@@ -479,47 +481,75 @@ impl<P: FluidPicker, F: PositionalRandom, B: AquiferBlockStates> NoiseBasedAquif
             y.wrapping_add(1).div_euclid(12),
             z.wrapping_sub(5) >> 4,
         ];
-        let mut distances = [i32::MAX; 4];
-        let mut indices = [0usize; 4];
-        for dx in 0..=1i32 {
-            for dy in -1..=1i32 {
-                for dz in 0..=1i32 {
-                    let cell = [
-                        grid[0].wrapping_add(dx),
-                        grid[1].wrapping_add(dy),
-                        grid[2].wrapping_add(dz),
-                    ];
-                    let index = self.grid_index(cell)?;
-                    if self.locations[index] == i64::MAX {
-                        let mut random = self.random.at(BlockPos::new(cell[0], cell[1], cell[2]));
-                        let px = cell[0]
-                            .wrapping_shl(4)
-                            .wrapping_add(random.next_int_bound(10).expect("positive bound"));
-                        let py = cell[1]
-                            .wrapping_mul(12)
-                            .wrapping_add(random.next_int_bound(9).expect("positive bound"));
-                        let pz = cell[2]
-                            .wrapping_shl(4)
-                            .wrapping_add(random.next_int_bound(10).expect("positive bound"));
-                        self.locations[index] = BlockPos::new(px, py, pz).pack();
-                    }
-                    let point = BlockPos::unpack(self.locations[index]);
-                    let ax = point.x.wrapping_sub(x);
-                    let ay = point.y.wrapping_sub(y);
-                    let az = point.z.wrapping_sub(z);
-                    let distance = ax
-                        .wrapping_mul(ax)
-                        .wrapping_add(ay.wrapping_mul(ay))
-                        .wrapping_add(az.wrapping_mul(az));
-                    if let Some(slot) = distances.iter().position(|old| distance <= *old) {
-                        for i in (slot + 1..4).rev() {
-                            distances[i] = distances[i - 1];
-                            indices[i] = indices[i - 1];
+        // Fill in the original cell order, publishing only after checked traversal
+        // succeeds. Failed traversal keeps the last complete neighborhood.
+        if self.neighborhood.as_ref().map(|(key, _)| *key) != Some(grid) {
+            let mut entries = [(0, BlockPos::default()); 12];
+            let mut next = 0;
+            for dx in 0..=1i32 {
+                for dy in -1..=1i32 {
+                    for dz in 0..=1i32 {
+                        let cell = [
+                            grid[0].wrapping_add(dx),
+                            grid[1].wrapping_add(dy),
+                            grid[2].wrapping_add(dz),
+                        ];
+                        let index = self.grid_index(cell)?;
+                        if self.locations[index] == i64::MAX {
+                            let mut random =
+                                self.random.at(BlockPos::new(cell[0], cell[1], cell[2]));
+                            let px = cell[0]
+                                .wrapping_shl(4)
+                                .wrapping_add(random.next_int_bound(10).expect("positive bound"));
+                            let py = cell[1]
+                                .wrapping_mul(12)
+                                .wrapping_add(random.next_int_bound(9).expect("positive bound"));
+                            let pz = cell[2]
+                                .wrapping_shl(4)
+                                .wrapping_add(random.next_int_bound(10).expect("positive bound"));
+                            self.locations[index] = BlockPos::new(px, py, pz).pack();
                         }
-                        distances[slot] = distance;
-                        indices[slot] = index;
+                        entries[next] = (index, BlockPos::unpack(self.locations[index]));
+                        next += 1;
                     }
                 }
+            }
+            self.neighborhood = Some((grid, entries));
+        }
+        let mut distances = [i32::MAX; 4];
+        let mut indices = [0usize; 4];
+        for &(index, point) in &self
+            .neighborhood
+            .as_ref()
+            .expect("populated neighborhood")
+            .1
+        {
+            let ax = point.x.wrapping_sub(x);
+            let ay = point.y.wrapping_sub(y);
+            let az = point.z.wrapping_sub(z);
+            let distance = ax
+                .wrapping_mul(ax)
+                .wrapping_add(ay.wrapping_mul(ay))
+                .wrapping_add(az.wrapping_mul(az));
+            // Equal distances insert before existing entries, as in vanilla.
+            if distance <= distances[0] {
+                distances = [distance, distances[0], distances[1], distances[2]];
+                indices = [index, indices[0], indices[1], indices[2]];
+            } else if distance <= distances[1] {
+                distances[3] = distances[2];
+                distances[2] = distances[1];
+                distances[1] = distance;
+                indices[3] = indices[2];
+                indices[2] = indices[1];
+                indices[1] = index;
+            } else if distance <= distances[2] {
+                distances[3] = distances[2];
+                distances[2] = distance;
+                indices[3] = indices[2];
+                indices[2] = index;
+            } else if distance <= distances[3] {
+                distances[3] = distance;
+                indices[3] = index;
             }
         }
         let a = self.status(context, indices[0])?;

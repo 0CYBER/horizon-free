@@ -349,7 +349,7 @@ jobs:
         run: |
           signature=(); [[ -f dist/SHA256SUMS.sig ]] && signature=(dist/SHA256SUMS.sig)
           smoke=(); [[ -f dist/smoke-test.json ]] && smoke=(dist/smoke-test.json)
-          # A beta (pre-release), the Nightly channel's: promote.yml makes it stable and latest in its daily promotion
+          # A beta (pre-release), the Alpha channel's: promote.yml makes it stable and latest in its daily promotion
           # (docs/release-flow.md).
           gh release create "$TAG" --target "${{ needs.decide.outputs.head }}" --title "$(cat notes/title.txt)" \
             --notes-file notes/body.md --prerelease --latest=false dist/horizon-linux-x86_64.tar.gz \

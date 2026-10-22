@@ -137,10 +137,10 @@ class ReleaseChannelTests(unittest.TestCase):
         pr = {"number": 1, "title": "Fix a thing", "labels": [], "paths": ["crates/x.rs"], "issues": [], "author": "ludovic111"}
         _, beta = train.notes("game", "v2026.10.19", [pr], [], beta=True)
         _, stable = train.notes("game", "v2026.10.19", [pr], [], beta=False)
-        self.assertIn("This is a nightly build: launchers on the Nightly channel", beta)
-        self.assertNotIn("nightly", stable.lower())
+        self.assertIn("This is an alpha build: launchers on the Alpha channel", beta)
+        self.assertNotIn("alpha", stable.lower())
         _, launcher = train.notes("launcher", "launcher-v0.9.0", [pr], [], beta=True)
-        self.assertNotIn("nightly", launcher.lower())
+        self.assertNotIn("alpha", launcher.lower())
 
 
 if __name__ == "__main__":
