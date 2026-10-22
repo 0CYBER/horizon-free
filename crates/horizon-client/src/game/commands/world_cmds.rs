@@ -470,8 +470,12 @@ impl Game<'_> {
                 match block {
                     Ok(Arg::Block(b)) => {
                         let state = self.block_state(&b)?;
+                        let at = self
+                            .position_arg(ctx, "pos")
+                            .unwrap_or_else(|| self.source_position())
+                            .map(|c| c.floor() as i32);
                         let (sprite, tint) = self
-                            .particle_sprite(state)
+                            .particle_sprite(state, at)
                             .unwrap_or_else(|| ("block/stone".into(), 0xFFFFFF));
                         ParticleOptions::block(ty, sprite, tint)
                     }

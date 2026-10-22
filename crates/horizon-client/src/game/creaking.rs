@@ -191,7 +191,8 @@ impl Game<'_> {
             let Ok(id) = registry.resolve(&state) else {
                 return;
             };
-            let Some((sprite, tint)) = this.particle_sprite(id) else {
+            let Some((sprite, tint)) = this.particle_sprite(id, center.map(|c| c.floor() as i32))
+            else {
                 return;
             };
             for _ in 0..count {

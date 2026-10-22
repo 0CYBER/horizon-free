@@ -82,6 +82,19 @@ impl CompiledChoices {
                 .collect::<Result<_>>()?,
         })
     }
+    /// The variant `particleMaterial` comes from: the first entry of a weighted
+    /// list (`WeightedVariants`) and, for a multipart root, of its first
+    /// selector whether or not that selector applies (`MultiPartModel`).
+    pub fn particle_variant(&self, selected: &SelectedModels) -> Option<&Variant> {
+        let choice = match selected {
+            SelectedModels::Variant(index) => self.variants.get(*index)?,
+            SelectedModels::Multipart(_) => self.multipart.first()?,
+        };
+        Some(match choice {
+            Choice::Single(value) => value,
+            Choice::Weighted { variants, .. } => variants.first()?,
+        })
+    }
     /// Append selected variants without allocating intermediate part lists. A
     /// multipart root consumes nextLong even for an empty selected subset, then
     /// resets the same random source to that seed before each selected part.
