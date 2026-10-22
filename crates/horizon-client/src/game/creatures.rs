@@ -2107,15 +2107,22 @@ impl Game<'_> {
                         let from = pl.position;
                         self.spawn_mob("minecraft:endermite", [from.x, from.y, from.z], false);
                     }
+                    // To where the pearl started its last tick (oldPosition).
+                    let to = p.previous;
                     if let Some(pl) = self.player.as_mut() {
-                        pl.position = at;
+                        pl.position = to;
                         pl.velocity = Vec3::ZERO;
                         pl.fall_distance = 0.0;
+                        pl.teleported = true;
                     }
-                    self.previous_position = at;
+                    self.previous_position = to;
                     self.hurt_player_by("minecraft:ender_pearl", 5.0);
-                    self.audio
-                        .play("minecraft:entity.player.teleport", Some(atp), 1.0, 1.0);
+                    self.audio.play(
+                        "minecraft:entity.player.teleport",
+                        Some([to.x, to.y, to.z]),
+                        1.0,
+                        1.0,
+                    );
                 }
             }
             (ProjectileKind::SmallFireball, hit) => match hit {
