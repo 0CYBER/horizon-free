@@ -1260,10 +1260,17 @@ fn centered(text_: &str, t: &Theme) -> Div {
 
 /// The name the game made up for a player without an account, once it has run.
 fn offline_name() -> Option<String> {
-    std::fs::read_to_string(backend::game_home().join("horizon-player.txt"))
-        .ok()
-        .map(|n| n.trim().to_string())
+    player_name(&std::fs::read_to_string(backend::game_home().join("horizon-player.txt")).ok()?)
+}
+
+/// The name in `horizon-player.txt`: the game writes `name:Player12345` (horizon-client's
+/// offline_name.rs).
+fn player_name(text: &str) -> Option<String> {
+    text.lines()
+        .find_map(|line| line.trim().strip_prefix("name:"))
+        .map(str::trim)
         .filter(|n| !n.is_empty())
+        .map(str::to_owned)
 }
 
 /// `1234` as `1,234`.
@@ -1539,7 +1546,9 @@ impl Launcher {
                         .flex_col()
                         .min_w_0()
                         .child(title("Horizon".into()))
-                        .child(sub(if prepared {
+                        .child(sub(if tag.is_none() {
+                            "No version installed"
+                        } else if prepared {
                             "Vanilla · ready"
                         } else {
                             "Needs preparing"
@@ -1826,10 +1835,12 @@ impl Launcher {
     fn play_page(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let Some(tag) = self.selected().cloned() else {
+            // No hero without a version: the page starts below the top bar like the others.
             return div()
                 .flex()
                 .flex_col()
                 .gap(px(24.))
+                .pt(px(28.))
                 .child(page_header(
                     "Play",
                     "Start the game, or run a server for others to join.",
@@ -3582,6 +3593,18 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_offline_name_is_read_from_its_key() {
+        use super::player_name;
+        assert_eq!(
+            player_name("name:Player63010\n").as_deref(),
+            Some("Player63010")
+        );
+        assert_eq!(player_name("name:Steve\r\n").as_deref(), Some("Steve"));
+        assert_eq!(player_name("Player63010\n"), None);
+        assert_eq!(player_name(""), None);
+    }
+
     #[test]
     fn counts_get_thousands_separators() {
         let shown: Vec<String> = [0, 7, 999, 1000, 12_300, 1_234_500]

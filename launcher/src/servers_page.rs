@@ -284,12 +284,10 @@ pub(super) fn stop_on_quit() {
 /// The player's own name, to let them in on a friends-only server: the Microsoft account that plays,
 /// else the name the game made up for them (`horizon-player.txt`).
 fn own_name(accounts: &Accounts) -> Option<String> {
-    accounts.selected().map(|a| a.name.clone()).or_else(|| {
-        std::fs::read_to_string(backend::game_home().join("horizon-player.txt"))
-            .ok()
-            .map(|n| n.trim().to_string())
-            .filter(|n| !n.is_empty())
-    })
+    accounts
+        .selected()
+        .map(|a| a.name.clone())
+        .or_else(crate::offline_name)
 }
 
 fn bytes(n: u64) -> String {
