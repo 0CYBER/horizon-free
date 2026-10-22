@@ -1,17 +1,20 @@
 name: promote
-# Beta game releases become stable (docs/release-flow.md, "Channels"): every 30 minutes tools/release_channels.py
-# promotes the newest beta that has been out 6 hours, passed its release smoke test and isn't covered by an issue
-# labelled release-blocker. By hand, from GitHub's app too (Actions > promote > Run workflow):
-#   gh workflow run promote -f tag=v2026.10.19.03               # that beta now, without the wait
-#   gh workflow run promote -f tag=v2026.10.19.03 -f force=true  # even blocked or without its smoke test
-#   gh workflow run promote -f dry_run=true                      # say what would be promoted
+# Beta game releases become stable once a day (docs/release-flow.md, "Channels"): at 19:00 UTC (21:00 in Paris in
+# summer time, 20:00 in winter) tools/release_channels.py promotes the newest beta that had been out 6 hours by then,
+# passed its release smoke test and isn't covered by an issue labelled release-blocker. Launchers on the Nightly
+# channel install every beta when it is published; Stable gets the day's promotion. The later runs of the evening are
+# retries for a run GitHub starts late or skips: they promote the same beta, so stable still moves once.
+# By hand, from GitHub's app too (Actions > promote > Run workflow):
+#   gh workflow run promote -f tag=v0.2.3                 # that beta now, without waiting for 19:00
+#   gh workflow run promote -f tag=v0.2.3 -f force=true   # even blocked or without its smoke test
+#   gh workflow run promote -f dry_run=true               # say what would be promoted
 # Holding betas back: label an issue release-blocker. While it is open it holds every beta; closed as completed it
 # still holds the betas published before it closed. The issue's text is never read (its author could edit it).
-# When the oldest waiting beta is 24 hours old, an issue "Promotion to stable has stalled" says so; it closes itself
-# after the next promotion.
+# When the oldest waiting beta is 30 hours old (it missed a promotion it was due for), an issue "Promotion to stable
+# has stalled" says so; it closes itself after the next promotion.
 on:
   schedule:
-    - cron: '13,43 * * * *'
+    - cron: '7,37 19-20 * * *'
   workflow_dispatch:
     inputs:
       tag:

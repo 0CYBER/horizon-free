@@ -277,6 +277,13 @@ enum Cmd {
         #[arg(value_parser = ["horizon", "classic"])]
         style: Option<String>,
     },
+    /// Show or set which Horizon releases install by themselves: stable (a tested build about once
+    /// a day) or nightly (every release as soon as it is built; can break)
+    UpdateChannel {
+        /// Omit to show the current channel
+        #[arg(value_parser = ["stable", "nightly"])]
+        channel: Option<String>,
+    },
     /// Show or set the extra arguments the game starts with (for example --server-thread);
     /// quotes group a word with spaces in it
     GameArgs {
@@ -394,7 +401,7 @@ fn attached(mut cmd: Command) -> Result<(), String> {
 
 fn release_json(r: &Release) -> serde_json::Value {
     serde_json::json!({
-        "tag": r.tag, "name": r.name, "date": r.date, "channel": if r.beta { "beta" } else { "stable" },
+        "tag": r.tag, "name": r.name, "date": r.date, "channel": backend::UpdateChannel::of(r).name(),
         "available_here": r.asset.is_some(), "installed": backend::installed().contains(&r.tag),
     })
 }
@@ -443,8 +450,8 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                     (false, true) => "",
                     (false, false) => "no build for this platform",
                 };
-                let channel = if r.beta { "beta" } else { "stable" };
-                println!("{:<15} {}  {:<6}  {}", r.tag, r.date, channel, state);
+                let channel = backend::UpdateChannel::of(r).name();
+                println!("{:<15} {}  {:<7}  {}", r.tag, r.date, channel, state);
             }
         }
         Cmd::Install { tag } => {
@@ -548,6 +555,19 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 json(serde_json::json!({ "menu_style": style }));
             } else {
                 println!("Menu style: {style}");
+            }
+        }
+        Cmd::UpdateChannel { channel } => {
+            let mut settings = backend::Settings::load();
+            if let Some(channel) = channel.as_deref().and_then(backend::UpdateChannel::parse) {
+                settings.update_channel = channel;
+                settings.save();
+            }
+            let channel = settings.update_channel.name();
+            if as_json {
+                json(serde_json::json!({ "update_channel": channel }));
+            } else {
+                println!("Update channel: {channel}");
             }
         }
         Cmd::GameArgs { args } => {

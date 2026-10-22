@@ -37,9 +37,14 @@ The game opens on Horizon's own title screen. Your worlds, options and logs live
 - **Horizon.** The launcher looks for a new release when it starts and every four hours while it is open. With **Install new versions automatically** on (the default), it installs one and moves you to it if you were on the newest. New releases come out many times a day, and old versions stay installed until you remove them on the **Versions** page.
 - **The launcher.** It updates itself from its own releases, then shows **Restart** in its footer.
 
-## Stable and beta builds
+## Stable and Nightly
 
-The launcher installs **stable** builds by default. In **Settings**, **Beta builds** installs new builds the moment they are released, before they have had time to settle. The **Versions** page shows each version's channel. A new release starts as a beta and becomes stable by itself about six hours later, once its smoke test has passed.
+In **Settings**, **Updates** picks which builds install by themselves:
+
+- **Stable** (the default): a tested build about once a day.
+- **Nightly**: every change as soon as it is built, several times a day. It can break.
+
+Every new release is a Nightly build first. Once a day, the newest one that has been out for six hours, passed its smoke test and has no known blocker becomes Stable. "Nightly" is just the name: it updates many times a day, not once a night. The **Versions** page shows each version's channel, and you can install any of them by hand.
 
 ## The Versions page
 
