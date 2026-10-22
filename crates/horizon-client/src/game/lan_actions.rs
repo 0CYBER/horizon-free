@@ -55,6 +55,8 @@ pub(super) struct GuestPlay {
     pub(super) crafting: super::lan_crafting::GuestCrafting,
     /// The workstation menu the guest has open (game/lan_stations.rs).
     pub(super) station: Option<super::lan_stations::GuestStation>,
+    /// The lectern the guest reads (game/lan_stations.rs).
+    pub(super) lectern: Option<super::lan_stations::GuestLectern>,
     /// What the guest's body was given for its effects and enchantments.
     potions: super::potions::BodyPotions,
     /// `ServerPlayer.getStats` and the inventory `inventory_changed` last saw.
@@ -478,7 +480,13 @@ impl Game<'_> {
         self.container = container;
         self.screen = screen;
         self.sign_edit = host_sign;
-        self.book = host_book;
+        // A lectern the guest's use opened (LecternBlock.openScreen).
+        let guest_lectern = match std::mem::replace(&mut self.book, host_book) {
+            Some(super::books::BookScreen::View {
+                lectern: Some(key), ..
+            }) => Some(key),
+            _ => None,
+        };
         self.command_block_screen = host_command_block;
         self.mount_menu = host_mount_menu;
         self.keys = host_keys;
@@ -572,6 +580,9 @@ impl Game<'_> {
         }
         if let Some(station) = opened_station {
             self.lan_station_opened(host, conn, station);
+        }
+        if let Some(key) = guest_lectern {
+            self.lan_open_lectern(host, conn, key);
         }
         if opened_table {
             self.lan_open_crafting(host, conn);
@@ -924,6 +935,7 @@ impl Game<'_> {
             S::ContainerClick(p) if self.lan_crafting_click(host, conn, &p) => {}
             S::ContainerClick(p) if self.lan_machine_click(host, conn, &p) => {}
             S::ContainerClick(p) if self.lan_station_click(host, conn, &p) => {}
+            S::ContainerClick(p) if self.lan_lectern_click(host, conn, &p) => {}
             S::ContainerButtonClick(p) => {
                 self.lan_station_button(host, conn, p.container, p.button);
             }

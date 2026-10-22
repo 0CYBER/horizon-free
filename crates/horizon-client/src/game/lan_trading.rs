@@ -259,6 +259,7 @@ impl Game<'_> {
             enchantments: &self.res.stations().enchantments,
             names: &self.pack.names,
             trade: Some(&trade_env),
+            maps: None,
         };
         let mut menu = Menu::new(Kind::Merchant);
         {

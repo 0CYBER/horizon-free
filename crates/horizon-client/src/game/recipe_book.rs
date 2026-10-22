@@ -283,6 +283,7 @@ impl Game<'_> {
                 enchantments: &self.res.stations().enchantments,
                 names: &self.pack.names,
                 trade: None,
+                maps: None,
             };
             for i in 0..36 {
                 menu.set_player_item(i, self.inventory[i].clone());

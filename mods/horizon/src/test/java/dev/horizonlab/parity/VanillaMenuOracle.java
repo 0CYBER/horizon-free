@@ -39,6 +39,8 @@ public final class VanillaMenuOracle {
     static final List<String> equips = new ArrayList<>();
     /** The block entity behind a "crafter_be" menu (slot state packets go to it). */
     static net.minecraft.world.level.block.entity.CrafterBlockEntity crafter;
+    /** The block entity behind a "lectern" menu. */
+    static net.minecraft.world.level.block.entity.LecternBlockEntity lectern;
 
     @SuppressWarnings("unchecked")
     static <T> T make(Class<T> type) {
@@ -87,7 +89,21 @@ public final class VanillaMenuOracle {
         // BlockEntity.setChanged of the "*_be" furnaces: no chunks here.
         @Override public void blockEntityChanged(BlockPos pos) { }
         @Override public void updateNeighbourForOutputSignal(BlockPos pos, net.minecraft.world.level.block.Block block) { }
+        // The case's maps (MapItem.getSavedData) and the ones the cartography table makes.
+        @Override public net.minecraft.world.level.saveddata.maps.MapItemSavedData getMapData(net.minecraft.world.level.saveddata.maps.MapId id) { return maps.get(id.id()); }
+        @Override public net.minecraft.world.level.saveddata.maps.MapId getFreeMapId() { return new net.minecraft.world.level.saveddata.maps.MapId(nextMap++); }
+        @Override public void setMapData(net.minecraft.world.level.saveddata.maps.MapId id, net.minecraft.world.level.saveddata.maps.MapItemSavedData data) { maps.put(id.id(), data); }
+        @Override public long getGameTime() { return 0L; }
+        // LecternBlock.signalPageChange and resetBookState: no chunks or ticks here.
+        @Override public boolean setBlock(BlockPos pos, net.minecraft.world.level.block.state.BlockState state, int flags, int recursion) { return true; }
+        @Override public void scheduleTick(BlockPos pos, net.minecraft.world.level.block.Block block, int delay) { }
+        @Override public void updateNeighborsAt(BlockPos pos, net.minecraft.world.level.block.Block block, net.minecraft.world.level.redstone.Orientation o) { }
+        @Override public void playSound(net.minecraft.world.entity.Entity e, BlockPos pos, net.minecraft.sounds.SoundEvent s, net.minecraft.sounds.SoundSource c, float v, float pitch) { }
     }
+
+    /** The maps of the case's level, by id, and the next free id. */
+    static final Map<Integer, net.minecraft.world.level.saveddata.maps.MapItemSavedData> maps = new HashMap<>();
+    static int nextMap;
 
     static final class FakePlayer extends ServerPlayer {
         World world;
@@ -184,6 +200,24 @@ public final class VanillaMenuOracle {
             case "smithing" -> new SmithingMenu(0, inv);
             case "enchanting" -> new EnchantmentMenu(0, inv);
             case "beacon" -> new BeaconMenu(0, inv);
+            // Over the level (its maps), as the server's menu is.
+            case "cartography" -> new CartographyTableMenu(0, inv, access);
+            case "lectern" -> {
+                // The server's menu: the block entity's bookAccess and dataAccess.
+                lectern = new net.minecraft.world.level.block.entity.LecternBlockEntity(BlockPos.ZERO,
+                    net.minecraft.world.level.block.Blocks.LECTERN.defaultBlockState());
+                lectern.setLevel(player.world);
+                try {
+                    var type = net.minecraft.world.level.block.entity.LecternBlockEntity.class;
+                    Field book = type.getDeclaredField("bookAccess");
+                    Field data = type.getDeclaredField("dataAccess");
+                    book.setAccessible(true);
+                    data.setAccessible(true);
+                    yield new LecternMenu(0, (Container) book.get(lectern), (ContainerData) data.get(lectern));
+                } catch (ReflectiveOperationException e) {
+                    throw new AssertionError(e);
+                }
+            }
             default -> throw new IllegalArgumentException(kind);
         };
     }
@@ -213,6 +247,12 @@ public final class VanillaMenuOracle {
 
     /** {@link #state} and what was equipped: the menu_click harness's line (place_recipe prints {@code state}). */
     static String clickState(AbstractContainerMenu menu, Inventory inv) throws Exception {
+        if (menu instanceof LecternMenu) {
+            // No inventory slots: the inventory Take Book fills.
+            StringBuilder items = new StringBuilder();
+            for (int i = 0; i < 36; i++) items.append(' ').append(ParityData.canon(inv.getItem(i)));
+            return state(menu, inv) + " | " + String.join(";", equips) + " | inv" + items;
+        }
         return state(menu, inv) + " | " + String.join(";", equips);
     }
 
@@ -244,6 +284,20 @@ public final class VanillaMenuOracle {
                     // EnchantmentMenu.clickMenuButton names the player on an invalid button.
                     set(player, Player.class, "gameProfile", new com.mojang.authlib.GameProfile(new java.util.UUID(0, 1), "Oracle"));
                     player.experienceLevel = f.has("levels") ? f.get("levels").getAsInt() : 0;
+                    maps.clear();
+                    nextMap = 1000;
+                    lectern = null;
+                    // LecternMenu's Take Book asks Player.mayBuild.
+                    set(player, Player.class, "abilities", new net.minecraft.world.entity.player.Abilities());
+                    if (f.has("maps")) {
+                        // [id, scale, locked] each.
+                        for (var m : f.getAsJsonArray("maps")) {
+                            var a = m.getAsJsonArray();
+                            var data = net.minecraft.world.level.saveddata.maps.MapItemSavedData.createFresh(0, 0,
+                                (byte) a.get(1).getAsInt(), false, false, net.minecraft.world.level.Level.OVERWORLD);
+                            maps.put(a.get(0).getAsInt(), a.get(2).getAsBoolean() ? data.locked() : data);
+                        }
+                    }
                     var inv = new Inventory(player, new EntityEquipment());
                     player.inv = inv;
                     AbstractContainerMenu menu = menu(f.get("menu").getAsString(), player, inv);
@@ -252,6 +306,19 @@ public final class VanillaMenuOracle {
                     var slotsJson = f.getAsJsonArray("slots");
                     for (int i = 0; i < menu.slots.size(); i++) menu.getSlot(i).set(ParityData.stack(slotsJson.get(i).getAsString()));
                     menu.setCarried(ParityData.stack(f.get("carried").getAsString()));
+                    if (lectern != null && menu instanceof LecternMenu) {
+                        // LecternBlockEntity.setBook without resolving the book: its slot can't set it.
+                        var type = net.minecraft.world.level.block.entity.LecternBlockEntity.class;
+                        ItemStack book = ParityData.stack(slotsJson.get(0).getAsString());
+                        set(lectern, type, "book", book);
+                        var count = type.getDeclaredMethod("getPageCount", ItemStack.class);
+                        count.setAccessible(true);
+                        set(lectern, type, "pageCount", count.invoke(null, book));
+                    }
+                    if (f.has("inventory")) {
+                        var items = f.getAsJsonArray("inventory");
+                        for (int i = 0; i < items.size(); i++) inv.setItem(i, ParityData.stack(items.get(i).getAsString()));
+                    }
                     // The slot listener of the block crafter's menu refreshes the result.
                     if (f.get("menu").getAsString().equals("crafter_be")) menu.broadcastChanges();
                     var dataJson = f.getAsJsonArray("data");

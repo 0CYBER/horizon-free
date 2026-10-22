@@ -427,6 +427,37 @@ pub fn stack_to_network(
                 horizon_protocol::item::Component::Int(d.repair_cost as i32),
             ));
         }
+        if let Some(mode) = d.map_post_processing {
+            stack.added.push((
+                horizon_protocol::item::component::MAP_POST_PROCESSING,
+                horizon_protocol::item::Component::Int(i32::from(mode)),
+            ));
+        }
+        // The books a lectern shows and a guest reads.
+        if !d.writable_pages.is_empty() {
+            stack.added.push((
+                horizon_protocol::item::component::WRITABLE_BOOK_CONTENT,
+                horizon_protocol::item::Component::WritableBook(d.writable_pages.clone()),
+            ));
+        }
+        if let Some(w) = &d.written {
+            stack.added.push((
+                horizon_protocol::item::component::WRITTEN_BOOK_CONTENT,
+                horizon_protocol::item::Component::WrittenBook(
+                    horizon_protocol::item::WrittenBook {
+                        title: w.title.clone(),
+                        author: w.author.clone(),
+                        generation: i32::from(w.generation),
+                        pages: w
+                            .pages
+                            .iter()
+                            .map(|p| horizon_protocol::text::literal(p))
+                            .collect(),
+                        resolved: true,
+                    },
+                ),
+            ));
+        }
     }
     if let Some(name) = s.custom_name() {
         stack.added.push((

@@ -2551,6 +2551,8 @@ impl Game<'_> {
                         1505 => Some(("minecraft:item.bone_meal.use", 1.0)),
                         1042 => Some(("minecraft:block.grindstone.use", 1.0)),
                         1044 => Some(("minecraft:block.smithing_table.use", 1.0)),
+                        // LevelEvent.SOUND_PAGE_TURN (a lectern's page).
+                        1043 => Some(("minecraft:item.book.page_turn", 1.0)),
                         _ => None,
                     };
                     if let Some((name, volume)) = sound {
@@ -2560,7 +2562,9 @@ impl Game<'_> {
                                     - self.world.random.next_float())
                                     * 0.8
                             }
-                            1029 | 1030 | 1042 | 1044 => self.world.random.next_float() * 0.1 + 0.9,
+                            1029 | 1030 | 1042 | 1043 | 1044 => {
+                                self.world.random.next_float() * 0.1 + 0.9
+                            }
                             _ => 1.0,
                         };
                         self.audio.play(name, c, volume, pitch);
@@ -5436,6 +5440,7 @@ impl Game<'_> {
             .is_some_and(|s| s.kind == stations::Kind::Stonecutter);
         let station_kind = self.station.as_ref().map(|s| s.kind);
         let grindstone_open = station_kind == Some(stations::Kind::Grindstone);
+        let cartography_open = station_kind == Some(stations::Kind::Cartography);
         let anvil_open = station_kind == Some(stations::Kind::Anvil);
         let smithing_open = station_kind == Some(stations::Kind::Smithing);
         let enchanting_open = station_kind == Some(stations::Kind::Enchanting);
@@ -5471,15 +5476,21 @@ impl Game<'_> {
             let mut v = vec![Some(stations::INPUT), Some(stations::RESULT)];
             v.extend((9..36).chain(0..9).map(Some));
             (Kind::Stonecutter, v)
-        } else if grindstone_open {
-            // GrindstoneMenu: the two inputs, the result, then the inventory.
+        } else if grindstone_open || cartography_open {
+            // GrindstoneMenu and CartographyTableMenu: the two inputs, the
+            // result, then the inventory.
             let mut v = vec![
                 Some(stations::INPUT),
                 Some(stations::INPUT + 1),
                 Some(stations::RESULT),
             ];
             v.extend((9..36).chain(0..9).map(Some));
-            (Kind::Grindstone, v)
+            let kind = if grindstone_open {
+                Kind::Grindstone
+            } else {
+                Kind::Cartography
+            };
+            (kind, v)
         } else if enchanting_open {
             // EnchantmentMenu: the item, the lapis, then the inventory.
             let mut v = vec![Some(stations::INPUT), Some(stations::INPUT + 1)];
@@ -5604,6 +5615,18 @@ impl Game<'_> {
         if let Some((s, mob)) = session.as_mut() {
             self.merchant_sync_in(s, *mob);
         }
+        // The cartography table reads and makes the level's maps; a
+        // server's (the client menu's ContainerLevelAccess.NULL) doesn't.
+        let level_maps = (kind == Kind::Cartography && self.remote.is_none()).then(|| {
+            let held: Vec<ItemStack> = before
+                .iter()
+                .flatten()
+                .chain(self.inventory.iter().flatten())
+                .chain(self.carried.iter())
+                .cloned()
+                .collect();
+            self.level_maps(&held)
+        });
         let next_map = if merchant_open { self.peek_map_id() } else { 0 };
         let tag = |t: &str| self.structure_tag(t);
         let maps = trading::GameMaps {
@@ -5626,6 +5649,9 @@ impl Game<'_> {
             enchantments: &self.res.stations().enchantments,
             names: &self.pack.names,
             trade: Some(&trade_env),
+            maps: level_maps
+                .as_ref()
+                .map(|m| m as &dyn horizon_client::menu::Maps),
         };
         menu.creative = creative;
         menu.selected = self.selected;
@@ -5729,6 +5755,10 @@ impl Game<'_> {
                 self.station_sound(sound);
             }
             self.loom_screen_changed();
+        } else if kind == Kind::Cartography {
+            for sound in sounds.into_iter().filter(|_| !predicting) {
+                self.station_sound(sound);
+            }
         } else if kind == Kind::Stonecutter {
             if let Some(s) = self.station.as_mut() {
                 s.selected = usize::try_from(menu.data[0]).ok();
@@ -5778,6 +5808,9 @@ impl Game<'_> {
             }
         }
         self.apply_equipment();
+        if let Some(maps) = level_maps {
+            self.register_made_maps(maps);
+        }
         true
     }
     /// Number keys, F and Q over a slot of the open menu: SWAP with a hotbar

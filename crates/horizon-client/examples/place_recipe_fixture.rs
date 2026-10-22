@@ -50,6 +50,7 @@ fn main() -> horizon_client::Result<()> {
         enchantments: &enchantments,
         names: &names,
         trade: None,
+        maps: None,
     };
     let mut out = String::new();
     for (line, order) in cases.lines().zip(orders.lines()) {

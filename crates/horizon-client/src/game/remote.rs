@@ -503,6 +503,26 @@ impl Game<'_> {
         if let Some(Component::Int(cost)) = s.component(component::REPAIR_COST) {
             out.data_mut().repair_cost = (*cost).max(0) as u32;
         }
+        if let Some(Component::Int(mode)) = s.component(component::MAP_POST_PROCESSING) {
+            out.data_mut().map_post_processing = Some((*mode).clamp(0, 1) as u8);
+        }
+        if let Some(Component::WritableBook(pages)) = s.component(component::WRITABLE_BOOK_CONTENT)
+        {
+            out.data_mut().writable_pages = pages.clone();
+        }
+        if let Some(Component::WrittenBook(b)) = s.component(component::WRITTEN_BOOK_CONTENT) {
+            let lang = self
+                .remote
+                .as_ref()
+                .map(|r| r.lang.clone())
+                .unwrap_or_default();
+            out.data_mut().written = Some(horizon_client::item_data::WrittenBook {
+                title: b.title.clone(),
+                author: b.author.clone(),
+                generation: b.generation.clamp(0, 3) as u8,
+                pages: b.pages.iter().map(|p| plain(p, &lang)).collect(),
+            });
+        }
         if let Some(Component::Text(name)) = s.component(component::CUSTOM_NAME) {
             let lang = self
                 .remote
@@ -1280,6 +1300,7 @@ impl Game<'_> {
             "minecraft:smithing" => Kind::Smithing,
             "minecraft:enchantment" => Kind::Enchanting,
             "minecraft:beacon" => Kind::Beacon,
+            "minecraft:cartography_table" => Kind::Cartography,
             _ => return None,
         })
     }
@@ -1291,6 +1312,12 @@ impl Game<'_> {
     }
     fn set_menu_slot(&mut self, container: i32, slot: i32, item: Option<ItemStack>) {
         let menu = self.open_menu_name(container);
+        if menu == "minecraft:lectern" {
+            if slot == 0 {
+                self.remote_lectern_book(item);
+            }
+            return;
+        }
         if container != 0 && menu == "inventory" {
             return;
         }
@@ -1948,6 +1975,9 @@ impl Game<'_> {
                 }
                 self.remote_synced();
             }
+            C::ContainerSetData(p) if self.open_menu_name(p.container) == "minecraft:lectern" => {
+                self.remote_lectern_page(i32::from(p.value));
+            }
             C::ContainerSetData(p) if self.remote_station_open(p.container) => {
                 self.remote_station_data(usize::try_from(p.id).unwrap_or(usize::MAX), p.value);
             }
@@ -1987,6 +2017,7 @@ impl Game<'_> {
             C::RecipeBookSettings(p) => self.remote_recipe_book_settings(p),
             C::PlaceGhostRecipe(p) => self.remote_ghost_recipe(p),
             C::MerchantOffers(p) => self.remote_merchant_offers(p),
+            C::ContainerClose(_) if self.remote_lectern_closed() => {}
             C::ContainerClose(_) => {
                 if self.screen == Screen::Inventory {
                     self.remote_close_local();
@@ -4039,6 +4070,14 @@ impl Game<'_> {
             .as_ref()
             .and_then(|r| r.use_target)
             .map(|t| (t[0], t[1], t[2]));
+        if menu == "minecraft:lectern" {
+            // LecternScreen: the book and page come in the menu's content and data.
+            if let Some(r) = self.remote.as_mut() {
+                r.menu = Some((p.container, menu));
+            }
+            self.remote_open_lectern(target.unwrap_or_default());
+            return;
+        }
         if let Some(kind) = Self::remote_station_kind(&menu) {
             let title = plain(
                 &p.title,

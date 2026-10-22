@@ -50,9 +50,14 @@ address. The script then checks, from both sides, what a guest's game used to ge
              server has the repaired, renamed sword (#868);
 - enchanting: an enchanting table opens on the guest's screen with the server's offers for the
              sword the guest puts in; the guest clicks the first offer and the server enchants the
-             sword for a level and a lapis (#868);
+             sword for a level and a lapis, and counts it in the guest's enchant_item stat (#868);
 - smithing:  a smithing table opens on the guest's screen; the guest upgrades a diamond sword to
              netherite and the server has it (#868);
+- lectern:   a lectern's written book opens on the guest's screen; the guest turns its pages
+             (ContainerButtonClick) and the server's lectern follows, then the guest takes the book
+             and the server has it in the guest's inventory (#868);
+- cartography: a cartography table opens on the guest's screen; the guest puts in a map the host
+             made and paper, takes the zoomed-out map, and the server has a new map for it (#868);
 - feedback:  the guest's command feedback names the guest and shows the numbers;
 - chat:      a line the host sends reaches the guest's event log (`wait-for chat`), and on the
              server thread the host window's too;
@@ -147,7 +152,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
 
 
 class Game:
@@ -962,13 +967,20 @@ def check_loom(host, guest, out):
     return seen
 
 
+def own_reply(event):
+    """A chat event that answers the guest's own command. On the server thread the guest also gets
+    its own command's `[Guest: ...]` operator broadcast, a moment later, which an answer to the next
+    command must not be taken for."""
+    return event.get('event') == 'chat' and not event.get('text', '').startswith(f'[{GUEST_NAME}: ')
+
+
 def server_count(guest, item):
     """How many of `item` the server says the guest has (`clear` with a count of 0 only counts)."""
     since = guest.raw('events')['last']
     guest('command', command=f'clear @s minecraft:{item} 0')
     for n in range(0, 65):
         reply = guest.raw('events', '--since', since)
-        lines = [e.get('text', '') for e in reply['events'] if e.get('event') == 'chat']
+        lines = [e.get('text', '') for e in reply['events'] if own_reply(e)]
         for line in lines:
             if 'matching item' in line or 'No items were found' in line:
                 return 0 if 'No items' in line else int(line.split('Found ')[1].split(' ')[0])
@@ -1012,7 +1024,7 @@ def server_reply(guest, command, *needles):
         reply = guest.raw('events', '--since', since)
         for e in reply['events']:
             line = e.get('text', '')
-            if e.get('event') == 'chat' and all(n in line for n in needles):
+            if own_reply(e) and all(n in line for n in needles):
                 return line
         guest.wait(2)
     raise Failed(f'no answer to {command}')
@@ -1038,11 +1050,13 @@ def check_grindstone(host, guest, out):
     close_station(guest, at)
     sword = server_reply(guest, 'data get entity @s Inventory[{id:"minecraft:iron_sword"}].components',
                          'minecraft:damage')
-    xp = server_reply(guest, 'xp query @s points', 'experience points')
+    # 16 points make exactly two levels and leave 0 points: count the levels too.
+    xp = (server_reply(guest, 'xp query @s points', 'experience points')
+          + server_reply(guest, 'xp query @s levels', 'experience levels'))
     seen = {'loaded': loaded, 'left': left, 'curse kept': 'vanishing_curse' in sword,
             'sharpness gone': 'sharpness' not in sword,
             'damage': re.search(r'minecraft:damage"?: 100\b', sword) is not None,
-            'xp': int(re.search(r'has (\d+) experience', xp).group(1)) > 0}
+            'xp': any(int(n) > 0 for n in re.findall(r'has (\d+) experience', xp))}
     want = {'loaded': {600: ('minecraft:iron_sword', 1), 650: ('minecraft:iron_sword', 1)}, 'left': {},
             'curse kept': True, 'sharpness gone': True, 'damage': True, 'xp': True}
     assert seen == want, f'the grindstone on the guest: {seen} ({sword!r}, {xp!r})'
@@ -1118,6 +1132,8 @@ def check_enchanting(host, guest, out):
     guest('command', command='xp set @s 30 levels')
     guest('command', command='give @s minecraft:iron_sword')
     guest('command', command='give @s minecraft:lapis_lazuli 3')
+    # EnchantmentMenu awards the enchant_item stat; a stat objective shows the guest's count.
+    guest('command', command='scoreboard objectives add lanench minecraft.custom:minecraft.enchant_item')
     at = open_station(guest, 'enchanting_table', out, 'enchanting')
     # EnchantmentMenu.quickMoveStack: the sword to the item slot, the lapis to its own.
     for item in ('iron_sword', 'lapis_lazuli'):
@@ -1133,10 +1149,13 @@ def check_enchanting(host, guest, out):
     close_station(guest, at)
     sword = server_reply(guest, 'data get entity @s Inventory[{id:"minecraft:iron_sword"}]', 'iron_sword')
     levels = server_reply(guest, 'xp query @s levels', 'experience levels')
+    stat = server_reply(guest, 'scoreboard players get @s lanench', 'lanench')
+    guest('command', command='scoreboard objectives remove lanench')
     seen = {'offered': costs[0] > 0, 'enchanted': 'minecraft:enchantments' in sword,
             'left': left.get(601), 'levels': int(re.search(r'has (\d+) experience', levels).group(1)),
-            'lapis': server_count(guest, 'lapis_lazuli')}
-    want = {'offered': True, 'enchanted': True, 'left': ('minecraft:lapis_lazuli', 2), 'levels': 29, 'lapis': 2}
+            'lapis': server_count(guest, 'lapis_lazuli'), 'stat': ' has 1 ' in stat}
+    want = {'offered': True, 'enchanted': True, 'left': ('minecraft:lapis_lazuli', 2), 'levels': 29, 'lapis': 2,
+            'stat': True}
     assert seen == want, f'the enchanting table on the guest: {seen} ({costs}, {sword!r})'
     return seen
 
@@ -1208,6 +1227,84 @@ def check_crafter(host, guest, out):
     seen = {'items': items[0] if isinstance(items, tuple) else items, 'planks': server_count(guest, 'oak_planks')}
     want = {'items': {1: 'minecraft:oak_planks'}, 'planks': 0}
     assert seen == want, f'the crafter on the guest: {seen}'
+    return seen
+
+
+def check_lectern(host, guest, out):
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    at = (x, y, z + 2)
+    book = ('{id:"minecraft:written_book",count:1,components:{"minecraft:written_book_content":'
+            '{title:"Lan",author:"Host",pages:["one","two","three"]}}}')
+    guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:lectern[has_book=true]{{Book:{book}}}')
+    guest.wait(10)
+    guest.raw('interact', *at)
+    guest.raw('wait-for', 'screen', 'book', '--timeout', 10)
+    guest.wait(10)
+    opened = guest.raw('book')
+    guest.shot(out, 'lectern')
+    # LecternScreen's page arrows: ContainerButtonClick 2 (forward) and 1 (back); the server's
+    # LecternMenu.setData clamps to the book's last page and sends the page back (data slot 0).
+    for button in ('next', 'next', 'next', 'back'):
+        guest.raw('book', button)
+        guest.wait(5)
+    guest.wait(10)
+    turned = guest.raw('book')
+    page = server_reply(guest, f'data get block {at[0]} {at[1]} {at[2]} Page', 'block data')
+    guest.shot(out, 'lectern-page')
+    # Take Book: ContainerButtonClick 3; the server empties the lectern and closes the menu.
+    guest.raw('book', 'take')
+    guest.wait(20)
+    screen = guest('state').get('screen')
+    held = server_count(guest, 'written_book')
+    has_book = server_reply(guest, f'execute if block {at[0]} {at[1]} {at[2]} minecraft:lectern[has_book=false]',
+                            'Test passed')
+    guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:air')
+    seen = {'opened': (opened.get('page'), opened.get('pages')), 'turned': turned.get('page'),
+            'server page': int(re.search(r'(-?\d+)\s*$', page).group(1)), 'screen': screen, 'held': held,
+            'emptied': 'Test passed' in has_book}
+    want = {'opened': (0, 3), 'turned': 1, 'server page': 1, 'screen': 'playing', 'held': 1, 'emptied': True}
+    assert seen == want, f'the lectern on the guest: {seen} ({page!r})'
+    return seen
+
+
+def check_cartography(host, guest, out):
+    # The host makes a map (EmptyMapItem.use), the guest gets a copy of it.
+    host('command', command='clear @s')
+    host('command', command='item replace entity @s weapon.mainhand with minecraft:map')
+    host.wait(5)
+    host.raw('use-item')
+    host.wait(20)
+    made = server_reply(host, 'data get entity @s Inventory[{id:"minecraft:filled_map"}].components', 'map_id')
+    map_id = int(re.search(r'map_id"?: (\d+)', made).group(1))
+    host('command', command='clear @s')
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    guest('command', command=f'give @s minecraft:filled_map[minecraft:map_id={map_id}]')
+    guest('command', command='give @s minecraft:paper')
+    at = open_station(guest, 'cartography_table', out, 'cartography')
+    # CartographyTableMenu.quickMoveStack: a map with an id to the map slot, paper to the other.
+    for item in ('filled_map', 'paper'):
+        guest.raw('click-slot', hotbar_slot(guest, f'minecraft:{item}'), 'shift')
+        guest.wait(5)
+    guest.wait(10)
+    loaded = station_slots(guest)
+    guest.shot(out, 'cartography-result')
+    # The result's onTake uses the map and the paper; MapItem.onCraftedPostProcess gives the zoomed
+    # out map a new id on the server.
+    guest.raw('click-slot', 650, 'shift')
+    guest.wait(10)
+    left = station_slots(guest)
+    close_station(guest, at)
+    taken = server_reply(guest, 'data get entity @s Inventory[{id:"minecraft:filled_map"}].components', 'map_id')
+    new_id = int(re.search(r'map_id"?: (\d+)', taken).group(1))
+    seen = {'loaded': loaded, 'left': left, 'new map': new_id != map_id,
+            'server': {item: server_count(guest, item) for item in ('filled_map', 'paper')}}
+    want = {'loaded': {600: ('minecraft:filled_map', 1), 601: ('minecraft:paper', 1),
+                       650: ('minecraft:filled_map', 1)},
+            'left': {}, 'new map': True, 'server': {'filled_map': 1, 'paper': 0}}
+    assert seen == want, f'the cartography table on the guest: {seen} ({made!r}, {taken!r})'
     return seen
 
 
@@ -2410,6 +2507,8 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'enchanting': check_enchanting,
              'beacon': check_beacon,
              'crafter': check_crafter,
+             'lectern': check_lectern,
+             'cartography': check_cartography,
              'hurt': check_hurt,
              'commands': check_commands,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,

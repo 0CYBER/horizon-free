@@ -33,6 +33,20 @@ pub struct Env<'a> {
     pub names: &'a crate::creative::Names,
     /// What a merchant menu needs for offers made while it is open (level-ups).
     pub trade: Option<&'a crate::merchant::TradeEnv<'a>>,
+    /// The level's maps (`ContainerLevelAccess`): the cartography table reads
+    /// and makes them. None is a client's menu (`ContainerLevelAccess.NULL`):
+    /// it makes no result, and a taken result keeps its map id.
+    pub maps: Option<&'a dyn Maps>,
+}
+
+/// The maps of the level a menu is in.
+pub trait Maps {
+    /// `MapItem.getSavedData`: whether map `id` is locked, and its scale;
+    /// None when the level has no such map.
+    fn state(&self, id: i32) -> Option<(bool, u8)>;
+    /// `MapItem.scaleMap` (`scale`) or `lockMap`: the copy of map `id` the
+    /// level makes under a new id (`getFreeMapId`), None without the map.
+    fn derive(&self, id: i32, scale: bool) -> Option<i32>;
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -92,6 +106,12 @@ pub enum Kind {
     /// `BeaconMenu`: the payment slot, then the inventory; its data slots are
     /// the pyramid's levels and the two powers (`encodeEffect`: id + 1).
     Beacon,
+    /// `CartographyTableMenu`: the map, the paper / map / glass pane, the
+    /// result, then the inventory.
+    Cartography,
+    /// `LecternMenu` over the `LecternBlockEntity`: the book's one slot (no
+    /// inventory slots); its data slot is the open page.
+    Lectern,
     /// `MerchantMenu`: two payment slots, the result, then the inventory.
     Merchant,
     /// `CreativeModeInventoryScreen.ItemPickerMenu`: an item tab's 45
@@ -123,6 +143,8 @@ impl Kind {
             "smithing" => Self::Smithing,
             "enchanting" => Self::Enchanting,
             "beacon" => Self::Beacon,
+            "cartography" => Self::Cartography,
+            "lectern" => Self::Lectern,
             "merchant" => Self::Merchant,
             "item_picker" => Self::ItemPicker,
             _ => return None,
@@ -176,6 +198,12 @@ enum Role {
     Lapis,
     /// `BeaconMenu.PaymentSlot`: one beacon payment item.
     BeaconPay,
+    /// The cartography table's map slot (anything with a map id).
+    CartoMap,
+    /// Its paper, empty map or glass pane slot.
+    CartoExtra,
+    /// Its result (`onTake`: one of each input, the map post-processed).
+    CartoResult,
     /// `CustomCreativeSlot`: a creative tab's display slot, which the
     /// screen clicks itself; drags and PICKUP_ALL pass it by.
     CreativeDisplay,
@@ -268,6 +296,8 @@ pub struct Menu {
     /// An enchanting button the menu took (`clickMenuButton` passed its
     /// checks): the caller (with a level) enchants.
     pub enchant_button: Option<usize>,
+    /// `Player.mayBuild` (not adventure mode): the lectern's Take Book.
+    pub may_build: bool,
 }
 
 /// `AnvilMenu`'s state besides its slots and `cost`.
@@ -302,6 +332,15 @@ fn split(stack: &mut ItemStack, amount: u32) -> ItemStack {
     out.count = real;
     stack.count -= real;
     out
+}
+
+/// `LecternBlockEntity.getPageCount`: a written book's pages, else a
+/// writable book's.
+pub fn book_pages(stack: &ItemStack) -> usize {
+    stack.data().map_or(0, |d| match &d.written {
+        Some(w) => w.pages.len(),
+        None => d.writable_pages.len(),
+    })
 }
 
 fn tidy(slot: &mut Option<ItemStack>) {
@@ -499,6 +538,28 @@ impl Menu {
                 // levels, primary, secondary.
                 data = 3;
             }
+            Kind::Cartography => {
+                containers[MAIN] = vec![None; 2];
+                for (index, role) in [Role::CartoMap, Role::CartoExtra].into_iter().enumerate() {
+                    slots.push(Slot {
+                        container: MAIN,
+                        index,
+                        role,
+                    });
+                }
+                slots.push(Slot {
+                    container: RESULT,
+                    index: 0,
+                    role: Role::CartoResult,
+                });
+                player(&mut slots);
+            }
+            Kind::Lectern => {
+                containers[MAIN] = vec![None; 1];
+                slots.extend(main(1, Role::Plain));
+                // The open page (LecternBlockEntity.dataAccess).
+                data = 1;
+            }
             Kind::ItemPicker => {
                 containers[MAIN] = vec![None; 45];
                 slots.extend(main(45, Role::CreativeDisplay));
@@ -592,6 +653,7 @@ impl Menu {
             combined: false,
             enchant_changed: false,
             enchant_button: None,
+            may_build: true,
         }
         .with_initial_data()
     }
@@ -611,6 +673,9 @@ impl Menu {
     /// `clickMenuButton`: the loom's pattern buttons and the stonecutter's
     /// recipes. False when refused.
     pub fn button(&mut self, env: &Env, id: i32) -> bool {
+        if self.kind == Kind::Lectern {
+            return self.lectern_button(env, id);
+        }
         if self.kind == Kind::Enchanting {
             return self.enchant_click(id);
         }
@@ -632,6 +697,41 @@ impl Menu {
         let pattern = self.loom_patterns[id as usize].clone();
         self.loom_setup_result(env, &pattern);
         true
+    }
+
+    /// `LecternMenu.clickMenuButton`: the page buttons (1 back, 2 forward,
+    /// 100 + n to page n) and Take Book (3), which puts the book in the
+    /// inventory or drops it.
+    fn lectern_button(&mut self, env: &Env, id: i32) -> bool {
+        match id {
+            100.. => self.set_data(0, id - 100),
+            1 => self.set_data(0, self.data[0] - 1),
+            2 => self.set_data(0, self.data[0] + 1),
+            3 if self.may_build => {
+                // removeItemNoUpdate: the whole book, and onBookItemRemove.
+                let book = self.containers[MAIN][0].take();
+                self.data[0] = 0;
+                if let Some(mut book) = book
+                    && !self.inventory_add(env, &mut book)
+                {
+                    self.drop_stack(&book);
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// `AbstractContainerMenu.setData`: the lectern's is
+    /// `LecternBlockEntity.setPage`, kept within the book's pages.
+    pub fn set_data(&mut self, id: usize, value: i32) {
+        if self.kind == Kind::Lectern && id == 0 {
+            // Mth.clamp(page, 0, pageCount - 1).
+            let count = self.containers[MAIN][0].as_ref().map_or(0, book_pages) as i32;
+            self.data[0] = value.max(0).min(count - 1);
+            return;
+        }
+        self.data[id] = value;
     }
 
     /// `CrafterBlockEntity.setSlotState` (the slot state packet): only an
@@ -768,6 +868,11 @@ impl Menu {
         // SmithingMenu.slotsChanged runs for its result container too.
         if self.kind == Kind::Smithing && self.slots[s].container == RESULT {
             self.smith_error();
+            return;
+        }
+        // CartographyTableMenu: its result container calls slotsChanged too.
+        if self.kind == Kind::Cartography && self.slots[s].container != PLAYER {
+            self.carto_changed(env);
             return;
         }
         if self.slots[s].container != MAIN {
@@ -928,6 +1033,68 @@ impl Menu {
         self.data[0] = i32::from(error);
     }
 
+    /// `CartographyTableMenu.slotsChanged` and `setupResultSlot`: a result
+    /// only where the level has the map (`access.execute`), with the post
+    /// processing its take runs (`MAP_POST_PROCESSING`: 0 lock, 1 scale).
+    fn carto_changed(&mut self, env: &Env) {
+        let [map, extra] = [0, 1].map(|i| self.containers[MAIN][i].clone());
+        if self.containers[RESULT][0].is_some() && (map.is_none() || extra.is_none()) {
+            self.containers[RESULT][0] = None;
+            return;
+        }
+        let (Some(map), Some(extra), Some(maps)) = (map, extra, env.maps) else {
+            return;
+        };
+        let Some((locked, scale)) = map
+            .data()
+            .and_then(|d| d.map_id)
+            .and_then(|id| maps.state(id))
+        else {
+            return;
+        };
+        let extendable = env
+            .items
+            .item_tags
+            .get("minecraft:extendable_maps")
+            .is_some_and(|t| t.contains(&*map.item));
+        let copy = |count: u32, post: Option<u8>| {
+            let mut out = ItemStack {
+                count,
+                ..map.clone()
+            };
+            if post.is_some() {
+                out.data_mut().map_post_processing = post;
+            }
+            out
+        };
+        self.containers[RESULT][0] = match &*extra.item {
+            "minecraft:paper" if extendable && !locked && scale < 4 => Some(copy(1, Some(1))),
+            "minecraft:glass_pane" if !locked => Some(copy(1, Some(0))),
+            "minecraft:map" => Some(copy(2, None)),
+            _ => None,
+        };
+    }
+
+    /// `Item.onCraftedBy` of a taken cartography result
+    /// (`MapItem.onCraftedPostProcess`): the post processing goes, and on a
+    /// level with maps the stack names the scaled or locked copy.
+    fn map_crafted(env: &Env, stack: &mut ItemStack) {
+        if &*stack.item != "minecraft:filled_map" {
+            return;
+        }
+        let Some(post) = stack.data().and_then(|d| d.map_post_processing) else {
+            return;
+        };
+        stack.data_mut().map_post_processing = None;
+        let id = stack.data().and_then(|d| d.map_id);
+        if let (Some(maps), Some(id)) = (env.maps, id)
+            && let Some(new) = maps.derive(id, post == 1)
+        {
+            stack.data_mut().map_id = Some(new);
+        }
+        stack.tidy();
+    }
+
     pub fn slot_count(&self) -> usize {
         self.slots.len()
     }
@@ -939,6 +1106,11 @@ impl Menu {
 
     /// Sets a slot as a test fixture does (`Slot.set`).
     pub fn set_slot(&mut self, env: &Env, i: usize, stack: Option<ItemStack>) {
+        if self.kind == Kind::Lectern {
+            // LecternBlockEntity.setBook: the book its slot can't set.
+            self.containers[MAIN][0] = stack;
+            return;
+        }
         self.put(env, i, stack);
     }
 
@@ -1043,12 +1215,23 @@ impl Menu {
                 .item_tags
                 .get("minecraft:beacon_payment_items")
                 .is_some_and(|t| t.contains(&*stack.item)),
+            Role::CartoMap => stack.data().is_some_and(|d| d.map_id.is_some()),
+            Role::CartoExtra => Self::is_carto_extra(stack),
             Role::LoomResult
             | Role::MerchantResult
             | Role::StoneResult
             | Role::GrindResult
-            | Role::CombineResult => false,
+            | Role::CombineResult
+            | Role::CartoResult => false,
         }
+    }
+
+    /// What the cartography table's second slot takes.
+    fn is_carto_extra(stack: &ItemStack) -> bool {
+        matches!(
+            &*stack.item,
+            "minecraft:paper" | "minecraft:map" | "minecraft:glass_pane"
+        )
     }
 
     /// `BannerItem`.
@@ -1088,6 +1271,8 @@ impl Menu {
     fn slot_max(&self, env: &Env, s: usize, stack: &ItemStack) -> u32 {
         let own = match self.slots[s].role {
             Role::Armor(_) | Role::Potion | Role::EnchantItem | Role::BeaconPay => 1,
+            // The lectern's bookAccess holds one.
+            Role::Plain if self.kind == Kind::Lectern && self.slots[s].container == MAIN => 1,
             Role::Fuel if Self::is_bucket(stack) => return 1,
             _ => CONTAINER_MAX,
         };
@@ -1098,6 +1283,10 @@ impl Menu {
     fn put(&mut self, env: &Env, s: usize, mut stack: Option<ItemStack>) {
         tidy(&mut stack);
         let slot = self.slots[s];
+        // LecternBlockEntity's bookAccess.setItem does nothing.
+        if self.kind == Kind::Lectern && slot.container == MAIN {
+            return;
+        }
         // SimpleContainer / BaseContainerBlockEntity.setItem: limitSize to
         // getMaxStackSize(stack). The loom's result is a SimpleContainer too.
         if (slot.container == MAIN || slot.role == Role::LoomResult)
@@ -1179,6 +1368,10 @@ impl Menu {
             .filter(|c| c.count > 0)
             .map(|c| split(c, amount));
         tidy(cell);
+        // LecternBlockEntity: an emptied book slot is onBookItemRemove (page 0).
+        if self.kind == Kind::Lectern && slot.container == MAIN && cell.is_none() {
+            self.data[0] = 0;
+        }
         if out.is_some() && slot.container == GRID {
             self.recompute(env);
         }
@@ -1194,6 +1387,7 @@ impl Menu {
                     | Kind::Anvil
                     | Kind::Smithing
                     | Kind::Enchanting
+                    | Kind::Cartography
             )
         {
             self.slot_changed(env, s);
@@ -1287,6 +1481,17 @@ impl Menu {
                 }
             }
             self.combined = true;
+            return;
+        }
+        if self.slots[s].role == Role::CartoResult {
+            // CartographyTableMenu's result onTake: one of each input, the
+            // take sound, then Slot.onTake's setChanged. The taken stack's
+            // onCraftedBy is the caller's (map_crafted).
+            self.remove(env, 0, 1);
+            self.remove(env, 1, 1);
+            self.sounds
+                .push("minecraft:ui.cartography_table.take_result");
+            self.slot_changed(env, s);
             return;
         }
         if self.slots[s].role == Role::LoomResult {
@@ -1399,8 +1604,11 @@ impl Menu {
         amount: u32,
         max_amount: u32,
     ) -> Option<ItemStack> {
-        let result = self.try_remove(env, s, amount, max_amount)?;
+        let mut result = self.try_remove(env, s, amount, max_amount)?;
         self.on_take(env, s);
+        if self.slots[s].role == Role::CartoResult {
+            Self::map_crafted(env, &mut result);
+        }
         Some(result)
     }
 
@@ -1786,6 +1994,38 @@ impl Menu {
                     return None;
                 }
             }
+            Kind::Cartography => {
+                after_take = true;
+                if index == 2 {
+                    // onCraftedBy edits the result in its slot first.
+                    Self::map_crafted(env, &mut stack);
+                    self.containers[RESULT][0] = Some(stack.clone());
+                    if !self.move_to(env, &mut stack, 3, 39, true) {
+                        return None;
+                    }
+                } else if index == 0 || index == 1 {
+                    if !self.move_to(env, &mut stack, 3, 39, false) {
+                        return None;
+                    }
+                } else if stack.data().is_some_and(|d| d.map_id.is_some()) {
+                    if !self.move_to(env, &mut stack, 0, 1, false) {
+                        return None;
+                    }
+                } else if Self::is_carto_extra(&stack) {
+                    if !self.move_to(env, &mut stack, 1, 2, false) {
+                        return None;
+                    }
+                } else if (3..30).contains(&index) {
+                    if !self.move_to(env, &mut stack, 30, 39, false) {
+                        return None;
+                    }
+                } else if (30..39).contains(&index) && !self.move_to(env, &mut stack, 3, 30, false)
+                {
+                    return None;
+                }
+            }
+            // LecternMenu.quickMoveStack moves nothing.
+            Kind::Lectern => return None,
             Kind::Beacon => {
                 // BeaconMenu.quickMoveStack.
                 after_take = true;
@@ -2181,6 +2421,10 @@ impl Menu {
             if let Some(stack) = self.slot(slot_index as usize) {
                 let mut copy = stack.clone();
                 copy.count = Self::max_stack(env, stack);
+                // The cartography result's safeClone runs onCraftedBy.
+                if self.slots[slot_index as usize].role == Role::CartoResult {
+                    Self::map_crafted(env, &mut copy);
+                }
                 self.carried = Some(copy);
             }
         } else if input == Input::Throw && self.carried.is_none() && slot_index >= 0 {
@@ -2248,9 +2492,14 @@ impl Menu {
                     } else {
                         clicked.count.div_ceil(2)
                     };
-                    if let Some(taken) = self.try_remove(env, s, amount, u32::MAX) {
-                        self.carried = Some(taken);
+                    if let Some(mut taken) = self.try_remove(env, s, amount, u32::MAX) {
+                        self.carried = Some(taken.clone());
                         self.on_take(env, s);
+                        if self.slots[s].role == Role::CartoResult {
+                            // onTake's onCraftedBy edits the carried stack.
+                            Self::map_crafted(env, &mut taken);
+                            self.carried = Some(taken);
+                        }
                     }
                 }
                 Some(mut carried) => {
@@ -2275,11 +2524,15 @@ impl Menu {
                     } else if clicked.same_item_same_components(&carried) {
                         let room = Self::max_stack(env, &carried).saturating_sub(carried.count);
                         self.carried = Some(carried.clone());
-                        if let Some(taken) = self.try_remove(env, s, clicked.count, room) {
+                        if let Some(mut taken) = self.try_remove(env, s, clicked.count, room) {
                             if let Some(c) = self.carried.as_mut() {
                                 c.count += taken.count;
                             }
                             self.on_take(env, s);
+                            if self.slots[s].role == Role::CartoResult {
+                                // onCraftedBy edits the taken stack, not the carried one.
+                                Self::map_crafted(env, &mut taken);
+                            }
                         }
                     } else {
                         self.carried = Some(carried);
@@ -2304,6 +2557,11 @@ impl Menu {
                     self.containers[PLAYER][inv_slot] = Some(taken.clone());
                     self.set_by_player(env, target, None);
                     self.on_take(env, target);
+                    if self.slots[target].role == Role::CartoResult
+                        && let Some(stack) = self.containers[PLAYER][inv_slot].as_mut()
+                    {
+                        Self::map_crafted(env, stack);
+                    }
                 }
             }
             (Some(mut source), None) => {
@@ -2681,6 +2939,7 @@ pub(crate) mod tests {
             enchantments: &enchantments,
             names: &names,
             trade: None,
+            maps: None,
         };
         let mut menu = Menu::new(kind);
         menu.creative = true;

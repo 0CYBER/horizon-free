@@ -16,7 +16,11 @@ cursed tools and books), the anvil (repairs, enchantment merges and renames,
 with the player's levels), the smithing table (upgrades and trims), the
 enchanting table (its button checks against the costs, lapis and levels), the
 beacon (its payment slot and ServerboundSetBeaconPacket against the pyramid's
-levels) and the
+levels), the
+cartography table (over a level with locked, scaled and missing maps: its
+results, and the scaled and locked copies a take makes), the lectern (over the
+block entity: its page buttons, clamped to the book's pages, and Take Book,
+with the inventory compared too) and the
 server's furnace menus over their block entities (`*_be`: a new input restarts
 cooking, other clicks keep its progress). After
 every click the slots, carried stack, data slots and drops are compared.
@@ -32,9 +36,9 @@ except ImportError:
 
 MENUS = {'inventory': 46, 'crafting': 46, 'chest1': 45, 'chest2': 54, 'chest3': 63, 'chest4': 72, 'chest5': 81,
          'chest6': 90, 'hopper': 41, 'dispenser': 45, 'shulker': 63, 'furnace': 39, 'blast_furnace': 39, 'smoker': 39, 'brewing': 41, 'crafter': 46,
-         'crafter_be': 46, 'loom': 40, 'stonecutter': 38, 'grindstone': 39, 'anvil': 39, 'smithing': 40, 'enchanting': 38, 'beacon': 37, 'furnace_be': 39, 'blast_furnace_be': 39, 'smoker_be': 39}
+         'crafter_be': 46, 'loom': 40, 'stonecutter': 38, 'grindstone': 39, 'anvil': 39, 'smithing': 40, 'enchanting': 38, 'beacon': 37, 'cartography': 39, 'lectern': 1, 'furnace_be': 39, 'blast_furnace_be': 39, 'smoker_be': 39}
 DATA = {'furnace': 4, 'blast_furnace': 4, 'smoker': 4, 'brewing': 4, 'crafter': 10, 'crafter_be': 10, 'loom': 1,
-        'stonecutter': 1, 'enchanting': 10, 'beacon': 3,
+        'stonecutter': 1, 'enchanting': 10, 'beacon': 3, 'lectern': 1,
         'furnace_be': 4, 'blast_furnace_be': 4, 'smoker_be': 4}
 DYES = ['white', 'orange', 'magenta', 'light_blue', 'yellow', 'lime', 'pink', 'gray', 'light_gray', 'cyan', 'purple',
         'blue', 'brown', 'green', 'red', 'black']
@@ -189,6 +193,32 @@ class Gen:
             return '{id:%s,count:1,components:{"minecraft:enchantments":{"minecraft:unbreaking":2}}}' % quote(item)
         return snbt(item, count)
 
+    def carto_stack(self):
+        """A filled map (some ids without data), paper, an empty map, a glass pane or anything."""
+        rng = self.rng
+        roll = rng.random()
+        if roll < 0.4:
+            return '{id:"minecraft:filled_map",count:%d,components:{"minecraft:map_id":%d}}' % (
+                rng.choice([1, 1, 2, 3, 64]), rng.randrange(0, 7))
+        if roll < 0.75:
+            return snbt('minecraft:' + rng.choice(['paper', 'map', 'glass_pane']), rng.choice([1, 1, 2, 5, 64]))
+        if roll < 0.78:
+            # Something else with a map id: the map slot takes it.
+            return '{id:"minecraft:paper",count:1,components:{"minecraft:map_id":%d}}' % rng.randrange(0, 7)
+        return self.stack()
+
+    def book(self):
+        """A written or writable book with a few pages, or something else."""
+        rng = self.rng
+        pages = ','.join('"p%d"' % i for i in range(rng.choice([0, 1, 2, 3, 5])))
+        roll = rng.random()
+        if roll < 0.45:
+            return ('{id:"minecraft:written_book",count:1,components:{"minecraft:written_book_content":'
+                    '{title:"T",author:"A",pages:[%s]}}}' % pages)
+        if roll < 0.85:
+            return '{id:"minecraft:writable_book",count:1,components:{"minecraft:writable_book_content":{pages:[%s]}}}' % pages
+        return self.stack()
+
     def recipe(self, slots, width, start=1):
         """Fills the crafting grid (slots `start`..) with a small known recipe."""
         rng = self.rng
@@ -244,6 +274,20 @@ class Gen:
                 continue
             if menu == 'grindstone' and rng.random() < 0.2:
                 out.append([2, rng.randrange(0, 2), rng.choice(['PICKUP', 'QUICK_MOVE', 'QUICK_MOVE', 'THROW', 'SWAP'])])
+                continue
+            if menu == 'cartography' and rng.random() < 0.3:
+                # The result: take it, shift it out, throw it, swap it, clone it.
+                out.append([2, rng.randrange(0, 2), rng.choice(['PICKUP', 'QUICK_MOVE', 'QUICK_MOVE', 'THROW', 'SWAP', 'CLONE'])])
+                continue
+            if menu == 'lectern':
+                # The page buttons, a page jump, Take Book, and buttons it doesn't have; now and
+                # then a click on the book's slot. Not SWAP or the drags: vanilla's bookAccess
+                # hands out the block entity's own stack, which the swapped slot then shares.
+                if rng.random() < 0.7:
+                    out.append([rng.choice([1, 1, 2, 2, 2, 3, 100, 101, 102, 104, 0, 4, 99, -1]), 0, 'BUTTON'])
+                else:
+                    out.append([rng.choice([0, 0, -999]), rng.randrange(0, 2),
+                                rng.choice(['PICKUP', 'THROW', 'QUICK_MOVE', 'CLONE'])])
                 continue
             if menu == 'crafter_be' and rng.random() < 0.2:
                 out.append([rng.choice([0, 1, 4, 8, 8, 9, -1]), rng.randrange(0, 2), 'SLOT_STATE'])
@@ -348,6 +392,15 @@ def main():
             for i in rng.sample(range(1, size), 8):
                 slots[i] = pay()
             slots[0] = pay() if rng.random() < 0.7 else rng.choice(['-', g.stack()])
+        if menu == 'cartography':
+            for i in rng.sample(range(3, size), 12):
+                slots[i] = g.carto_stack()
+            slots[0] = g.carto_stack() if rng.random() < 0.8 else '-'
+            slots[1] = g.carto_stack() if rng.random() < 0.75 else '-'
+            # The result follows the inputs; a fixture stack there is rare.
+            slots[2] = '-' if rng.random() < 0.9 else g.carto_stack()
+        if menu == 'lectern':
+            slots[0] = g.book() if rng.random() < 0.85 else '-'
         if menu == 'crafter_be':
             slots[45] = '-'
             if rng.random() < 0.6:
@@ -375,6 +428,8 @@ def main():
                 return rng.choice([0, 0, 1])
             if menu in ('loom', 'stonecutter'):
                 return rng.choice([-1, -1, 0, 0, 1, 2, 3, 30])
+            if menu == 'lectern':
+                return rng.choice([-1, 0, 0, 1, 2, 4, 9])
             if menu == 'beacon':
                 # the levels, then the powers (encodeEffect: id + 1)
                 return rng.choice([0, 1, 2, 3, 4, 4]) if i == 0 else rng.choice([0, 0, 2, 4, 11])
@@ -387,7 +442,19 @@ def main():
                    'anvil': g.anvil_stack, 'smithing': g.smith_stack}.get(menu, g.stack)() if rng.random() < 0.5 else '-'
         if carried_food is not None:
             carried = carried_food
-        cases.append({'menu': menu, 'creative': rng.random() < 0.25, 'slots': slots,
+        if menu == 'lectern':
+            carried = '-'
+        extra = {}
+        if menu == 'cartography':
+            # Maps 0-4 exist (5 and 6 don't): [id, scale, locked].
+            extra['maps'] = [[i, rng.choice([0, 0, 1, 3, 4]), rng.random() < 0.25] for i in range(5)]
+            if rng.random() < 0.5:
+                carried = g.carto_stack()
+        if menu == 'lectern':
+            # The inventory Take Book adds to (full, so the book drops, now and then).
+            density = rng.choice([0.0, 0.3, 1.0])
+            extra['inventory'] = [g.stack() if rng.random() < density else '-' for _ in range(36)]
+        cases.append({'menu': menu, 'creative': rng.random() < 0.25, 'slots': slots, **extra,
                       'levels': rng.choice([0, 1, 3, 8, 30, 39, 40]),
                       'carried': carried, 'data': [datum(i) for i in range(DATA.get(menu, 0))],
                       'ops': g.ops(size, menu, slots)})

@@ -94,6 +94,7 @@ impl Game<'_> {
             enchantments: &self.res.stations().enchantments,
             names: &self.pack.names,
             trade: None,
+            maps: None,
         }
     }
 
@@ -105,9 +106,25 @@ impl Game<'_> {
         menu: &mut Menu,
         op: impl FnOnce(&mut Menu, &Env) -> R,
     ) -> R {
-        let env = self.menu_env();
+        // The cartography table reads and makes the host level's maps.
+        let maps = (menu.kind() == Kind::Cartography).then(|| {
+            let g = &host.hub.guests[gi];
+            let held: Vec<ItemStack> = (0..menu.slot_count())
+                .filter_map(|s| menu.slot(s).cloned())
+                .chain(g.inventory.iter().flatten().cloned())
+                .chain(g.carried.clone())
+                .collect();
+            self.level_maps(&held)
+        });
+        let env = Env {
+            maps: maps.as_ref().map(|m| m as &dyn horizon_client::menu::Maps),
+            ..self.menu_env()
+        };
         load_player(menu, &host.hub.guests[gi]);
         let result = op(menu, &env);
+        if let Some(maps) = maps {
+            self.register_made_maps(maps);
+        }
         let dropped = std::mem::take(&mut menu.dropped);
         let equipped = std::mem::take(&mut menu.equipped);
         menu.drops.clear();

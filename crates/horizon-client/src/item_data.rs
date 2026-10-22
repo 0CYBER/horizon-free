@@ -594,12 +594,8 @@ pub fn components_tag(damage: u32, data: Option<&StackData>) -> Option<Tag> {
                 ),
             ));
         }
-        if let Some(mode) = d.map_post_processing {
-            entries.push((
-                "minecraft:map_post_processing",
-                Tag::String(if mode == 0 { "lock" } else { "scale" }.into()),
-            ));
-        }
+        // minecraft:map_post_processing is transient: ItemStack.CODEC never
+        // saves it (only the network carries it).
         if !d.charged.is_empty() {
             entries.push((
                 "minecraft:charged_projectiles",

@@ -31,6 +31,16 @@ pub(super) struct GuestStation {
     last_sound: u64,
 }
 
+/// A guest's open lectern: `LecternMenu` over the block entity, made on the
+/// menu engine for each click (`Game::lectern_menu`).
+pub(super) struct GuestLectern {
+    window: i32,
+    state: i32,
+    key: (i32, i32, i32),
+    /// The book and page the client was last sent (`broadcastChanges`).
+    sent: Option<(Option<ItemStack>, i32)>,
+}
+
 /// The `MenuType`, the engine's menu and the input slots
 /// (`clearContainer`'s container) of a station a guest can use.
 fn menu_of(kind: StationKind) -> Option<(&'static str, Kind, std::ops::Range<usize>)> {
@@ -42,6 +52,7 @@ fn menu_of(kind: StationKind) -> Option<(&'static str, Kind, std::ops::Range<usi
         StationKind::Smithing => ("minecraft:smithing", Kind::Smithing, 0..3),
         StationKind::Enchanting => ("minecraft:enchantment", Kind::Enchanting, 0..2),
         StationKind::Beacon => ("minecraft:beacon", Kind::Beacon, 0..1),
+        StationKind::Cartography => ("minecraft:cartography_table", Kind::Cartography, 0..2),
         _ => return None,
     })
 }
@@ -130,6 +141,115 @@ impl Game<'_> {
         true
     }
 
+    /// `LecternBlock.openScreen` for a guest: `minecraft:lectern` over the
+    /// block entity, with its book and page.
+    pub(super) fn lan_open_lectern(&mut self, host: &mut LanHost, conn: u32, key: (i32, i32, i32)) {
+        self.lan_station_closed(host, conn, None);
+        self.lan_crafting_closed(host, conn, None);
+        self.guest_container_closed(host, conn);
+        let title = horizon_protocol::text::translatable("container.lectern", &[]);
+        let Some(window) = host.hub.open_window(conn, "minecraft:lectern", title) else {
+            return;
+        };
+        host.play.entry(conn).or_default().lectern = Some(GuestLectern {
+            window,
+            state: 0,
+            key,
+            sent: None,
+        });
+        self.lan_send_lectern(host, conn, true);
+    }
+
+    /// The lectern's book and page for the client: everything (`all`), or
+    /// what changed since it was last sent.
+    fn lan_send_lectern(&mut self, host: &mut LanHost, conn: u32, all: bool) {
+        let Some(gl) = host.play.get_mut(&conn).and_then(|p| p.lectern.as_mut()) else {
+            return;
+        };
+        let (book, page) = match self.world.block_entities.get(&gl.key) {
+            Some(BlockEntity::Lectern(l)) => (l.book.clone(), l.page),
+            _ => (None, 0),
+        };
+        let now = Some((book.clone(), page));
+        if !all && gl.sent == now {
+            return;
+        }
+        let page_changed = gl.sent.as_ref().is_none_or(|(_, p)| *p != page);
+        gl.sent = now;
+        gl.state = (gl.state + 1) & 0x7FFF;
+        let (window, state) = (gl.window, gl.state);
+        let carried = host
+            .hub
+            .guests
+            .iter()
+            .find(|g| g.conn == conn)
+            .and_then(|g| g.carried.clone());
+        let content = C::ContainerSetContent(play::ContainerSetContent {
+            container: window,
+            state,
+            items: vec![host.hub.stack(&book)],
+            carried: host.hub.stack(&carried),
+        });
+        host.hub.send_to(conn, &content);
+        if all || page_changed {
+            host.hub.send_to(
+                conn,
+                &C::ContainerSetData(play::ContainerSetData {
+                    container: window,
+                    id: 0,
+                    value: page as i16,
+                }),
+            );
+        }
+    }
+
+    /// Runs `op` on the guest's lectern menu (window `window`) with their
+    /// inventory, the block entity takes the book and page back, and the
+    /// client gets what changed. False when no such window is open.
+    fn lan_lectern_op(
+        &mut self,
+        host: &mut LanHost,
+        conn: u32,
+        window: i32,
+        op: impl FnOnce(&mut Menu, &horizon_client::menu::Env),
+    ) -> bool {
+        let Some(key) = host
+            .play
+            .get(&conn)
+            .and_then(|p| p.lectern.as_ref())
+            .filter(|l| l.window == window)
+            .map(|l| l.key)
+        else {
+            return false;
+        };
+        if let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn)
+            && !host.hub.guests[gi].spectator()
+            && let Some(mut menu) = self.lectern_menu(key)
+        {
+            // Player.mayBuild: survival and creative.
+            let may_build = matches!(host.hub.guests[gi].game_mode, 0 | 1);
+            self.guest_menu_op(host, gi, &mut menu, |menu, env| {
+                menu.may_build = may_build;
+                op(menu, env);
+            });
+            self.lectern_menu_done(key, &menu);
+        }
+        self.lan_send_lectern(host, conn, true);
+        true
+    }
+
+    /// A click on the guest's lectern window; false for other windows.
+    pub(super) fn lan_lectern_click(
+        &mut self,
+        host: &mut LanHost,
+        conn: u32,
+        p: &play::ContainerClick,
+    ) -> bool {
+        self.lan_lectern_op(host, conn, p.container, |menu, env| {
+            let _ = menu.click(env, i32::from(p.slot), i32::from(p.button), input(p.input));
+        })
+    }
+
     /// The rest of a taken anvil or smithing result's `onTake`: the guest
     /// pays the levels, the anvil wears (level event 1030 or 1029), the
     /// smithing table sounds (1044).
@@ -193,8 +313,11 @@ impl Game<'_> {
             return;
         };
         let need = button as i32 + 1;
-        // Player.onEnchantmentPerformed.
-        self.as_guest(host, conn, |game| game.give_levels(-need));
+        // Player.onEnchantmentPerformed, and EnchantmentMenu's awardStat(ENCHANT_ITEM).
+        self.as_guest(host, conn, |game| {
+            game.give_levels(-need);
+            game.stats.custom("enchant_item", 1);
+        });
         host.hub.guests[gi].xp_seed = self.world.random.next_int();
         let env = self.menu_env();
         let lapis = gs.menu.slot(1).cloned().filter(|_| !creative).map(|mut l| {
@@ -267,6 +390,12 @@ impl Game<'_> {
         window: i32,
         id: i32,
     ) {
+        // LecternMenu's page buttons and Take Book.
+        if self.lan_lectern_op(host, conn, window, |menu, env| {
+            menu.button(env, id);
+        }) {
+            return;
+        }
         self.lan_station_op(host, conn, Some(window), |menu, env| {
             menu.button(env, id);
         });
@@ -322,6 +451,22 @@ impl Game<'_> {
         conn: u32,
         window: Option<i32>,
     ) -> bool {
+        // A lectern's menu keeps nothing of its own (the book is the block entity's).
+        let lectern = host
+            .play
+            .get_mut(&conn)
+            .and_then(|p| p.lectern.take_if(|l| window.is_none_or(|w| l.window == w)));
+        if lectern.is_some() {
+            // AbstractContainerMenu.removed: the carried stack goes back.
+            if let Some(gi) = host.hub.guests.iter().position(|g| g.conn == conn)
+                && let Some(carried) = host.hub.guests[gi].carried.take()
+            {
+                self.lan_place_back(host, gi, vec![carried]);
+            }
+            if window.is_some() {
+                return true;
+            }
+        }
         let Some(gs) = host
             .play
             .get_mut(&conn)
@@ -423,6 +568,7 @@ impl Game<'_> {
     /// `ServerPlayer.doTick`'s `stillValid`: a guest's station closes once its
     /// block is gone or the guest is out of reach (`isWithinBlockInteractionRange(pos, 4)`).
     pub(super) fn lan_stations_tick(&mut self, host: &mut LanHost) {
+        self.lan_lecterns_tick(host);
         let conns: Vec<u32> = host
             .play
             .iter()
@@ -468,6 +614,51 @@ impl Game<'_> {
                     gs.menu.data.copy_from_slice(&data);
                     self.lan_send_station(host, conn);
                 }
+            }
+        }
+    }
+}
+
+impl Game<'_> {
+    /// The guests' lecterns each tick: `stillValid` (the block entity, its
+    /// book, the reach) closes them, and `broadcastChanges` sends a book or
+    /// page another player changed.
+    fn lan_lecterns_tick(&mut self, host: &mut LanHost) {
+        let open: Vec<(u32, i32, (i32, i32, i32))> = host
+            .play
+            .iter()
+            .filter_map(|(c, p)| p.lectern.as_ref().map(|l| (*c, l.window, l.key)))
+            .collect();
+        for (conn, window, key) in open {
+            let Some(g) = host.hub.guests.iter().find(|g| g.conn == conn) else {
+                continue;
+            };
+            if !host.hub.here(g) {
+                continue;
+            }
+            let has_book = matches!(
+                self.world.block_entities.get(&key),
+                Some(BlockEntity::Lectern(l)) if l.book.is_some()
+            );
+            // Container.stillValidBlockEntity: the interaction range and its buffer.
+            let eye = [g.position[0], g.position[1] + g.eye_height(), g.position[2]];
+            let reach = if g.creative() { 5.0 } else { 4.5 } + 4.0;
+            let pos = [key.0, key.1, key.2];
+            let near = (0..3)
+                .map(|k| {
+                    let lo = f64::from(pos[k]);
+                    (lo - eye[k]).max(eye[k] - lo - 1.0).max(0.0).powi(2)
+                })
+                .sum::<f64>()
+                < reach * reach;
+            if has_book && near {
+                self.lan_send_lectern(host, conn, false);
+            } else {
+                self.lan_station_closed(host, conn, Some(window));
+                host.hub.send_to(
+                    conn,
+                    &C::ContainerClose(play::ContainerClose { container: window }),
+                );
             }
         }
     }
