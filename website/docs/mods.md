@@ -11,7 +11,7 @@ Horizon mods are written in Rust, compiled to WebAssembly and run in a sandbox. 
 **Playing with mods**
 
 1. Put the mod's `.hmod` file in the `horizon-mods` folder of the game folder (see [Install](/docs/install#first-launch) for where that is), or use the **Open Mod Folder** button on the Mods screen.
-2. Open **Options, Mods**. Each mod is listed with what it may do ("May see your position, health and the time, draw text on your screen…") and a switch. Mods start off. Turn on the ones you trust.
+2. Open **Options, Mods...**. Each mod is listed with what it may do ("May see your position, health and the time, draw text on your screen…") and a switch. Mods start off. Turn on the ones you trust.
 3. A mod that failed to load shows why, in red, on its row.
 
 **What a mod can do today**

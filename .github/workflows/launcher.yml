@@ -49,6 +49,10 @@ concurrency:
   group: launcher-${{ github.ref == 'refs/heads/main' && 'release' || github.ref }}
   cancel-in-progress: false
 
+env:
+  # Test runs never reach the telemetry server: no live-count ping, no uploads (docs/telemetry.md).
+  HORIZON_TELEMETRY_URL: "off"
+
 jobs:
   decide:
     runs-on: ubuntu-latest
@@ -188,9 +192,6 @@ jobs:
           retry "$launcher" install latest
           "$launcher" versions --installed
           "$launcher" links --json
-          "$launcher" menu-style classic
-          grep -qx 'menuStyle:classic' "$HORIZON_HOME/horizon.txt"
-          "$launcher" menu-style horizon
           clients=("$HORIZON_LAUNCHER_HOME"/versions/v*/horizon-client*)
           client="${clients[0]}"
           echo "installed client: $client"

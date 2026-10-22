@@ -89,8 +89,17 @@ fn stand_poses(raw: Option<&Tag>) -> Vec<(u8, i32, Value)> {
 impl Game<'_> {
     /// Who rides what (`Entity.getPassengers`): mobs on mobs, and the
     /// host in its boat or minecart.
-    pub(super) fn lan_riding(&self, host_entity: Option<i32>, riding: &mut Riding) {
+    pub(super) fn lan_riding(
+        &self,
+        host_entity: Option<i32>,
+        guests: &[(u32, i32)],
+        riding: &mut Riding,
+    ) {
         riding.clear();
+        // The server's players in their boats and minecarts.
+        for &(vehicle, guest) in guests {
+            riding.add(vehicle as i32, guest);
+        }
         for m in self.mobs.iter().filter(|m| !m.removed) {
             if let Some(vehicle) = m.extra.mount {
                 riding.add(vehicle as i32, m.id as i32);
@@ -264,6 +273,7 @@ impl Game<'_> {
         self.tridents.iter_mut().for_each(|t| give(&mut t.id));
         self.rockets.iter_mut().for_each(|r| give(&mut r.id));
         self.crystals.iter_mut().for_each(|c| give(&mut c.id));
+        self.bolts.iter_mut().for_each(|b| give(&mut b.id));
     }
 
     /// Primed TNT, falling blocks, projectiles, tridents, firework rockets and
@@ -275,6 +285,10 @@ impl Game<'_> {
             None => 0,
         };
         let at = |p: horizon_core::geometry::Vec3| [p.x, p.y, p.z];
+        // LightningBolt: each client draws and flashes its own.
+        for b in self.bolts.iter().filter(|b| b.id != 0) {
+            out.push(state(b.id, "minecraft:lightning_bolt", b.at, 0.0, false));
+        }
         for t in self.tnts.iter().filter(|t| t.id != 0) {
             let mut e = state(t.id, "minecraft:tnt", at(t.position), 0.0, t.on_ground);
             e.velocity = at(t.velocity);

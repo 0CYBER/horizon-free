@@ -357,25 +357,31 @@ impl Store {
             })?
             .collect::<Result<_, _>>()?
         };
-        let benchmarks: Vec<serde_json::Value> = {
-            let mut q = self.db.prepare(
-                "SELECT day, version, body FROM reports WHERE kind = ?1 AND day BETWEEN ?2 AND ?3
-                 ORDER BY rowid DESC LIMIT 50",
-            )?;
-            q.query_map(params![kind_code(Kind::Benchmark), from, to], |r| {
-                let body: Vec<u8> = r.get(2)?;
-                Ok(serde_json::json!({
-                    "day": r.get::<_, u32>(0)?, "version": r.get::<_, String>(1)?, "report": inflate(&body),
-                }))
-            })?
-            .collect::<Result<_, _>>()?
-        };
         Ok(serde_json::json!({
             "from_day": from, "to_day": to, "min_install_days": k,
             "bucket_edges_ms": BUCKET_EDGES_MS.map(|e| (f64::from(e) * 10.0).round() / 10.0),
             "totals": { "sessions": sessions, "hours": (hours * 10.0).round() / 10.0 },
-            "groups": out, "crashes_by_version": crashes, "benchmarks": benchmarks,
+            "groups": out, "crashes_by_version": crashes,
         }))
+    }
+
+    /// Every benchmark upload received since `from_day`, with its install (to count installs, never shown)
+    /// and release, for `summary`.
+    pub fn benchmark_uploads(
+        &self,
+        from_day: u32,
+    ) -> rusqlite::Result<Vec<crate::summary::Upload>> {
+        let mut q = self
+            .db
+            .prepare("SELECT install, version, body FROM reports WHERE kind = ?1 AND day >= ?2")?;
+        q.query_map(params![kind_code(Kind::Benchmark), from_day], |r| {
+            Ok(crate::summary::Upload {
+                install: r.get(0)?,
+                version: r.get(1)?,
+                report: inflate(&r.get::<_, Vec<u8>>(2)?),
+            })
+        })?
+        .collect()
     }
 
     /// The day an install's newest row came in, if any (tests, and checking a deletion).

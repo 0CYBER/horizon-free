@@ -38,7 +38,7 @@ pub(super) fn reset_icon(saves: &Path, folder: &str) -> crate::Result<()> {
     Ok(())
 }
 
-/// `LevelStorageAccess.deleteLevel`, shared by both menu styles. The world's
+/// `LevelStorageAccess.deleteLevel`. The world's
 /// session lock is taken first, so a world open in this or another instance is
 /// refused rather than pulled from under it; everything but the lock goes,
 /// then the lock is released and removed with the folder. A failed pass (a

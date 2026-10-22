@@ -1410,65 +1410,6 @@ pub fn read_logs(lines: usize, crash: bool) -> Result<(PathBuf, String), String>
     Ok((path, text))
 }
 
-/// Which drawing the game's menus use. Classic is vanilla's own screens, which have no way to
-/// switch back, so the launcher is where the player returns to Horizon's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MenuStyle {
-    Horizon,
-    Classic,
-}
-
-impl MenuStyle {
-    pub fn name(self) -> &'static str {
-        match self {
-            MenuStyle::Horizon => "horizon",
-            MenuStyle::Classic => "classic",
-        }
-    }
-
-    pub fn parse(name: &str) -> Option<Self> {
-        match name {
-            "horizon" => Some(MenuStyle::Horizon),
-            "classic" => Some(MenuStyle::Classic),
-            _ => None,
-        }
-    }
-
-    /// The style `horizon.txt` holds: Horizon unless it has the line `menuStyle:classic`, as the
-    /// game reads it (crates/horizon-client/src/ui_theme.rs).
-    fn from_file(text: &str) -> Self {
-        if text.lines().any(|l| l.trim() == "menuStyle:classic") {
-            MenuStyle::Classic
-        } else {
-            MenuStyle::Horizon
-        }
-    }
-
-    /// `text` with its `menuStyle:` line set to this style and every other line kept.
-    fn into_file(self, text: &str) -> String {
-        let mut out: Vec<String> = text
-            .lines()
-            .filter(|l| !l.trim().starts_with("menuStyle:"))
-            .map(String::from)
-            .collect();
-        out.insert(0, format!("menuStyle:{}", self.name()));
-        out.join("\n") + "\n"
-    }
-}
-
-/// The menu style saved in the game home's `horizon.txt` (Horizon when there is none).
-pub fn menu_style() -> MenuStyle {
-    MenuStyle::from_file(&fs::read_to_string(game_home().join("horizon.txt")).unwrap_or_default())
-}
-
-pub fn set_menu_style(style: MenuStyle) -> Result<(), String> {
-    let home = game_home();
-    fs::create_dir_all(&home).map_err(|e| e.to_string())?;
-    let file = home.join("horizon.txt");
-    let text = style.into_file(&fs::read_to_string(&file).unwrap_or_default());
-    fs::write(file, text).map_err(|e| e.to_string())
-}
-
 /// Splits the player's extra game arguments (Settings' one line) into words, the way a shell
 /// would: spaces separate them, single or double quotes group a word with spaces in it, and a
 /// backslash escapes the next character (outside quotes, or inside double quotes).
@@ -2917,30 +2858,6 @@ mod tests {
         );
         // A key this launcher does not know is ignored.
         assert_eq!(Links::parse(r#"{"mastodon": "https://x.y/z"}"#), defaults);
-    }
-
-    #[test]
-    fn menu_style_file_matches_the_games() {
-        assert_eq!(MenuStyle::from_file(""), MenuStyle::Horizon);
-        assert_eq!(
-            MenuStyle::from_file("menuStyle:horizon\n"),
-            MenuStyle::Horizon
-        );
-        assert_eq!(
-            MenuStyle::from_file("menuStyle:classic\n"),
-            MenuStyle::Classic
-        );
-        assert_eq!(
-            MenuStyle::from_file("other:1\nmenuStyle:classic\n"),
-            MenuStyle::Classic
-        );
-        assert_eq!(MenuStyle::Classic.into_file(""), "menuStyle:classic\n");
-        assert_eq!(
-            MenuStyle::Horizon.into_file("menuStyle:classic\nother:1\n"),
-            "menuStyle:horizon\nother:1\n"
-        );
-        assert_eq!(MenuStyle::parse("classic"), Some(MenuStyle::Classic));
-        assert_eq!(MenuStyle::parse("vanilla"), None);
     }
 
     #[test]
