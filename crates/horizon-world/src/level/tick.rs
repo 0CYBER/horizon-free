@@ -1615,16 +1615,18 @@ impl Behaviours {
         };
         ticks.handling_tick = false;
     }
-    /// Random-tick one chunk (`ServerLevel.tickChunk` block part). `sections`
-    /// yields the minimum block Y of every section the caller considers
-    /// randomly ticking (vanilla: sections containing randomly-ticking states),
-    /// in ascending order. Draws `randomTickSpeed` positions per section.
+    /// Random-tick one chunk (`ServerLevel.tickChunk` block part). Visits the
+    /// sections from the bottom up and draws `randomTickSpeed` positions in
+    /// each one `ticking(level, min_y)` reports randomly ticking
+    /// (`LevelChunkSection.isRandomlyTicking`: it holds a randomly ticking
+    /// block or fluid). Vanilla asks as it reaches each section, so the ticks
+    /// of the sections below count.
     pub fn tick_chunk_random<L: LevelAccess + ?Sized>(
         &self,
         level: &mut L,
         ticks: &mut Ticks,
         chunk: ChunkPos,
-        sections: impl IntoIterator<Item = i32>,
+        mut ticking: impl FnMut(&mut L, i32) -> bool,
     ) {
         let speed = level.game_rules().random_tick_speed;
         if speed <= 0 {
@@ -1639,7 +1641,10 @@ impl Behaviours {
                 }
             }
         }
-        for min_y in sections {
+        for min_y in (level.min_y()..level.max_y()).step_by(16) {
+            if !ticking(level, min_y) {
+                continue;
+            }
             for _ in 0..speed {
                 let pos = ticks.block_random_pos(min_x, min_y, min_z, 15);
                 self.sim(level, ticks).random_tick_at(pos);

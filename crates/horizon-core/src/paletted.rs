@@ -674,6 +674,41 @@ impl PalettedContainer {
             Palette::Global => (0..1u32 << self.bits.min(31)).any(predicate),
         }
     }
+    /// Whether any entry satisfies `predicate`. Unlike [`Self::maybe_has`],
+    /// palette entries no entry uses any more don't count.
+    pub fn has(&self, mut predicate: impl FnMut(u32) -> bool) -> bool {
+        let matching: Vec<bool> = match &self.palette {
+            Palette::Single(value) => return predicate(*value),
+            Palette::List(list) => list.iter().map(|&v| predicate(v)).collect(),
+            Palette::Global => Vec::new(),
+        };
+        if matches!(self.palette, Palette::List(_)) {
+            if !matching.contains(&true) {
+                return false;
+            }
+            if !matching.contains(&false) {
+                return true;
+            }
+        }
+        let bits = usize::from(self.bits);
+        let per = 64 / bits;
+        let m = mask(self.bits);
+        let mut left = self.strategy.entries();
+        for &word in &self.words {
+            for slot in 0..per.min(left) {
+                let id = ((word >> (slot * bits)) & m) as usize;
+                let hit = match self.palette {
+                    Palette::Global => predicate(id as u32),
+                    _ => matching[id],
+                };
+                if hit {
+                    return true;
+                }
+            }
+            left = left.saturating_sub(per);
+        }
+        false
+    }
     /// Heap bytes held by the palette and the storage.
     pub fn heap_bytes(&self) -> usize {
         self.words.capacity() * 8
@@ -771,7 +806,29 @@ mod tests {
             let wire =
                 PalettedContainer::from_wire(strategy, bits, palette, words.to_vec()).unwrap();
             assert_eq!(wire, c);
+            for wanted in [0, 7, 14, 35, 7 * 699, 5] {
+                assert_eq!(
+                    c.has(|v| v == wanted || v == wanted + 7),
+                    plain.iter().any(|&v| v == wanted || v == wanted + 7),
+                    "has {wanted} in {distinct} values"
+                );
+            }
         }
+    }
+    #[test]
+    fn has_ignores_stale_palette_entries() {
+        let mut c = PalettedContainer::new(BLOCKS, 0);
+        assert!(c.has(|v| v == 0) && !c.has(|v| v == 3));
+        c.set(4095, 3);
+        assert!(c.has(|v| v == 3));
+        c.set(4095, 0);
+        assert!(c.maybe_has(|v| v == 3) && !c.has(|v| v == 3));
+        for v in 1..=300 {
+            c.set(v as usize, v);
+        }
+        assert!(c.is_global() && c.has(|v| v == 300));
+        c.set(300, 0);
+        assert!(c.maybe_has(|v| v == 300) && !c.has(|v| v == 300));
     }
     #[test]
     fn uniform_detection_ignores_stale_palette_entries() {
