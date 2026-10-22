@@ -36,6 +36,28 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - brewing:   a brewing stand opens on the guest's screen; blaze powder, nether wart and a bottle the
              guest shift-clicks go to the fuel, ingredient and bottle slots, and the stand's fuel shows
              (#848);
+- loom:      a loom opens on the guest's screen; the banner and dye the guest shift-clicks go to their
+             slots, a pattern button the guest clicks makes the server's result, and the guest takes the
+             patterned banner (#868);
+- stonecutter: a stonecutter opens on the guest's screen with the recipes of the stone the guest puts
+             in; the guest picks the slab and shift-clicks the result, and the server has cut every
+             stone into slabs (#868);
+- grindstone: a grindstone opens on the guest's screen; the enchanted sword the guest shift-clicks in
+             shows the server's result, and the guest takes it with only its curse left and the
+             experience orbs the server awards (#868);
+- anvil:     an anvil opens on the guest's screen; the guest repairs a sword with iron ingots and
+             renames it (ServerboundRenameItemPacket), takes it for the server's level cost, and the
+             server has the repaired, renamed sword (#868);
+- enchanting: an enchanting table opens on the guest's screen with the server's offers for the
+             sword the guest puts in; the guest clicks the first offer and the server enchants the
+             sword for a level and a lapis, and counts it in the guest's enchant_item stat (#868);
+- smithing:  a smithing table opens on the guest's screen; the guest upgrades a diamond sword to
+             netherite and the server has it (#868);
+- lectern:   a lectern's written book opens on the guest's screen; the guest turns its pages
+             (ContainerButtonClick) and the server's lectern follows, then the guest takes the book
+             and the server has it in the guest's inventory (#868);
+- cartography: a cartography table opens on the guest's screen; the guest puts in a map the host
+             made and paper, takes the zoomed-out map, and the server has a new map for it (#868);
 - feedback:  the guest's command feedback names the guest and shows the numbers;
 - chat:      a line the host sends reaches the guest's event log (`wait-for chat`), and on the
              server thread the host window's too;
@@ -133,7 +155,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight']
 
 
 class Game:
@@ -914,6 +936,405 @@ def check_brewing(host, guest, out):
     seen = {'size': size, 'items': items, 'fuel': info and info.get('fuel')}
     want = {'size': 5, 'items': {0: 'minecraft:glass_bottle', 3: 'minecraft:nether_wart'}, 'fuel': 20}
     assert seen == want, f'the brewing stand on the guest: {seen}'
+    return seen
+
+
+def open_station(guest, block, out, label):
+    """Place `block` two blocks south of the guest and open it: the station's position."""
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    at = (x, y, z + 2)
+    guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:{block}')
+    guest.wait(10)
+    guest.raw('interact', *at)
+    guest.raw('wait-for', 'screen', 'station', '--timeout', 10)
+    guest.wait(10)
+    guest.shot(out, label)
+    return at
+
+
+def station_slots(guest):
+    """The open station's stacks: input slots 600 and up, the result at 650."""
+    menu = guest.raw('menu')
+    return {s['slot']: (s['stack']['item'], s['stack']['count']) for s in menu['slots'] if s['slot'] >= 600}
+
+
+def close_station(guest, at):
+    guest.raw('key', 'esc', 'tap')
+    guest.wait(10)
+    guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:air')
+
+
+def check_loom(host, guest, out):
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    for item in ('white_banner', 'red_dye'):
+        guest('command', command=f'give @s minecraft:{item}')
+    at = open_station(guest, 'loom', out, 'loom')
+    # LoomMenu.quickMoveStack: a banner to the banner slot, a dye to the dye slot.
+    for item in ('white_banner', 'red_dye'):
+        guest.raw('click-slot', hotbar_slot(guest, f'minecraft:{item}'), 'shift')
+        guest.wait(5)
+    loaded = station_slots(guest)
+    # LoomScreen's first pattern button (clickMenuButton 0): the server makes the result.
+    guest.raw('click-gui', 67, 20)
+    guest.wait(10)
+    made = station_slots(guest).get(650)
+    guest.shot(out, 'loom-pattern')
+    guest.raw('click-slot', 650, 'shift')
+    guest.wait(10)
+    left = station_slots(guest)
+    close_station(guest, at)
+    # The server's copy of the banner the guest took has the red layer.
+    since = guest.raw('events')['last']
+    guest('command', command='data get entity @s Inventory[{id:"minecraft:white_banner"}].components')
+    layer = guest.raw('wait-for', 'chat', 'color: "red"', '--timeout', 10, '--since', since).get('ok')
+    counts = guest('inventory')['counts']
+    seen = {'loaded': loaded, 'made': made, 'left': left, 'layer': layer, 'counts': counts}
+    want = {'loaded': {600: ('minecraft:white_banner', 1), 601: ('minecraft:red_dye', 1)},
+            'made': ('minecraft:white_banner', 1), 'left': {}, 'layer': True,
+            'counts': {'minecraft:white_banner': 1}}
+    assert seen == want, f'the loom on the guest: {seen}'
+    return seen
+
+
+def own_reply(event):
+    """A chat event that answers the guest's own command. On the server thread the guest also gets
+    its own command's `[Guest: ...]` operator broadcast, a moment later, which an answer to the next
+    command must not be taken for."""
+    return event.get('event') == 'chat' and not event.get('text', '').startswith(f'[{GUEST_NAME}: ')
+
+
+def server_count(guest, item):
+    """How many of `item` the server says the guest has (`clear` with a count of 0 only counts)."""
+    since = guest.raw('events')['last']
+    guest('command', command=f'clear @s minecraft:{item} 0')
+    for n in range(0, 65):
+        reply = guest.raw('events', '--since', since)
+        lines = [e.get('text', '') for e in reply['events'] if own_reply(e)]
+        for line in lines:
+            if 'matching item' in line or 'No items were found' in line:
+                return 0 if 'No items' in line else int(line.split('Found ')[1].split(' ')[0])
+        guest.wait(2)
+    raise Failed(f'no answer to clear for {item}')
+
+
+def check_stonecutter(host, guest, out):
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    guest('command', command='give @s minecraft:stone 3')
+    at = open_station(guest, 'stonecutter', out, 'stonecutter')
+    # StonecutterMenu.quickMoveStack: stone has recipes, so it goes to the input.
+    guest.raw('click-slot', hotbar_slot(guest, 'minecraft:stone'), 'shift')
+    guest.wait(10)
+    recipes = guest.raw('menu')['info']['recipes']
+    index = recipes.index('minecraft:stone_slab_from_stone_stonecutting')
+    # StonecutterScreen's recipe grid: four columns of 16x18 cells from (52, 14).
+    guest.raw('click-gui', 52 + index % 4 * 16 + 8, 14 + index // 4 * 18 + 9)
+    guest.wait(10)
+    picked = (guest.raw('menu')['info']['selected'], station_slots(guest).get(650))
+    guest.shot(out, 'stonecutter-recipe')
+    # A shift-click on the result cuts while there is stone (doClick repeats quickMoveStack).
+    guest.raw('click-slot', 650, 'shift')
+    guest.wait(10)
+    left = station_slots(guest)
+    close_station(guest, at)
+    seen = {'picked': picked, 'left': left,
+            'server': {item: server_count(guest, item) for item in ('stone_slab', 'stone')}}
+    want = {'picked': (index, ('minecraft:stone_slab', 2)), 'left': {},
+            'server': {'stone_slab': 6, 'stone': 0}}
+    assert seen == want, f'the stonecutter on the guest: {seen}'
+    return seen
+
+
+def server_reply(guest, command, *needles):
+    """The first chat line holding every needle after the guest runs `command`."""
+    since = guest.raw('events')['last']
+    guest('command', command=command)
+    for _ in range(0, 65):
+        reply = guest.raw('events', '--since', since)
+        for e in reply['events']:
+            line = e.get('text', '')
+            if own_reply(e) and all(n in line for n in needles):
+                return line
+        guest.wait(2)
+    raise Failed(f'no answer to {command}')
+
+
+def check_grindstone(host, guest, out):
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    guest('command', command='xp set @s 0 levels')
+    guest('command', command='xp set @s 0 points')
+    guest('command', command='give @s minecraft:iron_sword[minecraft:enchantments={"minecraft:sharpness":3,'
+                             '"minecraft:vanishing_curse":1},minecraft:damage=100]')
+    at = open_station(guest, 'grindstone', out, 'grindstone')
+    # GrindstoneMenu.quickMoveStack: with both inputs empty, into the first.
+    guest.raw('click-slot', hotbar_slot(guest, 'minecraft:iron_sword'), 'shift')
+    guest.wait(10)
+    loaded = station_slots(guest)
+    guest.shot(out, 'grindstone-result')
+    guest.raw('click-slot', 650, 'shift')
+    # The orbs (sharpness III: 12 to 23 points) fly to the guest.
+    guest.wait(60)
+    left = station_slots(guest)
+    close_station(guest, at)
+    sword = server_reply(guest, 'data get entity @s Inventory[{id:"minecraft:iron_sword"}].components',
+                         'minecraft:damage')
+    # 16 points make exactly two levels and leave 0 points: count the levels too.
+    xp = (server_reply(guest, 'xp query @s points', 'experience points')
+          + server_reply(guest, 'xp query @s levels', 'experience levels'))
+    seen = {'loaded': loaded, 'left': left, 'curse kept': 'vanishing_curse' in sword,
+            'sharpness gone': 'sharpness' not in sword,
+            'damage': re.search(r'minecraft:damage"?: 100\b', sword) is not None,
+            'xp': any(int(n) > 0 for n in re.findall(r'has (\d+) experience', xp))}
+    want = {'loaded': {600: ('minecraft:iron_sword', 1), 650: ('minecraft:iron_sword', 1)}, 'left': {},
+            'curse kept': True, 'sharpness gone': True, 'damage': True, 'xp': True}
+    assert seen == want, f'the grindstone on the guest: {seen} ({sword!r}, {xp!r})'
+    return seen
+
+
+def check_anvil(host, guest, out):
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    guest('command', command='xp set @s 5 levels')
+    guest('command', command='give @s minecraft:iron_sword[minecraft:damage=200]')
+    guest('command', command='give @s minecraft:iron_ingot 3')
+    at = open_station(guest, 'anvil', out, 'anvil')
+    # ItemCombinerMenu.quickMoveStack: into the first input that takes it.
+    for item in ('iron_sword', 'iron_ingot'):
+        guest.raw('click-slot', hotbar_slot(guest, f'minecraft:{item}'), 'shift')
+        guest.wait(5)
+    # The box shows "Iron Sword": erase it and type the new name.
+    for _ in range(len('Iron Sword')):
+        guest.raw('type-back')
+    guest.raw('type', 'Blade')
+    guest.wait(10)
+    menu = guest.raw('menu')
+    offered = (menu['info']['anvil_cost'], station_slots(guest).get(650))
+    guest.shot(out, 'anvil-rename')
+    guest.raw('click-slot', 650, 'shift')
+    guest.wait(10)
+    left = station_slots(guest)
+    close_station(guest, at)
+    sword = server_reply(guest, 'data get entity @s Inventory[{id:"minecraft:iron_sword"}].components',
+                         'minecraft:damage')
+    levels = server_reply(guest, 'xp query @s levels', 'experience levels')
+    seen = {'offered': offered, 'left': left, 'name': 'Blade' in sword,
+            'damage': re.search(r'minecraft:damage"?: 14\b', sword) is not None,
+            'levels': int(re.search(r'has (\d+) experience', levels).group(1)),
+            'ingots': server_count(guest, 'iron_ingot')}
+    # Three ingots repair 62 each (a quarter of 250), plus the name: four levels.
+    want = {'offered': (4, ('minecraft:iron_sword', 1)), 'left': {}, 'name': True, 'damage': True,
+            'levels': 1, 'ingots': 0}
+    assert seen == want, f'the anvil on the guest: {seen} ({sword!r})'
+    return seen
+
+
+def check_smithing(host, guest, out):
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    for item in ('netherite_upgrade_smithing_template', 'diamond_sword', 'netherite_ingot'):
+        guest('command', command=f'give @s minecraft:{item}')
+    at = open_station(guest, 'smithing_table', out, 'smithing')
+    # SmithingMenu.canMoveIntoInputSlots: each to the slot whose recipe test takes it.
+    for item in ('netherite_upgrade_smithing_template', 'diamond_sword', 'netherite_ingot'):
+        guest.raw('click-slot', hotbar_slot(guest, f'minecraft:{item}'), 'shift')
+        guest.wait(5)
+    guest.wait(5)
+    loaded = station_slots(guest)
+    guest.shot(out, 'smithing-result')
+    guest.raw('click-slot', 650, 'shift')
+    guest.wait(10)
+    left = station_slots(guest)
+    close_station(guest, at)
+    seen = {'loaded': loaded, 'left': left,
+            'server': {item: server_count(guest, item) for item in ('netherite_sword', 'diamond_sword', 'netherite_ingot')}}
+    want = {'loaded': {600: ('minecraft:netherite_upgrade_smithing_template', 1), 601: ('minecraft:diamond_sword', 1),
+                       602: ('minecraft:netherite_ingot', 1), 650: ('minecraft:netherite_sword', 1)},
+            'left': {}, 'server': {'netherite_sword': 1, 'diamond_sword': 0, 'netherite_ingot': 0}}
+    assert seen == want, f'the smithing table on the guest: {seen}'
+    return seen
+
+
+def check_enchanting(host, guest, out):
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    guest('command', command='xp set @s 30 levels')
+    guest('command', command='give @s minecraft:iron_sword')
+    guest('command', command='give @s minecraft:lapis_lazuli 3')
+    # EnchantmentMenu awards the enchant_item stat; a stat objective shows the guest's count.
+    guest('command', command='scoreboard objectives add lanench minecraft.custom:minecraft.enchant_item')
+    at = open_station(guest, 'enchanting_table', out, 'enchanting')
+    # EnchantmentMenu.quickMoveStack: the sword to the item slot, the lapis to its own.
+    for item in ('iron_sword', 'lapis_lazuli'):
+        guest.raw('click-slot', hotbar_slot(guest, f'minecraft:{item}'), 'shift')
+        guest.wait(5)
+    guest.wait(10)
+    costs = guest.raw('menu')['info']['costs']
+    guest.shot(out, 'enchanting-offers')
+    # EnchantmentScreen's first offer button (clickMenuButton 0).
+    guest.raw('click-gui', 110, 23)
+    guest.wait(10)
+    left = station_slots(guest)
+    close_station(guest, at)
+    sword = server_reply(guest, 'data get entity @s Inventory[{id:"minecraft:iron_sword"}]', 'iron_sword')
+    levels = server_reply(guest, 'xp query @s levels', 'experience levels')
+    stat = server_reply(guest, 'scoreboard players get @s lanench', 'lanench')
+    guest('command', command='scoreboard objectives remove lanench')
+    seen = {'offered': costs[0] > 0, 'enchanted': 'minecraft:enchantments' in sword,
+            'left': left.get(601), 'levels': int(re.search(r'has (\d+) experience', levels).group(1)),
+            'lapis': server_count(guest, 'lapis_lazuli'), 'stat': ' has 1 ' in stat}
+    want = {'offered': True, 'enchanted': True, 'left': ('minecraft:lapis_lazuli', 2), 'levels': 29, 'lapis': 2,
+            'stat': True}
+    assert seen == want, f'the enchanting table on the guest: {seen} ({costs}, {sword!r})'
+    return seen
+
+
+def check_beacon(host, guest, out):
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    guest('command', command='effect clear @s')
+    guest('command', command='give @s minecraft:iron_ingot')
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    at = (x, y, z + 2)
+    # A one-level pyramid under the beacon; its levels come with the first base check (80 ticks).
+    guest('command', command=f'fill {x - 1} {y - 1} {z + 1} {x + 1} {y - 1} {z + 3} minecraft:iron_block')
+    guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:beacon')
+    guest.wait(100)
+    guest.raw('interact', *at)
+    guest.raw('wait-for', 'screen', 'station', '--timeout', 10)
+    guest.wait(10)
+    # BeaconMenu.quickMoveStack: the ingot to the payment slot.
+    guest.raw('click-slot', hotbar_slot(guest, 'minecraft:iron_ingot'), 'shift')
+    guest.wait(10)
+    paid = station_slots(guest).get(600)
+    # BeaconScreen (54 px wider, 27 to the left): Haste, the first level's second power, then Done,
+    # which sends ServerboundSetBeaconPacket and closes the menu.
+    guest.raw('click-gui', 77 - 27 + 11, 22 + 11)
+    guest.wait(5)
+    guest.shot(out, 'beacon')
+    guest.raw('click-gui', 164 - 27 + 11, 107 + 11)
+    guest.wait(10)
+    screen = guest('state').get('screen')
+    effects = []
+    # BeaconBlockEntity.applyEffects runs every 80 ticks.
+    for _ in range(12):
+        guest.wait(20)
+        effects = effect_ids(guest)
+        if 'haste' in effects:
+            break
+    seen = {'paid': paid, 'haste': 'haste' in effects, 'ingots': server_count(guest, 'iron_ingot'),
+            'screen': screen}
+    guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:air')
+    want = {'paid': ('minecraft:iron_ingot', 1), 'haste': True, 'ingots': 0, 'screen': 'playing'}
+    assert seen == want, f'the beacon on the guest: {seen} ({effects})'
+    return seen
+
+
+def check_crafter(host, guest, out):
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    guest('command', command='give @s minecraft:oak_planks 4')
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    at = (x, y, z + 2)
+    guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:crafter')
+    guest.wait(10)
+    guest.raw('interact', *at)
+    guest.raw('wait-for', 'screen', 'container', '--timeout', 10)
+    guest.wait(10)
+    # CrafterScreen.slotClicked: an empty-handed click disables the first slot
+    # (ServerboundContainerSlotStateChangedPacket); the planks then skip it.
+    guest.raw('click-slot', 300)
+    guest.wait(5)
+    guest.raw('click-slot', hotbar_slot(guest, 'minecraft:oak_planks'), 'shift')
+    guest.wait(10)
+    guest.shot(out, 'crafter')
+    guest.raw('key', 'esc', 'tap')
+    guest.wait(10)
+    # Opening it again shows the server's crafter.
+    items = open_container(guest, at, out, 'crafter-after')
+    guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:air')
+    seen = {'items': items[0] if isinstance(items, tuple) else items, 'planks': server_count(guest, 'oak_planks')}
+    want = {'items': {1: 'minecraft:oak_planks'}, 'planks': 0}
+    assert seen == want, f'the crafter on the guest: {seen}'
+    return seen
+
+
+def check_lectern(host, guest, out):
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    at = (x, y, z + 2)
+    book = ('{id:"minecraft:written_book",count:1,components:{"minecraft:written_book_content":'
+            '{title:"Lan",author:"Host",pages:["one","two","three"]}}}')
+    guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:lectern[has_book=true]{{Book:{book}}}')
+    guest.wait(10)
+    guest.raw('interact', *at)
+    guest.raw('wait-for', 'screen', 'book', '--timeout', 10)
+    guest.wait(10)
+    opened = guest.raw('book')
+    guest.shot(out, 'lectern')
+    # LecternScreen's page arrows: ContainerButtonClick 2 (forward) and 1 (back); the server's
+    # LecternMenu.setData clamps to the book's last page and sends the page back (data slot 0).
+    for button in ('next', 'next', 'next', 'back'):
+        guest.raw('book', button)
+        guest.wait(5)
+    guest.wait(10)
+    turned = guest.raw('book')
+    page = server_reply(guest, f'data get block {at[0]} {at[1]} {at[2]} Page', 'block data')
+    guest.shot(out, 'lectern-page')
+    # Take Book: ContainerButtonClick 3; the server empties the lectern and closes the menu.
+    guest.raw('book', 'take')
+    guest.wait(20)
+    screen = guest('state').get('screen')
+    held = server_count(guest, 'written_book')
+    has_book = server_reply(guest, f'execute if block {at[0]} {at[1]} {at[2]} minecraft:lectern[has_book=false]',
+                            'Test passed')
+    guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:air')
+    seen = {'opened': (opened.get('page'), opened.get('pages')), 'turned': turned.get('page'),
+            'server page': int(re.search(r'(-?\d+)\s*$', page).group(1)), 'screen': screen, 'held': held,
+            'emptied': 'Test passed' in has_book}
+    want = {'opened': (0, 3), 'turned': 1, 'server page': 1, 'screen': 'playing', 'held': 1, 'emptied': True}
+    assert seen == want, f'the lectern on the guest: {seen} ({page!r})'
+    return seen
+
+
+def check_cartography(host, guest, out):
+    # The host makes a map (EmptyMapItem.use), the guest gets a copy of it.
+    host('command', command='clear @s')
+    host('command', command='item replace entity @s weapon.mainhand with minecraft:map')
+    host.wait(5)
+    host.raw('use-item')
+    host.wait(20)
+    made = server_reply(host, 'data get entity @s Inventory[{id:"minecraft:filled_map"}].components', 'map_id')
+    map_id = int(re.search(r'map_id"?: (\d+)', made).group(1))
+    host('command', command='clear @s')
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    guest('command', command=f'give @s minecraft:filled_map[minecraft:map_id={map_id}]')
+    guest('command', command='give @s minecraft:paper')
+    at = open_station(guest, 'cartography_table', out, 'cartography')
+    # CartographyTableMenu.quickMoveStack: a map with an id to the map slot, paper to the other.
+    for item in ('filled_map', 'paper'):
+        guest.raw('click-slot', hotbar_slot(guest, f'minecraft:{item}'), 'shift')
+        guest.wait(5)
+    guest.wait(10)
+    loaded = station_slots(guest)
+    guest.shot(out, 'cartography-result')
+    # The result's onTake uses the map and the paper; MapItem.onCraftedPostProcess gives the zoomed
+    # out map a new id on the server.
+    guest.raw('click-slot', 650, 'shift')
+    guest.wait(10)
+    left = station_slots(guest)
+    close_station(guest, at)
+    taken = server_reply(guest, 'data get entity @s Inventory[{id:"minecraft:filled_map"}].components', 'map_id')
+    new_id = int(re.search(r'map_id"?: (\d+)', taken).group(1))
+    seen = {'loaded': loaded, 'left': left, 'new map': new_id != map_id,
+            'server': {item: server_count(guest, item) for item in ('filled_map', 'paper')}}
+    want = {'loaded': {600: ('minecraft:filled_map', 1), 601: ('minecraft:paper', 1),
+                       650: ('minecraft:filled_map', 1)},
+            'left': {}, 'new map': True, 'server': {'filled_map': 1, 'paper': 0}}
+    assert seen == want, f'the cartography table on the guest: {seen} ({made!r}, {taken!r})'
     return seen
 
 
@@ -2152,6 +2573,16 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'containers': check_containers, 'feedback': check_feedback, 'titles': check_titles, 'chat': check_chat,
              'machines': check_machines,
              'brewing': check_brewing,
+             'loom': check_loom,
+             'stonecutter': check_stonecutter,
+             'grindstone': check_grindstone,
+             'anvil': check_anvil,
+             'smithing': check_smithing,
+             'enchanting': check_enchanting,
+             'beacon': check_beacon,
+             'crafter': check_crafter,
+             'lectern': check_lectern,
+             'cartography': check_cartography,
              'hurt': check_hurt,
              'commands': check_commands,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,

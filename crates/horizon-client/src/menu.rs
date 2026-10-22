@@ -3,8 +3,8 @@
 //! craft drags, pickup all) for the player inventory, the crafting table, the
 //! chest family, hoppers, dispensers, shulker boxes, the furnaces, the brewing
 //! stand, the crafter (its client menu and the block entity's server menu with
-//! `setSlotState`), the loom (`clickMenuButton`, `slotsChanged`) and the
-//! merchant (`MerchantMenu` over a `merchant::Session`: payment slots, the
+//! `setSlotState`), the loom (`clickMenuButton`, `slotsChanged`), the
+//! stonecutter (its recipe buttons and result) and the merchant (`MerchantMenu` over a `merchant::Session`: payment slots, the
 //! result slot's trade, `tryMoveItems`).
 //! `tools/test_menu_click_parity.py` compares every click with vanilla's menu
 //! classes.
@@ -24,8 +24,29 @@ pub struct Env<'a> {
     pub recipes: &'a Recipes,
     pub brewing: &'a Brewing,
     pub banners: &'a Banners,
+    /// The stonecutter's recipes.
+    pub station_recipes: &'a crate::stations::StationRecipes,
+    /// The grindstone's and the anvil's enchantment rules.
+    pub enchantments: &'a crate::enchant::Enchantments,
+    /// Item display names: the anvil compares the rename box with the
+    /// input's hover name.
+    pub names: &'a crate::creative::Names,
     /// What a merchant menu needs for offers made while it is open (level-ups).
     pub trade: Option<&'a crate::merchant::TradeEnv<'a>>,
+    /// The level's maps (`ContainerLevelAccess`): the cartography table reads
+    /// and makes them. None is a client's menu (`ContainerLevelAccess.NULL`):
+    /// it makes no result, and a taken result keeps its map id.
+    pub maps: Option<&'a dyn Maps>,
+}
+
+/// The maps of the level a menu is in.
+pub trait Maps {
+    /// `MapItem.getSavedData`: whether map `id` is locked, and its scale;
+    /// None when the level has no such map.
+    fn state(&self, id: i32) -> Option<(bool, u8)>;
+    /// `MapItem.scaleMap` (`scale`) or `lockMap`: the copy of map `id` the
+    /// level makes under a new id (`getFreeMapId`), None without the map.
+    fn derive(&self, id: i32, scale: bool) -> Option<i32>;
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -71,6 +92,26 @@ pub enum Kind {
     /// result follows the grid, and filling a disabled slot enables it.
     CrafterBlock,
     Loom,
+    /// `StonecutterMenu`: the input, the result, then the inventory.
+    Stonecutter,
+    /// `GrindstoneMenu`: two inputs, the result, then the inventory.
+    Grindstone,
+    /// `AnvilMenu`: two inputs, the result, then the inventory.
+    Anvil,
+    /// `SmithingMenu`: template, base, addition, the result, then the inventory.
+    Smithing,
+    /// `EnchantmentMenu`: the item, the lapis, then the inventory; its data
+    /// slots are the three costs, the seed and the clues.
+    Enchanting,
+    /// `BeaconMenu`: the payment slot, then the inventory; its data slots are
+    /// the pyramid's levels and the two powers (`encodeEffect`: id + 1).
+    Beacon,
+    /// `CartographyTableMenu`: the map, the paper / map / glass pane, the
+    /// result, then the inventory.
+    Cartography,
+    /// `LecternMenu` over the `LecternBlockEntity`: the book's one slot (no
+    /// inventory slots); its data slot is the open page.
+    Lectern,
     /// `MerchantMenu`: two payment slots, the result, then the inventory.
     Merchant,
     /// `CreativeModeInventoryScreen.ItemPickerMenu`: an item tab's 45
@@ -96,6 +137,14 @@ impl Kind {
             "crafter" => Self::Crafter,
             "crafter_be" => Self::CrafterBlock,
             "loom" => Self::Loom,
+            "stonecutter" => Self::Stonecutter,
+            "grindstone" => Self::Grindstone,
+            "anvil" => Self::Anvil,
+            "smithing" => Self::Smithing,
+            "enchanting" => Self::Enchanting,
+            "beacon" => Self::Beacon,
+            "cartography" => Self::Cartography,
+            "lectern" => Self::Lectern,
             "merchant" => Self::Merchant,
             "item_picker" => Self::ItemPicker,
             _ => return None,
@@ -133,6 +182,28 @@ enum Role {
     LoomResult,
     /// `MerchantResultSlot`.
     MerchantResult,
+    /// The stonecutter's result slot (`onTake` uses up one input).
+    StoneResult,
+    /// The grindstone's inputs: damageable or enchanted items.
+    GrindInput,
+    /// The grindstone's result slot (`onTake` clears both inputs).
+    GrindResult,
+    /// A smithing table input: its recipe property set (template, base, addition).
+    SmithInput(usize),
+    /// `ItemCombinerMenu`'s result slot (the anvil's and the smithing table's).
+    CombineResult,
+    /// The enchanting table's item slot (one item).
+    EnchantItem,
+    /// The enchanting table's lapis slot.
+    Lapis,
+    /// `BeaconMenu.PaymentSlot`: one beacon payment item.
+    BeaconPay,
+    /// The cartography table's map slot (anything with a map id).
+    CartoMap,
+    /// Its paper, empty map or glass pane slot.
+    CartoExtra,
+    /// Its result (`onTake`: one of each input, the map post-processed).
+    CartoResult,
     /// `CustomCreativeSlot`: a creative tab's display slot, which the
     /// screen clicks itself; drags and PICKUP_ALL pass it by.
     CreativeDisplay,
@@ -143,6 +214,26 @@ struct Slot {
     container: usize,
     index: usize,
     role: Role,
+}
+
+/// `BeaconBlockEntity.BEACON_EFFECTS`: the powers of each pyramid level.
+pub const BEACON_EFFECTS: [&[&str]; 4] = [
+    &["minecraft:speed", "minecraft:haste"],
+    &["minecraft:resistance", "minecraft:jump_boost"],
+    &["minecraft:strength"],
+    &["minecraft:regeneration"],
+];
+
+/// `BeaconBlockEntity.getRequiredLevelsFor`: 0 for no power, `i32::MAX`
+/// for one no level gives.
+pub fn beacon_required_levels(effect: Option<&str>) -> i32 {
+    let Some(effect) = effect else {
+        return 0;
+    };
+    BEACON_EFFECTS
+        .iter()
+        .position(|tier| tier.contains(&effect))
+        .map_or(i32::MAX, |i| i as i32 + 1)
 }
 
 /// The containers a menu spans.
@@ -182,6 +273,53 @@ pub struct Menu {
     pub equipped: Vec<(&'static str, Option<ItemStack>)>,
     /// The merchant a merchant menu trades with.
     pub merchant: Option<Box<crate::merchant::Session>>,
+    /// The stonecutter's recipe list (`recipesForInput`).
+    pub stone: Stonecutter,
+    /// The grindstone result's `getExperienceAmount` sum before its roll,
+    /// set when the result was taken: the caller (with a level) awards the
+    /// orbs and plays level event 1042.
+    pub ground: Option<i32>,
+    /// `Player.experienceLevel`, which the anvil's result needs.
+    pub levels: i32,
+    /// The levels the menu gave the player (`giveExperienceLevels`), for the caller.
+    pub level_change: i32,
+    /// `AnvilMenu`'s state besides its slots and its cost data slot.
+    pub anvil: Anvil,
+    /// The anvil's or the smithing table's result was taken: the caller (with
+    /// a level) runs the rest of its `onTake` (the anvil's wear and level
+    /// event 1030 or 1029, the smithing table's 1044).
+    pub combined: bool,
+    /// The enchanting table's item changed to an enchantable one: the caller
+    /// (with a level) fills the costs and clues (`slotsChanged`'s
+    /// `access.execute`).
+    pub enchant_changed: bool,
+    /// An enchanting button the menu took (`clickMenuButton` passed its
+    /// checks): the caller (with a level) enchants.
+    pub enchant_button: Option<usize>,
+    /// `Player.mayBuild` (not adventure mode): the lectern's Take Book.
+    pub may_build: bool,
+}
+
+/// `AnvilMenu`'s state besides its slots and `cost`.
+#[derive(Clone, Default, Debug, PartialEq)]
+pub struct Anvil {
+    /// `itemName`: the rename box's text (`ServerboundRenameItemPacket`).
+    pub name: Option<String>,
+    /// `repairItemCountCost`.
+    pub repair_count: u32,
+    /// `onlyRenaming`.
+    pub only_renaming: bool,
+}
+
+/// `StonecutterMenu`'s state besides its slots and `selectedRecipeIndex`.
+#[derive(Clone, Default, Debug, PartialEq)]
+pub struct Stonecutter {
+    /// `recipesForInput`: indices into `StationRecipes.stonecutting`.
+    pub recipes: Vec<usize>,
+    /// The item the list was made for (`input`; None for nothing).
+    pub input: Option<Arc<str>>,
+    /// `ResultContainer.recipeUsed`.
+    pub used: Option<usize>,
 }
 
 fn same_item(a: &ItemStack, b: &ItemStack) -> bool {
@@ -194,6 +332,15 @@ fn split(stack: &mut ItemStack, amount: u32) -> ItemStack {
     out.count = real;
     stack.count -= real;
     out
+}
+
+/// `LecternBlockEntity.getPageCount`: a written book's pages, else a
+/// writable book's.
+pub fn book_pages(stack: &ItemStack) -> usize {
+    stack.data().map_or(0, |d| match &d.written {
+        Some(w) => w.pages.len(),
+        None => d.writable_pages.len(),
+    })
 }
 
 fn tidy(slot: &mut Option<ItemStack>) {
@@ -318,6 +465,101 @@ impl Menu {
                 player(&mut slots);
                 data = 1;
             }
+            Kind::Stonecutter => {
+                containers[MAIN] = vec![None; 1];
+                slots.extend(main(1, Role::Plain));
+                slots.push(Slot {
+                    container: RESULT,
+                    index: 0,
+                    role: Role::StoneResult,
+                });
+                player(&mut slots);
+                // selectedRecipeIndex: DataSlot.standalone() starts at 0.
+                data = 1;
+            }
+            Kind::Grindstone => {
+                containers[MAIN] = vec![None; 2];
+                slots.extend(main(2, Role::GrindInput));
+                slots.push(Slot {
+                    container: RESULT,
+                    index: 0,
+                    role: Role::GrindResult,
+                });
+                player(&mut slots);
+            }
+            Kind::Anvil => {
+                containers[MAIN] = vec![None; 2];
+                slots.extend(main(2, Role::Plain));
+                slots.push(Slot {
+                    container: RESULT,
+                    index: 0,
+                    role: Role::CombineResult,
+                });
+                player(&mut slots);
+                // cost: DataSlot.standalone() starts at 0.
+                data = 1;
+            }
+            Kind::Smithing => {
+                containers[MAIN] = vec![None; 3];
+                slots.extend((0..3).map(|index| Slot {
+                    container: MAIN,
+                    index,
+                    role: Role::SmithInput(index),
+                }));
+                slots.push(Slot {
+                    container: RESULT,
+                    index: 0,
+                    role: Role::CombineResult,
+                });
+                player(&mut slots);
+                // hasRecipeError.
+                data = 1;
+            }
+            Kind::Enchanting => {
+                containers[MAIN] = vec![None; 2];
+                slots.push(Slot {
+                    container: MAIN,
+                    index: 0,
+                    role: Role::EnchantItem,
+                });
+                slots.push(Slot {
+                    container: MAIN,
+                    index: 1,
+                    role: Role::Lapis,
+                });
+                player(&mut slots);
+                // costs[3], enchantmentSeed, enchantClue[3], levelClue[3].
+                data = 10;
+            }
+            Kind::Beacon => {
+                containers[MAIN] = vec![None; 1];
+                slots.extend(main(1, Role::BeaconPay));
+                player(&mut slots);
+                // levels, primary, secondary.
+                data = 3;
+            }
+            Kind::Cartography => {
+                containers[MAIN] = vec![None; 2];
+                for (index, role) in [Role::CartoMap, Role::CartoExtra].into_iter().enumerate() {
+                    slots.push(Slot {
+                        container: MAIN,
+                        index,
+                        role,
+                    });
+                }
+                slots.push(Slot {
+                    container: RESULT,
+                    index: 0,
+                    role: Role::CartoResult,
+                });
+                player(&mut slots);
+            }
+            Kind::Lectern => {
+                containers[MAIN] = vec![None; 1];
+                slots.extend(main(1, Role::Plain));
+                // The open page (LecternBlockEntity.dataAccess).
+                data = 1;
+            }
             Kind::ItemPicker => {
                 containers[MAIN] = vec![None; 45];
                 slots.extend(main(45, Role::CreativeDisplay));
@@ -403,15 +645,51 @@ impl Menu {
             crafted: Vec::new(),
             equipped: Vec::new(),
             merchant: None,
+            stone: Stonecutter::default(),
+            ground: None,
+            levels: 0,
+            level_change: 0,
+            anvil: Anvil::default(),
+            combined: false,
+            enchant_changed: false,
+            enchant_button: None,
+            may_build: true,
         }
+        .with_initial_data()
+    }
+
+    /// Data slots that do not start at 0: the enchanting table's clues are -1.
+    fn with_initial_data(mut self) -> Self {
+        if self.kind == Kind::Enchanting {
+            self.data[4..].fill(-1);
+        }
+        self
     }
 
     pub fn kind(&self) -> Kind {
         self.kind
     }
 
-    /// `clickMenuButton`: the loom's pattern buttons. False when refused.
+    /// `clickMenuButton`: the loom's pattern buttons and the stonecutter's
+    /// recipes. False when refused.
     pub fn button(&mut self, env: &Env, id: i32) -> bool {
+        if self.kind == Kind::Lectern {
+            return self.lectern_button(env, id);
+        }
+        if self.kind == Kind::Enchanting {
+            return self.enchant_click(id);
+        }
+        if self.kind == Kind::Stonecutter {
+            // StonecutterMenu.clickMenuButton: an invalid index is taken too.
+            if self.data[0] == id {
+                return false;
+            }
+            if id >= 0 && (id as usize) < self.stone.recipes.len() {
+                self.data[0] = id;
+                self.stone_setup_result(env, id);
+            }
+            return true;
+        }
         if self.kind != Kind::Loom || id < 0 || id as usize >= self.loom_patterns.len() {
             return false;
         }
@@ -419,6 +697,41 @@ impl Menu {
         let pattern = self.loom_patterns[id as usize].clone();
         self.loom_setup_result(env, &pattern);
         true
+    }
+
+    /// `LecternMenu.clickMenuButton`: the page buttons (1 back, 2 forward,
+    /// 100 + n to page n) and Take Book (3), which puts the book in the
+    /// inventory or drops it.
+    fn lectern_button(&mut self, env: &Env, id: i32) -> bool {
+        match id {
+            100.. => self.set_data(0, id - 100),
+            1 => self.set_data(0, self.data[0] - 1),
+            2 => self.set_data(0, self.data[0] + 1),
+            3 if self.may_build => {
+                // removeItemNoUpdate: the whole book, and onBookItemRemove.
+                let book = self.containers[MAIN][0].take();
+                self.data[0] = 0;
+                if let Some(mut book) = book
+                    && !self.inventory_add(env, &mut book)
+                {
+                    self.drop_stack(&book);
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// `AbstractContainerMenu.setData`: the lectern's is
+    /// `LecternBlockEntity.setPage`, kept within the book's pages.
+    pub fn set_data(&mut self, id: usize, value: i32) {
+        if self.kind == Kind::Lectern && id == 0 {
+            // Mth.clamp(page, 0, pageCount - 1).
+            let count = self.containers[MAIN][0].as_ref().map_or(0, book_pages) as i32;
+            self.data[0] = value.max(0).min(count - 1);
+            return;
+        }
+        self.data[id] = value;
     }
 
     /// `CrafterBlockEntity.setSlotState` (the slot state packet): only an
@@ -510,12 +823,56 @@ impl Menu {
         }
     }
 
+    /// `StonecutterMenu.slotsChanged`: a new input item lists its recipes
+    /// (`setupRecipeList`), with none selected and no result.
+    fn stone_changed(&mut self, env: &Env) {
+        let input = self.containers[MAIN][0].as_ref().map(|s| s.item.clone());
+        if input == self.stone.input {
+            return;
+        }
+        self.stone.input = input;
+        self.data[0] = -1;
+        self.containers[RESULT][0] = None;
+        self.stone.recipes = match &self.containers[MAIN][0] {
+            Some(stack) => env
+                .station_recipes
+                .stonecutting
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| r.input.test(stack))
+                .map(|(i, _)| i)
+                .collect(),
+            None => Vec::new(),
+        };
+    }
+
+    /// `StonecutterMenu.setupResultSlot`.
+    fn stone_setup_result(&mut self, env: &Env, index: i32) {
+        let recipe = usize::try_from(index)
+            .ok()
+            .and_then(|i| self.stone.recipes.get(i).copied());
+        self.stone.used = recipe;
+        self.containers[RESULT][0] =
+            recipe.map(|r| env.station_recipes.stonecutting[r].result.clone());
+    }
+
     /// `Slot.setChanged` on slot `s`: the loom recomputes from its inputs,
-    /// the block crafter refreshes its result.
+    /// the stonecutter lists its recipes, the block crafter refreshes its
+    /// result.
     fn slot_changed(&mut self, env: &Env, s: usize) {
         // MerchantContainer.setChanged: every slot of it, the result too.
         if self.kind == Kind::Merchant && self.slots[s].container != PLAYER {
             self.merchant_update(env);
+            return;
+        }
+        // SmithingMenu.slotsChanged runs for its result container too.
+        if self.kind == Kind::Smithing && self.slots[s].container == RESULT {
+            self.smith_error();
+            return;
+        }
+        // CartographyTableMenu: its result container calls slotsChanged too.
+        if self.kind == Kind::Cartography && self.slots[s].container != PLAYER {
+            self.carto_changed(env);
             return;
         }
         if self.slots[s].container != MAIN {
@@ -523,9 +880,219 @@ impl Menu {
         }
         match self.kind {
             Kind::Loom => self.loom_changed(env),
+            Kind::Stonecutter => self.stone_changed(env),
+            // GrindstoneMenu.createResult.
+            Kind::Grindstone => {
+                self.containers[RESULT][0] = crate::stations::grindstone_result(
+                    env.enchantments,
+                    env.items,
+                    self.containers[MAIN][0].as_ref(),
+                    self.containers[MAIN][1].as_ref(),
+                );
+            }
             Kind::CrafterBlock => self.crafter_result(env),
+            Kind::Anvil => self.anvil_result(env),
+            Kind::Enchanting => self.enchant_changed(env),
+            Kind::Smithing => {
+                self.smith_result(env);
+                self.smith_error();
+            }
             _ => {}
         }
+    }
+
+    /// `EnchantmentMenu.clickMenuButton`'s checks: the lapis, the cost and
+    /// the levels (creative pays nothing). The enchanting itself needs a
+    /// level and is the caller's (`enchant_button`).
+    fn enchant_click(&mut self, id: i32) -> bool {
+        let Some(i) = usize::try_from(id).ok().filter(|&i| i < 3) else {
+            return false;
+        };
+        let need = id + 1;
+        let lapis = self.containers[MAIN][1]
+            .as_ref()
+            .map_or(0, |l| l.count as i32);
+        if lapis < need && !self.creative {
+            return false;
+        }
+        if self.data[i] <= 0
+            || self.containers[MAIN][0].is_none()
+            || (self.levels < need || self.levels < self.data[i]) && !self.creative
+        {
+            return false;
+        }
+        self.enchant_button = Some(i);
+        true
+    }
+
+    /// `EnchantmentMenu.slotsChanged`: no costs or clues without an
+    /// enchantable item; with one, a level fills them (`enchant_changed`).
+    fn enchant_changed(&mut self, env: &Env) {
+        let enchantable = self.containers[MAIN][0].as_ref().is_some_and(|s| {
+            env.enchantments.enchantable(&s.item) > 0 && s.enchantments().is_empty()
+        });
+        if enchantable {
+            self.enchant_changed = true;
+        } else {
+            self.data[..3].fill(0);
+            self.data[4..].fill(-1);
+        }
+    }
+
+    /// `AnvilMenu.createResult`.
+    fn anvil_result(&mut self, env: &Env) {
+        let hover = self.containers[MAIN][0]
+            .as_ref()
+            .map(|i| crate::stations::hover_name(&|id| env.names.item(id), i))
+            .unwrap_or_default();
+        let out = crate::stations::anvil_result(
+            env.enchantments,
+            env.items,
+            self.containers[MAIN][0].as_ref(),
+            self.containers[MAIN][1].as_ref(),
+            self.anvil.name.as_deref(),
+            &hover,
+            self.creative,
+        );
+        // onlyRenaming is reset, repairItemCountCost only where an input is.
+        self.anvil.only_renaming = out.only_renaming;
+        if self.containers[MAIN][0].is_some() {
+            self.anvil.repair_count = out.repair_item_count_cost;
+        }
+        self.data[0] = out.cost;
+        self.containers[RESULT][0] = out.result;
+    }
+
+    /// `AnvilMenu.setItemName` (`ServerboundRenameItemPacket`): false when
+    /// the name is refused or unchanged.
+    /// `BeaconMenu.updateEffects` (`ServerboundSetBeaconPacket`): with a
+    /// payment, powers `BeaconBlockEntity.validateEffects` allows for the
+    /// pyramid's levels (data 0) become data 1 and 2 and the payment is used.
+    /// Each power is its `mob_effect` id and name. False when refused.
+    pub fn beacon_update(
+        &mut self,
+        env: &Env,
+        primary: Option<(i32, &str)>,
+        secondary: Option<(i32, &str)>,
+    ) -> bool {
+        if self.kind != Kind::Beacon || self.containers[MAIN][0].is_none() {
+            return false;
+        }
+        let levels = self.data[0];
+        let (p, s) = (
+            beacon_required_levels(primary.map(|e| e.1)),
+            beacon_required_levels(secondary.map(|e| e.1)),
+        );
+        let valid = !(secondary.is_some() && levels < 4)
+            && p <= levels
+            && s <= levels
+            && p < 4
+            && !(s != 0 && s < 4 && primary.map(|e| e.0) != secondary.map(|e| e.0));
+        if !valid {
+            return false;
+        }
+        self.data[1] = primary.map_or(0, |e| e.0 + 1);
+        self.data[2] = secondary.map_or(0, |e| e.0 + 1);
+        self.remove(env, 0, 1);
+        true
+    }
+
+    pub fn rename(&mut self, env: &Env, name: &str) -> bool {
+        // StringUtil.filterText, then validateName's length limit.
+        let name: String = name
+            .chars()
+            .filter(|&c| c != '\u{a7}' && c >= ' ' && c != '\u{7f}')
+            .collect();
+        if self.kind != Kind::Anvil
+            || name.encode_utf16().count() > 50
+            || self.anvil.name.as_deref() == Some(&name)
+        {
+            return false;
+        }
+        if let Some(result) = self.containers[RESULT][0].as_mut() {
+            result.data_mut().custom_name = (!name.trim().is_empty()).then(|| name.clone());
+            result.tidy();
+        }
+        self.anvil.name = Some(name);
+        self.anvil_result(env);
+        true
+    }
+
+    /// `SmithingMenu.createResult`.
+    fn smith_result(&mut self, env: &Env) {
+        let [a, b, c] = [0, 1, 2].map(|i| self.containers[MAIN][i].as_ref());
+        self.containers[RESULT][0] = env
+            .station_recipes
+            .smithing_result(env.enchantments, a, b, c);
+    }
+
+    /// `SmithingMenu.slotsChanged`'s `hasRecipeError`: every input filled and no result.
+    fn smith_error(&mut self) {
+        let error = self.containers[MAIN].iter().all(Option::is_some)
+            && self.containers[RESULT][0].is_none();
+        self.data[0] = i32::from(error);
+    }
+
+    /// `CartographyTableMenu.slotsChanged` and `setupResultSlot`: a result
+    /// only where the level has the map (`access.execute`), with the post
+    /// processing its take runs (`MAP_POST_PROCESSING`: 0 lock, 1 scale).
+    fn carto_changed(&mut self, env: &Env) {
+        let [map, extra] = [0, 1].map(|i| self.containers[MAIN][i].clone());
+        if self.containers[RESULT][0].is_some() && (map.is_none() || extra.is_none()) {
+            self.containers[RESULT][0] = None;
+            return;
+        }
+        let (Some(map), Some(extra), Some(maps)) = (map, extra, env.maps) else {
+            return;
+        };
+        let Some((locked, scale)) = map
+            .data()
+            .and_then(|d| d.map_id)
+            .and_then(|id| maps.state(id))
+        else {
+            return;
+        };
+        let extendable = env
+            .items
+            .item_tags
+            .get("minecraft:extendable_maps")
+            .is_some_and(|t| t.contains(&*map.item));
+        let copy = |count: u32, post: Option<u8>| {
+            let mut out = ItemStack {
+                count,
+                ..map.clone()
+            };
+            if post.is_some() {
+                out.data_mut().map_post_processing = post;
+            }
+            out
+        };
+        self.containers[RESULT][0] = match &*extra.item {
+            "minecraft:paper" if extendable && !locked && scale < 4 => Some(copy(1, Some(1))),
+            "minecraft:glass_pane" if !locked => Some(copy(1, Some(0))),
+            "minecraft:map" => Some(copy(2, None)),
+            _ => None,
+        };
+    }
+
+    /// `Item.onCraftedBy` of a taken cartography result
+    /// (`MapItem.onCraftedPostProcess`): the post processing goes, and on a
+    /// level with maps the stack names the scaled or locked copy.
+    fn map_crafted(env: &Env, stack: &mut ItemStack) {
+        if &*stack.item != "minecraft:filled_map" {
+            return;
+        }
+        let Some(post) = stack.data().and_then(|d| d.map_post_processing) else {
+            return;
+        };
+        stack.data_mut().map_post_processing = None;
+        let id = stack.data().and_then(|d| d.map_id);
+        if let (Some(maps), Some(id)) = (env.maps, id)
+            && let Some(new) = maps.derive(id, post == 1)
+        {
+            stack.data_mut().map_id = Some(new);
+        }
+        stack.tidy();
     }
 
     pub fn slot_count(&self) -> usize {
@@ -539,6 +1106,11 @@ impl Menu {
 
     /// Sets a slot as a test fixture does (`Slot.set`).
     pub fn set_slot(&mut self, env: &Env, i: usize, stack: Option<ItemStack>) {
+        if self.kind == Kind::Lectern {
+            // LecternBlockEntity.setBook: the book its slot can't set.
+            self.containers[MAIN][0] = stack;
+            return;
+        }
         self.put(env, i, stack);
     }
 
@@ -634,8 +1206,32 @@ impl Menu {
             Role::LoomBanner => Self::is_banner(stack),
             Role::LoomDye => env.banners.loom_dye(env.items, stack).is_some(),
             Role::LoomPattern => env.banners.is_pattern_item(env.items, stack),
-            Role::LoomResult | Role::MerchantResult => false,
+            Role::GrindInput => crate::stations::grindstone_accepts(env.items, stack),
+            Role::SmithInput(i) => env.station_recipes.smithing_accepts(i, stack),
+            Role::EnchantItem => true,
+            Role::Lapis => &*stack.item == "minecraft:lapis_lazuli",
+            Role::BeaconPay => env
+                .items
+                .item_tags
+                .get("minecraft:beacon_payment_items")
+                .is_some_and(|t| t.contains(&*stack.item)),
+            Role::CartoMap => stack.data().is_some_and(|d| d.map_id.is_some()),
+            Role::CartoExtra => Self::is_carto_extra(stack),
+            Role::LoomResult
+            | Role::MerchantResult
+            | Role::StoneResult
+            | Role::GrindResult
+            | Role::CombineResult
+            | Role::CartoResult => false,
         }
+    }
+
+    /// What the cartography table's second slot takes.
+    fn is_carto_extra(stack: &ItemStack) -> bool {
+        matches!(
+            &*stack.item,
+            "minecraft:paper" | "minecraft:map" | "minecraft:glass_pane"
+        )
     }
 
     /// `BannerItem`.
@@ -646,6 +1242,10 @@ impl Menu {
     fn may_pickup(&self, env: &Env, s: usize) -> bool {
         match self.slots[s].role {
             Role::Inert => false,
+            // AnvilMenu.mayPickup: the levels to pay, and a price.
+            Role::CombineResult if self.kind == Kind::Anvil => {
+                (self.creative || self.levels >= self.data[0]) && self.data[0] > 0
+            }
             Role::MerchantResult => self
                 .merchant
                 .as_ref()
@@ -670,7 +1270,9 @@ impl Menu {
     /// `Slot.getMaxStackSize(stack)`.
     fn slot_max(&self, env: &Env, s: usize, stack: &ItemStack) -> u32 {
         let own = match self.slots[s].role {
-            Role::Armor(_) | Role::Potion => 1,
+            Role::Armor(_) | Role::Potion | Role::EnchantItem | Role::BeaconPay => 1,
+            // The lectern's bookAccess holds one.
+            Role::Plain if self.kind == Kind::Lectern && self.slots[s].container == MAIN => 1,
             Role::Fuel if Self::is_bucket(stack) => return 1,
             _ => CONTAINER_MAX,
         };
@@ -681,12 +1283,20 @@ impl Menu {
     fn put(&mut self, env: &Env, s: usize, mut stack: Option<ItemStack>) {
         tidy(&mut stack);
         let slot = self.slots[s];
+        // LecternBlockEntity's bookAccess.setItem does nothing.
+        if self.kind == Kind::Lectern && slot.container == MAIN {
+            return;
+        }
         // SimpleContainer / BaseContainerBlockEntity.setItem: limitSize to
         // getMaxStackSize(stack). The loom's result is a SimpleContainer too.
         if (slot.container == MAIN || slot.role == Role::LoomResult)
             && let Some(st) = stack.as_mut()
         {
             st.count = st.count.min(CONTAINER_MAX.min(Self::max_stack(env, st)));
+            // The beacon's container holds one item (getMaxStackSize 1).
+            if self.kind == Kind::Beacon {
+                st.count = st.count.min(1);
+            }
         }
         // CrafterBlockEntity.setItem: filling a disabled (empty) slot enables it.
         if self.kind == Kind::CrafterBlock
@@ -758,15 +1368,61 @@ impl Menu {
             .filter(|c| c.count > 0)
             .map(|c| split(c, amount));
         tidy(cell);
+        // LecternBlockEntity: an emptied book slot is onBookItemRemove (page 0).
+        if self.kind == Kind::Lectern && slot.container == MAIN && cell.is_none() {
+            self.data[0] = 0;
+        }
         if out.is_some() && slot.container == GRID {
             self.recompute(env);
         }
         // SimpleContainer.removeItem calls setChanged when it took something;
         // MerchantContainer.removeItem updates the result after a payment slot.
-        if out.is_some() && matches!(self.kind, Kind::Loom | Kind::Merchant) {
+        if out.is_some()
+            && matches!(
+                self.kind,
+                Kind::Loom
+                    | Kind::Merchant
+                    | Kind::Stonecutter
+                    | Kind::Grindstone
+                    | Kind::Anvil
+                    | Kind::Smithing
+                    | Kind::Enchanting
+                    | Kind::Cartography
+            )
+        {
             self.slot_changed(env, s);
         }
         out
+    }
+
+    /// `AnvilMenu.onTake`: the levels, the material used up, then the input.
+    fn anvil_take(&mut self, env: &Env) {
+        let cost = self.data[0];
+        if !self.creative {
+            // Player.giveExperienceLevels(-cost).
+            self.level_change -= cost;
+            self.drops.push(format!(
+                "levels{}{}",
+                if cost <= 0 { "+" } else { "" },
+                -cost
+            ));
+        }
+        let repair = self.anvil.repair_count;
+        if repair > 0 {
+            let addition = self.containers[MAIN][1]
+                .clone()
+                .filter(|a| a.count > repair)
+                .map(|mut a| {
+                    a.count -= repair;
+                    a
+                });
+            self.put(env, 1, addition);
+        } else if !self.anvil.only_renaming {
+            self.put(env, 1, None);
+        }
+        self.data[0] = 0;
+        self.put(env, 0, None);
+        self.combined = true;
     }
 
     /// `CraftingMenu.slotChangedCraftingGrid`.
@@ -785,6 +1441,57 @@ impl Menu {
     fn on_take(&mut self, env: &Env, s: usize) {
         if self.slots[s].role == Role::MerchantResult {
             self.merchant_take(env);
+            return;
+        }
+        if self.slots[s].role == Role::StoneResult {
+            // StonecutterMenu's result onTake: awardUsedRecipes, one input
+            // used up, the result again for the selected recipe.
+            if let Some(r) = self.stone.used {
+                self.crafted
+                    .push(env.station_recipes.stonecutting[r].id.clone());
+            }
+            if self.remove(env, 0, 1).is_some() {
+                self.stone_setup_result(env, self.data[0]);
+            }
+            self.sounds.push("minecraft:ui.stonecutter.take_result");
+            return;
+        }
+        if self.slots[s].role == Role::GrindResult {
+            // GrindstoneMenu's result onTake: the experience (from the inputs
+            // before they go), then both inputs cleared.
+            self.ground = Some(crate::stations::grindstone_xp_base(
+                env.enchantments,
+                self.containers[MAIN][0].as_ref(),
+                self.containers[MAIN][1].as_ref(),
+            ));
+            self.put(env, 0, None);
+            self.put(env, 1, None);
+            return;
+        }
+        if self.slots[s].role == Role::CombineResult && self.kind == Kind::Anvil {
+            self.anvil_take(env);
+            return;
+        }
+        if self.slots[s].role == Role::CombineResult {
+            // SmithingMenu.onTake: awardUsedRecipes, then one of each input.
+            for i in 0..3 {
+                if let Some(mut stack) = self.containers[MAIN][i].clone() {
+                    stack.count -= 1;
+                    self.put(env, i, Some(stack));
+                }
+            }
+            self.combined = true;
+            return;
+        }
+        if self.slots[s].role == Role::CartoResult {
+            // CartographyTableMenu's result onTake: one of each input, the
+            // take sound, then Slot.onTake's setChanged. The taken stack's
+            // onCraftedBy is the caller's (map_crafted).
+            self.remove(env, 0, 1);
+            self.remove(env, 1, 1);
+            self.sounds
+                .push("minecraft:ui.cartography_table.take_result");
+            self.slot_changed(env, s);
             return;
         }
         if self.slots[s].role == Role::LoomResult {
@@ -897,8 +1604,11 @@ impl Menu {
         amount: u32,
         max_amount: u32,
     ) -> Option<ItemStack> {
-        let result = self.try_remove(env, s, amount, max_amount)?;
+        let mut result = self.try_remove(env, s, amount, max_amount)?;
         self.on_take(env, s);
+        if self.slots[s].role == Role::CartoResult {
+            Self::map_crafted(env, &mut result);
+        }
         Some(result)
     }
 
@@ -1231,6 +1941,177 @@ impl Menu {
                     return None;
                 }
             }
+            Kind::Stonecutter => {
+                after_take = true;
+                if index == 1 {
+                    if !self.move_to(env, &mut stack, 2, 38, true) {
+                        return None;
+                    }
+                } else if index == 0 {
+                    if !self.move_to(env, &mut stack, 2, 38, false) {
+                        return None;
+                    }
+                } else if env
+                    .station_recipes
+                    .stonecutting
+                    .iter()
+                    .any(|r| r.input.test(&stack))
+                {
+                    if !self.move_to(env, &mut stack, 0, 1, false) {
+                        return None;
+                    }
+                } else if (2..29).contains(&index) {
+                    if !self.move_to(env, &mut stack, 29, 38, false) {
+                        return None;
+                    }
+                } else if (29..38).contains(&index) && !self.move_to(env, &mut stack, 2, 29, false)
+                {
+                    return None;
+                }
+            }
+            Kind::Grindstone => {
+                after_take = true;
+                let full = self.containers[MAIN].iter().all(Option::is_some);
+                if index == 2 {
+                    if !self.move_to(env, &mut stack, 3, 39, true) {
+                        return None;
+                    }
+                } else if index == 0 || index == 1 {
+                    if !self.move_to(env, &mut stack, 3, 39, false) {
+                        return None;
+                    }
+                } else if full {
+                    if (3..30).contains(&index) {
+                        if !self.move_to(env, &mut stack, 30, 39, false) {
+                            return None;
+                        }
+                    } else if (30..39).contains(&index)
+                        && !self.move_to(env, &mut stack, 3, 30, false)
+                    {
+                        return None;
+                    }
+                } else if !self.move_to(env, &mut stack, 0, 2, false) {
+                    return None;
+                }
+            }
+            Kind::Cartography => {
+                after_take = true;
+                if index == 2 {
+                    // onCraftedBy edits the result in its slot first.
+                    Self::map_crafted(env, &mut stack);
+                    self.containers[RESULT][0] = Some(stack.clone());
+                    if !self.move_to(env, &mut stack, 3, 39, true) {
+                        return None;
+                    }
+                } else if index == 0 || index == 1 {
+                    if !self.move_to(env, &mut stack, 3, 39, false) {
+                        return None;
+                    }
+                } else if stack.data().is_some_and(|d| d.map_id.is_some()) {
+                    if !self.move_to(env, &mut stack, 0, 1, false) {
+                        return None;
+                    }
+                } else if Self::is_carto_extra(&stack) {
+                    if !self.move_to(env, &mut stack, 1, 2, false) {
+                        return None;
+                    }
+                } else if (3..30).contains(&index) {
+                    if !self.move_to(env, &mut stack, 30, 39, false) {
+                        return None;
+                    }
+                } else if (30..39).contains(&index) && !self.move_to(env, &mut stack, 3, 30, false)
+                {
+                    return None;
+                }
+            }
+            // LecternMenu.quickMoveStack moves nothing.
+            Kind::Lectern => return None,
+            Kind::Beacon => {
+                // BeaconMenu.quickMoveStack.
+                after_take = true;
+                if index == 0 {
+                    if !self.move_to(env, &mut stack, 1, 37, true) {
+                        return None;
+                    }
+                } else if self.containers[MAIN][0].is_none()
+                    && self.may_place(env, 0, &stack)
+                    && stack.count == 1
+                {
+                    if !self.move_to(env, &mut stack, 0, 1, false) {
+                        return None;
+                    }
+                } else if (1..28).contains(&index) {
+                    if !self.move_to(env, &mut stack, 28, 37, false) {
+                        return None;
+                    }
+                } else if (28..37).contains(&index) {
+                    if !self.move_to(env, &mut stack, 1, 28, false) {
+                        return None;
+                    }
+                } else if !self.move_to(env, &mut stack, 1, 37, false) {
+                    return None;
+                }
+            }
+            Kind::Enchanting => {
+                after_take = true;
+                if index < 2 {
+                    if !self.move_to(env, &mut stack, 2, 38, true) {
+                        return None;
+                    }
+                } else if &*stack.item == "minecraft:lapis_lazuli" {
+                    if !self.move_to(env, &mut stack, 1, 2, true) {
+                        return None;
+                    }
+                } else {
+                    // One item into the empty item slot (setByPlayer).
+                    if self.containers[MAIN][0].is_some() {
+                        return None;
+                    }
+                    let single = ItemStack {
+                        count: 1,
+                        ..stack.clone()
+                    };
+                    stack.count -= 1;
+                    // The source slot keeps the rest while the item slot changes.
+                    let slot = self.slots[index];
+                    self.containers[slot.container][slot.index] =
+                        (stack.count > 0).then(|| stack.clone());
+                    self.set_by_player(env, 0, Some(single));
+                }
+            }
+            Kind::Anvil | Kind::Smithing => {
+                // ItemCombinerMenu.quickMoveStack.
+                after_take = true;
+                let result = if self.kind == Kind::Anvil { 2 } else { 3 };
+                let (start, use_row) = (result + 1, result + 28);
+                let end = result + 37;
+                let into_inputs = self.kind == Kind::Anvil
+                    || (0..3).any(|i| {
+                        self.containers[MAIN][i].is_none()
+                            && env.station_recipes.smithing_accepts(i, &stack)
+                    });
+                if index == result {
+                    if !self.move_to(env, &mut stack, start, end, true) {
+                        return None;
+                    }
+                } else if index < result {
+                    if !self.move_to(env, &mut stack, start, end, false) {
+                        return None;
+                    }
+                } else if into_inputs && (start..end).contains(&index) {
+                    if !self.move_to(env, &mut stack, 0, result, false) {
+                        return None;
+                    }
+                } else if (start..use_row).contains(&index) {
+                    if !self.move_to(env, &mut stack, use_row, end, false) {
+                        return None;
+                    }
+                } else if (use_row..end).contains(&index)
+                    && !self.move_to(env, &mut stack, start, use_row, false)
+                {
+                    return None;
+                }
+            }
             Kind::Merchant => {
                 after_take = true;
                 if index == 2 {
@@ -1369,7 +2250,10 @@ impl Menu {
         if after_take || matches!(self.kind, Kind::Inventory | Kind::Crafting) {
             self.on_take(env, index);
         }
-        if index == 0 && matches!(self.kind, Kind::Inventory | Kind::Crafting) {
+        // What the result slot's move left over is dropped.
+        if (index == 0 && matches!(self.kind, Kind::Inventory | Kind::Crafting))
+            || (index == 1 && self.kind == Kind::Stonecutter)
+        {
             self.drop_stack(&stack);
         }
         Some(clicked)
@@ -1537,6 +2421,10 @@ impl Menu {
             if let Some(stack) = self.slot(slot_index as usize) {
                 let mut copy = stack.clone();
                 copy.count = Self::max_stack(env, stack);
+                // The cartography result's safeClone runs onCraftedBy.
+                if self.slots[slot_index as usize].role == Role::CartoResult {
+                    Self::map_crafted(env, &mut copy);
+                }
                 self.carried = Some(copy);
             }
         } else if input == Input::Throw && self.carried.is_none() && slot_index >= 0 {
@@ -1604,9 +2492,14 @@ impl Menu {
                     } else {
                         clicked.count.div_ceil(2)
                     };
-                    if let Some(taken) = self.try_remove(env, s, amount, u32::MAX) {
-                        self.carried = Some(taken);
+                    if let Some(mut taken) = self.try_remove(env, s, amount, u32::MAX) {
+                        self.carried = Some(taken.clone());
                         self.on_take(env, s);
+                        if self.slots[s].role == Role::CartoResult {
+                            // onTake's onCraftedBy edits the carried stack.
+                            Self::map_crafted(env, &mut taken);
+                            self.carried = Some(taken);
+                        }
                     }
                 }
                 Some(mut carried) => {
@@ -1631,11 +2524,15 @@ impl Menu {
                     } else if clicked.same_item_same_components(&carried) {
                         let room = Self::max_stack(env, &carried).saturating_sub(carried.count);
                         self.carried = Some(carried.clone());
-                        if let Some(taken) = self.try_remove(env, s, clicked.count, room) {
+                        if let Some(mut taken) = self.try_remove(env, s, clicked.count, room) {
                             if let Some(c) = self.carried.as_mut() {
                                 c.count += taken.count;
                             }
                             self.on_take(env, s);
+                            if self.slots[s].role == Role::CartoResult {
+                                // onCraftedBy edits the taken stack, not the carried one.
+                                Self::map_crafted(env, &mut taken);
+                            }
                         }
                     } else {
                         self.carried = Some(carried);
@@ -1660,6 +2557,11 @@ impl Menu {
                     self.containers[PLAYER][inv_slot] = Some(taken.clone());
                     self.set_by_player(env, target, None);
                     self.on_take(env, target);
+                    if self.slots[target].role == Role::CartoResult
+                        && let Some(stack) = self.containers[PLAYER][inv_slot].as_mut()
+                    {
+                        Self::map_crafted(env, stack);
+                    }
                 }
             }
             (Some(mut source), None) => {
@@ -1698,12 +2600,14 @@ impl Menu {
     }
 
     /// The PICKUP_ALL branch (double click).
-    /// `canTakeItemForPickAll`: never the result slots (the loom's is a
-    /// plain slot), MerchantMenu's or an item tab's display slots.
+    /// `canTakeItemForPickAll`: never the result slots of the menus that
+    /// override it (crafting, smithing, stonecutter, cartography), MerchantMenu's
+    /// or an item tab's display slots.
     fn can_take_for_pick_all(&self, t: usize) -> bool {
         self.kind != Kind::Merchant
             && self.slots[t].role != Role::CreativeDisplay
-            && (self.slots[t].container != RESULT || self.kind == Kind::Loom)
+            && (self.slots[t].container != RESULT
+                || matches!(self.kind, Kind::Loom | Kind::Grindstone | Kind::Anvil))
     }
 
     /// `AbstractContainerScreen.mouseReleased` on a Shift double click:
@@ -2023,12 +2927,19 @@ pub(crate) mod tests {
         let recipes = Recipes::load(&root, &items).unwrap();
         let brewing = Brewing::load(&root, &items);
         let banners = Banners::load(&root);
+        let station_recipes = crate::stations::StationRecipes::load(&root, &items);
+        let enchantments = crate::enchant::Enchantments::default();
+        let names = crate::creative::Names::default();
         let env = Env {
             items: &items,
             recipes: &recipes,
             brewing: &brewing,
             banners: &banners,
+            station_recipes: &station_recipes,
+            enchantments: &enchantments,
+            names: &names,
             trade: None,
+            maps: None,
         };
         let mut menu = Menu::new(kind);
         menu.creative = true;
