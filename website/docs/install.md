@@ -39,6 +39,8 @@ The game opens on Horizon's own title screen. Your worlds, options and logs live
 
 ## Stable and Nightly
 
+> **Next launcher release.** The Updates switch below is merged but not in a launcher release yet. Launcher 0.17 has a **Beta builds** switch in Settings instead, which installs every new build at once, as Nightly does.
+
 In **Settings**, **Updates** picks which builds install by themselves:
 
 - **Stable** (the default): a tested build about once a day.

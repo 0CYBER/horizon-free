@@ -46,11 +46,15 @@ The change applies at the next start. If Vulkan gives you trouble, try DirectX 1
 
 Shader packs are **experimental**. Put a pack's folder in the `shaderpacks` folder of the game folder (see [Install](/docs/install#first-launch) for where that is), then choose it in **Options, Video, Shader Packs**. With no pack selected the game draws exactly what vanilla draws. A pack that fails to load shows why in red and leaves the normal picture on.
 
-Horizon can run the full-screen effects of Java shader packs (OptiFine and Iris packs: colour grading, bloom, sky and fog effects). It does not run their geometry and shadow passes yet, so packs do not look as they do in Iris. Horizon's own shader format, in WGSL with hot reload, is planned. The details are in the [shader pack notes](https://github.com/ludovic111/horizon/blob/main/docs/shader-packs.md).
+Horizon can run the full-screen effects of Java shader packs (OptiFine and Iris packs: colour grading, bloom, sky and fog effects). It does not run their geometry and shadow passes yet, so packs do not look as they do in Iris. Horizon also has its own shader pack format, in WGSL, with a `pack.toml` manifest, options and hot reload. It has full-screen passes too; stages that draw the world's terrain and shadows are planned. The details are in the [shader pack notes](https://github.com/ludovic111/horizon/blob/main/docs/shader-packs.md).
+
+In Nightly builds, the **Shader Packs** page shows the full path of the `shaderpacks` folder with an **Open Folder** button, then one switch per pack. Turning a pack on picks it, and turning it off gives the vanilla picture. Packs tested so far: BSL, Complementary Reimagined, Steadfast and Sildur's Vibrant Extreme draw their full-screen passes; Bliss, Bloop, Noble, Photon and Rethinking Voxels do not load yet. To find packs, the launcher's **Mods** page installs shader packs from Modrinth (see [Mods and data packs](/docs/mods#finding-resource-packs-shader-packs-and-modpacks)).
 
 ## Resource packs
 
 Java Edition resource packs work. Put the folder or `.zip` in the `resourcepacks` folder of the game folder and pick it on the **Resource Packs** screen, which is vanilla's screen. The game reloads every loader from the pack, as vanilla does.
+
+The launcher's **Mods** page can download them from Modrinth (see [Mods and data packs](/docs/mods#finding-resource-packs-shader-packs-and-modpacks)).
 
 [Resource packs: what works](https://github.com/ludovic111/horizon/blob/main/docs/resource-packs.md) lists everything a 26.3 resource pack can change and whether Horizon honours it.
 
@@ -65,7 +69,7 @@ Horizon plays with PlayStation (DualShock 4 and DualSense), Xbox (360, One and S
 
 ## Extras
 
-**Options, Extras** holds small, optional conveniences. Every one is off by default, so a fresh install behaves like vanilla: fullbright, zoom, a minimap, an FPS counter, a keystroke display, auto-reconnect, Mouse Tweaks-style inventory controls and inventory sorting.
+**Options, Extras** holds small, optional conveniences. Every one is off by default, so a fresh install behaves like vanilla: fullbright, zoom, a minimap, an FPS counter, a keystroke display, auto-reconnect, Mouse Tweaks-style inventory controls and inventory sorting. In Nightly builds there is one more, **dynamic lights**: a torch, lantern or other light source that you hold, that lies dropped as an item, or a burning mob, lights the blocks around it. It is client-side only, so other players do not see it.
 
 ## Where your settings are stored
 

@@ -20,6 +20,8 @@ There is no Horizon server in the middle. The code holds the host's addresses an
 
 Guests join with the name their game uses. There is no account check, so only share the code with people you trust.
 
+In Nightly builds, guests can also use the host's workstations: the crafter, loom, stonecutter, grindstone, anvil, smithing table, enchanting table, beacon, lectern and cartography table. Stable gets this once it has passed.
+
 ## Open to LAN
 
 As in vanilla, **Open to LAN** in the pause menu lets people on the same network join your world. They see it in their server list. A vanilla 26.3 client can join a Horizon LAN world, and Horizon can join a vanilla one. LAN worlds are in offline mode.
