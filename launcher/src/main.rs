@@ -9,6 +9,7 @@ mod markdown;
 mod mcp;
 mod modpacks_page;
 mod mods_page;
+mod mods_project;
 mod perf;
 mod scrollbar;
 mod servers_page;

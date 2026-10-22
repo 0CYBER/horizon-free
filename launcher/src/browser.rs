@@ -7,7 +7,9 @@
 //! (`resourcepacks/`) and Java shader packs (`shaderpacks/`, Iris and OptiFine). Java code itself
 //! doesn't run in Horizon (docs/mods.md).
 pub mod curseforge;
+pub mod details;
 pub mod download;
+pub mod images;
 pub mod installed;
 pub mod java;
 pub mod modrinth;
@@ -189,6 +191,7 @@ pub struct Query {
     pub everything: bool,
     pub offset: usize,
     pub limit: usize,
+    pub filters: details::Filters,
 }
 
 impl Query {
@@ -199,6 +202,7 @@ impl Query {
             everything: false,
             offset: 0,
             limit: 20,
+            filters: details::Filters::default(),
         }
     }
 }
@@ -210,6 +214,17 @@ pub trait Source: Send + Sync {
     fn project(&self, id: &str) -> Result<Project, String>;
     /// Versions, newest first.
     fn versions(&self, project: &Project) -> Result<Vec<Version>, String>;
+    /// The project's page: description, gallery, links, authors.
+    fn details(&self, project: &Project) -> Result<details::Details, String> {
+        Ok(details::Details {
+            body: project.summary.clone(),
+            ..details::Details::default()
+        })
+    }
+    /// The values the search's filters can take for `kind`.
+    fn tags(&self, _kind: Kind) -> Result<details::Tags, String> {
+        Ok(details::Tags::default())
+    }
     /// Downloads one of its files into `folder`, checked ([`download::fetch`]).
     fn fetch(
         &self,
