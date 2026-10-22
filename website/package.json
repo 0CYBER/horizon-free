@@ -9,7 +9,7 @@
     "dev": "node build.mjs && node serve.mjs",
     "assets": "node scripts/assets.mjs",
     "shots": "node scripts/shots.mjs",
-    "test": "node --test src/"
+    "test": "node --test src/ scripts/"
   },
   "devDependencies": {
     "sharp": "^0.34.4",

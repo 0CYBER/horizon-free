@@ -43,9 +43,10 @@
           <a href="#screenshots">In game</a>
           <a href="#parity">Parity</a>
           <a href="#launcher">Launcher</a>
-          <a href="#patch-notes">Notes</a>
+          <a href="#recent">New</a>
           <a href="#community">Community</a>
-          <a href="#contributors" data-contributors{{CONTRIBUTORS_HIDDEN}}>Contributors</a>
+          <a href="/releases">Releases</a>
+          <a href="/benchmarks">Benchmarks</a>
           <a href="/docs/">Docs</a>
         </nav>
         <div class="nav-end">
@@ -63,9 +64,11 @@
         <a href="#screenshots">In game</a>
         <a href="#parity">Parity</a>
         <a href="#launcher">Launcher</a>
-        <a href="#patch-notes">Patch notes</a>
+        <a href="#recent">Recently added</a>
         <a href="#community">Community</a>
         <a href="#contributors" data-contributors{{CONTRIBUTORS_HIDDEN}}>Contributors</a>
+        <a href="/releases">Releases</a>
+        <a href="/benchmarks">Benchmarks</a>
         <a href="/docs/">Documentation</a>
       </nav>
       <div class="menu-foot">
@@ -92,7 +95,7 @@
             <li class="row reveal"><a href="#parity"><span class="row-index">01</span><span class="row-name">Matches vanilla</span><span class="row-meta">{{PERCENT}}</span></a></li>
             <li class="row reveal"><a href="#parity"><span class="row-index">02</span><span class="row-name">Differential harnesses</span><span class="row-meta">{{HARNESSES}}</span></a></li>
             <li class="row reveal"><a href="#screenshots"><span class="row-index">03</span><span class="row-name">Drawn by Horizon</span><span class="row-meta">5 shots</span></a></li>
-            <li class="row reveal"><a href="#patch-notes"><span class="row-index">04</span><span class="row-name">What changed</span><span class="row-meta">Notes</span></a></li>
+            <li class="row reveal"><a href="#recent"><span class="row-index">04</span><span class="row-name">Recently added</span><span class="row-meta">Releases</span></a></li>
           </ol>
           <p class="disclaimer reveal">Unofficial. Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft.</p>
       </div>
@@ -199,14 +202,15 @@
         </div>
       </section>
 
-      <section id="patch-notes" class="section notes" aria-labelledby="notes-title">
+      <section id="recent" class="section notes" aria-labelledby="recent-title">
         <div class="container">
           <div class="section-head">
-            <p class="kicker reveal"><span>05</span>Patch notes</p>
-            <h2 id="notes-title" class="title reveal">What changed</h2>
+            <p class="kicker reveal"><span>05</span>Releases</p>
+            <h2 id="recent-title" class="title reveal">Recently added</h2>
+            <p class="lede reveal">Alpha builds come out many times a day, as changes land; about once a day the tested ones become Stable, the launcher's default. The newest, and what they added:</p>
           </div>
-          <div class="releases reveal" id="releases" aria-live="polite">
-        {{NOTES}}
+          <div class="recent reveal" id="recent-releases" aria-live="polite">
+        {{RECENT}}
           </div>
         </div>
       </section>
@@ -239,7 +243,7 @@
         </div>
         <div class="footer-bar">
           <span class="footer-mark">Made in the open, in Rust.</span>
-          <nav class="footer-links" aria-label="Elsewhere"><a href="https://github.com/ludovic111/horizon">GitHub</a><a href="https://github.com/ludovic111/horizon/releases">Releases</a><a href="https://github.com/ludovic111/horizon/blob/main/LICENSE">Licence</a><a href="/docs/">Docs</a><a href="/docs/hosting">Host a server</a><a href="/LEGAL.md">Assets</a><a href="/privacy">Privacy</a></nav>
+          <nav class="footer-links" aria-label="Elsewhere"><a href="https://github.com/ludovic111/horizon">GitHub</a><a href="/releases">Releases</a><a href="/benchmarks">Benchmarks</a><a href="https://github.com/ludovic111/horizon/blob/main/LICENSE">Licence</a><a href="/docs/">Docs</a><a href="/docs/hosting">Host a server</a><a href="/LEGAL.md">Assets</a><a href="/privacy">Privacy</a></nav>
         </div>
       </div>
       <p class="footer-word" aria-hidden="true">horizon</p>
