@@ -44,13 +44,13 @@ the repository, so the launcher's screenshots no longer show it.
 
 All captured in Horizon's Rust client, with vanilla resources prepared from the maintainer's
 own copy of Minecraft: Java Edition 26.3, at the default graphics settings and with no mods or shaders
-(the game and menus last captured on 2026-10-17). Converted to WebP at 1600 and 800 pixels wide
+(the game last captured on 2026-10-17, the menus on 2026-10-22). Converted to WebP at 1600 and 800 pixels wide
 by `scripts/assets.mjs`.
 
 | Files in `public/media/` | Source | What it shows |
 | --- | --- | --- |
 | `launcher*.webp` | `docs/media/launcher-play.png` | The Horizon launcher's Play page (no background image) |
-| `settings*.webp` | `docs/media/settings-simple.png` | Horizon's own Video settings, Simple view |
+| `settings*.webp` | `docs/media/settings-simple.png` | Video Settings, with Horizon's graphics and shader pack buttons at the top |
 | `sunset*.webp`, `village*.webp`, `survival*.webp`, `nether*.webp`, `night*.webp`, `underwater*.webp` | `docs/media/<name>.jpg` | In-game views of one fixed-seed world; none shows a Mojang logo or splash text |
 
 Horizon's interface in these images is Horizon's original work (MIT). The block, mob and

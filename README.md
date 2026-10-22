@@ -57,7 +57,7 @@ Screenshots, captured in the Rust client itself with vanilla assets and no mods 
   </tr>
   <tr>
     <td width="50%"><img src="docs/media/survival.webp" alt="Survival at dusk: a zombie walks up, with the hotbar, health, hunger and experience"></td>
-    <td width="50%"><img src="docs/media/settings.webp" alt="The Video settings in their Simple view: a preset, render distance, field of view, framerate, VSync and GUI scale, each with what it costs"></td>
+    <td width="50%"><img src="docs/media/settings.webp" alt="Vanilla's Video Settings screen with Horizon's own buttons at the top: Horizon Graphics, Advanced Graphics and Shader Packs"></td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/media/village.webp" alt="A plains village among savanna hills, with farms, villagers and an iron golem"></td>
