@@ -5,6 +5,7 @@ mod art;
 mod blocks;
 mod cli;
 mod collection;
+mod cull;
 mod game_tools;
 mod internet;
 mod markdown;
@@ -123,6 +124,8 @@ struct Launcher {
     /// How many times the page changed, for the page transition.
     switches: usize,
     content_scroll: Scrollbar,
+    /// The rows of the page's long list (Versions, Patch notes) last drawn.
+    long_list: cull::Cull,
     opening: Option<Opening>,
     updates: Updates,
     checked: Option<Instant>,
@@ -256,6 +259,7 @@ impl Launcher {
             page: Page::from_env(),
             switches: 0,
             content_scroll: Scrollbar::default(),
+            long_list: cull::Cull::default(),
             opening: (!settings.skip_opening).then(|| {
                 let focus = cx.focus_handle();
                 window.focus(&focus);
@@ -357,6 +361,7 @@ impl Launcher {
             self.page = page;
             self.switches += 1;
             self.content_scroll = Scrollbar::default();
+            self.long_list = cull::Cull::default();
         }
         self.picker_open = false;
     }
@@ -2974,23 +2979,36 @@ impl Launcher {
             Load::Ready(r) if r.is_empty() => return page.child(centered("No releases yet.", &t)),
             Load::Ready(r) => r.clone(),
         };
-        let mut list = div().flex().flex_col();
-        for release in releases.into_iter() {
-            let tag = release.tag.clone();
-            let installed = self.installed.contains(&tag);
-            let selected = self.selected() == Some(&tag);
-            let channel = backend::UpdateChannel::of(&release).label();
-            let mut meta = vec![channel.to_string(), release.date.clone()];
-            if let Some((_, size)) = release.asset {
-                meta.push(megabytes(size));
-            }
-            let summary = release
-                .name
-                .split_once(": ")
-                .map(|(_, rest)| rest.to_string())
-                .unwrap_or_else(|| release.name.clone());
-            let right: gpui::AnyElement =
-                if let Some((_, p)) = self.installing.as_ref().filter(|(t, _)| *t == tag) {
+        // A hundred releases: only the rows near the screen are drawn.
+        let keep = |i: usize| {
+            let tag = &releases[i].tag;
+            self.installing.as_ref().is_some_and(|(t, _)| t == tag)
+                || self.install_error.as_ref().is_some_and(|(t, _)| t == tag)
+                || self.confirm_remove.as_ref() == Some(tag)
+        };
+        let list = self.long_list.clone().column(
+            &self.content_scroll.handle,
+            releases.len(),
+            8.,
+            keep,
+            |i| {
+                let release = releases[i].clone();
+                let tag = release.tag.clone();
+                let installed = self.installed.contains(&tag);
+                let selected = self.selected() == Some(&tag);
+                let channel = backend::UpdateChannel::of(&release).label();
+                let mut meta = vec![channel.to_string(), release.date.clone()];
+                if let Some((_, size)) = release.asset {
+                    meta.push(megabytes(size));
+                }
+                let summary = release
+                    .name
+                    .split_once(": ")
+                    .map(|(_, rest)| rest.to_string())
+                    .unwrap_or_else(|| release.name.clone());
+                let right: gpui::AnyElement = if let Some((_, p)) =
+                    self.installing.as_ref().filter(|(t, _)| *t == tag)
+                {
                     div()
                         .flex()
                         .items_center()
@@ -3067,76 +3085,77 @@ impl Launcher {
                     }
                     b.into_any_element()
                 };
-            let status = if selected {
-                Some(caps("In use").text_color(t.accent))
-            } else if installed {
-                Some(caps("Installed").text_color(t.ink_soft))
-            } else {
-                None
-            };
-            let error = self
-                .install_error
-                .as_ref()
-                .filter(|(t, _)| *t == tag)
-                .map(|(_, e)| e.clone());
-            let id = SharedString::from(format!("release-{tag}"));
-            let row = div()
-                .id(id.clone())
-                .relative()
-                .flex()
-                .flex_col()
-                .gap(px(10.))
-                .py(px(14.))
-                .px(px(16.))
-                .mb(px(8.))
-                .bg(t.panel)
-                .border_2()
-                .border_color(t.outline)
-                .children(blocks::edges(t.bevel, t.lip, theme::BEVEL))
-                .child(hover_layer(&id, t.raised, 0., 0.))
-                .child(
-                    div()
-                        .relative()
-                        .flex()
-                        .items_center()
-                        .gap(px(16.))
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .flex_1()
-                                .min_w_0()
-                                .gap(px(4.))
-                                .child(version_tag(&tag).text_color(t.ink))
-                                .child(
-                                    text(theme::UI)
-                                        .text_color(t.muted)
-                                        .truncate()
-                                        .child(summary),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .items_end()
-                                .gap(px(2.))
-                                .flex_none()
-                                .children(status)
-                                .child(caps(meta.join("  ·  ")).text_color(t.muted)),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .justify_end()
-                                .w(px(190.))
-                                .flex_none()
-                                .child(right),
-                        ),
-                )
-                .children(error.map(|e| notice(e, &t)));
-            list = list.child(track_hover(row, id));
-        }
+                let status = if selected {
+                    Some(caps("In use").text_color(t.accent))
+                } else if installed {
+                    Some(caps("Installed").text_color(t.ink_soft))
+                } else {
+                    None
+                };
+                let error = self
+                    .install_error
+                    .as_ref()
+                    .filter(|(t, _)| *t == tag)
+                    .map(|(_, e)| e.clone());
+                let id = SharedString::from(format!("release-{tag}"));
+                let row = div()
+                    .id(id.clone())
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .gap(px(10.))
+                    .py(px(14.))
+                    .px(px(16.))
+                    .mb(px(8.))
+                    .bg(t.panel)
+                    .border_2()
+                    .border_color(t.outline)
+                    .children(blocks::edges(t.bevel, t.lip, theme::BEVEL))
+                    .child(hover_layer(&id, t.raised, 0., 0.))
+                    .child(
+                        div()
+                            .relative()
+                            .flex()
+                            .items_center()
+                            .gap(px(16.))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .gap(px(4.))
+                                    .child(version_tag(&tag).text_color(t.ink))
+                                    .child(
+                                        text(theme::UI)
+                                            .text_color(t.muted)
+                                            .truncate()
+                                            .child(summary),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .items_end()
+                                    .gap(px(2.))
+                                    .flex_none()
+                                    .children(status)
+                                    .child(caps(meta.join("  ·  ")).text_color(t.muted)),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .justify_end()
+                                    .w(px(190.))
+                                    .flex_none()
+                                    .child(right),
+                            ),
+                    )
+                    .children(error.map(|e| notice(e, &t)));
+                track_hover(row, id)
+            },
+        );
         page.child(list)
     }
 
@@ -3198,14 +3217,18 @@ impl Launcher {
             }
             Load::Ready(r) => r.clone(),
         };
-        let mut list = div().flex().flex_col();
-        for release in releases.iter() {
-            let summary = release
-                .name
-                .split_once(": ")
-                .map(|(_, rest)| rest.to_string())
-                .unwrap_or_default();
-            list = list.child(
+        let list = self.long_list.clone().column(
+            &self.content_scroll.handle,
+            releases.len(),
+            10.,
+            |_| false,
+            |i| {
+                let release = &releases[i];
+                let summary = release
+                    .name
+                    .split_once(": ")
+                    .map(|(_, rest)| rest.to_string())
+                    .unwrap_or_default();
                 div()
                     .flex()
                     .flex_col()
@@ -3247,9 +3270,9 @@ impl Launcher {
                             } else {
                                 markdown::render(&release.body, &t)
                             }),
-                    ),
-            );
-        }
+                    )
+            },
+        );
         page.child(list)
     }
 }

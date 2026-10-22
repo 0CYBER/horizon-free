@@ -220,6 +220,22 @@ impl Launcher {
                 Event::Loaded(l) => loaded.push(l),
             }
         }
+        // `HORIZON_LAUNCHER_PROJECT=<slug>` (with `HORIZON_LAUNCHER_PAGE=mods`): opens that
+        // project's page once a search finds it, for screenshots.
+        if self.mods.browse.open.is_none() {
+            if let Ok(want) = std::env::var("HORIZON_LAUNCHER_PROJECT") {
+                if let Some(p) = self
+                    .mods
+                    .results
+                    .iter()
+                    .find(|p| p.id == want || p.slug == want)
+                    .cloned()
+                {
+                    std::env::remove_var("HORIZON_LAUNCHER_PROJECT");
+                    self.mods_open(p);
+                }
+            }
+        }
         self.mods_check(to_check);
         for l in loaded {
             self.mods_loaded(l);
@@ -848,14 +864,7 @@ fn source_switch(t: &Theme) -> Stateful<Div> {
                 .text_color(t.muted)
                 .child("CurseForge (coming soon)"),
         );
-    segments(
-        "mods-source",
-        &SOURCES,
-        SourceId::Modrinth,
-        t,
-        |_, _, _| {},
-    )
-    .child(soon)
+    segments("mods-source", &SOURCES, SourceId::Modrinth, t, |_, _, _| {}).child(soon)
 }
 
 #[cfg(test)]
