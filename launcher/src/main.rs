@@ -9,6 +9,7 @@ mod markdown;
 mod mcp;
 mod modpacks_page;
 mod mods_page;
+mod mods_project;
 mod perf;
 mod scrollbar;
 mod servers_page;
@@ -37,18 +38,16 @@ enum Page {
     Play,
     Versions,
     Mods,
-    Modpacks,
     Servers,
     Notes,
     Settings,
 }
 
 impl Page {
-    const ALL: [(Page, &'static str); 7] = [
+    const ALL: [(Page, &'static str); 6] = [
         (Page::Play, "Play"),
         (Page::Versions, "Versions"),
         (Page::Mods, "Mods"),
-        (Page::Modpacks, "Modpacks"),
         (Page::Servers, "Servers"),
         (Page::Notes, "Patch notes"),
         (Page::Settings, "Settings"),
@@ -2759,7 +2758,6 @@ impl Render for Launcher {
             Page::Play => self.play_page(cx),
             Page::Versions => self.versions_page(cx),
             Page::Mods => self.mods_page(cx),
-            Page::Modpacks => self.modpacks_page(cx),
             Page::Servers => self.servers_page(cx),
             Page::Notes => self.notes_page(cx),
             Page::Settings => self.settings_page(cx),

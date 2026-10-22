@@ -19,6 +19,10 @@
 //! - `report <work>`: the coverage report, per mod ported, partial, not yet
 //!   or not needed with the reason, in `<work>/coverage.json` and
 //!   `coverage.md`.
+//! - `check <jar> <out>`: one mod jar on its own, as the launcher's mod
+//!   browser installs it: carried over into `<out>/carry/`, its classes
+//!   read, and the verdict (Works, Partly, Doesn't run) in
+//!   `<out>/check.json`.
 //! - `port <pack> <work> [--from <folder>] [--resources <prepared>]`: every
 //!   step for the portable mods, as the launcher's "Import modpack" runs it.
 //!
@@ -30,7 +34,7 @@ use std::{
     process::ExitCode,
 };
 
-const USAGE: &str = "usage: horizon-port-pack import <pack> <work> | inventory <work> [--offline] | fetch <work> [--from <folder>] [<mod id>...] | carry <work> [--resources <prepared>] [<mod id>...] | report <work> | port <pack> <work> [--from <folder>] [--resources <prepared>]";
+const USAGE: &str = "usage: horizon-port-pack import <pack> <work> | inventory <work> [--offline] | fetch <work> [--from <folder>] [<mod id>...] | carry <work> [--resources <prepared>] [<mod id>...] | report <work> | check <jar> <out> | port <pack> <work> [--from <folder>] [--resources <prepared>]";
 
 fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
@@ -64,6 +68,17 @@ fn main() -> ExitCode {
                 let work = path(1)?;
                 pipeline::report(work, log)?;
                 println!("{}", work.join("coverage.md").display());
+                Ok(())
+            }
+            Some("check") => {
+                let c = horizon_port_pack::check::check(path(1)?, path(2)?)?;
+                println!("{}: {}. {}", c.mod_id, c.verdict.label(), c.summary);
+                for p in &c.ports {
+                    println!("  ports: {p}");
+                }
+                for s in &c.skipped {
+                    println!("  skipped: {s}");
+                }
                 Ok(())
             }
             Some("port") => {

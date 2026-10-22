@@ -40,7 +40,7 @@ pub enum How {
     Downloaded,
     /// Copied from the player's folder.
     Local,
-    /// Only on CurseForge, whose downloads need an API key.
+    /// Only on CurseForge, whose downloads are coming soon (its API needs a paid key).
     NeedsKey,
     NotFound,
     Failed,
@@ -52,7 +52,7 @@ impl How {
             How::Present => "already here",
             How::Downloaded => "downloaded",
             How::Local => "copied from your folder",
-            How::NeedsKey => "needs a CurseForge key",
+            How::NeedsKey => "CurseForge downloads coming soon",
             How::NotFound => "not found",
             How::Failed => "failed",
         }
@@ -163,7 +163,7 @@ pub fn fetch(
     }
     write_json(&work.join("fetch.json"), &fetched)?;
     log(format!(
-        "jars: {} downloaded, {} copied, {} already here, {} need a CurseForge key, {} not found, {} failed",
+        "jars: {} downloaded, {} copied, {} already here, {} on CurseForge only (CurseForge downloads coming soon), {} not found, {} failed",
         fetched.count(How::Downloaded),
         fetched.count(How::Local),
         fetched.count(How::Present),

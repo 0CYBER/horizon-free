@@ -1,7 +1,8 @@
 //! What the browser installed into the game folder, and installing, updating and removing it.
 //!
 //! `mod-browser.json` beside `options.txt` lists each file the browser put in `resourcepacks/`
-//! or `shaderpacks/`: where it came from, its version and its checksum. Files the player put
+//! or `shaderpacks/`, and each Java mod it ported into `horizon-mods/`: where it came from, its
+//! version and its checksum. Files the player put
 //! there themselves are never touched: the browser only replaces or removes what it lists.
 use super::{pick, safe_name, Kind, Project, Source, SourceId, Support, Version};
 use serde::{Deserialize, Serialize};
@@ -29,6 +30,15 @@ pub struct Entry {
     /// Installed because another pack needs it.
     #[serde(default)]
     pub dependency: bool,
+    /// A Java mod's verdict when it was installed: `Works` or `Partly`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<String>,
+    /// What of a Java mod didn't port.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<String>,
+    /// A Java mod's namespaces: two installed mods never share one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub namespaces: Vec<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -78,9 +88,15 @@ pub struct Step {
 /// What installing `project` takes, dependencies first, checked before any byte is downloaded:
 /// every file runs in Horizon and has a version to install.
 pub fn plan(source: &dyn Source, project: &Project, everything: bool) -> Result<Vec<Step>, String> {
+    if project.kind == Kind::Modpack {
+        return Err(format!(
+            "{} is a modpack: it is imported, not installed.",
+            project.title
+        ));
+    }
     if project.kind.folder().is_none() {
         return Err(format!(
-            "{} is a modpack: it is imported on the Modpacks page.",
+            "{} is ported, not installed as a file.",
             project.title
         ));
     }
@@ -122,10 +138,7 @@ fn add(
             )
         })?;
         if needed.kind.folder().is_none() {
-            return Err(format!(
-                "{} needs the modpack {}.",
-                project.title, needed.title
-            ));
+            return Err(format!("{} needs {}.", project.title, needed.title));
         }
         add(source, needed, everything, true, depth + 1, steps)?;
     }
@@ -146,6 +159,9 @@ pub fn install(
     home: &Path,
     progress: &dyn Fn(&str, f32),
 ) -> Result<Vec<Entry>, String> {
+    if project.kind == Kind::Mod {
+        return super::java::install(source, project, everything, home, progress);
+    }
     let steps = plan(source, project, everything)?;
     let mut installed = Installed::load(home);
     let mut done = Vec::new();
@@ -199,6 +215,9 @@ pub fn install(
             page: p.page.clone(),
             // Asked for by the player once: it stays theirs.
             dependency: step.dependency && old.as_ref().is_none_or(|o| o.dependency),
+            verdict: None,
+            skipped: Vec::new(),
+            namespaces: Vec::new(),
         };
         debug_assert!(path.ends_with(name));
         installed
@@ -218,10 +237,14 @@ pub fn remove(home: &Path, name: &str) -> Result<Entry, String> {
         .lookup(name)
         .cloned()
         .ok_or_else(|| format!("{name} wasn't installed by the browser."))?;
-    match fs::remove_file(home.join(&entry.file)) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(format!("{}: {e}", entry.file)),
+    if entry.kind == Kind::Mod {
+        super::java::remove(home, &entry)?;
+    } else {
+        match fs::remove_file(home.join(&entry.file)) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("{}: {e}", entry.file)),
+        }
     }
     installed
         .entries

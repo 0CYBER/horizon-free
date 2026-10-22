@@ -24,10 +24,10 @@ The opening, then Play ([clip](docs/opening.webm)):
   preparation reuses checksum-verified game jars and libraries from the current
   or another installed Horizon version, so the original Minecraft install is
   only required when no valid imported copy exists.
-- **Mods**: search Modrinth (and CurseForge once the launcher has its API key) for resource
+- **Mods**: search Modrinth (CurseForge support is coming soon) for resource
   packs, Iris/OptiFine shader packs and modpacks, each marked Works, Partly or Doesn't run in
   Horizon; Java mod jars are never offered. Install puts a pack and what it needs in
-  `resourcepacks/` or `shaderpacks/` only after its SHA-512 (SHA-1 on CurseForge) matches, and a
+  `resourcepacks/` or `shaderpacks/` only after its SHA-512 matches, and a
   modpack goes to the Modpacks page; installed packs show their source and checksum, with Update
   and Remove ([docs/mod-browser.md](../docs/mod-browser.md)).
 - **Modpacks**: import a Java modpack (a Modrinth `.mrpack`, a CurseForge zip, or a Prism,
@@ -35,8 +35,8 @@ The opening, then Play ([clip](docs/opening.webm)):
   not yet or not needed, with the reason ([docs/modpacks.md](../docs/modpacks.md)). **Port**
   gets the jars of what this computer can port today (content mods with data and assets only)
   the player's own way: copied from a folder they have, or downloaded from the pack's own links
-  or the same file on Modrinth's CDN, hash checked; files only CurseForge has need its API key, so
-  they come from your installed instance. It carries them over for the selected version, and
+  or the same file on Modrinth's CDN, hash checked; files only CurseForge has come from your
+  installed instance (CurseForge downloads are coming soon). It carries them over for the selected version, and
   **Play** starts the game as the pack's own profile (`ports/<pack>/home/` in the game's home:
   its own saves and options) with those mods. Nothing is uploaded or shared: mod jars and ports
   stay on this computer.
@@ -149,7 +149,7 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher modpack play <pack> [--version <tag>]                 play it as its own profile
     horizon-launcher modpack remove <pack>
     horizon-launcher mods [list]                    what the mod browser installed (docs/mod-browser.md)
-    horizon-launcher mods search <text> [--kind resource|shader|modpack] [--everything] [--source modrinth|curseforge]
+    horizon-launcher mods search <text> [--kind resource|shader|modpack] [--everything] [--source modrinth]
     horizon-launcher mods install <id or slug>      checksum checked, with what it needs; a modpack is imported
     horizon-launcher mods update [<pack>] [--check]
     horizon-launcher mods remove <pack>
