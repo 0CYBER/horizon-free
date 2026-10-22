@@ -58,7 +58,13 @@ impl From<RegionError> for PlacementQueryError {
     }
 }
 pub struct TerrainRegion<'r, B: TerrainBlockStates> {
-    chunks: BTreeMap<(i32, i32), TerrainChunk<'r, B>>,
+    /// Ordered by X then Z.
+    chunks: Vec<TerrainChunk<'r, B>>,
+    /// Each chunk's index in `chunks` over the chunks' bounding box, row by
+    /// row from `origin` (`u32::MAX`: none): every block access looks one up.
+    grid: Vec<u32>,
+    origin: (i32, i32),
+    columns: i32,
     min_y: i32,
     height: i32,
     generation: WorldGenerationContext,
@@ -83,15 +89,32 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
         }) {
             return Err(RegionError::InvalidChunks);
         }
-        let mut stored = BTreeMap::new();
-        for chunk in chunks {
+        let mut chunks = chunks;
+        chunks.sort_by_key(|c| (c.position().x, c.position().z));
+        let (xs, zs) = (
+            chunks.iter().map(|c| c.position().x),
+            chunks.iter().map(|c| c.position().z),
+        );
+        let origin = (xs.clone().min().unwrap(), zs.clone().min().unwrap());
+        let columns = i64::from(xs.max().unwrap()) - i64::from(origin.0) + 1;
+        let rows = i64::from(zs.max().unwrap()) - i64::from(origin.1) + 1;
+        if columns * rows > 1 << 20 {
+            return Err(RegionError::InvalidChunks);
+        }
+        let mut grid = vec![u32::MAX; (columns * rows) as usize];
+        for (i, chunk) in chunks.iter().enumerate() {
             let p = chunk.position();
-            if stored.insert((p.x, p.z), chunk).is_some() {
+            let cell = (p.z - origin.1) as usize * columns as usize + (p.x - origin.0) as usize;
+            if grid[cell] != u32::MAX {
                 return Err(RegionError::InvalidChunks);
             }
+            grid[cell] = i as u32;
         }
         Ok(Self {
-            chunks: stored,
+            chunks,
+            grid,
+            origin,
+            columns: columns as i32,
             sea_level: generator.sea_level,
             game_time: 0,
             next_tick_order: 0,
@@ -114,10 +137,7 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
         mut self,
         bindings: &super::block_feature::FeatureBlockBindings<'r>,
     ) -> Result<Self, RegionError> {
-        if !std::ptr::eq(
-            self.chunks.first_key_value().unwrap().1.registry(),
-            bindings.registry(),
-        ) {
+        if !std::ptr::eq(self.chunks[0].registry(), bindings.registry()) {
             return Err(RegionError::InvalidBindings);
         }
         self.block_queries = Some(RegionBlockQueries {
@@ -186,20 +206,35 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
     }
     /// Release the resident chunks, ordered by X then Z; match them by position.
     pub fn into_chunks(self) -> Vec<TerrainChunk<'r, B>> {
-        self.chunks.into_values().collect()
+        self.chunks
     }
     pub fn chunks(&self) -> impl Iterator<Item = &TerrainChunk<'r, B>> {
-        self.chunks.values()
+        self.chunks.iter()
+    }
+    fn index(&self, x: i32, z: i32) -> Option<usize> {
+        let (dx, dz) = (x.wrapping_sub(self.origin.0), z.wrapping_sub(self.origin.1));
+        if dx < 0 || dz < 0 || dx >= self.columns {
+            return None;
+        }
+        match *self
+            .grid
+            .get(dz as usize * self.columns as usize + dx as usize)?
+        {
+            u32::MAX => None,
+            i => Some(i as usize),
+        }
     }
     pub fn chunk(&self, x: i32, z: i32) -> Result<&TerrainChunk<'r, B>, RegionError> {
-        self.chunks
-            .get(&(x, z))
-            .ok_or(RegionError::MissingChunk([x, z]))
+        match self.index(x, z) {
+            Some(i) => Ok(&self.chunks[i]),
+            None => Err(RegionError::MissingChunk([x, z])),
+        }
     }
     pub fn chunk_mut(&mut self, x: i32, z: i32) -> Result<&mut TerrainChunk<'r, B>, RegionError> {
-        self.chunks
-            .get_mut(&(x, z))
-            .ok_or(RegionError::MissingChunk([x, z]))
+        match self.index(x, z) {
+            Some(i) => Ok(&mut self.chunks[i]),
+            None => Err(RegionError::MissingChunk([x, z])),
+        }
     }
     pub fn block(&self, [x, y, z]: [i32; 3]) -> Result<BlockStateId, RegionError> {
         Ok(self.chunk(x >> 4, z >> 4)?.block(x, y, z))
@@ -302,12 +337,7 @@ impl<B: TerrainBlockStates> PlacementContext for TerrainRegion<'_, B> {
         block: BlockStateId,
         delay: i32,
     ) -> Result<(), PlacementQueryError> {
-        let registry = self
-            .chunks
-            .first_key_value()
-            .expect("nonempty region")
-            .1
-            .registry();
+        let registry = self.chunks[0].registry();
         let state = registry
             .state(block)
             .ok_or(RegionError::InvalidTickState(block))?;

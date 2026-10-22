@@ -1116,4 +1116,41 @@ impl PlacementContext for World<'_> {
     fn height(&mut self, kind: HeightmapType, x: i32, z: i32) -> Result<i32, PlacementQueryError> {
         self.region.height(kind, x, z)
     }
+    /// OreFeature's search for a column under its blob, without a trait call
+    /// per column. Defers to `height` when a heightmap still has to be primed.
+    fn any_height_at_least(
+        &mut self,
+        kind: HeightmapType,
+        [x0, z0]: [i32; 2],
+        size: i32,
+        y: i32,
+    ) -> Result<Option<bool>, PlacementQueryError> {
+        let (x1, z1) = (x0.wrapping_add(size), z0.wrapping_add(size));
+        if size < 0 || x1 < x0 || z1 < z0 {
+            return Ok(None);
+        }
+        for cx in x0 >> 4..=x1 >> 4 {
+            for cz in z0 >> 4..=z1 >> 4 {
+                if !self
+                    .region
+                    .chunk(cx, cz)
+                    .is_ok_and(|c| c.heightmap(kind).is_some())
+                {
+                    return Ok(None);
+                }
+            }
+        }
+        for x in x0..=x1 {
+            for z in z0..=z1 {
+                let map = self.region.chunk(x >> 4, z >> 4)?.heightmap(kind).unwrap();
+                let floor = map
+                    .first_available(x & 15, z & 15)
+                    .map_err(|e| RegionError::from(super::terrain::TerrainError::from(e)))?;
+                if y <= floor {
+                    return Ok(Some(true));
+                }
+            }
+        }
+        Ok(Some(false))
+    }
 }
