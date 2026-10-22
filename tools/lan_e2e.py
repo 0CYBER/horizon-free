@@ -496,12 +496,17 @@ def portals(host, guest, out, x, y, z, hx, hy, hz):
     guest('command', command=f'tp @s {x + 0.5} {y} {z + 3.5}')
     # players_nether_portal_default_delay: 80 ticks in survival.
     there = wait_dimension(guest, 'minecraft:the_nether', 600)
-    guest.wait(40)
+    # On a server the guest is held where it entered until the chunks around the destination are
+    # lit, then placed in its portal: wait for that before reading where it arrived.
+    for _ in range(30):
+        guest.wait(20)
+        arrived = [int(v // 1) for v in pos_of(guest)]
+        if guest.raw('block', *arrived).get('block') == 'minecraft:nether_portal':
+            break
     guest.shot(out, 'portals-nether')
     host_dim = host('state').get('dimension')
     assert there.get('dimension') == 'minecraft:the_nether', f'the guest is in {there.get("dimension")}'
     assert host_dim == 'minecraft:overworld', f'the host went to {host_dim} with the guest'
-    arrived = [int(v // 1) for v in pos_of(guest)]
     below = guest.raw('block', arrived[0], arrived[1] - 1, arrived[2])
     assert below.get('loaded') and below.get('block') != 'minecraft:air', f'under the guest in the Nether: {below}'
     # The host takes an End portal while the guest is in the Nether: three levels at once.
