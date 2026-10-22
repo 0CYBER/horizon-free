@@ -93,7 +93,7 @@ pub(super) struct Remote {
     pub(super) registries: Arc<Dynamic>,
     joined: bool,
     status: String,
-    entity_id: i32,
+    pub(super) entity_id: i32,
     dimension: DimensionType,
     biome_map: Vec<u16>,
     biome_bits: u8,
@@ -1367,6 +1367,10 @@ impl Game<'_> {
         self.turn_remote_projectile(id, rotation);
     }
     fn remove_entity(&mut self, id: i32) {
+        // The vehicle the player rode is gone (Entity.removeVehicle).
+        if self.riding == Some(id as u32) {
+            self.riding = None;
+        }
         self.mobs.retain(|m| m.id != id as u32);
         self.orbs.retain(|o| o.id != id as u32);
         self.dropped.retain(|d| d.id != id as u32);
@@ -1753,6 +1757,8 @@ impl Game<'_> {
                 ];
                 self.move_entity(p.id, position, Some((p.yaw, p.pitch)), p.on_ground);
             }
+            C::SetPassengers(p) => self.remote_set_passengers(p.vehicle, &p.passengers),
+            C::MoveVehicle(p) => self.remote_move_vehicle(p.position, p.yaw),
             // ClientPacketListener.handleRotateMob: lerpHeadTo(yHeadRot, 3).
             C::RotateHead(p) => {
                 if let Some(r) = self.remote.as_mut() {
@@ -2932,9 +2938,9 @@ impl Game<'_> {
             self.capture_loaded_world();
         }
         let stick = self.pad_move();
-        let Some(player) = self.player.as_mut() else {
+        if self.player.is_none() {
             return Ok(());
-        };
+        }
         let playing = self.screen == Screen::Playing;
         let held = |k| playing && self.keys.contains(&k);
         let keys = Keys {
@@ -2955,7 +2961,14 @@ impl Game<'_> {
             | u8::from(keys.jump) << 4
             | u8::from(keys.shift) << 5
             | u8::from(keys.sprint) << 6;
-        self.previous_position = player.position;
+        // A passenger moves with its vehicle (Entity.rideTick), not by itself.
+        let riding = self.screen != Screen::Dead && self.remote_ride(keys);
+        let Some(player) = self.player.as_mut() else {
+            return Ok(());
+        };
+        if !riding {
+            self.previous_position = player.position;
+        }
         let before = (
             player.ground.on_ground,
             [player.velocity.x, player.velocity.y, player.velocity.z],
@@ -2972,7 +2985,7 @@ impl Game<'_> {
                 f64::from(head[2]) + 0.5,
             );
             player.velocity = Vec3::ZERO;
-        } else if !dead {
+        } else if !dead && !riding {
             player.velocity = player.velocity.add_vector(pushed);
             MotionWorld {
                 entities: &ghast_collisions,
@@ -3258,6 +3271,9 @@ impl Game<'_> {
             };
             self.tick_remote_objects(&mut step);
             self.tick_remote_projectiles(&mut step);
+            // LightningBolt.tick on a client, and the sky flash fading.
+            self.flash = self.flash.saturating_sub(1);
+            self.tick_bolts();
         }
         lerps.retain(|_, l| l.steps > 0);
         if let Some(r) = self.remote.as_mut() {
@@ -3319,6 +3335,8 @@ impl Game<'_> {
             p.sprinting,
         );
         let (yaw, pitch, selected) = (self.yaw, self.pitch, self.selected);
+        let riding = self.riding.is_some();
+        let vehicle = self.remote_vehicle_packets();
         let Some(r) = self.remote.as_mut() else {
             return;
         };
@@ -3341,9 +3359,18 @@ impl Game<'_> {
                 data: 0,
             }));
         }
-        if let Some(packet) = r
-            .position_sender
-            .update(pos, (yaw, pitch), on_ground, collision)
+        if riding {
+            // LocalPlayer.tick: a passenger sends its look, then the vehicle
+            // it controls.
+            out.push(S::MovePlayerRot(play::MovePlayerRot {
+                yaw,
+                pitch,
+                flags: u8::from(on_ground) | u8::from(collision) << 1,
+            }));
+            out.extend(vehicle);
+        } else if let Some(packet) =
+            r.position_sender
+                .update(pos, (yaw, pitch), on_ground, collision)
         {
             out.push(packet);
         }
@@ -3574,6 +3601,21 @@ impl Game<'_> {
 
     fn remote_use_entity(&mut self) -> bool {
         let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
+        // A boat, minecart, item frame, armor stand or painting nearer than
+        // any mob: the server uses it (AbstractBoat.interact boards it).
+        if let Some(hit) = self.remote_object_hit()
+            && self.mob_hit().is_none_or(|(_, d)| hit.distance < d)
+            && self.before_block(hit.distance)
+        {
+            self.send(S::Interact(play::Interact {
+                id: hit.id,
+                hand: 0,
+                location: hit.location,
+                secondary: sneaking,
+            }));
+            self.swing_arm();
+            return true;
+        }
         if let Some((i, distance)) = self.mob_hit()
             && self.before_block(distance)
         {
@@ -3952,6 +3994,14 @@ impl Game<'_> {
             self.send(S::Attack(play::Attack {
                 id: self.creatures.projectiles[i].id as i32,
             }));
+            self.reset_attack_strength();
+        } else if let Some(hit) = self.remote_object_hit()
+            && self.mob_hit().is_none_or(|(_, d)| hit.distance < d)
+            && self.before_block(hit.distance)
+        {
+            // VehicleEntity.hurtServer, ItemFrame and ArmorStand hurtServer,
+            // a painting broken: the server decides.
+            self.send(S::Attack(play::Attack { id: hit.id }));
             self.reset_attack_strength();
         } else if let Some((i, distance)) = self.mob_hit()
             && self.before_block(distance)

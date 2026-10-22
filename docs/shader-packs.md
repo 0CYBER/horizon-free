@@ -44,8 +44,7 @@ Everything is in `crates/horizon-client/src/gfx.rs`, `Renderer::render`, one com
 4. **Screen effects** (`screen_effects.rs`): pumpkin blur, portal, powder snow, vignette, nausea, as
    full-screen quads.
 5. **Menu blur** (`menu_blur.rs`, `menu_blur.wgsl`): vanilla's `menuBackgroundBlurriness` behind screens.
-6. **Menu grade** (`post.rs`, `post.wgsl`): the Horizon menus' frosted backdrop.
-7. **HUD** (`hud.rs`, `hud.wgsl`): GUI, text, items in slots.
+6. **HUD** (`hud.rs`, `hud.wgsl`): GUI, text, items in slots.
 
 All world shaders share one uniform block, `Globals` in `gfx.rs` (`struct Globals` in `terrain.wgsl`):
 view-projection, inverse view, fog colour and distances, sky colour, sun direction, sunrise colour, game time.
@@ -60,8 +59,8 @@ The lightmap, fog and sky colours are computed on the CPU (`environment.rs`, `fo
   `~/Library/Application Support/horizon` on macOS, `~/.local/share/horizon` on Linux), not the launcher's version
   folder. A pack with a `pack.toml` at its root is a Horizon pack; a folder with `shaders/`, or a `.zip`, is a Java
   pack.
-- The **Shader Packs** page lists them: a sidebar section in the Horizon menus, **Video Settings → Shader Packs...**
-  in the Classic ones, and the Shader Pack row of the graphics settings leads to it. It shows the folder's full path
+- The **Shader Packs** page lists them: **Video Settings → Shader Packs...** (where Iris puts its button), **Options →
+  Horizon Settings... → Shader Packs...**, and the Shader Pack row of the graphics settings lead to it. It shows the folder's full path
   and an *Open Folder* button (the folder is made if it is missing), then one switch per pack: turning one on picks
   it, turning it off is the vanilla picture. With no pack, it says so under the path. The list is read again every
   second while the page is open, so a pack dropped into the folder shows up.
