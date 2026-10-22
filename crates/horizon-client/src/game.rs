@@ -10061,7 +10061,8 @@ impl Game<'_> {
                 })
                 || (self.title.is_none()
                     && self.player.is_some()
-                    && self.screen.blurs_background(self.pause_menu)));
+                    && (self.screen.blurs_background(self.pause_menu)
+                        || (self.screen == Screen::Win && self.win_screen_pauses()))));
         let radius = self.settings.menu_blur as f32;
         (blurred && radius >= 1.0).then_some(radius)
     }
