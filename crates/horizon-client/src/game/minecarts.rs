@@ -775,10 +775,13 @@ impl Game<'_> {
         self.push_carts();
         // ServerLevel.tick: only entities in entity-ticking chunks tick.
         let ticking = self.entity_ticking_area();
+        // A server player's minecart moves with its rider (lan_vehicles.rs).
+        let ridden = self.guest_vehicles();
         let mut i = 0;
         while i < self.carts.len() {
             let p = self.carts[i].position;
             if Some(self.carts[i].id) == self.riding
+                || ridden.contains(&self.carts[i].id)
                 || !ticking(p.x.floor() as i32, p.z.floor() as i32)
             {
                 i += 1;
@@ -986,7 +989,7 @@ impl Game<'_> {
         let held = self.held().cloned();
         match self.carts[i].kind {
             CartKind::Rideable => {
-                if sneaking || self.riding.is_some() {
+                if sneaking || self.riding.is_some() || self.ridden_by_guest(self.carts[i].id) {
                     return false;
                 }
                 self.riding = Some(self.carts[i].id);

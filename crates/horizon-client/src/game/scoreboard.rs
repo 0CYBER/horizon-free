@@ -431,20 +431,18 @@ impl Game<'_> {
         self.score.board.players_team(self.acting_player_name())
     }
     /// The teams of the player and of the mobs on one (empty without teams).
-    pub(super) fn mob_teams(&self) -> horizon_client::mobs::Teams {
+    pub(super) fn mob_teams(&self) -> horizon_client::mobs::Teams<'_> {
         let board = &self.score.board;
         if board.teams.is_empty() {
             return Default::default();
         }
         horizon_client::mobs::Teams {
-            player: self.player_team().cloned(),
+            player: self.player_team(),
             mobs: self
                 .persist
                 .uuids
                 .iter()
-                .filter_map(|(id, uuid)| {
-                    Some((*id, board.players_team(&uuid_text(*uuid))?.clone()))
-                })
+                .filter_map(|(id, uuid)| Some((*id, board.players_team(&uuid_text(*uuid))?)))
                 .collect(),
         }
     }
@@ -599,6 +597,11 @@ impl Game<'_> {
     /// objective.
     pub(super) fn draw_tab_list(&mut self, batch: &mut HudBatch) {
         use horizon_client::tab_list::{self, TabInputs};
+        // Player heads and the player list both draw from the same skin slots.
+        let ready: Vec<_> = self.skin_downloads.borrow_mut().take_ready();
+        for (location, rgba) in ready {
+            self.store_skin(location, rgba);
+        }
         let key = self.screen == super::Screen::Playing
             && self.keys.contains(&winit::keyboard::KeyCode::Tab);
         let (players, online_mode, upside_down) = match self.remote_tab_players() {

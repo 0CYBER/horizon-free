@@ -1736,7 +1736,9 @@ impl Game<'_> {
         mob.head_pitch = old.head_pitch;
         mob.persistent = old.persistent;
         mob.custom_name = old.custom_name.clone();
+        mob.custom_name_text = old.custom_name_text.clone();
         mob.name_visible = old.name_visible;
+        mob.invisible = old.invisible;
         mob.no_ai = old.no_ai;
         mob.silent = old.silent;
         mob.no_gravity = old.no_gravity;

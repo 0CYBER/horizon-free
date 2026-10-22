@@ -1,5 +1,5 @@
 //! Horizon's design tokens, the one source of truth for the launcher (`launcher/src/theme.rs`),
-//! the game's own menus (`horizon-client`'s `ui_theme`) and the website (`website/src/tokens.css`,
+//! the game's on-screen keyboard (`horizon-client`'s `ui_theme`) and the website (`website/src/tokens.css`,
 //! generated from [`css`] by `cargo run -p xtask -- tokens`). Change a value here and all three
 //! follow. The system is described in `docs/design-system.md`.
 //!
