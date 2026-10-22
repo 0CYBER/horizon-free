@@ -11084,6 +11084,7 @@ impl ApplicationHandler for Game<'_> {
                         self.fps_frames += 1;
                         horizon_client::crash::debug_crash_tick();
                         if self.fps_at.elapsed() >= Duration::from_secs(1) {
+                            horizon_client::heartbeat::set_lan(self.lan.is_some());
                             self.fps = self.fps_frames as f32 / self.fps_at.elapsed().as_secs_f32();
                             self.fps_frames = 0;
                             self.fps_at = Instant::now();
@@ -12756,6 +12757,16 @@ pub fn run() -> Result<()> {
     if options.dedicated.is_some() {
         // Before any worker starts: on Linux they go behind the server thread.
         horizon_threads::put_helpers_behind();
+    }
+    // Someone is playing: the anonymous ping behind the launcher's "N playing now". Not for a
+    // server, a benchmark or a run that quits by itself.
+    if options.dedicated.is_none()
+        && options.benchmark.is_none()
+        && !options.offscreen
+        && options.frames.is_none()
+        && options.world_frames.is_none()
+    {
+        horizon_client::heartbeat::start();
     }
     let started = Instant::now();
     horizon_client::spans::enable(options.spikes.is_some());

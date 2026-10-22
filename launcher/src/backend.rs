@@ -2040,6 +2040,8 @@ pub enum Msg {
     PackLine(String),
     /// A modpack step ended: the pack as it now is.
     PackDone(Result<Box<crate::modpacks::Imported>, String>),
+    /// How many play Horizon now, or none when the server can't be reached (`telemetry`).
+    Playing(Option<u64>),
 }
 
 /// A running process; its output arrives as `Msg::Line`, its end as `Msg::Exit`.
@@ -2130,6 +2132,10 @@ pub struct Settings {
     /// Whether new versions include betas (releases not promoted to stable yet). Off by default.
     #[serde(default)]
     pub beta_builds: bool,
+    /// The player has read what the "I'm playing" ping holds (`telemetry::PING`): on the
+    /// first-run question, or on the Play page once if they answered that before it existed.
+    #[serde(default)]
+    pub ping_notice_seen: bool,
 }
 
 impl Settings {

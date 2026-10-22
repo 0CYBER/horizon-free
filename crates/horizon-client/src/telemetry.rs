@@ -1,6 +1,7 @@
 //! The game's part in opt-in data collection (`horizon_telemetry`, docs/telemetry.md). When the
 //! player allows it, the game keeps a scrubbed crash report, or a play session's performance
-//! summary, in the outbox. It never sends anything itself: the launcher does, at its next start.
+//! summary, in the outbox. It never sends those itself: the launcher does, at its next start (the
+//! game's only sending is the anonymous "I'm playing" ping, `heartbeat.rs`).
 //! Without the player's yes for that kind nothing is kept, and crash-reports/ stays local.
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};

@@ -94,7 +94,8 @@ run at once there, and each must finish within 10 seconds however slowly its byt
 - **A relay** (only if one is configured) sees the IP addresses of the host and the guests, the short
   code's first half, when sessions start and end and the size of encrypted frames. It can't see the
   secret, the key or the game (names, chat, the world). It logs counts every five minutes, nothing else.
-- **Horizon** sees nothing: there is no Horizon service.
+- **Horizon** runs no service for it. The game's anonymous "I'm playing" ping says only whether a
+  LAN or friends world is open, never its address, code or name ([telemetry.md](telemetry.md)).
 
 ## Identity
 

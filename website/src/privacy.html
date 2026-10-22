@@ -17,8 +17,8 @@
     <main id="main" class="section">
       <div class="container">
         <p class="kicker"><span>Privacy</span>Data collection</p>
-        <h1 class="display">Nothing leaves without your yes.</h1>
-        <p class="lede">The Horizon launcher can send a few things that help make the game faster and steadier. It asks first, each kind has its own switch, and every switch is off until you turn it on.</p>
+        <h1 class="display">Nothing about you leaves without your yes.</h1>
+        <p class="lede">The Horizon launcher can send a few things that help make the game faster and steadier. It asks first, each kind has its own switch, and every switch is off until you turn it on. The only thing sent without asking is an anonymous "I'm playing" ping, which says nothing about you.</p>
         <div class="prose">
           <h2>What can be sent</h2>
           <p>Only the kinds you allow, from the launcher's first-run question or Settings → Data collection:</p>
@@ -32,11 +32,16 @@
           <p>Never sent: your Microsoft or Minecraft account name or UUID, world names, server or LAN addresses, chat, and your user name or home folder in file paths. Before anything is kept, those are replaced with placeholders, along with e-mail and IP addresses. The server does not store the IP address requests come from.</p>
           <p>The launcher shows exactly what would be sent: Settings → Data collection → View what would be sent, or <code>horizon-launcher data show</code>. Every field is listed in <a href="https://github.com/ludovic111/horizon/blob/main/docs/telemetry.md">docs/telemetry.md</a>.</p>
 
+          <h2>The "I'm playing" ping</h2>
+          <p>While you play, the game sends an anonymous "I'm playing" ping once a minute, so the launcher can show how many people play Horizon right now. It is sent whatever the switches say, and the launcher says so next to them.</p>
+          <p>It holds: a random number made when the game starts and forgotten when it closes, the Horizon version, your operating system (Linux, macOS or Windows), and whether you have a world open to LAN or to friends. It doesn't hold: your account, your install ID, world or server names, your hardware or settings, or anything you do in the game. The random number changes every time you start the game, so two of your sessions can't be linked to each other or to you.</p>
+          <p>The server keeps the pings in memory only, never on disk, and not with the address they came from (that is used only to stop abuse, as below). A session counts while it pinged in the last two minutes and is then forgotten. What it shows is the number playing now, per version and with a world open, rounded.</p>
+
           <h2>Why</h2>
-          <p>To find what is slow or crashes on which machines, and fix it. Benchmark uploads also show other players how Horizon runs on hardware like theirs. Nothing is sold, shared for advertising, or used to identify you.</p>
+          <p>To find what is slow or crashes on which machines, and fix it. The ping shows players, and Horizon, how many people play right now. Benchmark uploads also show other players how Horizon runs on hardware like theirs. Nothing is sold, shared for advertising, or used to identify you.</p>
 
           <h2>On what basis</h2>
-          <p>Your consent (Article 6(1)(a) of the EU's General Data Protection Regulation). It is given kind by kind, recorded on your computer with the version of the question you answered and when, and withdrawn at any time with the same switches. Withdrawing deletes what was waiting to be sent. When what is collected changes, the launcher asks again, and nothing new is sent until you answer.</p>
+          <p>For the switches: your consent (Article 6(1)(a) of the EU's General Data Protection Regulation). It is given kind by kind, recorded on your computer with the version of the question you answered and when, and withdrawn at any time with the same switches. Withdrawing deletes what was waiting to be sent. When what is collected changes, the launcher asks again, and nothing new is sent until you answer. The ping holds nothing that identifies you; the address it comes from is used only to limit how often one address may send, kept in memory for an hour at most and never stored.</p>
 
           <h2>Where and how long</h2>
           <p>Items wait on your computer (<code>telemetry/</code> in the game folder) and are sent compressed when the launcher starts or closes, to Horizon's own server at <a href="https://railway.com">Railway</a>. The server keeps them for <strong>180 days</strong>, then deletes them. What stays after that are anonymous totals per day, Horizon version, operating system, GPU maker and render distance (for example "120 sessions on macOS with Apple GPUs at render distance 12"). They hold no install ID, and groups too small to be anonymous are never shown.</p>
