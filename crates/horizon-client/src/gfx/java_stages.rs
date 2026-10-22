@@ -7,9 +7,17 @@
 //! drawn, and the last picture goes to `world_post`. The targets keep GL's
 //! layout (row 0 at the bottom, which the translated vertex programs
 //! produce), so the world is flipped going in and the picture coming out.
+//!
+//! When the pack has terrain programs (`gfx/java_terrain.rs`), Horizon's
+//! world comes without its terrain: the pack's `gbuffers_terrain` draws it
+//! into the pack's targets right after, against the world's depth, and its
+//! `gbuffers_water` draws the translucent terrain after `deferred`, as in
+//! Iris. `depthtex1` and `depthtex2` then hold the depth before it.
+use super::java_terrain::{Atlas, JavaWorld, TerrainPipelines};
 use super::pack_stages::FrameUniform;
 use crate::java_pack::{JavaFolder, JavaPasses};
 use glam::{Mat3, Mat4, Vec3, Vec4};
+use horizon_shaderpack::pipeline::GeometryProgram;
 use horizon_shaderpack::pipeline::TargetSettings;
 use horizon_shaderpack::pipeline::{Directives, Program, target_index};
 use horizon_shaderpack::uniforms::{CustomUniforms, SmoothFloat, UniformState};
@@ -32,7 +40,7 @@ const NOISE_SIZE: u32 = 256;
 /// The vertex buffers a pass may read (wgpu's default limit).
 const MAX_ATTRIBUTES: usize = 8;
 
-const BLIT: &str = r#"
+pub(super) const BLIT: &str = r#"
 @group(0) @binding(0) var color: texture_2d<f32>;
 @group(0) @binding(1) var depth: texture_depth_2d;
 
@@ -49,11 +57,47 @@ struct World {
 
 // The world's colour and depth, upside down into GL's layout; Horizon's
 // reversed depth (near 1) as GL's (near 0).
-@fragment
-fn world_in(@builtin(position) p: vec4f) -> World {
+fn world_texel(p: vec4f) -> World {
     let size = textureDimensions(depth);
     let xy = vec2u(u32(p.x), size.y - 1u - u32(p.y));
     return World(textureLoad(color, xy, 0), vec4f(1.0 - textureLoad(depth, xy, 0)));
+}
+
+@fragment
+fn world_in(@builtin(position) p: vec4f) -> World {
+    return world_texel(p);
+}
+
+struct WorldDepth {
+    @location(0) color: vec4f,
+    @location(1) depth: vec4f,
+    @builtin(frag_depth) test: f32,
+}
+
+// The same, and the depth into the depth buffer the pack's geometry
+// programs test against.
+@fragment
+fn world_in_depth(@builtin(position) p: vec4f) -> WorldDepth {
+    let world = world_texel(p);
+    return WorldDepth(world.color, world.depth, world.depth.x);
+}
+
+struct Depths {
+    @location(0) all: vec4f,
+    @location(1) solid: vec4f,
+}
+
+// The depth buffer after the pack's geometry into `depthtex0` (and
+// `depthtex1`, after solid terrain), both in GL's layout already.
+@fragment
+fn depth_out_both(@builtin(position) p: vec4f) -> Depths {
+    let d = vec4f(textureLoad(depth, vec2u(p.xy), 0));
+    return Depths(d, d);
+}
+
+@fragment
+fn depth_out(@builtin(position) p: vec4f) -> @location(0) vec4f {
+    return vec4f(textureLoad(depth, vec2u(p.xy), 0));
 }
 
 // A target, upside down back into wgpu's layout.
@@ -67,7 +111,10 @@ fn present(@builtin(position) p: vec4f) -> @location(0) vec4f {
 /// A wgpu format for each of Iris's (`InternalTextureFormat`), renderable
 /// everywhere: 8-bit unsigned normalized formats stay, signed normalized,
 /// 16-bit and packed float ones become half floats, integer ones 32-bit.
-fn target_format(iris: &str) -> wgpu::TextureFormat {
+/// `norm16`: the device has 16-bit normalized formats, which keep packed
+/// G-buffers (Chocapic13' packs two 8-bit values per `RGBA16` channel)
+/// exact where a half float rounds them.
+fn target_format(iris: &str, norm16: bool) -> wgpu::TextureFormat {
     use wgpu::TextureFormat as F;
     let channels = if iris.starts_with("RGB") || iris.contains("_B") {
         4
@@ -84,6 +131,12 @@ fn target_format(iris: &str) -> wgpu::TextureFormat {
     match iris {
         "R8" | "RG8" | "RGB8" | "RGBA8" | "RGBA" | "RGBA2" | "RGBA4" | "R3_G3_B2" | "RGB5_A1"
         | "RGB565" => pick(F::R8Unorm, F::Rg8Unorm, F::Rgba8Unorm),
+        "R16" | "RG16" | "RGB16" | "RGBA16" if norm16 => {
+            pick(F::R16Unorm, F::Rg16Unorm, F::Rgba16Unorm)
+        }
+        "R16_SNORM" | "RG16_SNORM" | "RGB16_SNORM" | "RGBA16_SNORM" if norm16 => {
+            pick(F::R16Snorm, F::Rg16Snorm, F::Rgba16Snorm)
+        }
         "RGB10_A2" => F::Rgb10a2Unorm,
         "RGB10_A2UI" => F::Rgb10a2Uint,
         f if f.ends_with("32F") => pick(F::R32Float, F::Rg32Float, F::Rgba32Float),
@@ -109,6 +162,14 @@ fn sample_type(format: wgpu::TextureFormat) -> wgpu::TextureSampleType {
     }
 }
 
+/// The textures besides the targets a pass may read.
+struct Views<'a> {
+    depth: &'a wgpu::TextureView,
+    depth_solid: &'a wgpu::TextureView,
+    atlas: Option<&'a wgpu::TextureView>,
+    lightmap: Option<&'a wgpu::TextureView>,
+}
+
 /// A colour target's two sides.
 struct Target {
     format: wgpu::TextureFormat,
@@ -123,19 +184,33 @@ struct Target {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Source {
     Target(u32),
-    /// `depthtex0..2`: the world's depth.
+    /// `depthtex0`: the world's depth.
     Depth,
+    /// `depthtex1` and `depthtex2`: the depth before translucent terrain
+    /// (the world's depth when the pack doesn't draw the terrain).
+    DepthSolid,
     Noise,
     /// `shadowtex*`: no shadow map yet, so a far depth (nothing in shadow);
     /// also Distant Horizons' and Voxy's depth, as without those mods.
     Shadow,
     /// Anything else (`shadowcolor*`, custom textures): white or black.
     Blank(bool),
+    /// In geometry programs: the block atlas (`gtexture`), the lightmap,
+    /// and a flat normal map for `normals` (sprites have no LabPBR maps).
+    Atlas,
+    Lightmap,
+    FlatNormal,
 }
 
-fn source(name: &str) -> Source {
+/// What sampler `name` reads, in a geometry program or a full-screen one.
+fn source(name: &str, geometry: bool) -> Source {
     match name {
-        "depthtex0" | "depthtex1" | "depthtex2" | "gdepthtex" => Source::Depth,
+        "texture" | "gtexture" | "tex" if geometry => Source::Atlas,
+        "lightmap" if geometry => Source::Lightmap,
+        "normals" if geometry => Source::FlatNormal,
+        "specular" if geometry => Source::Blank(false),
+        "depthtex0" | "gdepthtex" => Source::Depth,
+        "depthtex1" | "depthtex2" => Source::DepthSolid,
         "noisetex" => Source::Noise,
         "shadowtex0" | "shadowtex1" | "shadow" | "watershadow" => Source::Shadow,
         n if n.starts_with("dhDepthTex") || n.starts_with("vxDepthTex") => Source::Shadow,
@@ -174,11 +249,48 @@ struct PassGpu {
     draw_buffers: Vec<u32>,
     reads_alt: BTreeSet<u32>,
     scale: f32,
+    /// Geometry programs: the flat draws' pipeline (where the renderer has
+    /// them), and the targets written on their alternate side.
+    flat_pipeline: Option<wgpu::RenderPipeline>,
+    geometry: Option<BTreeSet<u32>>,
+}
+
+/// What a pass draws into.
+enum Output<'a> {
+    /// A full-screen pass: its targets, or for `final` the screen's format.
+    Screen(Option<wgpu::TextureFormat>),
+    /// A geometry program over Horizon's terrain.
+    Geometry(GeometrySetup<'a>),
+}
+
+struct GeometrySetup<'a> {
+    /// The vertex program for flat draws.
+    flat_vertex: &'a horizon_shaderpack::translate::Translated,
+    /// Each draw buffer's blending.
+    blends: &'a [Option<wgpu::BlendState>],
+    layouts: &'a GeometryLayouts<'a>,
+}
+
+/// The renderer's bind group layouts a geometry program's pipelines use:
+/// the flat draws' group 1 (`gfx/flat.rs`, when it has them) and the page
+/// group 3 ([`super::java_terrain::page_layout`]).
+pub struct GeometryLayouts<'a> {
+    pub flat: Option<&'a wgpu::BindGroupLayout>,
+    pub page: &'a wgpu::BindGroupLayout,
+}
+
+/// A folder's terrain and water programs.
+struct FolderGeometry {
+    terrain: PassGpu,
+    water: Option<PassGpu>,
+    translucent_at: usize,
 }
 
 /// What every pass of the pack shares.
 struct Common {
     linear: wgpu::Sampler,
+    /// The block atlas's, as vanilla's: nearest, mipmapped.
+    atlas: wgpu::Sampler,
     nearest: wgpu::Sampler,
     repeat: wgpu::Sampler,
     compare: wgpu::Sampler,
@@ -187,6 +299,8 @@ struct Common {
     vertices: [wgpu::Buffer; 4],
     world_layout: wgpu::BindGroupLayout,
     present_layout: wgpu::BindGroupLayout,
+    /// The geometry's depth buffer, read into `depthtex0` and `depthtex1`.
+    depth_layout: wgpu::BindGroupLayout,
     blit: wgpu::ShaderModule,
 }
 
@@ -196,8 +310,11 @@ struct Bound {
     size: [u32; 2],
     targets: BTreeMap<u32, Target>,
     depth: wgpu::TextureView,
+    /// `depthtex1`: `depth` before translucent terrain, or `depth` itself.
+    depth_solid: wgpu::TextureView,
     /// Per pass, then `final`.
     groups: Vec<wgpu::BindGroup>,
+    geometry: Option<BoundGeometry>,
     world_in: (wgpu::RenderPipeline, wgpu::BindGroup),
     /// The world goes to colortex0's alternate side.
     world_alt: bool,
@@ -209,6 +326,21 @@ struct Bound {
     _blank: Vec<wgpu::Texture>,
 }
 
+/// What a folder's geometry programs draw with at one size.
+struct BoundGeometry {
+    /// The depth buffer the geometry tests against: the world's, then the
+    /// terrain's.
+    test: wgpu::TextureView,
+    terrain: wgpu::BindGroup,
+    water: Option<wgpu::BindGroup>,
+    /// `world_in` that also fills `test`.
+    world_in: wgpu::RenderPipeline,
+    /// `test` into `depthtex0` and `depthtex1`, and into `depthtex0` alone.
+    out_both: wgpu::RenderPipeline,
+    out: wgpu::RenderPipeline,
+    out_group: wgpu::BindGroup,
+}
+
 struct Folder {
     targets: Vec<TargetSettings>,
     world_at: usize,
@@ -217,6 +349,7 @@ struct Folder {
     passes: Vec<PassGpu>,
     final_pass: Option<PassGpu>,
     directives: Directives,
+    geometry: Option<FolderGeometry>,
 }
 
 pub struct JavaStages {
@@ -234,16 +367,24 @@ pub struct JavaStages {
     uniform_state: UniformState,
     /// `eyeBrightnessSmooth`, block then sky.
     eye_smooth: [SmoothFloat; 2],
+    /// The block atlas of the geometry programs.
+    atlas: Option<Atlas>,
+    /// The device has 16-bit normalized formats ([`target_format`]).
+    norm16: bool,
 }
 
 impl JavaStages {
-    /// The pipelines of a loaded Java pack, or wgpu's error.
+    /// The pipelines of a loaded Java pack, or wgpu's error. `norm16`: the
+    /// device has 16-bit normalized targets ([`target_format`]).
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
         id: &str,
         pack: &JavaPasses,
+        layouts: &GeometryLayouts,
+        norm16: bool,
     ) -> Result<Self, String> {
         let common = Common::new(device, queue);
         let folder_for = [-1, 0, 1].map(|d| pack.folder_for(d));
@@ -255,17 +396,17 @@ impl JavaStages {
                 let formats: Vec<wgpu::TextureFormat> = plan
                     .targets
                     .iter()
-                    .map(|t| target_format(&t.format))
+                    .map(|t| target_format(&t.format, norm16))
                     .collect();
                 let passes = plan
                     .passes
                     .iter()
-                    .map(|p| PassGpu::new(device, p, &formats, None))
+                    .map(|p| PassGpu::new(device, p, &formats, Output::Screen(None)))
                     .collect::<Result<Vec<_>, _>>()?;
                 let final_pass = plan
                     .final_pass
                     .as_ref()
-                    .map(|p| PassGpu::new(device, p, &formats, Some(format)))
+                    .map(|p| PassGpu::new(device, p, &formats, Output::Screen(Some(format))))
                     .transpose()?;
                 Ok::<_, String>(Folder {
                     targets: plan.targets.clone(),
@@ -275,6 +416,7 @@ impl JavaStages {
                     passes,
                     final_pass,
                     directives: plan.directives,
+                    geometry: folder_geometry(device, plan, &formats, layouts),
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -295,11 +437,26 @@ impl JavaStages {
             uniforms: pack.uniforms.clone(),
             uniform_state: UniformState::default(),
             eye_smooth: [SmoothFloat::default(); 2],
+            atlas: None,
+            norm16,
         })
     }
 
+    /// Whether the pack draws the terrain in `dimension` (0 overworld, -1
+    /// the Nether, 1 the End): the renderer then leaves it out of the world
+    /// and gives `run` a [`JavaWorld`].
+    pub fn draws_terrain(&self, dimension: i8) -> bool {
+        let d = i32::from(dimension).clamp(-1, 1);
+        let folder = self.folder_for[(d + 1) as usize].unwrap_or(0);
+        self.folders
+            .get(folder)
+            .is_some_and(|f| f.geometry.is_some())
+    }
+
     /// Run the passes of the world's dimension over its `color` and `depth`
-    /// (`size`) and return `post`'s bindings of the picture.
+    /// (`size`) and return `post`'s bindings of the picture. `world` is given
+    /// when the world was drawn without its terrain ([`Self::draws_terrain`]):
+    /// the pack's geometry programs draw it.
     #[allow(clippy::too_many_arguments)]
     pub fn run(
         &mut self,
@@ -312,15 +469,21 @@ impl JavaStages {
         post: &super::world_post::Post,
         frame: FrameUniform,
         world: JavaFrame,
+        terrain: Option<&JavaWorld>,
     ) -> &wgpu::BindGroup {
         let dimension = (frame.dimension[0] as i32).clamp(-1, 1);
         let folder = self.folder_for[(dimension + 1) as usize].unwrap_or(0);
-        if self
-            .bound
-            .as_ref()
-            .is_none_or(|b| b.folder != folder || b.size != size)
+        let terrain = terrain.filter(|_| self.folders[folder].geometry.is_some());
+        if let Some(w) = terrain
+            && self.atlas.as_ref().is_none_or(|a| !a.fits(w))
         {
-            self.bound = Some(self.bind(device, queue, folder, color, depth, size, post));
+            self.atlas = Atlas::new(device, queue, w);
+            self.bound = None;
+        }
+        if self.bound.as_ref().is_none_or(|b| {
+            b.folder != folder || b.size != size || b.geometry.is_some() != terrain.is_some()
+        }) {
+            self.bound = Some(self.bind(device, queue, folder, color, depth, size, post, terrain));
         }
         let now = std::time::Instant::now();
         let frame_time = self.last.map_or(0.0, |t| (now - t).as_secs_f32());
@@ -335,6 +498,9 @@ impl JavaStages {
             self.previous,
         );
         inputs.set_world(&world, directives.sun_path_rotation);
+        if let Some(atlas) = &self.atlas {
+            inputs.atlas_size = atlas.size().map(|v| v as f32);
+        }
         let half_life = directives.eye_brightness_half_life;
         for (i, smooth) in self.eye_smooth.iter_mut().enumerate() {
             inputs.eye_smooth[i] = smooth.update(inputs.eye[i], half_life, half_life, frame_time);
@@ -357,15 +523,40 @@ impl JavaStages {
                 }
             }
         }
-        let world_at = folder.world_at;
-        for (i, (pass, group)) in folder.passes.iter().zip(&bound.groups).enumerate() {
+        if let (Some(w), Some(atlas)) = (terrain, &mut self.atlas) {
+            atlas.update(device, encoder, w);
+        }
+        // The world after `prepare`, the terrain with it; translucent
+        // terrain after `deferred`.
+        let world_at = folder.world_at.min(folder.passes.len());
+        let geometry = folder
+            .geometry
+            .as_ref()
+            .zip(bound.geometry.as_ref())
+            .zip(terrain);
+        let translucent_at = geometry.map_or(usize::MAX, |((g, _), _)| {
+            g.translucent_at.min(folder.passes.len())
+        });
+        for i in 0..=folder.passes.len() {
             if i == world_at {
                 world_in(encoder, bound);
+                if let Some(((g, b), w)) = geometry {
+                    g.terrain.draw_geometry(
+                        queue, encoder, bound, &b.terrain, &b.test, &inputs, w, false,
+                    );
+                    depth_out(encoder, bound, true);
+                }
             }
-            pass.draw(queue, encoder, bound, group, &self.common, &inputs);
-        }
-        if folder.passes.len() <= world_at {
-            world_in(encoder, bound);
+            if i == translucent_at
+                && let Some(((g, b), w)) = geometry
+                && let (Some(water), Some(group)) = (&g.water, &b.water)
+            {
+                water.draw_geometry(queue, encoder, bound, group, &b.test, &inputs, w, true);
+                depth_out(encoder, bound, false);
+            }
+            if let (Some(pass), Some(group)) = (folder.passes.get(i), bound.groups.get(i)) {
+                pass.draw(queue, encoder, bound, group, &self.common, &inputs);
+            }
         }
         if let (Some(pass), Some(view)) = (&folder.final_pass, &bound.final_target) {
             let group = bound.groups.last().expect("final's group");
@@ -413,13 +604,18 @@ impl JavaStages {
         world_depth: &wgpu::TextureView,
         size: [u32; 2],
         post: &super::world_post::Post,
+        world: Option<&JavaWorld>,
     ) -> Bound {
         let folder = &self.folders[folder_index];
         let plan = folder;
         let all = folder.passes.iter().chain(&folder.final_pass);
+        let geometry = folder.geometry.as_ref().filter(|_| world.is_some());
+        let geometry_passes = geometry
+            .into_iter()
+            .flat_map(|g| std::iter::once(&g.terrain).chain(&g.water));
         // Every target a pass reads or writes, and colortex0 (the world).
         let mut used: BTreeSet<u32> = [0].into();
-        for pass in all.clone() {
+        for pass in all.clone().chain(geometry_passes) {
             used.extend(pass.draw_buffers.iter().copied());
             used.extend(pass.samplers.iter().filter_map(|s| match s.source {
                 Source::Target(i) => Some(i),
@@ -450,7 +646,7 @@ impl JavaStages {
             .iter()
             .filter_map(|&i| {
                 let settings = plan.targets.get(i as usize)?;
-                let format = target_format(&settings.format);
+                let format = target_format(&settings.format, self.norm16);
                 let target_size = match settings.size {
                     Some(horizon_shaderpack::pipeline::TargetSize::Relative(w, h)) if i != 0 => [
                         (size[0] as f32 * w).round() as u32,
@@ -496,11 +692,78 @@ impl JavaStages {
             size,
         )
         .create_view(&Default::default());
+        let depth_solid = match geometry {
+            Some(_) => texture(
+                "Java shader pack depth before translucent terrain",
+                wgpu::TextureFormat::R32Float,
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                size,
+            )
+            .create_view(&Default::default()),
+            None => depth.clone(),
+        };
+        let views = Views {
+            depth: &depth,
+            depth_solid: &depth_solid,
+            atlas: self.atlas.as_ref().map(|a| &a.view),
+            lightmap: world.map(|w| w.lightmap),
+        };
         let mut blank = Vec::new();
         let groups = all
             .clone()
-            .map(|pass| pass.bind(device, queue, &targets, &depth, &self.common, &mut blank))
+            .map(|pass| pass.bind(device, queue, &targets, &views, &self.common, &mut blank))
             .collect();
+        let geometry = geometry.map(|g| {
+            let test = texture(
+                "Java shader pack geometry depth",
+                wgpu::TextureFormat::Depth32Float,
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                size,
+            )
+            .create_view(&Default::default());
+            let r32 = wgpu::TextureFormat::R32Float;
+            let out_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Java shader pack geometry depth"),
+                layout: &self.common.depth_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&test),
+                }],
+            });
+            let mut bind = |pass: &PassGpu| {
+                pass.bind(device, queue, &targets, &views, &self.common, &mut blank)
+            };
+            BoundGeometry {
+                terrain: bind(&g.terrain),
+                water: g.water.as_ref().map(&mut bind),
+                world_in: blit_pipeline(
+                    device,
+                    &self.common,
+                    &self.common.world_layout,
+                    "world_in_depth",
+                    &[targets[&0].format, r32],
+                    true,
+                ),
+                out_both: blit_pipeline(
+                    device,
+                    &self.common,
+                    &self.common.depth_layout,
+                    "depth_out_both",
+                    &[r32, r32],
+                    false,
+                ),
+                out: blit_pipeline(
+                    device,
+                    &self.common,
+                    &self.common.depth_layout,
+                    "depth_out",
+                    &[r32],
+                    false,
+                ),
+                out_group,
+                test,
+            }
+        });
 
         // The world goes into colortex0's side the gbuffers would write.
         let colortex0 = &targets[&0];
@@ -510,6 +773,7 @@ impl JavaStages {
             &self.common.world_layout,
             "world_in",
             &[colortex0.format, wgpu::TextureFormat::R32Float],
+            false,
         );
         let world_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Java shader pack world"),
@@ -549,6 +813,7 @@ impl JavaStages {
             &self.common.present_layout,
             "present",
             &[self.format],
+            false,
         );
         let present_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Java shader pack picture"),
@@ -571,7 +836,9 @@ impl JavaStages {
             size,
             targets,
             depth,
+            depth_solid,
             groups,
+            geometry,
             world_in: (world_pipeline, world_group),
             world_alt: plan.flipped_after_prepare.contains(&0),
             final_target,
@@ -579,6 +846,54 @@ impl JavaStages {
             output_view,
             output,
             _blank: blank,
+        }
+    }
+}
+
+/// A folder's terrain and water programs on the GPU, or `None` (with a
+/// warning: the terrain is then Horizon's) when wgpu refuses them.
+fn folder_geometry(
+    device: &wgpu::Device,
+    plan: &JavaFolder,
+    formats: &[wgpu::TextureFormat],
+    layouts: &GeometryLayouts,
+) -> Option<FolderGeometry> {
+    let terrain = plan.terrain.as_ref()?;
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let gpu = |g: &GeometryProgram, blends: &[Option<wgpu::BlendState>]| {
+        PassGpu::new(
+            device,
+            &g.program,
+            formats,
+            Output::Geometry(GeometrySetup {
+                flat_vertex: g.variants.first().unwrap_or(&g.program.vertex),
+                blends,
+                layouts,
+            }),
+        )
+    };
+    let made = gpu(terrain, &plan.terrain_blends).and_then(|terrain| {
+        let water = plan
+            .water
+            .as_ref()
+            .map(|w| gpu(w, &plan.water_blends))
+            .transpose()?;
+        Ok(FolderGeometry {
+            terrain,
+            water,
+            translucent_at: plan.translucent_at,
+        })
+    });
+    let error = pollster::block_on(scope.pop());
+    match (made, error) {
+        (Ok(geometry), None) => Some(geometry),
+        (Err(e), _) => {
+            log::warn!("Horizon: shader pack {}: {e}", terrain.program.pass.program);
+            None
+        }
+        (_, Some(e)) => {
+            log::warn!("Horizon: shader pack {}: {e}", terrain.program.pass.program);
+            None
         }
     }
 }
@@ -597,10 +912,43 @@ fn world_in(encoder: &mut wgpu::CommandEncoder, bound: &Bound) {
     let mut render = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("Java shader pack world"),
         color_attachments: &attachments,
+        depth_stencil_attachment: bound.geometry.as_ref().map(|g| {
+            wgpu::RenderPassDepthStencilAttachment {
+                view: &g.test,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }
+        }),
         ..Default::default()
     });
-    render.set_pipeline(&bound.world_in.0);
+    match &bound.geometry {
+        Some(g) => render.set_pipeline(&g.world_in),
+        None => render.set_pipeline(&bound.world_in.0),
+    }
     render.set_bind_group(0, &bound.world_in.1, &[]);
+    render.draw(0..3, 0..1);
+}
+
+/// The geometry's depth buffer into `depthtex0`, and `depthtex1` too after
+/// solid terrain.
+fn depth_out(encoder: &mut wgpu::CommandEncoder, bound: &Bound, solid: bool) {
+    let Some(g) = &bound.geometry else {
+        return;
+    };
+    let mut attachments = vec![Some(color_attachment(&bound.depth, None))];
+    if solid {
+        attachments.push(Some(color_attachment(&bound.depth_solid, None)));
+    }
+    let mut render = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("Java shader pack geometry depth"),
+        color_attachments: &attachments,
+        ..Default::default()
+    });
+    render.set_pipeline(if solid { &g.out_both } else { &g.out });
+    render.set_bind_group(0, &g.out_group, &[]);
     render.draw(0..3, 0..1);
 }
 
@@ -628,12 +976,15 @@ fn clear_view(encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, colo
     });
 }
 
+/// A full-screen pipeline of `BLIT`'s `entry`; `depth`: it writes the
+/// geometry's depth buffer.
 fn blit_pipeline(
     device: &wgpu::Device,
     common: &Common,
     layout: &wgpu::BindGroupLayout,
     entry: &str,
     formats: &[wgpu::TextureFormat],
+    depth: bool,
 ) -> wgpu::RenderPipeline {
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Java shader pack blit"),
@@ -652,7 +1003,13 @@ fn blit_pipeline(
             buffers: &[],
         },
         primitive: Default::default(),
-        depth_stencil: None,
+        depth_stencil: depth.then_some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Always),
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
         multisample: Default::default(),
         fragment: Some(wgpu::FragmentState {
             module: &common.blit,
@@ -750,6 +1107,13 @@ impl Common {
         let unfilterable = wgpu::TextureSampleType::Float { filterable: false };
         Self {
             linear: sampler(Linear, ClampToEdge, None),
+            atlas: device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("Java shader pack block atlas"),
+                mag_filter: Nearest,
+                min_filter: Nearest,
+                mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+                ..Default::default()
+            }),
             nearest: sampler(Nearest, ClampToEdge, None),
             repeat: sampler(Linear, Repeat, None),
             compare: sampler(Linear, ClampToEdge, Some(wgpu::CompareFunction::LessEqual)),
@@ -765,6 +1129,10 @@ impl Common {
             present_layout: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Java shader pack picture"),
                 entries: &[texture_entry(0, unfilterable)],
+            }),
+            depth_layout: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Java shader pack geometry depth"),
+                entries: &[texture_entry(1, wgpu::TextureSampleType::Depth)],
             }),
             blit: device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("Java shader pack blit"),
@@ -808,8 +1176,12 @@ impl PassGpu {
         device: &wgpu::Device,
         program: &Program,
         formats: &[wgpu::TextureFormat],
-        screen: Option<wgpu::TextureFormat>,
+        output: Output,
     ) -> Result<Self, String> {
+        let (screen, setup) = match output {
+            Output::Screen(screen) => (screen, None),
+            Output::Geometry(setup) => (None, Some(setup)),
+        };
         let name = program.pass.program.clone();
         let link = &program.link;
         let mut samplers = Vec::new();
@@ -841,7 +1213,7 @@ impl PassGpu {
                 .cloned()
                 .unwrap_or_else(|| format!("{sampler}_s"));
             samplers.push(SamplerBinding {
-                source: source(sampler),
+                source: source(sampler, setup.is_some()),
                 dimension,
                 signed,
                 texture: binding(&format!("{sampler}_t"))?,
@@ -885,7 +1257,7 @@ impl PassGpu {
                         )),
                     )
                 }
-                (false, Source::Depth | Source::Shadow) => (
+                (false, Source::Depth | Source::DepthSolid | Source::Shadow) => (
                     wgpu::TextureSampleType::Float { filterable: false },
                     Some(false),
                 ),
@@ -934,6 +1306,9 @@ impl PassGpu {
             label: Some(&name),
             entries: &entries,
         });
+        if let Some(setup) = setup {
+            return Self::geometry(device, program, formats, setup, layout, samplers, block);
+        }
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some(&name),
             bind_group_layouts: &[Some(&layout)],
@@ -1064,19 +1439,164 @@ impl PassGpu {
             },
             reads_alt: program.pass.reads_alt.clone(),
             scale: program.pass.scale.clamp(0.0, 1.0),
+            flat_pipeline: None,
+            geometry: None,
         })
     }
 
-    /// The pass's bind group over `targets`.
+    /// A geometry program's pipelines over Horizon's terrain vertices
+    /// (instanced and flat draws), into its draw buffers on the side the
+    /// next passes read, tested against the world's depth.
+    #[allow(clippy::too_many_arguments)]
+    fn geometry(
+        device: &wgpu::Device,
+        program: &Program,
+        formats: &[wgpu::TextureFormat],
+        setup: GeometrySetup,
+        layout: wgpu::BindGroupLayout,
+        samplers: Vec<SamplerBinding>,
+        block: Option<(u32, Vec<(String, Vec<Slot>)>)>,
+    ) -> Result<Self, String> {
+        let name = program.pass.program.clone();
+        let outputs = &program.fragment.interface.outputs;
+        let targets: Vec<Option<wgpu::ColorTargetState>> = program
+            .draw_buffers
+            .iter()
+            .enumerate()
+            .map(|(l, &i)| {
+                let format = formats
+                    .get(i as usize)
+                    .copied()
+                    .unwrap_or(wgpu::TextureFormat::Rgba8Unorm);
+                let blendable = matches!(
+                    sample_type(format),
+                    wgpu::TextureSampleType::Float { filterable: true }
+                );
+                Some(wgpu::ColorTargetState {
+                    format,
+                    blend: setup.blends.get(l).copied().flatten().filter(|_| blendable),
+                    write_mask: if outputs.contains_key(&(l as u32)) {
+                        wgpu::ColorWrites::ALL
+                    } else {
+                        wgpu::ColorWrites::empty()
+                    },
+                })
+            })
+            .collect();
+        let vertex = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<crate::mesher::TerrainVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &super::TERRAIN_ATTRIBUTES,
+        };
+        let instance_attributes = wgpu::vertex_attr_array![5 => Float32x4];
+        let instance = wgpu::VertexBufferLayout {
+            array_stride: 16,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &instance_attributes,
+        };
+        let fragment_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some(&format!("{name}.fsh")),
+            source: wgpu::ShaderSource::Wgsl(program.fragment.wgsl.as_str().into()),
+        });
+        let pipeline = |vertex_program: &horizon_shaderpack::translate::Translated,
+                        flat: Option<&wgpu::BindGroupLayout>| {
+            let vertex_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(&format!("{name}.vsh")),
+                source: wgpu::ShaderSource::Wgsl(vertex_program.wgsl.as_str().into()),
+            });
+            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some(&name),
+                bind_group_layouts: &[None, flat, Some(&layout), Some(setup.layouts.page)],
+                ..Default::default()
+            });
+            let buffers = if flat.is_some() {
+                vec![Some(vertex.clone())]
+            } else {
+                vec![Some(vertex.clone()), Some(instance.clone())]
+            };
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(&name),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &vertex_module,
+                    entry_point: Some("main"),
+                    compilation_options: Default::default(),
+                    buffers: &buffers,
+                },
+                // The y flip into GL's layout turns the faces around.
+                primitive: wgpu::PrimitiveState {
+                    cull_mode: Some(wgpu::Face::Back),
+                    front_face: wgpu::FrontFace::Cw,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &fragment_module,
+                    entry_point: Some("main"),
+                    compilation_options: Default::default(),
+                    targets: &targets,
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let instanced = pipeline(&program.vertex, None);
+        let flat_pipeline = setup
+            .layouts
+            .flat
+            .map(|flat| pipeline(setup.flat_vertex, Some(flat)));
+        let uniform = block.as_ref().map(|(size, _)| {
+            (
+                *size,
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Java shader pack uniforms"),
+                    size: u64::from(*size).max(16),
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }),
+            )
+        });
+        // It reads the side the next passes read, but the other side of the
+        // targets it writes: wgpu can't read and write a texture at once.
+        let flipped = program.pass.reads_alt.clone();
+        let written: BTreeSet<u32> = program.draw_buffers.iter().copied().collect();
+        let reads_alt = (0..horizon_shaderpack::pipeline::MAX_COLOR_BUFFERS)
+            .filter(|i| flipped.contains(i) != written.contains(i))
+            .collect();
+        Ok(Self {
+            program: name,
+            pipeline: instanced,
+            layout,
+            samplers,
+            uniforms: block.map(|(_, members)| members).unwrap_or_default(),
+            uniform,
+            attributes: Vec::new(),
+            draw_buffers: program.draw_buffers.clone(),
+            reads_alt,
+            scale: 1.0,
+            flat_pipeline,
+            geometry: Some(flipped),
+        })
+    }
+
+    /// The pass's bind group over `targets` and `views`.
     fn bind(
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         targets: &BTreeMap<u32, Target>,
-        depth: &wgpu::TextureView,
+        textures: &Views,
         common: &Common,
         blank: &mut Vec<wgpu::Texture>,
     ) -> wgpu::BindGroup {
+        let depth = textures.depth;
         let mut views = Vec::new();
         for s in &self.samplers {
             let view = match (s.compare, s.source) {
@@ -1090,6 +1610,24 @@ impl PassGpu {
                 }
                 (false, Source::Depth) if s.dimension == wgpu::TextureViewDimension::D2 => {
                     depth.clone()
+                }
+                (false, Source::DepthSolid) if s.dimension == wgpu::TextureViewDimension::D2 => {
+                    textures.depth_solid.clone()
+                }
+                (false, Source::Atlas) if s.dimension == wgpu::TextureViewDimension::D2 => {
+                    match textures.atlas {
+                        Some(v) => v.clone(),
+                        None => blank_view(device, queue, blank, s, BlankKind::Color(true)),
+                    }
+                }
+                (false, Source::Lightmap) if s.dimension == wgpu::TextureViewDimension::D2 => {
+                    match textures.lightmap {
+                        Some(v) => v.clone(),
+                        None => blank_view(device, queue, blank, s, BlankKind::Color(true)),
+                    }
+                }
+                (false, Source::FlatNormal) => {
+                    blank_view(device, queue, blank, s, BlankKind::FlatNormal)
                 }
                 (false, Source::Shadow) => blank_view(device, queue, blank, s, BlankKind::Far),
                 (false, Source::Noise) if s.dimension == wgpu::TextureViewDimension::D2 => {
@@ -1110,7 +1648,8 @@ impl PassGpu {
                 (true, _) => &common.compare,
                 _ if s.signed.is_some() => &common.nearest,
                 (false, Source::Noise) => &common.repeat,
-                (false, Source::Depth | Source::Shadow) => &common.nearest,
+                (false, Source::Depth | Source::DepthSolid | Source::Shadow) => &common.nearest,
+                (false, Source::Atlas) => &common.atlas,
                 (false, Source::Target(i)) => {
                     match targets.get(&i).map(|t| sample_type(t.format)) {
                         Some(wgpu::TextureSampleType::Float { filterable: true }) | None => {
@@ -1149,6 +1688,88 @@ impl PassGpu {
             layout: &self.layout,
             entries: &entries,
         })
+    }
+
+    /// This frame's values of its uniforms.
+    fn write_uniforms(&self, queue: &wgpu::Queue, inputs: &Inputs) {
+        let Some((block_size, buffer)) = &self.uniform else {
+            return;
+        };
+        let mut bytes = vec![0u8; *block_size as usize];
+        for (name, slots) in &self.uniforms {
+            if let Some(values) = inputs.value(name, self.geometry.is_some()) {
+                for (&(offset, int), value) in slots.iter().zip(values) {
+                    let at = offset as usize..offset as usize + 4;
+                    bytes[at].copy_from_slice(&if int {
+                        (value as i32).to_ne_bytes()
+                    } else {
+                        value.to_ne_bytes()
+                    });
+                }
+            }
+        }
+        queue.write_buffer(buffer, 0, &bytes);
+    }
+
+    /// A geometry program: Horizon's terrain (solid or `translucent`) into
+    /// its draw buffers on the side the next passes read, against `depth`.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_geometry(
+        &self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        bound: &Bound,
+        group: &wgpu::BindGroup,
+        depth: &wgpu::TextureView,
+        inputs: &Inputs,
+        world: &JavaWorld,
+        translucent: bool,
+    ) {
+        let Some(flipped) = &self.geometry else {
+            return;
+        };
+        self.write_uniforms(queue, inputs);
+        // Targets of another size than the world's can't be drawn with it.
+        let size = wgpu::Extent3d {
+            width: bound.size[0].max(1),
+            height: bound.size[1].max(1),
+            depth_or_array_layers: 1,
+        };
+        let attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = self
+            .draw_buffers
+            .iter()
+            .map(|i| {
+                let t = bound.targets.get(i).filter(|t| t.main.size() == size)?;
+                let side = if flipped.contains(i) {
+                    &t.alt_view
+                } else {
+                    &t.main_view
+                };
+                Some(color_attachment(side, None))
+            })
+            .collect();
+        let mut render = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some(&self.program),
+            color_attachments: &attachments,
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        });
+        (world.draw)(
+            &mut render,
+            translucent,
+            &TerrainPipelines {
+                instanced: &self.pipeline,
+                flat: self.flat_pipeline.as_ref(),
+                group,
+            },
+        );
     }
 
     /// Draw into the targets of `draw_buffers`, on the side it doesn't read.
@@ -1196,22 +1817,7 @@ impl PassGpu {
         common: &Common,
         inputs: &Inputs,
     ) {
-        if let Some((block_size, buffer)) = &self.uniform {
-            let mut bytes = vec![0u8; *block_size as usize];
-            for (name, slots) in &self.uniforms {
-                if let Some(values) = inputs.value(name) {
-                    for (&(offset, int), value) in slots.iter().zip(values) {
-                        let at = offset as usize..offset as usize + 4;
-                        bytes[at].copy_from_slice(&if int {
-                            (value as i32).to_ne_bytes()
-                        } else {
-                            value.to_ne_bytes()
-                        });
-                    }
-                }
-            }
-            queue.write_buffer(buffer, 0, &bytes);
-        }
+        self.write_uniforms(queue, inputs);
         let attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = views
             .iter()
             .map(|v| v.map(|v| color_attachment(v, None)))
@@ -1234,6 +1840,8 @@ impl PassGpu {
 
 enum BlankKind {
     Color(bool),
+    /// A normal map's flat normal, (0.5, 0.5, 1).
+    FlatNormal,
     /// An `R32Float` 1.0: the far plane.
     Far,
     /// A depth texture at the far plane, for comparison samplers.
@@ -1256,6 +1864,7 @@ fn blank_view(
             wgpu::TextureFormat::Rgba8Unorm,
             vec![if white { 255 } else { 0 }; 4],
         ),
+        (BlankKind::FlatNormal, _) => (wgpu::TextureFormat::Rgba8Unorm, vec![128, 128, 255, 255]),
         (BlankKind::Far, _) => (wgpu::TextureFormat::R32Float, 1.0f32.to_ne_bytes().to_vec()),
         (BlankKind::FarDepth, _) => (wgpu::TextureFormat::Depth32Float, Vec::new()),
     };
@@ -1452,6 +2061,8 @@ struct Inputs {
     is_day: bool,
     /// The pack's custom uniforms this frame.
     custom: HashMap<String, Vec<f32>>,
+    /// `atlasSize`, in geometry programs.
+    atlas_size: [f32; 2],
 }
 
 /// `CelestialUniforms.getSunAngle`: the body's angle plus 90, in 0..360
@@ -1506,6 +2117,7 @@ impl Inputs {
             shadow_angle: 0.0,
             is_day: true,
             custom: HashMap::new(),
+            atlas_size: [0.0; 2],
         };
         out.set_world(&JavaFrame::default(), 0.0);
         out
@@ -1541,16 +2153,55 @@ impl Inputs {
     /// The value of uniform `name`, as its scalars in order: Iris's own,
     /// else the pack's custom uniform; `None` for one Horizon doesn't
     /// provide (it stays zero).
-    fn value(&self, name: &str) -> Option<Vec<f32>> {
-        self.builtin(name)
+    fn value(&self, name: &str, geometry: bool) -> Option<Vec<f32>> {
+        geometry
+            .then(|| self.geometry(name))
+            .flatten()
+            .or_else(|| self.builtin(name))
             .or_else(|| self.custom.get(name).cloned())
+    }
+
+    /// The uniforms whose value differs in geometry programs: the
+    /// camera's matrices (camera-relative positions, as Iris's terrain),
+    /// the lightmap's texture matrix, the atlas's size.
+    fn geometry(&self, name: &str) -> Option<Vec<f32>> {
+        let mat = |m: Mat4| m.to_cols_array().to_vec();
+        Some(match name {
+            "iris_ModelViewMatrix" | "modelViewMatrix" => mat(self.view),
+            "iris_ModelViewMatrixInverse" | "modelViewMatrixInverse" => mat(self.view.inverse()),
+            "iris_ProjectionMatrix" | "projectionMatrix" => mat(self.projection),
+            "iris_ProjectionMatrixInverse" | "projectionMatrixInverse" => {
+                mat(self.projection.inverse())
+            }
+            "iris_ModelViewProjectionMatrix" => mat(self.projection * self.view),
+            "iris_NormalMatrix" | "normalMatrix" => Mat3::from_mat4(self.view)
+                .inverse()
+                .transpose()
+                .to_cols_array()
+                .to_vec(),
+            // Unit 1, the lightmap: 0..240 to texel centres (Iris's
+            // `LIGHTMAP_TEXTURE_MATRIX`).
+            "iris_TextureMatrix" => {
+                let lightmap = Mat4::from_scale(Vec3::splat(1.0 / 256.0))
+                    * Mat4::from_translation(Vec3::splat(8.0));
+                (0..8)
+                    .flat_map(|i| mat(if i == 1 { lightmap } else { Mat4::IDENTITY }))
+                    .collect()
+            }
+            "textureMatrix" => mat(Mat4::IDENTITY),
+            "chunkOffset" => vec![0.0; 3],
+            "alphaTestRef" => vec![0.1],
+            "atlasSize" => self.atlas_size.to_vec(),
+            "entityId" | "blockEntityId" | "currentRenderedItemId" => vec![-1.0],
+            _ => return None,
+        })
     }
 
     /// The value of Iris uniform `name`; `None` for one Horizon doesn't
     /// provide.
     fn builtin(&self, name: &str) -> Option<Vec<f32>> {
         if let Some(flag) = name.strip_prefix("iris_bool_") {
-            return self.value(flag);
+            return self.value(flag, false);
         }
         let f = &self.frame;
         let mat = |m: Mat4| m.to_cols_array().to_vec();
@@ -1638,8 +2289,11 @@ mod tests {
             ("R32UI", F::R32Uint),
             ("RGBA16I", F::Rgba32Sint),
         ] {
-            assert_eq!(target_format(iris), wgpu, "{iris}");
+            assert_eq!(target_format(iris, false), wgpu, "{iris}");
         }
+        assert_eq!(target_format("RGBA16", true), F::Rgba16Unorm);
+        assert_eq!(target_format("RG16_SNORM", true), F::Rg16Snorm);
+        assert_eq!(target_format("RGBA16F", true), F::Rgba16Float);
         assert_eq!(
             sample_type(F::R32Float),
             wgpu::TextureSampleType::Float { filterable: false }
@@ -1648,13 +2302,20 @@ mod tests {
 
     #[test]
     fn samplers_read_what_iris_binds() {
-        assert_eq!(source("colortex4"), Source::Target(4));
-        assert_eq!(source("gaux1"), Source::Target(4));
-        assert_eq!(source("gdepthtex"), Source::Depth);
-        assert_eq!(source("shadowtex1"), Source::Shadow);
-        assert_eq!(source("dhDepthTex0"), Source::Shadow);
-        assert_eq!(source("shadowcolor0"), Source::Blank(true));
-        assert_eq!(source("cloudTexture"), Source::Blank(false));
+        assert_eq!(source("colortex4", false), Source::Target(4));
+        assert_eq!(source("gaux1", false), Source::Target(4));
+        assert_eq!(source("gdepthtex", false), Source::Depth);
+        assert_eq!(source("shadowtex1", false), Source::Shadow);
+        assert_eq!(source("dhDepthTex0", false), Source::Shadow);
+        assert_eq!(source("shadowcolor0", false), Source::Blank(true));
+        assert_eq!(source("cloudTexture", false), Source::Blank(false));
+        // Before translucent terrain; geometry programs' own textures.
+        assert_eq!(source("depthtex1", false), Source::DepthSolid);
+        assert_eq!(source("gtexture", true), Source::Atlas);
+        assert_eq!(source("texture", true), Source::Atlas);
+        assert_eq!(source("lightmap", true), Source::Lightmap);
+        assert_eq!(source("normals", true), Source::FlatNormal);
+        assert_eq!(source("colortex1", true), Source::Target(1));
         let (d, signed, shadow) = sampler_kind("usampler2D").unwrap();
         assert_eq!(
             (d, signed, shadow),
@@ -1688,21 +2349,24 @@ mod tests {
             moon_angle: sun_angle + 180.0,
         };
         inputs.set_world(&world(-90.0), 0.0);
-        close(inputs.value("sunPosition"), [100.0, 0.0, 0.0]);
-        close(inputs.value("moonPosition"), [-100.0, 0.0, 0.0]);
-        close(inputs.value("upPosition"), [0.0, 100.0, 0.0]);
-        assert_eq!(inputs.value("sunAngle"), Some(vec![0.0]));
-        assert_eq!(inputs.value("eyeBrightness"), Some(vec![48.0, 240.0]));
+        close(inputs.value("sunPosition", false), [100.0, 0.0, 0.0]);
+        close(inputs.value("moonPosition", false), [-100.0, 0.0, 0.0]);
+        close(inputs.value("upPosition", false), [0.0, 100.0, 0.0]);
+        assert_eq!(inputs.value("sunAngle", false), Some(vec![0.0]));
+        assert_eq!(
+            inputs.value("eyeBrightness", false),
+            Some(vec![48.0, 240.0])
+        );
         // Complementary Unbound's sunPathRotation of -40 at noon: the sun
         // where its GetSunVector puts it, (0, cos 40, sin 40).
         let tilt = (-40f32).to_radians();
         inputs.set_world(&world(0.0), -40.0);
         close(
-            inputs.value("sunPosition"),
+            inputs.value("sunPosition", false),
             [0.0, 100.0 * tilt.cos(), -100.0 * tilt.sin()],
         );
-        assert_eq!(inputs.value("sunAngle"), Some(vec![0.25]));
-        close(inputs.value("shadowLightPosition"), {
+        assert_eq!(inputs.value("sunAngle", false), Some(vec![0.25]));
+        close(inputs.value("shadowLightPosition", false), {
             let s = inputs.sun_position;
             [s.x, s.y, s.z]
         });
@@ -1710,15 +2374,15 @@ mod tests {
         inputs.set_world(&world(150.0), 0.0);
         assert!(!inputs.is_day);
         assert_eq!(
-            inputs.value("shadowLightPosition"),
-            inputs.value("moonPosition")
+            inputs.value("shadowLightPosition", false),
+            inputs.value("moonPosition", false)
         );
-        assert!((inputs.value("shadowAngle").unwrap()[0] - 60.0 / 360.0).abs() < 1e-6);
+        assert!((inputs.value("shadowAngle", false).unwrap()[0] - 60.0 / 360.0).abs() < 1e-6);
         // Custom uniforms come after Iris's own.
         inputs.custom.insert("eyeBrightnessM".into(), vec![0.5]);
         inputs.custom.insert("sunAngle".into(), vec![9.0]);
-        assert_eq!(inputs.value("eyeBrightnessM"), Some(vec![0.5]));
-        assert_ne!(inputs.value("sunAngle"), Some(vec![9.0]));
+        assert_eq!(inputs.value("eyeBrightnessM", false), Some(vec![0.5]));
+        assert_ne!(inputs.value("sunAngle", false), Some(vec![9.0]));
     }
 
     #[test]
@@ -1737,10 +2401,10 @@ mod tests {
         };
         assert!((depth(near) + 1.0).abs() < 1e-4, "{}", depth(near));
         assert!((depth(far) - 1.0).abs() < 1e-3, "{}", depth(far));
-        assert_eq!(inputs.value("viewWidth"), Some(vec![300.0]));
+        assert_eq!(inputs.value("viewWidth", false), Some(vec![300.0]));
         assert_eq!(
-            inputs.value("iris_bool_hasSkylight"),
-            inputs.value("hasSkylight")
+            inputs.value("iris_bool_hasSkylight", false),
+            inputs.value("hasSkylight", false)
         );
     }
 }

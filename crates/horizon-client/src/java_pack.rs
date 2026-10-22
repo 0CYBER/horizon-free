@@ -2,11 +2,12 @@
 //! a folder holding `shaders/`, or a `.zip`. `horizon-shaderpack` translates
 //! their full-screen programs (`begin`, `prepare`, `deferred`, `composite`,
 //! `final`) to WGSL, and `gfx/java_stages.rs` runs them over Horizon's world
-//! as Iris runs them over its own. Geometry programs (`gbuffers_*`,
-//! `shadow`) don't run yet: the world is drawn by Horizon.
+//! as Iris runs them over its own. Of the geometry programs, the terrain's
+//! (`gbuffers_terrain`, `gbuffers_water` and their fallbacks) draw Horizon's
+//! terrain (`gfx/java_terrain.rs`); the rest of the world is Horizon's.
 use horizon_shaderpack::{
     JavaPack,
-    pipeline::{Directives, Program, TargetSettings},
+    pipeline::{Directives, GeometryProgram, Program, TargetSettings},
     preprocess::Environment,
     properties::SkyDirectives,
     uniforms::CustomUniforms,
@@ -32,6 +33,17 @@ pub struct JavaFolder {
     pub flipped_at_end: BTreeSet<u32>,
     /// `sunPathRotation` and `eyeBrightnessHalflife`.
     pub directives: Directives,
+    /// The programs Horizon's solid and translucent terrain are drawn with,
+    /// each translated for instanced and flat draws (`variants[0]`).
+    pub terrain: Option<GeometryProgram>,
+    pub water: Option<GeometryProgram>,
+    /// How many of `passes` run before translucent terrain (`begin*`,
+    /// `prepare*`, `deferred*`).
+    pub translucent_at: usize,
+    pub flipped_after_translucent: BTreeSet<u32>,
+    /// Each draw buffer's blending in `terrain` and `water`.
+    pub terrain_blends: Vec<Option<wgpu::BlendState>>,
+    pub water_blends: Vec<Option<wgpu::BlendState>>,
 }
 
 /// A loaded Java pack.
@@ -41,6 +53,8 @@ pub struct JavaPasses {
     pub uniforms: CustomUniforms,
     /// What the pack keeps of the vanilla sky (`clouds`, `sun`, `moon`).
     pub sky: SkyDirectives,
+    /// `block.properties`: block name → `mc_Entity` id.
+    pub block_ids: BTreeMap<String, i32>,
 }
 
 impl JavaPasses {
@@ -122,6 +136,50 @@ pub fn load(
         if passes.is_empty() && final_pass.is_none() {
             continue;
         }
+        // A geometry program that doesn't translate leaves that terrain to
+        // Horizon, with a warning.
+        let geometry = |pass: &Option<horizon_shaderpack::pipeline::Pass>, alpha_test| {
+            let pass = pass.as_ref()?;
+            let glues = [false, true].map(|flat| crate::gfx::java_terrain::glue(flat, alpha_test));
+            match pack.compile_geometry(pass, &plan.targets, &values, &env, &properties, &glues) {
+                Ok(program) => Some(program),
+                Err(e) => {
+                    log::warn!("Horizon: shader pack {}: {e}", pass.program);
+                    None
+                }
+            }
+        };
+        // Iris's alpha test of cutout terrain (`AlphaTests.ONE_TENTH_ALPHA`).
+        let terrain = geometry(&plan.terrain, Some(0.1));
+        let water = terrain.as_ref().and_then(|_| geometry(&plan.water, None));
+        let translucent_at = early.clone().count() + plan.deferred.len();
+        let blends = |g: &Option<GeometryProgram>, default| {
+            g.as_ref().map_or_else(Vec::new, |g| {
+                geometry_blends(
+                    &properties,
+                    &g.program.pass.program,
+                    &g.program.draw_buffers,
+                    default,
+                )
+            })
+        };
+        let terrain_blends = blends(&terrain, None);
+        // Vanilla's translucent blending (`BlendFunction.TRANSLUCENT`).
+        let water_blends = blends(
+            &water,
+            Some(wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::SrcAlpha,
+                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                    operation: wgpu::BlendOperation::Add,
+                },
+            }),
+        );
         folders.push(JavaFolder {
             folder: name.to_owned(),
             targets: plan.targets,
@@ -131,6 +189,12 @@ pub fn load(
             final_pass,
             flipped_at_end: plan.flipped_at_end,
             directives: plan.directives,
+            terrain,
+            water,
+            translucent_at,
+            flipped_after_translucent: plan.flipped_after_translucent,
+            terrain_blends,
+            water_blends,
         });
     }
     if folders.is_empty() {
@@ -140,10 +204,84 @@ pub fn load(
     for problem in &uniforms.problems {
         log::warn!("Horizon: shader pack custom uniform {problem}");
     }
+    let block_ids = pack.block_ids(&values, &env).unwrap_or_else(|e| {
+        log::warn!("Horizon: shader pack {e}");
+        BTreeMap::new()
+    });
     Ok(JavaPasses {
         folders,
         uniforms,
         sky: properties.sky(),
+        block_ids,
+    })
+}
+
+/// A geometry program's blending per draw buffer: `default`, or the
+/// pack's `blend.<program>` and `blend.<program>.<buffer>` (Iris's
+/// `BlendModeOverride`; the folder isn't part of the name).
+fn geometry_blends(
+    properties: &horizon_shaderpack::properties::ShaderProperties,
+    program: &str,
+    draw_buffers: &[u32],
+    default: Option<wgpu::BlendState>,
+) -> Vec<Option<wgpu::BlendState>> {
+    use horizon_shaderpack::properties::Blend;
+    let name = program.rsplit('/').next().unwrap_or(program);
+    let state = |blend: &Result<Blend, String>| match blend {
+        Ok(Blend::Off) => Some(None),
+        Ok(Blend::Factors(f)) => {
+            let [a, b, c, d] = f.each_ref().map(|f| blend_factor(f));
+            Some(Some(wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: a?,
+                    dst_factor: b?,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: c?,
+                    dst_factor: d?,
+                    operation: wgpu::BlendOperation::Add,
+                },
+            }))
+        }
+        Err(e) => {
+            log::warn!("Horizon: shader pack blend.{name}: {e}");
+            None
+        }
+    };
+    let all = properties
+        .blend(name)
+        .and_then(|b| state(&b))
+        .unwrap_or(default);
+    let buffers = properties.buffer_blends(name);
+    draw_buffers
+        .iter()
+        .map(|i| {
+            buffers
+                .iter()
+                .find(|(b, _)| b == i)
+                .and_then(|(_, b)| state(b))
+                .unwrap_or(all)
+        })
+        .collect()
+}
+
+/// A GL blend factor's wgpu one.
+fn blend_factor(name: &str) -> Option<wgpu::BlendFactor> {
+    use wgpu::BlendFactor as F;
+    Some(match name {
+        "ZERO" => F::Zero,
+        "ONE" => F::One,
+        "SRC_COLOR" => F::Src,
+        "ONE_MINUS_SRC_COLOR" => F::OneMinusSrc,
+        "DST_COLOR" => F::Dst,
+        "ONE_MINUS_DST_COLOR" => F::OneMinusDst,
+        "SRC_ALPHA" => F::SrcAlpha,
+        "ONE_MINUS_SRC_ALPHA" => F::OneMinusSrcAlpha,
+        "DST_ALPHA" => F::DstAlpha,
+        "ONE_MINUS_DST_ALPHA" => F::OneMinusDstAlpha,
+        "SRC_ALPHA_SATURATE" => F::SrcAlphaSaturated,
+        _ => return None,
     })
 }
 
@@ -186,8 +324,18 @@ mod tests {
             .folders
             .iter()
             .flat_map(|f| f.passes.iter().chain(&f.final_pass));
+        let geometry = pack
+            .folders
+            .iter()
+            .flat_map(|f| f.terrain.iter().chain(&f.water));
         passes
             .flat_map(|p| [(p, &p.vertex, "vsh"), (p, &p.fragment, "fsh")])
+            .chain(geometry.flat_map(|g| {
+                let p = &g.program;
+                [(p, &p.vertex, "vsh"), (p, &p.fragment, "fsh")]
+                    .into_iter()
+                    .chain(g.variants.iter().map(move |v| (p, v, "vsh (flat)")))
+            }))
             .find_map(|(p, t, ext)| {
                 let e = naga::front::wgsl::parse_str(&t.wgsl).err()?;
                 Some(format!(
@@ -227,7 +375,13 @@ mod tests {
                         .iter()
                         .map(|f| {
                             let n = f.passes.len() + usize::from(f.final_pass.is_some());
-                            format!("{} {n} passes", f.folder)
+                            let geometry: Vec<&str> = f
+                                .terrain
+                                .iter()
+                                .chain(&f.water)
+                                .map(|g| g.program.pass.program.as_str())
+                                .collect();
+                            format!("{} {n} passes, terrain {geometry:?}", f.folder)
                         })
                         .collect();
                     println!("{name}: loads ({})", folders.join(", "));

@@ -62,7 +62,8 @@ pub fn outline_vertices(edges: &[[f64; 6]], camera: glam::DVec3) -> Vec<[f32; 6]
 mod arena;
 mod cull;
 mod flat;
-mod java_stages;
+pub(crate) mod java_stages;
+pub(crate) mod java_terrain;
 mod lod;
 mod occlusion;
 mod pack_stages;
@@ -436,6 +437,15 @@ pub struct Renderer {
     world_post: world_post::Post,
     /// The selected shader pack's stages (Horizon setting; none by default).
     pack: Option<Pack>,
+    /// A Java pack's terrain programs (`gfx/java_terrain.rs`): their page
+    /// groups' layout, the glue's table, each arena page's group.
+    java_page_layout: wgpu::BindGroupLayout,
+    /// The device renders to and filters 16-bit normalized formats.
+    java_norm16: bool,
+    java_table: Option<wgpu::Buffer>,
+    java_pages: Vec<Option<(wgpu::Buffer, wgpu::BindGroup)>>,
+    /// The sprite layers and mip levels `animate` wrote this frame.
+    animated: Vec<(u32, u32)>,
     pub hud: HudRenderer,
     /// The menus' backdrop blur, made on first use.
     post: Option<crate::post::Post>,
@@ -784,7 +794,10 @@ async fn open_device(
             | cull::Cull::features(&adapter)
             | (adapter.features()
                 & (wgpu::Features::INDIRECT_FIRST_INSTANCE
-                    | wgpu::Features::MAPPABLE_PRIMARY_BUFFERS));
+                    | wgpu::Features::MAPPABLE_PRIMARY_BUFFERS
+                    // Java shader packs' 16-bit colour targets.
+                    | wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
+                    | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES));
         let driver = format!("{} {}", info.driver, info.driver_info);
         startup_step(format_args!(
             "requesting the device (driver {}) with features [{features}] and the adapter's \
@@ -1274,7 +1287,10 @@ impl Renderer {
                         sample_count: 1,
                         dimension: wgpu::TextureDimension::D2,
                         format: wgpu::TextureFormat::Rgba8Unorm,
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                        // COPY_SRC: animated sprites into a Java pack's atlas.
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING
+                            | wgpu::TextureUsages::COPY_DST
+                            | wgpu::TextureUsages::COPY_SRC,
                         view_formats: &[],
                     },
                     wgpu::util::TextureDataOrder::LayerMajor,
@@ -2001,6 +2017,8 @@ impl Renderer {
             std::mem::size_of::<TerrainVertex>() as u64,
             1 << 20,
         );
+        let java_page_layout = java_terrain::page_layout(&device);
+        let java_norm16 = java_terrain::norm16_targets(&adapter, &device);
         // Sections as one index list per frame where multi-draw is emulated.
         let flat = flat::wanted(&adapter, &device).then(|| {
             let buffers = [Some(wgpu::VertexBufferLayout {
@@ -2180,6 +2198,11 @@ impl Renderer {
             occlusion: occlusion::Occlusion::new(crate::chunk::MIN_Y, crate::chunk::HEIGHT / 16),
             world_post,
             pack: None,
+            java_page_layout,
+            java_norm16,
+            java_table: None,
+            java_pages: Vec::new(),
+            animated: Vec::new(),
             hud,
             post: None,
             menu_blur: None,
@@ -2484,6 +2507,18 @@ impl Renderer {
         first: u32,
         count: u32,
     ) {
+        self.draw_sections_with(pass, indirect, base, first, count, |_, _| {});
+    }
+    /// [`Self::draw_sections`]; `page` binds what else a page's draws need.
+    fn draw_sections_with(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        indirect: &wgpu::Buffer,
+        base: u32,
+        first: u32,
+        count: u32,
+        page_group: impl Fn(&mut wgpu::RenderPass<'_>, u32),
+    ) {
         let (mut i, end) = (first as usize, (first + count) as usize);
         while i < end {
             let (page, index_page) = self.draw_pages[i];
@@ -2492,6 +2527,7 @@ impl Renderer {
                 .take_while(|&&p| p == (page, index_page))
                 .count();
             pass.set_vertex_buffer(0, self.arena.buffer(page).slice(..));
+            page_group(pass, page);
             let indices = index_page.map_or(&self.indices, |p| self.sorted_indices.buffer(p));
             pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
             if self.multi_draw {
@@ -2503,6 +2539,88 @@ impl Renderer {
                 }
             }
             i += run;
+        }
+    }
+    /// Horizon's terrain, solid or `translucent`, with a Java pack's
+    /// geometry pipelines (`java_terrain::DrawTerrain`): the frame's flat
+    /// draws or its section draws, each page with its group 3.
+    fn draw_java_terrain(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        translucent: bool,
+        pipelines: &java_terrain::TerrainPipelines,
+        flat_frame: bool,
+        draws: [u32; 2],
+    ) {
+        let page = |pass: &mut wgpu::RenderPass<'_>, page: u32| {
+            if let Some(Some((_, group))) = self.java_pages.get(page as usize) {
+                pass.set_bind_group(3, group, &[]);
+            }
+        };
+        pass.set_bind_group(2, pipelines.group, &[]);
+        match (self.flat.as_ref().filter(|_| flat_frame), pipelines.flat) {
+            (Some(flat), Some(pipeline)) => {
+                pass.set_pipeline(pipeline);
+                let calls = if translucent {
+                    &flat.calls[flat.solid_calls..]
+                } else {
+                    &flat.calls[..flat.solid_calls]
+                };
+                flat.draw(pass, calls, |p| self.arena.buffer(p), page);
+            }
+            (Some(_), None) => {}
+            (None, _) => {
+                pass.set_pipeline(pipelines.instanced);
+                pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                pass.set_vertex_buffer(1, self.instances.slice(..));
+                let [solid, translucent_draws] = draws;
+                let (first, count) = if translucent {
+                    (solid, translucent_draws)
+                } else {
+                    (0, solid)
+                };
+                self.draw_sections_with(pass, &self.indirect, 0, first, count, page);
+            }
+        }
+    }
+    /// Each arena page's group for a Java pack's terrain programs: its
+    /// vertices and the glue's table.
+    fn prepare_java_pages(&mut self) {
+        let Some(table) = &self.java_table else {
+            return;
+        };
+        let count = self.arena.page_count() as usize;
+        self.java_pages.resize_with(count, || None);
+        let limit = self.device.limits().max_storage_buffer_binding_size;
+        for page in 0..count {
+            if !self.arena.has_page(page as u32) {
+                self.java_pages[page] = None;
+                continue;
+            }
+            let buffer = self.arena.buffer(page as u32);
+            if matches!(&self.java_pages[page], Some((b, _)) if b == buffer) {
+                continue;
+            }
+            let size = buffer.size().min(limit / 4 * 4);
+            let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Java shader pack terrain page"),
+                layout: &self.java_page_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer,
+                            offset: 0,
+                            size: std::num::NonZeroU64::new(size),
+                        }),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: table.as_entire_binding(),
+                    },
+                ],
+            });
+            self.java_pages[page] = Some((buffer.clone(), group));
         }
     }
     fn release_section(&mut self, key: SectionKey) {
@@ -2588,9 +2706,29 @@ impl Renderer {
         }
     }
     /// Run `pack`'s stages over the world from now on (`None`: no pack, the
-    /// vanilla frame). On error the previous pack stays.
-    pub fn set_shader_pack(&mut self, pack: Option<&crate::shader_pack::ShaderPack>) -> Result<()> {
+    /// vanilla frame). On error the previous pack stays. `sprite_layers`
+    /// names the block sprites, for a Java pack's `block.properties`.
+    pub fn set_shader_pack(
+        &mut self,
+        pack: Option<&crate::shader_pack::ShaderPack>,
+        sprite_layers: &std::collections::BTreeMap<String, u32>,
+    ) -> Result<()> {
         let format = self.config.format.remove_srgb_suffix();
+        let layouts = java_stages::GeometryLayouts {
+            flat: self.flat.as_ref().map(|f| f.draw_layout()),
+            page: &self.java_page_layout,
+        };
+        let table = pack.and_then(|p| p.java.as_ref()).map(|java| {
+            let table = java_terrain::table(sprite_layers, &java.block_ids);
+            wgpu::util::DeviceExt::create_buffer_init(
+                &self.device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("Java shader pack terrain table"),
+                    contents: bytemuck::cast_slice(&table),
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                },
+            )
+        });
         self.pack = match pack {
             Some(pack) => Some(match &pack.java {
                 Some(java) => Pack::Java(java_stages::JavaStages::new(
@@ -2599,11 +2737,15 @@ impl Renderer {
                     format,
                     &pack.id,
                     java,
+                    &layouts,
+                    self.java_norm16,
                 )?),
                 None => Pack::Horizon(pack_stages::PackStages::new(&self.device, format, pack)?),
             }),
             None => None,
         };
+        self.java_table = table;
+        self.java_pages.clear();
         Ok(())
     }
     /// The folder name of the pack `set_shader_pack` gave.
@@ -2733,11 +2875,13 @@ impl Renderer {
         self.lightmap_uploaded = true;
     }
     fn animate(&mut self, encoder: &mut wgpu::CommandEncoder, tick: u64) {
+        self.animated.clear();
         animate_sprites(
             &mut self.animations,
             tick,
             self.mip_levels,
             |layer, level, size, pixels| {
+                self.animated.push((layer, level));
                 self.uploads.texture(
                     encoder,
                     wgpu::TexelCopyTextureInfo {
@@ -3040,6 +3184,12 @@ impl Renderer {
         let eye = (frame.bob * crate::camera::view_matrix(frame.yaw, frame.pitch))
             .inverse()
             .transform_point3(Vec3::ZERO);
+        // A Java pack that draws the terrain (`gfx/java_terrain.rs`): the
+        // world pass leaves it out, and occlusion culling (which tests
+        // against its depth) is off.
+        let java_terrain = !frame.title
+            && self.java_table.is_some()
+            && matches!(&self.pack, Some(Pack::Java(j)) if j.draws_terrain(frame.shader.dimension));
         // Occlusion culling leaves the sections its last result did not see
         // to phase 2, after the others, with instance counts of 0.
         let mut cull = self
@@ -3050,6 +3200,7 @@ impl Renderer {
                     && !frame.title
                     && self.multi_draw
                     && !(self.flat_on && self.flat.is_some())
+                    && !java_terrain
             })
             .and_then(|cull| cull.begin(&self.device).then_some(cull));
         self.phase2_draws.clear();
@@ -3439,6 +3590,14 @@ impl Renderer {
                 );
             }
         }
+        if java_terrain {
+            self.prepare_java_pages();
+            if let Some(table) = &self.java_table {
+                let nether = i32::from(frame.shader.dimension == -1);
+                self.queue
+                    .write_buffer(table, 4, bytemuck::bytes_of(&nether));
+            }
+        }
         let view_target = target_texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.config.format.remove_srgb_suffix()),
             ..Default::default()
@@ -3528,11 +3687,15 @@ impl Renderer {
                 }
             }
             match self.flat.as_ref().filter(|_| flat_frame) {
+                _ if java_terrain => {}
                 Some(flat) => {
                     pass.set_pipeline(&flat.solid);
-                    flat.draw(&mut pass, &flat.calls[..flat.solid_calls], |p| {
-                        self.arena.buffer(p)
-                    });
+                    flat.draw(
+                        &mut pass,
+                        &flat.calls[..flat.solid_calls],
+                        |p| self.arena.buffer(p),
+                        |_, _| {},
+                    );
                     pass.set_bind_group(0, &self.group, &[]);
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                 }
@@ -3645,11 +3808,15 @@ impl Renderer {
                 pass.draw(0..4, debug_depth..debug_depth + debug_top);
             }
             match self.flat.as_ref().filter(|_| flat_frame) {
+                _ if java_terrain => {}
                 Some(flat) => {
                     pass.set_pipeline(&flat.translucent);
-                    flat.draw(&mut pass, &flat.calls[flat.solid_calls..], |p| {
-                        self.arena.buffer(p)
-                    });
+                    flat.draw(
+                        &mut pass,
+                        &flat.calls[flat.solid_calls..],
+                        |p| self.arena.buffer(p),
+                        |_, _| {},
+                    );
                     pass.set_bind_group(0, &self.group, &[]);
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                 }
@@ -3715,10 +3882,26 @@ impl Renderer {
                 );
             }
         }
-        if let (true, Some((color, depth)), Some(size), Some(stages)) =
-            (pack, &scaled, self.world_post.size(), self.pack.as_mut())
+        if pack
+            && let (Some((color, depth)), Some(size)) = (&scaled, self.world_post.size())
+            && let Some(mut stages) = self.pack.take()
         {
-            let output = match stages {
+            // The pack's terrain programs draw with the frame's draws.
+            let draws = [solid_draws, translucent_draws];
+            let draw = |render: &mut wgpu::RenderPass<'_>,
+                        translucent: bool,
+                        pipelines: &java_terrain::TerrainPipelines| {
+                self.draw_java_terrain(render, translucent, pipelines, flat_frame, draws);
+            };
+            let world = java_terrain::JavaWorld {
+                sprites: &self.sprite_textures,
+                split: self.sprite_split,
+                levels: self.mipmaps,
+                animated: &self.animated,
+                lightmap: &self.lightmap_view,
+                draw: &draw,
+            };
+            let output = match &mut stages {
                 Pack::Horizon(stages) => stages.run(
                     &self.device,
                     &self.queue,
@@ -3743,10 +3926,12 @@ impl Renderer {
                         sun_angle: frame.sky.sun_angle,
                         moon_angle: frame.sky.moon_angle,
                     },
+                    java_terrain.then_some(&world),
                 ),
             };
             self.world_post
                 .finish_with(&mut encoder, &view_target, output);
+            self.pack = Some(stages);
         } else if scaled.is_some() {
             self.world_post.finish(&mut encoder, &view_target);
         }
