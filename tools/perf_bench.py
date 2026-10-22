@@ -342,7 +342,7 @@ def wait_loaded(control, near, limit, min_chunks=0):
             counts = (s["chunks"], s["generated_chunks"])
             first = first or counts
             moved = moved or counts != first or (s["chunks"] >= min_chunks > 0 and now - began > 5)
-            if not moved or s["chunks"] < min_chunks:
+            if min_chunks and (not moved or s["chunks"] < min_chunks):
                 last, changed, previous, meshing = None, now, None, now
                 time.sleep(0.05)
                 continue
