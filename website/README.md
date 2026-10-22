@@ -4,9 +4,9 @@ Live at **https://playhorizon.dev**.
 
 A landing page and a documentation section in Horizon's design language (`docs/design-system.md`), with the tokens of
 `crates/horizon-theme` (generated into `src/tokens.css` by `cargo run -p xtask -- tokens`):
-Geist and Geist Mono, cool neutrals in a light and a dark appearance (the system's, or the
-toggle's) and one violet accent, numbered index lists with one-pixel rules, and short, eased
-motion. A headline and the download, then a scroll through what it is, the screenshots, the parity grid, the launcher, the patch
+the Blocks look: Pixelify Sans headings over Geist text, Horizon's purple in a light and a dark
+appearance (the system's, or the toggle's), square panels with an outline, a bevel and a lip, a
+stone texture and a pixel landscape drawn in code (`scripts/art.mjs`), and short, eased motion. A headline and the download, then a scroll through what it is, the screenshots, the parity grid, the launcher, the patch
 notes, the community links and the contributors. Plain HTML, CSS and JavaScript; no framework and
 no runtime dependencies.
 
@@ -28,7 +28,8 @@ src/markdown.js    a small Markdown renderer (escapes everything), shared by bui
 src/releases.js    the patch notes' markup, shared by build and page
 src/contributors.js the contributors' filtering and markup, shared by build and page
 public/            fonts, screenshots, icons, og.png, robots.txt: copied as is (sitemap.xml is written by the build)
-scripts/assets.mjs rebuilds public/ from the repo (fonts to WOFF2, images to WebP)
+scripts/assets.mjs rebuilds public/ from the repo (fonts to WOFF2, images to WebP, the pixel art)
+scripts/art.mjs    draws the stone tile and the hero's landscape (PNG, one pixel per texel)
 scripts/shots.mjs  Playwright screenshots at every width, and og.png
 Dockerfile, Caddyfile, railway.json   the Railway service
 LEGAL.md           every asset, its source and licence

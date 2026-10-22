@@ -21,6 +21,7 @@ cookies. The only requests to other hosts are the browser's calls to `api.github
 | File | Source | Licence |
 | --- | --- | --- |
 | `public/fonts/Geist-Regular.woff2`, `Geist-Medium.woff2`, `Geist-SemiBold.woff2`, `GeistMono-Regular.woff2` | Geist and Geist Mono, from `crates/horizon-theme/fonts` (converted from TTF to WOFF2) | SIL Open Font License 1.1, shipped as `public/fonts/OFL-Geist.txt` |
+| `public/fonts/PixelifySans-Medium.woff2`, `PixelifySans-SemiBold.woff2`, `PixelifySans-Bold.woff2` | Pixelify Sans by The Pixelify Sans Project Authors (github.com/eifetx/Pixelify-Sans), from `crates/horizon-theme/fonts` (converted from TTF to WOFF2) | SIL Open Font License 1.1, shipped as `public/fonts/OFL-PixelifySans.txt` |
 
 The fonts are self-hosted; nothing is fetched from a font service.
 
@@ -34,11 +35,16 @@ The fonts are self-hosted; nothing is fetched from a font service.
 No Minecraft logo or wordmark appears anywhere on the site, in images or as text styling.
 GitHub and Discord appear only as plain text links, without their logos.
 
-## No hero image
+## The pixel art
 
-The page opens on type, not a photograph. The launcher's old background
-(`launcher/assets/background.jpg`, from backgrounds.supply, licence never confirmed) is gone from
-the repository, so the launcher's screenshots no longer show it.
+| Files in `public/media/` | Source | Licence |
+| --- | --- | --- |
+| `stone-light.png`, `stone-dark.png` | The page's stone texture, drawn in code by `scripts/art.mjs` from the page colours of `crates/horizon-theme` | MIT, Horizon's original work |
+| `scene-light.png`, `scene-dark.png` | The hero's landscape (a dawn and a sunset with Horizon's sliced sun), drawn in code by `scripts/art.mjs`, the same drawing as the launcher's Home banner (`launcher/src/art.rs`) | MIT, Horizon's original work |
+
+No Minecraft texture is used: the stone is not Minecraft's stone, only shades of the page colour.
+The launcher's old background (`launcher/assets/background.jpg`, from backgrounds.supply, licence
+never confirmed) is gone from the repository, so the launcher's screenshots no longer show it.
 
 ## Screenshots
 
