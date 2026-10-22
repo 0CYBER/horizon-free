@@ -205,7 +205,13 @@ impl Game<'_> {
                 (Kind::Furnace(recipe), f.items.to_vec())
             }
             Some(BlockEntity::Brewing(b)) => (Kind::Brewing, b.items.to_vec()),
+            Some(BlockEntity::Crafter(c)) => (Kind::CrafterBlock, c.items.to_vec()),
             _ => return false,
+        };
+        // CrafterBlockEntity.containerData: the disabled slots, then triggered.
+        let crafter_data = match self.world.block_entities.get(&pos) {
+            Some(BlockEntity::Crafter(c)) => Some((c.disabled, c.triggered)),
+            _ => None,
         };
         if host.hub.guests[gi].spectator() {
             return true;
@@ -222,6 +228,13 @@ impl Game<'_> {
         let changed = self.guest_menu_op(host, gi, &mut menu, |menu, env| {
             for (k, s) in items.iter().enumerate() {
                 menu.set_slot(env, k, s.clone());
+            }
+            // After the slots: setting a disabled slot (CrafterBlockEntity.setItem) enables it.
+            if let Some((disabled, triggered)) = crafter_data {
+                for (k, d) in disabled.iter().enumerate() {
+                    menu.data[k] = i32::from(*d);
+                }
+                menu.data[9] = i32::from(triggered);
             }
             let before: Vec<_> = (0..menu.slot_count())
                 .map(|s| menu.slot(s).cloned())
@@ -245,11 +258,51 @@ impl Game<'_> {
                     b.items[k] = menu.slot(k).cloned();
                 }
             }
+            // CrafterBlockEntity.setItem: filling a disabled slot enables it.
+            Some(BlockEntity::Crafter(c)) => {
+                for k in 0..9 {
+                    c.items[k] = menu.slot(k).cloned();
+                    c.disabled[k] = menu.data[k] == 1;
+                }
+            }
             _ => {}
         }
         host.play.entry(conn).or_default().crafting.machine = Some((p.container, menu));
         host.hub.inventory_clicked(conn, p, &self.world, &changed);
         true
+    }
+
+    /// `ServerGamePacketListenerImpl.handleContainerSlotStateChanged`: a
+    /// guest's crafter slot toggle (`CrafterBlockEntity.setSlotState`) in
+    /// their open crafter window.
+    pub(super) fn lan_crafter_slot_state(
+        &mut self,
+        host: &mut LanHost,
+        conn: u32,
+        window: i32,
+        slot: i32,
+        enabled: bool,
+    ) {
+        let Some(pos) = host
+            .hub
+            .guest(conn)
+            .filter(|g| !g.spectator())
+            .and_then(|g| g.menu.as_ref())
+            .filter(|m| window != 0 && m.window == window)
+            .and_then(|m| match m.slots {
+                Slots::Block(pos) => Some(pos),
+                _ => None,
+            })
+        else {
+            return;
+        };
+        if let (Some(BlockEntity::Crafter(c)), Ok(slot)) = (
+            self.world.block_entities.get_mut(&pos),
+            usize::try_from(slot),
+        ) {
+            c.set_slot_state(slot, enabled);
+            self.world.modified.insert((pos.0 >> 4, pos.2 >> 4));
+        }
     }
 
     /// ServerGamePacketListenerImpl.handlePlaceRecipe: the guest's recipe

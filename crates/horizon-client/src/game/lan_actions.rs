@@ -639,6 +639,13 @@ impl Game<'_> {
                 _ => ("minecraft:furnace", "container.furnace"),
             };
             (menu, title, Slots::Block(pos))
+        } else if let Some(BlockEntity::Crafter(_)) = self.world.block_entities.get(&pos) {
+            // CrafterBlock.useWithoutItem: CrafterMenu over the block entity.
+            (
+                "minecraft:crafter_3x3",
+                "container.crafter",
+                Slots::Block(pos),
+            )
         } else if let Some(BlockEntity::Brewing(_)) = self.world.block_entities.get(&pos) {
             // BrewingStandBlock.useWithoutItem: BrewingStandMenu.
             (
@@ -921,6 +928,9 @@ impl Game<'_> {
                 self.lan_station_button(host, conn, p.container, p.button);
             }
             S::RenameItem(p) => self.lan_station_rename(host, conn, &p.name),
+            S::ContainerSlotStateChanged(p) => {
+                self.lan_crafter_slot_state(host, conn, p.container, p.slot, p.enabled);
+            }
             S::SetBeacon(p) => self.lan_station_beacon(host, conn, p.primary, p.secondary),
             S::SelectTrade(p) => self.lan_select_trade(host, conn, p.item),
             S::ContainerClose(p) if self.lan_merchant_closed(host, conn, Some(p.container)) => {

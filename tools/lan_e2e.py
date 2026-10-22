@@ -147,7 +147,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
 
 
 class Game:
@@ -1179,6 +1179,35 @@ def check_beacon(host, guest, out):
     guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:air')
     want = {'paid': ('minecraft:iron_ingot', 1), 'haste': True, 'ingots': 0, 'screen': 'playing'}
     assert seen == want, f'the beacon on the guest: {seen} ({effects})'
+    return seen
+
+
+def check_crafter(host, guest, out):
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    guest('command', command='give @s minecraft:oak_planks 4')
+    x, y, z = (int(v // 1) for v in pos_of(guest))
+    at = (x, y, z + 2)
+    guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:crafter')
+    guest.wait(10)
+    guest.raw('interact', *at)
+    guest.raw('wait-for', 'screen', 'container', '--timeout', 10)
+    guest.wait(10)
+    # CrafterScreen.slotClicked: an empty-handed click disables the first slot
+    # (ServerboundContainerSlotStateChangedPacket); the planks then skip it.
+    guest.raw('click-slot', 300)
+    guest.wait(5)
+    guest.raw('click-slot', hotbar_slot(guest, 'minecraft:oak_planks'), 'shift')
+    guest.wait(10)
+    guest.shot(out, 'crafter')
+    guest.raw('key', 'esc', 'tap')
+    guest.wait(10)
+    # Opening it again shows the server's crafter.
+    items = open_container(guest, at, out, 'crafter-after')
+    guest('command', command=f'setblock {at[0]} {at[1]} {at[2]} minecraft:air')
+    seen = {'items': items[0] if isinstance(items, tuple) else items, 'planks': server_count(guest, 'oak_planks')}
+    want = {'items': {1: 'minecraft:oak_planks'}, 'planks': 0}
+    assert seen == want, f'the crafter on the guest: {seen}'
     return seen
 
 
@@ -2380,6 +2409,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'smithing': check_smithing,
              'enchanting': check_enchanting,
              'beacon': check_beacon,
+             'crafter': check_crafter,
              'hurt': check_hurt,
              'commands': check_commands,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,

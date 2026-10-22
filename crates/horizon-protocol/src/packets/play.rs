@@ -1716,6 +1716,11 @@ packet!(
     ContainerButtonClick { container: i32 => VarInt, button: i32 => VarInt }
 );
 packet!(
+    /// ServerboundContainerSlotStateChangedPacket: the crafter's slot toggle
+    /// (`CrafterBlockEntity.setSlotState`).
+    ContainerSlotStateChanged { slot: i32 => VarInt, container: i32 => VarInt, enabled: bool => Bool }
+);
+packet!(
     /// ServerboundRenameItemPacket: `AnvilMenu.setItemName`.
     RenameItem { name: String => Str }
 );
@@ -1807,6 +1812,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     PlayerLoaded(Empty) = PLAYER_LOADED,
     Pong(Ping) = PONG,
     RenameItem(RenameItem) = RENAME_ITEM,
+    ContainerSlotStateChanged(ContainerSlotStateChanged) = CONTAINER_SLOT_STATE_CHANGED,
     Punch(Empty) = PUNCH,
     ResourcePack(ResourcePackResponse) = RESOURCE_PACK,
     SelectTrade(SelectTrade) = SELECT_TRADE,
@@ -2390,6 +2396,14 @@ mod tests {
         });
         assert_eq!(&rename.encode()[1..], &[5, b'B', b'l', b'a', b'd', b'e']);
         round_trip(rename, Serverbound::encode, Serverbound::decode);
+        // The slot, the container id (VarInts), then the new state.
+        let toggle = Serverbound::ContainerSlotStateChanged(ContainerSlotStateChanged {
+            slot: 4,
+            container: 2,
+            enabled: false,
+        });
+        assert_eq!(&toggle.encode()[1..], &[4, 2, 0]);
+        round_trip(toggle, Serverbound::encode, Serverbound::decode);
         // Two optional mob effect ids: a presence byte, then the VarInt.
         let beacon = Serverbound::SetBeacon(SetBeacon {
             primary: Some(2),

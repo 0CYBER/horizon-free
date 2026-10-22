@@ -1251,6 +1251,9 @@ impl Game<'_> {
             "minecraft:hopper" => slots(5),
             "minecraft:generic_3x3" => slots(9),
             "minecraft:brewing_stand" => slots(5),
+            // CrafterMenu: the grid, the inventory, then the result (the
+            // client's own).
+            "minecraft:crafter_3x3" => slots(9),
             // A workstation: its inputs, its result, then the inventory.
             m => {
                 let kind = Self::remote_station_kind(m)?;
@@ -1959,6 +1962,12 @@ impl Game<'_> {
                         1 => f.lit_total = v,
                         2 => f.cooking_timer = v,
                         3 => f.cooking_total = v,
+                        _ => {}
+                    },
+                    // CrafterBlockEntity.containerData.
+                    Some(BlockEntity::Crafter(c)) => match usize::try_from(p.id) {
+                        Ok(k @ 0..9) => c.disabled[k] = v == 1,
+                        Ok(9) => c.triggered = v == 1,
                         _ => {}
                     },
                     // BrewingStandBlockEntity.dataAccess.
@@ -3799,6 +3808,10 @@ impl Game<'_> {
     /// engine doesn't model sends the clicks unpredicted. False when a click's
     /// slot isn't one of the menu's.
     pub(super) fn remote_menu_ops(&mut self, ops: &[(Option<usize>, i32, Input)]) -> bool {
+        // CrafterScreen.slotClicked: a slot toggle goes out before the click.
+        if let [(Some(slot), button, input)] = ops {
+            self.crafter_slot_clicked(*slot, *button, *input);
+        }
         let (container, menu) = self.remote_menu();
         let mut clicks = Vec::with_capacity(ops.len());
         for &(slot, button, input) in ops {
@@ -4078,6 +4091,8 @@ impl Game<'_> {
                 horizon_client::brewing::BrewingStand::new(),
             ))),
             "minecraft:generic_3x3" => Some(BlockEntity::Chest(vec![None; 9])),
+            // CrafterMenu: the disabled slots and triggered come in ContainerSetData.
+            "minecraft:crafter_3x3" => Some(BlockEntity::Crafter(Default::default())),
             m if m.starts_with("minecraft:generic_9x") || m == "minecraft:shulker_box" => {
                 let rows = m
                     .strip_prefix("minecraft:generic_9x")
