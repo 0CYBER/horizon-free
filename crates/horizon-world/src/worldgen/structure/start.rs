@@ -1144,7 +1144,7 @@ fn try_generate(
             (position, legacy(vec![piece]))
         }
         StructureKind::Formations(formations) => {
-            let (position, piece) = super::formations::generate(
+            let (position, pieces) = super::formations::generate(
                 formations,
                 context,
                 &registry.pools,
@@ -1153,7 +1153,7 @@ fn try_generate(
                 &mut random,
                 chunk,
             )?;
-            (position, vec![Piece::Pool(piece)])
+            (position, pieces.into_iter().map(Piece::Pool).collect())
         }
         StructureKind::Unsupported(_) => return None,
     };
