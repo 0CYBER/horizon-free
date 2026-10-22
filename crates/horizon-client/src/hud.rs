@@ -82,11 +82,13 @@ fn atlas_sprites(root: &Path, packed: &[PackedImage]) -> Vec<PackedImage> {
     use crate::atlas_sources::{self, SpriteOrigin};
     let have: std::collections::HashSet<&str> = packed.iter().map(|i| i.0.as_str()).collect();
     let textures = atlas_sources::list_textures(root);
-    let load = |texture: &str, directory: &str| {
-        decode(&atlas_sources::texture_path(root, texture, directory)).ok()
-    };
-    let mut out: Vec<PackedImage> = Vec::new();
-    let mut added = std::collections::HashSet::new();
+    // Each new name with its origins in the atlases' order: the first that
+    // loads is the sprite. They load at once (a content pack's atlases list
+    // tens of thousands of files), and come out in the order a load of one
+    // after another would give.
+    let mut names: Vec<(String, Vec<(usize, SpriteOrigin)>)> = Vec::new();
+    let mut slots = std::collections::HashMap::new();
+    let mut order = 0;
     for (atlas, sources) in atlas_sources::atlases(root) {
         // The other atlases' renamed files (GUI sprites, particles...) are
         // looked up by their texture paths here.
@@ -96,18 +98,33 @@ fn atlas_sprites(root: &Path, packed: &[PackedImage]) -> Vec<PackedImage> {
                 continue;
             }
             let name = id.strip_prefix("minecraft:").unwrap_or(&id).to_owned();
-            if have.contains(name.as_str()) || added.contains(&name) {
+            if have.contains(name.as_str()) {
                 continue;
             }
-            let image = match &origin {
+            // A vanilla file is packed under its own name already: only a
+            // renamed one is new. Other namespaces' files (content mods) are
+            // never in the walked directories.
+            if let SpriteOrigin::File(texture) = &origin
+                && texture.strip_prefix("minecraft:") == Some(name.as_str())
+            {
+                continue;
+            }
+            let slot = *slots.entry(name.clone()).or_insert_with(|| {
+                names.push((name, Vec::new()));
+                names.len() - 1
+            });
+            names[slot].1.push((order, origin));
+            order += 1;
+        }
+    }
+    let load = |texture: &str, directory: &str| {
+        decode(&atlas_sources::texture_path(root, texture, directory)).ok()
+    };
+    let first = |(name, origins): &(String, Vec<(usize, SpriteOrigin)>)| {
+        origins.iter().find_map(|(order, origin)| {
+            let image = match origin {
                 SpriteOrigin::File(texture) => {
                     let path = texture.strip_prefix("minecraft:").unwrap_or(texture);
-                    // A vanilla file is packed under its own name already:
-                    // only a renamed one is new. Other namespaces' files
-                    // (content mods) are never in the walked directories.
-                    if texture.starts_with("minecraft:") && path == name {
-                        continue;
-                    }
                     load(texture, "textures").map(|(w, h, p)| {
                         // Animated strips keep their first frame, like the packed files.
                         if h > w && (path.starts_with("block/") || path.starts_with("item/")) {
@@ -119,13 +136,15 @@ fn atlas_sprites(root: &Path, packed: &[PackedImage]) -> Vec<PackedImage> {
                 }
                 generated => atlas_sources::generate(generated, &load),
             };
-            if let Some((w, h, pixels)) = image {
-                added.insert(name.clone());
-                out.push((name, w, h, pixels));
-            }
-        }
-    }
-    out
+            image.map(|(w, h, pixels)| (*order, (name.clone(), w, h, pixels)))
+        })
+    };
+    let mut out: Vec<_> = crate::par::par_map(&names, first)
+        .into_iter()
+        .flatten()
+        .collect();
+    out.sort_unstable_by_key(|(order, _)| *order);
+    out.into_iter().map(|(_, image)| image).collect()
 }
 impl HudAtlas {
     /// A font glyph's atlas cell (8x8 GUI pixels) and advance.
