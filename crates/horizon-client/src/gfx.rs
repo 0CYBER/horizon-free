@@ -34,6 +34,7 @@ fn entity_shader() -> String {
 
 mod entity_batch;
 use entity_batch::EntityBatch;
+pub use entity_batch::WATER_MASK_OVERLAY;
 
 /// Window.getAppropriateLineWidth, in framebuffer pixels.
 pub fn outline_width(width: u32) -> f32 {
@@ -106,12 +107,16 @@ struct Globals {
     fog_ends: [f32; 4],
     /// Atlas rects (u0, v0, width, height) of end_sky.png and end_portal.png.
     end_portal_sprites: [[f32; 4]; 2],
-    /// x: vanilla's `GameTime` uniform; y: nether cardinal lighting, zw unused.
+    /// x: vanilla's `GameTime` uniform; y: nether cardinal lighting; z: how many
+    /// `dynamic_lights` are set; w unused.
     time: [f32; 4],
-    /// Atlas rect of the current destroy stage (entity.wgsl).
+    /// Atlas rect of a destroy stage (entity.wgsl takes only its size: every stage's is the same,
+    /// and each crack carries its own stage's origin).
     crumbling_sprite: [f32; 4],
     /// Framebuffer size, selection stroke width, perspective layering scale.
     outline_params: [f32; 4],
+    /// Horizon Extras' dynamic lights: camera-relative position and level (`dynamic_light`).
+    dynamic_lights: [[f32; 4]; crate::dynamic_light::MAX],
 }
 pub type SectionKey = (i32, i32, i32);
 struct SectionGpu {
@@ -184,6 +189,8 @@ pub struct Frame<'a> {
     pub nether_lighting: bool,
     /// Camera-relative entity geometry textured from the shared atlas.
     pub entities: &'a [Vertex],
+    /// Horizon Extras' dynamic lights, nearest first (`dynamic_light::select`); empty when off.
+    pub dynamic_lights: &'a [[f32; 4]],
     /// Cloud mesh inputs; geometry and GPU storage are retained by the renderer.
     pub clouds: Option<crate::clouds::Input<'a>>,
     /// Additive translucent geometry after the entities (lightning, dragon rays).
@@ -212,7 +219,8 @@ pub struct Frame<'a> {
     /// Atlas rects (u0, v0, width, height) of end_sky.png and end_portal.png
     /// (`rendertype_end_portal`'s Sampler0 and Sampler1).
     pub end_portal_sprites: [[f32; 4]; 2],
-    /// Current destroy-stage sprite: projected UVs repeat inside this atlas rect.
+    /// A destroy-stage sprite: projected UVs repeat inside a rect of this size, from the
+    /// origin each crack vertex carries (`breaking::stage_light`).
     pub crumbling_sprite: [f32; 4],
     pub ticks: u64,
     /// The darkness effect on the lightmap: the brightness it takes off the
@@ -317,6 +325,8 @@ pub struct Renderer {
     crosshair_globals: wgpu::Buffer,
     entity_pipeline: wgpu::RenderPipeline,
     crumbling_pipeline: wgpu::RenderPipeline,
+    /// `RenderPipelines.WATER_MASK`: depth writes only, no colour.
+    water_mask_pipeline: wgpu::RenderPipeline,
     cloud_pipeline: wgpu::RenderPipeline,
     cloud_mesh: crate::clouds::Mesh,
     cloud_buffer: wgpu::Buffer,
@@ -1539,7 +1549,16 @@ impl Renderer {
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &entity_attributes,
         })];
-        let entity_pipeline = |label, cull_mode, depth_write, compare, bias, blend, clouds| {
+        #[allow(clippy::too_many_arguments)]
+        let entity_pipeline_with = |label,
+                                    cull_mode,
+                                    depth_write,
+                                    compare,
+                                    bias,
+                                    blend,
+                                    clouds,
+                                    fragment: &str,
+                                    write_mask| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(if clouds {
@@ -1567,18 +1586,43 @@ impl Renderer {
                 multisample: Default::default(),
                 fragment: Some(wgpu::FragmentState {
                     module: &entity_shader,
-                    entry_point: Some("fs_entity"),
+                    entry_point: Some(fragment),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: config.format.remove_srgb_suffix(),
                         blend: Some(blend),
-                        write_mask: wgpu::ColorWrites::ALL,
+                        write_mask,
                     })],
                 }),
                 multiview_mask: None,
                 cache: None,
             })
         };
+        let entity_pipeline = |label, cull_mode, depth_write, compare, bias, blend, clouds| {
+            entity_pipeline_with(
+                label,
+                cull_mode,
+                depth_write,
+                compare,
+                bias,
+                blend,
+                clouds,
+                "fs_entity",
+                wgpu::ColorWrites::ALL,
+            )
+        };
+        // RenderPipelines.WATER_MASK: the boat's water patch writes depth only.
+        let water_mask_pipeline = entity_pipeline_with(
+            "Water mask",
+            None,
+            true,
+            wgpu::CompareFunction::GreaterEqual,
+            Default::default(),
+            alpha_blend,
+            false,
+            "fs_water_mask",
+            wgpu::ColorWrites::empty(),
+        );
         let crumbling_pipeline = entity_pipeline(
             "Breaking cracks",
             Some(wgpu::Face::Back),
@@ -2058,6 +2102,7 @@ impl Renderer {
             crosshair_globals,
             entity_pipeline,
             crumbling_pipeline,
+            water_mask_pipeline,
             cloud_pipeline,
             cloud_mesh: Default::default(),
             cloud_buffer,
@@ -2868,10 +2913,17 @@ impl Renderer {
             time: [
                 frame.shader_game_time,
                 f32::from(frame.nether_lighting),
-                0.0,
+                frame.dynamic_lights.len().min(crate::dynamic_light::MAX) as f32,
                 0.0,
             ],
             outline_params: outline_params(self.config.width, self.config.height),
+            dynamic_lights: {
+                let mut lights = [[0.0; 4]; crate::dynamic_light::MAX];
+                for (to, from) in lights.iter_mut().zip(frame.dynamic_lights) {
+                    *to = *from;
+                }
+                lights
+            },
         };
         self.uploads
             .buffer(&mut encoder, &self.globals, 0, bytemuck::bytes_of(&globals));
@@ -3183,14 +3235,19 @@ impl Renderer {
             self.uploads
                 .buffer(&mut encoder, &self.outline, 0, bytemuck::cast_slice(&lines));
         }
-        let [entity_quads, crumbling_quads, translucent_crumbling_quads] =
-            self.entity_batch.update(
-                frame.entities,
-                frame.additive,
-                frame.hand,
-                frame.see_through,
-            );
-        let world_quads = entity_quads + crumbling_quads + translucent_crumbling_quads;
+        let [
+            entity_quads,
+            crumbling_quads,
+            translucent_crumbling_quads,
+            water_mask_quads,
+        ] = self.entity_batch.update(
+            frame.entities,
+            frame.additive,
+            frame.hand,
+            frame.see_through,
+        );
+        let world_quads =
+            entity_quads + crumbling_quads + translucent_crumbling_quads + water_mask_quads;
         let cloud_quads = if let Some(input) = &frame.clouds {
             let (rebuilt, uniform) =
                 crate::spans::time("clouds", || self.cloud_mesh.prepare(input));
@@ -3550,6 +3607,19 @@ impl Renderer {
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
                 pass.draw_indexed(0..crumbling_quads * 6, (entity_quads * 4) as i32, 0..1);
+                pass.set_bind_group(0, &self.group, &[]);
+            }
+            // BoatRenderer's water patch (RenderTypes.waterMask): depth only,
+            // before translucent terrain, so no water shows inside the boat.
+            if water_mask_quads > 0 {
+                pass.set_pipeline(&self.water_mask_pipeline);
+                pass.set_bind_group(0, &self.entity_group, &[]);
+                pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
+                pass.draw_indexed(
+                    0..water_mask_quads * 6,
+                    ((entity_quads + crumbling_quads + translucent_crumbling_quads) * 4) as i32,
+                    0..1,
+                );
                 pass.set_bind_group(0, &self.group, &[]);
             }
             if additive_quads > 0 {
@@ -4097,6 +4167,34 @@ mod tests {
         );
         assert_eq!(surface_format(&[Rgba16Float], Bgra8UnormSrgb), Rgba16Float);
     }
+    /// A Wayland surface on a compositor with colour management, as wgpu lists it (Mesa 26.2
+    /// ANV on an Intel HD 620 under weston 16): wide formats first. The pre-#1075 choice,
+    /// the first non-sRGB format, took `Rgba16Float` and the window looked washed out, as if
+    /// under a white overlay (#1007); XWayland lists no such format, which is why it looked fine.
+    #[test]
+    fn a_colour_managed_wayland_surface_still_gets_8_bit() {
+        use super::surface_format;
+        use wgpu::TextureFormat::*;
+        let wayland = [
+            Rgba16Float,
+            Rgba16Unorm,
+            Rgb10a2Unorm,
+            Bgra8UnormSrgb,
+            Bgra8Unorm,
+            Rgba8UnormSrgb,
+            Rgba8Unorm,
+        ];
+        assert_eq!(surface_format(&wayland, Bgra8UnormSrgb), Bgra8Unorm);
+        // Without Bgra8: Rgba8, still not a 16- or 10-bit format.
+        let without_bgra = [
+            Rgba16Float,
+            Rgba16Unorm,
+            Rgb10a2Unorm,
+            Rgba8UnormSrgb,
+            Rgba8Unorm,
+        ];
+        assert_eq!(surface_format(&without_bgra, Rgba8UnormSrgb), Rgba8Unorm);
+    }
     #[test]
     fn special_material_batches_preserve_quad_order_and_offsets() {
         let quad = |layer, id| {
@@ -4116,7 +4214,7 @@ mod tests {
         let mut batch = super::EntityBatch::default();
         let counts = batch.update(&entities, &quad(3, 5), &quad(0, 6), &quad(0, 8));
         let vertices = &batch.combined;
-        assert_eq!(counts, [4, 1, 1]);
+        assert_eq!(counts, [4, 1, 1, 0]);
         assert_eq!(
             vertices
                 .as_chunks::<4>()

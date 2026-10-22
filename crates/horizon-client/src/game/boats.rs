@@ -141,6 +141,8 @@ pub(super) fn boat_wood(item: &str) -> Option<&str> {
 pub(super) struct BoatModels {
     pub models: HashMap<String, Part>,
     pub chest_models: HashMap<String, Part>,
+    /// `ModelLayers.BOAT_WATER_PATCH`, shared by every boat (not rafts).
+    pub water_patch: Option<Part>,
 }
 impl BoatModels {
     /// Whether a boat of this wood (with or without a chest) can be drawn.
@@ -175,6 +177,7 @@ impl BoatModels {
         Self {
             models,
             chest_models,
+            water_patch: document.and_then(|d| d.model("minecraft:boat#water_patch")),
         }
     }
 }
@@ -785,6 +788,23 @@ impl Game<'_> {
                 0,
                 out,
             );
+            // BoatRenderer.submitTypeAdditions: the water patch hides the water
+            // inside the hull unless the boat is under water (RaftRenderer has none).
+            if let Some(patch) = self.boat_models.water_patch.as_ref()
+                && &*b.wood != "bamboo"
+                && !matches!(b.status, Status::UnderWater | Status::UnderFlowingWater)
+            {
+                horizon_client::mobs::render::draw(
+                    patch,
+                    base,
+                    &Poses::new(patch),
+                    uv,
+                    0xFFFF_FFFF,
+                    packed,
+                    horizon_client::gfx::WATER_MASK_OVERLAY,
+                    out,
+                );
+            }
             self.cull_entity_vertices(out, entity_start);
         }
     }

@@ -171,11 +171,41 @@ pub fn list(dir: &Path) -> Vec<(String, Result<Info, String>)> {
     packs
 }
 
+/// `shaderpacks/` beside `options.txt` (the game's working folder: the game
+/// home, not the launcher's version folder).
+pub fn folder() -> PathBuf {
+    std::env::current_dir().unwrap_or_default().join(DIR)
+}
+
+/// `shaderpacks/` and its packs as the Shader Packs page lists them, read
+/// again at most once a second while the page is open, so a pack dropped
+/// into the folder shows up.
+#[derive(Debug, Default)]
+pub struct Folder {
+    pub dir: PathBuf,
+    pub packs: Vec<(String, Result<Info, String>)>,
+    read: Option<std::time::Instant>,
+}
+
+impl Folder {
+    pub fn poll(&mut self, dir: PathBuf) {
+        let fresh = self
+            .read
+            .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(1));
+        if fresh && self.dir == dir {
+            return;
+        }
+        self.packs = list(&dir);
+        self.dir = dir;
+        self.read = Some(std::time::Instant::now());
+    }
+}
+
 /// A Java pack has no manifest: its name is its file name.
 fn java_info(name: String) -> Info {
     Info {
         name,
-        description: String::new(),
+        description: "Iris/OptiFine pack: its full-screen passes run.".into(),
         authors: Vec::new(),
         version: String::new(),
         license: String::new(),

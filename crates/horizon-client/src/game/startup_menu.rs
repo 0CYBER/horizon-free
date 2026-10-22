@@ -373,6 +373,11 @@ impl Loading {
                     let _ = std::fs::create_dir_all(&dir);
                     packs::open_folder(&dir);
                 }
+                Event::OpenShaderPackFolder => {
+                    let dir = horizon_client::shader_pack::folder();
+                    let _ = std::fs::create_dir_all(&dir);
+                    packs::open_folder(&dir);
+                }
                 Event::ButtonClick => {}
             }
         }

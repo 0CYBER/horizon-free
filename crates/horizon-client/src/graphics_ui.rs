@@ -237,7 +237,7 @@ pub fn rows(level: Level) -> Vec<Row> {
             h(
                 H::ShaderPack,
                 High,
-                "Redraws the world with a pack from shaderpacks/. Off is vanilla.",
+                "Redraws the world with a pack from the shaderpacks folder. Off is vanilla.",
             ),
             Row::Header("Preferences"),
             v(Opt::ViewBobbing, None, "Sways the view while walking."),
@@ -422,17 +422,6 @@ impl H {
             H::Antialiasing => g.fxaa = !g.fxaa,
             H::BatteryMode => g.battery = !g.battery,
             H::GraphicsApi => g.api = step(&GraphicsApi::ALL, g.api, back),
-            H::ShaderPack => {
-                // Off, then every pack in shaderpacks/ by folder name.
-                let dir = std::env::current_dir()
-                    .unwrap_or_default()
-                    .join(crate::shader_pack::DIR);
-                let mut all = vec![String::new()];
-                all.extend(crate::shader_pack::list(&dir).into_iter().map(|(id, _)| id));
-                let i = all.iter().position(|x| *x == g.shader_pack).unwrap_or(0);
-                let n = all.len();
-                g.shader_pack = all[if back { (i + n - 1) % n } else { (i + 1) % n }].clone();
-            }
             H::Pacing => {
                 g.pacing = match g.pacing {
                     Pacing::Efficient => Pacing::Precise,
@@ -559,6 +548,8 @@ pub enum Action {
     Changed,
     OpenAdvanced,
     OpenSimple,
+    /// The Shader Pack row: the Shader Packs page (where packs are picked).
+    OpenShaderPacks,
     Done,
 }
 
@@ -784,6 +775,9 @@ impl GraphicsUi {
             }
             return match wd.target {
                 Target::Button(action) => vec![Action::ButtonClick, action],
+                Target::Item(Item::Horizon(H::ShaderPack)) => {
+                    vec![Action::ButtonClick, Action::OpenShaderPacks]
+                }
                 Target::Item(item) => {
                     if item.slider(s).is_some() {
                         self.dragging = Some(item);
@@ -1003,11 +997,30 @@ mod tests {
         );
         s.horizon.shader_pack = "horizon-sample".into();
         assert_eq!(row.label(&s).plain(), "Shader Pack: horizon-sample");
-        // Picking a pack keeps the preset.
-        Item::Horizon(H::Preset).cycle(&mut s, false, [854, 480]);
-        let preset = s.horizon.preset;
-        row.cycle(&mut s, false, [854, 480]);
-        assert_eq!(s.horizon.preset, preset);
+        // The row opens the Shader Packs page, where packs are picked.
+        let mut ui = GraphicsUi::default();
+        let find = |ui: &mut GraphicsUi| {
+            let (widgets, ..) = ui.layout(Level::Advanced, 854.0, 480.0);
+            widgets
+                .into_iter()
+                .find(|w| matches!(w.target, Target::Item(i) if i == row))
+                .unwrap()
+        };
+        ui.scroll = find(&mut ui).y - GraphicsUi::bounds(480.0).0 - 4.0;
+        let w = find(&mut ui);
+        assert_eq!(
+            ui.click(
+                Level::Advanced,
+                &mut s,
+                (w.x + 1.0, w.y + 1.0),
+                (854.0, 480.0),
+                [854, 480],
+                false,
+                false
+            ),
+            [Action::ButtonClick, Action::OpenShaderPacks]
+        );
+        assert_eq!(s.horizon.shader_pack, "horizon-sample");
     }
 
     #[test]

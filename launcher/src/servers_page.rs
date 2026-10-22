@@ -291,7 +291,7 @@ fn bytes(n: u64) -> String {
 /// A backup's date and kind from its name (`2026-10-19_11-28-57-manual.zip`, UTC), for people.
 /// What a key did in a one-line field.
 #[derive(Debug, PartialEq)]
-enum Key {
+pub(super) enum Key {
     Enter,
     Escape,
     /// Command/Ctrl-V: the caller pastes the clipboard's first line.
@@ -303,7 +303,7 @@ enum Key {
 
 /// Types `key` into `text`. A `selected` suggestion is replaced by what's typed or pasted, and
 /// cleared by Backspace.
-fn type_key(
+pub(super) fn type_key(
     text: &mut String,
     selected: bool,
     key: &str,

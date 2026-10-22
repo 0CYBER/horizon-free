@@ -8,6 +8,7 @@ mod internet;
 mod markdown;
 mod mcp;
 mod modpacks_page;
+mod mods_page;
 mod perf;
 mod scrollbar;
 mod servers_page;
@@ -35,6 +36,7 @@ use theme::Theme;
 enum Page {
     Play,
     Versions,
+    Mods,
     Modpacks,
     Servers,
     Notes,
@@ -42,9 +44,10 @@ enum Page {
 }
 
 impl Page {
-    const ALL: [(Page, &'static str); 6] = [
+    const ALL: [(Page, &'static str); 7] = [
         (Page::Play, "Play"),
         (Page::Versions, "Versions"),
+        (Page::Mods, "Mods"),
         (Page::Modpacks, "Modpacks"),
         (Page::Servers, "Servers"),
         (Page::Notes, "Patch notes"),
@@ -88,9 +91,6 @@ struct Opening {
 fn ease_out_cubic(x: f32) -> f32 {
     horizon_theme::ease_out_cubic(x)
 }
-
-/// How often the launcher looks for new releases while it is open.
-const CHECK_EVERY: Duration = Duration::from_secs(4 * 3600);
 
 enum Load<T> {
     Loading,
@@ -160,6 +160,8 @@ struct Launcher {
     args_focus: FocusHandle,
     /// Opt-in data collection: the player's answer and Settings' section (`collection`).
     collection: collection::Collection,
+    /// How many play Horizon now, while the server answers ("N playing now" on the Play page).
+    playing: Option<u64>,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
     _appearance: Subscription,
@@ -181,6 +183,8 @@ struct Launcher {
     pack_error: Option<String>,
     /// The game starting now plays this pack's profile (its work folder).
     starting_pack: Option<std::path::PathBuf>,
+    /// The Mods page: the browser's search, installs and updates (`mods_page.rs`).
+    mods: mods_page::Mods,
 }
 
 impl Launcher {
@@ -275,6 +279,7 @@ impl Launcher {
             friend_focus: cx.focus_handle(),
             joining: None,
             collection: collection::Collection::load(),
+            playing: None,
             tx,
             rx,
             _appearance: appearance,
@@ -291,6 +296,7 @@ impl Launcher {
             pack_log: VecDeque::new(),
             pack_error: None,
             starting_pack: None,
+            mods: mods_page::Mods::new(cx),
         };
         if this.bench.is_some() {
             this.perf.keep_local_log(false);
@@ -311,6 +317,7 @@ impl Launcher {
         this.fetch_links();
         // What the game and the launcher kept, if the player allows it and there is a server.
         telemetry::send_in_background();
+        telemetry::watch_playing(this.tx.clone());
         this
     }
 
@@ -420,6 +427,7 @@ impl Launcher {
                 // The page reads is_prepared when drawn; `changed` redraws it.
                 Msg::Reused(_) => self.installed = backend::installed(),
                 Msg::Keychain(persistent) => self.keychain = persistent,
+                Msg::Playing(playing) => self.playing = playing,
                 Msg::Session(session) => {
                     if let Some(tag) = self.starting_client.take() {
                         let mut cmd = backend::client_command(&tag);
@@ -595,6 +603,7 @@ impl Launcher {
             }
         }
         changed |= self.servers_tick();
+        changed |= self.mods_tick();
         if let Some(sign_in) = &self.sign_in {
             let state = sign_in.state();
             let changed_state = format!("{state:?}") != format!("{:?}", self.sign_in_state);
@@ -606,7 +615,8 @@ impl Launcher {
                 changed = true;
             }
         }
-        if self.checked.is_some_and(|at| at.elapsed() > CHECK_EVERY) {
+        let every = self.settings.update_channel.check_every();
+        if self.checked.is_some_and(|at| at.elapsed() > every) {
             self.check_updates();
         }
         if changed {
@@ -1139,6 +1149,19 @@ fn centered(text_: &str, t: &Theme) -> Div {
         .child(text(theme::UI).text_color(t.muted).child(text_.to_string()))
 }
 
+/// `1234` as `1,234`.
+fn thousands(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// A mono line in upper case: the status above a title, the footer's links.
 fn caps(s: impl AsRef<str>) -> Div {
     text(theme::MICRO).child(s.as_ref().to_uppercase())
@@ -1381,6 +1404,8 @@ impl Launcher {
                 ));
         };
         let prepared = backend::is_prepared(&tag);
+        // Prepared without sounds (#1035): Prepare again is the fix, so it stands out.
+        let silent = prepared && !backend::has_sounds(&tag);
         let version = backend::game_version(&tag);
         let hero = self.hero(&tag, &version, prepared, cx);
         let running = self.client.is_some() || self.starting_client.is_some();
@@ -1422,15 +1447,13 @@ impl Launcher {
 
         let resources_value = if self.preparing {
             "Preparing…".to_string()
-        } else if prepared {
-            format!("Prepared for Minecraft {version}")
         } else {
-            format!("Not prepared. Horizon needs the files of your own Minecraft {version}.")
+            backend::resources_summary(prepared, !silent, &version)
         };
         let mut prepare = button(
             "prepare",
             if prepared { "Prepare again" } else { "Prepare" },
-            if prepared {
+            if prepared && !silent {
                 Kind::Ghost
             } else {
                 Kind::Secondary
@@ -1681,9 +1704,11 @@ impl Launcher {
             _ => None,
         };
         let title = "Horizon";
+        // Never squeezed by the rows below: the ping notice can make it tall.
         let mut hero =
             div()
                 .flex()
+                .flex_none()
                 .flex_col()
                 .gap(px(14.))
                 .pt(px(24.))
@@ -1697,7 +1722,18 @@ impl Launcher {
                         .child(
                             caps(if prepared { "Ready" } else { "Needs preparing" })
                                 .text_color(if prepared { t.success } else { t.muted }),
-                        ),
+                        )
+                        .children(self.playing.map(|n| {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(10.))
+                                .child(div().size(px(4.)).rounded_full().bg(t.rule))
+                                .child(
+                                    caps(format!("{} playing now", thousands(n)))
+                                        .text_color(t.muted),
+                                )
+                        })),
                 )
                 .child(text(theme::DISPLAY).text_color(t.ink).child(title))
                 .child(text(theme::BODY).max_w(px(560.)).text_color(t.muted).child(
@@ -1740,6 +1776,45 @@ impl Launcher {
                 ),
             });
         }
+        // Players who answered the first-run question before the ping existed read about it
+        // once here.
+        if !self.settings.ping_notice_seen && !self.collection.consent.needs_asking() {
+            hero = hero.child(
+                plate(&t)
+                    .flex()
+                    .flex_none()
+                    .flex_col()
+                    .gap(px(8.))
+                    .p(px(16.))
+                    .w_full()
+                    .max_w(px(640.))
+                    .child(
+                        text(theme::UI)
+                            .text_color(t.ink)
+                            .child(telemetry::PING_NAME),
+                    )
+                    .child(
+                        text(theme::CAPTION)
+                            .text_color(t.muted)
+                            .child(telemetry::PING),
+                    )
+                    .child(
+                        div()
+                            .id("ping-notice-ok")
+                            .text_size(px(theme::UI.px))
+                            .text_color(t.accent)
+                            .font_weight(FontWeight::MEDIUM)
+                            .cursor_pointer()
+                            .hover(|s| s.opacity(0.8))
+                            .child("Got it")
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.settings.ping_notice_seen = true;
+                                this.settings.save();
+                                cx.notify();
+                            })),
+                    ),
+            );
+        }
         hero
     }
 
@@ -1755,15 +1830,25 @@ impl Launcher {
                 cx.notify();
             }),
         );
-        let betas = switch("beta-builds", self.settings.beta_builds, &t).on_click(cx.listener(
-            |this, _: &ClickEvent, _, cx| {
-                this.settings.beta_builds = !this.settings.beta_builds;
-                this.settings.save();
-                // What counts as new changed: check again (and install it if that is on).
-                this.check_updates();
-                cx.notify();
+        use backend::UpdateChannel::{Alpha, Stable};
+        let this = cx.entity().downgrade();
+        let update_channel = segments(
+            "update-channel",
+            &[(Stable, Stable.label()), (Alpha, Alpha.label())],
+            self.settings.update_channel,
+            &t,
+            move |picked, _, cx| {
+                let _ = this.update(cx, |this, cx| {
+                    if this.settings.update_channel != picked {
+                        this.settings.update_channel = picked;
+                        this.settings.save();
+                        // What counts as new changed: check again (and install it if that is on).
+                        this.check_updates();
+                    }
+                    cx.notify();
+                });
             },
-        ));
+        );
         let opening = switch("opening", !self.settings.skip_opening, &t).on_click(cx.listener(
             |this, _: &ClickEvent, _, cx| {
                 this.settings.skip_opening = !this.settings.skip_opening;
@@ -1919,11 +2004,18 @@ impl Launcher {
                     ))
                     .child(index_row(
                         n + 2,
-                        "Beta builds",
-                        Some(plain(
-                            "New versions as soon as they are released, before they become stable 6 hours later. Off: only stable versions install by themselves.",
-                        )),
-                        Some(betas.into_any_element()),
+                        "Updates",
+                        Some(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .child("Stable: a tested build about once a day.")
+                                .child(
+                                    "Alpha: every change as soon as it is built, several times a day; can break.",
+                                )
+                                .into_any_element(),
+                        ),
+                        Some(update_channel.into_any_element()),
                         &t,
                     ))
                     .child(index_row(
@@ -2170,7 +2262,8 @@ impl Launcher {
                 .child(div().child(account::NO_KEYCHAIN))
         };
         let action = if !configured {
-            None
+            // No client ID in this build: the button says what's coming and does nothing.
+            Some(button("sign-in", "Coming soon", Kind::Ghost, &t).into_any_element())
         } else if let Some(SignInState::Code(code)) = &self.sign_in_state {
             let (uri, user_code) = (code.verification_uri.clone(), code.user_code.clone());
             Some(
@@ -2217,7 +2310,9 @@ impl Launcher {
             )
         };
         n += 1;
-        let title = if self.accounts.accounts.is_empty() {
+        let title = if !configured {
+            "Microsoft account (coming soon)"
+        } else if self.accounts.accounts.is_empty() {
             "Microsoft account"
         } else {
             "Another account"
@@ -2362,7 +2457,7 @@ impl Launcher {
             let tag = release.tag.clone();
             let installed = self.installed.contains(&tag);
             let selected = self.selected() == Some(&tag);
-            let channel = if release.beta { "Beta" } else { "Stable" };
+            let channel = backend::UpdateChannel::of(&release).label();
             let mut meta = vec![channel.to_string(), release.date.clone()];
             if let Some((_, size)) = release.asset {
                 meta.push(megabytes(size));
@@ -2687,10 +2782,12 @@ impl Render for Launcher {
         self.perf.frame();
         self.servers.note_focus(window);
         self.friend_focused = self.friend_focus.is_focused(window);
+        self.mods.note_focus(window);
         self.args_focused = self.args_focus.is_focused(window);
         let content = match self.page {
             Page::Play => self.play_page(cx),
             Page::Versions => self.versions_page(cx),
+            Page::Mods => self.mods_page(cx),
             Page::Modpacks => self.modpacks_page(cx),
             Page::Servers => self.servers_page(cx),
             Page::Notes => self.notes_page(cx),
@@ -2908,4 +3005,16 @@ fn main() {
         .detach();
         cx.activate(true);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn counts_get_thousands_separators() {
+        let shown: Vec<String> = [0, 7, 999, 1000, 12_300, 1_234_500]
+            .into_iter()
+            .map(super::thousands)
+            .collect();
+        assert_eq!(shown, ["0", "7", "999", "1,000", "12,300", "1,234,500"]);
+    }
 }

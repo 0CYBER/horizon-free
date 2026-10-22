@@ -247,6 +247,14 @@ pub struct PlayerMotion {
     pub glide_ending: bool,
     /// Glider durability to take this tick (updateFallFlying).
     pub glider_wear: u32,
+    /// `LivingEntity.autoSpinAttackTicks` and `autoSpinAttackDmg`: Riptide's
+    /// spin. The damage stays until the game has dealt the hit.
+    pub auto_spin_attack_ticks: i32,
+    pub auto_spin_attack_dmg: f32,
+    /// The living entities the game put near a spinning player (id, box).
+    pub spin_targets: Vec<(u32, Aabb)>,
+    /// The entity the spin touched this tick (`doAutoAttackOnTouch`).
+    pub spin_hit: Option<u32>,
     pub sprinting: bool,
     pub sprint_input: crate::sprint::SprintState,
     pub shift_key_down: bool,
@@ -262,6 +270,10 @@ pub struct PlayerMotion {
     pub steps: MovementDistances,
     pub needs_sync: bool,
     pub sync_position: bool,
+    /// Moved by an ender pearl (`ServerPlayer.teleport`): a server sends the
+    /// position packet even when the player lands where they stood. The
+    /// server takes it at the end of a guest's turn.
+    pub teleported: bool,
     pub events: Vec<MotionEvent>,
     pub attributes: LiveAttributes<Box<dyn FnMut() -> i32>>,
     pub impulse: ImpulseContext,
@@ -290,6 +302,11 @@ pub struct PlayerMotion {
     /// The powder snow blocks this tick's movement went into: the game
     /// destroys them if the player is burning, then puts the fire out.
     pub powder_snow_entered: Vec<BlockPos>,
+    /// The last hurts taken (`hurt_blocking`), newest last, for tests and
+    /// the control socket's `hurtlog`.
+    pub hurt_log: Vec<crate::health::HurtRecord>,
+    /// The last melee attacks made on mobs, newest last.
+    pub attack_log: Vec<crate::health::AttackRecord>,
 }
 fn attribute_error(error: impl std::fmt::Debug) -> io::Error {
     io::Error::other(format!("movement attribute: {error:?}"))
@@ -404,6 +421,10 @@ impl PlayerMotion {
             fall_fly_ticks: 0,
             glide_ending: false,
             glider_wear: 0,
+            auto_spin_attack_ticks: 0,
+            auto_spin_attack_dmg: 0.0,
+            spin_targets: Vec::new(),
+            spin_hit: None,
             sprinting: false,
             sprint_input: crate::sprint::SprintState::default(),
             shift_key_down: false,
@@ -423,6 +444,7 @@ impl PlayerMotion {
             },
             needs_sync: false,
             sync_position: false,
+            teleported: false,
             events: Vec::new(),
             attributes,
             fluids: PlayerFluids::default(),
@@ -434,6 +456,8 @@ impl PlayerMotion {
             old_position: position,
             block_effects: true,
             powder_snow_entered: Vec::new(),
+            hurt_log: Vec::new(),
+            attack_log: Vec::new(),
         })
     }
     /// `Entity.getTicksRequiredToFreeze`.
@@ -912,6 +936,7 @@ impl MotionWorld<'_, '_, '_> {
             input.z = 0.0;
         }
         self.jump_phase()?;
+        let before_travel = self.player.bounds();
         // Player.travel: swim steering, then LivingEntity.travel (fluids
         // first, then gliding, then air), keeping 0.6 of the vertical speed
         // while flying.
@@ -966,7 +991,25 @@ impl MotionWorld<'_, '_, '_> {
         {
             self.freeze_damage()?;
         }
+        if self.player.auto_spin_attack_ticks > 0 {
+            self.player.auto_spin_attack_ticks -= 1;
+            self.check_auto_spin_attack(before_travel);
+        }
         Ok(())
+    }
+    /// `LivingEntity.checkAutoSpinAttack`: the first living entity in the
+    /// box swept this tick takes the hit and ends the spin, bouncing the
+    /// player back at a fifth of its speed; a wall ends it too.
+    fn check_auto_spin_attack(&mut self, before: Aabb) {
+        let swept = before.union_bounds(self.player.bounds());
+        let p = &mut self.player;
+        if let Some(&(id, _)) = p.spin_targets.iter().find(|(_, b)| b.intersects(swept)) {
+            p.spin_hit = Some(id);
+            p.auto_spin_attack_ticks = 0;
+            p.velocity = p.velocity.scale(-0.2);
+        } else if p.collision.horizontal {
+            p.auto_spin_attack_ticks = 0;
+        }
     }
     /// `hurtServer(damageSources().freeze(), 1)` for a fully frozen player.
     fn freeze_damage(&mut self) -> Result<()> {
@@ -2145,6 +2188,68 @@ mod tests {
         assert!(player.position.y < 84.0);
     }
 
+    /// `MovingPistonBlock.getCollisionShape`: a block halfway through a push
+    /// up is solid at its moving position, so a player lands on it.
+    #[test]
+    fn a_player_lands_on_a_block_a_piston_is_moving() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 1).unwrap();
+        let registry = assets.registry;
+        let moving = registry.default_state("minecraft:moving_piston").unwrap();
+        let stone = registry.default_state("minecraft:stone").unwrap();
+        scene.set(20, 4, 20, moving).unwrap();
+        scene.moving_pistons.push((
+            [20, 4, 20],
+            horizon_world::piston_shape::MovingPistonState {
+                moved_state: stone,
+                direction: horizon_core::geometry::Direction::Up,
+                extending: true,
+                source: false,
+                progress: 0.5,
+                previous_progress: 0.0,
+            },
+        ));
+        let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 6.0, 20.5)).unwrap();
+        for _ in 0..30 {
+            MotionWorld {
+                entities: &[],
+                player: &mut player,
+                scene: &mut scene,
+                assets: &assets,
+                collision_binding: &binding,
+                resources: &resources,
+            }
+            .controlled_simulation_tick(Default::default())
+            .unwrap();
+        }
+        assert!(player.ground.on_ground);
+        assert_eq!(player.position.y, 4.5);
+        // Once the block entity is gone, the moving_piston block has no shape.
+        scene.moving_pistons.clear();
+        for _ in 0..10 {
+            MotionWorld {
+                entities: &[],
+                player: &mut player,
+                scene: &mut scene,
+                assets: &assets,
+                collision_binding: &binding,
+                resources: &resources,
+            }
+            .controlled_simulation_tick(Default::default())
+            .unwrap();
+        }
+        assert_eq!(player.position.y, 4.0);
+    }
+
     #[test]
     fn spectator_scroll_speed_controls_horizontal_and_vertical_flight() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -2586,6 +2691,49 @@ mod tests {
                 assert_eq!(w.player.fall_distance, 0.0);
             } else {
                 assert!(w.player.health.health() < 20.0);
+            }
+        }
+    }
+    #[test]
+    fn a_riptide_spin_lies_flat_and_ends_on_the_first_entity_it_touches() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("movement-properties.nbt").exists() {
+            return;
+        }
+        let assets = Assets::load(&root).unwrap();
+        let render = assets.reload(&root).unwrap();
+        let binding = crate::collisions::load(&root, assets.registry).unwrap();
+        let resources = MotionResources::load(&root, &assets).unwrap();
+        let mut scene = World::test_scene(&assets, &render, 2).unwrap();
+        let ahead = Aabb::new(Vec3::new(20.2, 9.0, 21.5), Vec3::new(20.8, 11.0, 22.1));
+        for target in [None, Some(ahead)] {
+            let mut player = PlayerMotion::new(&resources, Vec3::new(20.5, 10.0, 20.5)).unwrap();
+            player.auto_spin_attack_ticks = 20;
+            player.auto_spin_attack_dmg = 8.0;
+            player.velocity = Vec3::new(0.0, 0.0, 1.0);
+            player.spin_targets = target.map(|b| (7, b)).into_iter().collect();
+            let mut w = MotionWorld {
+                entities: &[],
+                player: &mut player,
+                scene: &mut scene,
+                assets: &assets,
+                collision_binding: &binding,
+                resources: &resources,
+            };
+            w.simulation_tick([0.0, 0.0], false).unwrap();
+            if target.is_some() {
+                // Touched: the hit, no more spin, bounced back at a fifth.
+                assert_eq!(w.player.spin_hit, Some(7));
+                assert_eq!(w.player.auto_spin_attack_ticks, 0);
+                assert!(w.player.velocity.z < 0.0, "{:?}", w.player.velocity);
+                assert_eq!(w.player.pose, crate::pose::Pose::Standing);
+            } else {
+                assert_eq!(w.player.spin_hit, None);
+                assert_eq!(w.player.auto_spin_attack_ticks, 19);
+                assert_eq!(w.player.pose, crate::pose::Pose::SpinAttack);
+                assert_eq!(w.player.dimensions.height, 0.6);
             }
         }
     }

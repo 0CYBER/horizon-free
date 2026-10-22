@@ -286,7 +286,7 @@ fn status(shared: &Shared) -> Value {
     let state = shared.state.lock().unwrap();
     json!({
         "phase": state.phase.name(),
-        "version": env!("CARGO_PKG_VERSION"),
+        "version": crate::VERSION,
         "pid": std::process::id(),
         "uptime_seconds": shared.started.elapsed().as_secs(),
         "engine_pid": state.engine_pid,

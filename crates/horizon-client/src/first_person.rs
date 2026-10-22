@@ -21,6 +21,8 @@ pub enum ItemPose {
     Trident {
         ticks_used: f32,
     },
+    /// Riptide's spin (`isAutoSpinAttack`): the item held up like a fork.
+    SpinAttack,
     Bow {
         ticks_used: f32,
     },
@@ -66,6 +68,12 @@ pub fn item_pose(left: bool, inverse_height: f32, attack: f32, pose: ItemPose) -
     }
     if matches!(pose, ItemPose::Using) {
         return m;
+    }
+    if matches!(pose, ItemPose::SpinAttack) {
+        return m
+            * Mat4::from_translation(Vec3::new(invert * -0.4, 0.8, 0.3))
+            * Mat4::from_rotation_y((invert * 65.0f32).to_radians())
+            * Mat4::from_rotation_z((invert * -85.0f32).to_radians());
     }
     let charging = match pose {
         ItemPose::Bow { ticks_used } => {

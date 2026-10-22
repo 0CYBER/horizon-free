@@ -431,20 +431,18 @@ impl Game<'_> {
         self.score.board.players_team(self.acting_player_name())
     }
     /// The teams of the player and of the mobs on one (empty without teams).
-    pub(super) fn mob_teams(&self) -> horizon_client::mobs::Teams {
+    pub(super) fn mob_teams(&self) -> horizon_client::mobs::Teams<'_> {
         let board = &self.score.board;
         if board.teams.is_empty() {
             return Default::default();
         }
         horizon_client::mobs::Teams {
-            player: self.player_team().cloned(),
+            player: self.player_team(),
             mobs: self
                 .persist
                 .uuids
                 .iter()
-                .filter_map(|(id, uuid)| {
-                    Some((*id, board.players_team(&uuid_text(*uuid))?.clone()))
-                })
+                .filter_map(|(id, uuid)| Some((*id, board.players_team(&uuid_text(*uuid))?)))
                 .collect(),
         }
     }

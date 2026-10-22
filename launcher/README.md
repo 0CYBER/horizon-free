@@ -24,6 +24,12 @@ The opening, then Play ([clip](docs/opening.webm)):
   preparation reuses checksum-verified game jars and libraries from the current
   or another installed Horizon version, so the original Minecraft install is
   only required when no valid imported copy exists.
+- **Mods**: search Modrinth (and CurseForge once the launcher has its API key) for resource
+  packs, Iris/OptiFine shader packs and modpacks, each marked Works, Partly or Doesn't run in
+  Horizon; Java mod jars are never offered. Install puts a pack and what it needs in
+  `resourcepacks/` or `shaderpacks/` only after its SHA-512 (SHA-1 on CurseForge) matches, and a
+  modpack goes to the Modpacks page; installed packs show their source and checksum, with Update
+  and Remove ([docs/mod-browser.md](../docs/mod-browser.md)).
 - **Modpacks**: import a Java modpack (a Modrinth `.mrpack`, a CurseForge zip, or a Prism,
   MultiMC or CurseForge instance folder) and see its coverage report: per mod, ported, partial,
   not yet or not needed, with the reason ([docs/modpacks.md](../docs/modpacks.md)). **Port**
@@ -72,9 +78,17 @@ page `servers.json` (the list), `servers/<name>/` (the servers created there) an
 `server-runtime/` (the programs and game files they run).
 
 - **Settings**: install new Horizon versions automatically (on unless you turn it off; the
-  selected version only moves to the new one if you were on the newest), the opening animation,
+  selected version only moves to the new one if you were on the newest), which ones (Updates,
+  below), the opening animation,
   the game's menu style, the game's extra command-line arguments, and the launcher's own version
   and update state.
+- **Updates**: **Stable** (the default) installs a tested build about once a day, the betas that
+  `promote.yml` makes stable; **Alpha** installs every release as soon as it is built, several
+  times a day, and can break (docs/release-flow.md, "Channels"). While it is open, the launcher
+  looks for new releases every 4 hours on Stable and every 30 minutes on Alpha. Kept as `update_channel` in
+  `settings.json`; a `beta_builds: true` from launchers before 0.2 reads as Alpha (so does a `nightly` from the channel's first name).
+  `horizon-launcher update-channel [stable|alpha]` shows or sets it. The **Versions** page
+  shows each release's channel. The launcher's own updates don't depend on it.
 - **Game arguments**: extra arguments added to the game's command line (for example
   `--server-thread`), one line where quotes group a word with spaces. They are appended after the
   launcher's own arguments, kept as `game_args` in `settings.json`, and apply the next time the
@@ -126,6 +140,7 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher notes [<tag>]                  patch notes as plain text
     horizon-launcher links                          the Discord, sponsor and website links
     horizon-launcher menu-style [horizon|classic]   show or set the game's menu style
+    horizon-launcher update-channel [stable|alpha]     show or set which releases install by themselves
     horizon-launcher game-args [<line>]             show or set the extra arguments the game starts with
     horizon-launcher update [--check]               Horizon and the launcher
     horizon-launcher logs [--lines N] [--crash]     the end of the game's log, or its newest crash report
@@ -139,6 +154,11 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher modpack port <pack> [--from <dir>] [--version <tag>]   get the jars and carry them over
     horizon-launcher modpack play <pack> [--version <tag>]                 play it as its own profile
     horizon-launcher modpack remove <pack>
+    horizon-launcher mods [list]                    what the mod browser installed (docs/mod-browser.md)
+    horizon-launcher mods search <text> [--kind resource|shader|modpack] [--everything] [--source modrinth|curseforge]
+    horizon-launcher mods install <id or slug>      checksum checked, with what it needs; a modpack is imported
+    horizon-launcher mods update [<pack>] [--check]
+    horizon-launcher mods remove <pack>
     horizon-launcher servers [list]                 the servers hosted from the launcher, and whether they run
     horizon-launcher servers create [--name N] [--seed S | --copy-world DIR] [--mode M] [--difficulty D]
                      [--max-players N] [--open] [--check-accounts] [--player NAME]... --accept-eula
@@ -154,7 +174,7 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher data benchmark <report.json>   upload a benchmark report, printed first
 
 `--json` prints JSON where there is something to report (`versions`, `install`, `notes`,
-`next`, `links`, `menu-style`, `game-args`, `update --check`, `logs`, `account`, `benchmark`, `data`, `modpack`). Errors go to stderr with exit code 1. `server` runs in the terminal,
+`next`, `links`, `menu-style`, `update-channel`, `game-args`, `update --check`, `logs`, `account`, `benchmark`, `data`, `modpack`). Errors go to stderr with exit code 1. `server` runs in the terminal,
 so lines you type reach its console. `HORIZON_LAUNCHER_HOME` replaces the data folder (for
 scripts and tests).
 
@@ -166,7 +186,7 @@ scripts and tests).
 
 (with the full path to the binary if it is not on your `PATH`). Its tools: `list_versions`,
 `install_version`, `remove_version`, `prepare_resources`, `launch_client`, `start_server`,
-`server_command`, `server_log`, `stop_server`, `patch_notes`, `links`, `menu_style`, `logs`,
+`server_command`, `server_log`, `stop_server`, `patch_notes`, `links`, `menu_style`, `update_channel`, `logs`,
 `check_updates`, `accounts`, `sign_in` (returns the link and code for the player; the sign-in
 finishes in the background), `sign_out`, `select_account`, and for data collection
 `data_collection`, `set_data_collection`, `data_preview`, `delete_my_data` and `report_bug`

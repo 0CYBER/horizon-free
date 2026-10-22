@@ -4,9 +4,10 @@
 import { escape } from "./markdown.js";
 import { releasesHtml } from "./releases.js";
 import { contributorsFrom, contributorsHtml } from "./contributors.js";
+import { isGame, isLauncher as isLauncherTag, launcherVersion, newestFirst } from "./versions.js";
 
 const REPO = "ludovic111/horizon";
-const RELEASES_PAGE = `https://github.com/${REPO}/releases?q=launcher-v&expanded=true`;
+const RELEASES_PAGE = `https://github.com/${REPO}/releases?q=launcher&expanded=true`;
 const baked = JSON.parse(document.getElementById("baked").textContent);
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -39,15 +40,12 @@ const slim = (r) => ({
   body: r.body || "",
   assets: r.assets.map((a) => ({ name: a.name, browser_download_url: a.browser_download_url, size: a.size })),
 });
-const isGame = (tag) => /^v\d{4}\.\d{1,2}\.\d{1,2}/.test(tag);
-const isLauncher = (r) => r.tag_name.startsWith("launcher-v") && !r.prerelease;
-const versionKey = (tag) => tag.replace("launcher-v", "").split(".").map(Number);
-const newer = (a, b) => versionKey(b).reduce((d, n, i) => d || n - (versionKey(a)[i] || 0), 0);
+const isLauncher = (r) => isLauncherTag(r.tag_name) && !r.prerelease;
 
 // The newest 100 releases (GitHub's most per page). Game betas come out several times a day, so the stable game
 // release and the newest launcher release can both be older than all of them. The stable game release is then
 // GitHub's "latest" (betas and launcher releases are never marked latest); the launcher release is looked up by its
-// tag (the newest launcher-v tag with a published release).
+// tag (the newest launcher@ tag with a published release, or launcher-v before 0.2: docs/versioning.md).
 async function loadReleases() {
   const list = (await get(`https://api.github.com/repos/${REPO}/releases?per_page=100`)).filter((r) => !r.draft).map(slim);
   if (!list.some((r) => isGame(r.tag_name) && !r.prerelease)) {
@@ -55,8 +53,12 @@ async function loadReleases() {
     if (latest && !latest.draft) list.push(slim(latest));
   }
   if (list.some(isLauncher)) return list;
-  const refs = await get(`https://api.github.com/repos/${REPO}/git/matching-refs/tags/launcher-v`).catch(() => []);
-  const tags = refs.map((r) => r.ref.replace("refs/tags/", "")).filter((t) => /^launcher-v\d+\.\d+\.\d+$/.test(t)).sort(newer);
+  let tags = [];
+  for (const prefix of ["launcher@", "launcher-v"]) {
+    if (tags.length) break;
+    const refs = await get(`https://api.github.com/repos/${REPO}/git/matching-refs/tags/${prefix}`).catch(() => []);
+    tags = refs.map((r) => r.ref.replace("refs/tags/", "")).filter(isLauncherTag).sort(newestFirst);
+  }
   for (const tag of tags.slice(0, 3)) {
     const release = await get(`https://api.github.com/repos/${REPO}/releases/tags/${tag}`).catch(() => null);
     if (release && !release.draft) return [...list, slim(release)];
@@ -91,9 +93,9 @@ function platform() {
 async function setUpDownload() {
   const os = platform();
   const list = await releases;
-  const launcher = list.find((r) => r.tag_name.startsWith("launcher-v") && !r.prerelease);
+  const launcher = list.filter(isLauncher).sort((a, b) => newestFirst(a.tag_name, b.tag_name))[0];
   if (!launcher) return;
-  const version = launcher.tag_name.replace("launcher-v", "");
+  const version = launcherVersion(launcher.tag_name);
   const asset = os && launcher.assets.find((a) => a.name.includes(os.key));
   const others = `<a href="${escape(launcher.html_url)}">Other platforms</a>`;
   document.querySelectorAll("[data-download]").forEach((a) => (a.href = asset ? asset.browser_download_url : launcher.html_url || RELEASES_PAGE));
@@ -107,7 +109,7 @@ async function setUpDownload() {
 // --- Patch notes and the links from main ---------------------------------
 
 async function setUpNotes() {
-  const list = (await releases).filter((r) => isGame(r.tag_name) && !r.prerelease);
+  const list = (await releases).filter((r) => isGame(r.tag_name) && !r.prerelease).sort((a, b) => newestFirst(a.tag_name, b.tag_name));
   if (list.length) document.getElementById("releases").innerHTML = releasesHtml(list.slice(0, 3));
 }
 

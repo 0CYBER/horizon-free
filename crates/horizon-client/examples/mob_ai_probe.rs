@@ -1027,6 +1027,7 @@ fn main() -> horizon_client::Result<()> {
                     nearest_player: player.as_ref().filter(|p| !p.spectator).map(|p| p.position),
                     others: $snapshot,
                     others_grid: $grid,
+                    others_index: None,
                     daylight: (world.day_time.rem_euclid(24000)) < 12000,
                     game_time: world.game_time,
                     day_time: world.day_time,

@@ -918,6 +918,43 @@ pub fn item_entity_from_nbt(tag: &Tag, id: u32, bob_offset: f32) -> Option<ItemE
     })
 }
 
+/// `OminousItemSpawner.addAdditionalSaveData`: its item (left out when
+/// empty) and `spawn_item_after_ticks`. Its tick count is the entity's
+/// `tickCount`, which isn't saved: a reloaded spawner counts from 0 again.
+pub fn ominous_item_spawner_to_nbt(
+    item: &crate::items::ItemStack,
+    position: Vec3,
+    spawn_item_after: i64,
+    uuid: [i32; 4],
+    raw: Option<&Tag>,
+) -> Tag {
+    let base = Base {
+        id: "minecraft:ominous_item_spawner",
+        uuid,
+        position,
+        motion: Vec3::ZERO,
+        rotation: [0.0, 0.0],
+        on_ground: false,
+        fall_distance: 0.0,
+    };
+    let mut tag = base.tag(raw);
+    put(&mut tag, "item", item_to_nbt(item));
+    put(
+        &mut tag,
+        "spawn_item_after_ticks",
+        Tag::Long(spawn_item_after),
+    );
+    tag
+}
+/// `OminousItemSpawner.readAdditionalSaveData`: the item, where it floats
+/// and `spawn_item_after_ticks` (0 when absent). None without an item:
+/// such a spawner would spawn nothing.
+pub fn ominous_item_spawner_from_nbt(tag: &Tag) -> Option<(crate::items::ItemStack, Vec3, i64)> {
+    let item = tag.get("item").and_then(item_from_nbt)?;
+    let after = number(tag.get("spawn_item_after_ticks")).unwrap_or(0);
+    Some((item, position(tag)?, after))
+}
+
 /// `ExperienceOrb`: Health, Age, Value, Count.
 pub fn orb_to_nbt(o: &ExperienceOrb, uuid: [i32; 4]) -> Tag {
     let base = Base {
@@ -1504,6 +1541,38 @@ fn read_villager(m: &mut Mob, tag: &Tag) {
 mod tests {
     use super::*;
     use crate::items::ItemStack;
+
+    /// The item, the spawn delay and the fields Horizon doesn't model come
+    /// back; a compound without an item is no spawner.
+    #[test]
+    fn ominous_item_spawner_round_trip() {
+        let item = ItemStack {
+            item: Arc::from("minecraft:ominous_trial_key"),
+            count: 1,
+            damage: 0,
+            extra: None,
+        };
+        let raw = Tag::compound([("CustomName", string("kept"))]);
+        let at = Vec3::new(10.5, 64.25, -3.5);
+        let tag = ominous_item_spawner_to_nbt(&item, at, 97, [1, 2, 3, 4], Some(&raw));
+        assert_eq!(
+            kind(&tag).as_deref(),
+            Some("minecraft:ominous_item_spawner")
+        );
+        assert_eq!(uuid(&tag), Some([1, 2, 3, 4]));
+        assert!(matches!(
+            tag.get("spawn_item_after_ticks"),
+            Some(Tag::Long(97))
+        ));
+        assert!(tag.get("CustomName").is_some());
+        let (back, pos, after) = ominous_item_spawner_from_nbt(&tag).unwrap();
+        assert_eq!(
+            (back.item.as_ref(), back.count),
+            ("minecraft:ominous_trial_key", 1)
+        );
+        assert_eq!((pos, after), (at, 97));
+        assert!(ominous_item_spawner_from_nbt(&raw).is_none());
+    }
 
     #[test]
     fn falling_block_round_trip_keeps_impact_distance_and_settings() {

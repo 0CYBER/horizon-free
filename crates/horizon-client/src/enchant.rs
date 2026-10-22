@@ -60,6 +60,7 @@ pub struct ItemProps {
     /// `minecraft:brewing_fuel` present.
     pub brewing_fuel: bool,
 }
+#[derive(Default)]
 pub struct Enchantments {
     pub list: Vec<Enchantment>,
     index: HashMap<Arc<str>, usize>,

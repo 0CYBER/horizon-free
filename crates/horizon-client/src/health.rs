@@ -231,6 +231,10 @@ impl PlayerHealth {
             .get(self.ids.absorption)
             .expect("validated absorption field")
     }
+    /// The game time the damage clock has counted.
+    pub fn game_time(&self) -> i64 {
+        self.game_time
+    }
     pub fn dead_or_dying(&self) -> bool {
         self.health() <= 0.0 || self.dead
     }
@@ -274,6 +278,11 @@ impl PlayerMotion {
             .damage
             .source::<()>(source, None, None, None)
             .ok_or("unknown resident damage source")?;
+        let armor = self.attribute("minecraft:armor").unwrap_or(0.0) as f32;
+        let toughness = self.attribute("minecraft:armor_toughness").unwrap_or(0.0) as f32;
+        let before = self.health.health() + self.health.absorption();
+        let fire_ticks = self.fire_ticks;
+        let source_name = source.definition().name.clone();
         let totem_ready = self.health.totem_ready;
         let invulnerable = self.invulnerable;
         let h = &mut self.health;
@@ -312,6 +321,23 @@ impl PlayerMotion {
         if outcome.hurt {
             h.hurt_animation_time = h.hurt.hurt_time;
         }
+        let after = h.health() + h.absorption();
+        if self.hurt_log.len() >= HURT_LOG {
+            self.hurt_log.remove(0);
+        }
+        self.hurt_log.push(HurtRecord {
+            game_time: h.game_time,
+            source: source_name,
+            amount,
+            blocked: outcome.blocked,
+            taken: before - after,
+            hurt: outcome.hurt,
+            armor,
+            toughness,
+            health: after,
+            fire_ticks,
+            knockback: None,
+        });
         Ok(outcome)
     }
     pub fn set_health(&mut self, value: f32, absorption: bool) -> Result<()> {
@@ -362,6 +388,45 @@ pub struct Blocking {
     pub pierce: bool,
     /// Angle between the head's view and the source position (pi without one).
     pub angle: f64,
+}
+/// How many hurts `PlayerMotion::hurt_log` keeps.
+const HURT_LOG: usize = 64;
+/// One hurt as it was taken: what came in, what a raised blocking item
+/// stopped, the armour it met and what health it left.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HurtRecord {
+    pub game_time: i64,
+    /// The damage type.
+    pub source: String,
+    /// The damage before blocking, armour and effects.
+    pub amount: f32,
+    pub blocked: f32,
+    /// Health and absorption lost.
+    pub taken: f32,
+    pub hurt: bool,
+    /// `minecraft:armor` and `minecraft:armor_toughness` when it came.
+    pub armor: f32,
+    pub toughness: f32,
+    pub health: f32,
+    /// The fire ticks before the hurt.
+    pub fire_ticks: i32,
+    /// The push the hurt gave, if the caller applied one.
+    pub knockback: Option<[f64; 3]>,
+}
+/// One melee attack on a mob: the damage after the attack strength, the
+/// strength (`getAttackStrengthScale`), and the health it took.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AttackRecord {
+    pub game_time: i64,
+    pub target: String,
+    /// The mob's entity id, and whether the blow killed it.
+    pub id: u32,
+    pub killed: bool,
+    pub amount: f32,
+    pub scale: f32,
+    pub crit: bool,
+    pub landed: bool,
+    pub dealt: f32,
 }
 /// The outcome of a hurt with a raised blocking item.
 #[derive(Clone, Copy, Debug, Default)]

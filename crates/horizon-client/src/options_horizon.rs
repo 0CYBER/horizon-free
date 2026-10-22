@@ -38,7 +38,14 @@ pub enum HRow {
     Mod(usize),
     /// Opens the directory where Horizon mods are installed.
     OpenModFolder,
+    /// `shaderpacks/`'s path and a button opening it.
+    ShaderPackFolder,
+    /// Shader pack `i` of `OptionsUi::shader_packs` and its switch.
+    ShaderPack(usize),
 }
+
+/// The sidebar section listing the shader packs.
+pub const SHADER_PACKS: &str = "Shader Packs";
 /// A sidebar section: name, description, rows.
 pub struct Section {
     pub name: &'static str,
@@ -171,6 +178,12 @@ pub const SECTIONS: &[Section] = &[
             .map(HRow::Opt)
             .to_vec()
         },
+    },
+    Section {
+        name: SHADER_PACKS,
+        blurb: "Packs that redraw the world. Off is the vanilla look.",
+        // The packs follow, from the folder (`horizon_rows`).
+        rows: |_| vec![HRow::ShaderPackFolder],
     },
     Section {
         name: "Interface",
@@ -309,7 +322,15 @@ fn horizon_batch(framebuffer: [i32; 2]) -> HudBatch {
 }
 impl OptionsUi {
     fn horizon_rows(&self, s: &Settings, section: usize) -> Vec<HRow> {
-        let rows = (SECTIONS[section].rows)(s);
+        let mut rows = (SECTIONS[section].rows)(s);
+        if SECTIONS[section].name == SHADER_PACKS {
+            if self.shader_packs.packs.is_empty() {
+                rows.push(HRow::Header(
+                    "No shader packs: put a pack's folder or .zip in this folder",
+                ));
+            }
+            rows.extend((0..self.shader_packs.packs.len()).map(HRow::ShaderPack));
+        }
         let query = self.settings_search.value.to_lowercase();
         if query.is_empty() || !searchable_section(section) {
             return rows;
@@ -510,6 +531,38 @@ impl OptionsUi {
                         .unwrap_or(&installed.description);
                     ui.described_row(x, y, &installed.title, "", 0.0, cost, text, cw - 60.0);
                     ui.switch(ROW + i as u64, control_x, y + ROW_H / 2.0, s.mods.is_on(m));
+                }
+                HRow::ShaderPackFolder => {
+                    let label = "Open Folder";
+                    let bw = ui.button_width(label, false).max(96.0);
+                    let dir = self.shader_packs.dir.display().to_string();
+                    ui.described_row(x, y, "Folder", "", 0.0, (0, ""), &dir, cw - bw - 24.0);
+                    ui.button(
+                        ROW + i as u64,
+                        [control_x - bw, y + 12.0, bw, CONTROL],
+                        label,
+                        Button::Secondary,
+                        true,
+                    );
+                }
+                HRow::ShaderPack(p) => {
+                    let (id, info) = &self.shader_packs.packs[p];
+                    let error = match info {
+                        Err(e) => Some(e.as_str()),
+                        Ok(_) => self
+                            .shader_pack_error
+                            .as_ref()
+                            .filter(|(failed, _)| failed == id)
+                            .map(|(_, e)| e.as_str()),
+                    };
+                    let (cost, text) = match (error, info) {
+                        (Some(e), _) => ((3, "Failed"), e),
+                        (None, Ok(info)) => ((0, ""), info.description.as_str()),
+                        (None, Err(_)) => unreachable!(),
+                    };
+                    ui.described_row(x, y, id, "", 0.0, cost, text, cw - 60.0);
+                    let on = s.horizon.shader_pack == *id;
+                    ui.switch(ROW + i as u64, control_x, y + ROW_H / 2.0, on);
                 }
                 HRow::OpenModFolder => {
                     ui.row(x, y, "Mod folder", "", 0.0);
@@ -756,13 +809,7 @@ impl OptionsUi {
             return events;
         }
         match target {
-            Some(Target::Nav(i)) => {
-                if searchable_section(self.section) || searchable_section(i) {
-                    self.settings_search.set_value("");
-                }
-                self.section = i;
-                self.hscroll = 0.0;
-            }
+            Some(Target::Nav(i)) => self.select_section(i),
             Some(Target::Search) => {
                 self.settings_search.focused = true;
                 self.settings_search.move_cursor_to_end(false);
@@ -798,6 +845,10 @@ impl OptionsUi {
                         }
                         events.push(Event::Changed);
                     }
+                    Some(HRow::Graphics(Item::Horizon(graphics_ui::H::ShaderPack), ..)) => {
+                        events.push(Event::ButtonClick);
+                        self.open_section(SHADER_PACKS);
+                    }
                     Some(HRow::Graphics(item, ..)) => {
                         item.cycle(s, right, framebuffer);
                         events.push(Event::Changed);
@@ -818,12 +869,33 @@ impl OptionsUi {
                         events.push(Event::ButtonClick);
                         events.push(Event::OpenModFolder);
                     }
+                    Some(HRow::ShaderPackFolder) if !right => {
+                        events.push(Event::ButtonClick);
+                        events.push(Event::OpenShaderPackFolder);
+                    }
+                    Some(HRow::ShaderPack(p)) => {
+                        self.toggle_shader_pack(s, *p);
+                        events.push(Event::Changed);
+                    }
                     _ => {}
                 }
             }
             None => {}
         }
         events
+    }
+    fn select_section(&mut self, i: usize) {
+        if searchable_section(self.section) || searchable_section(i) {
+            self.settings_search.set_value("");
+        }
+        self.section = i;
+        self.hscroll = 0.0;
+    }
+    /// Show the sidebar section called `name`.
+    fn open_section(&mut self, name: &str) {
+        if let Some(i) = SECTIONS.iter().position(|s| s.name == name) {
+            self.select_section(i);
+        }
     }
     pub(crate) fn scroll_horizon(&mut self, amount: f32) {
         self.hscroll -= amount * 40.0;
@@ -1055,6 +1127,85 @@ mod tests {
         let (x, drag_y) = gui_pointer(&atlas, framebuffer, (bar.x + 2.0, dp_y + 10.0));
         ui.click_horizon(&mut settings, &atlas, x, drag_y, framebuffer, true, false);
         assert_eq!(ui.hscroll, 0.0);
+    }
+
+    /// The Shader Packs section: the folder's path and Open Folder, a switch
+    /// per pack; the Video section's Shader Pack row leads here (#941, #925).
+    #[test]
+    fn shader_packs_section_opens_the_folder_and_picks_a_pack() {
+        let atlas = atlas();
+        let framebuffer = [2560, 1440];
+        let dir =
+            std::env::temp_dir().join(format!("horizon-shader-section-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut options = section_ui(SHADER_PACKS);
+        let mut settings = Settings::default();
+        options.shader_packs.poll(dir.clone());
+        assert!(matches!(
+            options.horizon_rows(&settings, options.section)[..],
+            [HRow::ShaderPackFolder, HRow::Header(_)]
+        ));
+        std::fs::write(dir.join("Pack.zip"), b"").unwrap();
+        options.shader_packs = Default::default();
+        options.shader_packs.poll(dir.clone());
+        // Click the control with hit id `id`, scrolling until it shows.
+        let click = |options: &mut OptionsUi, settings: &mut Settings, id: u64| {
+            for _ in 0..40 {
+                let mut batch = horizon_batch(framebuffer);
+                let mut ui = Ui::dry(&atlas, &mut batch, (0.0, 0.0));
+                options.horizon_layout(settings, &mut ui, 1.0);
+                if let Some(hit) = ui.hits.iter().find(|hit| hit.id == id) {
+                    let r = hit.rect;
+                    let scale = ui.density / ui.batch.scale;
+                    let at = ((r[0] + r[2]) * 0.5 * scale, (r[1] + r[3]) * 0.5 * scale);
+                    drop(ui);
+                    return options.click_horizon(
+                        settings,
+                        &atlas,
+                        at.0,
+                        at.1,
+                        framebuffer,
+                        false,
+                        false,
+                    );
+                }
+                drop(ui);
+                options.hscroll += 200.0;
+            }
+            panic!("no control {id}");
+        };
+        assert_eq!(
+            click(&mut options, &mut settings, ROW),
+            [Event::ButtonClick, Event::OpenShaderPackFolder]
+        );
+        assert_eq!(
+            click(&mut options, &mut settings, ROW + 1),
+            [Event::Changed]
+        );
+        assert_eq!(settings.horizon.shader_pack, "Pack.zip");
+        click(&mut options, &mut settings, ROW + 1);
+        assert_eq!(settings.horizon.shader_pack, "");
+
+        let mut options = section_ui("Video");
+        settings.horizon.advanced = true;
+        let video = SECTIONS.iter().position(|s| s.name == "Video").unwrap();
+        let row = options
+            .horizon_rows(&settings, video)
+            .iter()
+            .position(|r| {
+                matches!(
+                    r,
+                    HRow::Graphics(Item::Horizon(graphics_ui::H::ShaderPack), ..)
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            click(&mut options, &mut settings, ROW + row as u64),
+            [Event::ButtonClick]
+        );
+        assert_eq!(SECTIONS[options.section].name, SHADER_PACKS);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

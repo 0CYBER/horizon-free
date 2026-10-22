@@ -6,7 +6,7 @@ use horizon_client::{
     items::ItemStack,
     mobs::{Species, Who, piglin::ADMIRE},
 };
-use horizon_core::random::RandomSource;
+use horizon_core::{geometry::Vec3, random::RandomSource};
 
 impl Game<'_> {
     fn piglin_loved(&self, item: &str) -> bool {
@@ -34,6 +34,9 @@ impl Game<'_> {
         if !self.ui.rules.bool("mob_griefing") {
             return;
         }
+        // Whether each item is piglin-loved, kept until an item is added or
+        // removed (added ones are pushed at the end under a new id).
+        let mut loved: (Option<(usize, Option<u32>)>, Vec<bool>) = (None, Vec::new());
         for i in 0..self.mobs.len() {
             let m = &self.mobs[i];
             if m.species() != Species::Piglin
@@ -46,11 +49,20 @@ impl Game<'_> {
                 continue;
             }
             let pos = m.position;
+            let key = (self.dropped.len(), self.dropped.last().map(|e| e.id));
+            if loved.0 != Some(key) {
+                loved.0 = Some(key);
+                loved.1 = self
+                    .dropped
+                    .iter()
+                    .map(|e| self.piglin_loved(&e.stack.item))
+                    .collect();
+            }
             let best = self
                 .dropped
                 .iter()
                 .enumerate()
-                .filter(|(_, e)| self.piglin_loved(&e.stack.item))
+                .filter(|&(j, _)| loved.1[j])
                 .map(|(j, e)| (j, e.position.distance_squared(pos)))
                 .filter(|(_, d)| *d <= 81.0)
                 .min_by(|a, b| a.1.total_cmp(&b.1));
@@ -132,12 +144,29 @@ impl Game<'_> {
         } else {
             vec![ItemStack::new(&item, 1)]
         };
-        // BehaviorUtils.throwItem toward the nearest visible player, else nearby.
-        let target = self
+        // BehaviorUtils.throwItem toward the nearest visible player
+        // (NEAREST_VISIBLE_PLAYER: within 16, alive, no spectators; the
+        // guests count as much as the host), else nearby.
+        let at = m.position;
+        let host = self
             .player
             .as_ref()
-            .filter(|p| p.position.distance_squared(m.position) < 256.0)
-            .map(|p| [p.position.x, p.position.y + 1.0, p.position.z]);
+            .filter(|p| !p.health.dead_or_dying() && !self.spectator())
+            .map(|p| [p.position.x, p.position.y, p.position.z]);
+        let guests = self.lan.iter().flat_map(|h| {
+            h.hub
+                .guests
+                .iter()
+                .filter(|g| h.hub.here(g) && g.loaded && !g.dead && !g.spectator())
+                .map(|g| g.position)
+        });
+        let d = |p: &[f64; 3]| at.distance_squared(Vec3::new(p[0], p[1], p[2]));
+        let target = host
+            .into_iter()
+            .chain(guests)
+            .filter(|p| d(p) < 256.0)
+            .min_by(|a, b| d(a).total_cmp(&d(b)))
+            .map(|p| [p[0], p[1] + 1.0, p[2]]);
         for stack in items {
             let to = target.unwrap_or_else(|| {
                 let r = &mut self.world.random;

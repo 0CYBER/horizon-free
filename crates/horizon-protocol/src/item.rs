@@ -28,6 +28,21 @@ pub mod component {
     pub const STORED_ENCHANTMENTS: i32 = 45;
     pub const DYED_COLOR: i32 = 47;
     pub const MAP_ID: i32 = 48;
+    pub const MAP_POST_PROCESSING: i32 = 50;
+    pub const WRITABLE_BOOK_CONTENT: i32 = 56;
+    pub const WRITTEN_BOOK_CONTENT: i32 = 57;
+}
+
+/// A written book's content (`WrittenBookContent.STREAM_CODEC`): the
+/// filtered variants of the title and pages are read and dropped.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WrittenBook {
+    pub title: String,
+    pub author: String,
+    pub generation: i32,
+    /// Each page's text component.
+    pub pages: Vec<Tag>,
+    pub resolved: bool,
 }
 
 /// The value of one patched data component. Components whose stream codec
@@ -52,13 +67,49 @@ pub enum Component {
         hide: bool,
         hidden: Vec<i32>,
     },
+    /// `WritableBookContent`: the pages (raw text).
+    WritableBook(Vec<String>),
+    WrittenBook(WrittenBook),
+}
+
+/// `Filterable.streamCodec`: the raw value, then an optional filtered one
+/// (dropped).
+fn filterable<T>(r: &mut Reader, value: impl Fn(&mut Reader) -> Result<T>) -> Result<T> {
+    let raw = value(r)?;
+    if r.bool()? {
+        value(r)?;
+    }
+    Ok(raw)
 }
 impl Component {
     fn read(kind: i32, r: &mut Reader) -> Result<Self> {
         use component::*;
         Ok(match kind {
-            MAX_STACK_SIZE | MAX_DAMAGE | DAMAGE | RARITY | REPAIR_COST | MAP_ID => {
-                Self::Int(r.varint()?)
+            MAX_STACK_SIZE | MAX_DAMAGE | DAMAGE | RARITY | REPAIR_COST | MAP_ID
+            | MAP_POST_PROCESSING => Self::Int(r.varint()?),
+            WRITABLE_BOOK_CONTENT => {
+                let n = r.count(100)?;
+                Self::WritableBook(
+                    (0..n)
+                        .map(|_| filterable(r, |r| r.string(1024)))
+                        .collect::<Result<_>>()?,
+                )
+            }
+            WRITTEN_BOOK_CONTENT => {
+                let title = filterable(r, |r| r.string(32))?;
+                let author = r.string(32767)?;
+                let generation = r.varint()?;
+                let n = r.count(r.remaining())?;
+                let pages = (0..n)
+                    .map(|_| filterable(r, |r| r.nbt()))
+                    .collect::<Result<_>>()?;
+                Self::WrittenBook(WrittenBook {
+                    title,
+                    author,
+                    generation,
+                    pages,
+                    resolved: r.bool()?,
+                })
             }
             DYED_COLOR => Self::Int(r.i32()?),
             UNBREAKABLE | CREATIVE_SLOT_LOCK => Self::Unit,
@@ -143,6 +194,25 @@ impl Component {
                 w.bool(*hide);
                 w.varint(hidden.len() as i32);
                 hidden.iter().for_each(|h| w.varint(*h));
+            }
+            Self::WritableBook(pages) => {
+                w.varint(pages.len() as i32);
+                for page in pages {
+                    w.string(page);
+                    w.bool(false);
+                }
+            }
+            Self::WrittenBook(b) => {
+                w.string(&b.title);
+                w.bool(false);
+                w.string(&b.author);
+                w.varint(b.generation);
+                w.varint(b.pages.len() as i32);
+                for page in &b.pages {
+                    w.nbt(page);
+                    w.bool(false);
+                }
+                w.bool(b.resolved);
             }
         }
     }
@@ -349,10 +419,41 @@ mod tests {
             Component::Lore(vec![literal("a"), literal("b")]),
         ));
         sword.removed.push(component::REPAIR_COST);
+        let mut book = Stack::new(1100, 1);
+        book.added.push((
+            component::WRITTEN_BOOK_CONTENT,
+            Component::WrittenBook(WrittenBook {
+                title: "Notes".into(),
+                author: "Guest".into(),
+                generation: 1,
+                pages: vec![literal("one"), literal("two")],
+                resolved: true,
+            }),
+        ));
+        book.added
+            .push((component::MAP_POST_PROCESSING, Component::Int(1)));
+        round::<Option<Stack>, Slot>(Some(book));
+        let mut quill = Stack::new(1099, 1);
+        quill.added.push((
+            component::WRITABLE_BOOK_CONTENT,
+            Component::WritableBook(vec!["a".into(), String::new()]),
+        ));
+        round::<Option<Stack>, Slot>(Some(quill));
         assert_eq!(sword.damage(), 17);
         round::<Option<Stack>, Slot>(Some(sword.clone()));
         round::<Option<Hashed>, HashedSlot>(Some(Hashed::of(&sword)));
         round::<Option<Hashed>, HashedSlot>(None);
+    }
+
+    #[test]
+    fn filtered_book_pages_are_read_and_dropped() {
+        // A writable book with one page "hi" and its filtered "**".
+        let bytes = [1, 7, 1, 0, 56, 1, 2, b'h', b'i', 1, 2, b'*', b'*'];
+        let stack = Slot::read(&mut Reader::new(&bytes)).unwrap().unwrap();
+        assert_eq!(
+            stack.component(component::WRITABLE_BOOK_CONTENT),
+            Some(&Component::WritableBook(vec!["hi".into()]))
+        );
     }
 
     #[test]

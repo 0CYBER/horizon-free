@@ -91,6 +91,8 @@ pub(super) struct AdvState {
     /// The tree being read on another thread since the world opened
     /// (`prefetch_advancement_tree`), taken by the first `advancement_tree`.
     pub(super) pending_tree: Option<std::thread::JoinHandle<Tree>>,
+    /// `inventory_changed`'s criteria by item, built for `tree`.
+    inventory_index: Option<(Arc<Tree>, Arc<adv::InventoryIndex>)>,
 }
 /// The game's world for predicates.
 struct View<'a, 'g>(&'a Game<'g>);
@@ -229,8 +231,30 @@ impl Game<'_> {
                 _ => Tree::load(&self.options.resources.join("data")),
             };
             self.adv.tree = Arc::new(tree);
+            // With the tree, while the world loads: built on the first
+            // inventory change it cost that tick ~10 ms.
+            self.inventory_index();
         }
         self.adv.tree.clone()
+    }
+    /// `inventory_changed`'s criteria by item, for the tree in place.
+    fn inventory_index(&mut self) -> Arc<adv::InventoryIndex> {
+        let tree = self.adv.tree.clone();
+        if let Some((built, index)) = &self.adv.inventory_index
+            && Arc::ptr_eq(built, &tree)
+        {
+            return index.clone();
+        }
+        let items = self.res.items();
+        let index = Arc::new(adv::InventoryIndex::build(&tree, |tag| {
+            items
+                .item_tags
+                .get(tag)
+                .map(|t| t.iter().map(String::as_str).collect())
+                .unwrap_or_default()
+        }));
+        self.adv.inventory_index = Some((tree, index.clone()));
+        index
     }
     /// Start reading the advancement files on another thread while the world
     /// loads. The first tick's first criterion trigger used to read and parse
@@ -394,6 +418,16 @@ impl Game<'_> {
         let Some(list) = tree.by_trigger.get(name) else {
             return;
         };
+        self.trigger_criteria(&tree, list, test);
+    }
+    /// `trigger` for some of a trigger's criteria: (advancement, criterion)
+    /// indexes in `tree`, in tree order.
+    fn trigger_criteria(
+        &mut self,
+        tree: &Tree,
+        list: &[(usize, usize)],
+        test: impl Fn(&Value, &dyn adv::World) -> bool,
+    ) {
         let mut hits = Vec::new();
         {
             let view = View(self);
@@ -437,9 +471,14 @@ impl Game<'_> {
         } else {
             self.recipe_toast(unlocked);
         }
+        if unlocked.is_empty() || self.remote.is_some() || self.no_player_here() {
+            return;
+        }
+        self.load_advancements();
+        let tree = self.adv.tree.clone();
         for r in unlocked {
-            let r = r.clone();
-            self.trigger("minecraft:recipe_unlocked", move |c, _| {
+            let list = tree.recipe_criteria(r);
+            self.trigger_criteria(&tree, &list, |c, _| {
                 c["recipes"].as_str() == Some(r.as_str())
             });
         }
@@ -560,7 +599,15 @@ impl Game<'_> {
                     .is_some_and(|i| s.count >= i.max_stack)
             })
             .count() as f64;
-        self.trigger("minecraft:inventory_changed", move |c, w| {
+        // Only the criteria the items held could pass (`InventoryIndex`).
+        if self.remote.is_some() || self.no_player_here() {
+            return;
+        }
+        self.load_advancements();
+        let tree = self.adv.tree.clone();
+        let index = self.inventory_index();
+        let list = index.candidates(stacks.iter().map(|s| s.id.as_str()));
+        self.trigger_criteria(&tree, &list, move |c, w| {
             let slots = &c["slots"];
             let range = |k: &str, v: f64| {
                 let r = &slots[k];
@@ -965,10 +1012,8 @@ impl Game<'_> {
             });
             positions.push((a.x, a.y));
         }
-        let mut tree = Tree {
-            list,
-            ..Tree::default()
-        };
+        let mut tree = Tree::default();
+        tree.list = list;
         for (i, a) in tree.list.iter().enumerate() {
             tree.by_id.insert(a.id.clone(), i);
         }

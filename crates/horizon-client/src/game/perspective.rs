@@ -223,6 +223,14 @@ impl Game<'_> {
             .riding
             .and_then(|id| self.mobs.iter().find(|m| m.id == id))
             .map(|_| (1.0, 4.0));
+        // AbstractBoat.positionRider turns a passenger by the boat's
+        // deltaRotation after its yRotO was saved, and LocalPlayer.getViewYRot
+        // interpolates a passenger's yaw: the boat's turn is spread over the
+        // frames of a tick.
+        let ride_turn = self
+            .riding
+            .and_then(|id| self.boats.iter().find(|b| b.id == id))
+            .map_or(0.0, |b| b.delta_rotation);
         let entity = CameraEntity {
             position: [p.position.x, p.position.y, p.position.z],
             previous: [
@@ -235,7 +243,7 @@ impl Game<'_> {
             x_rot: self.pitch,
             y_rot: self.yaw,
             x_rot_o: self.pitch,
-            y_rot_o: self.yaw,
+            y_rot_o: self.yaw - ride_turn,
             eye_height: p.dimensions.eye_height,
             living: Some(LivingCamera {
                 scale,
@@ -304,6 +312,7 @@ impl Game<'_> {
         let crouching = p.pose == Pose::Crouching;
         let (position, flying) = (p.position, p.flying || p.fall_flying);
         let (fall_flying, fly_ticks, velocity) = (p.fall_flying, p.fall_fly_ticks, p.velocity);
+        let spinning = p.auto_spin_attack_ticks > 0;
         let using = self.using.map(|(_, ticks)| ticks as i32 + 1).unwrap_or(0);
         let using_off_hand = self
             .using
@@ -389,6 +398,7 @@ impl Game<'_> {
         m.velocity = velocity;
         m.extra.fall_flying = fall_flying;
         m.extra.fall_fly_ticks = fly_ticks;
+        m.extra.auto_spin_attack = spinning;
         m.extra.main_hand_left = self.settings.main_hand_left;
         m.extra.using_item = using;
         m.extra.using_off_hand = using_off_hand;
@@ -443,6 +453,7 @@ impl Game<'_> {
             out,
         );
         self.player_elytra_geometry(m, camera, alpha as f32, packed, out);
+        self.spin_attack_geometry(m, camera, alpha as f32, packed, out);
         self.held_item_geometry(m, camera, alpha, packed, true, out);
     }
     /// `extractEntityInInventoryFollowsMouse`: the player in the box
@@ -575,6 +586,47 @@ impl Game<'_> {
                     p[3] = angles[0];
                     p[4] = invert * angles[1];
                     p[5] = invert * angles[2];
+                }
+                p
+            },
+            [rect.u0, rect.v0, rect.u1, rect.v1],
+            light,
+            0,
+            out,
+        );
+    }
+    /// `SpinAttackEffectLayer`: Riptide's two boxes turning around a spinning
+    /// player (`SpinAttackEffectModel.setupAnim`).
+    fn spin_attack_geometry(
+        &self,
+        m: &Mob,
+        camera: glam::DVec3,
+        partial: f32,
+        light: u32,
+        out: &mut Vec<horizon_client::mesher::Vertex>,
+    ) {
+        if !m.extra.auto_spin_attack {
+            return;
+        }
+        let (Some(model), Some(rect)) = (
+            self.res.spin_attack().as_ref(),
+            self.gui.atlas.sprites.get("entity/trident/trident_riptide"),
+        ) else {
+            return;
+        };
+        let age = m.age as f32 + partial;
+        horizon_client::mobs::render_model(
+            model,
+            horizon_client::mobs::render::base_transform(m, partial, camera),
+            &|part| {
+                let mut p = part.pose;
+                if let Some(i) = part
+                    .name
+                    .strip_prefix("box")
+                    .and_then(|i| i.parse::<u8>().ok())
+                {
+                    let angle = age * -(45.0 + f32::from(i + 1) * 5.0);
+                    p[4] = wrap(angle).to_radians();
                 }
                 p
             },
