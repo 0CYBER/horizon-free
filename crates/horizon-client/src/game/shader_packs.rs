@@ -103,8 +103,11 @@ impl Game<'_> {
     }
     fn shader_pack_error(&mut self, id: &str, error: &str) {
         log::warn!("Horizon: shader pack {id}: {error}");
-        // The Shader Packs page says why on the pack's row.
-        self.ui.options.shader_pack_error = Some((id.to_owned(), error.to_owned()));
+        // The Shader Packs page says why on the pack's row: the first line,
+        // since translator errors go on with a drawn source excerpt.
+        let first = error.lines().map(str::trim).find(|l| !l.is_empty());
+        self.ui.options.shader_pack_error =
+            Some((id.to_owned(), first.unwrap_or(error).to_owned()));
         self.system_message(Text::literal(format!("Shader pack {id}: {error}")));
     }
 }
