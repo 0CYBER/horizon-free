@@ -71,6 +71,10 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - blast:     primed TNT going off beside a guest in survival hurts the guest and pushes it away
              (ServerExplosion.hurtEntities takes every player); facing it behind a raised shield, the
              guest takes nothing.
+
+
+- worn:      iron armour the guest puts on in its inventory protects it: a 10-damage blow takes 6
+             (armour 15, LivingEntity.getDamageAfterArmorAbsorb), and the full 10 without it.
 - plates:    a stone pressure plate the guest steps on is pressed on both sides, and comes up once
              the guest steps off (#848).
 - swings:    each side sees the other's arm swing while it mines a block, and the guest sees its own
@@ -119,7 +123,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
 
 
 class Game:
@@ -1895,6 +1899,63 @@ def check_barter(host, guest, out):
     return {'bought': bought, 'floor': floor}
 
 
+def check_worn(host, guest, out):
+    pieces = ['iron_helmet', 'iron_chestplate', 'iron_leggings', 'iron_boots']
+    guest('command', command='gamemode survival')
+    taken = {}
+    try:
+        for worn in (False, True):
+            guest('command', command='clear @s')
+            if remote(guest)['health'] <= 0:
+                guest.raw('respawn')
+                guest.wait(40)
+            if worn:
+                for piece in pieces:
+                    guest('command', command=f'give @s minecraft:{piece}')
+                guest.wait(10)
+                # Shift-clicked from the hotbar onto the body in the inventory menu (the hub moves them).
+                guest.raw('key', 'e', 'tap')
+                guest.raw('wait-for', 'screen', 'inventory')
+                for piece in pieces:
+                    guest.raw('click-slot', hotbar_slot(guest, f'minecraft:{piece}'), 'shift')
+                    guest.wait(2)
+                guest.raw('key', 'esc', 'tap')
+                guest.wait(5)
+            guest('command', command='effect give @s minecraft:instant_health 1 5')
+            guest.wait(30)
+            before = remote(guest)['health']
+            if not SERVER_THREAD:
+                host.raw('hurtlog')
+            # A mob's blow (no attacker: no difficulty scaling); armour counts against it.
+            guest('command', command='damage @s 10 minecraft:mob_attack')
+            if SERVER_THREAD:
+                # The server's hurt log isn't on a control socket here: the health the guest is
+                # sent, read as soon as it drops (natural regeneration heals it again after).
+                health = before
+                for _ in range(40):
+                    guest.wait(1)
+                    health = remote(guest)['health']
+                    if health < before:
+                        break
+                taken['worn' if worn else 'bare'] = [round(before - health, 2)]
+                continue
+            guest.wait(10)
+            log = [h for p in host.raw('hurtlog')['players'] if p['name'] == GUEST_NAME for h in p['hurts']]
+            taken['worn' if worn else 'bare'] = [(h['amount'], h['armor'], round(h['taken'], 2)) for h in log]
+    finally:
+        guest('command', command='clear @s')
+        guest('command', command='effect give @s minecraft:instant_health 1 5')
+    if SERVER_THREAD:
+        # Natural regeneration may heal up to a point before the health arrives.
+        assert len(taken['bare']) == 1 and 9.0 <= taken['bare'][0] <= 10.0, f'10 damage on no armour: {taken}'
+        assert len(taken['worn']) == 1 and 5.0 <= taken['worn'][0] <= 6.0, \
+            f'10 damage through iron armour (15) should take 6: {taken}'
+        return taken
+    assert taken['bare'] == [(10.0, 0.0, 10.0)], f'10 damage on no armour: {taken}'
+    assert taken['worn'] == [(10.0, 15.0, 6.0)], f'10 damage through iron armour (15) should take 6: {taken}'
+    return taken
+
+
 CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
              'chest': check_chest, 'crafting': check_crafting, 'sign': check_sign, 'damage': check_damage,
              'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
@@ -1910,7 +1971,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles, 'blast': check_blast,
              'light': check_light, 'plates': check_plates,
              'swings': check_swings, 'cracks': check_cracks,
-             'time': check_time, 'growth': check_growth, 'fireball': check_fireball, 'deflect': check_deflect, 'barter': check_barter}
+             'time': check_time, 'growth': check_growth, 'fireball': check_fireball, 'deflect': check_deflect, 'barter': check_barter, 'worn': check_worn}
 
 
 def run(ctl, out, resources, checks):
