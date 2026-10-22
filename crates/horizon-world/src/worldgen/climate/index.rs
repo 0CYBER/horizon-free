@@ -202,8 +202,11 @@ fn build(
 #[derive(Debug)]
 pub struct ClimateIndex<T> {
     entries: Vec<(ParameterPoint, T)>,
-    nodes: Vec<Node>,
-    root: usize,
+    /// The built tree renumbered breadth first, root at 0, so each branch's
+    /// children are one contiguous run and a search walks memory in order.
+    spaces: Vec<[Parameter; 7]>,
+    /// Per node: its first child and child count, or its entry and 0 for a leaf.
+    links: Vec<(u32, u32)>,
 }
 impl<T> ClimateIndex<T> {
     pub fn new(entries: Vec<(ParameterPoint, T)>) -> Result<Self, IndexError> {
@@ -232,10 +235,25 @@ impl<T> ClimateIndex<T> {
             .collect();
         let children = (0..nodes.len()).collect();
         let root = build(&mut nodes, children, branching)?;
+        let mut order = vec![root];
+        let mut links = Vec::with_capacity(nodes.len());
+        let mut next = 0;
+        while next < order.len() {
+            let node = &nodes[order[next]];
+            next += 1;
+            links.push(match &node.children {
+                Children::Leaf(entry) => (*entry as u32, 0),
+                Children::Branch(children) => {
+                    let first = order.len() as u32;
+                    order.extend_from_slice(children);
+                    (first, children.len() as u32)
+                }
+            });
+        }
         Ok(Self {
             entries,
-            nodes,
-            root,
+            spaces: order.iter().map(|id| nodes[*id].space).collect(),
+            links,
         })
     }
     pub fn entries(&self) -> &[(ParameterPoint, T)] {
@@ -263,18 +281,18 @@ impl<T> ClimateIndex<T> {
     }
     /// Preorder leaf entry indices expose stable tree layout for comparison.
     pub fn leaf_order(&self) -> Vec<usize> {
-        fn walk(nodes: &[Node], id: usize, out: &mut Vec<usize>) {
-            match &nodes[id].children {
-                Children::Leaf(entry) => out.push(*entry),
-                Children::Branch(children) => {
-                    for child in children {
-                        walk(nodes, *child, out);
+        fn walk(links: &[(u32, u32)], id: usize, out: &mut Vec<usize>) {
+            match links[id] {
+                (entry, 0) => out.push(entry as usize),
+                (first, count) => {
+                    for child in first..first + count {
+                        walk(links, child as usize, out);
                     }
                 }
             }
         }
         let mut result = Vec::with_capacity(self.entries.len());
-        walk(&self.nodes, self.root, &mut result);
+        walk(&self.links, 0, &mut result);
         result
     }
     fn search(
@@ -283,19 +301,20 @@ impl<T> ClimateIndex<T> {
         values: &[i64; 7],
         previous: Option<usize>,
     ) -> Result<usize, IndexError> {
-        let Children::Branch(children) = &self.nodes[id].children else {
+        let (first, count) = self.links[id];
+        if count == 0 {
             return Ok(id);
-        };
+        }
         let mut best = previous;
-        let mut fitness = previous.map_or(i64::MAX, |id| distance(&self.nodes[id].space, values));
-        for child in children {
-            let lower = distance(&self.nodes[*child].space, values);
+        let mut fitness = previous.map_or(i64::MAX, |id| distance(&self.spaces[id], values));
+        for child in first as usize..(first + count) as usize {
+            let lower = distance(&self.spaces[child], values);
             if fitness > lower {
-                let result = self.search(*child, values, best)?;
-                let next = if result == *child {
+                let result = self.search(child, values, best)?;
+                let next = if result == child {
                     lower
                 } else {
-                    distance(&self.nodes[result].space, values)
+                    distance(&self.spaces[result], values)
                 };
                 if fitness > next {
                     fitness = next;
@@ -313,13 +332,11 @@ pub struct ClimateSearch<'a, T> {
 }
 impl<'a, T> ClimateSearch<'a, T> {
     pub fn find(&mut self, target: TargetPoint) -> Result<&'a T, IndexError> {
-        let result = self
-            .index
-            .search(self.index.root, &target.parameters(), self.last)?;
+        let result = self.index.search(0, &target.parameters(), self.last)?;
         self.last = Some(result);
-        let Children::Leaf(entry) = self.index.nodes[result].children else {
+        let (entry, 0) = self.index.links[result] else {
             unreachable!("search returns a leaf");
         };
-        Ok(&self.index.entries[entry].1)
+        Ok(&self.index.entries[entry as usize].1)
     }
 }
