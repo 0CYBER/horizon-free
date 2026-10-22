@@ -12753,10 +12753,10 @@ pub fn run() -> Result<()> {
     if options.dedicated.is_some() && !dedicated::preflight(&mut options)? {
         return Ok(());
     }
-    if options.dedicated.is_some() {
-        // Before any worker starts: on Linux they go behind the server thread.
-        horizon_threads::put_helpers_behind();
-    } else {
+    // Before any worker starts: on Linux they go behind the server thread
+    // and the render thread.
+    horizon_threads::put_helpers_behind();
+    if options.dedicated.is_none() {
         // The render thread, like the server thread, ahead of the workers on
         // macOS and Windows. While terrain loads, the worker pools (two with
         // single player's server thread) and other programs outnumber the

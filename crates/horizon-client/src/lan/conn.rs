@@ -778,7 +778,7 @@ fn play(c: Connection, shared: &Arc<Shared>, parts: Parts, address: std::net::So
         std::thread::Builder::new()
             .name(format!("horizon-lan-out-{conn_id}"))
             .spawn(move || {
-                // A dedicated server's tick comes first (horizon_threads).
+                // Ticks and frames come first (horizon_threads).
                 horizon_threads::behind_server();
                 write_loop(writer, rx, alive, latency, pending)
             })

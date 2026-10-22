@@ -436,7 +436,7 @@ impl Streaming {
                 thread::Builder::new()
                     .name(format!("horizon-worker-{i}"))
                     .spawn(move || {
-                        // A dedicated server's tick comes first (horizon_threads).
+                        // Ticks and frames come first (horizon_threads).
                         horizon_threads::behind_server();
                         let mut worker = generator.worker();
                         // The face visibility table and its occlusion cache stay with
