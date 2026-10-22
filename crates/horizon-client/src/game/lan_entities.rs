@@ -89,8 +89,17 @@ fn stand_poses(raw: Option<&Tag>) -> Vec<(u8, i32, Value)> {
 impl Game<'_> {
     /// Who rides what (`Entity.getPassengers`): mobs on mobs, and the
     /// host in its boat or minecart.
-    pub(super) fn lan_riding(&self, host_entity: Option<i32>, riding: &mut Riding) {
+    pub(super) fn lan_riding(
+        &self,
+        host_entity: Option<i32>,
+        guests: &[(u32, i32)],
+        riding: &mut Riding,
+    ) {
         riding.clear();
+        // The server's players in their boats and minecarts.
+        for &(vehicle, guest) in guests {
+            riding.add(vehicle as i32, guest);
+        }
         for m in self.mobs.iter().filter(|m| !m.removed) {
             if let Some(vehicle) = m.extra.mount {
                 riding.add(vehicle as i32, m.id as i32);
