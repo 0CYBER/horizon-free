@@ -20,7 +20,7 @@
 		Referrer-Policy strict-origin-when-cross-origin
 		X-Frame-Options DENY
 		Permissions-Policy "interest-cohort=(), browsing-topics=(), camera=(), microphone=(), geolocation=()"
-		Content-Security-Policy "default-src 'self'; script-src 'self' {$CSP_SCRIPT}; style-src 'self' {$CSP_STYLE}; img-src 'self' data: https://avatars.githubusercontent.com; font-src 'self'; connect-src 'self' https://api.github.com https://raw.githubusercontent.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		Content-Security-Policy "default-src 'self'; script-src 'self' {$CSP_SCRIPT}; style-src 'self' {$CSP_STYLE}; img-src 'self' data: https://avatars.githubusercontent.com; font-src 'self'; connect-src 'self' https://api.github.com https://raw.githubusercontent.com https://telemetry.playhorizon.dev; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 		-Server
 	}
 	@assets path /assets/*
@@ -31,9 +31,11 @@
 	redir /server /docs/hosting permanent
 	redir /server.html /docs/hosting permanent
 	rewrite /privacy /privacy.html
+	rewrite /releases /releases.html
+	rewrite /benchmarks /benchmarks.html
 	@doc path_regexp doc ^/docs/([a-z-]+)$
 	rewrite @doc /docs/{re.doc.1}.html
-	@pages path / /index.html /404.html /privacy.html /docs /docs/* /sitemap.xml
+	@pages path / /index.html /404.html /privacy.html /releases /releases.html /benchmarks /benchmarks.html /benchmarks.json /docs /docs/* /sitemap.xml
 	header @pages Cache-Control "no-cache"
 	@legal path /LEGAL.md /fonts/*.txt
 	header @legal Content-Type "text/plain; charset=utf-8"

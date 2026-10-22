@@ -9,7 +9,9 @@ use horizon_client::mobs::{Damage, DamageKind, MobEvent, SpawnSetup, Species};
 use horizon_core::{position::BlockPos, random::RandomSource};
 
 pub(super) struct Bolt {
-    at: [f64; 3],
+    /// The entity id a server's players know it by (0 until it has one).
+    pub id: u32,
+    pub at: [f64; 3],
     life: i32,
     flashes: i32,
     seed: i64,
@@ -131,12 +133,32 @@ impl Game<'_> {
         let r = &mut self.world.random;
         let seed = r.next_long();
         let flashes = r.next_int_bound(3).unwrap_or(0) + 1;
+        self.lightning_seen[0] += 1;
         self.bolts.push(Bolt {
+            id: 0,
             at,
             life: 2,
             flashes,
             seed,
             visual_only,
+            converted: Vec::new(),
+        });
+    }
+    /// `ClientLevel.addEntity` for a server's lightning bolt: on a client it
+    /// only flashes, sounds and draws (`LightningBolt.tick` off the server).
+    pub(super) fn spawn_remote_bolt(&mut self, id: u32, at: [f64; 3]) {
+        self.bolts.retain(|b| b.id != id);
+        let r = &mut self.world.random;
+        let seed = r.next_long();
+        let flashes = r.next_int_bound(3).unwrap_or(0) + 1;
+        self.lightning_seen[0] += 1;
+        self.bolts.push(Bolt {
+            id,
+            at,
+            life: 2,
+            flashes,
+            seed,
+            visual_only: true,
             converted: Vec::new(),
         });
     }
@@ -216,6 +238,9 @@ impl Game<'_> {
                 }
             }
             if b.life >= 0 {
+                if self.flash == 0 {
+                    self.lightning_seen[1] += 1;
+                }
                 self.flash = 2;
                 if !b.visual_only {
                     self.thunder_hit(b);

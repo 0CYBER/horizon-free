@@ -71,6 +71,13 @@ pub struct Guest {
     /// The permission level (0 none, 2 game masters, 4 owners).
     pub permission: u8,
     pub sneaking: bool,
+    /// The last `ServerboundPlayerInputPacket` flags (forward 1, backward 2,
+    /// left 4, right 8, jump 16, shift 32, sprint 64).
+    pub input: u8,
+    /// The boat or minecart the player rides (`Entity.getVehicle`).
+    pub vehicle: Option<u32>,
+    /// `ServerGamePacketListenerImpl.lastGoodX/Y/Z` of the vehicle it controls.
+    pub vehicle_good: Option<[f64; 3]>,
     pub sprinting: bool,
     pub fall_flying: bool,
     pub flying: bool,
@@ -233,6 +240,9 @@ impl Guest {
             game_mode: SURVIVAL,
             permission: 0,
             sneaking: false,
+            input: 0,
+            vehicle: None,
+            vehicle_good: None,
             sprinting: false,
             fall_flying: false,
             flying: false,

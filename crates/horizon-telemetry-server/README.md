@@ -5,7 +5,7 @@ This server receives what players choose to send (performance summaries, crash a
     cargo run --release                     # in this folder: its own workspace, like the launcher's
     PORT=8080 HORIZON_TELEMETRY_DB=/data/telemetry.sqlite3 horizon-telemetry-server
 
-The launcher sends to it when `HORIZON_TELEMETRY_URL` is set (and to `DEFAULT_ENDPOINT` in `crates/horizon-telemetry` once there is one).
+It runs at **https://telemetry.playhorizon.dev** (`DEFAULT_ENDPOINT` in `crates/horizon-telemetry`). The game and the launcher use it unless `HORIZON_TELEMETRY_URL` names another server, or is `off` (tests and automated runs send nothing).
 
 ## Endpoints
 
@@ -14,11 +14,34 @@ The launcher sends to it when `HORIZON_TELEMETRY_URL` is set (and to `DEFAULT_EN
 | `POST /v1/batch` | A zstd batch (`Content-Encoding: zstd`, at most 256 KiB, 1 MiB inflated, 64 items). Returns 204. Returns 400 for a bad batch, 413 for one too large, 415 if it is not zstd, 429 when over a limit. |
 | `DELETE /v1/installs/<id>` | Deletes everything that install sent. Its share of the daily totals is rebuilt at once. |
 | `GET /v1/aggregate?days=30` | The totals the website reads. Cached 10 minutes, with `Access-Control-Allow-Origin` set to the website. |
+| `GET /v1/benchmarks/summary` | Players' benchmark uploads grouped by GPU, CPU, render distance and game, for the website's Benchmarks page (below). Cached 10 minutes, same `Access-Control-Allow-Origin`. |
 | `POST /v1/live` | A game's "I'm playing" ping (JSON, at most 512 bytes). Returns 204. Returns 400 for a bad ping, 413 for one too large, 429 over the address's limit, 503 when it holds `LIVE_MAX_SESSIONS` already. |
 | `GET /v1/live` | How many play now, rounded: `playing`, `lan`, `versions`, `platforms`. Made again at most every 15 seconds, with the same `Access-Control-Allow-Origin`. |
 | `GET /healthz` | `ok` |
 
-The totals are grouped per version, OS, GPU vendor and render distance. Each group has its sessions, install-days, hours played, the 14 frame-time buckets summed, and the mean p50 and p99 frame times. Groups with fewer than 5 install-days are left out. The totals also list crash counts per version and the newest 50 benchmark uploads.
+The totals are grouped per version, OS, GPU vendor and render distance. Each group has its sessions, install-days, hours played, the 14 frame-time buckets summed, and the mean p50 and p99 frame times. Groups with fewer than 5 install-days are left out. The totals also list crash counts per version. Benchmark uploads are published only through the summary below, never one by one.
+
+## Benchmarks summary
+
+`src/summary.rs` makes it with the same rules as `website/scripts/benchmarks.mjs`, which bakes the page's fallback copy; both are tested against the same fixtures (`website/scripts/fixtures/benchmarks/`).
+
+- Only reports that compare: a version 1 `horizon-benchmark-report` of the standard flight over the four scenes, VSync off, no frame cap, on screen, from Horizon or plain vanilla, naming its GPU and CPU.
+- A group (GPU, CPU, render distance, game) is published only with **at least 3 different installs**. Each install counts once: the median of its runs, then the median across installs.
+- Out go the names, the counts, the newest three versions and the medians. Never an install ID, a day, an OS version, a driver, a memory size or a screen.
+
+```json
+{
+  "format": "horizon-benchmark-summary", "version": 1, "generated": "2026-10-22T20:00:00Z", "min_installs": 3,
+  "groups": [{
+    "gpu": "NVIDIA GeForce RTX 4080", "cpu": "13th Gen Intel Core i7-13700KF", "render_distance": 12,
+    "game": "horizon", "source": "players", "installs": 3, "reports": 4, "versions": ["v0.2.1", "v0.2.0"],
+    "medians": { "avg_fps": 515, "low_1pct_fps": 120, "p95_ms": 3.5, "world_ms": 4500,
+                 "chunk_load_ms": 1400, "rss_peak_mb": 1450, "rss_steady_mb": 1250 }
+  }]
+}
+```
+
+Frame rates are whole numbers, milliseconds have one decimal under 10, megabytes are whole. Groups come most installs first. A deleted install leaves its groups at once.
 
 ## Storage
 
@@ -45,7 +68,7 @@ All are environment variables:
 - `HORIZON_TELEMETRY_MIN_INSTALL_DAYS` (5)
 - `HORIZON_TELEMETRY_REQUESTS_PER_HOUR` per address (60, bursts of 6)
 - `HORIZON_TELEMETRY_ITEMS_PER_DAY` per install (100)
-- `HORIZON_TELEMETRY_TRUST_PROXY=1` behind a proxy (the client's address is then the first of `X-Forwarded-For`)
+- `HORIZON_TELEMETRY_TRUST_PROXY=1` behind a proxy (the client's address is then the proxy's `X-Real-IP`, else the last `X-Forwarded-For` entry; it is used only for the rate limits, in memory, and never stored or logged)
 - `HORIZON_TELEMETRY_ALLOW_ORIGIN` (`https://playhorizon.dev`)
 - `HORIZON_TELEMETRY_LIVE_PER_HOUR` per address, pings and reads (600, bursts of 60: ten players behind one address)
 - `HORIZON_TELEMETRY_LIVE_WINDOW_SECONDS` (120)
@@ -54,6 +77,14 @@ All are environment variables:
 ## Hosting
 
 `Dockerfile` builds it from the repository root (`docker build -f crates/horizon-telemetry-server/Dockerfile .`). The database goes on a volume mounted at `/data`.
+
+On Railway it is a service of the same project as the website:
+
+- Source: this repository, root directory `/` (the Dockerfile needs the shared crate), config file `/crates/horizon-telemetry-server/railway.json` (Dockerfile build, health check `/healthz`, one replica in `europe-west4`, Amsterdam: one SQLite file can't be shared).
+- A volume mounted at `/data`. The Dockerfile already sets `HORIZON_TELEMETRY_DB=/data/telemetry.sqlite3` and `HORIZON_TELEMETRY_TRUST_PROXY=1`; Railway sets `PORT`.
+- The custom domain `telemetry.playhorizon.dev`: a `CNAME` at Porkbun to the target Railway gives.
+
+Check it with `curl https://telemetry.playhorizon.dev/healthz`.
 
 At Railway's prices (RAM $10/GB-month, CPU $20/vCPU-month, volumes $0.15/GB-month, egress $0.05/GB), one more service with a 1 GB volume uses about $0.35 a month:
 
