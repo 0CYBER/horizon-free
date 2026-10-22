@@ -993,6 +993,61 @@ fn download_for_owner(
     }
 }
 
+/// The home of a JDK of at least `major`: one horizon-prepare finds (JAVA_HOME, the PATH, an
+/// installed JDK) or the Java the official launcher downloaded into one of the `games`
+/// folders, else Minecraft's own Java downloaded from Mojang into Horizon's game folder, the
+/// runtime the version JSON at `manifest` names (Mojang's runtimes are whole JDKs).
+fn java(
+    major: i64,
+    games: &[PathBuf],
+    manifest: &Path,
+    log: &dyn Fn(String),
+) -> Result<PathBuf, String> {
+    let runtimes = || -> Vec<PathBuf> {
+        let mut homes: Vec<PathBuf> = games
+            .iter()
+            .flat_map(|game| horizon_prepare::java::minecraft_runtimes(&game.join("runtime")))
+            .collect();
+        homes.dedup();
+        homes
+    };
+    let missing = match horizon_prepare::java::find(major, &runtimes()) {
+        Ok(jdk) => return Ok(jdk.home()),
+        Err(e) => e,
+    };
+    let component = read_json(manifest)
+        .and_then(|json| json["javaVersion"]["component"].as_str().map(String::from))
+        .ok_or_else(|| missing.clone())?;
+    let fetch = |url: &str| -> Result<Vec<u8>, String> {
+        let mut body = Vec::new();
+        get(url)?
+            .into_reader()
+            .read_to_end(&mut body)
+            .map_err(|e| e.to_string())?;
+        Ok(body)
+    };
+    let runtime = data_dir().join("minecraft").join("runtime");
+    let home = mojang::java_runtime(&component, &runtime, 8, &fetch, log).map_err(|e| {
+        format!("{missing}\n  • Horizon also tried to download Minecraft's own Java from Mojang, but: {e}")
+    })?;
+    horizon_prepare::java::find(major, &[home]).map(|jdk| jdk.home())
+}
+
+/// Runs `cmd` with the JDK at `home`: JAVA_HOME names it and its `bin` leads the PATH, as the
+/// versions' own preparers look for Java.
+fn with_java(cmd: &mut Command, home: &Path) {
+    let mut path = vec![home.join("bin")];
+    path.extend(
+        std::env::var_os("PATH")
+            .iter()
+            .flat_map(std::env::split_paths),
+    );
+    cmd.env("JAVA_HOME", home);
+    if let Ok(path) = std::env::join_paths(path) {
+        cmd.env("PATH", path);
+    }
+}
+
 /// Checks what the preparation needs and picks how to run it. PLAY.txt describes the same
 /// steps: the player's own launcher install, the server jar from that version's own json, and
 /// Java (and Python, for versions before horizon-prepare). Also returns the Minecraft folder
@@ -1006,6 +1061,7 @@ pub fn preparer(
     let version = game_version(tag);
     let dir = version_dir(tag);
     let reused = horizon_prepare::artifacts::reuse_imported(&dir, &|line| log(line.to_string()))?;
+    let chosen = minecraft.to_path_buf();
     let minecraft = if reused {
         minecraft.to_path_buf()
     } else {
@@ -1042,25 +1098,27 @@ pub fn preparer(
         .join(&version)
         .join(format!("{version}.json"));
     let binary = preparer_binary(&dir);
-    let python = if binary.is_some() {
-        // The JDK the version pins, found as horizon-prepare finds it, so a missing one is
-        // reported before the server jar is downloaded.
-        let major = read_json(&dir.join("research-lock.json"))
-            .and_then(|lock| lock["minecraft"]["java_major"].as_i64())
-            .ok_or("The version's research-lock.json has no java_major")?;
-        horizon_prepare::java::find(major)?;
-        None
-    } else {
-        let python = python()
-            .ok_or("This version prepares with Python: Python 3.10 or newer is needed. Install it, or pick a newer version.")?;
-        if !found("java", "-version") {
-            return Err(
-                "Java 25 is needed (a JDK, e.g. Eclipse Temurin 25). Install it and try again."
-                    .into(),
-            );
-        }
-        Some(python)
+    let python = match binary {
+        Some(_) => None,
+        None => Some(python().ok_or(
+            "This version prepares with Python: Python 3.10 or newer is needed. Install it, or pick a newer version.",
+        )?),
     };
+    // The JDK the version pins, found as horizon-prepare finds it, so a missing one is
+    // reported (or downloaded) before the server jar is downloaded. Versions from before
+    // java_major ran Java 25.
+    let major = read_json(&dir.join("research-lock.json"))
+        .and_then(|lock| lock["minecraft"]["java_major"].as_i64())
+        .unwrap_or(25);
+    let mut games = vec![chosen, minecraft.clone(), data_dir().join("minecraft")];
+    games.extend(
+        sources::Folders::current()
+            .map(|f| sources::known_folders(sources::Os::current(), &f))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(_, dir)| dir),
+    );
+    let java_home = java(major, &games, &manifest, log)?;
     let jar = data_dir()
         .join("server-jars")
         .join(format!("{version}.jar"));
@@ -1092,10 +1150,12 @@ pub fn preparer(
                 import: !reused,
                 minecraft_dir: Some(minecraft.clone()),
                 server_jar: (!reused).then_some(jar),
+                java_home: Some(java_home),
             };
             return Ok((Preparer::InProcess(options), minecraft));
         }
         let mut cmd = Command::new(binary);
+        with_java(&mut cmd, &java_home);
         cmd.current_dir(&dir).arg("--root").arg(&dir);
         if !reused {
             cmd.args(["--prepare", "--server-jar"]).arg(&jar);
@@ -1104,6 +1164,7 @@ pub fn preparer(
         return Ok((Preparer::Process(cmd), minecraft));
     }
     let mut cmd = Command::new(python.unwrap());
+    with_java(&mut cmd, &java_home);
     cmd.current_dir(&dir)
         .args(["-u", "tools/prepare_native_client.py"]);
     if !reused {
