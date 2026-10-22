@@ -182,6 +182,7 @@ public final class VanillaMenuOracle {
             case "grindstone" -> new GrindstoneMenu(0, inv);
             case "anvil" -> new AnvilMenu(0, inv);
             case "smithing" -> new SmithingMenu(0, inv);
+            case "enchanting" -> new EnchantmentMenu(0, inv);
             default -> throw new IllegalArgumentException(kind);
         };
     }
@@ -231,6 +232,8 @@ public final class VanillaMenuOracle {
                     set(player, ServerPlayer.class, "connection", make(Connection.class));
                     // AnvilMenu.onTake filters a new name; the anvil's result needs the levels.
                     set(player, ServerPlayer.class, "textFilter", net.minecraft.server.network.TextFilter.DUMMY);
+                    // EnchantmentMenu.clickMenuButton names the player on an invalid button.
+                    set(player, Player.class, "gameProfile", new com.mojang.authlib.GameProfile(new java.util.UUID(0, 1), "Oracle"));
                     player.experienceLevel = f.has("levels") ? f.get("levels").getAsInt() : 0;
                     var inv = new Inventory(player, new EntityEquipment());
                     player.inv = inv;

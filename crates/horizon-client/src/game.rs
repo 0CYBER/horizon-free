@@ -5438,6 +5438,7 @@ impl Game<'_> {
         let grindstone_open = station_kind == Some(stations::Kind::Grindstone);
         let anvil_open = station_kind == Some(stations::Kind::Anvil);
         let smithing_open = station_kind == Some(stations::Kind::Smithing);
+        let enchanting_open = station_kind == Some(stations::Kind::Enchanting);
         let (kind, game_of): (Kind, Vec<Option<usize>>) = if self.creative_tab_open() {
             // ItemPickerMenu: the display slots (clicked by the screen), then the hotbar.
             let mut v = vec![None; 45];
@@ -5478,6 +5479,11 @@ impl Game<'_> {
             ];
             v.extend((9..36).chain(0..9).map(Some));
             (Kind::Grindstone, v)
+        } else if enchanting_open {
+            // EnchantmentMenu: the item, the lapis, then the inventory.
+            let mut v = vec![Some(stations::INPUT), Some(stations::INPUT + 1)];
+            v.extend((9..36).chain(0..9).map(Some));
+            (Kind::Enchanting, v)
         } else if anvil_open || smithing_open {
             // ItemCombinerMenu: the inputs, the result, then the inventory.
             let inputs = if anvil_open { 2 } else { 3 };
@@ -5647,6 +5653,17 @@ impl Game<'_> {
             menu.stone = state;
             menu.set_slot(&env, 1, before[1].clone());
         }
+        if kind == Kind::Enchanting
+            && let Some(s) = self.station.as_ref()
+        {
+            // The offers between clicks (what copying the slots in flagged is not a change).
+            menu.enchant_changed = false;
+            for i in 0..3 {
+                menu.data[i] = s.offers.costs[i];
+                menu.data[7 + i] = s.offers.clues[i].as_ref().map_or(-1, |(_, l)| *l as i32);
+            }
+            menu.data[3] = self.level.xp_seed;
+        }
         if let Some((disabled, triggered)) = crafter_data {
             for (i, d) in disabled.iter().enumerate() {
                 menu.data[i] = i32::from(*d);
@@ -5723,6 +5740,11 @@ impl Game<'_> {
         }
         if kind == Kind::Anvil || kind == Kind::Smithing {
             self.combiner_session_end(&menu, predicting);
+        }
+        if kind == Kind::Enchanting && (menu.enchant_changed || before[0] != menu.slot(0).cloned())
+        {
+            // EnchantmentMenu.slotsChanged: new offers for the item.
+            self.station_changed();
         }
         if kind == Kind::CrafterBlock
             && let Some(BlockEntity::Crafter(c)) = self

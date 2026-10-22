@@ -1268,6 +1268,7 @@ impl Game<'_> {
             "minecraft:grindstone" => Kind::Grindstone,
             "minecraft:anvil" => Kind::Anvil,
             "minecraft:smithing" => Kind::Smithing,
+            "minecraft:enchantment" => Kind::Enchanting,
             _ => return None,
         })
     }

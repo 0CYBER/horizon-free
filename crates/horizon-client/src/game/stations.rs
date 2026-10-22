@@ -131,7 +131,7 @@ pub(super) struct Station {
     pub(super) pos: [i32; 3],
     pub(super) inputs: Vec<Option<ItemStack>>,
     pub(super) result: Option<ItemStack>,
-    offers: EnchantOffers,
+    pub(super) offers: EnchantOffers,
     bookcases: i32,
     pub(super) anvil: AnvilResult,
     /// Anvil rename box text.
@@ -391,7 +391,7 @@ impl Game<'_> {
             _ => &mut self.scratch_slot,
         }
     }
-    fn count_bookshelves(&self, pos: [i32; 3]) -> i32 {
+    pub(super) fn count_bookshelves(&self, pos: [i32; 3]) -> i32 {
         let tags = &self.res.items().block_tags;
         let is = |p: [i32; 3], tag: &str| {
             let name = &self
@@ -435,6 +435,16 @@ impl Game<'_> {
         let data = self.res.stations();
         let items = self.res.items();
         match s.kind {
+            // A server's table: its data slots carry the offers, and its
+            // client menu only clears them without an enchantable item.
+            Kind::Enchanting if self.remote.is_some() => {
+                let enchantable = s.inputs[0].as_ref().is_some_and(|i| {
+                    data.enchantments.enchantable(&i.item) > 0 && i.enchantments().is_empty()
+                });
+                if !enchantable {
+                    s.offers = Default::default();
+                }
+            }
             Kind::Enchanting => {
                 s.bookcases = self.count_bookshelves(s.pos);
                 s.offers = stations::enchant_offers(
@@ -521,7 +531,6 @@ impl Game<'_> {
         }
         let i = slot - INPUT;
         match s.kind {
-            Kind::Enchanting if i == 0 => (true, 1),
             Kind::Beacon => (super::beacon::is_payment(&stack.item), 1),
             Kind::Loom => (false, 64),
             Kind::Cartography if i == 0 => (super::maps::map_id(stack).is_some(), 64),
@@ -532,7 +541,6 @@ impl Game<'_> {
                 ),
                 64,
             ),
-            Kind::Enchanting => (&*stack.item == "minecraft:lapis_lazuli", 64),
             _ => (true, 64),
         }
     }
@@ -669,21 +677,10 @@ impl Game<'_> {
         if slot >= INPUT {
             // An input slot: into the inventory, the hotbar's last slot first
             // where vanilla moves in reverse.
-            let reverse = matches!(kind, Kind::Enchanting | Kind::Beacon);
+            let reverse = kind == Kind::Beacon;
             self.move_to(&mut stack, &Self::player_slots(), reverse);
         } else {
             match kind {
-                Kind::Enchanting => {
-                    if &*stack.item == "minecraft:lapis_lazuli" {
-                        self.move_to(&mut stack, &[INPUT + 1], true);
-                    } else if empty(self, 0) {
-                        *self.station_slot_mut(INPUT) = Some(ItemStack {
-                            count: 1,
-                            ..stack.clone()
-                        });
-                        stack.count -= 1;
-                    }
-                }
                 Kind::Beacon => {
                     if empty(self, 0) && super::beacon::is_payment(&stack.item) && stack.count == 1
                     {
@@ -710,7 +707,8 @@ impl Game<'_> {
                 | Kind::Stonecutter
                 | Kind::Grindstone
                 | Kind::Anvil
-                | Kind::Smithing => {}
+                | Kind::Smithing
+                | Kind::Enchanting => {}
             }
         }
         let moved = stack.count != start;
@@ -940,6 +938,11 @@ impl Game<'_> {
         {
             return;
         }
+        if self.remote.is_some() {
+            // EnchantmentScreen.mouseClicked: the client menu took it, the server enchants.
+            self.remote_station_button(button as i32);
+            return;
+        }
         let Some(enchanted) = stations::apply_enchantment(
             &self.res.stations().enchantments,
             self.res.items(),
@@ -1058,6 +1061,7 @@ impl Game<'_> {
                     | Kind::Grindstone
                     | Kind::Anvil
                     | Kind::Smithing
+                    | Kind::Enchanting
             )
         }) {
             // LoomMenu, MerchantMenu, StonecutterMenu, GrindstoneMenu, AnvilMenu,

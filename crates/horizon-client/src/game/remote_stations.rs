@@ -79,6 +79,24 @@ impl Game<'_> {
             (Kind::Stonecutter, 0) => s.selected = usize::try_from(value).ok(),
             // AnvilMenu.cost.
             (Kind::Anvil, 0) => s.anvil.cost = i32::from(value),
+            // EnchantmentMenu: costs, the seed (the screen's glyph names),
+            // the clues' enchantments and levels.
+            (Kind::Enchanting, 0..3) => s.offers.costs[id] = i32::from(value),
+            (Kind::Enchanting, 3) => self.level.xp_seed = i32::from(value),
+            (Kind::Enchanting, 4..7) => {
+                let name = self.remote.as_ref().and_then(|r| {
+                    r.registries
+                        .name("minecraft:enchantment", i32::from(value))
+                        .map(std::sync::Arc::<str>::from)
+                });
+                let level = s.offers.clues[id - 4].as_ref().map_or(1, |(_, l)| *l);
+                s.offers.clues[id - 4] = name.map(|n| (n, level));
+            }
+            (Kind::Enchanting, 7..10) => {
+                if let Some((_, level)) = s.offers.clues[id - 7].as_mut() {
+                    *level = value.max(0) as u32;
+                }
+            }
             _ => {}
         }
     }

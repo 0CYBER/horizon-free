@@ -13,7 +13,8 @@ brewing stand, the crafter (the client's menu, and the server's over the block
 entity with slot state packets), the loom (with its pattern buttons), the
 stonecutter (with its recipe buttons), the grindstone (enchanted, damaged and
 cursed tools and books), the anvil (repairs, enchantment merges and renames,
-with the player's levels) and the smithing table (upgrades and trims) and the
+with the player's levels), the smithing table (upgrades and trims), the
+enchanting table (its button checks against the costs, lapis and levels) and the
 server's furnace menus over their block entities (`*_be`: a new input restarts
 cooking, other clicks keep its progress). After
 every click the slots, carried stack, data slots and drops are compared.
@@ -29,9 +30,9 @@ except ImportError:
 
 MENUS = {'inventory': 46, 'crafting': 46, 'chest1': 45, 'chest2': 54, 'chest3': 63, 'chest4': 72, 'chest5': 81,
          'chest6': 90, 'hopper': 41, 'dispenser': 45, 'shulker': 63, 'furnace': 39, 'blast_furnace': 39, 'smoker': 39, 'brewing': 41, 'crafter': 46,
-         'crafter_be': 46, 'loom': 40, 'stonecutter': 38, 'grindstone': 39, 'anvil': 39, 'smithing': 40, 'furnace_be': 39, 'blast_furnace_be': 39, 'smoker_be': 39}
+         'crafter_be': 46, 'loom': 40, 'stonecutter': 38, 'grindstone': 39, 'anvil': 39, 'smithing': 40, 'enchanting': 38, 'furnace_be': 39, 'blast_furnace_be': 39, 'smoker_be': 39}
 DATA = {'furnace': 4, 'blast_furnace': 4, 'smoker': 4, 'brewing': 4, 'crafter': 10, 'crafter_be': 10, 'loom': 1,
-        'stonecutter': 1,
+        'stonecutter': 1, 'enchanting': 10,
         'furnace_be': 4, 'blast_furnace_be': 4, 'smoker_be': 4}
 DYES = ['white', 'orange', 'magenta', 'light_blue', 'yellow', 'lime', 'pink', 'gray', 'light_gray', 'cyan', 'purple',
         'blue', 'brown', 'green', 'red', 'black']
@@ -223,6 +224,10 @@ class Gen:
                 result = 2 if menu == 'anvil' else 3
                 out.append([result, rng.randrange(0, 2), rng.choice(['PICKUP', 'QUICK_MOVE', 'QUICK_MOVE', 'THROW', 'SWAP'])])
                 continue
+            if menu == 'enchanting' and rng.random() < 0.25:
+                # An offer button (clickMenuButton), sometimes out of range.
+                out.append([rng.choice([0, 1, 2, 2, 3, -1]), 0, 'BUTTON'])
+                continue
             if menu == 'grindstone' and rng.random() < 0.2:
                 out.append([2, rng.randrange(0, 2), rng.choice(['PICKUP', 'QUICK_MOVE', 'QUICK_MOVE', 'THROW', 'SWAP'])])
                 continue
@@ -316,6 +321,14 @@ def main():
             for i in range(3):
                 slots[i] = g.smith_stack(i) if rng.random() < 0.75 else '-'
             slots[3] = '-' if rng.random() < 0.9 else g.smith_stack()
+        if menu == 'enchanting':
+            lapis = lambda: snbt('minecraft:lapis_lazuli', rng.choice([1, 2, 3, 5, 64]))
+            enchantable = lambda: snbt('minecraft:' + rng.choice(['iron_sword', 'book', 'diamond_pickaxe', 'bow',
+                                                                  'golden_helmet', 'fishing_rod']), 1)
+            for i in rng.sample(range(2, size), 10):
+                slots[i] = rng.choice([lapis, enchantable, g.grind_stack])()
+            slots[0] = rng.choice([enchantable, enchantable, g.grind_stack, g.stack])() if rng.random() < 0.8 else '-'
+            slots[1] = lapis() if rng.random() < 0.7 else rng.choice(['-', g.stack()])
         if menu == 'crafter_be':
             slots[45] = '-'
             if rng.random() < 0.6:
@@ -343,6 +356,10 @@ def main():
                 return rng.choice([0, 0, 1])
             if menu in ('loom', 'stonecutter'):
                 return rng.choice([-1, -1, 0, 0, 1, 2, 3, 30])
+            if menu == 'enchanting':
+                # costs, the seed, then the clues
+                return [rng.choice([0, 1, 2, 5, 15, 30]) for _ in range(3)][0] if i < 3 else \
+                    rng.randrange(-2**15, 2**15) if i == 3 else rng.choice([-1, -1, 0, 3, 12])
             return 0
         carried = {'loom': g.loom_stack, 'stonecutter': g.cut_stack, 'grindstone': g.grind_stack,
                    'anvil': g.anvil_stack, 'smithing': g.smith_stack}.get(menu, g.stack)() if rng.random() < 0.5 else '-'

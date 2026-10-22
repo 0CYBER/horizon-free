@@ -48,6 +48,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - anvil:     an anvil opens on the guest's screen; the guest repairs a sword with iron ingots and
              renames it (ServerboundRenameItemPacket), takes it for the server's level cost, and the
              server has the repaired, renamed sword (#868);
+- enchanting: an enchanting table opens on the guest's screen with the server's offers for the
+             sword the guest puts in; the guest clicks the first offer and the server enchants the
+             sword for a level and a lapis (#868);
 - smithing:  a smithing table opens on the guest's screen; the guest upgrades a diamond sword to
              netherite and the server has it (#868);
 - feedback:  the guest's command feedback names the guest and shows the numbers;
@@ -144,7 +147,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
 
 
 class Game:
@@ -1106,6 +1109,35 @@ def check_smithing(host, guest, out):
                        602: ('minecraft:netherite_ingot', 1), 650: ('minecraft:netherite_sword', 1)},
             'left': {}, 'server': {'netherite_sword': 1, 'diamond_sword': 0, 'netherite_ingot': 0}}
     assert seen == want, f'the smithing table on the guest: {seen}'
+    return seen
+
+
+def check_enchanting(host, guest, out):
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    guest('command', command='xp set @s 30 levels')
+    guest('command', command='give @s minecraft:iron_sword')
+    guest('command', command='give @s minecraft:lapis_lazuli 3')
+    at = open_station(guest, 'enchanting_table', out, 'enchanting')
+    # EnchantmentMenu.quickMoveStack: the sword to the item slot, the lapis to its own.
+    for item in ('iron_sword', 'lapis_lazuli'):
+        guest.raw('click-slot', hotbar_slot(guest, f'minecraft:{item}'), 'shift')
+        guest.wait(5)
+    guest.wait(10)
+    costs = guest.raw('menu')['info']['costs']
+    guest.shot(out, 'enchanting-offers')
+    # EnchantmentScreen's first offer button (clickMenuButton 0).
+    guest.raw('click-gui', 110, 23)
+    guest.wait(10)
+    left = station_slots(guest)
+    close_station(guest, at)
+    sword = server_reply(guest, 'data get entity @s Inventory[{id:"minecraft:iron_sword"}]', 'iron_sword')
+    levels = server_reply(guest, 'xp query @s levels', 'experience levels')
+    seen = {'offered': costs[0] > 0, 'enchanted': 'minecraft:enchantments' in sword,
+            'left': left.get(601), 'levels': int(re.search(r'has (\d+) experience', levels).group(1)),
+            'lapis': server_count(guest, 'lapis_lazuli')}
+    want = {'offered': True, 'enchanted': True, 'left': ('minecraft:lapis_lazuli', 2), 'levels': 29, 'lapis': 2}
+    assert seen == want, f'the enchanting table on the guest: {seen} ({costs}, {sword!r})'
     return seen
 
 
@@ -2305,6 +2337,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'grindstone': check_grindstone,
              'anvil': check_anvil,
              'smithing': check_smithing,
+             'enchanting': check_enchanting,
              'hurt': check_hurt,
              'commands': check_commands,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,

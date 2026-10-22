@@ -14,6 +14,7 @@ use horizon_client::{
     items::ItemStack,
     menu::{Kind, Menu},
 };
+use horizon_core::random::RandomSource;
 use horizon_protocol::packets::play::{self, Clientbound as C};
 
 /// A guest's open workstation menu.
@@ -38,6 +39,7 @@ fn menu_of(kind: StationKind) -> Option<(&'static str, Kind, std::ops::Range<usi
         StationKind::Grindstone => ("minecraft:grindstone", Kind::Grindstone, 0..2),
         StationKind::Anvil => ("minecraft:anvil", Kind::Anvil, 0..2),
         StationKind::Smithing => ("minecraft:smithing", Kind::Smithing, 0..3),
+        StationKind::Enchanting => ("minecraft:enchantment", Kind::Enchanting, 0..2),
         _ => return None,
     })
 }
@@ -62,12 +64,22 @@ impl Game<'_> {
         let Some(window) = host.hub.open_window(conn, menu_type, title) else {
             return true;
         };
+        let mut menu = Box::new(Menu::new(kind));
+        if let Some(g) = host.hub.guests.iter_mut().find(|g| g.conn == conn)
+            && kind == Kind::Enchanting
+        {
+            // Player.enchantmentSeed, made when first needed.
+            if g.xp_seed == 0 {
+                g.xp_seed = self.world.random.next_int();
+            }
+            menu.data[3] = g.xp_seed;
+        }
         host.play.entry(conn).or_default().station = Some(GuestStation {
             window,
             state: 0,
             kind: station.kind,
             pos: station.pos,
-            menu: Box::new(Menu::new(kind)),
+            menu,
             sent_data: Vec::new(),
             last_sound: 0,
         });
@@ -101,6 +113,12 @@ impl Game<'_> {
                 self.grindstone_taken(gs.pos, amount);
             }
             self.lan_station_combined(host, conn, &mut gs);
+            if let Some(button) = gs.menu.enchant_button.take() {
+                self.lan_enchant(host, gi, &mut gs, button);
+            }
+            if std::mem::take(&mut gs.menu.enchant_changed) {
+                self.lan_enchant_offers(host, gi, &mut gs);
+            }
         }
         host.play.entry(conn).or_default().station = Some(gs);
         self.lan_send_station(host, conn);
@@ -125,6 +143,73 @@ impl Game<'_> {
             // A broken anvil closes the menu on the next stillValid check.
             self.anvil_used(gs.pos, creative);
         }
+    }
+
+    /// `EnchantmentMenu.slotsChanged` with a level: the costs and clues for
+    /// the guest's seed and the bookshelves around the table.
+    fn lan_enchant_offers(&mut self, host: &LanHost, gi: usize, gs: &mut GuestStation) {
+        let seed = host.hub.guests[gi].xp_seed;
+        let bookcases = self.count_bookshelves(gs.pos);
+        let offers = horizon_client::stations::enchant_offers(
+            &self.res.stations().enchantments,
+            self.res.items(),
+            seed,
+            bookcases,
+            gs.menu.slot(0),
+        );
+        for i in 0..3 {
+            gs.menu.data[i] = offers.costs[i];
+            let clue = offers.clues[i].as_ref();
+            gs.menu.data[4 + i] = clue
+                .and_then(|(e, _)| host.hub.registry_id("minecraft:enchantment", e))
+                .unwrap_or(-1);
+            gs.menu.data[7 + i] = clue.map_or(-1, |(_, l)| *l as i32);
+        }
+        gs.menu.data[3] = seed;
+    }
+
+    /// `EnchantmentMenu.clickMenuButton`'s `access.execute`: the item gets
+    /// the offer's enchantments, the guest pays its levels and lapis and
+    /// gets a new seed, the table sounds, and the offers are made again.
+    fn lan_enchant(&mut self, host: &mut LanHost, gi: usize, gs: &mut GuestStation, button: usize) {
+        let Some(item) = gs.menu.slot(0).cloned() else {
+            return;
+        };
+        let g = &host.hub.guests[gi];
+        let (seed, creative, conn) = (g.xp_seed, g.creative(), g.conn);
+        let Some(enchanted) = horizon_client::stations::apply_enchantment(
+            &self.res.stations().enchantments,
+            self.res.items(),
+            seed,
+            button,
+            gs.menu.data[button],
+            &item,
+        ) else {
+            return;
+        };
+        let need = button as i32 + 1;
+        // Player.onEnchantmentPerformed.
+        self.as_guest(host, conn, |game| game.give_levels(-need));
+        host.hub.guests[gi].xp_seed = self.world.random.next_int();
+        let env = self.menu_env();
+        let lapis = gs.menu.slot(1).cloned().filter(|_| !creative).map(|mut l| {
+            l.count = l.count.saturating_sub(need as u32);
+            l
+        });
+        gs.menu.set_slot(&env, 0, Some(enchanted));
+        if !creative {
+            gs.menu.set_slot(&env, 1, lapis.filter(|l| l.count > 0));
+        }
+        gs.menu.enchant_changed = false;
+        self.lan_enchant_offers(host, gi, gs);
+        let pitch = self.world.random.next_float() * 0.1 + 0.9;
+        let at = gs.pos.map(|v| f64::from(v) + 0.5);
+        self.audio.play(
+            "minecraft:block.enchantment_table.use",
+            Some(at),
+            1.0,
+            pitch,
+        );
     }
 
     /// `ServerGamePacketListenerImpl.handleRenameItem`: the guest's anvil

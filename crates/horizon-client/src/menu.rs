@@ -86,6 +86,9 @@ pub enum Kind {
     Anvil,
     /// `SmithingMenu`: template, base, addition, the result, then the inventory.
     Smithing,
+    /// `EnchantmentMenu`: the item, the lapis, then the inventory; its data
+    /// slots are the three costs, the seed and the clues.
+    Enchanting,
     /// `MerchantMenu`: two payment slots, the result, then the inventory.
     Merchant,
     /// `CreativeModeInventoryScreen.ItemPickerMenu`: an item tab's 45
@@ -115,6 +118,7 @@ impl Kind {
             "grindstone" => Self::Grindstone,
             "anvil" => Self::Anvil,
             "smithing" => Self::Smithing,
+            "enchanting" => Self::Enchanting,
             "merchant" => Self::Merchant,
             "item_picker" => Self::ItemPicker,
             _ => return None,
@@ -162,6 +166,10 @@ enum Role {
     SmithInput(usize),
     /// `ItemCombinerMenu`'s result slot (the anvil's and the smithing table's).
     CombineResult,
+    /// The enchanting table's item slot (one item).
+    EnchantItem,
+    /// The enchanting table's lapis slot.
+    Lapis,
     /// `CustomCreativeSlot`: a creative tab's display slot, which the
     /// screen clicks itself; drags and PICKUP_ALL pass it by.
     CreativeDisplay,
@@ -227,6 +235,13 @@ pub struct Menu {
     /// a level) runs the rest of its `onTake` (the anvil's wear and level
     /// event 1030 or 1029, the smithing table's 1044).
     pub combined: bool,
+    /// The enchanting table's item changed to an enchantable one: the caller
+    /// (with a level) fills the costs and clues (`slotsChanged`'s
+    /// `access.execute`).
+    pub enchant_changed: bool,
+    /// An enchanting button the menu took (`clickMenuButton` passed its
+    /// checks): the caller (with a level) enchants.
+    pub enchant_button: Option<usize>,
 }
 
 /// `AnvilMenu`'s state besides its slots and `cost`.
@@ -435,6 +450,22 @@ impl Menu {
                 // hasRecipeError.
                 data = 1;
             }
+            Kind::Enchanting => {
+                containers[MAIN] = vec![None; 2];
+                slots.push(Slot {
+                    container: MAIN,
+                    index: 0,
+                    role: Role::EnchantItem,
+                });
+                slots.push(Slot {
+                    container: MAIN,
+                    index: 1,
+                    role: Role::Lapis,
+                });
+                player(&mut slots);
+                // costs[3], enchantmentSeed, enchantClue[3], levelClue[3].
+                data = 10;
+            }
             Kind::ItemPicker => {
                 containers[MAIN] = vec![None; 45];
                 slots.extend(main(45, Role::CreativeDisplay));
@@ -526,7 +557,18 @@ impl Menu {
             level_change: 0,
             anvil: Anvil::default(),
             combined: false,
+            enchant_changed: false,
+            enchant_button: None,
         }
+        .with_initial_data()
+    }
+
+    /// Data slots that do not start at 0: the enchanting table's clues are -1.
+    fn with_initial_data(mut self) -> Self {
+        if self.kind == Kind::Enchanting {
+            self.data[4..].fill(-1);
+        }
+        self
     }
 
     pub fn kind(&self) -> Kind {
@@ -536,6 +578,9 @@ impl Menu {
     /// `clickMenuButton`: the loom's pattern buttons and the stonecutter's
     /// recipes. False when refused.
     pub fn button(&mut self, env: &Env, id: i32) -> bool {
+        if self.kind == Kind::Enchanting {
+            return self.enchant_click(id);
+        }
         if self.kind == Kind::Stonecutter {
             // StonecutterMenu.clickMenuButton: an invalid index is taken too.
             if self.data[0] == id {
@@ -709,11 +754,50 @@ impl Menu {
             }
             Kind::CrafterBlock => self.crafter_result(env),
             Kind::Anvil => self.anvil_result(env),
+            Kind::Enchanting => self.enchant_changed(env),
             Kind::Smithing => {
                 self.smith_result(env);
                 self.smith_error();
             }
             _ => {}
+        }
+    }
+
+    /// `EnchantmentMenu.clickMenuButton`'s checks: the lapis, the cost and
+    /// the levels (creative pays nothing). The enchanting itself needs a
+    /// level and is the caller's (`enchant_button`).
+    fn enchant_click(&mut self, id: i32) -> bool {
+        let Some(i) = usize::try_from(id).ok().filter(|&i| i < 3) else {
+            return false;
+        };
+        let need = id + 1;
+        let lapis = self.containers[MAIN][1]
+            .as_ref()
+            .map_or(0, |l| l.count as i32);
+        if lapis < need && !self.creative {
+            return false;
+        }
+        if self.data[i] <= 0
+            || self.containers[MAIN][0].is_none()
+            || (self.levels < need || self.levels < self.data[i]) && !self.creative
+        {
+            return false;
+        }
+        self.enchant_button = Some(i);
+        true
+    }
+
+    /// `EnchantmentMenu.slotsChanged`: no costs or clues without an
+    /// enchantable item; with one, a level fills them (`enchant_changed`).
+    fn enchant_changed(&mut self, env: &Env) {
+        let enchantable = self.containers[MAIN][0].as_ref().is_some_and(|s| {
+            env.enchantments.enchantable(&s.item) > 0 && s.enchantments().is_empty()
+        });
+        if enchantable {
+            self.enchant_changed = true;
+        } else {
+            self.data[..3].fill(0);
+            self.data[4..].fill(-1);
         }
     }
 
@@ -887,6 +971,8 @@ impl Menu {
             Role::LoomPattern => env.banners.is_pattern_item(env.items, stack),
             Role::GrindInput => crate::stations::grindstone_accepts(env.items, stack),
             Role::SmithInput(i) => env.station_recipes.smithing_accepts(i, stack),
+            Role::EnchantItem => true,
+            Role::Lapis => &*stack.item == "minecraft:lapis_lazuli",
             Role::LoomResult
             | Role::MerchantResult
             | Role::StoneResult
@@ -931,7 +1017,7 @@ impl Menu {
     /// `Slot.getMaxStackSize(stack)`.
     fn slot_max(&self, env: &Env, s: usize, stack: &ItemStack) -> u32 {
         let own = match self.slots[s].role {
-            Role::Armor(_) | Role::Potion => 1,
+            Role::Armor(_) | Role::Potion | Role::EnchantItem => 1,
             Role::Fuel if Self::is_bucket(stack) => return 1,
             _ => CONTAINER_MAX,
         };
@@ -1033,6 +1119,7 @@ impl Menu {
                     | Kind::Grindstone
                     | Kind::Anvil
                     | Kind::Smithing
+                    | Kind::Enchanting
             )
         {
             self.slot_changed(env, s);
@@ -1623,6 +1710,33 @@ impl Menu {
                     }
                 } else if !self.move_to(env, &mut stack, 0, 2, false) {
                     return None;
+                }
+            }
+            Kind::Enchanting => {
+                after_take = true;
+                if index < 2 {
+                    if !self.move_to(env, &mut stack, 2, 38, true) {
+                        return None;
+                    }
+                } else if &*stack.item == "minecraft:lapis_lazuli" {
+                    if !self.move_to(env, &mut stack, 1, 2, true) {
+                        return None;
+                    }
+                } else {
+                    // One item into the empty item slot (setByPlayer).
+                    if self.containers[MAIN][0].is_some() {
+                        return None;
+                    }
+                    let single = ItemStack {
+                        count: 1,
+                        ..stack.clone()
+                    };
+                    stack.count -= 1;
+                    // The source slot keeps the rest while the item slot changes.
+                    let slot = self.slots[index];
+                    self.containers[slot.container][slot.index] =
+                        (stack.count > 0).then(|| stack.clone());
+                    self.set_by_player(env, 0, Some(single));
                 }
             }
             Kind::Anvil | Kind::Smithing => {
