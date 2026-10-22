@@ -623,7 +623,8 @@ impl Game<'_> {
     }
     /// LivingEntity.die / dropAllDeathLoot.
     fn mob_died(&mut self, m: &Mob) {
-        let by_player = self.last_hurt_by_player.remove(&m.id) || m.ai.last_hurt_by_player > 0;
+        let killer = self.last_hurt_by_player.remove(&m.id);
+        let by_player = killer.is_some() || m.ai.last_hurt_by_player > 0;
         let mut dying = m.clone();
         // LivingEntity.die: the death is heard, and a sculk catalyst nearby
         // takes the experience (before the loot is dropped).
@@ -637,11 +638,22 @@ impl Game<'_> {
                 }
             });
         if by_player {
-            self.stats.add("killed", &m.kind.id, 1);
-            self.stats.custom("mob_kills", 1);
-            self.score_player_killed(super::commands::Target::Mob(m.id));
-            let view = self.mob_entity(m);
-            self.trigger_entity("minecraft:player_killed_entity", "entity", &view);
+            // A guest's kill is theirs: their statistics, scores and
+            // advancements (LivingEntity.die credits lastHurtByPlayer).
+            let guest = killer.flatten().filter(|_| self.lan_acting.is_none());
+            let credited = guest.is_some_and(|conn| {
+                let Some(mut host) = self.lan.take() else {
+                    return false;
+                };
+                let done = self
+                    .as_guest(&mut host, conn, |g| g.credit_kill(m))
+                    .is_some();
+                self.lan = Some(host);
+                done
+            });
+            if !credited {
+                self.credit_kill(m);
+            }
         }
         self.score_entity_removed(m.id);
         self.raider_died(m, by_player);
@@ -675,6 +687,15 @@ impl Game<'_> {
                 }
             }
         }
+    }
+    /// The killer's side of a mob's death: `ServerPlayer.awardKillScore`'s
+    /// statistics and scores, and the `player_killed_entity` trigger.
+    fn credit_kill(&mut self, m: &Mob) {
+        self.stats.add("killed", &m.kind.id, 1);
+        self.stats.custom("mob_kills", 1);
+        self.score_player_killed(super::commands::Target::Mob(m.id));
+        let view = self.mob_entity(m);
+        self.trigger_entity("minecraft:player_killed_entity", "entity", &view);
     }
     /// `dropAllDeathLoot` through `mobs::drops`: the entity loot table from the
     /// world's random sequence, equipment by drop chance, species extras and
@@ -1974,7 +1995,7 @@ impl Game<'_> {
                             .find(|m| m.id == id)
                             .is_some_and(|m| m.damage(amount, source));
                         if p.owner == Some(Who::Player) {
-                            self.last_hurt_by_player.insert(id);
+                            self.last_hurt_by_player.insert(id, self.lan_acting);
                         }
                         hurt
                     }

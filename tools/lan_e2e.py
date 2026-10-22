@@ -20,6 +20,7 @@ address. The script then checks, from both sides, what a guest's game used to ge
              drowning and the void (then respawns);
 - pvp:       the guest and the host hit each other with a sword; with the pvp game rule off, or on one
              team without friendly fire, nothing;
+- kills:     a pig the guest kills counts in the guest's killed statistic, not the host's (#484);
 - respawn:   a player killed is drawn dead by the other side, and alive again once it respawns (the
              respawned player is a new entity to the others); the host dies, and on the server thread
              the guest too;
@@ -123,7 +124,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
 
 
 class Game:
@@ -623,6 +624,36 @@ def check_pvp(host, guest, out):
     for name in ('guest hits teammate', 'host hits teammate'):
         assert hits[name][1] == hits[name][0], f'friendly fire off still hurts ({name}): {hits}'
     return hits
+
+
+def check_kills(host, guest, out):
+    # A mob the guest kills is the guest's kill (#484): LivingEntity.die credits lastHurtByPlayer, so the
+    # killed statistic (and its scoreboard criterion) counts for the guest, not the host.
+    host('command', command='scoreboard objectives add parity_kills minecraft.killed:minecraft.pig')
+    for g in (host, guest):
+        g('command', command='gamemode survival')
+    guest('command', command='item replace entity @s weapon.mainhand with minecraft:iron_sword')
+    face_each_other(host, guest)
+    hx, hy, hz = pos_of(host)
+    try:
+        # Between the two, in front of the guest, with one health left.
+        host('command', command=f'summon minecraft:pig {hx + 1.5:.2f} {hy:.2f} {hz:.2f} {{NoAI:1b,Health:1.0f}}')
+        guest.wait(30)
+        guest.raw('look-at', f'{hx + 1.5:.2f}', f'{hy + 0.5:.2f}', f'{hz:.2f}')
+        guest.wait(10)
+        guest.raw('attack')
+        guest.wait(20)
+        host('command', command=f'scoreboard players get {GUEST_NAME} parity_kills')
+        host('command', command=f'scoreboard players get {host.player} parity_kills')
+        host.wait(10)
+        chat = host.raw('messages', 10)['chat']
+        guest.shot(out, 'kills')
+    finally:
+        host('command', command='kill @e[type=minecraft:pig]')
+        host('command', command='scoreboard objectives remove parity_kills')
+    assert any(f'{GUEST_NAME} has 1 [parity_kills]' in line for line in chat), f"the guest's kill is not theirs: {chat}"
+    assert not any(f'{host.player} has 1 [parity_kills]' in line for line in chat), f"the host got the guest's kill: {chat}"
+    return chat
 
 
 def dead_players(game, want, ticks=60):
@@ -1971,7 +2002,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles, 'blast': check_blast,
              'light': check_light, 'plates': check_plates,
              'swings': check_swings, 'cracks': check_cracks,
-             'time': check_time, 'growth': check_growth, 'fireball': check_fireball, 'deflect': check_deflect, 'barter': check_barter, 'worn': check_worn}
+             'time': check_time, 'growth': check_growth, 'fireball': check_fireball, 'deflect': check_deflect, 'barter': check_barter, 'worn': check_worn, 'kills': check_kills}
 
 
 def run(ctl, out, resources, checks):
