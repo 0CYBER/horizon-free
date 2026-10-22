@@ -83,12 +83,14 @@ fn main() -> horizon_client::Result<()> {
     // The inventory menu never reads banner patterns.
     let banners = horizon_client::banner::Banners::default();
     let station_recipes = horizon_client::stations::StationRecipes::default();
+    let enchantments = horizon_client::enchant::Enchantments::default();
     let env = Env {
         items: &items,
         recipes: &recipes,
         brewing: &brewing,
         banners: &banners,
         station_recipes: &station_recipes,
+        enchantments: &enchantments,
         trade: None,
     };
     let mut out = String::new();

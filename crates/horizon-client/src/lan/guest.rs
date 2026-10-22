@@ -418,6 +418,12 @@ pub fn stack_to_network(
                 horizon_protocol::item::Component::Int(id),
             ));
         }
+        if d.repair_cost > 0 {
+            stack.added.push((
+                horizon_protocol::item::component::REPAIR_COST,
+                horizon_protocol::item::Component::Int(d.repair_cost as i32),
+            ));
+        }
     }
     if let Some(name) = s.custom_name() {
         stack.added.push((

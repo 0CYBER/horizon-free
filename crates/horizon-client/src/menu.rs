@@ -26,6 +26,8 @@ pub struct Env<'a> {
     pub banners: &'a Banners,
     /// The stonecutter's recipes.
     pub station_recipes: &'a crate::stations::StationRecipes,
+    /// The grindstone's curse and cost rules.
+    pub enchantments: &'a crate::enchant::Enchantments,
     /// What a merchant menu needs for offers made while it is open (level-ups).
     pub trade: Option<&'a crate::merchant::TradeEnv<'a>>,
 }
@@ -75,6 +77,8 @@ pub enum Kind {
     Loom,
     /// `StonecutterMenu`: the input, the result, then the inventory.
     Stonecutter,
+    /// `GrindstoneMenu`: two inputs, the result, then the inventory.
+    Grindstone,
     /// `MerchantMenu`: two payment slots, the result, then the inventory.
     Merchant,
     /// `CreativeModeInventoryScreen.ItemPickerMenu`: an item tab's 45
@@ -101,6 +105,7 @@ impl Kind {
             "crafter_be" => Self::CrafterBlock,
             "loom" => Self::Loom,
             "stonecutter" => Self::Stonecutter,
+            "grindstone" => Self::Grindstone,
             "merchant" => Self::Merchant,
             "item_picker" => Self::ItemPicker,
             _ => return None,
@@ -140,6 +145,10 @@ enum Role {
     MerchantResult,
     /// The stonecutter's result slot (`onTake` uses up one input).
     StoneResult,
+    /// The grindstone's inputs: damageable or enchanted items.
+    GrindInput,
+    /// The grindstone's result slot (`onTake` clears both inputs).
+    GrindResult,
     /// `CustomCreativeSlot`: a creative tab's display slot, which the
     /// screen clicks itself; drags and PICKUP_ALL pass it by.
     CreativeDisplay,
@@ -191,6 +200,10 @@ pub struct Menu {
     pub merchant: Option<Box<crate::merchant::Session>>,
     /// The stonecutter's recipe list (`recipesForInput`).
     pub stone: Stonecutter,
+    /// The grindstone result's `getExperienceAmount` sum before its roll,
+    /// set when the result was taken: the caller (with a level) awards the
+    /// orbs and plays level event 1042.
+    pub ground: Option<i32>,
 }
 
 /// `StonecutterMenu`'s state besides its slots and `selectedRecipeIndex`.
@@ -350,6 +363,16 @@ impl Menu {
                 // selectedRecipeIndex: DataSlot.standalone() starts at 0.
                 data = 1;
             }
+            Kind::Grindstone => {
+                containers[MAIN] = vec![None; 2];
+                slots.extend(main(2, Role::GrindInput));
+                slots.push(Slot {
+                    container: RESULT,
+                    index: 0,
+                    role: Role::GrindResult,
+                });
+                player(&mut slots);
+            }
             Kind::ItemPicker => {
                 containers[MAIN] = vec![None; 45];
                 slots.extend(main(45, Role::CreativeDisplay));
@@ -436,6 +459,7 @@ impl Menu {
             equipped: Vec::new(),
             merchant: None,
             stone: Stonecutter::default(),
+            ground: None,
         }
     }
 
@@ -603,6 +627,15 @@ impl Menu {
         match self.kind {
             Kind::Loom => self.loom_changed(env),
             Kind::Stonecutter => self.stone_changed(env),
+            // GrindstoneMenu.createResult.
+            Kind::Grindstone => {
+                self.containers[RESULT][0] = crate::stations::grindstone_result(
+                    env.enchantments,
+                    env.items,
+                    self.containers[MAIN][0].as_ref(),
+                    self.containers[MAIN][1].as_ref(),
+                );
+            }
             Kind::CrafterBlock => self.crafter_result(env),
             _ => {}
         }
@@ -714,7 +747,10 @@ impl Menu {
             Role::LoomBanner => Self::is_banner(stack),
             Role::LoomDye => env.banners.loom_dye(env.items, stack).is_some(),
             Role::LoomPattern => env.banners.is_pattern_item(env.items, stack),
-            Role::LoomResult | Role::MerchantResult | Role::StoneResult => false,
+            Role::GrindInput => crate::stations::grindstone_accepts(env.items, stack),
+            Role::LoomResult | Role::MerchantResult | Role::StoneResult | Role::GrindResult => {
+                false
+            }
         }
     }
 
@@ -843,7 +879,12 @@ impl Menu {
         }
         // SimpleContainer.removeItem calls setChanged when it took something;
         // MerchantContainer.removeItem updates the result after a payment slot.
-        if out.is_some() && matches!(self.kind, Kind::Loom | Kind::Merchant | Kind::Stonecutter) {
+        if out.is_some()
+            && matches!(
+                self.kind,
+                Kind::Loom | Kind::Merchant | Kind::Stonecutter | Kind::Grindstone
+            )
+        {
             self.slot_changed(env, s);
         }
         out
@@ -878,6 +919,18 @@ impl Menu {
                 self.stone_setup_result(env, self.data[0]);
             }
             self.sounds.push("minecraft:ui.stonecutter.take_result");
+            return;
+        }
+        if self.slots[s].role == Role::GrindResult {
+            // GrindstoneMenu's result onTake: the experience (from the inputs
+            // before they go), then both inputs cleared.
+            self.ground = Some(crate::stations::grindstone_xp_base(
+                env.enchantments,
+                self.containers[MAIN][0].as_ref(),
+                self.containers[MAIN][1].as_ref(),
+            ));
+            self.put(env, 0, None);
+            self.put(env, 1, None);
             return;
         }
         if self.slots[s].role == Role::LoomResult {
@@ -1349,6 +1402,31 @@ impl Menu {
                     }
                 } else if (29..38).contains(&index) && !self.move_to(env, &mut stack, 2, 29, false)
                 {
+                    return None;
+                }
+            }
+            Kind::Grindstone => {
+                after_take = true;
+                let full = self.containers[MAIN].iter().all(Option::is_some);
+                if index == 2 {
+                    if !self.move_to(env, &mut stack, 3, 39, true) {
+                        return None;
+                    }
+                } else if index == 0 || index == 1 {
+                    if !self.move_to(env, &mut stack, 3, 39, false) {
+                        return None;
+                    }
+                } else if full {
+                    if (3..30).contains(&index) {
+                        if !self.move_to(env, &mut stack, 30, 39, false) {
+                            return None;
+                        }
+                    } else if (30..39).contains(&index)
+                        && !self.move_to(env, &mut stack, 3, 30, false)
+                    {
+                        return None;
+                    }
+                } else if !self.move_to(env, &mut stack, 0, 2, false) {
                     return None;
                 }
             }
@@ -2148,12 +2226,14 @@ pub(crate) mod tests {
         let brewing = Brewing::load(&root, &items);
         let banners = Banners::load(&root);
         let station_recipes = crate::stations::StationRecipes::load(&root, &items);
+        let enchantments = crate::enchant::Enchantments::default();
         let env = Env {
             items: &items,
             recipes: &recipes,
             brewing: &brewing,
             banners: &banners,
             station_recipes: &station_recipes,
+            enchantments: &enchantments,
             trade: None,
         };
         let mut menu = Menu::new(kind);

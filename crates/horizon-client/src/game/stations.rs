@@ -531,7 +531,6 @@ impl Game<'_> {
                 64,
             ),
             Kind::Enchanting => (&*stack.item == "minecraft:lapis_lazuli", 64),
-            Kind::Grindstone => (stations::grindstone_accepts(self.res.items(), stack), 64),
             Kind::Smithing => (data.recipes.smithing_accepts(i, stack), 64),
             _ => (true, 64),
         }
@@ -692,13 +691,6 @@ impl Game<'_> {
                         self.move_to(&mut stack, &halves, false);
                     }
                 }
-                Kind::Grindstone => {
-                    if empty(self, 0) || empty(self, 1) {
-                        self.move_to(&mut stack, &[INPUT, INPUT + 1], false);
-                    } else {
-                        self.move_to(&mut stack, &halves, false);
-                    }
-                }
                 Kind::Cartography => {
                     if super::maps::map_id(&stack).is_some() {
                         self.move_to(&mut stack, &[INPUT], false);
@@ -724,7 +716,7 @@ impl Game<'_> {
                     self.move_to(&mut stack, targets, false);
                 }
                 // Their clicks run on the menu engine.
-                Kind::Merchant | Kind::Loom | Kind::Stonecutter => {}
+                Kind::Merchant | Kind::Loom | Kind::Stonecutter | Kind::Grindstone => {}
             }
         }
         let moved = stack.count != start;
@@ -732,6 +724,17 @@ impl Game<'_> {
             *self.slot_mut(slot) = Some(stack);
         }
         moved
+    }
+    /// The grindstone result's `onTake` with a level (`amount`: the menu's
+    /// `getExperienceAmount` sum): the orbs at the block's centre
+    /// (`ExperienceOrb.award`), then level event 1042, the grindstone's sound
+    /// for everyone around.
+    pub(super) fn grindstone_taken(&mut self, pos: [i32; 3], amount: i32) {
+        let xp = stations::grindstone_xp_roll(amount, &mut self.world.random);
+        if xp > 0 {
+            self.spawn_orbs(pos.map(|v| f64::from(v) + 0.5), xp);
+        }
+        self.level_event_at(1042, pos, 0);
     }
     fn play_at(&mut self, sound: &str, pos: [i32; 3], volume: f32, pitch: f32) {
         let at = [
@@ -826,28 +829,6 @@ impl Game<'_> {
                     self.play_at("minecraft:block.anvil.use", pos, 1.0, pitch);
                 }
             }
-            Kind::Grindstone => {
-                let (a, b) = (s.inputs[0].take(), s.inputs[1].take());
-                let mut random = LegacyRandom::new(self.world.random.next_long());
-                let xp = stations::grindstone_experience(
-                    &self.res.stations().enchantments,
-                    &mut random,
-                    a.as_ref(),
-                    b.as_ref(),
-                );
-                if xp > 0 {
-                    self.spawn_orbs(
-                        [
-                            f64::from(pos[0]) + 0.5,
-                            f64::from(pos[1]) + 0.5,
-                            f64::from(pos[2]) + 0.5,
-                        ],
-                        xp,
-                    );
-                }
-                let pitch = self.world.random.next_float() * 0.1 + 0.9;
-                self.play_at("minecraft:block.grindstone.use", pos, 1.0, pitch);
-            }
             Kind::Smithing => {
                 for slot in s.inputs.iter_mut() {
                     if let Some(x) = slot.as_mut() {
@@ -860,7 +841,7 @@ impl Game<'_> {
                 let pitch = self.world.random.next_float() * 0.1 + 0.9;
                 self.play_at("minecraft:block.smithing_table.use", pos, 1.0, pitch);
             }
-            Kind::Merchant | Kind::Stonecutter => {}
+            Kind::Merchant | Kind::Stonecutter | Kind::Grindstone => {}
             Kind::Beacon => {}
             Kind::Cartography => {
                 for slot in &mut s.inputs {
@@ -1066,12 +1047,13 @@ impl Game<'_> {
         let Some(slot) = self.slot_at(&batch, self.cursor.0, self.cursor.1) else {
             return true;
         };
-        if self
-            .station
-            .as_ref()
-            .is_none_or(|s| matches!(s.kind, Kind::Loom | Kind::Merchant | Kind::Stonecutter))
-        {
-            // LoomMenu, MerchantMenu, StonecutterMenu and the brewing stand's
+        if self.station.as_ref().is_none_or(|s| {
+            matches!(
+                s.kind,
+                Kind::Loom | Kind::Merchant | Kind::Stonecutter | Kind::Grindstone
+            )
+        }) {
+            // LoomMenu, MerchantMenu, StonecutterMenu, GrindstoneMenu and the brewing stand's
             // BrewingStandMenu clicks run on the verified menu engine.
             let input = if shift {
                 horizon_client::menu::Input::QuickMove

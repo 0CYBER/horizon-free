@@ -51,7 +51,7 @@ impl Game<'_> {
         if !self
             .station
             .as_ref()
-            .is_some_and(|s| matches!(s.kind, Kind::Loom | Kind::Stonecutter))
+            .is_some_and(|s| matches!(s.kind, Kind::Loom | Kind::Stonecutter | Kind::Grindstone))
         {
             return;
         }

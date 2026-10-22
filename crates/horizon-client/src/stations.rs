@@ -401,13 +401,13 @@ pub fn grindstone_result(
         (None, None) => None,
     }
 }
-/// Experience from the grindstone result slot's `getExperienceAmount`.
-pub fn grindstone_experience(
+/// The grindstone result slot's `getExperienceAmount` before its roll: the
+/// minimum costs of the inputs' non-curse enchantments.
+pub fn grindstone_xp_base(
     e: &Enchantments,
-    random: &mut LegacyRandom,
     input: Option<&ItemStack>,
     additional: Option<&ItemStack>,
-) -> u32 {
+) -> i32 {
     let from = |s: Option<&ItemStack>| -> i32 {
         s.map_or(0, |s| {
             s.crafting_enchantments()
@@ -417,13 +417,25 @@ pub fn grindstone_experience(
                 .sum()
         })
     };
-    let amount = from(input) + from(additional);
+    from(input) + from(additional)
+}
+/// `getExperienceAmount`'s roll of the sum: `half + nextInt(half)`.
+pub fn grindstone_xp_roll(amount: i32, random: &mut LegacyRandom) -> u32 {
     if amount > 0 {
         let half = (f64::from(amount) / 2.0).ceil() as i32;
         (half + random.next_int_bound(half).unwrap_or(0)) as u32
     } else {
         0
     }
+}
+/// Experience from the grindstone result slot's `getExperienceAmount`.
+pub fn grindstone_experience(
+    e: &Enchantments,
+    random: &mut LegacyRandom,
+    input: Option<&ItemStack>,
+    additional: Option<&ItemStack>,
+) -> u32 {
+    grindstone_xp_roll(grindstone_xp_base(e, input, additional), random)
 }
 
 // ---------------------------------------------------------------- smithing & stonecutting

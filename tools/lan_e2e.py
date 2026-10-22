@@ -42,6 +42,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - stonecutter: a stonecutter opens on the guest's screen with the recipes of the stone the guest puts
              in; the guest picks the slab and shift-clicks the result, and the server has cut every
              stone into slabs (#868);
+- grindstone: a grindstone opens on the guest's screen; the enchanted sword the guest shift-clicks in
+             shows the server's result, and the guest takes it with only its curse left and the
+             experience orbs the server awards (#868);
 - feedback:  the guest's command feedback names the guest and shows the numbers;
 - chat:      a line the host sends reaches the guest's event log (`wait-for chat`), and on the
              server thread the host window's too;
@@ -136,7 +139,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
 
 
 class Game:
@@ -990,6 +993,51 @@ def check_stonecutter(host, guest, out):
     want = {'picked': (index, ('minecraft:stone_slab', 2)), 'left': {},
             'server': {'stone_slab': 6, 'stone': 0}}
     assert seen == want, f'the stonecutter on the guest: {seen}'
+    return seen
+
+
+def server_reply(guest, command, *needles):
+    """The first chat line holding every needle after the guest runs `command`."""
+    since = guest.raw('events')['last']
+    guest('command', command=command)
+    for _ in range(0, 65):
+        reply = guest.raw('events', '--since', since)
+        for e in reply['events']:
+            line = e.get('text', '')
+            if e.get('event') == 'chat' and all(n in line for n in needles):
+                return line
+        guest.wait(2)
+    raise Failed(f'no answer to {command}')
+
+
+def check_grindstone(host, guest, out):
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    guest('command', command='xp set @s 0 levels')
+    guest('command', command='xp set @s 0 points')
+    guest('command', command='give @s minecraft:iron_sword[minecraft:enchantments={"minecraft:sharpness":3,'
+                             '"minecraft:vanishing_curse":1},minecraft:damage=100]')
+    at = open_station(guest, 'grindstone', out, 'grindstone')
+    # GrindstoneMenu.quickMoveStack: with both inputs empty, into the first.
+    guest.raw('click-slot', hotbar_slot(guest, 'minecraft:iron_sword'), 'shift')
+    guest.wait(10)
+    loaded = station_slots(guest)
+    guest.shot(out, 'grindstone-result')
+    guest.raw('click-slot', 650, 'shift')
+    # The orbs (sharpness III: 12 to 23 points) fly to the guest.
+    guest.wait(60)
+    left = station_slots(guest)
+    close_station(guest, at)
+    sword = server_reply(guest, 'data get entity @s Inventory[{id:"minecraft:iron_sword"}].components',
+                         'minecraft:damage')
+    xp = server_reply(guest, 'xp query @s points', 'experience points')
+    seen = {'loaded': loaded, 'left': left, 'curse kept': 'vanishing_curse' in sword,
+            'sharpness gone': 'sharpness' not in sword,
+            'damage': re.search(r'minecraft:damage"?: 100\b', sword) is not None,
+            'xp': int(re.search(r'has (\d+) experience', xp).group(1)) > 0}
+    want = {'loaded': {600: ('minecraft:iron_sword', 1), 650: ('minecraft:iron_sword', 1)}, 'left': {},
+            'curse kept': True, 'sharpness gone': True, 'damage': True, 'xp': True}
+    assert seen == want, f'the grindstone on the guest: {seen} ({sword!r}, {xp!r})'
     return seen
 
 
@@ -2186,6 +2234,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'brewing': check_brewing,
              'loom': check_loom,
              'stonecutter': check_stonecutter,
+             'grindstone': check_grindstone,
              'hurt': check_hurt,
              'commands': check_commands,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,

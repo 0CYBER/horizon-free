@@ -11,7 +11,8 @@ item the first click moved) over the player inventory,
 crafting table, chests, hopper, dispenser, shulker box, the furnaces, the
 brewing stand, the crafter (the client's menu, and the server's over the block
 entity with slot state packets), the loom (with its pattern buttons), the
-stonecutter (with its recipe buttons) and the
+stonecutter (with its recipe buttons), the grindstone (enchanted, damaged and
+cursed tools and books) and the
 server's furnace menus over their block entities (`*_be`: a new input restarts
 cooking, other clicks keep its progress). After
 every click the slots, carried stack, data slots and drops are compared.
@@ -27,7 +28,7 @@ except ImportError:
 
 MENUS = {'inventory': 46, 'crafting': 46, 'chest1': 45, 'chest2': 54, 'chest3': 63, 'chest4': 72, 'chest5': 81,
          'chest6': 90, 'hopper': 41, 'dispenser': 45, 'shulker': 63, 'furnace': 39, 'blast_furnace': 39, 'smoker': 39, 'brewing': 41, 'crafter': 46,
-         'crafter_be': 46, 'loom': 40, 'stonecutter': 38, 'furnace_be': 39, 'blast_furnace_be': 39, 'smoker_be': 39}
+         'crafter_be': 46, 'loom': 40, 'stonecutter': 38, 'grindstone': 39, 'furnace_be': 39, 'blast_furnace_be': 39, 'smoker_be': 39}
 DATA = {'furnace': 4, 'blast_furnace': 4, 'smoker': 4, 'brewing': 4, 'crafter': 10, 'crafter_be': 10, 'loom': 1,
         'stonecutter': 1,
         'furnace_be': 4, 'blast_furnace_be': 4, 'smoker_be': 4}
@@ -45,6 +46,10 @@ COMMON = ['stone', 'dirt', 'cobblestone', 'oak_planks', 'stick', 'coal', 'iron_i
 # Stonecutter inputs (several recipes each), and a block it doesn't cut.
 CUTTABLE = ['stone', 'cobblestone', 'andesite', 'granite', 'copper_block', 'sandstone', 'quartz_block', 'deepslate',
             'stone_bricks', 'oak_planks']
+# Grindstone inputs: tools and armor, books, and their enchantments (curses too).
+GRINDABLE = ['iron_sword', 'diamond_pickaxe', 'bow', 'iron_helmet', 'elytra', 'shield', 'fishing_rod', 'trident']
+ENCHANTS = ['sharpness', 'unbreaking', 'mending', 'efficiency', 'protection', 'power', 'looting', 'fortune',
+            'binding_curse', 'vanishing_curse']
 
 
 def quote(text):
@@ -109,6 +114,33 @@ class Gen:
             return snbt('minecraft:' + rng.choice(CUTTABLE), rng.choice([1, 1, 2, 3, 10, 63, 64]))
         return self.stack()
 
+    def grind_stack(self):
+        """Mostly an enchanted or damaged tool or an enchanted book, sometimes anything."""
+        rng = self.rng
+        roll = rng.random()
+        if roll > 0.8:
+            return self.stack()
+        levels = ','.join('"minecraft:%s":%d' % (e, rng.randrange(1, 4))
+                          for e in rng.sample(ENCHANTS, rng.choice([0, 1, 1, 2, 3])))
+        comps = []
+        if roll < 0.25:
+            item = 'minecraft:' + rng.choice(['enchanted_book', 'enchanted_book', 'book'])
+            if levels:
+                comps.append('"minecraft:stored_enchantments":{%s}' % levels)
+            count = 1 if rng.random() < 0.85 else 2
+        else:
+            item = 'minecraft:' + rng.choice(GRINDABLE)
+            info = self.items.get(item, {})
+            if levels:
+                comps.append('"minecraft:enchantments":{%s}' % levels)
+            if info.get('minecraft:max_damage') and rng.random() < 0.6:
+                comps.append('"minecraft:damage":%d' % rng.randrange(0, info['minecraft:max_damage']))
+            count = 1
+        if rng.random() < 0.2:
+            comps.append('"minecraft:repair_cost":%d' % rng.choice([1, 3, 7]))
+        body = ',components:{%s}' % ','.join(comps) if comps else ''
+        return '{id:%s,count:%d%s}' % (quote(item), count, body)
+
     def recipe(self, slots, width, start=1):
         """Fills the crafting grid (slots `start`..) with a small known recipe."""
         rng = self.rng
@@ -141,6 +173,9 @@ class Gen:
                 continue
             if menu == 'stonecutter' and rng.random() < 0.2:
                 out.append([1, rng.randrange(0, 2), rng.choice(['PICKUP', 'QUICK_MOVE', 'QUICK_MOVE', 'THROW', 'SWAP'])])
+                continue
+            if menu == 'grindstone' and rng.random() < 0.2:
+                out.append([2, rng.randrange(0, 2), rng.choice(['PICKUP', 'QUICK_MOVE', 'QUICK_MOVE', 'THROW', 'SWAP'])])
                 continue
             if menu == 'crafter_be' and rng.random() < 0.2:
                 out.append([rng.choice([0, 1, 4, 8, 8, 9, -1]), rng.randrange(0, 2), 'SLOT_STATE'])
@@ -208,6 +243,16 @@ def main():
             slots[0] = g.cut_stack() if rng.random() < 0.8 else '-'
             # The result follows the input and the selected recipe; a fixture stack there is rare.
             slots[1] = '-' if rng.random() < 0.9 else g.cut_stack()
+        if menu == 'grindstone':
+            for i in rng.sample(range(3, size), 10):
+                slots[i] = g.grind_stack()
+            slots[0] = g.grind_stack() if rng.random() < 0.7 else '-'
+            slots[1] = g.grind_stack() if rng.random() < 0.6 else '-'
+            # Two of the same tool, so mergeItems runs.
+            if slots[0] != '-' and rng.random() < 0.3:
+                slots[1] = slots[0] if rng.random() < 0.4 else g.grind_stack()
+            # The result follows the inputs; a fixture stack there is rare.
+            slots[2] = '-' if rng.random() < 0.9 else g.grind_stack()
         if menu == 'crafter_be':
             slots[45] = '-'
             if rng.random() < 0.6:
@@ -236,7 +281,7 @@ def main():
             if menu in ('loom', 'stonecutter'):
                 return rng.choice([-1, -1, 0, 0, 1, 2, 3, 30])
             return 0
-        carried = {'loom': g.loom_stack, 'stonecutter': g.cut_stack}.get(menu, g.stack)() if rng.random() < 0.5 else '-'
+        carried = {'loom': g.loom_stack, 'stonecutter': g.cut_stack, 'grindstone': g.grind_stack}.get(menu, g.stack)() if rng.random() < 0.5 else '-'
         if carried_food is not None:
             carried = carried_food
         cases.append({'menu': menu, 'creative': rng.random() < 0.25, 'slots': slots,

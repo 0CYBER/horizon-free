@@ -493,6 +493,34 @@ impl Game<'_> {
         if let Some(Component::Int(id)) = s.component(component::MAP_ID) {
             out.data_mut().map_id = Some(*id);
         }
+        if let Some(Component::Int(cost)) = s.component(component::REPAIR_COST) {
+            out.data_mut().repair_cost = (*cost).max(0) as u32;
+        }
+        if let Some(Component::Text(name)) = s.component(component::CUSTOM_NAME) {
+            let lang = self
+                .remote
+                .as_ref()
+                .map(|r| r.lang.clone())
+                .unwrap_or_default();
+            out.data_mut().custom_name = Some(plain(name, &lang));
+        }
+        // The enchantments by the server's registry ids.
+        let levels = |list: &[(i32, i32)]| -> Vec<(Arc<str>, u32)> {
+            let names = self.remote.as_ref().map(|r| &r.registries);
+            list.iter()
+                .filter_map(|(id, level)| {
+                    let name = names?.name("minecraft:enchantment", *id)?;
+                    Some((Arc::from(name), (*level).max(0) as u32))
+                })
+                .collect()
+        };
+        if let Some(Component::Enchantments(list)) = s.component(component::ENCHANTMENTS) {
+            out.data_mut().enchantments = levels(list);
+        }
+        if let Some(Component::Enchantments(list)) = s.component(component::STORED_ENCHANTMENTS) {
+            out.data_mut().stored_enchantments = levels(list);
+        }
+        out.tidy();
         Some(out)
     }
     fn to_network(&self, s: &Option<ItemStack>) -> Option<Stack> {
@@ -1237,6 +1265,7 @@ impl Game<'_> {
         Some(match menu {
             "minecraft:loom" => Kind::Loom,
             "minecraft:stonecutter" => Kind::Stonecutter,
+            "minecraft:grindstone" => Kind::Grindstone,
             _ => return None,
         })
     }

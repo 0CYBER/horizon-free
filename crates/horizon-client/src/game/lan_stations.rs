@@ -35,6 +35,7 @@ fn menu_of(kind: StationKind) -> Option<(&'static str, Kind, std::ops::Range<usi
     Some(match kind {
         StationKind::Loom => ("minecraft:loom", Kind::Loom, 0..3),
         StationKind::Stonecutter => ("minecraft:stonecutter", Kind::Stonecutter, 0..1),
+        StationKind::Grindstone => ("minecraft:grindstone", Kind::Grindstone, 0..2),
         _ => return None,
     })
 }
@@ -94,6 +95,9 @@ impl Game<'_> {
         {
             self.guest_menu_op(host, gi, &mut gs.menu, op);
             self.lan_station_sounds(&mut gs);
+            if let Some(amount) = gs.menu.ground.take() {
+                self.grindstone_taken(gs.pos, amount);
+            }
         }
         host.play.entry(conn).or_default().station = Some(gs);
         self.lan_send_station(host, conn);

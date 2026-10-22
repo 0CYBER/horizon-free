@@ -2549,14 +2549,18 @@ impl Game<'_> {
                         1029 => Some(("minecraft:block.anvil.destroy", 1.0)),
                         1031 => Some(("minecraft:block.anvil.land", 0.3)),
                         1505 => Some(("minecraft:item.bone_meal.use", 1.0)),
+                        1042 => Some(("minecraft:block.grindstone.use", 1.0)),
                         _ => None,
                     };
                     if let Some((name, volume)) = sound {
-                        let pitch = if id == 1009 {
-                            2.6 + (self.world.random.next_float() - self.world.random.next_float())
-                                * 0.8
-                        } else {
-                            1.0
+                        let pitch = match id {
+                            1009 => {
+                                2.6 + (self.world.random.next_float()
+                                    - self.world.random.next_float())
+                                    * 0.8
+                            }
+                            1042 => self.world.random.next_float() * 0.1 + 0.9,
+                            _ => 1.0,
                         };
                         self.audio.play(name, c, volume, pitch);
                     }
@@ -5429,6 +5433,10 @@ impl Game<'_> {
             .station
             .as_ref()
             .is_some_and(|s| s.kind == stations::Kind::Stonecutter);
+        let grindstone_open = self
+            .station
+            .as_ref()
+            .is_some_and(|s| s.kind == stations::Kind::Grindstone);
         let (kind, game_of): (Kind, Vec<Option<usize>>) = if self.creative_tab_open() {
             // ItemPickerMenu: the display slots (clicked by the screen), then the hotbar.
             let mut v = vec![None; 45];
@@ -5460,6 +5468,15 @@ impl Game<'_> {
             let mut v = vec![Some(stations::INPUT), Some(stations::RESULT)];
             v.extend((9..36).chain(0..9).map(Some));
             (Kind::Stonecutter, v)
+        } else if grindstone_open {
+            // GrindstoneMenu: the two inputs, the result, then the inventory.
+            let mut v = vec![
+                Some(stations::INPUT),
+                Some(stations::INPUT + 1),
+                Some(stations::RESULT),
+            ];
+            v.extend((9..36).chain(0..9).map(Some));
+            (Kind::Grindstone, v)
         } else {
             let (kind, map) = if self.container.is_some() {
                 let size = self.container_size();
@@ -5578,6 +5595,7 @@ impl Game<'_> {
             brewing: &self.res.stations().brewing,
             banners: &self.res.stations().banners,
             station_recipes: &self.res.stations().recipes,
+            enchantments: &self.res.stations().enchantments,
             trade: Some(&trade_env),
         };
         menu.creative = creative;
@@ -5675,6 +5693,11 @@ impl Game<'_> {
             for sound in sounds.into_iter().filter(|_| !predicting) {
                 self.station_sound(sound);
             }
+        }
+        if let Some(amount) = menu.ground.take().filter(|_| !predicting)
+            && let Some(pos) = self.station.as_ref().map(|s| s.pos)
+        {
+            self.grindstone_taken(pos, amount);
         }
         if kind == Kind::CrafterBlock
             && let Some(BlockEntity::Crafter(c)) = self
