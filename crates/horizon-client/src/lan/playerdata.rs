@@ -66,6 +66,7 @@ pub fn apply(guest: &mut Guest, level: &Level) {
     guest.xp_level = level.xp_level;
     guest.xp_progress = level.xp_progress;
     guest.xp_total = level.xp_total;
+    guest.xp_seed = level.xp_seed;
     guest.effects = crate::effects::PlayerEffects::from_saved(&level.active_effects);
     guest.game_mode = level.mode();
     guest.flying = level.flying;
@@ -127,6 +128,7 @@ pub fn store(guest: &Guest, level: &mut Level) {
     level.xp_level = guest.xp_level;
     level.xp_progress = guest.xp_progress;
     level.xp_total = guest.xp_total;
+    level.xp_seed = guest.xp_seed;
     level.active_effects = guest.effects.saved();
     level.game_mode = guest.game_mode;
     level.creative = guest.game_mode == 1;

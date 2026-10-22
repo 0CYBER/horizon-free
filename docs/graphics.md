@@ -64,7 +64,7 @@ python3 tools/graphics_bench.py --compare baseline-4080 mine-gpu   # markdown ta
 
 vscreen is a headless compositor whose frames are software-rendered (lavapipe), so its frame times measure the CPU, rasterisation included. `--offscreen` (`horizon-client --offscreen`) renders into a texture on the most powerful GPU instead of the window, which measures the RTX 4080 under the same compositor. `--distances`, `--scenes` and `--build` pick a subset or another build. Results go to `benchmarks/graphics/<label>.json`, with the load average before and after: the desktop is shared, and other sessions' builds move the numbers.
 
-Two tools find where a slow frame goes: `HORIZON_SPIKES=MS` prints the timed spans (ticks by system, streaming, uploads, saving, renderer) of every frame slower than MS milliseconds, and a frame-pointer build (`RUSTFLAGS="-C force-frame-pointers=yes"`) profiles with `perf record --call-graph fp`.
+Two tools find where a slow frame goes: `HORIZON_SPIKES=MS` prints the timed spans (ticks by system, streaming, uploads, saving, renderer) of every frame slower than MS milliseconds, with the render thread's CPU time in the frame and, after a span that mostly waited (for the GPU, a lock or a core), its CPU time (`submit 30.2/0.1`), and a frame-pointer build (`RUSTFLAGS="-C force-frame-pointers=yes"`) profiles with `perf record --call-graph fp`.
 
 ## Results
 

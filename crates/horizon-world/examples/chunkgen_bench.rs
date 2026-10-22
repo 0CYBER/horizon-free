@@ -3,6 +3,7 @@
 //! chunkgen_bench <client resource dir> [--seed S] [--size N] [--threads T]
 //!     [--center CX CZ] [--verify <material-stage parity dir>] [--no-decorate]
 //!     [--dimension overworld|the_nether|the_end]
+//!     [--warmup] [--json] [--no-map] [--snapshot PATH]
 use horizon_core::position::ChunkPos;
 use horizon_world::{
     DATA_VERSION,
@@ -274,7 +275,9 @@ fn main() -> Result<(), Error> {
     let resources = PathBuf::from(args.next().expect("client resource directory"));
     let (mut seed, mut size, mut threads, mut center) = (0i64, 16i32, 2usize, (0, 0));
     let mut parity = None;
+    let mut snapshot_path = None;
     let mut decorate = true;
+    let (mut warmup, mut json, mut map) = (false, false, true);
     let mut dimension = String::from("minecraft:overworld");
     let mut starts: Option<(i32, i32, i32, i32, PathBuf)> = None;
     while let Some(arg) = args.next() {
@@ -285,7 +288,11 @@ fn main() -> Result<(), Error> {
             "--threads" => threads = next().parse()?,
             "--center" => center = (next().parse()?, next().parse()?),
             "--verify" => parity = Some(PathBuf::from(next())),
+            "--snapshot" => snapshot_path = Some(PathBuf::from(next())),
             "--no-decorate" => decorate = false,
+            "--warmup" => warmup = true,
+            "--json" => json = true,
+            "--no-map" => map = false,
             "--dimension" => {
                 let d = next();
                 dimension = if d.contains(':') {
@@ -326,6 +333,16 @@ fn main() -> Result<(), Error> {
         dump_starts(&generator, seed, [x0, z0, x1, z1], &out)?;
         return Ok(());
     }
+    if warmup {
+        let mut worker = generator.worker();
+        for z in -4..=4 {
+            for x in -4..=4 {
+                std::hint::black_box(
+                    worker.generate_proto(ChunkPos::new(center.0 + 64 + x, center.1 + 64 + z))?,
+                );
+            }
+        }
+    }
     let (x0, z0) = (center.0 - size / 2, center.1 - size / 2);
     let count = (size * size) as usize;
     let next = AtomicUsize::new(0);
@@ -353,6 +370,7 @@ fn main() -> Result<(), Error> {
         handles.into_iter().try_for_each(|h| h.join().unwrap())
     })?;
     let elapsed = start.elapsed();
+    let cpu_elapsed = cpu_seconds() - cpu;
     println!(
         "generated {count} proto chunks with {threads} threads in {elapsed:.2?}: {:.1} chunks/s ({:.1} ms/chunk/thread)",
         count as f64 / elapsed.as_secs_f64(),
@@ -360,7 +378,7 @@ fn main() -> Result<(), Error> {
     );
     println!(
         "  cpu time {:.1} ms/chunk",
-        (cpu_seconds() - cpu) * 1000. / count as f64
+        cpu_elapsed * 1000. / count as f64
     );
     let timings = timings.into_inner().unwrap();
     let per_chunk = |f: fn(&StageTimings) -> std::time::Duration| {
@@ -379,10 +397,23 @@ fn main() -> Result<(), Error> {
         per_chunk(|t| t.surface),
         per_chunk(|t| t.carvers)
     );
+    if json {
+        println!(
+            "BENCH {}",
+            serde_json::json!({"phase": "proto", "chunks": count,
+            "threads": threads, "wall_s": elapsed.as_secs_f64(), "cpu_s": cpu_elapsed,
+            "biomes_ms_chunk": per_chunk(|t| t.biomes), "noise_ms_chunk": per_chunk(|t| t.noise),
+            "structures_ms_chunk": per_chunk(|t| t.structures),
+            "surface_ms_chunk": per_chunk(|t| t.surface), "carvers_ms_chunk": per_chunk(|t| t.carvers)})
+        );
+    }
     let mut chunks: Vec<Option<ProtoChunk>> = slots
         .into_iter()
         .map(|slot| slot.into_inner().unwrap())
         .collect();
+    if let Some(path) = &snapshot_path {
+        snapshot(&chunks, path, "terrain")?;
+    }
     if decorate && size >= 3 {
         let totals = Mutex::new(DecorateStats::default());
         let start = Instant::now();
@@ -441,6 +472,13 @@ fn main() -> Result<(), Error> {
             }
         }
         let elapsed = start.elapsed();
+        if json {
+            println!(
+                "BENCH {}",
+                serde_json::json!({"phase": "decorate", "chunks": decorated,
+                "wall_s": elapsed.as_secs_f64()})
+            );
+        }
         let totals = totals.into_inner().unwrap();
         println!(
             "decorated {decorated} chunks in {elapsed:.2?}: {:.1} chunks/s; feature roots placed {}, unsupported {}, failed {}",
@@ -460,6 +498,9 @@ fn main() -> Result<(), Error> {
                 totals.skipped.into_iter().collect::<Vec<_>>().join(" ")
             );
         }
+    }
+    if let Some(path) = &snapshot_path {
+        snapshot(&chunks, path, "decorated")?;
     }
     let mut structures = BTreeMap::<(String, i32, i32), [[i32; 3]; 2]>::new();
     for chunk in chunks.iter().flatten() {
@@ -491,6 +532,9 @@ fn main() -> Result<(), Error> {
                 );
             }
         }
+    }
+    if !map {
+        return Ok(());
     }
     let mut legend = BTreeMap::<char, BTreeMap<String, usize>>::new();
     let step = (size * 16 / 96).max(1);
@@ -532,5 +576,77 @@ fn main() -> Result<(), Error> {
         p.z * 16,
         middle.biome_at(p.x * 16, 64, p.z * 16)
     );
+    Ok(())
+}
+
+// Diagnostic only: full ordered chunk state, outside performance measurements.
+fn snapshot(chunks: &[Option<ProtoChunk>], path: &Path, phase: &str) -> Result<(), Error> {
+    use std::io::Write;
+    let mut out =
+        std::io::BufWriter::new(fs::File::create(format!("{}-{phase}.bin", path.display()))?);
+    for chunk in chunks.iter().flatten() {
+        let terrain = &chunk.terrain;
+        writeln!(
+            out,
+            "chunk {:?} {:?} {} {:?} {:?}",
+            chunk.position(),
+            terrain.generation_stage(),
+            chunk.is_decorated(),
+            chunk.structures(),
+            terrain.below_zero_retrogen().map(|v| v.to_nbt())
+        )?;
+        for section in 0..terrain.height() as usize / 16 {
+            let data = terrain.section(section).unwrap();
+            writeln!(out, "section {section} {:?}", data.to_nbt()?)?;
+            for index in 0..4096 {
+                out.write_all(&data.get(index)?.0.to_le_bytes())?;
+            }
+        }
+        // Compare public reads too, including all-air section behavior.
+        for y in terrain.min_y()..terrain.min_y() + terrain.height() {
+            for z in 0..16 {
+                for x in 0..16 {
+                    out.write_all(&terrain.block(x, y, z).0.to_le_bytes())?;
+                }
+            }
+        }
+        for y in (terrain.min_y() >> 2)..((terrain.min_y() + terrain.height()) >> 2) {
+            for z in 0..4 {
+                for x in 0..4 {
+                    writeln!(
+                        out,
+                        "biome {}",
+                        chunk.biome_at(
+                            chunk.position().x * 16 + x * 4,
+                            y * 4,
+                            chunk.position().z * 16 + z * 4
+                        )
+                    )?;
+                }
+            }
+        }
+        for kind in HeightmapType::ALL {
+            writeln!(
+                out,
+                "heightmap {kind:?} {:?}",
+                terrain.heightmap(kind).map(|m| m.raw_data())
+            )?;
+        }
+        writeln!(out, "post {:?}", terrain.postprocessing())?;
+        writeln!(out, "blockticks {:?}", terrain.block_ticks().pack(0))?;
+        writeln!(out, "fluidticks {:?}", terrain.fluid_ticks().pack(0))?;
+        for (position, tag) in &chunk.block_entities {
+            writeln!(out, "blockentity {position:?}")?;
+            let bytes =
+                horizon_world::nbt::write_network(&Tag::Compound(tag.clone()), Default::default())?;
+            out.write_all(&(bytes.len() as u64).to_le_bytes())?;
+            out.write_all(&bytes)?;
+        }
+        let entities = Tag::List(chunk.entities.iter().cloned().map(Tag::Compound).collect());
+        let bytes = horizon_world::nbt::write_network(&entities, Default::default())?;
+        out.write_all(&(bytes.len() as u64).to_le_bytes())?;
+        out.write_all(&bytes)?;
+    }
+    out.flush()?;
     Ok(())
 }

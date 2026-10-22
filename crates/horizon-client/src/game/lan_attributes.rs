@@ -83,17 +83,16 @@ impl Game<'_> {
     /// `LivingEntity.removeFrost`), what finalizeSpawn set, the baby speed
     /// modifier, its effects' modifiers, its equipment's, and what
     /// `/attribute` changed.
-    pub(super) fn mob_attributes(&self, m: &Mob) -> Vec<AttributeSnapshot> {
+    pub(super) fn mob_attributes(&self, m: &Mob, out: &mut Vec<AttributeSnapshot>) {
         let kind = m.kind.id.as_str();
-        let mut out = Vec::new();
         if let Some(a) = self.synced_attribute(kind, "minecraft:movement_speed") {
-            instance(&mut out, a, finalize::base_value(m, Attr::MovementSpeed));
+            instance(out, a, finalize::base_value(m, Attr::MovementSpeed));
         }
         if let Some(s) = m.extra.attributes.as_deref() {
             for (attr, v) in &s.bases {
                 if let Some(a) = self.synced_attribute(kind, &format!("minecraft:{}", attr.name()))
                 {
-                    instance(&mut out, a, *v).base = *v;
+                    instance(out, a, *v).base = *v;
                 }
             }
             for x in &s.modifiers {
@@ -101,7 +100,7 @@ impl Game<'_> {
                     self.synced_attribute(kind, &format!("minecraft:{}", x.attr.name()))
                 {
                     add_modifier(
-                        &mut out,
+                        out,
                         a,
                         finalize::base_value(m, x.attr),
                         AttributeModifier {
@@ -122,7 +121,7 @@ impl Game<'_> {
             finalize::transient(m, Attr::MovementSpeed),
         ) {
             add_modifier(
-                &mut out,
+                out,
                 a,
                 finalize::base_value(m, Attr::MovementSpeed),
                 AttributeModifier {
@@ -150,7 +149,7 @@ impl Game<'_> {
             };
             let start = base(attribute).unwrap_or_else(|| self.attribute_default(kind, attribute));
             add_modifier(
-                &mut out,
+                out,
                 a,
                 start,
                 AttributeModifier {
@@ -172,10 +171,9 @@ impl Game<'_> {
                 ("chest", e.chest.as_ref()),
                 ("head", e.head.as_ref()),
             ],
-            &mut out,
+            out,
         );
-        self.generic_attributes_of(Target::Mob(m.id), &mut out);
-        out
+        self.generic_attributes_of(Target::Mob(m.id), out);
     }
 
     /// An armor stand's synced instances: movement speed (its first

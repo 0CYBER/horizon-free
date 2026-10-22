@@ -14,13 +14,22 @@ fn main() {
                 for count in [0, 1, 4, 64] {
                     let mut slot = Some(ItemStack::new("minecraft:stone", count));
                     let mut dropped = 0;
+                    let mut swings = 0;
+                    let mut packets = 0;
                     for _ in 0..2 {
                         if let Some(stack) =
                             take_held_drop(&mut slot, all, mode == GameMode::Spectator)
                         {
                             dropped += stack.count;
+                            swings += 1;
                         }
-                        println!("{} {}", slot.as_ref().map_or(0, |s| s.count), dropped);
+                        if mode != GameMode::Spectator {
+                            packets += 1;
+                        }
+                        println!(
+                            "{} {dropped} {swings} {packets}",
+                            slot.as_ref().map_or(0, |s| s.count),
+                        );
                     }
                 }
             }

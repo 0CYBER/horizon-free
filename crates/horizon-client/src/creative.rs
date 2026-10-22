@@ -44,6 +44,7 @@ pub struct Creative {
     search_index: Vec<SearchEntry>,
 }
 /// Display names from the pinned en_us language file.
+#[derive(Default)]
 pub struct Names {
     map: HashMap<String, String>,
 }

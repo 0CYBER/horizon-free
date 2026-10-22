@@ -707,7 +707,8 @@ pub fn carry(
     let mut biome_conventions = BTreeSet::new();
     let set_tags = crate::worldgen::structure_set_tags(&mut zip);
     let piece_counts = crate::worldgen::piece_counts(&mut zip);
-    let processor_data = crate::processors::ProcessorData::read(&mut zip);
+    let mut processor_data = crate::processors::ProcessorData::read(&mut zip);
+    processor_data.mark_loaded(loaded);
     report.namespaces = extra_namespaces(&mut zip, id, pack.mods);
     let owned: Vec<&str> = std::iter::once(id.as_str())
         .chain(report.namespaces.iter().map(String::as_str))

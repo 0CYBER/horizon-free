@@ -524,13 +524,22 @@ impl Game<'_> {
                     Screen::Inventory if self.recipe_search_focused() => {
                         self.recipe_text(Some(text), false)
                     }
+                    // The anvil's rename box.
+                    Screen::Inventory
+                        if self
+                            .station
+                            .as_ref()
+                            .is_some_and(|s| s.kind == super::stations::Kind::Anvil) =>
+                    {
+                        self.station_text(Some(text), false)
+                    }
                     Screen::Creative if self.creative_screen.tab().search => {
                         // As typed: replaces a selected query, keeps the length limit.
                         self.creative_search_edit(Some(text), false)
                     }
                     _ => {
                         return Err(
-                            "type needs the chat screen (key t tap), the language search, the creative search or World Options".into(),
+                            "type needs the chat screen (key t tap), the language search, the creative search, the anvil or World Options".into(),
                         );
                     }
                 }
@@ -913,7 +922,7 @@ impl Game<'_> {
             "chunks": self.world.chunks.len(),
             "mobs": self.mobs.len(),
             "block_entities": self.world.block_entities.len(),
-            "pending_chunks": self.streaming.pending() + self.pending_uploads.len(),
+            "pending_chunks": self.streaming.pending() + self.pending_uploads.len() + self.remote_backlog(),
             "generated_chunks": self.streaming.generated_total,
             "meshed_sections": self.streaming.meshed_total,
             "streaming": self.streaming.stages().into_iter().map(|(k, v)| (k.to_string(), v.into())).collect::<serde_json::Map<_, _>>(),

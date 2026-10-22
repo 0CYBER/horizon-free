@@ -331,6 +331,9 @@ pub enum Processor {
     /// `horizon:waterlog_in_world_water` (Repurposed Structures'): blocks
     /// are waterlogged where the world holds water, dry where it does not.
     WaterlogInWorldWater,
+    /// `horizon:mineshaft_sky_view` (Repurposed Structures' mineshafts):
+    /// nothing above the ocean floor but rails on solid ground.
+    MineshaftSkyView,
 }
 #[derive(Clone, Debug, Default)]
 pub struct ProcessorList(pub Vec<Processor>);
@@ -827,6 +830,7 @@ impl Processor {
             }
             "horizon:waterlog" => Self::Waterlog,
             "horizon:waterlog_in_world_water" => Self::WaterlogInWorldWater,
+            "horizon:mineshaft_sky_view" => Self::MineshaftSkyView,
             "horizon:keep_world_block" => {
                 Self::KeepWorldBlock(Box::new(sea_level::KeepWorldBlock::decode(value)?))
             }
@@ -1218,6 +1222,9 @@ fn process_block<W: PlacementContext>(
                 info,
                 settings,
             );
+        }
+        Processor::MineshaftSkyView => {
+            return sea_level::MineshaftSkyView::process(world, resources.registry, info);
         }
         Processor::Pick(pick) => match name(info.state) == pick.block {
             true => {

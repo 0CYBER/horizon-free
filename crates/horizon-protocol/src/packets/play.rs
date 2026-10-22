@@ -273,6 +273,68 @@ packet!(Login {
     online_mode: bool => Bool,
     enforces_secure_chat: bool => Bool,
 });
+packet!(
+/// MapDecoration: a registry holder, its map position and rotation, and an
+/// optional name.
+MapDecoration {
+    kind: i32 => VarInt,
+    x: i8 => Byte,
+    y: i8 => Byte,
+    rot: i8 => Byte,
+    name: Option<Tag> => Opt<Nbt>,
+}
+);
+
+/// MapItemSavedData.MapPatch: an empty patch is a zero width.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MapPatch {
+    pub start_x: i32,
+    pub start_y: i32,
+    pub width: i32,
+    pub height: i32,
+    pub colors: Vec<u8>,
+}
+pub struct MapPatchOpt;
+impl Codec<Option<MapPatch>> for MapPatchOpt {
+    fn read(r: &mut Reader) -> Result<Option<MapPatch>> {
+        let width = i32::from(r.u8()?);
+        if width == 0 {
+            return Ok(None);
+        }
+        let height = i32::from(r.u8()?);
+        let start_x = i32::from(r.u8()?);
+        let start_y = i32::from(r.u8()?);
+        let n = r.count(r.remaining())?;
+        let colors = r.bytes(n)?.to_vec();
+        Ok(Some(MapPatch {
+            start_x,
+            start_y,
+            width,
+            height,
+            colors,
+        }))
+    }
+    fn write(patch: &Option<MapPatch>, w: &mut Writer) {
+        let Some(patch) = patch else {
+            w.u8(0);
+            return;
+        };
+        w.u8(patch.width as u8);
+        w.u8(patch.height as u8);
+        w.u8(patch.start_x as u8);
+        w.u8(patch.start_y as u8);
+        w.varint(patch.colors.len() as i32);
+        w.bytes(&patch.colors);
+    }
+}
+
+packet!(MapItemData {
+    map_id: i32 => VarInt,
+    scale: i8 => Byte,
+    locked: bool => Bool,
+    decorations: Option<Vec<MapDecoration>> => Opt<List<MapDecoration>>,
+    patch: Option<MapPatch> => MapPatchOpt,
+});
 /// VecDelta: per-axis deltas in 1/4096 blocks, linear or in timed steps.
 #[derive(Clone, Debug, PartialEq)]
 pub enum VecDelta {
@@ -1425,6 +1487,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     LevelEvent(LevelEvent) = LEVEL_EVENT,
     LightUpdate(LightUpdate) = LIGHT_UPDATE,
     Login(Login) = LOGIN,
+    MapItemData(MapItemData) = MAP_ITEM_DATA,
     MoveEntityPos(MoveEntityPos) = MOVE_ENTITY_POS,
     MoveEntityPosRot(MoveEntityPosRot) = MOVE_ENTITY_POS_ROT,
     MoveEntityRot(MoveEntityRot) = MOVE_ENTITY_ROT,
@@ -1712,6 +1775,25 @@ packet!(
     }
 );
 packet!(SelectTrade { item: i32 => VarInt });
+packet!(
+    /// ServerboundContainerButtonClickPacket: `AbstractContainerMenu.clickMenuButton`
+    /// (the loom's patterns, the stonecutter's recipes, the enchanting table's offers).
+    ContainerButtonClick { container: i32 => VarInt, button: i32 => VarInt }
+);
+packet!(
+    /// ServerboundContainerSlotStateChangedPacket: the crafter's slot toggle
+    /// (`CrafterBlockEntity.setSlotState`).
+    ContainerSlotStateChanged { slot: i32 => VarInt, container: i32 => VarInt, enabled: bool => Bool }
+);
+packet!(
+    /// ServerboundRenameItemPacket: `AnvilMenu.setItemName`.
+    RenameItem { name: String => Str }
+);
+packet!(
+    /// ServerboundSetBeaconPacket: `BeaconMenu.updateEffects`, each power an
+    /// optional `mob_effect` id.
+    SetBeacon { primary: Option<i32> => Opt<VarInt>, secondary: Option<i32> => Opt<VarInt> }
+);
 packet!(Interact { id: i32 => VarInt, hand: i32 => VarInt, location: [f64; 3] => LpVec3, secondary: bool => Bool });
 packet!(
     /// ServerboundMovePlayerPacket flags: 1 on ground, 2 horizontal collision.
@@ -1777,6 +1859,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     ClientInformation(ClientInformation) = CLIENT_INFORMATION,
     ClientTickEnd(Empty) = CLIENT_TICK_END,
     ConfigurationAcknowledged(Empty) = CONFIGURATION_ACKNOWLEDGED,
+    ContainerButtonClick(ContainerButtonClick) = CONTAINER_BUTTON_CLICK,
     ContainerClick(ContainerClick) = CONTAINER_CLICK,
     ContainerClose(ContainerClose) = CONTAINER_CLOSE,
     CustomPayload(CustomPayload) = CUSTOM_PAYLOAD,
@@ -1794,9 +1877,12 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     PlayerInput(PlayerInput) = PLAYER_INPUT,
     PlayerLoaded(Empty) = PLAYER_LOADED,
     Pong(Ping) = PONG,
+    RenameItem(RenameItem) = RENAME_ITEM,
+    ContainerSlotStateChanged(ContainerSlotStateChanged) = CONTAINER_SLOT_STATE_CHANGED,
     Punch(Empty) = PUNCH,
     ResourcePack(ResourcePackResponse) = RESOURCE_PACK,
     SelectTrade(SelectTrade) = SELECT_TRADE,
+    SetBeacon(SetBeacon) = SET_BEACON,
     SetCarriedItem(SetCarriedItem) = SET_CARRIED_ITEM,
     SetCreativeModeSlot(SetCreativeModeSlot) = SET_CREATIVE_MODE_SLOT,
     UseItem(UseItem) = USE_ITEM,
@@ -2374,6 +2460,34 @@ mod tests {
             Serverbound::encode,
             Serverbound::decode,
         );
+        // CONTAINER_ID and the button, both VarInts.
+        let button = Serverbound::ContainerButtonClick(ContainerButtonClick {
+            container: 3,
+            button: 200,
+        });
+        assert_eq!(&button.encode()[1..], &[3, 0xC8, 1]);
+        round_trip(button, Serverbound::encode, Serverbound::decode);
+        // The name, a UTF-8 string with its VarInt length.
+        let rename = Serverbound::RenameItem(RenameItem {
+            name: "Blade".into(),
+        });
+        assert_eq!(&rename.encode()[1..], &[5, b'B', b'l', b'a', b'd', b'e']);
+        round_trip(rename, Serverbound::encode, Serverbound::decode);
+        // The slot, the container id (VarInts), then the new state.
+        let toggle = Serverbound::ContainerSlotStateChanged(ContainerSlotStateChanged {
+            slot: 4,
+            container: 2,
+            enabled: false,
+        });
+        assert_eq!(&toggle.encode()[1..], &[4, 2, 0]);
+        round_trip(toggle, Serverbound::encode, Serverbound::decode);
+        // Two optional mob effect ids: a presence byte, then the VarInt.
+        let beacon = Serverbound::SetBeacon(SetBeacon {
+            primary: Some(2),
+            secondary: None,
+        });
+        assert_eq!(&beacon.encode()[1..], &[1, 2, 0]);
+        round_trip(beacon, Serverbound::encode, Serverbound::decode);
     }
 
     #[test]
@@ -2438,5 +2552,27 @@ mod tests {
         assert_eq!(body, expected);
         assert_eq!(crate::ids::play::clientbound::UPDATE_ATTRIBUTES, 134);
         assert_eq!(Clientbound::decode(134, &body[2..]).unwrap(), p);
+    }
+
+    #[test]
+    fn map_item_data_carries_a_server_patch() {
+        let patch = MapPatch {
+            start_x: 3,
+            start_y: 4,
+            width: 2,
+            height: 1,
+            colors: vec![1, 2],
+        };
+        let mut w = Writer::new();
+        MapPatchOpt::write(&Some(patch.clone()), &mut w);
+        assert_eq!(w.data, [2, 1, 3, 4, 2, 1, 2]);
+        let p = Clientbound::MapItemData(MapItemData {
+            map_id: 2146483647,
+            scale: 1,
+            locked: true,
+            decorations: None,
+            patch: Some(patch),
+        });
+        round_trip(p, Clientbound::encode, Clientbound::decode);
     }
 }

@@ -3,6 +3,7 @@
 //! what the render thread pays for it in `Streaming::update`.
 //!
 //! streaming_bench RESOURCES [--threads N] [--radius R] [--seed S] [--fly CHUNKS_PER_S] [--seconds T] [--hz F]
+//!     [--dimension overworld|the_nether|the_end] [--center-x X] [--center-z Z]
 //!
 //! First the area around (0, 0) fills; then, with `--fly`, the centre moves along +x
 //! at that speed for T seconds while frames run at F per second. Each phase reports
@@ -72,14 +73,33 @@ static ALLOCATOR: CountingAllocator = CountingAllocator;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+fn cpu_seconds() -> f64 {
+    std::fs::read_to_string("/proc/self/stat")
+        .ok()
+        .and_then(|stat| {
+            let fields = stat
+                .rsplit_once(')')?
+                .1
+                .split_whitespace()
+                .collect::<Vec<_>>();
+            Some((fields[11].parse::<f64>().ok()? + fields[12].parse::<f64>().ok()?) / 100.0)
+        })
+        .unwrap_or(0.0)
+}
+
 #[derive(Default)]
 struct Phase {
     updates: Vec<f64>,
     local: (u64, u64),
     uploads: usize,
+    stage_samples: [u64; 7],
+    cpu_start: f64,
 }
 impl Phase {
     fn update(&mut self, streaming: &mut Streaming, world: &mut World) {
+        if self.updates.is_empty() {
+            self.cpu_start = cpu_seconds();
+        }
         let before = LOCAL.with(Cell::get);
         let started = Instant::now();
         let (uploads, _) = streaming.update(world);
@@ -89,6 +109,9 @@ impl Phase {
         self.local.1 += after.1 - before.1;
         self.uploads += uploads.len();
         drop(uploads);
+        for (sum, (_, count)) in self.stage_samples.iter_mut().zip(streaming.stages()) {
+            *sum += count as u64;
+        }
     }
     fn report(&self, name: &str, wall: Duration, streaming: &Streaming, generated: u64) {
         let mut sorted = self.updates.clone();
@@ -105,6 +128,16 @@ impl Phase {
             at(0.5),
             at(0.99),
             sorted.last().copied().unwrap_or(0.0),
+        );
+        println!(
+            "BENCH {}",
+            serde_json::json!({
+                "phase": name, "wall_s": wall.as_secs_f64(),
+                "cpu_s": cpu_seconds() - self.cpu_start,
+                "chunks": streaming.generated_total - generated, "sections": self.uploads,
+                "updates": self.updates.len(), "update_ms": total,
+                "mean_stages": self.stage_samples.map(|n| n as f64 / self.updates.len() as f64),
+            })
         );
         if TRACK {
             println!(
@@ -142,6 +175,22 @@ fn main() -> Result<()> {
     let fly = flag("--fly", 0.0);
     let seconds = flag("--seconds", 10.0);
     let hz = flag("--hz", 240.0);
+    let dimension = args
+        .iter()
+        .position(|a| a == "--dimension")
+        .and_then(|i| args.get(i + 1))
+        .map(|d| {
+            if d.contains(':') {
+                d.clone()
+            } else {
+                format!("minecraft:{d}")
+            }
+        })
+        .unwrap_or_else(|| "minecraft:overworld".into());
+    let center = (
+        flag("--center-x", 0.0) as i32,
+        flag("--center-z", 0.0) as i32,
+    );
 
     let assets = Arc::new(Assets::load(&root)?);
     let render = Arc::new(assets.reload(&root)?);
@@ -154,11 +203,12 @@ fn main() -> Result<()> {
         models::load_visibility(&root, assets.registry)?,
     )?);
     let light = Arc::new(LightTables::load(&root, assets.registry, &facts)?);
-    let terrain = Arc::new(VanillaTerrain::new(
+    let terrain = Arc::new(VanillaTerrain::for_dimension(
         &root.join("worldgen"),
         assets.registry,
         &biomes,
         seed,
+        &dimension,
     )?);
     let context = Arc::new(WorkerContext {
         assets,
@@ -170,8 +220,12 @@ fn main() -> Result<()> {
     let mut world = World::new(facts.air, seed);
     let mut streaming = Streaming::new(terrain, context, threads);
     streaming.radius = radius;
-    streaming.center = (0, 0);
-    println!("{threads} workers, radius {radius}, seed {seed}");
+    streaming.center = center;
+    streaming.nether_shading = dimension == "minecraft:the_nether";
+    streaming.sky_light = dimension != "minecraft:the_nether";
+    println!(
+        "{threads} workers, radius {radius}, seed {seed}, dimension {dimension}, center {center:?}"
+    );
     let (allocations, bytes) = (ALLOCATIONS.load(Relaxed), BYTES.load(Relaxed));
 
     // Fill: update as often as the game would uncapped, until settled.
@@ -198,12 +252,12 @@ fn main() -> Result<()> {
         let mut behind = Vec::new();
         while started.elapsed().as_secs_f64() < seconds {
             let next = Instant::now() + frame;
-            let x = (started.elapsed().as_secs_f64() * fly) as i32;
-            streaming.center = (x, 0);
+            let x = center.0 + (started.elapsed().as_secs_f64() * fly) as i32;
+            streaming.center = (x, center.1);
             phase.update(&mut streaming, &mut world);
             // Columns within 2 chunks of the player still missing their meshes.
             let near = (-2..=2)
-                .flat_map(|dz| (-2..=2).map(move |dx| (x + dx, dz)))
+                .flat_map(|dz| (-2..=2).map(move |dx| (x + dx, center.1 + dz)))
                 .filter(|&(cx, cz)| !streaming.is_lit(cx, cz))
                 .count();
             behind.push(near);

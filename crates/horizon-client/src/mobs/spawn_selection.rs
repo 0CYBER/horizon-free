@@ -691,33 +691,37 @@ pub struct StructureAt {
 }
 
 /// `NetherFortressStructure.FORTRESS_ENEMIES`.
-pub fn fortress_enemies() -> Vec<SpawnEntry> {
-    let e = |entity: &str, weight, min, max, constant| SpawnEntry {
-        entity: entity.to_owned(),
-        weight,
-        min,
-        max,
-        constant,
-    };
-    vec![
-        e("minecraft:blaze", 10, 2, 3, false),
-        e("minecraft:zombified_piglin", 5, 4, 4, true),
-        e("minecraft:wither_skeleton", 8, 5, 5, true),
-        e("minecraft:skeleton", 2, 5, 5, true),
-        e("minecraft:magma_cube", 3, 4, 4, true),
-    ]
+pub fn fortress_enemies() -> &'static [SpawnEntry] {
+    static ENEMIES: std::sync::LazyLock<Vec<SpawnEntry>> = std::sync::LazyLock::new(|| {
+        let e = |entity: &str, weight, min, max, constant| SpawnEntry {
+            entity: entity.to_owned(),
+            weight,
+            min,
+            max,
+            constant,
+        };
+        vec![
+            e("minecraft:blaze", 10, 2, 3, false),
+            e("minecraft:zombified_piglin", 5, 4, 4, true),
+            e("minecraft:wither_skeleton", 8, 5, 5, true),
+            e("minecraft:skeleton", 2, 5, 5, true),
+            e("minecraft:magma_cube", 3, 4, 4, true),
+        ]
+    });
+    &ENEMIES
 }
 
 /// `NaturalSpawner.mobsAt`: the fortress bounds on nether bricks, then
 /// `ChunkGenerator.getMobsAt` (the first referenced structure whose override
-/// for the category holds the position), else the biome's list.
+/// for the category holds the position), else the biome's list. Borrowed from
+/// the level: a spawn attempt looks it up up to twice.
 pub fn mobs_at<L: NaturalLevel>(
     l: &L,
     category: Category,
     x: i32,
     y: i32,
     z: i32,
-) -> Vec<SpawnEntry> {
+) -> &[SpawnEntry] {
     // Only a fortress or a structure overriding this category's spawns can
     // change the list, so only theirs are looked up (the references reaching
     // most chunks are mineshafts, which override nothing).
@@ -738,13 +742,12 @@ pub fn mobs_at<L: NaturalLevel>(
         if let Some(o) = overrides.get(&s.id, category.name())
             && (if o.piece { s.in_piece } else { s.in_bounds })
         {
-            return o.spawns.clone();
+            return &o.spawns;
         }
     }
     l.biome_spawns(x, y, z)
         .and_then(|b| b.get(category.name()))
-        .cloned()
-        .unwrap_or_default()
+        .map_or(&[], Vec::as_slice)
 }
 
 /// `WeightedList.getRandom`.
@@ -1103,7 +1106,7 @@ pub fn spawn_category_for_position<L: NaturalLevel, R: RandomSource>(
                 {
                     None
                 } else {
-                    weighted_pick(&mobs_at(l, category, x, y, z), random)
+                    weighted_pick(mobs_at(l, category, x, y, z), random)
                 };
                 let Some(entry) = list else {
                     break;
