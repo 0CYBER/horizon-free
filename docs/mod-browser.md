@@ -30,6 +30,15 @@ never offered for install.
   else removes the part file and installs nothing.
 - A file whose source lists no checksum is refused.
 
+## The Mods page
+
+The launcher's **Mods** page has the three kinds as tabs, a search field (Enter searches), **Show everything** and,
+once CurseForge is set up, a Modrinth / CurseForge switch. Each result is an index row: its summary, author,
+downloads, source and licence, how well it runs (and why), **Page** (the project's page on its source) and
+**Install** (**Import** for a modpack). Installed packs are listed above the results with their version, source,
+file and the checksum they were checked against, with **Update to …** when a newer version runs and **Remove**
+(asked twice).
+
 ## Installing, updating, removing
 
 `mod-browser.json` beside `options.txt` lists every file the browser installed: its source, project, version, file
