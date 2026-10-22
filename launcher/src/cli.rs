@@ -771,7 +771,7 @@ fn data(action: DataCmd, as_json: bool) -> Result<(), String> {
             println!("Waiting to be sent: {}", status["waiting"]);
             match horizon_telemetry::endpoint() {
                 Some(url) => println!("Server: {url}"),
-                None => println!("Server: none yet, nothing is sent"),
+                None => println!("Server: turned off (HORIZON_TELEMETRY_URL=off), nothing is sent"),
             }
         }
         DataCmd::Allow { kinds } => {
