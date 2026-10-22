@@ -12756,6 +12756,13 @@ pub fn run() -> Result<()> {
     if options.dedicated.is_some() {
         // Before any worker starts: on Linux they go behind the server thread.
         horizon_threads::put_helpers_behind();
+    } else {
+        // The render thread, like the server thread, ahead of the workers on
+        // macOS and Windows. While terrain loads, the worker pools (two with
+        // single player's server thread) and other programs outnumber the
+        // cores, and a frame that gave its core up (in a GPU submit) waited
+        // 10 to 200 ms to get one back.
+        horizon_threads::favour_current();
     }
     let started = Instant::now();
     horizon_client::spans::enable(options.spikes.is_some());
