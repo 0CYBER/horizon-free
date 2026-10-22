@@ -168,6 +168,19 @@ struct Views<'a> {
     depth_solid: &'a wgpu::TextureView,
     atlas: Option<&'a wgpu::TextureView>,
     lightmap: Option<&'a wgpu::TextureView>,
+    shadow: Option<&'a ShadowViews>,
+}
+
+/// The shadow map's textures, as the passes read them.
+struct ShadowViews {
+    /// `shadowtex0` and `shadowtex1` for comparisons (`Depth32Float`).
+    depth: wgpu::TextureView,
+    depth_solid: wgpu::TextureView,
+    /// The same as plain floats, for `sampler2D` reads (`R32Float`).
+    float: wgpu::TextureView,
+    float_solid: wgpu::TextureView,
+    /// `shadowcolor<N>`, for the targets the shadow programs write.
+    colors: Vec<Option<wgpu::TextureView>>,
 }
 
 /// A colour target's two sides.
@@ -190,10 +203,15 @@ enum Source {
     /// (the world's depth when the pack doesn't draw the terrain).
     DepthSolid,
     Noise,
-    /// `shadowtex*`: no shadow map yet, so a far depth (nothing in shadow);
-    /// also Distant Horizons' and Voxy's depth, as without those mods.
-    Shadow,
-    /// Anything else (`shadowcolor*`, custom textures): white or black.
+    /// `shadowtex0` (with translucent terrain) or `shadowtex1` (without):
+    /// the shadow map when the pack draws one, else a far depth (nothing in
+    /// shadow).
+    ShadowDepth(u32),
+    /// `shadowcolor<N>`: the shadow map's colour target, else white.
+    ShadowColor(u32),
+    /// Distant Horizons' and Voxy's depth: far, as without those mods.
+    Far,
+    /// Anything else (custom textures): white or black.
     Blank(bool),
     /// In geometry programs: the block atlas (`gtexture`), the lightmap,
     /// and a flat normal map for `normals` (sprites have no LabPBR maps).
@@ -212,9 +230,13 @@ fn source(name: &str, geometry: bool) -> Source {
         "depthtex0" | "gdepthtex" => Source::Depth,
         "depthtex1" | "depthtex2" => Source::DepthSolid,
         "noisetex" => Source::Noise,
-        "shadowtex0" | "shadowtex1" | "shadow" | "watershadow" => Source::Shadow,
-        n if n.starts_with("dhDepthTex") || n.starts_with("vxDepthTex") => Source::Shadow,
-        n if n.starts_with("shadowcolor") => Source::Blank(true),
+        "shadowtex0" | "shadow" | "watershadow" => Source::ShadowDepth(0),
+        "shadowtex1" => Source::ShadowDepth(1),
+        n if n.starts_with("dhDepthTex") || n.starts_with("vxDepthTex") => Source::Far,
+        "shadowcolor" => Source::ShadowColor(0),
+        n if let Some(i) = n.strip_prefix("shadowcolor").and_then(|i| i.parse().ok()) => {
+            Source::ShadowColor(i)
+        }
         n => target_index(n).map_or(Source::Blank(false), Source::Target),
     }
 }
@@ -253,6 +275,8 @@ struct PassGpu {
     /// them), and the targets written on their alternate side.
     flat_pipeline: Option<wgpu::RenderPipeline>,
     geometry: Option<BTreeSet<u32>>,
+    /// A shadow program: the light's matrices, `shadowcolor` targets.
+    shadow: bool,
 }
 
 /// What a pass draws into.
@@ -269,6 +293,8 @@ struct GeometrySetup<'a> {
     /// Each draw buffer's blending.
     blends: &'a [Option<wgpu::BlendState>],
     layouts: &'a GeometryLayouts<'a>,
+    /// A shadow program: no face culling (Iris's `ShadowRenderer`).
+    shadow: bool,
 }
 
 /// The renderer's bind group layouts a geometry program's pipelines use:
@@ -284,6 +310,19 @@ struct FolderGeometry {
     terrain: PassGpu,
     water: Option<PassGpu>,
     translucent_at: usize,
+    /// Its shadow programs, when it has some and they compile.
+    shadow: Option<FolderShadow>,
+}
+
+/// A folder's shadow map: its programs over the solid and translucent
+/// terrain, its `shadowcolor` targets, and where it runs.
+struct FolderShadow {
+    solid: PassGpu,
+    water: Option<PassGpu>,
+    /// Per `shadowcolor` target: its format and clear colour.
+    targets: Vec<(wgpu::TextureFormat, Option<wgpu::Color>)>,
+    /// How many passes run before it (`begin*`).
+    at: usize,
 }
 
 /// What every pass of the pack shares.
@@ -315,6 +354,7 @@ struct Bound {
     /// Per pass, then `final`.
     groups: Vec<wgpu::BindGroup>,
     geometry: Option<BoundGeometry>,
+    shadow: Option<BoundShadow>,
     world_in: (wgpu::RenderPipeline, wgpu::BindGroup),
     /// The world goes to colortex0's alternate side.
     world_alt: bool,
@@ -324,6 +364,25 @@ struct Bound {
     output: wgpu::BindGroup,
     /// Blank textures, kept alive by the bind groups too.
     _blank: Vec<wgpu::Texture>,
+}
+
+/// The shadow map's textures and its programs' groups.
+struct BoundShadow {
+    views: ShadowViews,
+    /// The depth buffer the shadow programs draw with (`shadowtex0`), and
+    /// its copy before translucent terrain (`shadowtex1`).
+    depth: wgpu::Texture,
+    depth_solid: wgpu::Texture,
+    /// The `shadowcolor` targets cleared each frame, with their colour,
+    /// and those cleared only when made (kept between frames).
+    clears: Vec<(wgpu::TextureView, wgpu::Color)>,
+    initial: Vec<(wgpu::TextureView, wgpu::Color)>,
+    solid: wgpu::BindGroup,
+    water: Option<wgpu::BindGroup>,
+    /// `depth` for `depth_out` into the float copies.
+    out_group: wgpu::BindGroup,
+    /// A pass reads the depth as plain floats: the copies are made.
+    float_reads: bool,
 }
 
 /// What a folder's geometry programs draw with at one size.
@@ -442,6 +501,24 @@ impl JavaStages {
         })
     }
 
+    /// Where the pack's shadow map looks this frame in `dimension`, when
+    /// it draws one: its view of camera-relative positions (`camera` is the
+    /// camera's position), and its half width, near and far planes, for
+    /// the renderer to pick the sections it draws.
+    pub fn shadow_view(
+        &self,
+        dimension: i8,
+        world: &JavaFrame,
+        camera: Vec3,
+    ) -> Option<(Mat4, [f32; 3])> {
+        let index = self.folder_for[(dimension.clamp(-1, 1) + 1) as usize].unwrap_or(0);
+        let folder = self.folders.get(index)?;
+        folder.geometry.as_ref()?.shadow.as_ref()?;
+        let d = folder.directives;
+        let (view, _) = shadow_matrices(&d, shadow_angle(world), camera);
+        Some((view, [d.shadow.distance, d.shadow.near, d.shadow.far]))
+    }
+
     /// Whether the pack draws the terrain in `dimension` (0 overworld, -1
     /// the Nether, 1 the End): the renderer then leaves it out of the world
     /// and gives `run` a [`JavaWorld`].
@@ -480,9 +557,10 @@ impl JavaStages {
             self.atlas = Atlas::new(device, queue, w);
             self.bound = None;
         }
-        if self.bound.as_ref().is_none_or(|b| {
+        let fresh = self.bound.as_ref().is_none_or(|b| {
             b.folder != folder || b.size != size || b.geometry.is_some() != terrain.is_some()
-        }) {
+        });
+        if fresh {
             self.bound = Some(self.bind(device, queue, folder, color, depth, size, post, terrain));
         }
         let now = std::time::Instant::now();
@@ -498,6 +576,8 @@ impl JavaStages {
             self.previous,
         );
         inputs.set_world(&world, directives.sun_path_rotation);
+        (inputs.shadow_view, inputs.shadow_projection) =
+            shadow_matrices(&directives, inputs.shadow_angle, inputs.camera);
         if let Some(atlas) = &self.atlas {
             inputs.atlas_size = atlas.size().map(|v| v as f32);
         }
@@ -537,7 +617,14 @@ impl JavaStages {
         let translucent_at = geometry.map_or(usize::MAX, |((g, _), _)| {
             g.translucent_at.min(folder.passes.len())
         });
+        let shadow = geometry
+            .and_then(|((g, b), w)| Some((g.shadow.as_ref()?, bound.shadow.as_ref()?, b, w)));
         for i in 0..=folder.passes.len() {
+            if let Some((sh, b, g, w)) = shadow
+                && i == sh.at.min(folder.passes.len())
+            {
+                draw_shadow(queue, encoder, sh, b, g, &inputs, w, fresh);
+            }
             if i == world_at {
                 world_in(encoder, bound);
                 if let Some(((g, b), w)) = geometry {
@@ -592,6 +679,151 @@ impl JavaStages {
             }
         }
         &bound.output
+    }
+
+    /// The shadow map's textures at the folder's `shadowMapResolution`,
+    /// and its programs' groups.
+    #[allow(clippy::too_many_arguments)]
+    fn bind_shadow(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        folder: &Folder,
+        shadow: &FolderShadow,
+        targets: &BTreeMap<u32, Target>,
+        world: Option<&JavaWorld>,
+        blank: &mut Vec<wgpu::Texture>,
+    ) -> BoundShadow {
+        let side = folder
+            .directives
+            .shadow
+            .resolution
+            .clamp(1, device.limits().max_texture_dimension_2d);
+        let texture = |label, format, usage| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: side,
+                    height: side,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage,
+                view_formats: &[],
+            })
+        };
+        use wgpu::TextureUsages as U;
+        let depth = texture(
+            "Java shader pack shadow depth",
+            wgpu::TextureFormat::Depth32Float,
+            U::RENDER_ATTACHMENT | U::TEXTURE_BINDING | U::COPY_SRC,
+        );
+        let depth_solid = texture(
+            "Java shader pack shadow depth before translucent terrain",
+            wgpu::TextureFormat::Depth32Float,
+            U::TEXTURE_BINDING | U::COPY_DST,
+        );
+        let float = |label| {
+            texture(
+                label,
+                wgpu::TextureFormat::R32Float,
+                U::RENDER_ATTACHMENT | U::TEXTURE_BINDING,
+            )
+            .create_view(&Default::default())
+        };
+        // The colour targets the shadow programs write or a pass reads.
+        let passes = folder.passes.iter().chain(&folder.final_pass).chain(
+            folder
+                .geometry
+                .iter()
+                .flat_map(|g| std::iter::once(&g.terrain).chain(&g.water)),
+        );
+        let mut used: BTreeSet<u32> = shadow
+            .solid
+            .draw_buffers
+            .iter()
+            .chain(shadow.water.iter().flat_map(|w| &w.draw_buffers))
+            .copied()
+            .collect();
+        let mut float_reads = false;
+        for s in passes.clone().flat_map(|p| &p.samplers) {
+            match s.source {
+                Source::ShadowColor(i) => {
+                    used.insert(i);
+                }
+                Source::ShadowDepth(_) if !s.compare => float_reads = true,
+                _ => {}
+            }
+        }
+        let mut colors = Vec::new();
+        let mut clears = Vec::new();
+        let mut initial = Vec::new();
+        for (i, &(format, clear)) in shadow.targets.iter().enumerate() {
+            if !used.contains(&(i as u32)) {
+                colors.push(None);
+                continue;
+            }
+            let view = texture(
+                "Java shader pack shadowcolor",
+                format,
+                U::RENDER_ATTACHMENT | U::TEXTURE_BINDING,
+            )
+            .create_view(&Default::default());
+            match clear {
+                Some(color) => clears.push((view.clone(), color)),
+                // Kept between frames: white to start with, as Iris's.
+                None => initial.push((view.clone(), wgpu::Color::WHITE)),
+            }
+            colors.push(Some(view));
+        }
+        let views = ShadowViews {
+            depth: depth.create_view(&Default::default()),
+            depth_solid: depth_solid.create_view(&Default::default()),
+            float: float("Java shader pack shadowtex0"),
+            float_solid: float("Java shader pack shadowtex1"),
+            colors,
+        };
+        // The shadow programs read neither the shadow map nor the size of
+        // the world's depth.
+        let unused = texture(
+            "Java shader pack shadow pass depth",
+            wgpu::TextureFormat::R32Float,
+            U::TEXTURE_BINDING,
+        )
+        .create_view(&Default::default());
+        let pass_views = Views {
+            depth: &unused,
+            depth_solid: &unused,
+            atlas: self.atlas.as_ref().map(|a| &a.view),
+            lightmap: world.map(|w| w.lightmap),
+            shadow: None,
+        };
+        let mut bind =
+            |pass: &PassGpu| pass.bind(device, queue, targets, &pass_views, &self.common, blank);
+        let solid = bind(&shadow.solid);
+        let water = shadow.water.as_ref().map(&mut bind);
+        let out_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Java shader pack shadow depth"),
+            layout: &self.common.depth_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&views.depth),
+            }],
+        });
+        BoundShadow {
+            views,
+            depth,
+            depth_solid,
+            clears,
+            initial,
+            solid,
+            water,
+            out_group,
+            float_reads,
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -702,13 +934,17 @@ impl JavaStages {
             .create_view(&Default::default()),
             None => depth.clone(),
         };
+        let mut blank = Vec::new();
+        let shadow = geometry
+            .and_then(|g| g.shadow.as_ref())
+            .map(|sh| self.bind_shadow(device, queue, folder, sh, &targets, world, &mut blank));
         let views = Views {
             depth: &depth,
             depth_solid: &depth_solid,
             atlas: self.atlas.as_ref().map(|a| &a.view),
             lightmap: world.map(|w| w.lightmap),
+            shadow: shadow.as_ref().map(|s| &s.views),
         };
-        let mut blank = Vec::new();
         let groups = all
             .clone()
             .map(|pass| pass.bind(device, queue, &targets, &views, &self.common, &mut blank))
@@ -839,6 +1075,7 @@ impl JavaStages {
             depth_solid,
             groups,
             geometry,
+            shadow,
             world_in: (world_pipeline, world_group),
             world_alt: plan.flipped_after_prepare.contains(&0),
             final_target,
@@ -869,6 +1106,7 @@ fn folder_geometry(
                 flat_vertex: g.variants.first().unwrap_or(&g.program.vertex),
                 blends,
                 layouts,
+                shadow: false,
             }),
         )
     };
@@ -882,11 +1120,15 @@ fn folder_geometry(
             terrain,
             water,
             translucent_at: plan.translucent_at,
+            shadow: None,
         })
     });
     let error = pollster::block_on(scope.pop());
     match (made, error) {
-        (Ok(geometry), None) => Some(geometry),
+        (Ok(mut geometry), None) => {
+            geometry.shadow = folder_shadow(device, plan, layouts);
+            Some(geometry)
+        }
         (Err(e), _) => {
             log::warn!("Horizon: shader pack {}: {e}", terrain.program.pass.program);
             None
@@ -896,6 +1138,210 @@ fn folder_geometry(
             None
         }
     }
+}
+
+/// A folder's shadow programs on the GPU, or `None` (with a warning: the
+/// pack then reads a shadow map with nothing in shadow) when wgpu refuses
+/// them.
+fn folder_shadow(
+    device: &wgpu::Device,
+    plan: &JavaFolder,
+    layouts: &GeometryLayouts,
+) -> Option<FolderShadow> {
+    let solid = plan.shadow.as_ref()?;
+    let formats: Vec<wgpu::TextureFormat> = plan
+        .shadow_targets
+        .iter()
+        .map(|t| target_format(&t.format, false))
+        .collect();
+    // Instanced draws only: the flat draws hold what the camera sees.
+    let layouts = GeometryLayouts {
+        flat: None,
+        page: layouts.page,
+    };
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let gpu = |g: &GeometryProgram, blends: &[Option<wgpu::BlendState>]| {
+        PassGpu::new(
+            device,
+            &g.program,
+            &formats,
+            Output::Geometry(GeometrySetup {
+                flat_vertex: &g.program.vertex,
+                blends,
+                layouts: &layouts,
+                shadow: true,
+            }),
+        )
+    };
+    let made = gpu(solid, &plan.shadow_blends).and_then(|solid_gpu| {
+        let water = plan
+            .shadow_water
+            .as_ref()
+            .map(|w| gpu(w, &plan.shadow_water_blends))
+            .transpose()?;
+        Ok((solid_gpu, water))
+    });
+    let error = pollster::block_on(scope.pop());
+    let warn = |e: &dyn std::fmt::Display| {
+        log::warn!("Horizon: shader pack {}: {e}", solid.program.pass.program);
+    };
+    match (made, error) {
+        (Ok((solid_gpu, water)), None) => Some(FolderShadow {
+            solid: solid_gpu,
+            water,
+            targets: plan
+                .shadow_targets
+                .iter()
+                .zip(&formats)
+                .map(|(t, &format)| {
+                    let clear = t.clear.then(|| {
+                        let [r, g, b, a] = t.clear_color.unwrap_or([1.0; 4]);
+                        wgpu::Color {
+                            r: r.into(),
+                            g: g.into(),
+                            b: b.into(),
+                            a: a.into(),
+                        }
+                    });
+                    (format, clear)
+                })
+                .collect(),
+            at: plan.shadow_at,
+        }),
+        (Err(e), _) => {
+            warn(&e);
+            None
+        }
+        (_, Some(e)) => {
+            warn(&e);
+            None
+        }
+    }
+}
+
+/// The shadow map: Horizon's terrain from the light with the pack's
+/// shadow programs, solid then translucent (`ShadowRenderer`), with the
+/// depth before translucent terrain kept for `shadowtex1`.
+#[allow(clippy::too_many_arguments)]
+fn draw_shadow(
+    queue: &wgpu::Queue,
+    encoder: &mut wgpu::CommandEncoder,
+    shadow: &FolderShadow,
+    b: &BoundShadow,
+    geometry: &BoundGeometry,
+    inputs: &Inputs,
+    world: &JavaWorld,
+    fresh: bool,
+) {
+    if fresh {
+        for (view, color) in &b.initial {
+            clear_view(encoder, view, *color);
+        }
+    }
+    for (view, color) in &b.clears {
+        clear_view(encoder, view, *color);
+    }
+    let draw = |encoder: &mut wgpu::CommandEncoder,
+                pass: &PassGpu,
+                group: &wgpu::BindGroup,
+                layer: Layer,
+                first: bool| {
+        pass.write_uniforms(queue, inputs);
+        let attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = pass
+            .draw_buffers
+            .iter()
+            .map(|&i| {
+                let view = b.views.colors.get(i as usize)?.as_ref()?;
+                Some(color_attachment(view, None))
+            })
+            .collect();
+        let mut render = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some(&pass.program),
+            color_attachments: &attachments,
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &b.views.depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: if first {
+                        wgpu::LoadOp::Clear(1.0)
+                    } else {
+                        wgpu::LoadOp::Load
+                    },
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        });
+        (world.draw)(
+            &mut render,
+            layer,
+            &TerrainPipelines {
+                instanced: &pass.pipeline,
+                flat: None,
+                group,
+            },
+        );
+    };
+    let float_out = |encoder: &mut wgpu::CommandEncoder, solid: bool| {
+        if !b.float_reads {
+            return;
+        }
+        let mut attachments = vec![Some(color_attachment(&b.views.float, None))];
+        if solid {
+            attachments.push(Some(color_attachment(&b.views.float_solid, None)));
+        }
+        let mut render = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Java shader pack shadow depth"),
+            color_attachments: &attachments,
+            ..Default::default()
+        });
+        render.set_pipeline(if solid {
+            &geometry.out_both
+        } else {
+            &geometry.out
+        });
+        render.set_bind_group(0, &b.out_group, &[]);
+        render.draw(0..3, 0..1);
+    };
+    draw(encoder, &shadow.solid, &b.solid, Layer::ShadowSolid, true);
+    encoder.copy_texture_to_texture(
+        b.depth.as_image_copy(),
+        b.depth_solid.as_image_copy(),
+        b.depth.size(),
+    );
+    float_out(encoder, true);
+    if let (Some(pass), Some(group)) = (&shadow.water, &b.water) {
+        draw(encoder, pass, group, Layer::ShadowTranslucent, false);
+        float_out(encoder, false);
+    }
+}
+
+/// Iris's `shadowModelView` and `shadowProjection` (`ShadowMatrices`):
+/// the light's view of camera-relative positions, snapped to the pack's
+/// `shadowIntervalSize` as the camera moves, and an orthographic
+/// projection `shadowDistance` wide each way of the camera.
+pub fn shadow_matrices(directives: &Directives, shadow_angle: f32, camera: Vec3) -> (Mat4, Mat4) {
+    let sky = if shadow_angle < 0.25 {
+        shadow_angle + 0.75
+    } else {
+        shadow_angle - 0.25
+    };
+    let mut view = Mat4::from_rotation_x(90f32.to_radians())
+        * Mat4::from_rotation_z((sky * -360.0).to_radians())
+        * Mat4::from_rotation_x(directives.sun_path_rotation.to_radians());
+    let d = &directives.shadow;
+    if d.interval != 0.0 {
+        // Java's `%` keeps the dividend's sign, as Rust's does.
+        let offset = Vec3::new(
+            camera.x % d.interval,
+            camera.y % d.interval,
+            camera.z % d.interval,
+        ) - Vec3::splat(d.interval / 2.0);
+        view *= Mat4::from_translation(offset);
+    }
+    let h = d.distance;
+    let projection = Mat4::orthographic_rh_gl(-h, h, -h, h, d.near, d.far);
+    (view, projection)
 }
 
 fn world_in(encoder: &mut wgpu::CommandEncoder, bound: &Bound) {
@@ -1257,7 +1703,10 @@ impl PassGpu {
                         )),
                     )
                 }
-                (false, Source::Depth | Source::DepthSolid | Source::Shadow) => (
+                (
+                    false,
+                    Source::Depth | Source::DepthSolid | Source::ShadowDepth(_) | Source::Far,
+                ) => (
                     wgpu::TextureSampleType::Float { filterable: false },
                     Some(false),
                 ),
@@ -1441,6 +1890,7 @@ impl PassGpu {
             scale: program.pass.scale.clamp(0.0, 1.0),
             flat_pipeline: None,
             geometry: None,
+            shadow: false,
         })
     }
 
@@ -1523,9 +1973,10 @@ impl PassGpu {
                     compilation_options: Default::default(),
                     buffers: &buffers,
                 },
-                // The y flip into GL's layout turns the faces around.
+                // The y flip into GL's layout turns the faces around. The
+                // shadow map culls none (a mountain's back casts shadows).
                 primitive: wgpu::PrimitiveState {
-                    cull_mode: Some(wgpu::Face::Back),
+                    cull_mode: (!setup.shadow).then_some(wgpu::Face::Back),
                     front_face: wgpu::FrontFace::Cw,
                     ..Default::default()
                 },
@@ -1583,6 +2034,7 @@ impl PassGpu {
             scale: 1.0,
             flat_pipeline,
             geometry: Some(flipped),
+            shadow: setup.shadow,
         })
     }
 
@@ -1599,8 +2051,31 @@ impl PassGpu {
         let depth = textures.depth;
         let mut views = Vec::new();
         for s in &self.samplers {
+            let shadow = textures
+                .shadow
+                .filter(|_| s.dimension == wgpu::TextureViewDimension::D2);
             let view = match (s.compare, s.source) {
+                (true, Source::ShadowDepth(i)) if let Some(sh) = shadow => {
+                    if i == 0 {
+                        sh.depth.clone()
+                    } else {
+                        sh.depth_solid.clone()
+                    }
+                }
                 (true, _) => blank_view(device, queue, blank, s, BlankKind::FarDepth),
+                (false, Source::ShadowDepth(i)) if let Some(sh) = shadow => {
+                    if i == 0 {
+                        sh.float.clone()
+                    } else {
+                        sh.float_solid.clone()
+                    }
+                }
+                (false, Source::ShadowColor(i))
+                    if let Some(view) =
+                        shadow.and_then(|sh| sh.colors.get(i as usize)?.as_ref()) =>
+                {
+                    view.clone()
+                }
                 (false, Source::Target(i)) if s.dimension == wgpu::TextureViewDimension::D2 => {
                     match targets.get(&i) {
                         Some(t) if self.reads_alt.contains(&i) => t.alt_view.clone(),
@@ -1629,7 +2104,12 @@ impl PassGpu {
                 (false, Source::FlatNormal) => {
                     blank_view(device, queue, blank, s, BlankKind::FlatNormal)
                 }
-                (false, Source::Shadow) => blank_view(device, queue, blank, s, BlankKind::Far),
+                (false, Source::ShadowDepth(_) | Source::Far) => {
+                    blank_view(device, queue, blank, s, BlankKind::Far)
+                }
+                (false, Source::ShadowColor(_)) => {
+                    blank_view(device, queue, blank, s, BlankKind::Color(true))
+                }
                 (false, Source::Noise) if s.dimension == wgpu::TextureViewDimension::D2 => {
                     common.noise.clone()
                 }
@@ -1648,7 +2128,10 @@ impl PassGpu {
                 (true, _) => &common.compare,
                 _ if s.signed.is_some() => &common.nearest,
                 (false, Source::Noise) => &common.repeat,
-                (false, Source::Depth | Source::DepthSolid | Source::Shadow) => &common.nearest,
+                (
+                    false,
+                    Source::Depth | Source::DepthSolid | Source::ShadowDepth(_) | Source::Far,
+                ) => &common.nearest,
                 (false, Source::Atlas) => &common.atlas,
                 (false, Source::Target(i)) => {
                     match targets.get(&i).map(|t| sample_type(t.format)) {
@@ -1697,7 +2180,12 @@ impl PassGpu {
         };
         let mut bytes = vec![0u8; *block_size as usize];
         for (name, slots) in &self.uniforms {
-            if let Some(values) = inputs.value(name, self.geometry.is_some()) {
+            let values = if self.shadow {
+                inputs.shadow(name).or_else(|| inputs.value(name, true))
+            } else {
+                inputs.value(name, self.geometry.is_some())
+            };
+            if let Some(values) = values {
                 for (&(offset, int), value) in slots.iter().zip(values) {
                     let at = offset as usize..offset as usize + 4;
                     bytes[at].copy_from_slice(&if int {
@@ -2073,6 +2561,19 @@ struct Inputs {
     custom: HashMap<String, Vec<f32>>,
     /// `atlasSize`, in geometry programs.
     atlas_size: [f32; 2],
+    /// `shadowModelView` and `shadowProjection` ([`shadow_matrices`]).
+    shadow_view: Mat4,
+    shadow_projection: Mat4,
+}
+
+/// `shadowAngle`: the sun's angle by day, the moon's by night, 0..1.
+fn shadow_angle(world: &JavaFrame) -> f32 {
+    let sun = celestial_angle(world.sun_angle);
+    if sun < 180.0 {
+        sun / 360.0
+    } else {
+        celestial_angle(world.moon_angle) / 360.0
+    }
 }
 
 /// `CelestialUniforms.getSunAngle`: the body's angle plus 90, in 0..360
@@ -2128,6 +2629,8 @@ impl Inputs {
             is_day: true,
             custom: HashMap::new(),
             atlas_size: [0.0; 2],
+            shadow_view: Mat4::IDENTITY,
+            shadow_projection: Mat4::IDENTITY,
         };
         out.set_world(&JavaFrame::default(), 0.0);
         out
@@ -2153,11 +2656,7 @@ impl Inputs {
         let sun = celestial_angle(world.sun_angle);
         self.is_day = sun < 180.0;
         self.sun_angle = sun / 360.0;
-        self.shadow_angle = if self.is_day {
-            sun
-        } else {
-            celestial_angle(world.moon_angle)
-        } / 360.0;
+        self.shadow_angle = shadow_angle(world);
     }
 
     /// The value of uniform `name`, as its scalars in order: Iris's own,
@@ -2203,6 +2702,26 @@ impl Inputs {
             "alphaTestRef" => vec![0.1],
             "atlasSize" => self.atlas_size.to_vec(),
             "entityId" | "blockEntityId" | "currentRenderedItemId" => vec![-1.0],
+            _ => return None,
+        })
+    }
+
+    /// The uniforms whose value differs in shadow programs: the light's
+    /// matrices instead of the camera's.
+    fn shadow(&self, name: &str) -> Option<Vec<f32>> {
+        let mat = |m: Mat4| m.to_cols_array().to_vec();
+        let (view, projection) = (self.shadow_view, self.shadow_projection);
+        Some(match name {
+            "iris_ModelViewMatrix" | "modelViewMatrix" => mat(view),
+            "iris_ModelViewMatrixInverse" | "modelViewMatrixInverse" => mat(view.inverse()),
+            "iris_ProjectionMatrix" | "projectionMatrix" => mat(projection),
+            "iris_ProjectionMatrixInverse" | "projectionMatrixInverse" => mat(projection.inverse()),
+            "iris_ModelViewProjectionMatrix" => mat(projection * view),
+            "iris_NormalMatrix" | "normalMatrix" => Mat3::from_mat4(view)
+                .inverse()
+                .transpose()
+                .to_cols_array()
+                .to_vec(),
             _ => return None,
         })
     }
@@ -2269,10 +2788,10 @@ impl Inputs {
             "iris_ProjectionMatrixInverse" => mat(screen.inverse()),
             "iris_TextureMatrix" => (0..8).flat_map(|_| mat(Mat4::IDENTITY)).collect(),
             "iris_NormalMatrix" => Mat3::IDENTITY.to_cols_array().to_vec(),
-            "shadowModelView"
-            | "shadowModelViewInverse"
-            | "shadowProjection"
-            | "shadowProjectionInverse" => mat(Mat4::IDENTITY),
+            "shadowModelView" => mat(self.shadow_view),
+            "shadowModelViewInverse" => mat(self.shadow_view.inverse()),
+            "shadowProjection" => mat(self.shadow_projection),
+            "shadowProjectionInverse" => mat(self.shadow_projection.inverse()),
             _ => return None,
         })
     }
@@ -2311,13 +2830,51 @@ mod tests {
     }
 
     #[test]
+    fn shadow_matrices_are_iris_s() {
+        use horizon_shaderpack::pipeline::ShadowDirectives;
+        let close = |a: Mat4, b: Mat4| {
+            for (x, y) in a.to_cols_array().iter().zip(b.to_cols_array()) {
+                assert!((x - y).abs() < 1e-5, "{a} != {b}");
+            }
+        };
+        // ShadowMatrices.Tests: shadowDistance 32, planes 0.05 and 256.
+        let directives = Directives {
+            shadow: ShadowDirectives {
+                distance: 32.0,
+                near: 0.05,
+                far: 256.0,
+                interval: 0.0,
+                ..ShadowDirectives::default()
+            },
+            ..Directives::default()
+        };
+        let (view, projection) = shadow_matrices(&directives, 0.25, Vec3::ZERO);
+        close(
+            projection,
+            Mat4::from_cols_array(&[
+                0.03125, 0.0, 0.0, 0.0, 0.0, 0.03125, 0.0, 0.0, 0.0, 0.0, -0.007_814_026, 0.0, 0.0,
+                0.0, -1.000_390_6, 1.0,
+            ]),
+        );
+        // Noon: the light looks straight down (up is toward it, +z).
+        assert!((view.transform_vector3(Vec3::Y) - Vec3::Z).length() < 1e-5);
+        // Snapped to the interval: x 5.5 % 2 = 1.5 further than 0 % 2.
+        let directives = Directives::default();
+        let (snapped, _) = shadow_matrices(&directives, 0.25, Vec3::new(5.5, 0.0, 0.0));
+        let (plain, _) = shadow_matrices(&directives, 0.25, Vec3::ZERO);
+        close(snapped, plain * Mat4::from_translation(Vec3::new(1.5, 0.0, 0.0)));
+    }
+
+    #[test]
     fn samplers_read_what_iris_binds() {
         assert_eq!(source("colortex4", false), Source::Target(4));
         assert_eq!(source("gaux1", false), Source::Target(4));
         assert_eq!(source("gdepthtex", false), Source::Depth);
-        assert_eq!(source("shadowtex1", false), Source::Shadow);
-        assert_eq!(source("dhDepthTex0", false), Source::Shadow);
-        assert_eq!(source("shadowcolor0", false), Source::Blank(true));
+        assert_eq!(source("shadowtex1", false), Source::ShadowDepth(1));
+        assert_eq!(source("shadow", false), Source::ShadowDepth(0));
+        assert_eq!(source("dhDepthTex0", false), Source::Far);
+        assert_eq!(source("shadowcolor1", false), Source::ShadowColor(1));
+        assert_eq!(source("shadowcolor", false), Source::ShadowColor(0));
         assert_eq!(source("cloudTexture", false), Source::Blank(false));
         // Before translucent terrain; geometry programs' own textures.
         assert_eq!(source("depthtex1", false), Source::DepthSolid);

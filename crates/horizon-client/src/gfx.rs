@@ -120,6 +120,18 @@ struct Globals {
     dynamic_lights: [[f32; 4]; crate::dynamic_light::MAX],
 }
 pub type SectionKey = (i32, i32, i32);
+/// The sections a Java pack's shadow map draws ([`Renderer`]'s `shadow`).
+#[derive(Default)]
+struct ShadowList {
+    visible: Vec<resident::Visible>,
+    draws: Vec<[u32; 5]>,
+    pages: Vec<(u32, Option<u32>)>,
+    /// How many of `draws` are solid.
+    solid: u32,
+    indirect: Option<wgpu::Buffer>,
+    capacity: u64,
+}
+
 struct SectionGpu {
     /// Arena page and first vertex in it: solid quads, then translucent ones.
     page: u32,
@@ -427,6 +439,10 @@ pub struct Renderer {
     /// built, and their pages.
     phase2_draws: Vec<[u32; 5]>,
     phase2_pages: Vec<(u32, Option<u32>)>,
+    /// A Java pack's shadow map (`gfx/java_terrain.rs`): the sections in
+    /// the light's view, their draws (solid then translucent, instances
+    /// after the camera's), and the indirect buffer they're uploaded to.
+    shadow: ShadowList,
     /// Block-entity blocks per meshed section (world position, state id).
     block_entities: HashMap<SectionKey, Vec<([i32; 3], u32)>>,
     /// Changes whenever `block_entities` does (unique across renderers).
@@ -2193,6 +2209,7 @@ impl Renderer {
             draw_pages: Vec::new(),
             phase2_draws: Vec::new(),
             phase2_pages: Vec::new(),
+            shadow: ShadowList::default(),
             block_entities: HashMap::new(),
             block_entity_revision: next_block_entity_revision(),
             occlusion: occlusion::Occlusion::new(crate::chunk::MIN_Y, crate::chunk::HEIGHT / 16),
@@ -2519,10 +2536,25 @@ impl Renderer {
         count: u32,
         page_group: impl Fn(&mut wgpu::RenderPass<'_>, u32),
     ) {
+        let list = (&self.draws[..], &self.draw_pages[..]);
+        self.draw_list(pass, indirect, list, base, first, count, page_group);
+    }
+    /// [`Self::draw_sections_with`] over another list of draws and pages.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_list(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        indirect: &wgpu::Buffer,
+        (draws, pages): (&[[u32; 5]], &[(u32, Option<u32>)]),
+        base: u32,
+        first: u32,
+        count: u32,
+        page_group: impl Fn(&mut wgpu::RenderPass<'_>, u32),
+    ) {
         let (mut i, end) = (first as usize, (first + count) as usize);
         while i < end {
-            let (page, index_page) = self.draw_pages[i];
-            let run = self.draw_pages[i..end]
+            let (page, index_page) = pages[i];
+            let run = pages[i..end]
                 .iter()
                 .take_while(|&&p| p == (page, index_page))
                 .count();
@@ -2534,7 +2566,7 @@ impl Renderer {
                 let offset = (i - base as usize) as u64 * 20;
                 pass.multi_draw_indexed_indirect(indirect, offset, run as u32);
             } else {
-                for d in &self.draws[i..i + run] {
+                for d in &draws[i..i + run] {
                     pass.draw_indexed(d[2]..d[2] + d[0], d[3] as i32, d[4]..d[4] + 1);
                 }
             }
@@ -2556,12 +2588,32 @@ impl Renderer {
         culling: bool,
     ) {
         use java_terrain::Layer;
-        let translucent = layer == Layer::Translucent;
         let page = |pass: &mut wgpu::RenderPass<'_>, page: u32| {
             if let Some(Some((_, group))) = self.java_pages.get(page as usize) {
                 pass.set_bind_group(3, group, &[]);
             }
         };
+        if matches!(layer, Layer::ShadowSolid | Layer::ShadowTranslucent) {
+            let shadow = &self.shadow;
+            let all = shadow.draws.len() as u32;
+            let (first, count) = if layer == Layer::ShadowSolid {
+                (0, shadow.solid)
+            } else {
+                (shadow.solid, all - shadow.solid)
+            };
+            // Without multi-draw the draws are read from the list.
+            let indirect = shadow.indirect.as_ref().unwrap_or(&self.indirect);
+            if count == 0 {
+                return;
+            }
+            pass.set_bind_group(2, pipelines.group, &[]);
+            pass.set_pipeline(pipelines.instanced);
+            pass.set_vertex_buffer(1, self.instances.slice(..));
+            let list = (&shadow.draws[..], &shadow.pages[..]);
+            self.draw_list(pass, indirect, list, 0, first, count, page);
+            return;
+        }
+        let translucent = layer == Layer::Translucent;
         pass.set_bind_group(2, pipelines.group, &[]);
         match (self.flat.as_ref().filter(|_| flat_frame), pipelines.flat) {
             // The flat path doesn't cull by occlusion: phase 1 is everything.
@@ -2585,6 +2637,7 @@ impl Renderer {
                     (Layer::Revealed, Some(c)) => (&c.phase2, phase1, phase1, solid - phase1),
                     (Layer::Revealed, None) => return,
                     (Layer::Translucent, _) => (&self.indirect, 0, solid, translucent_draws),
+                    (Layer::ShadowSolid | Layer::ShadowTranslucent, _) => return,
                 };
                 if count == 0 {
                     return;
@@ -3163,8 +3216,48 @@ impl Renderer {
             visible_lods.sort_unstable_by_key(|v| (v.distance, v.key));
         }
         self.drawn_sections = visible.len() + visible_lods.len();
-        if self.drawn_sections as u64 > self.instance_capacity {
-            self.instance_capacity = (self.drawn_sections as u64).next_power_of_two();
+        // A Java pack's shadow map: the sections in the light's orthographic
+        // box, whatever the camera sees (Iris turns cave culling off too).
+        let mut shadow_visible = std::mem::take(&mut self.shadow.visible);
+        shadow_visible.clear();
+        let shadow_view = match &self.pack {
+            Some(Pack::Java(j)) if !frame.title && self.java_table.is_some() => j.shadow_view(
+                frame.shader.dimension,
+                &java_stages::JavaFrame {
+                    eye_light: frame.shader.eye_light,
+                    sun_angle: frame.sky.sun_angle,
+                    moon_angle: frame.sky.moon_angle,
+                },
+                camera.as_vec3(),
+            ),
+            _ => None,
+        };
+        if let Some((view, [half, near, far])) = shadow_view {
+            // Inside when `plane · (p, 1) >= 0`: |x|, |y| <= half and the
+            // eye depth between the near and far planes (GL looks down -z).
+            let (x, y, z) = (view.row(0), view.row(1), view.row(2));
+            let planes = [
+                Vec4::W * half - x,
+                Vec4::W * half + x,
+                Vec4::W * half - y,
+                Vec4::W * half + y,
+                -z - Vec4::W * near,
+                z + Vec4::W * far,
+            ];
+            crate::spans::time("shadow visibility", || {
+                self.sections.visible(
+                    camera,
+                    (frame.detail_distance / 16.0) as i32,
+                    &Frustum { planes },
+                    |_| true,
+                    |_, _| false,
+                    &mut shadow_visible,
+                )
+            });
+        }
+        let instances = self.drawn_sections + shadow_visible.len();
+        if instances as u64 > self.instance_capacity {
+            self.instance_capacity = (instances as u64).next_power_of_two();
             self.instances = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Section origins"),
                 size: self.instance_capacity * 16,
@@ -3179,8 +3272,63 @@ impl Renderer {
             visible
                 .iter()
                 .map(|v| section_instance(v.origin))
-                .chain(visible_lods.iter().map(|v| lod::instance(v.origin))),
+                .chain(visible_lods.iter().map(|v| lod::instance(v.origin)))
+                .chain(shadow_visible.iter().map(|v| section_instance(v.origin))),
         );
+        // The shadow map's draws: every solid quad (no face is culled), then
+        // the translucent ones in the order the camera's sort left them.
+        let shadow = &mut self.shadow;
+        shadow.draws.clear();
+        shadow.pages.clear();
+        for pass in [false, true] {
+            for (j, v) in shadow_visible.iter().enumerate() {
+                let s = self.sections.get(v.slot);
+                let instance = (self.drawn_sections + j) as u32;
+                match (pass, s.sorted_indices) {
+                    (false, _) if s.solid > 0 => {
+                        shadow
+                            .draws
+                            .push([s.solid * 6, 1, 0, s.start as u32, instance]);
+                        shadow.pages.push((s.page, None));
+                    }
+                    (true, Some((index_page, index_start))) if s.translucent > 0 => {
+                        let first = s.start + u64::from(s.solid) * 4;
+                        shadow.draws.push([
+                            s.translucent * 6,
+                            1,
+                            index_start as u32,
+                            first as u32,
+                            instance,
+                        ]);
+                        shadow.pages.push((s.page, Some(index_page)));
+                    }
+                    _ => {}
+                }
+            }
+            if !pass {
+                shadow.solid = shadow.draws.len() as u32;
+            }
+        }
+        if self.multi_draw && !shadow.draws.is_empty() {
+            if shadow.draws.len() as u64 > shadow.capacity || shadow.indirect.is_none() {
+                shadow.capacity = (shadow.draws.len() as u64).next_power_of_two();
+                shadow.indirect = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Java shader pack shadow draws"),
+                    size: shadow.capacity * 20,
+                    usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+            }
+            if let Some(indirect) = &shadow.indirect {
+                self.uploads.buffer(
+                    &mut encoder,
+                    indirect,
+                    0,
+                    bytemuck::cast_slice(&shadow.draws),
+                );
+            }
+        }
+        shadow.visible = shadow_visible;
         if !self.origins.is_empty() {
             self.uploads.buffer(
                 &mut encoder,

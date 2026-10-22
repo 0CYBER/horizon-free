@@ -214,6 +214,10 @@ pub enum Layer {
     /// found in sight (phase 2).
     Revealed,
     Translucent,
+    /// The shadow map's sections ([`super::Renderer`]'s shadow list), solid
+    /// then translucent.
+    ShadowSolid,
+    ShadowTranslucent,
 }
 
 /// Draws Horizon's terrain with a pack's pipelines. Set by the renderer,
