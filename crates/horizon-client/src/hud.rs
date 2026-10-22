@@ -711,11 +711,12 @@ impl HudBatch {
         let mut glyphs = Vec::new();
         let mut cursor = x;
         for (i, (ch, style)) in text.chars().enumerate() {
-            let mut g = font.glyph(ch);
+            // The style's font (`Style.getFont`), the default one unless set.
+            let mut g = font.glyph_styled(ch, style);
             // Font.StringRenderOutput.accept: obfuscated characters draw a
             // random glyph of the same width each frame.
             if style.obfuscated == Some(true) && ch != ' ' {
-                g = font.random_glyph(g.advance);
+                g = font.random_glyph(style, g.advance);
             }
             let c = style.color.map_or(color, |rgb| {
                 rgba((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8, alpha)
@@ -1263,11 +1264,11 @@ mod tests {
         let (a, b) = (fonts.font.glyph('a').advance, fonts.font.glyph('b').advance);
         assert_ne!(a, b);
         for _ in 0..20 {
-            assert_eq!(fonts.font.random_glyph(a).advance, a);
-            assert_eq!(fonts.font.random_glyph(b).advance, b);
+            assert_eq!(fonts.font.random_glyph(&Default::default(), a).advance, a);
+            assert_eq!(fonts.font.random_glyph(&Default::default(), b).advance, b);
         }
         // No glyph that wide: FontSet's missing glyph.
-        let missing = fonts.font.random_glyph(30.0);
+        let missing = fonts.font.random_glyph(&Default::default(), 30.0);
         assert!(missing.rect.is_none() && missing.right == 5.0);
     }
 
