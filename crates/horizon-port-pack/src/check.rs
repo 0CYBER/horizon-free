@@ -156,7 +156,9 @@ pub fn check(jar_path: &Path, out: &Path) -> Result<Check, String> {
         .chain(report.namespaces.iter().cloned())
         .collect();
     let c = &info.census;
-    let recipes = report.recipes_upgraded;
+    let recipes = report
+        .recipes_upgraded
+        .saturating_sub(report.recipes_unregistered.len());
     let loot = c.loot_tables + report.loot_tables_added;
     let content =
         report.blocks.len() + report.items + recipes + loot + report.worldgen + c.structures;
@@ -183,6 +185,13 @@ pub fn check(jar_path: &Path, out: &Path) -> Result<Check, String> {
             report.blocks_unknown.len(),
             "block with no vanilla block to copy (left out)",
             "blocks with no vanilla block to copy (left out)",
+        ));
+    }
+    if !report.recipes_unregistered.is_empty() {
+        skipped.push(plural(
+            report.recipes_unregistered.len(),
+            "recipe for a left-out block",
+            "recipes for left-out blocks",
         ));
     }
     if !report.recipes_kept.is_empty() {
@@ -327,6 +336,42 @@ displayName = "Ruby"
             c.skipped[0].starts_with("1 block entity"),
             "{:?}",
             c.skipped
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn recipes_for_left_out_blocks_are_left_out_too() {
+        let dir = temp("left-out");
+        let odd = br#"{"variants": {"wobble=1": {"model": "ruby:block/odd"}}}"#;
+        let plain = br#"{"variants": {"": {"model": "ruby:block/ruby_block"}}}"#;
+        let recipe = |result: &str| {
+            format!(
+                r#"{{"type": "minecraft:crafting_shapeless", "ingredients": ["minecraft:red_dye"], "result": {{"id": "{result}"}}}}"#
+            )
+        };
+        let (odd_recipe, block_recipe) = (recipe("ruby:odd"), recipe("ruby:ruby_block"));
+        let files = [
+            ("META-INF/neoforge.mods.toml", TOML),
+            ("assets/ruby/blockstates/odd.json", odd.as_slice()),
+            ("assets/ruby/blockstates/ruby_block.json", plain.as_slice()),
+            ("data/ruby/recipe/odd.json", odd_recipe.as_bytes()),
+            ("data/ruby/recipe/ruby_block.json", block_recipe.as_bytes()),
+        ];
+        let c = check(&jar(&dir, &files), &dir.join("out")).unwrap();
+        assert_eq!(c.verdict, Verdict::Partly);
+        assert!(c.ports.contains(&"1 recipe".to_string()), "{:?}", c.ports);
+        assert!(
+            c.skipped
+                .contains(&"1 recipe for a left-out block".to_string()),
+            "{:?}",
+            c.skipped
+        );
+        assert!(!dir.join("out/carry/data/ruby/recipe/odd.json").exists());
+        assert!(dir.join("out/outside/data/ruby/recipe/odd.json").exists());
+        assert!(
+            dir.join("out/carry/data/ruby/recipe/ruby_block.json")
+                .exists()
         );
         fs::remove_dir_all(&dir).unwrap();
     }
