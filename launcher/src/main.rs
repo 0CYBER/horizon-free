@@ -92,9 +92,6 @@ fn ease_out_cubic(x: f32) -> f32 {
     horizon_theme::ease_out_cubic(x)
 }
 
-/// How often the launcher looks for new releases while it is open.
-const CHECK_EVERY: Duration = Duration::from_secs(4 * 3600);
-
 enum Load<T> {
     Loading,
     Ready(T),
@@ -618,7 +615,8 @@ impl Launcher {
                 changed = true;
             }
         }
-        if self.checked.is_some_and(|at| at.elapsed() > CHECK_EVERY) {
+        let every = self.settings.update_channel.check_every();
+        if self.checked.is_some_and(|at| at.elapsed() > every) {
             self.check_updates();
         }
         if changed {
@@ -1832,15 +1830,25 @@ impl Launcher {
                 cx.notify();
             }),
         );
-        let betas = switch("beta-builds", self.settings.beta_builds, &t).on_click(cx.listener(
-            |this, _: &ClickEvent, _, cx| {
-                this.settings.beta_builds = !this.settings.beta_builds;
-                this.settings.save();
-                // What counts as new changed: check again (and install it if that is on).
-                this.check_updates();
-                cx.notify();
+        use backend::UpdateChannel::{Nightly, Stable};
+        let this = cx.entity().downgrade();
+        let update_channel = segments(
+            "update-channel",
+            &[(Stable, Stable.label()), (Nightly, Nightly.label())],
+            self.settings.update_channel,
+            &t,
+            move |picked, _, cx| {
+                let _ = this.update(cx, |this, cx| {
+                    if this.settings.update_channel != picked {
+                        this.settings.update_channel = picked;
+                        this.settings.save();
+                        // What counts as new changed: check again (and install it if that is on).
+                        this.check_updates();
+                    }
+                    cx.notify();
+                });
             },
-        ));
+        );
         let opening = switch("opening", !self.settings.skip_opening, &t).on_click(cx.listener(
             |this, _: &ClickEvent, _, cx| {
                 this.settings.skip_opening = !this.settings.skip_opening;
@@ -1996,11 +2004,18 @@ impl Launcher {
                     ))
                     .child(index_row(
                         n + 2,
-                        "Beta builds",
-                        Some(plain(
-                            "New versions as soon as they are released, before they become stable 6 hours later. Off: only stable versions install by themselves.",
-                        )),
-                        Some(betas.into_any_element()),
+                        "Updates",
+                        Some(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .child("Stable: a tested build about once a day.")
+                                .child(
+                                    "Nightly: every change as soon as it is built, several times a day; can break.",
+                                )
+                                .into_any_element(),
+                        ),
+                        Some(update_channel.into_any_element()),
                         &t,
                     ))
                     .child(index_row(
@@ -2439,7 +2454,7 @@ impl Launcher {
             let tag = release.tag.clone();
             let installed = self.installed.contains(&tag);
             let selected = self.selected() == Some(&tag);
-            let channel = if release.beta { "Beta" } else { "Stable" };
+            let channel = backend::UpdateChannel::of(&release).label();
             let mut meta = vec![channel.to_string(), release.date.clone()];
             if let Some((_, size)) = release.asset {
                 meta.push(megabytes(size));

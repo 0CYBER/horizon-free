@@ -37,8 +37,9 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = os.environ.get("GITHUB_REPOSITORY", "ludovic111/horizon")
-DEBOUNCE = dt.timedelta(minutes=15)
-MAX_WAIT = dt.timedelta(hours=1)
+# Nightly builds ship constantly: a merge starts a release within minutes, once its wave of merges has settled.
+DEBOUNCE = dt.timedelta(minutes=5)
+MAX_WAIT = dt.timedelta(minutes=20)
 # Kept as typed in release titles, where the clauses after the first are lowercased.
 PROPER = {"Horizon", "Horizon's", "Minecraft", "Mojang", "Microsoft", "Java", "Xbox", "PlayStation", "Steam", "Windows",
           "Linux", "LAN", "Kira", "Discord", "Wayland", "Hyprland", "F3", "GUI", "UI"}
@@ -71,8 +72,8 @@ LAUNCHER_IGNORED = ["launcher/links.json", "launcher/docs/", "launcher/tests/"]
 FOOTER = {
     "game": "Install or update it from the Horizon launcher: it installs new versions by itself. "
             "New here? Get the launcher at https://playhorizon.dev. You need your own copy of Minecraft: Java Edition.",
-    "beta": "This is a beta build: launchers with Beta builds turned on in Settings install it now; everyone gets it "
-            "once it has been out 6 hours without a release-blocker.",
+    "beta": "This is a nightly build: launchers on the Nightly channel (Settings, Updates) install it now; Stable gets it "
+            "in the next daily update if it holds up.",
     "launcher": "Your launcher updates itself. New here? Download the archive for your system below, extract it, "
                 "and run `horizon-launcher`. Website: https://playhorizon.dev",
 }

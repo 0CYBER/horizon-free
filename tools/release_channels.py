@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Promotes Horizon's beta game releases to stable (.github/workflows/promote.yml, docs/release-flow.md).
+"""Promotes Horizon's beta game releases to stable once a day (.github/workflows/promote.yml, docs/release-flow.md).
 
     python3 tools/release_channels.py promote                   # the newest beta that is due, if any
     python3 tools/release_channels.py promote --tag v2026.10.19.03          # that beta now (by hand)
     python3 tools/release_channels.py promote --tag v2026.10.19.03 --force  # even if blocked or untested
     python3 tools/release_channels.py promote --dry-run         # say what would happen, change nothing
 
-Every game release goes out as a beta (a GitHub pre-release). A beta is due for stable when:
+Every game release goes out as a beta (a GitHub pre-release): launchers on the Nightly channel install it at once.
+Stable moves once a day, at PROMOTE_AT (20:00 UTC). A beta is due for stable when:
 - it is newer than the stable release (GitHub's "latest", which launchers and servers install by default),
-- it has been out PROMOTE_AFTER (6 hours) without trouble; a promotion by hand (--tag) skips the wait,
+- it had been out PROMOTE_AFTER (6 hours) at the day's promotion time, so every run until the next one picks the
+  same beta and a run GitHub starts late (or a second try) never promotes twice; by hand (--tag) skips the wait,
 - its release smoke test passed: release.yml attaches smoke-test.json only after the Mac mini ran the game,
 - and no issue labelled release-blocker covers it. An open blocker holds every beta; one closed as completed keeps
   holding the betas published before it closed (they still have the bug); one closed as not planned holds nothing.
@@ -20,7 +22,8 @@ stable release (tools/release_train.py notes --stable). Older betas stay betas: 
 Nothing older than the current stable release is ever promoted, even with --force: GitHub's "latest" is what
 horizon-server update and install.sh download, and it only moves forward.
 
-When the oldest beta newer than the stable release has waited STALL_AFTER (24 hours), promotion has stalled
+When the oldest beta newer than the stable release has waited STALL_AFTER (30 hours: past one daily promotion it
+was due for, so a normal day never trips it), promotion has stalled
 (blocked, smoke tests not running, the schedule off): an issue says so, and is closed once a beta is promoted.
 """
 
@@ -39,10 +42,14 @@ from tools.release_train import is_game_tag, tag_key  # noqa: E402  (vYYYY.MM.DD
 
 REPO = os.environ.get("GITHUB_REPOSITORY", "ludovic111/horizon")
 PROMOTE_AFTER = dt.timedelta(hours=6)
+# The daily promotion (21:00 in Paris in winter time, 22:00 in summer); promote.yml's schedule runs just after it.
+PROMOTE_AT = dt.time(20, 0)
 SMOKE_ASSET = "smoke-test.json"
 BLOCKER = "release-blocker"
-STALL_AFTER = dt.timedelta(hours=24)
+STALL_AFTER = dt.timedelta(hours=30)
 STALLED = "Promotion to stable has stalled"
+
+
 def parse_time(text):
     return dt.datetime.fromisoformat(text.replace("Z", "+00:00")) if text else None
 
@@ -53,6 +60,13 @@ def covers(blocker, release):
         return True
     closed = parse_time(blocker.get("closed_at"))
     return blocker.get("state_reason") == "completed" and bool(closed) and parse_time(release["published_at"]) < closed
+
+
+def promotion_time(now):
+    """The last daily promotion time (PROMOTE_AT, UTC) at or before now."""
+    now = now.astimezone(dt.timezone.utc)
+    at = dt.datetime.combine(now.date(), PROMOTE_AT, dt.timezone.utc)
+    return at if at <= now else at - dt.timedelta(days=1)
 
 
 def stable(releases):
@@ -68,11 +82,12 @@ def reasons_against(release, current, blockers, now, by_hand=False):
         reasons.append("it is already stable")
     if current and tag_key(release["tag_name"]) <= tag_key(current["tag_name"]):
         reasons.append(f"it is not newer than the stable {current['tag_name']}")
-    age = now - parse_time(release["published_at"])
-    if not by_hand and age < PROMOTE_AFTER:
-        left = PROMOTE_AFTER - age
-        reasons.append(f"it has been out {age.seconds // 3600} h {age.seconds % 3600 // 60} min, "
-                       f"{left.seconds // 3600} h {left.seconds % 3600 // 60} min to go")
+    ready = parse_time(release["published_at"]) + PROMOTE_AFTER
+    if not by_hand and ready > promotion_time(now):
+        due = promotion_time(ready)
+        due += dt.timedelta(days=1 if due < ready else 0)
+        reasons.append(f"it had not been out {PROMOTE_AFTER.seconds // 3600} h at a daily promotion yet: "
+                       f"the one at {due:%Y-%m-%d %H:%M} UTC takes it")
     if not any(asset["name"] == SMOKE_ASSET for asset in release.get("assets", [])):
         reasons.append(f"it has no {SMOKE_ASSET}: the release smoke test did not run")
     for blocker in blockers:
@@ -101,8 +116,8 @@ def choose(releases, blockers, now, tag=None, force=False):
     for release in betas:
         reasons = reasons_against(release, current, blockers, now)
         if not reasons:
-            return release, f"{release['tag_name']} has been out {PROMOTE_AFTER.seconds // 3600} h, passed its smoke test " \
-                            "and no release-blocker covers it"
+            return release, f"{release['tag_name']} had been out {PROMOTE_AFTER.seconds // 3600} h at the daily promotion, " \
+                            "passed its smoke test and no release-blocker covers it"
         held.append(f"{release['tag_name']}: " + "; ".join(reasons))
     return None, "no beta is due" + (" (" + " / ".join(held[:3]) + ")" if held else "")
 
@@ -161,7 +176,7 @@ def promote(release):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", choices=["promote"])
-    parser.add_argument("--tag", help="promote this beta now (by hand: no 6-hour wait)")
+    parser.add_argument("--tag", help="promote this beta now (by hand: no wait for the daily promotion)")
     parser.add_argument("--force", action="store_true", help="with --tag: even without a smoke test or with a blocker")
     parser.add_argument("--dry-run", action="store_true", help="say what would be promoted, change nothing")
     parser.add_argument("--now", help="the time to decide at (ISO 8601; default now)")
@@ -169,6 +184,7 @@ def main():
     if args.force and not args.tag:
         parser.error("--force needs --tag: only a named beta is forced")
     now = dt.datetime.fromisoformat(args.now) if args.now else dt.datetime.now(dt.timezone.utc)
+    now = now if now.tzinfo else now.replace(tzinfo=dt.timezone.utc)
     releases = gh_pages(f"repos/{REPO}/releases?per_page=100")
     blockers = [issue for issue in gh_pages(f"repos/{REPO}/issues?labels={BLOCKER}&state=all&per_page=100")
                 if "pull_request" not in issue]
