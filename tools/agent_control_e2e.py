@@ -10,7 +10,8 @@ the options scenario reads and sets options.txt values by key; the events scenar
 states (wait-for) and reads the event log; the consume scenario eats and drinks consumables (a
 golden apple, milk, honey, chorus fruit) and checks their effects, remainders and teleport; the
 pick scenario middle-clicks slots (AbstractContainerScreen's cloning): a full stack in creative, from
-the hotbar and from an item tab, and nothing in survival.
+the hotbar and from an item tab, and nothing in survival; the suggestions scenario checks
+slash-command Tab completion on single player's connected client after a fresh launch.
 
     python3 tools/agent_control_e2e.py                 # both modes
     python3 tools/agent_control_e2e.py --mode mcp      # one of them
@@ -45,6 +46,7 @@ LOG_KINDS = ['oak_log', 'birch_log', 'spruce_log', 'jungle_log', 'acacia_log', '
              'mangrove_log', 'cherry_log']
 # Positional arguments of the commands the scenario uses, for the CLI.
 POSITIONAL = {
+    'key': ['key', 'action'],
     'goto': ['x', 'y', 'z'], 'break': ['x', 'y', 'z'], 'place': ['x', 'y', 'z'], 'block': ['x', 'y', 'z'],
     'find_block': ['block', 'radius'], 'entities': ['radius', 'type'], 'click_slot': ['slot'],
     'click_button': ['label'], 'type': ['text'], 'wait': ['ticks'], 'wait_ready': ['seconds'],
@@ -62,7 +64,7 @@ class Failed(Exception):
 
 def game_env(screen):
     if sys.platform == 'darwin':
-        return dict(os.environ, HORIZON_NO_AUDIO='1')
+        return dict(os.environ, HORIZON_NO_AUDIO='1', HORIZON_TELEMETRY_URL='off')
     env = dict(os.environ, VSCREEN=screen)
     subprocess.run(['vscreen', 'up'], env=env, check=False, capture_output=True)
     text = subprocess.run(['vscreen', 'env'], env=env, capture_output=True, text=True, check=True).stdout
@@ -70,6 +72,7 @@ def game_env(screen):
     for match in re.finditer(r'(\w+)=(\S+)', text.split('unset')[0]):
         env[match.group(1)] = match.group(2)
     env['HORIZON_NO_AUDIO'] = '1'
+    env['HORIZON_TELEMETRY_URL'] = 'off'  # no live-count ping from test games
     if LAVAPIPE.exists():
         env['VK_ICD_FILENAMES'] = str(LAVAPIPE)
     return env
@@ -227,11 +230,18 @@ def scenario(d, out):
         raise Failed('no reachable tree near spawn')
     assert broke['block_before'].startswith(log_id), broke
     assert broke['drops'].get(log_id, 0) >= 1, broke
-    if broke['picked_up'].get(log_id, 0) < 1:
+    # On a client of a server (single player's server thread) the drop and its pickup both come from
+    # the server a few ticks later: wait for the logs in the inventory, or walk to the drop.
+    for _ in range(20):
+        if broke['picked_up'].get(log_id, 0) >= 1 or d('inventory')['counts'].get(log_id, 0) >= 1:
+            break
         items = d('entities', radius=8, type='item')['entities']
-        drop = next(e for e in items if e['item']['item'] == log_id)
-        d('goto', x=drop['pos'][0], y=drop['pos'][1], z=drop['pos'][2], near=1.0, timeout=20)  # pickup reaches a block; the drop may lie under the trunk
-        d('wait', ticks=10)
+        drop = next((e for e in items if e['item']['item'] == log_id), None)
+        if drop is not None:
+            d('goto', x=drop['pos'][0], y=drop['pos'][1], z=drop['pos'][2], near=1.0, timeout=20)  # pickup reaches a block; the drop may lie under the trunk
+            d('wait', ticks=10)
+            break
+        d('wait', ticks=1)
     inventory = d('inventory')
     assert inventory['counts'].get(log_id, 0) >= 1, inventory
 
@@ -244,29 +254,38 @@ def scenario(d, out):
     d('click_slot', slot=log_slot)           # pick up the logs
     d('click_slot', slot=100, right=True)    # put one in the crafting grid
     d('click_slot', slot=log_slot)           # put the rest back
+    d('wait', ticks=2)                       # the server crafts the result (single player's server thread)
     result = next(s for s in d('screen')['slots'] if s['slot'] == 200)
     assert result.get('item') == planks_id and result['count'] == 4, result
     d('click_slot', slot=200, shift=True)    # craft into the inventory
     d('close')
+    d('wait', ticks=2)
     inventory = d('inventory')
     assert inventory['counts'].get(planks_id, 0) >= 4, inventory
 
     # 5. Place a plank beside the player and read it back.
     p = d('state')['player']['block_pos']
-    target = None
+    hotbar = d('inventory')['hotbar']
+    if not any(s.get('item') == planks_id for s in hotbar):
+        raise Failed(f'{planks_id} did not land in the hotbar: {hotbar}')
+    target = placed = None
     for dx, dz in [(2, 0), (-2, 0), (0, 2), (0, -2), (2, 1), (1, 2), (-2, -1), (-1, -2)]:
         at = (p[0] + dx, p[1], p[2] + dz)
         here = d('block', x=at[0], y=at[1], z=at[2])['block']
         below = d('block', x=at[0], y=at[1] - 1, z=at[2])['block']
-        if here in ('minecraft:air', 'minecraft:short_grass') and below not in ('minecraft:air', 'minecraft:water'):
-            target = at
-            break
+        if here not in ('minecraft:air', 'minecraft:short_grass') or below in ('minecraft:air', 'minecraft:water'):
+            continue
+        # The tree's trunk above the broken log can hide a spot's faces: try the next one.
+        try:
+            placed = d('place', x=at[0], y=at[1], z=at[2], item=planks_id)
+        except Failed as e:
+            if 'no visible face' in str(e):
+                continue
+            raise
+        target = at
+        break
     if target is None:
         raise Failed(f'no free spot beside {p} to place a block')
-    hotbar = d('inventory')['hotbar']
-    if not any(s.get('item') == planks_id for s in hotbar):
-        raise Failed(f'{planks_id} did not land in the hotbar: {hotbar}')
-    placed = d('place', x=target[0], y=target[1], z=target[2], item=planks_id)
     assert placed['changed'], placed
     back = d('block', x=target[0], y=target[1], z=target[2])
     assert back['block'] == planks_id, back
@@ -322,6 +341,7 @@ def ui_scenario(d, out):
 
     # 3. The inventory's slots are widgets too, with their stacks.
     d('give', item='oak_log', count=2)
+    d('wait', ticks=2)  # single player's server thread gives them
     d('open_inventory')
     tree = widgets(d)
     log = next(w for w in tree.values() if w['kind'] == 'slot' and (w.get('stack') or {}).get('item') == 'minecraft:oak_log')
@@ -329,6 +349,7 @@ def ui_scenario(d, out):
     d('click', id=log['id'])
     d('click', id='slot-100', right=True)
     d('click', id=log['id'])
+    d('wait', ticks=2)
     assert widgets(d)['slot-200']['stack']['item'] == 'minecraft:oak_planks'
     d('close')
     shot = d('screenshot', path=str(out / f'{d.name}-ui.png'))
@@ -489,14 +510,65 @@ def pick_scenario(d, out):
     d('give', item='oak_log', count=2)
     assert d('open_inventory')['screen'] == 'inventory'
     d('click', id='slot-0', middle=True)
+    # The clone of step 2 lived only on this client: ItemPickerMenu's carried stack is the
+    # inventoryMenu's, and AbstractContainerMenu.removed clears it only for a ServerPlayer. With a
+    # stack in hand, mouseReleased sends CLONE, the server finds the carried stack it was told about
+    # wrong and sends the empty one back (broadcastChanges). On the server thread that takes a
+    # round trip, as in vanilla; in the frame, closing the menu already put the clone away.
+    for _ in range(20):
+        if carried() is None:
+            break
+        d('wait', ticks=1)
     assert carried() is None, carried()
     assert widgets(d)['slot-0']['stack'] == {'item': 'minecraft:oak_log', 'count': 2}
     d('close')
     return {'cloned': shown['item']}
 
 
+def suggestions_scenario(d, out):
+    # Start from the title screen: single player's client joins through memory,
+    # without opening a server world and building its command registries.
+    d('click', id='singleplayer')
+    if 'game' not in widgets(d):
+        d('click', id='create-new-world')
+    d('type', field='name', replace=True, text='Suggestions')
+    d('click', id='game-mode')  # survival -> hardcore -> creative (commands on)
+    d('click', id='game-mode')
+    d('type', field='seed', text='5')
+    d('click', id='world')
+    d('click', id='world-type')  # superflat: this checks chat, without a spawn search
+    d('click', id='create-new-world')
+    d('wait_for', condition='loaded', timeout=400)
+    d('wait_ready', seconds=400)
+
+    cases = [
+        ('/giv', '/give'),
+        ('/fill ^', '/fill ^ ^'),
+        ('/give @s diamond_sw', '/give @s minecraft:diamond_sword'),
+        ('/setblock ~ ~ ~ diamond_blo', '/setblock ~ ~ ~ minecraft:diamond_block'),
+        ('/fill ~ ~ ~ ~1 ~1 ~1 diamond_blo', '/fill ~ ~ ~ ~1 ~1 ~1 minecraft:diamond_block'),
+        ('/setblock ~ ~ ~ oak_stairs[fa', '/setblock ~ ~ ~ oak_stairs[facing='),
+        ('/clear @s diamond_sw', '/clear @s minecraft:diamond_sword'),
+        ('/execute run give @s diamond_sw', '/execute run give @s minecraft:diamond_sword'),
+    ]
+    for text, expected in cases:
+        d('key', key='t', action='tap')
+        d('type', text=text)
+        if text == '/give @s diamond_sw':
+            shot = d('screenshot', path=str((out / f'{d.name}-suggestions.png').resolve()))
+            if '_image' in shot:
+                (out / f'{d.name}-suggestions.png').write_bytes(shot['_image'])
+        d('key', key='tab', action='tap')
+        actual = d('screen')['chat_input']
+        assert actual == expected, (text, expected, actual)
+        d('key', key='esc', action='tap')
+        if d('screen')['screen'] == 'chat':  # Escape first dismisses suggestions
+            d('key', key='esc', action='tap')
+    return {'completions': len(cases)}
+
+
 SCENARIOS = {'survival': scenario, 'ui': ui_scenario, 'options': options_scenario, 'events': events_scenario,
-             'consume': consume_scenario, 'pick': pick_scenario}
+             'consume': consume_scenario, 'pick': pick_scenario, 'suggestions': suggestions_scenario}
 
 
 def run(mode, ctl, out, resources, which='survival'):

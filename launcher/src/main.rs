@@ -92,9 +92,6 @@ fn ease_out_cubic(x: f32) -> f32 {
     horizon_theme::ease_out_cubic(x)
 }
 
-/// How often the launcher looks for new releases while it is open.
-const CHECK_EVERY: Duration = Duration::from_secs(4 * 3600);
-
 enum Load<T> {
     Loading,
     Ready(T),
@@ -127,7 +124,6 @@ struct Launcher {
     settings: Settings,
     /// The Discord, sponsor and website links: built in until links.json on main has been read.
     links: backend::Links,
-    menu_style: backend::MenuStyle,
     preparing: bool,
     prepare_log: VecDeque<String>,
     prepare_error: Option<String>,
@@ -163,6 +159,8 @@ struct Launcher {
     args_focus: FocusHandle,
     /// Opt-in data collection: the player's answer and Settings' section (`collection`).
     collection: collection::Collection,
+    /// How many play Horizon now, while the server answers ("N playing now" on the Play page).
+    playing: Option<u64>,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
     _appearance: Subscription,
@@ -258,7 +256,6 @@ impl Launcher {
             args_focus: cx.focus_handle(),
             settings,
             links: backend::Links::default(),
-            menu_style: backend::menu_style(),
             preparing: false,
             prepare_log: VecDeque::new(),
             prepare_error: None,
@@ -280,6 +277,7 @@ impl Launcher {
             friend_focus: cx.focus_handle(),
             joining: None,
             collection: collection::Collection::load(),
+            playing: None,
             tx,
             rx,
             _appearance: appearance,
@@ -317,6 +315,7 @@ impl Launcher {
         this.fetch_links();
         // What the game and the launcher kept, if the player allows it and there is a server.
         telemetry::send_in_background();
+        telemetry::watch_playing(this.tx.clone());
         this
     }
 
@@ -426,6 +425,7 @@ impl Launcher {
                 // The page reads is_prepared when drawn; `changed` redraws it.
                 Msg::Reused(_) => self.installed = backend::installed(),
                 Msg::Keychain(persistent) => self.keychain = persistent,
+                Msg::Playing(playing) => self.playing = playing,
                 Msg::Session(session) => {
                     if let Some(tag) = self.starting_client.take() {
                         let mut cmd = backend::client_command(&tag);
@@ -613,7 +613,8 @@ impl Launcher {
                 changed = true;
             }
         }
-        if self.checked.is_some_and(|at| at.elapsed() > CHECK_EVERY) {
+        let every = self.settings.update_channel.check_every();
+        if self.checked.is_some_and(|at| at.elapsed() > every) {
             self.check_updates();
         }
         if changed {
@@ -1146,6 +1147,19 @@ fn centered(text_: &str, t: &Theme) -> Div {
         .child(text(theme::UI).text_color(t.muted).child(text_.to_string()))
 }
 
+/// `1234` as `1,234`.
+fn thousands(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// A mono line in upper case: the status above a title, the footer's links.
 fn caps(s: impl AsRef<str>) -> Div {
     text(theme::MICRO).child(s.as_ref().to_uppercase())
@@ -1388,6 +1402,8 @@ impl Launcher {
                 ));
         };
         let prepared = backend::is_prepared(&tag);
+        // Prepared without sounds (#1035): Prepare again is the fix, so it stands out.
+        let silent = prepared && !backend::has_sounds(&tag);
         let version = backend::game_version(&tag);
         let hero = self.hero(&tag, &version, prepared, cx);
         let running = self.client.is_some() || self.starting_client.is_some();
@@ -1429,15 +1445,13 @@ impl Launcher {
 
         let resources_value = if self.preparing {
             "Preparing…".to_string()
-        } else if prepared {
-            format!("Prepared for Minecraft {version}")
         } else {
-            format!("Not prepared. Horizon needs the files of your own Minecraft {version}.")
+            backend::resources_summary(prepared, !silent, &version)
         };
         let mut prepare = button(
             "prepare",
             if prepared { "Prepare again" } else { "Prepare" },
-            if prepared {
+            if prepared && !silent {
                 Kind::Ghost
             } else {
                 Kind::Secondary
@@ -1688,9 +1702,11 @@ impl Launcher {
             _ => None,
         };
         let title = "Horizon";
+        // Never squeezed by the rows below: the ping notice can make it tall.
         let mut hero =
             div()
                 .flex()
+                .flex_none()
                 .flex_col()
                 .gap(px(14.))
                 .pt(px(24.))
@@ -1704,7 +1720,18 @@ impl Launcher {
                         .child(
                             caps(if prepared { "Ready" } else { "Needs preparing" })
                                 .text_color(if prepared { t.success } else { t.muted }),
-                        ),
+                        )
+                        .children(self.playing.map(|n| {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(10.))
+                                .child(div().size(px(4.)).rounded_full().bg(t.rule))
+                                .child(
+                                    caps(format!("{} playing now", thousands(n)))
+                                        .text_color(t.muted),
+                                )
+                        })),
                 )
                 .child(text(theme::DISPLAY).text_color(t.ink).child(title))
                 .child(text(theme::BODY).max_w(px(560.)).text_color(t.muted).child(
@@ -1747,6 +1774,45 @@ impl Launcher {
                 ),
             });
         }
+        // Players who answered the first-run question before the ping existed read about it
+        // once here.
+        if !self.settings.ping_notice_seen && !self.collection.consent.needs_asking() {
+            hero = hero.child(
+                plate(&t)
+                    .flex()
+                    .flex_none()
+                    .flex_col()
+                    .gap(px(8.))
+                    .p(px(16.))
+                    .w_full()
+                    .max_w(px(640.))
+                    .child(
+                        text(theme::UI)
+                            .text_color(t.ink)
+                            .child(telemetry::PING_NAME),
+                    )
+                    .child(
+                        text(theme::CAPTION)
+                            .text_color(t.muted)
+                            .child(telemetry::PING),
+                    )
+                    .child(
+                        div()
+                            .id("ping-notice-ok")
+                            .text_size(px(theme::UI.px))
+                            .text_color(t.accent)
+                            .font_weight(FontWeight::MEDIUM)
+                            .cursor_pointer()
+                            .hover(|s| s.opacity(0.8))
+                            .child("Got it")
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.settings.ping_notice_seen = true;
+                                this.settings.save();
+                                cx.notify();
+                            })),
+                    ),
+            );
+        }
         hero
     }
 
@@ -1762,15 +1828,25 @@ impl Launcher {
                 cx.notify();
             }),
         );
-        let betas = switch("beta-builds", self.settings.beta_builds, &t).on_click(cx.listener(
-            |this, _: &ClickEvent, _, cx| {
-                this.settings.beta_builds = !this.settings.beta_builds;
-                this.settings.save();
-                // What counts as new changed: check again (and install it if that is on).
-                this.check_updates();
-                cx.notify();
+        use backend::UpdateChannel::{Alpha, Stable};
+        let this = cx.entity().downgrade();
+        let update_channel = segments(
+            "update-channel",
+            &[(Stable, Stable.label()), (Alpha, Alpha.label())],
+            self.settings.update_channel,
+            &t,
+            move |picked, _, cx| {
+                let _ = this.update(cx, |this, cx| {
+                    if this.settings.update_channel != picked {
+                        this.settings.update_channel = picked;
+                        this.settings.save();
+                        // What counts as new changed: check again (and install it if that is on).
+                        this.check_updates();
+                    }
+                    cx.notify();
+                });
             },
-        ));
+        );
         let opening = switch("opening", !self.settings.skip_opening, &t).on_click(cx.listener(
             |this, _: &ClickEvent, _, cx| {
                 this.settings.skip_opening = !this.settings.skip_opening;
@@ -1791,24 +1867,6 @@ impl Launcher {
                 };
                 cx.notify();
             }),
-        );
-        let this = cx.entity().downgrade();
-        let menus = segments(
-            "menu-style",
-            &[
-                (backend::MenuStyle::Horizon, "Horizon"),
-                (backend::MenuStyle::Classic, "Classic"),
-            ],
-            self.menu_style,
-            &t,
-            move |style, _, cx| {
-                let _ = this.update(cx, |this, cx| {
-                    if backend::set_menu_style(style).is_ok() {
-                        this.menu_style = style;
-                    }
-                    cx.notify();
-                });
-            },
         );
         let horizon = match (&self.updates.horizon, &self.update_error) {
             (Some(r), _) => format!("{} available", r.tag),
@@ -1905,7 +1963,7 @@ impl Launcher {
             .gap(px(32.))
             .child(page_header(
                 "Settings",
-                "Accounts, updates, menus, and the launcher itself.",
+                "Accounts, updates, and the launcher itself.",
                 &t,
             ))
             .child(
@@ -1926,11 +1984,18 @@ impl Launcher {
                     ))
                     .child(index_row(
                         n + 2,
-                        "Beta builds",
-                        Some(plain(
-                            "New versions as soon as they are released, before they become stable 6 hours later. Off: only stable versions install by themselves.",
-                        )),
-                        Some(betas.into_any_element()),
+                        "Updates",
+                        Some(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .child("Stable: a tested build about once a day.")
+                                .child(
+                                    "Alpha: every change as soon as it is built, several times a day; can break.",
+                                )
+                                .into_any_element(),
+                        ),
+                        Some(update_channel.into_any_element()),
                         &t,
                     ))
                     .child(index_row(
@@ -1940,33 +2005,24 @@ impl Launcher {
                         Some(opening.into_any_element()),
                         &t,
                     ))
+                    .child(self.game_args_row(n + 4, cx))
+                    .child(index_row(n + 5, "Horizon", Some(plain(&horizon)), horizon_action, &t))
                     .child(index_row(
-                        n + 4,
-                        "Game menus",
-                        Some(plain(
-                            "Classic is vanilla's own screens, with no way back inside the game: switch back here. Applies the next time the game starts.",
-                        )),
-                        Some(menus.into_any_element()),
-                        &t,
-                    ))
-                    .child(self.game_args_row(n + 5, cx))
-                    .child(index_row(n + 6, "Horizon", Some(plain(&horizon)), horizon_action, &t))
-                    .child(index_row(
-                        n + 7,
+                        n + 6,
                         "Launcher",
                         Some(plain(&launcher)),
                         launcher_action,
                         &t,
                     ))
                     .child(index_row(
-                        n + 8,
+                        n + 7,
                         "Data folder",
                         Some(mono(short(&backend::data_dir()))),
                         None,
                         &t,
                     ))
                     .child(index_row(
-                        n + 9,
+                        n + 8,
                         "Logs",
                         Some(mono(format!(
                             "{}  ·  crash reports beside it",
@@ -1985,7 +2041,7 @@ impl Launcher {
                     ))
                     .when(cfg!(target_os = "linux"), |d| {
                         d.child(index_row(
-                            n + 10,
+                            n + 9,
                             "Applications menu",
                             Some(plain(if self.settings.desktop_entry() {
                                 "Horizon and its icon are in your desktop's menu."
@@ -2177,7 +2233,8 @@ impl Launcher {
                 .child(div().child(account::NO_KEYCHAIN))
         };
         let action = if !configured {
-            None
+            // No client ID in this build: the button says what's coming and does nothing.
+            Some(button("sign-in", "Coming soon", Kind::Ghost, &t).into_any_element())
         } else if let Some(SignInState::Code(code)) = &self.sign_in_state {
             let (uri, user_code) = (code.verification_uri.clone(), code.user_code.clone());
             Some(
@@ -2224,7 +2281,9 @@ impl Launcher {
             )
         };
         n += 1;
-        let title = if self.accounts.accounts.is_empty() {
+        let title = if !configured {
+            "Microsoft account (coming soon)"
+        } else if self.accounts.accounts.is_empty() {
             "Microsoft account"
         } else {
             "Another account"
@@ -2369,7 +2428,7 @@ impl Launcher {
             let tag = release.tag.clone();
             let installed = self.installed.contains(&tag);
             let selected = self.selected() == Some(&tag);
-            let channel = if release.beta { "Beta" } else { "Stable" };
+            let channel = backend::UpdateChannel::of(&release).label();
             let mut meta = vec![channel.to_string(), release.date.clone()];
             if let Some((_, size)) = release.asset {
                 meta.push(megabytes(size));
@@ -2917,4 +2976,16 @@ fn main() {
         .detach();
         cx.activate(true);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn counts_get_thousands_separators() {
+        let shown: Vec<String> = [0, 7, 999, 1000, 12_300, 1_234_500]
+            .into_iter()
+            .map(super::thousands)
+            .collect();
+        assert_eq!(shown, ["0", "7", "999", "1,000", "12,300", "1,234,500"]);
+    }
 }

@@ -411,6 +411,12 @@ public final class VanillaProtocolClient {
     /** The entity mode's step, and how long it records the entities for (ms). */
     private static final int ENTITIES = 1000;
     private static final long ENTITY_WAIT = 20_000;
+    /**
+     * How long a step waits at most for what it waits on (a villager to trade with, the ingot, a thrown
+     * snowball, the pearl's teleport and hurt): a busy machine can hold a server's ticks back for seconds,
+     * so the steps wait for those, not for a fixed time.
+     */
+    private static final long PATIENCE = 30_000;
 
     static int moveEntityId(net.minecraft.network.protocol.game.ClientboundMoveEntityPacket p) {
         return (int) field(p, net.minecraft.network.protocol.game.ClientboundMoveEntityPacket.class, "entityId");
@@ -464,6 +470,9 @@ public final class VanillaProtocolClient {
         int furnaceState = 0;
         // Snowballs the server spawned since the last right click.
         int snowballs = 0;
+        // When the first of them came, and when the furnace's ingot did.
+        long snowballAt = 0;
+        long smeltedAt = 0;
         // The player's own id, and what the ender pearl it throws does to it.
         int playerId = -1;
         boolean pearl = false;
@@ -550,6 +559,7 @@ public final class VanillaProtocolClient {
                     && furnaceWindow > 0 && p.getContainerId() == furnaceWindow) {
                     furnaceState = p.getStateId();
                     record("play-furnace", "slot " + p.getSlot() + " " + p.getItem());
+                    if (p.getSlot() == 2 && !p.getItem().isEmpty() && smeltedAt == 0) smeltedAt = now;
                 } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundContainerSetDataPacket p
                     && furnaceWindow > 0 && p.getContainerId() == furnaceWindow && (p.getId() == 1 || p.getId() == 3)) {
                     // Lit total and cooking total; the time left and the cooking timer follow the ticks.
@@ -580,6 +590,7 @@ public final class VanillaProtocolClient {
                 } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundAddEntityPacket p
                     && p.getType() == net.minecraft.world.entity.EntityTypes.SNOWBALL) {
                     snowballs++;
+                    if (snowballAt == 0) snowballAt = now;
                     // Projectile.getAddEntityPacket: its owner's id.
                     record("play-use", "snowball owner is the player: " + (p.getData() == playerId));
                 } else if (packet instanceof net.minecraft.network.protocol.game.ClientboundAddEntityPacket p
@@ -666,8 +677,8 @@ public final class VanillaProtocolClient {
                 send(new ServerboundChatCommandPacket(REPLIES[step - 2]));
                 step++;
                 stepAt = now;
-            } else if (step == 2 + REPLIES.length && now - stepAt > 1500) {
-                // Right-click the villager: the trading screen and its offers.
+            } else if (step == 2 + REPLIES.length && now - stepAt > 1500 && (villager >= 0 || now - stepAt > PATIENCE)) {
+                // Right-click the villager (once the server sent it): the trading screen and its offers.
                 record("play-trade", "villager " + (villager >= 0));
                 if (villager >= 0) {
                     send(new net.minecraft.network.protocol.game.ServerboundInteractPacket(villager,
@@ -715,8 +726,9 @@ public final class VanillaProtocolClient {
                         net.minecraft.core.Direction.NORTH, furnace, false), 1));
                 step++;
                 stepAt = now;
-            } else if (step >= 8 + REPLIES.length && step <= 10 + REPLIES.length && furnaceWindow > 0
-                && now - stepAt > (step == 10 + REPLIES.length ? 12_000 : 1500)) {
+            } else if (step >= 8 + REPLIES.length && step <= 10 + REPLIES.length && furnaceWindow > 0 && now - stepAt > 1500
+                // The ingot out once the furnace made it (200 ticks), and its tick's other changes came.
+                && (step < 10 + REPLIES.length || smeltedAt > 0 && now - smeltedAt > 1000 || now - stepAt > 10_000 + PATIENCE)) {
                 // Shift-click the ore (hotbar 0) into the input, the coal (hotbar 1) into the
                 // fuel slot, and the smelted ingot out of the result; nothing claimed, so the
                 // server sends every slot the click changed.
@@ -743,9 +755,10 @@ public final class VanillaProtocolClient {
                 useOn(respawnAt, net.minecraft.world.InteractionHand.MAIN_HAND, 2);
                 use(position, net.minecraft.world.InteractionHand.MAIN_HAND, 3);
                 snowballs = 0;
+                snowballAt = 0;
                 step++;
                 stepAt = now;
-            } else if (step == 14 + REPLIES.length && now - stepAt > 2000) {
+            } else if (step == 14 + REPLIES.length && thrown(snowballAt, stepAt, now)) {
                 record("play-use", "main hand on a block: " + snowballs + " snowball(s)");
                 send(new ServerboundChatCommandPacket("item replace entity @s weapon.mainhand with minecraft:air"));
                 send(new ServerboundChatCommandPacket("item replace entity @s weapon.offhand with minecraft:snowball 16"));
@@ -757,9 +770,10 @@ public final class VanillaProtocolClient {
                 useOn(respawnAt, net.minecraft.world.InteractionHand.OFF_HAND, 5);
                 use(position, net.minecraft.world.InteractionHand.OFF_HAND, 6);
                 snowballs = 0;
+                snowballAt = 0;
                 step++;
                 stepAt = now;
-            } else if (step == 16 + REPLIES.length && now - stepAt > 2000) {
+            } else if (step == 16 + REPLIES.length && thrown(snowballAt, stepAt, now)) {
                 record("play-use", "off hand on a block: " + snowballs + " snowball(s)");
                 // An ender pearl thrown at its feet (no endermite: ThrownEnderpearl spawns one 5% of the time).
                 send(new ServerboundChatCommandPacket("gamerule spawn_monsters false"));
@@ -773,7 +787,8 @@ public final class VanillaProtocolClient {
                     position.yRot(), 90.0F));
                 step++;
                 stepAt = now;
-            } else if (step == 18 + REPLIES.length && now - stepAt > 2500) {
+            } else if (step == 18 + REPLIES.length && now - stepAt > 2500
+                && (pearlTeleports > 0 && pearlHealth >= 0 || now - stepAt > PATIENCE)) {
                 // ThrownEnderpearl.onHit: the thrower is teleported and takes 5 damage.
                 record("play-pearl", "teleported " + pearlTeleports + " time(s), health " + pearlHealth);
                 return;
@@ -784,6 +799,14 @@ public final class VanillaProtocolClient {
             record("play-respawn", "level never loaded: load start " + loadStart + ", chunk under the player " + respawnChunk);
         }
         record("error", "timed out in play, step " + step + ", chunks " + chunks.size());
+    }
+
+    /**
+     * A right click's snowballs are counted: once the first came and a second could have come with it
+     * (the server spawns each in the tick it handles the click), or once the server had all the time.
+     */
+    private static boolean thrown(long first, long clicked, long now) {
+        return now - clicked > 2000 && (first > 0 && now - first > 1000 || now - clicked > PATIENCE);
     }
 
     /** The death screen's Respawn button: true, the respawn being under way. */
@@ -821,10 +844,12 @@ public final class VanillaProtocolClient {
      */
     private String respawnLine(Received r) {
         String t = r.type;
-        // Entities moving and the dead player's health land in the window between the death
-        // and the respawn as each server's ticks fall: left out.
+        // Entities moving, blocks the world's ticks change (a lava fall flows again once the game
+        // runs) and the dead player's health land in the window between the death and the respawn
+        // as each server's ticks fall: left out.
         if (t.startsWith("minecraft:move_entity") || t.equals("minecraft:rotate_head") || t.equals("minecraft:set_entity_motion")
-            || t.equals("minecraft:set_entity_data") || t.equals("minecraft:entity_position_sync") || t.equals("minecraft:set_health")) {
+            || t.equals("minecraft:set_entity_data") || t.equals("minecraft:entity_position_sync") || t.equals("minecraft:set_health")
+            || t.equals("minecraft:block_update") || t.equals("minecraft:section_blocks_update")) {
             return null;
         }
         if (t.equals("minecraft:keep_alive") || t.equals("minecraft:ping") || t.equals("minecraft:level_chunk_with_light")

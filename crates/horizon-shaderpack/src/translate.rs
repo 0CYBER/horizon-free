@@ -18,7 +18,11 @@
 //!   swizzled shadow lookup is widened first (naga has no scalar swizzle);
 //! - global initialisers run at the start of `main` (drivers accept
 //!   non-constant ones), unsized global arrays are sized from them;
-//! - `isnan`, `isinf` and `modf` are helper functions (WGSL has none).
+//! - `isnan`, `isinf` and `modf` are helper functions (WGSL has none);
+//! - what naga refuses and drivers accept: `%` goes through overloads (naga
+//!   won't take `ivec2 % int`), `sqrt` of a negative constant isn't folded,
+//!   constants naga can't fold (`?:`, `mix`) become globals set in `main`,
+//!   and 16/8-bit types are their 32-bit ones.
 //!
 //! The programs of one pass share a [`Link`], so their locations, bindings and
 //! uniform block agree.
@@ -234,6 +238,106 @@ vec3 iris_modf(vec3 x, out vec3 i) { i = trunc(x); return x - i; }
 vec4 iris_modf(vec4 x, out vec4 i) { i = trunc(x); return x - i; }
 ";
 
+/// A fragment output narrower than four channels (`out vec3 color`,
+/// Steadfast's `final`): the four-channel type it is written through and the
+/// epilogue line that fills it, with alpha 1 and the rest 0. `None` when the
+/// output already has four channels.
+fn widen_output(ty: &str, name: &str) -> Option<(String, String)> {
+    let (wide, one, zero) = match ty {
+        "float" | "vec2" | "vec3" => ("vec4", "1.0", "0.0"),
+        "int" | "ivec2" | "ivec3" => ("ivec4", "1", "0"),
+        "uint" | "uvec2" | "uvec3" => ("uvec4", "1u", "0u"),
+        _ => return None,
+    };
+    let channels = match ty.chars().last() {
+        Some('2') => 2,
+        Some('3') => 3,
+        _ => 1,
+    };
+    let mut parts = vec![name.to_owned()];
+    parts.extend((channels..3).map(|_| zero.to_owned()));
+    parts.push(one.to_owned());
+    Some((
+        wide.to_owned(),
+        format!("iris_out_{name} = {wide}({});", parts.join(", ")),
+    ))
+}
+
+/// `%` as overloads: naga's GLSL front end splats a scalar operand for
+/// `+ - / & ^ |` but not for `%`, and rejects `ivec2(uv) % 256` (Noble).
+fn modulo_helpers() -> String {
+    let mut out = String::new();
+    for (s, v) in [("int", "ivec"), ("uint", "uvec")] {
+        out.push_str(&format!("{s} iris_mod({s} a, {s} b) {{ return a % b; }}\n"));
+        for n in 2..=4 {
+            let v = format!("{v}{n}");
+            out.push_str(&format!("{v} iris_mod({v} a, {v} b) {{ return a % b; }}\n"));
+            out.push_str(&format!(
+                "{v} iris_mod({v} a, {s} b) {{ return a % {v}(b); }}\n"
+            ));
+            out.push_str(&format!(
+                "{v} iris_mod({s} a, {v} b) {{ return {v}(a) % b; }}\n"
+            ));
+        }
+    }
+    out
+}
+
+/// 16- and 8-bit types (`GL_NV_gpu_shader5`, `GL_EXT_shader_explicit_arithmetic_types`)
+/// and their built-ins, as the 32-bit ones WGSL has: Noble declares
+/// `u16vec2` & co. when Iris reports an NVIDIA GPU, and falls back to these
+/// same aliases elsewhere.
+const SMALL_TYPES: &[(&str, &str)] = &[
+    ("float16_t", "float"),
+    ("f16vec2", "vec2"),
+    ("f16vec3", "vec3"),
+    ("f16vec4", "vec4"),
+    ("int16_t", "int"),
+    ("i16vec2", "ivec2"),
+    ("i16vec3", "ivec3"),
+    ("i16vec4", "ivec4"),
+    ("uint16_t", "uint"),
+    ("u16vec2", "uvec2"),
+    ("u16vec3", "uvec3"),
+    ("u16vec4", "uvec4"),
+    ("int8_t", "int"),
+    ("i8vec2", "ivec2"),
+    ("i8vec3", "ivec3"),
+    ("i8vec4", "ivec4"),
+    ("uint8_t", "uint"),
+    ("u8vec2", "uvec2"),
+    ("u8vec3", "uvec3"),
+    ("u8vec4", "uvec4"),
+    ("packFloat2x16", "packHalf2x16"),
+    ("unpackFloat2x16", "unpackHalf2x16"),
+];
+
+/// `source` with [`SMALL_TYPES`] replaced, word by word.
+fn widen_small_types(source: &str) -> std::borrow::Cow<'_, str> {
+    if !SMALL_TYPES.iter().any(|(t, _)| source.contains(t)) {
+        return source.into();
+    }
+    let mut out = String::with_capacity(source.len());
+    let mut rest = source;
+    while let Some(c) = rest.chars().next() {
+        let len = if c.is_ascii_alphanumeric() || c == '_' {
+            rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(rest.len())
+        } else {
+            c.len_utf8()
+        };
+        let word = &rest[..len];
+        out.push_str(
+            SMALL_TYPES
+                .iter()
+                .find(|(t, _)| *t == word)
+                .map_or(word, |(_, w)| w),
+        );
+        rest = &rest[len..];
+    }
+    out.into()
+}
+
 /// Translate one preprocessed program. `locate` turns a line of `source`
 /// into `file:line` for errors.
 pub fn translate(
@@ -248,7 +352,8 @@ pub fn translate(
         Stage::Compute => naga::ShaderStage::Compute,
         _ => return Err(format!("{stage:?} programs are not supported")),
     };
-    let mut unit = ast::TranslationUnit::parse(source).map_err(|e| {
+    let source = widen_small_types(source);
+    let mut unit = ast::TranslationUnit::parse(&source).map_err(|e| {
         let line = e.line() + 1;
         format!("{}: {}", locate(line), e.inner())
     })?;
@@ -279,6 +384,111 @@ pub fn translate(
         wgsl,
         interface,
     })
+}
+
+/// The GLSL built-ins naga's constant evaluator folds (`MathFunction`s it
+/// implements), besides type constructors.
+const FOLDABLE: &[&str] = &[
+    "abs",
+    "acos",
+    "acosh",
+    "asin",
+    "asinh",
+    "atan",
+    "atanh",
+    "ceil",
+    "clamp",
+    "cos",
+    "cosh",
+    "cross",
+    "degrees",
+    "distance",
+    "dot",
+    "exp",
+    "exp2",
+    "floor",
+    "fma",
+    "fract",
+    "inversesqrt",
+    "length",
+    "log",
+    "log2",
+    "max",
+    "min",
+    "normalize",
+    "pow",
+    "radians",
+    "round",
+    "sign",
+    "sin",
+    "sinh",
+    "sqrt",
+    "step",
+    "tan",
+    "tanh",
+    "trunc",
+];
+
+/// Whether a constant's initialisers need what naga can't fold and drivers
+/// do: a `?:`, another built-in (Bliss's `mix`), or a constant that had to
+/// become a global (`runtime`).
+fn needs_runtime(list: &ast::InitDeclaratorList, runtime: &HashSet<String>) -> bool {
+    let constructor = |name: &str| {
+        let n = name.trim_start_matches(['i', 'u', 'b', 'd']);
+        matches!(name, "float" | "int" | "uint" | "bool" | "double")
+            || n.starts_with("vec")
+            || n.starts_with("mat")
+    };
+    let expr = |e: &ast::Expr| {
+        fn walk(e: &ast::Expr, f: &dyn Fn(&ast::Expr) -> bool) -> bool {
+            use ast::ExprData as E;
+            f(e) || match &e.content {
+                E::Unary(_, a) | E::PostInc(a) | E::PostDec(a) | E::Dot(a, _) => walk(a, f),
+                E::Binary(_, a, b) | E::Assignment(a, _, b) | E::Comma(a, b) | E::Bracket(a, b) => {
+                    walk(a, f) || walk(b, f)
+                }
+                E::Ternary(a, b, c) => walk(a, f) || walk(b, f) || walk(c, f),
+                E::FunCall(_, args) => args.iter().any(|a| walk(a, f)),
+                _ => false,
+            }
+        }
+        walk(e, &|e| match &e.content {
+            ast::ExprData::Ternary(..) => true,
+            ast::ExprData::Variable(v) => runtime.contains(v.as_str()),
+            ast::ExprData::FunCall(f, _) => {
+                callee(f).is_some_and(|c| !constructor(&c) && !FOLDABLE.contains(&c.as_str()))
+            }
+            _ => false,
+        })
+    };
+    fn init(i: &ast::Initializer, expr: &dyn Fn(&ast::Expr) -> bool) -> bool {
+        match &i.content {
+            ast::InitializerData::Simple(e) => expr(e),
+            ast::InitializerData::List(items) => items.iter().any(|i| init(i, expr)),
+        }
+    }
+    let tail = list.tail.iter().filter_map(|t| t.initializer.as_ref());
+    list.head
+        .initializer
+        .iter()
+        .chain(tail)
+        .any(|i| init(i, &expr))
+}
+
+/// A negative number: `-1.0`, `-1`.
+fn negative_constant(e: &ast::Expr) -> bool {
+    use ast::ExprData as E;
+    match &e.content {
+        E::Unary(op, a) if op.content == ast::UnaryOpData::Minus => {
+            matches!(
+                a.content,
+                E::FloatConst(v) if v > 0.0
+            ) || matches!(a.content, E::IntConst(v) if v > 0)
+                || matches!(a.content, E::DoubleConst(v) if v > 0.0)
+        }
+        E::FloatConst(v) => *v < 0.0,
+        _ => false,
+    }
 }
 
 fn first_lines(s: &str) -> String {
@@ -316,6 +526,14 @@ struct Legaliser<'a> {
     /// Identifiers used, for the implicit declarations.
     used: HashSet<String>,
     errors: Vec<String>,
+    /// Inside a constant initialiser: no helper calls there.
+    constant: bool,
+    /// The program uses `%` ([`modulo_helpers`]) or `iris_sqrt`: their
+    /// helpers go in.
+    modulo: bool,
+    nan: bool,
+    /// Constants turned into globals ([`needs_runtime`]).
+    runtime_constants: HashSet<String>,
 }
 
 fn var(name: &str) -> ast::Expr {
@@ -507,6 +725,10 @@ impl<'a> Legaliser<'a> {
             declared: HashSet::new(),
             used: HashSet::new(),
             errors: Vec::new(),
+            constant: false,
+            modulo: false,
+            nan: false,
+            runtime_constants: HashSet::new(),
         }
     }
 
@@ -727,8 +949,19 @@ impl<'a> Legaliser<'a> {
                     let at = explicit
                         .map(|l: u32| l + i as u32)
                         .unwrap_or_else(|| self.next_output());
-                    self.header
-                        .push(format!("layout(location = {at}) out {full} {name}{array};"));
+                    if let (Some(widened), "") = (widen_output(&full, name), array.as_str()) {
+                        // GL fills the missing channels of a narrow output;
+                        // wgpu wants every channel of the target written.
+                        let (wide, fill) = widened;
+                        self.header.push(format!("{full} {name};"));
+                        self.header.push(format!(
+                            "layout(location = {at}) out {wide} iris_out_{name};"
+                        ));
+                        self.epilogue.push(fill);
+                    } else {
+                        self.header
+                            .push(format!("layout(location = {at}) out {full} {name}{array};"));
+                    }
                     self.interface.outputs.insert(at, name.clone());
                 } else {
                     self.varying(dir, &interp, &full, name, array);
@@ -736,9 +969,25 @@ impl<'a> Legaliser<'a> {
             }
             return Ok(false);
         }
-        if has(ast::StorageQualifierData::Const) || has(ast::StorageQualifierData::Shared) {
+        // A constant naga can't fold becomes a global set at the start of `main`.
+        if has(ast::StorageQualifierData::Const) && needs_runtime(list, &self.runtime_constants) {
+            self.runtime_constants
+                .extend(names.iter().map(|(n, _)| n.clone()));
+            let q = &mut list.head.ty.qualifier;
+            if let Some(q) = q {
+                q.qualifiers.retain(|q| {
+                    !matches!(&q.content, ast::TypeQualifierSpecData::Storage(s)
+                        if s.content == ast::StorageQualifierData::Const)
+                });
+            }
+            if q.as_ref().is_some_and(|q| q.qualifiers.is_empty()) {
+                *q = None;
+            }
+        } else if has(ast::StorageQualifierData::Const) || has(ast::StorageQualifierData::Shared) {
             self.sized(list);
+            self.constant = true;
             self.global_initialisers(list, false);
+            self.constant = false;
             return Ok(true);
         }
         self.sized(list);
@@ -930,6 +1179,8 @@ impl<'a> Legaliser<'a> {
             return;
         };
         self.sized(list);
+        self.constant =
+            storage(&list.head.ty.qualifier).contains(&ast::StorageQualifierData::Const);
         if let Some(i) = &mut list.head.initializer {
             self.initializer(i);
         }
@@ -944,6 +1195,7 @@ impl<'a> Legaliser<'a> {
             let n = t.ident.ident.as_str().to_owned();
             self.declare(&n);
         }
+        self.constant = false;
     }
 
     fn initializer(&mut self, i: &mut ast::Initializer) {
@@ -1148,6 +1400,24 @@ impl<'a> Legaliser<'a> {
             | E::FloatConst(_)
             | E::DoubleConst(_) => {}
             E::Unary(_, a) | E::PostInc(a) | E::PostDec(a) => self.expr(a),
+            E::Binary(op, a, b) if op.content == ast::BinaryOpData::Mod && !self.constant => {
+                self.expr(a);
+                self.expr(b);
+                self.modulo = true;
+                let (a, b) = (
+                    std::mem::replace(&mut **a, var("_")),
+                    std::mem::replace(&mut **b, var("_")),
+                );
+                *e = call("iris_mod", vec![a, b]);
+            }
+            E::Assignment(a, op, b) if op.content == ast::AssignmentOpData::Mod => {
+                self.expr(a);
+                self.expr(b);
+                self.modulo = true;
+                let rhs = std::mem::replace(&mut **b, var("_"));
+                **b = call("iris_mod", vec![(**a).clone(), rhs]);
+                *op = ast::AssignmentOpData::Equal.into_node();
+            }
             E::Binary(_, a, b) | E::Assignment(a, _, b) | E::Comma(a, b) => {
                 self.expr(a);
                 self.expr(b);
@@ -1268,6 +1538,12 @@ impl<'a> Legaliser<'a> {
         if self.functions.contains(&name) {
             return;
         }
+        // `sqrt(-1.0)`, Bloop's NaN: naga folds it and fails, drivers give NaN.
+        if name == "sqrt" && !self.constant && args.len() == 1 && negative_constant(&args[0]) {
+            *f = ast::FunIdentifierData::Expr(Box::new(var("iris_sqrt"))).into_node();
+            self.nan = true;
+            return;
+        }
         if let Some((_, new)) = LEGACY_CALLS.iter().find(|(old, _)| *old == name) {
             *f = ast::FunIdentifierData::Expr(Box::new(var(new))).into_node();
         } else if let Some((_, new)) = SHADOW_CALLS.iter().find(|(old, _)| *old == name) {
@@ -1307,6 +1583,12 @@ impl<'a> Legaliser<'a> {
         }
         let mut out = String::from("#version 450 core\n");
         out.push_str(HELPERS);
+        if self.modulo {
+            out.push_str(&modulo_helpers());
+        }
+        if self.nan {
+            out.push_str("float iris_sqrt(float x) { return sqrt(x); }\n");
+        }
         if !self.link.uniforms.is_empty() {
             out.push_str("layout(std140, set = 0, binding = 0) uniform IrisUniforms {\n");
             for (_, decl) in &self.link.uniforms {

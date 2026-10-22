@@ -21,7 +21,7 @@ The numbers below are Horizon before and after a round of performance work, on a
 
 The full tables, with the method and the Linux software-rendering run, are in [docs/graphics.md](https://github.com/ludovic111/horizon/blob/main/docs/graphics.md#results).
 
-**Horizon against vanilla.** The benchmark exists: `tools/perf_bench.py` starts Horizon, vanilla 26.3 and vanilla with Sodium, Lithium, FerriteCore and ImmediatelyFast on the same machine, world, camera path and settings, and computes every number the same way. [docs/benchmark.md](https://github.com/ludovic111/horizon/blob/main/docs/benchmark.md) says how it keeps the comparison fair. **We have not published its results for the client yet**, so this site does not claim a number.
+**Horizon against vanilla.** The benchmark exists: `tools/perf_bench.py` starts Horizon, vanilla 26.3 and vanilla with Sodium, Lithium, FerriteCore and ImmediatelyFast on the same machine, world, camera path and settings, and computes every number the same way. [docs/benchmark.md](https://github.com/ludovic111/horizon/blob/main/docs/benchmark.md) says how it keeps the comparison fair. Its results for the client, measured on the project's own machines, are on the [Benchmarks page](/benchmarks), with the places where Java is faster. It also estimates other hardware from them, as a range, and shows players' uploaded results once at least three installs share a graphics card and processor.
 
 **Measure your own computer.** Horizon's half of that benchmark runs on its own:
 

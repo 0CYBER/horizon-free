@@ -523,13 +523,22 @@ impl Game<'_> {
                     Screen::Inventory if self.recipe_search_focused() => {
                         self.recipe_text(Some(text), false)
                     }
+                    // The anvil's rename box.
+                    Screen::Inventory
+                        if self
+                            .station
+                            .as_ref()
+                            .is_some_and(|s| s.kind == super::stations::Kind::Anvil) =>
+                    {
+                        self.station_text(Some(text), false)
+                    }
                     Screen::Creative if self.creative_screen.tab().search => {
                         // As typed: replaces a selected query, keeps the length limit.
                         self.creative_search_edit(Some(text), false)
                     }
                     _ => {
                         return Err(
-                            "type needs the chat screen (key t tap), the language search, the creative search or World Options".into(),
+                            "type needs the chat screen (key t tap), the language search, the creative search, the anvil or World Options".into(),
                         );
                     }
                 }
@@ -555,6 +564,8 @@ impl Game<'_> {
                     "graphics" => Page::Graphics,
                     "graphics-advanced" => Page::GraphicsAdvanced,
                     "extras" => Page::Extras,
+                    "horizon" => Page::Horizon,
+                    "shader-packs" => Page::ShaderPacks,
                     other => return Err(format!("unknown options page {other}").into()),
                 };
                 if self.screen == Screen::Playing && self.title.is_none() {
@@ -727,6 +738,7 @@ impl Game<'_> {
             Screen::Stats => "stats",
             Screen::Advancements => "advancements",
             Screen::WorldOptions => "world-options",
+            Screen::Friends => "friends",
             Screen::CommandBlock => "command-block",
         }
     }
@@ -881,14 +893,16 @@ impl Game<'_> {
             "tridents": self.tridents.len(),
             "rockets": self.rockets.len(),
             "fight": self.dragon_status(),
-            "carts": self.carts.iter().map(|c| serde_json::json!({"kind": c.kind.id(), "position": [c.position.x, c.position.y, c.position.z], "velocity": [c.velocity.x, c.velocity.y, c.velocity.z]})).collect::<Vec<_>>(),
+            // A client of a server (single player's server thread) knows the
+            // carts it was sent.
+            "carts": self.remote_carts().unwrap_or_else(|| self.carts.iter().map(|c| serde_json::json!({"kind": c.kind.id(), "position": [c.position.x, c.position.y, c.position.z], "velocity": [c.velocity.x, c.velocity.y, c.velocity.z]})).collect::<Vec<_>>()),
             "riding": self.riding,
             "using": self.using,
             "render_distance": self.streaming.radius,
             "chunks": self.world.chunks.len(),
             "mobs": self.mobs.len(),
             "block_entities": self.world.block_entities.len(),
-            "pending_chunks": self.streaming.pending() + self.pending_uploads.len(),
+            "pending_chunks": self.streaming.pending() + self.pending_uploads.len() + self.remote_backlog(),
             "generated_chunks": self.streaming.generated_total,
             "meshed_sections": self.streaming.meshed_total,
             "streaming": self.streaming.stages().into_iter().map(|(k, v)| (k.to_string(), v.into())).collect::<serde_json::Map<_, _>>(),
@@ -917,6 +931,8 @@ impl Game<'_> {
         status["heard"] = json!(self.audio.heard);
         // Boats, minecarts, armor stands, item frames and paintings.
         status["objects"] = json!(self.objects_status());
+        status["lightning"] = json!({"bolts": self.bolts.len(), "struck": self.lightning_seen[0],
+            "flashes": self.lightning_seen[1], "flash": self.flash});
         // Primed TNT, falling blocks, projectiles, tridents and end crystals.
         status["projectiles"] = json!(self.projectiles_status());
         status

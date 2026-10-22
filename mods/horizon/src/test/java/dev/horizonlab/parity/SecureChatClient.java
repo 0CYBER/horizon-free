@@ -77,6 +77,7 @@ import net.minecraft.network.protocol.game.ClientboundChunkBatchFinishedPacket;
 import net.minecraft.network.protocol.game.ClientboundDisguisedChatPacket;
 import net.minecraft.network.protocol.game.ClientboundLoginPacket;
 import net.minecraft.network.protocol.game.ClientboundPlayerChatPacket;
+import net.minecraft.network.protocol.game.ClientboundPlayerInfoRemovePacket;
 import net.minecraft.network.protocol.game.ClientboundPlayerInfoUpdatePacket;
 import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
 import net.minecraft.network.protocol.game.ClientboundSystemChatPacket;
@@ -124,6 +125,8 @@ import net.minecraft.world.entity.player.ProfilePublicKey;
  */
 public final class SecureChatClient {
     private static final List<String> LINES = new ArrayList<>();
+    /** A command any player may run, whose reply only its sender gets (RandomCommand: value). */
+    private static final String BARRIER = "random value 1..2";
     private static PrivateKey services;
     private static String sessionUrl;
 
@@ -203,7 +206,7 @@ public final class SecureChatClient {
         settle(all, "alice's chain is broken");
         bob.send(new ServerboundChatAckPacket(50));
         settle(all, "bob acknowledges too much");
-        for (Client c : all) c.close();
+        leave(all);
     }
 
     /** Online mode with enforce-secure-profile: unsigned chat is refused. */
@@ -223,13 +226,35 @@ public final class SecureChatClient {
         // A key the services signed for another player.
         Client mallory = Client.join(host, port, "Mallory", true, UUID.nameUUIDFromBytes("someone else".getBytes()));
         settle(List.of(alice, carol, mallory), "mallory's borrowed key");
-        for (Client c : all) c.close();
+        leave(all);
         mallory.close();
     }
 
-    /** Lets the server answer, then records what each player received, in player order. */
+    /**
+     * The players still connected leave one at a time, each once the next was
+     * told the one before left (PlayerList.remove broadcasts the removal after
+     * the "lost connection" line): the server logs the departures in this
+     * order, not in the order its network threads notice the closed sockets.
+     */
+    private static void leave(List<Client> all) throws Exception {
+        List<Client> clients = all.stream().filter(c -> !c.closed).toList();
+        for (int i = 0; i < clients.size(); i++) {
+            clients.get(i).close();
+            if (i + 1 < clients.size()) clients.get(i + 1).awaitRemoved(clients.get(i));
+        }
+    }
+
+    /**
+     * Lets the server answer, then records what each player received, in player order. However slow the
+     * server, a step ends once it handled everything sent so far: each player still connected runs a command
+     * whose reply comes after it, twice (a chat's broadcast is a task the chat's own task queues), and has then
+     * read whatever the server sent it before.
+     */
     private static void settle(List<Client> clients, String step) throws Exception {
         Thread.sleep(1500);
+        for (int round = 0; round < 2; round++) {
+            for (Client c : clients) c.barrier();
+        }
         LINES.add("step " + step);
         for (Client c : clients) c.drain();
     }
@@ -249,6 +274,10 @@ public final class SecureChatClient {
         ProtocolInfo<?> inbound;
         ProtocolInfo<?> outbound;
         final BlockingQueue<Packet<?>> queue = new LinkedBlockingQueue<>();
+        /** Replies to BARRIER, kept out of the queue. */
+        final java.util.concurrent.Semaphore barriers = new java.util.concurrent.Semaphore(0);
+        /** The server ended the connection (its reader stopped). */
+        volatile boolean ended;
         volatile boolean closed;
         LocalChatSession session;
         SignedMessageChain.Encoder encoder = SignedMessageChain.Encoder.UNSIGNED;
@@ -359,13 +388,21 @@ public final class SecureChatClient {
                 try {
                     while (!closed) {
                         Packet<?> p = read();
+                        if (p instanceof ClientboundSystemChatPacket s
+                            && s.content().getContents() instanceof net.minecraft.network.chat.contents.TranslatableContents t
+                            && t.getKey().equals("commands.random.sample.success")) {
+                            barriers.release();
+                            continue;
+                        }
                         queue.put(p);
                         // Nothing follows a disconnect but the closed socket.
-                        if (p instanceof ClientboundDisconnectPacket) return;
+                        if (p instanceof ClientboundDisconnectPacket) break;
                     }
                 } catch (Exception e) {
                     if (!closed) queue.add(new ClientboundDisconnectPacket(Component.literal("connection lost: " + e)));
                 }
+                ended = true;
+                barriers.release();
             }, name + " reader");
             reader.setDaemon(true);
             reader.start();
@@ -437,6 +474,21 @@ public final class SecureChatClient {
             send(new ServerboundChatCommandPacket(command));
         }
 
+        /** Runs BARRIER and waits for its reply (30 s at most), which isn't recorded. */
+        void barrier() throws Exception {
+            if (closed || ended) return;
+            barriers.drainPermits();
+            try {
+                send(new ServerboundChatCommandPacket(BARRIER));
+            } catch (java.io.IOException e) {
+                if (ended) return;
+                throw e;
+            }
+            if (!barriers.tryAcquire(30, TimeUnit.SECONDS) && !ended) {
+                LINES.add("error " + name + " got no reply to /" + BARRIER);
+            }
+        }
+
         /** Handles and records what arrived. */
         void drain() throws Exception {
             Packet<?> p;
@@ -487,6 +539,18 @@ public final class SecureChatClient {
                 record("disconnected " + json(d.reason()));
                 closed = true;
             }
+        }
+
+        /** Waits (10 s at most) until the server removes `gone` from this player's list; records nothing else. */
+        void awaitRemoved(Client gone) throws Exception {
+            long until = System.nanoTime() + 10_000_000_000L;
+            while (System.nanoTime() < until) {
+                Packet<?> p = queue.poll(50, TimeUnit.MILLISECONDS);
+                if (p instanceof ClientboundPlayerInfoRemovePacket r && r.profileIds().contains(gone.id)) return;
+                if (p instanceof ClientboundKeepAlivePacket k) send(new ServerboundKeepAlivePacket(k.getId()));
+                else if (p instanceof ClientboundPingPacket ping) send(new ServerboundPongPacket(ping.getId()));
+            }
+            LINES.add("error " + name + " was never told that " + gone.name + " left");
         }
 
         /** ClientPacketListener.handlePlayerChat, then markMessageAsProcessed. */

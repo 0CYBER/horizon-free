@@ -7,7 +7,7 @@ they are. This note is the design, the status of each part and what Ludovic has 
 ## What Ludovic registers (needs his accounts)
 
 Nothing below can be done by an agent: the app registrations belong to Ludovic. Until the client ID
-is set, the launcher's sign-in shows "Microsoft sign-in is not configured yet" and everything else
+is set, the launcher's sign-in shows "Coming soon" ("Microsoft sign-in is coming soon") and everything else
 works as before.
 
 1. **Azure app registration** (https://portal.azure.com → Microsoft Entra ID → App registrations →

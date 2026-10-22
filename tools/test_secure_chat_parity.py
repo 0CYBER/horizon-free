@@ -236,10 +236,18 @@ def run_side(label, scenario, command, directory, client):
                 time.sleep(2)
         out = directory.parent / f'{label}-{scenario}.txt'
         client(port, scenario, out)
+        # Carol leaves last: stopping before the server saw her go would log another reason.
+        server.wait_for(r'Carol lost connection', timeout=30)
         transcript = [f'status enforcesSecureChat {enforces}'] + out.read_text(encoding='utf-8').splitlines()
     finally:
         server.stop()
-    return transcript, chat_lines(server.lines)
+    # A player the server disconnects (the transcript has the reason it sent, compared there) is logged as
+    # "lost connection: <that reason>", or as "Disconnected" when vanilla's network thread closed the connection
+    # before its disconnect(reason) ran: a race in vanilla, so the log's reason is left out for them.
+    kicked = {m.group(1) for line in transcript if (m := re.match(r'(\w+) disconnected ', line))}
+    log = [re.sub(r'^(\[\w+\] (\w+) lost connection: ).*', lambda m: m.group(1) + '(the reason sent)'
+                  if m.group(2) in kicked else m.group(0), line) for line in chat_lines(server.lines)]
+    return transcript, log
 
 
 def main():

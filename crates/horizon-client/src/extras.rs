@@ -69,6 +69,8 @@ impl Corner {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Extras {
     pub fullbright: bool,
+    /// Held, dropped and burning light sources light their surroundings (`dynamic_light`).
+    pub dynamic_lights: bool,
     pub zoom: bool,
     /// A vanilla key name (`key.keyboard.z`).
     pub zoom_key: String,
@@ -110,6 +112,7 @@ impl Default for Extras {
     fn default() -> Self {
         Self {
             fullbright: false,
+            dynamic_lights: false,
             zoom: false,
             zoom_key: "key.keyboard.z".into(),
             zoom_level: 4,
@@ -158,6 +161,7 @@ impl Extras {
             };
             match key.trim() {
                 "fullbright" => e.fullbright = flag(e.fullbright),
+                "dynamicLights" => e.dynamic_lights = flag(e.dynamic_lights),
                 "zoom" => e.zoom = flag(e.zoom),
                 "zoomKey" if value.starts_with("key.") => e.zoom_key = value.to_owned(),
                 "zoomLevel" => {
@@ -201,8 +205,9 @@ impl Extras {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "fullbright:{}\nzoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\nsort:{}\nsortKey:{}\n",
+            "fullbright:{}\ndynamicLights:{}\nzoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\nsort:{}\nsortKey:{}\n",
             bool_text(self.fullbright),
+            bool_text(self.dynamic_lights),
             bool_text(self.zoom),
             self.zoom_key,
             self.zoom_level,
@@ -423,6 +428,7 @@ impl Cps {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Item {
     Fullbright,
+    DynamicLights,
     Zoom,
     ZoomKey,
     ZoomLevel,
@@ -452,6 +458,7 @@ pub fn rows() -> Vec<Result<Item, &'static str>> {
     vec![
         Err("Lighting"),
         Ok(Fullbright),
+        Ok(DynamicLights),
         Err("Zoom"),
         Ok(Zoom),
         Ok(ZoomKey),
@@ -501,6 +508,7 @@ impl Item {
     pub fn caption(self) -> &'static str {
         match self {
             Item::Fullbright => "Fullbright",
+            Item::DynamicLights => "Dynamic lights",
             Item::Zoom => "Zoom",
             Item::ZoomKey => "Zoom key",
             Item::ZoomLevel => "Starting zoom",
@@ -533,7 +541,8 @@ impl Item {
             KeystrokesCorner | KeystrokesCps => Keystrokes,
             MouseTweaksWheel => MouseTweaks,
             SortKey => Sort,
-            Fullbright | Zoom | Minimap | Fps | Keystrokes | MouseTweaks | Sort | AutoReconnect => {
+            Fullbright | DynamicLights | Zoom | Minimap | Fps | Keystrokes | MouseTweaks | Sort
+            | AutoReconnect => {
                 return None;
             }
         })
@@ -542,6 +551,9 @@ impl Item {
     pub fn description(self) -> &'static str {
         match self {
             Item::Fullbright => "Show blocks and entities at full light, even in dark areas.",
+            Item::DynamicLights => {
+                "Torches and other light sources held, dropped or on fire light the blocks around them."
+            }
             Item::Zoom => "Hold the zoom key to zoom; the wheel changes it while held.",
             Item::ZoomKey => "Click, then press a key. Escape unbinds it.",
             Item::ZoomLevel => "The zoom the key starts at.",
@@ -581,7 +593,7 @@ impl Item {
         use crate::graphics_style::Cost;
         match self {
             Item::Fullbright | Item::Zoom | Item::Fps | Item::Keystrokes => Some(Cost::None),
-            Item::Minimap => Some(Cost::Low),
+            Item::Minimap | Item::DynamicLights => Some(Cost::Low),
             Item::AutoReconnect | Item::MouseTweaks | Item::Sort => Some(Cost::None),
             _ => None,
         }
@@ -590,6 +602,7 @@ impl Item {
     pub fn switch(self, e: &Extras) -> Option<bool> {
         Some(match self {
             Item::Fullbright => e.fullbright,
+            Item::DynamicLights => e.dynamic_lights,
             Item::Zoom => e.zoom,
             Item::ZoomSmooth => e.zoom_smooth,
             Item::ZoomSensitivity => e.zoom_sensitivity,
@@ -632,6 +645,7 @@ impl Item {
     pub fn cycle(self, e: &mut Extras, back: bool) {
         match self {
             Item::Fullbright => e.fullbright = !e.fullbright,
+            Item::DynamicLights => e.dynamic_lights = !e.dynamic_lights,
             Item::Zoom => e.zoom = !e.zoom,
             Item::ZoomSmooth => e.zoom_smooth = !e.zoom_smooth,
             Item::ZoomSensitivity => e.zoom_sensitivity = !e.zoom_sensitivity,
@@ -677,7 +691,7 @@ mod tests {
     #[test]
     fn everything_is_off_by_default_and_round_trips() {
         let d = Extras::default();
-        assert!(!d.fullbright);
+        assert!(!d.fullbright && !d.dynamic_lights);
         assert!(!d.zoom && !d.fps && !d.keystrokes && !d.minimap && !d.auto_reconnect);
         assert!(!d.mouse_tweaks && !d.sort);
         assert_eq!(Extras::parse(""), d);
@@ -685,6 +699,9 @@ mod tests {
         let mut e = d.clone();
         Item::Fullbright.cycle(&mut e, false);
         assert_eq!(Item::Fullbright.switch(&e), Some(true));
+        Item::DynamicLights.cycle(&mut e, false);
+        assert_eq!(Item::DynamicLights.switch(&e), Some(true));
+        assert_eq!(Extras::parse(&e.serialize()), e);
         e.zoom = true;
         e.zoom_key = "key.keyboard.c".into();
         e.zoom_level = 6;

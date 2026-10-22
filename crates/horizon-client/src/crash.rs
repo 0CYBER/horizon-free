@@ -105,18 +105,23 @@ impl Report {
     }
 }
 
-/// The release tag (the launcher installs each build in a folder named after it) and the client's
-/// own version, or just the latter.
+/// The release this binary is (`v0.2.3`); for a release from before 0.2, its tag and the client's
+/// crate version; for a build from source, that version alone.
 pub fn version() -> String {
     let version = env!("CARGO_PKG_VERSION");
-    match release_tag() {
-        Some(tag) => format!("{tag} (client {version})"),
-        None => version.to_owned(),
+    match (horizon_core::release::RELEASE, release_tag()) {
+        (Some(_), Some(tag)) => tag,
+        (None, Some(tag)) => format!("{tag} (client {version})"),
+        (_, None) => version.to_owned(),
     }
 }
 
-/// The release this binary came with: launcher installs live in a folder named after the tag.
+/// The release this binary came with: the version release.yml built in (docs/versioning.md), else
+/// the folder the launcher installed it in, named after the tag (releases from before 0.2).
 pub fn release_tag() -> Option<String> {
+    if let Some(version) = horizon_core::release::RELEASE {
+        return Some(format!("v{version}"));
+    }
     let exe = std::env::current_exe().ok()?;
     let folder = exe.parent()?.file_name()?.to_str()?;
     (folder.starts_with('v') && folder[1..].starts_with(|c: char| c.is_ascii_digit()))
@@ -516,6 +521,18 @@ pub fn debug_crash_after() -> Option<std::time::Duration> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_release_reports_its_built_in_version() {
+        // release.yml builds with HORIZON_VERSION (docs/versioning.md): `v0.2.3`, wherever it is installed.
+        match horizon_core::release::RELEASE {
+            Some(version) => {
+                assert_eq!(release_tag(), Some(format!("v{version}")));
+                assert_eq!(super::version(), format!("v{version}"));
+            }
+            None => assert!(release_tag().is_none() || super::version().contains("(client ")),
+        }
+    }
 
     fn report() -> Report {
         Report {

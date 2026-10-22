@@ -68,8 +68,9 @@ impl Game<'_> {
         }
         l.last_inputs = inputs;
     }
-    /// A sound the loom menu played: the result's once per tick.
-    pub(super) fn loom_sound(&mut self, sound: &str) {
+    /// A sound the loom or stonecutter menu played: the result's once per
+    /// tick (`lastSoundTime`).
+    pub(super) fn station_sound(&mut self, sound: &str) {
         let ticks = self.ticks;
         let Some(s) = self.station.as_mut() else {
             return;
@@ -98,6 +99,7 @@ impl Game<'_> {
         if taken {
             self.audio
                 .play("minecraft:ui.loom.select_pattern", None, 1.0, 1.0);
+            self.remote_station_button(index as i32);
         }
         taken
     }

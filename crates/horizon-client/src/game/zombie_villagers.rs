@@ -194,7 +194,9 @@ fn carry_over(from: &Mob, to: &mut Mob) {
     to.fire_ticks = from.fire_ticks;
     to.persistent = from.persistent;
     to.custom_name = from.custom_name.clone();
+    to.custom_name_text = from.custom_name_text.clone();
     to.name_visible = from.name_visible;
+    to.invisible = from.invisible;
     to.extra.pick_up_loot = from.extra.pick_up_loot;
     to.extra.main_hand = from.extra.main_hand.clone();
     to.extra.off_hand = from.extra.off_hand.clone();

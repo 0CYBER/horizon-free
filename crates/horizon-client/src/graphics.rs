@@ -248,8 +248,6 @@ pub struct Graphics {
     pub resolution_scale: u32,
     /// FXAA over the world.
     pub fxaa: bool,
-    /// The settings level last shown: Advanced, or Simple.
-    pub advanced: bool,
     /// Battery mode: at most 60 frames per second in a world and 30 in menus
     /// or behind other windows, and half the worker threads. Off by default;
     /// it changes when frames are drawn, never what they show or the ticks.
@@ -281,7 +279,6 @@ impl Default for Graphics {
             overlay: Overlay::Off,
             resolution_scale: 100,
             fxaa: false,
-            advanced: false,
             battery: false,
             shader_pack: String::new(),
             api: GraphicsApi::Auto,
@@ -334,7 +331,6 @@ impl Graphics {
                 "workers" => g.workers = number(g.workers).min(64),
                 "resolutionScale" => g.resolution_scale = number(g.resolution_scale).clamp(50, 200),
                 "fxaa" => g.fxaa = flag(g.fxaa),
-                "level" => g.advanced = value == "advanced",
                 "batteryMode" => g.battery = flag(g.battery),
                 "shaderPack" => g.shader_pack = value.to_string(),
                 "graphicsApi" => g.api = GraphicsApi::from_name(value).unwrap_or_default(),
@@ -352,7 +348,7 @@ impl Graphics {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\ncullLeaves:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nlevel:{}\nbatteryMode:{}\nshaderPack:{}\ngraphicsApi:{}\n",
+            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\ncullLeaves:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nbatteryMode:{}\nshaderPack:{}\ngraphicsApi:{}\n",
             self.preset.name(),
             self.lod_distance,
             self.far_detail.name(),
@@ -378,7 +374,6 @@ impl Graphics {
             },
             self.resolution_scale,
             bool_text(self.fxaa),
-            if self.advanced { "advanced" } else { "simple" },
             bool_text(self.battery),
             self.shader_pack,
             self.api.name(),
@@ -473,13 +468,14 @@ mod tests {
             overlay: Overlay::Graph,
             resolution_scale: 75,
             fxaa: true,
-            advanced: true,
             battery: true,
             shader_pack: "horizon-sample".into(),
             api: GraphicsApi::Dx12,
         };
         assert_eq!(Graphics::parse(&g.serialize()), g);
         assert_eq!(Graphics::parse(""), Graphics::default());
+        // The old menus' Simple / Advanced choice is ignored.
+        assert_eq!(Graphics::parse("level:advanced\n"), Graphics::default());
         assert_eq!(
             Graphics::parse("workers:abc\nsky:maybe\ncullLeaves:maybe\nentityCulling:maybe\n"),
             Graphics::default()

@@ -9,18 +9,28 @@ impl Game<'_> {
     pub(super) fn tick_allays(&mut self) {
         let griefing = self.ui.rules.bool("mob_griefing");
         let player = self.player.as_ref().map(|p| p.position);
+        // The playing jukeboxes, found at the first allay: no allay starts
+        // or stops one, and the block entities run into the thousands.
+        let mut jukeboxes: Option<Vec<(i32, i32, i32)>> = None;
         for i in 0..self.mobs.len() {
             if self.mobs[i].species() != Species::Allay || !self.mobs[i].alive() {
                 continue;
             }
             let pos = self.mobs[i].position;
             // Dancing: a playing jukebox within 10 blocks.
-            let dancing = self.world.block_entities.iter().any(|(k, e)| {
-                matches!(e, BlockEntity::Jukebox(j) if j.playing)
-                    && (f64::from(k.0) + 0.5 - pos.x).powi(2)
-                        + (f64::from(k.1) + 0.5 - pos.y).powi(2)
-                        + (f64::from(k.2) + 0.5 - pos.z).powi(2)
-                        <= 100.0
+            let jukeboxes = jukeboxes.get_or_insert_with(|| {
+                self.world
+                    .block_entities
+                    .iter()
+                    .filter(|(_, e)| matches!(e, BlockEntity::Jukebox(j) if j.playing))
+                    .map(|(k, _)| *k)
+                    .collect()
+            });
+            let dancing = jukeboxes.iter().any(|k| {
+                (f64::from(k.0) + 0.5 - pos.x).powi(2)
+                    + (f64::from(k.1) + 0.5 - pos.y).powi(2)
+                    + (f64::from(k.2) + 0.5 - pos.z).powi(2)
+                    <= 100.0
             });
             self.mobs[i].extra.flag =
                 dancing && !horizon_client::mobs::goals::should_panic(&self.mobs[i]);
