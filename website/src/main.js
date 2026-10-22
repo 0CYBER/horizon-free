@@ -7,7 +7,7 @@ import { contributorsFrom, contributorsHtml } from "./contributors.js";
 import { isGame, isLauncher as isLauncherTag, launcherVersion, newestFirst } from "./versions.js";
 
 const REPO = "ludovic111/horizon";
-const RELEASES_PAGE = `https://github.com/${REPO}/releases?q=launcher-v&expanded=true`;
+const RELEASES_PAGE = `https://github.com/${REPO}/releases?q=launcher&expanded=true`;
 const baked = JSON.parse(document.getElementById("baked").textContent);
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
