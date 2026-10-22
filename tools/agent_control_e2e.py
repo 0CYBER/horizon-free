@@ -533,6 +533,9 @@ def suggestions_scenario(d, out):
     d('type', field='name', replace=True, text='Suggestions')
     d('click', id='game-mode')  # survival -> hardcore -> creative (commands on)
     d('click', id='game-mode')
+    d('type', field='seed', text='5')
+    d('click', id='world')
+    d('click', id='world-type')  # superflat: this checks chat, without a spawn search
     d('click', id='create-new-world')
     d('wait_for', condition='loaded', timeout=400)
     d('wait_ready', seconds=400)
@@ -541,8 +544,8 @@ def suggestions_scenario(d, out):
         ('/giv', '/give'),
         ('/fill ^', '/fill ^ ^'),
         ('/give @s diamond_sw', '/give @s minecraft:diamond_sword'),
-        ('/setblock ~ ~ ~ sto', '/setblock ~ ~ ~ minecraft:stone'),
-        ('/fill ~ ~ ~ ~1 ~1 ~1 sto', '/fill ~ ~ ~ ~1 ~1 ~1 minecraft:stone'),
+        ('/setblock ~ ~ ~ diamond_blo', '/setblock ~ ~ ~ minecraft:diamond_block'),
+        ('/fill ~ ~ ~ ~1 ~1 ~1 diamond_blo', '/fill ~ ~ ~ ~1 ~1 ~1 minecraft:diamond_block'),
         ('/setblock ~ ~ ~ oak_stairs[fa', '/setblock ~ ~ ~ oak_stairs[facing='),
         ('/clear @s diamond_sw', '/clear @s minecraft:diamond_sword'),
         ('/execute run give @s diamond_sw', '/execute run give @s minecraft:diamond_sword'),
