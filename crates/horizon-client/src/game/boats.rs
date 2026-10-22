@@ -57,7 +57,7 @@ pub(super) const CHEST_SLOTS: usize = 27;
 const WIDTH: f64 = 1.375;
 const HEIGHT: f64 = 0.5625;
 /// Player.DEFAULT_VEHICLE_ATTACHMENT minus the boat's passenger attachment.
-const SEAT: f64 = 0.1875 - 0.6;
+pub(super) const SEAT: f64 = 0.1875 - 0.6;
 impl Boat {
     pub fn new(id: u32, wood: Arc<str>, position: Vec3, yaw: f32) -> Self {
         Self {
@@ -295,7 +295,7 @@ impl Game<'_> {
         }
     }
     /// `AbstractBoat.tick` for one boat (`controlled` when the player rides it).
-    fn tick_boat(&mut self, mut b: Boat, controlled: bool) -> Boat {
+    pub(super) fn tick_boat(&mut self, mut b: Boat, controlled: bool) -> Boat {
         b.previous = b.position;
         b.previous_yaw = b.yaw;
         b.old_status = b.status;
@@ -448,9 +448,12 @@ impl Game<'_> {
     pub(super) fn tick_boats(&mut self) {
         // ServerLevel.tick: only entities in entity-ticking chunks tick.
         let ticking = self.entity_ticking_area();
+        // A server player's boat is driven by its client (lan_vehicles.rs).
+        let driven = self.guest_vehicles();
         for i in 0..self.boats.len() {
             let p = self.boats[i].position;
             if Some(self.boats[i].id) == self.riding
+                || driven.contains(&self.boats[i].id)
                 || !ticking(p.x.floor() as i32, p.z.floor() as i32)
             {
                 continue;
@@ -659,7 +662,11 @@ impl Game<'_> {
             self.right = false;
             return true;
         }
-        if sneaking || self.boats[i].out_of_control >= 60.0 || self.riding.is_some() {
+        if sneaking
+            || self.boats[i].out_of_control >= 60.0
+            || self.riding.is_some()
+            || self.ridden_by_guest(self.boats[i].id)
+        {
             return false;
         }
         self.riding = Some(self.boats[i].id);

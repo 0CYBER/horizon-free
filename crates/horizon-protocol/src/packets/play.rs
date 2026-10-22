@@ -273,6 +273,68 @@ packet!(Login {
     online_mode: bool => Bool,
     enforces_secure_chat: bool => Bool,
 });
+packet!(
+/// MapDecoration: a registry holder, its map position and rotation, and an
+/// optional name.
+MapDecoration {
+    kind: i32 => VarInt,
+    x: i8 => Byte,
+    y: i8 => Byte,
+    rot: i8 => Byte,
+    name: Option<Tag> => Opt<Nbt>,
+}
+);
+
+/// MapItemSavedData.MapPatch: an empty patch is a zero width.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MapPatch {
+    pub start_x: i32,
+    pub start_y: i32,
+    pub width: i32,
+    pub height: i32,
+    pub colors: Vec<u8>,
+}
+pub struct MapPatchOpt;
+impl Codec<Option<MapPatch>> for MapPatchOpt {
+    fn read(r: &mut Reader) -> Result<Option<MapPatch>> {
+        let width = i32::from(r.u8()?);
+        if width == 0 {
+            return Ok(None);
+        }
+        let height = i32::from(r.u8()?);
+        let start_x = i32::from(r.u8()?);
+        let start_y = i32::from(r.u8()?);
+        let n = r.count(r.remaining())?;
+        let colors = r.bytes(n)?.to_vec();
+        Ok(Some(MapPatch {
+            start_x,
+            start_y,
+            width,
+            height,
+            colors,
+        }))
+    }
+    fn write(patch: &Option<MapPatch>, w: &mut Writer) {
+        let Some(patch) = patch else {
+            w.u8(0);
+            return;
+        };
+        w.u8(patch.width as u8);
+        w.u8(patch.height as u8);
+        w.u8(patch.start_x as u8);
+        w.u8(patch.start_y as u8);
+        w.varint(patch.colors.len() as i32);
+        w.bytes(&patch.colors);
+    }
+}
+
+packet!(MapItemData {
+    map_id: i32 => VarInt,
+    scale: i8 => Byte,
+    locked: bool => Bool,
+    decorations: Option<Vec<MapDecoration>> => Opt<List<MapDecoration>>,
+    patch: Option<MapPatch> => MapPatchOpt,
+});
 /// VecDelta: per-axis deltas in 1/4096 blocks, linear or in timed steps.
 #[derive(Clone, Debug, PartialEq)]
 pub enum VecDelta {
@@ -609,6 +671,11 @@ packet!(SetEntityMotion { id: i32 => VarInt, velocity: [f64; 3] => LpVec3 });
 packet!(
     /// ClientboundSetPassengersPacket: a vehicle and every entity riding it.
     SetPassengers { vehicle: i32 => VarInt, passengers: Vec<i32> => List<VarInt> }
+);
+packet!(
+    /// ClientboundMoveVehiclePacket: the server puts a vehicle its rider
+    /// controls back where it was (PositionAndRotation: x, y, z, yRot, xRot).
+    MoveVehicle { position: [f64; 3] => Vec3d, yaw: f32 => Float, pitch: f32 => Float }
 );
 /// ClientboundSetEquipmentPacket: (EquipmentSlot ordinal, stack) pairs.
 pub struct Equipment;
@@ -1425,6 +1492,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     LevelEvent(LevelEvent) = LEVEL_EVENT,
     LightUpdate(LightUpdate) = LIGHT_UPDATE,
     Login(Login) = LOGIN,
+    MapItemData(MapItemData) = MAP_ITEM_DATA,
     MoveEntityPos(MoveEntityPos) = MOVE_ENTITY_POS,
     MoveEntityPosRot(MoveEntityPosRot) = MOVE_ENTITY_POS_ROT,
     MoveEntityRot(MoveEntityRot) = MOVE_ENTITY_ROT,
@@ -1466,6 +1534,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     SetHeldSlot(SetHeldSlot) = SET_HELD_SLOT,
     SetObjective(SetObjective) = SET_OBJECTIVE,
     SetPassengers(SetPassengers) = SET_PASSENGERS,
+    MoveVehicle(MoveVehicle) = MOVE_VEHICLE,
     ProjectilePower(ProjectilePower) = PROJECTILE_POWER,
     SetPlayerInventory(SetPlayerInventory) = SET_PLAYER_INVENTORY,
     SetPlayerTeam(SetPlayerTeam) = SET_PLAYER_TEAM,
@@ -1739,6 +1808,15 @@ packet!(
 packet!(MovePlayerPosRot { x: f64 => Double, y: f64 => Double, z: f64 => Double, yaw: f32 => Float, pitch: f32 => Float, flags: u8 => UByte });
 packet!(MovePlayerRot { yaw: f32 => Float, pitch: f32 => Float, flags: u8 => UByte });
 packet!(MovePlayerStatus { flags: u8 => UByte });
+packet!(
+    /// ServerboundMoveVehiclePacket: where the rider moved the vehicle it
+    /// controls (PositionAndRotation, then onGround).
+    MoveVehicleRequest { position: [f64; 3] => Vec3d, yaw: f32 => Float, pitch: f32 => Float, on_ground: bool => Bool }
+);
+packet!(
+    /// ServerboundPaddleBoatPacket: the boat's left and right paddles.
+    PaddleBoat { left: bool => Bool, right: bool => Bool }
+);
 packet!(PickItemFromBlock { pos: [i32; 3] => Pos, include_data: bool => Bool });
 packet!(
     /// ServerboundPlayerActionPacket.Action: 0 start destroy, 1 change destroy
@@ -1806,6 +1884,8 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     MovePlayerPosRot(MovePlayerPosRot) = MOVE_PLAYER_POS_ROT,
     MovePlayerRot(MovePlayerRot) = MOVE_PLAYER_ROT,
     MovePlayerStatus(MovePlayerStatus) = MOVE_PLAYER_STATUS_ONLY,
+    MoveVehicle(MoveVehicleRequest) = MOVE_VEHICLE,
+    PaddleBoat(PaddleBoat) = PADDLE_BOAT,
     PickItemFromBlock(PickItemFromBlock) = PICK_ITEM_FROM_BLOCK,
     PingRequest(crate::packets::status::Ping) = PING_REQUEST,
     PlayerAbilities(PlayerAbilitiesRequest) = PLAYER_ABILITIES,
@@ -2489,5 +2569,27 @@ mod tests {
         assert_eq!(body, expected);
         assert_eq!(crate::ids::play::clientbound::UPDATE_ATTRIBUTES, 134);
         assert_eq!(Clientbound::decode(134, &body[2..]).unwrap(), p);
+    }
+
+    #[test]
+    fn map_item_data_carries_a_server_patch() {
+        let patch = MapPatch {
+            start_x: 3,
+            start_y: 4,
+            width: 2,
+            height: 1,
+            colors: vec![1, 2],
+        };
+        let mut w = Writer::new();
+        MapPatchOpt::write(&Some(patch.clone()), &mut w);
+        assert_eq!(w.data, [2, 1, 3, 4, 2, 1, 2]);
+        let p = Clientbound::MapItemData(MapItemData {
+            map_id: 2146483647,
+            scale: 1,
+            locked: true,
+            decorations: None,
+            patch: Some(patch),
+        });
+        round_trip(p, Clientbound::encode, Clientbound::decode);
     }
 }

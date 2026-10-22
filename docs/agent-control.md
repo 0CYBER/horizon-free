@@ -29,7 +29,6 @@ Legend: **yes** complete, **part** partial (see note), **no** missing, **—** n
 | Dedicated server: start, console, log, stop | yes | yes | yes | |
 | Accounts (no secrets) | yes | yes | yes | names and UUIDs only; sign-in is a device code the player enters |
 | Launcher settings (game folder, auto-install, opening animation, desktop entry) | yes | part | no | CLI has `desktop-entry`; the rest only in the window |
-| Game menu style | yes | yes | yes | |
 | Logs, crash report | yes | yes | yes | |
 | Updates (Horizon and launcher) | yes | yes | yes | MCP only checks |
 | Patch notes, links | yes | yes | yes | |
@@ -76,7 +75,7 @@ Legend: **yes** complete, **part** partial (see note), **no** missing, **—** n
 
 | Capability | Before | After |
 | --- | --- | --- |
-| Screens: widgets | labelled buttons only | every widget of every screen (`ui`): id, kind, label, bounds, slider value, tab selected, slots with stacks; both menu styles |
+| Screens: widgets | labelled buttons only | every widget of every screen (`ui`): id, kind, label, bounds, slider value, tab selected, slots with stacks |
 | Screens: act on a widget | `click-button LABEL`, `click-at X Y` | `click ID [right\|middle] [shift]`, `set ID VALUE` (sliders), `click` focuses fields |
 | Options | open a page; `render-distance` only | `options-get` all 193 `options.txt` options typed with ranges/choices; `options-set` validates, applies, saves |
 | Waits | `wait TICKS`, `wait-ready` | `wait-for screen\|widget\|loaded\|chat\|event` with timeout errors |
@@ -111,7 +110,7 @@ Legend: **yes** complete, **part** partial (see note), **no** missing, **—** n
 ### Structured UI: the widget tree
 
 `ui` returns every interactive element the last frame drew, on every screen (title menus,
-pause, options pages, inventories and stations, chat, death, Horizon-style menus):
+pause, options pages, inventories and stations, chat, death, Play with Friends):
 
 ```json
 {"screen": "options", "gui_size": [427, 240], "frame": 3061,
@@ -126,8 +125,7 @@ pause, options pages, inventories and stations, chat, death, Horizon-style menus
   `Video Settings...` → `video-settings`); a repeated slug gets `-2`, `-3` in draw order;
   unlabelled elements are `<kind>-<n>` in draw order. The id of a slider does not change
   when its value (and so its label) does. World, server and language rows carry their
-  names; Horizon-style switches, sliders and segments carry their settings row's caption
-  (`vsync`, `menu-style-horizon`); inventory, creative and menu slots are `slot-<ID>` with
+  names; inventory, creative and menu slots are `slot-<ID>` with
   their stack (an item tab's display slots are `slot-900` up).
 - **Kinds**: `button`, `slider` (`value` 0..1 as drawn), `field` (text box), `row` (list
   entry: world, server, pack, language), `tab` (`selected`), `slot`.

@@ -281,12 +281,6 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<AccountCmd>,
     },
-    /// Show or set the game's menu style (classic is vanilla's own screens)
-    MenuStyle {
-        /// Omit to show the current style
-        #[arg(value_parser = ["horizon", "classic"])]
-        style: Option<String>,
-    },
     /// Show or set which Horizon releases install by themselves: stable (a tested build about once
     /// a day) or alpha (every release as soon as it is built; can break)
     UpdateChannel {
@@ -557,17 +551,6 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 ] {
                     println!("{name:<8} {}", if url.is_empty() { "(none)" } else { url });
                 }
-            }
-        }
-        Cmd::MenuStyle { style } => {
-            if let Some(style) = style.as_deref().and_then(backend::MenuStyle::parse) {
-                backend::set_menu_style(style)?;
-            }
-            let style = backend::menu_style().name();
-            if as_json {
-                json(serde_json::json!({ "menu_style": style }));
-            } else {
-                println!("Menu style: {style}");
             }
         }
         Cmd::UpdateChannel { channel } => {

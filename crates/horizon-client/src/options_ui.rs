@@ -130,7 +130,7 @@ pub(crate) enum Kind {
     Slider(f32),
     Cycle,
 }
-/// Options shared by the Classic page and Horizon's Accessibility section.
+/// The Accessibility Settings page:
 /// `AccessibilityOptionsScreen.options`, with the Controls link inserted separately.
 pub(crate) const ACCESSIBILITY_OPTIONS: &[Opt] = &[
     Opt::Narrator,
@@ -871,6 +871,9 @@ pub enum Page {
     Controller,
     PadBinds,
     Extras,
+    /// Horizon Settings: every page Horizon adds, as a mod's settings
+    /// screen hangs off vanilla's Options.
+    Horizon,
 }
 #[derive(Clone, Debug, PartialEq)]
 enum Act {
@@ -886,8 +889,6 @@ enum Act {
     PadKey(&'static str),
     ResetPadKey(&'static str),
     ResetPadKeys,
-    /// Back to Horizon's own menus (Horizon only, see `list_rows`).
-    HorizonMenus,
     ToggleMod(usize),
     OpenModFolder,
     /// Pick shader pack `i` of `OptionsUi::shader_packs` (again: off).
@@ -968,15 +969,8 @@ pub struct OptionsUi {
     /// when it last moved: the handle follows the pointer while the option
     /// keeps its stepped value, then snaps to it (`resetValue`).
     slider_value: Option<(Opt, f32, Instant)>,
-    /// The pointer's last y while a Classic or Horizon scrollbar is held.
+    /// The pointer's last y while a scrollbar is held.
     pub(crate) scrollbar_drag_y: Option<f32>,
-    /// Horizon style: the selected sidebar section, the one last drawn and
-    /// the rows' scroll in dp (`options_horizon`).
-    pub section: usize,
-    pub(crate) section_shown: Option<usize>,
-    pub(crate) hscroll: f32,
-    /// The slider being dragged on the Horizon options shell.
-    pub(crate) hdragging: Option<crate::graphics_ui::Item>,
     /// Key Binds: the mapping waiting for a key.
     pub selected_key: Option<&'static str>,
     /// Controller Binds: the action waiting for a pad button.
@@ -1017,10 +1011,6 @@ impl Default for OptionsUi {
             dragging: None,
             slider_value: None,
             scrollbar_drag_y: None,
-            section: 0,
-            section_shown: None,
-            hscroll: 0.0,
-            hdragging: None,
             selected_key: None,
             selected_pad_action: None,
             pad_style: GlyphStyle::Xbox,
@@ -1081,6 +1071,27 @@ fn option_widget(s: &Settings, opt: Opt, x: f32, y: f32, w: f32) -> Widget {
         Kind::Cycle => button(x, y, w, opt.label(s), Act::Cycle(opt)),
     }
 }
+/// What a button opening one of Horizon's pages says on hover.
+fn horizon_page_tooltip(page: Page) -> Option<&'static str> {
+    Some(match page {
+        Page::Horizon => {
+            "Horizon's own settings: graphics, shader packs, controllers, extras and mods."
+        }
+        Page::Graphics => "Graphics, simply: each setting says what it costs.",
+        Page::GraphicsAdvanced => {
+            "Every graphics setting, Horizon's included, with what each costs."
+        }
+        Page::ShaderPacks => "Packs that redraw the world. Off is the vanilla look.",
+        Page::Controller => "Controllers: their buttons, sticks, vibration and menu navigation.",
+        Page::Extras => {
+            "Optional additions, all off by default: the game stays vanilla until you turn one on."
+        }
+        Page::Mods => {
+            "Mods made for Horizon, from the horizon-mods folder. Each runs in a sandbox and stays off until you turn it on."
+        }
+        _ => return None,
+    })
+}
 /// Rows of an OptionsList: (big?, options) or a header.
 enum Row {
     Big(Opt),
@@ -1098,10 +1109,7 @@ fn pairs(opts: &[Opt]) -> Vec<Row> {
 impl OptionsUi {
     fn settings_search_active(&self) -> bool {
         self.settings_search.focused
-            && (matches!(self.page(), Page::Video | Page::Controls | Page::KeyBinds)
-                || (crate::ui_theme::horizon()
-                    && self.page() == Page::Main
-                    && crate::options_horizon::searchable_section(self.section)))
+            && matches!(self.page(), Page::Video | Page::Controls | Page::KeyBinds)
     }
     pub fn page(&self) -> Page {
         *self.stack.last().unwrap_or(&Page::Main)
@@ -1121,10 +1129,6 @@ impl OptionsUi {
         self.push(page);
         self.in_world = in_world;
         self.selected_key = None;
-    }
-    /// Open one of vanilla's pages over the current one.
-    pub(crate) fn open_page(&mut self, page: Page) {
-        self.push(page);
     }
     fn push(&mut self, page: Page) {
         self.stack.push(page);
@@ -1164,14 +1168,9 @@ impl OptionsUi {
             .as_ref()
             .is_some_and(|(e, _)| e == id)
     }
-    /// Whether the Shader Packs page (or the Horizon menus' section) shows.
+    /// Whether the Shader Packs page shows.
     fn shader_packs_shown(&self) -> bool {
         self.page() == Page::ShaderPacks
-            || crate::ui_theme::horizon()
-                && self.page() == Page::Main
-                && crate::options_horizon::SECTIONS
-                    .get(self.section)
-                    .is_some_and(|s| s.name == crate::options_horizon::SHADER_PACKS)
     }
     /// The graphics screen level of `page`, if it is one.
     fn graphics_level(page: Page) -> Option<crate::graphics_ui::Level> {
@@ -1200,6 +1199,7 @@ impl OptionsUi {
             Page::Controller => "Controller Settings",
             Page::PadBinds => "Controller Binds",
             Page::Extras => "Horizon Extras",
+            Page::Horizon => "Horizon Settings",
         }
     }
     fn scrollbar_x(&self, width: f32) -> f32 {
@@ -1263,7 +1263,17 @@ impl OptionsUi {
                     } else {
                         Text::literal(value)
                     };
-                    button(0.0, 0.0, 150.0, label, Act::Extra(item))
+                    let widget = button(0.0, 0.0, 150.0, label, Act::Extra(item));
+                    // A setting of a switch that is off does nothing: inactive,
+                    // as vanilla greys out an option that can't apply.
+                    if item
+                        .parent()
+                        .is_some_and(|parent| parent.switch(&s.extras) == Some(false))
+                    {
+                        inactive(widget)
+                    } else {
+                        widget
+                    }
                 };
                 let mut rows = Vec::new();
                 let mut section = Vec::new();
@@ -1286,6 +1296,27 @@ impl OptionsUi {
                 }
                 flush(&mut rows, &mut section);
                 rows
+            }
+            Page::Horizon => {
+                // Two to a row, as vanilla's OptionsList.addSmall lays out
+                // buttons; each opens a page built from vanilla's widgets.
+                let open = |label: &str, page: Page| {
+                    button(0.0, 0.0, 150.0, Text::literal(label), Act::Push(page))
+                };
+                vec![
+                    Row::Buttons(
+                        open("Graphics...", Page::Graphics),
+                        Some(open("Advanced Graphics...", Page::GraphicsAdvanced)),
+                    ),
+                    Row::Buttons(
+                        open("Shader Packs...", Page::ShaderPacks),
+                        Some(open("Controller Settings...", Page::Controller)),
+                    ),
+                    Row::Buttons(
+                        open("Extras...", Page::Extras),
+                        Some(open("Mods...", Page::Mods)),
+                    ),
+                ]
             }
             Page::Video => {
                 // Horizon's graphics screens, Simple and Advanced.
@@ -1315,22 +1346,6 @@ impl OptionsUi {
                     ),
                     None,
                 ));
-                // The way back from Classic menus. Horizon-only like the row
-                // above, here rather than on the main Options screen so that
-                // one keeps vanilla's exact layout; vanilla's interface
-                // settings (GUI Scale) are on this page too.
-                if !crate::ui_theme::horizon() {
-                    rows.push(Row::Buttons(
-                        button(
-                            0.0,
-                            0.0,
-                            310.0,
-                            Text::literal("Menu Style: Classic"),
-                            Act::HorizonMenus,
-                        ),
-                        None,
-                    ));
-                }
                 rows.push(Row::Header("options.video.display.header"));
                 rows.extend(pairs(&[
                     Opt::MaxFps,
@@ -1578,8 +1593,10 @@ impl OptionsUi {
                     ("options.chat", Some(Page::Chat)),
                     ("options.resourcepack", Some(Page::Packs)),
                     ("options.accessibility", Some(Page::Accessibility)),
+                    // Vanilla's Telemetry Data and Credits slots: Horizon's
+                    // settings and its mods, as a mod adds its button here.
+                    ("Horizon Settings...", Some(Page::Horizon)),
                     ("Mods...", Some(Page::Mods)),
-                    ("Horizon Extras...", Some(Page::Extras)),
                 ];
                 let gy = (61.0 + 30.0f32).min(h - 33.0 - 120.0);
                 for (i, (key, page)) in entries.iter().enumerate() {
@@ -2052,10 +2069,6 @@ impl OptionsUi {
             );
             return;
         }
-        if crate::ui_theme::horizon() && self.page() == Page::Main {
-            self.draw_horizon(s, batch, atlas, cursor);
-            return;
-        }
         if let Some(level) = Self::graphics_level(self.page()) {
             self.graphics
                 .draw(level, s, batch, atlas, cursor, self.in_world);
@@ -2093,6 +2106,14 @@ impl OptionsUi {
                 } = &wd.kind
                 {
                     tooltip = Some(atlas.font.split(&Text::literal(item.description()), 170.0));
+                }
+                if let WKind::Button {
+                    act: Act::Push(page),
+                    ..
+                } = &wd.kind
+                    && let Some(text) = horizon_page_tooltip(*page)
+                {
+                    tooltip = Some(atlas.font.split(&Text::literal(text), 170.0));
                 }
                 let key = match &wd.kind {
                     WKind::Button {
@@ -2300,9 +2321,6 @@ impl OptionsUi {
             }
             return Vec::new();
         }
-        if crate::ui_theme::horizon() && self.page() == Page::Main {
-            return self.click_horizon(s, atlas, x, y, framebuffer, drag, right);
-        }
         if let Some(level) = Self::graphics_level(self.page()) {
             use crate::graphics_ui::Action;
             let mut events = Vec::new();
@@ -2471,12 +2489,6 @@ impl OptionsUi {
                             s.controller.reset_bindings();
                             events.push(Event::Changed);
                         }
-                        Act::HorizonMenus => {
-                            self.horizon_menus();
-                            if let Ok(dir) = std::env::current_dir() {
-                                crate::ui_theme::save_preferences(&dir);
-                            }
-                        }
                         Act::ToggleMod(i) => {
                             s.mods.toggle(i);
                             events.push(Event::Changed);
@@ -2510,20 +2522,6 @@ impl OptionsUi {
         }
         events
     }
-    /// Switch to Horizon's menus and show where the choice lives there
-    /// (Options, Interface, Menu style).
-    fn horizon_menus(&mut self) {
-        crate::ui_theme::set_style(crate::ui_theme::MenuStyle::Horizon);
-        self.stack.truncate(1);
-        self.scroll = 0.0;
-        self.scrollbar_drag_y = None;
-        self.section = crate::options_horizon::SECTIONS
-            .iter()
-            .position(|section| section.name == "Interface")
-            .unwrap_or(0);
-        self.section_shown = None;
-        self.hscroll = 0.0;
-    }
     /// Where a slider's handle sits: its own position while held (or until
     /// a delayed one applies), else the option's stepped value.
     fn slider_shown(&self, opt: Opt, value: f32) -> f32 {
@@ -2540,7 +2538,6 @@ impl OptionsUi {
         // AbstractSliderButton suppresses the press sound and plays once on
         // release, even if the pointer has left the widget or its value stayed.
         let slider = self.dragging.take().is_some();
-        self.hdragging = None;
         let graphics_slider = self.graphics.release();
         if slider || graphics_slider {
             vec![Event::ButtonClick]
@@ -2556,10 +2553,6 @@ impl OptionsUi {
     /// The mouse wheel at the cursor.
     pub fn scroll_at(&mut self, s: &Settings, size: (f32, f32), cursor: (f32, f32), amount: f32) {
         if self.resource_error.is_some() {
-            return;
-        }
-        if crate::ui_theme::horizon() && self.page() == Page::Main {
-            self.scroll_horizon(amount);
             return;
         }
         if let Some(level) = Self::graphics_level(self.page()) {
@@ -2783,7 +2776,6 @@ impl OptionsUi {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui_theme::{MenuStyle, set_style, style};
 
     #[test]
     fn accessibility_sliders_and_toggles_survive_options_round_trip() {
@@ -3337,9 +3329,7 @@ mod tests {
     }
 
     #[test]
-    fn classic_extras_entry_edits_shared_settings_and_returns_without_changing_style() {
-        let previous_style = style();
-        set_style(MenuStyle::Classic);
+    fn extras_from_horizon_settings_edit_shared_settings_and_return() {
         let atlas = atlas();
         let mut s = Settings::default();
         let mut ui = OptionsUi::default();
@@ -3363,11 +3353,13 @@ mod tests {
                 false,
             )
         };
-        assert_eq!(
-            click(&mut ui, &mut s, Act::Push(Page::Extras)),
-            vec![Event::ButtonClick]
-        );
-        assert_eq!(ui.page(), Page::Extras);
+        for page in [Page::Horizon, Page::Extras] {
+            assert_eq!(
+                click(&mut ui, &mut s, Act::Push(page)),
+                vec![Event::ButtonClick]
+            );
+            assert_eq!(ui.page(), page);
+        }
         let (widgets, _, _, _) = ui.layout(&s, size.0, size.1);
         assert_eq!(
             widgets
@@ -3408,9 +3400,7 @@ mod tests {
             ui.key(&mut s, &atlas, winit::keyboard::KeyCode::Escape, None),
             vec![Event::Changed]
         );
-        assert_eq!(ui.page(), Page::Main);
-        assert_eq!(style(), MenuStyle::Classic);
-        set_style(previous_style);
+        assert_eq!(ui.page(), Page::Horizon);
     }
 
     #[test]
@@ -3994,15 +3984,25 @@ mod tests {
         let atlas = atlas();
         let mut s = Settings::default();
         let mut ui = OptionsUi::default();
+        ui.show(Page::Extras);
         for (right, expected) in [(false, "key.mouse.left"), (true, "key.mouse.right")] {
             ui.selected_key = Some(crate::extras::SORT_KEY);
             assert_eq!(
-                ui.click_horizon(&mut s, &atlas, 2.0, 2.0, [960, 480], false, right),
+                ui.click(
+                    &mut s,
+                    &atlas,
+                    2.0,
+                    2.0,
+                    (480.0, 240.0),
+                    [960, 480],
+                    false,
+                    right
+                ),
                 vec![Event::Changed]
             );
             assert_eq!(s.extras.sort_key, expected);
             assert_eq!(ui.selected_key, None);
-            assert_eq!(ui.section, 0);
+            assert_eq!(ui.page(), Page::Extras);
         }
     }
 
@@ -4116,30 +4116,45 @@ mod tests {
     }
 
     #[test]
-    fn classic_video_settings_lead_back_to_horizon_menus() {
-        let previous_style = style();
-        set_style(MenuStyle::Horizon);
+    fn horizon_settings_hang_off_options_and_reach_every_horizon_page() {
         let s = Settings::default();
         let mut ui = OptionsUi::default();
-        ui.push(Page::Video);
-        let way_back = |ui: &OptionsUi| {
-            ui.list_rows(&s).iter().any(|row| {
-                matches!(row, Row::Buttons(w, _)
-                    if matches!(&w.kind, WKind::Button { act: Act::HorizonMenus, .. }))
-            })
+        let pushes = |ui: &mut OptionsUi| -> Vec<Page> {
+            let (widgets, _, _, _) = ui.layout(&s, 427.0, 240.0);
+            widgets
+                .iter()
+                .filter_map(|w| match &w.kind {
+                    WKind::Button {
+                        act: Act::Push(page),
+                        active: true,
+                        ..
+                    } => Some(*page),
+                    _ => None,
+                })
+                .collect()
         };
-        // Horizon's own menus have the choice on their Interface page.
-        assert!(!way_back(&ui));
-        set_style(MenuStyle::Classic);
-        let classic = way_back(&ui);
-        ui.horizon_menus();
-        assert!(classic, "Classic Video Settings offer Menu Style");
-        assert_eq!(style(), MenuStyle::Horizon);
-        assert_eq!(ui.stack, vec![Page::Main]);
+        // Vanilla's ten Options buttons, the last two Horizon's.
+        let main = pushes(&mut ui);
+        assert_eq!(&main[main.len() - 2..], [Page::Horizon, Page::Mods]);
+        ui.push(Page::Horizon);
         assert_eq!(
-            crate::options_horizon::SECTIONS[ui.section].name,
-            "Interface"
+            pushes(&mut ui),
+            [
+                Page::Graphics,
+                Page::GraphicsAdvanced,
+                Page::ShaderPacks,
+                Page::Controller,
+                Page::Extras,
+                Page::Mods,
+            ]
         );
-        set_style(previous_style);
+        // Vanilla's own pages keep the Horizon pages they had.
+        ui.stack = vec![Page::Main, Page::Video];
+        let video = pushes(&mut ui);
+        for page in [Page::Graphics, Page::GraphicsAdvanced, Page::ShaderPacks] {
+            assert!(video.contains(&page), "{page:?}");
+        }
+        ui.stack = vec![Page::Main, Page::Controls];
+        assert!(pushes(&mut ui).contains(&Page::Controller));
     }
 }
