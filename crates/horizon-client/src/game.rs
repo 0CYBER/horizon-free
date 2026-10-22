@@ -10962,6 +10962,8 @@ impl ApplicationHandler for Game<'_> {
                     }
                     let updated = Instant::now();
                     self.track_toggle_screens();
+                    // For the "I'm playing" ping: an atomic, sent on when it changes.
+                    horizon_client::heartbeat::set_lan(self.is_published());
                     let steps = self.clock.advance(elapsed);
                     for _ in 0..steps {
                         let started = Instant::now();
@@ -11084,7 +11086,6 @@ impl ApplicationHandler for Game<'_> {
                         self.fps_frames += 1;
                         horizon_client::crash::debug_crash_tick();
                         if self.fps_at.elapsed() >= Duration::from_secs(1) {
-                            horizon_client::heartbeat::set_lan(self.lan.is_some());
                             self.fps = self.fps_frames as f32 / self.fps_at.elapsed().as_secs_f32();
                             self.fps_frames = 0;
                             self.fps_at = Instant::now();
