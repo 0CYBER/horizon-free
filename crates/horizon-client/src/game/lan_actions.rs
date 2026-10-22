@@ -1127,6 +1127,22 @@ impl Game<'_> {
             }
             return;
         }
+        // A ghast's fireball or a wind charge: turned along the guest's own
+        // view (ServerGamePacketListenerImpl.handleInteract, then
+        // Player.attack's AIM_DEFLECT).
+        if let Some(i) = self
+            .creatures
+            .projectiles
+            .iter()
+            .position(|p| p.id != 0 && p.id as i32 == id && super::deflect::redirectable(p))
+        {
+            self.as_guest(host, conn, |g| {
+                if g.within_interaction_range(i) {
+                    g.deflect(i);
+                }
+            });
+            return;
+        }
         let (old_yaw, old_pitch) = (host.hub.guests[gi].yaw, host.hub.guests[gi].pitch);
         if self.look_at_entity(host, gi, id).is_none() {
             return;
