@@ -80,24 +80,44 @@ async function setUpContributors() {
 
 // --- Download ------------------------------------------------------------------------
 
+// Apple Silicon first: Safari and Firefox say "Intel Mac OS X" on every Mac.
+const MACS = [
+  { key: "macos-arm64", label: "macOS on Apple Silicon", other: "Apple Silicon" },
+  { key: "macos-x64", label: "macOS on an Intel Mac", other: "Intel Mac" },
+];
+
+// Only Chromium's client hints tell an Intel Mac apart.
+async function intelMac() {
+  try {
+    return (await navigator.userAgentData.getHighEntropyValues(["architecture"])).architecture === "x86";
+  } catch {
+    return false;
+  }
+}
+
 function platform() {
   const ua = navigator.userAgent;
   const hint = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
   if (/iPhone|iPad|iPod|Android/i.test(ua) || (navigator.maxTouchPoints > 1 && /Mac/.test(hint))) return null;
   if (/Win/i.test(hint) || /Windows/.test(ua)) return { key: "windows-x64", label: "Windows x64" };
-  if (/Mac/i.test(hint) || /Mac OS X/.test(ua)) return { key: "macos-arm64", label: "macOS on Apple Silicon" };
+  if (/Mac/i.test(hint) || /Mac OS X/.test(ua)) return MACS[0];
   if (/Linux|X11/i.test(hint) || /Linux/.test(ua)) return { key: "linux-x86_64", label: "Linux x86-64" };
   return null;
 }
 
 async function setUpDownload() {
-  const os = platform();
+  let os = platform();
+  if (os === MACS[0] && (await intelMac())) os = MACS[1];
   const list = await releases;
   const launcher = list.filter(isLauncher).sort((a, b) => newestFirst(a.tag_name, b.tag_name))[0];
   if (!launcher) return;
   const version = launcherVersion(launcher.tag_name);
-  const asset = os && launcher.assets.find((a) => a.name.includes(os.key));
-  const others = `<a href="${escape(launcher.html_url)}">Other platforms</a>`;
+  const find = (key) => launcher.assets.find((a) => a.name.includes(key));
+  const asset = os && find(os.key);
+  // On a Mac, the other processor's build too: the browser may have guessed wrong.
+  const mac = MACS.includes(os) && MACS.find((m) => m !== os);
+  const otherMac = mac && find(mac.key);
+  const others = `${otherMac ? `<a href="${escape(otherMac.browser_download_url)}">${escape(mac.other)}</a> · ` : ""}<a href="${escape(launcher.html_url)}">Other platforms</a>`;
   document.querySelectorAll("[data-download]").forEach((a) => (a.href = asset ? asset.browser_download_url : launcher.html_url || RELEASES_PAGE));
   const mb = asset && asset.size ? ` · ${(asset.size / 1e6).toFixed(0)} MB` : "";
   const meta = asset

@@ -115,8 +115,8 @@ set `HORIZON_LAUNCHER_NO_SELF_UPDATE=1` to keep launcher updates with the packag
 Launcher releases are automatic (docs/release-flow.md in the repository): when main changes the
 launcher, `horizon-prepare` or `horizon-theme`, the `launcher` workflow builds Linux, macOS and
 Windows and publishes `launcher-vX.Y.Z` (the next patch, or the next minor after a pull request
-labelled `feature`) with `horizon-launcher-linux-x86_64.tar.gz`, `horizon-launcher-macos-arm64.zip`
-and `horizon-launcher-windows-x64.zip`, never marked latest. The version is built in from the tag
+labelled `feature`) with `horizon-launcher-linux-x86_64.tar.gz`, `horizon-launcher-macos-arm64.zip`,
+`horizon-launcher-macos-x64.zip` (Intel Macs) and `horizon-launcher-windows-x64.zip`, never marked latest. The version is built in from the tag
 (`HORIZON_LAUNCHER_VERSION`); `Cargo.toml`'s version is only what local builds report.
 
 ## Command line

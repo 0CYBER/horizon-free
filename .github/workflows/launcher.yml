@@ -8,7 +8,8 @@ name: launcher
 # feature. The version and the tag are given to the build (HORIZON_LAUNCHER_VERSION, HORIZON_LAUNCHER_TAG): no bump
 # commits.
 # Never marked latest. Pushes to launcher branches only build. RELEASES_PAUSED=1 stops releases.
-# macOS: with the repository variable MACOS_SIGN_IDENTITY set, Horizon.app and the .dmg are signed with
+# macOS: Apple Silicon, and Intel cross-built for x86_64-apple-darwin on the same runner, its tests and smoke test
+# under Rosetta 2 (#1161). With the repository variable MACOS_SIGN_IDENTITY set, Horizon.app and the .dmg are signed with
 # Developer ID, notarized and stapled, from the runner's signing keychain (packaging/macos/README.md);
 # unset (forks), they are signed ad hoc.
 #   gh workflow run launcher --ref <branch>                    # dry run: builds everything, publishes nothing
@@ -101,6 +102,13 @@ jobs:
             mac: true
             asset: horizon-launcher-macos-arm64.zip
             binary: horizon-launcher
+            mac_arch: arm64
+          - name: macos-x64
+            mac: true
+            target: x86_64-apple-darwin
+            asset: horizon-launcher-macos-x64.zip
+            binary: horizon-launcher
+            mac_arch: x64
           - name: windows
             os: windows-latest
             asset: horizon-launcher-windows-x64.zip
@@ -113,6 +121,8 @@ jobs:
     timeout-minutes: ${{ matrix.mac && 60 || 40 }}
     env:
       RUSTFLAGS: ${{ matrix.rustflags }}
+      # Where cargo puts the launcher: target/release, or target/<target>/release for another target.
+      BIN: ${{ matrix.target && format('target/{0}/release', matrix.target) || 'target/release' }}
       # Horizon's Azure app for Microsoft sign-in (docs/microsoft-account.md): a repository
       # variable, not a secret. Unset, the launcher says sign-in is not configured.
       HORIZON_MSA_CLIENT_ID: ${{ vars.HORIZON_MSA_CLIENT_ID }}
@@ -136,6 +146,8 @@ jobs:
           # parity jobs, and nothing they leave may end up in a launcher release (target/ is rebuilt from scratch).
           clean: true
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         if: runner.environment == 'github-hosted'
         with:
@@ -156,17 +168,17 @@ jobs:
             echo "LAUNCHER_FEATURES=gpui/runtime_shaders" >> "$GITHUB_ENV"
           fi
       # Every test target (the library, the binary, tests/), on each system the launcher ships for.
-      - run: cargo test --release --locked ${LAUNCHER_FEATURES:+--features "$LAUNCHER_FEATURES"}
-      - run: cargo build --release --locked ${LAUNCHER_FEATURES:+--features "$LAUNCHER_FEATURES"}
+      - run: cargo test --release --locked ${{ matrix.target && format('--target {0}', matrix.target) || '' }} ${LAUNCHER_FEATURES:+--features "$LAUNCHER_FEATURES"}
+      - run: cargo build --release --locked ${{ matrix.target && format('--target {0}', matrix.target) || '' }} ${LAUNCHER_FEATURES:+--features "$LAUNCHER_FEATURES"}
       - name: The version is the release's
         run: |
-          out=$(target/release/${{ matrix.binary }} --version)
+          out=$("$BIN/${{ matrix.binary }}" --version)
           echo "$out"
           expected="${HORIZON_LAUNCHER_VERSION:-$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)}"
           [[ "$out" == "horizon-launcher $expected" ]] || { echo "::error::expected horizon-launcher $expected"; exit 1; }
       - name: Only system libraries
         run: |
-          file=target/release/${{ matrix.binary }}
+          file="$BIN/${{ matrix.binary }}"
           case "$RUNNER_OS" in
             Windows) python ../tools/check_imports.py "$file" ;;
             macOS) others=$(otool -L "$file" | tail -n +2 | awk '{print $1}' | grep -v -E '^(/usr/lib/|/System/Library/)' || true)
@@ -181,16 +193,24 @@ jobs:
           export HORIZON_LAUNCHER_HOME="${RUNNER_TEMP//\\//}/horizon-launcher-smoke"
           export HORIZON_HOME="$HORIZON_LAUNCHER_HOME/game"
           rm -rf "$HORIZON_LAUNCHER_HOME"
-          launcher="$PWD/target/release/${{ matrix.binary }}"
+          launcher="$PWD/$BIN/${{ matrix.binary }}"
           # GitHub's API rate-limits shared runner addresses now and then: try a few times.
           retry() { for i in 1 2 3 4; do "$@" && return 0; sleep $((i * 15)); done; return 1; }
           retry "$launcher" versions
-          retry "$launcher" install latest
-          "$launcher" versions --installed
           "$launcher" links --json
           "$launcher" menu-style classic
           grep -qx 'menuStyle:classic' "$HORIZON_HOME/horizon.txt"
           "$launcher" menu-style horizon
+          # A new platform's launcher can come out before any stable game release has its build (Intel Macs, #1161):
+          # then there is nothing to install yet.
+          stable_build='import json, sys; sys.exit(not any(r["available_here"] and r["channel"] == "stable" for r in json.load(sys.stdin)))'
+          if ! retry "$launcher" --json versions | ${{ runner.os == 'Windows' && 'python' || 'python3' }} -c "$stable_build"; then
+            echo "::warning::No stable game release has a build for ${{ matrix.name }} yet: install not tested"
+            rm -rf "$HORIZON_LAUNCHER_HOME"
+            exit 0
+          fi
+          retry "$launcher" install latest
+          "$launcher" versions --installed
           clients=("$HORIZON_LAUNCHER_HOME"/versions/v*/horizon-client*)
           client="${clients[0]}"
           echo "installed client: $client"
@@ -221,11 +241,11 @@ jobs:
             # Developer ID): packaging/macos.
             python3 -m venv "$RUNNER_TEMP/dmg" && "$RUNNER_TEMP/dmg/bin/pip" install --quiet dmgbuild==1.6.5
             version=${HORIZON_LAUNCHER_VERSION:-$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)}
-            DMGBUILD="$RUNNER_TEMP/dmg/bin/dmgbuild" ../packaging/macos/package.sh target/release/${{ matrix.binary }} "$version" out
+            DMGBUILD="$RUNNER_TEMP/dmg/bin/dmgbuild" ../packaging/macos/package.sh "$BIN/${{ matrix.binary }}" "$version" out ${{ matrix.mac_arch }}
             rm -rf out/Horizon.app
           else
             mkdir -p dist
-            cp target/release/${{ matrix.binary }} dist/
+            cp "$BIN/${{ matrix.binary }}" dist/
             if [[ "${{ matrix.asset }}" == *.tar.gz ]]; then
               (cd dist && tar czf ../out/${{ matrix.asset }} ${{ matrix.binary }})
             else

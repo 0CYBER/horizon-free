@@ -41,7 +41,7 @@ plan are in [docs/server.md](https://github.com/ludovic111/horizon/blob/main/doc
 
 ## 1. Install
 
-Linux (x86-64) and macOS (Apple Silicon):
+Linux (x86-64) and macOS (Apple Silicon; Intel from the next release):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/ludovic111/horizon/main/packaging/server/install.sh | sh
