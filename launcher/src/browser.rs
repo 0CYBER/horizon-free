@@ -1,4 +1,4 @@
-//! The mod browser's sources: search Modrinth (and CurseForge, once a key exists) for what
+//! The mod browser's sources: search Modrinth (CurseForge support is coming soon) for what
 //! Horizon loads, say how well each result runs, and download a file only after its checksum
 //! matches (docs/mod-browser.md).
 //!
@@ -221,13 +221,13 @@ pub trait Source: Send + Sync {
     }
 }
 
-/// The sources this launcher can use: Modrinth always, CurseForge when it has an API key.
+/// What the launcher says wherever CurseForge would be.
+pub const CURSEFORGE_SOON: &str = "CurseForge support is coming soon.";
+
+/// The sources this launcher uses: Modrinth. CurseForge support is coming soon: its API needs a
+/// paid key, so no search or install goes to it; `curseforge` is kept for then.
 pub fn sources() -> Vec<Box<dyn Source>> {
-    let mut all: Vec<Box<dyn Source>> = vec![Box::new(modrinth::Modrinth)];
-    if let Some(cf) = curseforge::CurseForge::from_env() {
-        all.push(Box::new(cf));
-    }
-    all
+    vec![Box::new(modrinth::Modrinth)]
 }
 
 /// The source of that id, when this launcher can use it.

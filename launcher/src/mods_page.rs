@@ -1,12 +1,11 @@
-//! The Mods page: search Modrinth (and CurseForge with a key) for Java mods, modpacks, resource
+//! The Mods page: search Modrinth (CurseForge: coming soon) for Java mods, modpacks, resource
 //! packs and shader packs, see where each comes from and how well it runs (a Java mod's jar is
 //! checked first), install it with its checksum checked, and update or remove what was installed
 //! (`horizon_launcher::browser`). Imported modpacks are listed on its Modpacks tab.
 use super::servers_page::{type_key, Key};
 use super::*;
 use horizon_launcher::browser::{
-    self, curseforge::CurseForge, installed, java, Kind as PackKind, Project, Query, SourceId,
-    Support,
+    self, installed, java, Kind as PackKind, Project, Query, SourceId, Support,
 };
 use horizon_launcher::modpacks;
 use horizon_port_pack::check::Check;
@@ -20,10 +19,8 @@ const KINDS: [(PackKind, &str); 4] = [
 ];
 /// Java mods checked at once.
 const CHECKING: usize = 2;
-const SOURCES: [(SourceId, &str); 2] = [
-    (SourceId::Modrinth, "Modrinth"),
-    (SourceId::CurseForge, "CurseForge"),
-];
+/// The sources to pick from; CurseForge is shown beside them as coming soon.
+const SOURCES: [(SourceId, &str); 1] = [(SourceId::Modrinth, "Modrinth")];
 const PAGE: usize = 20;
 
 pub(super) enum Event {
@@ -46,7 +43,6 @@ pub(super) enum Checking {
 pub(super) struct Mods {
     kind: PackKind,
     source: SourceId,
-    curseforge: bool,
     text: String,
     focus: FocusHandle,
     pub(super) focused: bool,
@@ -77,7 +73,6 @@ impl Mods {
         Self {
             kind: PackKind::Mod,
             source: SourceId::Modrinth,
-            curseforge: CurseForge::from_env().is_some(),
             text: String::new(),
             focus: cx.focus_handle().tab_index(0).tab_stop(true),
             focused: false,
@@ -458,8 +453,14 @@ impl Launcher {
                 this.mods_search(0);
                 cx.notify();
             }));
-        let source_note = if self.mods.curseforge {
-            segments("mods-source", &SOURCES, self.mods.source, &t, {
+        // CurseForge support is coming soon: shown, inert, never searched (like the Microsoft
+        // account's "Coming soon").
+        let source_note = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(px(8.))
+            .child(segments("mods-source", &SOURCES, self.mods.source, &t, {
                 let this = this.clone();
                 move |source, _, cx| {
                     let _ = this.update(cx, |this, cx| {
@@ -470,14 +471,13 @@ impl Launcher {
                         cx.notify();
                     });
                 }
-            })
-            .into_any_element()
-        } else {
-            text(theme::CAPTION)
-                .text_color(t.muted)
-                .child("From Modrinth. CurseForge comes once the launcher has its API key.")
-                .into_any_element()
-        };
+            }))
+            .child(disabled(button(
+                "mods-source-curseforge",
+                "CurseForge (coming soon)",
+                Kind::Ghost,
+                &t,
+            )));
         let controls = div()
             .flex()
             .flex_col()

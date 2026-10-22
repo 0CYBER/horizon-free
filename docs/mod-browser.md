@@ -1,6 +1,6 @@
 # The launcher's mod browser
 
-Search Modrinth (and CurseForge, once the launcher has a key) for Java mods, modpacks, resource packs and shader
+Search Modrinth (CurseForge support is coming soon) for Java mods, modpacks, resource packs and shader
 packs, see how well each one runs before installing it, and install it with its checksum checked. This is item 16 of the roadmap and issue #577. The code is in
 `launcher/src/browser.rs` and `launcher/src/browser/`.
 
@@ -63,8 +63,8 @@ off.
 
 ## The Mods page
 
-The launcher's **Mods** page has the four kinds as tabs (Mods, Modpacks, Resource packs, Shader packs), a search field (Enter searches), **Show everything** and,
-once CurseForge is set up, a Modrinth / CurseForge switch. Each result is an index row: its summary, author,
+The launcher's **Mods** page has the four kinds as tabs (Mods, Modpacks, Resource packs, Shader packs), a search field (Enter searches), **Show everything** and
+the source: Modrinth, with **CurseForge (coming soon)** beside it, disabled. Each result is an index row: its summary, author,
 downloads, source and licence, how well it runs (and why), **Page** (the project's page on its source) and
 **Install** (**Import** for a modpack). The Modpacks tab lists the imported packs first, with their coverage
 report, **Port** and **Play** ([modpacks.md](modpacks.md)). Installed packs are listed above the results with their version, source,
@@ -102,21 +102,13 @@ horizon-launcher mods remove faithful-32x
 **Modrinth.** The public API (`api.modrinth.com/v2`) needs no key. The launcher names itself in its user agent, as
 Modrinth asks.
 
-### CurseForge
+### CurseForge (coming soon)
 
-CurseForge's API (`api.curseforge.com/v1`) needs an API key from its developer console. Ludovic approved CurseForge
-for the browser on 2026-10-21; the key is his (agents never sign up for him). Until a key exists the CurseForge source
-is off and the browser searches Modrinth only.
+CurseForge support is coming soon. Its API (`api.curseforge.com/v1`) needs a paid key, so for now the launcher
+doesn't use it: the Mods page shows **CurseForge (coming soon)** beside the Modrinth switch, disabled, and no search
+or install goes to CurseForge (`browser::sources()` is Modrinth only; `horizon-launcher mods ... --source curseforge`
+says it is coming soon). The CurseForge source (`browser/curseforge.rs`) is kept for when it comes.
 
-To turn it on:
-
-1. Ludovic gets a key at <https://console.curseforge.com/> (sign in, API keys). CurseForge's terms for a launcher
-   that ships the key apply: the key is built into the binary, so anyone with the binary can read it.
-2. He stores it in the 1Password **Agents** vault as an item `CurseForge API`, field `credential`.
-3. It goes into the repository secret `HORIZON_CURSEFORGE_API_KEY`
-   (`~/fleet/op read "op://Agents/CurseForge API/credential" | gh secret set HORIZON_CURSEFORGE_API_KEY`).
-   The launcher workflow passes it to the build, which builds it in (`option_env!`).
-
-At run time `HORIZON_CURSEFORGE_API_KEY` in the environment overrides the built-in key; empty means none. A file
-whose author allows downloads from CurseForge's own site only (no `downloadUrl` in the API) is shown but can't be
-installed.
+A CurseForge modpack zip or instance the player already has still imports, since that needs no key: its jars come
+from the player's installed instance or, when Modrinth has the same file, from Modrinth. A jar only CurseForge serves
+is listed under the pack as "CurseForge downloads coming soon".

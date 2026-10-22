@@ -36,7 +36,7 @@ cargo horizon-mod run
 
 The launcher's **Mods** page (launcher 0.17 and newer) searches [Modrinth](https://modrinth.com) for what Horizon can load: resource packs, Java shader packs and modpacks. Each result says how well it runs in Horizon (**Works**, **Partly**, or **Doesn't run**), and by default the page shows only what runs. **Install** downloads the file, checks it against the checksum Modrinth lists and refuses anything that does not match, then puts it in the right folder, with the packs it needs. **Update** and **Remove** are there too. A resource pack still has to be turned on in the game's Resource Packs screen, and a shader pack in Video, Shader Packs. A modpack is imported on the [Modpacks page](/docs/modpacks).
 
-The page cannot search CurseForge yet. The same things work from a terminal: `horizon-launcher mods search`, `install`, `update` and `remove`.
+CurseForge support is coming soon: the page shows it, but doesn't search it yet. The same things work from a terminal: `horizon-launcher mods search`, `install`, `update` and `remove`.
 
 ## Java mods from the Mods page (next launcher release)
 

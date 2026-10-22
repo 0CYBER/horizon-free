@@ -400,3 +400,10 @@ fn live_modrinth_search_pick_and_download() {
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(source.project(&p.id).unwrap().slug, p.slug);
 }
+
+#[test]
+fn curseforge_is_coming_soon_and_never_searched() {
+    let ids: Vec<SourceId> = sources().iter().map(|s| s.id()).collect();
+    assert_eq!(ids, [SourceId::Modrinth]);
+    assert!(source(SourceId::CurseForge).is_none());
+}
