@@ -10,7 +10,8 @@ the options scenario reads and sets options.txt values by key; the events scenar
 states (wait-for) and reads the event log; the consume scenario eats and drinks consumables (a
 golden apple, milk, honey, chorus fruit) and checks their effects, remainders and teleport; the
 pick scenario middle-clicks slots (AbstractContainerScreen's cloning): a full stack in creative, from
-the hotbar and from an item tab, and nothing in survival.
+the hotbar and from an item tab, and nothing in survival; the suggestions scenario checks
+slash-command Tab completion on single player's connected client after a fresh launch.
 
     python3 tools/agent_control_e2e.py                 # both modes
     python3 tools/agent_control_e2e.py --mode mcp      # one of them
@@ -45,6 +46,7 @@ LOG_KINDS = ['oak_log', 'birch_log', 'spruce_log', 'jungle_log', 'acacia_log', '
              'mangrove_log', 'cherry_log']
 # Positional arguments of the commands the scenario uses, for the CLI.
 POSITIONAL = {
+    'key': ['key', 'action'],
     'goto': ['x', 'y', 'z'], 'break': ['x', 'y', 'z'], 'place': ['x', 'y', 'z'], 'block': ['x', 'y', 'z'],
     'find_block': ['block', 'radius'], 'entities': ['radius', 'type'], 'click_slot': ['slot'],
     'click_button': ['label'], 'type': ['text'], 'wait': ['ticks'], 'wait_ready': ['seconds'],
@@ -522,8 +524,47 @@ def pick_scenario(d, out):
     return {'cloned': shown['item']}
 
 
+def suggestions_scenario(d, out):
+    # Start from the title screen: single player's client joins through memory,
+    # without opening a server world and building its command registries.
+    d('click', id='singleplayer')
+    if 'game' not in widgets(d):
+        d('click', id='create-new-world')
+    d('type', field='name', replace=True, text='Suggestions')
+    d('click', id='game-mode')  # survival -> hardcore -> creative (commands on)
+    d('click', id='game-mode')
+    d('click', id='create-new-world')
+    d('wait_for', condition='loaded', timeout=400)
+    d('wait_ready', seconds=400)
+
+    cases = [
+        ('/giv', '/give'),
+        ('/fill ^', '/fill ^ ^'),
+        ('/give @s diamond_sw', '/give @s minecraft:diamond_sword'),
+        ('/setblock ~ ~ ~ sto', '/setblock ~ ~ ~ minecraft:stone'),
+        ('/fill ~ ~ ~ ~1 ~1 ~1 sto', '/fill ~ ~ ~ ~1 ~1 ~1 minecraft:stone'),
+        ('/setblock ~ ~ ~ oak_stairs[fa', '/setblock ~ ~ ~ oak_stairs[facing='),
+        ('/clear @s diamond_sw', '/clear @s minecraft:diamond_sword'),
+        ('/execute run give @s diamond_sw', '/execute run give @s minecraft:diamond_sword'),
+    ]
+    for text, expected in cases:
+        d('key', key='t', action='tap')
+        d('type', text=text)
+        if text == '/give @s diamond_sw':
+            shot = d('screenshot', path=str((out / f'{d.name}-suggestions.png').resolve()))
+            if '_image' in shot:
+                (out / f'{d.name}-suggestions.png').write_bytes(shot['_image'])
+        d('key', key='tab', action='tap')
+        actual = d('screen')['chat_input']
+        assert actual == expected, (text, expected, actual)
+        d('key', key='esc', action='tap')
+        if d('screen')['screen'] == 'chat':  # Escape first dismisses suggestions
+            d('key', key='esc', action='tap')
+    return {'completions': len(cases)}
+
+
 SCENARIOS = {'survival': scenario, 'ui': ui_scenario, 'options': options_scenario, 'events': events_scenario,
-             'consume': consume_scenario, 'pick': pick_scenario}
+             'consume': consume_scenario, 'pick': pick_scenario, 'suggestions': suggestions_scenario}
 
 
 def run(mode, ctl, out, resources, which='survival'):
