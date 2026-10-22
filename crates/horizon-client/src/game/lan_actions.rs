@@ -5,7 +5,7 @@
 //! blocks, attacking and the commands all behave exactly as they do for the
 //! host, and every world change they cause reaches all players through the
 //! block log, the level events and the entity tracker.
-use super::{Game, GuestUse, Hit, Mining, Screen, lan::LanHost};
+use super::{Game, GuestUse, Hit, Mining, Screen, lan::LanHost, respawn_anchor::RespawnConfig};
 use horizon_client::{
     command::vanilla,
     containers::BlockEntity,
@@ -303,6 +303,7 @@ impl Game<'_> {
             g.spawn.map(|s| Vec3::new(s[0], s[1], s[2])),
         );
         let respawn = (self.respawn_config.take(), self.level.spawn);
+        self.respawn_config = g.respawn_elsewhere.as_ref().map(RespawnConfig::from_saved);
         let message = self.message.take();
         // The guest's own ender inventory; one the host has open goes back
         // into the host's while the guest acts.
@@ -464,7 +465,8 @@ impl Game<'_> {
         let bed = std::mem::replace(&mut self.sleeping, sleeping);
         let guest_sleep_timer = std::mem::replace(&mut self.sleep_timer, sleep_timer);
         let guest_spawn = std::mem::replace(&mut self.spawn, spawn).map(|s| [s.x, s.y, s.z]);
-        (self.respawn_config, self.level.spawn) = respawn;
+        let guest_respawn = std::mem::replace(&mut self.respawn_config, respawn.0);
+        self.level.spawn = respawn.1;
         // ServerPlayer.displayClientMessage(_, true): the guest's action bar.
         let guest_message = std::mem::replace(&mut self.message, message);
         self.riding = riding;
@@ -493,6 +495,7 @@ impl Game<'_> {
         let g = &mut host.hub.guests[i];
         let fell_asleep = bed.is_some() && g.bed.is_none();
         (g.bed, g.sleep_timer, g.spawn) = (bed, guest_sleep_timer, guest_spawn);
+        g.respawn_elsewhere = guest_respawn.map(|c| c.saved());
         g.sleeping = g.bed.is_some();
         if let Some((text, _)) = guest_message {
             g.send(&C::SystemChat(play::SystemChat {
@@ -1417,17 +1420,32 @@ impl Game<'_> {
         if !host.hub.guests[i].dead {
             return;
         }
-        // PlayerList.respawn: a server's player comes back in the Overworld,
-        // where the world spawn is (respawn anchors and beds aside).
+        // PlayerList.respawn: a server's player comes back in its respawn
+        // point's level: the Overworld, where the world spawn and beds are,
+        // or another one's anchor or forced point, which its block resolves
+        // once the level has loaded around it.
+        let server = self.options.dedicated.is_some();
+        let elsewhere = host.hub.guests[i]
+            .respawn_elsewhere
+            .as_ref()
+            .filter(|_| server)
+            .map(RespawnConfig::from_saved);
+        let level = elsewhere.map_or(super::Dim::Overworld, |c| c.dim);
+        let spawn = elsewhere.map_or(spawn, |c| {
+            [
+                f64::from(c.pos[0]) + 0.5,
+                f64::from(c.pos[1]),
+                f64::from(c.pos[2]) + 0.5,
+            ]
+        });
         let back = self.dim;
-        let away = self.options.dedicated.is_some()
-            && host.hub.guests[i].dimension != super::Dim::Overworld.id();
-        if away {
+        let away = server && host.hub.guests[i].dimension != level.id();
+        if server {
             self.server_trips.retain(|t| !t.is(conn));
-            if let Err(e) = self.enter_level(Some(host), super::Dim::Overworld) {
-                log::error!("could not open the Overworld: {e}");
-                return;
-            }
+        }
+        if away && let Err(e) = self.enter_level(Some(host), level) {
+            log::error!("could not open {}: {e}", level.id());
+            return;
         }
         let g = &mut host.hub.guests[i];
         g.dead = false;
@@ -1466,6 +1484,9 @@ impl Game<'_> {
             collision: Some(self.collision),
         };
         host.hub.respawn(i, spawn, &ctx);
+        if let Some(config) = elsewhere {
+            self.respawn_trip(conn, config);
+        }
         if away && let Err(e) = self.enter_level(Some(host), back) {
             log::error!("could not reopen {}: {e}", back.id());
         }

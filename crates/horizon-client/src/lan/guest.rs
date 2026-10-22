@@ -86,6 +86,10 @@ pub struct Guest {
     /// Where the player respawns (a bed's spot; `ServerPlayer.respawnConfig`),
     /// None for the world spawn.
     pub spawn: Option<[f64; 3]>,
+    /// A respawn point outside the Overworld (a respawn anchor, or one
+    /// `spawnpoint` set there): its dimension, block, yaw and whether it is
+    /// forced, as the player's save keeps it (`respawn`).
+    pub respawn_elsewhere: Option<(String, [i32; 3], f32, bool)>,
     /// Pending ClientboundPlayerPositionPacket id; movement is ignored until
     /// the client accepts it (ServerGamePacketListenerImpl.awaitingPositionFromClient).
     pub awaiting_teleport: Option<(i32, [f64; 3])>,
@@ -242,6 +246,7 @@ impl Guest {
             sleep_timer: 0,
             sent_bed: None,
             spawn: None,
+            respawn_elsewhere: None,
             awaiting_teleport: None,
             teleport_counter: 0,
             teleport_tick: 0,

@@ -31,6 +31,24 @@ pub(super) struct RespawnConfig {
     pub forced: bool,
 }
 
+/// A respawn point as a player's save keeps it (`respawn`): dimension,
+/// block, yaw and whether it is forced.
+pub(super) type SavedRespawn = (String, [i32; 3], f32, bool);
+
+impl RespawnConfig {
+    pub(super) fn from_saved((dim, pos, yaw, forced): &SavedRespawn) -> Self {
+        Self {
+            dim: Dim::from_id(dim),
+            pos: *pos,
+            yaw: *yaw,
+            forced: *forced,
+        }
+    }
+    pub(super) fn saved(&self) -> SavedRespawn {
+        (self.dim.id().to_owned(), self.pos, self.yaw, self.forced)
+    }
+}
+
 /// `RespawnAnchorBlock.RESPAWN_HORIZONTAL_OFFSETS`, then the same a block
 /// below, a block above, and straight above.
 const HORIZONTAL: [[i32; 3]; 8] = [
@@ -415,6 +433,16 @@ impl Game<'_> {
         let (lz, hz) = (bounds.min(Axis::Z), bounds.max(Axis::Z) - 1.0e-5);
         (self.border.contains(lo, lz) && self.border.contains(hi, hz)).then_some(position)
     }
+    /// `Block.isPossibleToRespawnInThis`: neither solid nor liquid; banners,
+    /// signs and pressure plates override it to always.
+    fn possible_to_respawn_in(&self, state: BlockStateId) -> bool {
+        let f = self.res.facts().get(state);
+        let name = &*f.name;
+        name.ends_with("_banner")
+            || name.ends_with("_sign")
+            || name.ends_with("_pressure_plate")
+            || !(f.legacy_solid || matches!(name, "minecraft:water" | "minecraft:lava"))
+    }
     /// `RespawnAnchorBlock.findStandUpPosition`: a safe spot around the
     /// anchor, else any spot.
     pub(super) fn anchor_stand_up(&self, pos: [i32; 3]) -> Option<Vec3> {
@@ -428,8 +456,9 @@ impl Game<'_> {
         }
         None
     }
-    /// `ServerPlayer.findRespawnAndUseSpawnBlock` for an anchor config in the
-    /// loaded dimension: the position and yaw, using a charge.
+    /// `ServerPlayer.findRespawnAndUseSpawnBlock` for a config in the loaded
+    /// dimension: the position and yaw, using an anchor's charge. A forced
+    /// point (`spawnpoint`) that is no anchor holds if a player fits in it.
     pub(super) fn find_respawn_and_use(
         &mut self,
         c: RespawnConfig,
@@ -440,7 +469,13 @@ impl Game<'_> {
             && (c.forced || self.anchor_charges(state) > 0)
             && self.anchor_works())
         {
-            return Ok(None);
+            let [x, y, z] = c.pos;
+            let free = c.forced
+                && !self.is_anchor(state)
+                && self.possible_to_respawn_in(state)
+                && self.possible_to_respawn_in(self.world.block(x, y + 1, z));
+            let at = Vec3::new(f64::from(x) + 0.5, f64::from(y) + 0.1, f64::from(z) + 0.5);
+            return Ok(free.then_some((at, c.yaw)));
         }
         let stand = self.anchor_stand_up(c.pos);
         if !c.forced

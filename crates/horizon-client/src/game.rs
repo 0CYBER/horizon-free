@@ -7437,16 +7437,11 @@ impl Game<'_> {
         self.sleep_timer = 0;
         self.spawn = None;
         self.respawn_travel = None;
-        self.respawn_config =
-            self.level
-                .respawn_elsewhere
-                .as_ref()
-                .map(|(dim, pos, yaw, forced)| respawn_anchor::RespawnConfig {
-                    dim: Dim::from_id(dim),
-                    pos: *pos,
-                    yaw: *yaw,
-                    forced: *forced,
-                });
+        self.respawn_config = self
+            .level
+            .respawn_elsewhere
+            .as_ref()
+            .map(respawn_anchor::RespawnConfig::from_saved);
         self.spawn_origin = None;
         self.spawn_spiral = Default::default();
         self.player_spawn = None;
@@ -9424,9 +9419,7 @@ impl Game<'_> {
         level.weather = self.world.weather;
         level.day_time = self.world.day_time;
         level.spawn = self.spawn.map(|s| [s.x, s.y, s.z]);
-        level.respawn_elsewhere = self
-            .respawn_config
-            .map(|c| (c.dim.id().to_owned(), c.pos, c.yaw, c.forced));
+        level.respawn_elsewhere = self.respawn_config.map(|c| c.saved());
         level.rotation = [self.yaw, self.pitch];
         level.xp_level = self.experience.level;
         level.xp_progress = self.experience.progress;

@@ -2285,12 +2285,23 @@ impl Game<'_> {
         };
         let yaw = ((rot[0] + 180.0).rem_euclid(360.0)) - 180.0;
         let pitch = rot[1].clamp(-90.0, 90.0);
-        self.spawn = Some(Vec3::new(
-            f64::from(pos[0]) + 0.5,
-            f64::from(pos[1]),
-            f64::from(pos[2]) + 0.5,
-        ));
-        self.respawn_config = None;
+        // SetSpawnCommand: a forced point in the source's level.
+        if self.dim == Dim::Overworld {
+            self.spawn = Some(Vec3::new(
+                f64::from(pos[0]) + 0.5,
+                f64::from(pos[1]),
+                f64::from(pos[2]) + 0.5,
+            ));
+            self.respawn_config = None;
+        } else {
+            self.spawn = None;
+            self.respawn_config = Some(super::respawn_anchor::RespawnConfig {
+                dim: self.dim,
+                pos,
+                yaw,
+                forced: true,
+            });
+        }
         let dim = Text::literal(self.dim.id());
         let p = pos.map(|v| Text::literal(v.to_string()));
         let mut args = vec![
