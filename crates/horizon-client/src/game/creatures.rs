@@ -1415,7 +1415,8 @@ impl Game<'_> {
         from: [f64; 3],
         damage_type: &str,
     ) -> bool {
-        if self.creative {
+        // ServerPlayer.canHarmPlayer refused another player's projectile.
+        if self.creative || self.combat.refuse_player_hit {
             return false;
         }
         let projectile = self
@@ -1653,14 +1654,30 @@ impl Game<'_> {
                 w: &w,
                 targets: targets_guests,
             };
+            let guest_entities = self.lan_guest_entities();
             projectiles.retain_mut(|p| {
                 let mob_shot = !matches!(p.owner, Some(Who::Player));
-                let (keep, hit) = match (p.arrow.is_some(), mob_shot) {
+                // A player's arrows, snowballs and eggs meet every player; a
+                // guest's flies from that guest (Projectile.getOwner), not
+                // from the host, until it has left them.
+                let pvp = !mob_shot && super::lan_pvp::meets_players(&p.kind);
+                let shooter = p
+                    .guest
+                    .filter(|_| pvp)
+                    .and_then(|c| guest_entities.iter().find(|(g, _)| *g == c))
+                    .map(|&(_, id)| Who::Mob(id));
+                if shooter.is_some() {
+                    p.owner = shooter;
+                }
+                let (keep, hit) = match (p.arrow.is_some(), mob_shot || pvp) {
                     (true, false) => horizon_client::arrows::tick(p, &scene, &arrow_targets),
                     (true, true) => horizon_client::arrows::tick(p, &scene, &arrow_targets_guests),
                     (false, false) => p.tick(&pw),
                     (false, true) => p.tick(&pw_guests),
                 };
+                if shooter.is_some() {
+                    p.owner = Some(Who::Player);
+                }
                 if let Some(a) = p.arrow.as_mut() {
                     arrow_events.extend(a.events.drain(..).map(|e| (p.position, e)));
                 }
@@ -1712,6 +1729,11 @@ impl Game<'_> {
         }
         self.creatures.projectiles.append(&mut projectiles);
         for (p, hit) in hits {
+            // A player's arrow on another player lands as the victim's hurt.
+            if let Some(victim) = self.projectile_pvp_victim(&p, hit) {
+                self.projectile_hits_player(&p, hit, victim)?;
+                continue;
+            }
             // A guest's projectile lands as theirs: a pearl takes them, what
             // it hurts answers to them. One hitting the host (`Who::Player`
             // here) stays the host's hit.

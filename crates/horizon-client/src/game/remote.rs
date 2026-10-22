@@ -3336,6 +3336,16 @@ impl Game<'_> {
         // MultiPlayerGameMode.useItem runs the use here too: food starts
         // being eaten (Consumable.startConsuming).
         self.with_hand(hand, |g| g.start_eating(&info));
+        // BowItem.use: startUsingItem here too (with an arrow, or in creative), so that letting
+        // go sends RELEASE_USE_ITEM (Minecraft.handleKeybinds) and the server shoots.
+        if &*held.item == "minecraft:bow" {
+            self.with_hand(hand, |g| {
+                if g.using.is_none() && (g.creative || g.projectile_slot("minecraft:bow").is_some())
+                {
+                    g.using = Some((g.held_slot(), 0));
+                }
+            });
+        }
         item_has_use(&info)
     }
 
@@ -3351,14 +3361,20 @@ impl Game<'_> {
         }
         self.remote_use_item(Hand::Off);
     }
-    /// `LivingEntity.updatingUsingItem` for a consumable on a server client: the
-    /// eating animation and its crumbs. The server eats it and sends the
-    /// stack, the hunger and the sounds.
+    /// `LivingEntity.updatingUsingItem` on a server client: a drawn bow, and a
+    /// consumable's eating animation and its crumbs. The server eats it and
+    /// sends the stack, the hunger and the sounds.
     fn remote_tick_using(&mut self) {
         let Some((slot, ticks)) = self.using else {
             return;
         };
         let stack = self.stack_in(slot).cloned();
+        // A drawn bow: held until the button lets go (or another slot is picked).
+        if stack.as_ref().is_some_and(|s| &*s.item == "minecraft:bow") {
+            self.using = (slot == self.selected || slot == super::shield::OFFHAND_SLOT)
+                .then_some((slot, ticks + 1));
+            return;
+        }
         let consumable = stack
             .as_ref()
             .and_then(|s| self.res.items().get(&s.item))
