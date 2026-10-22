@@ -41,11 +41,19 @@ fn javac_major(javac: &Path) -> Result<u32, String> {
         .skip_while(|w| *w != "javac")
         .nth(1)
         .ok_or_else(|| {
-            format!(
-                "{} -version printed no version: {}",
-                javac.display(),
-                text.trim()
-            )
+            // macOS ships /usr/bin/javac as a placeholder that only says no Java is installed.
+            if text.contains("Unable to locate a Java Runtime") {
+                format!(
+                    "{} is macOS's placeholder (no Java installed)",
+                    javac.display()
+                )
+            } else {
+                format!(
+                    "{} -version printed no version: {}",
+                    javac.display(),
+                    text.trim()
+                )
+            }
         })?;
     let mut parts = version.split(['.', '-', '+', '_']);
     let first: u32 = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
@@ -126,11 +134,38 @@ fn installed_jdks(parents: &[PathBuf], major: i64) -> Vec<PathBuf> {
     homes
 }
 
+/// The Java runtimes the official launcher downloaded into `runtime` (a game directory's
+/// `runtime` folder: `<component>/<platform>/<component>/`, a macOS one in `jre.bundle`). Mojang's
+/// runtimes are whole JDKs, javac included, so a player who has run Minecraft has one already.
+pub fn minecraft_runtimes(runtime: &Path) -> Vec<PathBuf> {
+    let children = |dir: &Path| -> Vec<PathBuf> {
+        let mut paths: Vec<PathBuf> = fs::read_dir(dir)
+            .map(|entries| entries.flatten().map(|e| e.path()).collect())
+            .unwrap_or_default();
+        paths.sort();
+        paths
+    };
+    let mut homes = Vec::new();
+    for component in children(runtime) {
+        for platform in children(&component) {
+            let home = platform.join(component.file_name().unwrap_or_default());
+            for home in [home.join("jre.bundle/Contents/Home"), home] {
+                if executable(&home.join("bin"), "javac").is_file() {
+                    homes.push(home);
+                    break;
+                }
+            }
+        }
+    }
+    homes
+}
+
 /// Finds a JDK with `javac` of at least `major`, the version research-lock.json pins:
 /// `JAVA_HOME` when it holds one, else `javac` and `java` on the PATH (as the Python preparer
-/// ran them), else, on macOS, the JDK `/usr/libexec/java_home -v <major>` reports, else a JDK
-/// in the folders installers put them in (`jdk_parents`).
-pub fn find(major: i64) -> Result<Jdk, String> {
+/// ran them), else, on macOS, the JDK `/usr/libexec/java_home -v <major>` reports, else the JDK
+/// homes in `more` (the launcher's pick, Minecraft's own runtimes), else a JDK in the folders
+/// installers put them in (`jdk_parents`).
+pub fn find(major: i64, more: &[PathBuf]) -> Result<Jdk, String> {
     let need = format!(
         "Java {major} is needed (a JDK with javac, e.g. Eclipse Temurin {major}). \
          Install it, or set JAVA_HOME to it, and try again."
@@ -163,6 +198,14 @@ pub fn find(major: i64) -> Result<Jdk, String> {
                 ));
             }
         }
+    }
+    for home in more {
+        let bin = home.join("bin");
+        candidates.push((
+            executable(&bin, "javac"),
+            executable(&bin, "java"),
+            "Minecraft's Java",
+        ));
     }
     for home in installed_jdks(&jdk_parents(), major) {
         let bin = home.join("bin");
@@ -205,6 +248,15 @@ pub fn classpath<'a>(paths: impl IntoIterator<Item = &'a Path>) -> String {
 }
 
 impl Jdk {
+    /// The JDK's home, the folder above `bin` (what `JAVA_HOME` names).
+    pub fn home(&self) -> PathBuf {
+        self.javac
+            .parent()
+            .and_then(Path::parent)
+            .map(Path::to_path_buf)
+            .unwrap_or_default()
+    }
+
     /// `javac --release <major> -proc:none` with Python's `subprocess.run(..., check=True,
     /// stdout=log, stderr=STDOUT, timeout=3600)`.
     pub fn javac(&self, major: i64, args: &[String], log: &fs::File) -> Result<(), String> {
@@ -299,6 +351,34 @@ mod tests {
                 parent.join("jdk-21.0.5.11-hotspot"),
             ]
         );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn minecraft_runtimes_are_found_in_the_launchers_layout() {
+        let dir =
+            std::env::temp_dir().join(format!("horizon-prepare-runtimes-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let make = |home: PathBuf, javac: bool| {
+            fs::create_dir_all(home.join("bin")).unwrap();
+            if javac {
+                fs::write(executable(&home.join("bin"), "javac"), b"").unwrap();
+            }
+            home
+        };
+        let gamma = make(
+            dir.join("java-runtime-gamma/linux/java-runtime-gamma"),
+            true,
+        );
+        let epsilon = make(
+            dir.join(
+                "java-runtime-epsilon/mac-os-arm64/java-runtime-epsilon/jre.bundle/Contents/Home",
+            ),
+            true,
+        );
+        make(dir.join("jre-legacy/linux/jre-legacy"), false);
+        assert_eq!(minecraft_runtimes(&dir), [epsilon, gamma]);
+        assert!(minecraft_runtimes(&dir.join("missing")).is_empty());
         fs::remove_dir_all(&dir).unwrap();
     }
 }

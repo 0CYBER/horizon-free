@@ -13,6 +13,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 const OBJECTS: &str = "https://resources.download.minecraft.net";
+/// The index of Mojang's Java runtimes, the one the official launcher reads.
+const JAVA_RUNTIMES: &str = "https://launchermeta.mojang.com/v1/products/java-runtime/2ec0cc96c44e5a76b9c8b7c39df7210883d12871/all.json";
 
 /// One file to download.
 struct File {
@@ -82,6 +84,120 @@ pub fn download(
         log(format!("The sounds could not all be downloaded: {e}"));
     }
     Ok(())
+}
+
+/// Mojang's name for this system in its Java runtime index.
+fn java_platform() -> Option<&'static str> {
+    Some(match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "mac-os-arm64",
+        ("macos", "x86_64") => "mac-os",
+        ("linux", "x86_64") => "linux",
+        ("linux", "x86") => "linux-i386",
+        ("windows", "x86_64") => "windows-x64",
+        ("windows", "aarch64") => "windows-arm64",
+        ("windows", "x86") => "windows-x86",
+        _ => return None,
+    })
+}
+
+/// Downloads Mojang's Java runtime `component` (the version JSON's `javaVersion.component`, e.g.
+/// `java-runtime-epsilon`) into the game directory's `runtime` folder, as the official launcher
+/// lays it out: `<component>/<platform>/<component>/`. Each file is checked against its sha1;
+/// files already there and whole are kept. Mojang's runtimes are whole JDKs, javac included,
+/// which is what the exporters need.
+pub fn java_runtime(
+    component: &str,
+    runtime: &Path,
+    jobs: usize,
+    fetch: Fetch,
+    log: &dyn Fn(String),
+) -> Result<PathBuf, String> {
+    let platform = java_platform().ok_or("Mojang has no Java for this system")?;
+    let index: Value = serde_json::from_slice(&fetch(JAVA_RUNTIMES)?)
+        .map_err(|e| format!("Mojang's Java index: {e}"))?;
+    let entry = &index[platform][component][0];
+    if entry.is_null() {
+        return Err(format!("Mojang has no {component} for {platform}"));
+    }
+    let manifest = &entry["manifest"];
+    let manifest: Value = serde_json::from_slice(&fetch_checked(
+        fetch,
+        &text(manifest, "url")?,
+        &text(manifest, "sha1")?,
+    )?)
+    .map_err(|e| format!("Mojang's {component} manifest: {e}"))?;
+    let files = manifest["files"]
+        .as_object()
+        .ok_or_else(|| format!("Mojang's {component} manifest lists no files"))?;
+    let home = runtime.join(component).join(platform).join(component);
+    let mut downloads = Vec::new();
+    let mut executables = Vec::new();
+    let mut links = Vec::new();
+    for (name, file) in files {
+        let path = home.join(relative(name)?);
+        match file["type"].as_str() {
+            Some("file") => {
+                let raw = &file["downloads"]["raw"];
+                if file["executable"] == true {
+                    executables.push(path.clone());
+                }
+                downloads.push(File {
+                    url: text(raw, "url")?,
+                    sha1: text(raw, "sha1")?,
+                    path,
+                });
+            }
+            Some("link") => links.push((path, text(file, "target")?)),
+            _ => {}
+        }
+    }
+    let name = entry["version"]["name"].as_str().unwrap_or(component);
+    log(format!(
+        "Downloading Minecraft's Java {name} from Mojang ({} files)",
+        downloads.len()
+    ));
+    fetch_all(&downloads, jobs, fetch, log)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for path in &executables {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        for (path, target) in &links {
+            if !link_stays_inside(name_in(&home, path), target) {
+                return Err(format!(
+                    "Unsafe link {target:?} in Mojang's {component} manifest"
+                ));
+            }
+            let _ = fs::remove_file(path);
+            fs::create_dir_all(path.parent().unwrap())
+                .and_then(|_| std::os::unix::fs::symlink(target, path))
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = (executables, links);
+    Ok(home)
+}
+
+fn name_in<'a>(home: &Path, path: &'a Path) -> &'a Path {
+    path.strip_prefix(home).unwrap_or(path)
+}
+
+/// Whether a link at `link` (relative to the runtime's home) pointing at `target` stays in the
+/// home.
+fn link_stays_inside(link: &Path, target: &str) -> bool {
+    let mut depth = link.components().count().saturating_sub(1);
+    for c in Path::new(target).components() {
+        match c {
+            Component::Normal(_) => depth += 1,
+            Component::CurDir => {}
+            Component::ParentDir if depth > 0 => depth -= 1,
+            _ => return false,
+        }
+    }
+    true
 }
 
 fn read_json(path: &Path) -> Result<Value, String> {

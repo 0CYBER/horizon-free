@@ -113,7 +113,7 @@ def start_client(client, resources, home, endpoint, log, *extra):
         str(client), '--resources', str(resources), '--render-distance', '2',
         '--test-terrain', '--control-socket', str(endpoint), '--timeout-seconds', '180', *extra,
     ], cwd=home, env=dict(os.environ, HORIZON_HOME=str(home), HORIZON_NO_AUDIO='1',
-                         HORIZON_MENU_STYLE='classic', HORIZON_PLAYER_NAME=''),
+                         HORIZON_PLAYER_NAME=''),
         stdout=log, stderr=subprocess.STDOUT)
 
 

@@ -1,8 +1,9 @@
 # Horizon's design system
 
-One design language for the launcher, the website and the game's own menus (what "Menu style:
-Horizon" draws). Vanilla's classic screens and the HUD are not part of it: they stay exactly
-vanilla, because parity is the point of the game.
+One design language for the launcher, the website and the few overlays the game draws that
+vanilla has no screen for (the on-screen keyboard a controller types with). Every game screen
+and the HUD are not part of it: they are vanilla's, because parity is the point of the game, and
+Horizon's own settings are pages built from vanilla's widgets, the way mods add theirs.
 
 The tokens live in one place, `crates/horizon-theme`. The launcher (`launcher/src/theme.rs`)
 and the game (`crates/horizon-client/src/ui_theme.rs`) read them as Rust constants, and the
@@ -144,10 +145,8 @@ Geist (400, 500, 600) and Geist Mono (400), bundled under the SIL Open Font Lice
   stacks of panels, the stone texture behind the page and Horizon's pixel landscape (a dawn or a
   sunset) behind the hero. Light and dark follow the system, with a toggle. A giant wordmark in
   pixels sits in the footer.
-- **Game menus** (Horizon style): the title backdrop under a page-colour veil; text sidebar;
-  index lists for worlds and servers; options pages as index lists of rows (label left, value
-  in mono, the control right). The pause menu is a centred column of plain rows over a darker
-  veil.
+- **Game**: vanilla's screens. The on-screen keyboard is a rounded plate of keys in the page
+  colour, the focused key in the accent.
 
 ## Blocks
 

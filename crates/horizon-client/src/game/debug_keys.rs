@@ -753,7 +753,7 @@ impl Game<'_> {
         let lerp = |a: f64, b: f64| a + f64::from(alpha) * (b - a);
         let lerpf = |a: f32, b: f32| a + alpha * (b - a);
         for m in &self.mobs {
-            if m.removed || m.has_effect("minecraft:invisibility") {
+            if m.removed || m.invisible || m.has_effect("minecraft:invisibility") {
                 continue;
             }
             let pos = [
