@@ -74,6 +74,9 @@ pub struct Options {
     pub minecraft_dir: Option<PathBuf>,
     /// The pinned server jar the player downloaded (`--server-jar`, else HORIZON_SERVER_JAR).
     pub server_jar: Option<PathBuf>,
+    /// The JDK to try after JAVA_HOME and the PATH (the launcher's pick, e.g. Minecraft's
+    /// own Java it downloaded from Mojang).
+    pub java_home: Option<PathBuf>,
 }
 
 pub(crate) fn hex(bytes: &[u8]) -> String {
@@ -402,7 +405,11 @@ pub fn prepare(options: &Options, log: Log) -> Result<PathBuf, String> {
         .map_err(|e| format!("{}: {e}", options.root.display()))?;
     let lock = artifacts::Lock::read(root)?;
     // Java first: nothing below can finish without it, and the player should hear it at once.
-    let jdk = java::find(lock.java_major)?;
+    let mut homes: Vec<PathBuf> = options.java_home.iter().cloned().collect();
+    homes.extend(java::minecraft_runtimes(
+        &artifacts::minecraft_dir(options.minecraft_dir.as_deref()).join("runtime"),
+    ));
+    let jdk = java::find(lock.java_major, &homes)?;
     if options.import && !artifacts::reuse_imported(root, log)? {
         artifacts::import(
             root,

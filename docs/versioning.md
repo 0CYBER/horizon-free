@@ -22,8 +22,8 @@ game and the launcher of the 0.2 line.
   0.2. A `feature` label no longer bumps anything: it only lists the change under **New**.
 - **Patch releases** are every release the train makes: the patch after the newest release tagged on the line, game
   and launcher counted separately (the game releases more often, so `v0.2.14` can go with `launcher@0.2.3`).
-- **Betas** are not separate tags. As before, every game release is published as a GitHub pre-release (a beta, what
-  the launcher's Nightly channel installs) under its final tag and promoted in place to stable in the daily
+- **Alpha builds** are not separate tags. As before, every game release is published as a GitHub pre-release (an alpha build, what
+  the launcher's Alpha channel installs) under its final tag and promoted in place to stable in the daily
   promotion at 20:00 UTC, once it has been out 6 hours ([Channels](release-flow.md#channels)). `v0.2.4` is the same
   build whether it is still a beta or already stable.
 - **Pre-release tags** (`v0.3.0-rc.1`, `v0.3.0-beta.2`) are semver's and are reserved for a hand-made preview of a
@@ -126,7 +126,7 @@ Run by the orchestrator, in this order. Until step 3, nothing is published.
    makes it *latest*. Do not force it (`promote` with `force=true`): it carries about 43 player-facing pull requests
    from the freeze and needs its beta like any release. Check it is *latest*:
    `gh api repos/ludovic111/horizon/releases/latest --jq .tag_name`.
-5. Only then merge the update channels pull request (the launcher's Stable and Nightly, the daily promotion), then
+5. Only then merge the update channels pull request (the launcher's Stable and Alpha, the daily promotion), then
    mark the switch pull request (#1132) ready and merge it (`.github/release-line.txt` = `0.2`, and the
    docs that talk about 0.2). On the next run, about 10 minutes, the train publishes `v0.2.0` as a beta and
    `launcher@0.2.0`, both "the first release of 0.2", built from the same code as the bridges plus that pull request.

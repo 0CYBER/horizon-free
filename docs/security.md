@@ -38,7 +38,7 @@ and some are waiting for Ludovic:
 | Private vulnerability reporting | **Live** (see the end of this page). |
 | Signed checksums on releases | **Live** for new releases (#1011): the `release` environment holds the key, and its public half is in `release-keys.txt` (#1023). Releases from before then are unsigned. |
 | Launchers and servers checking signatures | **Not yet**: #1014 waits as a draft until a signed stable game release and a signed launcher release exist. Until then they trust GitHub's checksum, as before. |
-| Beta, then stable | **Live** (#1012): every release is first a beta. The launcher's Updates setting picks Stable (the default) or Nightly (the betas). |
+| Alpha, then stable | **Live** (#1012): every release is first an alpha build. The launcher's Updates setting picks Stable (the default) or Alpha (the pre-releases). |
 | Reports marked suspicious | **Partly**: the scan of Discord for agents does it. Kira's issues do it once its pull request merges. |
 | Code owners' review of the pipeline | **Not yet**: `.github/CODEOWNERS` and its protection (#1015) wait for the App, below. Until then pipeline changes merge like any other once `verify` passes. |
 | Agents on their own GitHub App | **Not yet**: prepared, waiting for Ludovic to create it. Agents still use his account. |
@@ -53,11 +53,11 @@ and some are waiting for Ludovic:
 - **`verify` always runs.** Labels no longer start the checks, and the required `verify` job has no condition, so
   the only `verify` a change can have is one that ran. Main requires it, from GitHub Actions only, for everyone,
   admins included.
-- **Beta, then stable.** Every release is first a **beta**. It becomes **stable**, the version launchers and
+- **Alpha, then stable.** Every release is first an **alpha** build (a GitHub pre-release). It becomes **stable**, the version launchers and
   servers install by themselves, in the daily promotion (20:00 UTC), only after it has been out 6 hours and passed its
   smoke test (the game started and drew a world on the Mac mini), and only while no issue labelled `release-blocker`
   is open. If a beta misses a promotion it was due for, an issue says so. Players who want the newest builds at once
-  pick **Nightly** under Updates in the launcher's Settings. Discord announces stable releases only.
+  pick **Alpha** under Updates in the launcher's Settings. Discord announces stable releases only.
 - **Signed updates.** Each release carries a list of its files' checksums, signed with Horizon's release key. The
   launcher (for the game and for itself) and `horizon-server update` check that signature against the public key
   built into them, then check the download against the list. Anything unsigned, signed with another key, signed

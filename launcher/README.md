@@ -83,11 +83,11 @@ page `servers.json` (the list), `servers/<name>/` (the servers created there) an
   the game's menu style, the game's extra command-line arguments, and the launcher's own version
   and update state.
 - **Updates**: **Stable** (the default) installs a tested build about once a day, the betas that
-  `promote.yml` makes stable; **Nightly** installs every release as soon as it is built, several
+  `promote.yml` makes stable; **Alpha** installs every release as soon as it is built, several
   times a day, and can break (docs/release-flow.md, "Channels"). While it is open, the launcher
-  looks for new releases every 4 hours on Stable and every 30 minutes on Nightly. Kept as `update_channel` in
-  `settings.json`; a `beta_builds: true` from launchers before 0.2 reads as Nightly.
-  `horizon-launcher update-channel [stable|nightly]` shows or sets it. The **Versions** page
+  looks for new releases every 4 hours on Stable and every 30 minutes on Alpha. Kept as `update_channel` in
+  `settings.json`; a `beta_builds: true` from launchers before 0.2 reads as Alpha (so does a `nightly` from the channel's first name).
+  `horizon-launcher update-channel [stable|alpha]` shows or sets it. The **Versions** page
   shows each release's channel. The launcher's own updates don't depend on it.
 - **Game arguments**: extra arguments added to the game's command line (for example
   `--server-thread`), one line where quotes group a word with spaces. They are appended after the
@@ -140,7 +140,7 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher notes [<tag>]                  patch notes as plain text
     horizon-launcher links                          the Discord, sponsor and website links
     horizon-launcher menu-style [horizon|classic]   show or set the game's menu style
-    horizon-launcher update-channel [stable|nightly]   show or set which releases install by themselves
+    horizon-launcher update-channel [stable|alpha]     show or set which releases install by themselves
     horizon-launcher game-args [<line>]             show or set the extra arguments the game starts with
     horizon-launcher update [--check]               Horizon and the launcher
     horizon-launcher logs [--lines N] [--crash]     the end of the game's log, or its newest crash report

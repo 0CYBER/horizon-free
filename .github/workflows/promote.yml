@@ -1,7 +1,7 @@
 name: promote
 # Beta game releases become stable once a day (docs/release-flow.md, "Channels"): at 20:00 UTC (21:00 in Paris in
 # winter time, 22:00 in summer) tools/release_channels.py promotes the newest beta that had been out 6 hours by then,
-# passed its release smoke test and isn't covered by an issue labelled release-blocker. Launchers on the Nightly
+# passed its release smoke test and isn't covered by an issue labelled release-blocker. Launchers on the Alpha
 # channel install every beta when it is published; Stable gets the day's promotion. The later runs of the evening are
 # retries for a run GitHub starts late or skips: they promote the same beta, so stable still moves once.
 # By hand, from GitHub's app too (Actions > promote > Run workflow):

@@ -7,7 +7,7 @@
 //! client predicts its own movement; the server stays authoritative for
 //! everything else.
 use super::{Dim, Game, Mining, Screen};
-use horizon_client::first_person::Hand;
+use horizon_client::first_person::{Hand, SwingAnimation};
 use horizon_client::{
     Result,
     chunk::{BIOME_STRATEGY, Chunk, Light, MIN_Y, SECTIONS, Section, block_strategy},
@@ -140,6 +140,8 @@ pub(super) struct Remote {
     tab_players: HashMap<u128, horizon_client::tab_list::TabPlayer>,
     /// Each listed profile's unpacked `textures` property.
     skin_textures: HashMap<u128, horizon_client::skins::Textures>,
+    /// The skin texture each profile's players show, once its download is ready.
+    skins: HashMap<u128, String>,
     listed: std::collections::HashSet<u128>,
     /// `ClientboundLoginPacket.onlineMode`: the player list shows heads.
     online_mode: bool,
@@ -192,6 +194,30 @@ fn face_direction(face: [i32; 3]) -> u8 {
         [1, 0, 0] => 5,
         _ => 1,
     }
+}
+
+/// A `minecraft:profile` component as the item data JSON the model reads.
+fn profile_tag(p: &horizon_protocol::item::Profile) -> Tag {
+    let properties = p
+        .properties
+        .iter()
+        .map(|(name, value, signature)| {
+            let mut entries: Vec<(&'static str, Tag)> = vec![
+                ("name", Tag::String(name.as_str().into())),
+                ("value", Tag::String(value.as_str().into())),
+            ];
+            if let Some(signature) = signature {
+                entries.push(("signature", Tag::String(signature.as_str().into())));
+            }
+            Tag::compound(entries)
+        })
+        .collect::<Vec<_>>();
+    let mut entries: Vec<(&'static str, Tag)> = Vec::new();
+    if let Some(name) = &p.name {
+        entries.push(("name", Tag::String(name.as_str().into())));
+    }
+    entries.push(("properties", Tag::List(properties)));
+    Tag::compound(entries)
 }
 
 /// A protocol number format as the scoreboard's.
@@ -306,6 +332,11 @@ impl Game<'_> {
             progress: 0.0,
             total: 0,
         };
+        // The connected client never opens a server world (single player also
+        // joins here), so load the registries its argument parsers and local
+        // suggestions need before receiving the server's command tree.
+        self.ui.registries = Default::default();
+        self.build_registries();
         self.ui.registries.permission = 0;
         self.ui.chat.clear();
         self.screen = Screen::Playing;
@@ -355,6 +386,7 @@ impl Game<'_> {
             players: HashMap::new(),
             tab_players: HashMap::new(),
             skin_textures: HashMap::new(),
+            skins: HashMap::new(),
             listed: Default::default(),
             online_mode: false,
             level_players: HashMap::new(),
@@ -515,65 +547,117 @@ impl Game<'_> {
         let mut out = ItemStack {
             item: self.item_name(s.item),
             count: s.count.max(0) as u32,
-            damage: s.damage().max(0) as u32,
+            damage: 0,
             extra: None,
         };
-        use horizon_protocol::item::{Component, component};
-        if let Some(Component::Int(rgb)) = s.component(component::DYED_COLOR) {
-            out.data_mut().dyed_color = Some(*rgb);
-        }
-        if let Some(Component::Int(id)) = s.component(component::MAP_ID) {
-            out.data_mut().map_id = Some(*id);
-        }
-        if let Some(Component::Int(cost)) = s.component(component::REPAIR_COST) {
-            out.data_mut().repair_cost = (*cost).max(0) as u32;
-        }
-        if let Some(Component::Int(mode)) = s.component(component::MAP_POST_PROCESSING) {
-            out.data_mut().map_post_processing = Some((*mode).clamp(0, 1) as u8);
-        }
-        if let Some(Component::WritableBook(pages)) = s.component(component::WRITABLE_BOOK_CONTENT)
-        {
-            out.data_mut().writable_pages = pages.clone();
-        }
-        if let Some(Component::WrittenBook(b)) = s.component(component::WRITTEN_BOOK_CONTENT) {
-            let lang = self
-                .remote
-                .as_ref()
-                .map(|r| r.lang.clone())
-                .unwrap_or_default();
-            out.data_mut().written = Some(horizon_client::item_data::WrittenBook {
-                title: b.title.clone(),
-                author: b.author.clone(),
-                generation: b.generation.clamp(0, 3) as u8,
-                pages: b.pages.iter().map(|p| plain(p, &lang)).collect(),
-            });
-        }
-        if let Some(Component::Text(name)) = s.component(component::CUSTOM_NAME) {
-            let lang = self
-                .remote
-                .as_ref()
-                .map(|r| r.lang.clone())
-                .unwrap_or_default();
-            out.data_mut().custom_name = Some(plain(name, &lang));
-        }
-        // The enchantments by the server's registry ids.
-        let levels = |list: &[(i32, i32)]| -> Vec<(Arc<str>, u32)> {
-            let names = self.remote.as_ref().map(|r| &r.registries);
-            list.iter()
-                .filter_map(|(id, level)| {
-                    let name = names?.name("minecraft:enchantment", *id)?;
-                    Some((Arc::from(name), (*level).max(0) as u32))
-                })
-                .collect()
-        };
-        if let Some(Component::Enchantments(list)) = s.component(component::ENCHANTMENTS) {
-            out.data_mut().enchantments = levels(list);
-        }
-        if let Some(Component::Enchantments(list)) = s.component(component::STORED_ENCHANTMENTS) {
-            out.data_mut().stored_enchantments = levels(list);
+        // A vanilla `components` compound, then the same decoder the saved
+        // and command item NBT use, so tooltips and models see every field.
+        let components = self.protocol_components(s);
+        let (damage, data) = horizon_client::item_data::decode_components(components.as_ref());
+        out.damage = damage;
+        if let Some(data) = data {
+            *out.data_mut() = *data;
         }
         out.tidy();
         Some(out)
+    }
+    /// The item's patched components as vanilla's `components` compound.
+    fn protocol_components(&self, s: &Stack) -> Option<Tag> {
+        use horizon_protocol::item::{Component, component};
+        let r = self.remote.as_ref()?;
+        let name = |id: i32| r.builtin.get("minecraft:data_component_type")?.name(id);
+        let mut entries: Vec<(&str, Tag)> = Vec::new();
+        for (kind, c) in &s.added {
+            let Some(key) = name(*kind) else {
+                continue;
+            };
+            let value = match c {
+                Component::Int(v) if *kind == component::RARITY => {
+                    let rarity = ["common", "uncommon", "rare", "epic"];
+                    Tag::String(rarity.get(*v as usize).copied().unwrap_or("common").into())
+                }
+                Component::Int(v) => Tag::Int(*v),
+                Component::Unit => Tag::Compound(Default::default()),
+                Component::Bool(v) => Tag::Byte(i8::from(*v)),
+                Component::Text(t) | Component::Nbt(t) => t.clone(),
+                Component::Ident(v) => Tag::String(v.as_str().into()),
+                Component::Lore(lines) => Tag::List(lines.clone()),
+                Component::WritableBook(pages) => Tag::compound([(
+                    "pages",
+                    Tag::List(
+                        pages
+                            .iter()
+                            .map(|p| Tag::String(p.as_str().into()))
+                            .collect(),
+                    ),
+                )]),
+                Component::WrittenBook(b) => Tag::compound([
+                    ("title", Tag::String(b.title.as_str().into())),
+                    ("author", Tag::String(b.author.as_str().into())),
+                    ("generation", Tag::Int(b.generation)),
+                    ("pages", Tag::List(b.pages.clone())),
+                    ("resolved", Tag::Byte(i8::from(b.resolved))),
+                ]),
+                Component::Enchantments(list) => {
+                    // Enchantments are a synced (data-driven) registry: the
+                    // ids index the server's RegistryData, not the builtin
+                    // report, so a datapack enchantment names correctly.
+                    let levels = list.iter().filter_map(|(id, level)| {
+                        let name = r.registries.name("minecraft:enchantment", *id)?;
+                        Some((name, Tag::Int(*level)))
+                    });
+                    Tag::compound(levels)
+                }
+                Component::AttackRange(v) => Tag::compound([
+                    ("min_reach", Tag::Float(v[0].to_bits())),
+                    ("max_reach", Tag::Float(v[1].to_bits())),
+                    ("min_attack_momentum", Tag::Float(v[2].to_bits())),
+                    ("max_attack_momentum", Tag::Float(v[3].to_bits())),
+                    ("hitbox_margin", Tag::Float(v[4].to_bits())),
+                    ("mob_factor", Tag::Float(v[5].to_bits())),
+                ]),
+                Component::Profile(p) => profile_tag(p),
+                Component::CustomModelData {
+                    floats,
+                    flags,
+                    strings,
+                    colors,
+                } => Tag::compound([
+                    (
+                        "floats",
+                        Tag::List(floats.iter().map(|f| Tag::Float(f.to_bits())).collect()),
+                    ),
+                    (
+                        "flags",
+                        Tag::List(flags.iter().map(|b| Tag::Byte(i8::from(*b))).collect()),
+                    ),
+                    (
+                        "strings",
+                        Tag::List(
+                            strings
+                                .iter()
+                                .map(|s| Tag::String(s.as_str().into()))
+                                .collect(),
+                        ),
+                    ),
+                    (
+                        "colors",
+                        Tag::List(colors.iter().map(|c| Tag::Int(*c)).collect()),
+                    ),
+                ]),
+                Component::TooltipDisplay { hide, hidden } => {
+                    let hidden = hidden
+                        .iter()
+                        .filter_map(|id| Some(Tag::String(name(*id)?.into())));
+                    Tag::compound([
+                        ("hide_tooltip", Tag::Byte(i8::from(*hide))),
+                        ("hidden_components", Tag::List(hidden.collect())),
+                    ])
+                }
+            };
+            entries.push((key, value));
+        }
+        Some(Tag::compound(entries))
     }
     fn to_network(&self, s: &Option<ItemStack>) -> Option<Stack> {
         let s = s.as_ref()?;
@@ -1677,6 +1761,29 @@ impl Game<'_> {
                 }
             }
             C::SetEntityData(p) => {
+                // Entity.DATA_SHARED_FLAGS_ID, DATA_CUSTOM_NAME and
+                // DATA_CUSTOM_NAME_VISIBLE: server NPCs and holograms rely on
+                // these instead of saved NBT.
+                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
+                    for (index, _, value) in &p.values {
+                        match (index, value) {
+                            (0, Value::Byte(flags)) => m.invisible = flags & 0x20 != 0,
+                            (2, Value::OptText(name)) => {
+                                let text = name.as_ref().map(horizon_client::entity_nbt::name_text);
+                                m.custom_name =
+                                    text.as_ref().map(horizon_client::text::Text::plain);
+                                m.custom_name_text = text;
+                            }
+                            (2, Value::Text(name)) => {
+                                let text = horizon_client::entity_nbt::name_text(name);
+                                m.custom_name = Some(text.plain());
+                                m.custom_name_text = Some(text);
+                            }
+                            (3, Value::Bool(visible)) => m.name_visible = *visible,
+                            _ => {}
+                        }
+                    }
+                }
                 if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
                     && m.species() == horizon_client::mobs::Species::Rabbit
                 {
@@ -2314,6 +2421,7 @@ impl Game<'_> {
                     .then(|| Vec3::new(f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5));
             }
             C::ServerData(p) => self.remote_server_data(p.icon.as_deref()),
+            C::MapItemData(p) => self.remote_map_item_data(&p),
             // handleTickingState / handleTickingStep: the level's TickRateManager.
             C::TickingState(p) => {
                 self.clock.set_rate(p.rate);
@@ -2459,33 +2567,20 @@ impl Game<'_> {
     pub(super) fn remote_tab_players(
         &mut self,
     ) -> Option<(Vec<horizon_client::tab_list::TabPlayer>, bool, Vec<u128>)> {
-        let r = self.remote.as_ref()?;
-        let mut players: Vec<_> = r
-            .listed
-            .iter()
-            .filter_map(|u| r.tab_players.get(u).cloned())
-            .collect();
+        self.update_remote_skins();
+        let mut players: Vec<_> = {
+            let r = self.remote.as_ref()?;
+            r.listed
+                .iter()
+                .filter_map(|u| r.tab_players.get(u).cloned())
+                .collect()
+        };
         for p in &mut players {
-            let Some(textures) = r.skin_textures.get(&p.uuid) else {
-                continue;
-            };
-            // PlayerInfo.createSkinLookup: only the local player's own skin
-            // may be unsigned.
-            let downloads = &mut self.skin_downloads;
-            let skin = horizon_client::skins::lookup(textures, p.uuid != r.profile, |kind, url| {
-                downloads.state(kind, url)
-            });
-            if let Some(skin) = skin {
-                p.skin = skin;
-            }
-        }
-        for (location, rgba) in self.skin_downloads.take_ready() {
-            self.store_skin(location, rgba);
-        }
-        for p in &mut players {
-            if p.skin.starts_with("skins/") && !self.show_skin(&p.skin) {
-                p.skin = horizon_client::tab_list::default_skin(p.uuid).to_owned();
-            }
+            p.skin = self
+                .remote
+                .as_ref()
+                .and_then(|r| r.skins.get(&p.uuid).cloned())
+                .unwrap_or_else(|| horizon_client::tab_list::default_skin(p.uuid).to_owned());
         }
         let r = self.remote.as_ref()?;
         let upside_down = players
@@ -2498,9 +2593,68 @@ impl Game<'_> {
             .collect();
         Some((players, r.online_mode, upside_down))
     }
+    /// `PlayerInfo.getSkin` for every player entity, including NPCs that are
+    /// never in the tab list: resolve each profile's textures and give the
+    /// level's player models their skin.
+    fn update_remote_skins(&mut self) {
+        let Some(r) = self.remote.as_ref() else {
+            return;
+        };
+        let local = r.profile;
+        let entries: Vec<(u128, horizon_client::skins::Textures)> = r
+            .skin_textures
+            .iter()
+            .map(|(uuid, textures)| (*uuid, textures.clone()))
+            .collect();
+        let mut resolved: Vec<(u128, String)> = Vec::new();
+        for (uuid, textures) in entries {
+            // PlayerInfo.createSkinLookup: only the local player's own skin
+            // may be unsigned.
+            let skin = {
+                let mut downloads = self.skin_downloads.borrow_mut();
+                horizon_client::skins::lookup(&textures, uuid != local, |kind, url| {
+                    downloads.state(kind, url)
+                })
+            };
+            if let Some(skin) = skin {
+                resolved.push((uuid, skin));
+            }
+        }
+        resolved.retain(|(_, skin)| !skin.starts_with("skins/") || self.show_skin(skin));
+        let Some((level, skins, own)) = self.remote.as_mut().map(|r| {
+            r.skins = resolved.into_iter().collect();
+            (
+                r.level_players
+                    .iter()
+                    .map(|(id, uuid)| (*id as u32, *uuid))
+                    .collect::<Vec<_>>(),
+                r.skins.clone(),
+                r.skins.get(&r.profile).cloned(),
+            )
+        }) else {
+            return;
+        };
+        for (id, uuid) in level {
+            let Some(skin) = skins.get(&uuid) else {
+                continue;
+            };
+            if let Some(mob) = self
+                .mobs
+                .iter_mut()
+                .find(|m| m.id == id && &*m.kind.id == "minecraft:player")
+            {
+                mob.skin = Some(skin.clone());
+            }
+        }
+        if let Some(skin) = own
+            && let Some(mob) = self.player_model.as_mut()
+        {
+            mob.skin = Some(skin);
+        }
+    }
     /// Puts a downloaded skin in an atlas skin slot: a free one, else the
     /// least recently shown.
-    fn store_skin(&mut self, location: String, rgba: Vec<u8>) {
+    pub(super) fn store_skin(&mut self, location: String, rgba: Vec<u8>) {
         use horizon_client::hud::SKIN_SLOTS;
         let slot = if self.skin_slots.len() < SKIN_SLOTS {
             self.skin_slots.len()
@@ -3309,10 +3463,8 @@ impl Game<'_> {
                 sequence: seq,
             }));
             if progress >= 1.0 {
+                // startDestroyBlock: instant survival breaks have no destroy delay.
                 self.predict_break(hit.pos, state, seq);
-                if let Some(r) = self.remote.as_mut() {
-                    r.destroy_delay = 5;
-                }
                 return;
             }
             if let Some(r) = self.remote.as_mut() {
@@ -3489,7 +3641,15 @@ impl Game<'_> {
                 self.predict_use(&changes, seq);
             }
             if held_block {
-                self.with_hand(hand, Game::swing_arm);
+                if reacts
+                    || held
+                        .as_ref()
+                        .is_some_and(|stack| self.remote_can_place(&hit, stack))
+                {
+                    self.with_hand(hand, Game::swing_arm);
+                }
+                // BlockItem.place returns FAIL when placement is rejected:
+                // stop this click without trying the item or the other hand.
                 return true;
             }
             return reacts;
@@ -3547,7 +3707,11 @@ impl Game<'_> {
     /// container, and the blocks it changed. Vanilla's client runs it on its
     /// own level first; this runs it on a copy, and `predict_use` keeps the
     /// changes it predicts.
-    fn remote_block_reacts(&self, hit: &super::Hit, held: Option<&ItemStack>) -> (bool, DryUse) {
+    fn remote_block_reacts(
+        &mut self,
+        hit: &super::Hit,
+        held: Option<&ItemStack>,
+    ) -> (bool, DryUse) {
         // Player.isSecondaryUseActive with something in either hand.
         let hands_full = self.stack_in(self.selected).is_some() || self.offhand.is_some();
         if self.keys.contains(&KeyCode::ShiftLeft) && hands_full {
@@ -3562,26 +3726,53 @@ impl Game<'_> {
             [-1, 0, 0] => Direction::West,
             _ => Direction::East,
         };
-        let mut level = DryLevel {
-            world: &self.world,
-            changed: HashMap::new(),
-            random: horizon_core::random::LegacyRandom::new(0),
-            sounds: Vec::new(),
+        let player = self.use_context();
+        self.with_level(|b, level, _| {
+            let mut level = DryLevel::new(level);
+            let reacts = b
+                .use_item_on(
+                    &mut level,
+                    &mut horizon_world::level::Ticks::default(),
+                    horizon_core::position::BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]),
+                    face,
+                    horizon_core::geometry::Vec3::new(hit.point[0], hit.point[1], hit.point[2]),
+                    player,
+                    held.map(|s| &*s.item),
+                )
+                .consumes_action();
+            (reacts, (level.changed.into_iter().collect(), level.sounds))
+        })
+    }
+
+    /// Run BlockItem.place on a disposable level before predicting its swing.
+    /// The real level supplies collision shapes and building-blocking entities;
+    /// block writes, random draws, scheduled ticks and events stay in the preview.
+    fn remote_can_place(&mut self, hit: &super::Hit, stack: &ItemStack) -> bool {
+        if !self.may_build() {
+            return false;
+        }
+        let ctx = horizon_world::level::PlaceContext {
+            clicked_pos: horizon_core::position::BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]),
+            face: horizon_core::geometry::Direction::ALL[face_direction(hit.face) as usize],
+            hit: Vec3::new(hit.point[0], hit.point[1], hit.point[2]),
+            inside: hit.face == [0; 3],
+            yaw: self.yaw,
+            pitch: self.pitch,
+            sneaking: self.keys.contains(&KeyCode::ShiftLeft),
+            item: stack.item.to_string(),
+            can_use_game_master_blocks: self.can_use_game_master_blocks(),
         };
-        let reacts = self
-            .res
-            .behaviours()
-            .use_item_on(
-                &mut level,
-                &mut horizon_world::level::Ticks::default(),
-                horizon_core::position::BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]),
-                face,
-                horizon_core::geometry::Vec3::new(hit.point[0], hit.point[1], hit.point[2]),
-                self.use_context(),
-                held.map(|s| &*s.item),
+        self.with_level(|b, level, _| {
+            let mut level = DryLevel::new(level);
+            matches!(
+                b.place_block(
+                    &mut level,
+                    &mut horizon_world::level::Ticks::default(),
+                    &ctx
+                ),
+                horizon_world::level::PlaceOutcome::Placed { .. }
             )
-            .consumes_action();
-        (reacts, (level.changed.into_iter().collect(), level.sounds))
+        })
     }
 
     /// MultiPlayerGameMode.useItem for `hand`, if it holds something: whether
@@ -3836,23 +4027,26 @@ impl Game<'_> {
                 Ok(true)
             }
             KeyCode::KeyQ => {
+                if self.spectator() {
+                    return Ok(true);
+                }
                 let all = self.keys.contains(&KeyCode::ControlLeft);
+                // MultiPlayerGameMode.dropItem: predict removal before sending
+                // the action, then swing only if a nonempty stack was removed.
+                let dropped = horizon_client::items::take_held_drop(
+                    &mut self.inventory[self.selected],
+                    all,
+                    false,
+                );
                 self.send(S::PlayerAction(play::PlayerAction {
                     action: if all { 4 } else { 5 },
                     pos: [0; 3],
                     direction: 0,
                     sequence: 0,
                 }));
-                // Inventory.removeFromSelected (prediction).
-                let slot = &mut self.inventory[self.selected];
-                if let Some(s) = slot {
-                    if all || s.count <= 1 {
-                        *slot = None;
-                    } else {
-                        s.count -= 1;
-                    }
+                if dropped.is_some() {
+                    self.swing_hand(Hand::Main, SwingAnimation::DEFAULT);
                 }
-                self.swing_arm();
                 Ok(true)
             }
             KeyCode::KeyE => {
@@ -4529,7 +4723,7 @@ pub(super) fn input_ordinal(input: Input) -> i32 {
 /// The client's world for a guess at what a click does: reads go to the
 /// world, writes stay here and are dropped.
 struct DryLevel<'w> {
-    world: &'w horizon_client::world::World,
+    base: &'w dyn horizon_world::level::LevelAccess,
     changed: HashMap<horizon_core::position::BlockPos, BlockStateId>,
     random: horizon_core::random::LegacyRandom,
     /// The sounds the use plays (a door's creak).
@@ -4559,6 +4753,17 @@ pub(super) fn hand_operated(name: &str) -> bool {
         || name == "lever"
 }
 
+impl<'w> DryLevel<'w> {
+    fn new(base: &'w dyn horizon_world::level::LevelAccess) -> Self {
+        Self {
+            base,
+            changed: HashMap::new(),
+            random: horizon_core::random::LegacyRandom::new(0),
+            sounds: Vec::new(),
+        }
+    }
+}
+
 impl horizon_world::level::LevelAccess for DryLevel<'_> {
     fn emit(&mut self, event: horizon_world::level::LevelEvent) {
         if let horizon_world::level::LevelEvent::Sound {
@@ -4575,7 +4780,7 @@ impl horizon_world::level::LevelAccess for DryLevel<'_> {
         self.changed
             .get(&pos)
             .copied()
-            .unwrap_or_else(|| self.world.block(pos.x, pos.y, pos.z))
+            .unwrap_or_else(|| self.base.block_state(pos))
     }
     fn set_raw(
         &mut self,
@@ -4587,13 +4792,31 @@ impl horizon_world::level::LevelAccess for DryLevel<'_> {
         Some(previous)
     }
     fn is_loaded(&self, pos: horizon_core::position::BlockPos) -> bool {
-        self.world.loaded(pos.x, pos.z)
+        self.base.is_loaded(pos)
+    }
+    fn min_y(&self) -> i32 {
+        self.base.min_y()
+    }
+    fn max_y(&self) -> i32 {
+        self.base.max_y()
+    }
+    fn block_light(&self, pos: horizon_core::position::BlockPos) -> i32 {
+        self.base.block_light(pos)
+    }
+    fn sky_light(&self, pos: horizon_core::position::BlockPos) -> i32 {
+        self.base.sky_light(pos)
+    }
+    fn sky_darken(&self) -> i32 {
+        self.base.sky_darken()
+    }
+    fn is_unobstructed(&self, pos: horizon_core::position::BlockPos, state: BlockStateId) -> bool {
+        self.base.is_unobstructed(pos, state)
     }
     fn random(&mut self) -> &mut horizon_core::random::LegacyRandom {
         &mut self.random
     }
     fn game_time(&self) -> i64 {
-        self.world.game_time
+        self.base.game_time()
     }
 }
 
@@ -4708,6 +4931,110 @@ impl horizon_client::interaction_input::InteractionWorld for RemoteInputWorld<'_
 #[cfg(test)]
 mod tests {
     use super::Game;
+
+    #[test]
+    fn placement_preview_checks_obstruction_without_changing_the_level() {
+        use super::DryLevel;
+        use horizon_core::{position::BlockPos, random::LegacyRandom};
+        use horizon_world::{
+            level::{
+                Behaviours, LevelAccess, PlaceContext, PlaceOutcome, Ticks, data::load_registry,
+            },
+            registry::BlockStateId,
+        };
+
+        struct Level {
+            air: BlockStateId,
+            stone: BlockStateId,
+            obstructed: bool,
+            loaded: bool,
+            ceiling: i32,
+        }
+        impl LevelAccess for Level {
+            fn block_state(&self, pos: BlockPos) -> BlockStateId {
+                if pos == BlockPos::new(0, 0, 0) {
+                    self.stone
+                } else {
+                    self.air
+                }
+            }
+            fn set_raw(&mut self, _: BlockPos, _: BlockStateId) -> Option<BlockStateId> {
+                panic!("preview must not write to the live level");
+            }
+            fn is_loaded(&self, _: BlockPos) -> bool {
+                self.loaded
+            }
+            fn max_y(&self) -> i32 {
+                self.ceiling
+            }
+            fn is_unobstructed(&self, pos: BlockPos, _: BlockStateId) -> bool {
+                assert_eq!(pos, BlockPos::new(0, 1, 0));
+                !self.obstructed
+            }
+            fn random(&mut self) -> &mut LegacyRandom {
+                panic!("preview must not advance the live level's random source");
+            }
+            fn game_time(&self) -> i64 {
+                0
+            }
+        }
+
+        // As with the LAN tests, prepared game resources are optional locally.
+        let resources = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !resources.join("block-behaviours.json").exists() {
+            return;
+        }
+        let registry = load_registry(&resources).unwrap();
+        let behaviours = Behaviours::load(&registry, &resources).unwrap();
+        let mut base = Level {
+            air: registry.default_state("minecraft:air").unwrap(),
+            stone: registry.default_state("minecraft:stone").unwrap(),
+            obstructed: false,
+            loaded: true,
+            ceiling: 320,
+        };
+        for item in [
+            "minecraft:stone",
+            "minecraft:oak_slab",
+            "minecraft:oak_door",
+            // GrowingPlantHeadBlock.getStateForPlacement draws a random age.
+            "minecraft:twisting_vines",
+        ] {
+            let ctx = PlaceContext {
+                clicked_pos: BlockPos::new(0, 0, 0),
+                face: horizon_core::geometry::Direction::Up,
+                hit: horizon_core::geometry::Vec3::new(0.5, 1.0, 0.5),
+                inside: false,
+                yaw: 0.0,
+                pitch: 45.0,
+                sneaking: false,
+                item: item.into(),
+                can_use_game_master_blocks: false,
+            };
+            for (obstructed, loaded, ceiling) in [
+                (false, true, 320),
+                (true, true, 320),
+                (false, false, 320),
+                (false, true, 1),
+            ] {
+                base.obstructed = obstructed;
+                base.loaded = loaded;
+                base.ceiling = ceiling;
+                let valid = !obstructed && loaded && ceiling > 1;
+                let mut preview = DryLevel::new(&base);
+                let outcome = behaviours.place_block(&mut preview, &mut Ticks::default(), &ctx);
+                assert_eq!(
+                    matches!(outcome, PlaceOutcome::Placed { .. }),
+                    valid,
+                    "{item}, obstructed={obstructed}, loaded={loaded}, ceiling={ceiling}"
+                );
+                assert_eq!(preview.changed.is_empty(), !valid);
+                assert_eq!(base.block_state(BlockPos::new(0, 1, 0)), base.air);
+            }
+        }
+    }
 
     #[test]
     fn every_inventory_menu_slot_is_a_game_slot_and_45_is_the_off_hand() {
