@@ -71,6 +71,8 @@ pub(super) struct SculkState {
     /// The sculk block entities in the order they were added.
     index: Index,
     pub known: HashSet<(i32, i32)>,
+    /// The chunk map's membership revision `known` was taken at.
+    pub known_revision: Option<u64>,
     // Keyed by mob ids the server gives out: the fast hasher is safe.
     steps: FxHashMap<Who, Steps>,
     damaged: FxHashMap<u32, i64>,
@@ -336,7 +338,10 @@ impl Game<'_> {
     /// the block writes recorded since the last tick.
     pub(super) fn sculk_sync_index(&mut self) {
         // Chunks that arrived or left (every half second is plenty).
-        if self.sculk.ticks.is_multiple_of(10) {
+        // Nothing to do while no chunk came or went.
+        let revision = self.world.chunks.membership_revision();
+        if self.sculk.ticks.is_multiple_of(10) && self.sculk.known_revision != Some(revision) {
+            self.sculk.known_revision = Some(revision);
             let loaded: HashSet<(i32, i32)> = self.world.chunks.keys().copied().collect();
             let arrived: Vec<(i32, i32)> = loaded.difference(&self.sculk.known).copied().collect();
             for key in arrived {
