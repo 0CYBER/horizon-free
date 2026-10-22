@@ -51,8 +51,8 @@ fn tools() -> Value {
         { "name": "links", "description": "The Horizon links: the Discord invite, the GitHub Sponsors page and the website (an empty one is not offered).", "inputSchema": none },
         { "name": "menu_style", "description": "Show or set the game's menu style. \"horizon\" is Horizon's own menus, \"classic\" is vanilla's screens, which have no way back inside the game. The game reads it when it starts.",
           "inputSchema": { "type": "object", "properties": { "style": { "type": "string", "enum": ["horizon", "classic"], "description": "Omit to show the current style." } } } },
-        { "name": "update_channel", "description": "Show or set which Horizon releases install by themselves. \"stable\" (the default) is a tested build about once a day; \"nightly\" is every release as soon as it is built, several times a day, and can break. Only when the player asks to change it.",
-          "inputSchema": { "type": "object", "properties": { "channel": { "type": "string", "enum": ["stable", "nightly"], "description": "Omit to show the current channel." } } } },
+        { "name": "update_channel", "description": "Show or set which Horizon releases install by themselves. \"stable\" (the default) is a tested build about once a day; \"alpha\" is every release as soon as it is built, several times a day, and can break. Only when the player asks to change it.",
+          "inputSchema": { "type": "object", "properties": { "channel": { "type": "string", "enum": ["stable", "alpha"], "description": "Omit to show the current channel." } } } },
         { "name": "logs", "description": "Read the game's log: the last lines of logs/latest.log in the game folder, or with crash the newest crash report (what the game wrote when it last crashed). Read-only.",
           "inputSchema": { "type": "object", "properties": { "lines": { "type": "integer", "minimum": 1, "maximum": 5000, "description": "How many lines of latest.log (default 100)." }, "crash": { "type": "boolean", "description": "Return the newest crash report instead." } } } },
         { "name": "accounts", "description": "The Microsoft accounts signed in to the launcher (names and UUIDs, never tokens), which one the game plays as (none = offline), and how a sign-in started with sign_in is going.", "inputSchema": none },
@@ -291,7 +291,7 @@ impl Session {
                 let mut settings = backend::Settings::load();
                 if let Some(name) = arg_str(args, "channel") {
                     settings.update_channel = backend::UpdateChannel::parse(name)
-                        .ok_or("channel is \"stable\" or \"nightly\"")?;
+                        .ok_or("channel is \"stable\" or \"alpha\"")?;
                     settings.save();
                 }
                 Ok(format!(

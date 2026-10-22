@@ -346,7 +346,7 @@ pub fn latest(releases: &[Release]) -> Option<&Release> {
     releases.iter().find(|r| r.asset.is_some())
 }
 
-/// The releases a launcher installs by itself: stable ones, and betas too on the Nightly channel.
+/// The releases a launcher installs by itself: stable ones, and betas too on the Alpha channel.
 pub fn channel(releases: &[Release], channel: UpdateChannel) -> Vec<Release> {
     releases
         .iter()
@@ -362,15 +362,17 @@ pub enum UpdateChannel {
     /// A tested build about once a day: the betas promote.yml makes stable.
     #[default]
     Stable,
-    /// Every release as soon as it is built, betas included.
-    Nightly,
+    /// Every release as soon as it is built, pre-releases included. It was called "nightly"
+    /// while the channels were new: that name is still read.
+    #[serde(alias = "nightly")]
+    Alpha,
 }
 
 impl UpdateChannel {
     pub fn name(self) -> &'static str {
         match self {
             UpdateChannel::Stable => "stable",
-            UpdateChannel::Nightly => "nightly",
+            UpdateChannel::Alpha => "alpha",
         }
     }
 
@@ -378,36 +380,36 @@ impl UpdateChannel {
     pub fn label(self) -> &'static str {
         match self {
             UpdateChannel::Stable => "Stable",
-            UpdateChannel::Nightly => "Nightly",
+            UpdateChannel::Alpha => "Alpha",
         }
     }
 
     pub fn parse(name: &str) -> Option<Self> {
         match name {
             "stable" => Some(UpdateChannel::Stable),
-            "nightly" => Some(UpdateChannel::Nightly),
+            "alpha" | "nightly" => Some(UpdateChannel::Alpha),
             _ => None,
         }
     }
 
-    /// Whether this channel installs `release`: betas only reach Nightly.
+    /// Whether this channel installs `release`: betas only reach Alpha.
     pub fn takes(self, release: &Release) -> bool {
-        self == UpdateChannel::Nightly || !release.beta
+        self == UpdateChannel::Alpha || !release.beta
     }
 
-    /// How often a launcher left open looks for new releases: Nightly's come many times a day,
+    /// How often a launcher left open looks for new releases: Alpha's come many times a day,
     /// Stable's once.
     pub fn check_every(self) -> std::time::Duration {
         std::time::Duration::from_secs(match self {
             UpdateChannel::Stable => 4 * 3600,
-            UpdateChannel::Nightly => 30 * 60,
+            UpdateChannel::Alpha => 30 * 60,
         })
     }
 
-    /// The channel a release is on when it is listed: betas are Nightly's only.
+    /// The channel a release is on when it is listed: betas are Alpha's only.
     pub fn of(release: &Release) -> Self {
         if release.beta {
-            UpdateChannel::Nightly
+            UpdateChannel::Alpha
         } else {
             UpdateChannel::Stable
         }
@@ -2214,7 +2216,7 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub game_args: String,
     /// Which releases install by themselves: Stable by default. Launchers before 0.2 had a "Beta
-    /// builds" switch instead; [`Settings::parse`] reads its `beta_builds: true` as Nightly.
+    /// builds" switch instead; [`Settings::parse`] reads its `beta_builds: true` as Alpha.
     #[serde(default)]
     pub update_channel: UpdateChannel,
     /// The player has read what the "I'm playing" ping holds (`telemetry::PING`): on the
@@ -2232,11 +2234,11 @@ impl Settings {
             return Self::default();
         };
         if let Some(fields) = value.as_object_mut() {
-            // The switch from before 0.2: on meant every release at once, the Nightly channel.
+            // The switch from before 0.2: on meant every release at once, the Alpha channel.
             if fields.remove("beta_builds") == Some(serde_json::Value::Bool(true)) {
                 fields
                     .entry("update_channel")
-                    .or_insert_with(|| UpdateChannel::Nightly.name().into());
+                    .or_insert_with(|| UpdateChannel::Alpha.name().into());
             }
             // A channel this launcher doesn't know is Stable, not a reason to lose every setting.
             if fields
@@ -2458,10 +2460,10 @@ mod tests {
         assert_eq!(offered(&["v2026.10.15.1", "v2026.10.14"]), None);
     }
 
-    /// Betas (GitHub pre-releases) install by themselves only on the Nightly channel; Stable waits
+    /// Betas (GitHub pre-releases) install by themselves only on the Alpha channel; Stable waits
     /// for promote.yml's daily promotion (docs/release-flow.md, "Channels").
     #[test]
-    fn updates_follow_the_stable_channel_unless_nightly_is_picked() {
+    fn updates_follow_the_stable_channel_unless_alpha_is_picked() {
         let asset = ASSET.unwrap_or("horizon-linux-x86_64.tar.gz");
         let list = serde_json::json!([
             {"tag_name": "v2026.10.19.02", "prerelease": true, "assets": [{"name": asset, "browser_download_url": "b", "size": 1}]},
@@ -2472,10 +2474,10 @@ mod tests {
             releases.iter().map(|r| r.beta).collect::<Vec<_>>(),
             [true, false]
         );
-        let offered = |nightly: bool, installed: &[&str]| {
+        let offered = |alpha: bool, installed: &[&str]| {
             let installed: Vec<String> = installed.iter().map(|t| t.to_string()).collect();
-            let on = if nightly {
-                UpdateChannel::Nightly
+            let on = if alpha {
+                UpdateChannel::Alpha
             } else {
                 UpdateChannel::Stable
             };
@@ -2491,12 +2493,12 @@ mod tests {
         assert_eq!(offered(false, &["v2026.10.19.02"]), None);
         assert_eq!(
             releases.iter().map(UpdateChannel::of).collect::<Vec<_>>(),
-            [UpdateChannel::Nightly, UpdateChannel::Stable]
+            [UpdateChannel::Alpha, UpdateChannel::Stable]
         );
     }
 
     #[test]
-    fn the_update_channel_is_stored_by_name_and_the_old_beta_switch_reads_as_nightly() {
+    fn the_update_channel_is_stored_by_name_and_the_old_beta_switch_reads_as_alpha() {
         let read = |text: &str| Settings::parse(text).update_channel;
         assert_eq!(read(""), UpdateChannel::Stable);
         assert_eq!(read("{}"), UpdateChannel::Stable);
@@ -2504,12 +2506,15 @@ mod tests {
             read(r#"{"update_channel": "stable"}"#),
             UpdateChannel::Stable
         );
+        assert_eq!(read(r#"{"update_channel": "alpha"}"#), UpdateChannel::Alpha);
+        // The channel's first name, from launchers built while it was called Nightly.
         assert_eq!(
             read(r#"{"update_channel": "nightly"}"#),
-            UpdateChannel::Nightly
+            UpdateChannel::Alpha
         );
-        // Launchers before 0.2: "Beta builds" on is Nightly, off is Stable.
-        assert_eq!(read(r#"{"beta_builds": true}"#), UpdateChannel::Nightly);
+        assert_eq!(UpdateChannel::parse("nightly"), Some(UpdateChannel::Alpha));
+        // Launchers before 0.2: "Beta builds" on is Alpha, off is Stable.
+        assert_eq!(read(r#"{"beta_builds": true}"#), UpdateChannel::Alpha);
         assert_eq!(read(r#"{"beta_builds": false}"#), UpdateChannel::Stable);
         // Once a channel is picked, it wins over a switch left behind.
         let both = r#"{"beta_builds": true, "update_channel": "stable"}"#;
@@ -2522,19 +2527,19 @@ mod tests {
         // Saved as a name, without the old switch.
         let mut settings = Settings::parse(r#"{"selected": "v0.2.0", "beta_builds": true}"#);
         let saved = serde_json::to_value(&settings).unwrap();
-        assert_eq!(saved["update_channel"], "nightly");
+        assert_eq!(saved["update_channel"], "alpha");
         assert!(saved.get("beta_builds").is_none());
         assert_eq!(saved["selected"], "v0.2.0");
         settings.update_channel = UpdateChannel::Stable;
         let text = serde_json::to_string(&settings).unwrap();
         assert_eq!(read(&text), UpdateChannel::Stable);
-        for c in [UpdateChannel::Stable, UpdateChannel::Nightly] {
+        for c in [UpdateChannel::Stable, UpdateChannel::Alpha] {
             assert_eq!(UpdateChannel::parse(c.name()), Some(c));
         }
-        // An open launcher looks again every 4 hours on Stable, every 30 minutes on Nightly.
+        // An open launcher looks again every 4 hours on Stable, every 30 minutes on Alpha.
         let minutes = |c: UpdateChannel| c.check_every().as_secs() / 60;
         assert_eq!(minutes(UpdateChannel::Stable), 240);
-        assert_eq!(minutes(UpdateChannel::Nightly), 30);
+        assert_eq!(minutes(UpdateChannel::Alpha), 30);
     }
 
     #[test]
@@ -2665,8 +2670,8 @@ mod tests {
         let releases = parse_releases(&list, Some(asset), is_game_tag);
         let installed = ["v2026.10.19.15".to_string(), "v2026.10.12".to_string()];
         let offered = |on| horizon_update(&channel(&releases, on), &installed).map(|r| r.tag);
-        // A beta 0.2.0 reaches launchers on Nightly; Stable ones wait for its promotion.
-        assert_eq!(offered(UpdateChannel::Nightly), Some("v0.2.0".into()));
+        // A beta 0.2.0 reaches launchers on Alpha; Stable ones wait for its promotion.
+        assert_eq!(offered(UpdateChannel::Alpha), Some("v0.2.0".into()));
         assert_eq!(offered(UpdateChannel::Stable), None);
         let mut sorted = vec![
             "v2026.10.19.15".to_string(),

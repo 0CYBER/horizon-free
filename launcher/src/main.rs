@@ -1830,11 +1830,11 @@ impl Launcher {
                 cx.notify();
             }),
         );
-        use backend::UpdateChannel::{Nightly, Stable};
+        use backend::UpdateChannel::{Alpha, Stable};
         let this = cx.entity().downgrade();
         let update_channel = segments(
             "update-channel",
-            &[(Stable, Stable.label()), (Nightly, Nightly.label())],
+            &[(Stable, Stable.label()), (Alpha, Alpha.label())],
             self.settings.update_channel,
             &t,
             move |picked, _, cx| {
@@ -2011,7 +2011,7 @@ impl Launcher {
                                 .flex_col()
                                 .child("Stable: a tested build about once a day.")
                                 .child(
-                                    "Nightly: every change as soon as it is built, several times a day; can break.",
+                                    "Alpha: every change as soon as it is built, several times a day; can break.",
                                 )
                                 .into_any_element(),
                         ),

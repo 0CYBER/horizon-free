@@ -20,7 +20,7 @@ There is no Horizon server in the middle. The code holds the host's addresses an
 
 Guests join with the name their game uses. There is no account check, so only share the code with people you trust.
 
-In Nightly builds, guests can also use the host's workstations: the crafter, loom, stonecutter, grindstone, anvil, smithing table, enchanting table, beacon, lectern and cartography table. Stable gets this once it has passed.
+In Alpha builds, guests can also use the host's workstations: the crafter, loom, stonecutter, grindstone, anvil, smithing table, enchanting table, beacon, lectern and cartography table. Stable gets this once it has passed.
 
 ## Open to LAN
 
