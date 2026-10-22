@@ -86,6 +86,31 @@ const YUNG_REPLACES: [(&str, &str); 7] = [
     ("betterfortresses:fortress", "minecraft:fortress"),
     ("bettermineshafts:mineshaft_", "minecraft:mineshaft"),
 ];
+/// Mo' Structures' placement (`mostructures:type`) takes its spacing and
+/// separation from the mod's config, not its files: the defaults it writes
+/// (MoStructuresConfig), by config key, as (spacing, separation).
+const MO_SPREADS: [(&str, i64, i64); 17] = [
+    ("abandoned_church", 33, 20),
+    ("air_balloon", 22, 12),
+    ("barn_house", 32, 16),
+    ("big_pyramid", 32, 25),
+    ("ice_tower", 28, 20),
+    ("jungle_pyramid", 25, 22),
+    ("killer_bunny_castle", 32, 22),
+    ("lighthouse", 24, 14),
+    ("moai", 17, 15),
+    ("pillager_factory", 34, 16),
+    ("pillager_mines", 40, 27),
+    ("pirate_ship", 32, 16),
+    ("tavern", 26, 16),
+    ("the_castle_in_the_sky", 32, 22),
+    ("villager_market", 32, 16),
+    ("villager_tower", 26, 16),
+    ("sphinx", 24, 16),
+];
+/// Mo' Structures keeps a start out of this many chunks around a start of
+/// each set in its `structure_set_to_avoid`.
+const MO_AVOID_CHUNKS: i64 = 3;
 /// Moog's Structure Lib spreads its structures 1.65 times as far apart as
 /// its files say (AdvancedRandomSpread's constructor).
 const MOOGS_SPACING: f64 = 1.65;
@@ -510,6 +535,22 @@ fn upgrade_types(
                 v["type"] = "minecraft:jigsaw".into();
                 true
             }
+            // Mo' Structures' ModStructure: vanilla's jigsaw that starts only
+            // where the terrain under the 5×5 chunks around varies by no
+            // more than `heightRange` blocks (-1: anywhere).
+            Some("mostructures:generic") => {
+                let range = v
+                    .as_object_mut()
+                    .and_then(|o| o.remove("heightRange"))
+                    .and_then(|r| r.as_i64())
+                    .unwrap_or(-1);
+                if range >= 0 {
+                    v["horizon:start_checks"] =
+                        serde_json::json!({"terrain_radius": 2, "terrain_range": range});
+                }
+                v["type"] = "minecraft:jigsaw".into();
+                true
+            }
             // Formations' SimpleStructure: its pool and placement, laid out
             // by the game (`horizon_world::worldgen::structure::formations`).
             Some("formations:simple") => {
@@ -533,6 +574,7 @@ fn upgrade_types(
                 p["type"] = "minecraft:random_spread".into();
                 true
             }
+            Some("mostructures:type") => mo_placement(&mut v["placement"], lost),
             Some(t) if YUNG_SPREADS.contains(&t) => {
                 let t = t.to_owned();
                 yung_placement(&t, &mut v["placement"], set_tags, lost);
@@ -1022,6 +1064,41 @@ fn placement_rules(
     }
 }
 
+/// Mo' Structures' placement as vanilla's random spread: the spacing and
+/// separation of its config key, and its sets to avoid as
+/// `horizon:exclusion_zone` tested by their spread alone
+/// (ModStructurePlacement.exclusionZoneCheck). A key the config does not
+/// have fails the mod's codec, and the set stays as it is.
+fn mo_placement(p: &mut Value, lost: &mut BTreeMap<String, usize>) -> bool {
+    let key = p["config_key"].as_str().unwrap_or_default();
+    let Some(&(_, spacing, separation)) = MO_SPREADS.iter().find(|(k, ..)| *k == key) else {
+        *lost.entry("config_key".into()).or_default() += 1;
+        return false;
+    };
+    let Some(o) = p.as_object_mut() else {
+        return false;
+    };
+    o.remove("config_key");
+    o.insert("spacing".into(), spacing.into());
+    o.insert("separation".into(), separation.into());
+    let avoid = o.remove("structure_set_to_avoid");
+    let sets: Vec<Value> = avoid
+        .iter()
+        .flat_map(|a| a.as_array().into_iter().flatten())
+        .filter(|s| s.is_string())
+        .cloned()
+        .collect();
+    if !sets.is_empty() {
+        o.insert(
+            "horizon:exclusion_zone".into(),
+            serde_json::json!({"other_sets": sets, "chunk_count": MO_AVOID_CHUNKS,
+                "their_zones": false}),
+        );
+    }
+    o.insert("type".into(), "minecraft:random_spread".into());
+    true
+}
+
 /// One of YUNG's placements as vanilla's random spread with `horizon:` keys:
 /// the enhanced exclusion zone as `horizon:exclusion_zone`; the temples'
 /// ocean and river search (findBiomeHorizontal around the chunk's middle
@@ -1383,6 +1460,71 @@ mod tests {
             json!({"library": "moogs", "min_y": 60, "burying": "lowest_corner",
                 "no_liquid": true})
         );
+    }
+
+    #[test]
+    fn mo_structures_become_vanillas_jigsaw_and_spread() {
+        let mut report = Upgrade::default();
+        let mut s = json!({"type": "mostructures:generic", "start_pool": "mostructures:a/base",
+            "size": 7, "heightRange": 25, "use_expansion_hack": true,
+            "start_height": {"absolute": 0}, "max_distance_from_center": 80});
+        assert!(upgrade("structure", &mut s, &mut report, &BTreeMap::new()));
+        assert_eq!(s["type"], "minecraft:jigsaw");
+        assert!(s.get("heightRange").is_none());
+        assert_eq!(
+            s["horizon:start_checks"],
+            json!({"terrain_radius": 2, "terrain_range": 25})
+        );
+        let mut anywhere = json!({"type": "mostructures:generic", "heightRange": -1});
+        assert!(upgrade(
+            "structure",
+            &mut anywhere,
+            &mut report,
+            &BTreeMap::new()
+        ));
+        assert!(anywhere.get("horizon:start_checks").is_none());
+
+        // The config's spacing and separation, not the file's.
+        let mut set = json!({"placement": {"type": "mostructures:type", "config_key": "moai",
+            "salt": 12994829, "spacing": 17, "separation": 15,
+            "structure_set_to_avoid": ["minecraft:villages", "mostructures:lighthouse"]}});
+        assert!(upgrade(
+            "structure_set",
+            &mut set,
+            &mut report,
+            &BTreeMap::new()
+        ));
+        assert_eq!(
+            set["placement"],
+            json!({"type": "minecraft:random_spread", "salt": 12994829, "spacing": 17,
+                "separation": 15, "horizon:exclusion_zone": {"chunk_count": 3,
+                "other_sets": ["minecraft:villages", "mostructures:lighthouse"],
+                "their_zones": false}})
+        );
+        let mut set = json!({"placement": {"type": "mostructures:type",
+            "config_key": "jungle_pyramid", "salt": 1, "spacing": 16, "separation": 14}});
+        assert!(upgrade(
+            "structure_set",
+            &mut set,
+            &mut report,
+            &BTreeMap::new()
+        ));
+        assert_eq!(
+            (
+                &set["placement"]["spacing"],
+                &set["placement"]["separation"]
+            ),
+            (&json!(25), &json!(22))
+        );
+        assert!(set["placement"].get("horizon:exclusion_zone").is_none());
+        let mut unknown = json!({"placement": {"type": "mostructures:type", "config_key": "x"}});
+        assert!(!upgrade(
+            "structure_set",
+            &mut unknown,
+            &mut report,
+            &BTreeMap::new()
+        ));
+        assert_eq!(report.rules_lost["config_key"], 1);
     }
 
     #[test]

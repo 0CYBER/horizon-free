@@ -444,6 +444,18 @@ Two cases the oracle fills in:
     also spreads its structures 1.65 times as far apart as its files say, which carry now
     applies. MVS went from 829 starts to 90 in a 128×128-chunk square (seed 1234): 294 from the
     spacing, the rest from the start checks.
+  - **Mo' Structures** (LGPL-3.0; 38 files). Its `mostructures:generic` is vanilla's jigsaw
+    that starts only where the terrain under the 5×5 chunks around it varies by no more than
+    its `heightRange`: carry writes `minecraft:jigsaw` with `horizon:start_checks`
+    (`terrain_radius` 2, `terrain_range`). Its placement `mostructures:type` takes spacing and
+    separation from the mod's config, not its files; carry writes the config's defaults
+    (keyed by `config_key`) and the sets it avoids within 3 chunks as `horizon:exclusion_zone`
+    with `"their_zones": false`: like the mod, the game tests those sets by their spread and
+    frequency alone, not by their own exclusion zones. Its two block-ageing processors
+    (`jungle_rot_processor`, `simple_cobblestone`, 3 uses) are still dropped, as is its
+    mixin that keeps lakes out of its structures. Over chunks -64..63 that adds 13 starts at
+    seed 1234 (pirate ships, churches, a tavern, the castle in the sky...) and 16 at seed 2,
+    and every other start stays as it was.
   - **Processors written in Java** are taken out of their lists (#822). The game, like
     vanilla, refuses a list holding a type it does not know, and with it every pool naming the
     list. The structures now generate undecorated (no pillars under them, spawners as the
@@ -627,7 +639,6 @@ Two cases the oracle fills in:
       Dungeons types: Java structure types;
     - the block processors written in Java
       (YUNG's banners and decorations, Better Strongholds' legs, Lithostitched's block swaps);
-    - MO Structures (38; its library is only on CurseForge).
   - **Formations** (Overworld and Nether: 50 structures, 128 pool elements) places one
     template per start at a height found in the noise columns under its corners and centre: on
     the surface, on water or lava, or in a cave (on its floor, under its ceiling, buried in
