@@ -3458,10 +3458,8 @@ impl Game<'_> {
                 sequence: seq,
             }));
             if progress >= 1.0 {
+                // startDestroyBlock: instant survival breaks have no destroy delay.
                 self.predict_break(hit.pos, state, seq);
-                if let Some(r) = self.remote.as_mut() {
-                    r.destroy_delay = 5;
-                }
                 return;
             }
             if let Some(r) = self.remote.as_mut() {
