@@ -6,7 +6,7 @@
     python3 tools/release_channels.py promote --tag v2026.10.19.03 --force  # even if blocked or untested
     python3 tools/release_channels.py promote --dry-run         # say what would happen, change nothing
 
-Every game release goes out as a beta (a GitHub pre-release): launchers on the Nightly channel install it at once.
+Every game release goes out as a beta (a GitHub pre-release): launchers on the Alpha channel install it at once.
 Stable moves once a day, at PROMOTE_AT (20:00 UTC). A beta is due for stable when:
 - it is newer than the stable release (GitHub's "latest", which launchers and servers install by default),
 - it had been out PROMOTE_AFTER (6 hours) at the day's promotion time, so every run until the next one picks the

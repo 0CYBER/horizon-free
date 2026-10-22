@@ -37,16 +37,16 @@ The game opens on Horizon's own title screen. Your worlds, options and logs live
 - **Horizon.** The launcher looks for a new release when it starts and every four hours while it is open. With **Install new versions automatically** on (the default), it installs one and moves you to it if you were on the newest. New releases come out many times a day, and old versions stay installed until you remove them on the **Versions** page.
 - **The launcher.** It updates itself from its own releases, then shows **Restart** in its footer.
 
-## Stable and Nightly
+## Stable and Alpha
 
-> **Next launcher release.** The Updates switch below is merged but not in a launcher release yet. Launcher 0.17 has a **Beta builds** switch in Settings instead, which installs every new build at once, as Nightly does.
+> **Next launcher release.** The Updates switch below is merged but not in a launcher release yet. Launcher 0.17 has a **Beta builds** switch in Settings instead, which installs every new build at once, as Alpha does.
 
 In **Settings**, **Updates** picks which builds install by themselves:
 
 - **Stable** (the default): a tested build about once a day.
-- **Nightly**: every change as soon as it is built, several times a day. It can break. A launcher left open looks for new builds every 30 minutes, instead of every four hours.
+- **Alpha**: every change as soon as it is built, several times a day. It can break. A launcher left open looks for new builds every 30 minutes, instead of every four hours.
 
-Every new release is a Nightly build first. Once a day (20:00 UTC, 21:00 in Paris in winter), the newest one that has been out for six hours, passed its smoke test and has no known blocker becomes Stable. "Nightly" is just the name: it updates many times a day, not once a night. The **Versions** page shows each version's channel, and you can install any of them by hand.
+Every new release is an Alpha build first. Once a day (20:00 UTC, 21:00 in Paris in winter), the newest one that has been out for six hours, passed its smoke test and has no known blocker becomes Stable. Alpha builds come out many times a day, and Horizon as a whole is still in beta; Stable is the tested ones. The **Versions** page shows each version's channel, and you can install any of them by hand.
 
 ## The Versions page
 
