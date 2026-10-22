@@ -637,6 +637,9 @@ impl Game<'_> {
         let r = self.world.random.next_double();
         let power = (4.0 + r * 1.5 * speed) as f32;
         let at = [c.position.x, c.position.y, c.position.z];
+        // The cart is the explosion's source: it is gone before the blast
+        // looks for entities, so it can't hit itself.
+        self.carts.retain(|x| x.id != c.id);
         let _ = self.server_explode(at, power, BlockInteraction::Destroy, false);
     }
     /// `MinecartHopper.suckInItems`: items above, into the five slots.
@@ -792,14 +795,17 @@ impl Game<'_> {
         let ticking = self.entity_ticking_area();
         // A server player's minecart moves with its rider (lan_vehicles.rs).
         let ridden = self.guest_vehicles();
-        let mut i = 0;
-        while i < self.carts.len() {
+        // By id: an exploding cart can destroy or prime others mid-loop.
+        let ids: Vec<u32> = self.carts.iter().map(|c| c.id).collect();
+        for id in ids {
+            let Some(i) = self.carts.iter().position(|c| c.id == id) else {
+                continue;
+            };
             let p = self.carts[i].position;
-            if Some(self.carts[i].id) == self.riding
-                || ridden.contains(&self.carts[i].id)
+            if Some(id) == self.riding
+                || ridden.contains(&id)
                 || !ticking(p.x.floor() as i32, p.z.floor() as i32)
             {
-                i += 1;
                 continue;
             }
             let mut c = self.carts[i].clone();
@@ -807,10 +813,12 @@ impl Game<'_> {
             if c.kind == CartKind::Hopper {
                 self.hopper_cart_pickup(&mut c);
             }
+            let Some(i) = self.carts.iter().position(|c| c.id == id) else {
+                continue;
+            };
             if alive {
                 self.carts[i] = c;
                 self.push_from_cart(i);
-                i += 1;
             } else {
                 self.carts.remove(i);
             }
@@ -881,6 +889,10 @@ impl Game<'_> {
             p.velocity = Vec3::ZERO;
             p.fall_distance = 0.0;
         }
+        let Some(i) = self.carts.iter().position(|x| x.id == c.id) else {
+            self.riding = None;
+            return true;
+        };
         if alive {
             self.carts[i] = c;
             self.push_from_cart(i);
@@ -1138,8 +1150,8 @@ impl Game<'_> {
     }
     /// `VehicleEntity.hurtServer`: shake, add the damage, break past 40 (at
     /// once for creative players); TNT minecarts prime instead when moving
-    /// or hurt by fire.
-    fn hurt_cart(&mut self, i: usize, damage: f32, creative: bool, fire: bool) {
+    /// or hurt by fire or an explosion (`damageSourceIgnitesTnt`).
+    pub(super) fn hurt_cart(&mut self, i: usize, damage: f32, creative: bool, fire: bool) {
         let c = &mut self.carts[i];
         c.hurt_dir = -c.hurt_dir;
         c.hurt_time = 10;
@@ -1148,7 +1160,7 @@ impl Game<'_> {
         if destroyed {
             let mut c = self.carts.remove(i);
             let speed = c.velocity.x * c.velocity.x + c.velocity.z * c.velocity.z;
-            if c.kind == CartKind::Tnt && (fire || speed >= 0.01) {
+            if c.kind == CartKind::Tnt && (fire || speed >= f64::from(0.01f32)) {
                 // MinecartTNT.destroy: prime instead of breaking.
                 if c.fuse < 0 {
                     self.prime_cart(&mut c);
