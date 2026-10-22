@@ -52,6 +52,10 @@ struct Cache {
     cursor: (u32, u32),
     pending: Vec<Patch>,
     hex: Option<Vec<HexProvider>>,
+    /// `FontSet.glyphsByWidth` for obfuscated text (built on first use).
+    by_width: Option<HashMap<u32, Vec<char>>>,
+    /// `Font.random`: picks obfuscated glyphs.
+    random: horizon_core::random::LegacyRandom,
 }
 pub struct Font {
     bitmap: HashMap<char, Glyph>,
@@ -285,6 +289,12 @@ impl Font {
                 cursor: (0, 0),
                 pending: Vec::new(),
                 hex: None,
+                by_width: None,
+                random: horizon_core::random::LegacyRandom::new(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_nanos() as i64),
+                ),
             }),
             uniform: false,
             japanese: false,
@@ -353,6 +363,7 @@ impl Font {
         cache.glyphs.clear();
         cache.cursor = (0, 0);
         cache.hex = None;
+        cache.by_width = None;
     }
     /// The glyph for a character (FontSet.getGlyph).
     pub fn glyph(&self, c: char) -> Glyph {
@@ -426,6 +437,66 @@ impl Font {
             advance: (width / 2 + 1) as f32,
             offset: 0.5,
         })
+    }
+    /// `FontSet.getRandomGlyph`: what an obfuscated character draws, a random
+    /// glyph as wide as `advance` (rounded up), else the missing glyph.
+    ///
+    /// Vanilla picks among every glyph of the font set, Unifont's included.
+    /// Those are rasterized into a fixed atlas region on demand, which a
+    /// line of obfuscated text would fill in seconds, so the candidates are
+    /// the glyphs already in the atlas (the bitmap sheets and spaces), or with
+    /// "Force Unicode Font" the Unifont glyphs below U+0250.
+    pub fn random_glyph(&self, advance: f32) -> Glyph {
+        use horizon_core::random::RandomSource;
+        let width = advance.ceil() as u32;
+        let pick = {
+            let mut cache = self.cache.borrow_mut();
+            if cache.by_width.is_none() {
+                let by_width = self.glyphs_by_width(&mut cache);
+                cache.by_width = Some(by_width);
+            }
+            let Cache {
+                by_width, random, ..
+            } = &mut *cache;
+            by_width
+                .as_ref()
+                .and_then(|m| m.get(&width))
+                .and_then(|chars| {
+                    let i = random.next_int_bound(chars.len() as i32).ok()?;
+                    chars.get(i as usize).copied()
+                })
+        };
+        pick.map_or(self.missing, |c| self.glyph(c))
+    }
+    fn glyphs_by_width(&self, cache: &mut Cache) -> HashMap<u32, Vec<char>> {
+        let mut chars: Vec<(char, f32)> = self.space.iter().map(|(c, a)| (*c, *a)).collect();
+        if self.uniform {
+            if cache.hex.is_none() {
+                cache.hex = Some(self.load_hex());
+            }
+            for code in 0..0x250u32 {
+                let hex = cache.hex.iter().flatten().find_map(|p| p.glyphs.get(&code));
+                if let (Some(c), Some(h)) = (char::from_u32(code), hex)
+                    && !self.space.contains_key(&c)
+                {
+                    let width = h.right.saturating_sub(h.left) + 1;
+                    chars.push((c, (width / 2 + 1) as f32));
+                }
+            }
+        } else {
+            chars.extend(
+                self.bitmap
+                    .iter()
+                    .filter(|(c, _)| !self.space.contains_key(c))
+                    .map(|(c, g)| (*c, g.advance)),
+            );
+        }
+        chars.sort_by_key(|(c, _)| *c);
+        let mut out: HashMap<u32, Vec<char>> = HashMap::new();
+        for (c, advance) in chars {
+            out.entry(advance.ceil() as u32).or_default().push(c);
+        }
+        out
     }
     /// Atlas pixels rasterized since the last call.
     pub fn take_patches(&self) -> Vec<Patch> {

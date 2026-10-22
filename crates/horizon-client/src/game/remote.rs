@@ -1840,6 +1840,10 @@ impl Game<'_> {
                         );
                     }
                 }
+                // WIN_GAME: the poem and credits, then PERFORM_RESPAWN.
+                4 if self.screen != Screen::Win => {
+                    self.open_win_screen(true, super::win::Finish::RemoteRespawn);
+                }
                 1 => {
                     self.world.weather.raining = true;
                     self.world.weather.rain_level = (0.0, 0.0);

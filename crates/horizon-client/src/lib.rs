@@ -186,6 +186,7 @@ pub mod vanillagen;
 pub mod vault;
 pub mod weather;
 pub mod widgets;
+pub mod win_screen;
 pub mod window;
 pub mod world;
 pub mod world_spawn;

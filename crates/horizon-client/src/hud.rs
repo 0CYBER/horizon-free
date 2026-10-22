@@ -363,6 +363,8 @@ pub struct HudBatch {
     pub patches: Vec<crate::font::Patch>,
     /// Vertex ranges with another blend or depth/scissor state, in order.
     pub blends: Vec<(std::ops::Range<u32>, Blend)>,
+    /// The textures and time of the `Blend::EndPortal` runs.
+    pub end_portal: EndPortalFill,
 }
 /// How a run of HUD vertices blends and tests depth.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -375,6 +377,19 @@ pub enum Blend {
     Additive,
     /// Alpha blending with an isolated depth buffer and a pixel scissor.
     Depth([u32; 4]),
+    /// `RenderPipelines.VIGNETTE`: the destination darkened by the texture
+    /// (`ZERO, ONE_MINUS_SRC_COLOR`).
+    Vignette,
+    /// `RenderPipelines.END_PORTAL` as a GUI fill: the End portal's layers
+    /// projected from the screen (`HudBatch::end_portal` sets the textures).
+    EndPortal,
+}
+/// What a `Blend::EndPortal` fill samples: the atlas rects (u0, v0, width,
+/// height) of `end_sky.png` and `end_portal.png`, and the `GameTime` uniform.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct EndPortalFill {
+    pub sprites: [[f32; 4]; 2],
+    pub game_time: f32,
 }
 pub fn rgba(r: u8, g: u8, b: u8, a: u8) -> u32 {
     u32::from(a) << 24 | u32::from(b) << 16 | u32::from(g) << 8 | u32::from(r)
@@ -398,6 +413,7 @@ impl HudBatch {
             height: (window[1] as f32 / scale as f32).ceil(),
             patches: Vec::new(),
             blends: Vec::new(),
+            end_portal: EndPortalFill::default(),
         }
     }
     /// Draw the vertices added since `start` with the inverting blend.
@@ -695,7 +711,12 @@ impl HudBatch {
         let mut glyphs = Vec::new();
         let mut cursor = x;
         for (i, (ch, style)) in text.chars().enumerate() {
-            let g = font.glyph(ch);
+            let mut g = font.glyph(ch);
+            // Font.StringRenderOutput.accept: obfuscated characters draw a
+            // random glyph of the same width each frame.
+            if style.obfuscated == Some(true) && ch != ' ' {
+                g = font.random_glyph(g.advance);
+            }
             let c = style.color.map_or(color, |rgb| {
                 rgba((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8, alpha)
             });
@@ -789,6 +810,20 @@ impl HudBatch {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct HudUniform {
     size: [f32; 4],
+    /// `EndPortalFill`: the two sprites, then the game time in x.
+    end_portal: [[f32; 4]; 3],
+}
+impl HudUniform {
+    fn new(size: [f32; 4], fill: EndPortalFill) -> Self {
+        Self {
+            size,
+            end_portal: [
+                fill.sprites[0],
+                fill.sprites[1],
+                [fill.game_time, 0.0, 0.0, 0.0],
+            ],
+        }
+    }
 }
 pub struct HudRenderer {
     pub fire_animations: Vec<(Rect, crate::sprites::SpriteAnimation, usize)>,
@@ -799,6 +834,8 @@ pub struct HudRenderer {
     invert_pipeline: wgpu::RenderPipeline,
     additive_pipeline: wgpu::RenderPipeline,
     depth_pipeline: wgpu::RenderPipeline,
+    vignette_pipeline: wgpu::RenderPipeline,
+    end_portal_pipeline: wgpu::RenderPipeline,
     group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
     buffer: wgpu::Buffer,
@@ -821,7 +858,7 @@ impl HudRenderer {
         });
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("HUD size"),
-            contents: bytemuck::bytes_of(&HudUniform { size: [1.0; 4] }),
+            contents: bytemuck::bytes_of(&HudUniform::new([1.0; 4], EndPortalFill::default())),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -829,7 +866,7 @@ impl HudRenderer {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -957,6 +994,31 @@ impl HudRenderer {
             "fs_main",
             false,
         );
+        // RenderPipelines.VIGNETTE: ZERO, ONE_MINUS_SRC_COLOR, ZERO, ONE.
+        let vignette_pipeline = create(
+            "HUD vignette",
+            wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::Zero,
+                    dst_factor: wgpu::BlendFactor::OneMinusSrc,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::Zero,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
+            },
+            "fs_main",
+            false,
+        );
+        // RenderPipelines.END_PORTAL: opaque.
+        let end_portal_pipeline = create(
+            "HUD end portal",
+            wgpu::BlendState::REPLACE,
+            "fs_end_portal",
+            false,
+        );
         let capacity = 1 << 16;
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("HUD vertices"),
@@ -971,6 +1033,8 @@ impl HudRenderer {
             invert_pipeline,
             additive_pipeline,
             depth_pipeline,
+            vignette_pipeline,
+            end_portal_pipeline,
             group,
             uniform,
             buffer,
@@ -1064,9 +1128,10 @@ impl HudRenderer {
             encoder,
             &self.uniform,
             0,
-            bytemuck::bytes_of(&HudUniform {
-                size: [size[0] as f32, size[1] as f32, batch.scale, 0.0],
-            }),
+            bytemuck::bytes_of(&HudUniform::new(
+                [size[0] as f32, size[1] as f32, batch.scale, 0.0],
+                batch.end_portal,
+            )),
         );
     }
     /// Draw the batch `prepare` staged.
@@ -1135,6 +1200,8 @@ impl HudRenderer {
                     Blend::Invert => &self.invert_pipeline,
                     Blend::Additive => &self.additive_pipeline,
                     Blend::Depth(_) => &self.depth_pipeline,
+                    Blend::Vignette => &self.vignette_pipeline,
+                    Blend::EndPortal => &self.end_portal_pipeline,
                 });
                 pass.draw(range.clone(), 0..1);
             }
@@ -1147,10 +1214,10 @@ impl HudRenderer {
 mod tests {
     use super::*;
 
-    #[test]
-    fn the_fonts_only_atlas_measures_text_like_the_full_one() {
-        // A synthetic default font: two 8x8 glyphs, 3 and 5 pixels wide.
-        let root = std::env::temp_dir().join(format!("horizon-fonts-atlas-{}", std::process::id()));
+    /// A synthetic default font: two 8x8 glyphs, 3 and 5 pixels wide.
+    fn two_glyph_font(name: &str) -> std::path::PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("horizon-fonts-{name}-{}", std::process::id()));
         let font = root.join("assets/minecraft/font");
         let textures = root.join("assets/minecraft/textures/font");
         fs::create_dir_all(&font).unwrap();
@@ -1175,6 +1242,11 @@ mod tests {
             .unwrap()
             .write_image_data(&pixels)
             .unwrap();
+        root
+    }
+    #[test]
+    fn the_fonts_only_atlas_measures_text_like_the_full_one() {
+        let root = two_glyph_font("atlas");
         let full = HudAtlas::build(&root).unwrap();
         let fonts = HudAtlas::fonts(&root).unwrap();
         let _ = fs::remove_dir_all(&root);
@@ -1182,6 +1254,21 @@ mod tests {
         let width = full.font.width("abba");
         assert!(width > 0.0);
         assert_eq!(fonts.font.width("abba"), width);
+    }
+    #[test]
+    fn obfuscated_glyphs_keep_the_width() {
+        let root = two_glyph_font("obfuscated");
+        let fonts = HudAtlas::fonts(&root).unwrap();
+        let _ = fs::remove_dir_all(&root);
+        let (a, b) = (fonts.font.glyph('a').advance, fonts.font.glyph('b').advance);
+        assert_ne!(a, b);
+        for _ in 0..20 {
+            assert_eq!(fonts.font.random_glyph(a).advance, a);
+            assert_eq!(fonts.font.random_glyph(b).advance, b);
+        }
+        // No glyph that wide: FontSet's missing glyph.
+        let missing = fonts.font.random_glyph(30.0);
+        assert!(missing.rect.is_none() && missing.right == 5.0);
     }
 
     #[test]
@@ -1340,6 +1427,7 @@ mod tests {
                 height: height as f32,
                 patches: Vec::new(),
                 blends: Vec::new(),
+                end_portal: EndPortalFill::default(),
             };
             for (image_width, image_height) in [(195, 136), (176, 166), (176, 222)] {
                 assert_eq!(
