@@ -3244,7 +3244,11 @@ impl Game<'_> {
             .and_then(|h| self.res.items().get(&h.item))
             .is_some_and(|i| i.block.is_some());
         if let Some(hit) = self.pick() {
-            let reacts = hand == Hand::Main && self.remote_block_reacts(&hit, held.as_ref());
+            let (reacts, changes) = if hand == Hand::Main {
+                self.remote_block_reacts(&hit, held.as_ref())
+            } else {
+                (false, DryUse::default())
+            };
             let seq = self.next_sequence();
             let cursor = [
                 (hit.point[0] - f64::from(hit.pos[0])) as f32,
@@ -3270,6 +3274,9 @@ impl Game<'_> {
                 r.use_target = Some(hit.pos);
                 r.placing = Some((target, ticks));
             }
+            if reacts {
+                self.predict_use(&changes, seq);
+            }
             if held_block {
                 self.with_hand(hand, Game::swing_arm);
                 return true;
@@ -3279,15 +3286,61 @@ impl Game<'_> {
         false
     }
 
+    /// MultiPlayerGameMode.useItemOn inside startPrediction: the blocks the
+    /// use changed on this client's level at once, each kept as predicted
+    /// under the use's sequence until the server acknowledges it (a use the
+    /// server refused goes back). Only the blocks a hand opens or flips: a
+    /// wooden or copper door, trapdoor or fence gate, a lever or a button;
+    /// whatever else the use changes waits for the server.
+    fn predict_use(&mut self, (changes, sounds): &DryUse, seq: i32) {
+        let facts = self.res.facts();
+        let predicted = |state: BlockStateId| hand_operated(&facts.get(state).name);
+        if changes.is_empty()
+            || !changes
+                .iter()
+                .all(|(p, s)| predicted(*s) && predicted(self.world.block(p.x, p.y, p.z)))
+        {
+            return;
+        }
+        for &(p, state) in changes {
+            let pos = [p.x, p.y, p.z];
+            let before = self.world.block(p.x, p.y, p.z);
+            // BlockStatePredictionHandler.retainKnownServerState.
+            if let Some(r) = self.remote.as_mut() {
+                r.predictions
+                    .entry(pos)
+                    .and_modify(|e| e.0 = seq)
+                    .or_insert((seq, before.0 as i32));
+            }
+            self.set_block(pos, state.0 as i32);
+        }
+        // `level.playSound(player, ...)`: the clicker hears it from its own use; the
+        // server sends it to the others only.
+        for (pos, sound, volume, pitch) in sounds {
+            let at = [
+                f64::from(pos.x) + 0.5,
+                f64::from(pos.y) + 0.5,
+                f64::from(pos.z) + 0.5,
+            ];
+            let name = if sound.contains(':') {
+                sound.to_string()
+            } else {
+                format!("minecraft:{sound}")
+            };
+            self.audio.play(&name, Some(at), *volume, *pitch);
+        }
+    }
+
     /// Whether the block hit takes a main-hand right click with `held`
     /// (`BlockState.useItemOn`, then `useWithoutItem`): a door, a button, a
-    /// container. Vanilla's client runs it on its own level first; this runs
-    /// it on a copy that keeps no change.
-    fn remote_block_reacts(&self, hit: &super::Hit, held: Option<&ItemStack>) -> bool {
+    /// container, and the blocks it changed. Vanilla's client runs it on its
+    /// own level first; this runs it on a copy, and `predict_use` keeps the
+    /// changes it predicts.
+    fn remote_block_reacts(&self, hit: &super::Hit, held: Option<&ItemStack>) -> (bool, DryUse) {
         // Player.isSecondaryUseActive with something in either hand.
         let hands_full = self.stack_in(self.selected).is_some() || self.offhand.is_some();
         if self.keys.contains(&KeyCode::ShiftLeft) && hands_full {
-            return false;
+            return (false, DryUse::default());
         }
         use horizon_core::geometry::Direction;
         let face = match hit.face {
@@ -3302,8 +3355,10 @@ impl Game<'_> {
             world: &self.world,
             changed: HashMap::new(),
             random: horizon_core::random::LegacyRandom::new(0),
+            sounds: Vec::new(),
         };
-        self.res
+        let reacts = self
+            .res
             .behaviours()
             .use_item_on(
                 &mut level,
@@ -3314,7 +3369,8 @@ impl Game<'_> {
                 self.use_context(),
                 held.map(|s| &*s.item),
             )
-            .consumes_action()
+            .consumes_action();
+        (reacts, (level.changed.into_iter().collect(), level.sounds))
     }
 
     /// MultiPlayerGameMode.useItem for `hand`, if it holds something: whether
@@ -3336,6 +3392,16 @@ impl Game<'_> {
         // MultiPlayerGameMode.useItem runs the use here too: food starts
         // being eaten (Consumable.startConsuming).
         self.with_hand(hand, |g| g.start_eating(&info));
+        // BowItem.use: startUsingItem here too (with an arrow, or in creative), so that letting
+        // go sends RELEASE_USE_ITEM (Minecraft.handleKeybinds) and the server shoots.
+        if &*held.item == "minecraft:bow" {
+            self.with_hand(hand, |g| {
+                if g.using.is_none() && (g.creative || g.projectile_slot("minecraft:bow").is_some())
+                {
+                    g.using = Some((g.held_slot(), 0));
+                }
+            });
+        }
         item_has_use(&info)
     }
 
@@ -3351,14 +3417,20 @@ impl Game<'_> {
         }
         self.remote_use_item(Hand::Off);
     }
-    /// `LivingEntity.updatingUsingItem` for a consumable on a server client: the
-    /// eating animation and its crumbs. The server eats it and sends the
-    /// stack, the hunger and the sounds.
+    /// `LivingEntity.updatingUsingItem` on a server client: a drawn bow, and a
+    /// consumable's eating animation and its crumbs. The server eats it and
+    /// sends the stack, the hunger and the sounds.
     fn remote_tick_using(&mut self) {
         let Some((slot, ticks)) = self.using else {
             return;
         };
         let stack = self.stack_in(slot).cloned();
+        // A drawn bow: held until the button lets go (or another slot is picked).
+        if stack.as_ref().is_some_and(|s| &*s.item == "minecraft:bow") {
+            self.using = (slot == self.selected || slot == super::shield::OFFHAND_SLOT)
+                .then_some((slot, ticks + 1));
+            return;
+        }
         let consumable = stack
             .as_ref()
             .and_then(|s| self.res.items().get(&s.item))
@@ -3468,7 +3540,18 @@ impl Game<'_> {
             return true;
         }
         let mut instant = false;
-        if let Some((i, distance)) = self.mob_hit()
+        // A ghast's fireball or a wind charge nearer than any mob: the
+        // server turns it (game/deflect.rs).
+        if let Some((i, distance)) = self.redirectable_hit()
+            && self.mob_hit().is_none_or(|(_, d)| distance <= d)
+            && self.before_block(distance)
+            && self.creatures.projectiles[i].id != 0
+        {
+            self.send(S::Attack(play::Attack {
+                id: self.creatures.projectiles[i].id as i32,
+            }));
+            self.reset_attack_strength();
+        } else if let Some((i, distance)) = self.mob_hit()
             && self.before_block(distance)
         {
             self.send(S::Attack(play::Attack {
@@ -4216,9 +4299,45 @@ struct DryLevel<'w> {
     world: &'w horizon_client::world::World,
     changed: HashMap<horizon_core::position::BlockPos, BlockStateId>,
     random: horizon_core::random::LegacyRandom,
+    /// The sounds the use plays (a door's creak).
+    sounds: Vec<DrySound>,
+}
+
+type DrySound = (
+    horizon_core::position::BlockPos,
+    std::sync::Arc<str>,
+    f32,
+    f32,
+);
+/// What a use on the dry level changed, and the sounds it played.
+type DryUse = (
+    Vec<(horizon_core::position::BlockPos, BlockStateId)>,
+    Vec<DrySound>,
+);
+
+/// The blocks a guest's hand flips that its use predicts (and hears at once): a wooden or
+/// copper door, trapdoor or fence gate, a lever or a button. An iron door or trapdoor has
+/// no hand use.
+pub(super) fn hand_operated(name: &str) -> bool {
+    let name = name.trim_start_matches("minecraft:");
+    ((name.ends_with("_door") || name.ends_with("_trapdoor")) && !name.starts_with("iron_"))
+        || name.ends_with("_fence_gate")
+        || name.ends_with("_button")
+        || name == "lever"
 }
 
 impl horizon_world::level::LevelAccess for DryLevel<'_> {
+    fn emit(&mut self, event: horizon_world::level::LevelEvent) {
+        if let horizon_world::level::LevelEvent::Sound {
+            pos,
+            sound,
+            volume,
+            pitch,
+        } = event
+        {
+            self.sounds.push((pos, sound, volume, pitch));
+        }
+    }
     fn block_state(&self, pos: horizon_core::position::BlockPos) -> BlockStateId {
         self.changed
             .get(&pos)
