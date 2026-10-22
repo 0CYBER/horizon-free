@@ -939,7 +939,14 @@ impl BlockEntityRenderer {
         !matches!(self.kind(state), Kind::None)
     }
     /// ChestRenderer and BannerRenderer submit their animated models for crumbling.
-    pub fn render_breaking(&self, scene: &Scene, pos: [i32; 3], state: u32, out: &mut Vec<Vertex>) {
+    pub fn render_breaking(
+        &self,
+        scene: &Scene,
+        pos: [i32; 3],
+        state: u32,
+        stage: [f32; 2],
+        out: &mut Vec<Vertex>,
+    ) {
         if !matches!(self.kind(state), Kind::Banner { .. } | Kind::Chest { .. }) {
             return;
         }
@@ -958,7 +965,7 @@ impl BlockEntityRenderer {
             false,
             out,
         );
-        crate::breaking::entity_geometry(&mut out[start..], origin);
+        crate::breaking::entity_geometry(&mut out[start..], origin, stage);
     }
     /// `ChestRenderer.extractRenderState`'s openness for the chest of `state`
     /// at `pos`: `ChestBlock.combine` (`DoubleBlockCombiner.combineWithNeigbour`)
@@ -1942,7 +1949,7 @@ mod tests {
             let mut base = Vec::new();
             renderer.render_block(&scene, [0; 3], state, Mat4::IDENTITY, 0xff, &mut base);
             let mut cracks = Vec::new();
-            renderer.render_breaking(&scene, [0; 3], state, &mut cracks);
+            renderer.render_breaking(&scene, [0; 3], state, [0.0; 2], &mut cracks);
             assert!(!cracks.is_empty());
             assert_eq!(
                 base.iter().map(|v| v.pos).collect::<Vec<_>>(),
@@ -1956,7 +1963,7 @@ mod tests {
                 scene.lid = &|_| 1.0;
             }
             let mut animated = Vec::new();
-            renderer.render_breaking(&scene, [0; 3], state, &mut animated);
+            renderer.render_breaking(&scene, [0; 3], state, [0.0; 2], &mut animated);
             assert!(cracks.iter().zip(&animated).any(|(a, b)| a.pos != b.pos));
             scene.game_time = 0;
             scene.lid = &|_| 0.0;

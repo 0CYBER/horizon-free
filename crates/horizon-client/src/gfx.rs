@@ -109,7 +109,8 @@ struct Globals {
     end_portal_sprites: [[f32; 4]; 2],
     /// x: vanilla's `GameTime` uniform; y: nether cardinal lighting, zw unused.
     time: [f32; 4],
-    /// Atlas rect of the current destroy stage (entity.wgsl).
+    /// Atlas rect of a destroy stage (entity.wgsl takes only its size: every stage's is the same,
+    /// and each crack carries its own stage's origin).
     crumbling_sprite: [f32; 4],
     /// Framebuffer size, selection stroke width, perspective layering scale.
     outline_params: [f32; 4],
@@ -213,7 +214,8 @@ pub struct Frame<'a> {
     /// Atlas rects (u0, v0, width, height) of end_sky.png and end_portal.png
     /// (`rendertype_end_portal`'s Sampler0 and Sampler1).
     pub end_portal_sprites: [[f32; 4]; 2],
-    /// Current destroy-stage sprite: projected UVs repeat inside this atlas rect.
+    /// A destroy-stage sprite: projected UVs repeat inside a rect of this size, from the
+    /// origin each crack vertex carries (`breaking::stage_light`).
     pub crumbling_sprite: [f32; 4],
     pub ticks: u64,
     /// The darkness effect on the lightmap: the brightness it takes off the

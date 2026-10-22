@@ -68,6 +68,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              the guest steps off (#848).
 - swings:    each side sees the other's arm swing while it mines a block, and the guest sees its own
              swing when its hoe tills dirt (the server's use) (#848).
+- cracks:    each side sees the other player's crack on the block they mine grow, and go once it breaks
+             (#1096).
 - time:      the guest's clock is the host's: it stops with `/time pause`, and catches up with the
              server's game time after the guest's game stalls for a few seconds (#848).
 - growth:    far from the host, the chunks around the guest tick (#890): water placed there flows
@@ -109,7 +111,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'light', 'time', 'swings', 'plates', 'effects', 'portals', 'distance', 'growth']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
 
 
 class Game:
@@ -1346,6 +1348,49 @@ def check_swings(host, guest, out):
     return detail
 
 
+def check_cracks(host, guest, out):
+    # Another player's crack (#1096): ServerLevel.destroyBlockProgress sends each new stage to the
+    # others (ClientboundBlockDestructionPacket), drawn by LevelRenderer from destroyingBlocks.
+    for g in (host, guest):
+        g('command', command='gamemode survival')
+        g('command', command='clear @s')
+    face_each_other(host, guest)
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    gx, gy, gz = (int(v // 1) for v in pos_of(guest))
+    guest('command', command=f'setblock {gx} {gy} {gz + 1} minecraft:stone')
+    host('command', command=f'setblock {hx} {hy} {hz + 1} minecraft:stone')
+    host.wait(10)
+    shots = []
+
+    def cracks(game, pos, name):
+        stage = max((c['stage'] for c in game('status')['destroying'] if tuple(c['pos']) == pos), default=None)
+        if stage is not None and stage >= 2 and name not in shots:
+            shots.append(name)
+            game.shot(out, name)
+        return stage
+
+    def watch(miner, watcher, pos, name):
+        # The watcher looks at the block the other mines.
+        watcher.raw('look-at', f'{pos[0] + 0.5:.2f}', f'{pos[1] + 0.5:.2f}', f'{pos[2] + 0.5:.2f}')
+        watcher.wait(5)
+        return watch_mining(miner, pos, lambda: cracks(watcher, pos, name))
+    host_sees = watch(guest, host, (gx, gy, gz + 1), 'cracks-guest-mines')
+    face_each_other(host, guest)
+    guest_sees = watch(host, guest, (hx, hy, hz + 1), 'cracks-host-mines')
+    host.wait(10)
+    # The breaker's -1 (ServerLevel.destroyBlockProgress once the block is broken) clears each crack.
+    gone = {name: [(c['pos'], game.raw('block', *c['pos'])['block']) for c in game('status')['destroying']]
+            for name, game in (('host', host), ('guest', guest))}
+    detail = {'host_sees_guest': host_sees, 'guest_sees_host': guest_sees, 'after': gone}
+    stages = lambda s: [x for x in s if x is not None]
+    assert len(stages(host_sees)) >= 3 and stages(host_sees) == sorted(stages(host_sees)), \
+        f'the host does not see the guest\'s crack grow: {detail}'
+    assert len(stages(guest_sees)) >= 3 and stages(guest_sees) == sorted(stages(guest_sees)), \
+        f'the guest does not see the host\'s crack grow: {detail}'
+    assert not any(gone.values()), f'a crack stays after the block broke: {detail}'
+    return detail
+
+
 def check_eating(host, guest, out):
     for g in (host, guest):
         g('command', command='gamemode survival')
@@ -1655,7 +1700,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'sleep': check_sleep, 'push': check_push, 'eat': check_eat, 'eating': check_eating,
              'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles,
              'light': check_light, 'plates': check_plates,
-             'swings': check_swings,
+             'swings': check_swings, 'cracks': check_cracks,
              'time': check_time, 'growth': check_growth}
 
 

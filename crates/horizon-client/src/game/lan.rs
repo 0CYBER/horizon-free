@@ -44,6 +44,8 @@ pub(super) struct LanHost {
     pub host_entity: i32,
     /// The host's swings the guests were told of (`Game::swings_started`).
     pub host_swings: u32,
+    /// The host's crack the guests were told of: the block and its stage.
+    pub host_crack: Option<([i32; 3], i32)>,
     pub host_uuid: u128,
     /// The host's profile name (the account's, or the offline name).
     pub host_name: String,
@@ -519,6 +521,7 @@ impl Game<'_> {
             settings: LanSettings { port, ..settings },
             host_entity,
             host_swings: self.swings_started,
+            host_crack: None,
             host_uuid,
             host_name: self.options.player_name(),
             models: HashMap::new(),

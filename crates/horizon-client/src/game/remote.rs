@@ -1342,6 +1342,10 @@ impl Game<'_> {
                 }));
             }
             C::BlockUpdate(p) => self.server_block(p.pos, p.state),
+            // ClientPacketListener.handleBlockDestruction: another player's crack.
+            C::BlockDestruction(p) => {
+                self.destroy_block_progress(p.id, p.pos, i32::from(p.progress));
+            }
             C::SectionBlocksUpdate(p) => {
                 let [sx, sy, sz] = p.section;
                 for change in p.changes {

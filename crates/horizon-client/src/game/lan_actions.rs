@@ -717,6 +717,7 @@ impl Game<'_> {
                         conn,
                         &C::BlockUpdate(play::BlockUpdate { pos: a.pos, state }),
                     );
+                    self.destroy_block_progress(host.hub.guests[gi].entity_id, a.pos, -1);
                     host.hub.broadcast_near(
                         [
                             f64::from(a.pos[0]),
@@ -1695,7 +1696,12 @@ impl Game<'_> {
         play.mining = None;
         let start = play.dig_start;
         let state = self.world.block(pos[0], pos[1], pos[2]);
-        if !dug || self.res.facts().is_air(state) {
+        if !dug {
+            return;
+        }
+        if self.res.facts().is_air(state) {
+            // Already broken (the guest's own tick dug it out): only the crack goes.
+            self.guest_crack_gone(host, conn, pos);
             return;
         }
         let progress = self
@@ -1744,18 +1750,7 @@ impl Game<'_> {
         self.as_guest(host, conn, |g| {
             let _ = g.break_block(pos);
         });
-        if let Some(g) = host.hub.guest(conn) {
-            host.hub.broadcast_near(
-                [f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])],
-                64.0,
-                &C::BlockDestruction(play::BlockDestruction {
-                    id: g.entity_id,
-                    pos,
-                    progress: 255,
-                }),
-                Some(conn),
-            );
-        }
+        self.guest_crack_gone(host, conn, pos);
     }
 
     /// The crack animation other players see.
@@ -1767,6 +1762,18 @@ impl Game<'_> {
         let Some((pos, _)) = play.digging else {
             return;
         };
+        // ServerPlayerGameMode.tick: a block gone while it is dug (the guest's own tick broke
+        // it, or something else did) clears the crack.
+        if play.last_progress >= 0
+            && self
+                .res
+                .facts()
+                .is_air(self.world.block(pos[0], pos[1], pos[2]))
+        {
+            play.last_progress = -1;
+            self.guest_crack_gone(host, conn, pos);
+            return;
+        }
         let progress = play
             .mining
             .as_ref()
@@ -1774,6 +1781,8 @@ impl Game<'_> {
         let swinging = play.swing.swinging();
         if progress != play.last_progress && progress >= 0 {
             play.last_progress = progress;
+            // The host player sees it too (on the server thread its window is a guest).
+            self.destroy_block_progress(host.hub.guests[gi].entity_id, pos, progress);
             host.hub.broadcast_near(
                 [f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])],
                 64.0,
@@ -1786,6 +1795,25 @@ impl Game<'_> {
             );
         }
         let _ = swinging;
+    }
+
+    /// `level.destroyBlockProgress(id, pos, -1)` for a guest: its crack on `pos` is gone, for the
+    /// host and the other guests.
+    fn guest_crack_gone(&mut self, host: &mut LanHost, conn: u32, pos: [i32; 3]) {
+        let Some(id) = host.hub.guest(conn).map(|g| g.entity_id) else {
+            return;
+        };
+        self.destroy_block_progress(id, pos, -1);
+        host.hub.broadcast_near(
+            [f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])],
+            64.0,
+            &C::BlockDestruction(play::BlockDestruction {
+                id,
+                pos,
+                progress: 255,
+            }),
+            Some(conn),
+        );
     }
 
     /// Dropped items touching a guest go into their inventory.
@@ -1992,6 +2020,7 @@ impl Game<'_> {
             }
             play.swing.tick();
         }
+        self.lan_host_crack(host);
         if self.swings_started != host.host_swings {
             host.host_swings = self.swings_started;
             if let (Some(p), Some(c)) = (self.player.as_ref(), self.swing.current) {
@@ -2000,6 +2029,39 @@ impl Game<'_> {
                 host.hub.broadcast_near(at, 128.0, &packet, None);
             }
         }
+    }
+}
+
+impl Game<'_> {
+    /// The host player's crack, for the guests (`ServerLevel.destroyBlockProgress` from the
+    /// host's mining): each new stage, and -1 once it stops or breaks the block.
+    fn lan_host_crack(&mut self, host: &mut LanHost) {
+        let now = self
+            .mining
+            .as_ref()
+            .and_then(|m| (m.progress > 0.0).then(|| (m.pos, ((m.progress * 10.0) as i32).min(9))));
+        if now == host.host_crack {
+            return;
+        }
+        let packet = |pos: [i32; 3], progress: u8| {
+            C::BlockDestruction(play::BlockDestruction {
+                id: host.host_entity,
+                pos,
+                progress,
+            })
+        };
+        let near = |pos: [i32; 3]| [f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])];
+        if let Some((pos, _)) = host.host_crack
+            && now.is_none_or(|(p, _)| p != pos)
+        {
+            host.hub
+                .broadcast_near(near(pos), 64.0, &packet(pos, 255), None);
+        }
+        if let Some((pos, stage)) = now {
+            host.hub
+                .broadcast_near(near(pos), 64.0, &packet(pos, stage as u8), None);
+        }
+        host.host_crack = now;
     }
 }
 

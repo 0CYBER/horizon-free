@@ -71,7 +71,8 @@ fn entity_vertex(position: vec3<f32>, uv: vec2<f32>,
     let unlit = overlay == 2u || overlay == 4u || overlay == 6u || overlay == 9u || overlay == 10u
         || overlay == 11u || overlay == 12u;
     out.light_color = select(lm, vec4(1.0), unlit);
-    // Overlay 6 (beacon beams): the light bytes carry the sprite's v range.
+    // Overlay 6 (beacon beams): the light bytes carry the sprite's v range; 11 and 12
+    // (cracks): the destroy stage sprite's origin.
     out.wrap = vec2(f32(light.x | (light.y << 8u)), f32(light.z | (light.w << 8u))) / 65535.0;
     // minecraft_mix_light: the vertex colour times the cardinal light only.
     var c = color;
@@ -147,7 +148,8 @@ fn linear_fog(d: f32, start: f32, end: f32) -> f32 {
     var uv = in.uv;
     if in.overlay == 6u { uv.y = in.wrap.x + fract(in.uv.y) * in.wrap.y; }
     if in.overlay == 11u || in.overlay == 12u {
-        uv = globals.crumbling_sprite.xy + fract(in.uv) * globals.crumbling_sprite.zw;
+        // Each crack's stage sprite origin comes in its light bytes (breaking::stage_light).
+        uv = in.wrap + fract(in.uv) * globals.crumbling_sprite.zw;
     }
     var color = textureSample(atlas, atlas_sampler, uv) * select(in.back_color, in.color, front);
     if in.overlay == 9u || in.overlay == 10u {

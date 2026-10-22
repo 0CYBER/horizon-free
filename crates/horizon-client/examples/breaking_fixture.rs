@@ -14,6 +14,8 @@ use std::{
     io::{BufRead, BufReader, BufWriter, Write},
     path::Path,
 };
+/// The stage sprite origin the cracks carry (the oracle compares the geometry and UVs only).
+const STAGE: [f32; 2] = [0.25, 0.5];
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().collect();
     let root = Path::new(&args[1]);
@@ -47,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .iter()
                 .any(|(_, m)| m.faces.iter().any(|f| f.translucent));
             for (_, m) in models {
-                breaking::geometry(m, origin, translucent, &mut vertices);
+                breaking::geometry(m, origin, translucent, STAGE, &mut vertices);
             }
         }
         let quads: Vec<_> = vertices
@@ -58,7 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 q.iter()
                     .map(|v| {
                         assert_eq!(v.color, 0xffff_ffff);
-                        assert_eq!(v.light, 240 | (240 << 8));
+                        assert_eq!(v.light, breaking::stage_light(STAGE));
                         assert_eq!(v.layer, if translucent { 12 } else { 11 });
                         [v.pos[0], v.pos[1], v.pos[2], v.uv[0], v.uv[1]]
                     })
