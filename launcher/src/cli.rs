@@ -170,8 +170,18 @@ enum ModsCmd {
         #[arg(long, value_enum, default_value_t = SourceArg::Modrinth)]
         source: SourceArg,
     },
-    /// Install a pack and what it needs, by its id or slug (checksums checked); a modpack is
-    /// imported on the Modpacks page
+    /// Say how well a Java mod runs in Horizon: its jar is downloaded (checksum checked),
+    /// carried over and read; the answer is kept
+    Check {
+        project: String,
+        /// Allow a version made for another Minecraft version (1.21 and later)
+        #[arg(long)]
+        everything: bool,
+        #[arg(long, value_enum, default_value_t = SourceArg::Modrinth)]
+        source: SourceArg,
+    },
+    /// Install a pack and what it needs, by its id or slug (checksums checked); a Java mod is
+    /// ported into horizon-mods and turned on; a modpack is imported
     Install {
         project: String,
         /// Allow a version made for another Minecraft version
@@ -193,6 +203,7 @@ enum ModsCmd {
 
 #[derive(Clone, Copy, clap::ValueEnum)]
 enum KindArg {
+    Mod,
     Resource,
     Shader,
     Modpack,
@@ -201,6 +212,7 @@ enum KindArg {
 #[derive(Clone, Copy, clap::ValueEnum)]
 enum SourceArg {
     Modrinth,
+    /// CurseForge support is coming soon
     Curseforge,
 }
 
@@ -211,9 +223,7 @@ impl SourceArg {
             SourceArg::Modrinth => SourceId::Modrinth,
             SourceArg::Curseforge => SourceId::CurseForge,
         };
-        browser::source(id).ok_or_else(|| {
-            "CurseForge needs an API key: HORIZON_CURSEFORGE_API_KEY (docs/mod-browser.md).".into()
-        })
+        browser::source(id).ok_or_else(|| browser::CURSEFORGE_SOON.into())
     }
 }
 
@@ -320,8 +330,9 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<ModpackCmd>,
     },
-    /// The mod browser: resource packs, shader packs and modpacks from Modrinth (and CurseForge
-    /// with a key), each file checked against its checksum (docs/mod-browser.md)
+    /// The mod browser: Java mods, resource packs, shader packs and modpacks from Modrinth
+    /// (CurseForge support is coming soon), each file checked against its checksum
+    /// (docs/mod-browser.md)
     Mods {
         #[command(subcommand)]
         action: Option<ModsCmd>,
@@ -933,6 +944,7 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                 KindArg::Resource => Kind::ResourcePack,
                 KindArg::Shader => Kind::ShaderPack,
                 KindArg::Modpack => Kind::Modpack,
+                KindArg::Mod => Kind::Mod,
             };
             let query = Query {
                 everything,
@@ -951,18 +963,65 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
             } else {
                 for p in &found {
                     let support = p.support();
+                    let unchecked = p.kind == Kind::Mod && support.installable();
                     println!(
                         "{}  ({})  {} · {} downloads\n  {}",
                         p.title,
                         p.slug,
-                        support.label(),
+                        if unchecked {
+                            "Not checked"
+                        } else {
+                            support.label()
+                        },
                         p.downloads,
                         p.summary
                     );
-                    if let Some(why) = support.reason() {
+                    if unchecked {
+                        println!("  horizon-launcher mods check {}", p.slug);
+                    } else if let Some(why) = support.reason() {
                         println!("  {why}");
                     }
                 }
+            }
+        }
+        ModsCmd::Check {
+            project,
+            everything,
+            source,
+        } => {
+            let source = source.get()?;
+            let p = source.project(&project)?;
+            if p.kind != Kind::Mod {
+                return Err(format!("{} isn't a Java mod.", p.title));
+            }
+            let (version, c) = horizon_launcher::browser::java::check_project(
+                &home,
+                &*source,
+                &p,
+                everything,
+                &progress(p.title.clone()),
+            )?;
+            if as_json {
+                let mut v = serde_json::to_value(&c).unwrap_or_default();
+                v["version"] = version.number.clone().into();
+                v["label"] = c.verdict.label().into();
+                println!("{v}");
+                return Ok(());
+            }
+            println!(
+                "{} {} ({} {}): {}. {}",
+                p.title,
+                version.number,
+                c.loader,
+                c.mod_id,
+                c.verdict.label(),
+                c.summary
+            );
+            for line in &c.ports {
+                println!("  ports: {line}");
+            }
+            for line in &c.skipped {
+                println!("  doesn't: {line}");
             }
         }
         ModsCmd::Install {
@@ -977,13 +1036,13 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
                 let file =
                     installed::fetch_modpack(&*source, &p, &folder, &progress(p.title.clone()))?;
                 let log = &|line: String| eprintln!("{line}");
-                let pack = modpacks::import(&file, log)?;
-                println!(
-                    "Imported {} ({}): horizon-launcher modpack port {}",
-                    pack.title(),
-                    pack.summary(),
-                    pack.slug
-                );
+                let resources = backend::resolve_version(None)
+                    .ok()
+                    .filter(|t| backend::is_prepared(t))
+                    .map(|t| backend::resources(&t));
+                let pack = modpacks::import_and_port(&file, resources.as_deref(), log)?;
+                println!("{} ({})", modpacks::outcome(&pack), pack.summary());
+                println!("Play it: horizon-launcher modpack play {}", pack.slug);
                 return Ok(());
             }
             let done = installed::install(&*source, &p, everything, &home, &line)?;
@@ -992,6 +1051,9 @@ fn mods(action: ModsCmd, as_json: bool) -> Result<(), String> {
             }
             for e in done.iter().filter(|_| !as_json) {
                 println!("{} {}: {} ({})", e.title, e.number, e.file, e.checksum);
+                for s in &e.skipped {
+                    println!("  not ported: {s}");
+                }
             }
         }
         ModsCmd::Update { project, check } => {

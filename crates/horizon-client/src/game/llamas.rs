@@ -93,7 +93,8 @@ impl Game<'_> {
             return false;
         }
         if tamed && sneaking {
-            // The horse inventory screen is not available yet.
+            // AbstractHorse.openCustomInventoryScreen.
+            self.open_mount_menu(index);
             return true;
         }
         let m = &self.mobs[index];
