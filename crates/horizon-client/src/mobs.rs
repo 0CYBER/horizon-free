@@ -2346,6 +2346,58 @@ mod sensor_scan_tests {
         }
     }
 
+    /// Natural spawning's `isUnobstructed` box test against every mob (real
+    /// `Mob`s), by scan and by a grid built once for the pass.
+    #[test]
+    #[ignore]
+    fn spawn_box_cost() {
+        let kind = kind();
+        for n in [500u32, 1000, 2000] {
+            let (seen, _) = herd(n, 384.0);
+            let mobs: Vec<Mob> = seen
+                .iter()
+                .map(|s| Mob::new(s.id, kind.clone(), s.position, 0.0))
+                .collect();
+            let mut seed = 7u64;
+            let mut next = |range: f64| {
+                seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                (seed >> 11) as f64 / (1u64 << 53) as f64 * range
+            };
+            let queries: Vec<Aabb> = (0..100)
+                .map(|_| {
+                    let (x, z) = (next(384.0), next(384.0));
+                    Aabb::new(Vec3::new(x, 64.0, z), Vec3::new(x + 0.9, 65.4, z + 0.9))
+                })
+                .collect();
+            let t = std::time::Instant::now();
+            let a: Vec<bool> = queries
+                .iter()
+                .map(|&q| {
+                    mobs.iter()
+                        .any(|m| m.alive() && !m.removed && m.bounds().intersects(q))
+                })
+                .collect();
+            let before = t.elapsed().as_secs_f64() * 1e3;
+            let t = std::time::Instant::now();
+            let boxes: Vec<Aabb> = mobs.iter().map(|m| m.bounds()).collect();
+            let grid = seen_grid::SeenGrid::new(boxes.iter().copied());
+            let build = t.elapsed().as_secs_f64() * 1e3;
+            let mut near = Vec::new();
+            let b: Vec<bool> = queries
+                .iter()
+                .map(|&q| {
+                    assert!(grid.candidates(q, &mut near));
+                    near.iter().any(|&i| boxes[i as usize].intersects(q))
+                })
+                .collect();
+            let after = t.elapsed().as_secs_f64() * 1e3;
+            assert_eq!(a, b);
+            println!(
+                "{n} mobs, 100 spawn box tests: {before:.3} ms -> {after:.3} ms (grid build {build:.3} ms included)"
+            );
+        }
+    }
+
     /// One tick of sensing: a twentieth of the mobs fire their sensor.
     #[test]
     #[ignore]
