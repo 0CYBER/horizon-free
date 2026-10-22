@@ -327,6 +327,46 @@ impl Containers<'_> {
     }
 }
 
+/// The block columns any item entity's box reaches, so that a hopper with
+/// no item over it skips the scan of every item. Kept for one block-entity
+/// pass, in which items do not move: removing one leaves a superset, still
+/// right, and adding one (always pushed at the end, under a new id) or
+/// removing the last rebuilds the columns.
+#[derive(Default)]
+pub(super) struct ItemColumns {
+    /// The item count and last item id when last asked, if built.
+    seen: Option<(usize, Option<u32>)>,
+    cells: horizon_client::fast_hash::FxHashSet<(i32, i32)>,
+}
+impl ItemColumns {
+    /// Whether an item's box may reach into column (x, z).
+    fn may_reach(
+        &mut self,
+        items: &[horizon_client::entities::ItemEntity],
+        x: i32,
+        z: i32,
+    ) -> bool {
+        let (len, last) = (items.len(), items.last().map(|i| i.id));
+        let stale = self
+            .seen
+            .is_none_or(|(seen_len, seen_last)| len > seen_len || last != seen_last);
+        self.seen = Some((len, last));
+        if stale {
+            self.cells.clear();
+            for item in items {
+                let b = item.bounds();
+                let (lo, hi) = (b.min_position(), b.max_position());
+                for cx in lo.x.floor() as i32..=hi.x.floor() as i32 {
+                    for cz in lo.z.floor() as i32..=hi.z.floor() as i32 {
+                        self.cells.insert((cx, cz));
+                    }
+                }
+            }
+        }
+        self.cells.contains(&(x, z))
+    }
+}
+
 fn bone_meal() -> ItemStack {
     ItemStack {
         item: "minecraft:bone_meal".into(),
@@ -648,6 +688,11 @@ impl Game<'_> {
                 f64::from(pos.2) + 1.0,
             ],
         );
+        if let Some(columns) = self.item_columns.as_mut()
+            && !columns.may_reach(&self.dropped, pos.0, pos.2)
+        {
+            return false;
+        }
         let mut i = 0;
         while i < self.dropped.len() {
             let b = self.dropped[i].bounds();
@@ -878,5 +923,124 @@ impl Game<'_> {
             false,
         );
         true
+    }
+}
+
+#[cfg(test)]
+mod item_column_tests {
+    use super::ItemColumns;
+    use horizon_client::{entities::ItemEntity, items::ItemStack};
+    use horizon_core::geometry::Vec3;
+
+    fn item(id: u32, x: f64, y: f64, z: f64) -> ItemEntity {
+        let at = Vec3::new(x, y, z);
+        ItemEntity {
+            health: 5,
+            fire_ticks: 0,
+            id,
+            stack: ItemStack::new("minecraft:stone", 1),
+            thrower: None,
+            position: at,
+            previous: at,
+            velocity: Vec3::ZERO,
+            on_ground: true,
+            age: 0,
+            pickup_delay: 0,
+            bob_offset: 0.0,
+            ticks: 0,
+        }
+    }
+    /// `hopper_suck`'s test: some item box meets the hopper's SUCK_AABB.
+    fn scan(items: &[ItemEntity], (x, y, z): (i32, i32, i32)) -> bool {
+        let (min, max) = (
+            Vec3::new(f64::from(x), f64::from(y) + 11.0 / 16.0, f64::from(z)),
+            Vec3::new(f64::from(x) + 1.0, f64::from(y) + 2.0, f64::from(z) + 1.0),
+        );
+        items.iter().any(|i| {
+            let b = i.bounds();
+            let (lo, hi) = (b.min_position(), b.max_position());
+            lo.x < max.x
+                && hi.x > min.x
+                && lo.y < max.y
+                && hi.y > min.y
+                && lo.z < max.z
+                && hi.z > min.z
+        })
+    }
+
+    /// One tick of empty hoppers looking for items: each scans every item
+    /// (before) or asks the columns first (after, build included).
+    #[test]
+    #[ignore]
+    fn hopper_suck_cost() {
+        for (hoppers, count) in [(500i32, 200u32), (2000, 500), (2000, 2000)] {
+            let mut seed = 99u64;
+            let mut next = |range: f64| {
+                seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                (seed >> 11) as f64 / (1u64 << 53) as f64 * range
+            };
+            let items: Vec<ItemEntity> = (0..count)
+                .map(|id| item(id, next(160.0), 64.0, next(160.0)))
+                .collect();
+            let at: Vec<(i32, i32, i32)> = (0..hoppers)
+                .map(|_| (next(160.0) as i32, 63, next(160.0) as i32))
+                .collect();
+            let t = std::time::Instant::now();
+            let a: Vec<bool> = at.iter().map(|&h| scan(&items, h)).collect();
+            let before = t.elapsed().as_secs_f64() * 1e3;
+            let t = std::time::Instant::now();
+            let mut columns = ItemColumns::default();
+            let b: Vec<bool> = at
+                .iter()
+                .map(|&h| columns.may_reach(&items, h.0, h.2) && scan(&items, h))
+                .collect();
+            let after = t.elapsed().as_secs_f64() * 1e3;
+            assert_eq!(a, b);
+            println!("{hoppers} hoppers, {count} items: {before:.3} ms -> {after:.3} ms");
+        }
+    }
+
+    #[test]
+    fn no_hopper_with_an_item_over_it_is_skipped() {
+        let mut seed = 0x1234_5678_9abc_def1u64;
+        let mut next = |range: f64| {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            (seed >> 11) as f64 / (1u64 << 53) as f64 * range
+        };
+        let mut items: Vec<ItemEntity> = Vec::new();
+        let mut columns = ItemColumns::default();
+        let mut next_id = 0;
+        let mut skipped = 0;
+        for round in 0..3000 {
+            // Items come and go as hoppers take them and crafters drop them.
+            match round % 5 {
+                0 | 1 => {
+                    next_id += 1;
+                    // On edges too: a quarter of them sit on a block line.
+                    let snap = |v: f64, edge: bool| if edge { v.floor() + 0.125 } else { v };
+                    let edge = round % 4 == 0;
+                    items.push(item(
+                        next_id,
+                        snap(next(24.0) - 12.0, edge),
+                        64.0,
+                        snap(next(24.0) - 12.0, edge),
+                    ));
+                }
+                2 if !items.is_empty() => {
+                    let i = next(items.len() as f64) as usize;
+                    items.remove(i);
+                }
+                _ => {}
+            }
+            let hopper = (next(26.0) as i32 - 13, 63, next(26.0) as i32 - 13);
+            let reach = columns.may_reach(&items, hopper.0, hopper.2);
+            let found = scan(&items, hopper);
+            assert!(
+                reach || !found,
+                "round {round}: skipped a hopper with an item over it"
+            );
+            skipped += usize::from(!reach);
+        }
+        assert!(skipped > 1000, "skipped only {skipped}");
     }
 }

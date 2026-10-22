@@ -68,7 +68,10 @@ impl Goal for DefendVillage {
         if !b.intersects(p.bounds) || m.position.distance_squared(p.position) > 64.0 * 64.0 {
             return false;
         }
-        let bad = cx.w.others.iter().any(|s| {
+        // A position inside `b` puts the box's bottom face there (one block
+        // wider, as the box test is strict).
+        let near = b.inflate(Vec3::new(1.0, 1.0, 1.0));
+        let bad = cx.w.others_near(near).any(|s| {
             s.species == Species::Villager
                 && s.alive
                 && s.player_rep <= -100
