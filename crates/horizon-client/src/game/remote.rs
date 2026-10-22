@@ -99,6 +99,10 @@ pub(super) struct Remote {
     last_input: u8,
     was_sprinting: bool,
     carried: Option<usize>,
+    /// The last ClientboundPlayerAbilitiesPacket. Vanilla's LocalPlayer
+    /// holds its abilities from the login on; here the player is made at
+    /// the first teleport, which takes them then.
+    abilities: Option<play::PlayerAbilities>,
     loaded_sent: bool,
     /// The view distance last sent in ClientInformation.
     sent_view: i8,
@@ -313,6 +317,7 @@ impl Game<'_> {
             last_input: 0,
             was_sprinting: false,
             carried: None,
+            abilities: None,
             loaded_sent: false,
             sent_view: view,
             predictions: HashMap::new(),
@@ -577,6 +582,28 @@ impl Game<'_> {
                 r.chat.remove(0);
             }
         }
+    }
+
+    /// The minecarts the server sent, for the control socket's `status`
+    /// (their velocity is not tracked here).
+    pub(super) fn remote_carts(&self) -> Option<Vec<serde_json::Value>> {
+        let r = self.remote.as_ref()?;
+        let mut carts: Vec<&Tracked> = r
+            .entities
+            .values()
+            .filter(|t| t.kind.ends_with("minecart"))
+            .collect();
+        carts.sort_by(|a, b| {
+            a.position
+                .partial_cmp(&b.position)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        Some(
+            carts
+                .into_iter()
+                .map(|t| serde_json::json!({"kind": t.kind, "position": t.position, "velocity": [0.0, 0.0, 0.0]}))
+                .collect(),
+        )
     }
 
     /// The names in the server's player list, sorted.
@@ -1934,9 +1961,10 @@ impl Game<'_> {
             },
             C::PlayerAbilities(p) => {
                 self.creative = p.flags & 8 != 0;
-                if let Some(player) = &mut self.player {
-                    player.flying_speed = p.flying_speed;
+                if let Some(r) = self.remote.as_mut() {
+                    r.abilities = Some(p);
                 }
+                self.apply_remote_abilities();
             }
             C::SetHeldSlot(p) => {
                 self.selected = p.slot.clamp(0, 8) as usize;
@@ -2592,6 +2620,7 @@ impl Game<'_> {
                 self.previous_eye = 1.62;
                 self.clock.reset();
                 self.apply_remote_health();
+                self.apply_remote_abilities();
             }
         }
         self.previous_position = position;
@@ -2727,6 +2756,7 @@ impl Game<'_> {
             [player.velocity.x, player.velocity.y, player.velocity.z],
             [player.position.x, player.position.y, player.position.z],
         );
+        let was_flying = player.flying;
         player.yaw = self.yaw;
         let dead = self.screen == Screen::Dead;
         // LivingEntity.isImmobile: a sleeper lies still in the bed.
@@ -2749,6 +2779,9 @@ impl Game<'_> {
             }
             .controlled_simulation_tick(keys)?;
         }
+        // LocalPlayer.onUpdateAbilities: flight turned on or off (a double
+        // jump, a spectator, landing) is sent to the server.
+        let flying = player.flying;
         let events = std::mem::take(&mut player.events);
         self.previous_eye = self.eye;
         self.eye += (player.dimensions.eye_height - self.eye) * 0.5;
@@ -2783,8 +2816,28 @@ impl Game<'_> {
         if !dead {
             self.remote_tick_using();
         }
+        if flying != was_flying {
+            self.send(S::PlayerAbilities(play::PlayerAbilitiesRequest {
+                flags: if flying { 2 } else { 0 },
+            }));
+        }
         self.remote_send_state(input);
         Ok(())
+    }
+
+    /// ClientPacketListener.handlePlayerAbilities: the player flies, may fly
+    /// and is invulnerable as the server says (bits 2, 4 and 1).
+    fn apply_remote_abilities(&mut self) {
+        let (Some(player), Some(a)) = (
+            self.player.as_mut(),
+            self.remote.as_ref().and_then(|r| r.abilities.as_ref()),
+        ) else {
+            return;
+        };
+        player.invulnerable = a.flags & 1 != 0;
+        player.flying = a.flags & 2 != 0;
+        player.may_fly = a.flags & 4 != 0;
+        player.flying_speed = a.flying_speed;
     }
     /// The local player's share of every touching entity's
     /// `LivingEntity.pushEntities`: on a client `EntitySelector.pushableBy`

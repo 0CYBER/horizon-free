@@ -5,6 +5,13 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+/// This release's version: release.yml builds it with `HORIZON_VERSION` from the tag
+/// (docs/versioning.md); a build from source says Cargo.toml's.
+const VERSION: &str = match option_env!("HORIZON_VERSION") {
+    Some(version) if !version.is_empty() => version,
+    _ => env!("CARGO_PKG_VERSION"),
+};
+
 const HELP: &str = "\
 horizon-prepare: prepare Horizon's resources from your own Minecraft Java Edition
 
@@ -92,7 +99,7 @@ fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
             "-V" | "--version" => {
-                println!("horizon-prepare {}", env!("CARGO_PKG_VERSION"));
+                println!("horizon-prepare {VERSION}");
                 return ExitCode::SUCCESS;
             }
             _ => Err(format!("unrecognized argument: {text}")),

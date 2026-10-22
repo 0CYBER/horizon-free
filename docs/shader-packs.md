@@ -13,10 +13,10 @@ Both are off by default. With no pack selected the renderer draws exactly what i
 | Part | State |
 | --- | --- |
 | Renderer layout (below) | today's code |
-| Horizon shader packs: `composite` stage, uniforms, hot reload, Shader Packs screen | first slice planned |
+| Horizon shader packs: `composite` stage, uniforms, hot reload, Shader Packs page | done (the page: list, pick, open the folder) |
 | Horizon shader packs: `deferred`, `gbuffer`, `shadow` stages, custom textures | planned |
 | Java shader packs: preprocessing + GLSL parse coverage | spike done: 450 of 470 programs reach valid WGSL (below) |
-| Java shader packs: preprocessor (`crates/horizon-shaderpack`: includes, options, Iris's macros) | done: every program of the three test packs preprocesses |
+| Java shader packs: preprocessor (`crates/horizon-shaderpack`: includes, options, Iris's macros, JCPP's `#if` and `#define` rules) | done: every program of the three test packs preprocesses; ten packs tested (Compatibility, below) |
 | Java shader packs: GLSL → WGSL (`horizon_shaderpack::translate`: syntax-tree legaliser, naga) | done: the 464 programs the three test packs enable by default translate (below) |
 | Java shader packs: `shaders.properties` (`horizon_shaderpack::properties`: screens, sliders, profiles, `program.*.enabled`, image formats, blend modes) | done, no screen yet: read like Iris for the three test packs |
 | Java shader packs: full-screen pass plan (`horizon_shaderpack::pipeline`: `DRAWBUFFERS`/`RENDERTARGETS`, `colortexN` formats and clearing, buffer flips) | done: planned for the three test packs |
@@ -56,15 +56,19 @@ The lightmap, fog and sky colours are computed on the CPU (`environment.rs`, `fo
 ### Where packs live and how one is picked
 
 - Packs go in `shaderpacks/` beside `options.txt` in the game folder (the same folder Iris uses, so one folder
-  holds both kinds). A pack is a folder (zips planned). A pack with a `pack.toml` at its root is a Horizon pack; a pack
-  with a `shaders/` folder is a Java pack.
-- **Options → Video Settings → Shader Packs...** (Classic screens, laid out like Iris's: the packs on the left with
-  "(off)" first, Apply and Done, *Open Shader Pack Folder*, *Shader Pack Settings...*) and a **Shader Packs** row in
-  the Horizon menus' Video section open the same list.
+  holds both kinds). That is the game home the launcher starts the game in (`%APPDATA%\horizon` on Windows,
+  `~/Library/Application Support/horizon` on macOS, `~/.local/share/horizon` on Linux), not the launcher's version
+  folder. A pack with a `pack.toml` at its root is a Horizon pack; a folder with `shaders/`, or a `.zip`, is a Java
+  pack.
+- The **Shader Packs** page lists them: a sidebar section in the Horizon menus, **Video Settings → Shader Packs...**
+  in the Classic ones, and the Shader Pack row of the graphics settings leads to it. It shows the folder's full path
+  and an *Open Folder* button (the folder is made if it is missing), then one switch per pack: turning one on picks
+  it, turning it off is the vanilla picture. With no pack, it says so under the path. The list is read again every
+  second while the page is open, so a pack dropped into the folder shows up.
 - The choice is kept in `horizon-graphics.txt` (`shaderPack:<folder or zip name>`, empty = off). A pack's option
   values are kept in `shaderpacks/<pack>.txt`, as Iris does.
-- A pack that fails to load or compile leaves the vanilla picture on and shows why, in red, on its row (and in the
-  log). Nothing a pack does can stop the game from starting.
+- A pack that fails to load or compile leaves the vanilla picture (or the last pack that worked) on and says why on
+  its row ("Failed", with the error), in chat and in the log. Nothing a pack does can stop the game from starting.
 - Benchmarks (`--benchmark`) and the parity harnesses never load a pack.
 
 ### Layout
@@ -377,6 +381,43 @@ grade and light Horizon's world as their post-processing would. Sildur's Vibrant
 shadows, water or sky look yet; Distant Horizons' and Voxy's depth read as far. Not supported yet: images and
 compute (`.csh`; a pack that needs them doesn't load), mipmapped targets (`colortexNMipmapEnabled` is read but
 ignored), custom textures, the option screen; shadow matrices are identity.
+
+### Compatibility
+
+Tested on 2026-10-22 on the Mac mini (M4 Pro, Metal) with each pack's default options, the 26.3 builds from Modrinth or
+the authors' pages (dev-only test inputs, kept outside the repository). "Loads" means every pass the pack enables for
+the overworld, Nether and End is preprocessed, translated and validated, as the game does when the pack is picked
+(`java_pack::tests::real_packs_load` with `HORIZON_TEST_SHADERPACKS`); "drawn" means it was also picked in the game
+and screenshotted. Only full-screen passes run (above), so no pack has its own terrain, water, shadows or sky yet.
+
+| Pack | Version | Result | First thing that stops it |
+| --- | --- | --- | --- |
+| BSL | v10.1.8 | drawn: 26 passes | |
+| Complementary Reimagined | r5.9.3 | drawn: 27 passes | |
+| Complementary Unbound | r5.8 | loads: 27 passes | |
+| Sildur's Vibrant Extreme | 2.02 | drawn: 18 passes, only its sky (above) | |
+| Steadfast | 0.8.0 | drawn: 3 passes | |
+| Bliss | 2.1.2 | fails | `world0/deferred.vsh`: an operation naga forbids in a vertex shader |
+| Bloop | 1.8.0-Alpha-3 | fails | `world0/prepare1.fsh`: `mat2(vec4)` and other constructors naga's GLSL front end refuses |
+| Noble | v1.9.9 | fails (Apple and NVIDIA) | `world0/deferred4.vsh`: a `vec3[9][9]` varying (nested arrays between stages) |
+| Photon | v1.4 | fails | `world0/prepare.vsh`: a struct varying (`CloudsParameters`) |
+| Rethinking Voxels | r0.1-beta9 | fails | `world0/prepare.fsh`: `1 << 31` overflows naga's constant folding; it also needs images |
+
+What the translator does for these packs, as Iris (JCPP and its GLSL transformer) does:
+
+- **`#if` reads floats as JCPP does**: a float in a condition, written there or through a macro, counts as its
+  integer part, and an empty operand as 0. The same holds in `shaders.properties`, where Steadfast's
+  `#elif ATMOSPHERE_FOG_STRENGTH_NOON == 0.5` stopped the pack (`UnexpectedToken(Float(0.5))`).
+- **A later `#define` replaces an earlier one** instead of failing (Bloop's `DefineRedefined`), and an unterminated
+  `#if` runs to the end of the file.
+- **`shaders.properties`** keeps its empty lines and backslashes through the preprocessor, as Iris's does, so a
+  continued line doesn't swallow the next one.
+- **16-bit and 8-bit types** (`float16_t`, `u16vec2`, `packFloat2x16`...), which Noble uses when the GPU reports
+  NVIDIA (`NV_gpu_shader5`), become their 32-bit types: WGSL has none.
+- **What naga refuses**: `%` with a scalar and a vector operand goes through overloads, a `const` naga can't fold
+  (`mix`, `?:`, `smoothstep`) becomes a global set at the start of `main`, `sqrt` of a negative constant is
+  evaluated at run time, and a fragment output narrower than four channels (`out vec3`, Steadfast's `final`) is
+  written through a `vec4` with alpha 1 as OpenGL fills it.
 
 ### Order to implement
 
