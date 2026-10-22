@@ -52,6 +52,8 @@ impl Game<'_> {
                 invisible: false,
                 check_interval: 0,
             });
+        } else if kind == "minecraft:lightning_bolt" {
+            self.spawn_remote_bolt(id, position);
         } else if kind == "minecraft:painting" {
             // The variant comes with the entity data; until then the
             // registry's first one (VariantUtils.getAny).
@@ -284,5 +286,6 @@ impl Game<'_> {
         self.armor_stands.retain(|a| a.id != id);
         self.item_frames.retain(|f| f.id != id);
         self.paintings.retain(|p| p.id != id);
+        self.bolts.retain(|b| b.id != id);
     }
 }

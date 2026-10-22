@@ -123,6 +123,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              it (#1222).
 - frames:    the host and the guest each put a diamond in an item frame and turn it, and put a
              helmet on an armor stand and take it back (#1222).
+- lightning: a bolt summoned beside the host, then the guest: both sides get the bolt and flash the
+             sky (on its server thread the host's window is a client of it too).
 - flight:    a player in creative double-taps jump and flies, stays up, and stops flying in survival:
              the guest, and on the server thread the host's window too, take what may fly from the
              server's abilities (ClientPacketListener.handlePlayerAbilities).
@@ -164,7 +166,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning']
 
 
 class Game:
@@ -2317,6 +2319,22 @@ def check_ladder(host, guest, out):
         guest('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
 
 
+def apart(host, guest):
+    """The host where it stands and the guest 12 blocks east, each on a stone floor with room
+    around: neither stands in the other's way (a ray from inside a player's box hits that player)."""
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    spots = {}
+    for label, player, dx in (('host', host, 0), ('guest', guest, 12)):
+        px = x + dx
+        host('command', command=f'fill {px - 3} {y - 1} {z - 3} {px + 4} {y - 1} {z + 6} minecraft:stone')
+        host('command', command=f'fill {px - 3} {y} {z - 3} {px + 4} {y + 3} {z + 6} minecraft:air')
+        player('command', command=f'tp @s {px + 0.5} {y} {z + 0.5} 0 0')
+        spots[label] = (px, y, z)
+    host.wait(10)
+    guest.wait(10)
+    return spots
+
+
 def board(player, kind, at):
     """Right-click the `kind` object near `at` and check `player` rides it."""
     found = [o for o in player('status')['objects'] if o['kind'].endswith(kind)
@@ -2359,8 +2377,9 @@ def check_boats(host, guest, out):
     on water with a right click, paddle it forward (the other side sees it move), sneak out, and
     break it with their fists."""
     result = {}
+    spots = apart(host, guest)
     for label, player, other in (('host', host, guest), ('guest', guest, host)):
-        x, y, z = (int(v // 1) for v in pos_of(player))
+        x, y, z = spots[label]
         bx = x + 3
         player('command', command='gamemode survival')
         # A pool ten blocks long, with a path beside it to walk back to the boat.
@@ -2404,8 +2423,9 @@ def check_minecarts(host, guest, out):
     """#1222: the host and the guest each get into a minecart on rails with a right click, sneak out
     beside it, and break it with their fists."""
     result = {}
+    spots = apart(host, guest)
     for label, player in (('host', host), ('guest', guest)):
-        x, y, z = (int(v // 1) for v in pos_of(player))
+        x, y, z = spots[label]
         cx = x + 3
         player('command', command='gamemode survival')
         player('command', command=f'fill {cx - 2} {y} {z - 2} {cx + 2} {y + 3} {z + 6} minecraft:air')
@@ -2436,8 +2456,9 @@ def check_frames(host, guest, out):
     """#1222: the host and the guest each put a diamond in an item frame and turn it, and put a
     helmet on an armor stand and take it back, with right clicks."""
     result = {}
+    spots = apart(host, guest)
     for label, player, other in (('host', host, guest), ('guest', guest, host)):
-        x, y, z = (int(v // 1) for v in pos_of(player))
+        x, y, z = spots[label]
         player('command', command='gamemode survival')
         # Within a survival player's 3 blocks of reach: a frame on a wall, an armor stand beside it.
         player('command', command=f'fill {x - 2} {y} {z + 1} {x + 2} {y + 2} {z + 2} minecraft:air')
@@ -2484,6 +2505,33 @@ def check_frames(host, guest, out):
             player('command', command=f'kill @e[type=!minecraft:player,x={x - 3},y={y - 1},z={z},dx=6,dy=4,dz=6]')
             player('command', command=f'fill {x - 2} {y} {z + 3} {x + 2} {y + 2} {z + 3} minecraft:air')
             player('command', command='clear @s')
+    return result
+
+
+def check_lightning(host, guest, out):
+    """A bolt summoned beside each player: both sides get the bolt entity and flash the sky (the
+    host's window too on its server thread, FEATURES 4z(f))."""
+    result = {}
+    for label, player in (('host', host), ('guest', guest)):
+        x, y, z = (int(v // 1) for v in pos_of(player))
+        before = {g.name: g('status')['lightning'] for g in (host, guest)}
+        # No fire where it strikes: on stone with nothing around.
+        player('command', command=f'fill {x + 4} {y - 1} {z - 2} {x + 8} {y - 1} {z + 2} minecraft:stone')
+        player('command', command=f'fill {x + 4} {y} {z - 2} {x + 8} {y + 3} {z + 2} minecraft:air')
+        player('command', command=f'summon minecraft:lightning_bolt {x + 6.5} {y} {z + 0.5}')
+        seen = {}
+        for _ in range(40):
+            player.wait(1)
+            seen = {g.name: g('status')['lightning'] for g in (host, guest)}
+            if all(seen[n]['struck'] > before[n]['struck'] and seen[n]['flashes'] > before[n]['flashes']
+                   for n in seen):
+                break
+        player('command', command=f'fill {x + 4} {y} {z - 2} {x + 8} {y + 3} {z + 2} minecraft:air')
+        for n in seen:
+            assert seen[n]['struck'] > before[n]['struck'], f"{label}'s bolt: the {n} got no bolt ({seen[n]})"
+            assert seen[n]['flashes'] > before[n]['flashes'], f"{label}'s bolt: the {n}'s sky didn't flash ({seen[n]})"
+        result[label] = {n: {'bolts': seen[n]['struck'] - before[n]['struck'],
+                             'flashes': seen[n]['flashes'] - before[n]['flashes']} for n in seen}
     return result
 
 
@@ -2799,18 +2847,13 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles, 'blast': check_blast,
              'light': check_light, 'plates': check_plates,
              'swings': check_swings, 'cracks': check_cracks,
-             'time': check_time, 'growth': check_growth, 'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect, 'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'arrows': check_arrows, 'predict': check_predict, 'ladder': check_ladder, 'boats': check_boats, 'minecarts': check_minecarts, 'frames': check_frames}
+             'time': check_time, 'growth': check_growth, 'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect, 'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'arrows': check_arrows, 'predict': check_predict, 'ladder': check_ladder, 'boats': check_boats, 'minecarts': check_minecarts, 'frames': check_frames, 'lightning': check_lightning}
 
 
 def run(ctl, out, resources, checks):
     host, guest = Game('host', ctl, resources), Game('guest', ctl, resources)
-    # Without --server-thread the host runs the game's default, the world in the frame, as players
-    # get it (`boats` fails there if the default goes back to the server thread before it has
-    # vehicles, #1222).
-    if SERVER_THREAD:
-        host.d.env['HORIZON_SERVER_THREAD'] = '1'
-    else:
-        host.d.env.pop('HORIZON_SERVER_THREAD', None)
+    # Either way explicitly: the game's default is the server thread.
+    host.d.env['HORIZON_SERVER_THREAD'] = '1' if SERVER_THREAD else '0'
     results = {}
     try:
         host.pid = host('launch', wait=False, offscreen=sys.platform == 'darwin')['pid']

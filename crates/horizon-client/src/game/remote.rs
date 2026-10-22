@@ -3271,6 +3271,9 @@ impl Game<'_> {
             };
             self.tick_remote_objects(&mut step);
             self.tick_remote_projectiles(&mut step);
+            // LightningBolt.tick on a client, and the sky flash fading.
+            self.flash = self.flash.saturating_sub(1);
+            self.tick_bolts();
         }
         lerps.retain(|_, l| l.steps > 0);
         if let Some(r) = self.remote.as_mut() {

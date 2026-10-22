@@ -1324,6 +1324,8 @@ struct Game<'a> {
     /// `ClientAvatarState`: walked distance and view bob.
     avatar: horizon_client::camera::AvatarBob,
     flash: u32,
+    /// Bolts that struck here and sky flashes they made, in total (`status`).
+    lightning_seen: [u32; 2],
     /// The head of the bed while sleeping; the visual timer also survives waking.
     sleeping: Option<[i32; 3]>,
     sleep_timer: u32,
@@ -11615,6 +11617,7 @@ impl<'a> Game<'a> {
             dragging: false,
             avatar: Default::default(),
             flash: 0,
+            lightning_seen: [0; 2],
             sleeping: None,
             sleep_timer: 0,
             dim: Dim::Overworld,
