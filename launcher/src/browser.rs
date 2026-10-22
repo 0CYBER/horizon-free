@@ -7,14 +7,18 @@
 //! page). Java mod jars don't run in Horizon (docs/mods.md), so they are never searched.
 pub mod curseforge;
 pub mod download;
+pub mod installed;
 pub mod modrinth;
+
+use serde::{Deserialize, Serialize};
 
 /// The Minecraft version Horizon plays. A version port updates it with the other `"26.3"` sites
 /// (docs/version-ports.md).
 pub const GAME: &str = "26.3";
 
 /// What a project is, as far as Horizon is concerned.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum Kind {
     ResourcePack,
     ShaderPack,
@@ -43,7 +47,8 @@ impl Kind {
 }
 
 /// Where a project comes from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum SourceId {
     Modrinth,
     CurseForge,
@@ -194,6 +199,15 @@ pub trait Source: Send + Sync {
     fn project(&self, id: &str) -> Result<Project, String>;
     /// Versions, newest first.
     fn versions(&self, project: &Project) -> Result<Vec<Version>, String>;
+    /// Downloads one of its files into `folder`, checked ([`download::fetch`]).
+    fn fetch(
+        &self,
+        file: &FileRef,
+        folder: &std::path::Path,
+        progress: &dyn Fn(f32),
+    ) -> Result<std::path::PathBuf, String> {
+        download::fetch(file, folder, progress)
+    }
 }
 
 /// The sources this launcher can use: Modrinth always, CurseForge when it has an API key.
@@ -203,6 +217,11 @@ pub fn sources() -> Vec<Box<dyn Source>> {
         all.push(Box::new(cf));
     }
     all
+}
+
+/// The source of that id, when this launcher can use it.
+pub fn source(id: SourceId) -> Option<Box<dyn Source>> {
+    sources().into_iter().find(|s| s.id() == id)
 }
 
 /// The loaders a Java shader pack may name that Horizon translates.

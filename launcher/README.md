@@ -139,6 +139,11 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher modpack port <pack> [--from <dir>] [--version <tag>]   get the jars and carry them over
     horizon-launcher modpack play <pack> [--version <tag>]                 play it as its own profile
     horizon-launcher modpack remove <pack>
+    horizon-launcher mods [list]                    what the mod browser installed (docs/mod-browser.md)
+    horizon-launcher mods search <text> [--kind resource|shader|modpack] [--everything] [--source modrinth|curseforge]
+    horizon-launcher mods install <id or slug>      checksum checked, with what it needs; a modpack is imported
+    horizon-launcher mods update [<pack>] [--check]
+    horizon-launcher mods remove <pack>
     horizon-launcher servers [list]                 the servers hosted from the launcher, and whether they run
     horizon-launcher servers create [--name N] [--seed S | --copy-world DIR] [--mode M] [--difficulty D]
                      [--max-players N] [--open] [--check-accounts] [--player NAME]... --accept-eula

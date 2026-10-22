@@ -1,0 +1,260 @@
+//! What the browser installed into the game folder, and installing, updating and removing it.
+//!
+//! `mod-browser.json` beside `options.txt` lists each file the browser put in `resourcepacks/`
+//! or `shaderpacks/`: where it came from, its version and its checksum. Files the player put
+//! there themselves are never touched: the browser only replaces or removes what it lists.
+use super::{pick, safe_name, Kind, Project, Source, SourceId, Support, Version};
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+const MANIFEST: &str = "mod-browser.json";
+/// How deep required dependencies are followed.
+const MAX_DEPTH: usize = 4;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Entry {
+    pub source: SourceId,
+    pub project: String,
+    pub slug: String,
+    pub title: String,
+    pub kind: Kind,
+    pub version: String,
+    pub number: String,
+    /// Relative to the game folder: `resourcepacks/<name>`.
+    pub file: String,
+    /// The checksum the download was checked against: `SHA-512:<hex>`.
+    pub checksum: String,
+    pub page: String,
+    /// Installed because another pack needs it.
+    #[serde(default)]
+    pub dependency: bool,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct Installed {
+    pub entries: Vec<Entry>,
+}
+
+impl Installed {
+    pub fn load(home: &Path) -> Self {
+        fs::read_to_string(home.join(MANIFEST))
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self, home: &Path) -> Result<(), String> {
+        let path = home.join(MANIFEST);
+        let part = home.join(format!(".{MANIFEST}.part"));
+        let text = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
+        fs::create_dir_all(home).map_err(|e| format!("{}: {e}", home.display()))?;
+        fs::write(&part, text).map_err(|e| format!("{}: {e}", part.display()))?;
+        fs::rename(&part, &path).map_err(|e| format!("{}: {e}", path.display()))
+    }
+
+    pub fn find(&self, source: SourceId, project: &str) -> Option<&Entry> {
+        self.entries
+            .iter()
+            .find(|e| e.source == source && e.project == project)
+    }
+
+    /// By project id or slug, as the CLI takes them.
+    pub fn lookup(&self, name: &str) -> Option<&Entry> {
+        self.entries
+            .iter()
+            .find(|e| e.project == name || e.slug == name)
+    }
+}
+
+/// One file to install: the project, the version chosen and why it was pulled in.
+#[derive(Clone, Debug)]
+pub struct Step {
+    pub project: Project,
+    pub version: Version,
+    pub dependency: bool,
+}
+
+/// What installing `project` takes, dependencies first, checked before any byte is downloaded:
+/// every file runs in Horizon and has a version to install.
+pub fn plan(source: &dyn Source, project: &Project, everything: bool) -> Result<Vec<Step>, String> {
+    if project.kind.folder().is_none() {
+        return Err(format!(
+            "{} is a modpack: it is imported on the Modpacks page.",
+            project.title
+        ));
+    }
+    let mut steps = Vec::new();
+    add(source, project.clone(), everything, false, 0, &mut steps)?;
+    Ok(steps)
+}
+
+fn add(
+    source: &dyn Source,
+    project: Project,
+    everything: bool,
+    dependency: bool,
+    depth: usize,
+    steps: &mut Vec<Step>,
+) -> Result<(), String> {
+    if steps.iter().any(|s| s.project.id == project.id) {
+        return Ok(());
+    }
+    if depth > MAX_DEPTH {
+        return Err(format!("{}'s dependencies go too deep.", project.title));
+    }
+    if let Support::No(why) = project.support() {
+        return Err(format!("{} doesn't run in Horizon: {why}", project.title));
+    }
+    let versions = source.versions(&project)?;
+    let Some(version) = pick(project.kind, &versions, everything).cloned() else {
+        return Err(match versions.iter().find_map(|v| v.blocked.clone()) {
+            Some(why) => format!("{} can't be installed from here: {why}", project.title),
+            None => format!("{} has no version Horizon runs.", project.title),
+        });
+    };
+    for id in &version.required {
+        let needed = source.project(id).map_err(|_| {
+            format!(
+                "{} needs {id} on {}, which isn't a pack Horizon loads (a Java mod?).",
+                project.title,
+                source.id().label()
+            )
+        })?;
+        if needed.kind.folder().is_none() {
+            return Err(format!(
+                "{} needs the modpack {}.",
+                project.title, needed.title
+            ));
+        }
+        add(source, needed, everything, true, depth + 1, steps)?;
+    }
+    steps.push(Step {
+        project,
+        version,
+        dependency,
+    });
+    Ok(())
+}
+
+/// Installs `project` (and what it needs) into the game folder `home`. A project already
+/// installed is updated to the version chosen. `progress` gets a line per file and the fraction.
+pub fn install(
+    source: &dyn Source,
+    project: &Project,
+    everything: bool,
+    home: &Path,
+    progress: &dyn Fn(&str, f32),
+) -> Result<Vec<Entry>, String> {
+    let steps = plan(source, project, everything)?;
+    let mut installed = Installed::load(home);
+    let mut done = Vec::new();
+    for step in steps {
+        let p = &step.project;
+        let old = installed.find(p.source, &p.id).cloned();
+        if old.as_ref().is_some_and(|o| o.version == step.version.id) {
+            done.push(old.expect("checked"));
+            continue;
+        }
+        let file = step
+            .version
+            .file()
+            .expect("pick keeps versions with a file");
+        let folder_name = p.kind.folder().expect("plan keeps folder kinds");
+        let name = safe_name(&file.name)
+            .ok_or_else(|| format!("{:?} isn't a plain file name.", file.name))?;
+        let relative = format!("{folder_name}/{name}");
+        let owner = installed.entries.iter().find(|e| e.file == relative);
+        let ours = owner.is_some_and(|e| e.source == p.source && e.project == p.id);
+        if home.join(&relative).exists() && !ours {
+            return Err(match owner {
+                Some(e) => format!(
+                    "{relative} belongs to {}, installed from the browser.",
+                    e.title
+                ),
+                None => format!(
+                    "{relative} is already there and wasn't installed by the browser: move it \
+                     away first, or keep it."
+                ),
+            });
+        }
+        let line = format!("{} {}", p.title, step.version.number);
+        let path = source.fetch(file, &home.join(folder_name), &|f| progress(&line, f))?;
+        let (algo, hash) = file.checksum().expect("fetch checks for one");
+        if let Some(old) = &old {
+            if old.file != relative {
+                let _ = fs::remove_file(home.join(&old.file));
+            }
+        }
+        let entry = Entry {
+            source: p.source,
+            project: p.id.clone(),
+            slug: p.slug.clone(),
+            title: p.title.clone(),
+            kind: p.kind,
+            version: step.version.id.clone(),
+            number: step.version.number.clone(),
+            file: relative,
+            checksum: format!("{algo}:{hash}"),
+            page: p.page.clone(),
+            // Asked for by the player once: it stays theirs.
+            dependency: step.dependency && old.as_ref().is_none_or(|o| o.dependency),
+        };
+        debug_assert!(path.ends_with(name));
+        installed
+            .entries
+            .retain(|e| !(e.source == p.source && e.project == p.id));
+        installed.entries.push(entry.clone());
+        installed.save(home)?;
+        done.push(entry);
+    }
+    Ok(done)
+}
+
+/// Removes what the browser installed for `name` (a project id or slug): its file and its entry.
+pub fn remove(home: &Path, name: &str) -> Result<Entry, String> {
+    let mut installed = Installed::load(home);
+    let entry = installed
+        .lookup(name)
+        .cloned()
+        .ok_or_else(|| format!("{name} wasn't installed by the browser."))?;
+    match fs::remove_file(home.join(&entry.file)) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("{}: {e}", entry.file)),
+    }
+    installed
+        .entries
+        .retain(|e| !(e.source == entry.source && e.project == entry.project));
+    installed.save(home)?;
+    Ok(entry)
+}
+
+/// The newer version `entry` can be updated to, if any.
+pub fn update_for(source: &dyn Source, entry: &Entry) -> Result<Option<Version>, String> {
+    let project = source.project(&entry.project)?;
+    let versions = source.versions(&project)?;
+    Ok(pick(project.kind, &versions, true)
+        .filter(|v| v.id != entry.version)
+        .cloned())
+}
+
+/// Downloads a modpack's file, checked, into `folder` (kept there: the import reads it).
+pub fn fetch_modpack(
+    source: &dyn Source,
+    project: &Project,
+    folder: &Path,
+    progress: &dyn Fn(f32),
+) -> Result<PathBuf, String> {
+    if project.kind != Kind::Modpack {
+        return Err(format!("{} isn't a modpack.", project.title));
+    }
+    let versions = source.versions(project)?;
+    let version = pick(Kind::Modpack, &versions, true)
+        .ok_or_else(|| format!("{} has no file to download.", project.title))?;
+    let file = version.file().expect("pick keeps versions with a file");
+    source.fetch(file, folder, progress)
+}
+
+#[cfg(test)]
+mod tests;
