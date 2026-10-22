@@ -719,14 +719,14 @@ impl Caret {
 /// highlight when Select All covers the value (`invert_text` as
 /// `setInvertHighlightedTextColor`), and the cursor, blinking from when the
 /// field took the focus (`TextCursorUtils.isCursorVisible`): an underscore,
-/// or a bar once the value is `max_chars` long.
+/// or a bar once the value is `max_chars` long. `shadow` is `setTextShadow`.
 #[allow(clippy::too_many_arguments)]
 pub fn append_field(
     batch: &mut HudBatch,
     atlas: &HudAtlas,
     value: &str,
     (x, y, width): (f32, f32, f32),
-    color: u32,
+    (color, shadow): (u32, bool),
     max_chars: usize,
     selected: bool,
     invert_text: bool,
@@ -734,7 +734,7 @@ pub fn append_field(
 ) {
     let mut cursor_x = x;
     if !value.is_empty() {
-        batch.text(atlas, value, x, y, color, true);
+        batch.text(atlas, value, x, y, color, shadow);
         cursor_x += HudBatch::text_width(atlas, value) + 1.0;
     }
     let insert = char_len(value) >= max_chars;
@@ -750,7 +750,7 @@ pub fn append_field(
         if insert {
             batch.fill(atlas, cursor_x, y - 1.0, 1.0, 11.0, color);
         } else {
-            batch.text(atlas, "_", cursor_x, y, color, true);
+            batch.text(atlas, "_", cursor_x, y, color, shadow);
         }
     }
 }
@@ -1152,7 +1152,7 @@ mod tests {
             &atlas,
             "abc",
             (10.0, 20.0, 80.0),
-            u32::MAX,
+            (u32::MAX, true),
             50,
             true,
             true,
@@ -1170,7 +1170,7 @@ mod tests {
             &atlas,
             "abc",
             (10.0, 20.0, 103.0),
-            u32::MAX,
+            (u32::MAX, true),
             50,
             true,
             false,
@@ -1185,7 +1185,7 @@ mod tests {
                 &atlas,
                 "abc",
                 (10.0, 20.0, 103.0),
-                0,
+                (0, true),
                 50,
                 false,
                 false,
@@ -1201,7 +1201,7 @@ mod tests {
             &atlas,
             "abc",
             (10.0, 20.0, 80.0),
-            u32::MAX,
+            (u32::MAX, true),
             3,
             false,
             true,

@@ -1663,7 +1663,7 @@ impl Game<'_> {
                             atlas,
                             &s.name,
                             (ox + 62.0, oy + 24.0, 103.0),
-                            u32::MAX,
+                            (u32::MAX, true),
                             ANVIL_NAME_CHARS,
                             self.text_selection.covers(ANVIL_NAME, &s.name),
                             false,

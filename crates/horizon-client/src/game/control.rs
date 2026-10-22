@@ -220,6 +220,25 @@ impl Game<'_> {
             "key" => {
                 let key = key_code(arg(1)?).ok_or_else(|| format!("unknown key {}", words[1]))?;
                 self.require_world()?;
+                // A held edit modifier (`key super down`) and A/C/V/X: the
+                // open book's Select All, Copy, Paste or Cut.
+                if self.book.is_some() && arg(2)? != "up" {
+                    let held = |k: [KeyCode; 2]| k.iter().any(|k| self.keys.contains(k));
+                    let edit = if cfg!(target_os = "macos") {
+                        held([KeyCode::SuperLeft, KeyCode::SuperRight])
+                    } else {
+                        held([KeyCode::ControlLeft, KeyCode::ControlRight])
+                    };
+                    let name = arg(1)?;
+                    let letter = name.chars().next().filter(|_| name.len() == 1);
+                    let shift = held([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+                    if let Some(shortcut) =
+                        horizon_client::clipboard::edit_shortcut(letter, edit, shift, false)
+                    {
+                        self.book_shortcut(shortcut);
+                        return ok();
+                    }
+                }
                 // KeyboardHandler.keyPress: the debug keys see the physical key first.
                 let physical = key;
                 {
@@ -909,6 +928,8 @@ fn key_code(name: &str) -> Option<KeyCode> {
         "space" => KeyCode::Space,
         "shift" | "lshift" => KeyCode::ShiftLeft,
         "ctrl" | "control" | "lctrl" => KeyCode::ControlLeft,
+        // The edit modifier on macOS (Cmd+A selects all there).
+        "super" | "cmd" | "meta" => KeyCode::SuperLeft,
         "esc" | "escape" => KeyCode::Escape,
         "tab" => KeyCode::Tab,
         "enter" | "return" => KeyCode::Enter,
@@ -917,6 +938,7 @@ fn key_code(name: &str) -> Option<KeyCode> {
         "f3" => KeyCode::F3,
         "f4" => KeyCode::F4,
         "f5" => KeyCode::F5,
+        "f6" => KeyCode::F6,
         "f11" => KeyCode::F11,
         "slash" | "/" => KeyCode::Slash,
         "backspace" => KeyCode::Backspace,
