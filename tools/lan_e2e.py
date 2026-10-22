@@ -66,6 +66,11 @@ address. The script then checks, from both sides, what a guest's game used to ge
              the host has them; a falling block lands on both sides.
 - fireball:  a fire charge a dispenser shoots onto stone lights a fire both sides see, and the fire
              goes out on its own within a minute (it ticks: FireBlock.tick on a floor that doesn't burn)
+
+
+- blast:     primed TNT going off beside a guest in survival hurts the guest and pushes it away
+             (ServerExplosion.hurtEntities takes every player); facing it behind a raised shield, the
+             guest takes nothing.
 - plates:    a stone pressure plate the guest steps on is pressed on both sides, and comes up once
              the guest steps off (#848).
 - swings:    each side sees the other's arm swing while it mines a block, and the guest sees its own
@@ -114,7 +119,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'trials', 'clicks', 'sleep', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth']
 
 
 class Game:
@@ -1587,6 +1592,56 @@ def check_projectiles(host, guest, out):
     return f'{len(theirs)} identical, fuses (host, guest) {fuses}'
 
 
+def check_blast(host, guest, out):
+    guest('command', command='gamemode survival')
+    guest('command', command='clear @s')
+    host('command', command='gamemode creative')
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    gx, gz = x + 6, z
+    floor = f'fill {gx - 6} {y - 1} {gz - 4} {gx + 6} {y - 1} {gz + 4} minecraft:bedrock'
+    detail = {}
+    try:
+        for shielded in (False, True):
+            if remote(guest)['health'] <= 0:
+                guest.raw('respawn')
+                guest.wait(40)
+            host('command', command=floor)
+            host('command', command=f'fill {gx - 6} {y} {gz - 4} {gx + 6} {y + 3} {gz + 4} minecraft:air')
+            guest('command', command=f'tp @s {gx + 0.5} {y} {gz + 0.5}')
+            guest('command', command='effect give @s minecraft:instant_health 1 5')
+            guest.wait(30)
+            hold = None
+            if shielded:
+                guest('command', command='item replace entity @s weapon.offhand with minecraft:shield')
+                guest.wait(5)
+                guest.raw('look-at', gx + 5.5, y + 0.5, gz + 0.5)
+                hold = threading.Thread(target=guest.raw, args=('use-item', '--hold', 2.5))
+                hold.start()
+                time.sleep(0.5)
+            before = remote(guest)['health']
+            at = pos_of(guest)
+            # Five blocks off: a blast that hurts without killing (about 14 at full exposure).
+            host('command', command=f'summon minecraft:tnt {gx + 5.5} {y} {gz + 0.5} {{fuse:10s}}')
+            # The guest's own controller is busy holding the shield up: the host waits.
+            host.wait(14)
+            after = remote(guest)['health']
+            moved = pos_of(guest)
+            if hold:
+                hold.join()
+            guest.shot(out, f'blast-{"shield" if shielded else "open"}')
+            detail['shield' if shielded else 'open'] = {
+                'before': before, 'after': after, 'pushed': round(at[0] - moved[0], 2)}
+    finally:
+        host('command', command='gamemode survival')
+        guest('command', command='clear @s')
+        host('command', command=floor)
+    open_, shield = detail['open'], detail['shield']
+    assert open_['after'] < open_['before'], f'the blast never hurt the guest: {detail}'
+    assert open_['pushed'] > 0, f'the blast never pushed the guest away: {detail}'
+    assert shield['after'] >= shield['before'], f'the shield did not stop the blast: {detail}'
+    return detail
+
+
 def light_differences(host, guest, lo, hi):
     """Positions of the box loaded on both sides, and those whose sky or block light differ."""
     h, g = host.raw('light', *lo, *hi), guest.raw('light', *lo, *hi)
@@ -1852,7 +1907,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,
              'effects': check_effects, 'portals': check_portals, 'distance': check_distance, 'clicks': check_clicks,
              'sleep': check_sleep, 'push': check_push, 'eat': check_eat, 'eating': check_eating,
-             'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles,
+             'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles, 'blast': check_blast,
              'light': check_light, 'plates': check_plates,
              'swings': check_swings, 'cracks': check_cracks,
              'time': check_time, 'growth': check_growth, 'fireball': check_fireball, 'deflect': check_deflect, 'barter': check_barter}
