@@ -302,6 +302,22 @@ cargo run -p horizon-port-pack -- report ~/.horizon/ports/pack        # coverage
 cargo run -p horizon-port-pack -- port ~/Downloads/pack.zip ~/.horizon/ports/pack [--from <folder>] [--resources <root>]
 ```
 
+`check <jar> <out>` takes one mod jar on its own, as the launcher's mod browser installs it
+([mod-browser.md](mod-browser.md)): it carries the jar into `<out>/carry/` and reads its class
+files (constant pool, superclass, declared methods; no decompiling) for what the carry can't
+take, then writes the verdict to `<out>/check.json`. **Works**: content only, and the code just
+registers it. **Partly**: the content ports, and the code features listed don't (block entities,
+menus, entities, blocks and items with behaviour of their own, recipe types, Mixins, game events).
+**Doesn't run**: nothing to port, or a jar made for 1.20 or older. Each mod class is followed up to
+the first game class it extends; a block subclass that only overrides how it looks or is placed
+(`getStateForPlacement`, `rotate`...) is registration. Game classes are read by Mojang's names
+(26.1 and later, and NeoForge since 1.20.5); older Fabric jars name them in intermediary, so a
+class extending one counts as code that can't be read. On ten 26.3 jars (2026-10-22): Macaw's
+Fences, Windows and Furniture, Ecologics, Compressed Blocks, More Decorative Blocks and Moog's
+Nether Structures are Partly; Sodium and GeckoLib don't run (Mixins, renderers, nothing to port);
+Fabric API doesn't run (its id has a dash, which content mods can't use). A check takes 0.2 s to
+3 s, and 24 s for Compressed Blocks (18 MB, 9,360 recipes, writing the carry dominates).
+
 `fetch` gets each jar the player's way, never from us: copied from a folder they have (matched
 by SHA-1, or through a CurseForge app instance's `minecraftinstance.json`), else downloaded from
 the link the pack itself gives (a `.mrpack`'s, on the format's hosts only) or, for a CurseForge
