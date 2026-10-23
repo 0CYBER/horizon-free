@@ -144,8 +144,11 @@ address. The script then checks, from both sides, what a guest's game used to ge
              than in the air on their own client as on the server, and it breaks (#1254).
 - worldspawn: the host moves the world spawn (`setworldspawn`): the host and the guest, with no bed,
              respawn there (#1310).
-- shield:    the host axes the guest's raised shield, then the guest the host's: it stays disabled
-             for 5 s on that player's own cooldown, then blocks again (#1316).
+- shield:    a vindicator's axe disables the host's, then the guest's, raised shield: the server
+             counts its 5 s cooldown down once a tick (#1316).
+- beds:      the host and the guest each set their respawn point at a bed and die elsewhere: they
+             stand up beside the bed, or, when the bed is gone or boxed in by stone, come back at
+             the world spawn (#1308).
 - deathmining: the host and the guest each die while breaking obsidian and let go on the death
              screen: once respawned, the obsidian stays (#1315).
 - contacts:  the host and the guest each stand on magma (and sneak on it), stand on a lit campfire,
@@ -198,7 +201,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning', 'riding', 'mounts', 'worldspawn', 'shield', 'deathmining', 'contacts', 'absorption', 'breath', 'lava', 'levels', 'drops', 'underwater']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning', 'riding', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption', 'breath', 'lava', 'levels', 'drops', 'underwater']
 
 
 class Game:
@@ -2849,6 +2852,60 @@ def check_world_spawn(host, guest, out):
     return seen
 
 
+def check_beds(host, guest, out):
+    """A bed sets the respawn point (day or night): respawning stands the player up beside it; a bed
+    that is gone, or boxed in by stone so there is nowhere to stand up, sends the player to the world
+    spawn instead (#1308). The host, then the guest, each for the three beds."""
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    host('command', command='gamerule respawn_radius 0')
+    host('command', command=f'setworldspawn {hx} {hy} {hz}')
+    host('command', command='time set 1000')
+    seen = {}
+    try:
+        for game, dz in ((host, -6), (guest, 6)):
+            game('command', command='gamemode survival')
+            x, y, z = hx + 12, hy, hz + dz
+            for case in ('intact', 'gone', 'boxed'):
+                game('command', command=f'fill {x - 3} {y - 1} {z - 3} {x + 4} {y - 1} {z + 3} minecraft:stone')
+                game('command', command=f'fill {x - 3} {y} {z - 3} {x + 4} {y + 3} {z + 3} minecraft:air')
+                game('command', command=f'setblock {x} {y} {z} minecraft:red_bed[facing=east,part=foot]')
+                game('command', command=f'setblock {x + 1} {y} {z} minecraft:red_bed[facing=east,part=head]')
+                game('command', command=f'tp @s {x + 0.5} {y} {z + 1.5}')
+                game.wait(20)
+                game.raw('interact', x + 1, y, z)
+                game.wait(10)
+                # Die elsewhere, by the world spawn.
+                game('command', command=f'tp @s {hx + 0.5} {hy} {hz + 3.5}')
+                game.wait(10)
+                if case == 'gone':
+                    game('command', command=f'fill {x} {y} {z} {x + 1} {y} {z} minecraft:air')
+                elif case == 'boxed':
+                    game('command', command=f'fill {x - 2} {y} {z - 2} {x + 3} {y + 2} {z + 2} minecraft:stone replace minecraft:air')
+                game.wait(5)
+                game('command', command='kill @s')
+                game.wait(20)
+                respawn_when_ready(game)
+                game.wait(60)
+                at = [round(v, 2) for v in pos_of(game)]
+                seen[f'{game.name}-{case}'] = {'at': at, 'bed': [x + 1, y, z], 'health': own(game)['health']}
+                game.shot(out, f'beds-{case}')
+    finally:
+        host('command', command='gamerule respawn_radius 10')
+        host('command', command='time set 1000')
+        for game in (host, guest):
+            game('command', command=f'tp @s {hx + 0.5} {hy} {hz + 0.5}')
+        guest.wait(20)
+    for case, s in seen.items():
+        (px, py, pz), (bx, by, bz) = s['at'], s['bed']
+        if case.endswith('intact'):
+            near = ((px - bx - 0.5) ** 2 + (pz - bz - 0.5) ** 2) ** 0.5
+            assert near < 2.6 and abs(py - by) < 0.6, f'{case}: not beside its bed: {seen}'
+        else:
+            assert abs(px - (hx + 0.5)) < 1 and abs(pz - (hz + 0.5)) < 1, f'{case}: not at the world spawn: {seen}'
+        assert s['health'] > 0, f'{case}: died again after respawning: {seen}'
+    return seen
+
+
 def check_death_mining(host, guest, out):
     """A player who dies while breaking obsidian, and lets go of attack on the death screen, doesn't
     break it once respawned: death forgets the digging (#1315)."""
@@ -3766,7 +3823,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'arrows': check_arrows, 'predict': check_predict, 'ladder': check_ladder,
              'boats': check_boats, 'minecarts': check_minecarts, 'frames': check_frames,
              'lightning': check_lightning, 'riding': check_riding, 'mounts': check_mounts,
-             'worldspawn': check_world_spawn, 'shield': check_shield, 'deathmining': check_death_mining,
+             'worldspawn': check_world_spawn, 'beds': check_beds, 'shield': check_shield, 'deathmining': check_death_mining,
              'contacts': check_contacts, 'absorption': check_absorption, 'breath': check_breath,
              'lava': check_lava, 'levels': check_levels, 'drops': check_drops,
              'underwater': check_underwater}
