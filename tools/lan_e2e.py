@@ -207,6 +207,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
              bites and reeling in catches it (#1348).
 - maps:      the host and the guest each make a map and hold it: their client draws the terrain
              around them and their marker, from the server's map data (#1382).
+- body:      the host and the guest each walk while drawing a bow (slowed), stand on powder snow
+             with leather boots (held up) and without (sinking), and sprint-swim looking down
+             (diving): their own client decides it (#1278, #1296, #1303).
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -4842,6 +4845,84 @@ def check_maps(host, guest, out):
 
 CHECKS += ['maps']
 CHECK_FNS.update(maps=check_maps)
+
+
+def check_body(host, guest, out):
+    """What each player's own client decides for its body (#1278, #1303, #1296): walking while
+    drawing a bow is slowed to a fifth (LocalPlayer.modifyInput), sprint-swimming follows the look
+    down (Player.travel's look angle) and leather boots hold on powder snow
+    (PowderSnowBlock.canEntityWalkOnPowderSnow)."""
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    seen = {}
+
+    def walked(game, x, z, use):
+        game('command', command=f'tp @s {x + 0.5} {hy} {z + 0.5} -90 0')
+        game.wait(10)
+        if use:
+            game.raw('mouse', 'right', 'down')
+            game.wait(5)
+        a = pos_of(game)
+        game.raw('move', 'forward', '0.8')
+        game.wait(10)
+        b = pos_of(game)
+        game.raw('mouse', 'right', 'up')
+        game.wait(5)
+        return round(math.dist((a[0], a[2]), (b[0], b[2])), 2)
+
+    try:
+        for game, dz in ((host, -4), (guest, 4)):
+            x, z = hx, hz + dz
+            host('command', command=f'fill {x - 1} {hy - 1} {z - 1} {x + 10} {hy - 1} {z + 1} minecraft:stone')
+            host('command', command=f'fill {x - 1} {hy} {z - 1} {x + 10} {hy + 3} {z + 1} minecraft:air')
+            game('command', command='gamemode survival')
+            game('command', command='clear @s')
+            game('command', command='effect clear @s')
+            s = {'walk': walked(game, x, z, False)}
+            game('command', command='item replace entity @s weapon.mainhand with minecraft:bow')
+            game('command', command='give @s minecraft:arrow 4')
+            game.wait(5)
+            s['drawing'] = walked(game, x, z, True)
+            game('command', command='clear @s')
+            # Powder snow under the feet: leather boots stand on it, bare feet sink.
+            host('command', command=f'setblock {x + 3} {hy - 1} {z} minecraft:powder_snow')
+            for boots in ('leather_boots', 'air'):
+                game('command', command=f'item replace entity @s armor.feet with minecraft:{boots}')
+                game('command', command=f'tp @s {x + 3.5} {hy} {z + 0.5} -90 0')
+                game.wait(30)
+                s[boots] = round(pos_of(game)[1] - hy, 2)
+            host('command', command=f'setblock {x + 3} {hy - 1} {z} minecraft:stone')
+            # Deep water: sprint-swimming while looking down dives.
+            wx, wz = x, z + 2 * (1 if dz > 0 else -1) * 3
+            host('command', command=f'fill {wx - 1} {hy - 14} {wz - 2} {wx + 12} {hy + 2} {wz + 2} minecraft:stone')
+            host('command', command=f'fill {wx} {hy - 13} {wz - 1} {wx + 11} {hy - 1} {wz + 1} minecraft:water')
+            game.wait(10)
+            game('command', command=f'tp @s {wx + 1.5} {hy - 6} {wz + 0.5} -90 60')
+            game.wait(10)
+            a = pos_of(game)
+            game.raw('move', 'forward', '1.5', '--sprint')
+            game.wait(5)
+            s['dive'] = round(pos_of(game)[1] - a[1], 2)
+            game('command', command=f'tp @s {x + 0.5} {hy} {z + 0.5} -90 0')
+            game.wait(5)
+            host('command', command=f'fill {wx - 1} {hy - 14} {wz - 2} {wx + 12} {hy + 2} {wz + 2} minecraft:air')
+            host('command', command=f'fill {wx - 1} {hy - 14} {wz - 2} {wx + 12} {hy - 1} {wz + 2} minecraft:stone')
+            game.shot(out, 'body')
+            seen[game.name] = s
+    finally:
+        for game in (host, guest):
+            back_to_game(game)
+            game.raw('mouse', 'right', 'up')
+            game('command', command='clear @s')
+        face_each_other(host, guest)
+    for name, s in seen.items():
+        assert s['walk'] > 2.5 and s['drawing'] < s['walk'] * 0.4, f'{name} drawing a bow: {seen}'
+        assert s['leather_boots'] > -0.01 and s['air'] < -0.5, f'{name} powder snow: {seen}'
+        assert s['dive'] < -2, f'{name} sprint-swimming down: {seen}'
+    return seen
+
+
+CHECKS += ['body']
+CHECK_FNS.update(body=check_body)
 
 
 if __name__ == '__main__':
