@@ -68,10 +68,12 @@ import zlib
 
 try:
     from . import lab, oracle_harness as oh, test_rust_parity as base
+    from .lab import free_port  # the other server harnesses import it from here
 except ImportError:
     import lab
     import oracle_harness as oh
     import test_rust_parity as base
+    from lab import free_port
 
 NAME = 'dedicated-server-parity'
 SEED = 12345
@@ -87,12 +89,6 @@ PROPERTIES = {
     'motd': '\\u00a7aHorizon \\u00a7rparity \\u00e9t\\u00e9',
     'pause-when-empty-seconds': '-1',
 }
-
-
-def free_port():
-    with socket.socket() as s:
-        s.bind(('127.0.0.1', 0))
-        return s.getsockname()[1]
 
 
 def icon_png():
