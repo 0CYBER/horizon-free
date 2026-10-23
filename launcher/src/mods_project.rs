@@ -167,28 +167,7 @@ impl Launcher {
             .icon
             .clone()
             .and_then(|url| self.mods_image(&url, images::ICON));
-        let frame = plate(&t)
-            .flex()
-            .flex_none()
-            .items_center()
-            .justify_center()
-            .size(px(side))
-            .overflow_hidden();
-        match path {
-            Some(path) => frame.child(img(path).size(px(side))).into_any_element(),
-            None => frame
-                .text_color(t.muted)
-                .child(
-                    text(theme::UI).child(
-                        p.title
-                            .chars()
-                            .next()
-                            .map(|c| c.to_uppercase().to_string())
-                            .unwrap_or_default(),
-                    ),
-                )
-                .into_any_element(),
-        }
+        blocks::slot(path.map(gpui::ImageSource::from), &p.title, side, &t).into_any_element()
     }
 
     /// The values the filters can take for the current kind and source, asked for once.
@@ -357,7 +336,7 @@ impl Launcher {
     }
 
     /// Vanilla's mark, drawn from the player's prepared game files when there are some.
-    fn vanilla_icon(&self) -> Option<PathBuf> {
+    pub(super) fn vanilla_icon(&self) -> Option<PathBuf> {
         let tag = self.selected().filter(|tag| backend::is_prepared(tag))?;
         images::grass_block(&backend::game_home(), &backend::resources(tag))
     }
@@ -371,7 +350,7 @@ impl Launcher {
         let support = self.mods.support(&p);
         let color = match support {
             Support::Works => t.success,
-            Support::Partial(_) => t.accent,
+            Support::Partial(_) => t.warn,
             Support::No(_) => t.muted,
         };
         let back = button("mods-back", "Back to results", Kind::Ghost, &t).on_click(cx.listener(
@@ -573,7 +552,7 @@ impl Launcher {
                 None => centered("Loading…", &t),
                 Some(Err(e)) => notice(e.clone(), &t),
                 Some(Ok(list)) => {
-                    let mut rows = div().flex().flex_col().border_t_1().border_color(t.rule);
+                    let mut rows = div().flex().flex_col();
                     for (i, v) in list.iter().take(50).enumerate() {
                         let file = v.file();
                         let mut detail = vec![

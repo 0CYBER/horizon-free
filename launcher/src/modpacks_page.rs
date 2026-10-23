@@ -124,9 +124,8 @@ impl Launcher {
         self.start_client(tag);
     }
 
-    /// The imported packs, above the Modpacks tab's search.
-    pub(super) fn imported_packs(&mut self, cx: &mut Context<Self>) -> Div {
-        let t = self.theme;
+    /// Reads the imported packs, once (the sidebar and the Modpacks tab both show them).
+    pub(super) fn load_packs(&mut self) {
         if self.packs_loaded.is_none() {
             self.packs = modpacks::list();
             if self.pack_open.is_none() {
@@ -134,6 +133,12 @@ impl Launcher {
             }
             self.packs_loaded = Some(Instant::now());
         }
+    }
+
+    /// The imported packs, above the Modpacks tab's search.
+    pub(super) fn imported_packs(&mut self, cx: &mut Context<Self>) -> Div {
+        let t = self.theme;
+        self.load_packs();
         let busy = self.pack_busy;
         let pick = |id: &'static str, label: &'static str, folder: bool| {
             let b = button(id, label, Kind::Secondary, &t);
@@ -153,12 +158,17 @@ impl Launcher {
             .gap(px(8.))
             .child(pick("import-file", "Import a pack file…", false))
             .child(pick("import-folder", "Import an instance folder…", true))
-            .child(text(theme::CAPTION).text_color(t.muted).child(
+            .child(text(theme::CAPTION).w_full().text_color(t.muted).child(
                 ".mrpack (Modrinth), .zip (CurseForge), or a Prism, MultiMC or CurseForge instance. \
                  Horizon ports what it can on this computer, from your own downloads, and plays \
                  the pack as its own profile. Nothing is uploaded or shared.",
             ));
-        let mut page = div().flex().flex_col().gap(px(32.)).child(actions);
+        let mut page = div()
+            .flex()
+            .flex_col()
+            .gap(px(16.))
+            .child(section_title("Your modpacks", "archive", &t))
+            .child(actions);
         if busy || !self.pack_log.is_empty() {
             page = page.child(self.pack_log_plate(&t));
         }
@@ -173,7 +183,7 @@ impl Launcher {
             );
         }
         if self.packs.len() > 1 {
-            let mut list = div().flex().flex_col().border_t_1().border_color(t.rule);
+            let mut list = div().flex().flex_col();
             for (i, p) in self.packs.iter().enumerate() {
                 let open = self.pack_open.as_ref() == Some(&p.slug);
                 let slug = p.slug.clone();
@@ -348,7 +358,7 @@ impl Launcher {
                 });
             }
         });
-        let mut list = div().flex().flex_col().border_t_1().border_color(t.rule);
+        let mut list = div().flex().flex_col();
         for (i, r) in rows.iter().enumerate() {
             let color = match r.status {
                 Status::Ported => t.success,
