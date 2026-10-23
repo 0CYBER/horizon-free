@@ -14,7 +14,7 @@ folder, loads no runtime and plays exactly like vanilla 26.3.
 | The contract (WIT) | `crates/horizon-mod-sdk/wit/horizon.wit` | 0.1: log, game-read, chat, hud, storage; tick, frame, chat and command hooks |
 | SDK for mod authors | `crates/horizon-mod-sdk` | 0.1 |
 | Example mod | `crates/horizon-mod-sdk/examples/coords-hud` | coordinates, facing and time HUD, `/where`, `/coords` |
-| Runtime | `crates/horizon-mods` | wasmtime 36 LTS, component model |
+| Runtime | `crates/horizon-mods` | wasmtime 48 LTS, component model |
 | Authoring tool | `crates/cargo-horizon-mod` | `cargo horizon-mod new / build / run` |
 | In the game | `crates/horizon-client/src/game/mods.rs`, Options > Mods | client mods |
 | Launcher mod browser (Modrinth, CurseForge with a key) | [mod-browser.md](mod-browser.md) | resource packs, shader packs, modpacks |
@@ -130,8 +130,10 @@ There is no file, socket, process or raw-input interface, on purpose.
 | native `cdylib` plugins | none | no: per OS and arch, unstable Rust ABI | yes | none | unsafe for players |
 | an embedded JVM | none per mod | yes | Java | 100+ MB, seconds of startup | see the research |
 
-wasmtime 36 is a long-term-support line (security fixes until August 2027)
-that builds on the client's Rust 1.90. Only its `runtime`, `cranelift`,
+wasmtime 48 is a long-term-support line (security fixes until August 2028)
+and needs Rust 1.95. It reads WebAssembly with the same wasm-tools release
+(0.254) as the `wit-component` that packs mods and the SDK's `wit-bindgen`, so
+the build carries one copy of them. Only its `runtime`, `cranelift`,
 `component-model` and `std` features are on: no WASI, no async, no GC
 proposal, no profiling. Its cranelift backend generates native code for x86-64
 and ARM64 on Windows, macOS and Linux, which is why one `.hmod` serves them
