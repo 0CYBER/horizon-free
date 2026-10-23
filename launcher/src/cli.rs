@@ -287,13 +287,6 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<AccountCmd>,
     },
-    /// Show or set which Horizon releases install by themselves: stable (a tested build about once
-    /// a day) or alpha (every release as soon as it is built; can break)
-    UpdateChannel {
-        /// Omit to show the current channel
-        #[arg(value_parser = ["stable", "alpha"])]
-        channel: Option<String>,
-    },
     /// Show the launcher's settings, or set one (the Settings page): selected-version TAG,
     /// minecraft-dir PATH, server-dir PATH ("default" resets a folder), install-new-versions
     /// on|off, opening-animation on|off
@@ -435,7 +428,6 @@ fn settings_json(s: &backend::Settings) -> serde_json::Value {
         "server_dir": backend::server_dir(None),
         "install_new_versions": s.install_new_versions.unwrap_or(true),
         "opening_animation": !s.skip_opening,
-        "update_channel": s.update_channel.name(),
         "game_args": s.game_args,
         "desktop_entry": s.desktop_entry.unwrap_or(true),
         "no_ai": backend::no_ai(),
@@ -504,7 +496,7 @@ fn attached(mut cmd: Command) -> Result<(), String> {
 
 fn release_json(r: &Release) -> serde_json::Value {
     serde_json::json!({
-        "tag": r.tag, "name": r.name, "date": r.date, "channel": backend::UpdateChannel::of(r).name(),
+        "tag": r.tag, "name": r.name, "date": r.date, "prerelease": r.prerelease,
         "available_here": r.asset.is_some(), "installed": backend::installed().contains(&r.tag),
     })
 }
@@ -555,8 +547,7 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                     (false, true) => "",
                     (false, false) => "no build for this platform",
                 };
-                let channel = backend::UpdateChannel::of(r).name();
-                println!("{:<15} {}  {:<7}  {}", r.tag, r.date, channel, state);
+                println!("{:<15} {}  {}", r.tag, r.date, state);
             }
         }
         Cmd::Install { tag } => {
@@ -731,19 +722,6 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 for (key, value) in all.as_object().into_iter().flatten() {
                     println!("{key}: {value}");
                 }
-            }
-        }
-        Cmd::UpdateChannel { channel } => {
-            let mut settings = backend::Settings::load();
-            if let Some(channel) = channel.as_deref().and_then(backend::UpdateChannel::parse) {
-                settings.update_channel = channel;
-                settings.save();
-            }
-            let channel = settings.update_channel.name();
-            if as_json {
-                json(serde_json::json!({ "update_channel": channel }));
-            } else {
-                println!("Update channel: {channel}");
             }
         }
         Cmd::GameArgs { args } => {

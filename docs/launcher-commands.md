@@ -130,16 +130,6 @@ Play offline, without an account.
 
 MCP: `account_offline`.
 
-## `horizon-launcher update-channel`
-
-Show or set which Horizon releases install by themselves: stable (a tested build about once a day) or alpha (every release as soon as it is built; can break).
-
-    horizon-launcher update-channel [CHANNEL]
-
-- `CHANNEL` (stable, alpha): Omit to show the current channel
-
-MCP: `update_channel`.
-
 ## `horizon-launcher settings`
 
 Show the launcher's settings, or set one (the Settings page): selected-version TAG, minecraft-dir PATH, server-dir PATH ("default" resets a folder), install-new-versions on|off, opening-animation on|off.
