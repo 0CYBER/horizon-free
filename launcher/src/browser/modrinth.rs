@@ -1,5 +1,5 @@
 //! Modrinth's public API (api.modrinth.com/v2): no key, files with SHA-512 and SHA-1.
-use super::{FileRef, Kind, Project, Query, Source, SourceId, Version, GAME};
+use super::{details, FileRef, Kind, Project, Query, Source, SourceId, Version, GAME};
 use serde_json::Value;
 
 const API: &str = "https://api.modrinth.com/v2";
@@ -13,6 +13,7 @@ fn project_type(kind: Kind) -> &'static str {
         Kind::ResourcePack => "resourcepack",
         Kind::ShaderPack => "shader",
         Kind::Modpack => "modpack",
+        Kind::Mod => "mod",
     }
 }
 
@@ -22,17 +23,34 @@ fn kind_of(project_type: &str) -> Option<Kind> {
         .find(|k| self::project_type(*k) == project_type)
 }
 
-/// The search's facets (AND of ORs): the kind, and unless `everything` what runs.
+/// The search's facets (AND of ORs): the kind, the filters, and unless `everything` what runs.
 pub(super) fn facets(query: &Query) -> String {
+    let f = &query.filters;
     let mut all = vec![vec![format!("project_type:{}", project_type(query.kind))]];
-    if !query.everything {
-        match query.kind {
-            Kind::ResourcePack => all.push(vec![format!("versions:{GAME}")]),
-            Kind::ShaderPack => {
-                all.push(vec!["categories:iris".into(), "categories:optifine".into()])
-            }
-            Kind::Modpack => {}
+    match &f.game_version {
+        Some(v) => all.push(vec![format!("versions:{v}")]),
+        None if !query.everything && matches!(query.kind, Kind::ResourcePack | Kind::Mod) => {
+            all.push(vec![format!("versions:{GAME}")])
         }
+        None => {}
+    }
+    let loaders: Vec<String> = match &f.loader {
+        Some(l) => vec![format!("categories:{l}")],
+        None => details::default_loaders(query.kind, query.everything)
+            .iter()
+            .map(|l| format!("categories:{l}"))
+            .collect(),
+    };
+    if !loaders.is_empty() {
+        all.push(loaders);
+    }
+    for c in &f.categories {
+        all.push(vec![format!("categories:{c}")]);
+    }
+    match f.environment {
+        Some(details::Environment::Client) => all.push(vec!["client_side!=unsupported".into()]),
+        Some(details::Environment::Server) => all.push(vec!["server_side!=unsupported".into()]),
+        None => {}
     }
     serde_json::to_string(&all).unwrap_or_default()
 }
@@ -41,11 +59,7 @@ pub(super) fn search_url(query: &Query) -> String {
     let mut url = format!(
         "{API}/search?facets={}&index={}&offset={}&limit={}",
         encode(&facets(query)),
-        if query.text.is_empty() {
-            "downloads"
-        } else {
-            "relevance"
-        },
+        query.filters.sort(&query.text).modrinth(),
         query.offset,
         query.limit.clamp(1, 100),
     );
@@ -182,6 +196,27 @@ impl Source for Modrinth {
         // Modrinth lists newest first already; ISO dates sort as text.
         all.sort_by(|a, b| b.published.cmp(&a.published));
         Ok(all)
+    }
+
+    fn details(&self, project: &Project) -> Result<details::Details, String> {
+        let id = encode(&project.id);
+        let p = get(&format!("{API}/project/{id}"))?;
+        let members = get(&format!("{API}/project/{id}/members")).unwrap_or_default();
+        Ok(details::modrinth_details(&p, &members))
+    }
+
+    fn tags(&self, kind: Kind) -> Result<details::Tags, String> {
+        static TAGS: std::sync::Mutex<Option<(Value, Value, Value)>> = std::sync::Mutex::new(None);
+        let mut cached = TAGS.lock().map_err(|_| "tags".to_string())?;
+        if cached.is_none() {
+            *cached = Some((
+                get(&format!("{API}/tag/category"))?,
+                get(&format!("{API}/tag/loader"))?,
+                get(&format!("{API}/tag/game_version"))?,
+            ));
+        }
+        let (c, l, v) = cached.as_ref().expect("filled above");
+        Ok(details::modrinth_tags(project_type(kind), c, l, v))
     }
 }
 

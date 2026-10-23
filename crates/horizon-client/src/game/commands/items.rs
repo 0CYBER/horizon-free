@@ -810,7 +810,10 @@ impl Game<'_> {
                         None => break,
                     },
                 };
-                if self.slot_get(slot) != item && self.slot_set(slot, item) {
+                // ItemStack.isEmpty: air (or a count of 0) is an empty slot.
+                // SlotAccess.set counts every slot it sets, the same item too.
+                let item = item.filter(|s| &*s.item != "minecraft:air" && s.count > 0);
+                if self.slot_set(slot, item) {
                     changed += 1;
                 }
             }

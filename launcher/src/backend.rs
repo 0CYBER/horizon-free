@@ -11,6 +11,8 @@ use std::sync::{Arc, Mutex};
 
 pub const REPO: &str = "ludovic111/horizon";
 pub const README_URL: &str = "https://github.com/ludovic111/horizon/blob/main/launcher/README.md";
+/// The players' page on connecting an AI agent (website/docs/agents.md).
+pub const AGENT_DOCS_URL: &str = "https://playhorizon.dev/docs/agents";
 /// This launcher's version: the release workflow sets `HORIZON_LAUNCHER_VERSION` from the
 /// tag it builds (no version-bump commits); other builds say Cargo.toml's.
 pub const VERSION: &str = version_or(option_env!("HORIZON_LAUNCHER_VERSION"));
@@ -35,8 +37,9 @@ pub struct Release {
     pub body: String,
     pub date: String,
     pub asset: Option<(String, u64)>,
-    /// A beta: a game release not promoted to stable yet (a GitHub pre-release, docs/release-flow.md).
-    pub beta: bool,
+    /// A GitHub pre-release: the Alpha builds from before every release went out as the release
+    /// (v0.2.1 on, docs/release-flow.md). Listed and installed by hand, never as an update.
+    pub prerelease: bool,
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -262,7 +265,7 @@ fn parse_releases(
                 .take(10)
                 .collect(),
             asset: found,
-            beta: r["prerelease"].as_bool().unwrap_or(false),
+            prerelease: r["prerelease"].as_bool().unwrap_or(false),
         });
     }
     out.sort_by(|a, b| compare_versions(&b.tag, &a.tag));
@@ -346,75 +349,14 @@ pub fn latest(releases: &[Release]) -> Option<&Release> {
     releases.iter().find(|r| r.asset.is_some())
 }
 
-/// The releases a launcher installs by itself: stable ones, and betas too on the Alpha channel.
-pub fn channel(releases: &[Release], channel: UpdateChannel) -> Vec<Release> {
-    releases
-        .iter()
-        .filter(|r| channel.takes(r))
-        .cloned()
-        .collect()
+/// The releases a launcher installs by itself: every one that is published as a release, so
+/// GitHub's latest when it comes out. The pre-releases of the old Alpha channel are left out.
+pub fn installable_updates(releases: &[Release]) -> Vec<Release> {
+    releases.iter().filter(|r| !r.prerelease).cloned().collect()
 }
 
-/// Which game releases install by themselves (Settings, "Updates"; docs/release-flow.md, "Channels").
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum UpdateChannel {
-    /// A tested build about once a day: the betas promote.yml makes stable.
-    #[default]
-    Stable,
-    /// Every release as soon as it is built, pre-releases included. It was called "nightly"
-    /// while the channels were new: that name is still read.
-    #[serde(alias = "nightly")]
-    Alpha,
-}
-
-impl UpdateChannel {
-    pub fn name(self) -> &'static str {
-        match self {
-            UpdateChannel::Stable => "stable",
-            UpdateChannel::Alpha => "alpha",
-        }
-    }
-
-    /// Its name in Settings and on the Versions page.
-    pub fn label(self) -> &'static str {
-        match self {
-            UpdateChannel::Stable => "Stable",
-            UpdateChannel::Alpha => "Alpha",
-        }
-    }
-
-    pub fn parse(name: &str) -> Option<Self> {
-        match name {
-            "stable" => Some(UpdateChannel::Stable),
-            "alpha" | "nightly" => Some(UpdateChannel::Alpha),
-            _ => None,
-        }
-    }
-
-    /// Whether this channel installs `release`: betas only reach Alpha.
-    pub fn takes(self, release: &Release) -> bool {
-        self == UpdateChannel::Alpha || !release.beta
-    }
-
-    /// How often a launcher left open looks for new releases: Alpha's come many times a day,
-    /// Stable's once.
-    pub fn check_every(self) -> std::time::Duration {
-        std::time::Duration::from_secs(match self {
-            UpdateChannel::Stable => 4 * 3600,
-            UpdateChannel::Alpha => 30 * 60,
-        })
-    }
-
-    /// The channel a release is on when it is listed: betas are Alpha's only.
-    pub fn of(release: &Release) -> Self {
-        if release.beta {
-            UpdateChannel::Alpha
-        } else {
-            UpdateChannel::Stable
-        }
-    }
-}
+/// How often a launcher left open looks for new releases: they come out several times a day.
+pub const CHECK_EVERY: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
 /// The community, sponsor and website links, from `launcher/links.json` on main, so they can change
 /// without a launcher release. An empty address hides its button.
@@ -1269,6 +1211,17 @@ pub fn game_home() -> PathBuf {
         .join("horizon")
 }
 
+/// Whether No AI is on: every AI feature hidden and off (`horizon_core::no_ai`, kept in the
+/// game's `horizon-extras.txt` so the game reads the same switch).
+pub fn no_ai() -> bool {
+    horizon_core::no_ai::is_on(&game_home())
+}
+
+/// Turns No AI on or off for the launcher and the game.
+pub fn set_no_ai(on: bool) -> Result<(), String> {
+    horizon_core::no_ai::set(&game_home(), on).map_err(|e| format!("Could not save No AI: {e}"))
+}
+
 // ----- Logs and crash reports ---------------------------------------------------------------------
 
 /// The game's logs (`latest.log` and the day archives), as it writes them in its home.
@@ -1408,65 +1361,6 @@ pub fn read_logs(lines: usize, crash: bool) -> Result<(PathBuf, String), String>
     let path = logs_dir().join("latest.log");
     let text = tail_of(&path, lines.max(1))?;
     Ok((path, text))
-}
-
-/// Which drawing the game's menus use. Classic is vanilla's own screens, which have no way to
-/// switch back, so the launcher is where the player returns to Horizon's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MenuStyle {
-    Horizon,
-    Classic,
-}
-
-impl MenuStyle {
-    pub fn name(self) -> &'static str {
-        match self {
-            MenuStyle::Horizon => "horizon",
-            MenuStyle::Classic => "classic",
-        }
-    }
-
-    pub fn parse(name: &str) -> Option<Self> {
-        match name {
-            "horizon" => Some(MenuStyle::Horizon),
-            "classic" => Some(MenuStyle::Classic),
-            _ => None,
-        }
-    }
-
-    /// The style `horizon.txt` holds: Horizon unless it has the line `menuStyle:classic`, as the
-    /// game reads it (crates/horizon-client/src/ui_theme.rs).
-    fn from_file(text: &str) -> Self {
-        if text.lines().any(|l| l.trim() == "menuStyle:classic") {
-            MenuStyle::Classic
-        } else {
-            MenuStyle::Horizon
-        }
-    }
-
-    /// `text` with its `menuStyle:` line set to this style and every other line kept.
-    fn into_file(self, text: &str) -> String {
-        let mut out: Vec<String> = text
-            .lines()
-            .filter(|l| !l.trim().starts_with("menuStyle:"))
-            .map(String::from)
-            .collect();
-        out.insert(0, format!("menuStyle:{}", self.name()));
-        out.join("\n") + "\n"
-    }
-}
-
-/// The menu style saved in the game home's `horizon.txt` (Horizon when there is none).
-pub fn menu_style() -> MenuStyle {
-    MenuStyle::from_file(&fs::read_to_string(game_home().join("horizon.txt")).unwrap_or_default())
-}
-
-pub fn set_menu_style(style: MenuStyle) -> Result<(), String> {
-    let home = game_home();
-    fs::create_dir_all(&home).map_err(|e| e.to_string())?;
-    let file = home.join("horizon.txt");
-    let text = style.into_file(&fs::read_to_string(&file).unwrap_or_default());
-    fs::write(file, text).map_err(|e| e.to_string())
 }
 
 /// Splits the player's extra game arguments (Settings' one line) into words, the way a shell
@@ -1791,17 +1685,10 @@ fn launcher_update_from(releases: &[Release], own: &str) -> Option<Release> {
 pub fn releases_and_updates(
     on_releases: impl FnOnce(Result<Vec<Release>, String>),
 ) -> Result<Updates, String> {
-    releases_and_updates_with(
-        Settings::load().update_channel,
-        release_list,
-        installed,
-        launcher_releases_in,
-        on_releases,
-    )
+    releases_and_updates_with(release_list, installed, launcher_releases_in, on_releases)
 }
 
 fn releases_and_updates_with(
-    update_channel: UpdateChannel,
     load: impl FnOnce() -> Result<serde_json::Value, String>,
     installed: impl FnOnce() -> Vec<String>,
     launchers: impl FnOnce(&serde_json::Value) -> Vec<Release>,
@@ -1815,7 +1702,7 @@ fn releases_and_updates_with(
         }
     };
     let releases = parse_releases(&list, ASSET, is_game_tag);
-    let horizon = horizon_update(&channel(&releases, update_channel), &installed());
+    let horizon = horizon_update(&installable_updates(&releases), &installed());
     on_releases(Ok(releases));
     Ok(Updates {
         horizon,
@@ -1837,15 +1724,14 @@ pub fn select_after_update(selected: Option<&str>, installed_before: &[String]) 
     }
 }
 
-/// Installs `tag` (or with "latest" the newest release of the player's channel), then updates the selection as
+/// Installs `tag` (or with "latest" the newest release, pre-releases left out), then updates the selection as
 /// `select_after_update` says when `as_update`, or always selects it otherwise.
 pub fn install_tag(tag: &str, as_update: bool, progress: impl Fn(f32)) -> Result<String, String> {
     let releases = releases()?;
     let release = if tag == "latest" {
-        let update_channel = Settings::load().update_channel;
         releases
             .iter()
-            .find(|r| r.asset.is_some() && update_channel.takes(r))
+            .find(|r| r.asset.is_some() && !r.prerelease)
             .ok_or("No release has a build for this platform yet.")?
     } else {
         releases
@@ -2277,6 +2163,17 @@ pub fn spawn(job: Job, mut cmd: Command, tx: Sender<Msg>) -> Result<Running, Str
     Ok(Running { child, stdin })
 }
 
+/// The launcher's appearance, as the player picks it in Settings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Appearance {
+    #[default]
+    Dark,
+    Light,
+    /// Follow the system's light or dark.
+    System,
+}
+
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Settings {
     pub selected: Option<String>,
@@ -2297,10 +2194,9 @@ pub struct Settings {
     /// default. Appended after the launcher's own arguments, so they can add to or override them.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub game_args: String,
-    /// Which releases install by themselves: Stable by default. Launchers before 0.2 had a "Beta
-    /// builds" switch instead; [`Settings::parse`] reads its `beta_builds: true` as Alpha.
+    /// Dark, Light, or the system's: the launcher's look. Dark by default.
     #[serde(default)]
-    pub update_channel: UpdateChannel,
+    pub appearance: Appearance,
     /// The player has read what the "I'm playing" ping holds (`telemetry::PING`): on the
     /// first-run question, or on the Play page once if they answered that before it existed.
     #[serde(default)]
@@ -2316,18 +2212,12 @@ impl Settings {
             return Self::default();
         };
         if let Some(fields) = value.as_object_mut() {
-            // The switch from before 0.2: on meant every release at once, the Alpha channel.
-            if fields.remove("beta_builds") == Some(serde_json::Value::Bool(true)) {
-                fields
-                    .entry("update_channel")
-                    .or_insert_with(|| UpdateChannel::Alpha.name().into());
-            }
-            // A channel this launcher doesn't know is Stable, not a reason to lose every setting.
+            // An appearance from a newer launcher is Dark, not a reason to lose every setting.
             if fields
-                .get("update_channel")
-                .is_some_and(|c| c.as_str().and_then(UpdateChannel::parse).is_none())
+                .get("appearance")
+                .is_some_and(|a| serde_json::from_value::<Appearance>(a.clone()).is_err())
             {
-                fields.remove("update_channel");
+                fields.remove("appearance");
             }
         }
         serde_json::from_value(value).unwrap_or_default()
@@ -2542,86 +2432,70 @@ mod tests {
         assert_eq!(offered(&["v2026.10.15.1", "v2026.10.14"]), None);
     }
 
-    /// Betas (GitHub pre-releases) install by themselves only on the Alpha channel; Stable waits
-    /// for promote.yml's daily promotion (docs/release-flow.md, "Channels").
+    /// Every release is published as the release, and launchers update to it. The pre-releases
+    /// of the old Alpha channel (v0.2.1 on) are only installed by hand: a launcher that
+    /// had one installed waits for the next release instead of going back.
     #[test]
-    fn updates_follow_the_stable_channel_unless_alpha_is_picked() {
+    fn updates_follow_every_release_and_leave_the_old_alpha_ones_out() {
         let asset = ASSET.unwrap_or("horizon-linux-x86_64.tar.gz");
         let list = serde_json::json!([
-            {"tag_name": "v2026.10.19.02", "prerelease": true, "assets": [{"name": asset, "browser_download_url": "b", "size": 1}]},
-            {"tag_name": "v2026.10.19.01", "assets": [{"name": asset, "browser_download_url": "s", "size": 1}]},
+            {"tag_name": "v0.2.13", "assets": [{"name": asset, "browser_download_url": "n", "size": 1}]},
+            {"tag_name": "v0.2.12", "prerelease": true, "assets": [{"name": asset, "browser_download_url": "a", "size": 1}]},
+            {"tag_name": "v0.2.0", "assets": [{"name": asset, "browser_download_url": "s", "size": 1}]},
         ]);
         let releases = parse_releases(&list, Some(asset), is_game_tag);
         assert_eq!(
-            releases.iter().map(|r| r.beta).collect::<Vec<_>>(),
-            [true, false]
+            releases.iter().map(|r| r.prerelease).collect::<Vec<_>>(),
+            [false, true, false]
         );
-        let offered = |alpha: bool, installed: &[&str]| {
+        let offered = |releases: &[Release], installed: &[&str]| {
             let installed: Vec<String> = installed.iter().map(|t| t.to_string()).collect();
-            let on = if alpha {
-                UpdateChannel::Alpha
-            } else {
-                UpdateChannel::Stable
-            };
-            horizon_update(&channel(&releases, on), &installed).map(|r| r.tag)
+            horizon_update(&installable_updates(releases), &installed).map(|r| r.tag)
         };
-        assert_eq!(offered(false, &[]), Some("v2026.10.19.01".into()));
-        assert_eq!(
-            offered(true, &["v2026.10.19.01"]),
-            Some("v2026.10.19.02".into())
-        );
-        assert_eq!(offered(false, &["v2026.10.19.01"]), None);
-        // A beta installed earlier is never "updated" to an older stable build.
-        assert_eq!(offered(false, &["v2026.10.19.02"]), None);
-        assert_eq!(
-            releases.iter().map(UpdateChannel::of).collect::<Vec<_>>(),
-            [UpdateChannel::Alpha, UpdateChannel::Stable]
-        );
+        assert_eq!(offered(&releases, &[]), Some("v0.2.13".into()));
+        assert_eq!(offered(&releases, &["v0.2.0"]), Some("v0.2.13".into()));
+        assert_eq!(offered(&releases, &["v0.2.12"]), Some("v0.2.13".into()));
+        assert_eq!(offered(&releases, &["v0.2.13"]), None);
+        // Before the first release of the single channel: the old Alpha one stays where it is.
+        let before = &releases[1..];
+        assert_eq!(offered(before, &["v0.2.0"]), None);
+        assert_eq!(offered(before, &["v0.2.12", "v0.2.0"]), None);
+        assert_eq!(CHECK_EVERY.as_secs(), 30 * 60);
     }
 
     #[test]
-    fn the_update_channel_is_stored_by_name_and_the_old_beta_switch_reads_as_alpha() {
-        let read = |text: &str| Settings::parse(text).update_channel;
-        assert_eq!(read(""), UpdateChannel::Stable);
-        assert_eq!(read("{}"), UpdateChannel::Stable);
+    fn the_appearance_is_dark_unless_picked_and_an_unknown_one_keeps_the_rest() {
+        assert_eq!(Settings::parse("{}").appearance, Appearance::Dark);
+        let light = Settings::parse(r#"{"appearance": "light", "game_args": "--x"}"#);
+        assert_eq!(light.appearance, Appearance::Light);
+        let future = Settings::parse(r#"{"appearance": "sepia", "game_args": "--x"}"#);
         assert_eq!(
-            read(r#"{"update_channel": "stable"}"#),
-            UpdateChannel::Stable
+            (future.appearance, future.game_args.as_str()),
+            (Appearance::Dark, "--x")
         );
-        assert_eq!(read(r#"{"update_channel": "alpha"}"#), UpdateChannel::Alpha);
-        // The channel's first name, from launchers built while it was called Nightly.
-        assert_eq!(
-            read(r#"{"update_channel": "nightly"}"#),
-            UpdateChannel::Alpha
-        );
-        assert_eq!(UpdateChannel::parse("nightly"), Some(UpdateChannel::Alpha));
-        // Launchers before 0.2: "Beta builds" on is Alpha, off is Stable.
-        assert_eq!(read(r#"{"beta_builds": true}"#), UpdateChannel::Alpha);
-        assert_eq!(read(r#"{"beta_builds": false}"#), UpdateChannel::Stable);
-        // Once a channel is picked, it wins over a switch left behind.
-        let both = r#"{"beta_builds": true, "update_channel": "stable"}"#;
-        assert_eq!(read(both), UpdateChannel::Stable);
-        // An unknown channel is Stable, and the rest of the settings survive it.
-        let odd =
-            Settings::parse(r#"{"update_channel": "beta", "game_args": "--x", "beta_builds": 1}"#);
-        assert_eq!(odd.update_channel, UpdateChannel::Stable);
-        assert_eq!(odd.game_args, "--x");
-        // Saved as a name, without the old switch.
-        let mut settings = Settings::parse(r#"{"selected": "v0.2.0", "beta_builds": true}"#);
-        let saved = serde_json::to_value(&settings).unwrap();
-        assert_eq!(saved["update_channel"], "alpha");
-        assert!(saved.get("beta_builds").is_none());
-        assert_eq!(saved["selected"], "v0.2.0");
-        settings.update_channel = UpdateChannel::Stable;
+        let settings = Settings {
+            appearance: Appearance::System,
+            ..Settings::default()
+        };
         let text = serde_json::to_string(&settings).unwrap();
-        assert_eq!(read(&text), UpdateChannel::Stable);
-        for c in [UpdateChannel::Stable, UpdateChannel::Alpha] {
-            assert_eq!(UpdateChannel::parse(c.name()), Some(c));
+        assert!(text.contains(r#""appearance":"system""#), "{text}");
+    }
+
+    #[test]
+    fn the_old_update_channel_settings_are_dropped_and_the_rest_kept() {
+        for old in [
+            r#"{"update_channel": "alpha", "game_args": "--x", "selected": "v0.2.0"}"#,
+            r#"{"update_channel": "stable", "game_args": "--x", "selected": "v0.2.0"}"#,
+            r#"{"beta_builds": true, "game_args": "--x", "selected": "v0.2.0"}"#,
+            r#"{"beta_builds": false, "update_channel": "nightly", "game_args": "--x", "selected": "v0.2.0"}"#,
+        ] {
+            let settings = Settings::parse(old);
+            assert_eq!(settings.game_args, "--x", "{old}");
+            assert_eq!(settings.selected.as_deref(), Some("v0.2.0"), "{old}");
+            let saved = serde_json::to_value(&settings).unwrap();
+            assert!(saved.get("update_channel").is_none(), "{old}");
+            assert!(saved.get("beta_builds").is_none(), "{old}");
         }
-        // An open launcher looks again every 4 hours on Stable, every 30 minutes on Alpha.
-        let minutes = |c: UpdateChannel| c.check_every().as_secs() / 60;
-        assert_eq!(minutes(UpdateChannel::Stable), 240);
-        assert_eq!(minutes(UpdateChannel::Alpha), 30);
     }
 
     #[test]
@@ -2642,7 +2516,7 @@ mod tests {
             body: String::new(),
             date: String::new(),
             asset: Some(("u".into(), 1)),
-            beta: false,
+            prerelease: false,
         };
         assert!(launcher_update(&[r(own_tag())]).is_none());
         assert_eq!(launcher_version(&own_tag()), Some(VERSION));
@@ -2682,7 +2556,7 @@ mod tests {
             body: String::new(),
             date: String::new(),
             asset: Some(("u".into(), 1)),
-            beta: false,
+            prerelease: false,
         };
         let mut list = vec![
             r("launcher-v0.16.0"),
@@ -2751,10 +2625,14 @@ mod tests {
         ]);
         let releases = parse_releases(&list, Some(asset), is_game_tag);
         let installed = ["v2026.10.19.15".to_string(), "v2026.10.12".to_string()];
-        let offered = |on| horizon_update(&channel(&releases, on), &installed).map(|r| r.tag);
-        // A beta 0.2.0 reaches launchers on Alpha; Stable ones wait for its promotion.
-        assert_eq!(offered(UpdateChannel::Alpha), Some("v0.2.0".into()));
-        assert_eq!(offered(UpdateChannel::Stable), None);
+        // A pre-release 0.2.0 is not an update; once published as the release, it is one.
+        let offered = |releases: &[Release]| {
+            horizon_update(&installable_updates(releases), &installed).map(|r| r.tag)
+        };
+        assert_eq!(offered(&releases), None);
+        let mut released = releases.clone();
+        released[0].prerelease = false;
+        assert_eq!(offered(&released), Some("v0.2.0".into()));
         let mut sorted = vec![
             "v2026.10.19.15".to_string(),
             "v0.2.1".into(),
@@ -2844,7 +2722,7 @@ mod tests {
             body: String::new(),
             date: String::new(),
             asset: Some(("u".into(), 1)),
-            beta: false,
+            prerelease: false,
         };
         let releases = [r("v2026.10.13"), r("v2026.10.12")];
         assert_eq!(
@@ -2917,30 +2795,6 @@ mod tests {
         );
         // A key this launcher does not know is ignored.
         assert_eq!(Links::parse(r#"{"mastodon": "https://x.y/z"}"#), defaults);
-    }
-
-    #[test]
-    fn menu_style_file_matches_the_games() {
-        assert_eq!(MenuStyle::from_file(""), MenuStyle::Horizon);
-        assert_eq!(
-            MenuStyle::from_file("menuStyle:horizon\n"),
-            MenuStyle::Horizon
-        );
-        assert_eq!(
-            MenuStyle::from_file("menuStyle:classic\n"),
-            MenuStyle::Classic
-        );
-        assert_eq!(
-            MenuStyle::from_file("other:1\nmenuStyle:classic\n"),
-            MenuStyle::Classic
-        );
-        assert_eq!(MenuStyle::Classic.into_file(""), "menuStyle:classic\n");
-        assert_eq!(
-            MenuStyle::Horizon.into_file("menuStyle:classic\nother:1\n"),
-            "menuStyle:horizon\nother:1\n"
-        );
-        assert_eq!(MenuStyle::parse("classic"), Some(MenuStyle::Classic));
-        assert_eq!(MenuStyle::parse("vanilla"), None);
     }
 
     #[test]

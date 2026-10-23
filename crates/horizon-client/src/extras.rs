@@ -107,6 +107,11 @@ pub struct Extras {
     pub sort: bool,
     /// A vanilla key name: sorts the part under the cursor.
     pub sort_key: String,
+    /// No AI: every AI feature hidden and off (`horizon_core::no_ai`; the launcher writes it too).
+    pub no_ai: bool,
+    /// Agents may control the game the player starts: it opens its control socket for
+    /// horizon-ctl and MCP clients (off by default; an agent's own launch always opens it).
+    pub agent_control: bool,
 }
 impl Default for Extras {
     fn default() -> Self {
@@ -135,6 +140,8 @@ impl Default for Extras {
             mouse_tweaks_wheel: true,
             sort: false,
             sort_key: "key.keyboard.unknown".into(),
+            no_ai: false,
+            agent_control: false,
         }
     }
 }
@@ -198,6 +205,8 @@ impl Extras {
                 "mouseTweaksWheel" => e.mouse_tweaks_wheel = flag(e.mouse_tweaks_wheel),
                 "sort" => e.sort = flag(e.sort),
                 "sortKey" if value.starts_with("key.") => e.sort_key = value.to_owned(),
+                horizon_core::no_ai::KEY => e.no_ai = flag(e.no_ai),
+                "agentControl" => e.agent_control = flag(e.agent_control),
                 _ => {}
             }
         }
@@ -205,7 +214,7 @@ impl Extras {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "fullbright:{}\ndynamicLights:{}\nzoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\nsort:{}\nsortKey:{}\n",
+            "fullbright:{}\ndynamicLights:{}\nzoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\nsort:{}\nsortKey:{}\n{}:{}\nagentControl:{}\n",
             bool_text(self.fullbright),
             bool_text(self.dynamic_lights),
             bool_text(self.zoom),
@@ -234,6 +243,9 @@ impl Extras {
             bool_text(self.mouse_tweaks_wheel),
             bool_text(self.sort),
             self.sort_key,
+            horizon_core::no_ai::KEY,
+            bool_text(self.no_ai),
+            bool_text(self.agent_control),
         )
     }
     /// Binds the extra key `name` (`ZOOM_KEY`, `SORT_KEY`); false for
@@ -451,6 +463,9 @@ pub enum Item {
     MouseTweaksWheel,
     Sort,
     SortKey,
+    /// Not on the Extras page: Horizon Settings shows No AI, its AI Agent page Agent Control.
+    NoAi,
+    AgentControl,
 }
 /// The Extras page: headers and items.
 pub fn rows() -> Vec<Result<Item, &'static str>> {
@@ -529,6 +544,8 @@ impl Item {
             Item::FpsLows => "Minimum and 1% low",
             Item::Keystrokes => "Keystrokes",
             Item::KeystrokesCps => "Clicks per second",
+            Item::NoAi => "No AI",
+            Item::AgentControl => "Agent Control",
         }
     }
     /// The switch this setting belongs to: it does nothing while that is off.
@@ -542,7 +559,7 @@ impl Item {
             MouseTweaksWheel => MouseTweaks,
             SortKey => Sort,
             Fullbright | DynamicLights | Zoom | Minimap | Fps | Keystrokes | MouseTweaks | Sort
-            | AutoReconnect => {
+            | AutoReconnect | NoAi | AgentControl => {
                 return None;
             }
         })
@@ -586,6 +603,12 @@ impl Item {
             }
             Item::Keystrokes => "Movement keys, jump and mouse buttons as you press them.",
             Item::KeystrokesCps => "Clicks in the last second under each mouse button.",
+            Item::NoAi => {
+                "Hides and turns off every AI feature: agent control, horizon-ctl and the MCP servers. The launcher's switch too."
+            }
+            Item::AgentControl => {
+                "Your own AI agent can play this game through horizon-ctl or an MCP client, on this computer only."
+            }
         }
     }
     /// The frame-time cost the main switch of an extra shows.
@@ -616,6 +639,8 @@ impl Item {
             Item::MouseTweaks => e.mouse_tweaks,
             Item::MouseTweaksWheel => e.mouse_tweaks_wheel,
             Item::Sort => e.sort,
+            Item::NoAi => e.no_ai,
+            Item::AgentControl => e.agent_control,
             _ => return None,
         })
     }
@@ -671,6 +696,8 @@ impl Item {
             }
             Item::MinimapShape => e.minimap_round = !e.minimap_round,
             Item::MinimapZoom => e.minimap_zoom = next(&MINIMAP_ZOOMS, e.minimap_zoom, back),
+            Item::NoAi => e.no_ai = !e.no_ai,
+            Item::AgentControl => e.agent_control = !e.agent_control,
             Item::ZoomKey | Item::SortKey => {}
         }
     }

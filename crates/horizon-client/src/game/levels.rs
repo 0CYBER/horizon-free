@@ -232,6 +232,9 @@ impl Game<'_> {
             p.world.game_time = self.world.game_time;
             p.world.day_time = self.world.day_time;
             p.world.weather = self.world.weather;
+            // The game rules and the difficulty are the server's, not a
+            // level's: natural regeneration holds in every dimension.
+            p.world.health_rules = self.world.health_rules;
             // The sculk tables' watched blocks are built once per game.
             p.world.watched = std::mem::take(&mut self.world.watched);
             self.swap_level(&mut p);
@@ -251,6 +254,24 @@ impl Game<'_> {
             h.hub.set_dimension(target.id());
         }
         Ok(())
+    }
+
+    /// Put `dim`'s level in place for a command whose source is there
+    /// (`execute in`, `execute at` a player in another level), opening it if
+    /// nobody is in it; returns the level to put back afterwards. Only a
+    /// server holds other levels.
+    pub(super) fn enter_command_level(&mut self, dim: Dim) -> Option<Dim> {
+        if self.options.dedicated.is_none() || dim == self.dim {
+            return None;
+        }
+        let back = self.dim;
+        match self.enter_level(None, dim) {
+            Ok(()) => Some(back),
+            Err(e) => {
+                log::error!("could not open {}: {e}", dim.id());
+                None
+            }
+        }
     }
 
     /// One server tick (`MinecraftServer.tickServer`): each level with

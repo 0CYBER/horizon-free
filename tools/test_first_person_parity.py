@@ -69,6 +69,12 @@ def block_hit(pos, face=1):
 
 def scenarios():
     stone = {TARGETS[0]: 'minecraft:stone', TARGETS[1]: 'minecraft:dirt', TARGETS[2]: 'minecraft:glass'}
+    # Consecutive instant survival breaks have no destroy delay. Cover both
+    # zero hardness and a shovel with haste reaching one-tick destroy progress.
+    for block, main, haste in [('minecraft:short_grass', None, None),
+                                ('minecraft:dirt', ['minecraft:diamond_shovel', 1], 9)]:
+        steps = [step(block_hit(p), ac=int(i == 0), ad=True) for i, p in enumerate(TARGETS)]
+        yield case(steps + [step()] * 6, main=main, blocks={p: block for p in TARGETS}, haste=haste)
     for creative in (False, True):
         for main in ITEMS:
             # Hold attack on blocks until they break, then on the air behind.

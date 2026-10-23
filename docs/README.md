@@ -4,6 +4,7 @@ To play, use [the launcher](../launcher/README.md); the project site is [playhor
 
 ## Build and run
 
+- [AGENTS.md](../AGENTS.md) and [Architecture](architecture.md): where each part of the code lives, how `Game` is organised, which harness checks which area.
 - [Build from source](../README.md#build-from-source): your own copy of the game, resource preparation, `cargo run`.
 - [Native client](native-client.md): options, controls, the dedicated server, `horizon-ctl` scripting, packaging, architecture.
 - [Host a server](hosting.md): install `horizon-server`, prepare the game files, first run, `server.toml`, the commands, the web panel, backups, services and Docker; what works today and what doesn't yet.
@@ -20,7 +21,7 @@ To play, use [the launcher](../launcher/README.md); the project site is [playhor
 - [Resource packs](resource-packs.md): everything a 26.3 resource pack can change, whether Horizon honours it, and the proof.
 - [Opt-in data collection](telemetry.md): the consent, exactly what is sent, how it is stored and sent.
 - [Benchmark report format](benchmark-report.md): the versioned JSON every benchmark writes (game, launcher, `tools/perf_bench.py`), the local log and, with consent, the upload.
-- Menus: the title, world list, create world, multiplayer, options and pause screens share the launcher's design tokens and fonts (`crates/horizon-theme`), drawn by `ui_theme` over a live frozen backdrop (`game/backdrop.rs`, blurred and graded by `post.rs`). Options → Interface → Menu style switches to vanilla's screens (Classic, kept in `horizon.txt`; `HORIZON_MENU_STYLE=horizon|classic` overrides it, and scripted runs default to Classic). [Title](media/menu-title.png) ([webm](media/menu-title.webm)), [worlds](media/menu-worlds.png), [options](media/menu-options.png), [pause](media/menu-pause.png).
+- Menus: every screen is vanilla's (title, world list, create world, multiplayer, options, pause). Horizon's own settings hang off vanilla's Options the way mods add theirs: **Horizon Settings...** and **Mods...** in the last two slots of the Options grid (Horizon Settings opens Graphics, Advanced Graphics, Shader Packs, Controller Settings, Extras and Mods, each a vanilla options list), with Horizon Graphics, Advanced Graphics and Shader Packs also at the top of Video Settings and Controller Settings at the bottom of Controls. The title screen's and pause menu's Friends buttons open Join a Friend and Play with Friends ([play-with-friends.md](play-with-friends.md)).
 
 ## Parity
 

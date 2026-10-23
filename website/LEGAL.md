@@ -21,6 +21,7 @@ cookies. The only requests to other hosts are the browser's calls to `api.github
 | File | Source | Licence |
 | --- | --- | --- |
 | `public/fonts/Geist-Regular.woff2`, `Geist-Medium.woff2`, `Geist-SemiBold.woff2`, `GeistMono-Regular.woff2` | Geist and Geist Mono, from `crates/horizon-theme/fonts` (converted from TTF to WOFF2) | SIL Open Font License 1.1, shipped as `public/fonts/OFL-Geist.txt` |
+| `public/fonts/PixelifySans-Medium.woff2`, `PixelifySans-SemiBold.woff2`, `PixelifySans-Bold.woff2` | Pixelify Sans by The Pixelify Sans Project Authors (github.com/eifetx/Pixelify-Sans), from `crates/horizon-theme/fonts` (converted from TTF to WOFF2) | SIL Open Font License 1.1, shipped as `public/fonts/OFL-PixelifySans.txt` |
 
 The fonts are self-hosted; nothing is fetched from a font service.
 
@@ -34,27 +35,28 @@ The fonts are self-hosted; nothing is fetched from a font service.
 No Minecraft logo or wordmark appears anywhere on the site, in images or as text styling.
 GitHub and Discord appear only as plain text links, without their logos.
 
-## No hero image
+## The pixel art
 
-The page opens on type, not a photograph. The launcher's old background
-(`launcher/assets/background.jpg`, from backgrounds.supply, licence never confirmed) is gone from
-the repository, so the launcher's screenshots no longer show it.
+| Files in `public/media/` | Source | Licence |
+| --- | --- | --- |
+| `stone-light.png`, `stone-dark.png` | The page's stone texture, drawn in code by `scripts/art.mjs` from the page colours of `crates/horizon-theme` | MIT, Horizon's original work |
+| `scene-light.png`, `scene-dark.png` | The hero's landscape (a dawn and a sunset with Horizon's sliced sun), drawn in code by `scripts/art.mjs`, the same drawing as the launcher's Home banner (`launcher/src/art.rs`) | MIT, Horizon's original work |
+
+No Minecraft texture is used: the stone is not Minecraft's stone, only shades of the page colour.
+The launcher's old background (`launcher/assets/background.jpg`, from backgrounds.supply, licence
+never confirmed) is gone from the repository, so the launcher's screenshots no longer show it.
 
 ## Screenshots
 
 All captured in Horizon's Rust client, with vanilla resources prepared from the maintainer's
 own copy of Minecraft: Java Edition 26.3, at the default graphics settings and with no mods or shaders
-(the game and menus last captured on 2026-10-17). Converted to WebP at 1600 and 800 pixels wide
+(the game last captured on 2026-10-17, the menus on 2026-10-22). Converted to WebP at 1600 and 800 pixels wide
 by `scripts/assets.mjs`.
 
 | Files in `public/media/` | Source | What it shows |
 | --- | --- | --- |
-| `menu-title*.webp` | `docs/media/menu-title.png` | Horizon's own title screen (no Minecraft logo or splash text) |
-| `menu-worlds*.webp` | `docs/media/menu-worlds.png` | Horizon's own world list |
-| `menu-options*.webp` | `docs/media/menu-options.png` | Horizon's own options screen |
-| `menu-pause*.webp` | `docs/media/menu-pause.png` | Horizon's own pause screen |
 | `launcher*.webp` | `docs/media/launcher-play.png` | The Horizon launcher's Play page (no background image) |
-| `settings*.webp` | `docs/media/settings-simple.png` | Horizon's own Video settings, Simple view |
+| `settings*.webp` | `docs/media/settings-simple.png` | Video Settings, with Horizon's graphics and shader pack buttons at the top |
 | `sunset*.webp`, `village*.webp`, `survival*.webp`, `nether*.webp`, `night*.webp`, `underwater*.webp` | `docs/media/<name>.jpg` | In-game views of one fixed-seed world; none shows a Mojang logo or splash text |
 
 Horizon's interface in these images is Horizon's original work (MIT). The block, mob and

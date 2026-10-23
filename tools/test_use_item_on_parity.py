@@ -23,7 +23,9 @@ explode elsewhere (`RespawnAnchorBlock`, through the stand-in level's real
 `ServerExplosion`, with water at the anchor). Respawn cases call
 `ServerPlayer.findRespawnAndUseSpawnBlock` on an anchor among blocks
 (`RespawnAnchorBlock.findStandUpPosition` through `DismountHelper`): the
-position, the yaw that faces the anchor and the charge it uses. Beds and straw
+position, the yaw that faces the anchor and the charge it uses; others on a
+bed's head set from some yaw (`AbstractBedBlock.findStandUpPosition`: intact,
+bunk, only the foot left or gone, crowded around and on top). Beds and straw
 beds clicked (head or foot, whole or broken) in the Nether and the End blow up
 or fall apart (`AbstractBedBlock.useWithoutItem` under the dimension's
 `bed_rule`: `BedBlock.destroyOnUse`, `StrawBedBlock.destroyBed`). Horizon runs
@@ -88,6 +90,52 @@ def respawn_case(rng, states, case):
 
 BED_COLORS = ['red', 'white', 'black', 'cyan', 'lime']
 FACINGS = {'north': (0, -1), 'south': (0, 1), 'west': (-1, 0), 'east': (1, 0)}
+
+
+def bed_respawn_case(rng, states, case):
+    """Respawning at a bed's head set from some yaw: intact, a bunk bed, only the foot left or
+    gone, with blocks around and on it, in the Overworld (and a few in the Nether or the End)."""
+    name = 'straw_bed' if rng.random() < 0.15 else rng.choice(BED_COLORS) + '_bed'
+    facing = rng.choice(list(FACINGS))
+    fx, fz = FACINGS[facing]
+    bed = {}
+    kept = rng.random()
+    if kept < 0.75:
+        bed[(0, 0, 0)] = states.get(name, facing=facing, part='head', occupied='false')
+    elif kept < 0.85:
+        bed[(0, 0, 0)] = states.get(rng.choice(['stone', 'white_carpet', 'oak_slab']))
+    if kept < 0.9 or rng.random() < 0.5:
+        bed[(-fx, 0, -fz)] = states.get(name, facing=facing, part='foot', occupied='false')
+    if rng.random() < 0.2:
+        # A bunk bed: another bed below.
+        bed[(0, -1, 0)] = states.get(name, facing=facing, part='head', occupied='false')
+        bed[(-fx, -1, -fz)] = states.get(name, facing=facing, part='foot', occupied='false')
+    crowd = rng.choice([0.0, 0.1, 0.3, 0.6, 0.95])
+    cells = [[*k, v] for k, v in bed.items()]
+    if (0, 0, 0) not in bed:
+        cells.insert(0, [0, 0, 0, states.get('air')])
+    for dy in (-2, -1, 0, 1, 2):
+        for dx in range(-3, 4):
+            for dz in range(-3, 4):
+                if (dx, dy, dz) in bed or (dx, dy, dz) == (0, 0, 0):
+                    continue
+                if dy == -1 and (dx, 0, dz) in bed:
+                    name2 = 'stone'
+                elif dy < 0:
+                    name2 = rng.choice(['stone'] * 8 + STAND)
+                elif rng.random() < crowd:
+                    name2 = rng.choice(['stone'] * 4 + STAND)
+                else:
+                    continue
+                if name2 == 'air':
+                    continue
+                state = states.any(rng, name2) if name2 in ('oak_trapdoor', 'oak_slab', 'snow', 'campfire', 'water', 'ladder') else states.get(name2)
+                cells.append([dx, dy, dz, state])
+    if rng.random() < 0.1:
+        case['dim'] = rng.choice(['nether', 'end'])
+    yaw = rng.choice([0.0, 90.0, -90.0, 180.0, round(rng.uniform(-720, 720), rng.choice([0, 2]))])
+    case['respawn_at'] = {'forced': rng.random() < 0.15, 'consume': rng.random() < 0.8, 'yaw': yaw}
+    case['cells'] = cells
 
 
 def bed_case(rng, states, case):
@@ -220,6 +268,12 @@ def cases(facts, count, seed):
             continue
         if rng.random() < 0.1:
             respawn_case(rng, states, case)
+            case['items'] = []
+            case['mode'] = 'dispense'
+            yield case
+            continue
+        if rng.random() < 0.1:
+            bed_respawn_case(rng, states, case)
             case['items'] = []
             case['mode'] = 'dispense'
             yield case

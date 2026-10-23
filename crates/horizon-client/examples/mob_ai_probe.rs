@@ -1133,7 +1133,7 @@ fn main() -> horizon_client::Result<()> {
             }
             #[allow(unused_mut)] // filled only with the rng-trace feature
             let mut traces: Vec<String> = Vec::new();
-            let mut pushes = Vec::new();
+            let mut pushes = horizon_client::mobs::PendingPushes::default();
             let mut born = Vec::new();
             for i in 0..mobs.len() {
                 if mobs[i].removed {

@@ -3,6 +3,8 @@
 //! - `POST /v1/batch`: a zstd batch from the launcher, checked by `horizon_telemetry::batch`.
 //! - `DELETE /v1/installs/<id>`: everything an install sent goes.
 //! - `GET /v1/aggregate?days=30`: the anonymous totals the website reads, cached.
+//! - `GET /v1/benchmarks/summary`: players' benchmark results grouped by GPU and CPU, groups of at
+//!   least 3 installs only (`summary`), cached; the website's Benchmarks page reads it.
 //! - `POST /v1/live`: a game's anonymous "I'm playing" ping (`live`, in memory only).
 //! - `GET /v1/live`: how many play now, rounded, cached briefly.
 //! - `GET /healthz`.
@@ -24,8 +26,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use horizon_telemetry::batch;
 
+pub mod classes;
 pub mod live;
 pub mod store;
+pub mod summary;
 
 use horizon_telemetry::live::{MAX_PING_BYTES, Ping};
 use live::Live;
@@ -40,7 +44,8 @@ pub struct Config {
     pub requests_per_hour: f64,
     /// Items one install may send a day.
     pub items_per_day: u32,
-    /// Behind a proxy (Railway, Fly…): the client's address is the first of X-Forwarded-For.
+    /// Behind a proxy (Railway, Fly…): the client's address is the proxy's `X-Real-IP`, else the
+    /// last `X-Forwarded-For` entry.
     pub trust_proxy: bool,
     /// The website allowed to read the totals from a browser.
     pub allow_origin: String,
@@ -117,6 +122,8 @@ pub struct App {
     live_cache: Mutex<Option<(Instant, String)>>,
     /// `/v1/aggregate` answers by `days`, with when they were made.
     cache: Mutex<HashMap<u32, (Instant, String)>>,
+    /// `/v1/benchmarks/summary`'s answer and when it was made.
+    summary_cache: Mutex<Option<(Instant, String)>>,
     /// Today, in days since 1970 (a test moves it).
     today: Box<dyn Fn() -> u32 + Send + Sync>,
 }
@@ -148,6 +155,7 @@ impl App {
             live: Mutex::new(live),
             live_cache: Mutex::default(),
             cache: Mutex::default(),
+            summary_cache: Mutex::default(),
             today,
         })
     }
@@ -170,20 +178,26 @@ impl App {
         self.live.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// The address requests are counted under, for the rate limits only: kept in memory, never
+    /// stored or logged. Behind a proxy (Railway) the TCP peer is the proxy, so it is the proxy's
+    /// `X-Real-IP`, else the last `X-Forwarded-For` entry: the one the proxy added, which a client
+    /// can't choose (the first one it can).
     fn client(&self, headers: &HeaderMap, peer: Option<SocketAddr>) -> IpAddr {
+        let header = |name: &str| headers.get(name)?.to_str().ok();
         let forwarded = self
             .config
             .trust_proxy
             .then(|| {
-                headers
-                    .get("x-forwarded-for")?
-                    .to_str()
-                    .ok()?
-                    .split(',')
-                    .next()?
-                    .trim()
-                    .parse()
-                    .ok()
+                header("x-real-ip")
+                    .and_then(|ip| ip.trim().parse().ok())
+                    .or_else(|| {
+                        header("x-forwarded-for")?
+                            .rsplit(',')
+                            .next()?
+                            .trim()
+                            .parse()
+                            .ok()
+                    })
             })
             .flatten();
         forwarded
@@ -194,6 +208,12 @@ impl App {
     /// The day an install's newest row came in, if it has any left.
     pub fn newest_day(&self, install: &[u8]) -> Option<u32> {
         self.store().newest_day(install).ok().flatten()
+    }
+
+    /// Drops the cached public answers (after a deletion or expiry).
+    fn forget_cached(&self) {
+        self.cache.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        *self.summary_cache.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
     /// Daily upkeep: totals rebuilt, expired rows removed, idle rate-limit entries and live
@@ -209,7 +229,7 @@ impl App {
         }
         self.live().forget_expired(Instant::now());
         if removed > 0 {
-            self.cache.lock().unwrap_or_else(|e| e.into_inner()).clear();
+            self.forget_cached();
         }
         Ok(removed)
     }
@@ -288,7 +308,7 @@ async fn forget(State(app): State<Arc<App>>, Path(id): Path<String>, req: Reques
     };
     match app.store().delete_install(&install) {
         Ok(_) => {
-            app.cache.lock().unwrap_or_else(|e| e.into_inner()).clear();
+            app.forget_cached();
             StatusCode::NO_CONTENT.into_response()
         }
         Err(e) => {
@@ -336,6 +356,60 @@ async fn aggregate(State(app): State<Arc<App>>, Query(window): Query<Window>) ->
         }
     };
     json_response(&app, json, CACHE_FOR.as_secs())
+}
+
+/// `GET /v1/benchmarks/summary`: players' benchmark groups (`summary`), made again at most every
+/// ten minutes.
+async fn benchmarks(State(app): State<Arc<App>>) -> Response {
+    let cached = app
+        .summary_cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .filter(|(at, _)| at.elapsed() < CACHE_FOR)
+        .map(|(_, json)| json.clone());
+    let json = match cached {
+        Some(json) => json,
+        None => {
+            let oldest = (app.today)().saturating_sub(app.config.retention_days);
+            let uploads = match app.store().benchmark_uploads(oldest) {
+                Ok(uploads) => uploads,
+                Err(e) => {
+                    eprintln!("horizon-telemetry-server: could not read the benchmarks: {e}");
+                    return status(StatusCode::SERVICE_UNAVAILABLE, "try again later");
+                }
+            };
+            let json = summary::summary(&uploads, summary::MIN_INSTALLS, &utc_now()).to_string();
+            *app.summary_cache.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some((Instant::now(), json.clone()));
+            json
+        }
+    };
+    json_response(&app, json, CACHE_FOR.as_secs())
+}
+
+/// Now as `YYYY-MM-DDTHH:MM:SSZ`.
+fn utc_now() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let (days, rest) = (secs / 86_400, secs % 86_400);
+    // Days since 1970 to a civil date (Howard Hinnant's algorithm).
+    let z = days as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rest / 3600,
+        rest / 60 % 60,
+        rest % 60
+    )
 }
 
 /// `POST /v1/live`: one "I'm playing". 204, or 400 for a bad ping, 413 for one too large, 429
@@ -407,6 +481,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/v1/live", post(ping).get(playing))
         .route("/v1/installs/{id}", delete(forget))
         .route("/v1/aggregate", get(aggregate))
+        .route("/v1/benchmarks/summary", get(benchmarks))
         .route("/healthz", get(|| async { "ok" }))
         .with_state(app)
 }

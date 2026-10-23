@@ -24,10 +24,10 @@ The opening, then Play ([clip](docs/opening.webm)):
   preparation reuses checksum-verified game jars and libraries from the current
   or another installed Horizon version, so the original Minecraft install is
   only required when no valid imported copy exists.
-- **Mods**: search Modrinth (and CurseForge once the launcher has its API key) for resource
+- **Mods**: search Modrinth (CurseForge support is coming soon) for resource
   packs, Iris/OptiFine shader packs and modpacks, each marked Works, Partly or Doesn't run in
   Horizon; Java mod jars are never offered. Install puts a pack and what it needs in
-  `resourcepacks/` or `shaderpacks/` only after its SHA-512 (SHA-1 on CurseForge) matches, and a
+  `resourcepacks/` or `shaderpacks/` only after its SHA-512 matches, and a
   modpack goes to the Modpacks page; installed packs show their source and checksum, with Update
   and Remove ([docs/mod-browser.md](../docs/mod-browser.md)).
 - **Modpacks**: import a Java modpack (a Modrinth `.mrpack`, a CurseForge zip, or a Prism,
@@ -35,8 +35,8 @@ The opening, then Play ([clip](docs/opening.webm)):
   not yet or not needed, with the reason ([docs/modpacks.md](../docs/modpacks.md)). **Port**
   gets the jars of what this computer can port today (content mods with data and assets only)
   the player's own way: copied from a folder they have, or downloaded from the pack's own links
-  or the same file on Modrinth's CDN, hash checked; files only CurseForge has need its API key, so
-  they come from your installed instance. It carries them over for the selected version, and
+  or the same file on Modrinth's CDN, hash checked; files only CurseForge has come from your
+  installed instance (CurseForge downloads are coming soon). It carries them over for the selected version, and
   **Play** starts the game as the pack's own profile (`ports/<pack>/home/` in the game's home:
   its own saves and options) with those mods. Nothing is uploaded or shared: mod jars and ports
   stay on this computer.
@@ -78,26 +78,18 @@ page `servers.json` (the list), `servers/<name>/` (the servers created there) an
 `server-runtime/` (the programs and game files they run).
 
 - **Settings**: install new Horizon versions automatically (on unless you turn it off; the
-  selected version only moves to the new one if you were on the newest), which ones (Updates,
-  below), the opening animation,
-  the game's menu style, the game's extra command-line arguments, and the launcher's own version
-  and update state.
-- **Updates**: **Stable** (the default) installs a tested build about once a day, the betas that
-  `promote.yml` makes stable; **Alpha** installs every release as soon as it is built, several
-  times a day, and can break (docs/release-flow.md, "Channels"). While it is open, the launcher
-  looks for new releases every 4 hours on Stable and every 30 minutes on Alpha. Kept as `update_channel` in
-  `settings.json`; a `beta_builds: true` from launchers before 0.2 reads as Alpha (so does a `nightly` from the channel's first name).
-  `horizon-launcher update-channel [stable|alpha]` shows or sets it. The **Versions** page
-  shows each release's channel. The launcher's own updates don't depend on it.
+  selected version only moves to the new one if you were on the newest), the opening animation,
+  the game's extra command-line arguments, and the launcher's own version and update state.
+- **Updates**: there is one channel. Every release is published as the release, GitHub's latest,
+  once its smoke test passed (docs/release-flow.md), and the launcher installs it. The game
+  pre-releases of the old Alpha channel (v0.2.1 on) stay on the Versions page to install
+  by hand, but are never installed as an update. The `update_channel` and `beta_builds` keys
+  older launchers wrote in `settings.json` are ignored and dropped on the next save.
 - **Game arguments**: extra arguments added to the game's command line (for example
   `--server-thread`), one line where quotes group a word with spaces. They are appended after the
   launcher's own arguments, kept as `game_args` in `settings.json`, and apply the next time the
   game starts. `horizon-launcher game-args "<line>"` sets them too, and `play --arg <ARG>` passes
   one for a single run.
-- **Menu style**: Horizon's own menus or Classic (vanilla's screens). Classic has no way back
-  inside the game, so the launcher is where you return to Horizon's. It is the `menuStyle:` line
-  of `horizon.txt` in the game's home folder (`HORIZON_HOME`, else `horizon` in the data
-  directory), which the game reads when it starts.
 - **Links**: the Discord invite, the Sponsors page and the website come from `launcher/links.json` on main
   (`{"discord": "...", "sponsor": "...", "website": "..."}`), so they change without a launcher release. Offline,
   the launcher uses the same values built in; an empty address hides its button.
@@ -107,7 +99,7 @@ their content overflows. Drag the thumb or click the track to navigate without a
 
 ## Updates
 
-The launcher looks for a newer Horizon release when it starts and every four hours while it
+The launcher looks for a newer Horizon release when it starts and every 30 minutes while it
 is open, and shows a small "available, Install" line on Play.
 
 It also updates itself from GitHub releases tagged `launcher@X.Y.Z` (Horizon's own are `vX.Y.Z`;
@@ -116,8 +108,14 @@ every 0.2 tag counts as newer than all of those (docs/versioning.md). It downloa
 own binary, and offers "Restart" in the footer. Development builds and
 `HORIZON_LAUNCHER_NO_SELF_UPDATE=1` never replace themselves.
 
+On Linux a release build that starts writes its applications-menu entry only when there is
+none, or when the program the entry starts (its `TryExec`, else its `Exec`) no longer exists.
+An entry pointing at another launcher that works is left alone, so a test or development build
+never takes it over. Turning the Settings switch on, or `horizon-launcher desktop-entry`,
+points the entry at this launcher whatever is there.
+
 Linux packagers can set `HORIZON_LAUNCHER_DESKTOP_EXEC` to a wrapper's absolute path.
-Menu entries created by Settings or `desktop-entry` then start that wrapper, which can
+Menu entries the launcher writes then start that wrapper, which can
 set `HORIZON_LAUNCHER_NO_SELF_UPDATE=1` to keep launcher updates with the package manager.
 
 Launcher releases are automatic (docs/release-flow.md in the repository): when main changes the
@@ -139,8 +137,6 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher server [--dir <dir>] [--version <tag>] [--accept-eula]
     horizon-launcher notes [<tag>]                  patch notes as plain text
     horizon-launcher links                          the Discord, sponsor and website links
-    horizon-launcher menu-style [horizon|classic]   show or set the game's menu style
-    horizon-launcher update-channel [stable|alpha]     show or set which releases install by themselves
     horizon-launcher game-args [<line>]             show or set the extra arguments the game starts with
     horizon-launcher update [--check]               Horizon and the launcher
     horizon-launcher logs [--lines N] [--crash]     the end of the game's log, or its newest crash report
@@ -155,7 +151,7 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher modpack play <pack> [--version <tag>]                 play it as its own profile
     horizon-launcher modpack remove <pack>
     horizon-launcher mods [list]                    what the mod browser installed (docs/mod-browser.md)
-    horizon-launcher mods search <text> [--kind resource|shader|modpack] [--everything] [--source modrinth|curseforge]
+    horizon-launcher mods search <text> [--kind resource|shader|modpack] [--everything] [--source modrinth]
     horizon-launcher mods install <id or slug>      checksum checked, with what it needs; a modpack is imported
     horizon-launcher mods update [<pack>] [--check]
     horizon-launcher mods remove <pack>
@@ -174,33 +170,41 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher data benchmark <report.json>   upload a benchmark report, printed first
 
 `--json` prints JSON where there is something to report (`versions`, `install`, `notes`,
-`next`, `links`, `menu-style`, `update-channel`, `game-args`, `update --check`, `logs`, `account`, `benchmark`, `data`, `modpack`). Errors go to stderr with exit code 1. `server` runs in the terminal,
+`next`, `links`, `game-args`, `update --check`, `logs`, `account`, `benchmark`, `data`, `modpack`). Errors go to stderr with exit code 1. `server` runs in the terminal,
 so lines you type reach its console. `HORIZON_LAUNCHER_HOME` replaces the data folder (for
 scripts and tests).
 
 ## AI agents (MCP)
 
-`horizon-launcher mcp` is a Model Context Protocol server over stdio. To use it from Claude Code:
+`horizon-launcher mcp` is a Model Context Protocol server over stdio. `horizon-launcher
+agent-config` prints the config for Claude Code, Codex, Cursor and any MCP client, and the
+command that adds it; for Claude Code:
 
-    claude mcp add horizon -- horizon-launcher mcp
+    claude mcp add --scope user horizon -- horizon-launcher mcp
 
-(with the full path to the binary if it is not on your `PATH`). Its tools: `list_versions`,
-`install_version`, `remove_version`, `prepare_resources`, `launch_client`, `start_server`,
-`server_command`, `server_log`, `stop_server`, `patch_notes`, `links`, `menu_style`, `update_channel`, `logs`,
-`check_updates`, `accounts`, `sign_in` (returns the link and code for the player; the sign-in
-finishes in the background), `sign_out`, `select_account`, and for data collection
-`data_collection`, `set_data_collection`, `data_preview`, `delete_my_data` and `report_bug`
-(only with the player's say-so).
-A server started through MCP stops (cleanly, with `stop`) when the session ends. Starting one
-needs `accept_eula`, which an agent should only pass with the player's consent.
+(with the full path to the binary if it is not on your `PATH`). Every CLI command is a tool of the
+same name and arguments, generated from the CLI's definition (`src/cli_tools.rs`): `versions`,
+`install`, `remove`, `prepare`, `settings`, `mods_search`, `mods_install`, `modpack_import`,
+`servers_create`, `data_status`... A call runs that command with `--json` and returns its
+output. Tools that delete something (`remove`, `mods_remove`, `modpack_remove`,
+`servers_forget`, `account_sign_out`, `data_delete`) need `confirm: true`. The session runs a few
+itself, under the CLI's names: `play`, `server` with `server_command`, `server_log` and
+`server_stop`, `account_list` and `account_sign_in` (returns the link and code for the player;
+the sign-in finishes in the background). A server started through MCP stops (cleanly, with
+`stop`) when the session ends. Starting one needs `accept_eula`, which an agent should only pass
+with the player's consent.
 
-The same server also plays the game: `launch_client` starts it with a local control socket
-(`world`, `creative` and `offscreen` are optional), and every `horizon-ctl` tool of the selected
+The same server also plays the game: `play` starts it with a local control socket (`world`,
+`creative`, `join` and `offscreen` are optional), and every `horizon-ctl` tool of the selected
 version is offered as `game_<name>`: `game_state`, `game_ui` (every widget of the open screen),
 `game_click`, `game_goto`, `game_break`, `game_inventory`, `game_screenshot` (an image) and the
-rest of [horizon-ctl's commands](../docs/agent-control.md). The launcher runs that version's
-`horizon-ctl mcp` and passes the calls through; while no game runs, they answer with an error
-saying to call `launch_client`.
+rest of [horizon-ctl's commands](../docs/horizon-ctl-commands.md). The launcher runs that
+version's `horizon-ctl mcp` and passes the calls through; while no game runs, they answer with an
+error saying to call `play`.
+
+`horizon-launcher no-ai on` (the Settings page's No AI switch) hides and turns off every AI
+feature: `mcp` and `agent-config` refuse, the game opens no control socket and `horizon-ctl`
+refuses. Every other command keeps working.
 
 The window, the command line and the MCP server all call the same core, `src/backend.rs`.
 
@@ -265,9 +269,9 @@ workflow builds all three platforms on every push to the `launcher` branch (or a
 client starts (`--help`) and that the binaries import only system libraries (Windows).
 
     cargo test --lib    # tag separation, version order, update selection, notes as text,
-                        # the auto-install default, the links fallback, the menu style file
+                        # the auto-install default, the links fallback
 
-Geist and Geist Mono (SIL Open Font License, `crates/horizon-theme/fonts/OFL-*.txt`, shared with the game's menus) are
+Geist and Geist Mono (SIL Open Font License, `crates/horizon-theme/fonts/OFL-*.txt`, shared with the game's on-screen keyboard) are
 bundled so the type is the same on every platform.
 
 

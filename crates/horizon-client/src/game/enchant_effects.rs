@@ -8,6 +8,15 @@ use super::Game;
 use horizon_client::{enchant::EffectContext, items::ItemStack};
 use horizon_core::random::RandomSource;
 
+/// Where Mending found a damaged item (`EnchantedItemInUse.inSlot`).
+#[derive(Clone, Copy)]
+enum MendSlot {
+    Main,
+    Off,
+    /// An `armor` index (head first).
+    Armor(usize),
+}
+
 impl Game<'_> {
     /// `Player.getDestroySpeed` after the tool speed: mining efficiency, haste
     /// and mining fatigue.
@@ -314,36 +323,29 @@ impl Game<'_> {
     pub(super) fn mending(&mut self, amount: u32) -> u32 {
         let mut amount = amount;
         loop {
-            // EnchantmentHelper.getRandomItemWith(REPAIR_WITH_XP, damaged): held and armor.
-            let mut candidates: Vec<(bool, usize)> = Vec::new();
-            if let Some(s) = &self.inventory[self.selected]
-                && s.damage > 0
-                && s.enchantment_level("minecraft:mending") > 0
-            {
-                candidates.push((false, self.selected));
-            }
-            for (i, s) in self.armor.iter().enumerate() {
-                if let Some(s) = s
-                    && s.damage > 0
-                    && s.enchantment_level("minecraft:mending") > 0
-                {
-                    candidates.push((true, i));
-                }
-            }
+            // EnchantmentHelper.getRandomItemWith(REPAIR_WITH_XP, damaged), in
+            // EquipmentSlot order: the main hand, the off hand, then feet, legs,
+            // chest and head (`armor` holds head first).
+            let mending = |s: &Option<ItemStack>| {
+                s.as_ref()
+                    .is_some_and(|s| s.damage > 0 && s.enchantment_level("minecraft:mending") > 0)
+            };
+            let candidates: Vec<MendSlot> = [MendSlot::Main, MendSlot::Off]
+                .into_iter()
+                .chain((0..self.armor.len()).rev().map(MendSlot::Armor))
+                .filter(|&slot| mending(self.mend_slot(slot)))
+                .collect();
             if candidates.is_empty() {
                 return amount;
             }
-            let (armor, i) = candidates[self
+            let slot = candidates[self
                 .world
                 .random
                 .next_int_bound(candidates.len() as i32)
                 .unwrap_or(0) as usize];
-            let stack = if armor {
-                self.armor[i].clone()
-            } else {
-                self.inventory[i].clone()
+            let Some(stack) = self.mend_slot(slot).clone() else {
+                return amount;
             };
-            let Some(stack) = stack else { return amount };
             let ctx = EffectContext {
                 items: Some(self.res.items()),
                 ..Default::default()
@@ -356,12 +358,7 @@ impl Game<'_> {
                 amount as f32,
             ) as u32;
             let repaired = to_repair_xp.min(stack.damage);
-            let slot = if armor {
-                &mut self.armor[i]
-            } else {
-                &mut self.inventory[i]
-            };
-            if let Some(s) = slot.as_mut() {
+            if let Some(s) = self.mend_slot_mut(slot).as_mut() {
                 s.damage -= repaired;
             }
             if repaired == 0 || to_repair_xp == 0 {
@@ -372,6 +369,20 @@ impl Game<'_> {
                 return 0;
             }
             amount = remaining;
+        }
+    }
+    fn mend_slot(&self, slot: MendSlot) -> &Option<ItemStack> {
+        match slot {
+            MendSlot::Main => &self.inventory[self.selected],
+            MendSlot::Off => &self.offhand,
+            MendSlot::Armor(i) => &self.armor[i],
+        }
+    }
+    fn mend_slot_mut(&mut self, slot: MendSlot) -> &mut Option<ItemStack> {
+        match slot {
+            MendSlot::Main => &mut self.inventory[self.selected],
+            MendSlot::Off => &mut self.offhand,
+            MendSlot::Armor(i) => &mut self.armor[i],
         }
     }
     /// Bow enchantments at release: (extra base damage, infinity keeps the arrow).
