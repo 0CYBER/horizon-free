@@ -376,7 +376,7 @@ def main():
         binary=Path(metadata['target_directory'])/'release/examples'/('probe.exe' if os.name=='nt' else 'probe')
         counts={'block_states':len(facts['states']),'blocks':len(facts['defaults']),'integer_properties':len(facts['integers']),'codec_inputs':fixture_count,'provider_types':10,'named_providers':len(catalog_resources),'rule_predicate_types':16,'survival_supported_blocks':len(survival_rules),'survival_supported_states':sum(s['id'] in survival_rules for s in facts['states']),'support_cached_states':len(support_states),'support_dynamic_states':len(facts['states'])-len(support_states),'biomes':len(biomes),'biome_tag_files':len(biome_tags),'fluid_tag_files':len(fluid_tags),'bundled_provider_definitions':len(provider_resources),'block_tag_files':len(tags),'requested_samples':requested_samples}
         base.ensure_sources_unchanged(sources,tested_sources)
-        checkpoint={'schema':1,'environment':environment,'sources_sha256':tested_sources,'fixtures_sha256':{str(lab.ROOT/name):digest for name,digest in tested_fixtures.items()},'artifacts_sha256':{str(path):lab.digest(path,'sha256') for path in [binary,'state_provider_fixture',*sorted(classes.rglob('*.class'))]},'binary':str(binary),'counts':counts,'outputs':{}}
+        checkpoint={'schema':1,'environment':environment,'sources_sha256':tested_sources,'fixtures_sha256':{str(lab.ROOT/name):digest for name,digest in tested_fixtures.items()},'artifacts_sha256':{str(path):lab.digest(path,'sha256') for path in [binary,*sorted(classes.rglob('*.class'))]},'binary':str(binary),'counts':counts,'outputs':{}}
         survival.save_checkpoint(checkpoint_path,checkpoint)
         print('Verified inputs and compiled executables checkpointed',flush=True)
     def stage(name,action):
@@ -386,7 +386,7 @@ def main():
             checkpoint['outputs'][name]=lab.digest(output,'sha256')
             survival.save_checkpoint(checkpoint_path,checkpoint)
             print(f'{name}: completed output checkpointed',flush=True)
-    stage('rust',lambda:run([checkpoint['binary'],build],'rust'));references=[]
+    stage('rust',lambda:run([checkpoint['binary'],'state_provider_fixture',build],'rust'));references=[]
     for side,jar in jars.items():
         stage(side,lambda:java(side,side,build));reference=build/f'{side}.txt';matched=base.compare(reference,build/'rust.txt')
         references.append({'side':side,'jar_sha256':lab.digest(jar,'sha256'),'output_sha256':lab.digest(reference,'sha256'),'matched_output_lines':matched})
