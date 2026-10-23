@@ -10,7 +10,7 @@
 //! other `GateBehavior`s shuffle with a random of their own, seeded with
 //! `Brain::shuffle_seed` when the brain is built.
 use super::{
-    Mob, MobEvent, MobWorld, Seen, Species, Who,
+    Mob, MobEvent, MobWorld, Species, Who,
     path::{Path, PathNode},
 };
 use horizon_core::{
@@ -4155,10 +4155,6 @@ pub fn woken(m: &mut Mob, now: i64) {
 /// What other villagers see of this one's brain.
 pub fn potential_job_site(m: &Mob) -> Option<[i32; 3]> {
     mem_ref(m).and_then(|mm| mm.potential_job_site.value())
-}
-/// Whether a seen mob is a villager wanting to breed (`AgeableMob::canBreed`).
-pub fn seen_can_breed(s: &Seen) -> bool {
-    s.species == Species::Villager && s.in_love
 }
 /// The memories other villagers read: the interaction target, the path's
 /// nodes (while it is not done), whether a golem was seen lately and the

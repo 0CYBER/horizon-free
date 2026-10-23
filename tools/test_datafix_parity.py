@@ -33,6 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import anvil_dump  # noqa: E402
+import parity_shard  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 LOCAL = ROOT / '.local' / 'datafix'
@@ -63,7 +64,7 @@ def java_classpath():
     import test_model_baking_parity as baking
     lock, jars, _ = base.verify_artifacts()
     libraries = baking.client_libraries()
-    build = LOCAL / 'build' / os.environ.get('PARITY_SHARD', 'all').replace('/', '-')  # shards compile apart
+    build = LOCAL / 'build' / parity_shard.label()  # shards compile apart
     build.mkdir(parents=True, exist_ok=True)
     classes, dependencies, _ = harness.compile_oracle(build, 'VanillaDataFixOracle', jars, libraries,
                                                       lock['minecraft']['java_major'])
@@ -76,15 +77,6 @@ def build_rust():
     meta = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1'],
                                               cwd=ROOT))
     return Path(meta['target_directory']) / 'release' / 'examples' / 'datafix_world'
-
-
-def shard(items):
-    """This run's share of items when tools/parity.py runs the harness in parts (PARITY_SHARD=i/n)."""
-    spec = os.environ.get('PARITY_SHARD')
-    if not spec:
-        return items
-    index, count = map(int, spec.split('/'))
-    return items[index - 1::count]
 
 
 def run_vanilla(classpath, world, out, target=None):
@@ -226,7 +218,7 @@ def main():
     band = args.band
     if band and not args.versions:  # worlds in the layout of before 1.16, saved before the target
         worlds = [w for w in worlds if json.loads((world_path(w) / 'datafix-source.json').read_text())['data_version'] < band]
-    versions = shard(args.versions or worlds)
+    versions = parity_shard.shard(args.versions or worlds)
     classpath = java_classpath()
     binary = None if args.vanilla_only else Path(args.binary) if args.binary else build_rust()
     total = 0

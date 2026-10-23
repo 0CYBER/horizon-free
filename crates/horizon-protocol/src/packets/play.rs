@@ -672,6 +672,11 @@ packet!(SetDefaultSpawnPosition { pos: GlobalPos => GlobalPos, yaw: f32 => Float
 packet!(SetEntityData { id: i32 => VarInt, values: Vec<(u8, i32, Value)> => EntityData });
 packet!(SetEntityMotion { id: i32 => VarInt, velocity: [f64; 3] => LpVec3 });
 packet!(
+    /// ClientboundSetEntityLinkPacket: the entity holding a leashed entity's
+    /// lead, 0 when none (Leashable.setDelayedLeashHolderId).
+    SetEntityLink { source: i32 => Int, dest: i32 => Int }
+);
+packet!(
     /// ClientboundSetPassengersPacket: a vehicle and every entity riding it.
     SetPassengers { vehicle: i32 => VarInt, passengers: Vec<i32> => List<VarInt> }
 );
@@ -1532,6 +1537,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     SetDisplayObjective(SetDisplayObjective) = SET_DISPLAY_OBJECTIVE,
     SetEntityData(SetEntityData) = SET_ENTITY_DATA,
     SetEntityMotion(SetEntityMotion) = SET_ENTITY_MOTION,
+    SetEntityLink(SetEntityLink) = SET_ENTITY_LINK,
     SetEquipment(SetEquipment) = SET_EQUIPMENT,
     SetExperience(SetExperience) = SET_EXPERIENCE,
     SetHealth(SetHealth) = SET_HEALTH,
@@ -2263,6 +2269,7 @@ mod tests {
                 vehicle: 2,
                 passengers: vec![3, 300],
             }),
+            Clientbound::SetEntityLink(SetEntityLink { source: 2, dest: 0 }),
             Clientbound::ProjectilePower(ProjectilePower { id: 4, power: 0.1 }),
             Clientbound::SetEquipment(SetEquipment {
                 id: 2,

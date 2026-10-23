@@ -1,13 +1,13 @@
 // The release notes on the site: the home page's "Recently added" block and the Releases page (every release,
 // newest first). Shared by build.mjs (baked into the pages) and the pages' scripts (refreshed from GitHub).
 // Tags: the game's vX.Y.Z and the launcher's launcher@X.Y.Z from 0.2, vYYYY.MM.DD[.N] and launcher-vX.Y.Z before
-// (src/versions.js). Alpha is a game pre-release, Stable a game release (docs/release-flow.md, "Channels").
+// (src/versions.js). One channel (docs/release-flow.md, "One channel"): a release is the game's or the launcher's.
 import { markdown, inline, escape } from "./markdown.js";
 import { isLauncher, launcherVersion, newestFirst } from "./versions.js";
 
 const REPO = "ludovic111/horizon";
 
-export const channel = (r) => (isLauncher(r.tag_name) ? "Launcher" : r.prerelease ? "Alpha" : "Stable");
+export const channel = (r) => (isLauncher(r.tag_name) ? "Launcher" : "Game");
 const anchor = (r) => `release-${r.tag_name.replace(/[^\w.-]/g, "-")}`;
 
 // "Horizon 0.2.3: Cave culling, weather" (before 0.2, "Horizon 2026.10.13: …") reads as the version and its line.
@@ -90,7 +90,7 @@ export function recentHtml(list, { rows = 5, picks = 3 } = {}) {
     })
     .join("");
   // What landed last: the "New" items of the newest releases with the highest pull request numbers (a release's
-  // notes list everything since the last Stable, oldest first).
+  // notes list everything since the release before it, oldest first).
   const pr = (item) => Math.max(0, ...[...item.matchAll(/#(\d+)/g)].map((m) => Number(m[1])));
   const seen = new Set();
   const picked = game

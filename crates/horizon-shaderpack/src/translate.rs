@@ -5,8 +5,9 @@
 //! patches do for the core profile, prints GLSL 450 and has naga turn that
 //! into a validated module and WGSL:
 //!
-//! - `attribute`/`varying` become `in`/`out` with locations; matrix and array
-//!   varyings are split into vectors (WGSL can pass neither between stages);
+//! - `attribute`/`varying` become `in`/`out` with locations; matrix, nested
+//!   array and struct varyings are split into vectors (WGSL can pass none of
+//!   them directly between stages);
 //! - loose uniforms go into one std140 block (`bool`s stored as `int`);
 //! - `sampler2D` & co. become a texture and a sampler binding, rebuilt as
 //!   `sampler2D(t, s)` where used, also through function parameters, and not
@@ -16,13 +17,16 @@
 //!   (`vaPosition`, `modelViewMatrix`, ...) are declared;
 //! - legacy texture calls are renamed, `shadow2D` returns a `vec4` again and a
 //!   swizzled shadow lookup is widened first (naga has no scalar swizzle);
+//! - vertex and compute `texture(s, uv)` calls without an explicit LOD become
+//!   `textureLod(s, uv, 0.0)` so naga doesn't reject implicit derivatives;
 //! - global initialisers run at the start of `main` (drivers accept
 //!   non-constant ones), unsized global arrays are sized from them;
 //! - `isnan`, `isinf` and `modf` are helper functions (WGSL has none);
 //! - what naga refuses and drivers accept: `%` goes through overloads (naga
-//!   won't take `ivec2 % int`), `sqrt` of a negative constant isn't folded,
-//!   constants naga can't fold (`?:`, `mix`) become globals set in `main`,
-//!   and 16/8-bit types are their 32-bit ones.
+//!   won't take `ivec2 % int`), `mat2(vec4)` goes through `iris_mat2`, `1 << 31`
+//!   shifts as unsigned before casting back to `int`, `sqrt` of a negative
+//!   constant isn't folded, constants naga can't fold (`?:`, `mix`, `<<`)
+//!   become globals set in `main`, and 16/8-bit types are their 32-bit ones.
 //!
 //! The programs of one pass share a [`Link`], so their locations, bindings and
 //! uniform block agree.
@@ -238,6 +242,18 @@ vec3 iris_modf(vec3 x, out vec3 i) { i = trunc(x); return x - i; }
 vec4 iris_modf(vec4 x, out vec4 i) { i = trunc(x); return x - i; }
 ";
 
+/// Overloaded `mat2` constructor helper: drivers accept `mat2(vec4)` (Bloop),
+/// which naga's GLSL front end refuses.
+const MAT2_HELPERS: &str = "\
+mat2 iris_mat2(float x) { return mat2(x); }
+mat2 iris_mat2(vec2 a, vec2 b) { return mat2(a, b); }
+mat2 iris_mat2(float a, float b, float c, float d) { return mat2(a, b, c, d); }
+mat2 iris_mat2(vec4 v) { return mat2(v.xy, v.zw); }
+mat2 iris_mat2(mat2 m) { return m; }
+mat2 iris_mat2(mat3 m) { return mat2(m); }
+mat2 iris_mat2(mat4 m) { return mat2(m); }
+";
+
 /// A fragment output narrower than four channels (`out vec3 color`,
 /// Steadfast's `final`): the four-channel type it is written through and the
 /// epilogue line that fills it, with alpha 1 and the rest 0. `None` when the
@@ -376,69 +392,62 @@ pub fn translate(
     let wgsl =
         naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())
             .map_err(|e| e.to_string())?;
-    let interface = std::mem::take(&mut legaliser.interface);
     Ok(Translated {
         glsl,
         module,
         info,
         wgsl,
-        interface,
+        interface: legaliser.interface,
     })
 }
 
-/// The GLSL built-ins naga's constant evaluator folds (`MathFunction`s it
-/// implements), besides type constructors.
+/// Built-in functions naga folds in `const` initialisers.
 const FOLDABLE: &[&str] = &[
-    "abs",
-    "acos",
-    "acosh",
-    "asin",
-    "asinh",
-    "atan",
-    "atanh",
-    "ceil",
-    "clamp",
-    "cos",
-    "cosh",
-    "cross",
+    "radians",
     "degrees",
+    "sin",
+    "cos",
+    "tan",
+    "asin",
+    "acos",
+    "atan",
+    "pow",
+    "exp",
+    "log",
+    "exp2",
+    "log2",
+    "sqrt",
+    "inversesqrt",
+    "abs",
+    "sign",
+    "floor",
+    "trunc",
+    "round",
+    "ceil",
+    "fract",
+    "mod",
+    "min",
+    "max",
+    "clamp",
+    "step",
+    "length",
     "distance",
     "dot",
-    "exp",
-    "exp2",
-    "floor",
-    "fma",
-    "fract",
-    "inversesqrt",
-    "length",
-    "log",
-    "log2",
-    "max",
-    "min",
+    "cross",
     "normalize",
-    "pow",
-    "radians",
-    "round",
-    "sign",
-    "sin",
-    "sinh",
-    "sqrt",
-    "step",
-    "tan",
-    "tanh",
-    "trunc",
 ];
 
-/// Whether a constant's initialisers need what naga can't fold and drivers
-/// do: a `?:`, another built-in (Bliss's `mix`), or a constant that had to
-/// become a global (`runtime`).
+fn constructor(name: &str) -> bool {
+    ["bool", "int", "uint", "float", "double"].contains(&name)
+        || ["vec", "ivec", "uvec", "bvec", "dvec", "mat", "dmat"]
+            .iter()
+            .any(|p| name.starts_with(p))
+}
+
+/// Whether `list` has an initialiser naga's constant folder refuses (`?:`,
+/// `mix`, `smoothstep`, `1 << 31`, or a reference to a constant already turned
+/// into a global).
 fn needs_runtime(list: &ast::InitDeclaratorList, runtime: &HashSet<String>) -> bool {
-    let constructor = |name: &str| {
-        let n = name.trim_start_matches(['i', 'u', 'b', 'd']);
-        matches!(name, "float" | "int" | "uint" | "bool" | "double")
-            || n.starts_with("vec")
-            || n.starts_with("mat")
-    };
     let expr = |e: &ast::Expr| {
         fn walk(e: &ast::Expr, f: &dyn Fn(&ast::Expr) -> bool) -> bool {
             use ast::ExprData as E;
@@ -454,6 +463,14 @@ fn needs_runtime(list: &ast::InitDeclaratorList, runtime: &HashSet<String>) -> b
         }
         walk(e, &|e| match &e.content {
             ast::ExprData::Ternary(..) => true,
+            ast::ExprData::Binary(op, _, _)
+                if matches!(
+                    op.content,
+                    ast::BinaryOpData::LShift | ast::BinaryOpData::RShift
+                ) =>
+            {
+                true
+            }
             ast::ExprData::Variable(v) => runtime.contains(v.as_str()),
             ast::ExprData::FunCall(f, _) => {
                 callee(f).is_some_and(|c| !constructor(&c) && !FOLDABLE.contains(&c.as_str()))
@@ -503,6 +520,9 @@ enum Local {
     Sampler(&'static str),
 }
 
+/// A struct field `(type_name, field_name, array_suffix)`.
+type StructField = (String, String, String);
+
 struct Legaliser<'a> {
     stage: Stage,
     link: &'a mut Link,
@@ -515,6 +535,8 @@ struct Legaliser<'a> {
     /// User functions → indices of their sampler parameters.
     sampler_params: HashMap<String, BTreeSet<usize>>,
     functions: HashSet<String>,
+    /// User structs → their fields `(ty, name, array)` (for struct varyings).
+    structs: HashMap<String, Vec<StructField>>,
     scopes: Vec<HashMap<String, Local>>,
     /// Declarations before the program (bindings, block, inputs, outputs).
     header: Vec<String>,
@@ -528,10 +550,11 @@ struct Legaliser<'a> {
     errors: Vec<String>,
     /// Inside a constant initialiser: no helper calls there.
     constant: bool,
-    /// The program uses `%` ([`modulo_helpers`]) or `iris_sqrt`: their
-    /// helpers go in.
+    /// The program uses `%` ([`modulo_helpers`]), `iris_sqrt` or `iris_mat2`:
+    /// their helpers go in.
     modulo: bool,
     nan: bool,
+    mat2_ctor: bool,
     /// Constants turned into globals ([`needs_runtime`]).
     runtime_constants: HashSet<String>,
 }
@@ -634,6 +657,38 @@ fn array_text(a: &Option<ast::ArraySpecifier>) -> String {
         .collect()
 }
 
+/// Parse one or more `[N]` dimensions (`[9][9]` → `Some(vec![9, 9])`).
+fn array_dims(array: &str) -> Option<Vec<usize>> {
+    if array.is_empty() {
+        return Some(Vec::new());
+    }
+    let mut dims = Vec::new();
+    let mut rest = array.trim();
+    while !rest.is_empty() {
+        let inner = rest.strip_prefix('[')?;
+        let (num, tail) = inner.split_once(']')?;
+        dims.push(num.trim().parse::<usize>().ok()?);
+        rest = tail.trim();
+    }
+    Some(dims)
+}
+
+/// Expand multi-dimensional indices `dims` into `(key_suffix, expr_suffix)`
+/// pairs (`[2, 2]` → `("#0#0", "[0][0]")`, `("#0#1", "[0][1]")`, ...).
+fn expand_dims(dims: &[usize]) -> Vec<(String, String)> {
+    let mut out = vec![(String::new(), String::new())];
+    for &n in dims {
+        let mut next = Vec::with_capacity(out.len() * n);
+        for (k, e) in &out {
+            for i in 0..n {
+                next.push((format!("{k}#{i}"), format!("{e}[{i}]")));
+            }
+        }
+        out = next;
+    }
+    out
+}
+
 /// The element count of `T[](a, b, c)`.
 fn constructor_len(init: &Option<ast::Initializer>) -> Option<usize> {
     match &init.as_ref()?.content {
@@ -718,6 +773,7 @@ impl<'a> Legaliser<'a> {
             sampler_vars: HashSet::new(),
             sampler_params: HashMap::new(),
             functions: HashSet::new(),
+            structs: HashMap::new(),
             scopes: Vec::new(),
             header: Vec::new(),
             prologue: Vec::new(),
@@ -728,14 +784,34 @@ impl<'a> Legaliser<'a> {
             constant: false,
             modulo: false,
             nan: false,
+            mat2_ctor: false,
             runtime_constants: HashSet::new(),
         }
     }
 
+    fn record_struct(&mut self, spec: &ast::StructSpecifier) {
+        let Some(name) = &spec.name else { return };
+        let mut fields = Vec::new();
+        for field in &spec.fields {
+            let base_ty = type_text(&field.ty);
+            let ty_arr = array_text(&field.ty.array_specifier);
+            for id in &field.identifiers {
+                let arr = format!("{ty_arr}{}", array_text(&id.array_spec));
+                fields.push((base_ty.clone(), id.ident.as_str().to_owned(), arr));
+            }
+        }
+        self.structs.insert(name.as_str().to_owned(), fields);
+    }
+
     fn unit(&mut self, unit: &mut ast::TranslationUnit) -> Result<(), String> {
-        // Functions and their sampler parameters first: calls may precede
-        // definitions through prototypes.
+        // Functions, their sampler parameters, and struct definitions first.
         for ed in &unit.0 {
+            if let ast::ExternalDeclarationData::Declaration(d) = &ed.content
+                && let ast::DeclarationData::InitDeclaratorList(list) = &d.content
+                && let ast::TypeSpecifierNonArrayData::Struct(s) = &list.head.ty.ty.ty.content
+            {
+                self.record_struct(s);
+            }
             let proto = match &ed.content {
                 ast::ExternalDeclarationData::FunctionDefinition(f) => &f.prototype,
                 ast::ExternalDeclarationData::Declaration(d) => match &d.content {
@@ -812,6 +888,22 @@ impl<'a> Legaliser<'a> {
     }
 
     fn global_list(&mut self, list: &mut ast::InitDeclaratorList) -> Result<bool, String> {
+        // If a standalone `struct S { ... };` has no declarator names, keep it
+        // in the header so varyings of type `S` can declare `S varname;` there.
+        if list.head.name.is_none()
+            && list.tail.is_empty()
+            && matches!(
+                list.head.ty.ty.ty.content,
+                ast::TypeSpecifierNonArrayData::Struct(_)
+            )
+        {
+            let mut text = String::new();
+            let decl = ast::DeclarationData::InitDeclaratorList(list.clone()).into_node();
+            show_declaration(&mut text, &decl, &mut FormattingState::default())
+                .map_err(|e| e.to_string())?;
+            self.header.push(text.trim().to_owned());
+            return Ok(false);
+        }
         let qualifier = list.head.ty.qualifier.clone();
         let storage = storage(&qualifier);
         let has = |s: ast::StorageQualifierData| storage.contains(&s);
@@ -939,32 +1031,34 @@ impl<'a> Legaliser<'a> {
                 .find(|(k, _)| k == "location")
                 .and_then(|(_, v)| v?.parse().ok());
             for (i, (name, array)) in names.iter().enumerate() {
-                let full = format!("{ty}{ty_array}");
+                let full_array = format!("{ty_array}{array}");
                 if input {
                     let at = Link::location(&mut self.link.attributes, name);
-                    self.header
-                        .push(format!("layout(location = {at}) in {full} {name}{array};"));
+                    self.header.push(format!(
+                        "layout(location = {at}) in {ty} {name}{full_array};"
+                    ));
                     self.interface.attributes.insert(name.clone());
                 } else if !varying {
                     let at = explicit
                         .map(|l: u32| l + i as u32)
                         .unwrap_or_else(|| self.next_output());
-                    if let (Some(widened), "") = (widen_output(&full, name), array.as_str()) {
+                    if let (Some(widened), "") = (widen_output(&ty, name), full_array.as_str()) {
                         // GL fills the missing channels of a narrow output;
                         // wgpu wants every channel of the target written.
                         let (wide, fill) = widened;
-                        self.header.push(format!("{full} {name};"));
+                        self.header.push(format!("{ty} {name};"));
                         self.header.push(format!(
                             "layout(location = {at}) out {wide} iris_out_{name};"
                         ));
                         self.epilogue.push(fill);
                     } else {
-                        self.header
-                            .push(format!("layout(location = {at}) out {full} {name}{array};"));
+                        self.header.push(format!(
+                            "layout(location = {at}) out {ty} {name}{full_array};"
+                        ));
                     }
                     self.interface.outputs.insert(at, name.clone());
                 } else {
-                    self.varying(dir, &interp, &full, name, array);
+                    self.varying(dir, &interp, &ty, name, &full_array);
                 }
             }
             return Ok(false);
@@ -1001,64 +1095,106 @@ impl<'a> Legaliser<'a> {
             .unwrap()
     }
 
-    /// One varying: matrices and arrays split into vectors that a private
-    /// global of the original type is packed from or into.
-    fn varying(&mut self, dir: &str, interp: &str, ty: &str, name: &str, array: &str) {
+    /// Emit scalar/vector/matrix varying leaves for an expression `expr_path`
+    /// with key `key_prefix`.
+    fn varying_leaf(&mut self, dir: &str, interp: &str, ty: &str, key: &str, expr_path: &str) {
+        if let Some(fields) = self.structs.get(ty).cloned() {
+            for (f_ty, f_name, f_arr) in fields {
+                let sub_key = format!("{key}#{f_name}");
+                let sub_expr = format!("{expr_path}.{f_name}");
+                self.varying_composite(dir, interp, &f_ty, &sub_key, &sub_expr, &f_arr);
+            }
+            return;
+        }
+        if let Some((cols, column)) = matrix_columns(ty) {
+            let flat = if is_integer(&column) && !interp.contains("flat") {
+                "flat "
+            } else {
+                ""
+            };
+            let mut columns = Vec::new();
+            for c in 0..cols {
+                let c_key = format!("{key}#{c}");
+                let at = Link::location(&mut self.link.varyings, &c_key);
+                let part = c_key.replace('#', "_iris");
+                self.header.push(format!(
+                    "layout(location = {at}) {flat}{interp}{dir} {column} {part};"
+                ));
+                if dir == "out" {
+                    self.epilogue.push(format!("{part} = {expr_path}[{c}];"));
+                }
+                columns.push(part);
+            }
+            if dir == "in" {
+                self.prologue
+                    .push(format!("{expr_path} = {ty}({});", columns.join(", ")));
+            }
+            return;
+        }
         let flat = if is_integer(ty) && !interp.contains("flat") {
             "flat "
         } else {
             ""
         };
-        let count: Option<usize> = array
-            .strip_prefix('[')
-            .and_then(|a| a.strip_suffix(']'))
-            .and_then(|n| n.parse().ok());
-        let parts: Vec<(String, String, String)> = match (matrix_columns(ty), count) {
-            (Some((cols, column)), None) => (0..cols)
-                .map(|c| {
-                    (
-                        format!("{name}#{c}"),
-                        column.clone(),
-                        format!("{name}[{c}]"),
-                    )
-                })
-                .collect(),
-            (None, Some(n)) => (0..n)
-                .map(|e| (format!("{name}#{e}"), ty.to_owned(), format!("{name}[{e}]")))
-                .collect(),
-            (None, None) => {
-                let at = Link::location(&mut self.link.varyings, name);
-                self.header.push(format!(
-                    "layout(location = {at}) {flat}{interp}{dir} {ty} {name};"
-                ));
-                return;
-            }
-            (Some(_), Some(_)) => {
-                self.errors.push(format!(
-                    "varying {name}: arrays of matrices are not supported"
-                ));
-                return;
-            }
+        let at = Link::location(&mut self.link.varyings, key);
+        let part = key.replace('#', "_iris");
+        self.header.push(format!(
+            "layout(location = {at}) {flat}{interp}{dir} {ty} {part};"
+        ));
+        if dir == "out" {
+            self.epilogue.push(format!("{part} = {expr_path};"));
+        } else {
+            self.prologue.push(format!("{expr_path} = {part};"));
+        }
+    }
+
+    fn varying_composite(
+        &mut self,
+        dir: &str,
+        interp: &str,
+        ty: &str,
+        key: &str,
+        expr_path: &str,
+        array: &str,
+    ) {
+        let Some(dims) = array_dims(array) else {
+            self.errors
+                .push(format!("varying {expr_path}: unsupported array `{array}`"));
+            return;
         };
-        self.header.push(format!("{ty} {name}{array};"));
-        let mut columns = Vec::new();
-        for (key, part_ty, element) in &parts {
-            let at = Link::location(&mut self.link.varyings, key);
-            let part = key.replace('#', "_iris");
-            self.header.push(format!(
-                "layout(location = {at}) {flat}{interp}{dir} {part_ty} {part};"
-            ));
-            if dir == "out" {
-                self.epilogue.push(format!("{part} = {element};"));
-            } else if count.is_some() {
-                self.prologue.push(format!("{element} = {part};"));
+        if dims.is_empty() {
+            self.varying_leaf(dir, interp, ty, key, expr_path);
+        } else {
+            for (k_suf, e_suf) in expand_dims(&dims) {
+                self.varying_leaf(
+                    dir,
+                    interp,
+                    ty,
+                    &format!("{key}{k_suf}"),
+                    &format!("{expr_path}{e_suf}"),
+                );
             }
-            columns.push(part);
         }
-        if dir == "in" && count.is_none() {
-            self.prologue
-                .push(format!("{name} = {ty}({});", columns.join(", ")));
+    }
+
+    /// One varying: matrices, arrays (including multi-dimensional `vec3[9][9]`)
+    /// and structs (`CloudsParameters`) split into vectors that a private
+    /// global of the original type is packed from or into.
+    fn varying(&mut self, dir: &str, interp: &str, ty: &str, name: &str, array: &str) {
+        if array.is_empty() && matrix_columns(ty).is_none() && !self.structs.contains_key(ty) {
+            let flat = if is_integer(ty) && !interp.contains("flat") {
+                "flat "
+            } else {
+                ""
+            };
+            let at = Link::location(&mut self.link.varyings, name);
+            self.header.push(format!(
+                "layout(location = {at}) {flat}{interp}{dir} {ty} {name};"
+            ));
+            return;
         }
+        self.header.push(format!("{ty} {name}{array};"));
+        self.varying_composite(dir, interp, ty, name, name, array);
     }
 
     fn sized(&mut self, list: &mut ast::InitDeclaratorList) {
@@ -1404,13 +1540,30 @@ impl<'a> Legaliser<'a> {
                 self.expr(a);
                 self.expr(b);
                 self.modulo = true;
-                let (a, b) = (
-                    std::mem::replace(&mut **a, var("_")),
-                    std::mem::replace(&mut **b, var("_")),
-                );
-                *e = call("iris_mod", vec![a, b]);
+                let lhs = std::mem::replace(&mut **a, var("_"));
+                let rhs = std::mem::replace(&mut **b, var("_"));
+                *e = call("iris_mod", vec![lhs, rhs]);
             }
-            E::Assignment(a, op, b) if op.content == ast::AssignmentOpData::Mod => {
+            E::Binary(op, a, b)
+                if op.content == ast::BinaryOpData::LShift
+                    && matches!(a.content, E::IntConst(_))
+                    && matches!(b.content, E::IntConst(n) if n >= 31) =>
+            {
+                self.expr(a);
+                self.expr(b);
+                let lhs = std::mem::replace(&mut **a, var("_"));
+                let rhs = std::mem::replace(&mut **b, var("_"));
+                let shifted = ast::ExprData::Binary(
+                    ast::BinaryOpData::LShift.into_node(),
+                    Box::new(call("uint", vec![lhs])),
+                    Box::new(call("uint", vec![rhs])),
+                )
+                .into_node();
+                *e = call("int", vec![shifted]);
+            }
+            E::Assignment(a, op, b)
+                if op.content == ast::AssignmentOpData::Mod && !self.constant =>
+            {
                 self.expr(a);
                 self.expr(b);
                 self.modulo = true;
@@ -1538,17 +1691,53 @@ impl<'a> Legaliser<'a> {
         if self.functions.contains(&name) {
             return;
         }
+        // `mat2(vec4)` (Bloop): naga refuses 1-argument `mat2` from a `vec4`.
+        if name == "mat2"
+            && !self.constant
+            && args.len() == 1
+            && !matches!(
+                args[0].content,
+                ast::ExprData::FloatConst(_)
+                    | ast::ExprData::IntConst(_)
+                    | ast::ExprData::UIntConst(_)
+                    | ast::ExprData::DoubleConst(_)
+            )
+        {
+            *f = ast::FunIdentifierData::Expr(Box::new(var("iris_mat2"))).into_node();
+            self.mat2_ctor = true;
+            return;
+        }
         // `sqrt(-1.0)`, Bloop's NaN: naga folds it and fails, drivers give NaN.
         if name == "sqrt" && !self.constant && args.len() == 1 && negative_constant(&args[0]) {
             *f = ast::FunIdentifierData::Expr(Box::new(var("iris_sqrt"))).into_node();
             self.nan = true;
             return;
         }
+        let mut target_name = name.as_str();
         if let Some((_, new)) = LEGACY_CALLS.iter().find(|(old, _)| *old == name) {
             *f = ast::FunIdentifierData::Expr(Box::new(var(new))).into_node();
+            target_name = new;
         } else if let Some((_, new)) = SHADOW_CALLS.iter().find(|(old, _)| *old == name) {
             let args = std::mem::take(args);
             *e = call("vec4", vec![call(new, args)]);
+            return;
+        }
+        // In vertex and compute shaders, `texture(sampler, coord)` uses implicit
+        // derivatives that WGSL/naga forbid outside fragment shaders (Bliss):
+        // rewrite 2-argument non-shadow `texture(s, uv)` to `textureLod(s, uv, 0.0)`.
+        if self.stage != Stage::Fragment && target_name == "texture" && args.len() == 2 {
+            let is_shadow = match &args[0].content {
+                ast::ExprData::FunCall(g, _) => {
+                    callee(g).and_then(|c| opaque(&c)).is_some_and(|o| o.3)
+                }
+                _ => false,
+            };
+            if !is_shadow {
+                if let ast::ExprData::FunCall(f, args) = &mut e.content {
+                    *f = ast::FunIdentifierData::Expr(Box::new(var("textureLod"))).into_node();
+                    args.push(ast::ExprData::FloatConst(0.0).into_node());
+                }
+            }
         }
     }
 
@@ -1588,6 +1777,9 @@ impl<'a> Legaliser<'a> {
         }
         if self.nan {
             out.push_str("float iris_sqrt(float x) { return sqrt(x); }\n");
+        }
+        if self.mat2_ctor {
+            out.push_str(MAT2_HELPERS);
         }
         if !self.link.uniforms.is_empty() {
             out.push_str("layout(std140, set = 0, binding = 0) uniform IrisUniforms {\n");

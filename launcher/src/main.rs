@@ -238,15 +238,16 @@ impl Launcher {
         if settings.minecraft_dir.is_none() {
             settings.minecraft_dir = backend::default_minecraft_dir();
         }
-        // Release builds on Linux keep their entry in the applications menu up to date (a moved
-        // binary changes it); `HORIZON_LAUNCHER_DESKTOP_ENTRY=1` does it in a development build.
+        // Release builds on Linux put their entry back in the applications menu when there is
+        // none or it starts a program that is gone (a moved or deleted binary), never over one
+        // that works; `HORIZON_LAUNCHER_DESKTOP_ENTRY=1` does it in a development build.
         if cfg!(target_os = "linux")
             && settings.desktop_entry()
             && (!cfg!(debug_assertions)
                 || std::env::var_os("HORIZON_LAUNCHER_DESKTOP_ENTRY").is_some())
         {
             std::thread::spawn(|| {
-                let _ = horizon_launcher::desktop::install(backend::exe_path());
+                let _ = horizon_launcher::desktop::repair(backend::exe_path());
             });
         }
         let installed = backend::installed();
@@ -658,8 +659,10 @@ impl Launcher {
                 changed = true;
             }
         }
-        let every = self.settings.update_channel.check_every();
-        if self.checked.is_some_and(|at| at.elapsed() > every) {
+        if self
+            .checked
+            .is_some_and(|at| at.elapsed() > backend::CHECK_EVERY)
+        {
             self.check_updates();
         }
         if changed {
@@ -1698,14 +1701,10 @@ impl Launcher {
             ));
         }
         foot = foot.child(
-            caps(format!(
-                "Launcher {}  ·  {}",
-                backend::VERSION,
-                self.settings.update_channel.label()
-            ))
-            .px(px(8.))
-            .pt(px(6.))
-            .text_color(t.muted),
+            caps(format!("Launcher {}", backend::VERSION))
+                .px(px(8.))
+                .pt(px(6.))
+                .text_color(t.muted),
         );
         div()
             .id("sidebar")
@@ -2339,25 +2338,6 @@ impl Launcher {
                 cx.notify();
             }),
         );
-        use backend::UpdateChannel::{Alpha, Stable};
-        let this = cx.entity().downgrade();
-        let update_channel = segments(
-            "update-channel",
-            &[(Stable, Stable.label()), (Alpha, Alpha.label())],
-            self.settings.update_channel,
-            &t,
-            move |picked, _, cx| {
-                let _ = this.update(cx, |this, cx| {
-                    if this.settings.update_channel != picked {
-                        this.settings.update_channel = picked;
-                        this.settings.save();
-                        // What counts as new changed: check again (and install it if that is on).
-                        this.check_updates();
-                    }
-                    cx.notify();
-                });
-            },
-        );
         let opening = switch("opening", !self.settings.skip_opening, &t).on_click(cx.listener(
             |this, _: &ClickEvent, _, cx| {
                 this.settings.skip_opening = !this.settings.skip_opening;
@@ -2485,22 +2465,6 @@ impl Launcher {
                             "Your selected version only changes if you were playing the newest one.",
                         )),
                         Some(toggle.into_any_element()),
-                        &t,
-                    ))
-                    .child(index_row(
-                        n + 2,
-                        "Updates",
-                        Some(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .child("Stable: a tested build about once a day.")
-                                .child(
-                                    "Alpha: every change as soon as it is built, several times a day; can break.",
-                                )
-                                .into_any_element(),
-                        ),
-                        Some(update_channel.into_any_element()),
                         &t,
                     ))
                     .child(group("Launcher", "monitor"))
@@ -2955,8 +2919,7 @@ impl Launcher {
                 let tag = release.tag.clone();
                 let installed = self.installed.contains(&tag);
                 let selected = self.selected() == Some(&tag);
-                let channel = backend::UpdateChannel::of(&release).label();
-                let mut meta = vec![channel.to_string(), release.date.clone()];
+                let mut meta = vec![release.date.clone()];
                 if let Some((_, size)) = release.asset {
                     meta.push(megabytes(size));
                 }

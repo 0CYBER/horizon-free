@@ -63,13 +63,27 @@ impl PackFiles {
         Ok(Self::Zip(files))
     }
 
+    /// Raw bytes of a file relative to `shaders/` (leading `/` or `./` stripped),
+    /// or `None` when it doesn't exist.
+    pub fn read_bytes(&self, rel: &str) -> Option<Vec<u8>> {
+        let clean = rel
+            .trim()
+            .trim_start_matches("./")
+            .trim_start_matches('/')
+            .trim_start_matches("shaders/");
+        if clean.is_empty() || clean.contains("..") {
+            return None;
+        }
+        match self {
+            Self::Folder(root) => fs::read(root.join(clean)).ok(),
+            Self::Zip(files) => files.get(clean).cloned(),
+        }
+    }
+
     /// A text file, or `None` when it doesn't exist. Invalid UTF-8 is
     /// replaced, as packs are often saved in Latin-1.
     pub fn read(&self, rel: &str) -> Option<String> {
-        let bytes = match self {
-            Self::Folder(root) => fs::read(root.join(rel)).ok()?,
-            Self::Zip(files) => files.get(rel)?.clone(),
-        };
+        let bytes = self.read_bytes(rel)?;
         Some(String::from_utf8_lossy(&bytes).into_owned())
     }
 

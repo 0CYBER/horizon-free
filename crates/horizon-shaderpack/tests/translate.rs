@@ -292,14 +292,48 @@ fn reports_errors_with_their_place() {
 
 /// What naga refuses and drivers accept: `vec % scalar` (Noble), `sqrt` of
 /// a negative constant (Bloop's NaN), constants naga can't fold (Bliss's
-/// `?:`, `mix`), and 16-bit types (Noble on NVIDIA).
+/// `?:`, `mix`), 16-bit types (Noble on NVIDIA), `mat2(vec4)` (Bloop),
+/// `1 << 31` (Rethinking Voxels), vertex `texture2D` without LOD (Bliss),
+/// nested array varyings (Noble), and struct varyings (Photon).
 #[test]
 fn legalises_what_naga_refuses() {
     let mut link = Link::default();
+    let vs = run(
+        Stage::Vertex,
+        "uniform sampler2D colortex0;
+struct CloudsParameters {
+    vec3 color;
+    float density;
+};
+varying CloudsParameters clouds;
+varying vec3 grid[2][2];
+void main() {
+    vec4 s = texture2D(colortex0, vec2(0.5));
+    clouds.color = s.rgb;
+    clouds.density = s.a;
+    grid[0][0] = s.rgb;
+    grid[0][1] = s.gbr;
+    grid[1][0] = s.brg;
+    grid[1][1] = vec3(1.0);
+    gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+}
+",
+        &mut link,
+    )
+    .unwrap();
+    reparse(&vs.wgsl).unwrap();
+
     let fs = run(
         Stage::Fragment,
         "uniform vec2 uv;
+struct CloudsParameters {
+    vec3 color;
+    float density;
+};
+varying CloudsParameters clouds;
+varying vec3 grid[2][2];
 const int RES = 256 % 100;
+const int SIGN_BIT = 1 << 31;
 const vec3 TARGET = length(vec3(1.0)) < 0.001 ? vec3(0.0) : normalize(vec3(1.0));
 const vec3 TINT = mix(TARGET, vec3(1.0), 0.5);
 const vec3 HALF = TINT * 0.5;
@@ -309,7 +343,9 @@ void main() {
     ivec2 texel = ivec2(uv) % RES;
     texel %= 7;
     uint packed = packFloat2x16(f16vec2(HALF.xy));
-    gl_FragColor = vec4(vec2(texel), float(pack(packed).x), nan());
+    mat2 rot = mat2(vec4(1.0, 0.0, 0.0, 1.0));
+    vec2 r = rot * vec2(clouds.density, float(SIGN_BIT != 0));
+    gl_FragColor = vec4(vec2(texel) + r + clouds.color.xy + grid[1][0].xy, float(pack(packed).x), nan());
 }
 ",
         &mut link,
@@ -325,6 +361,7 @@ void main() {
         "uvec2 pack(uint v)",
         "return iris_sqrt(-1.);",
         "uint packed = packHalf2x16(vec2(HALF.xy));",
+        "iris_mat2(",
     ] {
         assert!(fs.glsl.contains(wanted), "{wanted}\n{}", fs.glsl);
     }

@@ -271,7 +271,10 @@ fn load_bitmap(
         .flatten();
     // The sheet: its size, and its pixels when they are not in the atlas.
     let (sw, sh, sheet) = match in_atlas {
-        Some(rect) => (rect.w, rect.h, None),
+        Some(rect) => {
+            let (w, h) = rect.texels(atlas);
+            (w, h, None)
+        }
         None => match crate::hud::decode(&root.join(resource_path(file, "textures", ""))) {
             Ok((w, h, rgba)) => (w, h, Some(Arc::new((w, rgba)))),
             Err(_) => {

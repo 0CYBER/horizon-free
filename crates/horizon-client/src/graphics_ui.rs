@@ -112,13 +112,18 @@ pub fn rows(level: Level) -> Vec<Row> {
         "Waits for the display's refresh: no tearing, a little latency.",
     );
     let gui = v(Opt::GuiScale, None, "Size of menus and the HUD.");
+    let shader_pack = h(
+        H::ShaderPack,
+        High,
+        "Redraws the world with a pack from the shaderpacks folder. Off is vanilla.",
+    );
     let preset = h(
         H::Preset,
         None,
         "Sets the options below together. Changing one makes it Custom.",
     );
     let mut rows = match level {
-        Level::Simple => vec![preset, render, lod, far, fov, fps, vsync, gui],
+        Level::Simple => vec![preset, render, lod, far, fov, fps, vsync, gui, shader_pack],
         Level::Advanced => vec![
             Row::Header("Rendering"),
             render,
@@ -246,11 +251,7 @@ pub fn rows(level: Level) -> Vec<Row> {
                 None,
                 "Lowers the frame rate when minimised, or idle too.",
             ),
-            h(
-                H::ShaderPack,
-                High,
-                "Redraws the world with a pack from the shaderpacks folder. Off is vanilla.",
-            ),
+            shader_pack,
             Row::Header("Preferences"),
             v(Opt::ViewBobbing, None, "Sways the view while walking."),
             v(Opt::ChunkFade, None, "Fades newly loaded chunks in."),
@@ -484,14 +485,6 @@ impl Item {
             Item::Vanilla(Opt::ImprovedTransparency) => s.improved_transparency,
             _ => return None,
         })
-    }
-    /// Caption and value text, split from the label ("Caption: Value").
-    pub fn caption_value(self, s: &Settings) -> (String, String) {
-        let label = self.label(s).plain();
-        match label.split_once(": ") {
-            Some((c, v)) => (c.to_owned(), v.to_owned()),
-            None => (label, String::new()),
-        }
     }
     pub fn slider(self, s: &Settings) -> Option<f32> {
         match self {
