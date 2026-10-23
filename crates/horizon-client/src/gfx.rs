@@ -83,6 +83,40 @@ mod world_post;
 const COMPLETE_COLUMN: u32 = (1 << (crate::chunk::HEIGHT / 16)) - 1;
 /// A section's instance: its camera-relative origin and, in `w`, the step of
 /// its fixed-point UVs (`terrain.wgsl`'s `terrain_uv`).
+/// The world pass again after occlusion culling's test: it loads both
+/// targets (phase 2 draws over phase 1, reading the test's results).
+fn world_pass_after_culling<'e>(
+    encoder: &'e mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
+    depth: &wgpu::TextureView,
+    pack: bool,
+) -> wgpu::RenderPass<'e> {
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("Horizon world, after culling"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            resolve_target: None,
+            depth_slice: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+            view: depth,
+            depth_ops: Some(wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: if pack {
+                    wgpu::StoreOp::Store
+                } else {
+                    wgpu::StoreOp::Discard
+                },
+            }),
+            stencil_ops: None,
+        }),
+        ..Default::default()
+    })
+}
 fn section_instance(origin: [f32; 3]) -> [f32; 4] {
     [
         origin[0],
@@ -3114,18 +3148,11 @@ impl Renderer {
             .inverse()
             .transform_point3(Vec3::ZERO);
         // Occlusion culling leaves the sections its last result did not see
-        // to phase 2, after the others, with instance counts of 0. Frames
-        // drawn flat are not culled (phase 2's counts reach only per-section
-        // draws): those with as many draws as the last frame drew flat.
-        let flat_likely = self.flat_on
-            && self
-                .flat
-                .as_ref()
-                .is_some_and(|f| self.section_draws >= f.min_draws);
+        // to phase 2, after the others, with instance counts of 0.
         let mut cull = self
             .cull
             .as_mut()
-            .filter(|_| self.cull_on && !frame.title && self.multi_draw && !flat_likely)
+            .filter(|_| self.cull_on && !frame.title && self.multi_draw)
             .and_then(|cull| cull.begin(&self.device).then_some(cull));
         self.phase2_draws.clear();
         self.phase2_pages.clear();
@@ -3511,16 +3538,24 @@ impl Renderer {
             frame.hud,
             [self.config.width, self.config.height],
         );
+        if culling && let Some(cull) = &mut self.cull {
+            cull.upload(
+                &self.device,
+                &mut self.uploads,
+                &mut encoder,
+                &self.draws[phase1_draws as usize..solid_draws as usize],
+                &self.instances,
+                &self.globals,
+            );
+        }
         let flat_frame = match &mut self.flat {
             Some(flat)
-                if self.flat_on
-                    && !culling
-                    && !self.draws.is_empty()
-                    && self.draws.len() >= flat.min_draws =>
+                if self.flat_on && !self.draws.is_empty() && self.draws.len() >= flat.min_draws =>
             {
                 let sections = &self.sections;
                 let lods = &self.lods;
                 let sorted = &self.sorted_indices;
+                let phase2 = self.cull.as_ref().filter(|_| culling).map(|c| &c.phase2);
                 crate::spans::time("flatten", || {
                     flat.prepare(
                         &self.device,
@@ -3528,7 +3563,9 @@ impl Renderer {
                         &mut self.uploads,
                         &self.draws,
                         &self.draw_pages,
+                        phase1_draws as usize,
                         solid_draws as usize,
+                        phase2,
                         visible
                             .iter()
                             .filter_map(|v| {
@@ -3563,16 +3600,6 @@ impl Renderer {
                 0,
                 bytemuck::cast_slice(&self.draws),
             );
-            if culling && let Some(cull) = &mut self.cull {
-                cull.upload(
-                    &self.device,
-                    &mut self.uploads,
-                    &mut encoder,
-                    &self.draws[phase1_draws as usize..solid_draws as usize],
-                    &self.instances,
-                    &self.globals,
-                );
-            }
         }
         let view_target = target_texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.config.format.remove_srgb_suffix()),
@@ -3673,9 +3700,28 @@ impl Renderer {
             match self.flat.as_ref().filter(|_| flat_frame) {
                 Some(flat) => {
                     pass.set_pipeline(&flat.solid);
-                    flat.draw(&mut pass, &flat.calls[..flat.solid_calls], |p| {
-                        self.arena.buffer(p)
-                    });
+                    let vertices = |p| self.arena.buffer(p);
+                    match cull {
+                        // As below: phase 1, the test, then phase 2's draws
+                        // that the test saw, copied after it.
+                        Some(cull) => {
+                            flat.draw(&mut pass, &flat.calls[..flat.phase1_calls], vertices);
+                            cull.test(&mut pass);
+                            drop(pass);
+                            cull.test_pass(&mut encoder);
+                            flat.flatten_phase2(&mut encoder);
+                            pass = world_pass_after_culling(
+                                &mut encoder,
+                                world_view,
+                                world_depth,
+                                pack,
+                            );
+                            pass.set_bind_group(0, &self.group, &[]);
+                            pass.set_pipeline(&flat.solid);
+                            flat.draw_phase2(&mut pass, vertices);
+                        }
+                        None => flat.draw(&mut pass, &flat.calls[..flat.solid_calls], vertices),
+                    }
                     pass.set_bind_group(0, &self.group, &[]);
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                 }
@@ -3693,34 +3739,12 @@ impl Renderer {
                             cull.test(&mut pass);
                             drop(pass);
                             cull.test_pass(&mut encoder);
-                            let attachments = [Some(wgpu::RenderPassColorAttachment {
-                                view: world_view,
-                                resolve_target: None,
-                                depth_slice: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Load,
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            })];
-                            pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                label: Some("Horizon world, after culling"),
-                                color_attachments: &attachments,
-                                depth_stencil_attachment: Some(
-                                    wgpu::RenderPassDepthStencilAttachment {
-                                        view: world_depth,
-                                        depth_ops: Some(wgpu::Operations {
-                                            load: wgpu::LoadOp::Load,
-                                            store: if pack {
-                                                wgpu::StoreOp::Store
-                                            } else {
-                                                wgpu::StoreOp::Discard
-                                            },
-                                        }),
-                                        stencil_ops: None,
-                                    },
-                                ),
-                                ..Default::default()
-                            });
+                            pass = world_pass_after_culling(
+                                &mut encoder,
+                                world_view,
+                                world_depth,
+                                pack,
+                            );
                             pass.set_bind_group(0, &self.group, &[]);
                             pass.set_pipeline(&self.solid);
                             pass.set_index_buffer(
