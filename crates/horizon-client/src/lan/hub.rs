@@ -1562,6 +1562,7 @@ impl Hub {
             equipment,
             attributes,
             precise: false,
+            needs_sync: false,
         }
     }
 

@@ -433,6 +433,7 @@ fn guests_see_each_other_and_the_world_entities() {
         equipment: Vec::new(),
         attributes: Vec::new(),
         precise: false,
+        needs_sync: false,
     };
     let first = thread::spawn(move || {
         let mut bot = connect(port, "Alex", false)?;
