@@ -447,7 +447,7 @@ impl<P: FluidPicker, F: PositionalRandom, B: AquiferBlockStates> NoiseBasedAquif
             let n = 3. + edge;
             if n > 0. { n / 3. } else { n / 10. }
         };
-        let barrier = if q < -2. || q > 2. {
+        let barrier = if pressure_outside_interval(q) {
             0.
         } else {
             if memo.is_nan() {
@@ -603,6 +603,35 @@ impl<P: FluidPicker, F: PositionalRandom, B: AquiferBlockStates> NoiseBasedAquif
         Ok(Some(candidate))
     }
 }
+/// Preserve ordered floating-point comparisons, including NaN (which lies
+/// neither below -2 nor above 2). Negating `RangeInclusive::contains` alone
+/// would incorrectly treat NaN as outside the interval.
+fn pressure_outside_interval(q: f64) -> bool {
+    !q.is_nan() && !(-2.0..=2.0).contains(&q)
+}
+
 fn similarity(a: i32, b: i32) -> f64 {
     1. - b.wrapping_sub(a) as f64 / 25.
+}
+
+#[cfg(test)]
+mod pressure_interval_tests {
+    use super::pressure_outside_interval;
+
+    #[test]
+    fn outside_range_preserves_ordered_float_boundary_and_nan_behavior() {
+        for (q, expected) in [
+            (f64::NAN, false),
+            (f64::NEG_INFINITY, true),
+            (-2.1, true),
+            (-2.0, false),
+            (-0.0, false),
+            (0.0, false),
+            (2.0, false),
+            (2.1, true),
+            (f64::INFINITY, true),
+        ] {
+            assert_eq!(pressure_outside_interval(q), expected, "q={q:?}");
+        }
+    }
 }

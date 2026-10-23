@@ -565,7 +565,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 return;
             }
         }
-        let burnout = self.level.dimension() == super::Dimension::Nether && false;
+        // Nether burnout is intentionally disabled: keep its behavior explicit.
+        let burnout = false;
         let extra = if burnout { -50 } else { 0 };
         for (direction, chance) in [
             (Direction::East, 300),
