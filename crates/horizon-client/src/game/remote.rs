@@ -3496,22 +3496,13 @@ impl Game<'_> {
             return;
         }
         let facts = self.res.facts().get(state).clone();
-        let held = self.held().cloned();
-        let mut speed = self.res.items().mining_speed(held.as_ref(), &facts.name);
-        if self.player.as_ref().is_some_and(|p| !p.ground.on_ground) {
-            speed /= 5.0;
-        }
-        let harvest = !facts.requires_tool
-            || self
-                .res
-                .items()
-                .correct_for_drops(held.as_ref(), &facts.name);
-        let progress = if facts.hardness < 0.0 {
-            0.0
-        } else if facts.hardness == 0.0 {
+        // The server's own getDestroyProgress: under water, off the ground,
+        // with haste, fatigue and efficiency, so the client stops digging
+        // when the server is done too (#1254).
+        let progress = if facts.hardness == 0.0 {
             1.0
         } else {
-            speed / facts.hardness / if harvest { 30.0 } else { 100.0 }
+            self.destroy_progress(hit.pos)
         };
         let same = self
             .remote

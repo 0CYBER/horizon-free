@@ -138,6 +138,10 @@ address. The script then checks, from both sides, what a guest's game used to ge
              get off by sneaking; the other side sees the animal move.
 - lightning: a bolt summoned beside the host, then the guest: both sides get the bolt and flash the
              sky (on its server thread the host's window is a client of it too).
+- drops:     an item lies where the host, then the guest, places a block: it comes out of the block
+             on the server, and both sides see it outside (#1252).
+- underwater: the host and the guest each dig dirt by hand standing under water: five times slower
+             than in the air on their own client as on the server, and it breaks (#1254).
 - worldspawn: the host moves the world spawn (`setworldspawn`): the host and the guest, with no bed,
              respawn there (#1310).
 - shield:    the host axes the guest's raised shield, then the guest the host's: it stays disabled
@@ -194,7 +198,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning', 'riding', 'mounts', 'worldspawn', 'shield', 'deathmining', 'contacts', 'absorption', 'breath', 'lava', 'levels']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning', 'riding', 'mounts', 'worldspawn', 'shield', 'deathmining', 'contacts', 'absorption', 'breath', 'lava', 'levels', 'drops', 'underwater']
 
 
 class Game:
@@ -2605,6 +2609,74 @@ def check_flight(host, guest, out):
     return seen
 
 
+def check_drops(host, guest, out):
+    """A dropped item lying where a block is then placed comes out of it (#1252): the server moves
+    it towards the closest open side (ItemEntity.tick's noPhysics, Entity.moveTowardsClosestSpace),
+    and both sides see it outside the block. The host places one, then the guest."""
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    seen = {}
+    for game, dz in ((host, -3), (guest, 3)):
+        x, y, z = hx + 3, hy, hz + dz
+        game('command', command=f'fill {x - 1} {y} {z - 1} {x + 1} {y + 2} {z + 1} minecraft:air')
+        game('command', command=f'summon minecraft:item {x + 0.5} {y} {z + 0.5} '
+                                '{Item:{id:"minecraft:diamond",count:1},PickupDelay:32767}')
+        game.wait(20)
+        game('command', command=f'setblock {x} {y} {z} minecraft:stone')
+        game.wait(60)
+        for viewer in (host, guest):
+            near = [e['pos'] for e in viewer.raw('entities', 24, 'minecraft:item')['entities']
+                    if abs(e['pos'][0] - x - 0.5) < 2 and abs(e['pos'][2] - z - 0.5) < 2]
+            seen[f'{game.name} places, {viewer.name} sees'] = ([x, y, z], near)
+        game.shot(out, 'drops')
+        host('command', command='kill @e[type=minecraft:item]')
+        host('command', command=f'setblock {x} {y} {z} minecraft:air')
+    for name, (block, near) in seen.items():
+        inside = [p for p in near if all(block[i] <= p[i] < block[i] + 1 for i in range(3))]
+        assert near and not inside, f'{name}: items {near} in block {block} (all: {seen})'
+    return seen
+
+
+def check_underwater(host, guest, out):
+    """Digging dirt by hand underwater, standing on the bottom of a pool: five times slower than in
+    the air (SUBMERGED_MINING_SPEED), on the player's own client as on the server. Halfway through
+    the client is about halfway (it doesn't break the block early, which the server would put
+    back), and the block breaks (#1254). The dirt is at eye height, the player's head under water.
+    The host, then the guest."""
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    seen = {}
+    for game, dz in ((host, -4), (guest, 4)):
+        x, y, z = hx + 3, hy, hz + dz
+        game('command', command='gamemode survival')
+        game('command', command='item replace entity @s weapon.mainhand with minecraft:air')
+        game('command', command=f'fill {x - 1} {y - 1} {z - 1} {x + 2} {y + 3} {z + 1} minecraft:stone')
+        game('command', command=f'fill {x} {y} {z} {x} {y + 2} {z} minecraft:water')
+        game('command', command=f'setblock {x + 1} {y + 1} {z} minecraft:dirt')
+        game('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+        game.wait(40)
+        game.raw('look-at', f'{x + 1.5:.2f}', f'{y + 1.5:.2f}', f'{z + 0.5:.2f}')
+        game.wait(5)
+        game.raw('mouse', 'left', 'down')
+        # Dirt by hand: 15 ticks in the air, 75 under water.
+        game.wait(35)
+        halfway = {'mining': game('state').get('mining'), 'client': game.raw('block', x + 1, y + 1, z).get('block'),
+                   'server': host.raw('block', x + 1, y + 1, z).get('block'), 'y': y + 1}
+        game.wait(70)
+        game.raw('mouse', 'left', 'up')
+        game.wait(10)
+        done = host.raw('block', x + 1, y + 1, z).get('block')
+        game.shot(out, 'underwater')
+        seen[game.name] = {'halfway': halfway, 'done': done}
+        host('command', command=f'fill {x - 1} {y - 1} {z - 1} {x + 2} {y + 3} {z + 1} minecraft:air')
+        host('command', command=f'fill {x - 1} {y - 1} {z - 1} {x + 2} {y - 1} {z + 1} minecraft:stone')
+    for name, s in seen.items():
+        h = s['halfway']
+        assert h['client'] == 'minecraft:dirt' == h['server'], f'{name} broke it early: {seen}'
+        assert h['mining'] and h['mining']['pos'][1] == h['y'] and 0.3 < h['mining']['progress'] < 0.7, f'{name} digs at the wrong speed: {seen}'
+        # Broken: air, or the pool's water flowing in.
+        assert s['done'] in ('minecraft:air', 'minecraft:water'), f'{name} never broke it: {seen}'
+    return seen
+
+
 
 
 
@@ -3672,35 +3744,32 @@ def check_worn(host, guest, out):
     return taken
 
 
-CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
-             'chest': check_chest, 'crafting': check_crafting, 'sign': check_sign, 'damage': check_damage,
-             'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
-             'respawn': check_respawn,
-             'containers': check_containers, 'feedback': check_feedback, 'titles': check_titles, 'chat': check_chat,
-             'machines': check_machines,
-             'brewing': check_brewing,
-             'loom': check_loom,
-             'stonecutter': check_stonecutter,
-             'grindstone': check_grindstone,
-             'anvil': check_anvil,
-             'smithing': check_smithing,
-             'enchanting': check_enchanting,
-             'beacon': check_beacon,
-             'crafter': check_crafter,
-             'lectern': check_lectern,
-             'cartography': check_cartography,
-             'hurt': check_hurt,
-             'commands': check_commands,
+CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
+             'nametags': check_nametags, 'chest': check_chest, 'crafting': check_crafting,
+             'sign': check_sign, 'damage': check_damage, 'mobs': check_mobs,
+             'hazards': check_hazards, 'pvp': check_pvp, 'respawn': check_respawn,
+             'containers': check_containers, 'feedback': check_feedback, 'titles': check_titles,
+             'chat': check_chat, 'machines': check_machines, 'brewing': check_brewing,
+             'loom': check_loom, 'stonecutter': check_stonecutter, 'grindstone': check_grindstone,
+             'anvil': check_anvil, 'smithing': check_smithing, 'enchanting': check_enchanting,
+             'beacon': check_beacon, 'crafter': check_crafter, 'lectern': check_lectern,
+             'cartography': check_cartography, 'hurt': check_hurt, 'commands': check_commands,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,
-             'effects': check_effects, 'portals': check_portals, 'distance': check_distance, 'clicks': check_clicks,
-             'sleep': check_sleep, 'push': check_push, 'eat': check_eat, 'eating': check_eating,
-             'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles, 'blast': check_blast,
-             'light': check_light, 'plates': check_plates,
-             'swings': check_swings, 'cracks': check_cracks,
-             'time': check_time, 'growth': check_growth, 'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect, 'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'arrows': check_arrows, 'predict': check_predict, 'ladder': check_ladder, 'boats': check_boats, 'minecarts': check_minecarts, 'frames': check_frames, 'lightning': check_lightning, 'riding': check_riding, 'mounts': check_mounts,
+             'effects': check_effects, 'portals': check_portals, 'distance': check_distance,
+             'clicks': check_clicks, 'sleep': check_sleep, 'push': check_push,
+             'eat': check_eat, 'eating': check_eating, 'xp': check_xp,
+             'objects': check_objects, 'projectiles': check_projectiles, 'blast': check_blast,
+             'light': check_light, 'plates': check_plates, 'swings': check_swings,
+             'cracks': check_cracks, 'time': check_time, 'growth': check_growth,
+             'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect,
+             'barter': check_barter, 'worn': check_worn, 'kills': check_kills,
+             'arrows': check_arrows, 'predict': check_predict, 'ladder': check_ladder,
+             'boats': check_boats, 'minecarts': check_minecarts, 'frames': check_frames,
+             'lightning': check_lightning, 'riding': check_riding, 'mounts': check_mounts,
              'worldspawn': check_world_spawn, 'shield': check_shield, 'deathmining': check_death_mining,
              'contacts': check_contacts, 'absorption': check_absorption, 'breath': check_breath,
-             'lava': check_lava, 'levels': check_levels}
+             'lava': check_lava, 'levels': check_levels, 'drops': check_drops,
+             'underwater': check_underwater}
 
 
 def run(ctl, out, resources, checks):
