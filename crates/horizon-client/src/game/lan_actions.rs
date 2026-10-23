@@ -30,6 +30,8 @@ use winit::keyboard::KeyCode;
 /// Per-guest state of the gameplay code that lives outside `Guest`.
 #[derive(Default)]
 pub(super) struct GuestPlay {
+    /// The sign this guest may write on (`SignBlockEntity.playerWhoMayEdit`).
+    pub(super) sign_editing: Option<[i32; 3]>,
     mining: Option<Mining>,
     destroy_delay: u32,
     using: Option<(usize, u32)>,
@@ -510,7 +512,8 @@ impl Game<'_> {
         std::mem::swap(&mut self.mount, &mut play.mount);
         self.container = container;
         self.screen = screen;
-        self.sign_edit = host_sign;
+        // A sign the guest's placement opened (SignBlock.openTextEdit).
+        let guest_sign = std::mem::replace(&mut self.sign_edit, host_sign);
         // A lectern the guest's use opened (LecternBlock.openScreen).
         let guest_lectern = match std::mem::replace(&mut self.book, host_book) {
             Some(super::books::BookScreen::View {
@@ -648,6 +651,9 @@ impl Game<'_> {
         }
         if let Some(station) = opened_station {
             self.lan_station_opened(host, conn, station);
+        }
+        if let Some(edit) = guest_sign {
+            self.lan_open_sign_editor(host, conn, edit);
         }
         if let Some(key) = guest_lectern {
             self.lan_open_lectern(host, conn, key);
@@ -1025,6 +1031,7 @@ impl Game<'_> {
                 self.lan_station_button(host, conn, p.container, p.button);
             }
             S::RenameItem(p) => self.lan_station_rename(host, conn, &p.name),
+            S::SignUpdate(p) => self.lan_sign_update(host, conn, p),
             S::ContainerSlotStateChanged(p) => {
                 self.lan_crafter_slot_state(host, conn, p.container, p.slot, p.enabled);
             }

@@ -179,6 +179,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - keepinv:   the host and the guest each die holding diamonds and wearing a helmet: with keep_inventory
              off both drop where they died and the player respawns without them; with it on nothing
              drops and the player keeps them (#1284).
+- signs:     the host and the guest each place an oak sign: the editor opens on their own screen
+             (ClientboundOpenSignEditorPacket), the two lines they write reach the server
+             (ServerboundSignUpdatePacket) and both sides show them (#1380).
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -4120,8 +4123,45 @@ def check_keep_inventory(host, guest, out):
     return seen
 
 
-CHECKS += ['totem', 'keepinv']
-CHECK_FNS.update(totem=check_totem, keepinv=check_keep_inventory)
+def check_signs(host, guest, out):
+    """SignBlock.openTextEdit on the placing player's client, for the host and the guest: placing
+    an oak sign opens its editor there and nowhere else, the lines typed into it go to the server
+    when it closes, and both sides then show them (#1380)."""
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    seen = {}
+    for game, other, dz in ((host, guest, -2), (guest, host, 2)):
+        spot = (hx + 2, hy, hz + dz)
+        game('command', command=f'setblock {spot[0]} {spot[1] - 1} {spot[2]} minecraft:stone')
+        game('command', command=f'setblock {spot[0]} {spot[1]} {spot[2]} minecraft:air')
+        game('command', command='gamemode survival')
+        game('command', command='clear @s')
+        game('command', command='give @s minecraft:oak_sign 1')
+        game.wait(10)
+        game.raw('place', *spot, '--item', 'minecraft:oak_sign')
+        game.wait(10)
+        opened = {g.name: g('state').get('screen') for g in (game, other)}
+        game.shot(out, 'signs-editor')
+        lines = [f'{game.name} wrote', 'line two']
+        game.raw('type', lines[0])
+        game.raw('key', 'enter', 'tap')
+        game.raw('type', lines[1])
+        game.raw('key', 'esc', 'tap')
+        game.wait(20)
+        back_to_game(other)
+        seen[game.name] = {'opened': opened,
+                           'shown': {g.name: (g.raw('block', *spot).get('sign') or {}).get('front')
+                                     for g in (game, other)}}
+        other.shot(out, 'signs-shown')
+    for name, s in seen.items():
+        other = 'guest' if name == 'host' else 'host'
+        want = [f'{name} wrote', 'line two', '', '']
+        assert s['opened'] == {name: 'sign', other: 'playing'}, f'{name}: {seen}'
+        assert s['shown'] == {name: want, other: want}, f'{name}: {seen}'
+    return seen
+
+
+CHECKS += ['totem', 'keepinv', 'signs']
+CHECK_FNS.update(totem=check_totem, keepinv=check_keep_inventory, signs=check_signs)
 
 
 if __name__ == '__main__':

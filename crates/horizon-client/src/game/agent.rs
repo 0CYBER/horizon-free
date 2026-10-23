@@ -335,6 +335,12 @@ impl Game<'_> {
             Some(Ticker::Shulker { .. }) => v["lid"] = json!(self.block_anim(pos, 1.0).shulker.0),
             _ => {}
         }
+        // The lines of a sign, as this client has them.
+        if let Some(horizon_client::containers::BlockEntity::Sign(sign)) =
+            self.world.block_entities.get(&(pos[0], pos[1], pos[2]))
+        {
+            v["sign"] = json!({ "front": sign.front.lines, "back": sign.back.lines });
+        }
         v
     }
     pub(super) fn stack_value(&self, s: &ItemStack) -> Value {
