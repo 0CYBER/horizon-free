@@ -239,6 +239,10 @@ fn run(control: &Control, setup: Setup) -> Result<PathBuf, String> {
 
     let status = control.status();
     let renderer = &status["renderer"];
+    // On Wayland the window is on a screen only once it has been shown: ask again.
+    if report.hardware.display.is_none() {
+        report.hardware.display = serde_json::from_value(status["display"].clone()).ok();
+    }
     let c = &mut report.conditions;
     c.scenario = Some(setup.scenario.clone());
     c.seed = Some(SEED.to_string());
