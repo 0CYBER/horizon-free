@@ -4,6 +4,7 @@
 mod art;
 mod blocks;
 mod cli;
+mod cli_tools;
 mod collection;
 mod cull;
 mod game_tools;
