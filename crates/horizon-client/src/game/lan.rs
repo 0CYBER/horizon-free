@@ -1243,7 +1243,7 @@ impl Game<'_> {
         };
         let atlas = &self.gui.atlas;
         let lookup = |name: &str| atlas.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
-        for m in host.models.values() {
+        for (conn, m) in &host.models {
             let entity_start = out.len();
             let light = self.world.light(
                 m.position.x.floor() as i32,
@@ -1258,7 +1258,10 @@ impl Game<'_> {
                 &lookup,
                 packed,
                 self.res.mob_data(),
-                &self.worn_armor_layers(m),
+                &host.hub.guest(*conn).map_or_else(
+                    || self.worn_armor_layers(m),
+                    |g| self.stack_armor_layers(&g.armor),
+                ),
                 out,
             );
             self.held_item_geometry(m, camera, alpha, packed, true, out);

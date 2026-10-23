@@ -1397,6 +1397,8 @@ struct Game<'a> {
     /// (least recently shown first).
     skin_downloads: RefCell<horizon_client::skins::Downloader>,
     skin_slots: Vec<(String, usize)>,
+    /// Atlas trim slots in use: (sprite name, slot), least recently drawn first.
+    trim_slots: Vec<(String, usize)>,
     cart_models: minecarts::CartModels,
     /// The boat the player rides.
     riding: Option<u32>,
@@ -6476,6 +6478,7 @@ impl Game<'_> {
         mut out: Vec<Vertex>,
     ) -> Vec<Vertex> {
         self.prepare_entity_culling(camera);
+        self.prepare_trims();
         let fire_yaw = if self.camera_type == perspective::CameraType::ThirdPersonFront {
             self.yaw + 180.0
         } else {
@@ -11648,6 +11651,7 @@ impl<'a> Game<'a> {
                     .join("assets/skins"),
             )),
             skin_slots: Vec::new(),
+            trim_slots: Vec::new(),
             cart_models: prepared.cart_models,
             riding: None,
             ender_items: vec![None; 27],

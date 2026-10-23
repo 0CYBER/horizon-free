@@ -40,6 +40,9 @@ pub const MINIMAP_SPRITE: &str = "horizon/minimap";
 pub const SKIN_SLOTS: usize = 32;
 /// Reused by the visible rows of the classic world selector.
 pub const WORLD_ICON_SLOTS: usize = 32;
+/// Atlas slots for armour trim textures made at run time (`trims`), each the
+/// size of the largest trim texture.
+pub const TRIM_SLOTS: usize = 32;
 pub fn decode(path: &Path) -> Result<(u32, u32, Vec<u8>)> {
     decode_bytes(&fs::read(path)?)
 }
@@ -180,7 +183,7 @@ impl HudAtlas {
     }
     /// Empty slots written at run time: map textures (game/maps.rs), the
     /// minimap, downloaded skins, world icons and the on-screen keyboard's text.
-    fn slots(images: &mut Vec<PackedImage>) {
+    fn slots(images: &mut Vec<PackedImage>, trim: (u32, u32)) {
         for i in 0..MAP_SLOTS {
             images.push((format!("horizon/map{i}"), 128, 128, vec![0; 128 * 128 * 4]));
         }
@@ -194,6 +197,14 @@ impl HudAtlas {
         // Downloaded skins (game/scoreboard.rs).
         for i in 0..SKIN_SLOTS {
             images.push((format!("horizon/skin{i}"), 64, 64, vec![0; 64 * 64 * 4]));
+        }
+        for i in 0..TRIM_SLOTS {
+            images.push((
+                format!("horizon/trim{i}"),
+                trim.0,
+                trim.1,
+                vec![0; (trim.0 * trim.1 * 4) as usize],
+            ));
         }
         for i in 0..WORLD_ICON_SLOTS {
             images.push((
@@ -277,7 +288,7 @@ impl HudAtlas {
         }
         images.push(("horizon/white".into(), 4, 4, vec![255; 64]));
         if full {
-            Self::slots(&mut images);
+            Self::slots(&mut images, crate::trims::slot_size(root));
         }
         images.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
         let width = 4096u32;
