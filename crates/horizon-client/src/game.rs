@@ -1989,6 +1989,28 @@ impl Game<'_> {
         particle.scale(0.6);
         self.particles.push(particle);
     }
+    /// `Player.dropEquipment` for the player who died: unless keep_inventory
+    /// is on, `destroyVanishingCursedItems`, then `Inventory.dropAll` from
+    /// `at` (the eyes less 0.3): slots 0..36, armor feet to head (36..39),
+    /// the off hand (40), each thrown in a random direction.
+    fn drop_inventory(&mut self, at: [f64; 3]) {
+        if self.ui.rules.bool("keep_inventory") {
+            return;
+        }
+        let mut stacks: Vec<ItemStack> =
+            self.inventory.iter_mut().filter_map(Option::take).collect();
+        stacks.extend(self.armor.iter_mut().rev().filter_map(Option::take));
+        stacks.extend(self.offhand.take());
+        stacks.retain(|s| s.enchantment_level("minecraft:vanishing_curse") == 0);
+        self.apply_equipment();
+        for stack in stacks {
+            let r = &mut self.world.random;
+            let strength = f64::from(r.next_float()) * 0.5;
+            let angle = f64::from(r.next_float()) * std::f64::consts::TAU;
+            let v = [-angle.sin() * strength, 0.2, angle.cos() * strength];
+            self.spawn_item(stack, at, v, 40);
+        }
+    }
     fn spawn_item(
         &mut self,
         stack: ItemStack,
@@ -4278,20 +4300,8 @@ impl Game<'_> {
                 .experience
                 .death_reward(self.ui.rules.bool("keep_inventory") || self.spectator());
             self.spawn_orbs(feet, reward);
-            if !self.creative && !self.ui.rules.bool("keep_inventory") {
-                // Inventory.dropAll: slots 0..36, armor feet to head (36..39), off hand (40).
-                let mut stacks: Vec<ItemStack> =
-                    self.inventory.iter_mut().filter_map(Option::take).collect();
-                stacks.extend(self.armor.iter_mut().rev().filter_map(Option::take));
-                stacks.extend(self.offhand.take());
-                self.apply_equipment();
-                for stack in stacks {
-                    let r = &mut self.world.random;
-                    let strength = f64::from(r.next_float()) * 0.5;
-                    let angle = f64::from(r.next_float()) * std::f64::consts::TAU;
-                    let v = [-angle.sin() * strength, 0.2, angle.cos() * strength];
-                    self.spawn_item(stack, at, v, 40);
-                }
+            if !self.spectator() {
+                self.drop_inventory(at);
             }
             self.audio
                 .play("minecraft:entity.player.death", Some(at), 1.0, 1.0);
