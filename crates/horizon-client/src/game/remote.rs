@@ -164,6 +164,8 @@ pub(super) struct Remote {
     level_players: HashMap<i32, u128>,
     /// The local player's profile UUID (always in the level).
     profile: u128,
+    /// The local player's profile name: its score holder and team member.
+    pub(super) profile_name: String,
     destroying: Option<([i32; 3], u8, f32)>,
     destroy_delay: u32,
     input: horizon_client::interaction_input::InteractionInput,
@@ -411,6 +413,7 @@ impl Game<'_> {
             online_mode: false,
             level_players: HashMap::new(),
             profile: 0,
+            profile_name: String::new(),
             destroying: None,
             destroy_delay: 0,
             input: Default::default(),
@@ -795,6 +798,7 @@ impl Game<'_> {
                     if let Some(r) = self.remote.as_mut() {
                         r.joined = true;
                         r.profile = uuid;
+                        r.profile_name = name.clone();
                         r.status = format!("Joined as {name}; loading terrain...");
                     }
                 }

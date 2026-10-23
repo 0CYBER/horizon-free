@@ -20,6 +20,7 @@ pub mod hub;
 pub mod menu;
 pub mod playerdata;
 mod recipes;
+pub mod scoreboard;
 pub mod tracking;
 pub mod waypoints;
 

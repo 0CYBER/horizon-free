@@ -215,6 +215,8 @@ pub struct Guest {
     pub advancements_loaded: bool,
     pub advancements_visible: Vec<bool>,
     pub advancements_changed: std::collections::BTreeSet<usize>,
+    /// The server's scoreboard as this player's client has it (lan/scoreboard.rs).
+    pub scoreboard: super::scoreboard::View,
     /// Recipes unlocked since the client was last told
     /// (`ServerRecipeBook.addRecipes` sends them).
     pub recipes_unlocked: Vec<String>,
@@ -326,6 +328,7 @@ impl Guest {
             advancements_loaded: false,
             advancements_visible: Vec::new(),
             advancements_changed: Default::default(),
+            scoreboard: Default::default(),
             recipes_unlocked: Vec::new(),
         }
     }
