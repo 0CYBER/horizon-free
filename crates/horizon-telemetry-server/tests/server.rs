@@ -157,6 +157,45 @@ async fn totals_show_only_groups_with_enough_installs() {
     );
 }
 
+/// Sessions split by hardware class; a class shows only with three installs, and never a raw value.
+#[tokio::test]
+async fn totals_break_down_by_hardware_class() {
+    let s = server(Config {
+        min_install_days: 1,
+        ..generous()
+    });
+    for n in 0..4 {
+        let mut item = perf("NVIDIA GeForce RTX 4080", 12);
+        if let Payload::Perf(p) = &mut item.payload {
+            p.system.ram_gb = if n == 3 { 16 } else { 31 };
+            p.system.vram_mb = 16376;
+            p.system.gpu_kind = "discrete".into();
+            p.system.storage = if n == 3 { "hdd" } else { "nvme" }.into();
+        }
+        assert_eq!(
+            s.post(&install(n), vec![item]).await,
+            StatusCode::NO_CONTENT
+        );
+    }
+    let totals = s.aggregate().await;
+    let b = &totals["breakdowns"];
+    assert_eq!(
+        b["ram"],
+        serde_json::json!([{"class": "32 GB", "installs": 3, "sessions": 3, "hours": 1.5, "p50_ms": b["ram"][0]["p50_ms"], "p99_ms": b["ram"][0]["p99_ms"]}]),
+        "16 GB has one install: {totals}"
+    );
+    assert!(b["ram"][0]["p50_ms"].as_f64().unwrap() > 8.0);
+    assert_eq!(b["vram"][0]["class"], "16 GB");
+    assert_eq!(b["vram"][0]["installs"], 4);
+    assert_eq!(b["storage"].as_array().unwrap().len(), 1);
+    assert_eq!(b["os"][0]["class"], "linux");
+    assert_eq!(b["gpu_kind"][0]["class"], "discrete");
+    let text = totals.to_string();
+    for raw in ["16376", "570.86", "Fedora", "hdd", &install(0)] {
+        assert!(!text.contains(raw), "{raw} in {text}");
+    }
+}
+
 #[tokio::test]
 async fn bad_batches_are_refused() {
     let s = server(generous());

@@ -20,7 +20,7 @@ kilobytes whatever the frame rate. Measured numbers are rounded to 3 decimals.
   "app": { "name": "horizon-client", "version": "0.21.0", "commit": "e96e1571" },
   "hardware": {
     "os": "macos", "os_version": "27.0", "arch": "aarch64",
-    "cpu": "Apple M4 Pro", "cpu_threads": 14, "ram_mb": 65536,
+    "cpu": "Apple M4 Pro", "cpu_threads": 14, "cpu_cores": 14, "ram_mb": 65536, "storage": "nvme", "form": "desktop",
     "gpu": { "name": "Apple M4 Pro", "vendor": "apple", "driver": "", "backend": "metal", "kind": "integrated" },
     "display": { "width": 2560, "height": 1440, "scale": 2.0, "refresh_hz": 60 }
   },
@@ -58,9 +58,12 @@ one (histogram edges included) makes it 2.
 optionally `commit` (Horizon builds) and `mods` (`[{ "name", "version" }]`, vanilla with mods).
 
 **`hardware`.** `os` (`macos`, `linux`, `windows`), `os_version`, `arch`, `cpu` (brand string),
-`cpu_threads`, `ram_mb`; `gpu` (`name`, `vendor`, `driver`, `backend`: `metal`, `vulkan`, `dx12`, `gl`;
-`kind`: `integrated`, `discrete`, `virtual`, `cpu`, `other`) and `display` (the screen the window was on:
-`width`, `height` in physical pixels, `scale`, `refresh_hz`) when known. Any field can be missing.
+`cpu_threads`, `cpu_cores` (physical), `cpu_base_mhz` and `cpu_boost_mhz` (where the OS gives them; not on
+Apple silicon), `ram_mb`, `storage` (the drive under the game folder: `nvme`, `ssd`, `hdd`), `form` (`laptop`,
+`desktop`); `gpu` (`name`, `vendor`, `driver`, `backend`: `metal`, `vulkan`, `dx12`, `gl`;
+`kind`: `integrated`, `discrete`, `virtual`, `cpu`, `other`; `vram_mb`, a discrete GPU's own memory) and
+`display` (the screen the window was on: `width`, `height` in physical pixels, `scale`, `refresh_hz`) when
+known. Any field can be missing. On mains or battery is `conditions.power`.
 
 **`conditions`.** What has to match for two reports to be compared, all optional: `scenario`, `seed`,
 `render_distance`, `simulation_distance`, `window` (`[width, height]` actually rendered), `vsync`,

@@ -62,3 +62,40 @@ test("a release title of issue numbers falls back to its notes", async () => {
   assert.equal(parts(r).line, "Single player runs in the frame again and 1 more");
   assert.equal(parts({ ...r, name: "Horizon 2026.10.22.05: Hoppers, mob tick, server tick" }).line, "Hoppers, mob tick, server tick");
 });
+
+test("players' memory classes steer the base and the notes", async () => {
+  const { memoryNotes } = await import("./estimate.js");
+  const { ramClass, vramClass } = await import("./hardware.js");
+  assert.equal(vramClass(findGpu("NVIDIA GeForce RTX 4080")), "16 GB");
+  assert.equal(vramClass(findGpu("NVIDIA GeForce RTX 3080")), "12 GB");
+  assert.equal(vramClass(findGpu("Apple M4 Pro")), "shared");
+  assert.equal(ramClass(16), "16 GB");
+  // Two equally near groups: the one whose players have the picked GPU's memory class wins.
+  const players = (vram, ram, fps) =>
+    row("NVIDIA GeForce RTX 4070", "AMD Ryzen 5 7600X", { avg_fps: fps, rss_peak_mb: 3600 }, { source: "players", installs: 3, breakdowns: { vram: [{ class: vram, installs: 3 }], ram: [{ class: ram, installs: 3 }] } });
+  const a = players("8 GB", "16 GB", 400);
+  const b = { ...players("12 GB", "32 GB", 500), cpu: "AMD Ryzen 7 7800X3D" };
+  const gpu = findGpu("NVIDIA GeForce RTX 4070 Ti");
+  const cpu = findCpu("AMD Ryzen 5 7600X");
+  assert.equal(nearest([a, b], gpu, cpu, 12, "horizon").row, b, "12 GB like the 4070 Ti, though the CPU differs");
+  assert.equal(nearest([a, b], gpu, cpu, 12, "horizon", { ramGb: 16 }).row, a, "both classes count");
+  assert.deepEqual(memoryNotes(b, gpu, 32), []);
+  const notes = memoryNotes(a, gpu, 8);
+  assert.equal(notes.length, 3);
+  assert.match(notes[0], /8 GB \(3\) of their own memory; this one has 12 GB/);
+  assert.match(notes[1], /16 GB \(3\) of memory, not 8 GB/);
+  assert.match(notes[2], /Horizon used up to 3\.5 GB/);
+  // Our own rows have no breakdowns: only the peak memory note.
+  assert.deepEqual(memoryNotes(mac, gpu, 32), []);
+  assert.equal(estimate([a], gpu, cpu, 12, "horizon", { ramGb: 8 }).notes.length, 3);
+});
+
+test("breakdowns read as words, and the hardware table shows only with data", async () => {
+  const { breakdownLine, hardwareHtml } = await import("./bench.js");
+  assert.equal(breakdownLine({ ram: [{ class: "32 GB", installs: 3 }], storage: [{ class: "nvme", installs: 4 }], gpu_kind: [{ class: "discrete", installs: 3 }] }), "32 GB RAM (3) · NVMe (4) · separate GPU (3)");
+  assert.equal(breakdownLine(undefined), "");
+  assert.equal(hardwareHtml({ breakdowns: {} }), "");
+  const html = hardwareHtml({ breakdowns: { os: [{ class: "linux", installs: 5, sessions: 9, hours: 4.5, p50_ms: 6.2, p99_ms: 14 }] } });
+  assert.match(html, /Linux/);
+  assert.match(html, /6\.2 ms/);
+});

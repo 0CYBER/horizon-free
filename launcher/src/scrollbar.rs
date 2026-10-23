@@ -49,7 +49,7 @@ impl Scrollbar {
     /// Wrap the scroll container, reserving a narrow gutter so the bar never covers controls.
     pub fn wrap(&self, content: Stateful<Div>, theme: &Theme) -> Div {
         let state = self.clone();
-        let track_color = theme.rule;
+        let track_color = theme.well;
         let thumb_color = theme.muted;
         div()
             .relative()
@@ -83,17 +83,14 @@ impl Scrollbar {
                             return;
                         };
                         let hitbox = hitbox.unwrap();
-                        window.paint_quad(fill(bounds, track_color).corner_radii(px(3.)));
-                        window.paint_quad(
-                            fill(
-                                Bounds::new(
-                                    point(bounds.left() + px(3.), bounds.top() + px(g.top)),
-                                    size(bounds.size.width - px(6.), px(g.thumb)),
-                                ),
-                                thumb_color,
-                            )
-                            .corner_radii(px(3.)),
-                        );
+                        window.paint_quad(fill(bounds, track_color));
+                        window.paint_quad(fill(
+                            Bounds::new(
+                                point(bounds.left() + px(3.), bounds.top() + px(g.top)),
+                                size(bounds.size.width - px(6.), px(g.thumb)),
+                            ),
+                            thumb_color,
+                        ));
                         window.on_mouse_event({
                             let state = state.clone();
                             move |ev: &MouseDownEvent, phase, window, cx| {

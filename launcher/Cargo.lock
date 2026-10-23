@@ -2633,6 +2633,7 @@ dependencies = [
 name = "horizon-bench"
 version = "0.1.0"
 dependencies = [
+ "horizon-telemetry",
  "serde",
  "serde_json",
 ]
@@ -2661,7 +2662,7 @@ dependencies = [
 
 [[package]]
 name = "horizon-launcher"
-version = "0.1.5"
+version = "0.2.0"
 dependencies = [
  "clap",
  "dirs 5.0.1",

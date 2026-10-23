@@ -111,6 +111,8 @@ struct World<'a> {
     slime: f32,
     starts: Vec<Start>,
     players: Vec<([f64; 3], String)>,
+    /// Where the non-spectators among them are.
+    nearest: Vec<[f64; 3]>,
     respawn: Option<[i32; 3]>,
     unloaded: HashSet<(i32, i32)>,
     spawn_mobs: bool,
@@ -302,19 +304,8 @@ impl NaturalLevel for World<'_> {
     fn structure_spawns(&self) -> &StructureSpawns {
         self.s.structures
     }
-    fn nearest_player_distance_sqr(&self, x: f64, y: f64, z: f64) -> Option<f64> {
-        let mut best: Option<f64> = None;
-        for (p, mode) in &self.players {
-            if mode == "spectator" {
-                continue;
-            }
-            let d = [p[0] - x, p[1] - y, p[2] - z];
-            let d = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
-            if best.is_none_or(|b| d < b) {
-                best = Some(d);
-            }
-        }
-        best
+    fn nearest_player_positions(&self) -> &[[f64; 3]] {
+        &self.nearest
     }
     fn respawn(&self) -> Option<[i32; 3]> {
         self.respawn
@@ -730,6 +721,11 @@ fn main() -> horizon_client::Result<()> {
             dimension_id: dimension_id.clone(),
             slime: get("slime", "0.0").parse()?,
             starts,
+            nearest: players
+                .iter()
+                .filter(|(_, mode)| mode != "spectator")
+                .map(|(p, _)| *p)
+                .collect(),
             players,
             respawn,
             unloaded,

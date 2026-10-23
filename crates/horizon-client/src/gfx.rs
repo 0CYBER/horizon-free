@@ -60,6 +60,7 @@ pub fn outline_vertices(edges: &[[f64; 6]], camera: glam::DVec3) -> Vec<[f32; 6]
         .collect()
 }
 
+mod animate;
 mod arena;
 mod cull;
 mod end_sky;
@@ -69,6 +70,7 @@ pub mod lightning;
 mod lod;
 mod occlusion;
 mod pack_stages;
+mod page_runs;
 pub mod panorama;
 mod resident;
 mod stars;
@@ -374,8 +376,6 @@ pub struct Renderer {
     sprite_textures: Vec<wgpu::Texture>,
     /// A 1-layer array bound where a pack needs fewer arrays.
     sprite_unused: wgpu::TextureView,
-    /// Layers per sprite array ([`SPRITE_SPLIT`] but in tests).
-    sprite_split: u32,
     mip_levels: u32,
     /// The mipmap levels sampled (the Mipmap Levels option), at most `mip_levels - 1`.
     mipmaps: u32,
@@ -383,7 +383,7 @@ pub struct Renderer {
     sprite_sampler: wgpu::Sampler,
     lightmap_view: wgpu::TextureView,
     lightmap_sampler: wgpu::Sampler,
-    animations: AnimatedSprites,
+    animations: animate::SpriteAnimator,
     uploads: upload::Uploads,
     /// Section meshes are staged through their own belt into
     /// `section_copies`, which the next frame records its commands after:
@@ -437,6 +437,9 @@ pub struct Renderer {
     /// built, and their pages.
     phase2_draws: Vec<[u32; 5]>,
     phase2_pages: Vec<(u32, Option<u32>)>,
+    /// Each section's solid draws, to group them by arena page.
+    solid_runs: page_runs::PageRuns,
+    phase2_runs: page_runs::PageRuns,
     /// Block-entity blocks per meshed section (world position, state id).
     block_entities: HashMap<SectionKey, Vec<([i32; 3], u32)>>,
     /// Changes whenever `block_entities` does (unique across renderers).
@@ -694,13 +697,15 @@ fn describe_adapter(adapter: &wgpu::Adapter) {
         info.backend,
         info.device_type
     );
-    crate::telemetry::set_gpu(
-        &info.name,
-        format!("{} {}", info.driver, info.driver_info)
+    crate::telemetry::set_gpu(crate::telemetry::Gpu {
+        name: info.name.clone(),
+        vendor: horizon_telemetry::system::gpu_vendor(&info.name, info.vendor).to_owned(),
+        kind: crate::telemetry::gpu_kind(&format!("{:?}", info.device_type)).to_owned(),
+        driver: format!("{} {}", info.driver, info.driver_info)
             .trim()
             .to_owned(),
-        format!("{:?}", info.backend),
-    );
+        backend: format!("{:?}", info.backend),
+    });
     crate::crash::set_detail(
         "Graphics Adapter",
         format!(
@@ -864,6 +869,13 @@ impl Renderer {
     pub fn resident_sections(&self) -> usize {
         self.sections.len()
     }
+    /// Quads of the far terrain tiles with GPU buffers.
+    pub fn lod_quads(&self) -> u64 {
+        self.lods
+            .values()
+            .map(|tile| u64::from(tile.mesh.solid + tile.mesh.translucent))
+            .sum()
+    }
     /// Bytes of the section vertex arena's buffers, and of the vertices
     /// resident sections hold in them.
     pub fn section_vertex_bytes(&self) -> [u64; 2] {
@@ -930,6 +942,7 @@ impl Renderer {
             None => open_device(&window, offscreen, api, layers).await?,
         };
         let info = adapter.get_info();
+        crate::graphics::suggest_reduced_far_detail(crate::graphics::lod_capped(&info));
         let size = window.inner_size();
         let (config, present_modes) = if let Some(surface) = &surface {
             let mut config = surface
@@ -1283,7 +1296,9 @@ impl Renderer {
                         sample_count: 1,
                         dimension: wgpu::TextureDimension::D2,
                         format: wgpu::TextureFormat::Rgba8Unorm,
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING
+                            | wgpu::TextureUsages::COPY_DST
+                            | wgpu::TextureUsages::STORAGE_BINDING,
                         view_formats: &[],
                     },
                     wgpu::util::TextureDataOrder::LayerMajor,
@@ -1291,6 +1306,14 @@ impl Renderer {
                 )
             })
             .collect();
+        let animations = animate::SpriteAnimator::new(
+            &device,
+            animations,
+            sprite_size,
+            sprite_mips,
+            &sprite_textures,
+            split,
+        );
         let sprite_unused = device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("Block sprites (unused)"),
@@ -2171,14 +2194,13 @@ impl Renderer {
             lightmap,
             sprite_textures,
             sprite_unused,
-            sprite_split: split,
             mip_levels,
             mipmaps: mip_levels - 1,
             terrain_layout: bindings,
             sprite_sampler,
             lightmap_view,
             lightmap_sampler,
-            animations: AnimatedSprites::new(animations, sprite_size, sprite_mips),
+            animations,
             uploads,
             section_uploads,
             section_copies: None,
@@ -2213,6 +2235,8 @@ impl Renderer {
             draw_pages: Vec::new(),
             phase2_draws: Vec::new(),
             phase2_pages: Vec::new(),
+            solid_runs: page_runs::PageRuns::default(),
+            phase2_runs: page_runs::PageRuns::default(),
             block_entities: HashMap::new(),
             block_entity_revision: next_block_entity_revision(),
             occlusion: occlusion::Occlusion::new(crate::chunk::MIN_Y, crate::chunk::HEIGHT / 16),
@@ -2770,29 +2794,7 @@ impl Renderer {
         self.lightmap_uploaded = true;
     }
     fn animate(&mut self, encoder: &mut wgpu::CommandEncoder, tick: u64) {
-        animate_sprites(
-            &mut self.animations,
-            tick,
-            self.mip_levels,
-            |layer, level, size, pixels| {
-                self.uploads.texture(
-                    encoder,
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &self.sprite_textures[(layer / self.sprite_split) as usize],
-                        mip_level: level,
-                        origin: wgpu::Origin3d {
-                            x: 0,
-                            y: 0,
-                            z: layer % self.sprite_split,
-                        },
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    size,
-                    size,
-                    pixels,
-                );
-            },
-        );
+        self.animations.animate(encoder, &mut self.uploads, tick);
     }
     pub fn render(&mut self, frame: &Frame) -> Result<bool> {
         let rendered = self.draw_frame(frame);
@@ -3091,6 +3093,8 @@ impl Renderer {
             .and_then(|cull| cull.begin(&self.device).then_some(cull));
         self.phase2_draws.clear();
         self.phase2_pages.clear();
+        self.solid_runs.clear();
+        self.phase2_runs.clear();
         for (i, v) in visible.iter().enumerate() {
             let s = self.sections.get(v.slot);
             let first_phase = cull.as_ref().is_none_or(|c| c.first(v.slot));
@@ -3109,22 +3113,53 @@ impl Renderer {
                 pages.push((s.page, None));
                 indices += quads * 6;
             });
-            match &mut cull {
-                Some(c) if first_phase => c.drawn(i, v.slot, indices),
-                Some(c) => c.deferred(i, v.slot, start, draws.len() - start, indices),
-                None => {}
+            let runs = if first_phase {
+                &mut self.solid_runs
+            } else {
+                &mut self.phase2_runs
+            };
+            runs.push(
+                v.distance,
+                s.page,
+                start,
+                draws.len() - start,
+                [i as u32, v.slot, indices],
+            );
+            if let Some(c) = &mut cull
+                && first_phase
+            {
+                c.drawn(i, v.slot, indices);
+            }
+        }
+        self.solid_runs
+            .regroup(&mut self.draws, &mut self.draw_pages, 0);
+        // Phase 2's draws are tested where grouping left them.
+        let runs = self
+            .phase2_runs
+            .regroup(&mut self.phase2_draws, &mut self.phase2_pages, 0);
+        if let Some(c) = &mut cull {
+            for r in runs {
+                let [i, slot, indices] = r.tag;
+                c.deferred(i as usize, slot, r.start as usize, r.len as usize, indices);
             }
         }
         // Distant terrain tiles are never occlusion tested: phase 1.
+        let tiles = self.draws.len();
+        self.solid_runs.clear();
         for (i, v) in visible_lods.iter().enumerate() {
             let s = &self.lods[&v.key].mesh;
+            let start = self.draws.len();
             s.faces.ranges(eye - Vec3::from(v.origin), |first, quads| {
                 let first = s.start + u64::from(first) * 4;
                 self.draws
                     .push([quads * 6, 1, 0, first as u32, (visible.len() + i) as u32]);
                 self.draw_pages.push((s.page, None));
             });
+            self.solid_runs
+                .push(v.distance, s.page, start, self.draws.len() - start, [0; 3]);
         }
+        self.solid_runs
+            .regroup(&mut self.draws, &mut self.draw_pages, tiles);
         let phase1_draws = self.draws.len() as u32;
         self.draws.extend_from_slice(&self.phase2_draws);
         self.draw_pages.extend_from_slice(&self.phase2_pages);
@@ -4127,6 +4162,20 @@ impl Frustum {
             p.truncate().dot(v) + p.w < 0.0
         })
     }
+    /// Whether the camera-relative box `min..max` is entirely inside. Then
+    /// `intersects` accepts every box within it: each plane's distance only
+    /// grows from this box's nearest corner to the inner box's farthest, and
+    /// rounding keeps that order.
+    pub fn contains(&self, min: Vec3, max: Vec3) -> bool {
+        self.planes.iter().all(|p| {
+            let v = Vec3::new(
+                if p.x >= 0.0 { min.x } else { max.x },
+                if p.y >= 0.0 { min.y } else { max.y },
+                if p.z >= 0.0 { min.z } else { max.z },
+            );
+            p.truncate().dot(v) + p.w >= 0.0
+        })
+    }
 }
 /// Vanilla's `Projection`: reversed depth (near maps to 1, far to 0, tests
 /// are GREATER_THAN_OR_EQUAL), which keeps far faces a hair apart, like
@@ -4495,170 +4544,9 @@ pub(crate) fn sprite_mipmap_limit(requested: u32, size: u32, minimum: u32, avail
     let upscale = (size / minimum.max(1)).max(1).ilog2();
     requested.saturating_add(upscale).min(available - 1)
 }
-/// Room for every frame of the vanilla animations (594 frames, 13 MB of mip
-/// chains in 64-pixel layers), so no frame's chain is rebuilt on the render
-/// thread when its animation comes back to it; larger packs stay bounded.
-const ANIMATION_MIP_BUDGET: usize = 32 << 20;
-const ANIMATION_MIP_ENTRIES: usize = 4096;
-
-/// One immutable resource snapshot and its lazily generated frame mips. A new
-/// renderer on resource reload drops this entire snapshot, including its cache:
-/// frame indices can never alias another resource's pixels, size or settings.
-struct AnimatedSprites {
-    /// Each animated sprite and what its layer holds (`None`: not uploaded yet).
-    animations: Vec<(SpriteAnimation, Option<crate::sprites::FrameBlend>)>,
-    size: u32,
-    settings: Vec<crate::mipmap::Settings>,
-    // Cache bookkeeping must not consume randomness or affect other maps' seeding.
-    cache: crate::fast_hash::FxHashMap<(usize, usize), Vec<u8>>,
-    /// Retained pixel-buffer capacities, not just their initialized lengths.
-    cache_bytes: usize,
-    budget: usize,
-}
-impl AnimatedSprites {
-    fn new(
-        animations: &[SpriteAnimation],
-        size: u32,
-        settings: &[crate::mipmap::Settings],
-    ) -> Self {
-        Self {
-            animations: animations.iter().cloned().map(|a| (a, None)).collect(),
-            size,
-            settings: settings.to_vec(),
-            cache: Default::default(),
-            cache_bytes: 0,
-            budget: ANIMATION_MIP_BUDGET,
-        }
-    }
-}
-fn animate_sprites(
-    state: &mut AnimatedSprites,
-    tick: u64,
-    max_levels: u32,
-    mut write: impl FnMut(u32, u32, u32, &[u8]),
-) {
-    let size = state.size;
-    let levels = size.trailing_zeros() + 1;
-    let AnimatedSprites {
-        animations,
-        settings,
-        cache,
-        cache_bytes,
-        budget,
-        ..
-    } = state;
-    for (index, (animation, previous)) in animations.iter_mut().enumerate() {
-        let blend = animation.blend(tick);
-        if *previous == Some(blend) {
-            continue;
-        }
-        *previous = Some(blend);
-        let (animation, settings) = (&*animation, &**settings);
-        let chain = |frame: usize| {
-            move || mip_chain(animation.pixels(frame), size, settings, animation.layer, 1).0
-        };
-        let (current, mixed);
-        let mips: &[u8] = if blend.millis > 0 {
-            let mut mix = frame_mips(
-                cache,
-                cache_bytes,
-                *budget,
-                (index, blend.frame),
-                chain(blend.frame),
-            )
-            .into_owned();
-            let next = frame_mips(
-                cache,
-                cache_bytes,
-                *budget,
-                (index, blend.next),
-                chain(blend.next),
-            );
-            mix_frames(&mut mix, &next, blend.millis);
-            mixed = mix;
-            &mixed
-        } else {
-            current = frame_mips(
-                cache,
-                cache_bytes,
-                *budget,
-                (index, blend.frame),
-                chain(blend.frame),
-            );
-            &current
-        };
-        let mut offset = 0;
-        for level in 0..levels.min(max_levels) {
-            let edge = size >> level;
-            let bytes = (edge * edge * 4) as usize;
-            write(animation.layer, level, edge, &mips[offset..offset + bytes]);
-            offset += bytes;
-        }
-    }
-}
-/// `animate_sprite_interpolate.fsh`: `mix(current, next, millis / 1000)` per
-/// channel of every mipmap level, stored as 8-bit unorm.
-/// One frame's mip chain: from the cache, or generated and kept while the budget has room.
-/// Frames that do not fit still go through the same generation path.
-fn frame_mips<'a>(
-    cache: &'a mut crate::fast_hash::FxHashMap<(usize, usize), Vec<u8>>,
-    cache_bytes: &mut usize,
-    budget: usize,
-    key: (usize, usize),
-    generate: impl FnOnce() -> Vec<u8>,
-) -> std::borrow::Cow<'a, [u8]> {
-    let room = cache.len() < ANIMATION_MIP_ENTRIES;
-    match cache.entry(key) {
-        std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut().as_slice().into(),
-        std::collections::hash_map::Entry::Vacant(entry) => {
-            let pixels = generate();
-            // Bound both pixel storage and map metadata. Keep admitted frames
-            // rather than churning them on large/unique workloads.
-            if room && pixels.capacity() <= budget - *cache_bytes {
-                *cache_bytes += pixels.capacity();
-                entry.insert(pixels).as_slice().into()
-            } else {
-                pixels.into()
-            }
-        }
-    }
-}
-fn mix_frames(current: &mut [u8], next: &[u8], millis: u32) {
-    let t = millis as f32 / 1000.0;
-    for (c, n) in current.iter_mut().zip(next) {
-        let (a, b) = (f32::from(*c) / 255.0, f32::from(*n) / 255.0);
-        *c = round_unorm8((a * (1.0 - t) + b * t) * 255.0);
-    }
-}
-/// `x.round() as u8` for `x >= 0`, without the `roundf` library call that
-/// x86-64 makes for every `f32::round` (it has no rounding instruction before
-/// SSE4.1): the fraction `x - trunc(x)` is exact below 2^23, so rounding half
-/// away from zero is adding one when it is at least a half.
-#[inline]
-fn round_unorm8(x: f32) -> u8 {
-    let whole = x as u8;
-    whole.saturating_add(u8::from(x - f32::from(whole) >= 0.5))
-}
 #[cfg(test)]
 mod sprite_upload_tests {
     use super::*;
-    #[test]
-    fn blended_frames_round_like_f32_round() {
-        for millis in (0..1000).step_by(7).chain([999]) {
-            let t = millis as f32 / 1000.0;
-            for a in 0..=255u8 {
-                for b in 0..=255u8 {
-                    let x = (f32::from(a) / 255.0 * (1.0 - t) + f32::from(b) / 255.0 * t) * 255.0;
-                    assert_eq!(round_unorm8(x), x.round() as u8, "{a} {b} {millis}");
-                }
-            }
-        }
-        for x in [
-            0.0, 0.49999997, 0.5, 1.5, 2.5, 254.49998, 254.5, 255.0, 255.00002, 300.0,
-        ] {
-            assert_eq!(round_unorm8(x), x.round() as u8, "{x}");
-        }
-    }
     #[test]
     fn real_rail_mips_do_not_change_with_larger_array_layers() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -4723,84 +4611,6 @@ mod sprite_upload_tests {
         }
     }
     #[test]
-    fn animation_updates_entire_layer_every_mip_once() {
-        for size in [16, 32] {
-            let animation = crate::sprites::test_animation(size, 7);
-            let pixels = animation.pixels(animation.frame(1)).to_vec();
-            let settings = [];
-            let (expected, levels) = mip_chain(&pixels, size, &settings, 7, 1);
-            let mut animations = AnimatedSprites::new(&[animation], size, &settings);
-            animations.animations[0].1 = Some(animations.animations[0].0.blend(0));
-            let mut writes = Vec::new();
-            let mut record = |layer, level, edge, data: &[u8]| {
-                assert_eq!(layer, 7);
-                assert_eq!(edge, size >> level);
-                assert_eq!(data.len(), (edge * edge * 4) as usize);
-                writes.push(data.to_vec());
-            };
-            animate_sprites(&mut animations, 0, levels, &mut record);
-            animate_sprites(&mut animations, 1, levels, &mut record);
-            animate_sprites(&mut animations, 1, levels, &mut record);
-            assert_eq!(writes.len(), levels as usize);
-            assert_eq!(writes[0], pixels);
-            assert_eq!(writes.concat(), expected);
-        }
-    }
-
-    #[test]
-    fn cached_and_uncached_uploads_match_through_loops_and_mip_changes() {
-        for size in [16, 32] {
-            let animations = [crate::sprites::test_animation(size, 7)];
-            let settings = vec![
-                crate::mipmap::Settings {
-                    strategy: crate::mipmap::Strategy::StrictCutout,
-                    alpha_cutoff_bias: -0.2,
-                    ..Default::default()
-                };
-                8
-            ];
-            let mut cached = AnimatedSprites::new(&animations, size, &settings);
-            let mut uncached = AnimatedSprites::new(&animations, size, &settings);
-            uncached.budget = 0;
-            for tick in [0, 0, 1, 2, 3, 33, 32, 32, 1, 0] {
-                let levels = (tick % 7) as u32;
-                let mut expected = Vec::new();
-                let mut actual = Vec::new();
-                animate_sprites(&mut uncached, tick, levels, |layer, level, edge, bytes| {
-                    expected.push((layer, level, edge, bytes.to_vec()));
-                });
-                animate_sprites(&mut cached, tick, levels, |layer, level, edge, bytes| {
-                    actual.push((layer, level, edge, bytes.to_vec()));
-                });
-                assert_eq!(actual, expected);
-            }
-            assert_eq!(cached.cache.len(), 2);
-            assert_eq!(uncached.cache_bytes, 0);
-            assert_eq!(
-                cached.cache_bytes,
-                cached.cache.values().map(Vec::capacity).sum::<usize>()
-            );
-        }
-    }
-
-    #[test]
-    fn budget_exhaustion_keeps_admitted_frames_and_uploads_misses() {
-        let size = 16;
-        let animation = crate::sprites::test_animation(size, 0);
-        let bytes = mip_chain(animation.pixels(0), size, &[], 0, 1).0.capacity();
-        let mut state = AnimatedSprites::new(&[animation], size, &[]);
-        state.budget = bytes;
-        for tick in 0..8 {
-            let mut writes = 0;
-            animate_sprites(&mut state, tick, 5, |_, _, _, _| writes += 1);
-            assert_eq!(writes, 5);
-            assert_eq!(state.cache_bytes, bytes);
-            assert_eq!(state.cache.len(), 1);
-            assert!(state.cache.contains_key(&(0, 0)));
-        }
-    }
-
-    #[test]
     fn prepared_texture_uploads_preserve_layer_order_and_settings() {
         let size = 4;
         let layers = 5;
@@ -4851,87 +4661,5 @@ mod sprite_upload_tests {
             let (chain, _) = mip_chain(animation.pixels(0), size, &[], 0, 1);
             assert_eq!(chain.capacity(), chain.len());
         }
-    }
-
-    #[test]
-    fn every_vanilla_animation_frame_stays_cached() {
-        // Vanilla's 594 animation frames in 64-pixel layers: 297 two-frame clips.
-        let animations: Vec<_> = (0..297)
-            .map(|layer| crate::sprites::test_animation(64, layer))
-            .collect();
-        let mut state = AnimatedSprites::new(&animations, 64, &[]);
-        for tick in 0..4 {
-            animate_sprites(&mut state, tick, 7, |_, _, _, _| {});
-        }
-        assert_eq!(state.cache.len(), 594);
-        assert!(state.cache_bytes <= ANIMATION_MIP_BUDGET);
-    }
-
-    #[test]
-    fn entry_limit_also_bounds_metadata_for_tiny_frames() {
-        let animation = crate::sprites::test_animation(1, 0);
-        let animations = vec![animation; ANIMATION_MIP_ENTRIES + 1];
-        let mut state = AnimatedSprites::new(&animations, 1, &[]);
-        for tick in 0..2 {
-            let mut writes = 0;
-            animate_sprites(&mut state, tick, 1, |_, _, _, _| writes += 1);
-            assert_eq!(writes, animations.len());
-            assert_eq!(state.cache.len(), ANIMATION_MIP_ENTRIES);
-            assert!(state.cache_bytes <= ANIMATION_MIP_BUDGET);
-        }
-    }
-
-    #[test]
-    fn resource_snapshot_replacement_discards_pixels_size_and_settings() {
-        let old = crate::sprites::test_animation(16, 0);
-        let mut state = AnimatedSprites::new(&[old], 16, &[]);
-        animate_sprites(&mut state, 0, 5, |_, _, _, _| {});
-        assert!(!state.cache.is_empty());
-        let animation = crate::sprites::test_animation(32, 0);
-        let settings = [crate::mipmap::Settings {
-            strategy: crate::mipmap::Strategy::StrictCutout,
-            alpha_cutoff_bias: -0.4,
-            ..Default::default()
-        }];
-        let expected = mip_chain(animation.pixels(0), 32, &settings, 0, 1).0;
-        state = AnimatedSprites::new(&[animation], 32, &settings);
-        assert_eq!(state.cache_bytes, 0);
-        assert!(state.cache.is_empty());
-        let mut actual = Vec::new();
-        animate_sprites(&mut state, 0, 6, |_, _, _, bytes| {
-            actual.extend_from_slice(bytes)
-        });
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn interpolated_animation_uploads_the_mix_every_tick() {
-        let animation = crate::sprites::test_clip(16, 3, r#"{"frametime":4,"interpolate":true}"#);
-        let settings = [];
-        let (_, levels) = mip_chain(animation.pixels(0), 16, &settings, 3, 1);
-        let mut cached = AnimatedSprites::new(std::slice::from_ref(&animation), 16, &settings);
-        let mut uncached = AnimatedSprites::new(std::slice::from_ref(&animation), 16, &settings);
-        uncached.budget = 0;
-        for state in [&mut cached, &mut uncached] {
-            state.animations[0].1 = Some(animation.blend(0));
-        }
-        let mut blues = Vec::new();
-        let mut uncached_blues = Vec::new();
-        let mut record = |_, level, _, data: &[u8]| {
-            if level == 0 {
-                blues.push(data[2]);
-            }
-        };
-        for tick in [0, 1, 1, 2, 4] {
-            animate_sprites(&mut cached, tick, levels, &mut record);
-            animate_sprites(&mut uncached, tick, levels, |_, level, _, data: &[u8]| {
-                if level == 0 {
-                    uncached_blues.push(data[2]);
-                }
-            });
-        }
-        // Frame 0 is blue 0, frame 1 blue 99: a quarter, a half, then frame 1.
-        assert_eq!(blues, [25, 50, 99]);
-        assert_eq!(uncached_blues, blues);
     }
 }

@@ -147,6 +147,33 @@ pub struct Content {
     pub namespaces: Vec<String>,
 }
 
+/// Reads a mod's content files ([`Content::reader`]).
+pub enum FileReader<'a> {
+    Dir(&'a Path),
+    Zip(Box<zip::ZipArchive<std::fs::File>>),
+}
+impl FileReader<'_> {
+    /// One content file's bytes.
+    pub fn read(&mut self, name: &str) -> Result<Vec<u8>, String> {
+        check_path(name)?;
+        let reader: Box<dyn Read + '_> = match self {
+            Self::Dir(root) => {
+                Box::new(std::fs::File::open(root.join(name)).map_err(|e| format!("{name}: {e}"))?)
+            }
+            Self::Zip(zip) => Box::new(zip.by_name(name).map_err(|e| format!("{name}: {e}"))?),
+        };
+        let mut out = Vec::new();
+        reader
+            .take(MAX_FILE + 1)
+            .read_to_end(&mut out)
+            .map_err(|e| format!("{name}: {e}"))?;
+        if out.len() as u64 > MAX_FILE {
+            return Err(format!("{name} is over {} MiB", MAX_FILE >> 20));
+        }
+        Ok(out)
+    }
+}
+
 /// Why two content mods cannot be on together: a namespace both own (one's
 /// id or listed namespace is the other's), which would mix their files.
 /// `a` and `b` are (mod id, owned namespaces).
@@ -222,29 +249,16 @@ impl Content {
 
     /// One content file's bytes.
     pub fn file(&self, name: &str) -> Result<Vec<u8>, String> {
-        check_path(name)?;
-        let mut out = Vec::new();
-        match &self.source {
-            Source::Dir(root) => {
-                let file =
-                    std::fs::File::open(root.join(name)).map_err(|e| format!("{name}: {e}"))?;
-                file.take(MAX_FILE + 1)
-                    .read_to_end(&mut out)
-                    .map_err(|e| format!("{name}: {e}"))?;
-            }
-            Source::Zip(path) => {
-                let mut zip = open_zip(path)?;
-                let entry = zip.by_name(name).map_err(|e| format!("{name}: {e}"))?;
-                entry
-                    .take(MAX_FILE + 1)
-                    .read_to_end(&mut out)
-                    .map_err(|e| format!("{name}: {e}"))?;
-            }
-        }
-        if out.len() as u64 > MAX_FILE {
-            return Err(format!("{name} is over {} MiB", MAX_FILE >> 20));
-        }
-        Ok(out)
+        self.reader()?.read(name)
+    }
+
+    /// A reader of its content files. A packaged mod's archive is opened
+    /// once for all of them (opening it reads its whole index).
+    pub fn reader(&self) -> Result<FileReader<'_>, String> {
+        Ok(match &self.source {
+            Source::Dir(root) => FileReader::Dir(root),
+            Source::Zip(path) => FileReader::Zip(Box::new(open_zip(path)?)),
+        })
     }
 
     /// Where content may go, and the declarations.

@@ -1,6 +1,6 @@
 [package]
 name = "horizon-launcher"
-version = "0.1.5"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 description = "Downloads, prepares and starts Horizon builds"
@@ -39,7 +39,7 @@ horizon-telemetry = { path = "../crates/horizon-telemetry" }
 getrandom = "0.3"
 # Players' heads on the Servers page, from the default skins in the player's own game files (already
 # in the lockfile through gpui).
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 
 # Microsoft account secrets in the OS keychain: the Secret Service on Linux through oo7 (the same
 # build gpui uses), Keychain and Credential Manager through keyring.

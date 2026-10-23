@@ -3,6 +3,7 @@
 mod advancements;
 mod advancements_screen;
 mod agent;
+mod agent_settings;
 mod allays;
 mod armor_stands;
 mod banners;
@@ -71,6 +72,7 @@ mod lan_chat;
 mod lan_crafting;
 mod lan_entities;
 mod lan_mobs;
+mod lan_mount_menu;
 mod lan_pvp;
 mod lan_screen;
 mod lan_stations;
@@ -82,6 +84,7 @@ mod level_particles;
 mod levels;
 mod lightning;
 mod llamas;
+mod locator_bar;
 mod loom;
 mod mace;
 mod machines;
@@ -125,6 +128,7 @@ mod remote_vehicles;
 mod render_control;
 mod render_tick;
 mod respawn_anchor;
+mod saves_control;
 mod saving;
 mod scoreboard;
 mod screens;
@@ -275,10 +279,9 @@ struct Options {
     benchmark: Option<String>,
     /// `--dev-mod PATH` (repeatable): mods always on and reloaded when rebuilt.
     dev_mods: Vec<PathBuf>,
-    /// `--server-thread` or `HORIZON_SERVER_THREAD=1`: single player runs on an
-    /// integrated server thread (game/integrated.rs), as vanilla's does. Off by
-    /// default again until a server's players can board, ride and hit
-    /// vehicles (#1222); `--no-server-thread` keeps it off.
+    /// Single player runs on an integrated server thread (game/integrated.rs),
+    /// as vanilla's does: the default. `--no-server-thread` or
+    /// `HORIZON_SERVER_THREAD=0` runs the world in the frame instead.
     server_thread: bool,
     /// Set on the integrated server's own options: it draws nothing, so it skips meshing.
     integrated: bool,
@@ -335,7 +338,7 @@ impl Options {
             dev_mods: Vec::new(),
             // The command harness (HORIZON_COMMAND_SCRIPT) drives the world
             // itself, without the event loop: it stays in the frame.
-            server_thread: std::env::var("HORIZON_SERVER_THREAD").is_ok_and(|v| v == "1")
+            server_thread: std::env::var("HORIZON_SERVER_THREAD").map_or(true, |v| v != "0")
                 && std::env::var_os("HORIZON_COMMAND_SCRIPT").is_none(),
             integrated: false,
         };
@@ -345,7 +348,7 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Horizon — Minecraft Java Edition {} in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --world-frames N        Exit after N frames drawn in the world (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --dev-mod PATH          A Horizon mod (.hmod or folder) to develop: always on, reloaded when rebuilt\n  --server-thread         Run single player's world on its server thread (no vehicles yet)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause.",
+                        "Horizon — Minecraft Java Edition {} in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --world-frames N        Exit after N frames drawn in the world (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --dev-mod PATH          A Horizon mod (.hmod or folder) to develop: always on, reloaded when rebuilt\n  --no-server-thread      Run single player's world in the frame, not on its server thread\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause.",
                         horizon_core::VANILLA_VERSION
                     );
                     return Ok(None);
@@ -526,6 +529,7 @@ struct GameLevel<'w> {
     spill: &'w mut spill::Spill,
     /// Where the chunk tickets let blocks tick.
     tickets: horizon_client::ticket_levels::Levels,
+    random_tick_sections: &'w mut horizon_client::random_tick_sections::RandomTickSections,
 }
 struct PlayerCollision {
     y: f64,
@@ -1377,6 +1381,14 @@ struct Game<'a> {
     /// Entities of types Horizon does not simulate.
     others: Vec<commands::OtherEntity>,
     armor_stand_assets: armor_stands::ArmorStandAssets,
+    /// `WaypointStyleManager`.
+    waypoint_styles: horizon_client::locator_bar::WaypointStyles,
+    /// `ClientWaypointManager`: the locator bar's waypoints.
+    waypoints: horizon_client::locator_bar::ClientWaypoints,
+    /// The camera the last frame drew from (position, yaw, pitch, fov), for the locator bar.
+    locator_camera: Option<([f64; 3], f32, f32, f32)>,
+    /// `LocalPlayer.experienceDisplayStartTick`: (last progress, seen a change, tick).
+    experience_display: (f32, bool, u64),
     boats: Vec<boats::Boat>,
     boat_models: boats::BoatModels,
     /// EndCrystalModel's baked layer.
@@ -1399,6 +1411,8 @@ struct Game<'a> {
     /// (least recently shown first).
     skin_downloads: RefCell<horizon_client::skins::Downloader>,
     skin_slots: Vec<(String, usize)>,
+    /// Atlas trim slots in use: (sprite name, slot), least recently drawn first.
+    trim_slots: Vec<(String, usize)>,
     cart_models: minecarts::CartModels,
     /// The boat the player rides.
     riding: Option<u32>,
@@ -1431,6 +1445,10 @@ struct Game<'a> {
     item_columns: Option<machines::ItemColumns>,
     creative_screen: Creative,
     control: Option<horizon_client::control::Server>,
+    /// The Agent Control setting the socket was last opened or closed for (`agent_settings`).
+    agent_control_on: bool,
+    /// When an agent's last command came.
+    agent_last: Option<Instant>,
     frame_stats: horizon_client::control::FrameStats,
     /// This play session's frame and tick times, for opt-in performance statistics.
     perf: horizon_client::telemetry::Session,
@@ -2295,6 +2313,7 @@ impl Game<'_> {
             pending: &mut self.pending,
             spill: &mut self.spill,
             tickets: self.tickets.levels(),
+            random_tick_sections: &mut self.random_tick_sections,
         };
         let result = f(self.res.behaviours(), &mut level, &mut self.block_ticks);
         self.flush_spill();
@@ -2389,18 +2408,15 @@ impl Game<'_> {
         self.sync_tick_chunks();
         self.start_ticking_chunks();
         let levels = self.tickets.levels();
-        let mut ticking = Vec::new();
-        let facts = self.res.facts();
-        for (&(x, z), chunk) in &self.world.chunks {
-            if !levels.random_ticking(x, z) || !ticking_chunk(&self.world, x, z) {
-                continue;
-            }
-            // Capture eligibility before inside-block and scheduled updates, as
-            // before. Keep the world map's chunk order, including empty chunks
-            // (tick_chunk_random still draws for precipitation in those).
-            let sections = self.random_tick_sections.get((x, z), chunk, facts);
-            ticking.push((x, z, sections));
-        }
+        // Keep the world map's chunk order, including empty chunks
+        // (tick_chunk_random still draws for precipitation in those).
+        let ticking: Vec<_> = self
+            .world
+            .chunks
+            .keys()
+            .copied()
+            .filter(|&(x, z)| levels.random_ticking(x, z) && ticking_chunk(&self.world, x, z))
+            .collect();
         // Entity.checkInsideBlocks for the plates, tripwires and detector rails
         // under the players (the host and the LAN guests) and the minecarts.
         let mut inside = Vec::new();
@@ -2442,13 +2458,24 @@ impl Game<'_> {
         self.process_level_events()?;
         self.tick_scheduled()?;
         self.with_level(|b, level, ticks| {
-            for (x, z, sections) in ticking {
-                b.tick_chunk_random(
-                    level,
-                    ticks,
-                    horizon_core::position::ChunkPos::new(x, z),
-                    sections,
-                );
+            for (x, z) in ticking {
+                // The sections are read again only after a block changed.
+                let mut read = None;
+                let mut sections = Default::default();
+                let pos = horizon_core::position::ChunkPos::new(x, z);
+                b.tick_chunk_random(level, ticks, pos, |level, from| {
+                    if read != Some(level.world.revision) {
+                        read = Some(level.world.revision);
+                        sections = level
+                            .world
+                            .chunks
+                            .get(&(x, z))
+                            .map_or_else(Default::default, |chunk| {
+                                level.random_tick_sections.get((x, z), chunk, level.facts)
+                            });
+                    }
+                    sections.from(from)
+                });
             }
             b.run_block_events(level, ticks);
             b.tick_block_entities(level, ticks);
@@ -3906,6 +3933,7 @@ impl Game<'_> {
             None => 0.0,
         };
         self.ticks += 1;
+        self.track_experience_display();
         // `/tick freeze` stops the world but not the player.
         let running = self.clock.world_runs();
         if running {
@@ -4765,12 +4793,41 @@ impl Game<'_> {
             self.draw_extras(&mut batch);
         }
         if show_hud {
-            // The mount's hearts (and the jump bar that replaces the experience bar).
-            let (vehicle_hearts, jump_bar) = if spectator {
-                (0, false)
+            // Hud.nextContextualInfoState: the jump bar, the experience bar or
+            // the locator bar above the hotbar.
+            let has_experience = !self.creative && !spectator;
+            let contextual = horizon_client::locator_bar::ContextualBar::next(
+                self.waypoints.has_waypoints(),
+                !spectator && self.jumpable_mount(),
+                self.mount_jumping(),
+                has_experience,
+                self.experience_recent(),
+            );
+            use horizon_client::locator_bar::ContextualBar;
+            // The mount's hearts (and the jump bar).
+            let vehicle_hearts = if spectator {
+                0
             } else {
-                self.draw_mount_hud(&mut batch, wi, hi)
+                self.draw_mount_hud(
+                    &mut batch,
+                    wi,
+                    hi,
+                    contextual == ContextualBar::JumpableVehicle,
+                )
             };
+            if contextual == ContextualBar::Locator {
+                let (sprite, [x, y, w, h]) = horizon_client::locator_bar::background(wi, hi);
+                horizon_client::ui::nine_slice(
+                    &mut batch,
+                    &self.gui.atlas,
+                    sprite,
+                    x as f32,
+                    y as f32,
+                    w as f32,
+                    h as f32,
+                    u32::MAX,
+                );
+            }
             if !self.creative
                 && !spectator
                 && let Some(p) = &mut self.player
@@ -4782,7 +4839,7 @@ impl Game<'_> {
                     hi,
                     self.experience.progress,
                     self.experience.level,
-                    !jump_bar,
+                    contextual == ContextualBar::Experience,
                     &width,
                 );
                 hud_layout::paint(&mut batch, atlas, &draws);
@@ -4831,6 +4888,10 @@ impl Game<'_> {
                 };
                 let draws = self.health_hud.layout(&inputs, wi, hi);
                 hud_layout::paint(&mut batch, atlas, &draws);
+            }
+            if contextual == ContextualBar::Locator {
+                let draws = self.locator_bar_draws(wi, hi);
+                hud_layout::paint(&mut batch, &self.gui.atlas, &draws);
             }
             if !spectator {
                 self.draw_selected_name(&mut batch, !self.creative);
@@ -5489,6 +5550,16 @@ impl Game<'_> {
             let mut v = vec![None; 45];
             v.extend((0..9).map(Some));
             (Kind::ItemPicker, v)
+        } else if let Some(columns) = self
+            .mount_menu_columns()
+            .filter(|_| self.remote.is_some() && self.mount_active())
+        {
+            // A server's HorseInventoryMenu: the saddle, the body armour,
+            // the chest, then the inventory.
+            let mut v = vec![Some(mount_menu::SADDLE), Some(mount_menu::ARMOR)];
+            v.extend((0..columns * 3).map(|i| Some(mount_menu::CHEST + i)));
+            v.extend((9..36).chain(0..9).map(Some));
+            (Kind::Mount(columns), v)
         } else if merchant_open {
             // MerchantMenu: two payment slots, the result, then the inventory.
             let mut v: Vec<Option<usize>> = vec![
@@ -5621,6 +5692,9 @@ impl Game<'_> {
             None => game_of.iter().position(|x| *x == Some(g)),
         };
         let mut menu = Menu::new(kind);
+        if matches!(kind, Kind::Mount(_)) {
+            menu.mount = self.mount_menu_entity();
+        }
         let total = menu.slot_count();
         let before: Vec<Option<ItemStack>> = game_of
             .iter()
@@ -6460,6 +6534,7 @@ impl Game<'_> {
         mut out: Vec<Vertex>,
     ) -> Vec<Vertex> {
         self.prepare_entity_culling(camera);
+        self.prepare_trims();
         let fire_yaw = if self.camera_type == perspective::CameraType::ThirdPersonFront {
             self.yaw + 180.0
         } else {
@@ -7716,6 +7791,10 @@ impl Game<'_> {
             fullscreen: s.fullscreen,
             graphics: s.graphics_preset.clone(),
         };
+        // Again now: on Wayland the window is on a screen only once it has been shown.
+        if let Some(window) = &self.window {
+            horizon_client::telemetry::note_display(window);
+        }
         self.perf
             .finish(&horizon_client::logging::game_home(), settings);
     }
@@ -7748,6 +7827,7 @@ impl Game<'_> {
         Ok(())
     }
     fn close_world(&mut self) -> Result<()> {
+        self.clear_waypoints();
         self.begin_closing_save(false)
     }
     fn finish_close_world(&mut self) -> Result<()> {
@@ -9766,6 +9846,8 @@ impl Game<'_> {
         } else {
             self.fov_degrees(camera_alpha as f32, camera.to_array())
         };
+        self.locator_camera =
+            (!title).then_some((camera.to_array(), view_yaw, view_pitch, fov_degrees));
         let bob = if title {
             glam::Mat4::IDENTITY
         } else {
@@ -10451,6 +10533,10 @@ impl Game<'_> {
             if let (Some(lod), Some(player)) = (&mut self.lod, &self.player) {
                 let lod_distance = self.settings.horizon.lod_distance_on(&renderer.info);
                 lod.set_near_loading(self.streaming.busy());
+                lod.set_reduced_detail(
+                    self.settings.horizon.far_detail
+                        == horizon_client::graphics::FarDetail::Reduced,
+                );
                 // The covered columns change only with the complete ones and
                 // the render area: rebuilt then, not every frame.
                 let at = (
@@ -10516,6 +10602,7 @@ impl ApplicationHandler for Game<'_> {
                 return;
             }
         };
+        horizon_client::telemetry::note_display(&window);
         match self.new_renderer(window.clone()) {
             Ok(r) => {
                 self.renderer = Some(r);
@@ -11613,6 +11700,10 @@ impl<'a> Game<'a> {
             armor_stands: Vec::new(),
             others: Vec::new(),
             armor_stand_assets: prepared.armor_stand_assets,
+            waypoint_styles: prepared.waypoint_styles,
+            waypoints: Default::default(),
+            locator_camera: None,
+            experience_display: Default::default(),
             boats: Vec::new(),
             boat_models: prepared.boat_models,
             crystal_model: prepared.crystal_model,
@@ -11633,6 +11724,7 @@ impl<'a> Game<'a> {
                     .join("assets/skins"),
             )),
             skin_slots: Vec::new(),
+            trim_slots: Vec::new(),
             cart_models: prepared.cart_models,
             riding: None,
             ender_items: vec![None; 27],
@@ -11654,6 +11746,8 @@ impl<'a> Game<'a> {
             item_columns: None,
             creative_screen: prepared.creative_screen,
             control: None,
+            agent_control_on: false,
+            agent_last: None,
             frame_stats: Default::default(),
             perf: Default::default(),
             pending_screenshot: None,
@@ -11737,6 +11831,7 @@ struct GameCpuResources {
     map_frame_model: frames::FrameModel,
     glow_map_frame_model: frames::FrameModel,
     armor_stand_assets: armor_stands::ArmorStandAssets,
+    waypoint_styles: horizon_client::locator_bar::WaypointStyles,
     boat_models: boats::BoatModels,
     cart_models: minecarts::CartModels,
     crystal_model: Option<horizon_client::mobs::Part>,
@@ -11756,6 +11851,7 @@ impl GameCpuResources {
             map_frame_model: frames::bake_frame(root, "item_frame_map"),
             glow_map_frame_model: frames::bake_frame(root, "glow_item_frame_map"),
             armor_stand_assets: armor_stands::ArmorStandAssets::load(root, document.as_ref()),
+            waypoint_styles: horizon_client::locator_bar::WaypointStyles::load(root),
             boat_models: boats::BoatModels::load(document.as_ref()),
             cart_models: minecarts::CartModels::load(document.as_ref()),
             crystal_model: model("minecraft:end_crystal#main"),
@@ -12448,12 +12544,7 @@ fn start_game<'a>(
         game.mods.dev = game.options.dev_mods.clone();
         game.start_mods();
     }
-    if let Some(path) = &game.options.control {
-        let server = horizon_client::control::Server::start(path)
-            .map_err(|e| format!("control socket {}: {e}", path.display()))?;
-        log::info!("Horizon: control socket {}", server.path().display());
-        game.control = Some(server);
-    }
+    game.start_agent_control()?;
     if let Some(scenario) = game.options.benchmark.clone() {
         let control = game
             .control
@@ -12615,6 +12706,7 @@ impl Loading {
                 return;
             }
         };
+        horizon_client::telemetry::note_display(&window);
         let offscreen = self.options.as_ref().is_some_and(|o| o.offscreen);
         match loading_renderer(
             window.clone(),

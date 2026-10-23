@@ -9,6 +9,10 @@ use horizon_client::{
     },
 };
 
+/// The host player's connection id in the waypoint managers: its packets
+/// go to this client's locator bar rather than to a guest.
+const HOST_CONN: u32 = u32::MAX;
+
 /// `waypoint_transmit_range`: hidden by crouching, invisibility or a head worn.
 fn transmit_range(crouching: bool, invisible: bool, head: Option<&ItemStack>) -> f64 {
     let hiding_head = head.is_some_and(|s| HIDING_HEADS.contains(&&*s.item));
@@ -47,7 +51,7 @@ impl Game<'_> {
                 self.dim.id(),
                 waypoints::Player {
                     uuid: h.uuid,
-                    conn: None,
+                    conn: Some(HOST_CONN),
                     position: h.position,
                     spectator: self.spectator(),
                     transmit_range: transmit_range(
@@ -123,7 +127,12 @@ impl Game<'_> {
             }
         }
         for (conn, packet) in out {
-            if let Some(g) = host.hub.guest(conn) {
+            if conn == HOST_CONN {
+                // The host's own connection: its locator bar.
+                if let horizon_protocol::packets::play::Clientbound::TrackedWaypoint(w) = &packet {
+                    self.handle_waypoint(w);
+                }
+            } else if let Some(g) = host.hub.guest(conn) {
                 g.send(&packet);
             }
         }

@@ -387,7 +387,8 @@ impl Loading {
                         self.menu.win = Some((screen, Instant::now()));
                     }
                 }
-                Event::ButtonClick => {}
+                // The startup menu runs before the game opens a control socket.
+                Event::ButtonClick | Event::CopyAgentDetails => {}
             }
         }
     }

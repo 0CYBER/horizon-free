@@ -723,6 +723,8 @@ code { border-radius: 0; background: var(--well); box-shadow: 0 0 0 1px var(--ou
 .pick-result { margin-top: 16px; padding: 20px; background: var(--panel); border: var(--block-outline) solid var(--outline); box-shadow: var(--panel-edges); }
 .pick-head { margin-bottom: 12px; font-size: var(--text-caption); color: var(--ink-soft); line-height: 1.8; }
 .pick-result .meta { margin-top: 12px; }
+.pick-notes { margin: 12px 0 0; padding-left: 20px; font-size: var(--text-caption); color: var(--ink-soft); line-height: 1.6; }
+.players-hardware th[scope="rowgroup"] { vertical-align: top; }
 .empty { color: var(--muted); }
 .prose-section .prose { max-width: 80ch; }
 .spec-table { margin-top: 24px; }
@@ -740,4 +742,3 @@ code { border-radius: 0; background: var(--well); box-shadow: 0 0 0 1px var(--ou
   .release-detail { padding-left: 0; margin-left: 0; }
   .machine { padding: 16px; }
 }
-.older-runs { margin-top: 16px; max-width: 90ch; padding: 16px 20px; background: var(--well); box-shadow: 0 0 0 var(--block-outline) var(--outline); font-size: var(--text-caption); }

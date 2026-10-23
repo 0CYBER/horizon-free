@@ -24,10 +24,10 @@ The opening, then Play ([clip](docs/opening.webm)):
   preparation reuses checksum-verified game jars and libraries from the current
   or another installed Horizon version, so the original Minecraft install is
   only required when no valid imported copy exists.
-- **Mods**: search Modrinth (and CurseForge once the launcher has its API key) for resource
+- **Mods**: search Modrinth (CurseForge support is coming soon) for resource
   packs, Iris/OptiFine shader packs and modpacks, each marked Works, Partly or Doesn't run in
   Horizon; Java mod jars are never offered. Install puts a pack and what it needs in
-  `resourcepacks/` or `shaderpacks/` only after its SHA-512 (SHA-1 on CurseForge) matches, and a
+  `resourcepacks/` or `shaderpacks/` only after its SHA-512 matches, and a
   modpack goes to the Modpacks page; installed packs show their source and checksum, with Update
   and Remove ([docs/mod-browser.md](../docs/mod-browser.md)).
 - **Modpacks**: import a Java modpack (a Modrinth `.mrpack`, a CurseForge zip, or a Prism,
@@ -35,8 +35,8 @@ The opening, then Play ([clip](docs/opening.webm)):
   not yet or not needed, with the reason ([docs/modpacks.md](../docs/modpacks.md)). **Port**
   gets the jars of what this computer can port today (content mods with data and assets only)
   the player's own way: copied from a folder they have, or downloaded from the pack's own links
-  or the same file on Modrinth's CDN, hash checked; files only CurseForge has need its API key, so
-  they come from your installed instance. It carries them over for the selected version, and
+  or the same file on Modrinth's CDN, hash checked; files only CurseForge has come from your
+  installed instance (CurseForge downloads are coming soon). It carries them over for the selected version, and
   **Play** starts the game as the pack's own profile (`ports/<pack>/home/` in the game's home:
   its own saves and options) with those mods. Nothing is uploaded or shared: mod jars and ports
   stay on this computer.
@@ -149,7 +149,7 @@ The same binary is a command-line tool; without a subcommand it opens the window
     horizon-launcher modpack play <pack> [--version <tag>]                 play it as its own profile
     horizon-launcher modpack remove <pack>
     horizon-launcher mods [list]                    what the mod browser installed (docs/mod-browser.md)
-    horizon-launcher mods search <text> [--kind resource|shader|modpack] [--everything] [--source modrinth|curseforge]
+    horizon-launcher mods search <text> [--kind resource|shader|modpack] [--everything] [--source modrinth]
     horizon-launcher mods install <id or slug>      checksum checked, with what it needs; a modpack is imported
     horizon-launcher mods update [<pack>] [--check]
     horizon-launcher mods remove <pack>
@@ -174,27 +174,35 @@ scripts and tests).
 
 ## AI agents (MCP)
 
-`horizon-launcher mcp` is a Model Context Protocol server over stdio. To use it from Claude Code:
+`horizon-launcher mcp` is a Model Context Protocol server over stdio. `horizon-launcher
+agent-config` prints the config for Claude Code, Codex, Cursor and any MCP client, and the
+command that adds it; for Claude Code:
 
-    claude mcp add horizon -- horizon-launcher mcp
+    claude mcp add --scope user horizon -- horizon-launcher mcp
 
-(with the full path to the binary if it is not on your `PATH`). Its tools: `list_versions`,
-`install_version`, `remove_version`, `prepare_resources`, `launch_client`, `start_server`,
-`server_command`, `server_log`, `stop_server`, `patch_notes`, `links`, `update_channel`, `logs`,
-`check_updates`, `accounts`, `sign_in` (returns the link and code for the player; the sign-in
-finishes in the background), `sign_out`, `select_account`, and for data collection
-`data_collection`, `set_data_collection`, `data_preview`, `delete_my_data` and `report_bug`
-(only with the player's say-so).
-A server started through MCP stops (cleanly, with `stop`) when the session ends. Starting one
-needs `accept_eula`, which an agent should only pass with the player's consent.
+(with the full path to the binary if it is not on your `PATH`). Every CLI command is a tool of the
+same name and arguments, generated from the CLI's definition (`src/cli_tools.rs`): `versions`,
+`install`, `remove`, `prepare`, `settings`, `mods_search`, `mods_install`, `modpack_import`,
+`servers_create`, `data_status`... A call runs that command with `--json` and returns its
+output. Tools that delete something (`remove`, `mods_remove`, `modpack_remove`,
+`servers_forget`, `account_sign_out`, `data_delete`) need `confirm: true`. The session runs a few
+itself, under the CLI's names: `play`, `server` with `server_command`, `server_log` and
+`server_stop`, `account_list` and `account_sign_in` (returns the link and code for the player;
+the sign-in finishes in the background). A server started through MCP stops (cleanly, with
+`stop`) when the session ends. Starting one needs `accept_eula`, which an agent should only pass
+with the player's consent.
 
-The same server also plays the game: `launch_client` starts it with a local control socket
-(`world`, `creative` and `offscreen` are optional), and every `horizon-ctl` tool of the selected
+The same server also plays the game: `play` starts it with a local control socket (`world`,
+`creative`, `join` and `offscreen` are optional), and every `horizon-ctl` tool of the selected
 version is offered as `game_<name>`: `game_state`, `game_ui` (every widget of the open screen),
 `game_click`, `game_goto`, `game_break`, `game_inventory`, `game_screenshot` (an image) and the
-rest of [horizon-ctl's commands](../docs/agent-control.md). The launcher runs that version's
-`horizon-ctl mcp` and passes the calls through; while no game runs, they answer with an error
-saying to call `launch_client`.
+rest of [horizon-ctl's commands](../docs/horizon-ctl-commands.md). The launcher runs that
+version's `horizon-ctl mcp` and passes the calls through; while no game runs, they answer with an
+error saying to call `play`.
+
+`horizon-launcher no-ai on` (the Settings page's No AI switch) hides and turns off every AI
+feature: `mcp` and `agent-config` refuse, the game opens no control socket and `horizon-ctl`
+refuses. Every other command keeps working.
 
 The window, the command line and the MCP server all call the same core, `src/backend.rs`.
 

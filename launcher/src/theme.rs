@@ -1,19 +1,29 @@
 //! The launcher's view of Horizon's design tokens (`crates/horizon-theme`, described in
-//! `docs/design-system.md`), which the game's menus and the website share: cool neutrals in two
-//! appearances and one violet accent, Geist and Geist Mono (bundled, SIL Open Font License).
+//! `docs/design-system.md`): the blocky look it shares with the website ("Blocks"), stone-dark or
+//! lavender-light with Horizon's violet, Pixelify Sans for headings and controls, Geist and Geist
+//! Mono for text (all bundled, SIL Open Font License).
 use gpui::{rgb, Hsla, WindowAppearance};
+use horizon_launcher::backend::Appearance;
 use horizon_theme as tokens;
 use std::time::Duration;
 
 pub use tokens::{Step, BODY, CAPTION, DISPLAY, HEADING, LABEL, MICRO, TITLE, UI, WORDMARK};
 pub const FONT: &str = tokens::FONT;
 pub const MONO: &str = tokens::MONO;
+pub const PIXEL: &str = tokens::PIXEL;
 
+pub use tokens::{BLOCK_BEVEL as BEVEL, BLOCK_LIP as LIP};
 /// Shapes and controls, shared with the game's menus and the website.
-pub use tokens::{
-    CONTROL, CONTROL_LARGE, DISABLED, FIELD, GUTTER, INDEX, PLATE_BLEED, PRESSED, RADIUS,
-    RADIUS_PILL, RADIUS_PLATE, RISE, ROW, SEGMENT,
-};
+pub use tokens::{CONTROL_LARGE, DISABLED, FIELD, PRESSED, RISE, ROW, SEGMENT};
+
+/// Blocks have square corners: these stay for the places that ask for a radius.
+pub const RADIUS: f32 = 0.;
+pub const RADIUS_PLATE: f32 = 0.;
+/// Buttons are a little taller than the quiet look's, for their lip.
+pub const CONTROL: f32 = 34.;
+/// The top bar, and the sidebar of instances and servers.
+pub const TOPBAR: f32 = 56.;
+pub const SIDEBAR: f32 = 248.;
 
 /// Motion: short and eased out, never bouncy.
 pub const QUICK: Duration = tokens::QUICK.duration();
@@ -23,9 +33,15 @@ pub const STAGGER: Duration = tokens::STAGGER;
 
 #[derive(Clone, Copy)]
 pub struct Theme {
+    /// The page behind everything (under its stone texture), and its colour as `0xRRGGBB` for
+    /// the texture.
     pub page: Hsla,
+    pub page_rgb: u32,
+    /// Hover plates, fields and the console: the raised panel colour.
     pub plate_soft: Hsla,
+    /// Pressed plates, a switch that is off: the button colour.
     pub plate: Hsla,
+    /// Dialogs and menus above the page: the panel colour.
     pub surface: Hsla,
     pub rule: Hsla,
     pub ink: Hsla,
@@ -35,6 +51,21 @@ pub struct Theme {
     pub on_accent: Hsla,
     pub danger: Hsla,
     pub success: Hsla,
+    pub warn: Hsla,
+    /// The blocky parts (`horizon_theme::Blocks`).
+    pub side: Hsla,
+    pub panel: Hsla,
+    pub raised: Hsla,
+    pub button: Hsla,
+    pub button_bevel: Hsla,
+    pub well: Hsla,
+    pub bevel: Hsla,
+    pub lip: Hsla,
+    pub outline: Hsla,
+    pub face: Hsla,
+    pub face_bevel: Hsla,
+    pub face_lip: Hsla,
+    pub on_face: Hsla,
     pub dark: bool,
 }
 
@@ -43,42 +74,61 @@ fn c(hex: u32) -> Hsla {
 }
 
 impl Theme {
-    /// The system's appearance; `HORIZON_LAUNCHER_APPEARANCE=light` or `dark` overrides it (for
+    /// The player's choice in Settings (dark unless they picked another), the system's when they
+    /// asked to follow it. `HORIZON_LAUNCHER_APPEARANCE=light` or `dark` overrides both (for
     /// screenshots and tests).
-    pub fn for_appearance(appearance: WindowAppearance) -> Self {
+    pub fn for_appearance(choice: Appearance, system: WindowAppearance) -> Self {
         match std::env::var("HORIZON_LAUNCHER_APPEARANCE").as_deref() {
             Ok("light") => return Self::light(),
             Ok("dark") => return Self::dark(),
             _ => {}
         }
-        match appearance {
-            WindowAppearance::Light | WindowAppearance::VibrantLight => Self::light(),
+        match (choice, system) {
+            (Appearance::Light, _) => Self::light(),
+            (Appearance::System, WindowAppearance::Light | WindowAppearance::VibrantLight) => {
+                Self::light()
+            }
             _ => Self::dark(),
         }
     }
 
     pub fn dark() -> Self {
-        Self::from(tokens::DARK)
+        Self::from(tokens::BLOCKS_DARK)
     }
 
     pub fn light() -> Self {
-        Self::from(tokens::LIGHT)
+        Self::from(tokens::BLOCKS_LIGHT)
     }
 
-    fn from(p: tokens::Palette) -> Self {
+    fn from(p: tokens::Blocks) -> Self {
         Self {
             page: c(p.page),
-            plate_soft: c(p.plate_soft),
-            plate: c(p.plate),
-            surface: c(p.surface),
+            page_rgb: p.page,
+            plate_soft: c(p.raised),
+            plate: c(p.button),
+            surface: c(p.panel),
             rule: c(p.rule),
             ink: c(p.ink),
             ink_soft: c(p.ink_soft),
             muted: c(p.muted),
             accent: c(p.accent),
-            on_accent: c(p.on_accent),
+            on_accent: c(p.on_face),
             danger: c(p.danger),
             success: c(p.success),
+            warn: c(p.warn),
+            side: c(p.side),
+            panel: c(p.panel),
+            raised: c(p.raised),
+            button: c(p.button),
+            button_bevel: c(p.button_bevel),
+            well: c(p.well),
+            bevel: c(p.bevel),
+            lip: c(p.lip),
+            outline: c(p.outline),
+            face: c(p.face),
+            face_bevel: c(p.face_bevel),
+            face_lip: c(p.face_lip),
+            on_face: c(p.on_face),
             dark: p.dark,
         }
     }
@@ -105,13 +155,14 @@ mod tests {
     /// field (WCAG 1.4.11 asks 3:1 for those), and text over a selected suggestion.
     #[test]
     fn marks_and_selections_read_clearly() {
-        for p in [tokens::LIGHT, tokens::DARK] {
+        for p in [tokens::BLOCKS_LIGHT, tokens::BLOCKS_DARK] {
             let theme = if p.dark { "dark" } else { "light" };
             for (name, bg) in [
                 ("page", p.page),
-                ("plate_soft", p.plate_soft),
-                ("plate", p.plate),
-                ("surface", p.surface),
+                ("raised", p.raised),
+                ("button", p.button),
+                ("panel", p.panel),
+                ("well", p.well),
             ] {
                 let ring = tokens::contrast(p.accent, bg);
                 assert!(ring >= 3.0, "{theme} focus ring on {name}: {ring:.2}");
@@ -121,7 +172,7 @@ mod tests {
                     "{theme} refused field on {name}: {refused:.2}"
                 );
             }
-            let selection = blend(p.accent, p.surface, SELECTION);
+            let selection = blend(p.accent, p.panel, SELECTION);
             let ratio = tokens::contrast(p.ink, selection);
             assert!(ratio >= 4.5, "{theme} text on a selection: {ratio:.2}");
         }

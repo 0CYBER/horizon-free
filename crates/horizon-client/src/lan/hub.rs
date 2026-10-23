@@ -1972,6 +1972,10 @@ impl Hub {
                     self.guests[i].sneaking = p.flags & 32 != 0;
                     self.guests[i].sprinting = p.flags & 64 != 0 && p.flags & 1 != 0;
                 }
+                // OPEN_INVENTORY is the game's: the ridden mount's inventory.
+                S::PlayerCommand(p) if p.action == 5 => {
+                    events.push(HostEvent::Packet(conn, Box::new(S::PlayerCommand(p))));
+                }
                 S::PlayerCommand(p) => match p.action {
                     1 => self.guests[i].sprinting = true,
                     2 => self.guests[i].sprinting = false,

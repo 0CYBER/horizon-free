@@ -23,7 +23,7 @@ fn world_path(saves: &Path, folder: &str) -> crate::Result<PathBuf> {
     Ok(path)
 }
 
-pub(super) fn rename(saves: &Path, folder: &str, name: &str) -> crate::Result<()> {
+pub fn rename(saves: &Path, folder: &str, name: &str) -> crate::Result<()> {
     let path = world_path(saves, folder)?.join("level.dat");
     let mut root = read_dat(&path).ok_or("Could not read level.dat")?;
     let Some(Tag::Compound(data)) = root.get_mut("Data") else {
@@ -45,7 +45,7 @@ pub(super) fn reset_icon(saves: &Path, folder: &str) -> crate::Result<()> {
 /// file briefly held by a virus scanner, say) is retried up to five times,
 /// half a second apart, as vanilla does. Only the named folder directly in
 /// `saves` is touched: symbolic links inside it are removed, never followed.
-pub(super) fn delete(saves: &Path, folder: &str) -> crate::Result<()> {
+pub fn delete(saves: &Path, folder: &str) -> crate::Result<()> {
     let world = world_path(saves, folder)?;
     let lock = crate::save::SessionLock::acquire(&world)?;
     let lock_path = world.join("session.lock");
@@ -86,7 +86,7 @@ fn remove_contents(world: &Path, lock: &Path) -> io::Result<()> {
     Ok(())
 }
 
-pub(super) fn backups_path(saves: &Path) -> PathBuf {
+pub fn backups_path(saves: &Path) -> PathBuf {
     saves.parent().unwrap_or(saves).join("backups")
 }
 
@@ -112,7 +112,7 @@ pub(super) fn open_folder(path: &Path) -> crate::Result<()> {
     Ok(())
 }
 
-pub(super) fn backup(saves: &Path, folder: &str) -> crate::Result<u64> {
+pub fn backup(saves: &Path, folder: &str) -> crate::Result<u64> {
     let world = world_path(saves, folder)?;
     let backups = backups_path(saves);
     fs::create_dir_all(&backups)?;

@@ -35,7 +35,7 @@ The game opens on vanilla's title screen. Your worlds, options and logs live in 
 ## Updating
 
 - **Horizon.** The launcher looks for a new release when it starts and every four hours while it is open. With **Install new versions automatically** on (the default), it installs one and moves you to it if you were on the newest. New releases come out many times a day, and old versions stay installed until you remove them on the **Versions** page.
-- **The launcher.** It updates itself from its own releases, then shows **Restart** in its footer.
+- **The launcher.** It updates itself from its own releases, then shows **Restart** in its footer. A launcher from before 0.2 (0.16 or older) updates twice in a row: first to 0.17, then to 0.2. Then it installs Horizon 0.2 like any update.
 
 ## Stable and Alpha
 
