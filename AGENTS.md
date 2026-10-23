@@ -13,10 +13,10 @@ Feature → files → harness for the most-changed areas: [docs/architecture.md]
   `XDG_CONFIG_HOME`, plus `HORIZON_LAUNCHER_NO_SELF_UPDATE=1` and `HORIZON_NO_AUDIO=1`. Never write to
   `~/.local/share/{applications,horizon,horizon-launcher}` or `~/.local/bin`.
 - **Mark what an agent posts.** A PR body starts with
-  `> 🤖 Opened by Ludovic's AI agent (Claude), not by Ludovic himself.` (issues: "Filed by", reviews:
-  "Review by"); every comment starts with `🤖 Agent:`. Never write as Ludovic.
-- **Attribution.** Commits end with `Co-Authored-By: Claude <model> <noreply@anthropic.com>`; PR bodies end
-  with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
+  `> 🤖 Opened by an AI agent.` (issues: "Filed by", reviews: "Review by"); every comment starts with
+  `🤖 Agent:`. Do not claim to be or represent a specific person.
+  **Attribution.** Commits and PR bodies end
+  with `🤖 Generated with (Agent Name)`.
 - Everything players run is Rust. Python/Java only for dev tools and harness drivers in `tools/`.
 - Horizon-only features follow [docs/design-system.md](docs/design-system.md) and are off by default where
   they would change the vanilla look.
