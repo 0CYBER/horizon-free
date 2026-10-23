@@ -253,6 +253,12 @@ enum Cmd {
     Play {
         #[arg(long)]
         version: Option<String>,
+        /// Open or create this world (a folder under saves) at once
+        #[arg(long)]
+        world: Option<String>,
+        /// Creative mode for a new world
+        #[arg(long)]
+        creative: bool,
         /// Join a friend's world with its invite code
         #[arg(long)]
         join: Option<String>,
@@ -287,6 +293,16 @@ enum Cmd {
         /// Omit to show the current channel
         #[arg(value_parser = ["stable", "alpha"])]
         channel: Option<String>,
+    },
+    /// Show the launcher's settings, or set one (the Settings page): selected-version TAG,
+    /// minecraft-dir PATH, server-dir PATH ("default" resets a folder), install-new-versions
+    /// on|off, opening-animation on|off
+    Settings {
+        #[arg(value_parser = SETTING_KEYS)]
+        key: Option<String>,
+        /// The new value (with KEY)
+        #[arg(requires = "key")]
+        value: Option<String>,
     },
     /// Show or set the extra arguments the game starts with (for example --server-thread);
     /// quotes group a word with spaces in it
@@ -346,6 +362,13 @@ enum Cmd {
     /// Serve the Model Context Protocol on stdin and stdout, for AI agents (refused while No AI
     /// is on)
     Mcp,
+    /// How to connect an AI agent (Claude Code, Codex, Cursor, any MCP client) to `mcp`: the
+    /// config to paste and the command that adds it (refused while No AI is on)
+    AgentConfig {
+        /// Only this client
+        #[arg(long, value_parser = ["claude-code", "codex", "cursor", "generic"])]
+        client: Option<String>,
+    },
     /// Show or set No AI: on hides and turns off every AI feature (the companion, agent control,
     /// horizon-ctl and both MCP servers); off, the default, makes them available
     NoAi {
@@ -362,12 +385,75 @@ enum Cmd {
     },
 }
 
+/// The CLI's definition, for the MCP tools generated from it (cli_tools.rs).
+pub fn command() -> clap::Command {
+    <Cli as clap::CommandFactory>::command()
+}
+
+/// The commands that exist for AI agents: hidden and refused while No AI is on. Every other
+/// command stays: the launcher, packagers and scripts need them, and none drives the game.
+pub const AI_COMMANDS: [&str; 2] = ["mcp", "agent-config"];
+
+/// The keys `settings` sets.
+const SETTING_KEYS: [&str; 5] = [
+    "selected-version",
+    "minecraft-dir",
+    "server-dir",
+    "install-new-versions",
+    "opening-animation",
+];
+
+fn on_off(value: &str) -> Result<bool, String> {
+    match value {
+        "on" | "true" => Ok(true),
+        "off" | "false" => Ok(false),
+        _ => Err(format!("{value}: say on or off")),
+    }
+}
+
+fn set_setting(s: &mut backend::Settings, key: &str, value: &str) -> Result<(), String> {
+    let folder = |value: &str| (value != "default").then(|| PathBuf::from(value));
+    match key {
+        "selected-version" => s.selected = Some(backend::resolve_version(Some(value))?),
+        "minecraft-dir" => s.minecraft_dir = folder(value),
+        "server-dir" => s.server_dir = folder(value),
+        "install-new-versions" => s.install_new_versions = Some(on_off(value)?),
+        "opening-animation" => s.skip_opening = !on_off(value)?,
+        _ => return Err(format!("No setting {key}.")),
+    }
+    Ok(())
+}
+
+/// Every launcher setting, as `settings` shows them.
+fn settings_json(s: &backend::Settings) -> serde_json::Value {
+    serde_json::json!({
+        "selected_version": backend::resolve_version(None).ok(),
+        "minecraft_dir": s.minecraft_dir,
+        "server_dir": backend::server_dir(None),
+        "install_new_versions": s.install_new_versions.unwrap_or(true),
+        "opening_animation": !s.skip_opening,
+        "update_channel": s.update_channel.name(),
+        "game_args": s.game_args,
+        "desktop_entry": s.desktop_entry.unwrap_or(true),
+        "no_ai": backend::no_ai(),
+    })
+}
+
 /// Runs a subcommand and returns the exit code, or None when the window should open.
 pub fn run() -> Option<i32> {
-    let cli = Cli::parse();
+    use clap::FromArgMatches;
+    let no_ai = backend::no_ai();
+    let mut definition = command();
+    if no_ai {
+        // Hidden from the help too; a call still gets the refusal below.
+        for name in AI_COMMANDS {
+            definition = definition.mut_subcommand(name, |c| c.hide(true));
+        }
+    }
+    let cli = Cli::from_arg_matches(&definition.get_matches()).unwrap_or_else(|e| e.exit());
     let command = cli.command?;
     let result = match command {
-        Cmd::Mcp if backend::no_ai() => Err(horizon_core::no_ai::REFUSAL.into()),
+        Cmd::Mcp | Cmd::AgentConfig { .. } if no_ai => Err(horizon_core::no_ai::REFUSAL.into()),
         Cmd::Mcp => crate::mcp::serve(),
         command => execute(command, cli.json),
     };
@@ -505,10 +591,22 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
             }
             println!("{tag} is prepared.");
         }
-        Cmd::Play { version, join, arg } => {
+        Cmd::Play {
+            version,
+            world,
+            creative,
+            join,
+            arg,
+        } => {
             let mut cmd = backend::client(&backend::resolve_version(version.as_deref())?)?;
             if let Some(code) = join {
                 backend::join_friend(&mut cmd, &code)?;
+            }
+            if let Some(world) = world {
+                cmd.arg("--world").arg(world);
+            }
+            if creative {
+                cmd.arg("--creative");
             }
             cmd.args(arg);
             attached(cmd)?
@@ -573,6 +671,55 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 println!("No AI is on: every AI feature is hidden and off.");
             } else {
                 println!("No AI is off: AI features are available.");
+            }
+        }
+        Cmd::AgentConfig { client } => {
+            use horizon_launcher::agents;
+            let exe = backend::exe_path();
+            if as_json {
+                let mut all = agents::json(exe);
+                if let Some(id) = &client {
+                    all["clients"] = all["clients"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter(|c| c["id"] == id.as_str())
+                        .cloned()
+                        .collect();
+                }
+                json(all);
+                return Ok(());
+            }
+            for c in agents::clients(exe)
+                .iter()
+                .filter(|c| client.as_ref().is_none_or(|id| id == c.id))
+            {
+                println!("{}", c.name);
+                if let Some(line) = c.add_line() {
+                    println!("  Add it with:  {line}");
+                }
+                println!("  Or put this in {}:", c.file);
+                for line in c.config.lines() {
+                    println!("    {line}");
+                }
+                println!();
+            }
+            println!("Then ask your agent to say hello: it can call the links tool, or play.");
+        }
+        Cmd::Settings { key, value } => {
+            let mut settings = backend::Settings::load();
+            if let Some(key) = key {
+                let value = value.ok_or("settings KEY VALUE: the value is missing")?;
+                set_setting(&mut settings, &key, &value)?;
+                settings.save();
+            }
+            let all = settings_json(&settings);
+            if as_json {
+                json(all);
+            } else {
+                for (key, value) in all.as_object().into_iter().flatten() {
+                    println!("{key}: {value}");
+                }
             }
         }
         Cmd::UpdateChannel { channel } => {
