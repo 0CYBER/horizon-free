@@ -1725,29 +1725,10 @@ impl Game<'_> {
                     self.block_entity_event(p.pos, i32::from(p.b0), i32::from(p.b1));
                 }
             }
-            C::LevelEvent(p) if p.kind == 2015 => {
-                self.dragon_egg_particles(p.pos, p.data);
-            }
-            C::LevelEvent(p) if p.kind == 2017 => {
-                self.consume_teleport_particles(p.pos, p.data);
-            }
-            C::LevelEvent(p) if p.kind == 2001 => {
-                // LevelEvent.PARTICLES_DESTROY_BLOCK: someone else broke a block.
-                let state = BlockStateId(p.data.max(0) as u32);
-                let s = self.res.facts().get(state).sounds.clone();
-                let at = [
-                    f64::from(p.pos[0]) + 0.5,
-                    f64::from(p.pos[1]) + 0.5,
-                    f64::from(p.pos[2]) + 0.5,
-                ];
-                self.audio.play(
-                    &s.break_sound,
-                    Some(at),
-                    (s.volume + 1.0) / 2.0,
-                    s.pitch * 0.8,
-                );
-                self.destroy_particles(p.pos, state);
-            }
+            // ClientLevel.levelEvent: LevelEventHandler, as this client's own
+            // level plays them (particles and sounds: a spawner's burst, bone
+            // meal, waxing, a block broken by someone else).
+            C::LevelEvent(p) => self.level_event_at(p.kind, p.pos, p.data),
             C::Sound(p) => {
                 let name = match &p.sound.1 {
                     Some((location, _)) => Some(location.clone()),
@@ -3821,6 +3802,8 @@ impl Game<'_> {
             }
             if reacts {
                 self.predict_use(&changes, seq);
+            } else if let Some(stack) = held.as_ref() {
+                self.predict_item_on_block(stack, &hit);
             }
             if held_block {
                 if reacts
@@ -3837,6 +3820,38 @@ impl Game<'_> {
             return reacts;
         }
         false
+    }
+
+    /// `Item.useOn` on this client's level for the items whose effects are
+    /// the clicker's own (`Level.levelEvent(player, ...)` and
+    /// `playSound(player, ...)`: the server sends them to the others only):
+    /// honeycomb waxing copper, and an axe, hoe or shovel transforming a
+    /// block (stripping, scraping, removing wax, tilling, making a path).
+    fn predict_item_on_block(&mut self, stack: &ItemStack, hit: &super::Hit) {
+        let at = [
+            f64::from(hit.pos[0]) + 0.5,
+            f64::from(hit.pos[1]) + 0.5,
+            f64::from(hit.pos[2]) + 0.5,
+        ];
+        if &*stack.item == "minecraft:honeycomb" {
+            // HoneycombItem.useOn.
+            let registry = self.pack.assets.registry;
+            let clicked = self.world.block(hit.pos[0], hit.pos[1], hit.pos[2]);
+            let waxes = registry
+                .state(clicked)
+                .and_then(|old| self.res.transformers().waxed(registry, old))
+                .is_some();
+            if waxes {
+                self.level_event_at(3003, hit.pos, 0);
+                self.audio
+                    .play("minecraft:item.honeycomb.wax_on", Some(at), 1.0, 1.0);
+            }
+        } else if let Some((_, sound, _, _, particle)) =
+            self.block_transform(stack, hit.pos, hit.face)
+        {
+            self.transform_particle(&particle, hit.pos);
+            self.audio.play(&sound, Some(at), 1.0, 1.0);
+        }
     }
 
     /// MultiPlayerGameMode.useItemOn inside startPrediction: the blocks the
