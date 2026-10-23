@@ -73,6 +73,7 @@ mod lan_crafting;
 mod lan_entities;
 mod lan_mobs;
 mod lan_mount_menu;
+mod lan_particles;
 mod lan_pvp;
 mod lan_screen;
 mod lan_stations;
@@ -2609,6 +2610,17 @@ impl Game<'_> {
                 LevelEvent::LevelEvent { id: 2004, pos, .. } => {
                     self.spawner_burst([pos.x, pos.y, pos.z])
                 }
+                // LevelEventHandler 1505: the growth particles, then the sound.
+                LevelEvent::LevelEvent {
+                    id: 1505,
+                    pos,
+                    data,
+                } => {
+                    self.growth_particles(pos, data);
+                    let at = [pos.x, pos.y, pos.z].map(|v| f64::from(v) + 0.5);
+                    self.audio
+                        .play("minecraft:item.bone_meal.use", Some(at), 1.0, 1.0);
+                }
                 LevelEvent::LevelEvent {
                     id: 2015,
                     pos,
@@ -2652,7 +2664,6 @@ impl Game<'_> {
                         1030 => Some(("minecraft:block.anvil.use", 1.0)),
                         1029 => Some(("minecraft:block.anvil.destroy", 1.0)),
                         1031 => Some(("minecraft:block.anvil.land", 0.3)),
-                        1505 => Some(("minecraft:item.bone_meal.use", 1.0)),
                         1042 => Some(("minecraft:block.grindstone.use", 1.0)),
                         1044 => Some(("minecraft:block.smithing_table.use", 1.0)),
                         // LevelEvent.SOUND_PAGE_TURN (a lectern's page).
@@ -8114,13 +8125,15 @@ impl Game<'_> {
         }
         Ok(true)
     }
-    /// `BlockTransformer.transformBlock` for a held axe, hoe or shovel.
-    fn use_block_transformer(
-        &mut self,
+    /// What `BlockTransformer.transformBlock` would do with a held axe, hoe
+    /// or shovel on the block at `pos`, without doing it: the new state, its
+    /// sound, loot table, the durability it costs and its particle.
+    pub(super) fn block_transform(
+        &self,
         stack: &ItemStack,
         pos: [i32; 3],
         face: [i32; 3],
-    ) -> Result<bool> {
+    ) -> Option<(BlockStateId, String, Option<String>, u32, String)> {
         use horizon_client::block_transform::Around;
         struct Column<'w> {
             world: &'w World,
@@ -8140,14 +8153,11 @@ impl Game<'_> {
                 })
             }
         }
-        let Some(id) = self
+        let id = self
             .res
             .items()
             .get(&stack.item)
-            .and_then(|i| i.block_transformer.clone())
-        else {
-            return Ok(false);
-        };
+            .and_then(|i| i.block_transformer.clone())?;
         // playerHasBlockingItemUseIntent: a shield in the off hand is raised
         // instead, unless sneaking.
         let shield = self
@@ -8156,7 +8166,7 @@ impl Game<'_> {
             .and_then(|s| self.res.items().get(&s.item))
             .is_some_and(|i| i.blocks_attacks.is_some());
         if shield && !self.keys.contains(&KeyCode::ShiftLeft) {
-            return Ok(false);
+            return None;
         }
         let face_name = match face {
             [0, -1, 0] => "down",
@@ -8167,38 +8177,47 @@ impl Game<'_> {
             _ => "east",
         };
         let registry = self.pack.assets.registry;
-        let (state, sound, loot, damage, particle) = {
-            let around = Column {
-                world: &self.world,
-                registry,
-                pos,
-            };
-            let Some((_, t, state)) =
-                self.res
-                    .transformers()
-                    .apply(self.res.items(), registry, &id, face_name, &around)
-            else {
-                return Ok(false);
-            };
-            (
-                state,
-                t.sound.clone(),
-                t.loot.clone(),
-                t.damage,
-                t.particle.clone(),
-            )
+        let around = Column {
+            world: &self.world,
+            registry,
+            pos,
         };
-        let Ok(new) = registry.resolve(&state) else {
-            return Ok(false);
-        };
-        self.level_set(pos, new)?;
-        // BlockTransformer.TransformParticle.send.
-        match particle.as_str() {
+        let (_, t, state) =
+            self.res
+                .transformers()
+                .apply(self.res.items(), registry, &id, face_name, &around)?;
+        let new = registry.resolve(&state).ok()?;
+        Some((
+            new,
+            t.sound.clone(),
+            t.loot.clone(),
+            t.damage,
+            t.particle.clone(),
+        ))
+    }
+    /// `BlockTransformer.TransformParticle.send`: its level event.
+    pub(super) fn transform_particle(&mut self, particle: &str, pos: [i32; 3]) {
+        match particle {
             "scrape" => self.level_event_at(3005, pos, 0),
             "wax_on" => self.level_event_at(3003, pos, 0),
             "wax_off" => self.level_event_at(3004, pos, 0),
             _ => {}
         }
+    }
+    /// `BlockTransformer.transformBlock` for a held axe, hoe or shovel.
+    fn use_block_transformer(
+        &mut self,
+        stack: &ItemStack,
+        pos: [i32; 3],
+        face: [i32; 3],
+    ) -> Result<bool> {
+        let Some((new, sound, loot, damage, particle)) = self.block_transform(stack, pos, face)
+        else {
+            return Ok(false);
+        };
+        self.level_set(pos, new)?;
+        // BlockTransformer.TransformParticle.send.
+        self.transform_particle(&particle, pos);
         if loot.as_deref() == Some("minecraft:till/rooted_dirt") {
             self.pop_resource(
                 [pos[0] + face[0], pos[1] + face[1], pos[2] + face[2]],

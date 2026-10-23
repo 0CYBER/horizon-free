@@ -109,15 +109,9 @@ BENIGN = re.compile(r'(Unpacking |OFFLINE/INSECURE|online-mode|authenticate user
 
 # ---------------------------------------------------------------- vanilla server
 
-def free_port():
-    with socket.socket() as s:
-        s.bind(('127.0.0.1', 0))
-        return s.getsockname()[1]
-
-
 class Vanilla:
     def __init__(self, directory, port=None, world='world', extra=None):
-        port = port or free_port()
+        port = port or lab.free_port()
         directory.mkdir(parents=True, exist_ok=True)
         (directory / 'eula.txt').write_text('eula=true\n')
         props = {

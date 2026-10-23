@@ -46,7 +46,7 @@ impl BossBar {
             style: "progress".into(),
             value: 0,
             max: 100,
-            visible: false,
+            visible: true,
             player: false,
         }
     }

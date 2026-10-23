@@ -750,12 +750,6 @@ fn heightmaps(chunk: &Chunk, tables: &SaveTables) -> Tag {
         )
     }))
 }
-/// The heightmaps a ClientboundLevelChunkPacketData carries (the types with
-/// sendToClient: WORLD_SURFACE, MOTION_BLOCKING, MOTION_BLOCKING_NO_LEAVES),
-/// as (network id, packed longs) in Heightmap.Types order.
-pub fn client_heightmaps(chunk: &Chunk, tables: &SaveTables) -> Vec<(i32, Vec<i64>)> {
-    client_heightmaps_in(&chunk.sections, tables, MIN_Y, SECTIONS as i32 * 16)
-}
 /// The client heightmaps of a column's sections, in a level from `min_y`,
 /// `height` blocks high.
 pub fn client_heightmaps_in(

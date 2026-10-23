@@ -129,23 +129,6 @@ impl Game<'_> {
     }
     /// The screen title: the custom name, else the profession (the client
     /// adds the level itself).
-    #[allow(dead_code)]
-    fn merchant_title(&self, state: &MerchantState) -> String {
-        if let Some(name) = &state.name {
-            return name.clone();
-        }
-        let e = &self.res.stations().enchantments;
-        let profession = state.session.profession.trim_start_matches("minecraft:");
-        if state.session.villager {
-            e.translate(&format!("entity.minecraft.villager.{profession}"))
-                .unwrap_or(profession)
-                .to_owned()
-        } else {
-            e.translate("entity.minecraft.wandering_trader")
-                .unwrap_or("Wandering Trader")
-                .to_owned()
-        }
-    }
     /// `ServerPlayer.sendMerchantOffers`, when the offers changed.
     fn lan_send_offers(
         &mut self,

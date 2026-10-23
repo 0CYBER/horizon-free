@@ -1,7 +1,7 @@
 //! ComponentSerialization.CODEC and Style.Serializer.MAP_CODEC decoding of
 //! SNBT text components, with the data-fixer-upper error messages
 //! (ComponentArgument, StyleArgument and component-valued item data).
-use super::codec::{get, no_key, not_list, not_map, snbt};
+use super::codec::{get, no_key, not_list, not_map};
 use horizon_world::nbt::{Compound, Tag};
 
 /// A DataResult error: its message and whether it carries a partial result.
@@ -361,8 +361,4 @@ pub fn decode_style(t: &Tag) -> Result<(), String> {
         Tag::Compound(map) => style_fields(map).map_err(|e| e.msg),
         _ => Err(not_map(t)),
     }
-}
-#[allow(unused)]
-fn _keep(t: &Tag) -> String {
-    snbt(t)
 }
