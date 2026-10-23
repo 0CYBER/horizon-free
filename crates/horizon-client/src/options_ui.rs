@@ -871,6 +871,8 @@ pub enum Page {
     Controller,
     PadBinds,
     Extras,
+    /// CreditsAndAttributionScreen.
+    Credits,
     /// Horizon Settings: every page Horizon adds, as a mod's settings
     /// screen hangs off vanilla's Options.
     Horizon,
@@ -896,6 +898,8 @@ enum Act {
     /// Pick shader pack `i` of `OptionsUi::shader_packs` (again: off).
     ToggleShaderPack(usize),
     OpenShaderPackFolder,
+    /// Credits & Attribution's Credits button (WinScreen without the poem).
+    Credits,
     CopyAgentDetails,
 }
 enum WKind {
@@ -946,6 +950,8 @@ pub enum Event {
     OpenModFolder,
     /// Create `shaderpacks/` if needed and open it.
     OpenShaderPackFolder,
+    /// Roll the credits (`CreditsAndAttributionScreen.openCreditsScreen`).
+    Credits,
     /// Copy how an agent connects (the AI Agent page).
     CopyAgentDetails,
 }
@@ -1213,6 +1219,7 @@ impl OptionsUi {
             Page::Controller => "Controller Settings",
             Page::PadBinds => "Controller Binds",
             Page::Extras => "Horizon Extras",
+            Page::Credits => "credits_and_attribution.screen.title",
             Page::Horizon => "Horizon Settings",
             Page::Agent => "AI Agent",
         }
@@ -1633,15 +1640,58 @@ impl OptionsUi {
                     ("options.accessibility", Some(Page::Accessibility)),
                     // Vanilla's Telemetry Data and Credits slots: Horizon's
                     // settings and its mods, as a mod adds its button here.
+                    // Credits & Attribution (WinScreen's credits) follows them.
                     ("Horizon Settings...", Some(Page::Horizon)),
                     ("Mods...", Some(Page::Mods)),
+                    ("options.credits_and_attribution", Some(Page::Credits)),
                 ];
-                let gy = (61.0 + 30.0f32).min(h - 33.0 - 120.0);
+                let rows = entries.len().div_ceil(2) as f32;
+                let gy = (61.0 + 30.0f32).min(h - 33.0 - rows * 24.0);
                 for (i, (key, page)) in entries.iter().enumerate() {
                     let x = cx - 158.0 + 4.0 + (i % 2) as f32 * 158.0;
                     let y = gy + (i / 2) as f32 * 24.0;
                     let b = button(x, y, 150.0, tr(key), page.map_or(Act::None, Act::Push));
                     out.push(if page.is_some() { b } else { inactive(b) });
+                }
+                out.push(done(h - 27.0));
+                top = 0.0;
+                bottom = 0.0;
+            }
+            Page::Credits => {
+                // CreditsAndAttributionScreen: the title header, three 210-wide
+                // buttons 8 apart (HeaderAndFooterLayout: 30 below the header
+                // unless the footer is closer), Done.
+                out.push(Widget {
+                    x: 0.0,
+                    y: 12.0,
+                    w,
+                    h: 9.0,
+                    kind: WKind::Text {
+                        text: tr(Self::title(page)),
+                        color: u32::MAX,
+                        centered: true,
+                    },
+                    list: false,
+                });
+                let y = (33.0 + 30.0f32).min(h - 33.0 - 76.0);
+                let x = cx - 105.0;
+                out.push(button(
+                    x,
+                    y,
+                    210.0,
+                    tr("credits_and_attribution.button.credits"),
+                    Act::Credits,
+                ));
+                // ConfirmLinkScreen to minecraft.net: Horizon opens no links.
+                for (i, key) in [
+                    "credits_and_attribution.button.attribution",
+                    "credits_and_attribution.button.licenses",
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let y = y + 28.0 * (i + 1) as f32;
+                    out.push(inactive(button(x, y, 210.0, tr(key), Act::None)));
                 }
                 out.push(done(h - 27.0));
                 top = 0.0;
@@ -2537,6 +2587,7 @@ impl OptionsUi {
                             events.push(Event::Changed);
                         }
                         Act::OpenShaderPackFolder => events.push(Event::OpenShaderPackFolder),
+                        Act::Credits => events.push(Event::Credits),
                         Act::CopyAgentDetails => events.push(Event::CopyAgentDetails),
                         Act::None => {}
                     }
@@ -4172,9 +4223,13 @@ mod tests {
                 })
                 .collect()
         };
-        // Vanilla's ten Options buttons, the last two Horizon's.
+        // Vanilla's Options buttons, Horizon's two in the Telemetry and Credits slots, then
+        // Credits & Attribution (WinScreen's credits).
         let main = pushes(&mut ui);
-        assert_eq!(&main[main.len() - 2..], [Page::Horizon, Page::Mods]);
+        assert_eq!(
+            &main[main.len() - 3..],
+            [Page::Horizon, Page::Mods, Page::Credits]
+        );
         ui.push(Page::Horizon);
         assert_eq!(
             pushes(&mut ui),
