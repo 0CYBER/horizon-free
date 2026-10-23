@@ -267,6 +267,9 @@ struct Options {
     /// Render into a texture instead of the window (`--offscreen`), so a
     /// GPU the display cannot present from can still be benchmarked.
     offscreen: bool,
+    /// `--width` and `--height` (vanilla's own arguments): the window's
+    /// starting size, 1280x720 by default.
+    window_size: [u32; 2],
     /// Multiplayer: `--server HOST[:PORT]` joins at start; `--name` is the offline player name.
     server: Option<String>,
     /// `--name`, `HORIZON_PLAYER_NAME` or the signed-in account's name; else
@@ -326,6 +329,7 @@ impl Options {
             no_pause: false,
             control: None,
             offscreen: false,
+            window_size: [1280, 720],
             spikes: std::env::var("HORIZON_SPIKES")
                 .ok()
                 .and_then(|v| v.parse().ok()),
@@ -348,7 +352,7 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Horizon — Minecraft Java Edition {} in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --world-frames N        Exit after N frames drawn in the world (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --dev-mod PATH          A Horizon mod (.hmod or folder) to develop: always on, reloaded when rebuilt\n  --no-server-thread      Run single player's world in the frame, not on its server thread\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause.",
+                        "Horizon — Minecraft Java Edition {} in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --width N, --height N   Window size (default 1280 x 720)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --world-frames N        Exit after N frames drawn in the world (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --dev-mod PATH          A Horizon mod (.hmod or folder) to develop: always on, reloaded when rebuilt\n  --no-server-thread      Run single player's world in the frame, not on its server thread\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause.",
                         horizon_core::VANILLA_VERSION
                     );
                     return Ok(None);
@@ -397,6 +401,8 @@ impl Options {
                         "--timeout-seconds" => o.timeout = Duration::from_secs(value.parse()?),
                         "--smoke-report" => o.report = Some(value.into()),
                         "--screenshot-after" => o.screenshot_after = Some(value.parse()?),
+                        "--width" => o.window_size[0] = value.parse::<u32>()?.max(1),
+                        "--height" => o.window_size[1] = value.parse::<u32>()?.max(1),
                         "--world" => o.world = Some(value),
                         "--dev-mod" => o.dev_mods.push(std::path::absolute(&value)?),
                         "--benchmark" => {
@@ -2106,7 +2112,14 @@ impl Game<'_> {
             ) {
                 continue;
             }
-            let alive = item.tick(&self.world, self.res.facts(), self.collision);
+            // ItemEntity.tick's noPhysics (servers only): out of a block
+            // placed on it, towards the closest open side (#1252).
+            let no_physics = merging && item.inside_block(&self.world, self.collision);
+            if no_physics {
+                let speed = self.world.random.next_float() * 0.2 + 0.1;
+                item.move_towards_closest_space(&self.world, self.res.facts(), speed);
+            }
+            let alive = item.tick(&self.world, self.res.facts(), self.collision, no_physics);
             cells.moved(i, item.previous, item.position);
             // ItemEntity.tick: merge every 2 ticks while moving between
             // blocks, every 40 otherwise, before the lifetime check.
@@ -3586,8 +3599,6 @@ impl Game<'_> {
         }
     }
     fn tick_using(&mut self) {
-        // ItemCooldowns.tick for the shield.
-        self.shield_cooldown = self.shield_cooldown.saturating_sub(1);
         let Some(hand) = self.used_hand() else {
             return;
         };
@@ -4293,6 +4304,9 @@ impl Game<'_> {
     fn tick_world(&mut self, running: bool) -> Result<()> {
         self.update_chunk_tickets();
         horizon_client::spans::time("tick_effects", || self.tick_effects());
+        // Player.tick's ItemCooldowns.tick for the window's player (a
+        // server's players count theirs down in `tick_guests`).
+        self.shield_cooldown = self.shield_cooldown.saturating_sub(1);
         horizon_client::spans::time("tick_using", || self.tick_using());
         horizon_client::spans::time("tick_hud", || self.tick_hud());
         // The player's digging comes in with its packets, before the level
@@ -9138,31 +9152,41 @@ impl Game<'_> {
         } else {
             pos
         };
-        self.spawn = Some(Vec3::new(
-            f64::from(head[0]) + 0.5,
-            f64::from(head[1]) + 0.6,
-            f64::from(head[2]) + 0.5,
-        ));
-        // The bed replaces a respawn anchor.
-        self.respawn_config = None;
-        self.level.spawn = Some([
-            f64::from(head[0]),
-            f64::from(head[1]) + 1.0,
-            f64::from(head[2]),
-        ]);
         let dist = ((p.position.x - f64::from(head[0]) - 0.5).powi(2)
             + (p.position.z - f64::from(head[2]) - 0.5).powi(2))
         .sqrt();
-        if !night {
+        if dist > 3.0 {
             self.message = Some((
-                "You can sleep only at night or during thunderstorms".into(),
+                "You may not rest now; the bed is too far away".into(),
                 Instant::now(),
             ));
             return;
         }
-        if dist > 3.0 {
+        // In reach (bedInRange), day or night: setRespawnPosition(
+        // RespawnConfig(the head, the player's yaw), not forced). It replaces
+        // an anchor or a spawnpoint; respawning checks the bed is still there
+        // and finds where to stand up (findRespawnAndUseSpawnBlock).
+        // Straw beds never set it (`straw_bed_rule`).
+        if self.bed_sets_spawn(state) {
+            self.respawn_config = Some(respawn_anchor::RespawnConfig::wrapped(
+                self.dim, head, p.yaw, false,
+            ));
+            // The fallback becomes the world spawn: a guest's is none of its
+            // own, so it follows `setworldspawn`.
+            self.spawn = if self.lan_acting.is_some() {
+                None
+            } else {
+                self.level
+                    .world_spawn
+                    .map(|[x, y, z]| {
+                        Vec3::new(f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5)
+                    })
+                    .or(self.spawn)
+            };
+        }
+        if !night {
             self.message = Some((
-                "You may not rest now; the bed is too far away".into(),
+                "You can sleep only at night or during thunderstorms".into(),
                 Instant::now(),
             ));
             return;
@@ -9522,6 +9546,7 @@ impl Game<'_> {
         if let Some(p) = &self.player {
             level.position = Some([p.position.x, p.position.y, p.position.z]);
             level.health = p.health.health();
+            level.absorption = p.health.absorption();
             let extra = level
                 .player_extra
                 .get_or_insert_with(|| horizon_world::nbt::Tag::Compound(Default::default()));
@@ -10575,6 +10600,7 @@ impl ApplicationHandler for Game<'_> {
         }
         // The Window constructor: created fullscreen when options.txt says so.
         let fullscreen = self.settings.fullscreen;
+        let size = self.options.window_size.map(f64::from);
         self.fullscreen = horizon_client::window::FullscreenState::new(fullscreen);
         let attributes = Window::default_attributes()
             .with_title("Horizon")
@@ -10586,7 +10612,7 @@ impl ApplicationHandler for Game<'_> {
         );
         let window = match event_loop.create_window(
             attributes
-                .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0))
+                .with_inner_size(winit::dpi::LogicalSize::new(size[0], size[1]))
                 .with_fullscreen(fullscreen.then_some(winit::window::Fullscreen::Borderless(None))),
         ) {
             Ok(w) => Arc::new(w),
@@ -12679,6 +12705,11 @@ impl Loading {
         }
         // The Window constructor: created fullscreen when options.txt says so.
         let fullscreen = self.settings.fullscreen;
+        let size = self
+            .options
+            .as_ref()
+            .map_or([1280, 720], |o| o.window_size)
+            .map(f64::from);
         self.fullscreen = horizon_client::window::FullscreenState::new(fullscreen);
         let attributes = Window::default_attributes()
             .with_title("Horizon")
@@ -12690,7 +12721,7 @@ impl Loading {
         );
         let window = match event_loop.create_window(
             attributes
-                .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0))
+                .with_inner_size(winit::dpi::LogicalSize::new(size[0], size[1]))
                 .with_fullscreen(fullscreen.then_some(winit::window::Fullscreen::Borderless(None))),
         ) {
             Ok(w) => Arc::new(w),

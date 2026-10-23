@@ -2337,7 +2337,20 @@ impl Game<'_> {
             Some(Arg::Coords(c)) => c.rotation(self.source_rotation()),
             _ => [0.0, 0.0],
         };
-        self.level.spawn = Some([f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])]);
+        // LevelData.setRespawnData: the world's spawn (level.dat `spawn`).
+        let old = self.level.world_spawn.replace(pos);
+        self.level.world_spawn_angle = rot;
+        // A player whose fallback is the world spawn (no spawnpoint of its
+        // own; a bed or an anchor that is gone falls back to it) respawns at
+        // the new one.
+        let floor = |s: Vec3| [s.x.floor() as i32, s.y.floor() as i32, s.z.floor() as i32];
+        if self.spawn.map(floor) == old {
+            self.spawn = Some(Vec3::new(
+                f64::from(pos[0]) + 0.5,
+                f64::from(pos[1]),
+                f64::from(pos[2]) + 0.5,
+            ));
+        }
         let args = [
             Text::literal(pos[0].to_string()),
             Text::literal(pos[1].to_string()),

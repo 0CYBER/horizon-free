@@ -339,6 +339,8 @@ impl PlayerMotion {
                 .unwrap_or(300) as i32;
             self.fall_distance = level.fall_distance;
             self.set_health(level.health, false)?;
+            // LivingEntity.readAdditionalSaveData: internalSetAbsorptionAmount.
+            self.internal_set_absorption(level.absorption)?;
             self.health.food.food = level.food;
             self.health.food.saturation = level.saturation;
             self.flying = level.flying;
@@ -1030,9 +1032,22 @@ impl MotionWorld<'_, '_, '_> {
     }
     /// `Entity.applyEffectsFromBlocks` for the blocks Horizon's player reacts
     /// to inside its movement path: powder snow (`PowderSnowBlock.entityInside`
-    /// and the FREEZE / EXTINGUISH effects), cobwebs and sweet berry bushes. Pressure plates, tripwires and
-    /// rails are the world tick's scan.
+    /// and the FREEZE / EXTINGUISH effects), cobwebs, sweet berry bushes,
+    /// cactus and lit campfires, and the magma block it stands on
+    /// (`stepOn`). Pressure plates, tripwires and rails are the world tick's
+    /// scan.
     pub fn apply_effects_from_blocks(&mut self) -> Result<()> {
+        self.effects_from_blocks(false)
+    }
+    /// What `applyEffectsFromBlocks` does to a server's player along the
+    /// moves its client sent since `from` (in its history): the damage of
+    /// magma, cactus, lit campfires and grown sweet berry bushes. Its client
+    /// moves it, so the slowing and the rest are the client's.
+    pub fn server_block_damage(&mut self, from: Vec3) -> Result<()> {
+        self.player.old_position = from;
+        self.effects_from_blocks(true)
+    }
+    fn effects_from_blocks(&mut self, damage_only: bool) -> Result<()> {
         use horizon_world::entity_move::MovementRecord;
         let mut movements: Vec<MovementRecord> =
             self.player.history.records().iter().copied().collect();
@@ -1056,6 +1071,19 @@ impl MotionWorld<'_, '_, '_> {
         // isAffectedByBlocks: no physics for spectators.
         if self.player.spectator {
             return Ok(());
+        }
+        // Block.stepOn for the block under an entity on the ground:
+        // MagmaBlock's hot floor hurts unless it steps carefully (sneaks).
+        if self.player.ground.on_ground {
+            let on = self.legacy_on_position()?;
+            let magma = self
+                .assets
+                .registry
+                .state(self.block(on))
+                .is_some_and(|s| s.name == "minecraft:magma_block");
+            if magma && !self.player.shift_key_down {
+                self.environment_hurt("minecraft:hot_floor", 1.0)?;
+            }
         }
         let mut visited = std::collections::HashSet::new();
         let mut entered = Vec::new();
@@ -1082,6 +1110,7 @@ impl MotionWorld<'_, '_, '_> {
                                 &mut visited,
                                 &mut entered,
                                 budget,
+                                damage_only,
                             )?;
                             from = to;
                         }
@@ -1094,11 +1123,19 @@ impl MotionWorld<'_, '_, '_> {
                         &mut visited,
                         &mut entered,
                         16,
+                        damage_only,
                     )?;
                 }
             }
             if budget <= 0 {
-                self.check_inside_blocks(movement.to, movement.to, &mut visited, &mut entered, 1)?;
+                self.check_inside_blocks(
+                    movement.to,
+                    movement.to,
+                    &mut visited,
+                    &mut entered,
+                    1,
+                    damage_only,
+                )?;
             }
         }
         // InsideBlockEffectApplier.StepBasedCollector: the blocks entered
@@ -1138,6 +1175,7 @@ impl MotionWorld<'_, '_, '_> {
         visited: &mut std::collections::HashSet<i64>,
         entered: &mut Vec<(i32, BlockPos)>,
         max_iterations: i32,
+        damage_only: bool,
     ) -> Result<i32> {
         let deflated = self.player.dimensions.bounds(to).deflate(Vec3::new(
             f64::from(1.0e-5_f32),
@@ -1214,6 +1252,33 @@ impl MotionWorld<'_, '_, '_> {
                 }
             };
             if inside && visited.insert(p.pack()) {
+                // CactusBlock and CampfireBlock.entityInside (`entity.hurt`).
+                match name {
+                    "minecraft:cactus" => self.environment_hurt("minecraft:cactus", 1.0)?,
+                    "minecraft:campfire" | "minecraft:soul_campfire" => {
+                        let lit = self
+                            .assets
+                            .registry
+                            .state(state)
+                            .and_then(|s| s.properties.get("lit"))
+                            .is_some_and(|v| v == "true");
+                        let damage = if name == "minecraft:campfire" {
+                            1.0
+                        } else {
+                            2.0
+                        };
+                        if lit {
+                            self.environment_hurt("minecraft:campfire", damage)?;
+                        }
+                    }
+                    "minecraft:sweet_berry_bush" if damage_only => {
+                        self.sweet_berry_bush_damage(state)?;
+                    }
+                    _ => {}
+                }
+                if damage_only {
+                    continue;
+                }
                 match name {
                     "minecraft:powder_snow" => {
                         self.powder_snow_inside(p)?;
@@ -1262,6 +1327,10 @@ impl MotionWorld<'_, '_, '_> {
     /// is at least 0.003 on X or Z.
     fn sweet_berry_bush_inside(&mut self, state: BlockStateId) -> Result<()> {
         self.make_stuck_in_block(Vec3::new(f64::from(0.8_f32), 0.75, f64::from(0.8_f32)));
+        self.sweet_berry_bush_damage(state)
+    }
+    /// The server's half of `SweetBerryBushBlock.entityInside`: the prick.
+    fn sweet_berry_bush_damage(&mut self, state: BlockStateId) -> Result<()> {
         let age = self
             .assets
             .registry

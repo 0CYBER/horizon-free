@@ -193,11 +193,16 @@ impl Game<'_> {
             _ => 1.0,
         };
         self.end_portal_travel = end;
-        let scaled = self.end_destination(target).unwrap_or(Vec3::new(
-            from.x * scale,
-            from.y,
-            from.z * scale,
-        ));
+        // Leaving the End: the player's own respawn point.
+        let own = if end {
+            self.as_guest(host, conn, |g| g.end_destination(target))
+                .flatten()
+        } else {
+            None
+        };
+        let scaled = own
+            .or_else(|| self.end_destination(target))
+            .unwrap_or(Vec3::new(from.x * scale, from.y, from.z * scale));
         self.end_portal_travel = false;
         if let Err(e) = self.enter_level(Some(host), target) {
             log::error!("could not open {}: {e}", target.id());
@@ -244,13 +249,15 @@ impl Game<'_> {
     }
 
     /// `findRespawnAndUseSpawnBlock` for the player in place, at its point
-    /// in the level in place: where it stands up, facing the anchor, with
-    /// the deplete sound; else the point is forgotten
+    /// in the level in place: where it stands up, facing the anchor (with
+    /// the deplete sound) or the bed; else the point is forgotten
     /// (`block.minecraft.spawn.not_valid`).
-    fn resolve_server_respawn(&mut self, config: RespawnConfig) -> Option<(Vec3, f32)> {
+    pub(super) fn resolve_server_respawn(&mut self, config: RespawnConfig) -> Option<(Vec3, f32)> {
+        let [x, y, z] = config.pos;
+        let anchor = self.is_anchor(self.world.block(x, y, z));
         match self.find_respawn_and_use(config, true) {
             Ok(Some((at, yaw))) => {
-                if !config.forced {
+                if !config.forced && anchor {
                     let [x, y, z] = config.pos.map(f64::from);
                     self.audio.play(
                         "minecraft:block.respawn_anchor.deplete",
@@ -357,7 +364,11 @@ impl Game<'_> {
                     }
                 }
             } else if trip.end {
-                match self.end_arrival(trip.target) {
+                let arrival = match self.as_guest(host, trip.conn, |g| g.end_arrival(trip.target)) {
+                    Some(arrival) => arrival,
+                    None => self.end_arrival(trip.target),
+                };
+                match arrival {
                     Ok((at, turned)) => (at, turned.unwrap_or(yaw)),
                     Err(e) => {
                         log::error!("End arrival: {e}");

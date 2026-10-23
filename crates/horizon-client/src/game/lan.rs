@@ -390,9 +390,14 @@ impl Game<'_> {
                     "placed": g.placed,
                     "loaded": g.loaded,
                     "game_mode": g.game_mode,
+                    // ItemCooldowns: the ticks the shield an axe disabled stays down.
+                    "shield_cooldown": h.play.get(&g.conn).map_or(0, |p| p.shield_cooldown),
                     "sneaking": g.sneaking,
                     "sleeping": g.bed,
                     "health": g.health,
+                    // The server's body: its air supply and golden hearts.
+                    "air": g.motion.as_ref().map(|m| m.air),
+                    "absorption": g.motion.as_ref().map(|m| m.health.absorption()),
                     // FoodData: food level, saturation and exhaustion.
                     "food": [
                         f64::from(g.food),
@@ -760,6 +765,7 @@ impl Game<'_> {
             (e.yaw, e.pitch, e.head_yaw) = (m.yaw, m.head_pitch, m.head_yaw);
             e.on_ground = m.on_ground;
             e.velocity = [m.velocity.x, m.velocity.y, m.velocity.z];
+            e.needs_sync = m.needs_sync;
             mob_meta(m, hub, &mut e.meta);
             mob_equipment(m, hub, &mut e.equipment);
             self.mob_attributes(m, &mut e.attributes);
@@ -827,6 +833,10 @@ impl Game<'_> {
                 self.lan_entities(host_entity, &mut host.hub, &mut states);
             } else {
                 states.clear();
+            }
+            // ServerEntity.sendChanges clears needsSync once it has looked.
+            for m in &mut self.mobs {
+                m.needs_sync = false;
             }
             let entities = states.as_slice();
             let spawn = self.spawn.map_or([0.5, 80.0, 0.5], |s| [s.x, s.y, s.z]);

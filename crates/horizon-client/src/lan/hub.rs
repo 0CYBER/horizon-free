@@ -1562,6 +1562,7 @@ impl Hub {
             equipment,
             attributes,
             precise: false,
+            needs_sync: false,
         }
     }
 
@@ -1765,6 +1766,27 @@ impl Hub {
             let values = super::attributes::take_dirty(&mut m.attributes);
             if !values.is_empty() {
                 g.send(&C::UpdateAttributes(play::UpdateAttributes {
+                    id: g.entity_id,
+                    values,
+                }));
+            }
+        }
+        // ServerEntity.sendDirtyEntityData: the air supply and the absorption
+        // amount the server's body changed go to the player, whose HUD draws
+        // them (bubbles, golden hearts).
+        let g = &mut self.guests[i];
+        if let Some(m) = g.motion.as_ref() {
+            let now = (m.air, m.health.absorption());
+            let mut values = Vec::new();
+            if now.0 != g.sent_air.0 {
+                values.push((1, serializer::INT, Value::Int(now.0)));
+            }
+            if now.1.to_bits() != g.sent_air.1.to_bits() {
+                values.push((17, serializer::FLOAT, Value::Float(now.1)));
+            }
+            if !values.is_empty() {
+                g.sent_air = now;
+                g.send(&C::SetEntityData(play::SetEntityData {
                     id: g.entity_id,
                     values,
                 }));
@@ -2480,9 +2502,11 @@ impl Hub {
                 global: false,
             }));
         }
-        // lastSentExp, lastSentHealth and lastSentFood.
+        // lastSentExp, lastSentHealth and lastSentFood; the client's new
+        // player starts with the default air and no absorption.
         g.sent_health = None;
         g.sent_xp = None;
+        g.sent_air = (300, 0.0);
         let (cx, cz) = g.chunk();
         g.send(&C::SetChunkCacheCenter(play::SetChunkCacheCenter {
             x: cx,
