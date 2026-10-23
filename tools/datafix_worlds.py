@@ -23,7 +23,6 @@ import sys
 import threading
 import time
 import urllib.request
-import uuid
 import zipfile
 import zlib
 from pathlib import Path
@@ -31,6 +30,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import datafix_scene as scene  # noqa: E402
 import datafix_scene_12 as scene12  # noqa: E402
+import lab  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 LOCAL = ROOT / '.local' / 'datafix'
@@ -159,12 +159,6 @@ def install_runtime(pin, home):
         target.symlink_to(to)
 
 
-def free_port():
-    with socket.socket() as s:
-        s.bind(('127.0.0.1', 0))
-        return s.getsockname()[1]
-
-
 class Server:
     def __init__(self, directory, jar, port, packs=(), java='java', props_override=None):
         directory.mkdir(parents=True, exist_ok=True)
@@ -230,38 +224,9 @@ def failed(lines):
 
 # ------------------------------------------------------------------ minimal bot
 
-def varint(v):
-    out = b''
-    v &= 0xFFFFFFFF
-    while True:
-        b = v & 0x7F
-        v >>= 7
-        out += bytes([b | (0x80 if v else 0)])
-        if not v:
-            return out
-
-
 def mcstring(s):
     data = s.encode()
-    return varint(len(data)) + data
-
-
-def parse_varint(data, pos):
-    value = shift = 0
-    while True:
-        b = data[pos]
-        pos += 1
-        value |= (b & 0x7F) << shift
-        shift += 7
-        if not b & 0x80:
-            return pos, value
-
-
-def offline_uuid(name):
-    digest = bytearray(hashlib.md5(('OfflinePlayer:' + name).encode()).digest())
-    digest[6] = (digest[6] & 0x0F) | 0x30
-    digest[8] = (digest[8] & 0x3F) | 0x80
-    return uuid.UUID(bytes=bytes(digest))
+    return lab.varint(len(data)) + data
 
 
 class Bot:
@@ -273,21 +238,21 @@ class Bot:
         self.buffer = b''
         self.protocol = protocol
         self.stop = threading.Event()
-        self.send(0, varint(protocol) + mcstring('127.0.0.1') + struct.pack('>H', port) + varint(2))
+        self.send(0, lab.varint(protocol) + mcstring('127.0.0.1') + struct.pack('>H', port) + lab.varint(2))
         if protocol <= 758:  # 1.18.2: the name only
             self.send(0, mcstring(name))
         elif protocol == 759:  # 1.19: no signature data
             self.send(0, mcstring(name) + b'\x00')
         elif protocol == 760:  # 1.19.2: no signature data, optional UUID
-            self.send(0, mcstring(name) + b'\x00' + b'\x01' + offline_uuid(name).bytes)
+            self.send(0, mcstring(name) + b'\x00' + b'\x01' + lab.offline_uuid(name).bytes)
         elif protocol <= 763:  # 1.19.3 - 1.20.1: optional UUID
-            self.send(0, mcstring(name) + b'\x01' + offline_uuid(name).bytes)
+            self.send(0, mcstring(name) + b'\x01' + lab.offline_uuid(name).bytes)
         else:
-            self.send(0, mcstring(name) + offline_uuid(name).bytes)
+            self.send(0, mcstring(name) + lab.offline_uuid(name).bytes)
         while True:
             pid, data = self.receive()
             if pid == 3:
-                self.threshold = parse_varint(data, 0)[1]
+                self.threshold = lab.parse_varint(data, 0)[1]
             elif pid == 2:
                 break
             elif pid == 0:
@@ -312,15 +277,15 @@ class Bot:
             elif pid == disconnect:
                 raise RuntimeError(f'disconnected during configuration: {data!r}')
             elif not old and self.known_packs(data):
-                self.send(7, varint(0))  # claim no packs: the server sends full registries
+                self.send(7, lab.varint(0))  # claim no packs: the server sends full registries
 
     @staticmethod
     def known_packs(data):
         try:
-            pos, count = parse_varint(data, 0)
+            pos, count = lab.parse_varint(data, 0)
             if count < 1:
                 return False
-            pos, n = parse_varint(data, pos)
+            pos, n = lab.parse_varint(data, pos)
             return data[pos:pos + n] == b'minecraft'
         except IndexError:
             return False
@@ -359,18 +324,18 @@ class Bot:
                 return value
 
     def send(self, packet_id, payload=b''):
-        body = varint(packet_id) + payload
+        body = lab.varint(packet_id) + payload
         if self.threshold >= 0:
-            body = varint(len(body)) + zlib.compress(body) if len(body) >= self.threshold else varint(0) + body
-        self.sock.sendall(varint(len(body)) + body)
+            body = lab.varint(len(body)) + zlib.compress(body) if len(body) >= self.threshold else lab.varint(0) + body
+        self.sock.sendall(lab.varint(len(body)) + body)
 
     def receive(self):
         length = self.read_varint()
         body = self.read_exact(length)
         if self.threshold >= 0:
-            pos, size = parse_varint(body, 0)
+            pos, size = lab.parse_varint(body, 0)
             body = zlib.decompress(body[pos:]) if size else body[pos:]
-        pos, packet_id = parse_varint(body, 0)
+        pos, packet_id = lab.parse_varint(body, 0)
         return packet_id, body[pos:]
 
 
@@ -428,7 +393,7 @@ def build(name, force=False):
     era = scene.era(data_version)
     work = LOCAL / 'gen' / name
     shutil.rmtree(work, ignore_errors=True)
-    port = free_port()
+    port = lab.free_port()
     server = Server(work, jar, port, scene.experiments(data_version), java(version), props)
     problems = []
 

@@ -296,14 +296,4 @@ impl Tunnel {
             })?;
         Ok((port, thread))
     }
-    /// The protected stream itself (tests, or a client that reads it
-    /// directly).
-    pub fn into_stream(
-        self,
-    ) -> (
-        crypto::SecureReader<TcpStream>,
-        crypto::SecureWriter<TcpStream>,
-    ) {
-        self.secure
-    }
 }

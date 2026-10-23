@@ -366,7 +366,6 @@ mod tests {
             "prepare",
             "notes",
             "update",
-            "update_channel",
             "game_args",
             "settings",
             "logs",

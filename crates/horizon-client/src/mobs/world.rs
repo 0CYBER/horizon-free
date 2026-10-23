@@ -1,7 +1,7 @@
 //! What mobs read from the level: block solidity, ray clipping for line of
 //! sight (`ClipContext.Block.COLLIDER`), sky visibility, light-dependent
 //! values and the positions of other entities.
-use super::{MobWorld, Seen, Species, Who, data};
+use super::{MobWorld, Seen, Who, data};
 use crate::{
     blocks::{BlockFacts, Fluid},
     collisions::SceneCollisions,
@@ -268,12 +268,6 @@ impl MobWorld<'_> {
             da.total_cmp(&db)
         });
         v.into_iter()
-    }
-    pub fn count_species(&self, species: Species) -> usize {
-        self.others
-            .iter()
-            .filter(|s| s.species == species && s.alive)
-            .count()
     }
 }
 

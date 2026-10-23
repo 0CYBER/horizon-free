@@ -311,6 +311,18 @@ mod tests {
     }
 
     #[test]
+    fn love_ticks_survive_a_save() {
+        // Animal.addAdditionalSaveData / readAdditionalSaveData: "InLove" (#1396).
+        let mut m = rabbit();
+        m.extra.in_love = 570;
+        let tag = crate::entity_nbt::mob_to_nbt(&m, [0, 0, 0, 1], None);
+        assert_eq!(tag.get("InLove"), Some(&horizon_world::nbt::Tag::Int(570)));
+        let types = HashMap::from([(m.kind.id.clone(), m.kind.clone())]);
+        let back = crate::entity_nbt::mob_from_nbt(&tag, &types, 2).unwrap();
+        assert_eq!(back.extra.in_love, 570);
+    }
+
+    #[test]
     fn landing_waits_then_real_hop_clock_moves_the_model() {
         let mut m = rabbit();
         m.on_ground = true;

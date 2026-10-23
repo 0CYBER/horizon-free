@@ -124,17 +124,6 @@ impl ItemRenderState {
     pub fn is_empty(&self) -> bool {
         self.layers.is_empty()
     }
-    /// `pickParticleMaterial`: a random layer's particle sprite.
-    pub fn pick_particle(
-        &self,
-        random: &mut impl horizon_core::random::RandomSource,
-    ) -> Option<String> {
-        if self.layers.is_empty() {
-            return None;
-        }
-        let i = random.next_int_bound(self.layers.len() as i32).unwrap_or(0) as usize;
-        self.layers.get(i).map(|l| l.particle.clone())
-    }
     /// `usesBlockLight` of the first layer (GUI lighting choice).
     pub fn uses_block_light(&self) -> bool {
         self.layers.first().is_some_and(|l| l.uses_block_light)

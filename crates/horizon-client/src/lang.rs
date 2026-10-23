@@ -77,12 +77,6 @@ pub fn apply_deprecated(map: &mut HashMap<String, String>, json: &[u8]) {
 }
 
 impl Language {
-    pub fn from_map(code: &str, map: HashMap<String, String>) -> Self {
-        Self {
-            code: code.to_owned(),
-            map,
-        }
-    }
     /// ClientLanguage.loadFrom: en_us first, then the selected language, each
     /// from every namespace and every source in priority order (later sources
     /// override).

@@ -1491,6 +1491,13 @@ impl Renderer {
             mapped_at_creation: false,
         });
         let (atlas_pixels, atlas_width, atlas_height) = hud_atlas;
+        let limit = device.limits().max_texture_dimension_2d;
+        if atlas_width.max(atlas_height) > limit {
+            return Err(format!(
+                "the shared atlas is {atlas_width}x{atlas_height}; this GPU allows {limit}x{limit}"
+            )
+            .into());
+        }
         let atlas = device.create_texture_with_data(
             &queue,
             &wgpu::TextureDescriptor {
@@ -2455,10 +2462,6 @@ impl Renderer {
             usage: config.usage,
             view_formats: &config.view_formats,
         })
-    }
-    /// Rendering to a texture instead of the window (`--offscreen`).
-    pub fn is_offscreen(&self) -> bool {
-        self.surface.is_none()
     }
     /// Release the window surface before another renderer uses the same window.
     pub fn release_surface(&mut self) {
