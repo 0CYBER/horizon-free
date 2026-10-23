@@ -12108,7 +12108,20 @@ fn load_resources(
     // loads; the synchronous launch instead carries it in `Loaded`.
     let mut loaded_gui = None;
     let mut ui_ready = false;
-    if let Ok(ui) = UiResources::load(&root) {
+    let mut pack_error = None;
+    let ui = match UiResources::load(&root) {
+        Ok(ui) => Some(ui),
+        // Minecraft.rollbackResourcePacks: the packs' textures don't fit, start
+        // with the game's own resources.
+        Err(e) if root != vanilla_root => {
+            log::warn!("Horizon: resource packs failed to load ({e}); using the default resources");
+            pack_error = Some(e.to_string());
+            root = vanilla_root.to_path_buf();
+            None
+        }
+        Err(_) => None,
+    };
+    if let Some(ui) = ui {
         if menu {
             horizon_client::telemetry::mark_ui_ready();
             log::info!(
@@ -12122,7 +12135,6 @@ fn load_resources(
         ui_ready = true;
     }
     progress.set(0);
-    let mut pack_error = None;
     let (assets, render) = match Assets::load(&root).and_then(|assets| {
         let render = assets.reload(&root)?;
         Ok((assets, render))
@@ -12560,6 +12572,10 @@ fn start_game<'a>(
     game.rest_loader = rest_loader;
     game.ui.vanilla_root = vanilla_root;
     if let Some(error) = pack_error {
+        // Minecraft.clearResourcePacksOnError: the selection is cleared and
+        // saved, so the next launch starts without the packs.
+        game.settings.resource_packs.clear();
+        game.settings.save(&Game::options_path());
         game.open_options_at(true, horizon_client::options_ui::Page::Packs);
         game.ui.options.resource_error = Some(error);
     }

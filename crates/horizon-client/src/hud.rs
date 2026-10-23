@@ -54,6 +54,9 @@ pub struct HudAtlas {
 }
 /// Atlas rows reserved for glyphs rasterized at run time.
 pub const GLYPH_ROWS: u32 = 512;
+/// The largest atlas side: the 2D texture limit of the GPUs Horizon runs on
+/// (Apple silicon, RADV and Intel allow 16384; NVIDIA 32768).
+pub const MAX_ATLAS_SIZE: u32 = 16384;
 /// 128x128 atlas slots for map textures. A lobby paints its signs as walls of
 /// framed maps, so the pool holds a wall; too few slots re-upload every map
 /// every frame. 26.3's `MapTextureManager` keeps a texture per map instead.
@@ -269,6 +272,43 @@ impl HudAtlas {
         atlas.pixels = Vec::new();
         Ok(atlas)
     }
+    /// Shelf placements of `images` (tallest first) in the narrowest atlas
+    /// width from 4096 up that keeps the atlas, glyph rows included, within
+    /// `max` texels a side; and the first row free for glyphs. High-resolution
+    /// packs fill a 4096-wide atlas past what GPUs allow (Faithful 64x needs
+    /// 32768 rows); vanilla's stitcher fails the reload when its atlases don't
+    /// fit, and the packs are then turned off (`Minecraft.clearResourcePacksOnError`).
+    fn layout(images: &[PackedImage], max: u32) -> Result<(u32, Vec<(u32, u32)>, u32)> {
+        let mut width = 4096.min(max);
+        loop {
+            let mut placements = Vec::with_capacity(images.len());
+            let (mut x, mut y, mut row) = (0u32, 0u32, 0u32);
+            for (_, w, h, _) in images {
+                if x + w + 1 > width {
+                    x = 0;
+                    y += row + 1;
+                    row = 0;
+                }
+                placements.push((x, y));
+                x += w + 1;
+                row = row.max(*h);
+            }
+            let glyph_region = y + row + 1;
+            let wide_enough = images.iter().all(|i| i.1 < width);
+            if wide_enough && glyph_region + GLYPH_ROWS <= max {
+                return Ok((width, placements, glyph_region));
+            }
+            if width >= max {
+                let texels: u64 = images.iter().map(|i| u64::from(i.1) * u64::from(i.2)).sum();
+                return Err(format!(
+                    "the textures ({} images, {texels} texels) do not fit a {max}x{max} atlas",
+                    images.len()
+                )
+                .into());
+            }
+            width = (width * 2).min(max);
+        }
+    }
     /// Pack the textures under these folders of `textures/`, and for the
     /// `full` atlas the generated sprites and the run-time slots too.
     fn pack(root: &Path, folders: &[&str], full: bool) -> Result<Self> {
@@ -351,21 +391,10 @@ impl HudAtlas {
             }
         }
         images.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
-        let width = 4096u32;
-        let mut placements = Vec::with_capacity(images.len());
-        let (mut x, mut y, mut row) = (0u32, 0u32, 0u32);
-        for (_, w, h, _) in &images {
-            if x + w + 1 > width {
-                x = 0;
-                y += row + 1;
-                row = 0;
-            }
-            placements.push((x, y));
-            x += w + 1;
-            row = row.max(*h);
-        }
-        let glyph_region = y + row + 1;
-        let height = (glyph_region + GLYPH_ROWS).next_power_of_two();
+        let (width, placements, glyph_region) = Self::layout(&images, MAX_ATLAS_SIZE)?;
+        // A multiple of 1024 rather than a power of two: the default resources
+        // need 4096x5120 (8192 rows before), Faithful 32x 4096x12288 (16384).
+        let height = (glyph_region + GLYPH_ROWS).next_multiple_of(1024);
         let mut pixels = vec![0u8; (width * height * 4) as usize];
         let mut sprites = HashMap::new();
         for ((name, w, h, data), (px, py)) in images.iter().zip(placements) {
@@ -1339,6 +1368,45 @@ impl HudRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `count` images of `w x h`; layout reads only their sizes.
+    fn sized(count: usize, w: u32, h: u32) -> Vec<PackedImage> {
+        (0..count)
+            .map(|i| (format!("i{i}"), w, h, Vec::new()))
+            .collect()
+    }
+    fn assert_inside(images: &[PackedImage], width: u32, placements: &[(u32, u32)], free: u32) {
+        for ((_, w, h, _), (x, y)) in images.iter().zip(placements) {
+            assert!(
+                x + w <= width && y + h < free,
+                "{x},{y} {w}x{h} outside {width}x{free}"
+            );
+        }
+    }
+    #[test]
+    fn the_default_textures_keep_a_4096_wide_atlas() {
+        let images = sized(400, 64, 64);
+        let (width, placements, free) = HudAtlas::layout(&images, MAX_ATLAS_SIZE).unwrap();
+        assert_eq!(width, 4096);
+        assert_inside(&images, width, &placements, free);
+    }
+    #[test]
+    fn a_high_resolution_pack_widens_the_atlas_to_fit_the_gpu() {
+        // 34 rows of three 1024x512 GUI textures: 17442 rows at 4096 wide,
+        // past the 16384 GPUs allow (Faithful 64x needed 32768).
+        let images = sized(100, 1024, 512);
+        let (width, placements, free) = HudAtlas::layout(&images, MAX_ATLAS_SIZE).unwrap();
+        assert_eq!(width, 8192);
+        assert!(free + GLYPH_ROWS <= MAX_ATLAS_SIZE);
+        assert_inside(&images, width, &placements, free);
+    }
+    #[test]
+    fn textures_that_cannot_fit_are_an_error_not_a_gpu_panic() {
+        let error = HudAtlas::layout(&sized(300, 1024, 1024), MAX_ATLAS_SIZE).unwrap_err();
+        assert!(error.to_string().contains("do not fit a 16384x16384 atlas"));
+        // One image wider than the largest atlas.
+        assert!(HudAtlas::layout(&sized(1, 2048, 16), 2048).is_err());
+    }
 
     #[test]
     fn a_wrapped_border_repeats_the_opposite_edges() {
