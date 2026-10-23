@@ -178,6 +178,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - light:     the guest's light matches the host's: around a torch placed near it, under a roof and
              once a block of the roof is removed under the sky, and in the last chunk it tracks next to
              glowstone in a chunk it doesn't (only the server's light updates bring that one).
+- totem:     the host and the guest each take a lethal hit holding a totem of undying in the off
+             hand, then the main hand: the server uses it up and keeps them alive at 1 health with its
+             effects, and each side hears the totem once (entity event 35) (#1292).
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -4313,6 +4316,56 @@ def main():
     results = run(bins / 'horizon-ctl', out, resources, args.check or CHECKS)
     print(json.dumps(results, indent=1))
     sys.exit(0 if results and all(r['pass'] for r in results.values()) else 1)
+
+
+
+# Checks added after the list above (kept apart so open branches that extend it don't conflict).
+
+
+def heard(game, sound):
+    return game('status')['heard'].get(sound, 0)
+
+
+def check_totem(host, guest, out):
+    """LivingEntity.checkTotemDeathProtection on the server for each player: 100 damage holding a
+    totem in the off hand, then in the main hand, uses the totem up, leaves 1 health with
+    Regeneration II, Absorption II and Fire Resistance, and broadcasts entity event 35, which both
+    clients play once (#1292)."""
+    sound = 'minecraft:item.totem.use'
+    seen = {}
+    for game in (host, guest):
+        for hand in ('offhand', 'mainhand'):
+            game('command', command='gamemode survival')
+            game('command', command='clear @s')
+            game('command', command='effect clear @s')
+            game('command', command='effect give @s minecraft:instant_health 1 5 true')
+            game('command', command=f'item replace entity @s weapon.{hand} with minecraft:totem_of_undying')
+            game.wait(10)
+            before = {g.name: heard(g, sound) for g in (host, guest)}
+            game('command', command='damage @s 100 minecraft:generic')
+            game.wait(10)
+            me = own(game)
+            case = f'{game.name}-{hand}'
+            seen[case] = {
+                'screen': game('state').get('screen'),
+                'health': me['health'],
+                'server_health': server_player(host, game)['health'],
+                'effects': sorted(effect_ids(game)),
+                'totems': server_count(game, 'totem_of_undying'),
+                'heard': {g.name: heard(g, sound) - before[g.name] for g in (host, guest)},
+            }
+            game.shot(out, f'totem-{hand}')
+            game('command', command='effect clear @s')
+    for case, s in seen.items():
+        # 1 health, and what Regeneration II and the full food bar gave back since.
+        assert s['screen'] == 'playing' and 0 < s['health'] < 5 and 0 < s['server_health'] < 5, f'{case}: {seen}'
+        assert s['effects'] == ['absorption', 'fire_resistance', 'regeneration'], f'{case}: {seen}'
+        assert s['totems'] == 0 and s['heard'] == {'host': 1, 'guest': 1}, f'{case}: {seen}'
+    return seen
+
+
+CHECKS += ['totem']
+CHECK_FNS.update(totem=check_totem)
 
 
 if __name__ == '__main__':

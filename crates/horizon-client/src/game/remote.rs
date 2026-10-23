@@ -2118,6 +2118,9 @@ impl Game<'_> {
                 {
                     m.health = 0.0;
                 }
+                if p.event == super::totem::TOTEM_EVENT {
+                    self.remote_totem(p.id);
+                }
             }
             C::Animate(p) => self.remote_animate(p.id, p.action),
             // ClientPacketListener.handleSwingAnimation: the entity swings
