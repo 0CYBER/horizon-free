@@ -202,6 +202,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - wind:      the host and the guest each throw a wind charge at their feet: the server's burst
              launches them about six blocks up (the push in ClientboundExplodePacket) and they land
              unhurt (#1386).
+- fishing:   the host and the guest each cast a fishing rod: the hook stays out on the server and
+             both sides draw it and it reels back in from the ground, and in open water a fish
+             bites and reeling in catches it (#1348).
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -4724,6 +4727,83 @@ def check_wind(host, guest, out):
 
 CHECKS += ['wind']
 CHECK_FNS.update(wind=check_wind)
+
+
+def bobbers(game):
+    """The fishing bobbers this side draws, as (owner) ids: 0 for its own player's."""
+    return [q.get('owner') for q in game('status')['projectiles'] if q['kind'] == 'minecraft:fishing_bobber']
+
+
+def check_fishing(host, guest, out):
+    """FishingHook for each player, on the server: a cast hook stays out (ticked by the server and
+    tracked to the clients as a fishing bobber under its owner), lands on the ground and reels back
+    in; cast into open water with Lure III, a fish bites and reeling in
+    during the bite catches it for 1 (#1348)."""
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    host('command', command='weather clear')
+    seen = {}
+    try:
+        for game, other, dz in ((host, guest, -5), (guest, host, 5)):
+            x, z = hx, hz + dz
+            host('command', command=f'fill {x - 1} {hy - 1} {z - 1} {x + 14} {hy - 1} {z + 1} minecraft:stone')
+            host('command', command=f'fill {x - 1} {hy} {z - 1} {x + 14} {hy + 4} {z + 1} minecraft:air')
+            game('command', command='gamemode survival')
+            game('command', command='clear @s')
+            game('command', command='item replace entity @s weapon.mainhand with minecraft:fishing_rod')
+            game('command', command=f'tp @s {x + 0.5} {hy} {z + 0.5} -90 0')
+            game.wait(10)
+            # On the ground: the floor four blocks ahead.
+            game.raw('look-at', f'{x + 4.5:.2f}', f'{hy:.2f}', f'{z + 0.5:.2f}')
+            game.raw('use-item')
+            game.wait(40)
+            s = {'own': bobbers(game), 'other': bobbers(other)}
+            game.shot(out, 'fishing-cast')
+            game.raw('use-item')
+            game.wait(10)
+            s['reeled'] = {'own': bobbers(game), 'damage': (game('state').get('held') or {}).get('damage')}
+            # Open water: a pool 7x7 and 3 deep, ahead.
+            host('command', command=f'fill {x + 3} {hy - 3} {z - 3} {x + 9} {hy - 1} {z + 3} minecraft:water')
+            game('command', command='item replace entity @s weapon.mainhand with minecraft:fishing_rod[enchantments={lure:3}]')
+            game.wait(10)
+            game.raw('look-at', f'{x + 6.5:.2f}', f'{hy - 1:.2f}', f'{z + 0.5:.2f}')
+            game.raw('use-item')
+            bit = None
+            for t in range(0, 900, 5):
+                game.wait(5)
+                if (game('status').get('fishing') or {}).get('nibble', 0) > 0:
+                    bit = t
+                    break
+            game.raw('use-item')
+            game.wait(40)
+            counts = game.raw('inventory')['counts']
+            s['caught'] = {'bit': bit is not None,
+                           'damage': (game('state').get('held') or {}).get('damage'),
+                           'items': sum(counts.values()) - 1}
+            game.shot(out, 'fishing-caught')
+            host('command', command=f'fill {x + 3} {hy - 3} {z - 3} {x + 9} {hy - 2} {z + 3} minecraft:stone')
+            host('command', command=f'fill {x + 3} {hy - 1} {z - 3} {x + 9} {hy - 1} {z + 3} minecraft:stone')
+            seen[game.name] = s
+    finally:
+        host('command', command='kill @e[type=minecraft:item]')
+        for game in (host, guest):
+            game('command', command='clear @s')
+        face_each_other(host, guest)
+    for name, s in seen.items():
+        other = guest if name == 'host' else host
+        assert s['own'] == [0], f'{name}: {seen}'
+        # The in-frame host draws only its own hook.
+        if other is guest or SERVER_THREAD:
+            assert len(s['other']) == 1 and s['other'][0] != 0, f'{name}: {seen}'
+        # FishingHook.retrieve costs 2 on the ground, but a resting hook's onGround
+        # alternates every tick on the server (Entity.move with no vertical motion
+        # clears it, the next tick's gravity sets it again): 2 or nothing.
+        assert s['reeled']['own'] == [] and s['reeled']['damage'] in (None, 0, 2), f'{name}: {seen}'
+        assert s['caught']['bit'] and s['caught']['damage'] == 1 and s['caught']['items'] >= 1, f'{name}: {seen}'
+    return seen
+
+
+CHECKS += ['fishing']
+CHECK_FNS.update(fishing=check_fishing)
 
 
 if __name__ == '__main__':

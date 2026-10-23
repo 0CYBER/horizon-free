@@ -88,6 +88,8 @@ impl Game<'_> {
                 self.end
                     .add_remote_eye(id, position, [velocity.x, velocity.y, velocity.z])
             }
+            // FishingHook.recreateFromPacket: the owner's id is the data.
+            "minecraft:fishing_bobber" => self.spawn_remote_hook(id, at, data),
             "minecraft:end_crystal" => self.crystals.push(super::dragon::Crystal {
                 id,
                 position: at,
@@ -114,6 +116,7 @@ impl Game<'_> {
     /// `handleSetEntityData` for these types: what changes how they look.
     pub(super) fn remote_projectile_data(&mut self, id: i32, values: &[(u8, i32, Value)]) {
         let id = id as u32;
+        self.remote_hook_data(id, values);
         if self.potions.has_thrown(id) {
             // ThrowableItemProjectile.DATA_ITEM_STACK: the potion it is.
             for (index, _, value) in values {
@@ -205,6 +208,7 @@ impl Game<'_> {
             c.position = step(c.id, c.position);
         }
         self.potions.step_remote_thrown(&mut step);
+        self.step_remote_hooks(&mut step);
         self.end.step_remote_eyes(|id, at| {
             let at = step(id, Vec3::new(at[0], at[1], at[2]));
             [at.x, at.y, at.z]
@@ -220,6 +224,7 @@ impl Game<'_> {
         self.crystals.retain(|c| c.id != id);
         self.potions.remove_remote_thrown(id);
         self.end.remove_remote_eye(id);
+        self.remove_remote_hook(id);
     }
 
     /// Every one a server sent (a new connection, level or dimension).
@@ -232,6 +237,7 @@ impl Game<'_> {
         self.crystals.clear();
         self.potions.clear_thrown();
         self.end.clear_remote_eyes();
+        self.clear_remote_hooks();
     }
 
     /// Their kind and place, for `status`.
@@ -260,6 +266,7 @@ impl Game<'_> {
         for (id, p) in self.end.eye_positions() {
             out.push(json!({"id": id, "kind": "minecraft:eye_of_ender", "position": p}));
         }
+        out.extend(self.hooks_status());
         out
     }
 }
