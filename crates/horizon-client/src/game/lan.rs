@@ -395,6 +395,9 @@ impl Game<'_> {
                     "sneaking": g.sneaking,
                     "sleeping": g.bed,
                     "health": g.health,
+                    // The server's body: its air supply and golden hearts.
+                    "air": g.motion.as_ref().map(|m| m.air),
+                    "absorption": g.motion.as_ref().map(|m| m.health.absorption()),
                     // FoodData: food level, saturation and exhaustion.
                     "food": [
                         f64::from(g.food),
