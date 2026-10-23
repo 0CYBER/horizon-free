@@ -2128,6 +2128,15 @@ impl Game<'_> {
                     m.swing();
                 }
             }
+            // The player's own instances: its maximum health (the hearts the
+            // HUD draws and the health it may hold), reach, speed and so on.
+            // Then the received health again, which the old maximum clamped.
+            C::UpdateAttributes(p) if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) => {
+                if let Some(pl) = self.player.as_mut() {
+                    horizon_client::lan::attributes::apply(&mut pl.attributes, &p.values);
+                }
+                self.apply_remote_health();
+            }
             C::UpdateMobEffect(p) => self.remote_effect(&p),
             C::RemoveMobEffect(p) => {
                 if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id)

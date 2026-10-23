@@ -5,7 +5,7 @@
 //! changed since (`getAttributesToSync`), to the trackers and the player itself.
 use horizon_protocol::packets::play::{AttributeModifier, AttributeSnapshot};
 use horizon_world::attributes::{
-    Instance, Operation,
+    Instance, Modifier, Operation,
     entity::{AttributeId, EntityAttributes},
     live::LiveAttributes,
 };
@@ -68,6 +68,48 @@ pub fn take_dirty<G: FnMut() -> i32>(map: &mut LiveAttributes<G>) -> Vec<Attribu
             Some(snapshot(key.attribute(), map.instance(h).ok()?))
         })
         .collect()
+}
+
+/// `ClientPacketListener.handleUpdateAttributes`: each instance the server
+/// synced takes its base and exactly its modifiers (`removeModifiers`, then
+/// `addTransientModifier` for each). An attribute the map doesn't know is
+/// skipped, as vanilla warns and skips it.
+pub fn apply<G: FnMut() -> i32>(map: &mut LiveAttributes<G>, values: &[AttributeSnapshot]) {
+    for s in values {
+        let Some(key) = map
+            .keys()
+            .iter()
+            .find(|k| k.attribute().registry_id() == s.attribute)
+            .cloned()
+        else {
+            continue;
+        };
+        let Ok(Some(handle)) = map.get_instance(Some(key)) else {
+            continue;
+        };
+        let modifiers: Vec<_> = s
+            .modifiers
+            .iter()
+            .filter_map(|m| Modifier::new(&m.id, m.amount, operation(m.operation)).ok())
+            .collect();
+        let _ = map.edit(&handle, |instance, observer| {
+            instance.set_base_value(s.base, observer)?;
+            instance.remove_all(observer)?;
+            for m in modifiers {
+                instance.add_transient(m, observer)?;
+            }
+            Ok(())
+        });
+    }
+}
+
+/// `AttributeModifier.Operation.BY_ID`.
+fn operation(id: i32) -> Operation {
+    match id {
+        1 => Operation::AddMultipliedBase,
+        2 => Operation::AddMultipliedTotal,
+        _ => Operation::AddValue,
+    }
 }
 
 /// The client-syncable instances of a generic attribute map.

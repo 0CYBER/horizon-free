@@ -834,6 +834,12 @@ impl Game<'_> {
                 "velocity": [p.velocity.x, p.velocity.y, p.velocity.z],
                 "on_ground": p.ground.on_ground,
                 "health": p.health.health(),
+                // The maximum the HUD's hearts last read (its cached value).
+                "max_health": p
+                    .attributes
+                    .lookup(p.attributes.key("minecraft:max_health").as_ref())
+                    .and_then(|h| p.attributes.instance(&h).ok())
+                    .map(|i| i.cached_value()),
                 "food": p.health.food.food,
             })
         });

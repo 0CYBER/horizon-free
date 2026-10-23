@@ -213,7 +213,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning', 'riding', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption', 'breath', 'lava', 'levels', 'drops', 'underwater']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning', 'riding', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption', 'breath', 'lava', 'levels', 'drops', 'underwater']
 
 
 class Game:
@@ -2711,6 +2711,46 @@ def check_sparks(host, guest, out):
     return result
 
 
+def hearts(game):
+    """The player's maximum and current health as its own client holds them."""
+    p = game('status')['player']
+    return p.get('max_health'), round(p['health'], 1)
+
+
+def check_hud(host, guest, out):
+    result = {}
+    for label, player in (('host', host), ('guest', guest)):
+        player('command', command='gamemode survival')
+        try:
+            for maximum in (40, 10):
+                player('command', command=f'attribute @s minecraft:max_health base set {maximum}')
+                player.wait(10)
+                player('command', command='effect give @s minecraft:instant_health 1 10')
+                seen = None
+                for _ in range(15):
+                    player.wait(2)
+                    seen = hearts(player)
+                    if seen == (maximum, maximum):
+                        break
+                result[f'{label} {maximum}'] = seen
+                player.shot(out, f'hearts-{label}-{maximum}')
+        finally:
+            player('command', command='attribute @s minecraft:max_health base reset')
+            player('command', command='effect give @s minecraft:instant_health 1 10')
+    # BossBarCommands' new bar starts visible (ServerBossEvent's constructor).
+    host('command', command='bossbar add lan_e2e:bar "LAN bar"')
+    try:
+        host('command', command='bossbar get lan_e2e:bar visible')
+        host.wait(5)
+        result['bar'] = [line for line in host.raw('messages', 5)['chat'] if 'lan_e2e:bar' in line or 'LAN bar' in line]
+    finally:
+        host('command', command='bossbar remove lan_e2e:bar')
+    wrong = {k: v for k, v in result.items() if k != 'bar' and v != (int(k.split()[1]),) * 2}
+    assert not wrong, f'hearts: {wrong}\n{result}'
+    assert any('currently visible' in line for line in result['bar']), f'bar: {result["bar"]}'
+    return result
+
+
 def check_blast(host, guest, out):
     guest('command', command='gamemode survival')
     guest('command', command='clear @s')
@@ -4046,7 +4086,8 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'looks': check_looks,
              'leads': check_leads,
              'thrown': check_thrown,
-             'sparks': check_sparks}
+             'sparks': check_sparks,
+             'hud': check_hud}
 
 
 def run(ctl, out, resources, checks):
