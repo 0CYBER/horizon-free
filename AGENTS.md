@@ -21,7 +21,7 @@ Feature → files → harness for the most-changed areas: [docs/architecture.md]
 - Horizon-only features follow [docs/design-system.md](docs/design-system.md) and are off by default where
   they would change the vanilla look.
 - Small PRs (< ~500 lines). Labels: `feature` (players get something new), `skip-release` (they see no
-  change), none for a fix, `release-now` for crash fixes. Every merge to main ships
+  change), none for a fix. Agents never add `release-now`: the maintainer decides it. Every merge to main ships
   ([docs/release-flow.md](docs/release-flow.md)).
 - Contributors first: `gh pr list --state open --search <area>` before you start; never duplicate theirs.
 
