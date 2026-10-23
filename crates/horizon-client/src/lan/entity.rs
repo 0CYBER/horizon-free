@@ -12,8 +12,8 @@ use horizon_protocol::{
     item::Stack,
     packets::play::{
         self, AddEntity, AttributeSnapshot, EntityPositionSync, MoveEntity, MoveEntityPos,
-        MoveEntityPosRot, MoveEntityRot, PositionPath, RotateHead, SetEntityData, SetEntityMotion,
-        SetEquipment, SetPassengers, UpdateAttributes, VecDelta,
+        MoveEntityPosRot, MoveEntityRot, PositionPath, RotateHead, SetEntityData, SetEntityLink,
+        SetEntityMotion, SetEquipment, SetPassengers, UpdateAttributes, VecDelta,
     },
 };
 
@@ -65,6 +65,8 @@ pub struct EntityState {
     pub precise: bool,
     /// `Entity.needsSync`: send its changes this tick, due or not.
     pub needs_sync: bool,
+    /// `Leashable.getLeashHolder`: the entity holding its lead.
+    pub leash: Option<i32>,
 }
 
 impl EntityState {
@@ -87,6 +89,7 @@ impl EntityState {
         self.attributes.clear();
         self.precise = false;
         self.needs_sync = false;
+        self.leash = None;
     }
 }
 
@@ -219,6 +222,8 @@ struct ServerEntity {
     /// and the first update after it dismounts is a full position sync.
     passengers: Vec<i32>,
     was_riding: bool,
+    /// The lead's holder the clients were told of.
+    leash: Option<i32>,
     /// The level tick it was last seen in, its place in that tick's list, and
     /// whether it was added in it (its first update is the next tick's).
     seen: u32,
@@ -262,6 +267,7 @@ impl ServerEntity {
             teleport_delay: 0,
             passengers: riding.passengers(e.id).to_vec(),
             was_riding: false,
+            leash: e.leash,
             seen: 0,
             index: 0,
             added: true,
@@ -314,6 +320,13 @@ impl ServerEntity {
         if let Some(&vehicle) = riding.vehicle.get(&e.id) {
             out.push(riding.set_passengers(vehicle));
         }
+        // A leashed entity: who holds its lead.
+        if let Some(dest) = e.leash {
+            out.push(play::Clientbound::SetEntityLink(SetEntityLink {
+                source: e.id,
+                dest,
+            }));
+        }
     }
 
     /// Changes since the last update (ServerEntity.sendChanges): movement and
@@ -326,6 +339,14 @@ impl ServerEntity {
             out.push(riding.set_passengers(e.id));
             self.passengers.clear();
             self.passengers.extend_from_slice(passengers);
+        }
+        // Leashable.setLeashedTo / dropLeash: sendToTrackingPlayers at once.
+        if e.leash != self.leash {
+            out.push(play::Clientbound::SetEntityLink(SetEntityLink {
+                source: e.id,
+                dest: e.leash.unwrap_or(0),
+            }));
+            self.leash = e.leash;
         }
         // SynchedEntityData.isDirty: once for every client.
         let dirty = e.meta != self.meta;
@@ -868,6 +889,7 @@ mod tests {
             attributes: Vec::new(),
             precise: false,
             needs_sync: false,
+            leash: None,
         }
     }
 
@@ -1130,6 +1152,24 @@ mod tests {
             panic!("expected equipment");
         };
         assert_eq!(eq.slots, vec![(0, None)]);
+    }
+
+    #[test]
+    fn a_lead_tied_and_untied_reaches_the_clients() {
+        let link = |out: &[play::Clientbound]| {
+            out.iter().find_map(|p| match p {
+                play::Clientbound::SetEntityLink(l) => Some((l.source, l.dest)),
+                _ => None,
+            })
+        };
+        let mut e = state(0.0);
+        let mut s = added(&e);
+        changes(&mut s, &e);
+        e.leash = Some(7);
+        assert_eq!(link(&changes(&mut s, &e)), Some((e.id, 7)));
+        assert_eq!(link(&changes(&mut s, &e)), None);
+        e.leash = None;
+        assert_eq!(link(&changes(&mut s, &e)), Some((e.id, 0)));
     }
 
     /// Two clients at the origin; the chunks they hold.

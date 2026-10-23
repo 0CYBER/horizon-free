@@ -14,7 +14,7 @@ use horizon_client::{
         hub::{HostEvent, HostState, Hub, HubConfig, TickCtx},
         playerdata,
     },
-    mobs::Mob,
+    mobs::{Mob, leash::Holder},
     text::Text,
 };
 use horizon_core::geometry::Vec3;
@@ -774,9 +774,27 @@ impl Game<'_> {
     }
 
     /// The entities guests track: mobs, items and the rest (game/lan_entities.rs).
-    fn lan_entities(&self, host_entity: Option<i32>, hub: &mut Hub, out: &mut States) {
+    /// `mob_players` is the guest each mob sees as its player (game/lan_mobs.rs).
+    fn lan_entities(
+        &self,
+        host_entity: Option<i32>,
+        mob_players: &HashMap<u32, u32>,
+        hub: &mut Hub,
+        out: &mut States,
+    ) {
         out.clear();
         for m in self.mobs.iter().filter(|m| !m.removed) {
+            // The lead's holder: the player the mob sees (a guest, else the
+            // host) or another mob. A fence knot isn't an entity here.
+            let leash = m.extra.leash.and_then(|h| match h {
+                Holder::Player => mob_players
+                    .get(&m.id)
+                    .and_then(|conn| hub.guest(*conn))
+                    .map(|g| g.entity_id)
+                    .or(host_entity),
+                Holder::Mob(id) => Some(id as i32),
+                Holder::Knot(_) => None,
+            });
             let e = out.add(m.id as i32, entity_uuid(m.id), m.kind.id.as_str());
             e.position = [m.position.x, m.position.y, m.position.z];
             (e.yaw, e.pitch, e.head_yaw) = (m.yaw, m.head_pitch, m.head_yaw);
@@ -786,6 +804,7 @@ impl Game<'_> {
             mob_meta(m, hub, &mut e.meta, &mut e.defaults);
             mob_equipment(m, hub, &mut e.equipment);
             self.mob_attributes(m, &mut e.attributes);
+            e.leash = leash;
         }
         for d in &self.dropped {
             let stack = hub.stack(&Some(d.stack.clone()));
@@ -847,7 +866,7 @@ impl Game<'_> {
                     .filter_map(|g| Some((g.vehicle?, g.entity_id)))
                     .collect();
                 self.lan_riding(host_entity, &guests, &mut host.hub.riding);
-                self.lan_entities(host_entity, &mut host.hub, &mut states);
+                self.lan_entities(host_entity, &host.mob_players, &mut host.hub, &mut states);
             } else {
                 states.clear();
             }
@@ -1035,7 +1054,7 @@ impl Game<'_> {
                 return;
             }
             // A dedicated server has no host player.
-            self.lan_entities(None, &mut host.hub, &mut theirs);
+            self.lan_entities(None, &host.mob_players, &mut host.hub, &mut theirs);
             theirs.as_slice()
         } else {
             entities

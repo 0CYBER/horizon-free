@@ -29,6 +29,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              cow on fire burns and goes out; then the wither's health drops when it is hurt, the
              sheep is dyed blue with its wool back and the calf grows up (#1367, #1368, #1370,
              #1371, #1385, #1390);
+- leads:     the host and the guest each tie a cow to a lead and untie it: the rope shows on both
+             sides, held by the player who tied it, and goes on both (#1360);
 - respawn:   a player killed is drawn dead by the other side, and alive again once it respawns (the
              respawned player is a new entity to the others); the host dies, and on the server thread
              the guest too;
@@ -206,7 +208,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'looks', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning', 'riding', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption', 'breath', 'lava', 'levels', 'drops', 'underwater']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning', 'riding', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption', 'breath', 'lava', 'levels', 'drops', 'underwater']
 
 
 class Game:
@@ -1223,6 +1225,43 @@ def check_looks(host, guest, out):
             wrong.append(f"{name}: the wither's health {withers} then {hurt}, wants [300] then [150]")
     assert not wrong, '\n'.join(wrong)
     return seen['later']['guest']
+
+
+def check_leads(host, guest, out):
+    spots = apart(host, guest)
+    result = {}
+    for label, player, other in (('host', host, guest), ('guest', guest, host)):
+        x, y, z = spots[label]
+        at = (x + 0.5, y, z + 2.5)
+
+        def cow(game):
+            found = [m for m in game.raw('mobs', 32).get('near', []) if m['kind'] == 'minecraft:cow'
+                     and abs(m['pos'][0] - at[0]) < 1 and abs(m['pos'][2] - at[2]) < 1]
+            assert found, f'{game.name} sees no cow at {at}'
+            return found[0]
+        player('command', command='gamemode survival')
+        player('command', command=f'summon minecraft:cow {at[0]} {y} {at[2]} {{NoAI:1b}}')
+        player('command', command='item replace entity @s weapon.mainhand with minecraft:lead')
+        player.wait(30)
+        try:
+            player.raw('look-at', f'{at[0]:.2f}', f'{y + 0.7:.2f}', f'{at[2]:.2f}')
+            player.raw('mouse', 'right', 'click')
+            player.wait(20)
+            tied = {'own': cow(player)['leash'], 'other': cow(other)['leash']}
+            player.shot(out, 'leads-' + label)
+            other.shot(out, f'leads-{label}-seen')
+            # An empty hand unties it (the lead was used up).
+            player.raw('mouse', 'right', 'click')
+            player.wait(20)
+            untied = {'own': cow(player)['leash'], 'other': cow(other)['leash']}
+        finally:
+            player('command', command=f'kill @e[type=!minecraft:player,x={at[0]},y={y},z={at[2]},distance=..6]')
+            player('command', command='clear @s')
+        result[label] = {'tied': tied, 'untied': untied}
+        # The other side draws it held by the player who tied it (another player to it).
+        assert tied['own'] == 'Player' and tied['other'], f"the {label}'s cow on its lead: {tied}"
+        assert untied == {'own': None, 'other': None}, f"the {label}'s cow untied: {untied}"
+    return result
 
 
 def container_items(game):
@@ -3905,7 +3944,8 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'contacts': check_contacts, 'absorption': check_absorption, 'breath': check_breath,
              'lava': check_lava, 'levels': check_levels, 'drops': check_drops,
              'underwater': check_underwater,
-             'looks': check_looks}
+             'looks': check_looks,
+             'leads': check_leads}
 
 
 def run(ctl, out, resources, checks):
