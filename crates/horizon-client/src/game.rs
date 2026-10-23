@@ -9516,6 +9516,7 @@ impl Game<'_> {
         if let Some(p) = &self.player {
             level.position = Some([p.position.x, p.position.y, p.position.z]);
             level.health = p.health.health();
+            level.absorption = p.health.absorption();
             let extra = level
                 .player_extra
                 .get_or_insert_with(|| horizon_world::nbt::Tag::Compound(Default::default()));

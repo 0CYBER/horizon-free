@@ -131,6 +131,12 @@ address. The script then checks, from both sides, what a guest's game used to ge
              get off by sneaking; the other side sees the animal move.
 - lightning: a bolt summoned beside the host, then the guest: both sides get the bolt and flash the
              sky (on its server thread the host's window is a client of it too).
+- absorption: the host and the guest each take Absorption II and a hit of 3: their own HUD has the
+             server's golden hearts, 8 then 5 (#1306).
+- breath:    the host and the guest each stay underwater for 15 s in a Respiration III helmet: their
+             own bubbles follow the server's air, which the enchantment makes last (#1304).
+- lava:      (--server-thread) the host and the guest each stand in a Nether lava current with Fire
+             Resistance, which pushes them at the Nether's strength (#1309).
 - flight:    a player in creative double-taps jump and flies, stays up, and stops flying in survival:
              the guest, and on the server thread the host's window too, take what may fly from the
              server's abilities (ClientPacketListener.handlePlayerAbilities).
@@ -172,7 +178,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning', 'riding', 'mounts']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning', 'riding', 'mounts', 'absorption', 'breath', 'lava']
 
 
 class Game:
@@ -2297,6 +2303,117 @@ def check_flight(host, guest, out):
 
 
 
+def own(game):
+    """The player's own state, as its client has it."""
+    return game('state')['player']
+
+
+def server_player(host, game):
+    """The player's entry on the server: the guest's in the host's `lan status`, on the server
+    thread the host's too; the host's own world otherwise."""
+    if game is host and not SERVER_THREAD:
+        return own(host)
+    name = GUEST_NAME if game is not host else host.player
+    return next(g for g in host.raw('lan', 'status')['guests'] if g['name'] == name)
+
+
+def check_absorption(host, guest, out):
+    """Absorption II's golden hearts on each player's own HUD: 8 of them, and 5 once a hit of 3 took
+    its share: the client shows what the server's player has (#1306)."""
+    seen = {}
+    for game in (host, guest):
+        game('command', command='gamemode survival')
+        game('command', command='effect give @s minecraft:absorption 120 1')
+        game.wait(10)
+        given = own(game)['absorption']
+        game('command', command='damage @s 3 minecraft:generic')
+        game.wait(20)
+        me = own(game)
+        server = server_player(host, game)
+        game.shot(out, 'absorption')
+        game('command', command='effect clear @s minecraft:absorption')
+        seen[game.name] = {'given': given, 'left': me['absorption'], 'health': me['health'],
+                           'server': server.get('absorption')}
+    for name, s in seen.items():
+        assert s['given'] == 8.0 and s['left'] == 5.0 == s['server'] and s['health'] == 20.0, \
+            f'{name}: {seen}'
+    return seen
+
+
+def check_breath(host, guest, out):
+    """Underwater in a Respiration III helmet for 15 s: the enchantment makes the air last on the
+    server, and each player's own bubbles follow the server's air (#1304)."""
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    seen = {}
+    for game, dz in ((host, -4), (guest, 4)):
+        x, y, z = hx + 3, hy, hz + dz
+        game('command', command='gamemode survival')
+        game('command', command='item replace entity @s armor.head with '
+                                'minecraft:diamond_helmet[minecraft:enchantments={"minecraft:respiration":3}]')
+        game('command', command=f'fill {x - 1} {y - 1} {z - 1} {x + 1} {y + 2} {z + 1} minecraft:stone')
+        game('command', command=f'fill {x} {y} {z} {x} {y + 1} {z} minecraft:water')
+        game('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+    host.wait(300)
+    for game in (host, guest):
+        game.shot(out, 'breath')
+        seen[game.name] = {'own': own(game)['air'], 'server': server_player(host, game).get('air')}
+    for game, dz in ((host, -4), (guest, 4)):
+        x, y, z = hx + 3, hy, hz + dz
+        game('command', command='item replace entity @s armor.head with minecraft:air')
+        host('command', command=f'fill {x - 1} {y - 1} {z - 1} {x + 1} {y + 2} {z + 1} minecraft:air')
+        host('command', command=f'fill {x - 1} {y - 1} {z - 1} {x + 1} {y - 1} {z + 1} minecraft:stone')
+    guest.wait(40)
+    # 300 ticks lose about 75 of the 300 with Respiration III, all of it without.
+    for name, s in seen.items():
+        assert s['server'] > 150 and abs(s['own'] - s['server']) <= 10, f'{name}: {seen}'
+    return seen
+
+
+def check_lava(host, guest, out):
+    """(--server-thread) Standing in a settled Nether lava current with Fire Resistance: the
+    Nether's FAST_LAVA pushes each player about three times as hard as the Overworld's (#1309)."""
+    if not SERVER_THREAD:
+        return 'skipped (needs --server-thread)'
+    seen = {}
+    back = {g.name: pos_of(g) for g in (host, guest)}
+    try:
+        for game, z in ((host, 0), (guest, 6)):
+            game('command', command=f'execute in minecraft:the_nether run tp @s 0.5 100 {z + 0.5}')
+            state = wait_dimension(game, 'minecraft:the_nether', 600)
+            assert state.get('dimension') == 'minecraft:the_nether', f'{game.name} is in {state.get("dimension")}'
+            game.wait(40)
+            # A one-wide obsidian channel along x: a source at x = -3, the current flowing east.
+            game('command', command=f'fill -5 98 {z - 2} 6 104 {z + 2} minecraft:air')
+            game('command', command=f'fill -5 98 {z - 1} 6 98 {z + 1} minecraft:obsidian')
+            game('command', command=f'fill -5 99 {z - 1} 6 99 {z - 1} minecraft:obsidian')
+            game('command', command=f'fill -5 99 {z + 1} 6 99 {z + 1} minecraft:obsidian')
+            game('command', command=f'fill -4 99 {z} -4 99 {z} minecraft:obsidian')
+            game('command', command='effect give @s minecraft:fire_resistance 120 0 true')
+            game('command', command='gamemode survival')
+            game('command', command=f'setblock -3 99 {z} minecraft:lava')
+        host.wait(100)
+        for game, z in ((host, 0), (guest, 6)):
+            game('command', command=f'tp @s 0.5 99 {z + 0.5}')
+        host.wait(60)
+        for game, z in ((host, 0), (guest, 6)):
+            v = own(game)['velocity']
+            seen[game.name] = {'vx': v[0], 'level': game.raw('block', 0, 99, z).get('state')}
+            game.shot(out, 'lava')
+    finally:
+        for game, z in ((host, 0), (guest, 6)):
+            host('command', command=f'execute in minecraft:the_nether run fill -5 98 {z - 2} 6 104 {z + 2} minecraft:air')
+            x, y, zz = back[game.name]
+            game('command', command='effect clear @s minecraft:fire_resistance')
+            game('command', command=f'execute in minecraft:overworld run tp @s {x:.2f} {y:.2f} {zz:.2f}')
+        for game in (host, guest):
+            wait_dimension(game, 'minecraft:overworld', 600)
+        guest.wait(40)
+    # The Overworld's current settles at about 0.0047 a tick, the Nether's at about 0.014.
+    for name, s in seen.items():
+        assert s['vx'] > 0.009, f'{name}: {seen}'
+    return seen
+
+
 def check_ladder(host, guest, out):
     """#1255: climbing down a ladder doesn't hurt where the guest lands."""
     x, y, z = (int(v // 1) for v in pos_of(guest))
@@ -3075,7 +3192,8 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles, 'blast': check_blast,
              'light': check_light, 'plates': check_plates,
              'swings': check_swings, 'cracks': check_cracks,
-             'time': check_time, 'growth': check_growth, 'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect, 'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'arrows': check_arrows, 'predict': check_predict, 'ladder': check_ladder, 'boats': check_boats, 'minecarts': check_minecarts, 'frames': check_frames, 'lightning': check_lightning, 'riding': check_riding, 'mounts': check_mounts}
+             'time': check_time, 'growth': check_growth, 'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect, 'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'arrows': check_arrows, 'predict': check_predict, 'ladder': check_ladder, 'boats': check_boats, 'minecarts': check_minecarts, 'frames': check_frames, 'lightning': check_lightning, 'riding': check_riding, 'mounts': check_mounts,
+             'absorption': check_absorption, 'breath': check_breath, 'lava': check_lava}
 
 
 def run(ctl, out, resources, checks):

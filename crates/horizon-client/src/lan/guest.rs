@@ -149,6 +149,9 @@ pub struct Guest {
     /// The ender chest inventory (`PlayerEnderChestContainer`, 27 slots).
     pub ender_items: Vec<Option<ItemStack>>,
     pub health: f32,
+    /// The saved `AbsorptionAmount`, until the player's first body on the
+    /// server takes it (the body holds the live amount).
+    pub saved_absorption: Option<f32>,
     pub food: i32,
     pub saturation: f32,
     pub xp_level: i32,
@@ -168,6 +171,10 @@ pub struct Guest {
     /// `lastSentHealth`, `lastSentFood` and `lastFoodSaturationZero`.
     pub sent_health: Option<(f32, i32, bool)>,
     pub sent_xp: Option<(f32, i32, i32)>,
+    /// The air supply and absorption the player's client was last sent
+    /// (Entity.DATA_AIR_SUPPLY_ID, Player.DATA_PLAYER_ABSORPTION_ID); their
+    /// defaults until either changes.
+    pub sent_air: (i32, f32),
     /// Where the player last died (Player.lastDeathLocation), sent with the respawn.
     pub last_death: Option<[i32; 3]>,
     /// The last action sequence to acknowledge at the next tick (-1: none).
@@ -280,6 +287,7 @@ impl Guest {
             craft_result: None,
             ender_items: vec![None; 27],
             health: 20.0,
+            saved_absorption: None,
             food: 20,
             saturation: 5.0,
             xp_level: 0,
@@ -292,6 +300,7 @@ impl Guest {
             menu_state: 0,
             sent_health: None,
             sent_xp: None,
+            sent_air: (300, 0.0),
             last_death: None,
             ack_up_to: std::cell::Cell::new(-1),
             sent_selected: 0,

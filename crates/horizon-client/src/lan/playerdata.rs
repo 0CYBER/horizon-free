@@ -61,6 +61,7 @@ pub fn apply(guest: &mut Guest, level: &Level) {
     guest.head_yaw = guest.yaw;
     guest.on_ground = level.on_ground;
     guest.health = level.health;
+    guest.saved_absorption = Some(level.absorption);
     guest.food = level.food;
     guest.saturation = level.saturation;
     guest.xp_level = level.xp_level;
@@ -123,6 +124,12 @@ pub fn store(guest: &Guest, level: &mut Level) {
     level.dimension = guest.dimension.clone();
     level.rotation = [guest.yaw, guest.pitch];
     level.health = guest.health;
+    level.absorption = guest
+        .motion
+        .as_ref()
+        .map_or(guest.saved_absorption.unwrap_or(0.0), |m| {
+            m.health.absorption()
+        });
     level.food = guest.food;
     level.saturation = guest.saturation;
     level.xp_level = guest.xp_level;

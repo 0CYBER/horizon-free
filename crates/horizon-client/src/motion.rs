@@ -338,6 +338,8 @@ impl PlayerMotion {
                 .and_then(|t| crate::save::number(t.get("Air")))
                 .unwrap_or(300) as i32;
             self.set_health(level.health, false)?;
+            // LivingEntity.readAdditionalSaveData: internalSetAbsorptionAmount.
+            self.internal_set_absorption(level.absorption)?;
             self.health.food.food = level.food;
             self.health.food.saturation = level.saturation;
             self.flying = level.flying;
