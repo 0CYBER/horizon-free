@@ -15,7 +15,6 @@ in sorted order (the packets of one step may leave in another order within the t
 waypoints as each step leaves them (one manager per level: a player in another level is untracked). What a death does besides its messages
 is left to its own harness.
 """
-import hashlib
 import os
 from pathlib import Path
 import platform
@@ -23,7 +22,6 @@ import shutil
 import subprocess
 import sys
 import time
-import uuid as uuidlib
 
 try:
     from . import lab, test_rust_parity as base
@@ -39,20 +37,12 @@ NAME = 'server-player-targets-parity'
 NETHER, OVERWORLD = 'minecraft:the_nether', 'minecraft:overworld'
 
 
-def offline_uuid(name):
-    """UUIDUtil.createOfflinePlayerUUID."""
-    digest = bytearray(hashlib.md5(f'OfflinePlayer:{name}'.encode()).digest())
-    digest[6] = (digest[6] & 0x0F) | 0x30
-    digest[8] = (digest[8] & 0x3F) | 0x80
-    return str(uuidlib.UUID(bytes=bytes(digest)))
-
-
 # (label, what the console does, what the players do).
 SCRIPT = [
     ('console-give', ['give Bob minecraft:diamond 3'], []),
     ('console-give-all', ['give @a minecraft:apple'], []),
     ('alice-give-bob', [], ['cmd Alice give Bob minecraft:stick 2']),
-    ('console-give-uuid', [f'give {offline_uuid("Bob")} minecraft:iron_ingot'], []),
+    ('console-give-uuid', [f'give {lab.offline_uuid("Bob")} minecraft:iron_ingot'], []),
     ('console-give-nearest', ['give @p minecraft:emerald'], []),
     ('alice-give-random', [], ['cmd Alice give @r[name=Bob] minecraft:gold_ingot']),
     ('console-gamemode', ['gamemode survival Bob'], []),
@@ -81,17 +71,6 @@ SCRIPT = [
 # besides its messages (drops, the body leaving) the player combat ones: here only the messages of `kill`.
 DEATH_STEP = 'step=console-kill'
 STEP_SECONDS = 2.5
-
-
-def settled(lines):
-    """One player's lines of one step, in order, with the waypoint packets reduced to the last for each waypoint:
-    what the locator bar shows once the step is over. Arriving in a level, vanilla sends the same waypoint more
-    than once on the way there; the packet by packet order is test_locator_bar_parity's."""
-    def waypoint(line):
-        parts = line.split(' ')
-        return parts[3] if len(parts) > 3 and parts[2] in ('track', 'untrack', 'update') else None
-    last = {waypoint(l): i for i, l in enumerate(lines) if waypoint(l)}
-    return [l for i, l in enumerate(lines) if not waypoint(l) or last[waypoint(l)] == i]
 
 
 def run_side(label, server_command, client_command, build, world):
@@ -151,7 +130,7 @@ def run_side(label, server_command, client_command, build, world):
             steps.setdefault((who, step), []).append(line)
     order = {f'step={s}': i for i, (s, _, _) in enumerate(SCRIPT)}
     keys = sorted(steps, key=lambda k: (k[0], order.get(k[1], -1)))
-    return [l for k in keys for l in sorted(settled(steps[k]))], errors
+    return [l for k in keys for l in sorted(lab.settled(steps[k]))], errors
 
 
 def main():
