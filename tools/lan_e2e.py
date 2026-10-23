@@ -3703,13 +3703,18 @@ def check_hands(host, guest, out):
             player.raw('select', 'minecraft:bow')
             aim_cow()
             assert player('looking_at')['kind'] == 'entity', f'the {label} does not aim at the cow'
+            # Half drawn: a full draw is a crit, up to 10 damage (AbstractArrow.onHitEntity), which
+            # kills the 10 health cow one shot in five. Under 20 ticks the arrow does at most 6.
             player.raw('mouse', 'right', 'down')
-            player.wait(25)
+            player.wait(10)
             drawn = player('state')['using']
             player.raw('mouse', 'right', 'up')
             player.wait(20)
             assert drawn, f'the {label}\'s bow is not drawn at the cow'
             assert counts().get('minecraft:arrow') == 5, f'the {label} shot no arrow: {counts()}'
+            aim_cow()
+            cow = player('looking_at').get('entity') or {}
+            assert cow.get('health', 0) > 0, f'the {label}\'s arrow killed the cow: {cow}'
             player('command', command='clear @s')
             player('command', command='give @s minecraft:golden_apple')
             player.wait(5)
