@@ -30,7 +30,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["raw_value"] }
 # Shader packs: pack.toml, and WGSL checked before it reaches wgpu.
 toml = "1.1"
-naga = { version = "30.0.1", features = ["wgsl-in"] }
+# hlsl-out: the gfx.rs tests translate every shader as wgpu's DirectX 12 backend does. A normal feature,
+# not a dev-dependency's, so builds, tests and examples share one build of naga, wgpu and this crate.
+naga = { version = "30.0.1", features = ["wgsl-in", "hlsl-out"] }
 # Java (OptiFine/Iris) shader packs, translated to WGSL.
 horizon-shaderpack = { path = "../horizon-shaderpack" }
 # Sound (ALSA on Linux); the `audio` feature.
@@ -81,7 +83,3 @@ rng-trace = ["horizon-core/rng-trace"]
 
 [lints]
 workspace = true
-
-[dev-dependencies]
-# Every WGSL shader translated as wgpu's DirectX 12 backend does (gfx.rs tests).
-naga = { version = "30.0.1", features = ["wgsl-in", "hlsl-out"] }

@@ -23,7 +23,7 @@ const GATEWAY_FILE: &str = "horizon-end-gateways.json";
 
 /// A gateway teleport waiting for its destination chunks.
 #[derive(Clone, Copy, Debug)]
-enum GatewayJob {
+pub(super) enum GatewayJob {
     /// TheEndGatewayBlockEntity.findOrCreateValidTeleportPos from this gateway.
     Find { gateway: [i32; 3] },
     /// A known exit (exact, or findExitPosition around it).
@@ -342,7 +342,10 @@ impl Game<'_> {
             f64::from(p.dimensions.width),
             f64::from(p.dimensions.height),
         );
-        if portal {
+        if portal && self.dim == Dim::End && !self.level.seen_credits {
+            // EndPortalBlock.entityInside: the first exit shows the credits.
+            self.show_end_credits()?;
+        } else if portal {
             if self.portals.player.cooldown == 0 {
                 let target = if self.dim == Dim::End {
                     Dim::Overworld
@@ -413,7 +416,15 @@ impl Game<'_> {
                 f64::from(END_SPAWN[2]) + 0.5,
             ));
         }
-        // Leaving the End: the respawn position (the world spawn here).
+        // Leaving the End: the respawn position, a bed's found once it has
+        // loaded (findRespawnPositionAndUseSpawnBlock, not using it up).
+        if let Some(c) = self.respawn_config.filter(|c| c.dim == target) {
+            return Some(Vec3::new(
+                f64::from(c.pos[0]) + 0.5,
+                f64::from(c.pos[1]),
+                f64::from(c.pos[2]) + 0.5,
+            ));
+        }
         let s = self.level.spawn.unwrap_or([0.0, 64.0, 0.0]);
         Some(Vec3::new(s[0].floor() + 0.5, s[1], s[2].floor() + 0.5))
     }
@@ -484,7 +495,16 @@ impl Game<'_> {
             // Direction.WEST.toYRot().
             return Ok((target, Some(90.0)));
         }
-        // ServerPlayer.findRespawnPositionAndUseSpawnBlock: onto the spawn column.
+        // ServerPlayer.findRespawnPositionAndUseSpawnBlock: where the bed or
+        // anchor puts the player, facing it; else onto the spawn column.
+        let mut target = target;
+        if let Some(c) = self.respawn_config.filter(|c| c.dim == self.dim) {
+            if let Some((at, yaw)) = self.find_respawn_and_use(c, false)? {
+                return Ok((at, Some(yaw)));
+            }
+            let s = self.level.spawn.unwrap_or([0.0, 64.0, 0.0]);
+            target = Vec3::new(s[0].floor() + 0.5, s[1], s[2].floor() + 0.5);
+        }
         let y = self
             .land_column(target.x.floor() as i32, target.z.floor() as i32)
             .map_or(target.y, f64::from);
@@ -700,6 +720,20 @@ impl Game<'_> {
     fn enter_gateway(&mut self, gateway: [i32; 3]) -> Result<()> {
         // TheEndGatewayBlockEntity.triggerCooldown: 40 ticks.
         self.end.gateway_cooldown = 40;
+        let (job, destination) = self.gateway_job(gateway);
+        let Some(player) = self.player.take() else {
+            return Ok(());
+        };
+        self.end.job = Some(job);
+        self.end_travel = true;
+        self.travelling = Some((player, destination));
+        Ok(())
+    }
+
+    /// Where `gateway` leads (TheEndGatewayBlockEntity.getPortalPosition):
+    /// its exit, or the search for one, and the spot to load before either
+    /// is resolved ([`Game::resolve_gateway`]).
+    pub(super) fn gateway_job(&mut self, gateway: [i32; 3]) -> (GatewayJob, Vec3) {
         let known = self.gateway_exits().get(&gateway).copied();
         let job = match known {
             Some((exit, exact)) => GatewayJob::Known { exit, exact },
@@ -725,13 +759,7 @@ impl Game<'_> {
                 Vec3::new(d.x, 75.0, d.y)
             }
         };
-        let Some(player) = self.player.take() else {
-            return Ok(());
-        };
-        self.end.job = Some(job);
-        self.end_travel = true;
-        self.travelling = Some((player, destination));
-        Ok(())
+        (job, destination)
     }
 
     fn chunk_empty(&self, x: f64, z: f64) -> Option<bool> {
@@ -768,7 +796,7 @@ impl Game<'_> {
 
     /// The teleport position of a gateway job, creating the exit gateway (and
     /// an island when the chunk has no landing spot) for new destinations.
-    fn resolve_gateway(&mut self, job: GatewayJob, target: Vec3) -> Result<Vec3> {
+    pub(super) fn resolve_gateway(&mut self, job: GatewayJob, target: Vec3) -> Result<Vec3> {
         let bottom_center = |p: [i32; 3]| {
             Vec3::new(
                 f64::from(p[0]) + 0.5,

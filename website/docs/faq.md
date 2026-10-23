@@ -60,7 +60,7 @@ Only if you say yes, and each kind has its own switch. Everything is off by defa
 
 ## How often does it update?
 
-Often. Every change players can see is released automatically after it is merged, so new versions can come out several times a day. On the **Alpha** channel the launcher installs each one as soon as it is built; on **Stable**, the default, it installs a tested build about once a day. See [Install](/docs/install#updating).
+Often. Every change players can see is released automatically after it is merged, so new versions can come out several times a day. Each one is tested before it goes out (the game has to start and draw a world), and the launcher installs it as soon as it is out. There is one version for everyone. See [Install](/docs/install#updating).
 
 ## What do the version numbers mean?
 

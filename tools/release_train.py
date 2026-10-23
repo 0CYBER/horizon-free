@@ -4,13 +4,14 @@
     python3 tools/release_train.py decide --kind game [--head SHA] [--force]
     python3 tools/release_train.py decide --kind launcher
     python3 tools/release_train.py notes --kind game --tag v2026.10.15 --out dist/notes
-    python3 tools/release_train.py notes --kind game --tag v2026.10.15 --head v2026.10.15 --stable   # at promotion
+    python3 tools/release_train.py gate --kind game --smoke dist/smoke-test.json [--blockers]   # before publishing
 
 A kind releases when a pull request merged into main since its last published release changed one of its
 player-facing paths (GAME_PATHS, LAUNCHER_PATHS) and the newest of them merged at least DEBOUNCE ago (a burst
 of merges becomes one release), or the oldest at least MAX_WAIT ago (merges that never pause still ship), or when one
 of those pull requests is labelled release-now. Pull requests labelled skip-release (work players don't see) don't count
-towards a release and aren't listed in the notes. RELEASES_PAUSED=1 (a repository variable) stops automatic releases.
+towards a release and aren't listed in the notes. RELEASES_PAUSED=1 (a repository variable) stops automatic releases,
+and an open issue labelled release-blocker stops game releases, even forced ones, until it is closed.
 
 Tags (docs/versioning.md): with a release line in .github/release-line.txt (MAJOR.MINOR, e.g. 0.2), game releases
 are vMAJOR.MINOR.PATCH and launcher releases launcher@MAJOR.MINOR.PATCH, each the patch after the last tag of its kind
@@ -19,9 +20,11 @@ file, the tags from before 0.2: vYYYY.MM.DD, then .01, .02 the same UTC day, and
 the last launcher tag or the next minor when a merged pull request is labelled feature. Every 0.2 tag is newer than
 every tag from before (tag_key). Notes:
 "### New" lists the pull requests labelled feature, "### Fixed" the others, "### Known issues" the bullets of
-docs/known-issues.md. Game releases go out as betas (GitHub pre-releases) and tools/release_channels.py promotes
-them to stable; a beta's notes cover what changed since the release before it (beta or stable), a promoted
-release's (--stable) everything since the last stable one. See docs/release-flow.md.
+docs/known-issues.md. Every release is published as the release, GitHub's latest, which launchers, servers and
+install.sh take at once; one channel, no promotion. A game release is published only after `gate`: its smoke test
+passed and no release-blocker is open. Notes cover everything since the last published release; the game
+pre-releases of the old Alpha channel (v0.2.1 on) don't count, so the first release after them lists all of
+it since v0.2.0. See docs/release-flow.md.
 
 Prints the decision as JSON and writes it to $GITHUB_OUTPUT when set. Needs git history and the gh CLI.
 """
@@ -37,7 +40,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO = os.environ.get("GITHUB_REPOSITORY", "ludovic111/horizon")
-# Alpha builds ship constantly: a merge starts a release within minutes, once its wave of merges has settled.
+# Releases ship constantly: a merge starts a release within minutes, once its wave of merges has settled.
 DEBOUNCE = dt.timedelta(minutes=5)
 MAX_WAIT = dt.timedelta(minutes=20)
 # Kept as typed in release titles, where the clauses after the first are lowercased.
@@ -72,12 +75,13 @@ LAUNCHER_IGNORED = ["launcher/links.json", "launcher/docs/", "launcher/tests/"]
 FOOTER = {
     "game": "Install or update it from the Horizon launcher: it installs new versions by itself. "
             "New here? Get the launcher at https://playhorizon.dev. You need your own copy of Minecraft: Java Edition.",
-    "beta": "This is an alpha build: launchers on the Alpha channel (Settings, Updates) install it now; Stable gets it "
-            "in the next daily update if it holds up.",
     "launcher": "Your launcher updates itself. New here? Download the archive for your system below, extract it, "
                 "and run `horizon-launcher`. Website: https://playhorizon.dev",
 }
 DISCLAIMER = "Not an official Minecraft product. Not approved by or associated with Mojang or Microsoft."
+# An open issue with this label holds every game release (docs/release-flow.md). Only people who can triage the
+# repository can add it, and the issue's text is never read: its author could edit it afterwards.
+BLOCKER = "release-blocker"
 
 
 def run(*command, check=True):
@@ -225,11 +229,37 @@ def pull_request(number):
     }
 
 
-def published_releases(betas=True):
-    """Published (not draft) releases with their tags and dates; without betas (pre-releases) when betas is False."""
+def published_releases():
+    """Published releases with their tags and dates: no drafts, and no pre-releases (the old Alpha channel's)."""
     releases = gh_json("api", f"repos/{REPO}/releases?per_page=100", "--paginate", "--slurp")
     flat = [release for page in releases for release in page]
-    return [release for release in flat if not release["draft"] and (betas or not release["prerelease"])]
+    return [release for release in flat if not release["draft"] and not release["prerelease"]]
+
+
+def open_blockers():
+    """The numbers of the open issues labelled release-blocker (pull requests left out)."""
+    issues = gh_json("api", f"repos/{REPO}/issues?labels={BLOCKER}&state=open&per_page=100", "--paginate", "--slurp")
+    return sorted(issue["number"] for page in issues for issue in page if "pull_request" not in issue)
+
+
+def smoke_problem(report):
+    """Why a release smoke test's report (the game's --smoke-report) fails, or None when the game drew a world."""
+    if report is None:
+        return "no smoke-test.json: the release smoke test did not run"
+    if report.get("error") is not None:
+        return f"the smoke run failed: {report['error']}"
+    if report.get("frames", 0) < 1500 or not report.get("chunks") or not report.get("meshed_sections") \
+            or not report.get("player"):
+        return "the smoke run did not draw a world"
+    return None
+
+
+def gate(report, blockers):
+    """Why a built game release must not be published, or None: it is published as the latest at once, so its
+    smoke test must have passed and no release-blocker may be open."""
+    problems = [problem for problem in [smoke_problem(report)] if problem]
+    problems += [f"release-blocker #{number} is open" for number in blockers]
+    return "; ".join(problems) or None
 
 
 def last_release(releases, kind):
@@ -238,13 +268,16 @@ def last_release(releases, kind):
     return max(ours, key=lambda release: tag_key(release["tag_name"]), default=None)
 
 
-def decision(kind, prs, now, paused=False, force=False, new_line=None):
+def decision(kind, prs, now, paused=False, force=False, new_line=None, blockers=()):
     """Whether to release now, and why. prs: the merged pull requests since the last release, each with the
     files it changed under "paths" (player-facing ones only) and when it merged ("merged_at"). new_line: the
-    release line ("0.2") when it has no release of this kind yet; its first goes out at once."""
+    release line ("0.2") when it has no release of this kind yet; its first goes out at once. blockers: the open
+    release-blocker issues; they hold every release, forced ones too."""
     counted = [pr for pr in prs if pr["paths"] and "skip-release" not in pr["labels"]]
     urgent = [pr for pr in counted if "release-now" in pr["labels"]]
     merged = [pr["merged_at"] for pr in counted if pr.get("merged_at")]
+    if blockers:
+        return False, "held by " + ", ".join(f"release-blocker #{number}" for number in blockers)
     if force:
         return True, "started by hand with force"
     if paused:
@@ -323,9 +356,8 @@ def line_intro(kind, version, previous):
             f"`horizon-server update --version {version}`.")
 
 
-def notes(kind, version, prs, issues, beta=False, previous=None):
-    """(title, body) of a release; a game beta's say it is one. previous: the release before it, for a line's
-    first release."""
+def notes(kind, version, prs, issues, previous=None):
+    """(title, body) of a release. previous: the release before it, for a line's first release."""
     shown = [pr for pr in prs if pr["paths"] and "skip-release" not in pr["labels"]]
     new = [pr for pr in shown if "feature" in pr["labels"]]
     fixed = [pr for pr in shown if "feature" not in pr["labels"]]
@@ -346,17 +378,15 @@ def notes(kind, version, prs, issues, beta=False, previous=None):
     contributors = sorted({pr["author"] for pr in shown if pr["author"] and pr["author"] != REPO.split("/")[0]})
     if contributors:
         parts.append("Thanks to " + ", ".join(f"@{name}" for name in contributors) + ".")
-    if beta and kind == "game":
-        parts.append(FOOTER["beta"])
     parts.append(FOOTER[kind])
     parts.append(DISCLAIMER)
     return title, "\n\n".join(parts) + "\n"
 
 
-def gather(kind, head, releases=None, betas=True):
-    """The last published release of this kind (stable only when betas is False) and the pull requests merged
-    since, with their player-facing paths."""
-    releases = published_releases(betas) if releases is None else releases
+def gather(kind, head, releases=None):
+    """The last published release of this kind and the pull requests merged since, with their player-facing
+    paths."""
+    releases = published_releases() if releases is None else releases
     last = last_release(releases, kind)
     base = last["tag_name"] if last else run("git", "rev-list", "--max-parents=0", head).split()[0]
     exporter_paths = exporters()
@@ -387,17 +417,28 @@ def write_outputs(values):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["decide", "notes"])
+    parser.add_argument("command", choices=["decide", "notes", "gate"])
     parser.add_argument("--kind", choices=["game", "launcher"], required=True)
     parser.add_argument("--head", help="the commit to release (default: the newest commit on main whose checks passed)")
     parser.add_argument("--tag", help="notes: the release's tag")
     parser.add_argument("--force", action="store_true", help="release even without player-facing changes, before merges settle or while paused")
     parser.add_argument("--out", type=Path, help="notes: write title.txt and body.md here")
     parser.add_argument("--now", help="the time to decide at (ISO 8601; default now)")
-    parser.add_argument("--stable", action="store_true",
-                        help="notes: for promoting a beta to stable, so since the last stable release, without the beta line")
+    parser.add_argument("--smoke", type=Path, help="gate: the release smoke test's report (smoke-test.json)")
+    parser.add_argument("--blockers", action="store_true", help="gate: also check that no release-blocker is open")
     args = parser.parse_args()
     now = dt.datetime.fromisoformat(args.now) if args.now else dt.datetime.now(dt.timezone.utc)
+
+    if args.command == "gate":
+        report = json.loads(args.smoke.read_text()) if args.smoke and args.smoke.exists() else None
+        problem = gate(report, open_blockers() if args.blockers else [])
+        line = f"Not publishing: {problem}" if problem else "Ready to publish: the smoke test passed" + (
+            " and no release-blocker is open" if args.blockers else "")
+        print(json.dumps(report) if report else "", line, sep="\n")
+        if os.environ.get("GITHUB_STEP_SUMMARY"):
+            with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+                summary.write(f"### {line}\n")
+        return 1 if problem else 0
 
     head = args.head or green_main_head()
     if not head:
@@ -406,11 +447,11 @@ def main():
         write_outputs({"release": "false", "reason": result["reason"]})
         return 0
     head = run("git", "rev-parse", head).strip()
-    last, prs = gather(args.kind, head, betas=not args.stable)
+    last, prs = gather(args.kind, head)
     if args.command == "notes":
         version = args.tag or "unreleased"
         previous = last["tag_name"] if last and last["tag_name"] != version else None
-        title, body = notes(args.kind, version, prs, known_issues(), beta=not args.stable, previous=previous)
+        title, body = notes(args.kind, version, prs, known_issues(), previous=previous)
         if args.out:
             args.out.mkdir(parents=True, exist_ok=True)
             (args.out / "title.txt").write_text(title + "\n")
@@ -422,7 +463,9 @@ def main():
     line = release_line()
     prefix = GAME_PREFIX if args.kind == "game" else LAUNCHER_PREFIX
     new_line = f"{line[0]}.{line[1]}" if line and first_on_line(tags, prefix, line) else None
-    release, reason = decision(args.kind, prs, now, os.environ.get("RELEASES_PAUSED") == "1", args.force, new_line)
+    blockers = open_blockers() if args.kind == "game" else []
+    release, reason = decision(args.kind, prs, now, os.environ.get("RELEASES_PAUSED") == "1", args.force, new_line,
+                               blockers)
     minor = any("feature" in pr["labels"] for pr in prs if pr["paths"])
     tag = next_game_tag(tags, now.date(), line) if args.kind == "game" else next_launcher_tag(tags, minor, line)
     result = {

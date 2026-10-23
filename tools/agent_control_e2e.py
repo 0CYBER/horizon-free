@@ -684,9 +684,73 @@ def no_ai_check(mode, ctl, resources):
         shutil.rmtree(work, ignore_errors=True)
 
 
+def setting_check(mode, ctl, out, resources):
+    """Agent Control turned on in Horizon Settings > AI Agent: the game the player starts (no
+    --control) opens the default endpoint, the page shows the agent connected, Copy Connection
+    Details copies the socket, and turning the switch off closes the endpoint at once."""
+    work, env = scratch(mode, resources)
+    socket = work / 'c.sock'
+    env['HORIZON_CONTROL'] = str(socket)  # the default endpoint, this home's
+    (work / 'horizon-extras.txt').write_text('agentControl:true\n')
+    args = [str(ctl.with_name('horizon-client'))]
+    if sys.platform == 'darwin':
+        args.append('--offscreen')
+    game = subprocess.Popen(args, cwd=work, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    d = None
+    try:
+        deadline = time.time() + 300
+        while not socket.exists():
+            assert game.poll() is None, f'the game exited ({game.returncode})'
+            assert time.time() < deadline, 'Agent Control on, but no control socket'
+            time.sleep(0.5)
+        d = (Cli if mode == 'cli' else Mcp)(ctl, socket, work, env)
+        assert d('state')['screen'] == 'title'  # the player's own game, at its title screen
+        d('options', page='horizon')
+        tree = widgets(d)
+        assert {'ai-agent', 'no-ai'} <= set(tree), sorted(tree)
+        d('screenshot', path=str(out / f'{mode}-horizon-settings.png'))
+        d('options', page='agent')
+        tree = widgets(d)
+        switch = next(w for w in tree.values() if w.get('label', '').startswith('Agent Control'))
+        assert switch['label'] == 'Agent Control: On', switch
+        d('screenshot', path=str(out / f'{mode}-ai-agent.png'))
+        copy = next(w for w in tree.values() if w.get('label') == 'Copy Connection Details')
+        d('click', id=copy['id'])
+        # Off: the endpoint goes away and the next command can't reach the game.
+        try:
+            d('click', id=switch['id'])
+        except Failed:
+            pass  # the reply may be lost with the socket
+        deadline = time.time() + 30
+        while socket.exists():
+            assert time.time() < deadline, 'Agent Control off, but the socket stayed'
+            time.sleep(0.5)
+        assert 'agentControl:false' in (work / 'horizon-extras.txt').read_text()
+        assert game.poll() is None, 'the game exited when Agent Control went off'
+        print(f'[{mode}] PASS: setting')
+        return True
+    except (Failed, AssertionError, StopIteration, json.JSONDecodeError, subprocess.TimeoutExpired) as e:
+        print(f'[{mode}] FAIL: setting: {e!r}')
+        return False
+    finally:
+        if d is not None:
+            try:
+                d.close()
+            except Exception:
+                pass
+        game.terminate()
+        try:
+            game.wait(30)
+        except subprocess.TimeoutExpired:
+            game.kill()
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def run(mode, ctl, out, resources, which='survival'):
     if which == 'no-ai':
         return no_ai_check(mode, ctl, resources)
+    if which == 'setting':
+        return setting_check(mode, ctl, out, resources)
     work, env = scratch(mode, resources)
     socket = work / 'c.sock'
     driver = (Cli if mode == 'cli' else Mcp)(ctl, socket, work, env)
@@ -715,7 +779,7 @@ def run(mode, ctl, out, resources, which='survival'):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--mode', choices=['cli', 'mcp', 'both'], default='both')
-    parser.add_argument('--scenario', choices=[*SCENARIOS, 'no-ai', 'all'], default='all')
+    parser.add_argument('--scenario', choices=[*SCENARIOS, 'no-ai', 'setting', 'all'], default='all')
     parser.add_argument('--bin-dir', help='prebuilt horizon-client and horizon-ctl (default: build with the fast profile)')
     parser.add_argument('--out', default=str(ROOT / '.local/agent-control-e2e'), help='screenshots go here')
     args = parser.parse_args()
@@ -733,7 +797,7 @@ def main():
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     modes = ['cli', 'mcp'] if args.mode == 'both' else [args.mode]
-    scenarios = [*SCENARIOS, 'no-ai'] if args.scenario == 'all' else [args.scenario]
+    scenarios = [*SCENARIOS, 'no-ai', 'setting'] if args.scenario == 'all' else [args.scenario]
     results = {f'{m}/{s}': run(m, bins / 'horizon-ctl', out, resources, s) for m in modes for s in scenarios}
     print(json.dumps(results))
     sys.exit(0 if all(results.values()) else 1)

@@ -2,7 +2,7 @@
 //! they show, in what groups, with what description and cost, and their
 //! input. How they look comes from `graphics_style`.
 use crate::{
-    graphics::{GraphicsApi, Overlay, Pacing, PresentMode, Preset},
+    graphics::{FarDetail, GraphicsApi, Overlay, Pacing, PresentMode, Preset},
     graphics_style::{Cost, STYLE},
     hud::{HudAtlas, HudBatch},
     options_ui::Opt,
@@ -22,6 +22,7 @@ pub enum Level {
 pub enum H {
     Preset,
     LodDistance,
+    FarDetail,
     CaveCulling,
     CullLeaves,
     EntityCulling,
@@ -85,6 +86,16 @@ pub fn rows(level: Level) -> Vec<Row> {
         Medium,
         "Coarse distant terrain in local worlds. Integrated GPUs stop at 128 chunks.",
     );
+    // Suggested, never switched on, where far terrain costs the GPU most.
+    let far = h(
+        H::FarDetail,
+        Medium,
+        if crate::graphics::reduced_far_detail_suggested() {
+            "Reduced draws far terrain coarser: faster on this integrated GPU."
+        } else {
+            "Reduced draws far terrain coarser, for GPUs it slows down."
+        },
+    );
     let fov = v(
         Opt::Fov,
         Low,
@@ -101,17 +112,23 @@ pub fn rows(level: Level) -> Vec<Row> {
         "Waits for the display's refresh: no tearing, a little latency.",
     );
     let gui = v(Opt::GuiScale, None, "Size of menus and the HUD.");
+    let shader_pack = h(
+        H::ShaderPack,
+        High,
+        "Redraws the world with a pack from the shaderpacks folder. Off is vanilla.",
+    );
     let preset = h(
         H::Preset,
         None,
         "Sets the options below together. Changing one makes it Custom.",
     );
     let mut rows = match level {
-        Level::Simple => vec![preset, render, lod, fov, fps, vsync, gui],
+        Level::Simple => vec![preset, render, lod, far, fov, fps, vsync, gui, shader_pack],
         Level::Advanced => vec![
             Row::Header("Rendering"),
             render,
             lod,
+            far,
             v(
                 Opt::SimulationDistance,
                 Medium,
@@ -234,11 +251,7 @@ pub fn rows(level: Level) -> Vec<Row> {
                 None,
                 "Lowers the frame rate when minimised, or idle too.",
             ),
-            h(
-                H::ShaderPack,
-                High,
-                "Redraws the world with a pack from the shaderpacks folder. Off is vanilla.",
-            ),
+            shader_pack,
             Row::Header("Preferences"),
             v(Opt::ViewBobbing, None, "Sways the view while walking."),
             v(Opt::ChunkFade, None, "Fades newly loaded chunks in."),
@@ -335,6 +348,7 @@ impl H {
                 0 => labelled("LOD Distance", "Off"),
                 n => labelled("LOD Distance", format!("{n} chunks")),
             },
+            H::FarDetail => labelled("Far Detail", g.far_detail.label()),
             H::CaveCulling => labelled("Cave Culling", on_off(g.cave_culling)),
             H::CullLeaves => labelled("Cull Leaves", on_off(g.cull_leaves)),
             H::EntityCulling => labelled("Entity Culling", on_off(g.entity_culling)),
@@ -410,6 +424,9 @@ impl H {
         match self {
             H::LodDistance => {
                 g.lod_distance = step(&[0, 64, 128, 256, 512, 1024], g.lod_distance, back)
+            }
+            H::FarDetail => {
+                g.far_detail = step(&[FarDetail::Full, FarDetail::Reduced], g.far_detail, back)
             }
             H::CaveCulling => g.cave_culling = !g.cave_culling,
             H::CullLeaves => g.cull_leaves = !g.cull_leaves,

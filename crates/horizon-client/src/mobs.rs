@@ -792,6 +792,9 @@ pub struct Mob {
     pub on_ground: bool,
     pub horizontal_collision: bool,
     pub vertical_collision_below: bool,
+    /// `Entity.needsSync`: knocked back, pushed or jumped since its server
+    /// last sent it, so the next update goes out at once.
+    pub needs_sync: bool,
     pub health: f32,
     pub hurt_time: i32,
     pub invulnerable: i32,
@@ -1361,8 +1364,10 @@ impl PendingPushes {
 }
 /// Adds the pending pushes aimed at `m` to its velocity, in push order.
 pub fn apply_mob_pushes(m: &mut Mob, pending: &mut PendingPushes) {
+    // Entity.push(x, y, z) sets needsSync.
     let mut add = |v: Vec3| {
         m.velocity = Vec3::new(m.velocity.x + v.x, m.velocity.y + v.y, m.velocity.z + v.z);
+        m.needs_sync = true;
     };
     if !pending.list.is_empty() {
         pending.list.retain(|(id, v)| {
@@ -1529,6 +1534,7 @@ impl Mob {
             on_ground: false,
             horizontal_collision: false,
             vertical_collision_below: false,
+            needs_sync: false,
             hurt_time: 0,
             invulnerable: 0,
             death_time: 0,
@@ -1769,6 +1775,7 @@ impl Mob {
         if power <= 0.0 {
             return;
         }
+        self.needs_sync = true;
         while xd * xd + zd * zd < f64::from(1.0e-5_f32) {
             xd = (self.random.next_double() - self.random.next_double()) * 0.01;
             zd = (self.random.next_double() - self.random.next_double()) * 0.01;

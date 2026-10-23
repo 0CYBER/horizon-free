@@ -61,6 +61,13 @@ pub struct Style {
     pub click: Option<ClickEvent>,
     /// Hover text.
     pub hover: Option<Box<Text>>,
+    /// The font (`FontDescription.Resource`), a full id like
+    /// `minecraft:alt`; the default font when unset.
+    pub font: Option<String>,
+}
+/// A style's `font` field: an identifier (`alt` is `minecraft:alt`).
+pub fn font_id(v: &Value) -> Option<String> {
+    crate::command::args::parse_identifier(v.as_str()?)
 }
 impl Style {
     pub fn color(c: u32) -> Self {
@@ -82,6 +89,9 @@ impl Style {
         }
         if self.hover.is_none() {
             self.hover.clone_from(&base.hover);
+        }
+        if self.font.is_none() {
+            self.font.clone_from(&base.font);
         }
     }
     pub fn is_bold(&self) -> bool {
@@ -451,7 +461,7 @@ impl Text {
 }
 
 /// The style fields of a component's JSON.
-const STYLE_KEYS: [&str; 8] = [
+const STYLE_KEYS: [&str; 9] = [
     "color",
     "bold",
     "italic",
@@ -460,6 +470,7 @@ const STYLE_KEYS: [&str; 8] = [
     "obfuscated",
     "click_event",
     "hover_event",
+    "font",
 ];
 /// Style.Serializer: the fields a style sets.
 fn style_json(style: &Style) -> Vec<(String, Value)> {
@@ -499,6 +510,9 @@ fn style_json(style: &Style) -> Vec<(String, Value)> {
             "hover_event".to_owned(),
             json!({ "action": "show_text", "value": hover.component() }),
         ));
+    }
+    if let Some(font) = &style.font {
+        out.push(("font".to_owned(), font.clone().into()));
     }
     out
 }

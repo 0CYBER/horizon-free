@@ -297,10 +297,14 @@ impl Game<'_> {
         }
     }
     /// The local player's effects (`tick_mob_effects`), then the potions
-    /// in flight, which a server without a local player still has.
-    pub(super) fn tick_effects(&mut self) {
+    /// in flight, which a server without a local player still has. A frozen
+    /// tick (`/tick freeze`) leaves the potions where they are
+    /// (`TickRateManager.isEntityFrozen`); players' effects still run.
+    pub(super) fn tick_effects(&mut self, running: bool) {
         self.tick_mob_effects();
-        self.tick_thrown_potions();
+        if running {
+            self.tick_thrown_potions();
+        }
     }
     /// `LivingEntity.tickEffects` (server side) for `self.player`, the local
     /// player or a guest acting (`as_guest`), then its attribute modifiers

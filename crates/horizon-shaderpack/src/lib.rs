@@ -17,7 +17,7 @@ pub mod uniforms;
 use include::{IncludeGraph, Inlined};
 use options::{Annotated, OptionSet, OptionValues};
 use preprocess::{Environment, Preprocessed};
-use properties::ShaderProperties;
+use properties::{Properties, ShaderProperties};
 use source::PackFiles;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -153,6 +153,32 @@ impl JavaPack {
             Some(text) => ShaderProperties::new(&text, env, &self.options, values),
             None => Ok(ShaderProperties::default()),
         }
+    }
+
+    /// The pack's language translations (`shaders/lang/<code_lower>.lang` or
+    /// `en_US.lang`), mapping keys such as `option.SHADOW_QUALITY`,
+    /// `value.SHADOW_QUALITY.2`, `screen.LIGHTING`, and `profile.HIGH` to their
+    /// display labels.
+    pub fn translations(&self, lang_code: &str) -> BTreeMap<String, String> {
+        let mut out = BTreeMap::new();
+        let lower = lang_code.to_lowercase();
+        let upper = match lower.split_once('_') {
+            Some((l, r)) => format!("{l}_{}", r.to_uppercase()),
+            None => lower.clone(),
+        };
+        let mut candidates = vec!["lang/en_US.lang".to_owned(), "lang/en_us.lang".to_owned()];
+        if lower != "en_us" {
+            candidates.push(format!("lang/{lower}.lang"));
+            candidates.push(format!("lang/{upper}.lang"));
+        }
+        for path in candidates {
+            if let Some(text) = self.files.read(&path) {
+                for (k, v) in Properties::parse(&text).iter() {
+                    out.insert(k.to_owned(), v.to_owned());
+                }
+            }
+        }
+        out
     }
 }
 

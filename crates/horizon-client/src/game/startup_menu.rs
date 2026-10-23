@@ -12,6 +12,8 @@ pub(super) struct StartupMenu {
     title: Option<Title>,
     options: OptionsUi,
     options_open: bool,
+    /// The credits from Credits & Attribution, and their last frame.
+    win: Option<(horizon_client::win_screen::WinScreen, Instant)>,
     root: PathBuf,
     cursor: (f32, f32),
     pointer: (f64, f64),
@@ -370,7 +372,26 @@ impl Loading {
                     let _ = std::fs::create_dir_all(&dir);
                     packs::open_folder(&dir);
                 }
-                Event::ButtonClick => {}
+                Event::Credits => {
+                    if let Some(gui) = &self.gui {
+                        let name = self.options.as_ref().map_or_else(
+                            || horizon_client::offline_name::generate(0),
+                            Options::player_name,
+                        );
+                        let screen = horizon_client::win_screen::WinScreen::new(
+                            false,
+                            &self.menu.root,
+                            &name,
+                            &gui.atlas.font,
+                        );
+                        self.menu.win = Some((screen, Instant::now()));
+                    }
+                }
+                Event::ReloadShaderPack => {
+                    self.save_menu_settings();
+                }
+                // The startup menu runs before the game opens a control socket.
+                Event::ButtonClick | Event::CopyAgentDetails => {}
             }
         }
     }
@@ -434,6 +455,17 @@ impl Loading {
                 }
                 self.apply_menu_settings();
             }
+            WindowEvent::DroppedFile(path) => {
+                match self
+                    .menu
+                    .options
+                    .drop_shader_pack(&mut self.settings, &path)
+                {
+                    Some(Ok(())) => self.save_menu_settings(),
+                    Some(Err(e)) => log::warn!("Horizon: shader pack {}: {e}", path.display()),
+                    None => {}
+                }
+            }
             WindowEvent::RedrawRequested => self.draw(),
             WindowEvent::ModifiersChanged(modifiers) => self.menu.modifiers = modifiers.state(),
             WindowEvent::Focused(false) => {
@@ -456,6 +488,20 @@ impl Loading {
                 }
             }
             _ if self.gui.is_none() || self.menu.pending.is_some() => {}
+            WindowEvent::KeyboardInput { event, .. } if self.menu.win.is_some() => {
+                if let PhysicalKey::Code(code) = event.physical_key {
+                    let pressed = event.state == ElementState::Pressed;
+                    if code == KeyCode::Escape && pressed {
+                        self.menu.win = None;
+                    } else if let Some(key) = horizon_client::win_screen::Key::from_code(code)
+                        && let Some((win, _)) = &mut self.menu.win
+                    {
+                        win.key(key, pressed);
+                    }
+                }
+            }
+            WindowEvent::MouseInput { .. } | WindowEvent::MouseWheel { .. }
+                if self.menu.win.is_some() => {}
             WindowEvent::CursorMoved { position, .. } => {
                 self.menu.pointer = (position.x, position.y);
                 self.update_menu_cursor();
@@ -575,6 +621,15 @@ impl Loading {
                 self.progress.line(),
                 self.progress.fraction(),
             );
+        } else if let Some((win, frame)) = &mut self.menu.win {
+            let now = Instant::now();
+            // 20 ticks a second: the startup menu runs no tick rate.
+            let delta_ticks = now.duration_since(*frame).as_secs_f32() * 20.0;
+            *frame = now;
+            win.draw(batch, &gui.atlas, delta_ticks, Default::default());
+            if win.finished(batch.height) {
+                self.menu.win = None;
+            }
         } else if self.menu.options_open {
             self.menu
                 .options

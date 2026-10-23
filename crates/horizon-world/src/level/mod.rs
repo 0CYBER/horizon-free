@@ -19,9 +19,9 @@
 //!    `ServerLevel.tickChunk`'s random ticks: for each non-empty section,
 //!    `randomTickSpeed` (game rule, default 3) positions are drawn with
 //!    `Level.getBlockRandomPos` and randomly-ticking block and fluid states are
-//!    ticked. The caller decides which sections are randomly ticking (vanilla
-//!    counts randomly-ticking states per section); [`Behaviours::random_tick`]
-//!    ticks a single position.
+//!    ticked. The caller says which sections are randomly ticking when each is
+//!    reached (vanilla counts randomly-ticking states per section);
+//!    [`Behaviours::random_tick`] ticks a single position.
 //! 3. [`Behaviours::run_block_events`] runs queued block events (pistons),
 //!    then (after entities) [`Behaviours::tick_block_entities`] advances
 //!    moving pistons ([`Ticks::moving_pistons`]).
@@ -69,7 +69,7 @@
 //! level.time += 1;
 //! behaviours.tick_scheduled(&mut level, &mut ticks);
 //! for chunk in ticking_chunks {
-//!     behaviours.tick_chunk_random(&mut level, &mut ticks, chunk, randomly_ticking_section_min_ys(chunk));
+//!     behaviours.tick_chunk_random(&mut level, &mut ticks, chunk, |level, from| level.next_ticking_section(chunk, from));
 //! }
 //! behaviours.run_block_events(&mut level, &mut ticks);
 //! /* tick entities */

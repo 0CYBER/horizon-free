@@ -22,8 +22,16 @@
 //! Every solid draw is an entry of one of the two lists, so the CPU records
 //! as many draws as without culling: drivers that unroll an indirect
 //! multi-draw on the CPU (Mesa's on Intel Gen9) pay per entry. Phase 2's
-//! counts come from the GPU, which needs a native multi-draw and forced
-//! early depth tests: Vulkan. Translucent draws are not culled.
+//! counts come from the GPU, which reads them from the draws themselves:
+//! Vulkan's native multi-draw, and Metal's, which wgpu replays as one
+//! indirect draw per entry. Translucent draws are not culled.
+//!
+//! Metal cannot force the depth test before a fragment shader that writes
+//! storage (naga writes no `[[early_fragment_tests]]`), so there the boxes
+//! are drawn in a pass of their own between the phases, which reads phase
+//! 1's depth as a texture and makes the same comparison in the shader: the
+//! fragment's depth against the stored one, greater or equal passing. The
+//! same fragments pass, so the same sections are seen.
 use std::num::NonZeroU64;
 use std::sync::{
     Arc,
@@ -38,6 +46,13 @@ const RETEST: u32 = 8;
 /// more than they save. Else one frame in `PROBE` tests every section.
 const MIN_SHARE: f32 = 0.1;
 const PROBE: u32 = 64;
+/// On Metal, section draws from which a frame culls. Apple's GPUs store and
+/// reload the whole frame at each of the passes the test adds, a fixed cost
+/// that the sections it hides repay only at high render distances: on an M4
+/// Pro at 1080p and render distance 12 (1,000–1,600 draws) culling added
+/// about 0.05 ms of GPU time while hiding 15–30% of the solid indices; at
+/// 32 (drawn flat, over this many draws) it saved 0.25–1.6 ms.
+pub const TILED_MIN_DRAWS: usize = 4096;
 /// Boxes over more than this share of the screen count as seen untested.
 const BIG: f32 = 0.25;
 /// Results read back at once, some frames late so the CPU never waits.
@@ -74,10 +89,40 @@ struct Group {
     group: wgpu::BindGroup,
 }
 
+/// Where the boxes' depth test runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DepthTest {
+    /// Forced before the fragment shader, in phase 1's pass (Vulkan).
+    Early,
+    /// In the fragment shader, against phase 1's depth read as a texture,
+    /// in a pass of its own (Metal).
+    InShader,
+}
+
+/// The Vulkan entry point: the depth test forced early, which naga cannot
+/// write for Metal (so it is not in `cull.wgsl`, which every backend takes).
+const EARLY_TEST: &str = "
+@fragment
+@early_depth_test(force)
+fn fs_box_early(in: Box) -> @location(0) vec4<f32> {
+    see(in.test);
+    return vec4(0.0);
+}
+";
+
+/// The test's depth texture binding (`InShader`), for the view it was made with.
+struct DepthGroup {
+    view: wgpu::TextureView,
+    group: wgpu::BindGroup,
+}
+
 pub struct Cull {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     group: Option<Group>,
+    depth_test: DepthTest,
+    depth_layout: Option<wgpu::BindGroupLayout>,
+    depth_group: Option<DepthGroup>,
     params: wgpu::Buffer,
     /// Phase 2's draws: the solid draws after phase 1's in the frame's list.
     pub phase2: wgpu::Buffer,
@@ -103,6 +148,8 @@ pub struct Cull {
     pub hidden: ([usize; 2], f32),
     /// Cull every frame, whatever the hidden share (A/B checks).
     pub always: bool,
+    /// Frames with fewer section draws than this do not cull.
+    pub min_draws: usize,
 }
 
 fn buffer(
@@ -134,20 +181,33 @@ impl Cull {
     pub fn features(adapter: &wgpu::Adapter) -> wgpu::Features {
         adapter.features() & wgpu::Features::SHADER_EARLY_DEPTH_TEST
     }
-    /// Whether the device draws an indirect multi-draw natively and runs
-    /// fragment shaders that write storage only past an early depth test.
-    pub fn supported(adapter: &wgpu::Adapter, device: &wgpu::Device) -> bool {
-        adapter.get_info().backend == wgpu::Backend::Vulkan
-            && device.features().contains(
-                wgpu::Features::SHADER_EARLY_DEPTH_TEST | wgpu::Features::INDIRECT_FIRST_INSTANCE,
-            )
+    /// Where the device can run the test, if it can: Vulkan with early
+    /// depth tests, or Metal, both drawing an indirect multi-draw's entries
+    /// with the instance counts the GPU wrote, with fragment shaders that
+    /// write storage.
+    pub fn supported(adapter: &wgpu::Adapter, device: &wgpu::Device) -> Option<DepthTest> {
+        let depth_test = match adapter.get_info().backend {
+            wgpu::Backend::Vulkan
+                if device
+                    .features()
+                    .contains(wgpu::Features::SHADER_EARLY_DEPTH_TEST) =>
+            {
+                DepthTest::Early
+            }
+            wgpu::Backend::Metal => DepthTest::InShader,
+            _ => return None,
+        };
+        (device
+            .features()
+            .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE)
             && adapter.get_downlevel_capabilities().flags.contains(
                 wgpu::DownlevelFlags::VERTEX_STORAGE
                     | wgpu::DownlevelFlags::FRAGMENT_WRITABLE_STORAGE,
-            )
+            ))
+        .then_some(depth_test)
     }
     /// `color` is the world pass's colour format.
-    pub fn new(device: &wgpu::Device, color: wgpu::TextureFormat) -> Self {
+    pub fn new(device: &wgpu::Device, color: wgpu::TextureFormat, depth_test: DepthTest) -> Self {
         let entry = |binding, visibility, ty| wgpu::BindGroupLayoutEntry {
             binding,
             visibility,
@@ -180,13 +240,41 @@ impl Cull {
         });
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Section culling"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("cull.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(source(depth_test).into()),
+        });
+        let depth_layout = (depth_test == DepthTest::InShader).then(|| {
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Section culling depth"),
+                entries: &[entry(
+                    0,
+                    fragment,
+                    wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                )],
+            })
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Section culling"),
-            bind_group_layouts: &[Some(&layout)],
+            bind_group_layouts: &[Some(&layout), depth_layout.as_ref()],
             ..Default::default()
         });
+        // In the shader: no colour target, and phase 1's depth attached read
+        // only (a pass needs an attachment), its test left to the shader.
+        let (fragment_entry, targets, depth_compare) = match depth_test {
+            DepthTest::Early => (
+                "fs_box_early",
+                &[Some(wgpu::ColorTargetState {
+                    format: color,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::empty(),
+                })][..],
+                wgpu::CompareFunction::GreaterEqual,
+            ),
+            DepthTest::InShader => ("fs_box", &[][..], wgpu::CompareFunction::Always),
+        };
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Section culling"),
             layout: Some(&pipeline_layout),
@@ -204,20 +292,16 @@ impl Cull {
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
                 depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
+                depth_compare: Some(depth_compare),
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
             multisample: Default::default(),
             fragment: Some(wgpu::FragmentState {
                 module: &module,
-                entry_point: Some("fs_box"),
+                entry_point: Some(fragment_entry),
                 compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: color,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::empty(),
-                })],
+                targets,
             }),
             multiview_mask: None,
             cache: None,
@@ -226,6 +310,9 @@ impl Cull {
             pipeline,
             layout,
             group: None,
+            depth_test,
+            depth_layout,
+            depth_group: None,
             params: buffer(
                 device,
                 "Section culling parameters",
@@ -259,6 +346,7 @@ impl Cull {
             stamp: 0,
             hidden: ([0; 2], 1.0),
             always: false,
+            min_draws: 0,
         }
     }
 
@@ -399,17 +487,69 @@ impl Cull {
         }
     }
 
-    /// In the world pass after phase 1: draw the tested boxes against its
-    /// depth. Leaves the pass's pipeline and group 0 changed.
+    pub fn depth_test(&self) -> DepthTest {
+        self.depth_test
+    }
+
+    /// In the world pass after phase 1 (`Early`): draw the tested boxes
+    /// against its depth. Leaves the pass's pipeline and group 0 changed.
     pub fn test(&self, pass: &mut wgpu::RenderPass<'_>) {
         let Some(Group { group, .. }) = &self.group else {
+            return;
+        };
+        if self.depth_test != DepthTest::Early || self.test_data.is_empty() {
+            return;
+        }
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, group, &[]);
+        pass.draw(0..36, 0..self.test_data.len() as u32);
+    }
+
+    /// Before the world pass (`InShader`): the binding of the depth the
+    /// world is drawn with this frame.
+    pub fn bind_depth(&mut self, device: &wgpu::Device, depth: &wgpu::TextureView) {
+        let Some(layout) = &self.depth_layout else {
+            return;
+        };
+        if self.depth_group.as_ref().is_none_or(|g| g.view != *depth) {
+            self.depth_group = Some(DepthGroup {
+                view: depth.clone(),
+                group: device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Section culling depth"),
+                    layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(depth),
+                    }],
+                }),
+            });
+        }
+    }
+
+    /// Between the phases (`InShader`): draw the tested boxes in a pass of
+    /// their own that reads phase 1's depth, bound by `bind_depth`.
+    pub fn test_pass(&self, encoder: &mut wgpu::CommandEncoder) {
+        let (Some(Group { group, .. }), Some(DepthGroup { view, group: depth })) =
+            (&self.group, &self.depth_group)
+        else {
             return;
         };
         if self.test_data.is_empty() {
             return;
         }
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Section culling"),
+            color_attachments: &[],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view,
+                depth_ops: None,
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        });
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, group, &[]);
+        pass.set_bind_group(1, depth, &[]);
         pass.draw(0..36, 0..self.test_data.len() as u32);
     }
 
@@ -498,16 +638,33 @@ impl Cull {
     }
 }
 
+/// The test's shader for `depth_test`.
+fn source(depth_test: DepthTest) -> String {
+    let common = include_str!("cull.wgsl");
+    match depth_test {
+        DepthTest::Early => format!("{common}{EARLY_TEST}"),
+        DepthTest::InShader => common.to_owned(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
-    fn shader_validates() {
-        let module = naga::front::wgsl::parse_str(include_str!("cull.wgsl")).unwrap();
-        naga::valid::Validator::new(
-            naga::valid::ValidationFlags::all(),
-            naga::valid::Capabilities::all(),
-        )
-        .validate(&module)
-        .unwrap();
+    fn shaders_validate() {
+        for (depth_test, capabilities) in [
+            (DepthTest::Early, naga::valid::Capabilities::all()),
+            // What wgpu's Metal backend allows: no early depth test.
+            (
+                DepthTest::InShader,
+                naga::valid::Capabilities::all() - naga::valid::Capabilities::EARLY_DEPTH_TEST,
+            ),
+        ] {
+            let module = naga::front::wgsl::parse_str(&source(depth_test)).unwrap();
+            naga::valid::Validator::new(naga::valid::ValidationFlags::all(), capabilities)
+                .validate(&module)
+                .unwrap_or_else(|e| panic!("{depth_test:?}: {e:?}"));
+        }
     }
 }

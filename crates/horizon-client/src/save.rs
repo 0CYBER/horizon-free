@@ -2258,14 +2258,18 @@ pub struct Level {
     pub game_mode: i32,
     pub time: i64,
     pub day_time: i64,
-    /// The player's respawn point (bed, or the world spawn).
+    /// Where the player respawns when it has no bed or anchor: its forced
+    /// Overworld point (`spawnpoint`), or the world spawn.
     pub spawn: Option<[f64; 3]>,
-    /// A respawn point in another dimension than the Overworld (a respawn
-    /// anchor): dimension, block, yaw and `forced`.
+    /// A respawn point resolved through its block when the player respawns
+    /// (a bed, a respawn anchor, a forced point outside the Overworld):
+    /// dimension, block, yaw and `forced`.
     pub respawn_elsewhere: Option<(String, [i32; 3], f32, bool)>,
     pub position: Option<[f64; 3]>,
     pub rotation: [f32; 2],
     pub health: f32,
+    /// LivingEntity `AbsorptionAmount`: the golden hearts left.
+    pub absorption: f32,
     pub food: i32,
     pub saturation: f32,
     /// (slot, item, count, damage): 0..36 inventory, 100..103 armor (feet..head), 150 offhand.
@@ -2274,6 +2278,8 @@ pub struct Level {
     pub inventory_components: HashMap<u8, Box<crate::item_data::StackData>>,
     /// Player.XpSeed: the enchanting table seed.
     pub xp_seed: i32,
+    /// ServerPlayer.seenCredits: the end poem has been shown.
+    pub seen_credits: bool,
     /// Player.active_effects: (id, duration, amplifier, ambient, show_icon).
     pub active_effects: Vec<(String, i32, i32, bool, bool)>,
     /// Player.EnderItems: the ender chest inventory (27 slots).
@@ -2288,6 +2294,8 @@ pub struct Level {
     pub dimension: String,
     /// World spawn (`level.dat` `spawn`), distinct from a bed respawn point.
     pub world_spawn: Option<[i32; 3]>,
+    /// The world spawn's yaw and pitch (`setworldspawn`'s rotation).
+    pub world_spawn_angle: [f32; 2],
     pub difficulty: String,
     pub hardcore: bool,
     /// `difficulty_settings.locked` (LevelData.isDifficultyLocked).
@@ -2365,6 +2373,11 @@ impl Level {
                 ]
             }),
         };
+        let angle = |k: &str| match data.get("spawn").and_then(|s| s.get(k)) {
+            Some(Tag::Float(b)) => f32::from_bits(*b),
+            _ => 0.0,
+        };
+        level.world_spawn_angle = [angle("yaw"), angle("pitch")];
         if let Some(d) = data.get("difficulty_settings") {
             level.difficulty = text(d.get("difficulty")).unwrap_or_else(|| "normal".into());
             level.hardcore = n(d.get("hardcore")) != 0;
@@ -2455,6 +2468,7 @@ impl Level {
         }
         self.motion = read_doubles::<3>(p.get("Motion")).unwrap_or_default();
         self.health = f("Health").map_or(20.0, |v| v as f32);
+        self.absorption = f("AbsorptionAmount").map_or(0.0, |v| v as f32);
         self.food = n("foodLevel").map_or(20, |v| v as i32);
         self.saturation = f("foodSaturationLevel").map_or(5.0, |v| v as f32);
         self.food_exhaustion = f("foodExhaustionLevel").unwrap_or(0.0) as f32;
@@ -2465,6 +2479,7 @@ impl Level {
         self.selected_slot = n("SelectedItemSlot").unwrap_or(0) as i32;
         self.fall_distance = f("fall_distance").unwrap_or(0.0);
         self.on_ground = n("OnGround").unwrap_or(0) != 0;
+        self.seen_credits = n("seenCredits").unwrap_or(0) != 0;
         if let Some(mode) = n("playerGameType") {
             self.creative = mode == 1;
             self.game_mode = mode as i32;
@@ -2482,14 +2497,17 @@ impl Level {
         {
             let dimension =
                 text(respawn.get("dimension")).unwrap_or_else(|| "minecraft:overworld".into());
-            if dimension == "minecraft:overworld" {
+            let forced = number(respawn.get("forced")).is_some_and(|v| v != 0);
+            // A forced point in the Overworld (`spawnpoint`) is where the
+            // player respawns; anything else (a bed, an anchor) is resolved
+            // through its block then.
+            if dimension == "minecraft:overworld" && forced {
                 self.spawn = Some([f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])]);
             } else {
                 let yaw = match respawn.get("yaw") {
                     Some(Tag::Float(b)) => f32::from_bits(*b),
                     _ => 0.0,
                 };
-                let forced = number(respawn.get("forced")).is_some_and(|v| v != 0);
                 self.respawn_elsewhere = Some((dimension, [pos[0], pos[1], pos[2]], yaw, forced));
             }
         }
@@ -2626,6 +2644,7 @@ impl Level {
             ("OnGround", Tag::Byte(i8::from(self.on_ground))),
             ("fall_distance", Tag::Double(self.fall_distance.to_bits())),
             ("Health", Tag::Float(self.health.to_bits())),
+            ("AbsorptionAmount", Tag::Float(self.absorption.to_bits())),
             ("foodLevel", Tag::Int(self.food)),
             ("foodSaturationLevel", Tag::Float(self.saturation.to_bits())),
             (
@@ -2686,6 +2705,7 @@ impl Level {
         if let Some(pos) = self.position {
             entries.push(("Pos", doubles(&pos)));
         }
+        entries.push(("seenCredits", Tag::Byte(i8::from(self.seen_credits))));
         // A respawn point other than the world spawn: an anchor elsewhere, or a bed.
         if let Some((dimension, block, yaw, forced)) = &self.respawn_elsewhere {
             let mut respawn = vec![
@@ -2704,6 +2724,8 @@ impl Level {
                 s[1].floor() as i32,
                 s[2].floor() as i32,
             ];
+            // A point of the player's own in the Overworld other than a bed
+            // (`respawn_elsewhere`): `spawnpoint`'s, forced.
             if Some(block) != self.world_spawn {
                 entries.push((
                     "respawn",
@@ -2712,6 +2734,7 @@ impl Level {
                         ("pos", Tag::IntArray(block.to_vec())),
                         ("yaw", Tag::Float(0f32.to_bits())),
                         ("pitch", Tag::Float(0f32.to_bits())),
+                        ("forced", Tag::Byte(1)),
                     ]),
                 ));
             }
@@ -2731,7 +2754,6 @@ impl Level {
                 ("seenCredits", Tag::Byte(0)),
                 ("HurtTime", Tag::Short(0)),
                 ("DeathTime", Tag::Short(0)),
-                ("AbsorptionAmount", Tag::Float(0)),
                 ("FallFlying", Tag::Byte(0)),
             ] {
                 map.entry(key.into()).or_insert(value);
@@ -2857,8 +2879,8 @@ impl Level {
                 Tag::compound([
                     ("pos", Tag::IntArray(spawn.to_vec())),
                     ("dimension", string("minecraft:overworld")),
-                    ("yaw", Tag::Float(0f32.to_bits())),
-                    ("pitch", Tag::Float(0f32.to_bits())),
+                    ("yaw", Tag::Float(self.world_spawn_angle[0].to_bits())),
+                    ("pitch", Tag::Float(self.world_spawn_angle[1].to_bits())),
                 ]),
             ),
             ("difficulty_settings", difficulty),
@@ -4114,6 +4136,7 @@ mod tests {
             position: Some([1.5, 70.0, -3.25]),
             rotation: [90.0, 10.0],
             health: 17.0,
+            absorption: 5.0,
             food: 15,
             saturation: 2.5,
             inventory: vec![
@@ -4126,6 +4149,7 @@ mod tests {
             xp_total: 30,
             dimension: "minecraft:the_nether".into(),
             world_spawn: Some([8, 64, 8]),
+            world_spawn_angle: [45.0, -10.0],
             spawn: Some([20.0, 70.0, 20.0]),
             difficulty_locked: true,
             flying: true,
@@ -4144,6 +4168,7 @@ mod tests {
         assert_eq!(back.position, Some([1.5, 70.0, -3.25]));
         assert_eq!(back.rotation, [90.0, 10.0]);
         assert_eq!((back.health, back.food, back.saturation), (17.0, 15, 2.5));
+        assert_eq!(back.absorption, 5.0);
         let mut inv = back.inventory.clone();
         inv.sort();
         assert_eq!(
@@ -4160,6 +4185,7 @@ mod tests {
         );
         assert_eq!(back.dimension, "minecraft:the_nether");
         assert_eq!(back.world_spawn, Some([8, 64, 8]));
+        assert_eq!(back.world_spawn_angle, [45.0, -10.0]);
         assert_eq!(back.spawn, Some([20.0, 70.0, 20.0]));
         assert!(back.difficulty_locked);
         assert!(back.weather.raining);
@@ -4178,10 +4204,13 @@ mod tests {
         let mut again = Level {
             player_extra: Some(extra),
             ender_items: ender,
+            // The live amount, not the one the loaded compound held (#1307).
+            absorption: 2.0,
             ..back
         };
         again.write(&dir).unwrap();
         let third = Level::read(&dir).unwrap();
+        assert_eq!(third.absorption, 2.0);
         assert!(matches!(
             third
                 .player_extra

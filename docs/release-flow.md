@@ -2,9 +2,8 @@
 
 How a change gets from a pull request to players: the checks a pull request passes, how it merges, and the
 automatic releases that follow. Releases are automatic and frequent so the latest Horizon is always playable.
-Each one goes out as an **alpha** build, which launchers on the **Alpha** channel install at once, and becomes **stable** in
-the next daily promotion unless something holds it back ([Channels](#channels)): launchers and servers install
-stable builds unless their owner picks Alpha.
+There is one channel ([One channel](#one-channel)): each release is published as the release and GitHub's *latest*
+once its smoke test passed and no `release-blocker` is open, and launchers and servers install it at once.
 
 ## Pull request checks
 
@@ -101,12 +100,11 @@ flowchart LR
         windows["Windows x64<br/>GitHub windows-latest"]
         mac["macOS arm64<br/>Mac mini runner<br/>+ offscreen game run"]
     end
-    build --> publish["publish vX.Y.Z as an alpha<br/>notes from the merged PRs"]
-    publish --> alpha(["launchers on Alpha install it"])
-    publish --> promote{"promote.yml, daily at 20:00 UTC:<br/>6 h old by then, smoke test, no release-blocker"}
-    promote --> stable["stable and latest<br/>notes since the last stable"]
-    stable --> launcher(["every launcher and server installs it"])
-    stable --> kira(["Kira posts it;<br/>pings only with ### New"])
+    build --> gate{"gate: the smoke test drew a world,<br/>no release-blocker is open"}
+    gate -- no --> nothing(["nothing is published"])
+    gate -- yes --> publish["publish vX.Y.Z as the release and latest<br/>notes from the merged PRs"]
+    publish --> launcher(["every launcher and server installs it"])
+    publish --> kira(["Kira posts it; the first release<br/>after 20:00 UTC pings, once a day"])
 ```
 
 ### When it releases
@@ -121,9 +119,10 @@ commits) since the last **published** game release:
 - It releases when at least one pull request counts and the newest of them merged at least 5 minutes ago, so a wave
   of merges becomes one release; if merges never pause, it releases once the oldest has waited 20 minutes. There is
   no minimum time between releases: every settled player-facing change ships, limited only by the release already
-  building. That is the Alpha channel, many releases a day.
+  building: many releases a day.
 - A pull request labelled `release-now` (a crash or a blocker) releases at once.
 - A pull request labelled `skip-release` (work players don't see) doesn't count and isn't listed in the notes.
+- An open issue labelled `release-blocker` holds every game release, forced ones too (`held by release-blocker #N`).
 - One release at a time (concurrency group `game-release`); a run that finds nothing new does nothing.
 - A scheduled or hand-started run releases main's newest commit whose `checks` passed; after `checks`, the commit
   they passed on.
@@ -137,7 +136,7 @@ How releases are numbered, and how installs from before 0.2 reach it: [versionin
   the patch after the newest release tagged on that line (`v0.2.0` first). A `feature` label doesn't change the line:
   only that file does, by pull request.
 - Without the file (every release before 0.2), `vYYYY.MM.DD`, then `.01`, `.02`… the same UTC day.
-- Every reader (`release_train.py`, `release_channels.py`, the launcher, `horizon-server update`, the website) ranks
+- Every reader (`release_train.py`, the launcher, `horizon-server update`, the website) ranks
   every `vX.Y.Z` tag above every dated one.
 
 ### Labels
@@ -149,7 +148,7 @@ How releases are numbered, and how installs from before 0.2 reach it: [versionin
 | `skip-release` | Doesn't trigger a release and isn't listed in the notes |
 | `run-parity` | Runs the parity job once on a fork's pull request |
 | `parity-regression` | Opened by the nightly audit for a harness that fails on main |
-| `release-blocker` | On an issue: holds every beta back from stable while it is open ([Channels](#channels)) |
+| `release-blocker` | On an issue: no game release is published while it is open ([One channel](#one-channel)) |
 
 Pull requests without `feature` are listed under **Fixed**. Titles are written for players, since they become
 the notes.
@@ -180,63 +179,38 @@ runs the game: GitHub's runners have neither a GPU worth the name nor the game f
 - `### Known issues`: the bullets of [docs/known-issues.md](known-issues.md);
 - thanks to outside contributors, how to install, the disclaimer.
 
-Kira posts every release in Discord's #releases. An Alpha build (a game pre-release) is posted silently: no ping and
-Discord's @silent flag, so nobody gets a notification. When the same release becomes Stable it is posted again, and
-that post pings the releases role when the notes have a `### New` section (at most once every 6 hours). Launcher
-releases post without a ping.
+Kira posts every release once in Discord's #releases. It pings the releases role at most once a day: the first game
+release published after 20:00 UTC, with a short list of what came out since its last ping. Every other post is
+silent (no ping and Discord's @silent flag). Launcher releases post without a ping.
 
-### Channels
+### One channel
 
-Every game release is published as an **alpha** build, a GitHub pre-release (the workflows, tools and labels
-call it a *beta*: `release-blocker` holds every beta), so GitHub's *latest* release stays the last
-**stable** one. The launcher's Settings has an **Updates** choice of two channels (`update_channel` in its
-`settings.json`, `horizon-launcher update-channel`):
+Since 2026-10-23 there is one channel. Every game release is published as the release, never a pre-release, and
+marked GitHub's *latest*: the launcher, `horizon-server update` and `install.sh` take it at once. Because nothing
+promotes it later, the checks that used to gate a promotion run in the release itself, and the publish job
+(`tools/release_train.py gate`) publishes nothing unless both pass:
 
-- **Stable**, the default: a tested build about once a day, the alpha builds promoted below.
-- **Alpha**: every alpha build as soon as it is built, many times a day; it can break. "Alpha" is the project's
-  word for builds that are still being tested (the whole of Horizon is in beta); Stable is the tested ones. An open
-  launcher looks for releases every 30 minutes on Alpha (4 hours on Stable). Launchers from before 0.2 had a "Beta
-  builds" switch instead; on, it reads as Alpha.
+- the release smoke test: the macOS build runs the game offscreen on the Mac mini and keeps its report,
+  `smoke-test.json`, only when the game drew a world. The gate reads the report again before publishing, and the
+  release carries it. A run whose macOS build went to GitHub (`MAC_RUNNER=macos-latest`) has no report, so it
+  publishes nothing;
+- no open issue labelled `release-blocker`. `decide` checks first, so a blocked train builds nothing; the gate checks
+  again right before publishing, so an issue labelled while the builds ran still holds the release. Only the label
+  and the issue's state count, never its text: whoever opened the issue can edit the text after a maintainer
+  labels it. Close the issue (or remove the label) and the next run releases everything waiting, with notes
+  covering all of it.
 
-`horizon-server update` installs stable builds (`--version <tag>` takes an alpha build by name). In Discord's #releases every
-Alpha is posted silently and only Stable posts notify (above).
+A failed gate fails the run; the next run (10 minutes later) decides again. Nothing older than the latest release is
+ever published: tags only count up.
 
-`.github/workflows/promote.yml` runs `tools/release_channels.py promote` once a day at 20:00 UTC (21:00 in Paris in
-winter time, 22:00 in summer), with retries until 21:37 for a run GitHub starts late or skips. It promotes the newest
-beta that
+The launcher has no channel setting any more and looks for releases every 30 minutes. The game pre-releases of the
+old Alpha channel (v0.2.1 on, published before this change) stay listed for anyone who wants one by hand, but no
+launcher installs them as an update, and `release_train.py` ignores them: the first release of the single channel
+lists everything since the last release that was not a pre-release (v0.2.0). Launchers from before this change keep
+updating either way: with Alpha (or 0.17's "Beta builds") on they take every release, pre-release or not; with it
+off, every release that is not a pre-release, which is now every new one.
 
-- is newer than the stable release,
-- had been out 6 hours at 20:00 UTC (published by 14:00 UTC that day; one published later waits for the next day),
-  so every run of the evening picks the same beta and stable moves once a day,
-- passed its release smoke test: the macOS build attaches `smoke-test.json` (the offscreen game run's report) only
-  when the game drew a world on the Mac mini, so a release built while `MAC_RUNNER` sends macOS to GitHub waits
-  for a hand,
-- and isn't covered by an issue labelled `release-blocker`. An open blocker holds every beta; closed as completed
-  it still holds the betas published before it closed (they have the bug); closed as not planned it holds
-  nothing. Only the label and the issue's state count, never its text: whoever opened the issue can edit the
-  text after a maintainer labels it, so it can't pick which betas go out.
-
-Nothing older than the stable release is ever promoted, not even with `force`: GitHub's latest release is what
-`horizon-server update` and `install.sh` download, so it only moves forward.
-
-When the oldest beta newer than the stable release has waited 30 hours (it missed a daily promotion it was due for;
-on a normal day a beta waits at most that long and is promoted), promote.yml opens an issue titled
-"Promotion to stable has stalled" with the reason from the last check (a blocker left open, smoke tests not
-running). It closes itself after the next promotion.
-
-Promoting marks the beta stable and latest and rewrites its notes to list everything since the previous stable
-release (`release_train.py notes --stable`), so players who skipped the betas see all of it. Older betas stay
-betas. By hand, from a phone too (GitHub app: Actions, promote, Run workflow):
-
-```sh
-gh workflow run promote -f tag=v0.2.3                 # that beta now: no wait for 20:00, still no blocker
-gh workflow run promote -f tag=v0.2.3 -f force=true   # even blocked or without a smoke test
-gh workflow run promote -f dry_run=true               # what would be promoted now
-```
-
-An alpha build's notes cover only what changed since the release before it (alpha or stable), and say it is an alpha build.
-`release_train.py decide` counts pull requests from the newest release of either channel, so betas don't
-release the same changes again.
+`promote.yml` and `tools/release_channels.py` (the daily promotion at 20:00 UTC) are gone.
 
 ### Signed checksums
 
@@ -298,7 +272,8 @@ gh variable set RELEASES_PAUSED --body 1     # no automatic game or launcher rel
 gh variable delete RELEASES_PAUSED           # back on; the next hourly run catches up
 ```
 
-While paused, runs still decide and say why in their summary; `force=true` still releases.
+While paused, runs still decide and say why in their summary; `force=true` still releases, but never past an open
+`release-blocker`.
 
 ### Rolling back
 
@@ -308,8 +283,8 @@ A bad release is withdrawn by turning it back into a draft:
 gh release edit v0.2.3 --draft
 ```
 
-A beta that is not promoted yet needs no rollback: label an issue about it `release-blocker`. For a stable
-release: launchers list only published releases, so the previous version becomes the newest one again, launchers that
+To stop the next releases while a problem is fixed, label an issue about it `release-blocker`. For the bad
+release itself: launchers list only published releases, so the previous version becomes the newest one again, launchers that
 didn't install the bad one won't, and players who did can pick the previous version in the launcher's version
 list (`launcher/src/backend.rs` tests `withdrawn_release_is_never_offered`). The tag stays, so the next release
 that day takes the next number, and its notes start from the last *published* release, so they list the

@@ -630,14 +630,13 @@ code { border-radius: 0; background: var(--well); box-shadow: 0 0 0 1px var(--ou
 .page-main > .container > .lede { font-size: var(--text-body); }
 .page-main .disclaimer { margin-top: 48px; }
 
-/* Channel and source badges: small square tags. */
+/* Release and source badges: small square tags. */
 .badge {
   display: inline-flex; align-items: center; height: 22px; padding: 0 8px; margin-right: 10px; vertical-align: 2px;
   font: 500 12px / 1 var(--pixel); letter-spacing: 0.02em; text-transform: uppercase; white-space: nowrap;
   border: var(--block-outline) solid var(--outline); background: var(--well); color: var(--ink-soft);
 }
-.badge-stable { background: color-mix(in srgb, var(--success) 22%, var(--panel)); color: var(--ink); }
-.badge-alpha { background: color-mix(in srgb, var(--warn) 24%, var(--panel)); color: var(--ink); }
+.badge-game { background: color-mix(in srgb, var(--success) 22%, var(--panel)); color: var(--ink); }
 .badge-launcher { background: color-mix(in srgb, var(--accent) 20%, var(--panel)); color: var(--ink); }
 .badge-us { background: color-mix(in srgb, var(--accent) 20%, var(--panel)); color: var(--ink); }
 .badge-players { background: color-mix(in srgb, var(--success) 22%, var(--panel)); color: var(--ink); }

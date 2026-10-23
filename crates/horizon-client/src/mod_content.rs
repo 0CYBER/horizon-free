@@ -1028,6 +1028,66 @@ impl TagMerge {
     }
 }
 
+/// Threads rewriting the tables at once. Each holds a whole table as a tree
+/// (gameplay-facts.json's is over a gigabyte with ATM10's mods), so more
+/// would mostly add memory.
+const TABLE_THREADS: usize = 3;
+
+/// Rewrites the base's per-state tables for the mods' states into the
+/// overlay. They are independent: [`TABLE_THREADS`] threads take them,
+/// the largest first.
+fn tables(base: &Path, plan: &Plan, overlay: &Overlay<'_>) -> Result<()> {
+    let mut jobs: Vec<(&str, u64)> = JSON_TABLES
+        .iter()
+        .chain(&NBT_TABLES)
+        .filter_map(|name| Some((*name, fs::metadata(base.join(name)).ok()?.len())))
+        .collect();
+    jobs.sort_by_key(|(_, size)| std::cmp::Reverse(*size));
+    // Their directories become real here, so the threads only write files.
+    for (name, _) in &jobs {
+        if let Some(parent) = Path::new(name).parent() {
+            overlay.dir(parent)?;
+        }
+    }
+    let table = |name: &str| -> Result<()> {
+        let path = base.join(name);
+        let bytes = if JSON_TABLES.contains(&name) {
+            let mut doc = read_json(&path)?;
+            plan.json(name, &mut doc)
+                .map_err(|e| format!("{name}: {e}"))?;
+            serde_json::to_vec(&doc)?
+        } else {
+            let (mut named, _) = nbt::read_named(&fs::read(&path)?, Limits::tables())
+                .map_err(|e| format!("{name}: {e}"))?;
+            plan.nbt(&mut named.tag);
+            nbt::write_named(&named, Limits::tables()).map_err(|e| format!("{name}: {e}"))?
+        };
+        overlay.write(name, &bytes)
+    };
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..threads.min(TABLE_THREADS))
+            .map(|_| {
+                scope.spawn(|| -> std::result::Result<(), String> {
+                    loop {
+                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some((name, _)) = jobs.get(i) else {
+                            return Ok(());
+                        };
+                        table(name).map_err(|e| e.to_string())?;
+                    }
+                })
+            })
+            .collect();
+        workers.into_iter().try_for_each(|w| {
+            w.join()
+                .unwrap_or_else(|_| Err("a table thread panicked".into()))
+        })
+    })?;
+    Ok(())
+}
+
 /// Builds the content root for `mods` over `base` in `out`. Returns the
 /// warnings for the log: the shared tags a mod replaced.
 pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<Vec<String>> {
@@ -1047,28 +1107,7 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<Vec<String>
     let base = &std::path::absolute(base)?;
     let plan = Plan::new(base, mods)?;
     let overlay = Overlay::new(base, out)?;
-    for name in JSON_TABLES {
-        let path = base.join(name);
-        if !path.exists() {
-            continue;
-        }
-        let mut doc = read_json(&path)?;
-        plan.json(name, &mut doc)
-            .map_err(|e| format!("{name}: {e}"))?;
-        overlay.write(name, &serde_json::to_vec(&doc)?)?;
-    }
-    for name in NBT_TABLES {
-        let path = base.join(name);
-        if !path.exists() {
-            continue;
-        }
-        let (mut named, _) = nbt::read_named(&fs::read(&path)?, Limits::tables())
-            .map_err(|e| format!("{name}: {e}"))?;
-        plan.nbt(&mut named.tag);
-        let bytes =
-            nbt::write_named(&named, Limits::tables()).map_err(|e| format!("{name}: {e}"))?;
-        overlay.write(name, &bytes)?;
-    }
+    tables(base, &plan, &overlay)?;
     // Mod files, and every tag addition gathered per tag file.
     let mut tags: BTreeMap<String, TagMerge> = BTreeMap::new();
     let mut warnings = Vec::new();
@@ -1076,8 +1115,9 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<Vec<String>
     let mut additions: BTreeMap<&str, Vec<Addition>> = BTreeMap::new();
     for m in mods {
         let declarations = format!("data/{}/horizon/", m.id);
+        let mut reader = m.content.reader()?;
         for file in &m.content.files {
-            let bytes = m.content.file(file)?;
+            let bytes = reader.read(file)?;
             let is_tag = file.starts_with("data/") && file.contains("/tags/");
             if is_tag && file.ends_with(".json") {
                 let doc: J = serde_json::from_slice(&bytes).map_err(|e| format!("{file}: {e}"))?;

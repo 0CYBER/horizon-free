@@ -23,15 +23,34 @@ pub struct JavaFolder {
     /// `begin*`, `prepare*`, `deferred*`, `composite*`, in order.
     pub passes: Vec<Program>,
     /// How many of `passes` run before the world (`begin*`, `prepare*`): the
-    /// world's colour and depth enter `colortex0` and `depthtex*` after them.
+    /// world's colour and depth enter `world_target` and `depthtex*` after them.
     pub world_at: usize,
+    /// The colour target the world goes into, where the pack's terrain
+    /// program draws (MakeUp: colortex1).
+    pub world_target: u32,
     /// The targets whose alternate side the world is written to.
     pub flipped_after_prepare: BTreeSet<u32>,
     pub final_pass: Option<Program>,
     /// The targets whose alternate side holds the frame's last write.
     pub flipped_at_end: BTreeSet<u32>,
-    /// `sunPathRotation` and `eyeBrightnessHalflife`.
+    /// `sunPathRotation`, `eyeBrightnessHalflife`, `wetnessHalflife` and
+    /// `drynessHalflife`.
     pub directives: Directives,
+}
+
+/// The key of `texture.noise` (`noisetex`) in [`JavaPasses::custom_textures`].
+pub const NOISE_KEY: &str = "noise";
+
+/// The key of `texture.<stage>.<sampler>` in [`JavaPasses::custom_textures`]
+/// for a pass of `program` (`world0/composite2`): Iris's texture stages, where
+/// `final` reads the `composite` ones.
+pub fn texture_key(program: &str, sampler: &str) -> String {
+    let name = program.rsplit('/').next().unwrap_or(program);
+    let stage = match name.trim_end_matches(|c: char| c.is_ascii_digit()) {
+        "final" => "composite",
+        stage => stage,
+    };
+    format!("{stage}.{sampler}")
 }
 
 /// A loaded Java pack.
@@ -41,6 +60,9 @@ pub struct JavaPasses {
     pub uniforms: CustomUniforms,
     /// What the pack keeps of the vanilla sky (`clouds`, `sun`, `moon`).
     pub sky: SkyDirectives,
+    /// `texture.<stage>.<sampler>` and `texture.noise` images, by
+    /// `"<stage>.<sampler>"` and [`NOISE_KEY`].
+    pub custom_textures: BTreeMap<String, crate::shader_pack::Rgba>,
 }
 
 impl JavaPasses {
@@ -126,6 +148,7 @@ pub fn load(
             folder: name.to_owned(),
             targets: plan.targets,
             world_at: early.count(),
+            world_target: plan.world_target,
             passes,
             flipped_after_prepare: plan.flipped_after_prepare,
             final_pass,
@@ -136,6 +159,27 @@ pub fn load(
     if folders.is_empty() {
         return Err("no deferred, composite or final programs".into());
     }
+    let mut custom_textures = BTreeMap::new();
+    for tex in properties.custom_textures() {
+        let key = match tex.stage {
+            Some(stage) => format!("{stage}.{}", tex.sampler),
+            None if tex.sampler == NOISE_KEY => NOISE_KEY.to_owned(),
+            None => continue,
+        };
+        // Only PNGs for now: resource locations and raw `.dat` textures are
+        // skipped and the sampler reads what it would without them.
+        let image = pack
+            .files
+            .read_bytes(&tex.path)
+            .ok_or_else(|| "not in the pack".to_owned())
+            .and_then(|bytes| crate::shader_pack::decode_png(&bytes));
+        match image {
+            Ok(image) => {
+                custom_textures.insert(key, image);
+            }
+            Err(e) => log::warn!("Horizon: shader pack texture {}: {e}", tex.path),
+        }
+    }
     let uniforms = properties.custom_uniforms();
     for problem in &uniforms.problems {
         log::warn!("Horizon: shader pack custom uniform {problem}");
@@ -144,12 +188,24 @@ pub fn load(
         folders,
         uniforms,
         sky: properties.sky(),
+        custom_textures,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_textures_belong_to_iris_s_stages() {
+        assert_eq!(texture_key("world0/composite2", "gaux1"), "composite.gaux1");
+        assert_eq!(texture_key("final", "colortex4"), "composite.colortex4");
+        assert_eq!(
+            texture_key("world-1/deferred10", "noisetex"),
+            "deferred.noisetex"
+        );
+        assert_eq!(texture_key("prepare", "depthtex2"), "prepare.depthtex2");
+    }
 
     #[test]
     fn loads_the_full_screen_passes_of_a_java_pack() {

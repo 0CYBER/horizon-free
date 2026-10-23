@@ -38,7 +38,7 @@ and some are waiting for Ludovic:
 | Private vulnerability reporting | **Live** (see the end of this page). |
 | Signed checksums on releases | **Live** for new releases (#1011): the `release` environment holds the key, and its public half is in `release-keys.txt` (#1023). Releases from before then are unsigned. |
 | Launchers and servers checking signatures | **Not yet**: #1014 waits as a draft until a signed stable game release and a signed launcher release exist. Until then they trust GitHub's checksum, as before. |
-| Alpha, then stable | **Live** (#1012): every release is first an alpha build. The launcher's Updates setting picks Stable (the default) or Alpha (the pre-releases). |
+| Smoke test and release-blocker before publishing | **Live**: since 2026-10-23 every release is the latest at once (one channel, Ludovic's decision), so it is published only after its smoke test passed and while no `release-blocker` is open. The 6-hour beta of the old Alpha, then stable flow (#1012) is gone. |
 | Reports marked suspicious | **Partly**: the scan of Discord for agents does it. Kira's issues do it once its pull request merges. |
 | Code owners' review of the pipeline | **Not yet**: `.github/CODEOWNERS` and its protection (#1015) wait for the App, below. Until then pipeline changes merge like any other once `verify` passes. |
 | Agents on their own GitHub App | **Not yet**: prepared, waiting for Ludovic to create it. Agents still use his account. |
@@ -53,11 +53,10 @@ and some are waiting for Ludovic:
 - **`verify` always runs.** Labels no longer start the checks, and the required `verify` job has no condition, so
   the only `verify` a change can have is one that ran. Main requires it, from GitHub Actions only, for everyone,
   admins included.
-- **Alpha, then stable.** Every release is first an **alpha** build (a GitHub pre-release). It becomes **stable**, the version launchers and
-  servers install by themselves, in the daily promotion (20:00 UTC), only after it has been out 6 hours and passed its
-  smoke test (the game started and drew a world on the Mac mini), and only while no issue labelled `release-blocker`
-  is open. If a beta misses a promotion it was due for, an issue says so. Players who want the newest builds at once
-  pick **Alpha** under Updates in the launcher's Settings. Discord announces stable releases only.
+- **Checked before it is published.** Every release is published as the latest, which launchers and servers
+  install by themselves, so the release run publishes it only after its smoke test passed (the game started and
+  drew a world on the Mac mini) and only while no issue labelled `release-blocker` is open; otherwise nothing is
+  published.
 - **Signed updates.** Each release carries a list of its files' checksums, signed with Horizon's release key. The
   launcher (for the game and for itself) and `horizon-server update` check that signature against the public key
   built into them, then check the download against the list. Anything unsigned, signed with another key, signed
@@ -78,9 +77,8 @@ and some are waiting for Ludovic:
 ## What still needs Ludovic
 
 - **Approving pipeline changes** (rare): a pull request touching a file in `.github/CODEOWNERS`.
-- **Holding a release back or speeding one up**, from his phone if he likes. Label an issue `release-blocker` to
-  hold every beta until it is closed. Run the `promote` workflow (GitHub app: Actions,
-  promote, Run workflow) to make a beta stable at once.
+- **Holding releases back or speeding one up**, from his phone if he likes. Label an issue `release-blocker` to
+  hold every release until it is closed; label a pull request `release-now` to release it as soon as it merges.
 - **Creating the GitHub App**: one link, "Create GitHub App", then "Install". His login, his clicks.
 - **Fork pull requests**: their checks run only after a maintainer approves them, and they run on the Mac mini only
   after a maintainer has read them and added `run-parity`.
@@ -90,8 +88,9 @@ and some are waiting for Ludovic:
 ## What this doesn't solve
 
 - **Code that merges is code that ships.** Signing proves a build came from Horizon's pipeline, not that the code
-  is good. Against a bad change, the safety nets are the checks and harnesses, review, the 6-hour beta and the
-  release-blocker label.
+  is good. Against a bad change, the safety nets are the checks and harnesses, review, the release smoke test and
+  the release-blocker label. Since the single channel there is no 6-hour beta: a change reaches every player
+  within minutes of merging.
 - **Until agents switch to the App**, they still work with Ludovic's own account, so nothing technical tells his
   actions from theirs. Code owners' reviews are switched on together with the App.
 - **The Mac mini** builds the macOS release and also runs pull requests' parity checks: a pull request from this
