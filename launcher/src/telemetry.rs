@@ -17,7 +17,7 @@ pub const SWITCHES: [(Kind, &str, &str); 4] = [
     (
         Kind::Perf,
         "Performance statistics",
-        "After each session: frame-time percentiles and a 14-bucket histogram, tick times, peak memory and startup times, with your OS, CPU, GPU, driver, memory size and the settings that change performance.",
+        "After each session: frame-time percentiles and a 14-bucket histogram, tick times, peak memory and startup times, with your machine (OS, CPU and its cores and clocks, memory size, GPU, its memory and driver, drive type, screen size and refresh rate, laptop or desktop, on battery or not) and the settings that change performance.",
     ),
     (
         Kind::Crash,
@@ -96,7 +96,7 @@ pub fn preview() -> (String, String) {
         );
         return (what, upload::preview(&home));
     }
-    let system = System::detect();
+    let system = with_example_gpu(System::detect_in(Some(&home)));
     let examples = vec![
         Item::new(
             Source::Game,
@@ -137,9 +137,27 @@ pub fn preview() -> (String, String) {
     }))
     .unwrap_or_default();
     (
-        "Nothing is waiting. One example of each kind, from this machine (a benchmark upload is the report itself, see docs/benchmark-report.md):".into(),
+        "Nothing is waiting. One example of each kind, from this machine; the game fills in the GPU and screen it uses where these say example (a benchmark upload is the report itself, see docs/benchmark-report.md):".into(),
         json,
     )
+}
+
+/// What only the game knows (the GPU it draws with, the screen its window is on), as an
+/// example: the launcher draws with neither.
+pub fn with_example_gpu(mut system: System) -> System {
+    system.gpu = "example: the GPU the game draws with".into();
+    system.gpu_vendor = "nvidia".into();
+    system.gpu_kind = "discrete".into();
+    system.vram_mb = 8192;
+    system.driver = "example: 570.86".into();
+    system.backend = "Vulkan".into();
+    system.display = Some(horizon_telemetry::payload::Display {
+        width: 1920,
+        height: 1080,
+        refresh_hz: 60,
+        scale: 1.0,
+    });
+    system
 }
 
 /// "Delete my data": the server deletes everything sent under this install's ID, the waiting
@@ -203,7 +221,7 @@ pub fn bug_report(text: &str, with_log: bool) -> Result<Item, String> {
         Source::Launcher,
         backend::VERSION,
         Payload::Bug(Bug {
-            system: System::detect(),
+            system: System::detect_in(Some(&home())),
             text: scrubber().scrub(text.trim()),
             log: with_log.then(log_for_report).flatten(),
         }),
@@ -340,6 +358,20 @@ mod tests {
         );
         assert_eq!(names(&["all"]).unwrap(), Kind::ALL);
         assert!(names(&["everything"]).is_err());
+    }
+
+    /// "View what would be sent" and `data show` list every hardware field.
+    #[test]
+    fn the_example_shows_every_hardware_field() {
+        let json = serde_json::to_string(&with_example_gpu(System::detect())).unwrap();
+        let fields = "os os_version arch cpu threads cores cpu_base_mhz cpu_boost_mhz ram_gb gpu \
+            gpu_vendor gpu_kind vram_mb driver backend storage width height refresh_hz scale power form";
+        for field in fields.split_whitespace() {
+            assert!(
+                json.contains(&format!("\"{field}\":")),
+                "{field} missing from {json}"
+            );
+        }
     }
 
     #[test]

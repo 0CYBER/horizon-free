@@ -694,13 +694,15 @@ fn describe_adapter(adapter: &wgpu::Adapter) {
         info.backend,
         info.device_type
     );
-    crate::telemetry::set_gpu(
-        &info.name,
-        format!("{} {}", info.driver, info.driver_info)
+    crate::telemetry::set_gpu(crate::telemetry::Gpu {
+        name: info.name.clone(),
+        vendor: horizon_telemetry::system::gpu_vendor(&info.name, info.vendor).to_owned(),
+        kind: crate::telemetry::gpu_kind(&format!("{:?}", info.device_type)).to_owned(),
+        driver: format!("{} {}", info.driver, info.driver_info)
             .trim()
             .to_owned(),
-        format!("{:?}", info.backend),
-    );
+        backend: format!("{:?}", info.backend),
+    });
     crate::crash::set_detail(
         "Graphics Adapter",
         format!(

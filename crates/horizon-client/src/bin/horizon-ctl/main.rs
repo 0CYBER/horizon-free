@@ -191,6 +191,18 @@ impl Session {
                 ready["launch"] = reply;
                 Ok(ready)
             }
+            "interact-entity" => {
+                let id = match words {
+                    [_, id] if id.parse::<i64>().is_ok() => id,
+                    _ => return Err(Failure::usage(format!("usage: {}", usage(name)))),
+                };
+                self.game(&format!("look-at entity {id}"))?;
+                self.game("mouse right click")?;
+                self.game("wait 2")?;
+                let mut screen = self.game("screen")?;
+                screen["ok"] = json!(true);
+                Ok(screen)
+            }
             "hold" => {
                 let (key, seconds) = match words {
                     [_, key, _] => (key.clone(), number(2, "SECONDS")?),
@@ -432,6 +444,10 @@ fn main() -> ExitCode {
     let status = match name.as_deref() {
         None | Some("-h" | "--help") => {
             print!("{}", commands::overview());
+            0
+        }
+        Some("help") if args.get(1).is_some_and(|a| a == "--markdown") => {
+            print!("{}", commands::markdown());
             0
         }
         Some("help") if args.get(1).is_none_or(|a| a != "--game") => match args.get(1) {

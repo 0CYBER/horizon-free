@@ -26,6 +26,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use horizon_telemetry::batch;
 
+pub mod classes;
 pub mod live;
 pub mod store;
 pub mod summary;

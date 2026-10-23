@@ -174,27 +174,35 @@ scripts and tests).
 
 ## AI agents (MCP)
 
-`horizon-launcher mcp` is a Model Context Protocol server over stdio. To use it from Claude Code:
+`horizon-launcher mcp` is a Model Context Protocol server over stdio. `horizon-launcher
+agent-config` prints the config for Claude Code, Codex, Cursor and any MCP client, and the
+command that adds it; for Claude Code:
 
-    claude mcp add horizon -- horizon-launcher mcp
+    claude mcp add --scope user horizon -- horizon-launcher mcp
 
-(with the full path to the binary if it is not on your `PATH`). Its tools: `list_versions`,
-`install_version`, `remove_version`, `prepare_resources`, `launch_client`, `start_server`,
-`server_command`, `server_log`, `stop_server`, `patch_notes`, `links`, `update_channel`, `logs`,
-`check_updates`, `accounts`, `sign_in` (returns the link and code for the player; the sign-in
-finishes in the background), `sign_out`, `select_account`, and for data collection
-`data_collection`, `set_data_collection`, `data_preview`, `delete_my_data` and `report_bug`
-(only with the player's say-so).
-A server started through MCP stops (cleanly, with `stop`) when the session ends. Starting one
-needs `accept_eula`, which an agent should only pass with the player's consent.
+(with the full path to the binary if it is not on your `PATH`). Every CLI command is a tool of the
+same name and arguments, generated from the CLI's definition (`src/cli_tools.rs`): `versions`,
+`install`, `remove`, `prepare`, `settings`, `mods_search`, `mods_install`, `modpack_import`,
+`servers_create`, `data_status`... A call runs that command with `--json` and returns its
+output. Tools that delete something (`remove`, `mods_remove`, `modpack_remove`,
+`servers_forget`, `account_sign_out`, `data_delete`) need `confirm: true`. The session runs a few
+itself, under the CLI's names: `play`, `server` with `server_command`, `server_log` and
+`server_stop`, `account_list` and `account_sign_in` (returns the link and code for the player;
+the sign-in finishes in the background). A server started through MCP stops (cleanly, with
+`stop`) when the session ends. Starting one needs `accept_eula`, which an agent should only pass
+with the player's consent.
 
-The same server also plays the game: `launch_client` starts it with a local control socket
-(`world`, `creative` and `offscreen` are optional), and every `horizon-ctl` tool of the selected
+The same server also plays the game: `play` starts it with a local control socket (`world`,
+`creative`, `join` and `offscreen` are optional), and every `horizon-ctl` tool of the selected
 version is offered as `game_<name>`: `game_state`, `game_ui` (every widget of the open screen),
 `game_click`, `game_goto`, `game_break`, `game_inventory`, `game_screenshot` (an image) and the
-rest of [horizon-ctl's commands](../docs/agent-control.md). The launcher runs that version's
-`horizon-ctl mcp` and passes the calls through; while no game runs, they answer with an error
-saying to call `launch_client`.
+rest of [horizon-ctl's commands](../docs/horizon-ctl-commands.md). The launcher runs that
+version's `horizon-ctl mcp` and passes the calls through; while no game runs, they answer with an
+error saying to call `play`.
+
+`horizon-launcher no-ai on` (the Settings page's No AI switch) hides and turns off every AI
+feature: `mcp` and `agent-config` refuse, the game opens no control socket and `horizon-ctl`
+refuses. Every other command keeps working.
 
 The window, the command line and the MCP server all call the same core, `src/backend.rs`.
 

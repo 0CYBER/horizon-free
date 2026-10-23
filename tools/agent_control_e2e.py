@@ -54,10 +54,13 @@ POSITIONAL = {
     'click_button': ['label'], 'type': ['text'], 'wait': ['ticks'], 'wait_ready': ['seconds'],
     'command': ['command'], 'look_at_block': ['x', 'y', 'z'], 'click': ['id'], 'set': ['id', 'value'],
     'give': ['item', 'count'], 'options_get': ['keys'], 'options_set': ['key', 'value'],
-    'wait_for': ['condition', 'value'], 'options': ['page'],
+    'wait_for': ['condition', 'value'], 'open': ['world', 'seed', 'mode'], 'select': ['slot'],
+    'summon': ['kind', 'x', 'y', 'z'], 'interact_entity': ['id'], 'effect': ['id', 'seconds', 'amplifier'],
+    'xp': ['levels'], 'options': ['page'], 'lan': ['action'], 'world_backup': ['folder'],
+    'world_rename': ['folder', 'name'], 'world_delete': ['folder'],
 }
 # Booleans the game takes as bare words.
-BARE = {'click_slot': ['right', 'shift'], 'click': ['right', 'middle', 'shift']}
+BARE = {'click_slot': ['right', 'shift'], 'click': ['right', 'middle', 'shift'], 'summon': ['baby']}
 
 
 class Failed(Exception):
@@ -569,8 +572,54 @@ def suggestions_scenario(d, out):
     return {'completions': len(cases)}
 
 
+def manage_scenario(d, out):
+    # The commands that close the audit's gaps: status (F3), entities by right-click, effects and xp,
+    # LAN status, options pages by name, then from the title screen the worlds list, Make Backup,
+    # rename and a delete that needs the player's confirmation.
+    d('open', world='Manage', seed=7)
+    d('wait_for', condition='loaded', timeout=400)
+    assert d('status')['player'] is not None
+    d('give', item='bucket')
+    d('select', slot='bucket')
+    pos = d('state')['player']['position']
+    cow = d('summon', kind='cow', x=pos[0], y=pos[1], z=pos[2] + 2)['id']
+    d('wait', ticks=5)
+    d('interact_entity', id=cow)
+    items = {s.get('item') for s in d('inventory')['hotbar'] if s}
+    assert 'minecraft:milk_bucket' in items, items
+    d('effect', id='speed', seconds=30, amplifier=1)
+    effects = json.dumps(d('effects'))
+    assert 'speed' in effects, effects
+    d('xp', levels=5)
+    assert d('lan', action='status') is not None
+    d('options', page='horizon')
+    assert 'graphics' in widgets(d), widgets(d).keys()
+    d('close')
+    d('pause')
+    d('click', id='save-and-quit-to-title')
+    d('wait_for', condition='screen', value='title', timeout=60)
+    worlds = {w['folder']: w for w in d('worlds')['worlds']}
+    assert worlds['Manage']['mode'] == 'survival', worlds
+    assert d('world_backup', folder='Manage')['bytes'] > 0
+    assert (d.cwd / 'backups').is_dir() and any((d.cwd / 'backups').glob('*_Manage.zip'))
+    d('world_rename', folder='Manage', name='Renamed Base')
+    assert {w['folder']: w for w in d('worlds')['worlds']}['Manage']['name'] == 'Renamed Base'
+    try:
+        d('world_delete', folder='Manage')
+        raise AssertionError('deleted without --confirm')
+    except Failed as e:
+        assert 'confirm' in str(e), e
+    assert (d.cwd / 'saves/Manage').is_dir()
+    d('world_delete', folder='Manage', confirm=True)
+    assert not (d.cwd / 'saves/Manage').exists()
+    assert 'Manage' not in {w['folder'] for w in d('worlds')['worlds']}
+    assert d('servers')['servers'] == []
+    return {'worlds': len(worlds)}
+
+
 SCENARIOS = {'survival': scenario, 'ui': ui_scenario, 'options': options_scenario, 'events': events_scenario,
-             'consume': consume_scenario, 'pick': pick_scenario, 'suggestions': suggestions_scenario}
+             'consume': consume_scenario, 'pick': pick_scenario, 'suggestions': suggestions_scenario,
+             'manage': manage_scenario}
 
 
 REFUSAL = "AI features are off: turn off No AI in the launcher's settings"

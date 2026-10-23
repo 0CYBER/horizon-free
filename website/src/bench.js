@@ -117,6 +117,39 @@ export function machinesHtml(summary) {
   return [...by].map(([name, rows]) => machineHtml(name, rows)).join("\n");
 }
 
+// The hardware breakdowns (the server's classes), in words.
+export const DIMENSIONS = [
+  { key: "ram", label: "Memory", word: (c) => `${c} RAM` },
+  { key: "vram", label: "Graphics memory", word: (c) => (c === "shared" ? "shared graphics memory" : `${c} graphics memory`) },
+  { key: "storage", label: "Drive", word: (c) => ({ nvme: "NVMe", ssd: "SSD", hdd: "hard disk" })[c] || c },
+  { key: "os", label: "System", word: (c) => ({ linux: "Linux", macos: "macOS", windows: "Windows" })[c] || c },
+  { key: "gpu_kind", label: "Graphics", word: (c) => (c === "integrated" ? "integrated GPU" : c === "discrete" ? "separate GPU" : c) },
+];
+
+// A group's breakdowns in one line: "32 GB RAM (3) · NVMe (3) · Linux (3)". Empty without any.
+export function breakdownLine(breakdowns) {
+  return DIMENSIONS.flatMap((d) => (breakdowns?.[d.key] || []).map((c) => `${d.word(c.class)} (${c.installs})`)).join(" · ");
+}
+
+// GET /v1/aggregate's breakdowns: players' play sessions per hardware class. Empty without any.
+export function hardwareHtml(aggregate) {
+  const b = aggregate?.breakdowns || {};
+  const dims = DIMENSIONS.filter((d) => b[d.key]?.length);
+  if (!dims.length) return "";
+  const rows = dims
+    .flatMap((d) =>
+      b[d.key].map(
+        (c, i) =>
+          `<tr>${i === 0 ? `<th scope="rowgroup" rowspan="${b[d.key].length}">${escape(d.label)}</th>` : ""}<th scope="row">${escape(d.word(c.class))}</th><td class="num">${c.installs}</td><td class="num">${Math.round(c.hours).toLocaleString("en")}</td><td class="num">${format("ms", c.p50_ms)}</td><td class="num">${format("ms", c.p99_ms)}</td></tr>`,
+      ),
+    )
+    .join("");
+  return `<div class="table-wrap"><table class="bench-table players-hardware">
+            <thead><tr><th scope="col">By</th><th scope="col">Class</th><th scope="col">Installs</th><th scope="col">Hours played</th><th scope="col">Frame time, median</th><th scope="col">Frame time, 99th percentile</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table></div>`;
+}
+
 // Players' groups: one row each, at least `min_installs` installs.
 export function playersHtml(summary) {
   const groups = (summary?.groups || []).filter((g) => g.source === "players");
@@ -124,7 +157,7 @@ export function playersHtml(summary) {
     return `<p class="empty">No player results yet. A GPU and CPU pair shows here once at least ${summary?.min_installs || 3} different installs have shared a benchmark with it.</p>`;
   const rows = groups
     .map(
-      (g) => `<tr><th scope="row">${escape(g.gpu)}<span class="metric-hint">${escape(g.cpu)}</span></th><td class="num">${g.render_distance}</td><td>${g.game === "vanilla" ? "Java" : "Horizon"}</td>${["avg_fps", "low_1pct_fps", "p95_ms", "world_ms", "rss_steady_mb"].map((k) => `<td class="num">${format(METRICS.find((m) => m.key === k).kind, g.medians?.[k])}</td>`).join("")}<td><span class="badge badge-players">From ${g.installs} players</span></td></tr>`,
+      (g) => `<tr><th scope="row">${escape(g.gpu)}<span class="metric-hint">${escape(g.cpu)}</span></th><td class="num">${g.render_distance}</td><td>${g.game === "vanilla" ? "Java" : "Horizon"}</td>${["avg_fps", "low_1pct_fps", "p95_ms", "world_ms", "rss_steady_mb"].map((k) => `<td class="num">${format(METRICS.find((m) => m.key === k).kind, g.medians?.[k])}</td>`).join("")}<td><span class="badge badge-players">From ${g.installs} players</span>${breakdownLine(g.breakdowns) ? `<span class="metric-hint">${escape(breakdownLine(g.breakdowns))}</span>` : ""}</td></tr>`,
     )
     .join("");
   return `<div class="table-wrap"><table class="bench-table players-table">

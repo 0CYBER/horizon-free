@@ -69,7 +69,9 @@ pub fn rejection(report: &Value) -> Option<&'static str> {
     if report.get("kind").and_then(Value::as_str) != Some("game") {
         return Some("not a game run");
     }
-    game(&report["app"])?;
+    if game(&report["app"]).is_none() {
+        return Some("not Horizon or plain vanilla");
+    }
     let c = &report["conditions"];
     let scenario = c.get("scenario").and_then(Value::as_str).unwrap_or("");
     if !(scenario == "standard" || scenario == "flight" || scenario.starts_with("perf_bench:")) {
@@ -190,6 +192,8 @@ fn newest_first(a: &str, b: &str) -> std::cmp::Ordering {
 #[derive(Default)]
 struct Group {
     installs: HashMap<Vec<u8>, Vec<[Option<f64>; 7]>>,
+    /// Per dimension and class, the installs in it.
+    classes: [BTreeMap<&'static str, BTreeSet<Vec<u8>>>; 5],
     reports: usize,
     versions: BTreeSet<String>,
 }
@@ -219,6 +223,14 @@ pub fn groups(uploads: &[Upload], min_installs: usize) -> Vec<Value> {
             .entry(u.install.clone())
             .or_default()
             .push(figures(r));
+        for (dim, class) in crate::classes::of_report(r).into_iter().enumerate() {
+            if let Some(class) = class {
+                g.classes[dim]
+                    .entry(class)
+                    .or_default()
+                    .insert(u.install.clone());
+            }
+        }
     }
     let mut out: Vec<(usize, Value)> = by
         .into_iter()
@@ -243,11 +255,13 @@ pub fn groups(uploads: &[Upload], min_installs: usize) -> Vec<Value> {
             versions.sort_by(|a, b| newest_first(a, b));
             versions.truncate(3);
             let installs = g.installs.len();
+            let breakdowns = breakdowns(&g.classes, min_installs);
             (
                 installs,
                 json!({
                     "gpu": gpu, "cpu": cpu, "render_distance": rd, "game": game, "source": "players",
                     "installs": installs, "reports": g.reports, "versions": versions, "medians": medians,
+                    "breakdowns": breakdowns,
                 }),
             )
         })
@@ -255,6 +269,33 @@ pub fn groups(uploads: &[Upload], min_installs: usize) -> Vec<Value> {
     // Most installs first, then by GPU and render distance (the map's order).
     out.sort_by_key(|g| std::cmp::Reverse(g.0));
     out.into_iter().map(|(_, v)| v).collect()
+}
+
+/// Per dimension, the classes with at least `min_installs` installs, most first:
+/// `{"ram": [{"class": "32 GB", "installs": 3}], …}`. A dimension with none is left out.
+pub fn breakdowns(
+    classes: &[BTreeMap<&'static str, BTreeSet<Vec<u8>>>; 5],
+    min_installs: usize,
+) -> Value {
+    let mut out = serde_json::Map::new();
+    for (dim, by_class) in crate::classes::DIMENSIONS.iter().zip(classes) {
+        let mut cells: Vec<(&str, usize)> = by_class
+            .iter()
+            .map(|(c, set)| (*c, set.len()))
+            .filter(|(_, n)| *n >= min_installs)
+            .collect();
+        cells.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+        if !cells.is_empty() {
+            out.insert(
+                dim.to_string(),
+                cells
+                    .into_iter()
+                    .map(|(class, installs)| json!({"class": class, "installs": installs}))
+                    .collect(),
+            );
+        }
+    }
+    Value::Object(out)
 }
 
 /// The whole answer; `generated` is an RFC 3339 UTC time.
