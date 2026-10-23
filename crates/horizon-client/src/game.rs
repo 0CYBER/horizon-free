@@ -4306,7 +4306,7 @@ impl Game<'_> {
     /// world's entities and blocks, and the network hub.
     fn tick_world(&mut self, running: bool) -> Result<()> {
         self.update_chunk_tickets();
-        horizon_client::spans::time("tick_effects", || self.tick_effects());
+        horizon_client::spans::time("tick_effects", || self.tick_effects(running));
         // Player.tick's ItemCooldowns.tick for the window's player (a
         // server's players count theirs down in `tick_guests`).
         self.shield_cooldown = self.shield_cooldown.saturating_sub(1);
@@ -7037,10 +7037,16 @@ impl Game<'_> {
         // Item.getAttackDamageBonus (a mace's smash), before the critical hit.
         amount += self.smash_damage_bonus(target_kind);
         let player = self.player.as_ref();
-        // Player.canCriticalAttack: falling, off the ground, not sprinting.
-        let falling =
-            player.is_some_and(|p| !p.ground.on_ground && p.fall_distance > 0.0 && !p.sprinting);
-        let crit = scale > 0.9 && falling;
+        // Player.canCriticalAttack: falling, off the ground, not in water,
+        // not blind (isMobilityRestricted), not riding, not sprinting.
+        let falling = player.is_some_and(|p| {
+            !p.ground.on_ground
+                && p.fall_distance > 0.0
+                && !p.fluids.was_touching_water
+                && !p.sprinting
+        });
+        let restricted = self.potions.effects.get("blindness").is_some() || self.riding.is_some();
+        let crit = scale > 0.9 && falling && !restricted;
         if crit {
             amount *= 1.5;
         }
@@ -7649,6 +7655,8 @@ impl Game<'_> {
         world.game_time = self.world.game_time;
         world.day_time = self.world.day_time;
         world.weather = self.world.weather;
+        // The game rules and the difficulty hold in every dimension.
+        world.health_rules = self.world.health_rules;
         // An open hub keeps hearing the new level's block changes.
         world.block_log = self.world.block_log.as_ref().map(|_| Vec::new());
         world.light_log = self.world.light_log.as_ref().map(|_| Default::default());
