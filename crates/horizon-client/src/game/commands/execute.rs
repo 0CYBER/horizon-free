@@ -155,14 +155,20 @@ impl Game<'_> {
             _ => s.pos,
         }
     }
-    /// Evaluate `f` with `source` as the command source.
+    /// Evaluate `f` with `source` as the command source, in the source's
+    /// level (`CommandSourceStack.getLevel`): a server puts that level in
+    /// place for it.
     pub(in crate::game) fn with_source<T>(
         &mut self,
         source: Source,
         f: impl FnOnce(&mut Self) -> T,
     ) -> T {
         let previous = self.command_source.replace(source);
+        let back = self.enter_command_level(source.dimension);
         let out = f(self);
+        if let Some(back) = back {
+            self.enter_command_level(back);
+        }
         self.command_source = previous;
         out
     }
@@ -447,11 +453,13 @@ impl Game<'_> {
             "at" => targets(self)?
                 .into_iter()
                 .filter_map(|t| {
+                    // CommandSourceStack.withLevel(entity.level()).
+                    let level = self.target_level(t);
                     Some(Source {
                         pos: self.target_position(t)?,
                         rot: self.target_rotation(t),
-                        dimension: self.dim,
-                        level: None,
+                        dimension: level,
+                        level: (level != self.dim).then_some(level),
                         ..s
                     })
                 })

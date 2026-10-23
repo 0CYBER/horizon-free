@@ -20,6 +20,7 @@ the other dimensions' levels as `Parked` values and swaps one into place (`enter
 | `ServerPlayer.teleport` into another level | `server_travel.rs`: a Respawn packet, then the teleport once the destination has loaded (portals and `execute in … tp`) |
 | `PlayerList.respawn` | `guest_respawn`: back into the Overworld's level |
 | `ServerLevel.noPlayersEmptyTime`, chunk unloading | `close_idle_levels`: a level other than the Overworld with nobody in it for 300 ticks is saved and closed |
+| `CommandSourceStack.getLevel` | `with_source` puts the source's level in place for a command (`execute in`, `execute at` a player in another level) |
 | the levels' shared `LevelData` | not swapped: game time, day time, weather, game rules, scoreboard, maps, entity ids (`next_entity`, unique across levels) |
 
 The packets of a guest are read in its own level's pass (`Hub::tick_level`), so its actions and
@@ -70,7 +71,8 @@ the Nether, or whose host saves and quits, joins again in the Nether where it wa
 - `portals`: the guest goes to the Nether through a portal while the host stays. The host then goes
   to the End while the guest is in the Nether, so three levels run at once, and both come back.
 - `levels`, with the host and the guest each in a level of its own:
-  - `execute in the_nether run tp` moves the guest alone.
+  - `execute in the_nether run tp` moves the guest alone. From the Nether, `execute in overworld` and
+    `execute at` the host change and test blocks in the host's level.
   - Mobs and armour stands fall in two levels at once, and every entity id is unique across the
     levels.
   - The guest leaves in the Nether and joins again there.
