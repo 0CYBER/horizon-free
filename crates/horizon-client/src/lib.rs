@@ -132,6 +132,7 @@ pub mod osk;
 pub mod overlay;
 pub mod pack_screen;
 pub mod packs;
+pub mod par;
 pub mod particles;
 pub mod patrol;
 pub mod perf_overlay;
