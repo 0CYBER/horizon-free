@@ -592,7 +592,7 @@ def manage_scenario(d, out):
     assert d('lan', action='status') is not None
     d('options', page='horizon')
     assert 'graphics' in widgets(d), widgets(d).keys()
-    d('key', key='esc', action='tap')
+    d('close')
     d('pause')
     d('click', id='save-and-quit-to-title')
     d('wait_for', condition='screen', value='title', timeout=60)
