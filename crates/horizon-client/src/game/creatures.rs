@@ -2409,13 +2409,14 @@ impl Game<'_> {
                     self.spawn_item(rest, self.eye_position().unwrap_or([0.0; 3]), [0.0; 3], 40);
                 }
             } else {
-                self.inventory[self.selected] = Some(filled);
+                *self.held_mut() = Some(filled);
             }
             self.swing_arm();
             return Ok(true);
         }
         let creative = self.creative;
-        let selected = self.selected;
+        // The hand's slot (Player.interactOn passes the hand).
+        let selected = self.held_slot();
         if self.interact_zombie_villager(index, &item) {
             return Ok(true);
         }
@@ -2447,10 +2448,10 @@ impl Game<'_> {
         // PiglinAi.mobInteract: hand over something gold to admire.
         if self.mobs[index].alive() && self.give_piglin(index, &item) {
             self.swing_arm();
-            if !creative && let Some(stack) = self.inventory[selected].as_mut() {
+            if !creative && let Some(stack) = self.stack_in_mut(selected).as_mut() {
                 stack.count -= 1;
                 if stack.count == 0 {
-                    self.inventory[selected] = None;
+                    *self.stack_in_mut(selected) = None;
                 }
             }
             return Ok(true);
@@ -2761,11 +2762,11 @@ impl Game<'_> {
         }
         if consume
             && !creative
-            && let Some(stack) = self.inventory[selected].as_mut()
+            && let Some(stack) = self.stack_in_mut(selected).as_mut()
         {
             stack.count -= 1;
             if stack.count == 0 {
-                self.inventory[selected] = None;
+                *self.stack_in_mut(selected) = None;
             }
         }
         if let Some(g) = give {
@@ -2775,8 +2776,8 @@ impl Game<'_> {
                 damage: 0,
                 extra: None,
             };
-            if self.inventory[selected].is_none() {
-                self.inventory[selected] = Some(stack);
+            if self.stack_in(selected).is_none() {
+                *self.stack_in_mut(selected) = Some(stack);
             } else if let Some(rest) = self.give(stack) {
                 let at = self.eye_position().unwrap_or(center);
                 self.spawn_item(rest, at, [0.0, 0.0, 0.0], 40);
@@ -2808,13 +2809,17 @@ impl Game<'_> {
         if self.creative {
             return;
         }
-        if let Some(stack) = self.inventory[self.selected].as_mut()
-            && let Some(info) = self.res.items().get(&stack.item)
-            && info.max_damage > 0
+        let slot = self.held_slot();
+        let max_damage = self
+            .held()
+            .and_then(|s| self.res.items().get(&s.item))
+            .map_or(0, |i| i.max_damage);
+        if max_damage > 0
+            && let Some(stack) = self.stack_in_mut(slot).as_mut()
         {
             stack.damage += 1;
-            if stack.damage >= info.max_damage {
-                self.inventory[self.selected] = None;
+            if stack.damage >= max_damage {
+                *self.stack_in_mut(slot) = None;
             }
         }
     }
