@@ -454,7 +454,7 @@ impl Game<'_> {
             return;
         }
         let focused = self.screen == Screen::Chat;
-        let heard = self.mods.mods.is_running().then(|| text.plain());
+        let heard = self.mods.running().then(|| text.plain());
         self.ui.chat.add(
             &self.gui.atlas,
             text,
@@ -583,7 +583,7 @@ impl Game<'_> {
                 &[Text::literal(PLAYER_NAME), Text::literal(message)],
             );
             let focused = self.screen == Screen::Chat;
-            let heard = self.mods.mods.is_running().then(|| line.plain());
+            let heard = self.mods.running().then(|| line.plain());
             self.ui
                 .chat
                 .add(&self.gui.atlas, line, None, self.ticks, focused);
