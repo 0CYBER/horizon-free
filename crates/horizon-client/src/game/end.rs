@@ -416,7 +416,15 @@ impl Game<'_> {
                 f64::from(END_SPAWN[2]) + 0.5,
             ));
         }
-        // Leaving the End: the respawn position (the world spawn here).
+        // Leaving the End: the respawn position, a bed's found once it has
+        // loaded (findRespawnPositionAndUseSpawnBlock, not using it up).
+        if let Some(c) = self.respawn_config.filter(|c| c.dim == target) {
+            return Some(Vec3::new(
+                f64::from(c.pos[0]) + 0.5,
+                f64::from(c.pos[1]),
+                f64::from(c.pos[2]) + 0.5,
+            ));
+        }
         let s = self.level.spawn.unwrap_or([0.0, 64.0, 0.0]);
         Some(Vec3::new(s[0].floor() + 0.5, s[1], s[2].floor() + 0.5))
     }
@@ -487,7 +495,16 @@ impl Game<'_> {
             // Direction.WEST.toYRot().
             return Ok((target, Some(90.0)));
         }
-        // ServerPlayer.findRespawnPositionAndUseSpawnBlock: onto the spawn column.
+        // ServerPlayer.findRespawnPositionAndUseSpawnBlock: where the bed or
+        // anchor puts the player, facing it; else onto the spawn column.
+        let mut target = target;
+        if let Some(c) = self.respawn_config.filter(|c| c.dim == self.dim) {
+            if let Some((at, yaw)) = self.find_respawn_and_use(c, false)? {
+                return Ok((at, Some(yaw)));
+            }
+            let s = self.level.spawn.unwrap_or([0.0, 64.0, 0.0]);
+            target = Vec3::new(s[0].floor() + 0.5, s[1], s[2].floor() + 0.5);
+        }
         let y = self
             .land_column(target.x.floor() as i32, target.z.floor() as i32)
             .map_or(target.y, f64::from);

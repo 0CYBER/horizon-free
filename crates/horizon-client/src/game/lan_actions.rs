@@ -34,6 +34,8 @@ pub(super) struct GuestPlay {
     destroy_delay: u32,
     using: Option<(usize, u32)>,
     use_delay: u32,
+    /// The shield's ItemCooldowns entry: an axe disabled it for this many ticks.
+    pub(super) shield_cooldown: u32,
     attack_ticks: u32,
     /// The main hand's item at the guest's last tick (`Game::attack_item`).
     attack_item: Option<std::sync::Arc<str>>,
@@ -117,6 +119,7 @@ pub(super) struct GuestSwap {
     destroy_delay: u32,
     using: Option<(usize, u32)>,
     use_delay: u32,
+    pub(super) shield_cooldown: u32,
     attack_ticks: u32,
     attack_item: Option<std::sync::Arc<str>>,
     swing: horizon_client::first_person::SwingState,
@@ -217,6 +220,12 @@ impl Game<'_> {
                 host.hub.guests[i].position[2],
             );
             host.hub.guests[i].motion = PlayerMotion::new(self.motion, p).ok().map(Box::new);
+            // The saved golden hearts go on the first body of a player who
+            // has been here before.
+            let saved = host.hub.guests[i].saved_absorption.take();
+            if let (Some(m), Some(amount)) = (host.hub.guests[i].motion.as_mut(), saved) {
+                let _ = m.internal_set_absorption(amount);
+            }
             let kept = host.hub.guests[i].logs_kept.take();
             if let (Some(m), Some((hurts, attacks))) = (host.hub.guests[i].motion.as_mut(), kept) {
                 m.hurt_log = hurts;
@@ -290,6 +299,7 @@ impl Game<'_> {
         let destroy_delay = std::mem::replace(&mut self.destroy_delay, play.destroy_delay);
         let using = std::mem::replace(&mut self.using, play.using.take());
         let use_delay = std::mem::replace(&mut self.use_delay, play.use_delay);
+        let shield_cooldown = std::mem::replace(&mut self.shield_cooldown, play.shield_cooldown);
         let attack_ticks = std::mem::replace(&mut self.attack_ticks, play.attack_ticks);
         let attack_item = std::mem::replace(&mut self.attack_item, play.attack_item.take());
         let swing = std::mem::replace(&mut self.swing, play.swing);
@@ -370,6 +380,7 @@ impl Game<'_> {
             destroy_delay,
             using,
             use_delay,
+            shield_cooldown,
             attack_ticks,
             attack_item,
             swing,
@@ -422,6 +433,7 @@ impl Game<'_> {
             destroy_delay,
             using,
             use_delay,
+            shield_cooldown,
             attack_ticks,
             attack_item,
             swing,
@@ -482,6 +494,7 @@ impl Game<'_> {
         play.destroy_delay = std::mem::replace(&mut self.destroy_delay, destroy_delay);
         play.using = std::mem::replace(&mut self.using, using);
         play.use_delay = std::mem::replace(&mut self.use_delay, use_delay);
+        play.shield_cooldown = std::mem::replace(&mut self.shield_cooldown, shield_cooldown);
         play.attack_ticks = std::mem::replace(&mut self.attack_ticks, attack_ticks);
         play.attack_item = std::mem::replace(&mut self.attack_item, attack_item);
         play.swing = std::mem::replace(&mut self.swing, swing);
@@ -1499,11 +1512,22 @@ impl Game<'_> {
         // or another one's anchor or forced point, which its block resolves
         // once the level has loaded around it.
         let server = self.options.dedicated.is_some();
-        let elsewhere = host.hub.guests[i]
+        let own = host.hub.guests[i]
             .respawn_elsewhere
             .as_ref()
-            .filter(|_| server)
             .map(RespawnConfig::from_saved);
+        let elsewhere = own.filter(|_| server);
+        // In the window's world a guest has no level of its own to wait in:
+        // its bed is resolved at once when its chunk is there, else it
+        // comes back on the bed.
+        let in_frame_bed = own.filter(|c| !server && c.dim == super::Dim::Overworld);
+        let spawn = in_frame_bed.map_or(spawn, |c| {
+            [
+                f64::from(c.pos[0]) + 0.5,
+                f64::from(c.pos[1]) + 0.6,
+                f64::from(c.pos[2]) + 0.5,
+            ]
+        });
         let level = elsewhere.map_or(super::Dim::Overworld, |c| c.dim);
         let spawn = elsewhere.map_or(spawn, |c| {
             [
@@ -1561,6 +1585,25 @@ impl Game<'_> {
         if let Some(config) = elsewhere {
             self.respawn_trip(conn, config);
         }
+        if let Some(c) = in_frame_bed
+            && self.dim == super::Dim::Overworld
+            && self.world.loaded(c.pos[0], c.pos[2])
+        {
+            let found = self
+                .as_guest(host, conn, |g| g.resolve_server_respawn(c))
+                .flatten();
+            let world = self
+                .level
+                .world_spawn
+                .map_or([0.5, 80.0, 0.5], |[x, y, z]| {
+                    [f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5]
+                });
+            let at = found.map_or(world, |(at, yaw)| {
+                host.hub.guests[i].yaw = yaw;
+                [at.x, at.y, at.z]
+            });
+            host.hub.teleport(i, Some(at));
+        }
         if away && let Err(e) = self.enter_level(Some(host), back) {
             log::error!("could not reopen {}: {e}", back.id());
         }
@@ -1588,6 +1631,9 @@ impl Game<'_> {
                 continue;
             }
             let play = host.play.entry(conn).or_default();
+            // Player.tick's ItemCooldowns.tick, once a tick for each player
+            // (the shield an axe disabled).
+            play.shield_cooldown = play.shield_cooldown.saturating_sub(1);
             let digging = play.digging;
             let using = play.using.is_some();
             let delayed = play.destroy_delay > 0 || play.use_delay > 0 || play.attack_ticks < 100;
@@ -1642,6 +1688,9 @@ impl Game<'_> {
             self.guest_dig_feedback(host, conn);
             self.guest_pickups(host, gi);
             self.guest_orbs(host, gi);
+            if host.hub.guests[gi].health <= 0.0 && !host.hub.guests[gi].dead {
+                self.guest_forget_digging(host, conn);
+            }
             let g = &mut host.hub.guests[gi];
             if g.health <= 0.0 && !g.dead {
                 g.dead = true;
@@ -1791,6 +1840,7 @@ impl Game<'_> {
         }
         let in_wall = !g.sleeping && self.in_wall(g.position, g.eye_height());
         let at = g.position;
+        let sneaking = g.sneaking;
         let sounds = self.as_guest(host, conn, |game| {
             let (rules, motion) = (game.world.health_rules, game.motion);
             let health = &motion.health;
@@ -1809,6 +1859,26 @@ impl Game<'_> {
             let _ = w.fluid_base_tick();
             w.player.ground.on_ground = from_ground;
             let travelled: Vec<[f64; 3]> = moves.iter().map(|m| m.0).collect();
+            // Entity.move's movementThisTick: each move, from where the
+            // tick's first one started.
+            let end = w.player.position;
+            let start = travelled
+                .iter()
+                .fold(end, |p, d| p.subtract(Vec3::new(d[0], d[1], d[2])));
+            w.player.history.clear();
+            let mut from = start;
+            for d in &travelled {
+                let delta = Vec3::new(d[0], d[1], d[2]);
+                let to = from.add_vector(delta);
+                w.player
+                    .history
+                    .add(horizon_world::entity_move::MovementRecord {
+                        from,
+                        to,
+                        original: Some(delta),
+                    });
+                from = to;
+            }
             for (moved, on_ground) in moves {
                 let movement = Vec3::new(moved[0], moved[1], moved[2]);
                 if w.player.ground.on_ground && !on_ground && moved[1] > 0.0 {
@@ -1834,6 +1904,10 @@ impl Game<'_> {
             if w.climbable().unwrap_or(false) {
                 w.player.fall_distance = 0.0;
             }
+            // Entity.applyEffectsFromBlocks along those moves: magma, cactus,
+            // lit campfires and grown sweet berry bushes hurt (#1305).
+            w.player.shift_key_down = sneaking;
+            let _ = w.server_block_damage(start);
             let _ = w.tick_environment_damage();
             let _ = w.apply_fire_contact();
             let _ = w.server_hazards_tick(in_wall);
@@ -1994,6 +2068,23 @@ impl Game<'_> {
 
     /// `level.destroyBlockProgress(id, pos, -1)` for a guest: its crack on `pos` is gone, for the
     /// host and the other guests.
+    /// A player who dies digs and uses nothing any more: the block it was
+    /// breaking, or had left to break (`hasDelayedDestroy`), stays, and its
+    /// crack goes. Respawning gives it a new ServerPlayerGameMode (#1315).
+    fn guest_forget_digging(&mut self, host: &mut LanHost, conn: u32) {
+        let Some(play) = host.play.get_mut(&conn) else {
+            return;
+        };
+        let cracked = play.digging.take().filter(|_| play.last_progress >= 0);
+        play.mining = None;
+        play.delayed = None;
+        play.destroy_delay = 0;
+        play.using = None;
+        play.last_progress = -1;
+        if let Some((pos, _)) = cracked {
+            self.guest_crack_gone(host, conn, pos);
+        }
+    }
     fn guest_crack_gone(&mut self, host: &mut LanHost, conn: u32, pos: [i32; 3]) {
         let Some(id) = host.hub.guest(conn).map(|g| g.entity_id) else {
             return;

@@ -4,7 +4,10 @@
 //! `hud_overlays::camera_overlays` (vignette, pumpkin blur, powder-snow
 //! outline, nether portal swirl). Positions are clip-space quads; textures
 //! come from the shared 2D atlas and may repeat.
-use crate::{hud::Rect, hud_layout::GuiDraw};
+use crate::{
+    hud::{Rect, TextureFlags},
+    hud_layout::GuiDraw,
+};
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,15 +28,28 @@ pub struct ScreenVertex {
     pub rect: [f32; 4],
     pub color: [f32; 4],
 }
+/// Linear filtering (`TextureMetadataSection.blur`), else nearest.
+pub const SAMPLE_BLUR: u32 = 1;
+/// Clamp-to-edge addressing (`TextureMetadataSection.clamp`), else repeat.
+pub const SAMPLE_CLAMP: u32 = 2;
+/// The sampling bits of a standalone texture's flags.
+pub fn sampling(flags: TextureFlags) -> u32 {
+    let bit = |on: bool, bit: u32| if on { bit } else { 0 };
+    bit(flags.blur, SAMPLE_BLUR) | bit(flags.clamp, SAMPLE_CLAMP)
+}
 #[derive(Clone, Debug)]
 pub struct ScreenQuad {
     pub vertices: [ScreenVertex; 4],
     pub blend: Blend,
+    /// How the sprite is sampled: [`SAMPLE_BLUR`] and [`SAMPLE_CLAMP`].
+    pub sampling: u32,
 }
 
 /// What the camera sees this frame.
 pub struct ScreenInputs<'a> {
     pub sprites: &'a HashMap<String, Rect>,
+    /// `.png.mcmeta` sampling of the standalone textures among `sprites`.
+    pub flags: &'a HashMap<String, TextureFlags>,
     pub aspect: f32,
     pub partial: f32,
     /// Particle sprite of the view-blocking block around the eye.
@@ -92,12 +108,17 @@ impl ScreenEffects {
     pub fn build(&self, input: &ScreenInputs) -> Vec<ScreenQuad> {
         let mut out = Vec::new();
         let sprite = |name: &str| input.sprites.get(name).map(|r| [r.u0, r.v0, r.u1, r.v1]);
+        // Standalone textures (`ReloadableTexture.setSampler`) follow their
+        // metadata; atlas sprites (block overlay, fire, portal) sample
+        // nearest with repeat.
+        let texture_sampling = |name: &str| input.flags.get(name).copied().map_or(0, sampling);
         let scale = hand_scale(input.aspect);
         // Screen-effect quads live at view depth 0.5 in the hand projection.
         let hand_quad = |corners: [[f32; 2]; 4],
                          uv: [[f32; 2]; 4],
                          rect: [f32; 4],
-                         color: [f32; 4]| ScreenQuad {
+                         color: [f32; 4],
+                         sampling: u32| ScreenQuad {
             vertices: std::array::from_fn(|i| ScreenVertex {
                 pos: [corners[i][0] * scale[0], corners[i][1] * scale[1]],
                 uv: uv[i],
@@ -105,6 +126,7 @@ impl ScreenEffects {
                 color,
             }),
             blend: Blend::Alpha,
+            sampling,
         };
         let full = [[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]];
         // ScreenEffectRenderer.submitBlockSprite: u1/v1 at (-1, -1), colour 0xFF191919.
@@ -117,6 +139,7 @@ impl ScreenEffects {
                 [[1.0, 1.0], [0.0, 1.0], [0.0, 0.0], [1.0, 0.0]],
                 rect,
                 [c, c, c, 1.0],
+                0,
             ));
         }
         if let Some((brightness, yaw, pitch)) = input.water
@@ -129,6 +152,7 @@ impl ScreenEffects {
                 uv,
                 rect,
                 [brightness, brightness, brightness, 0.1],
+                texture_sampling("misc/underwater"),
             ));
         }
         if input.on_fire
@@ -150,11 +174,12 @@ impl ScreenEffects {
                     [[1.0, 1.0], [0.0, 1.0], [0.0, 0.0], [1.0, 0.0]],
                     rect,
                     [1.0, 1.0, 1.0, alpha],
+                    0,
                 ));
             }
         }
         // Hud camera overlays: GUI-space full-screen blits (v grows downwards).
-        let gui = |rect: [f32; 4], color: [f32; 4], blend: Blend| ScreenQuad {
+        let gui = |rect: [f32; 4], color: [f32; 4], blend: Blend, sampling: u32| ScreenQuad {
             vertices: std::array::from_fn(|i| {
                 let p = [[-1.0f32, 1.0], [1.0, 1.0], [1.0, -1.0], [-1.0, -1.0]][i];
                 ScreenVertex {
@@ -165,6 +190,7 @@ impl ScreenEffects {
                 }
             }),
             blend,
+            sampling,
         };
         let rgba = |c: u32| {
             let [a, r, g, b] = c.to_be_bytes();
@@ -187,8 +213,14 @@ impl ScreenEffects {
                     } else {
                         Blend::Alpha
                     };
+                    // The vignette darkens by texture × colour: black (in
+                    // daylight its brightness fades to 0 within half a
+                    // minute) leaves every pixel as it was.
+                    if blend == Blend::Vignette && color & 0x00ff_ffff == 0 {
+                        continue;
+                    }
                     if let Some(rect) = sprite(texture) {
-                        out.push(gui(rect, rgba(*color), blend));
+                        out.push(gui(rect, rgba(*color), blend, texture_sampling(texture)));
                     }
                 }
                 GuiDraw::AtlasSprite {
@@ -197,7 +229,7 @@ impl ScreenEffects {
                     ..
                 } => {
                     if let Some(rect) = sprite(name) {
-                        out.push(gui(rect, rgba(*color), Blend::Alpha));
+                        out.push(gui(rect, rgba(*color), Blend::Alpha, 0));
                     }
                 }
                 _ => {}
@@ -243,8 +275,10 @@ mod tests {
             },
         );
         let e = ScreenEffects::default();
+        let flags = HashMap::new();
         let input = ScreenInputs {
             sprites: &sprites,
+            flags: &flags,
             aspect: 1.6,
             partial: 0.0,
             block_overlay: None,
@@ -255,5 +289,80 @@ mod tests {
         let quads = e.build(&input);
         assert_eq!(quads.len(), 1);
         assert_eq!(quads[0].blend, Blend::Vignette);
+        assert_eq!(quads[0].sampling, 0);
+        // A black vignette (faded out in daylight) changes no pixel: no quad.
+        // Below 1/255 the colour's channels are 0; a border warning tints it.
+        for (brightness, warning, drawn) in [(0.003, 0.0, 0), (0.004, 0.0, 1), (0.0, 0.5, 1)] {
+            let overlays = [crate::hud_overlays::vignette(320, 240, brightness, warning)];
+            let input = ScreenInputs {
+                block_overlay: None,
+                gui_overlays: &overlays,
+                ..input
+            };
+            assert_eq!(e.build(&input).len(), drawn, "{brightness} {warning}");
+        }
+    }
+    #[test]
+    fn standalone_textures_sample_by_their_metadata() {
+        let rect = Rect {
+            u0: 0.0,
+            v0: 0.0,
+            u1: 1.0,
+            v1: 1.0,
+            w: 16,
+            h: 16,
+        };
+        let sprites: HashMap<_, _> = ["misc/vignette", "misc/underwater", "block/stone"]
+            .map(|name| (name.to_owned(), rect))
+            .into();
+        let blur = TextureFlags {
+            blur: true,
+            clamp: false,
+        };
+        let clamp = TextureFlags {
+            blur: false,
+            clamp: true,
+        };
+        let flags: HashMap<_, _> = [
+            ("misc/vignette".to_owned(), blur),
+            ("misc/underwater".to_owned(), clamp),
+            // Atlas sprites ignore the texture section.
+            ("block/stone".to_owned(), blur),
+        ]
+        .into();
+        let quads = ScreenEffects::default().build(&ScreenInputs {
+            sprites: &sprites,
+            flags: &flags,
+            aspect: 1.6,
+            partial: 0.0,
+            block_overlay: Some("block/stone".to_owned()),
+            water: Some((1.0, 0.0, 0.0)),
+            on_fire: false,
+            gui_overlays: &[crate::hud_overlays::vignette(320, 240, 1.0, 0.0)],
+        });
+        let sampling: Vec<_> = quads.iter().map(|q| q.sampling).collect();
+        assert_eq!(sampling, [0, SAMPLE_CLAMP, SAMPLE_BLUR]);
+    }
+    #[test]
+    fn mcmeta_texture_section() {
+        let parse = TextureFlags::from_mcmeta;
+        assert_eq!(
+            parse(r#"{"texture":{"blur":true}}"#),
+            Some(TextureFlags {
+                blur: true,
+                clamp: false
+            })
+        );
+        assert_eq!(
+            parse(r#"{"texture":{"clamp":true,"mipmap_strategy":"mean"}}"#),
+            Some(TextureFlags {
+                blur: false,
+                clamp: true
+            })
+        );
+        // Defaults (false, false) or no section: the default sampler.
+        assert_eq!(parse(r#"{"texture":{"blur":false}}"#), None);
+        assert_eq!(parse(r#"{"animation":{}}"#), None);
+        assert_eq!(parse("not json"), None);
     }
 }

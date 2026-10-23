@@ -2700,6 +2700,7 @@ impl Game<'_> {
             equipment: Vec::new(),
             attributes: Vec::new(),
             precise: false,
+            needs_sync: false,
         })
     }
 }
