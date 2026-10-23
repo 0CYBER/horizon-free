@@ -4003,7 +4003,11 @@ impl Renderer {
             cull.end(&self.device, &mut encoder);
         }
         if let Some(timer) = &mut self.gpu_timer {
-            timer.end(&mut encoder);
+            timer.end(
+                &self.device,
+                &mut encoder,
+                (&view_target, self.config.format.remove_srgb_suffix()),
+            );
         }
         let readback = self.screenshot.take().and_then(|path| {
             // The copy and PNG writer both assume 8-bit pixels; a float surface would make
@@ -4034,7 +4038,7 @@ impl Renderer {
             cull.submitted();
         }
         if let Some(timer) = &mut self.gpu_timer {
-            timer.submitted();
+            timer.submitted(&self.queue);
             timer.collect(&self.device, &mut self.gpu_times);
         }
         if let Some((path, buffer)) = readback {
