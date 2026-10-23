@@ -121,6 +121,7 @@ mod pumpkin;
 mod raids;
 mod recipe_book;
 mod remote;
+mod remote_mob_data;
 mod remote_mob_use;
 mod remote_objects;
 mod remote_projectiles;
@@ -283,9 +284,11 @@ struct Options {
     benchmark: Option<String>,
     /// `--dev-mod PATH` (repeatable): mods always on and reloaded when rebuilt.
     dev_mods: Vec<PathBuf>,
-    /// Single player runs on an integrated server thread (game/integrated.rs),
-    /// as vanilla's does: the default. `--no-server-thread` or
-    /// `HORIZON_SERVER_THREAD=0` runs the world in the frame instead.
+    /// `--server-thread` or `HORIZON_SERVER_THREAD=1`: single player runs on an
+    /// integrated server thread (game/integrated.rs), as vanilla's does. Off by
+    /// default again until a server's players reach parity with the in-frame
+    /// world (signs, books, totems, keep_inventory...); `--no-server-thread`
+    /// keeps it off.
     server_thread: bool,
     /// Set on the integrated server's own options: it draws nothing, so it skips meshing.
     integrated: bool,
@@ -343,7 +346,7 @@ impl Options {
             dev_mods: Vec::new(),
             // The command harness (HORIZON_COMMAND_SCRIPT) drives the world
             // itself, without the event loop: it stays in the frame.
-            server_thread: std::env::var("HORIZON_SERVER_THREAD").map_or(true, |v| v != "0")
+            server_thread: std::env::var("HORIZON_SERVER_THREAD").is_ok_and(|v| v == "1")
                 && std::env::var_os("HORIZON_COMMAND_SCRIPT").is_none(),
             integrated: false,
         };
@@ -353,7 +356,7 @@ impl Options {
             match arg.as_str() {
                 "--help" | "-h" => {
                     println!(
-                        "Horizon — Minecraft Java Edition {} in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --width N, --height N   Window size (default 1280 x 720)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --world-frames N        Exit after N frames drawn in the world (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --dev-mod PATH          A Horizon mod (.hmod or folder) to develop: always on, reloaded when rebuilt\n  --no-server-thread      Run single player's world in the frame, not on its server thread\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause.",
+                        "Horizon — Minecraft Java Edition {} in Rust\n\n  --resources PATH        Prepared resources (horizon-prepare)\n  --render-distance N     Chunks, 2..64 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --width N, --height N   Window size (default 1280 x 720)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --frames N              Exit after N frames (testing)\n  --world-frames N        Exit after N frames drawn in the world (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain), write its report to benchmarks/ and quit\n  --control               Accept horizon-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/horizon-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --name NAME             Player name for multiplayer (default: generated once, kept in horizon-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --dev-mod PATH          A Horizon mod (.hmod or folder) to develop: always on, reloaded when rebuilt\n  --server-thread         Run single player's world on its server thread (not at parity yet)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause.",
                         horizon_core::VANILLA_VERSION
                     );
                     return Ok(None);
@@ -1022,9 +1025,11 @@ pub struct UiResources {
     pub panorama: Arc<horizon_client::gfx::panorama::Faces>,
 }
 impl UiResources {
-    pub fn load(root: &std::path::Path) -> Result<Self> {
+    /// From a resource root layering packs over `defaults`, the game's own
+    /// resources (`root` itself when no pack is on).
+    pub fn load(root: &std::path::Path, defaults: &std::path::Path) -> Result<Self> {
         Ok(Self {
-            atlas: HudAtlas::build(root)?,
+            atlas: HudAtlas::build_over(root, defaults)?,
             panorama: Arc::new(horizon_client::gfx::panorama::Faces::load(root)),
         })
     }
@@ -2576,6 +2581,17 @@ impl Game<'_> {
                 LevelEvent::LevelEvent { id: 2004, pos, .. } => {
                     self.spawner_burst([pos.x, pos.y, pos.z])
                 }
+                // LevelEventHandler 1505: the growth particles, then the sound.
+                LevelEvent::LevelEvent {
+                    id: 1505,
+                    pos,
+                    data,
+                } => {
+                    self.growth_particles(pos, data);
+                    let at = [pos.x, pos.y, pos.z].map(|v| f64::from(v) + 0.5);
+                    self.audio
+                        .play("minecraft:item.bone_meal.use", Some(at), 1.0, 1.0);
+                }
                 LevelEvent::LevelEvent {
                     id: 2015,
                     pos,
@@ -2619,7 +2635,6 @@ impl Game<'_> {
                         1030 => Some(("minecraft:block.anvil.use", 1.0)),
                         1029 => Some(("minecraft:block.anvil.destroy", 1.0)),
                         1031 => Some(("minecraft:block.anvil.land", 0.3)),
-                        1505 => Some(("minecraft:item.bone_meal.use", 1.0)),
                         1042 => Some(("minecraft:block.grindstone.use", 1.0)),
                         1044 => Some(("minecraft:block.smithing_table.use", 1.0)),
                         // LevelEvent.SOUND_PAGE_TURN (a lectern's page).
@@ -4320,7 +4335,7 @@ impl Game<'_> {
     /// world's entities and blocks, and the network hub.
     fn tick_world(&mut self, running: bool) -> Result<()> {
         self.update_chunk_tickets();
-        horizon_client::spans::time("tick_effects", || self.tick_effects());
+        horizon_client::spans::time("tick_effects", || self.tick_effects(running));
         // Player.tick's ItemCooldowns.tick for the window's player (a
         // server's players count theirs down in `tick_guests`).
         self.shield_cooldown = self.shield_cooldown.saturating_sub(1);
@@ -7051,10 +7066,16 @@ impl Game<'_> {
         // Item.getAttackDamageBonus (a mace's smash), before the critical hit.
         amount += self.smash_damage_bonus(target_kind);
         let player = self.player.as_ref();
-        // Player.canCriticalAttack: falling, off the ground, not sprinting.
-        let falling =
-            player.is_some_and(|p| !p.ground.on_ground && p.fall_distance > 0.0 && !p.sprinting);
-        let crit = scale > 0.9 && falling;
+        // Player.canCriticalAttack: falling, off the ground, not in water,
+        // not blind (isMobilityRestricted), not riding, not sprinting.
+        let falling = player.is_some_and(|p| {
+            !p.ground.on_ground
+                && p.fall_distance > 0.0
+                && !p.fluids.was_touching_water
+                && !p.sprinting
+        });
+        let restricted = self.potions.effects.get("blindness").is_some() || self.riding.is_some();
+        let crit = scale > 0.9 && falling && !restricted;
         if crit {
             amount *= 1.5;
         }
@@ -7663,6 +7684,8 @@ impl Game<'_> {
         world.game_time = self.world.game_time;
         world.day_time = self.world.day_time;
         world.weather = self.world.weather;
+        // The game rules and the difficulty hold in every dimension.
+        world.health_rules = self.world.health_rules;
         // An open hub keeps hearing the new level's block changes.
         world.block_log = self.world.block_log.as_ref().map(|_| Vec::new());
         world.light_log = self.world.light_log.as_ref().map(|_| Default::default());
@@ -8106,13 +8129,15 @@ impl Game<'_> {
         }
         Ok(true)
     }
-    /// `BlockTransformer.transformBlock` for a held axe, hoe or shovel.
-    fn use_block_transformer(
-        &mut self,
+    /// What `BlockTransformer.transformBlock` would do with a held axe, hoe
+    /// or shovel on the block at `pos`, without doing it: the new state, its
+    /// sound, loot table, the durability it costs and its particle.
+    pub(super) fn block_transform(
+        &self,
         stack: &ItemStack,
         pos: [i32; 3],
         face: [i32; 3],
-    ) -> Result<bool> {
+    ) -> Option<(BlockStateId, String, Option<String>, u32, String)> {
         use horizon_client::block_transform::Around;
         struct Column<'w> {
             world: &'w World,
@@ -8132,14 +8157,11 @@ impl Game<'_> {
                 })
             }
         }
-        let Some(id) = self
+        let id = self
             .res
             .items()
             .get(&stack.item)
-            .and_then(|i| i.block_transformer.clone())
-        else {
-            return Ok(false);
-        };
+            .and_then(|i| i.block_transformer.clone())?;
         // playerHasBlockingItemUseIntent: a shield in the off hand is raised
         // instead, unless sneaking.
         let shield = self
@@ -8148,7 +8170,7 @@ impl Game<'_> {
             .and_then(|s| self.res.items().get(&s.item))
             .is_some_and(|i| i.blocks_attacks.is_some());
         if shield && !self.keys.contains(&KeyCode::ShiftLeft) {
-            return Ok(false);
+            return None;
         }
         let face_name = match face {
             [0, -1, 0] => "down",
@@ -8159,38 +8181,47 @@ impl Game<'_> {
             _ => "east",
         };
         let registry = self.pack.assets.registry;
-        let (state, sound, loot, damage, particle) = {
-            let around = Column {
-                world: &self.world,
-                registry,
-                pos,
-            };
-            let Some((_, t, state)) =
-                self.res
-                    .transformers()
-                    .apply(self.res.items(), registry, &id, face_name, &around)
-            else {
-                return Ok(false);
-            };
-            (
-                state,
-                t.sound.clone(),
-                t.loot.clone(),
-                t.damage,
-                t.particle.clone(),
-            )
+        let around = Column {
+            world: &self.world,
+            registry,
+            pos,
         };
-        let Ok(new) = registry.resolve(&state) else {
-            return Ok(false);
-        };
-        self.level_set(pos, new)?;
-        // BlockTransformer.TransformParticle.send.
-        match particle.as_str() {
+        let (_, t, state) =
+            self.res
+                .transformers()
+                .apply(self.res.items(), registry, &id, face_name, &around)?;
+        let new = registry.resolve(&state).ok()?;
+        Some((
+            new,
+            t.sound.clone(),
+            t.loot.clone(),
+            t.damage,
+            t.particle.clone(),
+        ))
+    }
+    /// `BlockTransformer.TransformParticle.send`: its level event.
+    pub(super) fn transform_particle(&mut self, particle: &str, pos: [i32; 3]) {
+        match particle {
             "scrape" => self.level_event_at(3005, pos, 0),
             "wax_on" => self.level_event_at(3003, pos, 0),
             "wax_off" => self.level_event_at(3004, pos, 0),
             _ => {}
         }
+    }
+    /// `BlockTransformer.transformBlock` for a held axe, hoe or shovel.
+    fn use_block_transformer(
+        &mut self,
+        stack: &ItemStack,
+        pos: [i32; 3],
+        face: [i32; 3],
+    ) -> Result<bool> {
+        let Some((new, sound, loot, damage, particle)) = self.block_transform(stack, pos, face)
+        else {
+            return Ok(false);
+        };
+        self.level_set(pos, new)?;
+        // BlockTransformer.TransformParticle.send.
+        self.transform_particle(&particle, pos);
         if loot.as_deref() == Some("minecraft:till/rooted_dirt") {
             self.pop_resource(
                 [pos[0] + face[0], pos[1] + face[1], pos[2] + face[2]],
@@ -9576,6 +9607,7 @@ impl Game<'_> {
                 );
                 map.insert("Air".into(), horizon_world::nbt::Tag::Short(p.air as i16));
             }
+            level.fall_distance = p.fall_distance;
 
             level.food = p.health.food.food;
             level.saturation = p.health.food.saturation;
@@ -10742,6 +10774,9 @@ impl ApplicationHandler for Game<'_> {
             match event {
                 WindowEvent::CloseRequested => {
                     self.pending_save.as_mut().unwrap().quit = true;
+                }
+                WindowEvent::DroppedFile(path) => {
+                    self.drop_shader_pack(&path);
                 }
                 WindowEvent::Focused(focused) => {
                     self.focused = focused;
@@ -12111,7 +12146,20 @@ fn load_resources(
     // loads; the synchronous launch instead carries it in `Loaded`.
     let mut loaded_gui = None;
     let mut ui_ready = false;
-    if let Ok(ui) = UiResources::load(&root) {
+    let mut pack_error = None;
+    let ui = match UiResources::load(&root, vanilla_root) {
+        Ok(ui) => Some(ui),
+        // Minecraft.rollbackResourcePacks: the packs' textures don't fit, start
+        // with the game's own resources.
+        Err(e) if root != vanilla_root => {
+            log::warn!("Horizon: resource packs failed to load ({e}); using the default resources");
+            pack_error = Some(e.to_string());
+            root = vanilla_root.to_path_buf();
+            None
+        }
+        Err(_) => None,
+    };
+    if let Some(ui) = ui {
         if menu {
             horizon_client::telemetry::mark_ui_ready();
             log::info!(
@@ -12125,7 +12173,6 @@ fn load_resources(
         ui_ready = true;
     }
     progress.set(0);
-    let mut pack_error = None;
     let (assets, render) = match Assets::load(&root).and_then(|assets| {
         let render = assets.reload(&root)?;
         Ok((assets, render))
@@ -12152,7 +12199,7 @@ fn load_resources(
     let render = Arc::new(render);
     // The menu bundle must come from the same root as the world bundle.
     if !ui_ready || root != requested_root {
-        let ui = UiResources::load(&root)?;
+        let ui = UiResources::load(&root, vanilla_root)?;
         if menu {
             horizon_client::telemetry::mark_ui_ready();
             log::info!(
@@ -12563,6 +12610,10 @@ fn start_game<'a>(
     game.rest_loader = rest_loader;
     game.ui.vanilla_root = vanilla_root;
     if let Some(error) = pack_error {
+        // Minecraft.clearResourcePacksOnError: the selection is cleared and
+        // saved, so the next launch starts without the packs.
+        game.settings.resource_packs.clear();
+        game.settings.save(&Game::options_path());
         game.open_options_at(true, horizon_client::options_ui::Page::Packs);
         game.ui.options.resource_error = Some(error);
     }

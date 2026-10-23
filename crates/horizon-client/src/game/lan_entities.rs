@@ -36,10 +36,12 @@ fn state(id: u32, kind: &str, position: [f64; 3], yaw: f32, on_ground: bool) -> 
         velocity: [0.0; 3],
         data: 0,
         meta: Vec::new(),
+        defaults: Vec::new(),
         equipment: Vec::new(),
         attributes: Vec::new(),
         precise: false,
         needs_sync: false,
+        leash: None,
     }
 }
 
@@ -275,6 +277,8 @@ impl Game<'_> {
         self.rockets.iter_mut().for_each(|r| give(&mut r.id));
         self.crystals.iter_mut().for_each(|c| give(&mut c.id));
         self.bolts.iter_mut().for_each(|b| give(&mut b.id));
+        self.potions.thrown_ids().for_each(&mut give);
+        self.end.eye_ids().for_each(&mut give);
     }
 
     /// Primed TNT, falling blocks, projectiles, tridents, firework rockets and
@@ -355,6 +359,26 @@ impl Game<'_> {
                 }
                 _ => {}
             }
+            out.push(e);
+        }
+        // Thrown potions and bottles: ThrowableItemProjectile.DATA_ITEM_STACK
+        // (the potion's colour), which a plain bottle's type already has.
+        for (id, kind, stack, position, velocity) in self.potions.thrown_tracked() {
+            let mut e = state(id, kind, at(position), 0.0, false);
+            e.velocity = at(velocity);
+            if stack.extra.is_some() || stack.count != 1 {
+                e.meta.push((
+                    8,
+                    serializer::ITEM_STACK,
+                    Value::Item(hub.stack(&Some(stack.clone()))),
+                ));
+            }
+            out.push(e);
+        }
+        // EyeOfEnder: its item is the plain eye (DATA_ITEM_STACK's default).
+        for (id, position, velocity) in self.end.eyes_tracked() {
+            let mut e = state(id, "minecraft:eye_of_ender", position, 0.0, false);
+            e.velocity = velocity;
             out.push(e);
         }
         for t in self.tridents.iter().filter(|t| t.id != 0) {

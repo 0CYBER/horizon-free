@@ -101,6 +101,21 @@ impl Game<'_> {
             self.load_shader_pack();
         }
     }
+    /// A file dropped on the window: a shader pack while the Shader Packs
+    /// page shows (`OptionsUi::drop_shader_pack`).
+    pub(super) fn drop_shader_pack(&mut self, path: &std::path::Path) {
+        match self.ui.options.drop_shader_pack(&mut self.settings, path) {
+            Some(Ok(())) => {
+                self.settings.save(&Self::options_path());
+                self.load_shader_pack();
+            }
+            Some(Err(e)) => {
+                log::warn!("Horizon: shader pack {}: {e}", path.display());
+                self.system_message(Text::literal(format!("Shader pack: {e}")));
+            }
+            None => {}
+        }
+    }
     fn shader_pack_error(&mut self, id: &str, error: &str) {
         log::warn!("Horizon: shader pack {id}: {error}");
         // The Shader Packs page says why on the pack's row: the first line,

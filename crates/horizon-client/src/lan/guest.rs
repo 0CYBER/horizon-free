@@ -15,8 +15,32 @@ use std::{
 /// GameType ids.
 pub const SURVIVAL: i32 = 0;
 pub const CREATIVE: i32 = 1;
-pub const ADVENTURE: i32 = 2;
 pub const SPECTATOR: i32 = 3;
+
+/// The body state a player's file keeps that lives on `PlayerMotion`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SavedBody {
+    pub fire_ticks: i32,
+    pub air: i32,
+    pub fall_distance: f64,
+}
+
+impl SavedBody {
+    /// The body state of `motion`, to save.
+    pub fn of(motion: &PlayerMotion) -> Self {
+        Self {
+            fire_ticks: motion.fire_ticks,
+            air: motion.air,
+            fall_distance: motion.fall_distance,
+        }
+    }
+    /// Put it on a new body.
+    pub fn apply(self, motion: &mut PlayerMotion) {
+        motion.fire_ticks = self.fire_ticks;
+        motion.air = self.air;
+        motion.fall_distance = self.fall_distance;
+    }
+}
 
 /// An effect as last sent in ClientboundUpdateMobEffectPacket.
 #[derive(Clone, Debug, PartialEq)]
@@ -133,6 +157,9 @@ pub struct Guest {
     pub tracker: Tracker,
     // Player state the gameplay code reads and writes.
     pub motion: Option<Box<PlayerMotion>>,
+    /// What the player's file says of the body (`Entity.load`: the fire
+    /// and air ticks and the fall distance), for the first body it gets.
+    pub loaded_body: Option<SavedBody>,
     /// The hurt and attack logs of the body it had before it respawned,
     /// until the new body takes them over (the control socket's `hurtlog`
     /// reads across a death).
@@ -215,6 +242,8 @@ pub struct Guest {
     pub advancements_loaded: bool,
     pub advancements_visible: Vec<bool>,
     pub advancements_changed: std::collections::BTreeSet<usize>,
+    /// The server's scoreboard as this player's client has it (lan/scoreboard.rs).
+    pub scoreboard: super::scoreboard::View,
     /// Recipes unlocked since the client was last told
     /// (`ServerRecipeBook.addRecipes` sends them).
     pub recipes_unlocked: Vec<String>,
@@ -282,6 +311,7 @@ impl Guest {
             batch_quota: 0.0,
             tracker: Tracker::default(),
             motion: None,
+            loaded_body: None,
             logs_kept: None,
             inventory: vec![None; 36],
             armor: [None, None, None, None],
@@ -326,6 +356,7 @@ impl Guest {
             advancements_loaded: false,
             advancements_visible: Vec::new(),
             advancements_changed: Default::default(),
+            scoreboard: Default::default(),
             recipes_unlocked: Vec::new(),
         }
     }

@@ -489,11 +489,14 @@ impl OptionValues {
                 out.bools.insert(name.clone(), value);
             }
         }
+        // A saved value the option doesn't list (an old or hand-edited
+        // file) is dropped, as OptiFine's `ShaderOption.setValue` refuses it.
         for (name, o) in &options.strings {
-            if let Some(v) = saved.get(name) {
-                if *v != o.default {
-                    out.strings.insert(name.clone(), v.clone());
-                }
+            if let Some(v) = saved.get(name)
+                && *v != o.default
+                && o.allowed.contains(v)
+            {
+                out.strings.insert(name.clone(), v.clone());
             }
         }
         out
@@ -622,6 +625,13 @@ mod tests {
         assert!(
             !values.bools.contains_key("shadowHardwareFiltering"),
             "not a boolean: ignored"
+        );
+        let stale = [("QUALITY", "abc"), ("sunPathRotation", "")]
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .into();
+        assert!(
+            OptionValues::new(&set, &stale).strings.is_empty(),
+            "values the options don't list: ignored"
         );
         let edited: Vec<String> = lines
             .iter()

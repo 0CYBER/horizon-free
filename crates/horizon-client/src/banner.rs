@@ -2,7 +2,7 @@
 //! `banner_patterns` layers carried by banner items, shields and placed
 //! banners, and the loom rules of `LoomMenu` (selectable patterns, the
 //! six-layer limit and the result stack).
-use crate::{block_entity_render::DYES, item_data, items::ItemStack, items::Items};
+use crate::{block_entity_render::DYES, items::ItemStack, items::Items};
 use horizon_world::nbt::Tag;
 use serde_json::Value;
 use std::{collections::HashMap, fs, path::Path, sync::Arc};
@@ -260,12 +260,6 @@ pub fn layers_from_nbt(tag: Option<&Tag>) -> Vec<BannerLayer> {
             ))
         })
         .collect()
-}
-/// Keeps `item_data` linked: the `StackData` fields the banner code reads.
-pub fn set_layers(stack: &mut ItemStack, layers: Vec<BannerLayer>) {
-    let data: &mut item_data::StackData = stack.data_mut();
-    data.banner_patterns = layers;
-    stack.tidy();
 }
 
 #[cfg(test)]

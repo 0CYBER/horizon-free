@@ -875,13 +875,6 @@ impl BlockEntityRenderer {
             visibility: None,
         }
     }
-    /// The standing banner's pole-and-bar and flag models (`BannerRenderer.submitSpecial`).
-    pub fn banner_models(&self) -> Option<(&ModelPart, &ModelPart)> {
-        Some((
-            self.models.get("standing_banner")?,
-            self.models.get("standing_banner_flag")?,
-        ))
-    }
     fn kind(&self, state: u32) -> &Kind {
         self.kinds.get(state as usize).unwrap_or(&Kind::None)
     }

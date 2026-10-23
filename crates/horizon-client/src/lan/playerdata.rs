@@ -1,6 +1,6 @@
 //! Guests' saved state: `players/data/<uuid>.dat` in the vanilla player
 //! compound, through the same code that saves the host.
-use super::guest::Guest;
+use super::guest::{Guest, SavedBody};
 use crate::{
     items::ItemStack,
     save::{Level, read_dat, write_dat},
@@ -80,6 +80,17 @@ pub fn apply(guest: &mut Guest, level: &Level) {
         .map(|s| [s[0] + 0.5, s[1], s[2] + 0.5]);
     guest.respawn_elsewhere = level.respawn_elsewhere.clone();
     guest.saved = level.player_extra.clone();
+    let extra = level.player_extra.as_ref();
+    let short = |key: &str, default: i64| {
+        extra
+            .and_then(|t| crate::save::number(t.get(key)))
+            .unwrap_or(default) as i32
+    };
+    guest.loaded_body = Some(SavedBody {
+        fire_ticks: short("Fire", -20),
+        air: short("Air", 300),
+        fall_distance: level.fall_distance,
+    });
     guest.recipe_book = level.recipe_book.clone();
     guest.dimension = match level.dimension.as_str() {
         d @ ("minecraft:the_nether" | "minecraft:the_end") => d.to_owned(),
@@ -151,6 +162,24 @@ pub fn store(guest: &Guest, level: &mut Level) {
     level.respawn_elsewhere = guest.respawn_elsewhere.clone();
     level.on_ground = guest.on_ground;
     level.player_extra = guest.saved.clone();
+    // The live body's fire, air and fall distance (Entity.saveWithoutId),
+    // or what the file had while the player has no body yet.
+    let body = guest
+        .motion
+        .as_deref()
+        .map(SavedBody::of)
+        .or(guest.loaded_body);
+    if let Some(body) = body {
+        level.fall_distance = body.fall_distance;
+        let extra = level
+            .player_extra
+            .get_or_insert_with(|| horizon_world::nbt::Tag::Compound(Default::default()));
+        if let horizon_world::nbt::Tag::Compound(map) = extra {
+            let short = |v: i32| horizon_world::nbt::Tag::Short(v.clamp(-32768, 32767) as i16);
+            map.insert("Fire".into(), short(body.fire_ticks));
+            map.insert("Air".into(), short(body.air));
+        }
+    }
     level.recipe_book = guest.recipe_book.clone();
     level.ender_items = guest.ender_items.clone();
     level.inventory.clear();
@@ -173,4 +202,53 @@ pub fn store(guest: &Guest, level: &mut Level) {
     put(101, &guest.armor[2]);
     put(100, &guest.armor[3]);
     put(150, &guest.offhand);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lan::{Joined, PlayerSender};
+    use horizon_protocol::packets::configuration::ClientInformation;
+    use std::sync::{Arc, atomic::AtomicI32, mpsc};
+
+    fn guest() -> Guest {
+        let (tx, _rx) = mpsc::channel();
+        Guest::new(
+            Joined {
+                conn: 2,
+                uuid: 2,
+                name: "Alex".into(),
+                properties: Vec::new(),
+                info: ClientInformation::new(8),
+                brand: "test".into(),
+                sender: PlayerSender::new(tx, Arc::default()),
+                latency: Arc::new(AtomicI32::new(0)),
+                address: "127.0.0.1:25565".parse().unwrap(),
+            },
+            2,
+            [0.0, 64.0, 0.0],
+            8,
+        )
+    }
+
+    #[test]
+    fn a_saved_burn_and_fall_come_back() {
+        // A player saved burning in mid-fall (#1323, #1327): Entity.saveWithoutId's
+        // Fire, Air and fall_distance, read back for the next body.
+        let mut g = guest();
+        g.loaded_body = Some(SavedBody {
+            fire_ticks: 96,
+            air: 250,
+            fall_distance: 9.5,
+        });
+        let mut level = Level::default();
+        store(&g, &mut level);
+        let tag = level.player_tag();
+        let mut read = Level::default();
+        read.read_player(&tag);
+        read.player_extra = Some(tag);
+        let mut back = guest();
+        apply(&mut back, &read);
+        assert_eq!(back.loaded_body, g.loaded_body);
+    }
 }

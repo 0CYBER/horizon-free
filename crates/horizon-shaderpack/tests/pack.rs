@@ -292,6 +292,8 @@ fn plans_the_full_screen_passes() {
     assert_eq!(passes.composite[0].mipmapped, [3].into());
     assert_eq!(passes.composite[1].scale, 0.5);
     assert_eq!(passes.flipped_after_prepare, [].into());
+    // No gbuffers programs: the world goes into colortex0.
+    assert_eq!(passes.world_target, 0);
     assert_eq!(passes.flipped_after_translucent, [3].into());
     assert_eq!(passes.flipped_at_end, [1, 2, 3].into());
     let final_pass = passes.final_pass.unwrap();
@@ -300,6 +302,40 @@ fn plans_the_full_screen_passes() {
         ("final", None)
     );
     assert_eq!(final_pass.reads_alt, [1, 2, 3].into());
+}
+
+/// The world enters the target terrain draws to first (MakeUp's colortex1),
+/// through Iris's fallbacks when `gbuffers_terrain` is missing or disabled.
+#[test]
+fn the_world_goes_where_terrain_draws() {
+    let dir = scratch("world-target");
+    let shaders = dir.join("shaders");
+    std::fs::create_dir_all(&shaders).unwrap();
+    let write = |name: &str, text: &str| std::fs::write(shaders.join(name), text).unwrap();
+    for program in ["composite", "gbuffers_terrain", "gbuffers_textured"] {
+        write(&format!("{program}.vsh"), "void main() {}\n");
+    }
+    write("composite.fsh", "void main() {}\n");
+    write(
+        "gbuffers_textured.fsh",
+        "void main() {\n/* DRAWBUFFERS:12 */\n    gl_FragData[0] = vec4(1.0);\n}\n",
+    );
+    write(
+        "gbuffers_terrain.fsh",
+        "void main() {\n#ifdef GRASS\n/* DRAWBUFFERS:42 */\n#else\n/* DRAWBUFFERS:3 */\n#endif\n    gl_FragData[0] = vec4(1.0);\n}\n",
+    );
+    let target = |properties: &str| {
+        write("shaders.properties", properties);
+        let pack = JavaPack::open(&dir).unwrap();
+        let values = pack.values(&BTreeMap::new());
+        let properties = pack.properties(&values, &env()).unwrap();
+        pack.passes("", &values, &env(), &properties)
+            .unwrap()
+            .world_target
+    };
+    assert_eq!(target(""), 3);
+    assert_eq!(target("program.gbuffers_terrain.enabled = false\n"), 1);
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 fn scratch(name: &str) -> PathBuf {

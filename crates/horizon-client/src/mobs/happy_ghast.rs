@@ -17,7 +17,6 @@ use horizon_core::{
 // Happy ghast state: `head` the harness, `scratch[0]` 1 once set up as a
 // baby and 2 as an adult, `ai.home` the restriction, `counter`
 // the end tick of the follow-an-adult range pick.
-pub const BABY_SCALE: f64 = 0.2375;
 /// `Attributes.FLYING_SPEED` and the speed `travel` uses (`* 5 / 3`).
 pub const FLYING_SPEED: f64 = 0.05;
 pub const AIR_SPEED: f32 = 0.05 * 5.0 / 3.0;

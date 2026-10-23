@@ -41,12 +41,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 try:
     from . import lab, oracle_harness as oh, test_rust_parity as base
-    from .test_dedicated_server_parity import Server, free_port
+    from .test_dedicated_server_parity import Server
 except ImportError:
     import lab
     import oracle_harness as oh
     import test_rust_parity as base
-    from test_dedicated_server_parity import Server, free_port
+    from test_dedicated_server_parity import Server
 
 NAME = 'secure-chat-parity'
 SCENARIOS = {
@@ -153,20 +153,10 @@ def dashed(u):
     return f'{u[:8]}-{u[8:12]}-{u[12:16]}-{u[16:20]}-{u[20:]}'
 
 
-def varint(n):
-    out = b''
-    while True:
-        b = n & 0x7F
-        n >>= 7
-        out += bytes([b | (0x80 if n else 0)])
-        if not n:
-            return out
-
-
 def status(port):
     """The status response's JSON (ServerStatus)."""
     def packet(body):
-        return varint(len(body)) + body
+        return lab.varint(len(body)) + body
 
     def read_varint(s):
         value = 0
@@ -177,7 +167,7 @@ def status(port):
                 return value
     with socket.create_connection(('127.0.0.1', port), timeout=10) as s:
         host = b'127.0.0.1'
-        s.sendall(packet(b'\x00' + varint(777) + varint(len(host)) + host + port.to_bytes(2, 'big') + b'\x01'))
+        s.sendall(packet(b'\x00' + lab.varint(777) + lab.varint(len(host)) + host + port.to_bytes(2, 'big') + b'\x01'))
         s.sendall(packet(b'\x00'))
         length = read_varint(s)
         data = b''
@@ -212,7 +202,7 @@ def chat_lines(lines):
 
 
 def run_side(label, scenario, command, directory, client):
-    port = free_port()
+    port = lab.free_port()
     shutil.rmtree(directory, ignore_errors=True)
     directory.mkdir(parents=True)
     props = dict(PROPERTIES, **SCENARIOS[scenario], **{'server-port': str(port)})

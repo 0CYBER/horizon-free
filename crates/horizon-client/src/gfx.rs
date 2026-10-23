@@ -83,6 +83,40 @@ mod world_post;
 const COMPLETE_COLUMN: u32 = (1 << (crate::chunk::HEIGHT / 16)) - 1;
 /// A section's instance: its camera-relative origin and, in `w`, the step of
 /// its fixed-point UVs (`terrain.wgsl`'s `terrain_uv`).
+/// The world pass again after occlusion culling's test: it loads both
+/// targets (phase 2 draws over phase 1, reading the test's results).
+fn world_pass_after_culling<'e>(
+    encoder: &'e mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
+    depth: &wgpu::TextureView,
+    pack: bool,
+) -> wgpu::RenderPass<'e> {
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("Horizon world, after culling"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            resolve_target: None,
+            depth_slice: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+            view: depth,
+            depth_ops: Some(wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: if pack {
+                    wgpu::StoreOp::Store
+                } else {
+                    wgpu::StoreOp::Discard
+                },
+            }),
+            stencil_ops: None,
+        }),
+        ..Default::default()
+    })
+}
 fn section_instance(origin: [f32; 3]) -> [f32; 4] {
     [
         origin[0],
@@ -316,7 +350,8 @@ pub struct Renderer {
     flat: Option<flat::Flat>,
     /// `flat` draws this frame's sections (off: the per-section draws).
     flat_on: bool,
-    /// Occlusion culling of solid section draws, where multi-draw is native.
+    /// Occlusion culling of solid section draws, where the GPU's instance
+    /// counts reach a multi-draw's entries (Vulkan, Metal).
     cull: Option<cull::Cull>,
     cull_on: bool,
     sky: wgpu::RenderPipeline,
@@ -332,6 +367,11 @@ pub struct Renderer {
     /// (`crosshair_globals`).
     crosshair_group: wgpu::BindGroup,
     crosshair_globals: wgpu::Buffer,
+    shadow_pipeline: wgpu::RenderPipeline,
+    shadow_entity_pipeline: wgpu::RenderPipeline,
+    shadow_globals: wgpu::Buffer,
+    shadow_group: wgpu::BindGroup,
+    shadow_entity_group: wgpu::BindGroup,
     entity_pipeline: wgpu::RenderPipeline,
     weather: weather::Weather,
     crumbling_pipeline: wgpu::RenderPipeline,
@@ -1272,6 +1312,38 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let shadow_globals = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Shader pack shadow globals"),
+            size: std::mem::size_of::<Globals>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let shadow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Terrain shadow"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_terrain"),
+                compilation_options: Default::default(),
+                buffers: &terrain_buffers,
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: tri,
+                cull_mode: Some(wgpu::Face::Back),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            fragment: None,
+            multiview_mask: None,
+            cache: None,
+        });
         let prepared = prepared.unwrap_or_else(|| {
             PreparedTextures::new(sprite_pixels, sprite_size, layers, sprite_mips, forcefield)
         });
@@ -1385,6 +1457,16 @@ impl Renderer {
             &lightmap_view,
             &lightmap_sampler,
         );
+        let shadow_group = terrain_group(
+            &device,
+            "Shader pack shadow terrain resources",
+            &bindings,
+            &shadow_globals,
+            &sprite_views,
+            &sprite_sampler,
+            &lightmap_view,
+            &lightmap_sampler,
+        );
         let index_quads = 1 << 16;
         let indices = Self::quad_indices(&device, index_quads);
         let instance_capacity = 4096;
@@ -1408,8 +1490,14 @@ impl Renderer {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let depth = Self::depth(&device, &config);
         let (atlas_pixels, atlas_width, atlas_height) = hud_atlas;
+        let limit = device.limits().max_texture_dimension_2d;
+        if atlas_width.max(atlas_height) > limit {
+            return Err(format!(
+                "the shared atlas is {atlas_width}x{atlas_height}; this GPU allows {limit}x{limit}"
+            )
+            .into());
+        }
         let atlas = device.create_texture_with_data(
             &queue,
             &wgpu::TextureDescriptor {
@@ -1540,6 +1628,32 @@ impl Renderer {
                 },
             ],
         });
+        let shadow_entity_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Shader pack shadow entity resources"),
+            layout: &entity_bindings,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: shadow_globals.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&atlas_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&atlas_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&lightmap_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&lightmap_sampler),
+                },
+            ],
+        });
         let entity_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Entity layout"),
             bind_group_layouts: &[Some(&entity_bindings)],
@@ -1650,6 +1764,32 @@ impl Renderer {
                 wgpu::ColorWrites::ALL,
             )
         };
+        let shadow_entity_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Entity shadow"),
+                layout: Some(&entity_layout),
+                vertex: wgpu::VertexState {
+                    module: &entity_shader,
+                    entry_point: Some("vs_entity"),
+                    compilation_options: Default::default(),
+                    buffers: &entity_vertex,
+                },
+                primitive: wgpu::PrimitiveState {
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                fragment: None,
+                multiview_mask: None,
+                cache: None,
+            });
         // RenderPipelines.WATER_MASK: the boat's water patch writes depth only.
         let water_mask_pipeline = entity_pipeline_with(
             "Water mask",
@@ -2112,14 +2252,25 @@ impl Renderer {
             .features()
             .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE);
         // HORIZON_GPU_CULL=0 turns occlusion culling off, `all` culls every
-        // frame however little it hides (A/B checks).
+        // frame however few its draws and little it hides, `shader` tests in
+        // the shader as on Metal (A/B checks).
         let cull_env = std::env::var("HORIZON_GPU_CULL");
-        let cull = (cull_env.as_deref() != Ok("0") && cull::Cull::supported(&adapter, &device))
-            .then(|| {
-                let mut cull = cull::Cull::new(&device, config.format.remove_srgb_suffix());
+        let cull = cull::Cull::supported(&adapter, &device)
+            .filter(|_| cull_env.as_deref() != Ok("0"))
+            .map(|depth_test| match cull_env.as_deref() {
+                Ok("shader") => cull::DepthTest::InShader,
+                _ => depth_test,
+            })
+            .map(|depth_test| {
+                let mut cull =
+                    cull::Cull::new(&device, config.format.remove_srgb_suffix(), depth_test);
                 cull.always = cull_env.as_deref() == Ok("all");
+                if !cull.always && adapter.get_info().backend == wgpu::Backend::Metal {
+                    cull.min_draws = cull::TILED_MIN_DRAWS;
+                }
                 cull
             });
+        let depth = Self::depth(&device, &config, cull.as_ref());
         let world_post = world_post::Post::new(&device, config.format.remove_srgb_suffix());
         let uploads = upload::Uploads::new(&device);
         let section_uploads = upload::Uploads::with_chunk(&device, SECTION_UPLOAD_CHUNK);
@@ -2173,6 +2324,11 @@ impl Renderer {
             debug_line_capacity: 4096,
             crosshair_group,
             crosshair_globals,
+            shadow_pipeline,
+            shadow_entity_pipeline,
+            shadow_globals,
+            shadow_group,
+            shadow_entity_group,
             entity_pipeline,
             weather,
             crumbling_pipeline,
@@ -2307,10 +2463,6 @@ impl Renderer {
             view_formats: &config.view_formats,
         })
     }
-    /// Rendering to a texture instead of the window (`--offscreen`).
-    pub fn is_offscreen(&self) -> bool {
-        self.surface.is_none()
-    }
     /// Release the window surface before another renderer uses the same window.
     pub fn release_surface(&mut self) {
         self.surface = None;
@@ -2327,7 +2479,13 @@ impl Renderer {
         self.surface = Some(surface);
         Ok(())
     }
-    fn depth(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> wgpu::TextureView {
+    /// The world's depth, which occlusion culling's test may read.
+    fn depth(
+        device: &wgpu::Device,
+        config: &wgpu::SurfaceConfiguration,
+        cull: Option<&cull::Cull>,
+    ) -> wgpu::TextureView {
+        let read = cull.is_some_and(|c| c.depth_test() == cull::DepthTest::InShader);
         device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("Horizon depth"),
@@ -2340,7 +2498,11 @@ impl Renderer {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Depth32Float,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                usage: if read {
+                    wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
+                } else {
+                    wgpu::TextureUsages::RENDER_ATTACHMENT
+                },
                 view_formats: &[],
             })
             .create_view(&Default::default())
@@ -2391,7 +2553,7 @@ impl Renderer {
         } else {
             self.offscreen = Some(Self::offscreen_target(&self.device, &self.config));
         }
-        self.depth = Self::depth(&self.device, &self.config);
+        self.depth = Self::depth(&self.device, &self.config, self.cull.as_ref());
     }
     /// Whether sections are drawn as one index list per frame (`flat`).
     pub fn flat_draws(&self) -> bool {
@@ -2677,7 +2839,12 @@ impl Renderer {
                     &pack.id,
                     java,
                 )?),
-                None => Pack::Horizon(pack_stages::PackStages::new(&self.device, format, pack)?),
+                None => Pack::Horizon(pack_stages::PackStages::new(
+                    &self.device,
+                    &self.queue,
+                    format,
+                    pack,
+                )?),
             }),
             None => None,
         };
@@ -2714,6 +2881,16 @@ impl Renderer {
             "Horizon terrain resources",
             &self.terrain_layout,
             &self.globals,
+            &views,
+            &self.sprite_sampler,
+            &self.lightmap_view,
+            &self.lightmap_sampler,
+        );
+        self.shadow_group = terrain_group(
+            &self.device,
+            "Shader pack shadow terrain resources",
+            &self.terrain_layout,
+            &self.shadow_globals,
             &views,
             &self.sprite_sampler,
             &self.lightmap_view,
@@ -3096,15 +3273,13 @@ impl Renderer {
             .inverse()
             .transform_point3(Vec3::ZERO);
         // Occlusion culling leaves the sections its last result did not see
-        // to phase 2, after the others, with instance counts of 0.
+        // to phase 2, after the others, with instance counts of 0. Whether
+        // the frame has draws enough goes by the last one's.
         let mut cull = self
             .cull
             .as_mut()
-            .filter(|_| {
-                self.cull_on
-                    && !frame.title
-                    && self.multi_draw
-                    && !(self.flat_on && self.flat.is_some())
+            .filter(|c| {
+                self.cull_on && !frame.title && self.multi_draw && self.section_draws >= c.min_draws
             })
             .and_then(|cull| cull.begin(&self.device).then_some(cull));
         self.phase2_draws.clear();
@@ -3491,6 +3666,16 @@ impl Renderer {
             frame.hud,
             [self.config.width, self.config.height],
         );
+        if culling && let Some(cull) = &mut self.cull {
+            cull.upload(
+                &self.device,
+                &mut self.uploads,
+                &mut encoder,
+                &self.draws[phase1_draws as usize..solid_draws as usize],
+                &self.instances,
+                &self.globals,
+            );
+        }
         let flat_frame = match &mut self.flat {
             Some(flat)
                 if self.flat_on && !self.draws.is_empty() && self.draws.len() >= flat.min_draws =>
@@ -3498,6 +3683,7 @@ impl Renderer {
                 let sections = &self.sections;
                 let lods = &self.lods;
                 let sorted = &self.sorted_indices;
+                let phase2 = self.cull.as_ref().filter(|_| culling).map(|c| &c.phase2);
                 crate::spans::time("flatten", || {
                     flat.prepare(
                         &self.device,
@@ -3505,7 +3691,9 @@ impl Renderer {
                         &mut self.uploads,
                         &self.draws,
                         &self.draw_pages,
+                        phase1_draws as usize,
                         solid_draws as usize,
+                        phase2,
                         visible
                             .iter()
                             .filter_map(|v| {
@@ -3540,16 +3728,6 @@ impl Renderer {
                 0,
                 bytemuck::cast_slice(&self.draws),
             );
-            if culling && let Some(cull) = &mut self.cull {
-                cull.upload(
-                    &self.device,
-                    &mut self.uploads,
-                    &mut encoder,
-                    &self.draws[phase1_draws as usize..solid_draws as usize],
-                    &self.instances,
-                    &self.globals,
-                );
-            }
         }
         let view_target = target_texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.config.format.remove_srgb_suffix()),
@@ -3560,14 +3738,81 @@ impl Renderer {
         }
         // The world's targets: the screen, or the scaled target of `post`.
         let pack = self.pack.is_some() && !frame.title;
-        let scaled =
+        // What the pack reads beyond the world's colour and depth: each costs
+        // a pass (the shadow map, the G-buffer) or a copy (the opaque depth).
+        let (shadow_cfg, gbuffer, opaque_depth) = match self.pack.as_ref().filter(|_| pack) {
+            Some(Pack::Horizon(s)) => (
+                s.needs_shadow.then_some((s.shadow_res, s.shadow_dist)),
+                s.needs_gbuffer,
+                s.needs_opaque_depth,
+            ),
+            Some(Pack::Java(s)) => (None, false, s.reads_opaque_depth),
+            None => (None, false, false),
+        };
+        if let Some((shadow_res, shadow_dist)) = shadow_cfg {
             self.world_post
-                .prepare(&self.device, [self.config.width, self.config.height], pack);
+                .prepare_shadow(&self.device, shadow_res, shadow_dist, sun, -sun);
+            let shadow_globals = Globals {
+                view_proj: (self.world_post.shadow_proj * self.world_post.shadow_view)
+                    .to_cols_array_2d(),
+                ..globals
+            };
+            self.uploads.buffer(
+                &mut encoder,
+                &self.shadow_globals,
+                0,
+                bytemuck::bytes_of(&shadow_globals),
+            );
+        } else {
+            self.world_post.shadow_active = false;
+        }
+        let scaled = self.world_post.prepare(
+            &self.device,
+            [self.config.width, self.config.height],
+            pack,
+            world_post::Extras {
+                opaque_depth,
+                gbuffer,
+            },
+        );
         let (world_view, world_depth) = match &scaled {
             Some((color, depth)) => (color, depth),
             None => (&view_target, &self.depth),
         };
+        if culling && let Some(cull) = &mut self.cull {
+            cull.bind_depth(&self.device, world_depth);
+        }
         let cull = self.cull.as_ref().filter(|_| culling && solid_draws > 0);
+        if shadow_cfg.is_some() {
+            let shadow_view = self.world_post.shadow_depth().clone();
+            let mut shadow_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Horizon shadow"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &shadow_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(0.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            if solid_draws > 0 && !flat_frame {
+                shadow_pass.set_bind_group(0, &self.shadow_group, &[]);
+                shadow_pass.set_pipeline(&self.shadow_pipeline);
+                shadow_pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                shadow_pass.set_vertex_buffer(1, self.instances.slice(..));
+                self.draw_sections(&mut shadow_pass, &self.indirect, 0, 0, solid_draws);
+            }
+            if entity_quads > 0 {
+                shadow_pass.set_pipeline(&self.shadow_entity_pipeline);
+                shadow_pass.set_bind_group(0, &self.shadow_entity_group, &[]);
+                shadow_pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                shadow_pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
+                shadow_pass.draw_indexed(0..entity_quads * 6, 0, 0..1);
+            }
+        }
         {
             let attachments = [Some(wgpu::RenderPassColorAttachment {
                 view: world_view,
@@ -3647,9 +3892,28 @@ impl Renderer {
             match self.flat.as_ref().filter(|_| flat_frame) {
                 Some(flat) => {
                     pass.set_pipeline(&flat.solid);
-                    flat.draw(&mut pass, &flat.calls[..flat.solid_calls], |p| {
-                        self.arena.buffer(p)
-                    });
+                    let vertices = |p| self.arena.buffer(p);
+                    match cull {
+                        // As below: phase 1, the test, then phase 2's draws
+                        // that the test saw, copied after it.
+                        Some(cull) => {
+                            flat.draw(&mut pass, &flat.calls[..flat.phase1_calls], vertices);
+                            cull.test(&mut pass);
+                            drop(pass);
+                            cull.test_pass(&mut encoder);
+                            flat.flatten_phase2(&mut encoder);
+                            pass = world_pass_after_culling(
+                                &mut encoder,
+                                world_view,
+                                world_depth,
+                                pack,
+                            );
+                            pass.set_bind_group(0, &self.group, &[]);
+                            pass.set_pipeline(&flat.solid);
+                            flat.draw_phase2(&mut pass, vertices);
+                        }
+                        None => flat.draw(&mut pass, &flat.calls[..flat.solid_calls], vertices),
+                    }
                     pass.set_bind_group(0, &self.group, &[]);
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                 }
@@ -3659,40 +3923,20 @@ impl Renderer {
                     pass.set_vertex_buffer(1, self.instances.slice(..));
                     match cull {
                         Some(cull) => {
-                            // Phase 1 and the boxes against its depth, then
+                            // Phase 1 and the boxes against its depth (in
+                            // its pass, or one of their own on Metal), then
                             // what they found in sight, in a pass that loads
                             // both targets (it reads the test's results).
                             self.draw_sections(&mut pass, &self.indirect, 0, 0, phase1_draws);
                             cull.test(&mut pass);
                             drop(pass);
-                            let attachments = [Some(wgpu::RenderPassColorAttachment {
-                                view: world_view,
-                                resolve_target: None,
-                                depth_slice: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Load,
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            })];
-                            pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                label: Some("Horizon world, after culling"),
-                                color_attachments: &attachments,
-                                depth_stencil_attachment: Some(
-                                    wgpu::RenderPassDepthStencilAttachment {
-                                        view: world_depth,
-                                        depth_ops: Some(wgpu::Operations {
-                                            load: wgpu::LoadOp::Load,
-                                            store: if pack {
-                                                wgpu::StoreOp::Store
-                                            } else {
-                                                wgpu::StoreOp::Discard
-                                            },
-                                        }),
-                                        stencil_ops: None,
-                                    },
-                                ),
-                                ..Default::default()
-                            });
+                            cull.test_pass(&mut encoder);
+                            pass = world_pass_after_culling(
+                                &mut encoder,
+                                world_view,
+                                world_depth,
+                                pack,
+                            );
                             pass.set_bind_group(0, &self.group, &[]);
                             pass.set_pipeline(&self.solid);
                             pass.set_index_buffer(
@@ -3769,6 +4013,33 @@ impl Renderer {
                 pass.set_vertex_buffer(0, self.debug_line_buffer.slice(..));
                 pass.draw(0..4, debug_depth..debug_depth + debug_top);
             }
+            if opaque_depth {
+                drop(pass);
+                self.world_post.capture_opaque_depth(&mut encoder);
+                let attachments = [Some(wgpu::RenderPassColorAttachment {
+                    view: world_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })];
+                pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Horizon world, translucent"),
+                    color_attachments: &attachments,
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: world_depth,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    ..Default::default()
+                });
+                pass.set_bind_group(0, &self.group, &[]);
+            }
             match self.flat.as_ref().filter(|_| flat_frame) {
                 Some(flat) => {
                     pass.set_pipeline(&flat.translucent);
@@ -3840,6 +4111,15 @@ impl Renderer {
                 );
             }
         }
+        if gbuffer && scaled.is_some() {
+            self.world_post.build_gbuffer(
+                &self.queue,
+                &mut encoder,
+                &pack_uniform,
+                frame.shader.eye_light,
+                frame.shader.rain,
+            );
+        }
         if let (true, Some((color, depth)), Some(size), Some(stages)) =
             (pack, &scaled, self.world_post.size(), self.pack.as_mut())
         {
@@ -3853,6 +4133,7 @@ impl Renderer {
                     size,
                     &self.world_post,
                     pack_uniform,
+                    frame.shader.eye_light,
                 ),
                 Pack::Java(stages) => stages.run(
                     &self.device,
@@ -4005,7 +4286,11 @@ impl Renderer {
             cull.end(&self.device, &mut encoder);
         }
         if let Some(timer) = &mut self.gpu_timer {
-            timer.end(&mut encoder);
+            timer.end(
+                &self.device,
+                &mut encoder,
+                (&view_target, self.config.format.remove_srgb_suffix()),
+            );
         }
         let readback = self.screenshot.take().and_then(|path| {
             // The copy and PNG writer both assume 8-bit pixels; a float surface would make
@@ -4036,7 +4321,7 @@ impl Renderer {
             cull.submitted();
         }
         if let Some(timer) = &mut self.gpu_timer {
-            timer.submitted();
+            timer.submitted(&self.queue);
             timer.collect(&self.device, &mut self.gpu_times);
         }
         if let Some((path, buffer)) = readback {
@@ -4401,7 +4686,11 @@ mod tests {
         );
         assert!(files.len() >= 10, "{files:?}");
         for path in files {
-            let text = std::fs::read_to_string(&path).unwrap();
+            let mut text = std::fs::read_to_string(&path).unwrap();
+            // Api 2's prelude follows api 1's (`shader_pack::ShaderPack::load`).
+            if path.ends_with("shader_pack_prelude_api2.wgsl") {
+                text = format!("{}\n{text}", crate::shader_pack::PRELUDE);
+            }
             // entity.wgsl comes after the overlay's constants (entity_shader).
             let module = naga::front::wgsl::parse_str(&text)
                 .or_else(|_| {

@@ -46,7 +46,7 @@ Shader packs are **experimental**. Put a pack's folder in the `shaderpacks` fold
 
 Horizon can run the full-screen effects of Java shader packs (OptiFine and Iris packs: colour grading, bloom, sky and fog effects). It does not run their geometry and shadow passes yet, so packs do not look as they do in Iris. Horizon also has its own shader pack format, in WGSL, with a `pack.toml` manifest, options and hot reload. It has full-screen passes too; stages that draw the world's terrain and shadows are planned. The details are in the [shader pack notes](https://github.com/ludovic111/horizon/blob/main/docs/shader-packs.md).
 
-In Alpha builds, the **Shader Packs** page shows the full path of the `shaderpacks` folder with an **Open Folder** button, then one switch per pack. Turning a pack on picks it, and turning it off gives the vanilla picture. Packs tested so far: BSL, Complementary Reimagined, Steadfast and Sildur's Vibrant Extreme draw their full-screen passes; Bliss, Bloop, Noble, Photon and Rethinking Voxels do not load yet. To find packs, the launcher's **Mods** page installs shader packs from Modrinth (see [Mods and data packs](/docs/mods#finding-resource-packs-shader-packs-and-modpacks)).
+The **Shader Packs** page shows the full path of the `shaderpacks` folder with an **Open Folder** button, then one switch per pack. Turning a pack on picks it, and turning it off gives the vanilla picture. Packs tested so far: BSL, Complementary Reimagined, Steadfast and Sildur's Vibrant Extreme draw their full-screen passes; Bliss, Bloop, Noble, Photon and Rethinking Voxels do not load yet. To find packs, the launcher's **Mods** page installs shader packs from Modrinth (see [Mods and data packs](/docs/mods#finding-resource-packs-shader-packs-and-modpacks)).
 
 ## Resource packs
 
@@ -67,7 +67,7 @@ Horizon plays with PlayStation (DualShock 4 and DualSense), Xbox (360, One and S
 
 ## Extras
 
-**Options, Horizon Settings, Extras** holds small, optional conveniences. Every one is off by default, so a fresh install behaves like vanilla: fullbright, zoom, a minimap, an FPS counter, a keystroke display, auto-reconnect, Mouse Tweaks-style inventory controls and inventory sorting. In Alpha builds there is one more, **dynamic lights**: a torch, lantern or other light source that you hold, that lies dropped as an item, or a burning mob, lights the blocks around it. It is client-side only, so other players do not see it.
+**Options, Horizon Settings, Extras** holds small, optional conveniences. Every one is off by default, so a fresh install behaves like vanilla: fullbright, zoom, a minimap, an FPS counter, a keystroke display, auto-reconnect, Mouse Tweaks-style inventory controls and inventory sorting. One more is **dynamic lights**: a torch, lantern or other light source that you hold, that lies dropped as an item, or a burning mob, lights the blocks around it. It is client-side only, so other players do not see it.
 
 ## Where your settings are stored
 

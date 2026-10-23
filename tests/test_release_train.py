@@ -104,7 +104,7 @@ class ReleaseTrainTests(unittest.TestCase):
         self.assertFalse(train.decision("game", [], NOW)[0])
 
     def test_the_first_release_of_0_2_says_what_changed(self):
-        title, body = train.notes("game", "v0.2.0", [pr(1)], [], beta=True, previous="v2026.10.21")
+        title, body = train.notes("game", "v0.2.0", [pr(1)], [], previous="v2026.10.21")
         self.assertTrue(title.startswith("Horizon 0.2.0: "), title)
         self.assertTrue(body.startswith("Horizon is numbered from now on: this is Horizon 0.2.0, the release after 2026.10.21."))
         self.assertIn("`horizon-server update --version v0.2.0`", body)
@@ -131,6 +131,32 @@ class ReleaseTrainTests(unittest.TestCase):
         self.assertFalse(decide([pr(1, merged=3 * minute), pr(2, labels=["skip-release"], merged=minute)]), "the settled one waits for nothing")
         self.assertFalse(decide([pr(1)], paused=True))
         self.assertTrue(decide([], paused=True, force=True))
+
+    def test_an_open_release_blocker_holds_every_release_even_forced(self):
+        release, why = train.decision("game", [pr(1, labels=["release-now"])], NOW, blockers=[7, 9])
+        self.assertFalse(release)
+        self.assertEqual(why, "held by release-blocker #7, release-blocker #9")
+        self.assertFalse(train.decision("game", [], NOW, force=True, blockers=[7])[0])
+        self.assertFalse(train.decision("game", [], NOW, new_line="0.3", blockers=[7])[0])
+        self.assertTrue(train.decision("game", [pr(1)], NOW, blockers=[])[0])
+
+    def test_a_release_is_published_only_after_its_smoke_test_and_with_no_blocker(self):
+        drew = {"error": None, "frames": 12710, "chunks": 81, "meshed_sections": 550, "player": [160.5, 71.0, 156.5]}
+        self.assertIsNone(train.gate(drew, []))
+        self.assertEqual(train.gate(drew, [4]), "release-blocker #4 is open")
+        self.assertEqual(train.gate(None, []), "no smoke-test.json: the release smoke test did not run")
+        self.assertEqual(train.gate(None, [4]),
+                         "no smoke-test.json: the release smoke test did not run; release-blocker #4 is open")
+        self.assertEqual(train.smoke_problem({**drew, "error": "device lost"}), "the smoke run failed: device lost")
+        for broken in ({**drew, "frames": 1499}, {**drew, "chunks": 0}, {**drew, "meshed_sections": 0},
+                       {**drew, "player": None}, {}):
+            self.assertEqual(train.smoke_problem(broken), "the smoke run did not draw a world", broken)
+
+    def test_notes_never_call_a_release_alpha_or_beta(self):
+        _, body = train.notes("game", "v0.2.12", [pr(1)], [])
+        self.assertNotIn("alpha", body.lower())
+        self.assertNotIn("beta", body.lower())
+        self.assertNotIn("Stable", body)
 
     def test_notes(self):
         prs = [pr(5, "Nether portals: vanilla timing and linking (fixes #94)", issues=[94]),
