@@ -1,6 +1,7 @@
 //! Horizon launcher: installs Horizon builds, prepares them from the player's own Minecraft,
 //! and starts the client or a dedicated server.
 
+mod agents_page;
 mod art;
 mod blocks;
 mod cli;
@@ -180,6 +181,8 @@ struct Launcher {
     args_focus: FocusHandle,
     /// Opt-in data collection: the player's answer and Settings' section (`collection`).
     collection: collection::Collection,
+    /// Settings' "Connect an AI agent" (`agents_page`).
+    agents: agents_page::AgentsUi,
     /// How many play Horizon now, while the server answers ("N playing now" on the Play page).
     playing: Option<u64>,
     tx: Sender<Msg>,
@@ -307,6 +310,7 @@ impl Launcher {
             friend_focus: cx.focus_handle(),
             joining: None,
             collection: collection::Collection::load(),
+            agents: agents_page::AgentsUi::default(),
             playing: None,
             tx,
             rx,
@@ -2433,36 +2437,6 @@ impl Launcher {
         };
         let mono = |s: String| div().font_family(theme::MONO).child(s).into_any_element();
         let plain = |s: &str| div().child(s.to_string()).into_any_element();
-        let agents = plate(&t)
-            .flex()
-            .flex_col()
-            .gap(px(10.))
-            .p(px(24.))
-            .text_size(px(theme::UI.px))
-            .line_height(px(21.))
-            .child(
-                text(theme::HEADING)
-                    .text_color(t.ink)
-                    .child("Use from the command line or AI agents"),
-            )
-            .child(div().max_w(px(600.)).text_color(t.muted).child(
-                "The launcher is also a command-line tool and an MCP server. Everything here works from a terminal, or from an agent such as Claude Code:",
-            ))
-            .child(
-                text(theme::CAPTION)
-                    .font_family(theme::MONO)
-                    .text_color(t.ink)
-                    .child("claude mcp add horizon -- horizon-launcher mcp"),
-            )
-            .child(
-                div()
-                    .id("readme")
-                    .text_color(t.accent)
-                    .cursor_pointer()
-                    .hover(|s| s.opacity(0.8))
-                    .child("Commands and tools, in the README")
-                    .on_click(|_, _, cx| cx.open_url(backend::README_URL)),
-            );
         let (accounts, n) = self.account_rows(cx);
         let appearance = segments(
             "appearance",
@@ -2546,6 +2520,8 @@ impl Launcher {
                     ))
                     .child(group("Game", "gamepad"))
                     .child(self.game_args_row(n + 4, cx))
+                    .child(group("AI", "terminal"))
+                    .child(self.no_ai_row(n + 4, cx))
                     .child(group("About", "info-box"))
                     .child(index_row(n + 5, "Horizon", Some(plain(&horizon)), horizon_action, &t))
                     .child(index_row(
@@ -2595,7 +2571,7 @@ impl Launcher {
                     }),
             )
             .child(self.collection_section(cx))
-            .child(agents)
+            .children(self.agents_section(cx))
     }
 
     /// Settings' Game arguments row: the extra arguments the game starts with, kept in

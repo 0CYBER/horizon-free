@@ -122,6 +122,8 @@ def no_ai_scenario(launcher, env, home):
     config = json.loads(run('agent-config', '--json').stdout)
     assert config['server']['args'] == ['mcp'] and len(config['clients']) == 4, config
     assert 'agent-config' in run('--help').stdout
+    test = json.loads(run('agent-config', '--test', '--json').stdout)
+    assert test['answered'] and test['tools'] > 100, test
     m = Mcp(launcher, env)
     m.rpc('initialize', {'protocolVersion': '2025-06-18', 'capabilities': {},
                          'clientInfo': {'name': 'launcher_mcp_e2e', 'version': '1'}})
