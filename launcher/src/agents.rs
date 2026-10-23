@@ -86,6 +86,73 @@ pub fn clients(exe: &Path) -> Vec<Client> {
     ]
 }
 
+/// Where a client's CLI is: on the PATH, else in the folders installers use (a launcher started
+/// from the desktop gets a short PATH on macOS). The bare name when it is nowhere.
+pub fn locate(program: &str) -> std::path::PathBuf {
+    let home = dirs::home_dir().unwrap_or_default();
+    let names: Vec<String> = if cfg!(windows) {
+        ["exe", "cmd"]
+            .iter()
+            .map(|e| format!("{program}.{e}"))
+            .collect()
+    } else {
+        vec![program.to_owned()]
+    };
+    let extra = [
+        home.join(".local/bin"),
+        home.join(".claude/local"),
+        home.join(".npm-global/bin"),
+        home.join(".bun/bin"),
+        home.join(".cargo/bin"),
+        "/opt/homebrew/bin".into(),
+        "/usr/local/bin".into(),
+        home.join("AppData/Roaming/npm"),
+    ];
+    std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
+        .unwrap_or_default()
+        .into_iter()
+        .chain(extra)
+        .flat_map(|dir| names.iter().map(move |n| dir.join(n)))
+        .find(|p| p.is_file())
+        .unwrap_or_else(|| program.into())
+}
+
+/// Starts `exe mcp` as a client would, lists its tools and returns how many answered: the
+/// Settings page's "Test the connection".
+pub fn self_test(exe: &Path) -> Result<usize, String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(exe)
+        .arg("mcp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Could not start {}: {e}", exe.display()))?;
+    let lines = [
+        json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "horizon-launcher-test", "version": "1" } } }),
+        json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+        json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} }),
+    ];
+    if let Some(mut stdin) = child.stdin.take() {
+        for line in &lines {
+            writeln!(stdin, "{line}").map_err(|e| e.to_string())?;
+        }
+        // Dropping stdin ends the session: the server answers, then exits.
+    }
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_owned());
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .find(|r| r["id"] == 2)
+        .and_then(|r| r["result"]["tools"].as_array().map(Vec::len))
+        .ok_or_else(|| "The MCP server did not list its tools.".into())
+}
+
 /// `program args...` quoted for a POSIX shell where a word needs it.
 pub fn shell_line(program: &str, args: &[String]) -> String {
     let quote = |w: &str| {

@@ -368,6 +368,9 @@ enum Cmd {
         /// Only this client
         #[arg(long, value_parser = ["claude-code", "codex", "cursor", "generic"])]
         client: Option<String>,
+        /// Start the MCP server as a client would and say whether it answered
+        #[arg(long)]
+        test: bool,
     },
     /// Show or set No AI: on hides and turns off every AI feature (the companion, agent control,
     /// horizon-ctl and both MCP servers); off, the default, makes them available
@@ -673,7 +676,15 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 println!("No AI is off: AI features are available.");
             }
         }
-        Cmd::AgentConfig { client } => {
+        Cmd::AgentConfig { test: true, .. } => {
+            let tools = horizon_launcher::agents::self_test(backend::exe_path())?;
+            if as_json {
+                json(serde_json::json!({ "answered": true, "tools": tools }));
+            } else {
+                println!("The MCP server answered with {tools} tools.");
+            }
+        }
+        Cmd::AgentConfig { client, .. } => {
             use horizon_launcher::agents;
             let exe = backend::exe_path();
             if as_json {
