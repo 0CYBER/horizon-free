@@ -71,8 +71,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              teleports into another level, and `execute in` and `at` change and test blocks there;
              mobs fall in two levels at once, with ids unique across them; the guest rejoins in the
              Nether, dies there and respawns in the Overworld; the host takes a Nether portal alone;
-             the guest takes an End portal and the exit portal alone; and the host saves, quits and
-             reopens with the guest in the Nether.
+             the guest takes an End portal, an End gateway and the exit portal alone; and the host
+             saves, quits and reopens with the guest in the Nether.
 - commands:  the guest's chat completes commands and their arguments over the server's command
              tree (Tab), and runs what it completed;
 - recipes:   the guest's recipe book lists the planks recipe the logs unlock, and clicking it
@@ -716,8 +716,8 @@ def level_host_nether(host, guest, out):
 
 
 def level_guest_end(host, guest, out):
-    """The guest steps into an End portal alone and lands on the obsidian platform; an exit portal
-    takes it back to the Overworld."""
+    """The guest steps into an End portal alone and lands on the obsidian platform, an End gateway
+    takes it across the End, and an exit portal takes it back to the Overworld."""
     x, y, z = (int(v // 1) for v in pos_of(guest))
     guest('command', command=f'setblock {x + 2} {y} {z} minecraft:end_portal')
     try:
@@ -731,13 +731,32 @@ def level_guest_end(host, guest, out):
         assert [int(v // 1) for v in landed] == [100, 49, 0], f'the guest landed at {landed}'
     finally:
         guest('command', command=f'execute in {OVERWORLD} run setblock {x + 2} {y} {z} minecraft:air')
-    ex, ey, ez = (int(v // 1) for v in landed)
+    # A gateway far out with an exact exit at the End spawn, as end_gateway_return's
+    # (TheEndGatewayBlockEntity.getPortalPosition), takes the guest back there within the End.
+    guest('command', command='tp @s 700.5 80 0.5')
+    guest.wait(60)
+    level_floor(guest, 700, 80, 0)
+    guest('command', command='tp @s 700.5 80 0.5')
+    guest.wait(20)
+    guest('command', command='setblock 702 80 0 minecraft:end_gateway{exit_portal:[I;100,50,0],exact_teleport:1b}')
+    guest('command', command='tp @s 702.5 80 0.5')
+    gateway = None
+    for _ in range(20):
+        guest.wait(10)
+        gateway = pos_of(guest)
+        if abs(gateway[0] - 702.5) > 50:
+            break
+    assert dims(host, guest) == (OVERWORLD, END), f'host, guest in {dims(host, guest)}'
+    assert abs(gateway[0] - 100.5) < 1 and abs(gateway[2] - 0.5) < 1 and 49 <= gateway[1] <= 50, \
+        f'the gateway left the guest at {gateway}'
+    guest.wait(40)
+    ex, ey, ez = (int(v // 1) for v in pos_of(guest))
     guest('command', command=f'setblock {ex + 2} {ey} {ez} minecraft:end_portal')
     guest('command', command=f'tp @s {ex + 2.5} {ey} {ez + 0.5}')
     home = wait_dimension(guest, OVERWORLD, 600)
     guest.wait(20)
     assert dims(host, guest) == (OVERWORLD, OVERWORLD), f'host, guest in {dims(host, guest)}'
-    return {'landed': landed, 'home': home['player']['position']}
+    return {'landed': landed, 'gateway': gateway, 'home': home['player']['position']}
 
 
 def level_reload(host, guest, out):

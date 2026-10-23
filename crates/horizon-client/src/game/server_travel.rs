@@ -7,6 +7,7 @@
 //! another level: a Respawn packet keeping all data, then a teleport to the
 //! exit once the destination has loaded around them.
 
+use super::end::GatewayJob;
 use super::nether_portal::{PLAYER_DELAY, Plan};
 use super::{Dim, Game, lan::LanHost};
 use horizon_client::lan::hub::TickCtx;
@@ -22,6 +23,9 @@ pub(super) struct Trip {
     end: bool,
     /// The Nether portal plan, whose exit is found or built on arrival.
     plan: Option<Plan>,
+    /// Through an End gateway, within the level: its exit, found or built
+    /// on arrival.
+    gateway: Option<GatewayJob>,
     /// Sent by a command: the player is already where it goes.
     placed: bool,
 }
@@ -95,7 +99,7 @@ impl Game<'_> {
         if let Some(pos) = self.nether_portal_inside(at) {
             self.portals.player.set_inside(pos, PLAYER_DELAY);
         }
-        let (end_portal, _) = self.inside_end_portals(at, WIDTH, HEIGHT);
+        let (end_portal, gateway) = self.inside_end_portals(at, WIDTH, HEIGHT);
         if end_portal {
             if self.portals.player.cooldown == 0 {
                 let target = if self.dim == Dim::End {
@@ -106,6 +110,19 @@ impl Game<'_> {
                 self.start_server_trip(host, conn, target, None);
             }
             // Entity.setAsInsidePortal while cooling down restarts the cooldown.
+            self.portals.player.cooldown = 10;
+            return;
+        }
+        // EndGatewayBlock.entityInside: a gateway that is not cooling down
+        // takes the player at once (no transition time) and cools down
+        // (triggerCooldown), even for a player still on its own cooldown.
+        if let Some(g) = gateway
+            && self.gateway_enter(g)
+        {
+            if self.portals.player.cooldown == 0 {
+                self.start_gateway_trip(host, conn, g);
+            }
+            // setPortalCooldown: after the trip, or again while cooling down.
             self.portals.player.cooldown = 10;
             return;
         }
@@ -197,11 +214,38 @@ impl Game<'_> {
             target: destination,
             end,
             plan,
+            gateway: None,
             placed: false,
         });
         if let Err(e) = self.enter_level(Some(host), source) {
             log::error!("could not reopen {}: {e}", source.id());
         }
+    }
+
+    /// `TheEndGatewayBlockEntity.getPortalPosition` and the teleport within
+    /// the End (keeping the player's motion and look): straight to an exact
+    /// exit, else once the destination has loaded around the player, who
+    /// waits there (its exit is found among those blocks, or built).
+    fn start_gateway_trip(&mut self, host: &mut LanHost, conn: u32, gateway: [i32; 3]) {
+        let Some(i) = host.hub.guests.iter().position(|g| g.conn == conn) else {
+            return;
+        };
+        let (job, destination) = self.gateway_job(gateway);
+        let at = [destination.x, destination.y, destination.z];
+        // Relative.union(DELTA, ROTATION).
+        host.hub.teleport_keeping_motion(i, at);
+        if let GatewayJob::Known { exact: true, .. } = job {
+            return;
+        }
+        self.server_trips.push(Trip {
+            conn,
+            dim: self.dim,
+            target: destination,
+            end: false,
+            plan: None,
+            gateway: Some(job),
+            placed: false,
+        });
     }
 
     /// The trips into the level in place whose destination has loaded
@@ -232,7 +276,15 @@ impl Game<'_> {
             }
             self.resolve_arrivals();
             let yaw = host.hub.guests[i].yaw;
-            let (position, yaw) = if trip.end {
+            let (position, yaw) = if let Some(job) = trip.gateway {
+                match self.resolve_gateway(job, trip.target) {
+                    Ok(at) => (at, yaw),
+                    Err(e) => {
+                        log::error!("End gateway exit: {e}");
+                        (trip.target, yaw)
+                    }
+                }
+            } else if trip.end {
                 match self.end_arrival(trip.target) {
                     Ok((at, turned)) => (at, turned.unwrap_or(yaw)),
                     Err(e) => {
@@ -293,6 +345,7 @@ impl Game<'_> {
                 target: Vec3::new(t.at[0], t.at[1], t.at[2]),
                 end: false,
                 plan: None,
+                gateway: None,
                 placed: true,
             });
             if let Err(e) = self.enter_level(Some(host), source) {
