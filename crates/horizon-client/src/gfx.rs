@@ -316,7 +316,8 @@ pub struct Renderer {
     flat: Option<flat::Flat>,
     /// `flat` draws this frame's sections (off: the per-section draws).
     flat_on: bool,
-    /// Occlusion culling of solid section draws, where multi-draw is native.
+    /// Occlusion culling of solid section draws, where the GPU's instance
+    /// counts reach a multi-draw's entries (Vulkan, Metal).
     cull: Option<cull::Cull>,
     cull_on: bool,
     sky: wgpu::RenderPipeline,
@@ -1408,7 +1409,6 @@ impl Renderer {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let depth = Self::depth(&device, &config);
         let (atlas_pixels, atlas_width, atlas_height) = hud_atlas;
         let atlas = device.create_texture_with_data(
             &queue,
@@ -2112,14 +2112,22 @@ impl Renderer {
             .features()
             .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE);
         // HORIZON_GPU_CULL=0 turns occlusion culling off, `all` culls every
-        // frame however little it hides (A/B checks).
+        // frame however little it hides, `shader` tests in the shader as on
+        // Metal (A/B checks).
         let cull_env = std::env::var("HORIZON_GPU_CULL");
-        let cull = (cull_env.as_deref() != Ok("0") && cull::Cull::supported(&adapter, &device))
-            .then(|| {
-                let mut cull = cull::Cull::new(&device, config.format.remove_srgb_suffix());
+        let cull = cull::Cull::supported(&adapter, &device)
+            .filter(|_| cull_env.as_deref() != Ok("0"))
+            .map(|depth_test| match cull_env.as_deref() {
+                Ok("shader") => cull::DepthTest::InShader,
+                _ => depth_test,
+            })
+            .map(|depth_test| {
+                let mut cull =
+                    cull::Cull::new(&device, config.format.remove_srgb_suffix(), depth_test);
                 cull.always = cull_env.as_deref() == Ok("all");
                 cull
             });
+        let depth = Self::depth(&device, &config, cull.as_ref());
         let world_post = world_post::Post::new(&device, config.format.remove_srgb_suffix());
         let uploads = upload::Uploads::new(&device);
         let section_uploads = upload::Uploads::with_chunk(&device, SECTION_UPLOAD_CHUNK);
@@ -2327,7 +2335,13 @@ impl Renderer {
         self.surface = Some(surface);
         Ok(())
     }
-    fn depth(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> wgpu::TextureView {
+    /// The world's depth, which occlusion culling's test may read.
+    fn depth(
+        device: &wgpu::Device,
+        config: &wgpu::SurfaceConfiguration,
+        cull: Option<&cull::Cull>,
+    ) -> wgpu::TextureView {
+        let read = cull.is_some_and(|c| c.depth_test() == cull::DepthTest::InShader);
         device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("Horizon depth"),
@@ -2340,7 +2354,11 @@ impl Renderer {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Depth32Float,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                usage: if read {
+                    wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
+                } else {
+                    wgpu::TextureUsages::RENDER_ATTACHMENT
+                },
                 view_formats: &[],
             })
             .create_view(&Default::default())
@@ -2391,7 +2409,7 @@ impl Renderer {
         } else {
             self.offscreen = Some(Self::offscreen_target(&self.device, &self.config));
         }
-        self.depth = Self::depth(&self.device, &self.config);
+        self.depth = Self::depth(&self.device, &self.config, self.cull.as_ref());
     }
     /// Whether sections are drawn as one index list per frame (`flat`).
     pub fn flat_draws(&self) -> bool {
@@ -3096,16 +3114,18 @@ impl Renderer {
             .inverse()
             .transform_point3(Vec3::ZERO);
         // Occlusion culling leaves the sections its last result did not see
-        // to phase 2, after the others, with instance counts of 0.
+        // to phase 2, after the others, with instance counts of 0. Frames
+        // drawn flat are not culled (phase 2's counts reach only per-section
+        // draws): those with as many draws as the last frame drew flat.
+        let flat_likely = self.flat_on
+            && self
+                .flat
+                .as_ref()
+                .is_some_and(|f| self.section_draws >= f.min_draws);
         let mut cull = self
             .cull
             .as_mut()
-            .filter(|_| {
-                self.cull_on
-                    && !frame.title
-                    && self.multi_draw
-                    && !(self.flat_on && self.flat.is_some())
-            })
+            .filter(|_| self.cull_on && !frame.title && self.multi_draw && !flat_likely)
             .and_then(|cull| cull.begin(&self.device).then_some(cull));
         self.phase2_draws.clear();
         self.phase2_pages.clear();
@@ -3493,7 +3513,10 @@ impl Renderer {
         );
         let flat_frame = match &mut self.flat {
             Some(flat)
-                if self.flat_on && !self.draws.is_empty() && self.draws.len() >= flat.min_draws =>
+                if self.flat_on
+                    && !culling
+                    && !self.draws.is_empty()
+                    && self.draws.len() >= flat.min_draws =>
             {
                 let sections = &self.sections;
                 let lods = &self.lods;
@@ -3567,6 +3590,9 @@ impl Renderer {
             Some((color, depth)) => (color, depth),
             None => (&view_target, &self.depth),
         };
+        if culling && let Some(cull) = &mut self.cull {
+            cull.bind_depth(&self.device, world_depth);
+        }
         let cull = self.cull.as_ref().filter(|_| culling && solid_draws > 0);
         {
             let attachments = [Some(wgpu::RenderPassColorAttachment {
@@ -3659,12 +3685,14 @@ impl Renderer {
                     pass.set_vertex_buffer(1, self.instances.slice(..));
                     match cull {
                         Some(cull) => {
-                            // Phase 1 and the boxes against its depth, then
+                            // Phase 1 and the boxes against its depth (in
+                            // its pass, or one of their own on Metal), then
                             // what they found in sight, in a pass that loads
                             // both targets (it reads the test's results).
                             self.draw_sections(&mut pass, &self.indirect, 0, 0, phase1_draws);
                             cull.test(&mut pass);
                             drop(pass);
+                            cull.test_pass(&mut encoder);
                             let attachments = [Some(wgpu::RenderPassColorAttachment {
                                 view: world_view,
                                 resolve_target: None,
