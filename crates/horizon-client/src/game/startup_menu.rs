@@ -387,6 +387,9 @@ impl Loading {
                         self.menu.win = Some((screen, Instant::now()));
                     }
                 }
+                Event::ReloadShaderPack => {
+                    self.save_menu_settings();
+                }
                 // The startup menu runs before the game opens a control socket.
                 Event::ButtonClick | Event::CopyAgentDetails => {}
             }
@@ -451,6 +454,17 @@ impl Loading {
                     r.resize(size.width, size.height);
                 }
                 self.apply_menu_settings();
+            }
+            WindowEvent::DroppedFile(path) => {
+                match self
+                    .menu
+                    .options
+                    .drop_shader_pack(&mut self.settings, &path)
+                {
+                    Some(Ok(())) => self.save_menu_settings(),
+                    Some(Err(e)) => log::warn!("Horizon: shader pack {}: {e}", path.display()),
+                    None => {}
+                }
             }
             WindowEvent::RedrawRequested => self.draw(),
             WindowEvent::ModifiersChanged(modifiers) => self.menu.modifiers = modifiers.state(),

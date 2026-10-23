@@ -10737,6 +10737,9 @@ impl ApplicationHandler for Game<'_> {
                 WindowEvent::CloseRequested => {
                     self.pending_save.as_mut().unwrap().quit = true;
                 }
+                WindowEvent::DroppedFile(path) => {
+                    self.drop_shader_pack(&path);
+                }
                 WindowEvent::Focused(focused) => {
                     self.focused = focused;
                     if !focused {
