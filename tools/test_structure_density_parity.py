@@ -60,7 +60,7 @@ def main():
     lock,jars,libraries=base.verify_artifacts()
     oracle=lab.ROOT/"mods/horizon/src/test/java/dev/horizonlab/parity/VanillaStructureDensityOracle.java"
     sources=[oracle,Path(__file__),lab.ROOT/"tools/test_rust_parity.py",lab.ROOT/"tools/lab.py",lab.ROOT/"Cargo.toml",lab.ROOT/"Cargo.lock",lab.ROOT/"crates/horizon-core/Cargo.toml",lab.ROOT/"crates/horizon-world/Cargo.toml",
-             *sorted((lab.ROOT/"crates/horizon-core/src").rglob("*.rs")),*sorted((lab.ROOT/"crates/horizon-world/src").rglob("*.rs")),lab.ROOT/"crates/horizon-world/examples/structure_density_fixture.rs"]
+             *sorted((lab.ROOT/"crates/horizon-core/src").rglob("*.rs")),*sorted((lab.ROOT/"crates/horizon-world/src").rglob("*.rs")),lab.ROOT/"crates/horizon-world/examples/probe/structure_density_fixture.rs"]
     tested_sources=base.source_hashes(sources)
     fixtures=list(corpus());inputs=build/"inputs.txt";inputs.write_text("".join(json.dumps(f,separators=(",",":"))+"\n" for f in fixtures),encoding="utf-8")
     tested_fixtures=base.source_hashes([inputs]);classes=build/"classes";classes.mkdir(exist_ok=True)
@@ -68,10 +68,10 @@ def main():
         with (build/(name+".log")).open("w",encoding="utf-8") as log:base.run(list(map(str,command)),stdout=log,stderr=subprocess.STDOUT)
     dependency_path=os.pathsep.join(map(str,libraries))
     run(["javac","--release",lock["minecraft"]["java_major"],"-proc:none","-cp",str(jars["server"])+os.pathsep+dependency_path,"-d",classes,oracle],"compile-java")
-    run(["cargo","build","--release","-p","horizon-world","--example","structure_density_fixture"],"compile-rust")
+    run(["cargo","build","--release","-p","horizon-world","--example","probe"],"compile-rust")
     metadata=json.loads(subprocess.check_output(["cargo","metadata","--no-deps","--format-version","1"],cwd=lab.ROOT,text=True))
-    binary=Path(metadata["target_directory"])/"release/examples"/("structure_density_fixture.exe" if os.name=="nt" else "structure_density_fixture")
-    run([binary,inputs,build/"rust.txt"],"rust")
+    binary=Path(metadata["target_directory"])/"release/examples"/("probe.exe" if os.name=="nt" else "probe")
+    run([binary,"structure_density_fixture",inputs,build/"rust.txt"],"rust")
     references=[]
     for side,jar in jars.items():
         reference=build/f"{side}.txt"
