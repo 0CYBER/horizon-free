@@ -405,6 +405,7 @@ impl Game<'_> {
             Screen::WorldOptions => "world-options",
             Screen::Friends => "friends",
             Screen::CommandBlock => "command-block",
+            Screen::Win => "win",
         }
     }
     pub(super) fn inventory_counts(&self) -> BTreeMap<String, i64> {

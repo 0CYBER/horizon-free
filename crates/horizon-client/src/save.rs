@@ -2276,6 +2276,8 @@ pub struct Level {
     pub inventory_components: HashMap<u8, Box<crate::item_data::StackData>>,
     /// Player.XpSeed: the enchanting table seed.
     pub xp_seed: i32,
+    /// ServerPlayer.seenCredits: the end poem has been shown.
+    pub seen_credits: bool,
     /// Player.active_effects: (id, duration, amplifier, ambient, show_icon).
     pub active_effects: Vec<(String, i32, i32, bool, bool)>,
     /// Player.EnderItems: the ender chest inventory (27 slots).
@@ -2468,6 +2470,7 @@ impl Level {
         self.selected_slot = n("SelectedItemSlot").unwrap_or(0) as i32;
         self.fall_distance = f("fall_distance").unwrap_or(0.0);
         self.on_ground = n("OnGround").unwrap_or(0) != 0;
+        self.seen_credits = n("seenCredits").unwrap_or(0) != 0;
         if let Some(mode) = n("playerGameType") {
             self.creative = mode == 1;
             self.game_mode = mode as i32;
@@ -2690,6 +2693,7 @@ impl Level {
         if let Some(pos) = self.position {
             entries.push(("Pos", doubles(&pos)));
         }
+        entries.push(("seenCredits", Tag::Byte(i8::from(self.seen_credits))));
         // A respawn point other than the world spawn: an anchor elsewhere, or a bed.
         if let Some((dimension, block, yaw, forced)) = &self.respawn_elsewhere {
             let mut respawn = vec![
