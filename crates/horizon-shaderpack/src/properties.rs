@@ -358,8 +358,21 @@ impl Default for SkyDirectives {
     }
 }
 
+/// A custom texture bound by `texture.<stage>.<sampler> = <path>` in
+/// `shaders.properties`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CustomTexture {
+    /// Stage family (`composite`, `deferred`, `gbuffers`, `prepare`, `begin`),
+    /// or `None` when bound across all stages.
+    pub stage: Option<String>,
+    /// Sampler uniform name (`noisetex`, `colortex4`, `customTex`, ...).
+    pub sampler: String,
+    /// Path relative to `shaders/` (`textures/noise.png`).
+    pub path: String,
+}
+
 /// A pack's `shaders.properties`.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct ShaderProperties {
     /// As written: screens, sliders, profiles, feature flags.
     pub original: Properties,
@@ -535,6 +548,31 @@ impl ShaderProperties {
             .collect()
     }
 
+    /// `texture.<stage>.<sampler> = <path>` and `texture.<sampler> = <path>`:
+    /// custom textures defined in `shaders.properties`.
+    pub fn custom_textures(&self) -> Vec<CustomTexture> {
+        let mut out = Vec::new();
+        for (k, v) in self.preprocessed.iter() {
+            let Some(rest) = k.strip_prefix("texture.") else {
+                continue;
+            };
+            let path = v.split_whitespace().next().unwrap_or("").trim();
+            if path.is_empty() {
+                continue;
+            }
+            let (stage, sampler) = match rest.split_once('.') {
+                Some((stage, sampler)) => (Some(stage.to_owned()), sampler.to_owned()),
+                None => (None, rest.to_owned()),
+            };
+            out.push(CustomTexture {
+                stage,
+                sampler,
+                path: path.to_owned(),
+            });
+        }
+        out
+    }
+
     /// `uniform.*` and `variable.*`: the pack's custom uniforms.
     pub fn custom_uniforms(&self) -> crate::uniforms::CustomUniforms {
         crate::uniforms::CustomUniforms::parse(self.preprocessed.iter())
@@ -564,23 +602,37 @@ impl ShaderProperties {
     pub fn blend(&self, program: &str) -> Option<Result<Blend, String>> {
         self.preprocessed
             .get(&format!("blend.{program}"))
+            .or_else(|| {
+                let short = program.rsplit('/').next()?;
+                self.preprocessed.get(&format!("blend.{short}"))
+            })
             .map(parse_blend)
     }
 
     /// `blend.<program>.<buffer>`: per colour target overrides, by target index.
     pub fn buffer_blends(&self, program: &str) -> Vec<(u32, Result<Blend, String>)> {
-        let prefix = format!("blend.{program}.");
-        self.preprocessed
-            .iter()
-            .filter_map(|(k, v)| {
-                let buffer = k.strip_prefix(&prefix)?;
-                let index = match LEGACY_TARGETS.iter().position(|t| *t == buffer) {
-                    Some(i) => i as u32,
-                    None => buffer.strip_prefix("colortex")?.parse().ok()?,
-                };
-                Some((index, parse_blend(v)))
-            })
-            .collect()
+        let short = program.rsplit('/').next().unwrap_or(program);
+        let prefixes = [format!("blend.{program}."), format!("blend.{short}.")];
+        let mut out = Vec::new();
+        for (k, v) in self.preprocessed.iter() {
+            let Some(buffer) = prefixes.iter().find_map(|p| k.strip_prefix(p.as_str())) else {
+                continue;
+            };
+            let Some(index) = LEGACY_TARGETS
+                .iter()
+                .position(|t| *t == buffer)
+                .map(|i| i as u32)
+                .or_else(|| buffer.strip_prefix("colortex")?.parse().ok())
+            else {
+                continue;
+            };
+            if let Some(existing) = out.iter_mut().find(|(i, _)| *i == index) {
+                existing.1 = parse_blend(v);
+            } else {
+                out.push((index, parse_blend(v)));
+            }
+        }
+        out
     }
 }
 
@@ -796,6 +848,7 @@ blend.gbuffers_water.gaux2 = off
 blend.gbuffers_water.colortex9 = ONE ONE ONE ONE
 size.buffer.colortex4 = 0.50 QUALITY
 image.lightimg0 = lighttex0 rgba RGBA16F half_float false false 128 64 128
+texture.composite.colortex4 = textures/noise.png
 # a comment, not a directive
 iris.features.optional = CUSTOM_IMAGES SSBO
 ";
@@ -822,6 +875,14 @@ iris.features.optional = CUSTOM_IMAGES SSBO
         assert_eq!(
             p.image_formats(),
             [("lightimg0".to_owned(), "rgba16f".to_owned())].into()
+        );
+        assert_eq!(
+            p.custom_textures(),
+            [CustomTexture {
+                stage: Some("composite".into()),
+                sampler: "colortex4".into(),
+                path: "textures/noise.png".into(),
+            }]
         );
         assert_eq!(p.features(), (vec![], vec!["CUSTOM_IMAGES", "SSBO"]));
         // The preprocessed read: #if picked, values expanded, spelling kept.

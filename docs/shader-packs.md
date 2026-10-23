@@ -13,16 +13,16 @@ Both are off by default. With no pack selected the renderer draws exactly what i
 | Part | State |
 | --- | --- |
 | Renderer layout (below) | today's code |
-| Horizon shader packs: `composite` stage, uniforms, hot reload, Shader Packs page | done (the page: list, pick, open the folder) |
-| Horizon shader packs: `deferred`, `gbuffer`, `shadow` stages, custom textures | planned |
-| Java shader packs: preprocessing + GLSL parse coverage | spike done: 450 of 470 programs reach valid WGSL (below) |
-| Java shader packs: preprocessor (`crates/horizon-shaderpack`: includes, options, Iris's macros, JCPP's `#if` and `#define` rules) | done: every program of the three test packs preprocesses; ten packs tested (Compatibility, below) |
-| Java shader packs: GLSL → WGSL (`horizon_shaderpack::translate`: syntax-tree legaliser, naga) | done: the 464 programs the three test packs enable by default translate (below) |
-| Java shader packs: `shaders.properties` (`horizon_shaderpack::properties`: screens, sliders, profiles, `program.*.enabled`, image formats, blend modes) | done, no screen yet: read like Iris for the three test packs |
-| Java shader packs: full-screen pass plan (`horizon_shaderpack::pipeline`: `DRAWBUFFERS`/`RENDERTARGETS`, `colortexN` formats and clearing, buffer flips) | done: planned for the three test packs |
-| Java shader packs: full-screen passes drawn (`java_pack.rs`, `gfx/java_stages.rs`: `begin`, `prepare`, `deferred*`, `composite*`, `final` over Horizon's world) | first slice: BSL and Complementary run (below) |
-| Java shader packs: custom uniforms (`horizon_shaderpack::uniforms`), `sunPathRotation`, `clouds`/`sun`/`moon`, eye light | done for the full-screen passes (below) |
-| Java shader packs: `gbuffers_*`, `shadow`, custom textures, images, compute, option screen | planned |
+| Horizon shader packs: `composite`, `deferred`, `gbuffer`, `shadow`, `final` stages (API 2), uniforms, custom textures, hot reload | done (`examples/shaderpacks/horizon-ultra` + `horizon-sample`) |
+| Shader Packs UI: import (`.zip`/folder dialog + drag-and-drop), profiles, sub-screens, sliders, toggles, reset to defaults | done (Horizon & Classic Video/Graphics settings) |
+| Real-time shadow map pass (`"Horizon shadow"`, `shadowtex0/1`, `shadowModelView`, `shadowProjection`) & pre-translucent depth (`depthtex1/2`) | done |
+| G-buffer normal & material pass (`"Horizon gbuffer"`, `scene_normal`, `scene_material`, `colortex1..3` initialization) | done |
+| Java shader packs: preprocessor (`crates/horizon-shaderpack`: includes, options, Iris's macros, JCPP's `#if` and `#define` rules, `.lang` files) | done: ten packs tested (Compatibility, below) |
+| Java shader packs: GLSL → WGSL (`horizon_shaderpack::translate`: syntax-tree legaliser, naga, 2D array & struct varyings, vertex `textureLod`, `mat2(vec4)`, `1 << 31` shifts) | done |
+| Java shader packs: `shaders.properties` (`horizon_shaderpack::properties`: screens, sliders, profiles, `program.*.enabled`, image formats, blend modes, custom textures) | done, wired to UI and GPU passes |
+| Java shader packs: full-screen pass plan (`horizon_shaderpack::pipeline`: `DRAWBUFFERS`/`RENDERTARGETS`, `colortexN` formats and clearing, buffer flips, blend state) | done |
+| Java shader packs: full-screen passes drawn (`java_pack.rs`, `gfx/java_stages.rs`: `begin`, `prepare`, `deferred*`, `composite*`, `final` over Horizon's world) | done: with shadow maps, `depthtex1/2`, custom PNG textures, GL blend modes, `wetness`, `centerDepthSmooth` |
+| Java shader packs: custom uniforms (`horizon_shaderpack::uniforms`), `sunPathRotation`, `clouds`/`sun`/`moon`, eye light | done |
 
 ## How the renderer draws a frame today
 

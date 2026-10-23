@@ -1,9 +1,9 @@
 //! Java (OptiFine/Iris) shader packs in `shaderpacks/` (docs/shader-packs.md):
 //! a folder holding `shaders/`, or a `.zip`. `horizon-shaderpack` translates
 //! their full-screen programs (`begin`, `prepare`, `deferred`, `composite`,
-//! `final`) to WGSL, and `gfx/java_stages.rs` runs them over Horizon's world
-//! as Iris runs them over its own. Geometry programs (`gbuffers_*`,
-//! `shadow`) don't run yet: the world is drawn by Horizon.
+//! `final`) to WGSL, and `gfx/java_stages.rs` runs them over Horizon's world,
+//! G-buffers, pre-translucent depth (`depthtex1`) and directional shadow map
+//! (`shadowtex0`/`shadowtex1`) as Iris runs them over its own.
 use horizon_shaderpack::{
     JavaPack,
     pipeline::{Directives, Program, TargetSettings},
@@ -30,8 +30,10 @@ pub struct JavaFolder {
     pub final_pass: Option<Program>,
     /// The targets whose alternate side holds the frame's last write.
     pub flipped_at_end: BTreeSet<u32>,
-    /// `sunPathRotation` and `eyeBrightnessHalflife`.
+    /// `sunPathRotation`, `eyeBrightnessHalflife`, shadow and wetness directives.
     pub directives: Directives,
+    /// Whether this dimension's passes read directional shadow maps.
+    pub shadow_enabled: bool,
 }
 
 /// A loaded Java pack.
@@ -41,6 +43,8 @@ pub struct JavaPasses {
     pub uniforms: CustomUniforms,
     /// What the pack keeps of the vanilla sky (`clouds`, `sun`, `moon`).
     pub sky: SkyDirectives,
+    /// Decoded RGBA8 custom textures (`sampler_name` → `(width, height, rgba)`).
+    pub custom_textures: BTreeMap<String, (u32, u32, Vec<u8>)>,
 }
 
 impl JavaPasses {
@@ -131,10 +135,24 @@ pub fn load(
             final_pass,
             flipped_at_end: plan.flipped_at_end,
             directives: plan.directives,
+            shadow_enabled: plan.shadow_enabled,
         });
     }
     if folders.is_empty() {
         return Err("no deferred, composite or final programs".into());
+    }
+    let mut custom_textures = BTreeMap::new();
+    for tex in properties.custom_textures() {
+        if let Some(bytes) = pack.files.read_bytes(&tex.path) {
+            match crate::shader_pack::decode_png_rgba(&bytes) {
+                Ok(decoded) => {
+                    custom_textures.insert(tex.sampler, decoded);
+                }
+                Err(e) => {
+                    log::warn!("Horizon: shader pack texture {}: {e}", tex.path);
+                }
+            }
+        }
     }
     let uniforms = properties.custom_uniforms();
     for problem in &uniforms.problems {
@@ -144,6 +162,7 @@ pub fn load(
         folders,
         uniforms,
         sky: properties.sky(),
+        custom_textures,
     })
 }
 

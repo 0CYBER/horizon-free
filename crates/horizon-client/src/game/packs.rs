@@ -34,6 +34,60 @@ pub fn open_folder(dir: &Path) {
         log::warn!("Horizon: could not open {}: {e}", dir.display());
     }
 }
+/// Open a native file dialog to pick a shader pack `.zip` or folder, falling
+/// back to opening `dir` in the system file manager when no dialog helper is present.
+pub fn pick_shader_pack(dir: &Path) -> Option<PathBuf> {
+    let _ = std::fs::create_dir_all(dir);
+    let output = if cfg!(target_os = "windows") {
+        std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Filter = 'Shader Packs (*.zip;pack.toml)|*.zip;pack.toml|All Files (*.*)|*.*'; if ($f.ShowDialog() -eq 'OK') { Write-Output $f.FileName }",
+            ])
+            .output()
+            .ok()
+    } else if cfg!(target_os = "macos") {
+        std::process::Command::new("osascript")
+            .args([
+                "-e",
+                "POSIX path of (choose file with prompt \"Select Shader Pack (.zip)\")",
+            ])
+            .output()
+            .ok()
+    } else {
+        std::process::Command::new("zenity")
+            .args([
+                "--file-selection",
+                "--title=Import Shader Pack (.zip)",
+                "--file-filter=Shader Packs (*.zip) | *.zip",
+            ])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .or_else(|| {
+                std::process::Command::new("kdialog")
+                    .args(["--getopenfilename", ".", "*.zip|Shader Packs (*.zip)"])
+                    .output()
+                    .ok()
+            })
+    };
+    if let Some(out) = output
+        && out.status.success()
+    {
+        let raw = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+        if !raw.is_empty() {
+            let p = PathBuf::from(raw);
+            if p.file_name().is_some_and(|n| n == "pack.toml") {
+                return p.parent().map(Path::to_path_buf);
+            }
+            return Some(p);
+        }
+        return None;
+    }
+    open_folder(dir);
+    None
+}
 /// The resource root to load from, given the vanilla root and the selection.
 pub fn startup_root(vanilla: &Path, selected: &[String]) -> std::io::Result<PathBuf> {
     let all = packs::discover(vanilla, &packs_dir());

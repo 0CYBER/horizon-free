@@ -387,6 +387,22 @@ impl Loading {
                         self.menu.win = Some((screen, Instant::now()));
                     }
                 }
+                Event::ImportShaderPack => {
+                    let dir = horizon_client::shader_pack::folder();
+                    if let Some(chosen) = packs::pick_shader_pack(&dir)
+                        && let Ok(id) = horizon_client::shader_pack::import_pack(&chosen, &dir)
+                    {
+                        self.menu.options.shader_packs = Default::default();
+                        self.menu.options.shader_packs.poll(dir);
+                        self.settings.horizon.shader_pack = id;
+                        self.menu.options.shader_pack_config = None;
+                        self.menu.options.sync_shader_pack_config(&self.settings);
+                        self.save_menu_settings();
+                    }
+                }
+                Event::ReloadShaderPack => {
+                    self.save_menu_settings();
+                }
                 // The startup menu runs before the game opens a control socket.
                 Event::ButtonClick | Event::CopyAgentDetails => {}
             }
@@ -451,6 +467,17 @@ impl Loading {
                     r.resize(size.width, size.height);
                 }
                 self.apply_menu_settings();
+            }
+            WindowEvent::DroppedFile(path) => {
+                let dir = horizon_client::shader_pack::folder();
+                if let Ok(id) = horizon_client::shader_pack::import_pack(&path, &dir) {
+                    self.menu.options.shader_packs = Default::default();
+                    self.menu.options.shader_packs.poll(dir);
+                    self.settings.horizon.shader_pack = id;
+                    self.menu.options.shader_pack_config = None;
+                    self.menu.options.sync_shader_pack_config(&self.settings);
+                    self.save_menu_settings();
+                }
             }
             WindowEvent::RedrawRequested => self.draw(),
             WindowEvent::ModifiersChanged(modifiers) => self.menu.modifiers = modifiers.state(),
