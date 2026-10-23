@@ -4176,6 +4176,20 @@ impl Frustum {
             p.truncate().dot(v) + p.w < 0.0
         })
     }
+    /// Whether the camera-relative box `min..max` is entirely inside. Then
+    /// `intersects` accepts every box within it: each plane's distance only
+    /// grows from this box's nearest corner to the inner box's farthest, and
+    /// rounding keeps that order.
+    pub fn contains(&self, min: Vec3, max: Vec3) -> bool {
+        self.planes.iter().all(|p| {
+            let v = Vec3::new(
+                if p.x >= 0.0 { min.x } else { max.x },
+                if p.y >= 0.0 { min.y } else { max.y },
+                if p.z >= 0.0 { min.z } else { max.z },
+            );
+            p.truncate().dot(v) + p.w >= 0.0
+        })
+    }
 }
 /// Vanilla's `Projection`: reversed depth (near maps to 1, far to 0, tests
 /// are GREATER_THAN_OR_EQUAL), which keeps far faces a hair apart, like
