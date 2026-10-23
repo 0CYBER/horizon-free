@@ -202,10 +202,10 @@ impl Game<'_> {
                 self.mobs[index].extra.leash = Some(Holder::Player);
                 self.lead_sound("tied", at);
                 // The lead is always used up.
-                if let Some(stack) = self.inventory[self.selected].as_mut() {
+                if let Some(stack) = self.held_mut().as_mut() {
                     stack.count -= 1;
                     if stack.count == 0 {
-                        self.inventory[self.selected] = None;
+                        *self.held_mut() = None;
                     }
                 }
                 return true;
