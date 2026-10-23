@@ -199,8 +199,11 @@ pub fn preprocess(
         let (start, end) = (token.location.start, token.location.end);
         let at = line_of(start);
         if at > line {
+            // Lines the preprocessor left empty stay empty lines, so a value
+            // continued with `\` before an `#else` (Photon's
+            // `moon_phase_brightness`) ends there, as in Iris.
             if line > 0 {
-                out.push('\n');
+                out.extend(std::iter::repeat_n('\n', at - line));
             }
             line = at;
         } else if last_end != Some(start) {
@@ -799,7 +802,26 @@ b = 1
         };
         let values = OptionValues::default();
         let out = preprocess(text, &env, &set, &values).unwrap();
-        assert_eq!(out, "a = 0.75\nb = 1\n");
+        let lines: Vec<&str> = out.lines().filter(|l| !l.is_empty()).collect();
+        assert_eq!(lines, ["a = 0.75", "b = 1"]);
+        // Photon ends an `#if`'d value with `) \` before `#else`: the value
+        // stops at the empty line the directive leaves.
+        let text = "\
+#if FOG == 0
+a = if( \\
+  moonPhase == 0, 1.0, \\
+  2.0 \\
+) \\
+#else
+a = 1.0
+#endif
+
+b = 2
+";
+        let out = preprocess(text, &env, &set, &values).unwrap();
+        let parsed = Properties::parse(&out);
+        assert_eq!(parsed.get("a"), Some("if( moonPhase == 0, 1.0, 2.0 ) "));
+        assert_eq!(parsed.get("b"), Some("2"));
         assert_eq!(
             jcpp_condition("#elif FOG == 0.75 && X > 2.5", &set, &values),
             "#elif 0 == 0 && X > 2"
