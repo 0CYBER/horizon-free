@@ -138,6 +138,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
              get off by sneaking; the other side sees the animal move.
 - lightning: a bolt summoned beside the host, then the guest: both sides get the bolt and flash the
              sky (on its server thread the host's window is a client of it too).
+- contacts:  the host and the guest each stand on magma (and sneak on it), stand on a lit campfire,
+             walk against a cactus and through grown sweet berry bushes: the server hurts them, but
+             not the sneaking player or young bushes (#1305, #1311, #1312, #1313).
 - absorption: the host and the guest each take Absorption II and a hit of 3: their own HUD has the
              server's golden hearts, 8 then 5 (#1306).
 - breath:    the host and the guest each stay underwater for 15 s in a Respiration III helmet: their
@@ -185,7 +188,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning', 'riding', 'mounts', 'absorption', 'breath', 'lava', 'levels']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning', 'riding', 'mounts', 'contacts', 'absorption', 'breath', 'lava', 'levels']
 
 
 class Game:
@@ -2602,6 +2605,64 @@ def own(game):
     return game('state')['player']
 
 
+def check_contacts(host, guest, out):
+    """Blocks that hurt what touches them, on the server: standing on magma (but not sneaking on it)
+    and on a lit campfire, walking against a cactus and through grown sweet berry bushes, for the
+    host and the guest (#1305, #1311, #1312, #1313); a young bush pricks no one."""
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    host('command', command='gamerule natural_health_regeneration false')
+    seen = {}
+    try:
+        for game, dz in ((host, -4), (guest, 4)):
+            x, y, z = hx + 2, hy, hz + dz
+            game('command', command='gamemode survival')
+            game('command', command='effect clear @s')
+            for case, blocks, walk in (
+                    ('magma', [(0, -1, 'minecraft:magma_block')], False),
+                    ('sneaking', [(0, -1, 'minecraft:magma_block')], False),
+                    ('campfire', [(0, 0, 'minecraft:campfire[lit=true]')], False),
+                    ('cactus', [(2, -1, 'minecraft:sand'), (2, 0, 'minecraft:cactus')], True),
+                    ('berries', [(k, -1, 'minecraft:grass_block') for k in range(1, 4)]
+                     + [(k, 0, 'minecraft:sweet_berry_bush[age=3]') for k in range(1, 4)], True),
+                    ('young', [(k, -1, 'minecraft:grass_block') for k in range(1, 4)]
+                     + [(k, 0, 'minecraft:sweet_berry_bush[age=0]') for k in range(1, 4)], True)):
+                game('command', command='effect give @s minecraft:instant_health 1 5 true')
+                game('command', command=f'fill {x - 1} {y - 2} {z - 1} {x + 4} {y - 1} {z + 1} minecraft:stone')
+                game('command', command=f'fill {x - 1} {y} {z - 1} {x + 4} {y + 2} {z + 1} minecraft:air')
+                # A wall ends the walk before the player leaves the floor.
+                game('command', command=f'fill {x + 5} {y - 1} {z - 1} {x + 5} {y + 2} {z + 1} minecraft:stone')
+                for dx, dy, block in blocks:
+                    game('command', command=f'setblock {x + dx} {y + dy} {z} {block}')
+                stand = 0.5 if case == 'campfire' else 0.0
+                # Sneaking from before the player lands on the magma.
+                held = ['shift'] if case == 'sneaking' else []
+                for k in held:
+                    game.raw('key', k, 'down')
+                game.wait(5)
+                game('command', command=f'tp @s {x + 0.5} {y + stand} {z + 0.5}')
+                game.raw('look-at', f'{x + 10:.2f}', f'{y + 1.6:.2f}', f'{z + 0.5:.2f}')
+                game.wait(30)
+                before = own(game)['health']
+                keys = ['w'] if walk else []
+                for k in keys:
+                    game.raw('key', k, 'down')
+                game.wait(60)
+                # Read before letting go: standing up on the magma would hurt.
+                after = own(game)['health']
+                for k in keys + held:
+                    game.raw('key', k, 'up')
+                game.wait(10)
+                seen[f'{game.name}-{case}'] = (before, after)
+                game.shot(out, f'contacts-{case}')
+            host('command', command=f'fill {x - 1} {y} {z - 1} {x + 5} {y + 2} {z + 1} minecraft:air')
+    finally:
+        host('command', command='gamerule natural_health_regeneration true')
+    for case, (before, after) in seen.items():
+        safe = case.endswith(('sneaking', 'young'))
+        assert (after == before) if safe else (after < before), f'{case}: {before} -> {after} (all: {seen})'
+    return seen
+
+
 def server_player(host, game):
     """The player's entry on the server: the guest's in the host's `lan status`, on the server
     thread the host's too; the host's own world otherwise."""
@@ -3487,8 +3548,8 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'light': check_light, 'plates': check_plates,
              'swings': check_swings, 'cracks': check_cracks,
              'time': check_time, 'growth': check_growth, 'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect, 'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'arrows': check_arrows, 'predict': check_predict, 'ladder': check_ladder, 'boats': check_boats, 'minecarts': check_minecarts, 'frames': check_frames, 'lightning': check_lightning, 'riding': check_riding, 'mounts': check_mounts,
-             'absorption': check_absorption, 'breath': check_breath, 'lava': check_lava,
-             'levels': check_levels}
+             'contacts': check_contacts, 'absorption': check_absorption, 'breath': check_breath,
+             'lava': check_lava, 'levels': check_levels}
 
 
 def run(ctl, out, resources, checks):
