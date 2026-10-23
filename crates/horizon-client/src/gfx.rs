@@ -69,6 +69,7 @@ pub mod lightning;
 mod lod;
 mod occlusion;
 mod pack_stages;
+mod page_runs;
 pub mod panorama;
 mod resident;
 mod stars;
@@ -437,6 +438,9 @@ pub struct Renderer {
     /// built, and their pages.
     phase2_draws: Vec<[u32; 5]>,
     phase2_pages: Vec<(u32, Option<u32>)>,
+    /// Each section's solid draws, to group them by arena page.
+    solid_runs: page_runs::PageRuns,
+    phase2_runs: page_runs::PageRuns,
     /// Block-entity blocks per meshed section (world position, state id).
     block_entities: HashMap<SectionKey, Vec<([i32; 3], u32)>>,
     /// Changes whenever `block_entities` does (unique across renderers).
@@ -2215,6 +2219,8 @@ impl Renderer {
             draw_pages: Vec::new(),
             phase2_draws: Vec::new(),
             phase2_pages: Vec::new(),
+            solid_runs: page_runs::PageRuns::default(),
+            phase2_runs: page_runs::PageRuns::default(),
             block_entities: HashMap::new(),
             block_entity_revision: next_block_entity_revision(),
             occlusion: occlusion::Occlusion::new(crate::chunk::MIN_Y, crate::chunk::HEIGHT / 16),
@@ -3093,6 +3099,8 @@ impl Renderer {
             .and_then(|cull| cull.begin(&self.device).then_some(cull));
         self.phase2_draws.clear();
         self.phase2_pages.clear();
+        self.solid_runs.clear();
+        self.phase2_runs.clear();
         for (i, v) in visible.iter().enumerate() {
             let s = self.sections.get(v.slot);
             let first_phase = cull.as_ref().is_none_or(|c| c.first(v.slot));
@@ -3111,22 +3119,53 @@ impl Renderer {
                 pages.push((s.page, None));
                 indices += quads * 6;
             });
-            match &mut cull {
-                Some(c) if first_phase => c.drawn(i, v.slot, indices),
-                Some(c) => c.deferred(i, v.slot, start, draws.len() - start, indices),
-                None => {}
+            let runs = if first_phase {
+                &mut self.solid_runs
+            } else {
+                &mut self.phase2_runs
+            };
+            runs.push(
+                v.distance,
+                s.page,
+                start,
+                draws.len() - start,
+                [i as u32, v.slot, indices],
+            );
+            if let Some(c) = &mut cull
+                && first_phase
+            {
+                c.drawn(i, v.slot, indices);
+            }
+        }
+        self.solid_runs
+            .regroup(&mut self.draws, &mut self.draw_pages, 0);
+        // Phase 2's draws are tested where grouping left them.
+        let runs = self
+            .phase2_runs
+            .regroup(&mut self.phase2_draws, &mut self.phase2_pages, 0);
+        if let Some(c) = &mut cull {
+            for r in runs {
+                let [i, slot, indices] = r.tag;
+                c.deferred(i as usize, slot, r.start as usize, r.len as usize, indices);
             }
         }
         // Distant terrain tiles are never occlusion tested: phase 1.
+        let tiles = self.draws.len();
+        self.solid_runs.clear();
         for (i, v) in visible_lods.iter().enumerate() {
             let s = &self.lods[&v.key].mesh;
+            let start = self.draws.len();
             s.faces.ranges(eye - Vec3::from(v.origin), |first, quads| {
                 let first = s.start + u64::from(first) * 4;
                 self.draws
                     .push([quads * 6, 1, 0, first as u32, (visible.len() + i) as u32]);
                 self.draw_pages.push((s.page, None));
             });
+            self.solid_runs
+                .push(v.distance, s.page, start, self.draws.len() - start, [0; 3]);
         }
+        self.solid_runs
+            .regroup(&mut self.draws, &mut self.draw_pages, tiles);
         let phase1_draws = self.draws.len() as u32;
         self.draws.extend_from_slice(&self.phase2_draws);
         self.draw_pages.extend_from_slice(&self.phase2_pages);
