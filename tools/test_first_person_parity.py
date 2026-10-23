@@ -18,14 +18,6 @@ except ImportError:
     import lab, oracle_harness as harness
 
 
-def fbits(v):
-    return struct.pack('>f', v).hex()
-
-
-def dbits(v):
-    return struct.pack('>d', v).hex()
-
-
 def f32(v):
     return struct.unpack('>f', struct.pack('>f', v))[0]
 
@@ -52,15 +44,15 @@ def step(hit=('miss',), ac=0, uc=0, ad=False, ud=False, busy=False, using=False,
     """rot: the player's (xRot, yRot) from this step on (LocalPlayer.applyInput's hand sway)."""
     return dict(hit=list(hit), ac=ac, uc=uc, ad=ad, ud=ud, busy=busy, using=using,
                 uses=uses or dict(entity='pass', block='pass', item='pass'), shrink=shrink, set=set,
-                rot=None if rot is None else [fbits(rot[0]), fbits(rot[1])])
+                rot=None if rot is None else [lab.fbits(rot[0]), lab.fbits(rot[1])])
 
 
 def case(steps, creative=False, main=None, off=None, blocks=None, haste=None, fatigue=None):
     return dict(creative=creative, main=main, off=off, haste=haste, fatigue=fatigue,
                 blocks=[[*p, b] for p, b in (blocks or {}).items()], steps=steps,
-                rust=dict(blocks={k: [fbits(v[0]), v[1]] for k, v in BLOCKS.items()},
-                          tools={k: [fbits(v[0]), v[1]] for k, v in TOOLS.items()},
-                          attack_speed={k: dbits(v) for k, v in SPEEDS.items()}))
+                rust=dict(blocks={k: [lab.fbits(v[0]), v[1]] for k, v in BLOCKS.items()},
+                          tools={k: [lab.fbits(v[0]), v[1]] for k, v in TOOLS.items()},
+                          attack_speed={k: lab.dbits(v) for k, v in SPEEDS.items()}))
 
 
 def block_hit(pos, face=1):

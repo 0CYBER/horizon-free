@@ -363,6 +363,11 @@ impl Guest {
     pub fn send(&self, packet: &play::Clientbound) {
         self.sender.send(packet.encode());
     }
+    pub fn send_all(&self, packets: &[play::Clientbound]) {
+        for p in packets {
+            self.send(p);
+        }
+    }
     pub fn chunk(&self) -> (i32, i32) {
         (
             (self.position[0].floor() as i32) >> 4,

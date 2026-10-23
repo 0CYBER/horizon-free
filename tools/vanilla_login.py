@@ -11,12 +11,10 @@ its log reports the position it read, and console commands such as
 `data get entity NAME` can inspect the loaded player meanwhile.
 """
 import argparse
-import hashlib
 import socket
 import struct
 import sys
 import time
-import uuid
 import zlib
 
 try:
@@ -25,27 +23,9 @@ except ImportError:
     import lab
 
 
-def offline_uuid(name):
-    digest = bytearray(hashlib.md5(('OfflinePlayer:' + name).encode()).digest())
-    digest[6] = (digest[6] & 0x0F) | 0x30
-    digest[8] = (digest[8] & 0x3F) | 0x80
-    return uuid.UUID(bytes=bytes(digest))
-
-
-def varint(v):
-    out = b''
-    v &= 0xFFFFFFFF
-    while True:
-        b = v & 0x7F
-        v >>= 7
-        out += bytes([b | (0x80 if v else 0)])
-        if not v:
-            return out
-
-
 def string(s):
     data = s.encode()
-    return varint(len(data)) + data
+    return lab.varint(len(data)) + data
 
 
 class Connection:
@@ -73,44 +53,33 @@ class Connection:
                 return value
 
     def send(self, packet_id, payload=b''):
-        body = varint(packet_id) + payload
+        body = lab.varint(packet_id) + payload
         if self.threshold >= 0:
             if len(body) >= self.threshold:
-                body = varint(len(body)) + zlib.compress(body)
+                body = lab.varint(len(body)) + zlib.compress(body)
             else:
-                body = varint(0) + body
-        self.sock.sendall(varint(len(body)) + body)
+                body = lab.varint(0) + body
+        self.sock.sendall(lab.varint(len(body)) + body)
 
     def receive(self):
         length = self.read_varint()
         body = self.read_exact(length)
         if self.threshold >= 0:
-            pos, size = parse_varint(body, 0)
+            pos, size = lab.parse_varint(body, 0)
             body = zlib.decompress(body[pos:]) if size else body[pos:]
-        pos, packet_id = parse_varint(body, 0)
+        pos, packet_id = lab.parse_varint(body, 0)
         return packet_id, body[pos:]
-
-
-def parse_varint(data, pos):
-    value = shift = 0
-    while True:
-        b = data[pos]
-        pos += 1
-        value |= (b & 0x7F) << shift
-        shift += 7
-        if not b & 0x80:
-            return pos, value
 
 
 def join(host, port, name, seconds):
     c = Connection(host, port)
-    c.send(0, varint(lab.version_info()['protocol_version']) + string(host) + struct.pack('>H', port) + varint(2))
-    c.send(0, string(name) + offline_uuid(name).bytes)
+    c.send(0, lab.varint(lab.version_info()['protocol_version']) + string(host) + struct.pack('>H', port) + lab.varint(2))
+    c.send(0, string(name) + lab.offline_uuid(name).bytes)
     # Login: compression, then login finished.
     while True:
         pid, data = c.receive()
         if pid == 3:
-            c.threshold = parse_varint(data, 0)[1]
+            c.threshold = lab.parse_varint(data, 0)[1]
         elif pid == 2:
             break
         elif pid == 0:
@@ -119,7 +88,7 @@ def join(host, port, name, seconds):
     while True:
         pid, data = c.receive()
         if pid == 15:  # select known packs: claim none, receive full registries
-            c.send(7, varint(0))
+            c.send(7, lab.varint(0))
         elif pid == 4:  # keep alive
             c.send(4, data)
         elif pid == 5:  # ping
@@ -153,7 +122,7 @@ def main():
     p.add_argument('--uuid', action='store_true')
     args = p.parse_args()
     if args.uuid:
-        print(offline_uuid(args.name))
+        print(lab.offline_uuid(args.name))
         return 0
     join(args.host, args.port, args.name, args.seconds)
     return 0
