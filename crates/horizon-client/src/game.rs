@@ -1021,9 +1021,11 @@ pub struct UiResources {
     pub panorama: Arc<horizon_client::gfx::panorama::Faces>,
 }
 impl UiResources {
-    pub fn load(root: &std::path::Path) -> Result<Self> {
+    /// From a resource root layering packs over `defaults`, the game's own
+    /// resources (`root` itself when no pack is on).
+    pub fn load(root: &std::path::Path, defaults: &std::path::Path) -> Result<Self> {
         Ok(Self {
-            atlas: HudAtlas::build(root)?,
+            atlas: HudAtlas::build_over(root, defaults)?,
             panorama: Arc::new(horizon_client::gfx::panorama::Faces::load(root)),
         })
     }
@@ -12109,7 +12111,7 @@ fn load_resources(
     let mut loaded_gui = None;
     let mut ui_ready = false;
     let mut pack_error = None;
-    let ui = match UiResources::load(&root) {
+    let ui = match UiResources::load(&root, vanilla_root) {
         Ok(ui) => Some(ui),
         // Minecraft.rollbackResourcePacks: the packs' textures don't fit, start
         // with the game's own resources.
@@ -12161,7 +12163,7 @@ fn load_resources(
     let render = Arc::new(render);
     // The menu bundle must come from the same root as the world bundle.
     if !ui_ready || root != requested_root {
-        let ui = UiResources::load(&root)?;
+        let ui = UiResources::load(&root, vanilla_root)?;
         if menu {
             horizon_client::telemetry::mark_ui_ready();
             log::info!(
