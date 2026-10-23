@@ -783,24 +783,6 @@ impl HudBatch {
         };
         self.text_styled(atlas, &t, x, y, color, shadow)
     }
-    /// `text_styled` under a pose: GUI positions scaled by `scale`, then
-    /// moved to `origin` (Matrix3x2fStack translate + scale).
-    pub fn text_posed(
-        &mut self,
-        atlas: &HudAtlas,
-        text: &crate::text::Text,
-        at: [f32; 2],
-        color: u32,
-        scale: f32,
-        origin: [f32; 2],
-    ) -> f32 {
-        let start = self.vertices.len();
-        let advance = self.text_styled(atlas, text, at[0], at[1], color, true);
-        for v in &mut self.vertices[start..] {
-            v.pos = [origin[0] + v.pos[0] * scale, origin[1] + v.pos[1] * scale];
-        }
-        advance
-    }
     /// Font.drawInternal: styled glyphs, shadows first, with bold, italic,
     /// underline and strikethrough. `color` is the default colour and alpha.
     pub fn text_styled(

@@ -272,13 +272,6 @@ impl FluidStateTable {
     pub fn get(&self, state: BlockStateId) -> Option<FluidState> {
         self.0.get(state.0 as usize).copied()
     }
-    pub fn matching_states(&self, mask: u8) -> impl Iterator<Item = BlockStateId> + '_ {
-        self.0
-            .iter()
-            .enumerate()
-            .filter(move |(_, state)| state.kind.mask() & mask != 0)
-            .map(|(i, _)| BlockStateId(i as u32))
-    }
 }
 
 /// Bound identities for converting fluid states into their legacy liquid blocks.

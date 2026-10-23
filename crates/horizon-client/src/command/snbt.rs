@@ -1,8 +1,6 @@
 //! SnbtGrammar and TagParser: vanilla's packrat SNBT grammar, with its
 //! error messages and completion suggestions, producing NBT tags.
-use super::packrat::{
-    Grammar, Reason, Rule, State, Sugg, Term, Value, alt, ch, chs, look, opt, seq,
-};
+use super::packrat::{Grammar, Reason, State, Sugg, Term, Value, alt, ch, chs, look, opt, seq};
 use super::{CmdResult, CommandError, Reader, SuggestionsBuilder};
 use horizon_world::nbt::{Compound, JavaString, Tag};
 use std::rc::Rc;
@@ -981,5 +979,3 @@ pub fn rule_in<V: super::packrat::Value>(
         }
     }
 }
-#[allow(unused)]
-fn _rule_kind(_: Rule<SV>) {}

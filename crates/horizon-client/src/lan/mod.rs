@@ -272,9 +272,6 @@ impl Shared {
     pub fn max_players(&self) -> usize {
         self.max_players.load(Ordering::Relaxed)
     }
-    pub fn set_max_players(&self, n: usize) {
-        self.max_players.store(n, Ordering::Relaxed);
-    }
     pub fn release(&self, uuid: u128) {
         self.online.lock().unwrap().retain(|(u, _)| *u != uuid);
     }
@@ -512,9 +509,6 @@ impl Lan {
     /// Reserve a uuid for the host so a guest cannot take the name.
     pub fn reserve(&self, uuid: u128) {
         self.shared.reserved.lock().unwrap().insert(uuid);
-    }
-    pub fn set_motd(&self, motd: &str) {
-        *self.shared.motd.lock().unwrap() = motd.to_owned();
     }
     pub fn stop(&mut self) {
         self.shared.stop.store(true, Ordering::Relaxed);

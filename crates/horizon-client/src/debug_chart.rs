@@ -17,8 +17,6 @@ use std::{
 pub const CAPACITY: usize = 240;
 /// `AbstractDebugChart.CHART_HEIGHT`.
 pub const CHART_HEIGHT: i32 = 60;
-/// `TpsDebugDimensions`: a tick sample's values.
-pub const FULL_TICK: usize = 0;
 pub const TICK_SERVER_METHOD: usize = 1;
 pub const SCHEDULED_TASKS: usize = 2;
 pub const IDLE: usize = 3;
@@ -251,10 +249,6 @@ impl Chart {
     /// `AbstractDebugChart.getWidth`.
     pub fn width(max_width: i32) -> i32 {
         (CAPACITY as i32 + 2).min(max_width)
-    }
-    /// `getFullHeight`: the box and the min/avg/max line above it.
-    pub fn full_height() -> i32 {
-        CHART_HEIGHT + 9
     }
     /// `AbstractDebugChart.extractRenderState`.
     pub fn draw(

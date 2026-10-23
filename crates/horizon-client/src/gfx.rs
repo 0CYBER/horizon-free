@@ -2307,10 +2307,6 @@ impl Renderer {
             view_formats: &config.view_formats,
         })
     }
-    /// Rendering to a texture instead of the window (`--offscreen`).
-    pub fn is_offscreen(&self) -> bool {
-        self.surface.is_none()
-    }
     /// Release the window surface before another renderer uses the same window.
     pub fn release_surface(&mut self) {
         self.surface = None;

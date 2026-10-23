@@ -632,10 +632,6 @@ pub fn parse_predicate(reader: &mut Reader, reg: &Registries) -> CmdResult<ItemI
 pub fn suggest_predicate(builder: &mut SuggestionsBuilder, reg: &Registries) {
     PREDICATE.with(|g| g.parse_for_suggestions_with(builder, Some(reg)));
 }
-#[allow(unused)]
-fn _unused(t: &Tag) -> String {
-    snbt(t)
-}
 
 #[cfg(test)]
 mod tests {

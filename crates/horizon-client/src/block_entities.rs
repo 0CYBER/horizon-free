@@ -144,9 +144,6 @@ impl BlockEntities {
     pub fn set_states(&mut self, states: Vec<Ticking>) {
         self.states = states;
     }
-    pub fn take_states(&mut self) -> Vec<Ticking> {
-        std::mem::take(&mut self.states)
-    }
     pub fn ticking(&self, state: u32) -> Ticking {
         self.states.get(state as usize).copied().unwrap_or_default()
     }

@@ -769,19 +769,6 @@ pub fn weighted_pick(list: &[SpawnEntry], random: &mut impl RandomSource) -> Opt
     None
 }
 
-/// `NaturalSpawner.getRandomSpawnMobAt`.
-pub fn random_spawn_mob_at(
-    list: &[SpawnEntry],
-    category: &str,
-    reduced_water_ambient: bool,
-    random: &mut impl RandomSource,
-) -> Option<SpawnEntry> {
-    if category == "water_ambient" && reduced_water_ambient && random.next_float() < 0.98 {
-        return None;
-    }
-    weighted_pick(list, random)
-}
-
 /// `SpawnerData.count().sample(random)`: a constant draws nothing.
 pub fn sample_count(entry: &SpawnEntry, random: &mut impl RandomSource) -> u32 {
     if entry.constant {

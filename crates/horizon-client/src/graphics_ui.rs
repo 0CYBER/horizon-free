@@ -485,14 +485,6 @@ impl Item {
             _ => return None,
         })
     }
-    /// Caption and value text, split from the label ("Caption: Value").
-    pub fn caption_value(self, s: &Settings) -> (String, String) {
-        let label = self.label(s).plain();
-        match label.split_once(": ") {
-            Some((c, v)) => (c.to_owned(), v.to_owned()),
-            None => (label, String::new()),
-        }
-    }
     pub fn slider(self, s: &Settings) -> Option<f32> {
         match self {
             Item::Vanilla(o) => o.slider_position(s),

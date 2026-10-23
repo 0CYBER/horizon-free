@@ -582,26 +582,4 @@ impl Mob {
             NavKind::Amphibious => !w.facts.is_air(w.world.block(p[0], p[1] - 1, p[2])),
         }
     }
-    pub fn should_recompute_path(&self, p: [i32; 3]) -> bool {
-        if self.ai.nav.delayed_recompute {
-            return false;
-        }
-        let Some(path) = &self.ai.nav.path else {
-            return false;
-        };
-        if path.is_done() || path.nodes.is_empty() {
-            return false;
-        }
-        let Some(end) = path.end() else { return false };
-        let mid = [
-            (f64::from(end.x) + self.position.x) / 2.0,
-            (f64::from(end.y) + self.position.y) / 2.0,
-            (f64::from(end.z) + self.position.z) / 2.0,
-        ];
-        let d = (f64::from(p[0]) + 0.5 - mid[0]).powi(2)
-            + (f64::from(p[1]) + 0.5 - mid[1]).powi(2)
-            + (f64::from(p[2]) + 0.5 - mid[2]).powi(2);
-        let r = (path.nodes.len() - path.next) as f64;
-        d < r * r
-    }
 }

@@ -11,10 +11,6 @@ pub const PROTOCOL_VERSION: i32 = 777;
 pub const DATA_VERSION: i32 = 5023;
 /// `WorldVersion.packVersion(PackType.CLIENT_RESOURCES)`: (major, minor).
 pub const RESOURCE_PACK_FORMAT: (i64, i64) = (97, 1);
-/// `WorldVersion.packVersion(PackType.SERVER_DATA)`: (major, minor).
-pub const DATA_PACK_FORMAT: (i64, i64) = (121, 0);
-/// The Java major version the game runs on.
-pub const JAVA_VERSION: u32 = 25;
 /// `WorldVersion.stable()`: false for snapshots and pre-releases.
 pub const STABLE: bool = true;
 /// `WorldVersion.buildTime()` as `Date.toString()` prints it in UTC (`/version`).
