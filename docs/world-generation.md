@@ -195,7 +195,7 @@ above remains a record of its narrower tested source snapshot.
 
 `tools/test_chunk_generation_parity.py` generates chunks in actual vanilla classes (`VanillaChunkGenerationOracle`: structure starts and
 references, biomes, noise, surface, carvers, then biome decoration and structure pieces through real `WorldGenRegion`s) and with
-`crates/horizon-world/examples/chunk_dump.rs`, and compares every block state, quart biome and block entity (canonical NBT) of each target
+`crates/horizon-world/examples/probe/chunk_dump.rs`, and compares every block state, quart biome and block entity (canonical NBT) of each target
 chunk, and the scheduled block and fluid ticks each proto chunk carries into the live world. Cases are terrain sites for several seeds
 across the overworld, Nether and End, plus rectangles around every structure kind found by scanning the seed. `--phase structures`
 isolates terrain plus structure pieces, `--phase terrain` stops before features. `HORIZON_ORDER` (a file of `x z` lines) makes both sides

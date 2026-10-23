@@ -73,6 +73,7 @@ mod lan_crafting;
 mod lan_entities;
 mod lan_mobs;
 mod lan_mount_menu;
+mod lan_particles;
 mod lan_pvp;
 mod lan_screen;
 mod lan_stations;
@@ -3978,7 +3979,7 @@ impl Game<'_> {
         if self.use_delay > 0 {
             self.use_delay -= 1;
         }
-        self.apply_totem();
+        self.tick_totem();
         self.update_totem_ready();
         self.tick_command_extras();
         self.tick_mods();
@@ -4257,7 +4258,7 @@ impl Game<'_> {
             }
         }
         self.powder_snow_fire()?;
-        self.apply_totem();
+        self.tick_totem();
         let Some(player) = self.player.as_mut() else {
             return Ok(());
         };

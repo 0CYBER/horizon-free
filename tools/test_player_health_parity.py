@@ -47,7 +47,7 @@ def main():
     lock,jars,libraries=base.verify_artifacts()
     oracle=lab.ROOT/'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaPlayerHealthOracle.java'
     helper=lab.ROOT/'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaEntityAttributeOracle.java'
-    sources=[oracle,helper,Path(__file__),lab.ROOT/'tools/test_rust_parity.py',lab.ROOT/'tools/lab.py',lab.ROOT/'Cargo.toml',lab.ROOT/'Cargo.lock',lab.ROOT/'crates/horizon-core/Cargo.toml',lab.ROOT/'crates/horizon-world/Cargo.toml',*sorted((lab.ROOT/'crates/horizon-core/src').rglob('*.rs')),*sorted((lab.ROOT/'crates/horizon-world/src').rglob('*.rs')),lab.ROOT/'crates/horizon-world/examples/player_health_fixture.rs']
+    sources=[oracle,helper,Path(__file__),lab.ROOT/'tools/test_rust_parity.py',lab.ROOT/'tools/lab.py',lab.ROOT/'Cargo.toml',lab.ROOT/'Cargo.lock',lab.ROOT/'crates/horizon-core/Cargo.toml',lab.ROOT/'crates/horizon-world/Cargo.toml',*sorted((lab.ROOT/'crates/horizon-core/src').rglob('*.rs')),*sorted((lab.ROOT/'crates/horizon-world/src').rglob('*.rs')),lab.ROOT/'crates/horizon-world/examples/probe/player_health_fixture.rs']
     tested_sources=base.source_hashes(sources)
     classes=build/'classes';classes.mkdir(exist_ok=True)
     def run(command,name):
@@ -58,10 +58,10 @@ def main():
         run(['java','-Xmx512M','-cp',os.pathsep.join([str(classes),str(jars[side]),dependency_path]),'dev.horizonlab.parity.VanillaPlayerHealthOracle',mode,path],side+'-'+mode)
     java('server','export',build);states=json.loads((build/'catalog.json').read_text());fixtures=list(corpus(states));inputs=build/'inputs.txt';inputs.write_text(''.join(json.dumps(value,separators=(',',':'))+'\n' for value in fixtures),encoding='utf-8')
     fixture_paths=[inputs,build/'catalog.json',build/'ids.json'];tested_fixtures=base.source_hashes(fixture_paths)
-    run(['cargo','build','--release','-p','horizon-world','--example','player_health_fixture'],'compile-rust')
+    run(['cargo','build','--release','-p','horizon-world','--example','probe'],'compile-rust')
     metadata=json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version','1'],cwd=lab.ROOT,text=True))
-    binary=Path(metadata['target_directory'])/'release/examples'/('player_health_fixture.exe' if os.name=='nt' else 'player_health_fixture')
-    run([binary,build],'rust');references=[]
+    binary=Path(metadata['target_directory'])/'release/examples'/('probe.exe' if os.name=='nt' else 'probe')
+    run([binary,'player_health_fixture',build],'rust');references=[]
     for side,jar in jars.items():
         java(side,side,build);reference=build/f'{side}.txt';matched=base.compare(reference,build/'rust.txt')
         references.append({'side':side,'jar_sha256':lab.digest(jar,'sha256'),'output_sha256':lab.digest(reference,'sha256'),'matched_output_lines':matched})

@@ -80,6 +80,10 @@ impl PartialEq for WorldBorder {
     }
 }
 impl WorldBorder {
+    /// Its extent, for collisions.
+    pub fn geometry(&self) -> &BorderGeometry {
+        &self.geometry
+    }
     pub fn center(&self) -> [f64; 2] {
         self.geometry.center()
     }

@@ -10,7 +10,7 @@ against the real menu for every display of the recipe and prints the GhostSlots
 it fills: the menu slot, whether it is the result and the stacks the slot
 cycles through (PlaceRecipeHelper's centred placement of shaped recipes, the
 first slots for shapeless ones, every fuel for an empty fuel slot);
-examples/ghost_recipe_fixture prints the same from
+examples/probe/ghost_recipe_fixture prints the same from
 horizon_client::recipe_book::Book::ghost, which the game fills its ghost
 slots from. The lines must agree.
 """

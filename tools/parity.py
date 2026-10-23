@@ -464,6 +464,42 @@ def narrow_rust_sources(sources, scope):
     return sorted(kept), None
 
 
+PROBE_SOURCE = re.compile(r"/examples/probe/(?:(support)/)?(\w+)\.rs$")
+
+
+def probes_run(commands):
+    """The probes a harness ran through a crate's probe binary: `probe <name> ...`, or
+    `cargo run --example probe -- <name> ...`."""
+    names = set()
+    for arguments in commands:
+        program = Path(arguments[0]).name if arguments else ""
+        if program in ("probe", "probe.exe") and len(arguments) > 1:
+            names.add(arguments[1])
+        elif program == "cargo" and "--" in arguments and "probe" in arguments[:arguments.index("--")] \
+                and len(arguments) > arguments.index("--") + 1:
+            names.add(arguments[arguments.index("--") + 1])
+    return names
+
+
+def only_probes_run(paths, names):
+    """A probe binary's dep-info lists every probe in it. Keep those the harness ran, the probes they include! or
+    name (crate::<probe>) and the shared support modules they name (support::<module>), so that editing one probe
+    reruns only its own harnesses. Files in a probe's own subdirectory and dispatch.rs, which runs them, are always
+    kept; main.rs, which only lists them, is left out, so adding a probe reruns nothing."""
+    if not names:
+        return paths
+    names, used = {*names, "dispatch"}, ""
+    while True:
+        ran = [path for path in paths if (match := PROBE_SOURCE.search(path)) and not match.group(1) and match.group(2) in names]
+        used = "".join((ROOT / path).read_text(encoding="utf-8", errors="replace") for path in ran)
+        included = {*re.findall(r'include!\("(\w+)\.rs"\)', used), *re.findall(r"\bcrate::(\w+)", used)} - names
+        if not included:
+            break
+        names |= included
+    return [path for path in paths if not (match := PROBE_SOURCE.search(path))
+            or (f"support::{match.group(2)}" in used if match.group(1) else match.group(2) in names)]
+
+
 def dependencies(trace, scope=None):
     """Repository files a traced harness depended on, relative to ROOT, and the probes it built.
 
@@ -495,7 +531,8 @@ def dependencies(trace, scope=None):
     for artifact in artifacts:
         if artifact not in unique:
             unique.append(artifact)
-    kept, note = narrow_rust_sources(sorted(kept), scope) if scope else (sorted(kept), None)
+    kept = only_probes_run(sorted(kept), probes_run(trace["commands"]))
+    kept, note = narrow_rust_sources(kept, scope) if scope else (kept, None)
     if note:
         print(f"note: PARITY_RUST_SCOPE not applied: {note}", flush=True)
     return kept, unique

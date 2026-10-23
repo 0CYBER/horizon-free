@@ -1471,7 +1471,7 @@ the `hp` text when they no longer fit; and the header and footer wrapped by
 the list in single player unless a `list` objective is set.
 `tools/test_tab_list_parity.py` runs vanilla's own `extractRenderState` frame
 after frame (`VanillaTabListOracle`: stand-in connection, level and options,
-real `Scoreboard`) against `examples/tab_list_fixture` and compares every fill,
+real `Scoreboard`) against `examples/probe/tab_list_fixture.rs` and compares every fill,
 styled text run, sprite and face blit (as `hud_layout::GuiDraw` calls, painted
 like the rest of the HUD): **1,000 cases, 3,476 frames and 844,758
 calls match**. The game draws the same layout while the player-list key is
@@ -1492,7 +1492,7 @@ nearest first. `WorldBorder::warning_strength` feeds `hud_overlays::vignette`
 the border's warning strength at the camera. `tools/test_world_border_render_parity.py` drives vanilla's border,
 renderer and vignette (`VanillaWorldBorderRenderOracle`, with a stand-in GPU
 device, dynamic-uniform writer and render pass) against
-`examples/world_border_render_fixture`: **1,500 cases and 16,859 frames match
+`examples/probe/world_border_render_fixture.rs`: **1,500 cases and 16,859 frames match
 bit for bit** (8,513 with the wall drawn). The game draws the wall with
 `RenderPipelines.WORLD_BORDER`'s overlay blend and the mipmapped forcefield
 texture, and follows the server's border packets. One border is kept for all

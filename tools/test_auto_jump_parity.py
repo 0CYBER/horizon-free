@@ -115,7 +115,7 @@ def main():
     sources = [Path(__file__).resolve(), lab.ROOT / 'tools/oracle_harness.py', lab.ROOT / 'tools/lab.py',
                parity / (oracle + '.java'), parity / 'VanillaSceneCollisionOracle.java',
                parity / 'VanillaRegistryCollisionScanOracle.java', lab.ROOT / 'Cargo.lock',
-               lab.ROOT / 'crates/horizon-client/examples/auto_jump_probe.rs',
+               lab.ROOT / 'crates/horizon-client/examples/probe/auto_jump_probe.rs',
                lab.ROOT / 'crates/horizon-client/src/auto_jump.rs', lab.ROOT / 'crates/horizon-client/src/motion.rs']
     tested = base.source_hashes(sources)
     fixtures = list(cases(random.Random(0x4155544f)))
@@ -123,8 +123,8 @@ def main():
     inputs.write_text(''.join(json.dumps(f, separators=(',', ':')) + '\n' for f in fixtures))
     input_hash = lab.digest(inputs, 'sha256')
     classes, dependencies, _ = harness.compile_oracle(build, oracle, jars, libraries, lock['minecraft']['java_major'])
-    binary = harness.build_probe(build, 'auto_jump_probe')
-    harness.run_logged([binary, resources, inputs, build / 'rust.txt', build / 'scene.json'], build, 'rust', timeout=3600)
+    command = harness.build_probe(build, 'auto_jump_probe')
+    harness.run_logged([*command, resources, inputs, build / 'rust.txt', build / 'scene.json'], build, 'rust', timeout=3600)
     harness.java_run(build, classes, dependencies, oracle, [inputs, build / 'client.txt', resources, build / 'scene.json'], 'client')
     matched = harness.compare(build / 'client.txt', build / 'rust.txt', 2 * len(fixtures))
     base.ensure_sources_unchanged(sources, tested)

@@ -101,7 +101,7 @@ fn place_interpolated(m: &mut Mob, at: PosRot) {
 pub(super) struct Remote {
     pub session: Session,
     pub brand: String,
-    builtin: Arc<Builtin>,
+    pub(super) builtin: Arc<Builtin>,
     lang: Arc<Language>,
     pub(super) registries: Arc<Dynamic>,
     joined: bool,
@@ -1733,6 +1733,8 @@ impl Game<'_> {
             // level plays them (particles and sounds: a spawner's burst, bone
             // meal, waxing, a block broken by someone else).
             C::LevelEvent(p) => self.level_event_at(p.kind, p.pos, p.data),
+            C::LevelParticles(p) => self.remote_level_particles(&p),
+            C::Explode(p) => self.remote_explode(&p),
             C::Sound(p) => {
                 let name = match &p.sound.1 {
                     Some((location, _)) => Some(location.clone()),
@@ -2115,6 +2117,9 @@ impl Game<'_> {
                     && let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
                 {
                     m.health = 0.0;
+                }
+                if p.event == super::totem::TOTEM_EVENT {
+                    self.remote_totem(p.id);
                 }
             }
             C::Animate(p) => self.remote_animate(p.id, p.action),
@@ -3043,6 +3048,7 @@ impl Game<'_> {
         self.remote_handle_input();
         // ClientLevel.tick: the border's size change.
         self.border.tick();
+        self.player_border();
         self.tick_remote_entities(running);
         // ClientLevel.tickBlockEntities: chest lids, shulker boxes, bells.
         self.tick_block_entity_anims();
