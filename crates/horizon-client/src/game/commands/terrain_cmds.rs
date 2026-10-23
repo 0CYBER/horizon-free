@@ -248,8 +248,32 @@ impl Game<'_> {
 
     /// Every tick: the size change, the wall the player cannot pass and
     /// damage outside the border.
+    /// `BorderChangeListener.DelegateBorderChangeListener`'s packets: what
+    /// changed on the border since the guests were last told of it.
+    pub(in crate::game) fn lan_sync_border(&mut self, host: &mut crate::game::lan::LanHost) {
+        let now = horizon_client::lan::border::Sent::of(&self.border);
+        if let Some(sent) = host.border_sent.replace(now) {
+            for packet in sent.changes(&self.border) {
+                host.hub.broadcast(&packet);
+            }
+        }
+    }
     pub(in crate::game) fn tick_worldborder(&mut self) {
         self.border.tick();
+        self.player_border();
+        self.border_damage();
+    }
+    /// The player's movement collides with the border as it is now
+    /// (`CollisionGetter.borderCollision`): from inside, its walls stop it.
+    pub(in crate::game) fn player_border(&mut self) {
+        if let Some(p) = self.player.as_mut() {
+            p.border = Some(self.border.geometry().clone());
+        }
+    }
+    /// `LivingEntity.baseTick`: a player outside the border, further than
+    /// its safe zone, is hurt by the blocks beyond it. The game's player, or
+    /// a guest's in their turn (`as_guest`).
+    pub(in crate::game) fn border_damage(&mut self) {
         let Some((px, pz, half)) = self.player.as_ref().map(|p| {
             (
                 p.position.x,
@@ -268,20 +292,6 @@ impl Game<'_> {
         if dist < 0.0 && self.border.damage_per_block > 0.0 && self.ticks.is_multiple_of(10) {
             let amount = (-dist * self.border.damage_per_block).floor().max(1.0) as f32;
             self.hurt_player_by("minecraft:outside_border", amount);
-        }
-        // From inside the border the wall stops movement.
-        if self.border.distance(px, pz) >= 0.0 {
-            let [x, z] = self.border.clamp(px, pz, half);
-            if let Some(p) = self.player.as_mut() {
-                if x != px {
-                    p.velocity.x = 0.0;
-                }
-                if z != pz {
-                    p.velocity.z = 0.0;
-                }
-                p.position.x = x;
-                p.position.z = z;
-            }
         }
     }
     pub(super) fn cmd_worldborder(&mut self, id: &str, ctx: &Context) -> R<i32> {

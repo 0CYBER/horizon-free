@@ -121,6 +121,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             tick_frozen: false,
             tick_steps: (0, 0),
             collision: None,
+            border: &horizon_client::worldborder::WorldBorder::default(),
         };
         for event in hub.tick(&mut ctx) {
             match event {

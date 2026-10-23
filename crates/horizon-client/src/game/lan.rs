@@ -66,6 +66,8 @@ pub(super) struct LanHost {
     /// whose respawn replaces their waypoint.
     pub waypoints: std::collections::HashMap<String, lan::waypoints::Waypoints>,
     pub waypoint_dead: std::collections::HashSet<u128>,
+    /// The world border as the guests were last told of it (lan/border.rs).
+    pub border_sent: Option<lan::border::Sent>,
     /// Guests' commands waiting for the hub to be back in `self.lan`, where
     /// a command can reach every player (game/lan_actions.rs).
     pub commands: Vec<super::lan_actions::GuestCommand>,
@@ -561,6 +563,7 @@ impl Game<'_> {
             owner: None,
             waypoints: Default::default(),
             waypoint_dead: Default::default(),
+            border_sent: None,
             commands: Vec::new(),
             states: Default::default(),
         });
@@ -891,6 +894,7 @@ impl Game<'_> {
                     tick_frozen: self.clock.frozen(),
                     tick_steps: self.clock.step_state(),
                     collision: Some(self.collision),
+                    border: &self.border,
                 };
                 host.hub.movement_checks = (
                     self.ui.rules.bool("player_movement_check"),
@@ -998,6 +1002,7 @@ impl Game<'_> {
         self.lan_update_models(&mut host);
         self.lan_update_waypoints(&mut host, state.as_ref());
         self.lan_sync_scoreboard(&mut host);
+        self.lan_sync_border(&mut host);
         drop(holding);
         lan::flush_all(host.hub.guests.iter().map(|g| &g.sender));
         self.lan = Some(host);
@@ -1074,6 +1079,7 @@ impl Game<'_> {
             tick_frozen: self.clock.frozen(),
             tick_steps: self.clock.step_state(),
             collision: Some(self.collision),
+            border: &self.border,
         };
         host.hub.place_new_player(conn, &mut ctx);
         if elsewhere && let Err(e) = self.enter_level(Some(host), back) {
