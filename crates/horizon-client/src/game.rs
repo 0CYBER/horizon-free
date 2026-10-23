@@ -162,6 +162,7 @@ mod ui_control;
 mod vault;
 mod villagers;
 mod wandering_trader;
+mod win;
 mod wind;
 mod wither;
 mod world_loading;
@@ -464,6 +465,8 @@ enum Screen {
     Friends,
     /// CommandBlockEditScreen (game/command_blocks.rs).
     CommandBlock,
+    /// WinScreen: the end poem and the credits (game/win.rs).
+    Win,
 }
 struct Mining {
     pos: [i32; 3],
@@ -1357,6 +1360,8 @@ struct Game<'a> {
     respawn_travel: Option<respawn_anchor::RespawnConfig>,
     /// The next enter_dimension call comes from an End portal.
     end_portal_travel: bool,
+    /// The open WinScreen (game/win.rs).
+    win: Option<win::Win>,
     end: end::EndState,
     block_ticks: Ticks,
     tick_chunks: horizon_client::tick_chunk_membership::TickChunkMembership,
@@ -3798,6 +3803,9 @@ impl Game<'_> {
             return Ok(());
         }
         if let Some((_, target)) = &self.travelling {
+            if self.win_screen_holds_arrival() {
+                return Ok(());
+            }
             let (cx, cz) = (
                 (target.x.floor() as i32) >> 4,
                 (target.z.floor() as i32) >> 4,
@@ -4485,7 +4493,8 @@ impl Game<'_> {
                     | Screen::WorldOptions
                     | Screen::Friends
                     | Screen::CommandBlock
-            ) || self.book.is_some())
+            ) || self.book.is_some()
+                || self.win_screen_pauses())
     }
     /// `MouseHandler.grabMouse` / `releaseMouse`. Both put the pointer at
     /// the window's centre, so a screen opened from gameplay (inventory,
@@ -4700,6 +4709,10 @@ impl Game<'_> {
     fn hud_layers(&mut self, size: [u32; 2]) -> HudBatch {
         let mut batch = HudBatch::new(size);
         let (w, h) = (batch.width, batch.height);
+        if self.screen == Screen::Win {
+            self.draw_win_screen(&mut batch);
+            return batch;
+        }
         if self.screen == Screen::Options {
             self.draw_options(&mut batch);
             return batch;
@@ -4934,7 +4947,7 @@ impl Game<'_> {
                 self.draw_creative(&mut batch);
             }
             Screen::Chat => self.draw_chat_screen(&mut batch),
-            Screen::Playing | Screen::Options => {}
+            Screen::Playing | Screen::Options | Screen::Win => {}
         }
         self.draw_toasts(&mut batch);
         self.remote_hud(&mut batch);
@@ -10098,12 +10111,13 @@ impl Game<'_> {
         let loading = self.loading_reason() == Some(horizon_client::level_loading::Reason::Other);
         let blurred = loading
             || self.title.as_ref().is_some_and(|t| {
-                self.screen == Screen::Options
+                matches!(self.screen, Screen::Options | Screen::Win)
                     || !matches!(t.mode, horizon_client::title::Mode::Main)
             })
             || (self.title.is_none()
                 && self.player.is_some()
-                && self.screen.blurs_background(self.pause_menu));
+                && (self.screen.blurs_background(self.pause_menu)
+                    || (self.screen == Screen::Win && self.win_screen_pauses())));
         let radius = self.settings.menu_blur as f32;
         (blurred && radius >= 1.0).then_some(radius)
     }
@@ -10187,6 +10201,7 @@ impl Game<'_> {
                 Screen::WorldOptions => self.world_options_escape(),
                 Screen::CommandBlock => self.close_command_block(),
                 Screen::Chat => self.close_chat(),
+                Screen::Win => self.close_win_screen()?,
             },
             KeyCode::Digit1
             | KeyCode::Digit2
@@ -10786,7 +10801,9 @@ impl ApplicationHandler for Game<'_> {
                         }) * wheel_sensitivity
                     };
                     let d = scaled(raw_y) as f32;
-                    if let Some(title) = &mut self.title {
+                    if let Some(title) = &mut self.title
+                        && self.screen != Screen::Win
+                    {
                         let size = self
                             .window
                             .as_ref()
@@ -10844,6 +10861,7 @@ impl ApplicationHandler for Game<'_> {
                         self.advancements_scroll(scaled(raw_x) as f32, d);
                     }
                 }
+                WindowEvent::MouseInput { .. } if self.screen == Screen::Win => {}
                 WindowEvent::MouseInput { state, button, .. } if self.screen == Screen::Options => {
                     if self.options_waiting_for_key() && state == ElementState::Pressed {
                         self.options_bind_mouse(button)?;
@@ -11100,6 +11118,9 @@ impl ApplicationHandler for Game<'_> {
                 {
                     self.world_options_key(&event)
                 }
+                WindowEvent::KeyboardInput { event, .. } if self.screen == Screen::Win => {
+                    self.win_key(&event)?
+                }
                 WindowEvent::KeyboardInput { event, .. } if self.screen == Screen::CommandBlock => {
                     self.command_block_key(&event)
                 }
@@ -11233,6 +11254,7 @@ impl ApplicationHandler for Game<'_> {
                             self.tick_ambience();
                             self.tick_fov();
                         }
+                        self.tick_win_screen()?;
                         self.tick_music();
                         self.tick_sound_engine();
                         self.clock.record(started.elapsed());
@@ -11660,6 +11682,7 @@ impl<'a> Game<'a> {
             respawn_config: None,
             respawn_travel: None,
             end_portal_travel: false,
+            win: None,
             end: Default::default(),
             block_ticks: Ticks::new(0),
             tick_chunks: Default::default(),

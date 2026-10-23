@@ -342,7 +342,10 @@ impl Game<'_> {
             f64::from(p.dimensions.width),
             f64::from(p.dimensions.height),
         );
-        if portal {
+        if portal && self.dim == Dim::End && !self.level.seen_credits {
+            // EndPortalBlock.entityInside: the first exit shows the credits.
+            self.show_end_credits()?;
+        } else if portal {
             if self.portals.player.cooldown == 0 {
                 let target = if self.dim == Dim::End {
                     Dim::Overworld
