@@ -979,6 +979,8 @@ impl Game<'_> {
         status["projectiles"] = json!(self.projectiles_status());
         // The particles made so far, by type.
         status["particles"] = json!(self.particles.made());
+        // The world border this side knows of.
+        status["border"] = json!({ "center": self.border.center(), "size": self.border.size() });
         // The scoreboard sidebar the HUD shows.
         status["sidebar"] = self.sidebar_status();
         status
