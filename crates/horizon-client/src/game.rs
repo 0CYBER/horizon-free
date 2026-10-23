@@ -73,6 +73,7 @@ mod lan_crafting;
 mod lan_entities;
 mod lan_mobs;
 mod lan_mount_menu;
+mod lan_particles;
 mod lan_pvp;
 mod lan_screen;
 mod lan_stations;
