@@ -45,7 +45,6 @@ from pathlib import Path
 import platform
 import re
 import shutil
-import socket
 import statistics
 import subprocess
 import sys
@@ -79,12 +78,6 @@ PROPERTIES = {
     'difficulty': 'easy',
     'sync-chunk-writes': 'true',
 }
-
-
-def free_port():
-    with socket.socket() as s:
-        s.bind(('127.0.0.1', 0))
-        return s.getsockname()[1]
 
 
 def cpu_seconds(text):
@@ -282,7 +275,7 @@ def run_once(kind, bots, behaviour, args, out):
     directory = out / name
     shutil.rmtree(directory, ignore_errors=True)
     directory.mkdir(parents=True)
-    port = free_port()
+    port = lab.free_port()
     props = dict(PROPERTIES, **{'server-port': str(port), 'level-seed': str(args.seed)})
     (directory / 'server.properties').write_text(''.join(f'{k}={v}\n' for k, v in props.items()))
     (directory / 'eula.txt').write_text('eula=true\n')

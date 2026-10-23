@@ -190,14 +190,6 @@ impl UserCache {
         result
     }
 
-    /// `get(UUID)`: a cached player by id (expired or not).
-    pub fn get_by_id(&mut self, id: u128) -> Option<NameAndId> {
-        let index = *self.by_uuid.get(&id)?;
-        self.operations += 1;
-        self.infos[index].last_access = self.operations;
-        Some(self.infos[index].user.clone())
-    }
-
     /// The file's text: the 1000 most recently used entries, most recent
     /// first, as Gson writes them (compact, HTML-safe).
     pub fn to_json(&self) -> String {

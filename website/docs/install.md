@@ -34,19 +34,14 @@ The game opens on vanilla's title screen. Your worlds, options and logs live in 
 
 ## Updating
 
-- **Horizon.** The launcher looks for a new release when it starts and every four hours while it is open. With **Install new versions automatically** on (the default), it installs one and moves you to it if you were on the newest. New releases come out many times a day, and old versions stay installed until you remove them on the **Versions** page.
+- **Horizon.** The launcher looks for a new release when it starts and every 30 minutes while it is open. With **Install new versions automatically** on (the default), it installs one and moves you to it if you were on the newest. New releases come out many times a day, and old versions stay installed until you remove them on the **Versions** page.
 - **The launcher.** It updates itself from its own releases, then shows **Restart** in its footer. A launcher from before 0.2 (0.16 or older) updates twice in a row: first to 0.17, then to 0.2. Then it installs Horizon 0.2 like any update.
 
-## Stable and Alpha
+## One version for everyone
 
-> **Next launcher release.** The Updates switch below is merged but not in a launcher release yet. Launcher 0.17 has a **Beta builds** switch in Settings instead, which installs every new build at once, as Alpha does.
+There is one channel: every release is the version everyone gets. Before a release goes out, the game has to start and draw a world on our test machine, and nothing goes out while a serious problem is open. New releases come out many times a day, and you can install any older version by hand on the **Versions** page.
 
-In **Settings**, **Updates** picks which builds install by themselves:
-
-- **Stable** (the default): a tested build about once a day.
-- **Alpha**: every change as soon as it is built, several times a day. It can break. A launcher left open looks for new builds every 30 minutes, instead of every four hours.
-
-Every new release is an Alpha build first. Once a day (20:00 UTC, 21:00 in Paris in winter), the newest one that has been out for six hours, passed its smoke test and has no known blocker becomes Stable. Alpha builds come out many times a day, and Horizon as a whole is still in beta; Stable is the tested ones. The **Versions** page shows each version's channel, and you can install any of them by hand.
+Launchers from before this change still show an **Updates** choice in Settings. Either option now gets every new release, and the choice goes away once the launcher has updated itself.
 
 ## The Versions page
 

@@ -17,9 +17,9 @@ const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 const isLauncher = (r) => isLauncherTag(r.tag_name) && !r.prerelease;
 
-// The newest 100 releases (GitHub's most per page). Game betas come out several times a day, so the stable game
-// release and the newest launcher release can both be older than all of them. The stable game release is then
-// GitHub's "latest" (betas and launcher releases are never marked latest); the launcher release is looked up by its
+// The newest 100 releases (GitHub's most per page). The newest game release that is not a pre-release (the old
+// Alpha channel's, docs/release-flow.md) and the newest launcher release can be older than all of them. The game
+// release is then GitHub's "latest" (pre-releases and launcher releases never are); the launcher release is looked up by its
 // tag (the newest launcher@ tag with a published release, or launcher-v before 0.2: docs/versioning.md).
 async function loadReleases() {
   const list = (await get(`https://api.github.com/repos/${REPO}/releases?per_page=100`)).filter((r) => !r.draft).map(slim);
@@ -83,7 +83,7 @@ async function setUpDownload() {
 
 // --- Recently added and the links from main ---------------------------------
 
-// "Recently added": the newest game releases, Alpha and Stable.
+// "Recently added": the newest game releases.
 async function setUpRecent() {
   const html = recentHtml((await releases).filter((r) => isGame(r.tag_name)));
   if (html) document.getElementById("recent-releases").innerHTML = html;

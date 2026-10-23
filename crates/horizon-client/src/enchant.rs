@@ -359,10 +359,6 @@ impl Enchantments {
         }
         out
     }
-    /// Whether a stack draws the enchantment glint.
-    pub fn has_glint(&self, stack: &ItemStack) -> bool {
-        stack.has_any_enchantments() || self.props(&stack.item).is_some_and(|p| p.glint)
-    }
 
     // ---- Enchanting table (EnchantmentHelper) ----
 
@@ -513,19 +509,6 @@ impl Enchantments {
             self.get(id)
                 .is_some_and(|e| e.effects.get(component).is_some())
         })
-    }
-    /// The highest level among enchantments on `stack` that have `component`.
-    pub fn component_level(&self, stack: &ItemStack, component: &str) -> u32 {
-        stack
-            .enchantments()
-            .iter()
-            .filter(|(id, _)| {
-                self.get(id)
-                    .is_some_and(|e| e.effects.get(component).is_some())
-            })
-            .map(|(_, l)| *l)
-            .max()
-            .unwrap_or(0)
     }
     /// `minecraft:attributes` contributions of `stack`: (attribute, id, amount, operation).
     pub fn attributes(&self, stack: &ItemStack) -> Vec<(String, String, f64, String)> {

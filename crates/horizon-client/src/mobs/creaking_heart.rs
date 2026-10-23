@@ -152,10 +152,6 @@ pub fn protector(heart: &mut CreakingHeart, host: &impl HeartHost) -> Option<u32
     }
     None
 }
-/// `isProtector`.
-pub fn is_protector(heart: &mut CreakingHeart, host: &impl HeartHost, id: u32) -> bool {
-    protector(heart, host) == Some(id)
-}
 fn distance_to_creaking(heart: &mut CreakingHeart, pos: [i32; 3], host: &impl HeartHost) -> f64 {
     protector(heart, host)
         .and_then(|id| host.mob(id))

@@ -997,6 +997,7 @@ impl Game<'_> {
         self.lan_update_streaming(&host);
         self.lan_update_models(&mut host);
         self.lan_update_waypoints(&mut host, state.as_ref());
+        self.lan_sync_scoreboard(&mut host);
         drop(holding);
         lan::flush_all(host.hub.guests.iter().map(|g| &g.sender));
         self.lan = Some(host);
@@ -1087,8 +1088,14 @@ impl Game<'_> {
         }
         for e in events {
             if let horizon_world::level::LevelEvent::LevelEvent { id, pos, data } = e {
-                // The acting guest does not predict the egg's teleport particles.
-                let except = if *id == 2015 { None } else { self.lan_acting };
+                // The acting guest does not predict the egg's teleport
+                // particles, nor bone meal's growth (BoneMealItem.useOn's
+                // levelEvent names no player).
+                let except = if matches!(*id, 2015 | 1505) {
+                    None
+                } else {
+                    self.lan_acting
+                };
                 self.lan_events
                     .push((*id, [pos.x, pos.y, pos.z], *data, except));
             }

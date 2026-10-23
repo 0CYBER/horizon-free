@@ -186,25 +186,6 @@ impl<'r> BlockSupportRegistry<'r> {
     pub fn registry(&self) -> &'r BlockRegistry {
         self.cached.registry()
     }
-    pub fn support_shape<W: DynamicSupportWorld>(
-        &self,
-        world: &mut W,
-        state: BlockStateId,
-        position: [i32; 3],
-    ) -> Result<VoxelShape, SupportQueryError<W::Error>> {
-        if let Some(shape) = self
-            .cached
-            .cached_shape(state)
-            .map_err(SupportQueryError::Data)?
-        {
-            return Ok(shape.clone());
-        }
-        self.dynamic
-            .get(&state)
-            .ok_or(SupportQueryError::Unsupported(state))?
-            .shape(world, position)
-            .map_err(SupportQueryError::Dynamic)
-    }
     pub fn is_face_sturdy<W: DynamicSupportWorld>(
         &self,
         world: &mut W,

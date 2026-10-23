@@ -337,6 +337,7 @@ impl PlayerMotion {
             self.air = extra
                 .and_then(|t| crate::save::number(t.get("Air")))
                 .unwrap_or(300) as i32;
+            self.fall_distance = level.fall_distance;
             self.set_health(level.health, false)?;
             // LivingEntity.readAdditionalSaveData: internalSetAbsorptionAmount.
             self.internal_set_absorption(level.absorption)?;

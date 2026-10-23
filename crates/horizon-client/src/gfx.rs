@@ -83,6 +83,40 @@ mod world_post;
 const COMPLETE_COLUMN: u32 = (1 << (crate::chunk::HEIGHT / 16)) - 1;
 /// A section's instance: its camera-relative origin and, in `w`, the step of
 /// its fixed-point UVs (`terrain.wgsl`'s `terrain_uv`).
+/// The world pass again after occlusion culling's test: it loads both
+/// targets (phase 2 draws over phase 1, reading the test's results).
+fn world_pass_after_culling<'e>(
+    encoder: &'e mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
+    depth: &wgpu::TextureView,
+    pack: bool,
+) -> wgpu::RenderPass<'e> {
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("Horizon world, after culling"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            resolve_target: None,
+            depth_slice: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+            view: depth,
+            depth_ops: Some(wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: if pack {
+                    wgpu::StoreOp::Store
+                } else {
+                    wgpu::StoreOp::Discard
+                },
+            }),
+            stencil_ops: None,
+        }),
+        ..Default::default()
+    })
+}
 fn section_instance(origin: [f32; 3]) -> [f32; 4] {
     [
         origin[0],
@@ -316,7 +350,8 @@ pub struct Renderer {
     flat: Option<flat::Flat>,
     /// `flat` draws this frame's sections (off: the per-section draws).
     flat_on: bool,
-    /// Occlusion culling of solid section draws, where multi-draw is native.
+    /// Occlusion culling of solid section draws, where the GPU's instance
+    /// counts reach a multi-draw's entries (Vulkan, Metal).
     cull: Option<cull::Cull>,
     cull_on: bool,
     sky: wgpu::RenderPipeline,
@@ -1455,8 +1490,14 @@ impl Renderer {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let depth = Self::depth(&device, &config);
         let (atlas_pixels, atlas_width, atlas_height) = hud_atlas;
+        let limit = device.limits().max_texture_dimension_2d;
+        if atlas_width.max(atlas_height) > limit {
+            return Err(format!(
+                "the shared atlas is {atlas_width}x{atlas_height}; this GPU allows {limit}x{limit}"
+            )
+            .into());
+        }
         let atlas = device.create_texture_with_data(
             &queue,
             &wgpu::TextureDescriptor {
@@ -2211,14 +2252,25 @@ impl Renderer {
             .features()
             .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE);
         // HORIZON_GPU_CULL=0 turns occlusion culling off, `all` culls every
-        // frame however little it hides (A/B checks).
+        // frame however few its draws and little it hides, `shader` tests in
+        // the shader as on Metal (A/B checks).
         let cull_env = std::env::var("HORIZON_GPU_CULL");
-        let cull = (cull_env.as_deref() != Ok("0") && cull::Cull::supported(&adapter, &device))
-            .then(|| {
-                let mut cull = cull::Cull::new(&device, config.format.remove_srgb_suffix());
+        let cull = cull::Cull::supported(&adapter, &device)
+            .filter(|_| cull_env.as_deref() != Ok("0"))
+            .map(|depth_test| match cull_env.as_deref() {
+                Ok("shader") => cull::DepthTest::InShader,
+                _ => depth_test,
+            })
+            .map(|depth_test| {
+                let mut cull =
+                    cull::Cull::new(&device, config.format.remove_srgb_suffix(), depth_test);
                 cull.always = cull_env.as_deref() == Ok("all");
+                if !cull.always && adapter.get_info().backend == wgpu::Backend::Metal {
+                    cull.min_draws = cull::TILED_MIN_DRAWS;
+                }
                 cull
             });
+        let depth = Self::depth(&device, &config, cull.as_ref());
         let world_post = world_post::Post::new(&device, config.format.remove_srgb_suffix());
         let uploads = upload::Uploads::new(&device);
         let section_uploads = upload::Uploads::with_chunk(&device, SECTION_UPLOAD_CHUNK);
@@ -2411,10 +2463,6 @@ impl Renderer {
             view_formats: &config.view_formats,
         })
     }
-    /// Rendering to a texture instead of the window (`--offscreen`).
-    pub fn is_offscreen(&self) -> bool {
-        self.surface.is_none()
-    }
     /// Release the window surface before another renderer uses the same window.
     pub fn release_surface(&mut self) {
         self.surface = None;
@@ -2431,7 +2479,13 @@ impl Renderer {
         self.surface = Some(surface);
         Ok(())
     }
-    fn depth(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> wgpu::TextureView {
+    /// The world's depth, which occlusion culling's test may read.
+    fn depth(
+        device: &wgpu::Device,
+        config: &wgpu::SurfaceConfiguration,
+        cull: Option<&cull::Cull>,
+    ) -> wgpu::TextureView {
+        let read = cull.is_some_and(|c| c.depth_test() == cull::DepthTest::InShader);
         device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("Horizon depth"),
@@ -2444,7 +2498,11 @@ impl Renderer {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Depth32Float,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                usage: if read {
+                    wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
+                } else {
+                    wgpu::TextureUsages::RENDER_ATTACHMENT
+                },
                 view_formats: &[],
             })
             .create_view(&Default::default())
@@ -2495,7 +2553,7 @@ impl Renderer {
         } else {
             self.offscreen = Some(Self::offscreen_target(&self.device, &self.config));
         }
-        self.depth = Self::depth(&self.device, &self.config);
+        self.depth = Self::depth(&self.device, &self.config, self.cull.as_ref());
     }
     /// Whether sections are drawn as one index list per frame (`flat`).
     pub fn flat_draws(&self) -> bool {
@@ -3215,15 +3273,13 @@ impl Renderer {
             .inverse()
             .transform_point3(Vec3::ZERO);
         // Occlusion culling leaves the sections its last result did not see
-        // to phase 2, after the others, with instance counts of 0.
+        // to phase 2, after the others, with instance counts of 0. Whether
+        // the frame has draws enough goes by the last one's.
         let mut cull = self
             .cull
             .as_mut()
-            .filter(|_| {
-                self.cull_on
-                    && !frame.title
-                    && self.multi_draw
-                    && !(self.flat_on && self.flat.is_some())
+            .filter(|c| {
+                self.cull_on && !frame.title && self.multi_draw && self.section_draws >= c.min_draws
             })
             .and_then(|cull| cull.begin(&self.device).then_some(cull));
         self.phase2_draws.clear();
@@ -3610,6 +3666,16 @@ impl Renderer {
             frame.hud,
             [self.config.width, self.config.height],
         );
+        if culling && let Some(cull) = &mut self.cull {
+            cull.upload(
+                &self.device,
+                &mut self.uploads,
+                &mut encoder,
+                &self.draws[phase1_draws as usize..solid_draws as usize],
+                &self.instances,
+                &self.globals,
+            );
+        }
         let flat_frame = match &mut self.flat {
             Some(flat)
                 if self.flat_on && !self.draws.is_empty() && self.draws.len() >= flat.min_draws =>
@@ -3617,6 +3683,7 @@ impl Renderer {
                 let sections = &self.sections;
                 let lods = &self.lods;
                 let sorted = &self.sorted_indices;
+                let phase2 = self.cull.as_ref().filter(|_| culling).map(|c| &c.phase2);
                 crate::spans::time("flatten", || {
                     flat.prepare(
                         &self.device,
@@ -3624,7 +3691,9 @@ impl Renderer {
                         &mut self.uploads,
                         &self.draws,
                         &self.draw_pages,
+                        phase1_draws as usize,
                         solid_draws as usize,
+                        phase2,
                         visible
                             .iter()
                             .filter_map(|v| {
@@ -3659,16 +3728,6 @@ impl Renderer {
                 0,
                 bytemuck::cast_slice(&self.draws),
             );
-            if culling && let Some(cull) = &mut self.cull {
-                cull.upload(
-                    &self.device,
-                    &mut self.uploads,
-                    &mut encoder,
-                    &self.draws[phase1_draws as usize..solid_draws as usize],
-                    &self.instances,
-                    &self.globals,
-                );
-            }
         }
         let view_target = target_texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.config.format.remove_srgb_suffix()),
@@ -3720,6 +3779,9 @@ impl Renderer {
             Some((color, depth)) => (color, depth),
             None => (&view_target, &self.depth),
         };
+        if culling && let Some(cull) = &mut self.cull {
+            cull.bind_depth(&self.device, world_depth);
+        }
         let cull = self.cull.as_ref().filter(|_| culling && solid_draws > 0);
         if shadow_cfg.is_some() {
             let shadow_view = self.world_post.shadow_depth().clone();
@@ -3830,9 +3892,28 @@ impl Renderer {
             match self.flat.as_ref().filter(|_| flat_frame) {
                 Some(flat) => {
                     pass.set_pipeline(&flat.solid);
-                    flat.draw(&mut pass, &flat.calls[..flat.solid_calls], |p| {
-                        self.arena.buffer(p)
-                    });
+                    let vertices = |p| self.arena.buffer(p);
+                    match cull {
+                        // As below: phase 1, the test, then phase 2's draws
+                        // that the test saw, copied after it.
+                        Some(cull) => {
+                            flat.draw(&mut pass, &flat.calls[..flat.phase1_calls], vertices);
+                            cull.test(&mut pass);
+                            drop(pass);
+                            cull.test_pass(&mut encoder);
+                            flat.flatten_phase2(&mut encoder);
+                            pass = world_pass_after_culling(
+                                &mut encoder,
+                                world_view,
+                                world_depth,
+                                pack,
+                            );
+                            pass.set_bind_group(0, &self.group, &[]);
+                            pass.set_pipeline(&flat.solid);
+                            flat.draw_phase2(&mut pass, vertices);
+                        }
+                        None => flat.draw(&mut pass, &flat.calls[..flat.solid_calls], vertices),
+                    }
                     pass.set_bind_group(0, &self.group, &[]);
                     pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
                 }
@@ -3842,40 +3923,20 @@ impl Renderer {
                     pass.set_vertex_buffer(1, self.instances.slice(..));
                     match cull {
                         Some(cull) => {
-                            // Phase 1 and the boxes against its depth, then
+                            // Phase 1 and the boxes against its depth (in
+                            // its pass, or one of their own on Metal), then
                             // what they found in sight, in a pass that loads
                             // both targets (it reads the test's results).
                             self.draw_sections(&mut pass, &self.indirect, 0, 0, phase1_draws);
                             cull.test(&mut pass);
                             drop(pass);
-                            let attachments = [Some(wgpu::RenderPassColorAttachment {
-                                view: world_view,
-                                resolve_target: None,
-                                depth_slice: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Load,
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            })];
-                            pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                label: Some("Horizon world, after culling"),
-                                color_attachments: &attachments,
-                                depth_stencil_attachment: Some(
-                                    wgpu::RenderPassDepthStencilAttachment {
-                                        view: world_depth,
-                                        depth_ops: Some(wgpu::Operations {
-                                            load: wgpu::LoadOp::Load,
-                                            store: if pack {
-                                                wgpu::StoreOp::Store
-                                            } else {
-                                                wgpu::StoreOp::Discard
-                                            },
-                                        }),
-                                        stencil_ops: None,
-                                    },
-                                ),
-                                ..Default::default()
-                            });
+                            cull.test_pass(&mut encoder);
+                            pass = world_pass_after_culling(
+                                &mut encoder,
+                                world_view,
+                                world_depth,
+                                pack,
+                            );
                             pass.set_bind_group(0, &self.group, &[]);
                             pass.set_pipeline(&self.solid);
                             pass.set_index_buffer(

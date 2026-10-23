@@ -71,7 +71,6 @@ passes on without checking it).
 | Dedicated server here: start, console, log, stop | Servers | yes | yes | yes | yes | `server`; MCP `server`, `server_command`, `server_log`, `server_stop` |
 | Hosted servers: list, create, set up, run a command, forget | Servers | yes | no | yes | yes | `servers ...`; `servers_forget` needs `confirm` |
 | Accounts: list, sign in, sign out, select, offline | Settings | yes | part | yes | yes | names and UUIDs only; sign-in is a device code; `account_offline` was missing |
-| Update channel (Alpha, Stable) | Settings | yes | yes | yes | yes | |
 | Game folder, server folder, install new versions, opening animation | Settings | no | no | yes | yes | `settings [KEY VALUE]` |
 | Extra game arguments | Settings | yes | no | yes | yes | `game-args` |
 | Applications menu entry (Linux) | Settings | yes | no | yes | yes | `desktop-entry` |
@@ -148,7 +147,7 @@ The switch is in three places: Settings > AI in the launcher, Horizon Settings i
 | Companion (#1068) | uses the same switch (see horizon-parity companion-notes.md) |
 
 Every other launcher command stays usable: versions, install, remove, prepare, play, server,
-notes, links, account, update-channel, settings, game-args, logs, update, desktop-entry, data,
+notes, links, account, settings, game-args, logs, update, desktop-entry, data,
 modpack, mods, servers, no-ai and benchmark. None of them drives the game for an agent. The
 launcher itself, packagers, the docs and players' scripts need them, and `no-ai` has to stay to
 turn the switch off.

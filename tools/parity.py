@@ -27,9 +27,10 @@ Harness probes build into .local/parity-target with release optimisations but
 without LTO and with 16 codegen units (`PROFILE` below), which builds in
 seconds instead of minutes. Rust does not let those settings change results:
 there is no fast-math, and overflow checks stay as in release. Probes built in
-the dev profile are optimised too, keeping their overflow checks. Probes the
-recorded harnesses need are built in one Cargo run before the harnesses start,
-so parallel harnesses don't queue on Cargo's lock.
+the dev profile are optimised too, keeping their overflow checks. The probes the
+selected harnesses built last time are built before they start, so parallel
+harnesses don't queue on Cargo's lock, with each harness's own package and
+feature flags so that its Cargo run then finds them fresh.
 """
 
 import argparse
@@ -210,18 +211,42 @@ def artifact_path(kind, name, profile):
     return TARGET / directory / ("examples" if kind == "example" else "") / name
 
 
+SELECTION_FLAGS = {"-p", "--package", "-F", "--features"}  # followed by a value
+SELECTION_SWITCHES = {"--workspace", "--all", "--all-features", "--no-default-features"}
+
+
 def artifacts_of(arguments):
-    """The [kind, name, profile] targets a cargo build/run command line names."""
+    """The [kind, name, profile, selection, examples] targets a cargo build/run command line names.
+
+    kind is example, bin, or examples/bins (every one, name ""). selection is the command's package and feature
+    flags, and examples whether the command builds any example (which turns on dev-dependencies): together they
+    decide how Cargo unifies features, so the probe prebuild must repeat them exactly. A `--workspace` build of
+    the same example gives its dependencies other features, and the harness's own `-p` build then compiles
+    everything again."""
     arguments = arguments[:arguments.index("--")] if "--" in arguments else arguments
     profile = "release" if "--release" in arguments else "dev"
-    if "--profile" in arguments:
-        profile = arguments[arguments.index("--profile") + 1]
+    selection = []
     found = []
-    for flag, kind in (("--example", "example"), ("--bin", "bin")):
-        for index, argument in enumerate(arguments[:-1]):
-            if argument == flag:
-                found.append([kind, arguments[index + 1], profile])
-    return found
+    index = 1
+    while index < len(arguments):
+        argument = arguments[index]
+        flag, _, value = argument.partition("=")
+        if flag in SELECTION_FLAGS | {"--profile", "--example", "--bin"} and not value and index + 1 < len(arguments):
+            value = arguments[index + 1]
+            index += 1
+        if flag == "--profile":
+            profile = value
+        elif flag in SELECTION_FLAGS:
+            selection += ["-p" if flag == "--package" else "--features" if flag == "-F" else flag, value]
+        elif flag in SELECTION_SWITCHES:
+            selection.append("--workspace" if flag == "--all" else flag)
+        elif flag in ("--example", "--bin"):
+            found.append([flag[2:], value])
+        elif flag in ("--examples", "--bins"):
+            found.append([flag[2:], ""])
+        index += 1
+    examples = any(kind in ("example", "examples") for kind, _ in found)
+    return [[kind, name, profile, selection, examples] for kind, name in found]
 
 
 RUST_PATH = re.compile(r"(?<![\w:])((?:crate|self|super)(?:::super)*|[a-z_][a-z0-9_]*)::((?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)")
@@ -457,8 +482,9 @@ def dependencies(trace, scope=None):
         for argument in arguments[1:]:
             if isinstance(argument, str) and os.path.isfile(argument):
                 found.add(argument)
-    for kind, name, profile in artifacts:
-        found.update(dep_info(artifact_path(kind, name, profile)))
+    for kind, name, profile, *_ in artifacts:
+        if name:
+            found.update(dep_info(artifact_path(kind, name, profile)))
     kept = set()
     for path in found:
         path = Path(path) if os.path.isabs(path) else ROOT / path
@@ -515,15 +541,49 @@ def default_build_jobs():
     return jobs
 
 
+def target_packages():
+    """{(kind, name): package} for the workspace's examples and binaries."""
+    result = subprocess.run(["cargo", "metadata", "--no-deps", "--format-version", "1"], cwd=ROOT, capture_output=True,
+                            text=True)
+    if result.returncode:
+        return {}
+    return {(kind, target["name"]): package["name"] for package in json.loads(result.stdout)["packages"]
+            for target in package["targets"] for kind in target["kind"] if kind in ("example", "bin")}
+
+
+def prebuild_commands(artifacts, packages=None):
+    """The Cargo runs that build the recorded probes exactly as their harnesses do: one per profile, package and
+    feature selection, and whether examples are among the command's targets (see artifacts_of).
+
+    packages: target_packages(). Records of targets that no longer exist (a probe renamed or deleted since a harness
+    ran it) are left out, since one unknown target fails its whole Cargo run. A [kind, name, profile] record from
+    before selections were kept is taken as built with `-p` and its own crate, as nearly every harness does; the
+    harness's next run records the real one."""
+    groups = {}
+    for artifact in artifacts:
+        if packages and artifact[1] and tuple(artifact[:2]) not in packages:
+            continue
+        if len(artifact) == 3 and (packages or {}).get(tuple(artifact[:2])):
+            kind, name, profile = artifact
+            artifact = [kind, name, profile, ["-p", packages[(kind, name)]], kind == "example"]
+        if len(artifact) < 5:
+            continue
+        kind, name, profile, selection, examples = artifact
+        targets = groups.setdefault((profile, tuple(selection), examples), [])
+        target = [f"--{kind}", name] if name else [f"--{kind}"]
+        if target not in targets:
+            targets.append(target)
+    return [["cargo", "build", "--locked", "--profile", profile, *selection, *(part for target in targets for part in target)]
+            for (profile, selection, _), targets in sorted(groups.items())]
+
+
 def prebuild(artifacts, jobs):
-    """Build every recorded probe in one Cargo run so harnesses don't serialise on its lock."""
+    """Build the recorded probes before the harnesses start, so they don't serialise on Cargo's lock."""
     environment = run_environment()
     environment["CARGO_BUILD_JOBS"] = str(jobs)
     errors = ""
-    for profile in sorted({profile for _, _, profile in artifacts}):
-        command = ["cargo", "build", "--locked", "--workspace", "--profile", profile]
-        for kind, name, _ in (artifact for artifact in artifacts if artifact[2] == profile):
-            command += ["--examples", "--bins"] if kind == "all" else [f"--{kind}", name]
+    packages = target_packages()
+    for command in prebuild_commands(artifacts, packages):
         result = subprocess.run(command, cwd=ROOT, env=environment, capture_output=True, text=True)
         if result.returncode:
             errors += result.stderr
@@ -1217,10 +1277,15 @@ def main():
             finished_run([])
         return 0
 
-    # Harnesses that never ran here have no recorded probes: build them all.
-    artifacts = [["all", "", "release"]] if any("artifacts" not in records.get(name, {}) for name in selected) else []
+    # The probes the selected harnesses built last time, here or (for those that never ran here) in another
+    # worktree. A harness with no record builds its own: building every probe for it would be ~275 binaries.
+    artifacts = []
     for name in selected:
-        for artifact in records.get(name, {}).get("artifacts", []):
+        record = records.get(name)
+        if not record or "artifacts" not in record:
+            template = SHARED / "dependencies" / f"{name}.json"
+            record = json.loads(template.read_text(encoding="utf-8")) if template.exists() else {}
+        for artifact in record.get("artifacts", []):
             if artifact not in artifacts:
                 artifacts.append(artifact)
     config = host_config()

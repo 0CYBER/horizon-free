@@ -382,10 +382,6 @@ impl Shulker {
         }
         out
     }
-    /// `getProgress(a)`: `Mth.lerp(a, progressOld, progress)`.
-    pub fn get_progress(&self, a: f32) -> f32 {
-        self.progress_old + a * (self.progress - self.progress_old)
-    }
     /// `ShulkerBoxBlock.canOpen`: a closed box only opens when its lid has room
     /// (`level.noCollision` of the half-block lid box, deflated by 1e-6).
     pub fn lid_box(pos: [i32; 3], facing: u8) -> [f64; 6] {
@@ -666,14 +662,6 @@ impl Skull {
             self.tick_count += 1;
         } else {
             self.animating = false;
-        }
-    }
-    /// `getAnimation(a)`.
-    pub fn get_animation(&self, a: f32) -> f32 {
-        if self.animating {
-            self.tick_count as f32 + a
-        } else {
-            self.tick_count as f32
         }
     }
 }

@@ -7,7 +7,6 @@ use std::collections::BTreeMap;
 
 /// `ReputationEventType` amounts.
 pub const REPUTATION_CHANGE_PER_EVENT: i32 = 25;
-pub const REPUTATION_CHANGE_PER_EVERLASTING_MEMORY: i32 = 20;
 pub const REPUTATION_CHANGE_PER_TRADE: i32 = 2;
 /// `GossipContainer.DISCARD_THRESHOLD`: values below this are forgotten.
 const DISCARD_THRESHOLD: i32 = 2;
