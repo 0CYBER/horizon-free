@@ -160,6 +160,16 @@ impl Behaviours {
     ) -> bool {
         self.sim(level, ticks).grow_water_plant(pos, face)
     }
+    /// The `BonemealableBlock.Type` particle spread of a block at level event
+    /// 1505: Some(true) for `NEIGHBOR_SPREADER` (particles over a 3-block
+    /// area above), Some(false) for `GROWER`, None when not bonemealable.
+    pub fn bone_meal_spreads(&self, state: BlockStateId) -> Option<bool> {
+        let kind = self.bonemeal_kind(state)?;
+        Some(matches!(
+            kind,
+            Kind::Grass | Kind::Nylium | Kind::Netherrack | Kind::FeaturePlacer
+        ))
+    }
     fn bonemeal_kind(&self, state: BlockStateId) -> Option<Kind> {
         let data = self.data(state);
         if !data.implements(Interface::Bonemealable) {
