@@ -37,6 +37,9 @@ public final class VanillaMenuOracle {
     static final List<String> drops = new ArrayList<>();
     /** onEquipItem calls that change the item (its sound and game event): slot and new stack. */
     static final List<String> equips = new ArrayList<>();
+    /** The sounds the player played ({@code Entity.playSound}: a bundle's insert and remove). */
+    static final List<String> sounds = new ArrayList<>();
+    static final net.minecraft.util.RandomSource soundRandom = net.minecraft.util.RandomSource.create(0L);
     /** The block entity behind a "crafter_be" menu (slot state packets go to it). */
     static net.minecraft.world.level.block.entity.CrafterBlockEntity crafter;
     /** The block entity behind a "lectern" menu. */
@@ -99,6 +102,8 @@ public final class VanillaMenuOracle {
         @Override public void scheduleTick(BlockPos pos, net.minecraft.world.level.block.Block block, int delay) { }
         @Override public void updateNeighborsAt(BlockPos pos, net.minecraft.world.level.block.Block block, net.minecraft.world.level.redstone.Orientation o) { }
         @Override public void playSound(net.minecraft.world.entity.Entity e, BlockPos pos, net.minecraft.sounds.SoundEvent s, net.minecraft.sounds.SoundSource c, float v, float pitch) { }
+        // A bundle sound's pitch: 0.8 + level.getRandom().nextFloat() * 0.4.
+        @Override public net.minecraft.util.RandomSource getRandom() { return soundRandom; }
     }
 
     /** The maps of the case's level, by id, and the next free id. */
@@ -127,6 +132,9 @@ public final class VanillaMenuOracle {
             if (!ItemStack.isSameItemSameComponents(old, now)) equips.add(slot.getName() + ":" + ParityData.canon(now));
         }
         @Override public boolean hasDisconnected() { return false; }
+        @Override public void playSound(net.minecraft.sounds.SoundEvent sound, float volume, float pitch) {
+            sounds.add(sound.location().toString());
+        }
         @Override public ItemEntity drop(ItemStack stack, boolean thrown, net.minecraft.util.Prediction p) {
             if (!stack.isEmpty()) drops.add(ParityData.canon(stack));
             return null;
@@ -251,9 +259,9 @@ public final class VanillaMenuOracle {
             // No inventory slots: the inventory Take Book fills.
             StringBuilder items = new StringBuilder();
             for (int i = 0; i < 36; i++) items.append(' ').append(ParityData.canon(inv.getItem(i)));
-            return state(menu, inv) + " | " + String.join(";", equips) + " | inv" + items;
+            return state(menu, inv) + " | " + String.join(";", equips) + " | " + String.join(";", sounds) + " | inv" + items;
         }
-        return state(menu, inv) + " | " + String.join(";", equips);
+        return state(menu, inv) + " | " + String.join(";", equips) + " | " + String.join(";", sounds);
     }
 
     public static void main(String[] args) throws Exception {
@@ -271,6 +279,7 @@ public final class VanillaMenuOracle {
                 try {
                     drops.clear();
                     equips.clear();
+                    sounds.clear();
                     var world = make(World.class);
                     world.server = make(Server.class);
                     var player = make(FakePlayer.class);
@@ -325,6 +334,7 @@ public final class VanillaMenuOracle {
                     for (int i = 0; i < dataJson.size(); i++) menu.setData(i, dataJson.get(i).getAsInt());
                     drops.clear();
                     equips.clear();
+                    sounds.clear();
                     out.println("init " + clickState(menu, inv));
                     for (var opJson : f.getAsJsonArray("ops")) {
                         var op = opJson.getAsJsonArray();

@@ -4,10 +4,15 @@
 //! clone, throw, quick craft (drag) and pickup all; items thrown out of a
 //! menu are returned for the game to drop.
 use super::guest::Guest;
-use crate::{items::ItemStack, world::World};
+use crate::{
+    bundle::{Contents, can_be_in_bundle},
+    items::{ItemStack, Items},
+    world::World,
+};
 
 /// What the menus need to know about items.
 pub trait Rules {
+    fn items(&self) -> &Items;
     fn max_stack(&self, item: &str) -> u32;
     /// The armor slot (0 head .. 3 feet) an item can be worn in.
     fn armor_index(&self, item: &str) -> Option<usize>;
@@ -364,6 +369,9 @@ fn pickup(view: &mut View, slot: i32, button: i32, rules: &dyn Rules) {
         return;
     }
     let right = button == 1;
+    if bundle_click(view, i, right, rules) {
+        return;
+    }
     let (slot_item, carried) = (view.get(i), view.guest.carried.clone());
     match (slot_item, carried) {
         (None, None) => {}
@@ -408,6 +416,84 @@ fn pickup(view: &mut View, slot: i32, button: i32, rules: &dyn Rules) {
             }
         }
     }
+}
+
+/// `tryItemClickBehaviourOverride`: the carried stack's
+/// `BundleItem.overrideStackedOnOther`, then the clicked one's
+/// `overrideOtherStackedOnMe`. True when a bundle took the click.
+fn bundle_click(view: &mut View, i: usize, right: bool, rules: &dyn Rules) -> bool {
+    let items = rules.items();
+    let other = view.get(i);
+    if let Some(mut carried) = view.guest.carried.clone()
+        && let Some(mut contents) = Contents::of(items, &carried)
+        && other.is_some() != right
+    {
+        match other {
+            // tryTransfer: as much as fits, through `safeTake`.
+            Some(mut other) => {
+                if can_be_in_bundle(&other) {
+                    let amount = other.count.min(contents.room_for(items, &other));
+                    if amount > 0 {
+                        let mut taken = other.clone();
+                        taken.count = amount;
+                        other.count -= amount;
+                        view.set(i, (other.count > 0).then_some(other));
+                        contents.try_insert(items, &mut taken);
+                    }
+                }
+            }
+            // removeOne into the empty slot (`safeInsert`); the rest goes back.
+            None => {
+                if let Some(mut stack) = contents.remove_one(items) {
+                    if view.may_place(i, &stack, rules) {
+                        let amount = stack.count.min(view.slot_max(i, &stack, rules));
+                        view.set(
+                            i,
+                            Some(ItemStack {
+                                count: amount,
+                                ..stack.clone()
+                            }),
+                        );
+                        stack.count -= amount;
+                    }
+                    if stack.count > 0 {
+                        contents.try_insert(items, &mut stack);
+                    }
+                }
+            }
+        }
+        contents.store(&mut carried);
+        view.guest.carried = Some(carried);
+        return true;
+    }
+    let Some(mut bundle) = other else {
+        return false;
+    };
+    let Some(mut contents) = Contents::of(items, &bundle) else {
+        return false;
+    };
+    // Slot.allowModification: mayPickup and mayPlace of its item.
+    let allowed = view.may_place(i, &bundle, rules);
+    match (view.guest.carried.take(), right) {
+        (Some(mut carried), false) => {
+            if allowed {
+                contents.try_insert(items, &mut carried);
+            }
+            view.guest.carried = (carried.count > 0).then_some(carried);
+        }
+        (None, true) => {
+            if allowed {
+                view.guest.carried = contents.remove_one(items);
+            }
+        }
+        (carried, _) => {
+            view.guest.carried = carried;
+            return false;
+        }
+    }
+    contents.store(&mut bundle);
+    view.set(i, Some(bundle));
+    true
 }
 
 fn swap(view: &mut View, slot: i32, button: i32, rules: &dyn Rules) {
@@ -536,5 +622,118 @@ fn quick_craft(
             }
             view.guest.carried = (carried.count > 0).then_some(carried);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lan::{Joined, PlayerSender};
+    use horizon_protocol::packets::configuration::ClientInformation;
+    use std::sync::{Arc, atomic::AtomicI32, mpsc};
+
+    struct ItemRules(Items);
+    impl Rules for ItemRules {
+        fn items(&self) -> &Items {
+            &self.0
+        }
+        fn max_stack(&self, item: &str) -> u32 {
+            self.0.get(item).map_or(64, |i| i.max_stack)
+        }
+        fn armor_index(&self, _: &str) -> Option<usize> {
+            None
+        }
+    }
+
+    fn guest() -> Guest {
+        let (tx, _rx) = mpsc::channel();
+        Guest::new(
+            Joined {
+                conn: 2,
+                uuid: 2,
+                name: "Alex".into(),
+                properties: Vec::new(),
+                info: ClientInformation::new(8),
+                brand: "test".into(),
+                sender: PlayerSender::new(tx, Arc::default()),
+                latency: Arc::new(AtomicI32::new(0)),
+                address: "127.0.0.1:25565".parse().unwrap(),
+            },
+            2,
+            [0.0, 64.0, 0.0],
+            8,
+        )
+    }
+
+    fn contents(stack: &Option<ItemStack>) -> Vec<(String, u32)> {
+        let inside = stack.as_ref().and_then(|s| s.data());
+        inside.map_or(Vec::new(), |d| {
+            d.bundle_contents
+                .iter()
+                .map(|s| (s.item.to_string(), s.count))
+                .collect()
+        })
+    }
+
+    /// A guest's chest clicks run `BundleItem`'s overrides: a carried
+    /// bundle takes a slot's stack and drops its first one into an empty
+    /// slot; a stack clicked onto a bundle goes in, as far as it fits.
+    #[test]
+    fn guest_chest_clicks_fill_and_empty_bundles() {
+        let root = std::env::var_os("HORIZON_RESOURCES")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../.local/horizon-client")
+                    .join(horizon_core::VANILLA_VERSION)
+            });
+        if !root.join("items.json").exists() {
+            eprintln!("skipping resource-backed bundle check: {}", root.display());
+            return;
+        }
+        let registry = horizon_world::level::data::load_registry(&root).unwrap();
+        let facts = crate::blocks::BlockFacts::load(&root, &registry).unwrap();
+        let rules = ItemRules(Items::load(&root, &registry, &facts).unwrap());
+        let mut g = guest();
+        let mut chest = vec![
+            Some(ItemStack::new("minecraft:stone", 48)),
+            None,
+            Some(ItemStack::new("minecraft:bundle", 1)),
+        ];
+        let mut drag = None;
+        let mut view = View {
+            guest: &mut g,
+            container: Some(&mut chest),
+        };
+        view.guest.carried = Some(ItemStack::new("minecraft:bundle", 1));
+        // Left click with the bundle: the stone goes in.
+        click(&mut view, &mut drag, 0, 0, input::PICKUP, &rules);
+        assert_eq!(view.get(0), None);
+        assert_eq!(
+            contents(&view.guest.carried),
+            [("minecraft:stone".into(), 48)]
+        );
+        // Right click on an empty slot: the stone comes back out.
+        click(&mut view, &mut drag, 1, 1, input::PICKUP, &rules);
+        assert_eq!(view.get(1).map(|s| s.count), Some(48));
+        assert_eq!(contents(&view.guest.carried), []);
+        // Ender pearls (1/16 each) onto the bundle in the chest: 16 fit.
+        view.guest.carried = Some(ItemStack::new("minecraft:ender_pearl", 16));
+        click(&mut view, &mut drag, 2, 0, input::PICKUP, &rules);
+        assert_eq!(view.guest.carried, None);
+        let bundle = view.get(2);
+        assert_eq!(contents(&bundle), [("minecraft:ender_pearl".into(), 16)]);
+        // Full: more stone stays in hand.
+        view.guest.carried = Some(ItemStack::new("minecraft:stone", 5));
+        click(&mut view, &mut drag, 2, 0, input::PICKUP, &rules);
+        assert_eq!(view.guest.carried.as_ref().map(|s| s.count), Some(5));
+        // Right click on it with an empty hand takes the pearls out.
+        view.guest.carried = None;
+        click(&mut view, &mut drag, 2, 1, input::PICKUP, &rules);
+        assert_eq!(
+            view.guest.carried.as_ref().map(|s| (&*s.item, s.count)),
+            Some(("minecraft:ender_pearl", 16))
+        );
+        assert_eq!(contents(&view.get(2)), []);
     }
 }
