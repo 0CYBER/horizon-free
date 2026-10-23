@@ -6,9 +6,12 @@
 //! the world's options) with [`Integrated::call`], as vanilla's client calls
 //! into its `IntegratedServer`.
 //!
-//! On by default. `--no-server-thread` or `HORIZON_SERVER_THREAD=0` runs
-//! the world in the frame instead (the escape hatch while the network
-//! player's side catches up with the in-frame one).
+//! Opt-in again (`--server-thread` or `HORIZON_SERVER_THREAD=1`) until a
+//! server's players reach parity with the in-frame world: on the server
+//! thread, signs open no editor, books don't open, a totem doesn't save its
+//! holder and death keeps the inventory (#1380, #1366, #1292, #1284 and the
+//! other `[server-thread]` issues). LAN guests and dedicated servers use the
+//! same code either way.
 use super::{
     Game, Options, PackResources, Resources, UiResources,
     lan::{LanSettings, Owner},
