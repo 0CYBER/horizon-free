@@ -854,6 +854,8 @@ impl Game<'_> {
             "source_attempted": self.lod_source_attempted,
             "active_tiles": self.lod.as_ref().map_or(0, |lod| lod.stats().0),
             "cached_tiles": self.lod.as_ref().map_or(0, |lod| lod.stats().1),
+            "far_detail": self.settings.horizon.far_detail.name(),
+            "resident_quads": self.renderer.as_ref().map_or(0, |r| r.lod_quads()),
             "pending_observations": self.lod_observe.len(),
             "refined_samples": self.lod.as_ref().map_or(0, |lod| lod.refined_samples()),
         });

@@ -326,14 +326,17 @@ struct Plan {
 impl Plan {
     #[cfg(test)]
     fn new(camera: [i32; 2], detail: i32, distance: u32) -> Self {
-        Self::with_previous(camera, detail, distance, &Self::default(), 0)
+        Self::with_previous(camera, detail, distance, &Self::default(), 0, false)
     }
+    /// `reduced`: Reduced far detail (`graphics::FarDetail`), each level from
+    /// half the distance.
     fn with_previous(
         camera: [i32; 2],
         detail: i32,
         distance: u32,
         previous: &Self,
         elevation: i32,
+        reduced: bool,
     ) -> Self {
         let range = distance.min(1024) as i32 * 16;
         let mut level = 0;
@@ -349,25 +352,35 @@ impl Plan {
             for x in (camera[0] - range).div_euclid(size)..=(camera[0] + range).div_euclid(size) {
                 let key = TileKey { x, z, level };
                 result.roots.push(key);
-                result.visit(key, camera, detail, range, previous);
+                result.visit(key, camera, detail, range, previous, reduced);
             }
         }
         result
     }
-    fn visit(&mut self, key: TileKey, camera: [i32; 2], detail: i32, range: i32, previous: &Self) {
+    fn visit(
+        &mut self,
+        key: TileKey,
+        camera: [i32; 2],
+        detail: i32,
+        range: i32,
+        previous: &Self,
+        reduced: bool,
+    ) {
         if key.distance(camera) > range {
             return;
         }
         self.nodes.insert(key);
-        // Keep distant cells small on screen; finest tiles retain individual blocks.
-        let threshold = key.size() * if previous.split.contains(&key) { 10 } else { 8 };
+        // Keep distant cells small on screen; finest tiles retain individual
+        // blocks. Reduced keeps them twice as large (a quarter of the cells).
+        let split = if previous.split.contains(&key) { 10 } else { 8 };
+        let threshold = key.size() * if reduced { split / 2 } else { split };
         if key.level > 0
             && (key.distance(camera) < detail * 16 + 16
                 || key.distance(camera).max(self.elevation) < threshold)
         {
             self.split.insert(key);
             for child in key.children() {
-                self.visit(child, camera, detail, range, previous);
+                self.visit(child, camera, detail, range, previous, reduced);
             }
         }
     }
@@ -517,8 +530,10 @@ pub struct Lod {
     /// The plan or the covered columns changed: covered leaves need stand-ins.
     replanned: bool,
     invalidated: FxHashSet<(i32, i32)>,
-    area: Option<([i32; 2], i32, u32, i32)>,
+    area: Option<([i32; 2], i32, u32, i32, bool)>,
     plan: Plan,
+    /// Reduced far detail (`set_reduced_detail`).
+    reduced_detail: bool,
     pending: FxHashSet<TileKey>,
     sample_nearby: bool,
     detail_masks: FxHashMap<TileKey, [u64; 4]>,
@@ -714,6 +729,7 @@ impl Lod {
             replanned: true,
             invalidated: FxHashSet::default(),
             area: None,
+            reduced_detail: false,
             plan: Plan::default(),
             pending: FxHashSet::default(),
             sample_nearby: true,
@@ -930,6 +946,11 @@ impl Lod {
     pub fn set_near_loading(&mut self, loading: bool) {
         self.near_loading = loading;
     }
+    /// Reduced far detail (`graphics::FarDetail::Reduced`): the next update
+    /// replans when it changes.
+    pub fn set_reduced_detail(&mut self, reduced: bool) {
+        self.reduced_detail = reduced;
+    }
     fn held(&self) -> bool {
         self.small && self.near_loading
     }
@@ -1021,11 +1042,19 @@ impl Lod {
             detail,
             distance,
             elevation,
+            self.reduced_detail,
         );
         if self.area != Some(area) {
             crate::spans::time("lod_plan", || {
                 self.area = Some(area);
-                self.plan = Plan::with_previous(camera, detail, distance, &self.plan, elevation);
+                self.plan = Plan::with_previous(
+                    camera,
+                    detail,
+                    distance,
+                    &self.plan,
+                    elevation,
+                    self.reduced_detail,
+                );
                 self.ready.retain(|key, _| self.plan.nodes.contains(key));
                 self.detail_masks
                     .retain(|key, _| self.plan.nodes.contains(key));
@@ -1421,6 +1450,35 @@ mod tests {
     use super::*;
     use crate::mesher::TerrainVertex;
     #[test]
+    fn reduced_far_detail_only_merges_tiles_away_from_the_near_terrain() {
+        let leaves = |plan: &Plan| {
+            plan.nodes
+                .iter()
+                .filter(|k| !plan.split.contains(k))
+                .count()
+        };
+        for camera in [[0, 0], [100, -40]] {
+            for distance in [64, 128, 512, 1024] {
+                let full = Plan::new(camera, 12, distance);
+                let reduced = Plan::with_previous(camera, 12, distance, &Plan::default(), 0, true);
+                // Never finer than Full anywhere, and as fine next to the
+                // full-detail area, whose edge the finest tiles match.
+                assert!(reduced.split.is_subset(&full.split));
+                assert_eq!(reduced.roots, full.roots);
+                for key in reduced.nodes.iter().filter(|k| !reduced.split.contains(k)) {
+                    if key.distance(camera) < 12 * 16 + 16 {
+                        assert_eq!(key.level, 0, "{key:?}");
+                    }
+                }
+                let (full, reduced) = (leaves(&full), leaves(&reduced));
+                assert!(
+                    reduced * 2 < full,
+                    "{reduced} of {full} tiles at {distance}"
+                );
+            }
+        }
+    }
+    #[test]
     fn far_plan_is_bounded_and_near_tiles_align_with_chunks() {
         for camera in [[0, 0], [-1, -17], [1023, -4097]] {
             for distance in [64, 256, 1024] {
@@ -1453,7 +1511,7 @@ mod tests {
     #[test]
     fn aerial_distance_avoids_unseen_full_detail_outside_the_near_area() {
         let ground = Plan::new([0, 0], 12, 1024);
-        let high = Plan::with_previous([0, 0], 12, 1024, &Plan::default(), 1024);
+        let high = Plan::with_previous([0, 0], 12, 1024, &Plan::default(), 1024, false);
         assert!(high.nodes.len() < ground.nodes.len());
         assert!(
             high.nodes.contains(&TileKey {
@@ -1505,7 +1563,7 @@ mod tests {
     #[test]
     fn detail_survives_movement_across_a_split_threshold() {
         let before = Plan::new([0, 0], 2, 256);
-        let after = Plan::with_previous([16, 0], 2, 256, &before, 0);
+        let after = Plan::with_previous([16, 0], 2, 256, &before, 0, false);
         let mut retained = 0;
         for key in &before.split {
             if key.distance([16, 0]) < key.size() * 10 {
@@ -1804,7 +1862,7 @@ mod tests {
         // Exercise the actual worker/update seam: a parent stays displayed
         // until all four child meshes can replace it in the same update.
         let camera = [-256.0, 100.0, -256.0];
-        lod.area = Some(([-16, -16], 2, 64, 0));
+        lod.area = Some(([-16, -16], 2, 64, 0, false));
         lod.plan.roots = vec![key];
         lod.plan.nodes.insert(key);
         // As a replan does (`update` only selects after a change).

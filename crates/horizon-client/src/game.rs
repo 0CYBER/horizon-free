@@ -10454,6 +10454,10 @@ impl Game<'_> {
             if let (Some(lod), Some(player)) = (&mut self.lod, &self.player) {
                 let lod_distance = self.settings.horizon.lod_distance_on(&renderer.info);
                 lod.set_near_loading(self.streaming.busy());
+                lod.set_reduced_detail(
+                    self.settings.horizon.far_detail
+                        == horizon_client::graphics::FarDetail::Reduced,
+                );
                 // The covered columns change only with the complete ones and
                 // the render area: rebuilt then, not every frame.
                 let at = (

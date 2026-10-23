@@ -870,6 +870,13 @@ impl Renderer {
     pub fn resident_sections(&self) -> usize {
         self.sections.len()
     }
+    /// Quads of the far terrain tiles with GPU buffers.
+    pub fn lod_quads(&self) -> u64 {
+        self.lods
+            .values()
+            .map(|tile| u64::from(tile.mesh.solid + tile.mesh.translucent))
+            .sum()
+    }
     /// Bytes of the section vertex arena's buffers, and of the vertices
     /// resident sections hold in them.
     pub fn section_vertex_bytes(&self) -> [u64; 2] {
@@ -936,6 +943,7 @@ impl Renderer {
             None => open_device(&window, offscreen, api, layers).await?,
         };
         let info = adapter.get_info();
+        crate::graphics::suggest_reduced_far_detail(crate::graphics::lod_capped(&info));
         let size = window.inner_size();
         let (config, present_modes) = if let Some(surface) = &surface {
             let mut config = surface
