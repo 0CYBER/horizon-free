@@ -445,10 +445,10 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
                 map.entry(key.into()).or_insert(value);
             }
         }
+        // Sheep.addAdditionalSaveData: its wool as it is now.
         "minecraft:sheep" => {
-            for (key, value) in [("Color", Tag::Byte(0)), ("Sheared", Tag::Byte(0))] {
-                map.entry(key.into()).or_insert(value);
-            }
+            map.insert("Color".into(), Tag::Byte((m.extra.color & 15) as i8));
+            map.insert("Sheared".into(), Tag::Byte(i8::from(m.extra.sheared)));
         }
         // CopperGolem.addAdditionalSaveData.
         "minecraft:copper_golem" => {
@@ -831,6 +831,11 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
             m.extra.home = Some([v[0], v[1], v[2]]);
         }
         m.extra.egg_time = number(tag.get("life_ticks")).map_or(-1, |v| v as i32);
+    }
+    // Sheep.readAdditionalSaveData: white and unsheared when absent.
+    if m.species() == crate::mobs::Species::Sheep {
+        m.extra.color = number(tag.get("Color")).map_or(0, |c| (c as u8) & 15);
+        m.extra.sheared = flag(tag, "Sheared");
     }
     if m.species() == crate::mobs::Species::Shulker {
         m.extra.variant3 = number(tag.get("AttachFace")).unwrap_or(0).clamp(0, 5) as u8;
@@ -2049,5 +2054,41 @@ mod axolotl_nbt_tests {
         let mm = &restored.extra.animal_brain.as_ref().unwrap().mem;
         assert_eq!(mm.play_dead_ticks.value(), Some(78));
         assert_eq!(mm.temptation_cooldown_ticks.value(), Some(42));
+    }
+}
+
+#[cfg(test)]
+mod sheep_nbt_tests {
+    use super::*;
+    #[test]
+    fn a_sheep_keeps_its_dyed_and_sheared_wool() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.local/horizon-client")
+            .join(horizon_core::VANILLA_VERSION);
+        if !root.join("items.json").exists() {
+            return;
+        }
+        let data = crate::mobs::MobTypes::load(&root).unwrap();
+        let mut m = Mob::new(
+            1,
+            Arc::new(data.types["minecraft:sheep"].clone()),
+            Vec3::new(0.0, 4.0, 0.0),
+            0.0,
+        );
+        // Summoned white, then dyed red and sheared: the save has it now.
+        let raw = Tag::compound([("Color", Tag::Byte(0)), ("Sheared", Tag::Byte(0))]);
+        (m.extra.color, m.extra.sheared) = (14, true);
+        let tag = mob_to_nbt(&m, [1, 2, 3, 4], Some(&raw));
+        assert_eq!(
+            (number(tag.get("Color")), number(tag.get("Sheared"))),
+            (Some(14), Some(1))
+        );
+        let types: HashMap<String, Arc<MobType>> = data
+            .types
+            .iter()
+            .map(|(k, v)| (k.clone(), Arc::new(v.clone())))
+            .collect();
+        let back = mob_from_nbt(&tag, &types, 2).unwrap();
+        assert_eq!((back.extra.color, back.extra.sheared), (14, true));
     }
 }

@@ -2697,9 +2697,11 @@ impl Game<'_> {
             velocity: [d.velocity.x, d.velocity.y, d.velocity.z],
             data: 0,
             meta,
+            defaults: Vec::new(),
             equipment: Vec::new(),
             attributes: Vec::new(),
             precise: false,
+            needs_sync: false,
         })
     }
 }

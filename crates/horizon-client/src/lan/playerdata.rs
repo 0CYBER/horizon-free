@@ -61,6 +61,7 @@ pub fn apply(guest: &mut Guest, level: &Level) {
     guest.head_yaw = guest.yaw;
     guest.on_ground = level.on_ground;
     guest.health = level.health;
+    guest.saved_absorption = Some(level.absorption);
     guest.food = level.food;
     guest.saturation = level.saturation;
     guest.xp_level = level.xp_level;
@@ -71,7 +72,12 @@ pub fn apply(guest: &mut Guest, level: &Level) {
     guest.game_mode = level.mode();
     guest.flying = level.flying;
     guest.selected = (level.selected_slot.max(0) as usize).min(8);
-    guest.spawn = level.spawn.map(|s| [s[0] + 0.5, s[1], s[2] + 0.5]);
+    // A point that is the world spawn is none of the player's own: it
+    // respawns wherever the world spawn is then (`setworldspawn`).
+    guest.spawn = level
+        .spawn
+        .filter(|s| Some(s.map(|v| v.floor() as i32)) != level.world_spawn)
+        .map(|s| [s[0] + 0.5, s[1], s[2] + 0.5]);
     guest.respawn_elsewhere = level.respawn_elsewhere.clone();
     guest.saved = level.player_extra.clone();
     guest.recipe_book = level.recipe_book.clone();
@@ -124,6 +130,12 @@ pub fn store(guest: &Guest, level: &mut Level) {
     level.dimension = guest.dimension.clone();
     level.rotation = [guest.yaw, guest.pitch];
     level.health = guest.health;
+    level.absorption = guest
+        .motion
+        .as_ref()
+        .map_or(guest.saved_absorption.unwrap_or(0.0), |m| {
+            m.health.absorption()
+        });
     level.food = guest.food;
     level.saturation = guest.saturation;
     level.xp_level = guest.xp_level;

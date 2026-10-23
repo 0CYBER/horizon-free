@@ -24,6 +24,11 @@ address. The script then checks, from both sides, what a guest's game used to ge
 
 
 - arrows:    the guest and the host shoot each other with a bow; with the pvp game rule off, nothing (#484);
+- looks:     mobs look on both sides as the server has them (their synched data): a calf is a
+             baby, a red sheep is sheared, a size 4 slime, a tamed wolf sits with its blue collar, a
+             cow on fire burns and goes out; then the wither's health drops when it is hurt, the
+             sheep is dyed blue with its wool back and the calf grows up (#1367, #1368, #1370,
+             #1371, #1385, #1390);
 - respawn:   a player killed is drawn dead by the other side, and alive again once it respawns (the
              respawned player is a new entity to the others); the host dies, and on the server thread
              the guest too;
@@ -138,6 +143,28 @@ address. The script then checks, from both sides, what a guest's game used to ge
              get off by sneaking; the other side sees the animal move.
 - lightning: a bolt summoned beside the host, then the guest: both sides get the bolt and flash the
              sky (on its server thread the host's window is a client of it too).
+- drops:     an item lies where the host, then the guest, places a block: it comes out of the block
+             on the server, and both sides see it outside (#1252).
+- underwater: the host and the guest each dig dirt by hand standing under water: five times slower
+             than in the air on their own client as on the server, and it breaks (#1254).
+- worldspawn: the host moves the world spawn (`setworldspawn`): the host and the guest, with no bed,
+             respawn there (#1310).
+- shield:    a vindicator's axe disables the host's, then the guest's, raised shield: the server
+             counts its 5 s cooldown down once a tick (#1316).
+- beds:      the host and the guest each set their respawn point at a bed and die elsewhere: they
+             stand up beside the bed, or, when the bed is gone or boxed in by stone, come back at
+             the world spawn (#1308).
+- deathmining: the host and the guest each die while breaking obsidian and let go on the death
+             screen: once respawned, the obsidian stays (#1315).
+- contacts:  the host and the guest each stand on magma (and sneak on it), stand on a lit campfire,
+             walk against a cactus and through grown sweet berry bushes: the server hurts them, but
+             not the sneaking player or young bushes (#1305, #1311, #1312, #1313).
+- absorption: the host and the guest each take Absorption II and a hit of 3: their own HUD has the
+             server's golden hearts, 8 then 5 (#1306).
+- breath:    the host and the guest each stay underwater for 15 s in a Respiration III helmet: their
+             own bubbles follow the server's air, which the enchantment makes last (#1304).
+- lava:      (--server-thread) the host and the guest each stand in a Nether lava current with Fire
+             Resistance, which pushes them at the Nether's strength (#1309).
 - flight:    a player in creative double-taps jump and flies, stays up, and stops flying in survival:
              the guest, and on the server thread the host's window too, take what may fly from the
              server's abilities (ClientPacketListener.handlePlayerAbilities).
@@ -179,7 +206,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning', 'riding', 'mounts', 'levels']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'looks', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning', 'riding', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption', 'breath', 'lava', 'levels', 'drops', 'underwater']
 
 
 class Game:
@@ -1123,6 +1150,79 @@ def check_hurt(host, guest, out):
     for name, sides in seen.items():
         assert all(t > 0 for t in sides.values()), f'{name}: the pig\'s hurt flash {seen}'
     return seen
+
+
+def mob_looks(game, centre):
+    """What `check_looks` compares of each mob around `centre`, by kind and column."""
+    found = {}
+    for m in game.raw('mobs', 32).get('near', []):
+        if abs(m['pos'][0] - centre[0]) > 12 or abs(m['pos'][2] - centre[2]) > 14:
+            continue
+        key = f"{m['kind'].removeprefix('minecraft:')}@{round(m['pos'][0] - centre[0])}"
+        found[key] = {'baby': m['baby'], 'color': m['color'], 'sheared': m['sheared'], 'size': m['size'],
+                      'tame': m['tame'], 'sitting': m['sitting'], 'burning': m['burning'],
+                      'health': round(m['health'])}
+    return found
+
+
+def check_looks(host, guest, out):
+    x, y, z = (int(v // 1) for v in pos_of(host))
+    centre = (x + 0.5, y, z + 0.5)
+    # Each mob in a column of its own (the key), standing on the stone floor.
+    looks = {
+        'cow@-5': ('{NoAI:1b,Fire:80s}', {'burning': True}),
+        'cow@-3': ('{NoAI:1b,Age:-24000}', {'baby': True}),
+        'cow@-1': ('{NoAI:1b}', {'baby': False}),
+        'sheep@1': ('{NoAI:1b,Color:14b,Sheared:1b}', {'color': 14, 'sheared': True}),
+        'slime@3': ('{NoAI:1b,Size:3}', {'size': 4}),
+        'wolf@5': ('{NoAI:1b,Owner:[I;1,2,3,4],Sitting:1b,CollarColor:11b}',
+                   {'tame': True, 'sitting': True, 'color': 11}),
+    }
+    sides = {'host': host, 'guest': guest}
+    seen = {}
+    try:
+        for key, (tag, _) in looks.items():
+            kind, dx = key.split('@')
+            host('command', command=f'summon minecraft:{kind} {centre[0] + int(dx)} {y} {z + 4.5} {tag}')
+        host('command', command=f'summon minecraft:wither {centre[0]} {y + 3} {z + 10.5} {{NoAI:1b,Invul:0}}')
+        host.wait(30)
+        seen['spawned'] = {name: mob_looks(g, centre) for name, g in sides.items()}
+        # Changes after the spawn: the wither hurt, the sheep dyed and grown back, the calf grown up.
+        host('command', command='damage @e[type=minecraft:wither,limit=1] 150 minecraft:generic')
+        for kind, dx, tag in (('sheep', 1, '{Color:11b,Sheared:0b}'), ('cow', -3, '{Age:0}')):
+            host('command', command=f'data merge entity @e[type=minecraft:{kind},x={centre[0] + dx},y={y},'
+                                    f'z={z + 4.5},distance=..0.5,limit=1] {tag}')
+        guest.raw('look-at', centre[0], y + 1, z + 4.5)
+        host.raw('look-at', centre[0], y + 1, z + 4.5)
+        # The fire (80 ticks) goes out in the meantime.
+        host.wait(80)
+        for name, g in sides.items():
+            g.shot(out, 'looks')
+        seen['later'] = {name: mob_looks(g, centre) for name, g in sides.items()}
+    finally:
+        # A killed slime splits: shrink it first so no children are left hopping into the next check.
+        host('command', command=f'data merge entity @e[type=minecraft:slime,x={centre[0] + 3},y={y},z={z + 4.5},'
+                                f'distance=..2,limit=1] {{Size:0}}')
+        host('command', command=f'kill @e[type=!minecraft:player,x={x - 12},y={y - 2},z={z - 2},dx=24,dy=12,dz=16]')
+    wrong = []
+    for name in sides:
+        spawned, later = seen['spawned'][name], seen['later'][name]
+        for key, (_, want) in looks.items():
+            got = spawned.get(key)
+            if got is None or any(got[k] != v for k, v in want.items()):
+                wrong.append(f'{name} {key}: {got}, wants {want}')
+        if later.get('cow@-5', {}).get('burning') is not False:
+            wrong.append(f"{name}: the cow's fire never went out: {later.get('cow@-5')}")
+        if [later.get('sheep@1', {}).get(k) for k in ('color', 'sheared')] != [11, False]:
+            wrong.append(f"{name}: the sheep dyed blue with its wool back: {later.get('sheep@1')}")
+        if later.get('cow@-3', {}).get('baby') is not False:
+            wrong.append(f"{name}: the calf grown up: {later.get('cow@-3')}")
+        withers = [v['health'] for k, v in spawned.items() if k.startswith('wither')]
+        hurt = [v['health'] for k, v in later.items() if k.startswith('wither')]
+        if withers != [300] or hurt != [150]:
+            wrong.append(f"{name}: the wither's health {withers} then {hurt}, wants [300] then [150]")
+    assert not wrong, '\n'.join(wrong)
+    return seen['later']['guest']
 
 
 def container_items(game):
@@ -2590,6 +2690,441 @@ def check_flight(host, guest, out):
     return seen
 
 
+def check_drops(host, guest, out):
+    """A dropped item lying where a block is then placed comes out of it (#1252): the server moves
+    it towards the closest open side (ItemEntity.tick's noPhysics, Entity.moveTowardsClosestSpace),
+    and both sides see it outside the block. The host places one, then the guest."""
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    seen = {}
+    for game, dz in ((host, -3), (guest, 3)):
+        x, y, z = hx + 3, hy, hz + dz
+        game('command', command=f'fill {x - 1} {y} {z - 1} {x + 1} {y + 2} {z + 1} minecraft:air')
+        game('command', command=f'summon minecraft:item {x + 0.5} {y} {z + 0.5} '
+                                '{Item:{id:"minecraft:diamond",count:1},PickupDelay:32767}')
+        game.wait(20)
+        game('command', command=f'setblock {x} {y} {z} minecraft:stone')
+        game.wait(60)
+        for viewer in (host, guest):
+            near = [e['pos'] for e in viewer.raw('entities', 24, 'minecraft:item')['entities']
+                    if abs(e['pos'][0] - x - 0.5) < 2 and abs(e['pos'][2] - z - 0.5) < 2]
+            seen[f'{game.name} places, {viewer.name} sees'] = ([x, y, z], near)
+        game.shot(out, 'drops')
+        host('command', command='kill @e[type=minecraft:item]')
+        host('command', command=f'setblock {x} {y} {z} minecraft:air')
+    for name, (block, near) in seen.items():
+        inside = [p for p in near if all(block[i] <= p[i] < block[i] + 1 for i in range(3))]
+        assert near and not inside, f'{name}: items {near} in block {block} (all: {seen})'
+    return seen
+
+
+def check_underwater(host, guest, out):
+    """Digging dirt by hand underwater, standing on the bottom of a pool: five times slower than in
+    the air (SUBMERGED_MINING_SPEED), on the player's own client as on the server. Halfway through
+    the client is about halfway (it doesn't break the block early, which the server would put
+    back), and the block breaks (#1254). The dirt is at eye height, the player's head under water.
+    The host, then the guest."""
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    seen = {}
+    for game, dz in ((host, -4), (guest, 4)):
+        x, y, z = hx + 3, hy, hz + dz
+        game('command', command='gamemode survival')
+        game('command', command='item replace entity @s weapon.mainhand with minecraft:air')
+        game('command', command=f'fill {x - 1} {y - 1} {z - 1} {x + 2} {y + 3} {z + 1} minecraft:stone')
+        game('command', command=f'fill {x} {y} {z} {x} {y + 2} {z} minecraft:water')
+        game('command', command=f'setblock {x + 1} {y + 1} {z} minecraft:dirt')
+        game('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+        game.wait(40)
+        game.raw('look-at', f'{x + 1.5:.2f}', f'{y + 1.5:.2f}', f'{z + 0.5:.2f}')
+        game.wait(5)
+        game.raw('mouse', 'left', 'down')
+        # Dirt by hand: 15 ticks in the air, 75 under water.
+        game.wait(35)
+        halfway = {'mining': game('state').get('mining'), 'client': game.raw('block', x + 1, y + 1, z).get('block'),
+                   'server': host.raw('block', x + 1, y + 1, z).get('block'), 'y': y + 1}
+        game.wait(70)
+        game.raw('mouse', 'left', 'up')
+        game.wait(10)
+        done = host.raw('block', x + 1, y + 1, z).get('block')
+        game.shot(out, 'underwater')
+        seen[game.name] = {'halfway': halfway, 'done': done}
+        host('command', command=f'fill {x - 1} {y - 1} {z - 1} {x + 2} {y + 3} {z + 1} minecraft:air')
+        host('command', command=f'fill {x - 1} {y - 1} {z - 1} {x + 2} {y - 1} {z + 1} minecraft:stone')
+    for name, s in seen.items():
+        h = s['halfway']
+        assert h['client'] == 'minecraft:dirt' == h['server'], f'{name} broke it early: {seen}'
+        assert h['mining'] and h['mining']['pos'][1] == h['y'] and 0.3 < h['mining']['progress'] < 0.7, f'{name} digs at the wrong speed: {seen}'
+        # Broken: air, or the pool's water flowing in.
+        assert s['done'] in ('minecraft:air', 'minecraft:water'), f'{name} never broke it: {seen}'
+    return seen
+
+
+
+
+
+def own(game):
+    """The player's own state, as its client has it."""
+    return game('state')['player']
+
+
+
+
+def check_contacts(host, guest, out):
+    """Blocks that hurt what touches them, on the server: standing on magma (but not sneaking on it)
+    and on a lit campfire, walking against a cactus and through grown sweet berry bushes, for the
+    host and the guest (#1305, #1311, #1312, #1313); a young bush pricks no one."""
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    host('command', command='gamerule natural_health_regeneration false')
+    seen = {}
+    try:
+        for game, dz in ((host, -4), (guest, 4)):
+            x, y, z = hx + 2, hy, hz + dz
+            game('command', command='gamemode survival')
+            game('command', command='effect clear @s')
+            for case, blocks, walk in (
+                    ('magma', [(0, -1, 'minecraft:magma_block')], False),
+                    ('sneaking', [(0, -1, 'minecraft:magma_block')], False),
+                    ('campfire', [(0, 0, 'minecraft:campfire[lit=true]')], False),
+                    ('cactus', [(2, -1, 'minecraft:sand'), (2, 0, 'minecraft:cactus')], True),
+                    ('berries', [(k, -1, 'minecraft:grass_block') for k in range(1, 4)]
+                     + [(k, 0, 'minecraft:sweet_berry_bush[age=3]') for k in range(1, 4)], True),
+                    ('young', [(k, -1, 'minecraft:grass_block') for k in range(1, 4)]
+                     + [(k, 0, 'minecraft:sweet_berry_bush[age=0]') for k in range(1, 4)], True)):
+                game('command', command='effect give @s minecraft:instant_health 1 5 true')
+                game('command', command=f'fill {x - 1} {y - 2} {z - 1} {x + 4} {y - 1} {z + 1} minecraft:stone')
+                game('command', command=f'fill {x - 1} {y} {z - 1} {x + 4} {y + 2} {z + 1} minecraft:air')
+                # A wall ends the walk before the player leaves the floor.
+                game('command', command=f'fill {x + 5} {y - 1} {z - 1} {x + 5} {y + 2} {z + 1} minecraft:stone')
+                for dx, dy, block in blocks:
+                    game('command', command=f'setblock {x + dx} {y + dy} {z} {block}')
+                stand = 0.5 if case == 'campfire' else 0.0
+                # Sneaking from before the player lands on the magma.
+                held = ['shift'] if case == 'sneaking' else []
+                for k in held:
+                    game.raw('key', k, 'down')
+                game.wait(5)
+                game('command', command=f'tp @s {x + 0.5} {y + stand} {z + 0.5}')
+                game.raw('look-at', f'{x + 10:.2f}', f'{y + 1.6:.2f}', f'{z + 0.5:.2f}')
+                game.wait(30)
+                before = own(game)['health']
+                keys = ['w'] if walk else []
+                for k in keys:
+                    game.raw('key', k, 'down')
+                game.wait(60)
+                # Read before letting go: standing up on the magma would hurt.
+                after = own(game)['health']
+                for k in keys + held:
+                    game.raw('key', k, 'up')
+                game.wait(10)
+                seen[f'{game.name}-{case}'] = (before, after)
+                game.shot(out, f'contacts-{case}')
+            host('command', command=f'fill {x - 1} {y} {z - 1} {x + 5} {y + 2} {z + 1} minecraft:air')
+    finally:
+        host('command', command='gamerule natural_health_regeneration true')
+    for case, (before, after) in seen.items():
+        safe = case.endswith(('sneaking', 'young'))
+        assert (after == before) if safe else (after < before), f'{case}: {before} -> {after} (all: {seen})'
+    return seen
+
+
+def server_player(host, game):
+    """The player's entry on the server: the guest's in the host's `lan status`, on the server
+    thread the host's too; the host's own world otherwise."""
+    if game is host and not SERVER_THREAD:
+        return own(host)
+    name = GUEST_NAME if game is not host else host.player
+    return next(g for g in host.raw('lan', 'status')['guests'] if g['name'] == name)
+
+
+def check_shield(host, guest, out):
+    """An axe disables a raised shield for 5 s (100 ticks), counted down once a tick on the
+    server: a vindicator's axe hits each player's shield, then the cooldown left falls by about 40
+    over 40 ticks (#1316)."""
+    host('command', command='gamerule natural_health_regeneration false')
+    rates = {}
+    try:
+        for game, dz in ((host, -4), (guest, 4)):
+            x, y, z = (int(v // 1) for v in pos_of(host))
+            z += dz
+            game('command', command='gamemode survival')
+            game('command', command='effect give @s minecraft:resistance 60 4 true')
+            game('command', command='effect give @s minecraft:instant_health 1 5 true')
+            game('command', command='item replace entity @s weapon.mainhand with minecraft:air')
+            game('command', command='item replace entity @s weapon.offhand with minecraft:shield')
+            game('command', command=f'fill {x - 1} {y} {z - 1} {x + 4} {y + 2} {z + 1} minecraft:air')
+            game('command', command=f'fill {x - 1} {y - 1} {z - 1} {x + 4} {y - 1} {z + 1} minecraft:stone')
+            game('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+            game.wait(10)
+            game.raw('look-at', f'{x + 2.5:.2f}', f'{y + 1.5:.2f}', f'{z + 0.5:.2f}')
+            game.raw('mouse', 'right', 'down')
+            game.wait(10)
+            host('command', command=f'summon minecraft:vindicator {x + 2.5} {y} {z + 0.5} '
+                 '{PersistenceRequired:1b,Rotation:[90f,0f]}')
+            host('command', command='item replace entity @e[type=minecraft:vindicator] weapon.mainhand '
+                 'with minecraft:iron_axe')
+            first = None
+            for _ in range(60):
+                game.wait(5)
+                first = server_player(host, game).get('shield_cooldown', 0)
+                if first:
+                    break
+            host('command', command='kill @e[type=minecraft:vindicator]')
+            game.raw('mouse', 'right', 'up')
+            assert first, f'{game.name}: the vindicator never disabled the shield'
+            start = server_player(host, game)['shield_cooldown']
+            game.wait(40)
+            end = server_player(host, game)['shield_cooldown']
+            rates[game.name] = {'first': first, 'start': start, 'end': end}
+            game.shot(out, 'shield')
+            game('command', command='item replace entity @s weapon.offhand with minecraft:air')
+            game('command', command='effect clear @s')
+    finally:
+        host('command', command='kill @e[type=minecraft:vindicator]')
+        host('command', command='gamerule natural_health_regeneration true')
+    for name, r in rates.items():
+        assert r['first'] <= 100, f'{name}: {rates}'
+        # Once a tick: 40 down over 40 ticks, give or take the ticks the two queries straddle.
+        assert 30 <= r['start'] - r['end'] <= 50, f'{name}: {rates}'
+    return rates
+
+
+def respawn_when_ready(game):
+    """Press Respawn once the death screen lets it (DeathScreen's 20-tick delay, counted from when
+    the screen opens)."""
+    for _ in range(20):
+        try:
+            return game.raw('respawn')
+        except Failed as e:
+            if 'not active yet' not in str(e):
+                raise
+            game.wait(10)
+    return game.raw('respawn')
+
+
+def check_world_spawn(host, guest, out):
+    """`setworldspawn` moves the world spawn: the host and the guest, with no bed of their own,
+    respawn there once killed (#1310)."""
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    sx, sz = hx + 24, hz
+    host('command', command='gamerule respawn_radius 0')
+    host('command', command=f'fill {sx - 2} {hy - 1} {sz - 2} {sx + 2} {hy - 1} {sz + 2} minecraft:stone')
+    host('command', command=f'fill {sx - 2} {hy} {sz - 2} {sx + 2} {hy + 3} {sz + 2} minecraft:air')
+    seen = {}
+    try:
+        host('command', command=f'setworldspawn {sx} {hy} {sz}')
+        for game in (host, guest):
+            game('command', command='gamemode survival')
+            game('command', command='kill @s')
+            game.wait(20)
+            respawn_when_ready(game)
+            game.wait(60)
+            seen[game.name] = [round(v, 2) for v in pos_of(game)]
+            game.shot(out, 'world-spawn')
+    finally:
+        host('command', command=f'setworldspawn {hx} {hy} {hz}')
+        host('command', command='gamerule respawn_radius 10')
+        for game in (host, guest):
+            game('command', command=f'tp @s {hx + 0.5} {hy} {hz + 0.5}')
+        guest.wait(20)
+    for name, at in seen.items():
+        assert abs(at[0] - (sx + 0.5)) < 1 and abs(at[2] - (sz + 0.5)) < 1, f'{name}: {seen}, spawn {sx} {sz}'
+    return seen
+
+
+def check_beds(host, guest, out):
+    """A bed sets the respawn point (day or night): respawning stands the player up beside it; a bed
+    that is gone, or boxed in by stone so there is nowhere to stand up, sends the player to the world
+    spawn instead (#1308). The host, then the guest, each for the three beds."""
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    host('command', command='gamerule respawn_radius 0')
+    host('command', command=f'setworldspawn {hx} {hy} {hz}')
+    host('command', command='time set 1000')
+    seen = {}
+    try:
+        for game, dz in ((host, -6), (guest, 6)):
+            game('command', command='gamemode survival')
+            x, y, z = hx + 12, hy, hz + dz
+            for case in ('intact', 'gone', 'boxed'):
+                game('command', command=f'fill {x - 3} {y - 1} {z - 3} {x + 4} {y - 1} {z + 3} minecraft:stone')
+                game('command', command=f'fill {x - 3} {y} {z - 3} {x + 4} {y + 3} {z + 3} minecraft:air')
+                game('command', command=f'setblock {x} {y} {z} minecraft:red_bed[facing=east,part=foot]')
+                game('command', command=f'setblock {x + 1} {y} {z} minecraft:red_bed[facing=east,part=head]')
+                game('command', command=f'tp @s {x + 0.5} {y} {z + 1.5}')
+                game.wait(20)
+                game.raw('interact', x + 1, y, z)
+                game.wait(10)
+                # Die elsewhere, by the world spawn.
+                game('command', command=f'tp @s {hx + 0.5} {hy} {hz + 3.5}')
+                game.wait(10)
+                if case == 'gone':
+                    game('command', command=f'fill {x} {y} {z} {x + 1} {y} {z} minecraft:air')
+                elif case == 'boxed':
+                    game('command', command=f'fill {x - 2} {y} {z - 2} {x + 3} {y + 2} {z + 2} minecraft:stone replace minecraft:air')
+                game.wait(5)
+                game('command', command='kill @s')
+                game.wait(20)
+                respawn_when_ready(game)
+                game.wait(60)
+                at = [round(v, 2) for v in pos_of(game)]
+                seen[f'{game.name}-{case}'] = {'at': at, 'bed': [x + 1, y, z], 'health': own(game)['health']}
+                game.shot(out, f'beds-{case}')
+    finally:
+        host('command', command='gamerule respawn_radius 10')
+        host('command', command='time set 1000')
+        for game in (host, guest):
+            game('command', command=f'tp @s {hx + 0.5} {hy} {hz + 0.5}')
+        guest.wait(20)
+    for case, s in seen.items():
+        (px, py, pz), (bx, by, bz) = s['at'], s['bed']
+        if case.endswith('intact'):
+            near = ((px - bx - 0.5) ** 2 + (pz - bz - 0.5) ** 2) ** 0.5
+            assert near < 2.6 and abs(py - by) < 0.6, f'{case}: not beside its bed: {seen}'
+        else:
+            assert abs(px - (hx + 0.5)) < 1 and abs(pz - (hz + 0.5)) < 1, f'{case}: not at the world spawn: {seen}'
+        assert s['health'] > 0, f'{case}: died again after respawning: {seen}'
+    return seen
+
+
+def check_death_mining(host, guest, out):
+    """A player who dies while breaking obsidian, and lets go of attack on the death screen, doesn't
+    break it once respawned: death forgets the digging (#1315)."""
+    host('command', command='gamerule keep_inventory true')
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    seen = {}
+    try:
+        for game, dz in ((host, -3), (guest, 3)):
+            x, y, z = hx + 2, hy, hz + dz
+            game('command', command='gamemode survival')
+            game('command', command='item replace entity @s weapon.mainhand with minecraft:diamond_pickaxe')
+            game('command', command=f'setblock {x + 2} {y} {z} minecraft:obsidian')
+            game('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+            game.wait(10)
+            game.raw('look-at', f'{x + 2.5:.2f}', f'{y + 0.5:.2f}', f'{z + 0.5:.2f}')
+            game.wait(5)
+            game.raw('mouse', 'left', 'down')
+            game.wait(10)
+            game('command', command='kill @s')
+            game.wait(10)
+            # The death screen lets go of the button (Minecraft.setScreen); let go again once back.
+            try:
+                game.raw('mouse', 'left', 'up')
+            except Failed:
+                pass
+            game.wait(10)
+            respawn_when_ready(game)
+            game.wait(2)
+            try:
+                game.raw('mouse', 'left', 'up')
+            except Failed:
+                pass
+            # Obsidian takes a diamond pickaxe about 190 ticks.
+            game.wait(240)
+            seen[game.name] = host.raw('block', x + 2, y, z).get('block')
+            game.shot(out, 'death-mining')
+            host('command', command=f'setblock {x + 2} {y} {z} minecraft:air')
+            game('command', command='item replace entity @s weapon.mainhand with minecraft:air')
+    finally:
+        host('command', command='gamerule keep_inventory false')
+    for name, block in seen.items():
+        assert block == 'minecraft:obsidian', f'{name}: {seen}'
+    return seen
+
+
+def check_absorption(host, guest, out):
+    """Absorption II's golden hearts on each player's own HUD: 8 of them, and 5 once a hit of 3 took
+    its share: the client shows what the server's player has (#1306)."""
+    seen = {}
+    for game in (host, guest):
+        game('command', command='gamemode survival')
+        game('command', command='effect give @s minecraft:absorption 120 1')
+        game.wait(10)
+        given = own(game)['absorption']
+        game('command', command='damage @s 3 minecraft:generic')
+        game.wait(20)
+        me = own(game)
+        server = server_player(host, game)
+        game.shot(out, 'absorption')
+        game('command', command='effect clear @s minecraft:absorption')
+        seen[game.name] = {'given': given, 'left': me['absorption'], 'health': me['health'],
+                           'server': server.get('absorption')}
+    for name, s in seen.items():
+        assert s['given'] == 8.0 and s['left'] == 5.0 == s['server'] and s['health'] == 20.0, \
+            f'{name}: {seen}'
+    return seen
+
+
+def check_breath(host, guest, out):
+    """Underwater in a Respiration III helmet for 15 s: the enchantment makes the air last on the
+    server, and each player's own bubbles follow the server's air (#1304)."""
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    seen = {}
+    for game, dz in ((host, -4), (guest, 4)):
+        x, y, z = hx + 3, hy, hz + dz
+        game('command', command='gamemode survival')
+        game('command', command='item replace entity @s armor.head with '
+                                'minecraft:diamond_helmet[minecraft:enchantments={"minecraft:respiration":3}]')
+        game('command', command=f'fill {x - 1} {y - 1} {z - 1} {x + 1} {y + 2} {z + 1} minecraft:stone')
+        game('command', command=f'fill {x} {y} {z} {x} {y + 1} {z} minecraft:water')
+        game('command', command=f'tp @s {x + 0.5} {y} {z + 0.5}')
+    host.wait(300)
+    for game in (host, guest):
+        game.shot(out, 'breath')
+        seen[game.name] = {'own': own(game)['air'], 'server': server_player(host, game).get('air')}
+    for game, dz in ((host, -4), (guest, 4)):
+        x, y, z = hx + 3, hy, hz + dz
+        game('command', command='item replace entity @s armor.head with minecraft:air')
+        host('command', command=f'fill {x - 1} {y - 1} {z - 1} {x + 1} {y + 2} {z + 1} minecraft:air')
+        host('command', command=f'fill {x - 1} {y - 1} {z - 1} {x + 1} {y - 1} {z + 1} minecraft:stone')
+    guest.wait(40)
+    # 300 ticks lose about 75 of the 300 with Respiration III, all of it without.
+    for name, s in seen.items():
+        assert s['server'] > 150 and abs(s['own'] - s['server']) <= 10, f'{name}: {seen}'
+    return seen
+
+
+def check_lava(host, guest, out):
+    """(--server-thread) Standing in a settled Nether lava current with Fire Resistance: the
+    Nether's FAST_LAVA pushes each player about three times as hard as the Overworld's (#1309)."""
+    if not SERVER_THREAD:
+        return 'skipped (needs --server-thread)'
+    seen = {}
+    back = {g.name: pos_of(g) for g in (host, guest)}
+    try:
+        for game, z in ((host, 0), (guest, 6)):
+            game('command', command=f'execute in minecraft:the_nether run tp @s 0.5 100 {z + 0.5}')
+            state = wait_dimension(game, 'minecraft:the_nether', 600)
+            assert state.get('dimension') == 'minecraft:the_nether', f'{game.name} is in {state.get("dimension")}'
+            game.wait(40)
+            # A one-wide obsidian channel along x: a source at x = -3, the current flowing east.
+            game('command', command=f'fill -5 98 {z - 2} 6 104 {z + 2} minecraft:air')
+            game('command', command=f'fill -5 98 {z - 1} 6 98 {z + 1} minecraft:obsidian')
+            game('command', command=f'fill -5 99 {z - 1} 6 99 {z - 1} minecraft:obsidian')
+            game('command', command=f'fill -5 99 {z + 1} 6 99 {z + 1} minecraft:obsidian')
+            game('command', command=f'fill -4 99 {z} -4 99 {z} minecraft:obsidian')
+            game('command', command='effect give @s minecraft:fire_resistance 120 0 true')
+            game('command', command='gamemode survival')
+            game('command', command=f'setblock -3 99 {z} minecraft:lava')
+        host.wait(100)
+        for game, z in ((host, 0), (guest, 6)):
+            game('command', command=f'tp @s 0.5 99 {z + 0.5}')
+        host.wait(60)
+        for game, z in ((host, 0), (guest, 6)):
+            v = own(game)['velocity']
+            seen[game.name] = {'vx': v[0], 'level': game.raw('block', 0, 99, z).get('state')}
+            game.shot(out, 'lava')
+    finally:
+        for game, z in ((host, 0), (guest, 6)):
+            host('command', command=f'execute in minecraft:the_nether run fill -5 98 {z - 2} 6 104 {z + 2} minecraft:air')
+            x, y, zz = back[game.name]
+            game('command', command='effect clear @s minecraft:fire_resistance')
+            game('command', command=f'execute in minecraft:overworld run tp @s {x:.2f} {y:.2f} {zz:.2f}')
+        for game in (host, guest):
+            wait_dimension(game, 'minecraft:overworld', 600)
+        guest.wait(40)
+    # The Overworld's current settles at about 0.0047 a tick, the Nether's at about 0.014.
+    for name, s in seen.items():
+        assert s['vx'] > 0.009, f'{name}: {seen}'
+    return seen
+
 
 def check_ladder(host, guest, out):
     """#1255: climbing down a ladder doesn't hurt where the guest lands."""
@@ -3344,33 +3879,33 @@ def check_worn(host, guest, out):
     return taken
 
 
-CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'nametags': check_nametags,
-             'chest': check_chest, 'crafting': check_crafting, 'sign': check_sign, 'damage': check_damage,
-             'mobs': check_mobs, 'hazards': check_hazards, 'pvp': check_pvp,
-             'respawn': check_respawn,
-             'containers': check_containers, 'feedback': check_feedback, 'titles': check_titles, 'chat': check_chat,
-             'machines': check_machines,
-             'brewing': check_brewing,
-             'loom': check_loom,
-             'stonecutter': check_stonecutter,
-             'grindstone': check_grindstone,
-             'anvil': check_anvil,
-             'smithing': check_smithing,
-             'enchanting': check_enchanting,
-             'beacon': check_beacon,
-             'crafter': check_crafter,
-             'lectern': check_lectern,
-             'cartography': check_cartography,
-             'hurt': check_hurt,
-             'commands': check_commands,
+CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
+             'nametags': check_nametags, 'chest': check_chest, 'crafting': check_crafting,
+             'sign': check_sign, 'damage': check_damage, 'mobs': check_mobs,
+             'hazards': check_hazards, 'pvp': check_pvp, 'respawn': check_respawn,
+             'containers': check_containers, 'feedback': check_feedback, 'titles': check_titles,
+             'chat': check_chat, 'machines': check_machines, 'brewing': check_brewing,
+             'loom': check_loom, 'stonecutter': check_stonecutter, 'grindstone': check_grindstone,
+             'anvil': check_anvil, 'smithing': check_smithing, 'enchanting': check_enchanting,
+             'beacon': check_beacon, 'crafter': check_crafter, 'lectern': check_lectern,
+             'cartography': check_cartography, 'hurt': check_hurt, 'commands': check_commands,
              'recipes': check_recipes, 'trials': check_trials, 'walls': check_walls,
-             'effects': check_effects, 'portals': check_portals, 'distance': check_distance, 'clicks': check_clicks,
-             'sleep': check_sleep, 'push': check_push, 'eat': check_eat, 'eating': check_eating,
-             'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles, 'blast': check_blast,
-             'light': check_light, 'plates': check_plates,
-             'swings': check_swings, 'cracks': check_cracks,
-             'time': check_time, 'growth': check_growth, 'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect, 'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'arrows': check_arrows, 'predict': check_predict, 'ladder': check_ladder, 'boats': check_boats, 'minecarts': check_minecarts, 'frames': check_frames, 'lightning': check_lightning, 'riding': check_riding, 'mounts': check_mounts,
-             'levels': check_levels}
+             'effects': check_effects, 'portals': check_portals, 'distance': check_distance,
+             'clicks': check_clicks, 'sleep': check_sleep, 'push': check_push,
+             'eat': check_eat, 'eating': check_eating, 'xp': check_xp,
+             'objects': check_objects, 'projectiles': check_projectiles, 'blast': check_blast,
+             'light': check_light, 'plates': check_plates, 'swings': check_swings,
+             'cracks': check_cracks, 'time': check_time, 'growth': check_growth,
+             'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect,
+             'barter': check_barter, 'worn': check_worn, 'kills': check_kills,
+             'arrows': check_arrows, 'predict': check_predict, 'ladder': check_ladder,
+             'boats': check_boats, 'minecarts': check_minecarts, 'frames': check_frames,
+             'lightning': check_lightning, 'riding': check_riding, 'mounts': check_mounts,
+             'worldspawn': check_world_spawn, 'beds': check_beds, 'shield': check_shield, 'deathmining': check_death_mining,
+             'contacts': check_contacts, 'absorption': check_absorption, 'breath': check_breath,
+             'lava': check_lava, 'levels': check_levels, 'drops': check_drops,
+             'underwater': check_underwater,
+             'looks': check_looks}
 
 
 def run(ctl, out, resources, checks):

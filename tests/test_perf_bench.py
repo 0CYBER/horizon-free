@@ -38,6 +38,14 @@ class PerfBenchStatsTests(unittest.TestCase):
         self.assertIsNone(frames("x", 0, []))
         json.dumps(s)
 
+    def test_window_sizes_name_their_reports(self):
+        from tools.perf_bench import SIZES, parse_sizes, size_label
+        self.assertEqual(parse_sizes("1280x720,1920X1080"), [(1280, 720), (1920, 1080)])
+        self.assertEqual(SIZES, [(1280, 720), (1920, 1080)])
+        self.assertEqual(size_label("horizon-m4", 1280, 720), "horizon-m4")
+        self.assertEqual(size_label("horizon-m4", 1920, 1080), "horizon-m4-1080p")
+        self.assertEqual(size_label("horizon-m4", 2560, 1080), "horizon-m4-2560x1080")
+
     def test_one_options_file_sets_the_render_distance(self):
         self.assertEqual(OPTIONS["renderDistance"].format(distance=16), "16")
         self.assertEqual(OPTIONS["graphicsPreset"], '"custom"')
