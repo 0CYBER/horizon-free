@@ -35,10 +35,13 @@ class ParityRunnerTests(unittest.TestCase):
             *parity.artifacts_of(["cargo", "build", "--release", "-p", "horizon-world", "--bin", "horizon-world"]),
             *parity.artifacts_of(["cargo", "build", "--release", "--bin", "horizon-world"]),
             *parity.artifacts_of(["cargo", "run", "--profile", "fast", "-p", "horizon-client", "--example", "c"]),
+            *parity.artifacts_of(["cargo", "build", "--release", "-p", "horizon-world", "--example", "renamed"]),
             ["example", "old", "release"],  # recorded before selections were kept: its own crate's -p
             ["example", "unknown", "release"],  # no longer in the workspace: left to its harness
         ]
-        self.assertEqual(parity.prebuild_commands(artifacts, {("example", "old"): "horizon-world"}), [
+        packages = {("example", "a"): "horizon-world", ("example", "b"): "horizon-world", ("example", "c"): "horizon-client",
+                    ("bin", "horizon-world"): "horizon-world", ("example", "old"): "horizon-world"}
+        self.assertEqual(parity.prebuild_commands(artifacts, packages), [
             ["cargo", "build", "--locked", "--profile", "fast", "-p", "horizon-client", "--example", "c"],
             ["cargo", "build", "--locked", "--profile", "release", "--bin", "horizon-world"],
             ["cargo", "build", "--locked", "--profile", "release", "-p", "horizon-world", "--bin", "horizon-world"],

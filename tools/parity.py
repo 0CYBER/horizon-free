@@ -555,10 +555,14 @@ def prebuild_commands(artifacts, packages=None):
     """The Cargo runs that build the recorded probes exactly as their harnesses do: one per profile, package and
     feature selection, and whether examples are among the command's targets (see artifacts_of).
 
-    A [kind, name, profile] record from before selections were kept is taken as built with `-p` and its own crate,
-    as nearly every harness does (packages: target_packages()); the harness's next run records the real one."""
+    packages: target_packages(). Records of targets that no longer exist (a probe renamed or deleted since a harness
+    ran it) are left out, since one unknown target fails its whole Cargo run. A [kind, name, profile] record from
+    before selections were kept is taken as built with `-p` and its own crate, as nearly every harness does; the
+    harness's next run records the real one."""
     groups = {}
     for artifact in artifacts:
+        if packages and artifact[1] and tuple(artifact[:2]) not in packages:
+            continue
         if len(artifact) == 3 and (packages or {}).get(tuple(artifact[:2])):
             kind, name, profile = artifact
             artifact = [kind, name, profile, ["-p", packages[(kind, name)]], kind == "example"]
@@ -578,7 +582,7 @@ def prebuild(artifacts, jobs):
     environment = run_environment()
     environment["CARGO_BUILD_JOBS"] = str(jobs)
     errors = ""
-    packages = target_packages() if any(len(artifact) == 3 for artifact in artifacts) else None
+    packages = target_packages()
     for command in prebuild_commands(artifacts, packages):
         result = subprocess.run(command, cwd=ROOT, env=environment, capture_output=True, text=True)
         if result.returncode:
