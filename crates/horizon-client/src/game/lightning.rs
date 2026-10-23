@@ -280,11 +280,12 @@ impl Game<'_> {
     }
     /// `thunderHit` for entities within 3 blocks (up to 9 above).
     fn thunder_hit(&mut self, b: &mut Bolt) {
-        let inside = |p: [f64; 3]| {
-            (p[0] - b.at[0]).abs() <= 3.0
-                && (p[2] - b.at[2]).abs() <= 3.0
-                && p[1] >= b.at[1] - 3.0
-                && p[1] <= b.at[1] + 9.0
+        let at = b.at;
+        let inside = move |p: [f64; 3]| {
+            (p[0] - at[0]).abs() <= 3.0
+                && (p[2] - at[2]).abs() <= 3.0
+                && p[1] >= at[1] - 3.0
+                && p[1] <= at[1] + 9.0
         };
         let damage = Damage {
             kind: DamageKind::Generic,
@@ -349,19 +350,24 @@ impl Game<'_> {
         if !events.is_empty() {
             let _ = self.handle_mob_events(events);
         }
-        if let Some(p) = self.player.as_ref().map(|p| p.position)
-            && inside([p.x, p.y, p.z])
-        {
-            if let Some(p) = self.player.as_mut() {
-                p.fire_ticks += 1;
-                if p.fire_ticks == 0
-                    && let Err(error) = p.ignite_for_ticks(160)
-                {
-                    self.error = Some(error);
+        // Every player in the box, the server's players too.
+        let strike = move |g: &mut Self| {
+            if let Some(p) = g.player.as_ref().map(|p| p.position)
+                && inside([p.x, p.y, p.z])
+            {
+                if let Some(p) = g.player.as_mut() {
+                    p.fire_ticks += 1;
+                    if p.fire_ticks == 0
+                        && let Err(error) = p.ignite_for_ticks(160)
+                    {
+                        g.error = Some(error);
+                    }
                 }
+                g.hurt_player_by("minecraft:lightning_bolt", 5.0);
             }
-            self.hurt_player_by("minecraft:lightning_bolt", 5.0);
-        }
+        };
+        strike(self);
+        self.each_guest_hit(strike);
         // Dropped items burn up (ItemEntity health 5), save fire-resistant ones.
         self.dropped.retain(|e| {
             !inside([e.position.x, e.position.y, e.position.z])

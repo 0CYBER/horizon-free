@@ -78,6 +78,8 @@ pub(super) fn acts_on_player(e: &MobEvent) -> bool {
                 target: Who::Player,
                 ..
             }
+            | MobEvent::EffectPlayer { .. }
+            | MobEvent::AxolotlSupportPlayer
     )
 }
 
@@ -113,6 +115,25 @@ impl Game<'_> {
         }
         self.lan = Some(host);
         views
+    }
+
+    /// Runs `f` as each guest in play here, for what strikes every player in
+    /// an area (`Level.getEntities`), not only the window's own.
+    pub(super) fn each_guest_hit(&mut self, mut f: impl FnMut(&mut Self)) {
+        let Some(mut host) = self.lan.take() else {
+            return;
+        };
+        let conns: Vec<u32> = host
+            .hub
+            .guests
+            .iter()
+            .filter(|g| host.hub.here(g) && g.loaded && !g.dead)
+            .map(|g| g.conn)
+            .collect();
+        for conn in conns {
+            self.guest_hit_by(&mut host, conn, &mut f);
+        }
+        self.lan = Some(host);
     }
 
     /// Mob events aimed at a guest, run as that guest (`guest_hit_by`).
