@@ -2258,10 +2258,12 @@ pub struct Level {
     pub game_mode: i32,
     pub time: i64,
     pub day_time: i64,
-    /// The player's respawn point (bed, or the world spawn).
+    /// Where the player respawns when it has no bed or anchor: its forced
+    /// Overworld point (`spawnpoint`), or the world spawn.
     pub spawn: Option<[f64; 3]>,
-    /// A respawn point in another dimension than the Overworld (a respawn
-    /// anchor): dimension, block, yaw and `forced`.
+    /// A respawn point resolved through its block when the player respawns
+    /// (a bed, a respawn anchor, a forced point outside the Overworld):
+    /// dimension, block, yaw and `forced`.
     pub respawn_elsewhere: Option<(String, [i32; 3], f32, bool)>,
     pub position: Option<[f64; 3]>,
     pub rotation: [f32; 2],
@@ -2495,14 +2497,17 @@ impl Level {
         {
             let dimension =
                 text(respawn.get("dimension")).unwrap_or_else(|| "minecraft:overworld".into());
-            if dimension == "minecraft:overworld" {
+            let forced = number(respawn.get("forced")).is_some_and(|v| v != 0);
+            // A forced point in the Overworld (`spawnpoint`) is where the
+            // player respawns; anything else (a bed, an anchor) is resolved
+            // through its block then.
+            if dimension == "minecraft:overworld" && forced {
                 self.spawn = Some([f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])]);
             } else {
                 let yaw = match respawn.get("yaw") {
                     Some(Tag::Float(b)) => f32::from_bits(*b),
                     _ => 0.0,
                 };
-                let forced = number(respawn.get("forced")).is_some_and(|v| v != 0);
                 self.respawn_elsewhere = Some((dimension, [pos[0], pos[1], pos[2]], yaw, forced));
             }
         }
@@ -2719,6 +2724,8 @@ impl Level {
                 s[1].floor() as i32,
                 s[2].floor() as i32,
             ];
+            // A point of the player's own in the Overworld other than a bed
+            // (`respawn_elsewhere`): `spawnpoint`'s, forced.
             if Some(block) != self.world_spawn {
                 entries.push((
                     "respawn",
@@ -2727,6 +2734,7 @@ impl Level {
                         ("pos", Tag::IntArray(block.to_vec())),
                         ("yaw", Tag::Float(0f32.to_bits())),
                         ("pitch", Tag::Float(0f32.to_bits())),
+                        ("forced", Tag::Byte(1)),
                     ]),
                 ));
             }

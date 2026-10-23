@@ -1507,11 +1507,22 @@ impl Game<'_> {
         // or another one's anchor or forced point, which its block resolves
         // once the level has loaded around it.
         let server = self.options.dedicated.is_some();
-        let elsewhere = host.hub.guests[i]
+        let own = host.hub.guests[i]
             .respawn_elsewhere
             .as_ref()
-            .filter(|_| server)
             .map(RespawnConfig::from_saved);
+        let elsewhere = own.filter(|_| server);
+        // In the window's world a guest has no level of its own to wait in:
+        // its bed is resolved at once when its chunk is there, else it
+        // comes back on the bed.
+        let in_frame_bed = own.filter(|c| !server && c.dim == super::Dim::Overworld);
+        let spawn = in_frame_bed.map_or(spawn, |c| {
+            [
+                f64::from(c.pos[0]) + 0.5,
+                f64::from(c.pos[1]) + 0.6,
+                f64::from(c.pos[2]) + 0.5,
+            ]
+        });
         let level = elsewhere.map_or(super::Dim::Overworld, |c| c.dim);
         let spawn = elsewhere.map_or(spawn, |c| {
             [
@@ -1568,6 +1579,25 @@ impl Game<'_> {
         host.hub.respawn(i, spawn, &ctx);
         if let Some(config) = elsewhere {
             self.respawn_trip(conn, config);
+        }
+        if let Some(c) = in_frame_bed
+            && self.dim == super::Dim::Overworld
+            && self.world.loaded(c.pos[0], c.pos[2])
+        {
+            let found = self
+                .as_guest(host, conn, |g| g.resolve_server_respawn(c))
+                .flatten();
+            let world = self
+                .level
+                .world_spawn
+                .map_or([0.5, 80.0, 0.5], |[x, y, z]| {
+                    [f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5]
+                });
+            let at = found.map_or(world, |(at, yaw)| {
+                host.hub.guests[i].yaw = yaw;
+                [at.x, at.y, at.z]
+            });
+            host.hub.teleport(i, Some(at));
         }
         if away && let Err(e) = self.enter_level(Some(host), back) {
             log::error!("could not reopen {}: {e}", back.id());

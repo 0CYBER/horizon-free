@@ -9146,31 +9146,41 @@ impl Game<'_> {
         } else {
             pos
         };
-        self.spawn = Some(Vec3::new(
-            f64::from(head[0]) + 0.5,
-            f64::from(head[1]) + 0.6,
-            f64::from(head[2]) + 0.5,
-        ));
-        // The bed replaces a respawn anchor.
-        self.respawn_config = None;
-        self.level.spawn = Some([
-            f64::from(head[0]),
-            f64::from(head[1]) + 1.0,
-            f64::from(head[2]),
-        ]);
         let dist = ((p.position.x - f64::from(head[0]) - 0.5).powi(2)
             + (p.position.z - f64::from(head[2]) - 0.5).powi(2))
         .sqrt();
-        if !night {
+        if dist > 3.0 {
             self.message = Some((
-                "You can sleep only at night or during thunderstorms".into(),
+                "You may not rest now; the bed is too far away".into(),
                 Instant::now(),
             ));
             return;
         }
-        if dist > 3.0 {
+        // In reach (bedInRange), day or night: setRespawnPosition(
+        // RespawnConfig(the head, the player's yaw), not forced). It replaces
+        // an anchor or a spawnpoint; respawning checks the bed is still there
+        // and finds where to stand up (findRespawnAndUseSpawnBlock).
+        // Straw beds never set it (`straw_bed_rule`).
+        if self.bed_sets_spawn(state) {
+            self.respawn_config = Some(respawn_anchor::RespawnConfig::wrapped(
+                self.dim, head, p.yaw, false,
+            ));
+            // The fallback becomes the world spawn: a guest's is none of its
+            // own, so it follows `setworldspawn`.
+            self.spawn = if self.lan_acting.is_some() {
+                None
+            } else {
+                self.level
+                    .world_spawn
+                    .map(|[x, y, z]| {
+                        Vec3::new(f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5)
+                    })
+                    .or(self.spawn)
+            };
+        }
+        if !night {
             self.message = Some((
-                "You may not rest now; the bed is too far away".into(),
+                "You can sleep only at night or during thunderstorms".into(),
                 Instant::now(),
             ));
             return;

@@ -2340,10 +2340,11 @@ impl Game<'_> {
         // LevelData.setRespawnData: the world's spawn (level.dat `spawn`).
         let old = self.level.world_spawn.replace(pos);
         self.level.world_spawn_angle = rot;
-        // A player whose respawn point is the world spawn (no bed, anchor or
-        // spawnpoint of its own) respawns at the new one.
+        // A player whose fallback is the world spawn (no spawnpoint of its
+        // own; a bed or an anchor that is gone falls back to it) respawns at
+        // the new one.
         let floor = |s: Vec3| [s.x.floor() as i32, s.y.floor() as i32, s.z.floor() as i32];
-        if self.respawn_config.is_none() && self.spawn.map(floor) == old {
+        if self.spawn.map(floor) == old {
             self.spawn = Some(Vec3::new(
                 f64::from(pos[0]) + 0.5,
                 f64::from(pos[1]),

@@ -36,6 +36,15 @@ pub(super) struct RespawnConfig {
 pub(super) type SavedRespawn = (String, [i32; 3], f32, bool);
 
 impl RespawnConfig {
+    /// `RespawnData.of`: the yaw wrapped to [-180, 180).
+    pub(super) fn wrapped(dim: Dim, pos: [i32; 3], yaw: f32, forced: bool) -> Self {
+        Self {
+            dim,
+            pos,
+            yaw: wrap_degrees(f64::from(yaw)) as f32,
+            forced,
+        }
+    }
     pub(super) fn from_saved((dim, pos, yaw, forced): &SavedRespawn) -> Self {
         Self {
             dim: Dim::from_id(dim),
@@ -80,7 +89,7 @@ pub(super) enum AnchorUse {
 }
 
 impl Game<'_> {
-    fn is_anchor(&self, state: BlockStateId) -> bool {
+    pub(super) fn is_anchor(&self, state: BlockStateId) -> bool {
         &*self.res.facts().get(state).name == "minecraft:respawn_anchor"
     }
     fn anchor_charges(&self, state: BlockStateId) -> i32 {
@@ -456,9 +465,87 @@ impl Game<'_> {
         }
         None
     }
+    /// `AbstractBedBlock.findStandUpPosition` for a bed whose head is at
+    /// `pos`, facing `forward`, set from `yaw`: beside the bed on the side
+    /// the player faced away from, around it, then on it; a safe spot
+    /// first, else any spot (a bunk bed: around it, a block lower, then on
+    /// it).
+    pub(super) fn bed_stand_up(&self, pos: [i32; 3], forward: [i32; 3], yaw: f32) -> Option<Vec3> {
+        // Direction.getClockWise.
+        let right = [-forward[2], 0, forward[0]];
+        // Direction.isFacingAngle.
+        let radians = yaw * 0.017_453_292;
+        let (dx, dz) = (
+            -horizon_core::geometry::trig::sin(f64::from(radians)),
+            horizon_core::geometry::trig::cos(f64::from(radians)),
+        );
+        let facing = right[0] as f32 * dx + right[2] as f32 * dz > 0.0;
+        let side = if facing {
+            [-right[0], 0, -right[2]]
+        } else {
+            right
+        };
+        let (f, s) = ([forward[0], forward[2]], [side[0], side[2]]);
+        // bedSurroundStandUpOffsets and bedAboveStandUpOffsets.
+        let surround = [
+            [s[0], s[1]],
+            [s[0] - f[0], s[1] - f[1]],
+            [s[0] - f[0] * 2, s[1] - f[1] * 2],
+            [-f[0] * 2, -f[1] * 2],
+            [-s[0] - f[0] * 2, -s[1] - f[1] * 2],
+            [-s[0] - f[0], -s[1] - f[1]],
+            [-s[0], -s[1]],
+            [-s[0] + f[0], -s[1] + f[1]],
+            [f[0], f[1]],
+            [s[0] + f[0], s[1] + f[1]],
+        ];
+        let above = [[0, 0], [-f[0], -f[1]]];
+        let at = |base: [i32; 3], offsets: &[[i32; 2]], check: bool| {
+            offsets.iter().find_map(|o| {
+                self.safe_dismount_location([base[0] + o[0], base[1], base[2] + o[1]], check)
+            })
+        };
+        let below = [pos[0], pos[1] - 1, pos[2]];
+        // isBunkBed: a bed below.
+        if self.is_bed(self.world.block(below[0], below[1], below[2])) {
+            return at(pos, &surround, true)
+                .or_else(|| at(below, &surround, true))
+                .or_else(|| at(pos, &above, true))
+                .or_else(|| at(pos, &surround, false))
+                .or_else(|| at(below, &surround, false))
+                .or_else(|| at(pos, &above, false));
+        }
+        let all: Vec<[i32; 2]> = surround.into_iter().chain(above).collect();
+        at(pos, &all, true).or_else(|| at(pos, &all, false))
+    }
+    pub(super) fn is_bed(&self, state: BlockStateId) -> bool {
+        self.res.facts().get(state).name.ends_with("_bed")
+    }
+    /// The bed's `facing`, as a step.
+    fn bed_forward(&self, state: BlockStateId) -> [i32; 3] {
+        let facing = self
+            .pack
+            .assets
+            .registry
+            .state(state)
+            .and_then(|s| s.properties.get("facing").cloned());
+        match facing.as_deref() {
+            Some("south") => [0, 0, 1],
+            Some("west") => [-1, 0, 0],
+            Some("east") => [1, 0, 0],
+            _ => [0, 0, -1],
+        }
+    }
+    /// `BedRule.canSetSpawn` of the bed's rule attribute (`bed_rule`,
+    /// `straw_bed_rule`): only the Overworld's beds set the spawn, straw
+    /// beds never.
+    pub(super) fn bed_sets_spawn(&self, state: BlockStateId) -> bool {
+        self.dim == Dim::Overworld && &*self.res.facts().get(state).name != "minecraft:straw_bed"
+    }
     /// `ServerPlayer.findRespawnAndUseSpawnBlock` for a config in the loaded
-    /// dimension: the position and yaw, using an anchor's charge. A forced
-    /// point (`spawnpoint`) that is no anchor holds if a player fits in it.
+    /// dimension: the position and yaw, using an anchor's charge; a bed's
+    /// stand-up spot. A forced point (`spawnpoint`) that is no anchor or bed
+    /// holds if a player fits in it; anything else is gone.
     pub(super) fn find_respawn_and_use(
         &mut self,
         c: RespawnConfig,
@@ -469,6 +556,12 @@ impl Game<'_> {
             && (c.forced || self.anchor_charges(state) > 0)
             && self.anchor_works())
         {
+            // A bed where its bed rule lets it set the spawn.
+            if self.is_bed(state) && self.bed_sets_spawn(state) {
+                let facing = self.bed_forward(state);
+                let stand = self.bed_stand_up(c.pos, facing, c.yaw);
+                return Ok(stand.map(|p| (p, look_at_yaw(p, c.pos))));
+            }
             let [x, y, z] = c.pos;
             let free = c.forced
                 && !self.is_anchor(state)
