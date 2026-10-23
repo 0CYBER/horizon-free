@@ -427,9 +427,11 @@ What makes Horizon look like OpenGL to the pack:
 Measured on the Mac mini (M4 Pro) with the packs' default options: BSL v10.1.8 and Complementary Reimagined r5.9.3
 grade and light Horizon's world as their post-processing would. Sildur's Vibrant v2.02 draws only its sky: its
 `deferred` reads the albedo `gbuffers_*` write to `colortex4`. Without `gbuffers_*` and `shadow`, no pack has its
-shadows, water or sky look yet; Distant Horizons' and Voxy's depth read as far. Not supported yet: images and
-compute (`.csh`; a pack that needs them doesn't load), mipmapped targets (`colortexNMipmapEnabled` is read but
-ignored), custom textures, the option screen; shadow matrices are identity.
+shadows, water or sky look yet; Distant Horizons' and Voxy's depth read as far. Horizon's world goes into the target
+the pack's `gbuffers_terrain` (or the program Iris falls back to) draws to first: `colortex0` for most packs,
+`colortex1` for MakeUp. Not supported yet: images and compute (`.csh`; a pack that needs them doesn't load),
+mipmapped targets (`colortexNMipmapEnabled` is read but ignored), `.dat` and resource-location custom textures (PNG
+files in the pack only); shadow matrices are identity.
 
 ### Compatibility
 
@@ -438,6 +440,7 @@ the authors' pages (dev-only test inputs, kept outside the repository). "Loads" 
 the overworld, Nether and End is preprocessed, translated and validated, as the game does when the pack is picked
 (`java_pack::tests::real_packs_load` with `HORIZON_TEST_SHADERPACKS`); "drawn" means it was also picked in the game
 and screenshotted. Only full-screen passes run (above), so no pack has its own terrain, water, shadows or sky yet.
+The MakeUp, Chocapic13' and Photon rows are from 2026-10-23, on Metal and on Vulkan (RTX 4080).
 
 | Pack | Version | Result | First thing that stops it |
 | --- | --- | --- | --- |
@@ -446,10 +449,12 @@ and screenshotted. Only full-screen passes run (above), so no pack has its own t
 | Complementary Unbound | r5.8 | loads: 27 passes | |
 | Sildur's Vibrant Extreme | 2.02 | drawn: 18 passes, only its sky (above) | |
 | Steadfast | 0.8.0 | drawn: 3 passes | |
+| MakeUp Ultra Fast | 9.6 | drawn: 6 passes, its fog, light shafts and grade over Horizon's world | |
+| Chocapic13' | V9 High | drawn: 16 passes; its default TAA upscaling shrinks the world in its `gbuffers_*` vertex programs, which don't run, so the picture is magnified 1/0.7: turn TAA Upscaling off in its settings | |
 | Bliss | 2.1.2 | fails | `world0/deferred.vsh`: an operation naga forbids in a vertex shader |
 | Bloop | 1.8.0-Alpha-3 | fails | `world0/prepare1.fsh`: `mat2(vec4)` and other constructors naga's GLSL front end refuses |
 | Noble | v1.9.9 | fails (Apple and NVIDIA) | `world0/deferred4.vsh`: a `vec3[9][9]` varying (nested arrays between stages) |
-| Photon | v1.4 | fails | `world0/prepare.vsh`: a struct varying (`CloudsParameters`) |
+| Photon | v1.4 | fails | `world0/deferred1.fsh`: `textureGather` |
 | Rethinking Voxels | r0.1-beta9 | fails | `world0/prepare.fsh`: `1 << 31` overflows naga's constant folding; it also needs images |
 
 What the translator does for these packs, as Iris (JCPP and its GLSL transformer) does:
