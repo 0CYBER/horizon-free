@@ -70,7 +70,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - levels:    (--server-thread) the host and the guest each in a level of their own: `execute in`
              teleports into another level, and `execute in` and `at` change and test blocks there;
              mobs fall in two levels at once, with ids unique across them; the guest rejoins in the
-             Nether, dies there and respawns in the Overworld; the host takes a Nether portal alone;
+             Nether, dies there and respawns in the Overworld, then in the Nether at a `spawnpoint`
+             and at a respawn anchor set there; the host takes a Nether portal alone;
              the guest takes an End portal, an End gateway and the exit portal alone; and the host
              saves, quits and reopens with the guest in the Nether.
 - commands:  the guest's chat completes commands and their arguments over the server's command
@@ -696,6 +697,48 @@ def level_death(host, guest, out):
     return {'respawned': back['player']['position']}
 
 
+def level_respawn_points(host, guest, out):
+    """Respawn points outside the Overworld (ServerPlayer.findRespawnAndUseSpawnBlock): a point
+    `spawnpoint` sets in the Nether (forced), then a charged respawn anchor the guest uses there,
+    each bring the guest back in the Nether; the anchor loses a charge."""
+    home = pos_of(guest)
+    x, z = (int(v // 1) for v in home[::2])
+    into_level(guest, NETHER, x, 100, z)
+    results = {}
+    try:
+        guest('command', command=f'spawnpoint @s {x} 100 {z}')
+        results['spawnpoint'] = die_and_respawn(guest)
+        guest('command', command=f'setblock {x + 2} 100 {z} minecraft:respawn_anchor[charges=2]')
+        guest.wait(10)
+        guest.raw('interact', x + 2, 100, z)
+        guest.wait(10)
+        results['anchor'] = die_and_respawn(guest)
+        results['charges'] = guest.raw('block', x + 2, 100, z).get('state')
+    finally:
+        sx, sy, sz = (int(v // 1) for v in pos_of(host))
+        guest('command', command=f'execute in {OVERWORLD} run spawnpoint @s {sx} {sy} {sz}')
+        guest('command', command=f'execute in {NETHER} run setblock {x + 2} 100 {z} minecraft:air')
+        guest('command', command=f'execute in {OVERWORLD} run tp @s {home[0]:.2f} {home[1]:.2f} {home[2]:.2f}')
+        wait_dimension(guest, OVERWORLD, 400)
+    point, anchor = results['spawnpoint'], results['anchor']
+    assert point[0] == NETHER and abs(point[1][0] - x - 0.5) < 0.6 and abs(point[1][2] - z - 0.5) < 0.6, \
+        f'the spawnpoint brought the guest to {point}'
+    assert anchor[0] == NETHER and abs(anchor[1][0] - x - 2.5) < 2 and abs(anchor[1][2] - z - 0.5) < 2, \
+        f'the anchor brought the guest to {anchor}'
+    assert 'charges=1' in (results['charges'] or ''), f'the anchor after the respawn: {results["charges"]}'
+    return results
+
+
+def die_and_respawn(guest):
+    """Kill the guest and respawn it: the dimension and position it comes back at, once settled."""
+    guest('command', command='kill @s')
+    guest.wait(20)
+    guest.raw('respawn')
+    guest.wait(80)
+    state = guest('state')
+    return state.get('dimension'), state['player']['position']
+
+
 def level_host_nether(host, guest, out):
     """The host goes through a Nether portal while the guest stays in the Overworld."""
     hx, hy, hz = (int(v // 1) for v in pos_of(host))
@@ -788,7 +831,8 @@ def level_reload(host, guest, out):
 
 
 LEVEL_STEPS = [('execute', level_execute), ('ticking', level_ticking), ('rejoin', level_rejoin),
-               ('death', level_death), ('host_nether', level_host_nether),
+               ('death', level_death), ('respawn_points', level_respawn_points),
+               ('host_nether', level_host_nether),
                ('guest_end', level_guest_end), ('reload', level_reload)]
 
 

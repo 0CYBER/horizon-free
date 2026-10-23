@@ -9,8 +9,9 @@
 
 use super::end::GatewayJob;
 use super::nether_portal::{PLAYER_DELAY, Plan};
+use super::respawn_anchor::RespawnConfig;
 use super::{Dim, Game, lan::LanHost};
-use horizon_client::lan::hub::TickCtx;
+use horizon_client::{lan::hub::TickCtx, text::Text};
 use horizon_core::{geometry::Vec3, position::BlockPos};
 
 /// A trip under way: the player is in the destination's level, whose
@@ -26,6 +27,9 @@ pub(super) struct Trip {
     /// Through an End gateway, within the level: its exit, found or built
     /// on arrival.
     gateway: Option<GatewayJob>,
+    /// A respawn at this point outside the Overworld, resolved through its
+    /// block on arrival.
+    respawn: Option<RespawnConfig>,
     /// Sent by a command: the player is already where it goes.
     placed: bool,
 }
@@ -215,11 +219,70 @@ impl Game<'_> {
             end,
             plan,
             gateway: None,
+            respawn: None,
             placed: false,
         });
         if let Err(e) = self.enter_level(Some(host), source) {
             log::error!("could not reopen {}: {e}", source.id());
         }
+    }
+
+    /// A respawned player waits at its point outside the Overworld for the
+    /// level to load around it.
+    pub(super) fn respawn_trip(&mut self, conn: u32, config: RespawnConfig) {
+        let [x, y, z] = config.pos;
+        self.server_trips.push(Trip {
+            conn,
+            dim: config.dim,
+            target: Vec3::new(f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5),
+            end: false,
+            plan: None,
+            gateway: None,
+            respawn: Some(config),
+            placed: false,
+        });
+    }
+
+    /// `findRespawnAndUseSpawnBlock` for the player in place, at its point
+    /// in the level in place: where it stands up, facing the anchor, with
+    /// the deplete sound; else the point is forgotten
+    /// (`block.minecraft.spawn.not_valid`).
+    fn resolve_server_respawn(&mut self, config: RespawnConfig) -> Option<(Vec3, f32)> {
+        match self.find_respawn_and_use(config, true) {
+            Ok(Some((at, yaw))) => {
+                if !config.forced {
+                    let [x, y, z] = config.pos.map(f64::from);
+                    self.audio.play(
+                        "minecraft:block.respawn_anchor.deplete",
+                        Some([x, y, z]),
+                        1.0,
+                        1.0,
+                    );
+                }
+                Some((at, yaw))
+            }
+            Ok(None) | Err(_) => {
+                self.respawn_config = None;
+                self.system_message(Text::translate("block.minecraft.spawn.not_valid", &[]));
+                None
+            }
+        }
+    }
+
+    /// TeleportTransition.missingRespawnBlock: the world spawn, in the
+    /// Overworld.
+    fn respawn_at_world_spawn(&mut self, host: &mut LanHost, conn: u32) {
+        let at = self.level.world_spawn.map_or(
+            self.spawn.map_or([0.5, 80.0, 0.5], |s| [s.x, s.y, s.z]),
+            |[x, y, z]| [f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5],
+        );
+        self.level_teleports.push(LevelTeleport {
+            conn,
+            dim: Dim::Overworld,
+            at,
+            rotation: None,
+        });
+        self.run_level_teleports(host);
     }
 
     /// `TheEndGatewayBlockEntity.getPortalPosition` and the teleport within
@@ -244,6 +307,7 @@ impl Game<'_> {
             end: false,
             plan: None,
             gateway: Some(job),
+            respawn: None,
             placed: false,
         });
     }
@@ -276,7 +340,15 @@ impl Game<'_> {
             }
             self.resolve_arrivals();
             let yaw = host.hub.guests[i].yaw;
-            let (position, yaw) = if let Some(job) = trip.gateway {
+            let (position, yaw) = if let Some(config) = trip.respawn {
+                match self.as_guest(host, trip.conn, |g| g.resolve_server_respawn(config)) {
+                    Some(Some(found)) => found,
+                    _ => {
+                        self.respawn_at_world_spawn(host, trip.conn);
+                        continue;
+                    }
+                }
+            } else if let Some(job) = trip.gateway {
                 match self.resolve_gateway(job, trip.target) {
                     Ok(at) => (at, yaw),
                     Err(e) => {
@@ -346,6 +418,7 @@ impl Game<'_> {
                 end: false,
                 plan: None,
                 gateway: None,
+                respawn: None,
                 placed: true,
             });
             if let Err(e) = self.enter_level(Some(host), source) {

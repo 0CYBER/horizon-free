@@ -18,7 +18,7 @@ the other dimensions' levels as `Parked` values and swaps one into place (`enter
 | `MinecraftServer.tickChildren`, every level | `tick_server`: each level with a player in it, in Overworld, Nether, End order. The first pass reads the network and runs the shared parts (clock, weather, functions, autosave). |
 | `ServerLevel.players` | `Hub::here`: the guests whose `dimension` is the level in place |
 | `ServerPlayer.teleport` into another level | `server_travel.rs`: a Respawn packet, then the teleport once the destination has loaded (portals and `execute in … tp`). An End gateway teleports within the End. |
-| `PlayerList.respawn` | `guest_respawn`: back into the Overworld's level |
+| `PlayerList.respawn` | `guest_respawn`: into the respawn point's level, the Overworld unless the player has an anchor or a `spawnpoint` elsewhere (`Guest::respawn_elsewhere`), resolved through its block once that level has loaded |
 | `ServerLevel.noPlayersEmptyTime`, chunk unloading | `close_idle_levels`: a level other than the Overworld with nobody in it for 300 ticks is saved and closed |
 | `CommandSourceStack.getLevel` | `with_source` puts the source's level in place for a command (`execute in`, `execute at` a player in another level) |
 | the levels' shared `LevelData` | not swapped: game time, day time, weather, game rules, scoreboard, maps, entity ids (`next_entity`, unique across levels) |
@@ -76,7 +76,8 @@ the Nether, or whose host saves and quits, joins again in the Nether where it wa
   - Mobs and armour stands fall in two levels at once, and every entity id is unique across the
     levels.
   - The guest leaves in the Nether and joins again there.
-  - The guest dies in the Nether and respawns in the Overworld.
+  - The guest dies in the Nether and respawns in the Overworld. With a `spawnpoint` and then a
+    respawn anchor set in the Nether, it respawns there, and the anchor loses a charge.
   - The host takes a Nether portal alone.
   - The guest takes an End portal, an End gateway and then the exit portal alone.
   - The host saves, quits and opens the world again with the guest in the Nether, and the guest
