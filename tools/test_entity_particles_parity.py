@@ -79,8 +79,8 @@ def main():
     cases_path, units = make_cases(build)
     classes, dependencies, _ = harness.compile_oracle(build, oracle, jars, baking.client_libraries(),
                                                       lock['minecraft']['java_major'])
-    binary = harness.build_probe(build, probe)
-    harness.run_logged([binary, cases_path, build / 'rust.txt'], build, 'rust')
+    command = harness.build_probe(build, probe)
+    harness.run_logged([*command, cases_path, build / 'rust.txt'], build, 'rust')
     harness.java_run(build, classes, dependencies, oracle, [cases_path, build / 'client.txt'], 'client')
     vanilla = (build / 'client.txt').read_text().splitlines()
     rust = (build / 'rust.txt').read_text().splitlines()

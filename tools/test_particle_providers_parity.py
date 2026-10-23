@@ -201,10 +201,10 @@ def main():
     tested = base.source_hashes(sources)
     cases_path, units = make_cases(build)
     classes, dependencies, _ = harness.compile_oracle(build, oracle, jars, libraries, lock['minecraft']['java_major'])
-    binary = harness.build_probe(build, probe)
+    command = harness.build_probe(build, probe)
     # The oracle runs first: the probe replays the particle seeds it recovered.
     harness.java_run(build, classes, dependencies, oracle, [cases_path, build / 'client.txt'], 'client')
-    harness.run_logged([binary, cases_path, build / 'client.txt', build / 'rust.txt'], build, 'rust')
+    harness.run_logged([*command, cases_path, build / 'client.txt', build / 'rust.txt'], build, 'rust')
     tolerance = 0
     try:
         matched = base.compare(build / 'client.txt', build / 'rust.txt')

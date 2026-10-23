@@ -40,7 +40,7 @@ def main():
     build=lab.LOCAL/'rust-sprint-input';build.mkdir(exist_ok=True)
     report=build/'report.json';report.unlink(missing_ok=True)
     oracle=lab.ROOT/'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaSprintInputOracle.java'
-    sources=[Path(__file__),lab.ROOT/'tools/test_rust_parity.py',lab.ROOT/'tools/test_model_baking_parity.py',lab.ROOT/'tools/lab.py',oracle,lab.ROOT/'Cargo.toml',lab.ROOT/'Cargo.lock',lab.ROOT/'crates/horizon-client/Cargo.toml',lab.ROOT/'crates/horizon-client/src/input.rs',lab.ROOT/'crates/horizon-client/src/sprint.rs',lab.ROOT/'crates/horizon-client/src/lib.rs',lab.ROOT/'crates/horizon-client/examples/sprint_probe.rs']
+    sources=[Path(__file__),lab.ROOT/'tools/test_rust_parity.py',lab.ROOT/'tools/test_model_baking_parity.py',lab.ROOT/'tools/lab.py',oracle,lab.ROOT/'Cargo.toml',lab.ROOT/'Cargo.lock',lab.ROOT/'crates/horizon-client/Cargo.toml',lab.ROOT/'crates/horizon-client/src/input.rs',lab.ROOT/'crates/horizon-client/src/sprint.rs',lab.ROOT/'crates/horizon-client/src/lib.rs',lab.ROOT/'crates/horizon-client/examples/probe/sprint_probe.rs']
     tested=base.source_hashes(sources)
     def run(command,name):
         with (build/(name+'.log')).open('w') as log:subprocess.run(list(map(str,command)),cwd=lab.ROOT,check=True,timeout=600,stdout=log,stderr=subprocess.STDOUT)
@@ -49,10 +49,10 @@ def main():
     classes=build/'classes';classes.mkdir(exist_ok=True)
     dependencies=os.pathsep.join(map(str,[jars['client'],*libraries]))
     run(['javac','--release',lock['minecraft']['java_major'],'-proc:none','-sourcepath',str(lab.ROOT/'mods/horizon/src/test/java'),'-cp',dependencies,'-d',classes,oracle],'compile-java')
-    run(['cargo','build','--locked','-p','horizon-client','--example','sprint_probe'],'compile-rust')
+    run(['cargo','build','--locked','-p','horizon-client','--example','probe'],'compile-rust')
     metadata=json.loads(subprocess.check_output(['cargo','metadata','--locked','--no-deps','--format-version','1'],cwd=lab.ROOT))
-    binary=Path(metadata['target_directory'])/'debug/examples'/('sprint_probe.exe' if os.name=='nt' else 'sprint_probe')
-    run([binary,inputs,build/'rust.txt'],'rust')
+    binary=Path(metadata['target_directory'])/'debug/examples'/('probe.exe' if os.name=='nt' else 'probe')
+    run([binary,'sprint_probe',inputs,build/'rust.txt'],'rust')
     run(['java','-Xmx768M','-cp',str(classes)+os.pathsep+dependencies,'dev.horizonlab.parity.VanillaSprintInputOracle',inputs,build/'client.txt'],'client')
     matched=base.compare(build/'client.txt',build/'rust.txt')
     if matched!=operations+len(fixtures):raise AssertionError('Incomplete input output')

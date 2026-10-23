@@ -20,7 +20,7 @@ emit for the same scenes.
   `FluidRenderer.tesselate`, then `RenderShape.MODEL` blocks through
   `ModelBlockRenderer.tesselateBlock` with smooth lighting on, culling on,
   cutout leaves, `BlockColors.createDefault()` and `state.getSeed(pos)`.
-- **Horizon side**: `crates/horizon-client/examples/section_mesh_fixture.rs`
+- **Horizon side**: `crates/horizon-client/examples/probe/section_mesh_fixture.rs`
   loads the prepared resources (`Assets`, `BlockFacts`, `Biomes`,
   `load_visibility`, `MeshTables`), builds the same blocks and light in real
   client `Chunk`s (a 3x3 chunk region), sets every biome's colours to the

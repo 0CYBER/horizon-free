@@ -122,7 +122,7 @@ def main():
     tables = resources / 'data/minecraft/loot_table/entities'
     types = sorted('minecraft:' + p.stem for p in tables.glob('*.json') if p.stem not in SKIPPED)
     oracle = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaEntityDeathLootOracle.java'
-    sources = [oracle, Path(__file__), lab.ROOT / 'crates/horizon-client/examples/entity_death_loot_fixture.rs',
+    sources = [oracle, Path(__file__), lab.ROOT / 'crates/horizon-client/examples/probe/entity_death_loot_fixture.rs',
                lab.ROOT / 'crates/horizon-client/src/mobs/drops.rs', lab.ROOT / 'crates/horizon-world/src/loot.rs']
     tested = base.source_hashes(sources)
     inputs = build / 'inputs.txt'
@@ -139,10 +139,10 @@ def main():
          '-cp', str(jars['server']) + os.pathsep + deps, '-d', classes, oracle], 'compile-java')
     run(['java', '-Xmx2G', '-cp', os.pathsep.join([str(classes), str(jars['server']), deps]),
          'dev.horizonlab.parity.VanillaEntityDeathLootOracle', inputs, build / 'server.txt'], 'server')
-    run(['cargo', 'build', '--release', '-p', 'horizon-client', '--example', 'entity_death_loot_fixture'], 'compile-rust')
+    run(['cargo', 'build', '--release', '-p', 'horizon-client', '--example', 'probe'], 'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'], cwd=lab.ROOT, text=True))
-    binary = Path(metadata['target_directory']) / 'release/examples/entity_death_loot_fixture'
-    run([binary, resources, inputs, build / 'rust.txt'], 'rust')
+    binary = Path(metadata['target_directory']) / 'release/examples/probe'
+    run([binary, 'entity_death_loot_fixture', resources, inputs, build / 'rust.txt'], 'rust')
     errors = [l for l in (build / 'server.txt').read_text().splitlines() if l.startswith('error ')]
     if errors:
         raise SystemExit(f'oracle errors ({len(errors)}): {errors[:5]}')

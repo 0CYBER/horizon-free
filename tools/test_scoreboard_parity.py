@@ -13,7 +13,7 @@ of each collection in vanilla's iteration order (objectivesByName and
 playerScores as fastutil open hash maps, teamsByName, each team's HashSet of
 players), and the ScoreboardSaveData.Packed codec output that
 data/minecraft/scoreboard.dat holds, before and after loading it back.
-`examples/scoreboard_fixture` runs the same cases on
+`examples/probe/scoreboard_fixture` runs the same cases on
 `horizon_client::scoreboard`, reloads vanilla's NBT, and vanilla reloads
 Horizon's NBT; all must agree. The one order vanilla leaves to identity hash
 codes (each holder's scores within PlayerScores) is compared as a set.
@@ -250,10 +250,10 @@ def main():
     inputs = build / 'inputs.jsonl'
     inputs.write_text(''.join(json.dumps(c, ensure_ascii=False) + '\n' for c in chosen), encoding='utf-8')
     run([*oracle, 'run', inputs, build / 'vanilla.jsonl'], 'vanilla')
-    run(['cargo', 'build', '--release', '-p', 'horizon-client', '--example', 'scoreboard_fixture'], 'compile-rust')
+    run(['cargo', 'build', '--release', '-p', 'horizon-client', '--example', 'probe'], 'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'], cwd=lab.ROOT, text=True))
-    binary = Path(metadata['target_directory']) / 'release/examples' / ('scoreboard_fixture.exe' if os.name == 'nt' else 'scoreboard_fixture')
-    run([binary, build / 'registries.json', inputs, build / 'rust.jsonl', build / 'vanilla.jsonl'], 'rust')
+    binary = Path(metadata['target_directory']) / 'release/examples' / ('probe.exe' if os.name=='nt' else 'probe')
+    run([binary, 'scoreboard_fixture',build / 'registries.json', inputs, build / 'rust.jsonl', build / 'vanilla.jsonl'], 'rust')
     read = lambda p: [json.loads(l) for l in p.read_text(encoding='utf-8').splitlines()]
     vanilla, rust = read(build / 'vanilla.jsonl'), read(build / 'rust.jsonl')
     assert len(vanilla) == len(rust)

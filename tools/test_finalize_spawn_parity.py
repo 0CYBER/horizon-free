@@ -118,7 +118,7 @@ def main():
     lock, jars, libraries = base.verify_artifacts()
     resources = lab.RESOURCES
     oracle = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaFinalizeSpawnOracle.java'
-    sources = [oracle, Path(__file__), lab.ROOT / 'crates/horizon-client/examples/finalize_spawn_fixture.rs',
+    sources = [oracle, Path(__file__), lab.ROOT / 'crates/horizon-client/examples/probe/finalize_spawn_fixture.rs',
                lab.ROOT / 'crates/horizon-client/src/mobs/finalize.rs']
     tested = base.source_hashes([s for s in sources if s.exists()])
     inputs = build / 'inputs.txt'
@@ -148,10 +148,10 @@ def main():
         print(f'{len(vanilla)} oracle lines')
         return
     halloween = vanilla[0].split()[1]
-    run(['cargo', 'build', '--release', '-p', 'horizon-client', '--example', 'finalize_spawn_fixture'], 'compile-rust')
+    run(['cargo', 'build', '--release', '-p', 'horizon-client', '--example', 'probe'], 'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'], cwd=lab.ROOT, text=True))
-    binary = Path(metadata['target_directory']) / 'release/examples/finalize_spawn_fixture'
-    run([binary, resources, inputs, build / 'rust.txt', halloween], 'rust')
+    binary = Path(metadata['target_directory']) / 'release/examples/probe'
+    run([binary, 'finalize_spawn_fixture', resources, inputs, build / 'rust.txt', halloween], 'rust')
     rust = (build / 'rust.txt').read_text().splitlines()
     bad = [(a, b) for a, b in zip(vanilla, rust) if a != b]
     if bad or len(vanilla) != len(rust):
