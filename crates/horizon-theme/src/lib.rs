@@ -1,5 +1,5 @@
 //! Horizon's design tokens, the one source of truth for the launcher (`launcher/src/theme.rs`),
-//! the game's own menus (`horizon-client`'s `ui_theme`) and the website (`website/src/tokens.css`,
+//! the game's on-screen keyboard (`horizon-client`'s `ui_theme`) and the website (`website/src/tokens.css`,
 //! generated from [`css`] by `cargo run -p xtask -- tokens`). Change a value here and all three
 //! follow. The system is described in `docs/design-system.md`.
 //!
@@ -11,6 +11,9 @@ use std::time::Duration;
 
 pub const FONT: &str = "Geist";
 pub const MONO: &str = "Geist Mono";
+/// The launcher's and the website's display face (headings, navigation, buttons, badges only):
+/// Pixelify Sans, bundled under the SIL Open Font License (`fonts/OFL-PixelifySans.txt`).
+pub const PIXEL: &str = "Pixelify Sans";
 
 /// The bundled font files.
 pub mod fonts {
@@ -18,6 +21,62 @@ pub mod fonts {
     pub const GEIST_MEDIUM: &[u8] = include_bytes!("../fonts/Geist-Medium.ttf");
     pub const GEIST_SEMIBOLD: &[u8] = include_bytes!("../fonts/Geist-SemiBold.ttf");
     pub const GEIST_MONO: &[u8] = include_bytes!("../fonts/GeistMono-Regular.ttf");
+    pub const PIXEL_MEDIUM: &[u8] = include_bytes!("../fonts/PixelifySans-Medium.ttf");
+    pub const PIXEL_SEMIBOLD: &[u8] = include_bytes!("../fonts/PixelifySans-SemiBold.ttf");
+    pub const PIXEL_BOLD: &[u8] = include_bytes!("../fonts/PixelifySans-Bold.ttf");
+}
+
+/// The launcher's pixel icons: Pixelarticons (MIT, `icons/pixel/LICENSE-pixelarticons.txt`), 24
+/// unit SVGs filled with `currentColor`, by name (`"home"`, `"play"`…).
+pub mod icons {
+    macro_rules! icons {
+        ($($name:literal),* $(,)?) => {
+            /// Every icon, `(name, svg)`.
+            pub const ALL: &[(&str, &[u8])] = &[
+                $(($name, include_bytes!(concat!("../icons/pixel/", $name, ".svg")))),*
+            ];
+        };
+    }
+    icons!(
+        "archive",
+        "arrow-left",
+        "book-open",
+        "box",
+        "bug",
+        "check",
+        "chevron-down",
+        "chevron-right",
+        "clock",
+        "close",
+        "download",
+        "external-link",
+        "folder",
+        "gamepad",
+        "globe",
+        "heart",
+        "home",
+        "image",
+        "info-box",
+        "message",
+        "monitor",
+        "notes",
+        "package",
+        "play",
+        "plus",
+        "reload",
+        "search",
+        "server",
+        "sliders",
+        "terminal",
+        "trash",
+        "user",
+        "zap",
+    );
+
+    /// An icon's SVG by name.
+    pub fn get(name: &str) -> Option<&'static [u8]> {
+        ALL.iter().find(|(n, _)| *n == name).map(|(_, svg)| *svg)
+    }
 }
 
 /// Horizon's icon at 64 px (PNG), for window title bars and task bars at run time. Rendered from
@@ -275,6 +334,113 @@ pub const DARK: Palette = Palette {
     dark: true,
 };
 
+/// The launcher's and the website's blocky look ("Blocks" in `docs/design-system.md`): stone-dark
+/// (or lavender-light) neutrals with a violet cast, panels with a dark outline, a light bevel on top
+/// and a darker lip below, and the violet `face` of the one big action. The game's menus keep
+/// [`LIGHT`] and [`DARK`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Blocks {
+    /// The window behind everything, tiled with a faint stone texture.
+    pub page: u32,
+    /// The top bar and the sidebar.
+    pub side: u32,
+    /// Panels: rows, cards, dialogs.
+    pub panel: u32,
+    /// A selected or hovered panel or row, the open tab.
+    pub raised: u32,
+    /// Buttons and the chosen segment.
+    pub button: u32,
+    /// A button's top bevel.
+    pub button_bevel: u32,
+    /// Sunk wells: fields, tracks, switch and checkbox boxes, segmented tracks.
+    pub well: u32,
+    /// The light top (and left) edge of a panel.
+    pub bevel: u32,
+    /// The darker bottom edge of a panel or button.
+    pub lip: u32,
+    /// The 2 px outline around panels, buttons and wells.
+    pub outline: u32,
+    /// Rules between rows inside a panel.
+    pub rule: u32,
+    pub ink: u32,
+    pub ink_soft: u32,
+    pub muted: u32,
+    /// Links, focus, progress, the selection marker; text-safe on every background.
+    pub accent: u32,
+    /// The main action's face (Play, Install, Download), its top bevel and bottom lip.
+    pub face: u32,
+    pub face_bevel: u32,
+    pub face_lip: u32,
+    pub on_face: u32,
+    pub danger: u32,
+    pub success: u32,
+    /// "Partly": a mod or pack that runs in part.
+    pub warn: u32,
+    pub dark: bool,
+}
+
+pub const BLOCKS_DARK: Blocks = Blocks {
+    page: 0x0f0d17,
+    side: 0x0b0a11,
+    panel: 0x1a1727,
+    raised: 0x221e34,
+    button: 0x2b2641,
+    button_bevel: 0x3d3560,
+    well: 0x0c0b12,
+    bevel: 0x342d52,
+    lip: 0x07060b,
+    outline: 0x05040a,
+    rule: 0x120f1c,
+    ink: 0xecedf3,
+    ink_soft: 0xc5c7d1,
+    muted: 0xa29cb8,
+    accent: 0x9a86ff,
+    face: 0x5b3fd6,
+    face_bevel: 0x8a74ff,
+    face_lip: 0x3a2694,
+    on_face: 0xffffff,
+    danger: 0xf07a68,
+    success: 0x45c27a,
+    warn: 0xf0b84f,
+    dark: true,
+};
+
+pub const BLOCKS_LIGHT: Blocks = Blocks {
+    page: 0xece7f7,
+    side: 0xe2dbf2,
+    panel: 0xf8f6fd,
+    raised: 0xe9e3f8,
+    button: 0xddd4f3,
+    button_bevel: 0xf4f0fe,
+    well: 0xf3f0fb,
+    bevel: 0xffffff,
+    lip: 0xc3b8e2,
+    outline: 0x2b2244,
+    rule: 0xe4ddf4,
+    ink: 0x1b1530,
+    ink_soft: 0x3b3354,
+    muted: 0x585071,
+    accent: 0x5333c9,
+    face: 0x5b3fd6,
+    face_bevel: 0x8069ef,
+    face_lip: 0x3a2694,
+    on_face: 0xffffff,
+    danger: 0xa3301d,
+    success: 0x136336,
+    warn: 0x7a4f00,
+    dark: false,
+};
+
+/// Pixel sizes of the blocky look: outlines, bevels and lips, the cut corner, and the stone tile.
+pub const BLOCK_OUTLINE: f32 = 2.;
+pub const BLOCK_BEVEL: f32 = 2.;
+pub const BLOCK_LIP: f32 = 4.;
+/// The stone texture: a 16 by 16 tile, each texel this many logical pixels.
+pub const TILE_TEXELS: usize = 16;
+pub const TILE_TEXEL: f32 = 4.;
+/// The texture's shades: the page colour moved this many levels (of 255) lighter or darker.
+pub const TILE_SHADES: [i16; 5] = [0, 2, -2, 5, -4];
+
 /// How strongly the game's menus veil the live backdrop (the title panorama, or the world behind
 /// the pause and options screens) with the page colour. Every text colour the menus use keeps
 /// WCAG AA over it, even on a selected row's plate, with a backdrop as bright as
@@ -308,6 +474,41 @@ impl Palette {
     }
 }
 
+impl Blocks {
+    /// Every colour by its CSS name. The website reads the Blocks palettes; the first twelve keep
+    /// the names of [`Palette::named`] (`plate-soft` is `raised`, `plate` is `button`, `surface`
+    /// is `panel`, `on-accent` is `on_face`), so styles written for those still apply.
+    pub fn named(&self) -> [(&'static str, u32); 25] {
+        [
+            ("page", self.page),
+            ("plate-soft", self.raised),
+            ("plate", self.button),
+            ("surface", self.panel),
+            ("rule", self.rule),
+            ("ink", self.ink),
+            ("ink-soft", self.ink_soft),
+            ("muted", self.muted),
+            ("accent", self.accent),
+            ("on-accent", self.on_face),
+            ("danger", self.danger),
+            ("success", self.success),
+            ("warn", self.warn),
+            ("side", self.side),
+            ("panel", self.panel),
+            ("raised", self.raised),
+            ("button", self.button),
+            ("button-bevel", self.button_bevel),
+            ("well", self.well),
+            ("bevel", self.bevel),
+            ("lip", self.lip),
+            ("outline", self.outline),
+            ("face", self.face),
+            ("face-bevel", self.face_bevel),
+            ("face-lip", self.face_lip),
+        ]
+    }
+}
+
 /// The WCAG 2 contrast ratio of two colours.
 pub fn contrast(a: u32, b: u32) -> f32 {
     fn luminance(c: u32) -> f32 {
@@ -333,10 +534,12 @@ pub fn css() -> String {
         let t = format!("{v:.3}");
         t.trim_end_matches('0').trim_end_matches('.').to_string()
     };
-    let colors = |s: &mut String, p: &Palette| {
+    // The website wears the launcher's Blocks look; the game's menus keep LIGHT and DARK.
+    let colors = |s: &mut String, p: &Blocks| {
         for (name, c) in p.named() {
             let _ = writeln!(s, "  --{name}: #{c:06x};");
         }
+        let _ = writeln!(s, "  --on-face: #{:06x};", p.on_face);
         let _ = writeln!(
             s,
             "  color-scheme: {};",
@@ -347,11 +550,18 @@ pub fn css() -> String {
         "/* Generated from crates/horizon-theme by `cargo run -p xtask -- tokens`; do not edit.\n   \
          docs/design-system.md describes the tokens. */\n\n:root {\n",
     );
-    colors(&mut s, &LIGHT);
+    colors(&mut s, &BLOCKS_LIGHT);
     let _ = writeln!(
         s,
-        "  --font: \"{FONT}\", ui-sans-serif, system-ui, sans-serif;\n  --mono: \"{MONO}\", ui-monospace, monospace;"
+        "  --font: \"{FONT}\", ui-sans-serif, system-ui, sans-serif;\n  --mono: \"{MONO}\", ui-monospace, monospace;\n  --pixel: \"{PIXEL}\", \"{FONT}\", ui-sans-serif, sans-serif;"
     );
+    for (name, v) in [
+        ("block-outline", BLOCK_OUTLINE),
+        ("block-bevel", BLOCK_BEVEL),
+        ("block-lip", BLOCK_LIP),
+    ] {
+        let _ = writeln!(s, "  --{name}: {}px;", num(v));
+    }
     for step in TYPE {
         let size = match step.web {
             Web::Fixed => format!("{}px", num(step.px)),
@@ -410,7 +620,7 @@ pub fn css() -> String {
         "}\n\n@media (prefers-color-scheme: dark) {\n  :root:not([data-theme=\"light\"]) {\n",
     );
     let mut dark = String::new();
-    colors(&mut dark, &DARK);
+    colors(&mut dark, &BLOCKS_DARK);
     for line in dark.lines() {
         let _ = writeln!(s, "  {line}");
     }
@@ -456,6 +666,63 @@ mod tests {
             assert!(contrast(p.on_accent, p.accent) >= 4.5);
             assert!(contrast(p.page, p.ink) >= 4.5);
         }
+    }
+
+    /// The blocky look: every text colour on every background it is drawn on reaches AA, the
+    /// main action's label too, and the focus ring (the accent) reaches 3:1 (WCAG 1.4.11).
+    #[test]
+    fn blocks_text_meets_wcag_aa_in_both_appearances() {
+        for p in [BLOCKS_DARK, BLOCKS_LIGHT] {
+            let theme = if p.dark { "dark" } else { "light" };
+            let backgrounds = [
+                ("page", p.page),
+                ("side", p.side),
+                ("panel", p.panel),
+                ("raised", p.raised),
+                ("button", p.button),
+                ("well", p.well),
+            ];
+            let texts = [
+                ("ink", p.ink),
+                ("ink_soft", p.ink_soft),
+                ("muted", p.muted),
+                ("accent", p.accent),
+                ("danger", p.danger),
+                ("success", p.success),
+                ("warn", p.warn),
+            ];
+            for (bn, bg) in backgrounds {
+                for (tn, fg) in texts {
+                    let ratio = contrast(fg, bg);
+                    assert!(ratio >= 4.5, "{theme} {tn} on {bn}: {ratio:.2}");
+                }
+                // The texture's lightest shade under the page's text.
+                let lifted = TILE_SHADES.iter().max().copied().unwrap_or(0) as i32;
+                let shade = [16, 8, 0].iter().fold(0, |out, s| {
+                    let c = (((p.page >> s) & 255) as i32 + lifted).clamp(0, 255) as u32;
+                    out | c << s
+                });
+                for (tn, fg) in texts {
+                    let ratio = contrast(fg, shade);
+                    assert!(
+                        ratio >= 4.5,
+                        "{theme} {tn} on the stone texture: {ratio:.2}"
+                    );
+                }
+            }
+            let label = contrast(p.on_face, p.face);
+            assert!(label >= 4.5, "{theme} the main action's label: {label:.2}");
+        }
+    }
+
+    #[test]
+    fn every_icon_is_a_pixel_svg() {
+        for (name, svg) in icons::ALL {
+            let svg = std::str::from_utf8(svg).unwrap();
+            assert!(svg.contains("viewBox=\"0 0 24 24\""), "{name}");
+            assert!(svg.contains("currentColor"), "{name}");
+        }
+        assert!(icons::get("play").is_some());
     }
 
     /// The game's menus over the brightest backdrop: the page colour veiled over it, and a

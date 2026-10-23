@@ -11,7 +11,7 @@ use crate::{
     JavaPack,
     options::OptionValues,
     preprocess::Environment,
-    properties::{LEGACY_TARGETS, ShaderProperties},
+    properties::{Blend, LEGACY_TARGETS, ShaderProperties},
     translate::{Geometry, Link, Translated},
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -297,6 +297,10 @@ pub struct Pass {
     pub mipmapped: BTreeSet<u32>,
     /// `scale.<name>`: the fraction of the screen it draws.
     pub scale: f32,
+    /// `blend.<program>` override for all outputs of this pass.
+    pub blend: Option<Blend>,
+    /// `blend.<program>.<buffer>` overrides per colour target index.
+    pub buffer_blends: Vec<(u32, Blend)>,
 }
 
 /// The full-screen passes of one program folder, in order, and the
@@ -309,6 +313,10 @@ pub struct Passes {
     /// The targets gbuffers programs (and Horizon's world) write on their
     /// alternate side, before and after translucent geometry.
     pub flipped_after_prepare: BTreeSet<u32>,
+    /// The target Horizon's world goes into: the first one `gbuffers_terrain`
+    /// (or the program Iris falls back to for terrain) draws to, `colortex0`
+    /// without one.
+    pub world_target: u32,
     pub deferred: Vec<Pass>,
     pub flipped_after_translucent: BTreeSet<u32>,
     pub composite: Vec<Pass>,
@@ -424,6 +432,11 @@ pub struct Directives {
     pub sun_path_rotation: f32,
     /// `eyeBrightnessHalflife`, tenths of a second: `eyeBrightnessSmooth`.
     pub eye_brightness_half_life: f32,
+    /// `wetnessHalflife`, tenths of a second: `wetness` smoothing when raining.
+    pub wetness_half_life: f32,
+    /// `drynessHalflife`, tenths of a second: `wetness` smoothing when dry.
+    pub dryness_half_life: f32,
+    /// The shadow map's directives.
     pub shadow: ShadowDirectives,
 }
 
@@ -432,6 +445,8 @@ impl Default for Directives {
         Self {
             sun_path_rotation: 0.0,
             eye_brightness_half_life: 10.0,
+            wetness_half_life: 600.0,
+            dryness_half_life: 200.0,
             shadow: ShadowDirectives::default(),
         }
     }
@@ -483,6 +498,8 @@ impl Directives {
                     ("float", "shadowNearPlane", Ok(v)) => out.shadow.near = v,
                     ("float", "shadowFarPlane", Ok(v)) => out.shadow.far = v,
                     ("float", "shadowIntervalSize", Ok(v)) => out.shadow.interval = v,
+                    ("float", "wetnessHalflife", Ok(v)) => out.wetness_half_life = v,
+                    ("float", "drynessHalflife", Ok(v)) => out.dryness_half_life = v,
                     _ => {}
                 }
             }
@@ -611,15 +628,27 @@ impl JavaPack {
             ..Passes::default()
         };
 
+        let resolve_blends = |prog: &str| {
+            let blend = properties.blend(prog).and_then(Result::ok);
+            let buffer_blends: Vec<(u32, Blend)> = properties
+                .buffer_blends(prog)
+                .into_iter()
+                .filter_map(|(i, b)| Some((i, b.ok()?)))
+                .collect();
+            (blend, buffer_blends)
+        };
+
         let flips = explicit_flips(properties);
         let run = |group: &[String], pre: &str, flipped: &mut BTreeSet<u32>| {
             *flipped = flips_pre(&flips, pre, flipped);
             let mut passes = Vec::new();
             for name in group {
                 let text = &fragments[name];
+                let prog = path(name);
+                let (blend, buffer_blends) = resolve_blends(&prog);
                 let pass = Pass {
-                    program: path(name),
-                    draw_buffers: draw_buffers(text).map_err(|e| format!("{}: {e}", path(name)))?,
+                    program: prog.clone(),
+                    draw_buffers: draw_buffers(text).map_err(|e| format!("{prog}: {e}"))?,
                     reads_alt: flipped.clone(),
                     mipmapped: mipmapped(text),
                     scale: properties
@@ -627,6 +656,8 @@ impl JavaPack {
                         .get(&format!("scale.{name}"))
                         .and_then(|v| v.split_whitespace().next()?.parse().ok())
                         .unwrap_or(1.0),
+                    blend,
+                    buffer_blends,
                 };
                 *flipped = flip_set(&pass, &flips);
                 passes.push(pass);
@@ -638,6 +669,20 @@ impl JavaPack {
         let flipped_after_begin = flipped.clone();
         out.prepare = run(&groups[1], "prepare_pre", &mut flipped)?;
         out.flipped_after_prepare = flipped.clone();
+        // Iris's fallbacks for terrain (`ProgramFallbackResolver`).
+        let terrain = [
+            "gbuffers_terrain",
+            "gbuffers_textured_lit",
+            "gbuffers_textured",
+            "gbuffers_basic",
+        ]
+        .into_iter()
+        .find(|name| exists(name));
+        if let Some(name) = terrain {
+            let buffers =
+                draw_buffers(&fragment(name)?).map_err(|e| format!("{}: {e}", path(name)))?;
+            out.world_target = buffers.and_then(|b| b.first().copied()).unwrap_or(0);
+        }
         out.deferred = run(&groups[2], "deferred_pre", &mut flipped)?;
         out.flipped_after_translucent = flipped.clone();
         out.composite = run(&groups[3], "composite_pre", &mut flipped)?;
@@ -648,12 +693,15 @@ impl JavaPack {
                 return Ok::<_, String>(None);
             };
             let text = fragment(name)?;
+            let (blend, buffer_blends) = resolve_blends(&path(name));
             Ok(Some(Pass {
                 program: path(name),
                 draw_buffers: draw_buffers(&text).map_err(|e| format!("{}: {e}", path(name)))?,
                 reads_alt: flipped.clone(),
                 mipmapped: BTreeSet::new(),
                 scale: 1.0,
+                blend,
+                buffer_blends,
             }))
         };
         out.terrain = geometry(TERRAIN_PROGRAMS, &out.flipped_after_prepare)?;
@@ -661,12 +709,16 @@ impl JavaPack {
         out.shadow = geometry(SHADOW_PROGRAMS, &flipped_after_begin)?;
         out.shadow_water = geometry(SHADOW_WATER_PROGRAMS, &flipped_after_begin)?;
         if exists("final") {
+            let prog = path("final");
+            let (blend, buffer_blends) = resolve_blends(&prog);
             out.final_pass = Some(Pass {
-                program: path("final"),
+                program: prog,
                 draw_buffers: None,
                 reads_alt: out.flipped_at_end.clone(),
                 mipmapped: mipmapped(&fragment("final")?),
                 scale: 1.0,
+                blend,
+                buffer_blends,
             });
         }
         Ok(out)
@@ -950,12 +1002,14 @@ mod tests {
         assert_eq!(Directives::read([]), Directives::default());
         assert_eq!(Directives::default().eye_brightness_half_life, 10.0);
         let d = Directives::read([
-            "const float sunPathRotation = 30.0;\nconst float eyeBrightnessHalflife = 4.0f;",
+            "const float sunPathRotation = 30.0;\nconst float eyeBrightnessHalflife = 4.0f;\nconst float wetnessHalflife = 300.0;",
             "const float sunPathRotation = -40.0; // Complementary Unbound",
             "const int sunPathRotation = 5;",
         ]);
         assert_eq!(d.sun_path_rotation, -40.0);
         assert_eq!(d.eye_brightness_half_life, 4.0);
+        assert_eq!(d.wetness_half_life, 300.0);
+        assert_eq!(d.dryness_half_life, 200.0, "the default");
     }
 
     #[test]

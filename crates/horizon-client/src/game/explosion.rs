@@ -224,7 +224,7 @@ impl Game<'_> {
         }
         set.entries().map(|(k, _)| k.0).collect()
     }
-    /// `ServerExplosion.hurtEntities` (player, mobs, items, primed TNT);
+    /// `ServerExplosion.hurtEntities` (player, mobs, items, primed TNT, minecarts);
     /// the player takes `damage_type`.
     /// `ServerExplosion.hurtEntities` for the player: damage scaled by
     /// distance and exposure, through a raised shield (`hurtServer` blocks
@@ -460,6 +460,34 @@ impl Game<'_> {
             );
         }
         self.tnts = tnts;
+        // Minecarts: VehicleEntity.hurtServer (explosions ignite TNT carts),
+        // then the push from their eyes (0.85 of their height).
+        let ids: Vec<u32> = self.carts.iter().map(|c| c.id).collect();
+        for id in ids {
+            let Some(i) = self.carts.iter().position(|c| c.id == id) else {
+                continue;
+            };
+            let bounds = self.carts[i].bounds();
+            let feet = self.carts[i].position;
+            let dist = distance([feet.x, feet.y, feet.z]) / diameter;
+            if dist > 1.0 {
+                continue;
+            }
+            let (lo, hi) = (bounds.min_position(), bounds.max_position());
+            let exposure = self.seen_percent(center, [lo.x, lo.y, lo.z], [hi.x, hi.y, hi.z]);
+            self.hurt_cart(i, damage(dist, exposure), false, true);
+            let Some(c) = self.carts.iter_mut().find(|c| c.id == id) else {
+                continue;
+            };
+            let eye_height = f64::from((hi.y - lo.y) as f32 * 0.85f32);
+            let dir = direction([feet.x, feet.y + eye_height, feet.z]);
+            let power = (1.0 - dist) * f64::from(exposure);
+            c.velocity = Vec3::new(
+                c.velocity.x + dir[0] * power,
+                c.velocity.y + dir[1] * power,
+                c.velocity.z + dir[2] * power,
+            );
+        }
     }
     /// `Level.explode` on the server: positions, entities, blocks, fire; then
     /// the client's explosion sound.

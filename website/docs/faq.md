@@ -56,11 +56,15 @@ In part. Horizon runs the full-screen effects of Java shader packs, not their ge
 
 ## Does Horizon collect data?
 
-Only if you say yes, and each kind has its own switch. Everything is off by default. The game has an anonymous "I'm playing" ping for a live player count, but it is off today: no server receives it yet, so the game sends nothing. See [Privacy](/privacy).
+Only if you say yes, and each kind has its own switch. Everything is off by default. The one thing sent without asking is an anonymous "I'm playing" ping, for the count of how many play right now: it holds a random number made each time the game starts, the version, your OS and whether a world is open to LAN, and nothing about you. See [Privacy](/privacy).
 
 ## How often does it update?
 
-Often. Every change players can see is released automatically after it is merged, so new versions can come out several times a day. On the **Alpha** channel the launcher installs each one as soon as it is built; on **Stable**, the default, it installs a tested build about once a day. See [Install](/docs/install#updating).
+Often. Every change players can see is released automatically after it is merged, so new versions can come out several times a day. Each one is tested before it goes out (the game has to start and draw a world), and the launcher installs it as soon as it is out. There is one version for everyone. See [Install](/docs/install#updating).
+
+## What do the version numbers mean?
+
+Since 0.2, every release has a number: 0.2.0, then 0.2.1, 0.2.2 and so on, one for each release. The game and the launcher are both on 0.2 and count on their own, so you can play Horizon 0.2.7 with launcher 0.2.3. A bigger step, such as 0.3, is announced when it comes. Releases before 0.2 were named after the day they came out (2026.10.19.15); every 0.2 release is newer than all of them.
 
 ## How do I report a bug?
 

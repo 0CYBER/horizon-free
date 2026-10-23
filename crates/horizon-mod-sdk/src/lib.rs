@@ -135,7 +135,13 @@ macro_rules! export_mod {
                     with(|m| $crate::Mod::chat(m, &text))
                 }
             }
+            // Only WebAssembly has the component's exports: a host build (cargo test or
+            // clippy on the workspace) checks the mod without them, which macOS
+            // couldn't link (its exported-symbols list cuts names at the `#`).
+            #[cfg(target_arch = "wasm32")]
             $crate::__export_horizon_mod!(Export);
+            #[cfg(not(target_arch = "wasm32"))]
+            let _ = <Export as $crate::__Guest>::init;
         };
     };
 }

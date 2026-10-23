@@ -129,8 +129,9 @@ impl Item {
     }
 }
 
-/// The machine, as coarse as is useful: no serial numbers, names or exact memory.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// The machine, as coarse as is useful: no serial numbers, names or exact memory. Every field
+/// explains performance; `docs/telemetry.md` lists them. Empty or zero: not known.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct System {
     /// `linux`, `macos` or `windows`.
@@ -140,12 +141,42 @@ pub struct System {
     pub arch: String,
     pub cpu: String,
     pub threads: u16,
+    /// Physical cores.
+    pub cores: u16,
+    /// The CPU's base and top boost clock, where the OS says.
+    pub cpu_base_mhz: u32,
+    pub cpu_boost_mhz: u32,
     /// Installed memory, rounded to the GiB.
     pub ram_gb: u16,
     pub gpu: String,
+    /// `nvidia`, `amd`, `intel`, `apple`…
+    pub gpu_vendor: String,
+    /// `integrated`, `discrete`, `virtual` or `cpu`.
+    pub gpu_kind: String,
+    /// The GPU's own memory, rounded to 256 MiB (0 for a GPU that shares the system's).
+    pub vram_mb: u32,
     pub driver: String,
     /// `Metal`, `Vulkan`, `Dx12`…
     pub backend: String,
+    /// The drive under the game folder: `nvme`, `ssd` or `hdd`.
+    pub storage: String,
+    /// The screen the game's window is on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display: Option<Display>,
+    /// `ac` or `battery`, when the game started.
+    pub power: String,
+    /// `laptop` or `desktop`.
+    pub form: String,
+}
+
+/// A screen: its size in physical pixels, refresh rate and scale.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Display {
+    pub width: u32,
+    pub height: u32,
+    pub refresh_hz: u32,
+    pub scale: f32,
 }
 
 /// The settings that change performance.
@@ -190,7 +221,7 @@ pub struct Perf {
 
 /// A crash, scrubbed: the error and its stack, the thread, and the details that say what the
 /// game was doing (graphics adapter, settings), never its log, world or server.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Crash {
     pub system: System,
@@ -202,7 +233,7 @@ pub struct Crash {
 }
 
 /// A bug report the player wrote, with the log only if they chose to add it after reading it.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Bug {
     pub system: System,

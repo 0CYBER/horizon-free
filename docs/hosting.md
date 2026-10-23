@@ -240,7 +240,9 @@ If the new game crashes or doesn't come up in time, the server goes back to the 
 and puts the world back as it was just before the switch (the world the new game left is kept in
 `backups/`). `horizon-server rollback` goes back to the release before by hand, keeping the world as it is
 (it backs it up first). `--version vX.Y.Z` installs a given release, and `--archive FILE --version NAME` an
-archive you have, such as your own build. A stopped server is switched and starts on the new release next
+archive you have, such as your own build. A server still on a release from before the last dated one doesn't know
+that 0.2 comes after the dated releases and says it is up to date: run `horizon-server update --version v0.2.0`
+once ([versioning](versioning.md)). A stopped server is switched and starts on the new release next
 time. Set `HORIZON_NO_UPDATE_CHECK=1` in the server's environment to turn the check off.
 
 Coming: `console` (attach to a server running in the background), `ban` and `pardon` as their own

@@ -15,6 +15,10 @@ on:
         required: true
 permissions:
   contents: read
+env:
+  # Test runs never reach the telemetry server: no live-count ping, no uploads (docs/telemetry.md).
+  HORIZON_TELEMETRY_URL: "off"
+
 jobs:
   parity:
     runs-on: [self-hosted, horizon-game]

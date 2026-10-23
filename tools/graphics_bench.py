@@ -61,6 +61,8 @@ def vscreen_env():
     env.pop("DISPLAY", None)
     # Benchmark games never play sound on the machine's speakers.
     env["HORIZON_NO_AUDIO"] = "1"
+    # Nor reach the telemetry server (docs/telemetry.md).
+    env["HORIZON_TELEMETRY_URL"] = "off"
     return env
 
 

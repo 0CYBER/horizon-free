@@ -42,6 +42,7 @@ const HELP: &[&str] = &[
     "chat MESSAGE                   send chat or a /command to the server",
     "disconnect                     leave the server for the server list",
     "respawn                        respawn after death on a server",
+    "credits [poem] [SCROLL]        roll the credits (with the end poem), or hold them SCROLL pixels in",
     "quit                           save and exit",
 ];
 
@@ -117,6 +118,7 @@ impl Game<'_> {
             self.answer(request, event_loop);
         }
         while let Some(request) = self.control.as_ref().and_then(|c| c.try_recv()) {
+            self.agent_command_seen();
             self.answer(request, event_loop);
             if self.pending_save.is_some() {
                 break;
@@ -124,6 +126,11 @@ impl Game<'_> {
         }
         if self.control.is_some() {
             self.watch_events();
+        }
+        if self.screen == Screen::Options
+            && self.ui.options.page() == horizon_client::options_ui::Page::Agent
+        {
+            self.ui.options.agent_status = self.agent_status_lines();
         }
     }
 
@@ -165,6 +172,9 @@ impl Game<'_> {
         if let Some(value) = self.events_command(&words, reply)? {
             return Ok(value);
         }
+        if let Some(value) = self.saves_control(&words, line, reply)? {
+            return Ok(value);
+        }
         if let Some(value) = self.options_control(&words, line)? {
             return Ok(Some(value));
         }
@@ -192,6 +202,7 @@ impl Game<'_> {
                 .chain(super::ui_control::HELP)
                 .chain(super::options::CONTROL_HELP)
                 .chain(super::events::HELP)
+                .chain(super::saves_control::HELP)
                 .chain(super::pad::HELP)
                 .collect::<Vec<_>>() }))),
             "setblock" | "fill" | "particle" | "signedit" => self.render_command(&words),
@@ -564,6 +575,10 @@ impl Game<'_> {
                     "graphics" => Page::Graphics,
                     "graphics-advanced" => Page::GraphicsAdvanced,
                     "extras" => Page::Extras,
+                    "credits" => Page::Credits,
+                    "horizon" => Page::Horizon,
+                    "agent" => Page::Agent,
+                    "shader-packs" => Page::ShaderPacks,
                     other => return Err(format!("unknown options page {other}").into()),
                 };
                 if self.screen == Screen::Playing && self.title.is_none() {
@@ -637,6 +652,25 @@ impl Game<'_> {
                     .get(2)
                     .map_or_else(|| self.options.player_name(), |n| (*n).to_owned());
                 self.connect_server(arg(1)?, &name)?;
+                ok()
+            }
+            "credits" => {
+                let poem = words.get(1) == Some(&"poem");
+                let hold = words
+                    .get(1 + usize::from(poem))
+                    .map(|s| s.parse::<f32>())
+                    .transpose()?;
+                if self.screen != Screen::Win {
+                    let finish = if self.screen == Screen::Options {
+                        super::win::Finish::Options
+                    } else {
+                        super::win::Finish::Closed
+                    };
+                    self.open_win_screen(poem, finish);
+                }
+                if let Some(scroll) = hold {
+                    self.hold_win_screen(scroll);
+                }
                 ok()
             }
             "respawn" => {
@@ -721,6 +755,9 @@ impl Game<'_> {
     }
 
     fn screen_name(&self) -> &'static str {
+        if self.screen == Screen::Win {
+            return "win";
+        }
         if self.title.is_some() {
             return "title";
         }
@@ -736,7 +773,9 @@ impl Game<'_> {
             Screen::Stats => "stats",
             Screen::Advancements => "advancements",
             Screen::WorldOptions => "world-options",
+            Screen::Friends => "friends",
             Screen::CommandBlock => "command-block",
+            Screen::Win => "win",
         }
     }
 
@@ -847,6 +886,8 @@ impl Game<'_> {
             "source_attempted": self.lod_source_attempted,
             "active_tiles": self.lod.as_ref().map_or(0, |lod| lod.stats().0),
             "cached_tiles": self.lod.as_ref().map_or(0, |lod| lod.stats().1),
+            "far_detail": self.settings.horizon.far_detail.name(),
+            "resident_quads": self.renderer.as_ref().map_or(0, |r| r.lod_quads()),
             "pending_observations": self.lod_observe.len(),
             "refined_samples": self.lod.as_ref().map_or(0, |lod| lod.refined_samples()),
         });
@@ -903,7 +944,7 @@ impl Game<'_> {
             "streaming": self.streaming.stages().into_iter().map(|(k, v)| (k.to_string(), v.into())).collect::<serde_json::Map<_, _>>(),
             "dirty_light": self.world.dirty_light.len(),
             "renderer": renderer,
-            "display": self.window.as_ref().and_then(|w| w.current_monitor()).map(|m| json!({
+            "display": self.window.as_deref().and_then(horizon_client::telemetry::monitor).map(|m| json!({
                 "width": m.size().width,
                 "height": m.size().height,
                 "scale": m.scale_factor(),
@@ -926,6 +967,8 @@ impl Game<'_> {
         status["heard"] = json!(self.audio.heard);
         // Boats, minecarts, armor stands, item frames and paintings.
         status["objects"] = json!(self.objects_status());
+        status["lightning"] = json!({"bolts": self.bolts.len(), "struck": self.lightning_seen[0],
+            "flashes": self.lightning_seen[1], "flash": self.flash});
         // Primed TNT, falling blocks, projectiles, tridents and end crystals.
         status["projectiles"] = json!(self.projectiles_status());
         status

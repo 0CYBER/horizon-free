@@ -156,6 +156,48 @@ pub enum Overlay {
     Graph,
 }
 
+/// How finely far terrain is drawn (`FarDetail` in the LOD options).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum FarDetail {
+    /// Each tile level starts at eight times its size from the camera.
+    #[default]
+    Full,
+    /// Coarser levels start at half that distance: about a quarter of the
+    /// far quads, for GPUs that far terrain slows down. Changes the picture.
+    Reduced,
+}
+impl FarDetail {
+    pub fn name(self) -> &'static str {
+        match self {
+            FarDetail::Full => "full",
+            FarDetail::Reduced => "reduced",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            FarDetail::Full => "Full",
+            FarDetail::Reduced => "Reduced",
+        }
+    }
+    fn parse(s: &str) -> Self {
+        if s == "reduced" {
+            FarDetail::Reduced
+        } else {
+            FarDetail::Full
+        }
+    }
+}
+
+static REDUCED_SUGGESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Whether the settings suggest Reduced far detail: set when the renderer
+/// starts, on the GPUs `lod_capped` names (far terrain slows them most).
+pub fn suggest_reduced_far_detail(on: bool) {
+    REDUCED_SUGGESTED.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+pub fn reduced_far_detail_suggested() -> bool {
+    REDUCED_SUGGESTED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The farthest LOD Distance, in chunks, on integrated GPUs other than
 /// Apple's: they share the CPU's memory bandwidth, and past it far terrain
 /// costs them more frame time than it is worth.
@@ -181,6 +223,8 @@ pub struct Graphics {
     pub preset: Preset,
     /// Distant surface terrain range, in chunks; 0 disables LODs.
     pub lod_distance: u32,
+    /// How finely far terrain is drawn; Full unless the player picks Reduced.
+    pub far_detail: FarDetail,
     /// Skip sections hidden behind closed ones (vanilla's occlusion graph).
     pub cave_culling: bool,
     /// Hide shared leaf and mangrove-root faces, reducing foliage density.
@@ -204,8 +248,6 @@ pub struct Graphics {
     pub resolution_scale: u32,
     /// FXAA over the world.
     pub fxaa: bool,
-    /// The settings level last shown: Advanced, or Simple.
-    pub advanced: bool,
     /// Battery mode: at most 60 frames per second in a world and 30 in menus
     /// or behind other windows, and half the worker threads. Off by default;
     /// it changes when frames are drawn, never what they show or the ticks.
@@ -221,6 +263,7 @@ impl Default for Graphics {
         Self {
             preset: Preset::Custom,
             lod_distance: 0,
+            far_detail: FarDetail::Full,
             cave_culling: true,
             cull_leaves: false,
             entity_culling: false,
@@ -236,7 +279,6 @@ impl Default for Graphics {
             overlay: Overlay::Off,
             resolution_scale: 100,
             fxaa: false,
-            advanced: false,
             battery: false,
             shader_pack: String::new(),
             api: GraphicsApi::Auto,
@@ -268,6 +310,7 @@ impl Graphics {
             match key.trim() {
                 "preset" => g.preset = Preset::parse(value),
                 "lodDistance" => g.lod_distance = number(g.lod_distance).min(1024),
+                "farDetail" => g.far_detail = FarDetail::parse(value),
                 "caveCulling" => g.cave_culling = flag(g.cave_culling),
                 "cullLeaves" => g.cull_leaves = flag(g.cull_leaves),
                 "entityCulling" => g.entity_culling = flag(g.entity_culling),
@@ -288,7 +331,6 @@ impl Graphics {
                 "workers" => g.workers = number(g.workers).min(64),
                 "resolutionScale" => g.resolution_scale = number(g.resolution_scale).clamp(50, 200),
                 "fxaa" => g.fxaa = flag(g.fxaa),
-                "level" => g.advanced = value == "advanced",
                 "batteryMode" => g.battery = flag(g.battery),
                 "shaderPack" => g.shader_pack = value.to_string(),
                 "graphicsApi" => g.api = GraphicsApi::from_name(value).unwrap_or_default(),
@@ -306,9 +348,10 @@ impl Graphics {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "preset:{}\nlodDistance:{}\ncaveCulling:{}\ncullLeaves:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nlevel:{}\nbatteryMode:{}\nshaderPack:{}\ngraphicsApi:{}\n",
+            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\ncullLeaves:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nbatteryMode:{}\nshaderPack:{}\ngraphicsApi:{}\n",
             self.preset.name(),
             self.lod_distance,
+            self.far_detail.name(),
             bool_text(self.cave_culling),
             bool_text(self.cull_leaves),
             bool_text(self.entity_culling),
@@ -331,7 +374,6 @@ impl Graphics {
             },
             self.resolution_scale,
             bool_text(self.fxaa),
-            if self.advanced { "advanced" } else { "simple" },
             bool_text(self.battery),
             self.shader_pack,
             self.api.name(),
@@ -410,6 +452,7 @@ mod tests {
         let g = Graphics {
             preset: Preset::Balanced,
             lod_distance: 256,
+            far_detail: FarDetail::Reduced,
             cave_culling: false,
             cull_leaves: true,
             entity_culling: true,
@@ -425,13 +468,14 @@ mod tests {
             overlay: Overlay::Graph,
             resolution_scale: 75,
             fxaa: true,
-            advanced: true,
             battery: true,
             shader_pack: "horizon-sample".into(),
             api: GraphicsApi::Dx12,
         };
         assert_eq!(Graphics::parse(&g.serialize()), g);
         assert_eq!(Graphics::parse(""), Graphics::default());
+        // The old menus' Simple / Advanced choice is ignored.
+        assert_eq!(Graphics::parse("level:advanced\n"), Graphics::default());
         assert_eq!(
             Graphics::parse("workers:abc\nsky:maybe\ncullLeaves:maybe\nentityCulling:maybe\n"),
             Graphics::default()
@@ -489,6 +533,24 @@ mod tests {
         assert_eq!(Graphics::parse("lodDistance:10000\n").lod_distance, 1024);
         assert_eq!(Graphics::parse("lodDistance:-1\n").lod_distance, 0);
         assert_eq!(Graphics::parse("lodDistance:invalid\n").lod_distance, 0);
+    }
+
+    #[test]
+    fn far_detail_is_full_unless_reduced_is_picked() {
+        assert_eq!(Graphics::default().far_detail, FarDetail::Full);
+        assert_eq!(
+            Graphics::parse("farDetail:reduced\n").far_detail,
+            FarDetail::Reduced
+        );
+        for text in ["farDetail:full\n", "farDetail:other\n", ""] {
+            assert_eq!(Graphics::parse(text).far_detail, FarDetail::Full);
+        }
+        // No preset changes it.
+        for preset in Preset::ALL {
+            let mut s = crate::settings::Settings::default();
+            apply_preset(preset, &mut s);
+            assert_eq!(s.horizon.far_detail, FarDetail::Full, "{preset:?}");
+        }
     }
 
     #[test]

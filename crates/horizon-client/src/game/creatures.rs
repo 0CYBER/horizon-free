@@ -330,6 +330,10 @@ impl Game<'_> {
                     "held": m.extra.main_hand.as_deref(),
                     "mount": m.extra.mount,
                     "rider": m.extra.rider,
+                    // A player's input this tick, and whether it steers.
+                    "ridden": m.rider.map(|r| r.steer),
+                    "controlled": horizon_client::mobs::equine::controlled(m),
+                    "saddled": m.extra.saddled,
                     "enchants": horizon_client::mobs::gear::gear(m).map(|g| g.slots.iter().map(|s| s.iter().map(|(e, l)| format!("{e}:{l}")).collect::<Vec<_>>()).collect::<Vec<_>>()),
                     "ints": m.extra.ints,
                     "pois": [m.extra.home, m.extra.bed, m.extra.meeting],
@@ -339,8 +343,12 @@ impl Game<'_> {
                     "on_ground": m.on_ground,
                     "variant": m.extra.variant,
                     "color": m.extra.color,
+                    "sheared": m.extra.sheared,
+                    "burning": m.fire_ticks > 0,
+                    "size": m.extra.size,
                     "leash": m.extra.leash.map(|h| format!("{h:?}")),
                     "tame": m.extra.tame,
+                    "sitting": m.extra.sitting,
                     "temper": m.extra.variant3,
                     "chested": m.extra.chested,
                     "head": m.extra.head.as_deref(),
@@ -500,7 +508,7 @@ impl Game<'_> {
             // The level random, lent to the mobs (brain behaviours draw from
             // it) and taken back after their ticks.
             let mut scratch = self.world.random.clone();
-            let mut pushes = Vec::new();
+            let mut pushes = horizon_client::mobs::PendingPushes::default();
             let mut keep = Vec::with_capacity(mobs.len());
             let mut grid =
                 horizon_client::mobs::seen_grid::SeenGrid::new(snapshot.iter().map(|s| s.bounds));

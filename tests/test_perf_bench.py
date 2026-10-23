@@ -38,6 +38,14 @@ class PerfBenchStatsTests(unittest.TestCase):
         self.assertIsNone(frames("x", 0, []))
         json.dumps(s)
 
+    def test_window_sizes_name_their_reports(self):
+        from tools.perf_bench import SIZES, parse_sizes, size_label
+        self.assertEqual(parse_sizes("1280x720,1920X1080"), [(1280, 720), (1920, 1080)])
+        self.assertEqual(SIZES, [(1280, 720), (1920, 1080)])
+        self.assertEqual(size_label("horizon-m4", 1280, 720), "horizon-m4")
+        self.assertEqual(size_label("horizon-m4", 1920, 1080), "horizon-m4-1080p")
+        self.assertEqual(size_label("horizon-m4", 2560, 1080), "horizon-m4-2560x1080")
+
     def test_one_options_file_sets_the_render_distance(self):
         self.assertEqual(OPTIONS["renderDistance"].format(distance=16), "16")
         self.assertEqual(OPTIONS["graphicsPreset"], '"custom"')
@@ -50,7 +58,7 @@ if __name__ == "__main__":
 class WaitLoadedTests(unittest.TestCase):
     """wait_loaded on a scripted game with a fake clock: one status per 50 ms poll."""
 
-    def run_script(self, statuses):
+    def run_script(self, statuses, min_chunks=0):
         import tools.perf_bench as pb
         clock = [0.0]
         it = iter(statuses)
@@ -62,7 +70,7 @@ class WaitLoadedTests(unittest.TestCase):
         pb.time.time = lambda: clock[0]
         pb.time.sleep = lambda s: clock.__setitem__(0, clock[0] + s)
         try:
-            return pb.wait_loaded(control, lambda p: True, 60)
+            return pb.wait_loaded(control, lambda p: True, 60, min_chunks)
         finally:
             pb.time.time, pb.time.sleep = real_time, real_sleep
 
@@ -86,3 +94,15 @@ class WaitLoadedTests(unittest.TestCase):
         busy = [self.status(901, 1000 * i) for i in range(20)]
         quiet = [self.status(901, 20000 + i) for i in range(40)]
         self.assertAlmostEqual(self.run_script(busy + quiet), 1.0, places=6)
+
+    def test_a_quiet_start_is_not_a_load(self):
+        # Right after a teleport Horizon reports steady counts and nothing queued for 1.5 s before it loads:
+        # with a target the clock runs on until the chunks are there and the meshing has gone quiet.
+        idle = [self.status(3, 0, stages=0) for _ in range(30)]
+        loading = [self.status(30 * (i + 1), 500 * i, stages=500) for i in range(20)]
+        tail = [self.status(600, 10000, stages=0) for _ in range(60)]
+        took = self.run_script(idle + loading + tail, min_chunks=500)
+        self.assertGreater(took, 2.4)
+        self.assertLess(took, 4.0)
+        # Without one (the old call), the quiet start ends the wait at once.
+        self.assertLess(self.run_script(idle + loading + tail), 1.6)

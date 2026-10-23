@@ -10,10 +10,12 @@ pub(crate) struct ParsedModels {
 impl ParsedModels {
     /// Every `models/**.json` of a namespace directory, by identifier.
     pub(crate) fn load(root: &Path) -> Self {
-        let mut out = BTreeMap::new();
         let Ok(namespaces) = fs::read_dir(root.join("assets")) else {
-            return Self { models: out };
+            return Self::default();
         };
+        // Listed first, then read and parsed at once: a content pack has tens
+        // of thousands of models.
+        let mut files = Vec::new();
         for ns in namespaces.flatten() {
             let namespace = ns.file_name().to_string_lossy().into_owned();
             let base = ns.path().join("models");
@@ -24,20 +26,33 @@ impl ParsedModels {
                 };
                 for e in entries.flatten() {
                     let path = e.path();
-                    if path.is_dir() {
+                    // The entry's own type saves a stat per file; a link
+                    // (content roots link into the base) is followed.
+                    let is_dir = match e.file_type() {
+                        Ok(t) if !t.is_symlink() => t.is_dir(),
+                        _ => path.is_dir(),
+                    };
+                    if is_dir {
                         stack.push(path);
                     } else if path.extension().is_some_and(|x| x == "json")
                         && let Ok(rel) = path.strip_prefix(&base)
-                        && let Ok(text) = fs::read_to_string(&path)
-                        && let Ok(model) = CuboidModel::from_json(&text)
                     {
                         let rel = rel.with_extension("").to_string_lossy().replace('\\', "/");
-                        out.insert(format!("{namespace}:{rel}"), Arc::new(model));
+                        files.push((format!("{namespace}:{rel}"), path));
                     }
                 }
             }
         }
-        Self { models: out }
+        let parsed = crate::par::par_map(&files, |(_, path)| {
+            let text = fs::read_to_string(path).ok()?;
+            CuboidModel::from_json(&text).ok().map(Arc::new)
+        });
+        let models = files
+            .into_iter()
+            .zip(parsed)
+            .filter_map(|((id, _), model)| Some((id, model?)))
+            .collect();
+        Self { models }
     }
 
     /// Blocks require every referenced resource, including parents. Items instead

@@ -3,12 +3,15 @@ name: release
 # release waiting for merges to settle goes out without another merge) and by hand, tools/release_train.py decides:
 # a release when pull requests merged since the last one changed what players run and the newest merged 5 minutes
 # ago (the oldest 20 minutes ago, if merges never pause), or at once for a pull request labelled release-now.
-# RELEASES_PAUSED=1 (repository variable) stops them.
+# RELEASES_PAUSED=1 (repository variable) stops them; so does an open issue labelled release-blocker, forced runs too.
 # Builds Linux (an older Ubuntu, so the binary runs on any recent distribution and on NixOS through nix-ld) and
 # Windows on GitHub, macOS on the Mac mini's runner (MAC_RUNNER=macos-latest sends it to GitHub), then
 # publishes vX.Y.Z on the release line in .github/release-line.txt (docs/versioning.md; without it, the dated
-# vYYYY.MM.DD[.N] from before 0.2) with notes from the merged pull requests, as a beta (a pre-release) that promote.yml makes
-# stable in its daily promotion. macOS: with the repository variable MACOS_SIGN_IDENTITY set, the programs are signed with
+# vYYYY.MM.DD[.N] from before 0.2) with notes from the merged pull requests, as the release and GitHub's latest: one
+# channel, which launchers, `horizon-server update` and install.sh follow at once. So it is published only after the
+# checks that used to gate a promotion pass in this run: the Mac mini's smoke test drew a world, and no release-blocker
+# is open (tools/release_train.py gate); otherwise nothing is published. macOS: with the repository variable
+# MACOS_SIGN_IDENTITY set, the programs are signed with
 # Developer ID and the hardened runtime and the zip is notarized, from the runner's signing keychain
 # (packaging/macos/README.md); unset (forks), ad hoc.
 #   gh workflow run release --ref <branch>                       # dry run: builds and notes, publishes nothing
@@ -32,6 +35,8 @@ on:
         default: false
 permissions:
   contents: read
+  # The open release-blocker issues (decide).
+  issues: read
 concurrency:
   group: game-release
   cancel-in-progress: false
@@ -203,7 +208,7 @@ jobs:
                   or not report.get("meshed_sections") or not report.get("player"):
               sys.exit("the smoke run did not draw a world")
           EOF
-          # Published with the release: a beta becomes stable only with it (tools/release_channels.py).
+          # Published with the release; the publish job checks it again before it publishes anything.
           cp "$home/smoke.json" "$RUNNER_TEMP/smoke-test.json"
       - uses: actions/upload-artifact@v4
         if: runner.environment == 'self-hosted'
@@ -319,6 +324,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+      issues: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -341,6 +347,17 @@ jobs:
         run: |
           key=(); [[ -n "$EPHEMERAL" ]] && key=(--key "$(cat dist/ephemeral.pub)")
           cargo run --locked --quiet -p horizon-release-sign -- verify --tag "$TAG" --publishing "${key[@]}" dist
+      - name: Ready to publish (the smoke test passed, no release-blocker is open)
+        # Right before publishing: an issue labelled while the builds ran still holds this release. A dry run only
+        # reports what a real run would do.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ needs.decide.outputs.dry_run }}
+        run: |
+          if ! python3 tools/release_train.py gate --kind game --smoke dist/smoke-test.json --blockers; then
+            [[ "$DRY_RUN" == true ]] || { echo "::error::Nothing published"; exit 1; }
+            echo "::warning::A real run would publish nothing"
+          fi
       - name: Publish ${{ needs.decide.outputs.tag }}
         if: needs.decide.outputs.dry_run != 'true'
         env:
@@ -348,17 +365,15 @@ jobs:
           TAG: ${{ needs.decide.outputs.tag }}
         run: |
           signature=(); [[ -f dist/SHA256SUMS.sig ]] && signature=(dist/SHA256SUMS.sig)
-          smoke=(); [[ -f dist/smoke-test.json ]] && smoke=(dist/smoke-test.json)
-          # A beta (pre-release), the Alpha channel's: promote.yml makes it stable and latest in its daily promotion
-          # (docs/release-flow.md).
+          # The release and the latest at once: there is one channel (docs/release-flow.md).
           gh release create "$TAG" --target "${{ needs.decide.outputs.head }}" --title "$(cat notes/title.txt)" \
-            --notes-file notes/body.md --prerelease --latest=false dist/horizon-linux-x86_64.tar.gz \
+            --notes-file notes/body.md --latest dist/horizon-linux-x86_64.tar.gz \
             dist/horizon-windows-x64.zip dist/horizon-macos-arm64.zip dist/horizon-server-linux-x86_64.tar.gz \
-            dist/SHA256SUMS "${signature[@]}" "${smoke[@]}"
+            dist/SHA256SUMS "${signature[@]}" dist/smoke-test.json
       - name: Dry run, the release that would be published
         if: needs.decide.outputs.dry_run == 'true'
         run: |
-          echo "Would publish ${{ needs.decide.outputs.tag }} at ${{ needs.decide.outputs.head }}: $(cat notes/title.txt)"
+          echo "Would publish ${{ needs.decide.outputs.tag }} at ${{ needs.decide.outputs.head }} as the release and latest: $(cat notes/title.txt)"
           ls -l dist
       - uses: actions/upload-artifact@v4
         with:
