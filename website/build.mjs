@@ -238,8 +238,8 @@ const siteFooter = `    <footer class="footer">
 
 const fixed = (x, n) => Number(x).toFixed(n);
 const specTable =
-  `<table class="bench-table spec"><thead><tr><th scope="col">Graphics card</th><th scope="col">FP32 TFLOPS</th><th scope="col">Bandwidth, GB/s</th></tr></thead><tbody>` +
-  GPUS.map((g) => `<tr><th scope="row">${escape(g.name)}</th><td class="num">${fixed(g.tflops, 1)}</td><td class="num">${g.gbps}</td></tr>`).join("") +
+  `<table class="bench-table spec"><thead><tr><th scope="col">Graphics card</th><th scope="col">FP32 TFLOPS</th><th scope="col">Bandwidth, GB/s</th><th scope="col">Memory, GB</th></tr></thead><tbody>` +
+  GPUS.map((g) => `<tr><th scope="row">${escape(g.name)}</th><td class="num">${fixed(g.tflops, 1)}</td><td class="num">${g.gbps}</td><td class="num">${g.vram_gb || "shared"}</td></tr>`).join("") +
   `</tbody></table><table class="bench-table spec"><thead><tr><th scope="col">Processor</th><th scope="col">Boost, GHz</th><th scope="col">Generation factor</th><th scope="col">Single-thread score</th></tr></thead><tbody>` +
   CPUS.map((c) => `<tr><th scope="row">${escape(c.name)}</th><td class="num">${fixed(c.ghz, 2)}</td><td class="num">${fixed(c.ipc, 2)}</td><td class="num">${fixed(singleThread(c), 2)}</td></tr>`).join("") +
   `</tbody></table>`;

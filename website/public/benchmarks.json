@@ -1,7 +1,7 @@
 {
  "format": "horizon-benchmark-summary",
  "version": 1,
- "generated": "2026-10-22T20:35:03Z",
+ "generated": "2026-10-23T01:09:54Z",
  "min_installs": 3,
  "groups": [
   {
@@ -311,6 +311,211 @@
      "avg_fps": 205,
      "low_1pct_fps": 42,
      "chunk_load_ms": 54778
+    }
+   }
+  },
+  {
+   "gpu": "NVIDIA GeForce RTX 4080",
+   "cpu": "13th Gen Intel Core i7-13700KF",
+   "render_distance": 12,
+   "game": "horizon",
+   "source": "us",
+   "machine": "Desktop (RTX 4080, i7-13700KF)",
+   "measured": "2026-10-23",
+   "version": "v2026.10.22.13",
+   "backend": "vulkan",
+   "os": "linux",
+   "window": [
+    1280,
+    720
+   ],
+   "repeats": 3,
+   "load_avg_1m": 17.934,
+   "note": "Linux (NixOS) with the NVIDIA 595 driver. The desktop is in daily use, so both games drew to a separate GPU compositor (a headless sway rendering on the RTX 4080) in a 1280x720 window, never on its screen: Horizon through Wayland, vanilla through Xwayland, both on Vulkan. Other jobs were running during the runs (1-minute load average 18 to 25 on 24 threads), which costs both games, chunk loading most.",
+   "medians": {
+    "avg_fps": 2993,
+    "low_1pct_fps": 311,
+    "p95_ms": 0.5,
+    "world_ms": 17973,
+    "chunk_load_ms": 1797,
+    "rss_peak_mb": 1414,
+    "rss_steady_mb": 1202,
+    "cpu_p50_ms": 0.3,
+    "gpu_p50_ms": 0.1
+   },
+   "scenes": {
+    "village": {
+     "avg_fps": 2594,
+     "low_1pct_fps": 254,
+     "chunk_load_ms": 1260
+    },
+    "forest": {
+     "avg_fps": 3427,
+     "low_1pct_fps": 328,
+     "chunk_load_ms": 1592
+    },
+    "ocean": {
+     "avg_fps": 3277,
+     "low_1pct_fps": 388,
+     "chunk_load_ms": 2660
+    },
+    "mountain": {
+     "avg_fps": 2673,
+     "low_1pct_fps": 275,
+     "chunk_load_ms": 1675
+    }
+   }
+  },
+  {
+   "gpu": "NVIDIA GeForce RTX 4080",
+   "cpu": "13th Gen Intel Core i7-13700KF",
+   "render_distance": 32,
+   "game": "horizon",
+   "source": "us",
+   "machine": "Desktop (RTX 4080, i7-13700KF)",
+   "measured": "2026-10-23",
+   "version": "v2026.10.22.13",
+   "backend": "vulkan",
+   "os": "linux",
+   "window": [
+    1280,
+    720
+   ],
+   "repeats": 3,
+   "load_avg_1m": 22.354,
+   "medians": {
+    "avg_fps": 672,
+    "low_1pct_fps": 89,
+    "p95_ms": 3.6,
+    "world_ms": 8999,
+    "chunk_load_ms": 4677,
+    "rss_peak_mb": 1957,
+    "rss_steady_mb": 1646,
+    "cpu_p50_ms": 1.1,
+    "gpu_p50_ms": 0.3
+   },
+   "scenes": {
+    "village": {
+     "avg_fps": 686,
+     "low_1pct_fps": 93,
+     "chunk_load_ms": 2702
+    },
+    "forest": {
+     "avg_fps": 590,
+     "low_1pct_fps": 76,
+     "chunk_load_ms": 4823
+    },
+    "ocean": {
+     "avg_fps": 868,
+     "low_1pct_fps": 113,
+     "chunk_load_ms": 3629
+    },
+    "mountain": {
+     "avg_fps": 544,
+     "low_1pct_fps": 73,
+     "chunk_load_ms": 7552
+    }
+   }
+  },
+  {
+   "gpu": "NVIDIA GeForce RTX 4080",
+   "cpu": "13th Gen Intel Core i7-13700KF",
+   "render_distance": 12,
+   "game": "vanilla",
+   "source": "us",
+   "machine": "Desktop (RTX 4080, i7-13700KF)",
+   "measured": "2026-10-23",
+   "version": "26.3",
+   "backend": "vulkan",
+   "os": "linux",
+   "window": [
+    1280,
+    720
+   ],
+   "repeats": 3,
+   "load_avg_1m": 25.007,
+   "medians": {
+    "avg_fps": 2600,
+    "low_1pct_fps": 312,
+    "p95_ms": 0.5,
+    "world_ms": 30470,
+    "chunk_load_ms": 10837,
+    "rss_peak_mb": 3078,
+    "rss_steady_mb": 2883,
+    "cpu_p50_ms": null,
+    "gpu_p50_ms": null
+   },
+   "scenes": {
+    "village": {
+     "avg_fps": 2482,
+     "low_1pct_fps": 385,
+     "chunk_load_ms": 8003
+    },
+    "forest": {
+     "avg_fps": 2368,
+     "low_1pct_fps": 209,
+     "chunk_load_ms": 9654
+    },
+    "ocean": {
+     "avg_fps": 2727,
+     "low_1pct_fps": 247,
+     "chunk_load_ms": 10442
+    },
+    "mountain": {
+     "avg_fps": 2824,
+     "low_1pct_fps": 407,
+     "chunk_load_ms": 15249
+    }
+   }
+  },
+  {
+   "gpu": "NVIDIA GeForce RTX 4080",
+   "cpu": "13th Gen Intel Core i7-13700KF",
+   "render_distance": 32,
+   "game": "vanilla",
+   "source": "us",
+   "machine": "Desktop (RTX 4080, i7-13700KF)",
+   "measured": "2026-10-23",
+   "version": "26.3",
+   "backend": "vulkan",
+   "os": "linux",
+   "window": [
+    1280,
+    720
+   ],
+   "repeats": 3,
+   "load_avg_1m": 21.652,
+   "medians": {
+    "avg_fps": 849,
+    "low_1pct_fps": 112,
+    "p95_ms": 3.1,
+    "world_ms": 58554,
+    "chunk_load_ms": 31819,
+    "rss_peak_mb": 3484,
+    "rss_steady_mb": 3419,
+    "cpu_p50_ms": null,
+    "gpu_p50_ms": null
+   },
+   "scenes": {
+    "village": {
+     "avg_fps": 881,
+     "low_1pct_fps": 110,
+     "chunk_load_ms": 19818
+    },
+    "forest": {
+     "avg_fps": 1072,
+     "low_1pct_fps": 165,
+     "chunk_load_ms": 28927
+    },
+    "ocean": {
+     "avg_fps": 894,
+     "low_1pct_fps": 142,
+     "chunk_load_ms": 19246
+    },
+    "mountain": {
+     "avg_fps": 551,
+     "low_1pct_fps": 33,
+     "chunk_load_ms": 59283
     }
    }
   }
