@@ -256,6 +256,23 @@ def write_options(game_dir, distance, version=None):
     return text
 
 
+# Window sizes of the standard set (every game gets --width/--height): 720p,
+# the size results were first published at, and 1080p, the commonest screen.
+SIZES = [(1280, 720), (1920, 1080)]
+
+
+def parse_sizes(text):
+    """"1280x720,1920x1080" as [(1280, 720), (1920, 1080)]."""
+    return [tuple(int(v) for v in size.lower().split("x")) for size in text.split(",") if size]
+
+
+def size_label(label, width, height):
+    """Reports at 1280x720 keep the plain label; other sizes add theirs: horizon-m4-1080p, or -2560x1080."""
+    if (width, height) == SIZES[0]:
+        return label
+    return f"{label}-{height}p" if width * 9 == height * 16 else f"{label}-{width}x{height}"
+
+
 def scene_list(args):
     picked = args.scenes.split(",") if args.scenes else [s[0] for s in SCENES]
     return [s for s in SCENES if s[0] in picked]
@@ -375,6 +392,9 @@ def run_horizon(args, distance):
     client = Path(args.build).resolve() / "horizon-client"
     command = [str(client), "--resources", str(Path(args.resources).resolve()),
                "--control-socket", str(sock), "--no-pause", "--weather", "clear", "--time", "6000"]
+    if (args.width, args.height) != SIZES[0]:
+        # 1280x720 is Horizon's own window; builds before --width open only that one.
+        command += ["--width", str(args.width), "--height", str(args.height)]
     if args.offscreen:
         command.append("--offscreen")
     for carry in dev_mods(args):
@@ -796,8 +816,8 @@ def main():
     p.add_argument("--seconds", type=float, default=12.0, help="flight duration per scene")
     p.add_argument("--settle", type=float, default=2.0, help="seconds held at the start before each flight")
     p.add_argument("--timeout", type=float, default=300.0, help="seconds allowed for each load")
-    p.add_argument("--width", type=int, default=1280, help="vanilla window width (Horizon's is 1280x720)")
-    p.add_argument("--height", type=int, default=720)
+    p.add_argument("--sizes", default=",".join(f"{w}x{h}" for w, h in SIZES),
+                   help="window sizes, each a set of reports (default 1280x720 and 1920x1080)")
     p.add_argument("--heap", default="2G", help="vanilla -Xmx (the official launcher's default is 2G)")
     p.add_argument("--offscreen", action="store_true",
                    help="Horizon renders into a texture and does not wait for the window (locked macOS sessions)")
@@ -817,17 +837,20 @@ def main():
     args.label = args.label or f"{args.game}-{platform.node().split('.')[0]}"
     WORK.mkdir(parents=True, exist_ok=True)
     run = {"horizon": run_horizon, "neoforge": run_neoforge}.get(args.game, run_vanilla)
-    for d in [int(x) for x in args.distances.split(",")]:
-        runs = []
-        for _ in range(args.repeats):
-            load_before = os.getloadavg()
-            result = run(args, d)
-            result["load_before"], result["load_after"] = load_before, os.getloadavg()
-            runs.append(result)
-        out = ROOT / "benchmarks/perf" / f"{args.label}-rd{d}.json"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(report(args, d, runs, app(args)), indent=1) + "\n")
-        print(out)
+    label = args.label
+    for args.width, args.height in parse_sizes(args.sizes):
+        args.label = size_label(label, args.width, args.height)
+        for d in [int(x) for x in args.distances.split(",")]:
+            runs = []
+            for _ in range(args.repeats):
+                load_before = os.getloadavg()
+                result = run(args, d)
+                result["load_before"], result["load_after"] = load_before, os.getloadavg()
+                runs.append(result)
+            out = ROOT / "benchmarks/perf" / f"{args.label}-rd{d}.json"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(json.dumps(report(args, d, runs, app(args)), indent=1) + "\n")
+            print(out)
 
 
 def app(args):

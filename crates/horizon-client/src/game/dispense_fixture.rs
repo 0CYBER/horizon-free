@@ -291,12 +291,12 @@ impl Game<'_> {
             used = self.fixture_use_item(origin, op)?;
         } else if let Some(op) = case.get("respawn_at") {
             // ServerPlayer.findRespawnAndUseSpawnBlock for a respawn point at the origin.
-            let config = super::respawn_anchor::RespawnConfig {
-                dim: self.dim,
-                pos: [origin.x, origin.y, origin.z],
-                yaw: 0.0,
-                forced: op["forced"].as_bool().unwrap_or(false),
-            };
+            let config = super::respawn_anchor::RespawnConfig::wrapped(
+                self.dim,
+                [origin.x, origin.y, origin.z],
+                op["yaw"].as_f64().map_or(0.0, |v| v as f32),
+                op["forced"].as_bool().unwrap_or(false),
+            );
             let found =
                 self.find_respawn_and_use(config, op["consume"].as_bool().unwrap_or(true))?;
             used.push(match found {

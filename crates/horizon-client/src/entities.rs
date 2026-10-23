@@ -98,12 +98,73 @@ impl ItemEntity {
             lava_hurt,
         }
     }
-    /// Returns false when the item should be removed.
+    /// `ItemEntity.tick` on a server: an item whose box is inside a block
+    /// (one placed where it lay) has no physics this tick
+    /// (`level.noCollision(box.deflate(1.0E-7))`).
+    pub fn inside_block(&self, world: &World, collision: &BlockCollisionRegistry<'_>) -> bool {
+        let mut scene = SceneCollisions {
+            world,
+            binding: collision,
+            subject: None,
+        };
+        let inner = self.bounds().deflate(Vec3::new(1.0e-7, 1.0e-7, 1.0e-7));
+        !crate::collisions::no_collision_empty(&mut scene, inner)
+    }
+    /// `Entity.moveTowardsClosestSpace` from the middle of the item's box:
+    /// towards the nearest side of its block (north, south, west, east or
+    /// up) without a full collision cube, at `speed` (`nextFloat() * 0.2 +
+    /// 0.1`).
+    pub fn move_towards_closest_space(&mut self, world: &World, facts: &BlockFacts, speed: f32) {
+        let bounds = self.bounds();
+        let at = Vec3::new(
+            self.position.x,
+            (bounds.min_position().y + bounds.max_position().y) / 2.0,
+            self.position.z,
+        );
+        let pos = [
+            at.x.floor() as i32,
+            at.y.floor() as i32,
+            at.z.floor() as i32,
+        ];
+        let delta = [
+            at.x - f64::from(pos[0]),
+            at.y - f64::from(pos[1]),
+            at.z - f64::from(pos[2]),
+        ];
+        // (axis, step): NORTH, SOUTH, WEST, EAST, UP.
+        let mut closest = (1, 1);
+        let mut nearest = f64::MAX;
+        for (axis, step) in [(2, -1), (2, 1), (0, -1), (0, 1), (1, 1)] {
+            let mut n = pos;
+            n[axis] += step;
+            if !facts.get(world.block(n[0], n[1], n[2])).full_collision {
+                let d = if step > 0 {
+                    1.0 - delta[axis]
+                } else {
+                    delta[axis]
+                };
+                if d < nearest {
+                    nearest = d;
+                    closest = (axis, step);
+                }
+            }
+        }
+        let push = f64::from(closest.1 as f32 * speed);
+        let v = self.velocity.scale(0.75);
+        self.velocity = match closest.0 {
+            0 => Vec3::new(push, v.y, v.z),
+            1 => Vec3::new(v.x, push, v.z),
+            _ => Vec3::new(v.x, v.y, push),
+        };
+    }
+    /// Returns false when the item should be removed. `no_physics`: the item
+    /// moves through blocks this tick ([`ItemEntity::inside_block`]).
     pub fn tick(
         &mut self,
         world: &World,
         facts: &BlockFacts,
         collision: &BlockCollisionRegistry<'_>,
+        no_physics: bool,
     ) -> bool {
         self.ticks += 1;
         self.previous = self.position;
@@ -140,15 +201,22 @@ impl ItemEntity {
                 subject: None,
             };
             let wanted = self.velocity;
-            let moved = scene
-                .resolve(self.bounds(), wanted, 0.0, self.on_ground)
-                .unwrap_or(Vec3::ZERO);
+            // Entity.move with noPhysics: straight through, the ground as it was.
+            let moved = if no_physics {
+                wanted
+            } else {
+                scene
+                    .resolve(self.bounds(), wanted, 0.0, self.on_ground)
+                    .unwrap_or(Vec3::ZERO)
+            };
             self.position = Vec3::new(
                 self.position.x + moved.x,
                 self.position.y + moved.y,
                 self.position.z + moved.z,
             );
-            self.on_ground = wanted.y < 0.0 && moved.y != wanted.y;
+            if !no_physics {
+                self.on_ground = wanted.y < 0.0 && moved.y != wanted.y;
+            }
             if moved.x != wanted.x {
                 self.velocity.x = 0.0;
             }

@@ -40,7 +40,11 @@ use horizon_protocol::{
     registry::{Builtin, DimensionType, Dynamic, ceil_log2},
     text::{Language, format_java, plain},
 };
-use horizon_world::{nbt::Tag, registry::BlockStateId};
+use horizon_world::{
+    nbt::Tag,
+    registry::BlockStateId,
+    stepped_interpolation::{Path, PosRot, Start, SteppedInterpolation},
+};
 use std::{
     collections::{HashMap, VecDeque},
     sync::Arc,
@@ -85,6 +89,15 @@ struct Lerp {
     steps: u32,
 }
 
+/// `SteppedInterpolationHandler.doInterpolate`'s `setPos` and `setRot` on a
+/// mob: its yaw kept continuous (the same turn as vanilla's, without the
+/// wrap that would spin it in the frame between ticks), its pitch clamped.
+fn place_interpolated(m: &mut Mob, at: PosRot) {
+    m.position = Vec3::new(at.position[0], at.position[1], at.position[2]);
+    m.yaw += wrap_degrees(at.yaw - m.yaw);
+    m.head_pitch = (at.pitch % 360.0).clamp(-90.0, 90.0);
+}
+
 pub(super) struct Remote {
     pub session: Session,
     pub brand: String,
@@ -123,6 +136,8 @@ pub(super) struct Remote {
     use_target: Option<[i32; 3]>,
     entities: HashMap<i32, Tracked>,
     lerps: HashMap<i32, Lerp>,
+    /// Living entities' `SteppedInterpolationHandler`s.
+    stepped: HashMap<i32, SteppedInterpolation>,
     /// `LivingEntity.lerpHeadTo`: the head yaw and the ticks left to reach it.
     head_lerps: HashMap<i32, (f32, u32)>,
     /// Item entities waiting for their item data.
@@ -380,6 +395,7 @@ impl Game<'_> {
             use_target: None,
             entities: HashMap::new(),
             lerps: HashMap::new(),
+            stepped: HashMap::new(),
             head_lerps: HashMap::new(),
             pending_items: HashMap::new(),
             health: (20.0, 20, 5.0),
@@ -931,6 +947,7 @@ impl Game<'_> {
             if let Some(r) = self.remote.as_mut() {
                 r.entities.clear();
                 r.lerps.clear();
+                r.stepped.clear();
                 r.head_lerps.clear();
                 r.pending_items.clear();
                 // A new ClientLevel: a new chunk storage, centred on 0, 0.
@@ -1322,6 +1339,9 @@ impl Game<'_> {
             mob.persistent = true;
             self.mobs.retain(|m| m.id != id as u32);
             self.mobs.push(mob);
+            if let Some(r) = self.remote.as_mut() {
+                r.stepped.remove(&id);
+            }
         }
         if let Some(r) = self.remote.as_mut() {
             if kind == "minecraft:item" {
@@ -1336,23 +1356,77 @@ impl Game<'_> {
             );
         }
     }
+    /// A move packet for entity `id`: to the end of `path` (None: a
+    /// rotation alone), turned to `rotation` if it has one. `far_snaps`:
+    /// an `EntityPositionSync`, which puts an entity more than 64 blocks
+    /// away there at once.
     fn move_entity(
         &mut self,
         id: i32,
-        position: [f64; 3],
+        path: Option<Path>,
         rotation: Option<(f32, f32)>,
         on_ground: bool,
+        far_snaps: bool,
     ) {
         let mob = self.mobs.iter_mut().find(|m| m.id == id as u32);
+        let tracked = self
+            .remote
+            .as_ref()
+            .and_then(|r| r.entities.get(&id))
+            .map(|t| t.position);
+        let position = path
+            .as_ref()
+            .map(Path::end)
+            .or(tracked)
+            .or_else(|| {
+                mob.as_ref()
+                    .map(|m| [m.position.x, m.position.y, m.position.z])
+            })
+            .unwrap_or([0.0; 3]);
         if let Some(r) = self.remote.as_mut() {
             if let Some(t) = r.entities.get_mut(&id) {
                 t.position = position;
             }
+            if let Some(m) = mob {
+                // A living entity: LivingEntity.createInterpolationHandler's
+                // SteppedInterpolationHandler, over its type's update interval.
+                let entity = PosRot {
+                    position: [m.position.x, m.position.y, m.position.z],
+                    yaw: m.yaw,
+                    pitch: m.head_pitch,
+                };
+                let far = far_snaps && {
+                    let d = [0, 1, 2].map(|i| position[i] - entity.position[i]);
+                    d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > 4096.0
+                };
+                let handler = r.stepped.entry(id).or_insert_with(|| {
+                    let interval = horizon_client::lan::tracking::settings(&m.kind.id).1;
+                    SteppedInterpolation::new(interval as i32)
+                });
+                let snap = if far {
+                    handler.cancel();
+                    let (yaw, pitch) = rotation.unwrap_or((m.yaw, m.head_pitch));
+                    Some(PosRot {
+                        position,
+                        yaw,
+                        pitch,
+                    })
+                } else {
+                    match handler.interpolate_to(entity, path, rotation) {
+                        Start::Snap(at) => Some(at),
+                        Start::Interpolating | Start::Unchanged => None,
+                    }
+                };
+                if let Some(at) = snap {
+                    place_interpolated(m, at);
+                    m.previous = m.position;
+                }
+                m.on_ground = on_ground;
+                return;
+            }
             // AbstractInterpolationHandler.interpolateTo: without a rotation,
-            // the one it was heading for (or has).
-            let rotation = rotation
-                .or_else(|| r.lerps.get(&id).and_then(|l| l.rotation))
-                .or_else(|| mob.as_ref().map(|m| (m.yaw, m.head_pitch)));
+            // the one it was heading for.
+            let rotation = rotation.or_else(|| r.lerps.get(&id).and_then(|l| l.rotation));
             r.lerps.insert(
                 id,
                 Lerp {
@@ -1364,9 +1438,6 @@ impl Game<'_> {
             if let Some(p) = r.pending_items.get_mut(&id) {
                 *p = position;
             }
-        }
-        if let Some(m) = mob {
-            m.on_ground = on_ground;
         }
         self.turn_remote_object(id, rotation.map(|(yaw, _)| yaw), on_ground);
         self.turn_remote_projectile(id, rotation);
@@ -1384,6 +1455,7 @@ impl Game<'_> {
         if let Some(r) = self.remote.as_mut() {
             r.entities.remove(&id);
             r.lerps.remove(&id);
+            r.stepped.remove(&id);
             r.head_lerps.remove(&id);
             r.pending_items.remove(&id);
         }
@@ -1743,17 +1815,36 @@ impl Game<'_> {
                     .and_then(|r| r.entities.get(&m.id))
                     .map(|t| t.position);
                 let Some(base) = base else { return Ok(()) };
-                let position = m.delta.as_ref().map_or(base, |d| d.end(base));
+                // VecDeltaCodec.decode: each step's position from the last.
+                let path = m.delta.as_ref().map(|d| match d {
+                    play::VecDelta::Linear(_) => Path::Linear(d.end(base)),
+                    play::VecDelta::Stepped(steps) => {
+                        let mut at = base;
+                        Path::Stepped(
+                            steps
+                                .iter()
+                                .map(|(delta, ticks)| {
+                                    at = play::VecDelta::apply(at, *delta);
+                                    (at, *ticks)
+                                })
+                                .collect(),
+                        )
+                    }
+                });
                 let rotation = m.rotation.map(|(y, x)| {
                     (
                         horizon_protocol::buf::unpack_degrees(y),
                         horizon_protocol::buf::unpack_degrees(x),
                     )
                 });
-                self.move_entity(m.id, position, rotation, m.on_ground);
+                self.move_entity(m.id, path, rotation, m.on_ground, false);
             }
             C::EntityPositionSync(p) => {
-                self.move_entity(p.id, p.path.end(), Some((p.yaw, p.pitch)), p.on_ground)
+                let path = match p.path {
+                    play::PositionPath::Linear(at) => Path::Linear(at),
+                    play::PositionPath::Stepped(steps) => Path::Stepped(steps),
+                };
+                self.move_entity(p.id, Some(path), Some((p.yaw, p.pitch)), p.on_ground, true)
             }
             C::TeleportEntity(p) => {
                 let base = self
@@ -1773,7 +1864,13 @@ impl Game<'_> {
                     rel(play::relative::Y, 1),
                     rel(play::relative::Z, 2),
                 ];
-                self.move_entity(p.id, position, Some((p.yaw, p.pitch)), p.on_ground);
+                self.move_entity(
+                    p.id,
+                    Some(Path::Linear(position)),
+                    Some((p.yaw, p.pitch)),
+                    p.on_ground,
+                    false,
+                );
             }
             C::SetPassengers(p) => self.remote_set_passengers(p.vehicle, &p.passengers),
             C::MoveVehicle(p) => self.remote_move_vehicle(p.position, p.yaw),
@@ -1867,11 +1964,27 @@ impl Game<'_> {
                 // player lies down in the bed, or gets up.
                 if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) {
                     for (index, _, value) in &p.values {
-                        if let (14, Value::OptPos(bed)) = (index, value) {
-                            if bed.is_some() && self.sleeping.is_none() {
-                                self.sleep_timer = 0;
+                        match (index, value) {
+                            (14, Value::OptPos(bed)) => {
+                                if bed.is_some() && self.sleeping.is_none() {
+                                    self.sleep_timer = 0;
+                                }
+                                self.sleeping = *bed;
                             }
-                            self.sleeping = *bed;
+                            // Entity.DATA_AIR_SUPPLY_ID and
+                            // Player.DATA_PLAYER_ABSORPTION_ID: the bubbles
+                            // and golden hearts the server's player has.
+                            (1, Value::Int(air)) => {
+                                if let Some(pl) = self.player.as_mut() {
+                                    pl.air = *air;
+                                }
+                            }
+                            (17, Value::Float(amount)) => {
+                                if let Some(pl) = self.player.as_mut() {
+                                    let _ = pl.internal_set_absorption(*amount);
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -3001,6 +3114,13 @@ impl Game<'_> {
         );
         let was_flying = player.flying;
         player.yaw = self.yaw;
+        // As the window's own tick has them: the helmet's Respiration
+        // (decreaseAirSupply) and the dimension's FAST_LAVA, the Nether's
+        // stronger lava current.
+        player.respiration = self.armor[0]
+            .as_ref()
+            .map_or(0, |s| s.enchantment_level("minecraft:respiration") as i32);
+        player.fluids.fast_lava = self.dim == Dim::Nether;
         let dead = self.screen == Screen::Dead;
         // LivingEntity.isImmobile: a sleeper lies still in the bed.
         if let Some(head) = self.sleeping {
@@ -3153,6 +3273,7 @@ impl Game<'_> {
             return;
         };
         let mut lerps = std::mem::take(&mut r.lerps);
+        let stepped = &mut r.stepped;
         let head_lerps = &mut r.head_lerps;
         let players = &r.level_players;
         let mut using = Vec::new();
@@ -3183,22 +3304,12 @@ impl Game<'_> {
             // LivingEntity.updateSwingTime.
             m.anim.attack_anim_o = m.anim.attack_anim;
             horizon_client::mobs::ai::tick_swing(m);
-            // Entity.commonTick: LinearInterpolationHandler.interpolate.
-            if let Some(l) = lerps.get_mut(&(m.id as i32))
-                && l.steps > 0
+            // Entity.tick: the SteppedInterpolationHandler's step.
+            if let Some(at) = stepped
+                .get_mut(&(m.id as i32))
+                .and_then(|h| h.interpolate())
             {
-                let n = f64::from(l.steps);
-                m.position = Vec3::new(
-                    m.position.x + (l.target[0] - m.position.x) / n,
-                    m.position.y + (l.target[1] - m.position.y) / n,
-                    m.position.z + (l.target[2] - m.position.z) / n,
-                );
-                if let Some((yaw, pitch)) = l.rotation {
-                    let alpha = 1.0 / l.steps as f32;
-                    m.yaw += wrap_degrees(yaw - m.yaw) * alpha;
-                    m.head_pitch += (pitch - m.head_pitch) * alpha;
-                }
-                l.steps -= 1;
+                place_interpolated(m, at);
             }
             // LivingEntity.aiStep: the head's own interpolation.
             if let Some((yaw, steps)) = head_lerps.get_mut(&(m.id as i32))
@@ -3473,22 +3584,13 @@ impl Game<'_> {
             return;
         }
         let facts = self.res.facts().get(state).clone();
-        let held = self.held().cloned();
-        let mut speed = self.res.items().mining_speed(held.as_ref(), &facts.name);
-        if self.player.as_ref().is_some_and(|p| !p.ground.on_ground) {
-            speed /= 5.0;
-        }
-        let harvest = !facts.requires_tool
-            || self
-                .res
-                .items()
-                .correct_for_drops(held.as_ref(), &facts.name);
-        let progress = if facts.hardness < 0.0 {
-            0.0
-        } else if facts.hardness == 0.0 {
+        // The server's own getDestroyProgress: under water, off the ground,
+        // with haste, fatigue and efficiency, so the client stops digging
+        // when the server is done too (#1254).
+        let progress = if facts.hardness == 0.0 {
             1.0
         } else {
-            speed / facts.hardness / if harvest { 30.0 } else { 100.0 }
+            self.destroy_progress(hit.pos)
         };
         let same = self
             .remote

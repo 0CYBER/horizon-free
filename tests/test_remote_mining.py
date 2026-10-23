@@ -79,6 +79,10 @@ impl Game {
     }
     fn pick(&self) -> Option<Hit> { Some(self.hit) }
     fn held(&self) -> Option<&()> { None }
+    // Game::destroy_progress (hand.rs) for a harvestable block on the ground.
+    fn destroy_progress(&self, _: [i32; 3]) -> f32 {
+        self.res.speed / self.res.facts.hardness / 30.0
+    }
     fn next_sequence(&mut self) -> i32 { self.sequence += 1; self.sequence }
     fn predict_break(&mut self, pos: [i32; 3], _: u32, _: i32) { self.world.broken.push(pos); }
     fn send(&mut self, S::PlayerAction(packet): S) { self.packets.push(packet); }
