@@ -205,6 +205,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - fishing:   the host and the guest each cast a fishing rod: the hook stays out on the server and
              both sides draw it and it reels back in from the ground, and in open water a fish
              bites and reeling in catches it (#1348).
+- maps:      the host and the guest each make a map and hold it: their client draws the terrain
+             around them and their marker, from the server's map data (#1382).
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -4804,6 +4806,42 @@ def check_fishing(host, guest, out):
 
 CHECKS += ['fishing']
 CHECK_FNS.update(fishing=check_fishing)
+
+
+def check_maps(host, guest, out):
+    """MapItem.update for each player, on the server: a map the player makes and holds reveals the
+    terrain around them and shows their marker, which reach their client in
+    ClientboundMapItemDataPacket (#1382)."""
+    seen = {}
+    try:
+        for game in (host, guest):
+            game('command', command='gamemode survival')
+            game('command', command='clear @s')
+            game('command', command='item replace entity @s weapon.mainhand with minecraft:map')
+            x, y, z = pos_of(game)
+            game.raw('look-at', f'{x + 5:.2f}', f'{y + 1.6:.2f}', f'{z:.2f}')
+            game.wait(5)
+            game.raw('use-item')
+            # 16 ticks sweep every column once; the marker goes out every 5th tick.
+            game.wait(60)
+            maps = game('status').get('maps', [])
+            game.raw('look-at', f'{x + 1:.2f}', f'{y:.2f}', f'{z:.2f}')
+            game.wait(5)
+            game.shot(out, 'maps-held')
+            seen[game.name] = [{'pixels': m['pixels'], 'decorations': m['decorations']} for m in maps]
+    finally:
+        for game in (host, guest):
+            game('command', command='clear @s')
+        face_each_other(host, guest)
+    for name, maps in seen.items():
+        # Revealed out to the server's view distance, at least a 32-block disk.
+        assert len(maps) == 1 and maps[0]['pixels'] > 3000, f'{name}: {seen}'
+        assert maps[0]['decorations'] == ['map/decorations/player'], f'{name}: {seen}'
+    return seen
+
+
+CHECKS += ['maps']
+CHECK_FNS.update(maps=check_maps)
 
 
 if __name__ == '__main__':
