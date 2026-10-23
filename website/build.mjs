@@ -55,7 +55,8 @@ try {
     if (batch.length < 100) break;
   }
   if (!res.ok) console.warn(`releases: ${res.status} from GitHub; the pages will load them themselves`);
-  // A day of betas can push the stable release out of the newest 100: it is GitHub's "latest" (betas never are).
+  // Pre-releases of the old Alpha channel could push the newest release out of the newest 100: it is GitHub's
+  // "latest" (pre-releases never are).
   if (res.ok && !releases.some((r) => isGame(r.tag_name) && !r.prerelease)) {
     const latest = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, { headers: githubHeaders, signal: AbortSignal.timeout(15000) });
     if (latest.ok) releases.push(await latest.json());
@@ -121,8 +122,8 @@ const parityHeadline = matching === body.length ? "Every subsystem matches vanil
 
 // --- The releases ----------------------------------------------------------------------
 
-// Newest first by tag: every 0.2 tag is newer than the dated ones (src/versions.js). Alpha builds are GitHub
-// pre-releases, Stable the others (docs/release-flow.md, "Channels").
+// Newest first by tag: every 0.2 tag is newer than the dated ones (src/versions.js). One channel since 2026-10-23
+// (docs/release-flow.md, "One channel"); the old Alpha channel's pre-releases stay listed.
 const byTag = (a, b) => newestFirst(a.tag_name, b.tag_name);
 const ours = releases.filter((r) => isGame(r.tag_name) || isLauncher(r.tag_name)).sort(byTag);
 const game = ours.filter((r) => isGame(r.tag_name));
