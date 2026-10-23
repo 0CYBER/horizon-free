@@ -197,7 +197,7 @@ def main():
         'tools/test_particle_providers_parity.py', 'tools/oracle_harness.py', 'tools/test_rust_parity.py', 'tools/lab.py',
         f'mods/horizon/src/test/java/dev/horizonlab/parity/{oracle}.java', 'Cargo.toml', 'Cargo.lock',
         'crates/horizon-client/Cargo.toml', 'crates/horizon-client/src/particles.rs',
-        f'crates/horizon-client/examples/{probe}.rs', 'crates/horizon-core/src/random.rs']]
+        f'crates/horizon-client/examples/probe/{probe}.rs', 'crates/horizon-core/src/random.rs']]
     tested = base.source_hashes(sources)
     cases_path, units = make_cases(build)
     classes, dependencies, _ = harness.compile_oracle(build, oracle, jars, libraries, lock['minecraft']['java_major'])
