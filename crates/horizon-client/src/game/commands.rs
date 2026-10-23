@@ -1039,6 +1039,11 @@ impl Game<'_> {
                             .play("minecraft:entity.item.pickup", Some(p), 0.2, pitch);
                     }
                 }
+                // containerMenu.broadcastChanges: InventoryChangeTrigger
+                // (and its announcement) comes before the command's message.
+                if g.player.is_some() {
+                    g.check_inventory_trigger();
+                }
             });
         }
         // The prototype stack: one item.

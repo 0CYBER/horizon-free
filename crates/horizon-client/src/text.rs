@@ -428,6 +428,34 @@ impl Text {
         }
         out
     }
+    /// The text without its legacy `§` codes (ChatFormatting.stripFormatting:
+    /// a `§` and a code character, `0`-`9`, `a`-`f`, `k`-`o` or `r`).
+    pub fn strip_legacy(&self) -> Text {
+        if !self.spans.iter().any(|s| s.text.contains('§')) {
+            return self.clone();
+        }
+        let code =
+            |c: char| matches!(c.to_ascii_lowercase(), '0'..='9' | 'a'..='f' | 'k'..='o' | 'r');
+        let mut out = Text::default();
+        for span in &self.spans {
+            let mut text = String::with_capacity(span.text.len());
+            let mut chars = span.text.chars().peekable();
+            while let Some(c) = chars.next() {
+                if c == '§' && chars.peek().is_some_and(|&n| code(n)) {
+                    chars.next();
+                } else {
+                    text.push(c);
+                }
+            }
+            if !text.is_empty() {
+                out.spans.push(Span {
+                    text,
+                    style: span.style.clone(),
+                });
+            }
+        }
+        out
+    }
     /// Characters with their effective styles.
     pub fn chars(&self) -> impl Iterator<Item = (char, &Style)> {
         self.spans
