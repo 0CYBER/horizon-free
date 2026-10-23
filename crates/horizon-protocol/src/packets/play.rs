@@ -465,6 +465,11 @@ packet!(
     /// ClientboundOpenSignEditorPacket: the sign whose side the player edits.
     OpenSignEditor { pos: [i32; 3] => Pos, front: bool => SignSide }
 );
+packet!(
+    /// ClientboundOpenBookPacket: the hand (InteractionHand, 0 main, 1 off)
+    /// whose written book the player reads.
+    OpenBook { hand: i32 => VarInt }
+);
 packet!(PlayerAbilities { flags: i8 => Byte, flying_speed: f32 => Float, walking_speed: f32 => Float });
 /// MessageSignature.Packed: an index into the last-seen cache or a full signature.
 pub struct PackedSignature;
@@ -1511,6 +1516,7 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     MerchantOffers(MerchantOffers) = MERCHANT_OFFERS,
     MountScreenOpen(MountScreenOpen) = MOUNT_SCREEN_OPEN,
     OpenScreen(OpenScreen) = OPEN_SCREEN,
+    OpenBook(OpenBook) = OPEN_BOOK,
     OpenSignEditor(OpenSignEditor) = OPEN_SIGN_EDITOR,
     Ping(Ping) = PING,
     PongResponse(crate::packets::status::Ping) = PONG_RESPONSE,
@@ -1814,6 +1820,29 @@ packet!(
     /// ServerboundSignUpdatePacket: the four lines the player wrote on a side.
     SignUpdate { pos: [i32; 3] => Pos, lines: [String; 4] => SignLines, front: bool => SignSide }
 );
+packet!(
+    /// ServerboundEditBookPacket: the book's slot (a hotbar slot, or 40 for
+    /// the off hand), its pages and, to sign it, its title.
+    EditBook {
+        slot: i32 => VarInt,
+        pages: Vec<String> => BookPages,
+        title: Option<String> => Opt<StrN<32>>,
+    }
+);
+/// `stringUtf8(1024)` in `list(100)`: a book's pages.
+pub struct BookPages;
+impl Codec<Vec<String>> for BookPages {
+    fn read(r: &mut Reader) -> Result<Vec<String>> {
+        let n = r.varint()?;
+        if !(0..=100).contains(&n) {
+            return Err(Error::new(format!("{n} book pages, at most 100")));
+        }
+        (0..n).map(|_| r.string(1024)).collect()
+    }
+    fn write(v: &Vec<String>, w: &mut Writer) {
+        List::<StrN<1024>>::write(v, w);
+    }
+}
 /// SignTextSlot.STREAM_CODEC: VarInt 0 for the back, 1 for the front (any
 /// other id reads as the back, ByIdMap's ZERO strategy).
 pub struct SignSide;
@@ -1925,6 +1954,7 @@ packet_enum!(Serverbound, crate::ids::play::serverbound {
     ContainerClick(ContainerClick) = CONTAINER_CLICK,
     ContainerClose(ContainerClose) = CONTAINER_CLOSE,
     CustomPayload(CustomPayload) = CUSTOM_PAYLOAD,
+    EditBook(EditBook) = EDIT_BOOK,
     Interact(Interact) = INTERACT,
     KeepAlive(KeepAlive) = KEEP_ALIVE,
     MovePlayerPos(MovePlayerPos) = MOVE_PLAYER_POS,
@@ -2670,5 +2700,24 @@ mod tests {
         let body = update.encode();
         assert_eq!(body[9..], [2, b'H', b'i', 0, 1, b'x', 0, 0]);
         round_trip(update, Serverbound::encode, Serverbound::decode);
+    }
+
+    #[test]
+    fn book_packets_match_vanilla_stream_codecs() {
+        // ClientboundOpenBookPacket: InteractionHand as a VarInt.
+        let open = Clientbound::OpenBook(OpenBook { hand: 1 });
+        assert_eq!(open.encode()[1..], [1]);
+        round_trip(open, Clientbound::encode, Clientbound::decode);
+        // ServerboundEditBookPacket: the slot, the pages (a counted list), then an optional title.
+        let sign = Serverbound::EditBook(EditBook {
+            slot: 40,
+            pages: vec!["a".into(), String::new()],
+            title: Some("T".into()),
+        });
+        assert_eq!(sign.encode()[1..], [40, 2, 1, b'a', 0, 1, 1, b'T']);
+        round_trip(sign, Serverbound::encode, Serverbound::decode);
+        let mut w = Writer::new();
+        w.varint(101);
+        assert!(BookPages::read(&mut Reader::new(&w.data)).is_err());
     }
 }

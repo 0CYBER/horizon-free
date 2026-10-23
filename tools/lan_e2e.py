@@ -182,6 +182,10 @@ address. The script then checks, from both sides, what a guest's game used to ge
 - signs:     the host and the guest each place an oak sign: the editor opens on their own screen
              (ClientboundOpenSignEditorPacket), the two lines they write reach the server
              (ServerboundSignUpdatePacket) and both sides show them (#1380).
+- books:     the host and the guest each write in a book and quill on their own screen, sign it
+             (ServerboundEditBookPacket), read the written book the server gave them
+             (ClientboundOpenBookPacket), then drop it: the other side sees its title, author and
+             page (#1366).
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -4160,8 +4164,59 @@ def check_signs(host, guest, out):
     return seen
 
 
-CHECKS += ['totem', 'keepinv', 'signs']
-CHECK_FNS.update(totem=check_totem, keepinv=check_keep_inventory, signs=check_signs)
+def book_screen(game):
+    """The open book (`book`'s page and page count), once `game` shows it."""
+    game.raw('wait-for', 'screen', 'book', '--timeout', 10)
+    return game.raw('book')
+
+
+def check_books(host, guest, out):
+    """Books in hand for the host and the guest: a book and quill opens its editor on the player's
+    own client (LocalPlayer.openItemGui), what it writes and signs reaches the server
+    (ServerboundEditBookPacket), and the written book opens on the player's client when the server
+    says so (ServerPlayer.openItemGui's ClientboundOpenBookPacket); dropped, the other side sees the
+    server's book (#1366)."""
+    seen = {}
+    for game, other in ((host, guest), (guest, host)):
+        game('command', command='gamemode survival')
+        game('command', command='clear @s')
+        game('command', command='item replace entity @s weapon.mainhand with minecraft:writable_book')
+        x, y, z = pos_of(game)
+        game.raw('look-at', f'{x + 0.5:.2f}', f'{y + 30:.2f}', f'{z:.2f}')
+        game.wait(10)
+        case = seen[game.name] = {}
+        game.raw('use-item')
+        case['edit'] = book_screen(game)
+        case['other_screen'] = other('state').get('screen')
+        game.raw('type', f'{game.name} page one')
+        game.shot(out, 'books-edit')
+        game.raw('book', 'sign')
+        game.raw('type', f'{game.name} book')
+        game.raw('book', 'sign')
+        game.wait(20)
+        case['signed'] = {item: server_count(game, item) for item in ('writable_book', 'written_book')}
+        game.raw('use-item')
+        case['view'] = book_screen(game)
+        game.shot(out, 'books-view')
+        game.raw('book', 'done')
+        game.wait(5)
+        game.raw('key', 'q', 'tap')
+        game.wait(30)
+        books = [e['item'].get('components', '') for e in other.raw('entities', 16, 'minecraft:item')['entities']
+                 if e['item']['item'] == 'minecraft:written_book']
+        case['dropped'] = [all(f'{game.name} {t}' in c for t in ('page one', 'book')) for c in books]
+        host('command', command='kill @e[type=minecraft:item]')
+    for name, case in seen.items():
+        assert case['edit'] == {'page': 0, 'pages': 1, 'lectern': None}, f'{name}: {seen}'
+        assert case['other_screen'] == 'playing', f'{name}: {seen}'
+        assert case['signed'] == {'writable_book': 0, 'written_book': 1}, f'{name}: {seen}'
+        assert case['view'] == {'page': 0, 'pages': 1, 'lectern': None}, f'{name}: {seen}'
+        assert case['dropped'] == [True], f'{name}: {seen}'
+    return seen
+
+
+CHECKS += ['totem', 'keepinv', 'signs', 'books']
+CHECK_FNS.update(totem=check_totem, keepinv=check_keep_inventory, signs=check_signs, books=check_books)
 
 
 if __name__ == '__main__':
