@@ -104,6 +104,20 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 /// A packed atlas image: sprite name, size and RGBA pixels.
 type PackedImage = (String, u32, u32, Vec<u8>);
+/// `image` inside a one-texel border copied from its opposite edges, the
+/// texels repeat addressing reads past each edge.
+fn wrap_border((name, w, h, data): &PackedImage) -> PackedImage {
+    let (bw, bh) = (w + 2, h + 2);
+    let mut out = Vec::with_capacity((bw * bh * 4) as usize);
+    for y in 0..bh {
+        let row = (y + h - 1) % h;
+        for x in 0..bw {
+            let at = ((row * w + (x + w - 1) % w) * 4) as usize;
+            out.extend_from_slice(&data[at..at + 4]);
+        }
+    }
+    (name.clone(), bw, bh, out)
+}
 /// Sprites the atlas definitions (`atlases/*.json`) add beyond the texture
 /// files already packed: generated ones (`paletted_permutations` such as the
 /// armour trim sprites, `unstitch` regions) and files listed under another id.
@@ -326,6 +340,16 @@ impl HudAtlas {
         if full {
             Self::slots(&mut images, crate::trims::slot_size(root));
         }
+        // Blurred sprites are sampled linearly in the atlas (screen.wgsl): a
+        // border wrapped from their own edges keeps the filter off their
+        // neighbours, as repeat addressing of their own texture would.
+        let mut bordered = std::collections::HashSet::new();
+        for image in &mut images {
+            if flags.get(&image.0).is_some_and(|f: &TextureFlags| f.blur) {
+                *image = wrap_border(image);
+                bordered.insert(image.0.clone());
+            }
+        }
         images.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
         let width = 4096u32;
         let mut placements = Vec::with_capacity(images.len());
@@ -350,6 +374,8 @@ impl HudAtlas {
                 let dst = (((py + row) * width + px) * 4) as usize;
                 pixels[dst..dst + (w * 4) as usize].copy_from_slice(src);
             }
+            let b = u32::from(bordered.contains(name));
+            let (px, py, w, h) = (px + b, py + b, w - 2 * b, h - 2 * b);
             sprites.insert(
                 name.clone(),
                 Rect {
@@ -357,8 +383,8 @@ impl HudAtlas {
                     v0: py as f32 / height as f32,
                     u1: (px + w) as f32 / width as f32,
                     v1: (py + h) as f32 / height as f32,
-                    w: *w,
-                    h: *h,
+                    w,
+                    h,
                 },
             );
         }
@@ -1245,6 +1271,30 @@ impl HudRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_wrapped_border_repeats_the_opposite_edges() {
+        // 2x2 texels a b / c d, one byte each in red.
+        let image = (
+            "x".to_owned(),
+            2,
+            2,
+            [1u8, 2, 3, 4]
+                .iter()
+                .flat_map(|&v| [v, 0, 0, 255])
+                .collect(),
+        );
+        let (_, w, h, data) = wrap_border(&image);
+        assert_eq!((w, h), (4, 4));
+        let red: Vec<u8> = data.chunks(4).map(|t| t[0]).collect();
+        #[rustfmt::skip]
+        assert_eq!(red, [
+            4, 3, 4, 3,
+            2, 1, 2, 1,
+            4, 3, 4, 3,
+            2, 1, 2, 1,
+        ]);
+    }
 
     #[test]
     fn the_fonts_only_atlas_measures_text_like_the_full_one() {

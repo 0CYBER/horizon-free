@@ -3,51 +3,49 @@
 // with the sampler vanilla gives it (ReloadableTexture.setSampler: linear
 // when `blur`, clamp-to-edge when `clamp`, else nearest and repeat).
 @group(0) @binding(1) var atlas: texture_2d<f32>;
+// The block sprites' sampler (nearest), and the entity group's lightmap
+// sampler (linear) for `blur`. A blurred sprite has a one-texel border in the
+// atlas, wrapped as repeat reads it (hud.rs), so the hardware's bilinear
+// sample is GL_LINEAR with repeat; clamp-to-edge keeps the sample point half
+// a texel inside. Each sampling has its own pipeline (gfx.rs), so a pixel
+// costs what it did with nearest and repeat only: one sample.
+@group(0) @binding(2) var nearest_sampler: sampler;
+@group(0) @binding(4) var linear_sampler: sampler;
+override BLUR: bool = false;
+override CLAMP: bool = false;
 struct Out {
     @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) @interpolate(flat) rect: vec4<f32>,
     @location(2) color: vec4<f32>,
-    @location(3) @interpolate(flat) sampling: u32,
+    // With clamp-to-edge, the sprite's first and last texel centres.
+    @location(3) @interpolate(flat) edges: vec4<f32>,
 }
 @vertex fn vs_screen(@location(0) pos: vec2<f32>, @location(1) uv: vec2<f32>,
-    @location(2) rect: vec4<f32>, @location(3) color: vec4<f32>,
-    @location(4) sampling: u32) -> Out {
+    @location(2) rect: vec4<f32>, @location(3) color: vec4<f32>) -> Out {
     var out: Out;
     out.clip = vec4(pos, 0.0, 1.0);
     out.uv = uv;
     out.rect = rect;
     out.color = color;
-    out.sampling = sampling;
+    let half = 0.5 / vec2<f32>(textureDimensions(atlas));
+    out.edges = vec4(rect.xy + half, rect.zw - half);
     return out;
 }
-const SAMPLE_BLUR: u32 = 1u;
-const SAMPLE_CLAMP: u32 = 2u;
-// A texel of the sprite, addressed by repeat or clamp-to-edge. With repeat, `p` is at most one
-// texel outside the sprite (`sample` reduces the coordinate first), so wrapping is a select: no
-// integer division, which Intel GPUs emulate (it cost 0.85 ms a frame on the vignette on an HD 620).
-fn texel(origin: vec2<i32>, size: vec2<i32>, p: vec2<i32>, clamp_edge: bool) -> vec4<f32> {
-    var q = select(select(p, p - size, p >= size), p + size, p < vec2(0));
-    if clamp_edge { q = clamp(p, vec2(0), size - 1); }
-    return textureLoad(atlas, origin + q, 0);
-}
 fn sample(in: Out) -> vec4<f32> {
-    let dims = vec2<f32>(textureDimensions(atlas));
-    let origin = vec2<i32>(round(in.rect.xy * dims));
-    let size = max(vec2<i32>(round((in.rect.zw - in.rect.xy) * dims)), vec2(1));
-    let clamp_edge = (in.sampling & SAMPLE_CLAMP) != 0u;
-    // Repeat: one period of the sprite, so every texel read is at most one outside it.
-    let p = select(fract(in.uv), in.uv, clamp_edge) * vec2<f32>(size);
-    if (in.sampling & SAMPLE_BLUR) == 0u {
-        return texel(origin, size, vec2<i32>(floor(p)), clamp_edge) * in.color;
+    var f = in.uv;
+    if !CLAMP {
+        // Repeat: one period of the sprite.
+        f = fract(f);
     }
-    // GL_LINEAR: the four texels around the sample point, weighted.
-    let c = p - 0.5;
-    let i = vec2<i32>(floor(c));
-    let t = c - floor(c);
-    let a = mix(texel(origin, size, i, clamp_edge), texel(origin, size, i + vec2(1, 0), clamp_edge), t.x);
-    let b = mix(texel(origin, size, i + vec2(0, 1), clamp_edge), texel(origin, size, i + vec2(1, 1), clamp_edge), t.x);
-    return mix(a, b, t.y) * in.color;
+    var uv = in.rect.xy + f * (in.rect.zw - in.rect.xy);
+    if CLAMP {
+        uv = clamp(uv, in.edges.xy, in.edges.zw);
+    }
+    if BLUR {
+        return textureSampleLevel(atlas, linear_sampler, uv, 0.0) * in.color;
+    }
+    return textureSampleLevel(atlas, nearest_sampler, uv, 0.0) * in.color;
 }
 @fragment fn fs_screen(in: Out) -> @location(0) vec4<f32> {
     let c = sample(in);

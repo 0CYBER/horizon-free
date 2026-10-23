@@ -27,8 +27,6 @@ pub struct ScreenVertex {
     /// Atlas rectangle (u0, v0, u1, v1) of the sprite.
     pub rect: [f32; 4],
     pub color: [f32; 4],
-    /// How the sprite is sampled: [`SAMPLE_BLUR`] and [`SAMPLE_CLAMP`].
-    pub sampling: u32,
 }
 /// Linear filtering (`TextureMetadataSection.blur`), else nearest.
 pub const SAMPLE_BLUR: u32 = 1;
@@ -43,6 +41,8 @@ pub fn sampling(flags: TextureFlags) -> u32 {
 pub struct ScreenQuad {
     pub vertices: [ScreenVertex; 4],
     pub blend: Blend,
+    /// How the sprite is sampled: [`SAMPLE_BLUR`] and [`SAMPLE_CLAMP`].
+    pub sampling: u32,
 }
 
 /// What the camera sees this frame.
@@ -124,9 +124,9 @@ impl ScreenEffects {
                 uv: uv[i],
                 rect,
                 color,
-                sampling,
             }),
             blend: Blend::Alpha,
+            sampling,
         };
         let full = [[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]];
         // ScreenEffectRenderer.submitBlockSprite: u1/v1 at (-1, -1), colour 0xFF191919.
@@ -187,10 +187,10 @@ impl ScreenEffects {
                     uv: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]][i],
                     rect,
                     color,
-                    sampling,
                 }
             }),
             blend,
+            sampling,
         };
         let rgba = |c: u32| {
             let [a, r, g, b] = c.to_be_bytes();
@@ -213,6 +213,12 @@ impl ScreenEffects {
                     } else {
                         Blend::Alpha
                     };
+                    // The vignette darkens by texture × colour: black (in
+                    // daylight its brightness fades to 0 within half a
+                    // minute) leaves every pixel as it was.
+                    if blend == Blend::Vignette && color & 0x00ff_ffff == 0 {
+                        continue;
+                    }
                     if let Some(rect) = sprite(texture) {
                         out.push(gui(rect, rgba(*color), blend, texture_sampling(texture)));
                     }
@@ -283,7 +289,18 @@ mod tests {
         let quads = e.build(&input);
         assert_eq!(quads.len(), 1);
         assert_eq!(quads[0].blend, Blend::Vignette);
-        assert_eq!(quads[0].vertices[0].sampling, 0);
+        assert_eq!(quads[0].sampling, 0);
+        // A black vignette (faded out in daylight) changes no pixel: no quad.
+        // Below 1/255 the colour's channels are 0; a border warning tints it.
+        for (brightness, warning, drawn) in [(0.003, 0.0, 0), (0.004, 0.0, 1), (0.0, 0.5, 1)] {
+            let overlays = [crate::hud_overlays::vignette(320, 240, brightness, warning)];
+            let input = ScreenInputs {
+                block_overlay: None,
+                gui_overlays: &overlays,
+                ..input
+            };
+            assert_eq!(e.build(&input).len(), drawn, "{brightness} {warning}");
+        }
     }
     #[test]
     fn standalone_textures_sample_by_their_metadata() {
@@ -323,7 +340,7 @@ mod tests {
             on_fire: false,
             gui_overlays: &[crate::hud_overlays::vignette(320, 240, 1.0, 0.0)],
         });
-        let sampling: Vec<_> = quads.iter().map(|q| q.vertices[0].sampling).collect();
+        let sampling: Vec<_> = quads.iter().map(|q| q.sampling).collect();
         assert_eq!(sampling, [0, SAMPLE_CLAMP, SAMPLE_BLUR]);
     }
     #[test]
