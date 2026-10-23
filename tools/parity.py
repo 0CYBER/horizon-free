@@ -482,16 +482,17 @@ def probes_run(commands):
 
 
 def only_probes_run(paths, names):
-    """A probe binary's dep-info lists every probe in it. Keep those the harness ran, the probes they include!
-    and the shared support modules they name (support::<module>), so that editing one probe reruns only its own
-    harnesses."""
+    """A probe binary's dep-info lists every probe in it. Keep those the harness ran, the probes they include! or
+    name (crate::<probe>) and the shared support modules they name (support::<module>), so that editing one probe
+    reruns only its own harnesses. Files in a probe's own subdirectory and dispatch.rs, which runs them, are always
+    kept; main.rs, which only lists them, is left out, so adding a probe reruns nothing."""
     if not names:
         return paths
-    names, used = {*names, "main"}, ""
+    names, used = {*names, "dispatch"}, ""
     while True:
         ran = [path for path in paths if (match := PROBE_SOURCE.search(path)) and not match.group(1) and match.group(2) in names]
         used = "".join((ROOT / path).read_text(encoding="utf-8", errors="replace") for path in ran)
-        included = set(re.findall(r'include!\("(\w+)\.rs"\)', used)) - names
+        included = {*re.findall(r'include!\("(\w+)\.rs"\)', used), *re.findall(r"\bcrate::(\w+)", used)} - names
         if not included:
             break
         names |= included

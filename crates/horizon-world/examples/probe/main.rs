@@ -1,7 +1,13 @@
 //! Every horizon-world parity probe in one binary: `probe <name> [arguments]` runs `<name>.rs` as its own
 //! example did (tools/test_*_parity.py). Linking ~170 examples, each instantiating the crate's generics again,
 //! was most of the parity job's probe build; one binary builds them once.
-use std::process::{ExitCode, Termination};
+//!
+//! This file only lists the probes, so that adding one reruns no harness: tools/parity.py leaves it out of
+//! their dependencies. How a probe runs is in dispatch.rs.
+#[macro_use]
+mod dispatch;
+
+use dispatch::args;
 
 /// Code shared by several probes.
 mod support {
@@ -180,20 +186,6 @@ mod world_fixture;
 mod world_ray_fixture;
 mod worldgen_random_fixture;
 
-/// `run(name)` runs the probe module `name`; NAMES lists them.
-macro_rules! probes {
-    ($($name:ident,)*) => {
-        const NAMES: &[&str] = &[$(stringify!($name)),*];
-
-        fn run(name: &str) -> Option<ExitCode> {
-            Some(match name {
-                $(stringify!($name) => $name::main().report(),)*
-                _ => return None,
-            })
-        }
-    };
-}
-
 probes! {
     active_effect_tick_fixture,
     active_effects_fixture,
@@ -363,24 +355,4 @@ probes! {
     world_fixture,
     world_ray_fixture,
     worldgen_random_fixture,
-}
-
-/// The probe's command line as its own example saw it: the program, then the arguments after the probe's name.
-fn args() -> std::vec::IntoIter<String> {
-    let mut args: Vec<String> = std::env::args().collect();
-    if args.len() > 1 {
-        args.remove(1);
-    }
-    args.into_iter()
-}
-
-fn main() -> ExitCode {
-    let name = std::env::args().nth(1).unwrap_or_default();
-    run(&name).unwrap_or_else(|| {
-        eprintln!(
-            "usage: probe <name> [arguments...]\nprobes: {}",
-            NAMES.join(" ")
-        );
-        ExitCode::from(2)
-    })
 }

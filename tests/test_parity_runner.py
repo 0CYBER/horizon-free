@@ -57,12 +57,14 @@ class ParityRunnerTests(unittest.TestCase):
             (probe / "support").mkdir(parents=True)
             (probe / "a_fixture.rs").write_text('mod integration { include!("d_fixture.rs"); }')
             (probe / "d_fixture.rs").write_text("use crate::support::shared as s;")
-            for name in ("b_fixture.rs", "c_fixture.rs", "main.rs", "support/shared.rs", "support/other.rs"):
+            (probe / "b_fixture.rs").write_text("use crate::e_fixture;")
+            for name in ("c_fixture.rs", "dispatch.rs", "e_fixture.rs", "main.rs", "support/shared.rs", "support/other.rs"):
                 (probe / name).write_text("")
             paths = [f"crates/w/examples/probe/{name}" for name in ("a_fixture.rs", "b_fixture.rs", "c_fixture.rs",
-                                                                    "d_fixture.rs", "main.rs", "support/other.rs", "support/shared.rs")]
+                                                                    "d_fixture.rs", "dispatch.rs", "e_fixture.rs", "main.rs",
+                                                                    "support/other.rs", "support/shared.rs")]
             self.assertEqual(parity.only_probes_run(["crates/w/src/lib.rs", *paths], {"a_fixture", "b_fixture"}),
-                             ["crates/w/src/lib.rs", *paths[:2], *paths[3:5], paths[6]])
+                             ["crates/w/src/lib.rs", *paths[:2], *paths[3:6], paths[8]])
             self.assertEqual(parity.only_probes_run(paths, set()), paths)
 
     def test_java_sources_include_classes_pulled_from_the_sourcepath(self):
