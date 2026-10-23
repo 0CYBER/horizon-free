@@ -370,7 +370,8 @@ impl Loading {
                     let _ = std::fs::create_dir_all(&dir);
                     packs::open_folder(&dir);
                 }
-                Event::ButtonClick => {}
+                // The startup menu runs before the game opens a control socket.
+                Event::ButtonClick | Event::CopyAgentDetails => {}
             }
         }
     }

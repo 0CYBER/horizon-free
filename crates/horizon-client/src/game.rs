@@ -3,6 +3,7 @@
 mod advancements;
 mod advancements_screen;
 mod agent;
+mod agent_settings;
 mod allays;
 mod armor_stands;
 mod banners;
@@ -1427,6 +1428,10 @@ struct Game<'a> {
     item_columns: Option<machines::ItemColumns>,
     creative_screen: Creative,
     control: Option<horizon_client::control::Server>,
+    /// The Agent Control setting the socket was last opened or closed for (`agent_settings`).
+    agent_control_on: bool,
+    /// When an agent's last command came.
+    agent_last: Option<Instant>,
     frame_stats: horizon_client::control::FrameStats,
     /// This play session's frame and tick times, for opt-in performance statistics.
     perf: horizon_client::telemetry::Session,
@@ -11645,6 +11650,8 @@ impl<'a> Game<'a> {
             item_columns: None,
             creative_screen: prepared.creative_screen,
             control: None,
+            agent_control_on: false,
+            agent_last: None,
             frame_stats: Default::default(),
             perf: Default::default(),
             pending_screenshot: None,
@@ -12439,18 +12446,7 @@ fn start_game<'a>(
         game.mods.dev = game.options.dev_mods.clone();
         game.start_mods();
     }
-    if game.options.control.is_some() && game.settings.extras.no_ai {
-        // No AI turns agent control off: the socket is never opened.
-        log::warn!(
-            "Horizon: control socket not opened: {}",
-            horizon_core::no_ai::REFUSAL
-        );
-    } else if let Some(path) = &game.options.control {
-        let server = horizon_client::control::Server::start(path)
-            .map_err(|e| format!("control socket {}: {e}", path.display()))?;
-        log::info!("Horizon: control socket {}", server.path().display());
-        game.control = Some(server);
-    }
+    game.start_agent_control()?;
     if let Some(scenario) = game.options.benchmark.clone() {
         let control = game
             .control

@@ -874,6 +874,8 @@ pub enum Page {
     /// Horizon Settings: every page Horizon adds, as a mod's settings
     /// screen hangs off vanilla's Options.
     Horizon,
+    /// AI Agent: agent control on or off, whether an agent is connected, the connection details.
+    Agent,
 }
 #[derive(Clone, Debug, PartialEq)]
 enum Act {
@@ -894,6 +896,7 @@ enum Act {
     /// Pick shader pack `i` of `OptionsUi::shader_packs` (again: off).
     ToggleShaderPack(usize),
     OpenShaderPackFolder,
+    CopyAgentDetails,
 }
 enum WKind {
     Button {
@@ -943,6 +946,8 @@ pub enum Event {
     OpenModFolder,
     /// Create `shaderpacks/` if needed and open it.
     OpenShaderPackFolder,
+    /// Copy how an agent connects (the AI Agent page).
+    CopyAgentDetails,
 }
 /// `SliderableValueSet.applyValueImmediately`: these apply 600 ms after
 /// the last change (`OptionInstanceSliderButton.delayedApplyAt`).
@@ -998,6 +1003,8 @@ pub struct OptionsUi {
     pub shader_packs: crate::shader_pack::Folder,
     /// The pack that failed to load last and why (set by the game).
     pub shader_pack_error: Option<(String, String)>,
+    /// The AI Agent page's status lines (set by the game while it shows).
+    pub agent_status: Vec<String>,
 }
 impl Default for OptionsUi {
     fn default() -> Self {
@@ -1028,6 +1035,7 @@ impl Default for OptionsUi {
             graphics: Default::default(),
             shader_packs: Default::default(),
             shader_pack_error: None,
+            agent_status: Vec::new(),
         }
     }
 }
@@ -1086,6 +1094,7 @@ fn horizon_page_tooltip(page: Page) -> Option<&'static str> {
         Page::Extras => {
             "Optional additions, all off by default: the game stays vanilla until you turn one on."
         }
+        Page::Agent => "Let your own AI agent play: horizon-ctl and MCP clients on this computer.",
         Page::Mods => {
             "Mods made for Horizon, from the horizon-mods folder. Each runs in a sandbox and stays off until you turn it on."
         }
@@ -1107,6 +1116,11 @@ fn pairs(opts: &[Opt]) -> Vec<Row> {
         .collect()
 }
 impl OptionsUi {
+    /// A switch of `horizon-extras.txt` as the Extras page draws it: "Caption: On".
+    fn extra_button(&self, s: &Settings, item: crate::extras::Item) -> Widget {
+        let label = format!("{}: {}", item.caption(), item.value(&s.extras));
+        button(0.0, 0.0, 150.0, Text::literal(label), Act::Extra(item))
+    }
     fn settings_search_active(&self) -> bool {
         self.settings_search.focused
             && matches!(self.page(), Page::Video | Page::Controls | Page::KeyBinds)
@@ -1200,6 +1214,7 @@ impl OptionsUi {
             Page::PadBinds => "Controller Binds",
             Page::Extras => "Horizon Extras",
             Page::Horizon => "Horizon Settings",
+            Page::Agent => "AI Agent",
         }
     }
     fn scrollbar_x(&self, width: f32) -> f32 {
@@ -1316,7 +1331,30 @@ impl OptionsUi {
                         open("Extras...", Page::Extras),
                         Some(open("Mods...", Page::Mods)),
                     ),
+                    // No AI hides the AI Agent page and everything AI.
+                    if s.extras.no_ai {
+                        Row::Buttons(self.extra_button(s, crate::extras::Item::NoAi), None)
+                    } else {
+                        Row::Buttons(
+                            open("AI Agent...", Page::Agent),
+                            Some(self.extra_button(s, crate::extras::Item::NoAi)),
+                        )
+                    },
                 ]
+            }
+            Page::Agent => {
+                let mut rows = vec![Row::Buttons(
+                    self.extra_button(s, crate::extras::Item::AgentControl),
+                    Some(button(
+                        0.0,
+                        0.0,
+                        150.0,
+                        Text::literal("Copy Connection Details"),
+                        Act::CopyAgentDetails,
+                    )),
+                )];
+                rows.extend(self.agent_status.iter().cloned().map(Row::Note));
+                rows
             }
             Page::Video => {
                 // Horizon's graphics screens, Simple and Advanced.
@@ -2499,6 +2537,7 @@ impl OptionsUi {
                             events.push(Event::Changed);
                         }
                         Act::OpenShaderPackFolder => events.push(Event::OpenShaderPackFolder),
+                        Act::CopyAgentDetails => events.push(Event::CopyAgentDetails),
                         Act::None => {}
                     }
                 }
@@ -4146,8 +4185,33 @@ mod tests {
                 Page::Controller,
                 Page::Extras,
                 Page::Mods,
+                Page::Agent,
             ]
         );
+        // No AI hides the AI Agent page.
+        let mut no_ai = Settings::default();
+        no_ai.extras.no_ai = true;
+        let (widgets, _, _, _) = ui.layout(&no_ai, 427.0, 240.0);
+        assert!(!widgets.iter().any(|w| matches!(
+            &w.kind,
+            WKind::Button {
+                act: Act::Push(Page::Agent),
+                ..
+            }
+        )));
+        // The AI Agent page: the switch, Copy and the status the game sets.
+        ui.push(Page::Agent);
+        ui.agent_status = vec!["Waiting for an agent.".into()];
+        let (widgets, _, _, _) = ui.layout(&s, 427.0, 240.0);
+        let acts: Vec<&Act> = widgets
+            .iter()
+            .filter_map(|w| match &w.kind {
+                WKind::Button { act, .. } => Some(act),
+                _ => None,
+            })
+            .collect();
+        assert!(acts.contains(&&Act::Extra(crate::extras::Item::AgentControl)));
+        assert!(acts.contains(&&Act::CopyAgentDetails));
         // Vanilla's own pages keep the Horizon pages they had.
         ui.stack = vec![Page::Main, Page::Video];
         let video = pushes(&mut ui);

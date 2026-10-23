@@ -117,6 +117,7 @@ impl Game<'_> {
             self.answer(request, event_loop);
         }
         while let Some(request) = self.control.as_ref().and_then(|c| c.try_recv()) {
+            self.agent_command_seen();
             self.answer(request, event_loop);
             if self.pending_save.is_some() {
                 break;
@@ -124,6 +125,11 @@ impl Game<'_> {
         }
         if self.control.is_some() {
             self.watch_events();
+        }
+        if self.screen == Screen::Options
+            && self.ui.options.page() == horizon_client::options_ui::Page::Agent
+        {
+            self.ui.options.agent_status = self.agent_status_lines();
         }
     }
 
@@ -565,6 +571,7 @@ impl Game<'_> {
                     "graphics-advanced" => Page::GraphicsAdvanced,
                     "extras" => Page::Extras,
                     "horizon" => Page::Horizon,
+                    "agent" => Page::Agent,
                     "shader-packs" => Page::ShaderPacks,
                     other => return Err(format!("unknown options page {other}").into()),
                 };
