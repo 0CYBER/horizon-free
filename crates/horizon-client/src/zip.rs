@@ -1,75 +1,35 @@
-//! Minimal read-only ZIP archive support (stored and deflated entries), used
-//! for resource packs and the unifont glyph archive.
-use std::{collections::BTreeMap, fs, io, path::Path};
+//! Read-only ZIP archives held in memory (resource packs, data packs and the
+//! unifont glyph archive), on the `zip` crate. Like Java's `ZipFile` (what
+//! vanilla's `FilePackResources` reads with), entries aren't CRC-checked.
+use std::{
+    collections::BTreeMap,
+    fs,
+    io::{self, Cursor, Read},
+    path::Path,
+    sync::Arc,
+};
+use zip::{CompressionMethod, ZipArchive};
 
-/// One archive held in memory with its central directory indexed by name.
+/// One archive with its entries indexed by name (`\` read as `/`, folders
+/// left out).
 pub struct Zip {
-    data: Vec<u8>,
-    entries: BTreeMap<String, Entry>,
+    archive: ZipArchive<Cursor<Arc<[u8]>>>,
+    entries: BTreeMap<String, usize>,
 }
-#[derive(Clone, Copy)]
-struct Entry {
-    method: u16,
-    compressed: usize,
-    size: usize,
-    header: usize,
-}
-fn invalid(message: &str) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, message)
-}
-fn u16_at(d: &[u8], at: usize) -> io::Result<u16> {
-    d.get(at..at + 2)
-        .map(|b| u16::from_le_bytes([b[0], b[1]]))
-        .ok_or_else(|| invalid("truncated zip"))
-}
-fn u32_at(d: &[u8], at: usize) -> io::Result<u32> {
-    d.get(at..at + 4)
-        .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-        .ok_or_else(|| invalid("truncated zip"))
+fn invalid(e: impl std::fmt::Display) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, e.to_string())
 }
 impl Zip {
     pub fn open(path: &Path) -> io::Result<Self> {
         Self::from_bytes(fs::read(path)?)
     }
     pub fn from_bytes(data: Vec<u8>) -> io::Result<Self> {
-        // End of central directory: the last "PK\x05\x06" within 64 KiB of the end.
-        let min = data.len().saturating_sub(22 + 65_535);
-        let eocd = (min..=data.len().saturating_sub(22))
-            .rev()
-            .find(|&i| data[i..i + 4] == [0x50, 0x4b, 0x05, 0x06])
-            .ok_or_else(|| invalid("not a zip archive"))?;
-        let count = usize::from(u16_at(&data, eocd + 10)?);
-        let mut at = u32_at(&data, eocd + 16)? as usize;
-        let mut entries = BTreeMap::new();
-        for _ in 0..count {
-            if u32_at(&data, at)? != 0x0201_4b50 {
-                return Err(invalid("bad central directory entry"));
-            }
-            let method = u16_at(&data, at + 10)?;
-            let compressed = u32_at(&data, at + 20)? as usize;
-            let size = u32_at(&data, at + 24)? as usize;
-            let name_len = usize::from(u16_at(&data, at + 28)?);
-            let extra_len = usize::from(u16_at(&data, at + 30)?);
-            let comment_len = usize::from(u16_at(&data, at + 32)?);
-            let header = u32_at(&data, at + 42)? as usize;
-            let name = data
-                .get(at + 46..at + 46 + name_len)
-                .ok_or_else(|| invalid("truncated zip name"))?;
-            let name = String::from_utf8_lossy(name).replace('\\', "/");
-            if !name.ends_with('/') {
-                entries.insert(
-                    name,
-                    Entry {
-                        method,
-                        compressed,
-                        size,
-                        header,
-                    },
-                );
-            }
-            at += 46 + name_len + extra_len + comment_len;
-        }
-        Ok(Self { data, entries })
+        let archive = ZipArchive::new(Cursor::new(Arc::from(data))).map_err(invalid)?;
+        let entries = (0..archive.len())
+            .filter_map(|i| Some((archive.name_for_index(i)?.replace('\\', "/"), i)))
+            .filter(|(name, _)| !name.ends_with('/'))
+            .collect();
+        Ok(Self { archive, entries })
     }
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.entries.keys().map(String::as_str)
@@ -78,30 +38,21 @@ impl Zip {
         self.entries.contains_key(name)
     }
     pub fn read(&self, name: &str) -> io::Result<Vec<u8>> {
-        let e = *self
+        let &index = self
             .entries
             .get(name)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, name.to_owned()))?;
-        if u32_at(&self.data, e.header)? != 0x0403_4b50 {
-            return Err(invalid("bad local file header"));
-        }
-        let start = e.header
-            + 30
-            + usize::from(u16_at(&self.data, e.header + 26)?)
-            + usize::from(u16_at(&self.data, e.header + 28)?);
-        let raw = self
-            .data
-            .get(start..start + e.compressed)
-            .ok_or_else(|| invalid("truncated zip entry"))?;
-        match e.method {
-            0 => Ok(raw.to_vec()),
-            8 => {
-                let out = miniz_oxide::inflate::decompress_to_vec_with_limit(
-                    raw,
-                    e.size.max(1) * 2 + 1024,
-                )
-                .map_err(|_| invalid("corrupt deflate stream"))?;
-                Ok(out)
+        // A clone shares the bytes and the central directory: reading needs `&mut`.
+        let mut archive = self.archive.clone();
+        let mut entry = archive.by_index_raw(index).map_err(invalid)?;
+        let (method, size) = (entry.compression(), entry.size() as usize);
+        let mut raw = Vec::with_capacity(entry.compressed_size() as usize);
+        entry.read_to_end(&mut raw)?;
+        match method {
+            CompressionMethod::Stored => Ok(raw),
+            CompressionMethod::Deflated => {
+                miniz_oxide::inflate::decompress_to_vec_with_limit(&raw, size.max(1) * 2 + 1024)
+                    .map_err(|_| invalid("corrupt deflate stream"))
             }
             _ => Err(invalid("unsupported zip compression")),
         }
@@ -163,10 +114,97 @@ mod tests {
     }
     #[test]
     fn reads_stored_and_deflated_entries() {
+        // Its CRCs are zero: Java's ZipFile doesn't check them either.
         let zip = Zip::from_bytes(archive()).unwrap();
         assert_eq!(zip.names().collect::<Vec<_>>(), ["a/b.txt", "pack.mcmeta"]);
         assert_eq!(zip.read("pack.mcmeta").unwrap(), b"{\"pack\":{}}");
         assert_eq!(zip.read("a/b.txt").unwrap(), b"hello hello hello hello");
         assert!(zip.read("missing").is_err());
+    }
+
+    /// A pack as zip tools write it: folder entries, a nested pack root,
+    /// stored and deflated files, and a Windows-style name.
+    fn written() -> Vec<u8> {
+        use std::io::Write;
+        use zip::write::SimpleFileOptions;
+        let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        w.add_directory("Pack-main/", stored).unwrap();
+        w.add_directory("Pack-main/assets/minecraft/", stored)
+            .unwrap();
+        w.start_file("Pack-main/pack.mcmeta", stored).unwrap();
+        w.write_all(b"{\"pack\":{\"pack_format\":64}}").unwrap();
+        w.start_file("Pack-main/assets/minecraft/lang/en_us.json", deflated)
+            .unwrap();
+        w.write_all("{\"a\":\"b\"}".repeat(100).as_bytes()).unwrap();
+        w.start_file(
+            "Pack-main\\assets\\minecraft\\texts\\splashes.txt",
+            deflated,
+        )
+        .unwrap();
+        w.write_all(b"Also try Horizon!").unwrap();
+        w.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn reads_nested_folders_and_skips_folder_entries() {
+        let zip = Zip::from_bytes(written()).unwrap();
+        assert_eq!(
+            zip.names().collect::<Vec<_>>(),
+            [
+                "Pack-main/assets/minecraft/lang/en_us.json",
+                "Pack-main/assets/minecraft/texts/splashes.txt",
+                "Pack-main/pack.mcmeta",
+            ]
+        );
+        assert!(zip.contains("Pack-main/pack.mcmeta"));
+        assert!(!zip.contains("Pack-main/"));
+        assert_eq!(
+            zip.read("Pack-main/assets/minecraft/lang/en_us.json")
+                .unwrap(),
+            "{\"a\":\"b\"}".repeat(100).as_bytes()
+        );
+        assert_eq!(
+            zip.read("Pack-main/assets/minecraft/texts/splashes.txt")
+                .unwrap(),
+            b"Also try Horizon!"
+        );
+    }
+
+    #[test]
+    fn a_bad_entry_fails_alone() {
+        let mut bytes = written();
+        // The deflated lang file's stream becomes a reserved block type.
+        let (start, len) = {
+            let mut archive = ZipArchive::new(Cursor::new(bytes.as_slice())).unwrap();
+            let index = archive
+                .index_for_name("Pack-main/assets/minecraft/lang/en_us.json")
+                .unwrap();
+            let entry = archive.by_index_raw(index).unwrap();
+            (
+                entry.data_start() as usize,
+                entry.compressed_size() as usize,
+            )
+        };
+        bytes[start..start + len].fill(0xff);
+        let zip = Zip::from_bytes(bytes).unwrap();
+        assert!(
+            zip.read("Pack-main/assets/minecraft/lang/en_us.json")
+                .is_err()
+        );
+        assert_eq!(
+            zip.read("Pack-main/pack.mcmeta").unwrap(),
+            b"{\"pack\":{\"pack_format\":64}}"
+        );
+    }
+
+    #[test]
+    fn refuses_what_is_not_a_zip() {
+        assert!(Zip::from_bytes(b"PK not really".to_vec()).is_err());
+        assert!(Zip::from_bytes(Vec::new()).is_err());
+        let mut cut = written();
+        cut.truncate(cut.len() / 2);
+        assert!(Zip::from_bytes(cut).is_err());
     }
 }
