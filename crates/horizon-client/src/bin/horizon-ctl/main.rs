@@ -174,15 +174,6 @@ impl Session {
                 ready["launch"] = reply;
                 Ok(ready)
             }
-            "hold" => {
-                let (key, seconds) = match words {
-                    [_, key, _] => (key.clone(), number(2, "SECONDS")?),
-                    _ => return Err(Failure::usage(format!("usage: {}", usage(name)))),
-                };
-                self.game(&format!("key {key} down"))?;
-                thread::sleep(Duration::from_secs_f64(seconds.max(0.0)));
-                self.game(&format!("key {key} up"))
-            }
             "interact-entity" => {
                 let id = match words {
                     [_, id] if id.parse::<i64>().is_ok() => id,
@@ -194,6 +185,15 @@ impl Session {
                 let mut screen = self.game("screen")?;
                 screen["ok"] = json!(true);
                 Ok(screen)
+            }
+            "hold" => {
+                let (key, seconds) = match words {
+                    [_, key, _] => (key.clone(), number(2, "SECONDS")?),
+                    _ => return Err(Failure::usage(format!("usage: {}", usage(name)))),
+                };
+                self.game(&format!("key {key} down"))?;
+                thread::sleep(Duration::from_secs_f64(seconds.max(0.0)));
+                self.game(&format!("key {key} up"))
             }
             "logs" => logs(&horizon_client::logging::game_home(), &words[1..]),
             "wait-ready" => {
