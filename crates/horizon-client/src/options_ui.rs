@@ -4184,9 +4184,13 @@ mod tests {
                 })
                 .collect()
         };
-        // Vanilla's ten Options buttons, the last two Horizon's.
+        // Vanilla's Options buttons, Horizon's two in the Telemetry and Credits slots, then
+        // Credits & Attribution (WinScreen's credits).
         let main = pushes(&mut ui);
-        assert_eq!(&main[main.len() - 2..], [Page::Horizon, Page::Mods]);
+        assert_eq!(
+            &main[main.len() - 3..],
+            [Page::Horizon, Page::Mods, Page::Credits]
+        );
         ui.push(Page::Horizon);
         assert_eq!(
             pushes(&mut ui),
