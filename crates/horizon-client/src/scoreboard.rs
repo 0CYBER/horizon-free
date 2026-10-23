@@ -118,6 +118,7 @@ pub fn style_from_json(v: &Value) -> Style {
     s.underlined = flag("underlined");
     s.strikethrough = flag("strikethrough");
     s.obfuscated = flag("obfuscated");
+    s.font = o.get("font").and_then(text::font_id);
     s
 }
 impl NumberFormat {

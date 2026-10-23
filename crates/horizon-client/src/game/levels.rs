@@ -253,6 +253,24 @@ impl Game<'_> {
         Ok(())
     }
 
+    /// Put `dim`'s level in place for a command whose source is there
+    /// (`execute in`, `execute at` a player in another level), opening it if
+    /// nobody is in it; returns the level to put back afterwards. Only a
+    /// server holds other levels.
+    pub(super) fn enter_command_level(&mut self, dim: Dim) -> Option<Dim> {
+        if self.options.dedicated.is_none() || dim == self.dim {
+            return None;
+        }
+        let back = self.dim;
+        match self.enter_level(None, dim) {
+            Ok(()) => Some(back),
+            Err(e) => {
+                log::error!("could not open {}: {e}", dim.id());
+                None
+            }
+        }
+    }
+
     /// One server tick (`MinecraftServer.tickServer`): each level with
     /// players in turn (`tickChildren`), its chunks streamed and loaded and
     /// its world ticked. The first pass reads the network and runs the
