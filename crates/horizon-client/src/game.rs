@@ -5955,6 +5955,37 @@ impl Game<'_> {
         }
         true
     }
+    /// `CreativeModeInventoryScreen.keyPressed` on the search tab: a hotbar
+    /// key over a slot swaps before the search box sees it.
+    fn search_tab_hotbar_key(&mut self, code: KeyCode) -> bool {
+        use horizon_client::creative::{Hover, search_key_swaps};
+        let hotbar_key = HOTBAR_DIGITS.contains(&code);
+        let numeric = hotbar_key || NUMERIC_KEYS.contains(&code);
+        if !numeric {
+            return false;
+        }
+        let Some(size) = self
+            .renderer
+            .as_ref()
+            .map(|r| [r.config.width, r.config.height])
+        else {
+            return false;
+        };
+        let batch = HudBatch::new(size);
+        let hover = match self.slot_at(&batch, self.cursor.0, self.cursor.1) {
+            None => Hover::Nothing,
+            Some(slot) if slot >= Creative::DISPLAY => {
+                let first = self.creative_screen.first_row(&self.pack.names);
+                let shown = self.creative_screen.items(&self.pack.names).len();
+                Hover::Display {
+                    filled: first * 9 + slot - Creative::DISPLAY < shown,
+                }
+            }
+            Some(_) => Hover::Slot,
+        };
+        search_key_swaps(numeric, hotbar_key, hover, self.carried.is_some())
+            && self.inventory_hotkey(code)
+    }
     /// Number keys, F and Q over a slot of the open menu: SWAP with a hotbar
     /// slot or the off hand, THROW one or the whole stack.
     fn inventory_hotkey(&mut self, key: KeyCode) -> bool {
@@ -5970,19 +6001,7 @@ impl Game<'_> {
         let Some(slot) = self.slot_at(&batch, self.cursor.0, self.cursor.1) else {
             return false;
         };
-        let digit = [
-            KeyCode::Digit1,
-            KeyCode::Digit2,
-            KeyCode::Digit3,
-            KeyCode::Digit4,
-            KeyCode::Digit5,
-            KeyCode::Digit6,
-            KeyCode::Digit7,
-            KeyCode::Digit8,
-            KeyCode::Digit9,
-        ]
-        .iter()
-        .position(|k| *k == key);
+        let digit = HOTBAR_DIGITS.iter().position(|k| *k == key);
         let done = match (digit, key) {
             (Some(n), _) => self.menu_click(Some(slot), n as i32, Input::Swap),
             (None, KeyCode::KeyF) => self.menu_click(Some(slot), 40, Input::Swap),
@@ -10267,6 +10286,11 @@ impl Game<'_> {
                 if (self.screen == Screen::Inventory
                     || (self.screen == Screen::Creative && !self.creative_screen.tab().search))
                     && self.inventory_hotkey(key) => {}
+            // The search tab's number keys (scripted presses; the window's
+            // keys reach search_tab_hotbar_key before the search box).
+            _ if self.screen == Screen::Creative
+                && self.creative_screen.tab().search
+                && self.search_tab_hotbar_key(key) => {}
             KeyCode::KeyT if self.screen == Screen::Inventory => self.recipe_focus_search(),
             KeyCode::KeyT if self.screen == Screen::Playing => self.open_chat(""),
             // key.advancements.
@@ -11138,7 +11162,11 @@ impl ApplicationHandler for Game<'_> {
                         && event.state == ElementState::Pressed
                         && !matches!(event.physical_key, PhysicalKey::Code(KeyCode::Escape)) =>
                 {
-                    if let Some(shortcut) = self.edit_shortcut(&event) {
+                    if let PhysicalKey::Code(key) = event.physical_key
+                        && self.search_tab_hotbar_key(key)
+                    {
+                        // The hovered slot took the key (`ignoreTextInput`).
+                    } else if let Some(shortcut) = self.edit_shortcut(&event) {
                         self.creative_search_shortcut(shortcut);
                     } else {
                         let backspace = event.physical_key == PhysicalKey::Code(KeyCode::Backspace);
@@ -12064,6 +12092,33 @@ impl Game<'_> {
         Ok(())
     }
 }
+
+/// `key.hotbar.1` to `key.hotbar.9` in a menu.
+const HOTBAR_DIGITS: [KeyCode; 9] = [
+    KeyCode::Digit1,
+    KeyCode::Digit2,
+    KeyCode::Digit3,
+    KeyCode::Digit4,
+    KeyCode::Digit5,
+    KeyCode::Digit6,
+    KeyCode::Digit7,
+    KeyCode::Digit8,
+    KeyCode::Digit9,
+];
+/// The other keys `InputConstants.Key.getNumericKeyValue` gives a digit.
+const NUMERIC_KEYS: [KeyCode; 11] = [
+    KeyCode::Digit0,
+    KeyCode::Numpad0,
+    KeyCode::Numpad1,
+    KeyCode::Numpad2,
+    KeyCode::Numpad3,
+    KeyCode::Numpad4,
+    KeyCode::Numpad5,
+    KeyCode::Numpad6,
+    KeyCode::Numpad7,
+    KeyCode::Numpad8,
+    KeyCode::Numpad9,
+];
 
 const STAGES: u32 = 10;
 const STAGE_LINES: [&str; 10] = [

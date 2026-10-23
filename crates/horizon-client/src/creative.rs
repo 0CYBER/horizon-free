@@ -425,6 +425,29 @@ fn split_id(id: &str) -> (String, String) {
         None => ("minecraft".to_owned(), id.to_owned()),
     }
 }
+/// The slot under the cursor, for the search tab's keys.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Hover {
+    Nothing,
+    /// A display slot (`isCreativeSlot`), showing an item or past the end.
+    Display {
+        filled: bool,
+    },
+    /// Any other slot: the hotbar row, or the inventory tab's slots.
+    Slot,
+}
+
+/// `CreativeModeInventoryScreen.keyPressed` on the search tab: whether a
+/// key is a hotbar swap on the hovered slot instead of text for the search
+/// box. `numeric` is `getNumericKeyValue().isPresent()` (the digit and keypad
+/// keys); `hotbar_key` is a `keyHotbarSlots` key. Over an empty display slot
+/// the key types (`doQuickSwap` is false), and `checkHotbarKeyPressed` needs
+/// a hovered slot and an empty cursor.
+pub fn search_key_swaps(numeric: bool, hotbar_key: bool, hover: Hover, carrying: bool) -> bool {
+    let quick_swap = hover != Hover::Display { filled: false };
+    quick_swap && numeric && hotbar_key && !carrying && hover != Hover::Nothing
+}
+
 /// What a click on an item tab's display slot does besides changing the
 /// carried stack.
 #[derive(Clone, PartialEq, Debug)]
@@ -527,6 +550,22 @@ mod tests {
         let max = |s: &ItemStack| if s.item.ends_with("pearl") { 16 } else { 64 };
         let effect = click_display(&mut carried, Some(&stack("stone", 1)), max, button, input);
         (carried, effect)
+    }
+
+    #[test]
+    fn search_tab_number_keys_swap_over_a_slot_before_typing() {
+        let filled = Hover::Display { filled: true };
+        let empty = Hover::Display { filled: false };
+        // Over an item, the hotbar row or another slot: the hotbar swap.
+        assert!(search_key_swaps(true, true, filled, false));
+        assert!(search_key_swaps(true, true, Hover::Slot, false));
+        // Over an empty display slot, nothing or with a carried stack: text.
+        assert!(!search_key_swaps(true, true, empty, false));
+        assert!(!search_key_swaps(true, true, Hover::Nothing, false));
+        assert!(!search_key_swaps(true, true, filled, true));
+        // Letters always type; so do the digits no hotbar key is bound to.
+        assert!(!search_key_swaps(false, false, filled, false));
+        assert!(!search_key_swaps(true, false, filled, false));
     }
 
     #[test]
