@@ -44,9 +44,6 @@ impl MovementHistory {
         }
         self.records.push_back(record);
     }
-    pub fn remove_latest(&mut self) {
-        self.records.pop_back();
-    }
     pub fn clear(&mut self) {
         self.records.clear();
     }

@@ -149,9 +149,6 @@ impl Ticks {
         self.blocks
             .has_scheduled(pos, TickTypeId(u32::from(block.0)))
     }
-    pub fn has_fluid_tick(&self, pos: BlockPos, fluid: FluidKind) -> bool {
-        self.fluids.has_scheduled(pos, TickTypeId(fluid as u32))
-    }
     pub fn will_block_tick_this_tick(&mut self, pos: BlockPos, block: BlockId) -> bool {
         self.blocks
             .will_tick_this_tick(pos, TickTypeId(u32::from(block.0)))

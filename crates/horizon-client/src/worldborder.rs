@@ -7,7 +7,6 @@ pub use horizon_core::geometry::border::BorderStatus;
 
 /// `WorldBorder.MAX_SIZE` (the float 5.999997E7 as a double).
 pub const MAX_SIZE: f64 = 59_999_968.0;
-pub const MAX_CENTER: f64 = 2.999_998_4e7;
 
 /// `BorderStatus.getColor`: the wall colour.
 pub fn status_color(status: BorderStatus) -> u32 {
@@ -81,6 +80,10 @@ impl PartialEq for WorldBorder {
     }
 }
 impl WorldBorder {
+    /// Its extent, for collisions.
+    pub fn geometry(&self) -> &BorderGeometry {
+        &self.geometry
+    }
     pub fn center(&self) -> [f64; 2] {
         self.geometry.center()
     }

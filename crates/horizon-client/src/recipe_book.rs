@@ -384,21 +384,6 @@ impl Book {
             order,
         }
     }
-    /// Which book a recipe id belongs to.
-    pub fn book_of(&self, id: &str) -> Option<BookType> {
-        let e = self.entries.iter().find(|e| e.id == id)?;
-        Some(match e.category {
-            Category::CraftingBuilding
-            | Category::CraftingRedstone
-            | Category::CraftingEquipment
-            | Category::CraftingMisc => BookType::Crafting,
-            Category::FurnaceFood | Category::FurnaceBlocks | Category::FurnaceMisc => {
-                BookType::Furnace
-            }
-            Category::BlastBlocks | Category::BlastMisc => BookType::BlastFurnace,
-            Category::SmokerFood => BookType::Smoker,
-        })
-    }
     /// `RecipeDisplayEntry.canCraft`: the recipe's placement ingredients
     /// (`craftingRequirements`) can all be found in `stock`.
     pub fn can_craft(&self, entry: &Entry, stock: &crate::menu::place::Stacked) -> bool {

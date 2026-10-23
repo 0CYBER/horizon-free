@@ -524,14 +524,6 @@ impl<'r> BlockSurvivalRegistry<'r> {
             bubble_down: tag_states("minecraft:enables_bubble_column_drag_down")?,
         })
     }
-    pub fn supported_states(&self) -> usize {
-        self.rules.iter().filter(|r| r.is_some()).count()
-    }
-    pub fn supports_state(&self, state: BlockStateId) -> bool {
-        self.rules
-            .get(state.0 as usize)
-            .is_some_and(Option::is_some)
-    }
     fn read<W: SurvivalWorld>(
         &self,
         world: &mut W,

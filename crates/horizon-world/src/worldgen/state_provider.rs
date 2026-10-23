@@ -344,12 +344,6 @@ impl BlockStateProvider {
             _ => Err(DecodeError::Field("exclusive state or provider")),
         }
     }
-    pub fn from_typed_json(
-        json: &str,
-        bindings: &StateProviderBindings<'_>,
-    ) -> Result<Self, DecodeError> {
-        Self::decode_typed(json, bindings, 0, &mut 65536, None)
-    }
     fn decode_typed(
         json: &str,
         bindings: &StateProviderBindings<'_>,

@@ -2,8 +2,12 @@
 //! `applications/horizon-launcher.desktop` (pointing at wherever the binary is now) and Horizon's
 //! icon into the `hicolor` theme, under `$XDG_DATA_HOME` (`~/.local/share` by default), so no root
 //! is needed; `horizon.desktop` (hidden from menus) gives the game's window its icon on Wayland.
-//! A release build does this when it starts, and again whenever the binary has moved; the
-//! Settings switch and `horizon-launcher desktop-entry --remove` take it all away again.
+//! A release build writes it when it starts only if there is no entry yet or the one there starts
+//! a program that is gone ([`repair`]), so a development or test build never takes over a working
+//! entry. Turning the Settings switch on (or `horizon-launcher desktop-entry`) points it at this
+//! binary whatever is there ([`install`]); the switch off and `desktop-entry --remove` take it all
+//! away again.
+use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -153,15 +157,85 @@ pub fn remove_in(data: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Registers the launcher, using a distributor's wrapper when one is configured.
-/// Both GUI registration (including the settings switch) and the CLI use this path.
+/// The program an entry starts: its `TryExec`, else the first word of its `Exec` (unquoted as
+/// [`quote`] writes it). None when the entry names neither.
+fn entry_target(entry: &str) -> Option<String> {
+    let mut in_main = false;
+    let (mut exec, mut try_exec) = (None, None);
+    for line in entry.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_main = line == "[Desktop Entry]";
+        } else if let Some((key, value)) = line.split_once('=').filter(|_| in_main) {
+            match key.trim() {
+                "TryExec" if try_exec.is_none() => try_exec = Some(value.trim()),
+                "Exec" if exec.is_none() => exec = Some(value.trim()),
+                _ => {}
+            }
+        }
+    }
+    if let Some(program) = try_exec.filter(|p| !p.is_empty()) {
+        return Some(program.to_string());
+    }
+    let exec = exec?;
+    let program = match exec.strip_prefix('"') {
+        Some(rest) => {
+            let (mut out, mut chars) = (String::new(), rest.chars());
+            while let Some(c) = chars.next() {
+                match c {
+                    '"' => break,
+                    '\\' => out.extend(chars.next()),
+                    c => out.push(c),
+                }
+            }
+            out
+        }
+        None => exec.split_whitespace().next()?.to_string(),
+    };
+    (!program.is_empty()).then_some(program)
+}
+
+/// Whether an entry's program is there: a path that exists, or a bare name found on `path`
+/// (`$PATH`), as menus look `TryExec` up.
+fn target_exists(program: &str, path: Option<&OsStr>) -> bool {
+    if program.contains('/') {
+        return Path::new(program).exists();
+    }
+    path.is_some_and(|dirs| std::env::split_paths(dirs).any(|dir| dir.join(program).is_file()))
+}
+
+/// Whether the launcher may write its entry by itself: there is none under `data`, or the one
+/// there starts a program that no longer exists. An entry pointing at another launcher that
+/// still works is left alone.
+pub fn needs_repair_in(data: &Path, path: Option<&OsStr>) -> bool {
+    match fs::read_to_string(data.join("applications").join(LAUNCHER_ENTRY)) {
+        Ok(entry) => !entry_target(&entry).is_some_and(|p| target_exists(&p, path)),
+        Err(e) => e.kind() == io::ErrorKind::NotFound,
+    }
+}
+
+/// What the entry starts: a distributor's wrapper (`HORIZON_LAUNCHER_DESKTOP_EXEC`) when one is
+/// configured, else the binary at `exe`.
+fn target(exe: &Path) -> PathBuf {
+    std::env::var_os("HORIZON_LAUNCHER_DESKTOP_EXEC")
+        .filter(|path| !path.is_empty())
+        .map_or_else(|| exe.to_path_buf(), PathBuf::from)
+}
+
+/// Registers the launcher whatever entry is there: for the player turning it on (the Settings
+/// switch, `horizon-launcher desktop-entry`).
 pub fn install(exe: &Path) -> Result<bool, String> {
     let data = data_home().ok_or("No home folder to put the menu entry in.")?;
-    let wrapper = std::env::var_os("HORIZON_LAUNCHER_DESKTOP_EXEC")
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from);
-    install_in(&data, wrapper.as_deref().unwrap_or(exe))
-        .map_err(|e| format!("{}: {e}", data.display()))
+    install_in(&data, &target(exe)).map_err(|e| format!("{}: {e}", data.display()))
+}
+
+/// At start: registers the launcher only when [`needs_repair_in`] says so. Returns whether it
+/// wrote anything.
+pub fn repair(exe: &Path) -> Result<bool, String> {
+    let data = data_home().ok_or("No home folder to put the menu entry in.")?;
+    if !needs_repair_in(&data, std::env::var_os("PATH").as_deref()) {
+        return Ok(false);
+    }
+    install_in(&data, &target(exe)).map_err(|e| format!("{}: {e}", data.display()))
 }
 
 pub fn remove() -> Result<(), String> {
@@ -205,5 +279,60 @@ mod tests {
         assert!(!png.exists());
         remove_in(&data).unwrap();
         let _ = fs::remove_dir_all(&data);
+    }
+
+    #[test]
+    fn the_target_is_try_exec_else_the_first_word_of_exec() {
+        let ours = launcher_entry(Path::new("/opt/a b/horizon \"x\"/horizon-launcher"));
+        assert_eq!(
+            entry_target(&ours).as_deref(),
+            Some("/opt/a b/horizon \"x\"/horizon-launcher")
+        );
+        let without_try = ours.replace("TryExec=", "X-Old=");
+        assert_eq!(
+            entry_target(&without_try).as_deref(),
+            Some("/opt/a b/horizon \"x\"/horizon-launcher")
+        );
+        let wrapper = "[Desktop Entry]\nExec=flatpak run dev.horizon.Launcher %U\n";
+        assert_eq!(entry_target(wrapper).as_deref(), Some("flatpak"));
+        // Only the main group counts: an action's Exec is not the launcher.
+        let action = "[Desktop Action play]\nExec=/a\n[Desktop Entry]\nExec=/b --x\n";
+        assert_eq!(entry_target(action).as_deref(), Some("/b"));
+        assert_eq!(entry_target("[Desktop Entry]\nName=Horizon\n"), None);
+        assert_eq!(entry_target("[Desktop Entry]\nExec=\nTryExec=\n"), None);
+    }
+
+    /// A build that starts never takes over an entry that works (a test or development build
+    /// started on a player's machine, 2026-10-23); it writes one only when there is none or the
+    /// program it starts is gone.
+    #[test]
+    fn a_start_writes_the_entry_only_when_none_works() {
+        let root =
+            std::env::temp_dir().join(format!("horizon-desktop-repair-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let (data, bin) = (root.join("data"), root.join("bin"));
+        fs::create_dir_all(&bin).unwrap();
+        let installed = bin.join("horizon-launcher");
+        fs::write(&installed, b"").unwrap();
+        let entry = data.join("applications").join(LAUNCHER_ENTRY);
+        let path = Some(bin.as_os_str());
+
+        // No entry: write one.
+        assert!(needs_repair_in(&data, path));
+        install_in(&data, &installed).unwrap();
+        // Ours works: a build elsewhere leaves it alone.
+        assert!(!needs_repair_in(&data, path));
+        // So does one another launcher wrote, found on PATH or by its path.
+        fs::write(&entry, "[Desktop Entry]\nExec=horizon-launcher %U\n").unwrap();
+        assert!(!needs_repair_in(&data, path));
+        assert!(needs_repair_in(&data, None));
+        // The program is gone (a deleted target/ folder, a moved binary): write it again.
+        install_in(&data, &installed).unwrap();
+        fs::remove_file(&installed).unwrap();
+        assert!(needs_repair_in(&data, path));
+        // An entry that starts nothing is broken too.
+        fs::write(&entry, "[Desktop Entry]\nName=Horizon\n").unwrap();
+        assert!(needs_repair_in(&data, path));
+        let _ = fs::remove_dir_all(&root);
     }
 }

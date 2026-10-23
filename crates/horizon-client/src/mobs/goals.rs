@@ -76,9 +76,6 @@ pub struct GoalSelector {
     locked: [Option<usize>; 4],
     pub disabled: u8,
 }
-fn flag_index(f: u8) -> usize {
-    f.trailing_zeros() as usize
-}
 impl GoalSelector {
     pub fn add(&mut self, priority: i32, goal: impl Goal + 'static) {
         self.goals.push(Wrapped {
@@ -173,10 +170,6 @@ impl GoalSelector {
             self.stop(i, m, cx);
         }
         self.locked = [None; 4];
-    }
-    #[allow(dead_code)]
-    fn locked_by(&self, flag: u8) -> Option<usize> {
-        self.locked[flag_index(flag)]
     }
 }
 
@@ -544,36 +537,6 @@ impl Mob {
             xd = self.random.next_double() - 0.5;
             zd = self.random.next_double() - 0.5;
         }
-        self.pick_best(w, |m| {
-            let d = m.random_direction_within(
-                0.0,
-                f64::from(h),
-                v,
-                0,
-                xd,
-                zd,
-                std::f64::consts::FRAC_PI_2,
-            )?;
-            let p = m.toward(f64::from(h), d);
-            if p[1] < crate::chunk::MIN_Y
-                || p[1] >= 320
-                || m.restricted(f64::from(h), p)
-                || !m.stable_destination(w, p)
-            {
-                return None;
-            }
-            m.land_up_out_of_solid(w, p)
-        })
-    }
-    /// LandRandomPos.getPosTowards
-    pub fn land_random_pos_towards(
-        &mut self,
-        w: &MobWorld,
-        h: i32,
-        v: i32,
-        to: [f64; 3],
-    ) -> Option<[f64; 3]> {
-        let (xd, zd) = (to[0] - self.position.x, to[2] - self.position.z);
         self.pick_best(w, |m| {
             let d = m.random_direction_within(
                 0.0,

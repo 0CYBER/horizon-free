@@ -5,7 +5,7 @@ use horizon_client::{
     chat::{Chat, ChatAction, ChatScreen, Commands, SYSTEM_INDICATOR},
     command::Registries,
     gamerules::GameRules,
-    hud::{HudBatch, rgba},
+    hud::HudBatch,
     screen_draw::Measure,
     text::{ClickEvent, Style, Text},
 };
@@ -882,10 +882,6 @@ impl Game<'_> {
         self.ui
             .chat
             .add(&self.gui.atlas, message, None, self.ticks, focused);
-    }
-    #[allow(dead_code)]
-    fn chat_debug_fill(&self, batch: &mut HudBatch) {
-        batch.fill(&self.gui.atlas, 0.0, 0.0, 1.0, 1.0, rgba(0, 0, 0, 0));
     }
 }
 /// `yyyy-MM-dd_HH.mm.ss[_n].png` (Util.getFilenameFormattedDateTime, local time

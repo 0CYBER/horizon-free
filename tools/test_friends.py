@@ -72,12 +72,6 @@ def wait_for(endpoint, line, predicate, timeout=60, what=None):
     raise AssertionError(f'timed out waiting for {what or line}: {last}')
 
 
-def free_port():
-    with socket.socket() as s:
-        s.bind(('127.0.0.1', 0))
-        return s.getsockname()[1]
-
-
 def health(relay_url):
     with urllib.request.urlopen(f'http://{relay_url}/health', timeout=5) as r:
         return json.loads(r.read())
@@ -204,7 +198,7 @@ def leave(host, guest, name):
 
 def start_relay(args, work):
     """A relay on a free local port, as anyone would run their own."""
-    port = free_port()
+    port = lab.free_port()
     url = f'127.0.0.1:{port}'
     log = (work / 'relay.log').open('w+')
     process = subprocess.Popen([str(args.relay.resolve())], env=dict(os.environ, PORT=str(port)),

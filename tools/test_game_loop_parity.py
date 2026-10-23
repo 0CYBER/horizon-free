@@ -6,22 +6,12 @@ and absolute motion, sensitivity curve, cinematic smoothing, inversion,
 scroll accumulation and discrete scrolling), Entity.turn and ToggleKeyMapping,
 all driven with identical synthetic input and time sequences."""
 import json
-import math
 import random
-import struct
 
 try:
     from . import lab, oracle_harness as harness
 except ImportError:
     import lab, oracle_harness as harness
-
-
-def fbits(v):
-    return struct.pack('>f', v).hex()
-
-
-def dbits(v):
-    return struct.pack('>d', v).hex()
 
 
 def timer_cases(rng):
@@ -38,12 +28,12 @@ def timer_cases(rng):
                     now -= rng.randrange(0, 30)
             if kind == 'adv':
                 mspt = rng.choice([None, None, None, 50.0, 25.0, 100.0, 500.0, 1000.0, 0.5, 5.0, 0.1])
-                ops.append(['adv', now, None if mspt is None else fbits(mspt)])
+                ops.append(['adv', now, None if mspt is None else lab.fbits(mspt)])
             elif kind == 'real':
                 ops.append(['real', now])
             else:
                 ops.append([kind, rng.random() < 0.5])
-        yield dict(t='timer', tps=fbits(tps), start=start, ops=ops)
+        yield dict(t='timer', tps=lab.fbits(tps), start=start, ops=ops)
 
 
 def rate_cases(rng):
@@ -55,7 +45,7 @@ def rate_cases(rng):
             kind = rng.choice(['rate', 'freeze', 'step', 'stopstep', 'sprint', 'check', 'check', 'check', 'end', 'stopsprint',
                                'tick', 'tick', 'tick'])
             if kind == 'rate':
-                ops.append(['rate', fbits(rng.choice(rates))])
+                ops.append(['rate', lab.fbits(rng.choice(rates))])
             elif kind == 'freeze':
                 ops.append(['freeze', rng.random() < 0.5])
             elif kind == 'step':
@@ -78,7 +68,7 @@ def scale_cases(rng):
             for uni in (False, True):
                 sw, sh = rng.choice([(w, h), (max(w // 2, 1), max(h // 2, 1)), (w + 1, h + 3)])
                 yield dict(t='scale', w=w, h=h, max=maxs, uni=uni, sw=sw, sh=sh,
-                           x=dbits(rng.uniform(0, w)), y=dbits(rng.uniform(0, h)))
+                           x=lab.dbits(rng.uniform(0, w)), y=lab.dbits(rng.uniform(0, h)))
 
 
 def limit_cases(rng):
@@ -103,13 +93,13 @@ def mouse_cases(rng):
             if kind == 'move':
                 x, y = rng.uniform(0, 1920), rng.uniform(0, 1080)
                 big = rng.choice([1, 1, 1, 50, 5000])
-                ops.append(['move', dbits(x), dbits(y), dbits(rng.uniform(-30, 30) * big), dbits(rng.uniform(-30, 30) * big)])
+                ops.append(['move', lab.dbits(x), lab.dbits(y), lab.dbits(rng.uniform(-30, 30) * big), lab.dbits(rng.uniform(-30, 30) * big)])
             elif kind == 'frame':
                 time += rng.choice([0.0, 0.001, 0.0069, 0.016, 0.0167, 0.05, 0.5, 2.0])
-                ops.append(['frame', dbits(time)])
+                ops.append(['frame', lab.dbits(time)])
             else:
                 ops.append(['ignore'])
-        yield dict(t='mouse', sens=dbits(sens), smooth=rng.random() < 0.4, scoping=rng.random() < 0.3,
+        yield dict(t='mouse', sens=lab.dbits(sens), smooth=rng.random() < 0.4, scoping=rng.random() < 0.3,
                    ix=rng.random() < 0.3, iy=rng.random() < 0.3, grabbed=rng.random() < 0.85, active=rng.random() < 0.9, ops=ops)
 
 
@@ -119,14 +109,14 @@ def scroll_cases(rng):
         for _ in range(rng.randrange(1, 40)):
             x = rng.choice([0.0, 0.0, 0.0, 1.0, -1.0, 0.25, -0.25, 0.4, 2.0, 5.5, -7.0, rng.uniform(-3, 3)])
             y = rng.choice([0.0, 1.0, -1.0, 1.0, -1.0, 0.1, -0.3, 0.5, -0.5, 2.0, -3.0, 120.0, rng.uniform(-3, 3)])
-            ops.append([dbits(x), dbits(y)])
-        case = dict(t='scroll', discrete=rng.random() < 0.4, sens=dbits(rng.choice([1.0, 0.01, 10.0, 0.5, 2.0, 3.1622776601683795])),
+            ops.append([lab.dbits(x), lab.dbits(y)])
+        case = dict(t='scroll', discrete=rng.random() < 0.4, sens=lab.dbits(rng.choice([1.0, 0.01, 10.0, 0.5, 2.0, 3.1622776601683795])),
                     slot=rng.randrange(9), ops=ops)
         yield case
         yield dict(case, spectator=True)
     # Bounds, recovery from each bound, fractional accumulation, and horizontal-only input.
-    yield dict(t='scroll', discrete=False, sens=dbits(1.0), slot=4, spectator=True,
-               ops=[[dbits(x), dbits(y)] for x, y in
+    yield dict(t='scroll', discrete=False, sens=lab.dbits(1.0), slot=4, spectator=True,
+               ops=[[lab.dbits(x), lab.dbits(y)] for x, y in
                     [(0, 100), (0, -1), (0, -100), (0, 1), (0, .4), (0, .7),
                      (0, -.4), (0, -.7), (5, 0), (-5, 0)]])
 

@@ -3,7 +3,7 @@
 //! Entity-dependent rules use the defaults for players and the supported mobs.
 use crate::{Result, world::World};
 use horizon_core::{
-    geometry::{Aabb, Vec3, VoxelShape},
+    geometry::{Aabb, Vec3, VoxelShape, border::BorderGeometry},
     position::{BlockPos, ChunkPos},
 };
 use horizon_world::{
@@ -64,6 +64,9 @@ pub struct SceneCollisions<'w, 'r> {
 pub struct EntityCollisions<'a, W> {
     pub blocks: W,
     pub entities: &'a [Aabb],
+    /// The world border and the moving entity's x and z
+    /// (`CollisionGetter.borderCollision`); None: the blocks' answer.
+    pub border: Option<(&'a BorderGeometry, [f64; 2])>,
 }
 impl<W: BlockCollisionWorld> BlockCollisionWorld for EntityCollisions<'_, W> {
     type Error = W::Error;
@@ -114,12 +117,20 @@ impl<W: EntityMovementWorld<Error = io::Error>> EntityMovementWorld for EntityCo
         }
         Ok(shapes)
     }
+    /// `WorldBorder.isInsideCloseToBorder`: an entity inside the border and
+    /// near it collides with its walls.
     fn movement_border(
         &mut self,
         entity: EntityIdentity,
         bounds: Aabb,
     ) -> io::Result<Option<VoxelShape>> {
-        self.blocks.movement_border(entity, bounds)
+        let Some((border, [x, z])) = self.border else {
+            return self.blocks.movement_border(entity, bounds);
+        };
+        if !border.is_inside_close_to_border(x, z, bounds) {
+            return Ok(None);
+        }
+        border.collision_shape().map(Some).map_err(io::Error::other)
     }
 }
 impl SceneCollisions<'_, '_> {
