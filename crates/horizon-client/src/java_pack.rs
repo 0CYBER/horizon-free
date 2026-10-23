@@ -236,6 +236,24 @@ mod tests {
         assert_eq!(vendor_name(0, "Apple M4 Pro"), "Apple");
     }
 
+    /// wgpu is given the WGSL text: it must parse again.
+    fn reparse_error(pack: &JavaPasses) -> Option<String> {
+        let passes = pack
+            .folders
+            .iter()
+            .flat_map(|f| f.passes.iter().chain(&f.final_pass));
+        passes
+            .flat_map(|p| [(p, &p.vertex, "vsh"), (p, &p.fragment, "fsh")])
+            .find_map(|(p, t, ext)| {
+                let e = naga::front::wgsl::parse_str(&t.wgsl).err()?;
+                Some(format!(
+                    "{}.{ext}: {}",
+                    p.pass.program,
+                    e.emit_to_string(&t.wgsl)
+                ))
+            })
+    }
+
     /// The packs in `HORIZON_TEST_SHADERPACKS` (folders or zips) load as the
     /// game loads them, with their default options: the compatibility table
     /// of docs/shader-packs.md. Skipped when the variable isn't set.
@@ -255,6 +273,10 @@ mod tests {
         for path in entries {
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
             match load(&path, &BTreeMap::new(), "Apple", "Apple M4 Pro") {
+                Ok(pack) if let Some(e) = reparse_error(&pack) => {
+                    println!("{name}: {e}");
+                    failures.push(name);
+                }
                 Ok(pack) => {
                     let folders: Vec<String> = pack
                         .folders
