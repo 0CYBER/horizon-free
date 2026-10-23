@@ -579,7 +579,7 @@ def manage_scenario(d, out):
     assert d('status')['player'] is not None
     d('give', item='bucket')
     d('select', slot='bucket')
-    pos = d('state')['position']
+    pos = d('state')['player']['position']
     cow = d('summon', kind='cow', x=pos[0], y=pos[1], z=pos[2] + 2)['id']
     d('wait', ticks=5)
     d('interact_entity', id=cow)
