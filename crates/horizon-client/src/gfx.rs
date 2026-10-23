@@ -2146,8 +2146,8 @@ impl Renderer {
             .features()
             .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE);
         // HORIZON_GPU_CULL=0 turns occlusion culling off, `all` culls every
-        // frame however little it hides, `shader` tests in the shader as on
-        // Metal (A/B checks).
+        // frame however few its draws and little it hides, `shader` tests in
+        // the shader as on Metal (A/B checks).
         let cull_env = std::env::var("HORIZON_GPU_CULL");
         let cull = cull::Cull::supported(&adapter, &device)
             .filter(|_| cull_env.as_deref() != Ok("0"))
@@ -2159,6 +2159,9 @@ impl Renderer {
                 let mut cull =
                     cull::Cull::new(&device, config.format.remove_srgb_suffix(), depth_test);
                 cull.always = cull_env.as_deref() == Ok("all");
+                if !cull.always && adapter.get_info().backend == wgpu::Backend::Metal {
+                    cull.min_draws = cull::TILED_MIN_DRAWS;
+                }
                 cull
             });
         let depth = Self::depth(&device, &config, cull.as_ref());
@@ -3148,11 +3151,14 @@ impl Renderer {
             .inverse()
             .transform_point3(Vec3::ZERO);
         // Occlusion culling leaves the sections its last result did not see
-        // to phase 2, after the others, with instance counts of 0.
+        // to phase 2, after the others, with instance counts of 0. Whether
+        // the frame has draws enough goes by the last one's.
         let mut cull = self
             .cull
             .as_mut()
-            .filter(|_| self.cull_on && !frame.title && self.multi_draw)
+            .filter(|c| {
+                self.cull_on && !frame.title && self.multi_draw && self.section_draws >= c.min_draws
+            })
             .and_then(|cull| cull.begin(&self.device).then_some(cull));
         self.phase2_draws.clear();
         self.phase2_pages.clear();
