@@ -4,7 +4,7 @@
 Vanilla side: VanillaChunkGenerationOracle drives the actual ChunkGenerator
 stages (structure starts and references, biomes, terrain with surface and
 carvers, then biome decoration with every placed feature and structure piece)
-through real WorldGenRegion instances. Horizon side: the chunk_dump example
+through real WorldGenRegion instances. Horizon side: the chunk_dump probe
 runs the same stages in the same order. Every block state, quart biome and
 block entity (canonical NBT) of each target chunk is compared.
 
@@ -71,9 +71,9 @@ class Oracle:
 
 
 def rust_binary():
-    subprocess.run(['cargo', 'build', '--release', '-q', '-p', 'horizon-world', '--example', 'chunk_dump'], check=True, cwd=lab.ROOT)
+    subprocess.run(['cargo', 'build', '--release', '-q', '-p', 'horizon-world', '--example', 'probe'], check=True, cwd=lab.ROOT)
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'], cwd=lab.ROOT, text=True))
-    return Path(metadata['target_directory']) / 'release/examples/chunk_dump'
+    return Path(metadata['target_directory']) / 'release/examples/probe'
 
 
 def run_rust(binary, out, seed, dimension, rects, scan=False):
@@ -81,7 +81,7 @@ def run_rust(binary, out, seed, dimension, rects, scan=False):
     if scan:
         env['HORIZON_SCAN'] = '1'
     with open(out, 'w') as handle:
-        result = subprocess.run([str(binary), str(RESOURCES), str(seed), dimension, *rects], stdout=handle, stderr=subprocess.PIPE, text=True, env=env, cwd=lab.ROOT)
+        result = subprocess.run([str(binary), 'chunk_dump', str(RESOURCES), str(seed), dimension, *rects], stdout=handle, stderr=subprocess.PIPE, text=True, env=env, cwd=lab.ROOT)
     if result.returncode:
         raise SystemExit('chunk_dump failed: ' + result.stderr[-2000:])
     return result.stderr

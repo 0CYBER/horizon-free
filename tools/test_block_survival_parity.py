@@ -205,7 +205,7 @@ def main():
     lock,jars,libraries=base.verify_artifacts()
     oracle=lab.ROOT/'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaBlockSurvivalOracle.java'
     helpers=[oracle.with_name(name+'.java') for name in ['VanillaBlockPropertiesOracle','VanillaBlockSupportOracle','VanillaBlockStateCodecOracle','VanillaCollisionOracle','VanillaHeightmapOracle']]
-    sources=[oracle,*helpers,lab.ROOT/'tools/test_worldgen_parity.py',Path(__file__),lab.ROOT/'tools/test_rust_parity.py',lab.ROOT/'tools/lab.py',lab.ROOT/'Cargo.toml',lab.ROOT/'Cargo.lock',lab.ROOT/'crates/horizon-core/Cargo.toml',lab.ROOT/'crates/horizon-world/Cargo.toml',*sorted((lab.ROOT/'crates/horizon-core/src').rglob('*.rs')),*sorted((lab.ROOT/'crates/horizon-world/src').rglob('*.rs')),lab.ROOT/'crates/horizon-world/examples/block_survival_fixture.rs']
+    sources=[oracle,*helpers,lab.ROOT/'tools/test_worldgen_parity.py',Path(__file__),lab.ROOT/'tools/test_rust_parity.py',lab.ROOT/'tools/lab.py',lab.ROOT/'Cargo.toml',lab.ROOT/'Cargo.lock',lab.ROOT/'crates/horizon-core/Cargo.toml',lab.ROOT/'crates/horizon-world/Cargo.toml',*sorted((lab.ROOT/'crates/horizon-core/src').rglob('*.rs')),*sorted((lab.ROOT/'crates/horizon-world/src').rglob('*.rs')),lab.ROOT/'crates/horizon-world/examples/probe/block_survival_fixture.rs']
     tested_sources=base.source_hashes(sources)
     environment={'minecraft':lock['minecraft']['version'],'manifest_sha1':lock['minecraft']['manifest_sha1'],'platform':platform.platform(),'java':subprocess.check_output(['java','--version'],text=True).splitlines()[0],'rustc':subprocess.check_output(['rustc','--version'],text=True).strip(),'dependencies':{str(path):lab.digest(path,'sha256') for path in [*jars.values(),*libraries]}}
     checkpoint=load_checkpoint(checkpoint_path,tested_sources,environment) if args.resume else None
@@ -236,9 +236,9 @@ def main():
                 output.write(json.dumps(fixture,separators=(',',':'))+'\n');fixture_count+=1
         fixture_paths=[inputs,build/'survival-extra-definitions.json',build/'fluid-tags.json',build/'survival-placement-classes.json',build/'survival-support-tags.json',build/'facts.json',build/'survival-classes.json',build/'survival-rules.json',build/'tags.json',build/'block-registry.nbt',build/'cached-collision.nbt',build/'block-properties.nbt',build/'cached-support.nbt']
         tested_fixtures=base.source_hashes(fixture_paths)
-        run(['cargo','build','--release','-p','horizon-world','--example','block_survival_fixture'],'compile-rust')
+        run(['cargo','build','--release','-p','horizon-world','--example','probe'],'compile-rust')
         metadata=json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version','1'],cwd=lab.ROOT,text=True))
-        binary=Path(metadata['target_directory'])/'release/examples'/('block_survival_fixture.exe' if os.name=='nt' else 'block_survival_fixture')
+        binary=Path(metadata['target_directory'])/'release/examples'/('probe.exe' if os.name=='nt' else 'probe')
         base.ensure_sources_unchanged(sources,tested_sources)
         checkpoint={'schema':1,'environment':environment,'sources_sha256':tested_sources,'fixtures_sha256':{str(lab.ROOT/name):digest for name,digest in tested_fixtures.items()},'artifacts_sha256':{str(path):lab.digest(path,'sha256') for path in [binary,*sorted(classes.rglob('*.class'))]},'binary':str(binary),'counts':{'supported_blocks':len(definitions),'supported_states':sum(state['id'] in definitions for state in facts['states']),'survival_rules':len(set(definitions.values())),'survival_rule_kinds':len({rule.split(':',1)[0] for rule in definitions.values()}),'fluid_tag_files':len(fluid_tags),'fixtures':fixture_count},'outputs':{}}
         save_checkpoint(checkpoint_path,checkpoint)
@@ -251,7 +251,7 @@ def main():
             checkpoint['outputs'][name]=lab.digest(output,'sha256')
             save_checkpoint(checkpoint_path,checkpoint)
             print(f'{name}: completed output checkpointed',flush=True)
-    stage('rust',lambda:run([checkpoint['binary'],build],'rust'))
+    stage('rust',lambda:run([checkpoint['binary'],'block_survival_fixture',build],'rust'))
     references=[]
     for side,jar in jars.items():
         stage(side,lambda:java(side,side,build))

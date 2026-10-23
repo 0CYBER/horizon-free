@@ -3996,7 +3996,7 @@ impl Game<'_> {
         if self.use_delay > 0 {
             self.use_delay -= 1;
         }
-        self.apply_totem();
+        self.tick_totem();
         self.update_totem_ready();
         self.tick_command_extras();
         self.tick_mods();
@@ -4275,7 +4275,7 @@ impl Game<'_> {
             }
         }
         self.powder_snow_fire()?;
-        self.apply_totem();
+        self.tick_totem();
         let Some(player) = self.player.as_mut() else {
             return Ok(());
         };
@@ -11313,7 +11313,17 @@ impl ApplicationHandler for Game<'_> {
                     // For the "I'm playing" ping: an atomic, sent on when it changes.
                     horizon_client::heartbeat::set_lan(self.is_published());
                     let steps = self.clock.advance(elapsed);
-                    for _ in 0..steps {
+                    // The world ticking in the frame: once its ticks took a
+                    // tick's length, the rest are dropped (`FixedStep::tick_fits`).
+                    let in_frame = self.remote.is_none();
+                    let mut spent = Duration::ZERO;
+                    for step in 0..steps {
+                        if in_frame && !self.clock.tick_fits(spent) {
+                            if let Some(warning) = self.clock.drop_ticks(steps - step) {
+                                log::warn!("{warning}");
+                            }
+                            break;
+                        }
                         let started = Instant::now();
                         if self.title.is_none() && !self.pause {
                             let tick = Instant::now();
@@ -11330,6 +11340,7 @@ impl ApplicationHandler for Game<'_> {
                         self.tick_music();
                         self.tick_sound_engine();
                         self.clock.record(started.elapsed());
+                        spent += started.elapsed();
                         if let Some(report) = self.clock.take_sprint_report() {
                             self.sprint_report(&report);
                         }

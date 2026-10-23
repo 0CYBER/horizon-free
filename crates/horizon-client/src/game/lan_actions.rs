@@ -361,6 +361,7 @@ impl Game<'_> {
             self.apply_equipment();
             play.equipped = Some(equipped);
         }
+        self.update_totem_ready();
         Some(GuestSwap {
             conn,
             i,
@@ -414,6 +415,8 @@ impl Game<'_> {
     /// The second half of `as_guest`: the guest's state back into their
     /// record, the game's back in place, and what the turn changed sent.
     pub(super) fn leave_guest(&mut self, host: &mut LanHost, swap: GuestSwap) {
+        // A totem that saved the guest this turn (its hurt set it off).
+        let totem = self.apply_totem();
         let GuestSwap {
             conn,
             i,
@@ -623,6 +626,16 @@ impl Game<'_> {
         if new_mode != g.game_mode {
             let conn = g.conn;
             host.hub.set_game_mode(conn, new_mode);
+        }
+        // LivingEntity.checkTotemDeathProtection's entity event, to every
+        // client around, the guest's own included; this window draws it too.
+        if let Some(body) = totem {
+            let id = host.hub.guests[i].entity_id;
+            host.hub
+                .entity_event(id, super::totem::TOTEM_EVENT, body.at);
+            if self.player.is_some() {
+                self.totem_event(body, false);
+            }
         }
         host.play.insert(conn, play);
         self.stat_criteria_changed(&name, stat_events);

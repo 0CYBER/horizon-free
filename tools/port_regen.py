@@ -229,10 +229,10 @@ def gen_vanilla_order(root, version, store, build):
          "dev.horizonlab.parity.VanillaCommandParseOracle", "tree", build], build)
     env = dict(os.environ, CARGO_TARGET_DIR=str(root / ".local" / "port-target"))
     jobs = os.environ.get("FLEET_LOAD_JOBS")
-    run(["cargo", "build", "-p", "horizon-client", "--example", "command_parse_fixture",
+    run(["cargo", "build", "-p", "horizon-client", "--example", "probe",
          *(["-j", jobs] if jobs else [])], root, env=env)
-    fixture = root / ".local/port-target/debug/examples/command_parse_fixture"
-    run([fixture, "tree", build / "rust_tree.json"], root)
+    fixture = root / ".local/port-target/debug/examples/probe"
+    run([fixture, "command_parse_fixture", "tree", build / "rust_tree.json"], root)
     return [python(), "tools/generate_command_order.py", build / "tree.json", build / "rust_tree.json"]
 
 

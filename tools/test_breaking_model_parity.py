@@ -29,13 +29,13 @@ def canonical(quads):
 def main():
     lock,jars,_=base.verify_artifacts();libraries=baking.client_libraries()
     resources=lab.RESOURCES;build=lab.LOCAL/"breaking-model-parity";build.mkdir(exist_ok=True)
-    paths=[lab.ROOT/"tools/test_breaking_model_parity.py",lab.ROOT/"crates/horizon-client/src/breaking.rs",lab.ROOT/"crates/horizon-client/src/game.rs",lab.ROOT/"crates/horizon-client/src/gfx.rs",lab.ROOT/"crates/horizon-client/src/entity.wgsl",lab.ROOT/"crates/horizon-client/src/models/catalog.rs",lab.ROOT/"crates/horizon-client/src/mesher.rs",lab.ROOT/"crates/horizon-client/src/camera.rs",lab.ROOT/"crates/horizon-client/examples/breaking_fixture.rs",lab.ROOT/"mods/horizon/src/test/java/dev/horizonlab/parity/VanillaBreakingModelOracle.java",lab.ROOT/"mods/horizon/src/test/java/dev/horizonlab/parity/VanillaSectionMeshOracle.java",lab.ROOT/"Cargo.lock"]
+    paths=[lab.ROOT/"tools/test_breaking_model_parity.py",lab.ROOT/"crates/horizon-client/src/breaking.rs",lab.ROOT/"crates/horizon-client/src/game.rs",lab.ROOT/"crates/horizon-client/src/gfx.rs",lab.ROOT/"crates/horizon-client/src/entity.wgsl",lab.ROOT/"crates/horizon-client/src/models/catalog.rs",lab.ROOT/"crates/horizon-client/src/mesher.rs",lab.ROOT/"crates/horizon-client/src/camera.rs",lab.ROOT/"crates/horizon-client/examples/probe/breaking_fixture.rs",lab.ROOT/"mods/horizon/src/test/java/dev/horizonlab/parity/VanillaBreakingModelOracle.java",lab.ROOT/"mods/horizon/src/test/java/dev/horizonlab/parity/VanillaSectionMeshOracle.java",lab.ROOT/"Cargo.lock"]
     tested=base.source_hashes(paths)
     rows=[dict(case=i,**row) for i,row in enumerate(cases(resources))]
     inputs=build/"inputs.jsonl";inputs.write_text("".join(json.dumps(row)+"\n" for row in rows))
     classes,dependencies,_=harness.compile_oracle(build,"VanillaBreakingModelOracle",jars,libraries,lock["minecraft"]["java_major"])
-    binary=harness.build_probe(build,"breaking_fixture")
-    harness.run_logged([binary,resources,inputs,build/"rust.jsonl"],build,"rust")
+    command=harness.build_probe(build,"breaking_fixture")
+    harness.run_logged([*command,resources,inputs,build/"rust.jsonl"],build,"rust")
     harness.java_run(build,classes,dependencies,"VanillaBreakingModelOracle",[inputs,build/"client.jsonl"],"client")
     count=vertices=0;max_error=0.0
     with (build/"client.jsonl").open() as native, (build/"rust.jsonl").open() as rust:
