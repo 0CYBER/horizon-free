@@ -175,11 +175,14 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         for (key, value) in [
             ("Age", Tag::Int(0)),
             ("ForcedAge", Tag::Int(0)),
-            ("InLove", Tag::Int(0)),
             ("AgeLocked", Tag::Byte(0)),
         ] {
             map.entry(key.into()).or_insert(value);
         }
+    }
+    // Animal.addAdditionalSaveData: the love ticks left, whatever the save had.
+    if m.kind.flags.animal {
+        map.insert("InLove".into(), Tag::Int(m.extra.in_love.max(0)));
     }
     match id {
         "minecraft:creeper" => {
@@ -620,6 +623,9 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         m.extra.age = number(tag.get("Age")).unwrap_or(0) as i32;
         m.extra.forced_age = number(tag.get("ForcedAge")).unwrap_or(0) as i32;
         m.extra.age_locked = flag(tag, "AgeLocked");
+    }
+    if m.kind.flags.animal {
+        m.extra.in_love = number(tag.get("InLove")).unwrap_or(0) as i32;
     }
     m.name_visible = flag(tag, "CustomNameVisible");
     m.no_ai = flag(tag, "NoAI");

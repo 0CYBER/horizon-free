@@ -9534,6 +9534,7 @@ impl Game<'_> {
                 );
                 map.insert("Air".into(), horizon_world::nbt::Tag::Short(p.air as i16));
             }
+            level.fall_distance = p.fall_distance;
 
             level.food = p.health.food.food;
             level.saturation = p.health.food.saturation;

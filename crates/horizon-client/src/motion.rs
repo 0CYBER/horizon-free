@@ -337,6 +337,7 @@ impl PlayerMotion {
             self.air = extra
                 .and_then(|t| crate::save::number(t.get("Air")))
                 .unwrap_or(300) as i32;
+            self.fall_distance = level.fall_distance;
             self.set_health(level.health, false)?;
             self.health.food.food = level.food;
             self.health.food.saturation = level.saturation;
