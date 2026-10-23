@@ -2719,18 +2719,25 @@ def check_contacts(host, guest, out):
                 for dx, dy, block in blocks:
                     game('command', command=f'setblock {x + dx} {y + dy} {z} {block}')
                 stand = 0.5 if case == 'campfire' else 0.0
+                # Sneaking from before the player lands on the magma.
+                held = ['shift'] if case == 'sneaking' else []
+                for k in held:
+                    game.raw('key', k, 'down')
+                game.wait(5)
                 game('command', command=f'tp @s {x + 0.5} {y + stand} {z + 0.5}')
                 game.raw('look-at', f'{x + 10:.2f}', f'{y + 1.6:.2f}', f'{z + 0.5:.2f}')
                 game.wait(30)
                 before = own(game)['health']
-                keys = (['shift'] if case == 'sneaking' else []) + (['w'] if walk else [])
+                keys = ['w'] if walk else []
                 for k in keys:
                     game.raw('key', k, 'down')
                 game.wait(60)
-                for k in keys:
+                # Read before letting go: standing up on the magma would hurt.
+                after = own(game)['health']
+                for k in keys + held:
                     game.raw('key', k, 'up')
                 game.wait(10)
-                seen[f'{game.name}-{case}'] = (before, own(game)['health'])
+                seen[f'{game.name}-{case}'] = (before, after)
                 game.shot(out, f'contacts-{case}')
             host('command', command=f'fill {x - 1} {y} {z - 1} {x + 5} {y + 2} {z + 1} minecraft:air')
     finally:
