@@ -859,31 +859,8 @@ fn poi_root(sections: Compound) -> NamedTag {
     }
 }
 
-/// What a dimension's saved chunks depend on: skylight and the build height
-/// (`DimensionType.minY` and `height`). `Chunk` always holds the Overworld's
-/// sections; a level saves only the ones inside its own height.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LevelShape {
-    pub sky_light: bool,
-    pub min_y: i32,
-    pub height: i32,
-}
+pub use crate::chunk::LevelShape;
 impl LevelShape {
-    pub const OVERWORLD: Self = Self {
-        sky_light: true,
-        min_y: MIN_Y,
-        height: SECTIONS as i32 * 16,
-    };
-    pub const NETHER: Self = Self {
-        sky_light: false,
-        min_y: 0,
-        height: 256,
-    };
-    pub const END: Self = Self {
-        sky_light: true,
-        min_y: 0,
-        height: 256,
-    };
     /// The shape of a dimension folder (`dimensions/minecraft/<name>`, or the
     /// old `DIM-1` and `DIM1`).
     pub fn for_dir(root: &Path) -> Self {
@@ -894,15 +871,6 @@ impl LevelShape {
         } else {
             Self::OVERWORLD
         }
-    }
-    fn min_section(self) -> i32 {
-        self.min_y >> 4
-    }
-    fn section_count(self) -> usize {
-        (self.height >> 4) as usize
-    }
-    fn has_section(self, y: i32) -> bool {
-        (self.min_section()..self.min_section() + self.section_count() as i32).contains(&y)
     }
 }
 
