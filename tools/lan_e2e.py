@@ -190,6 +190,10 @@ address. The script then checks, from both sides, what a guest's game used to ge
              (ServerboundPlayerCommandPacket START_FALL_FLYING): both their client and the server
              have them gliding, they go forward far more than down, and the glide ends on both once
              they land (#1288).
+- helduse:   the host and the guest raise a shield, charge and fire a crossbow, throw a trident
+             and scope with a spyglass: each use starts on their own client and on the server, and
+             letting go ends it on both (RELEASE_USE_ITEM), so the shield lowers, the trident flies
+             and the loaded crossbow fires on the next use (#1300, #1281, #1282, #1301).
 
 Each check is reported on its own (a failing one doesn't stop the others) and the screenshots of
 both sides go to --out (host-*.png, guest-*.png).
@@ -4272,6 +4276,105 @@ def check_elytra(host, guest, out):
 
 CHECKS += ['elytra']
 CHECK_FNS.update(elytra=check_elytra)
+
+
+def server_using(host, game):
+    """The item the server has the player using ({slot, ticks}), or None."""
+    if game is host and not SERVER_THREAD:
+        return host('state').get('using')
+    return server_player(host, game).get('using')
+
+
+def flying(game, kind):
+    """How many of the projectiles this side draws are of `kind` (a trident, an arrow)."""
+    return sum(kind in q['kind'].lower() for q in game('status')['projectiles'])
+
+
+def check_held_use(host, guest, out):
+    """Items used until the button lets go, for each player: the client starts the use too
+    (Item.use runs on both sides), so letting go sends RELEASE_USE_ITEM and the server ends it."""
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    seen = {}
+    try:
+        for game, dz in ((host, -3), (guest, 3)):
+            x, z = hx, hz + dz
+            host('command', command=f'fill {x - 1} {hy - 1} {z - 1} {x + 12} {hy - 1} {z + 1} minecraft:stone')
+            host('command', command=f'fill {x - 1} {hy} {z - 1} {x + 12} {hy + 3} {z + 1} minecraft:air')
+            host('command', command=f'fill {x + 12} {hy} {z - 1} {x + 12} {hy + 3} {z + 1} minecraft:stone')
+            game('command', command='gamemode survival')
+            game('command', command='clear @s')
+            game('command', command=f'tp @s {x + 0.5} {hy} {z + 0.5} -90 0')
+            game.wait(10)
+            s = {}
+            # ShieldItem: raised while held, lowered once let go.
+            game('command', command='item replace entity @s weapon.offhand with minecraft:shield')
+            game.wait(5)
+            game.raw('mouse', 'right', 'down')
+            game.wait(10)
+            s['shield'] = {'held': (bool(game('state').get('using')), bool(server_using(host, game)))}
+            game.raw('mouse', 'right', 'up')
+            game.wait(10)
+            s['shield']['let_go'] = (bool(game('state').get('using')), bool(server_using(host, game)))
+            game('command', command='item replace entity @s weapon.offhand with minecraft:air')
+            # SpyglassItem: scoping while held.
+            game('command', command='item replace entity @s weapon.mainhand with minecraft:spyglass')
+            game.wait(5)
+            game.raw('mouse', 'right', 'down')
+            game.wait(10)
+            s['spyglass'] = {'held': (bool(game('state').get('using')), bool(server_using(host, game)))}
+            game.raw('mouse', 'right', 'up')
+            game.wait(10)
+            s['spyglass']['let_go'] = (bool(game('state').get('using')), bool(server_using(host, game)))
+            # TridentItem.releaseUsing after 10 ticks: thrown.
+            host('command', command='kill @e[type=minecraft:trident]')
+            game('command', command='item replace entity @s weapon.mainhand with minecraft:trident')
+            game.wait(5)
+            # /kill finds no thrown trident (Horizon's selectors miss them): count what's new.
+            before = flying(game, 'trident')
+            game.raw('use-item', '--hold', 1.2)
+            game.wait(10)
+            s['trident'] = {'kept': server_count(game, 'trident'),
+                            'thrown': flying(game, 'trident') - before}
+            host('command', command='kill @e[type=minecraft:trident]')
+            # CrossbowItem: charged by holding (25 ticks), fired by the next use.
+            host('command', command='kill @e[type=minecraft:arrow]')
+            game('command', command='clear @s')
+            game('command', command='item replace entity @s weapon.mainhand with minecraft:crossbow')
+            game('command', command='give @s minecraft:arrow 16')
+            game.wait(5)
+            before = flying(game, 'arrow')
+            game.raw('use-item', '--hold', 1.6)
+            game.wait(10)
+            held = game('state').get('held') or {}
+            s['crossbow'] = {'loaded': 'charged_projectiles' in str(held.get('components', '')),
+                             'arrows': server_count(game, 'arrow')}
+            game.raw('use-item')
+            game.wait(10)
+            held = game('state').get('held') or {}
+            s['crossbow'].update(
+                fired=flying(game, 'arrow') - before,
+                emptied='charged_projectiles' not in str(held.get('components', '')))
+            game.shot(out, 'helduse')
+            seen[game.name] = s
+    finally:
+        host('command', command='kill @e[type=minecraft:arrow]')
+        host('command', command='kill @e[type=minecraft:trident]')
+        for game in (host, guest):
+            back_to_game(game)
+            game.raw('mouse', 'right', 'up')
+            game('command', command='clear @s')
+        face_each_other(host, guest)
+    for name, s in seen.items():
+        for item in ('shield', 'spyglass'):
+            assert s[item] == {'held': (True, True), 'let_go': (False, False)}, f'{name} {item}: {seen}'
+        assert s['trident'] == {'kept': 0, 'thrown': 1}, f'{name} trident: {seen}'
+        assert s['crossbow'] == {'loaded': True, 'arrows': 15, 'fired': 1, 'emptied': True}, \
+            f'{name} crossbow: {seen}'
+    return seen
+
+
+CHECKS += ['helduse']
+CHECK_FNS.update(helduse=check_held_use)
 
 
 if __name__ == '__main__':

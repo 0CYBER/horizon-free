@@ -32,6 +32,7 @@ pub mod component {
     pub const DYED_COLOR: i32 = 47;
     pub const MAP_ID: i32 = 48;
     pub const MAP_POST_PROCESSING: i32 = 50;
+    pub const CHARGED_PROJECTILES: i32 = 51;
     pub const WRITABLE_BOOK_CONTENT: i32 = 56;
     pub const WRITTEN_BOOK_CONTENT: i32 = 57;
 }
@@ -75,6 +76,8 @@ pub enum Component {
     /// `WritableBookContent`: the pages (raw text).
     WritableBook(Vec<String>),
     WrittenBook(WrittenBook),
+    /// `ChargedProjectiles`: a loaded crossbow's ammunition, as templates.
+    Stacks(Vec<Stack>),
 }
 
 /// `Filterable.streamCodec`: the raw value, then an optional filtered one
@@ -124,6 +127,10 @@ impl Component {
                     pages,
                     resolved: r.bool()?,
                 })
+            }
+            CHARGED_PROJECTILES => {
+                let n = r.count(1024)?;
+                Self::Stacks((0..n).map(|_| Template::read(r)).collect::<Result<_>>()?)
             }
             DYED_COLOR => Self::Int(r.i32()?),
             UNBREAKABLE | CREATIVE_SLOT_LOCK => Self::Unit,
@@ -282,6 +289,10 @@ impl Component {
                 w.bool(*hide);
                 w.varint(hidden.len() as i32);
                 hidden.iter().for_each(|h| w.varint(*h));
+            }
+            Self::Stacks(stacks) => {
+                w.varint(stacks.len() as i32);
+                stacks.iter().for_each(|s| Template::write(s, w));
             }
             Self::WritableBook(pages) => {
                 w.varint(pages.len() as i32);
@@ -531,6 +542,21 @@ mod tests {
         round::<Option<Stack>, Slot>(Some(sword.clone()));
         round::<Option<Hashed>, HashedSlot>(Some(Hashed::of(&sword)));
         round::<Option<Hashed>, HashedSlot>(None);
+    }
+
+    #[test]
+    fn charged_projectiles_are_item_stack_templates() {
+        // A crossbow (id 7) loaded with one arrow (id 9): ChargedProjectiles
+        // is a list of ItemStackTemplate, the item before the count.
+        let bytes = [1, 7, 1, 0, 51, 1, 9, 1, 0, 0];
+        let stack = Slot::read(&mut Reader::new(&bytes)).unwrap().unwrap();
+        assert_eq!(
+            stack.component(component::CHARGED_PROJECTILES),
+            Some(&Component::Stacks(vec![Stack::new(9, 1)]))
+        );
+        let mut w = Writer::new();
+        Slot::write(&Some(stack), &mut w);
+        assert_eq!(w.data, bytes);
     }
 
     #[test]
