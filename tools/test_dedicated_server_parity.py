@@ -7,7 +7,9 @@ respawn_radius 0) and stops; a vanilla dedicated server and Horizon's
 server.properties, server-icon.png and lists. VanillaProtocolClient, a
 headless client made of vanilla's own codecs (any byte vanilla would not
 read is an error), pings each server, joins it in offline mode through
-login, configuration and play, accepts the spawn teleport, receives the
+login, configuration and play, accepts the spawn teleport (then, standing
+still until its death, sends its position every 20 ticks as LocalPlayer
+does: the server checks then which entities it sees), receives the
 chunks around the spawn (their bytes are compared: the world is loaded from
 the same files), chats, runs /list and commands that fail (`/random value
 7..7`, `/random value x`, `/trigger nope`), trades, is made an operator by
@@ -244,6 +246,20 @@ def console_lines(lines):
     return out
 
 
+# What a failure's diff doesn't say: warnings, errors, panics and why a player left.
+NOTABLE = re.compile(r'/(WARN|ERROR)\]|Exception|panicked|lost connection')
+
+
+def notable_lines(path, limit=20):
+    """A server's notable lines from its `Done (` on (the startup warnings are every run's), or a client's."""
+    try:
+        lines = path.read_text(encoding='utf-8', errors='replace').splitlines()
+    except OSError:
+        return []
+    start = next((i for i, l in enumerate(lines) if 'Done (' in l), 0)
+    return [f'{path.name}: {l[:300]}' for l in lines[start:] if NOTABLE.search(l)][-limit:]
+
+
 def server_files(directory):
     out = []
     for name in ['server.properties', 'eula.txt', 'ops.json', 'whitelist.json', 'banned-players.json', 'banned-ips.json',
@@ -420,9 +436,13 @@ def main():
     (world / 'playerdata').mkdir(exist_ok=True)
 
     def client(port, out):
-        oh.run_logged(['java', '-Xmx1g', '-Duser.timezone=UTC', '-cp', str(classes) + os.pathsep + dependencies,
-                       'dev.horizonlab.parity.VanillaProtocolClient', '127.0.0.1', port, PLAYER, out], build,
-                      out.stem, timeout=300)
+        try:
+            oh.run_logged(['java', '-Xmx1g', '-Duser.timezone=UTC', '-cp', str(classes) + os.pathsep + dependencies,
+                           'dev.horizonlab.parity.VanillaProtocolClient', '127.0.0.1', port, PLAYER, out], build,
+                          out.stem, timeout=300)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            log = (build / f'{out.stem}.log').read_text(encoding='utf-8', errors='replace').splitlines()
+            raise AssertionError(f'{out.stem}: {error}:\n' + '\n'.join(log[-30:])) from None
 
     results = {}
     for label, command in [('vanilla', vanilla_server), ('horizon', horizon_server)]:
@@ -448,8 +468,10 @@ def main():
         if a != b:
             differences.append(f'chunk {key}: vanilla {a} horizon {b}')
     if differences or errors:
+        notes = [line for name in ('vanilla', 'vanilla-client', 'horizon', 'horizon-client')
+                 for line in notable_lines(build / f'{name}.log')]
         raise AssertionError(f'{len([d for d in differences if d[:1] in "+-" and d[:3] not in ("+++", "---")])} differing lines '
-                             f'(see {build}/vanilla.txt and horizon.txt):\n' + '\n'.join(differences[:80]))
+                             f'(see {build}/vanilla.txt and horizon.txt):\n' + '\n'.join(differences[:80] + notes))
     lab.write_json(report, dict(
         schema=1, minecraft=lock['minecraft']['version'], platform=platform.platform(),
         java=subprocess.check_output(['java', '--version'], text=True).splitlines()[0],
