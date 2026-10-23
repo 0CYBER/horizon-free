@@ -3739,7 +3739,10 @@ impl Game<'_> {
         horizon_client::interaction_input::use_on_target(&mut RemoteUseWorld(self), entity);
     }
 
-    fn remote_use_entity(&mut self) -> bool {
+    /// `Minecraft.startUseItem`'s entity turn for `hand`: Interact goes to
+    /// the server, and whether the click ends there is what this client's
+    /// copy of the entity answers (`MultiPlayerGameMode.interact`).
+    fn remote_use_entity(&mut self, hand: Hand) -> bool {
         let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
         // A boat, minecart, item frame, armor stand or painting nearer than
         // any mob: the server uses it (AbstractBoat.interact boards it).
@@ -3747,6 +3750,10 @@ impl Game<'_> {
             && self.mob_hit().is_none_or(|(_, d)| hit.distance < d)
             && self.before_block(hit.distance)
         {
+            // The main hand's turn takes it; there is no off hand turn.
+            if hand == Hand::Off {
+                return false;
+            }
             self.send(S::Interact(play::Interact {
                 id: hit.id,
                 hand: 0,
@@ -3762,18 +3769,18 @@ impl Game<'_> {
             let id = self.mobs[i].id as i32;
             self.send(S::Interact(play::Interact {
                 id,
-                hand: 0,
+                hand: hand_id(hand),
                 location: [0.0, 1.0, 0.0],
                 secondary: sneaking,
             }));
-            // Player.interactOn: another player passes, and the held item is
-            // used instead (Minecraft.startUseItem).
+            // Player.interactOn: another player passes, and so does a mob
+            // the held item means nothing to: the item is used instead.
             let player = self
                 .remote
                 .as_ref()
                 .is_some_and(|r| r.level_players.contains_key(&id));
-            if !player {
-                self.swing_arm();
+            if !player && self.remote_mob_takes(i, hand) {
+                self.with_hand(hand, Game::swing_arm);
                 return true;
             }
         }
@@ -4030,7 +4037,13 @@ impl Game<'_> {
         if self.remote_use_item(Hand::Main) {
             return;
         }
-        if !self.entity_targeted() && self.remote_use_block(Hand::Off) {
+        // The off hand's turn: the entity again, or the block.
+        let off_target = if self.entity_targeted() {
+            self.remote_use_entity(Hand::Off)
+        } else {
+            self.remote_use_block(Hand::Off)
+        };
+        if off_target {
             return;
         }
         self.remote_use_item(Hand::Off);
@@ -5135,7 +5148,7 @@ struct RemoteUseWorld<'g, 'a>(&'g mut Game<'a>);
 
 impl horizon_client::interaction_input::TargetUseWorld for RemoteUseWorld<'_, '_> {
     fn use_entity(&mut self) -> bool {
-        self.0.remote_use_entity()
+        self.0.remote_use_entity(Hand::Main)
     }
     fn use_block(&mut self) -> bool {
         self.0.remote_use_block(Hand::Main)
