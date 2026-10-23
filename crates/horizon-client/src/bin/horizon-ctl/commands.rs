@@ -366,8 +366,9 @@ pub fn overview() -> String {
     }
     out.push_str(
         "\nEvery reply is one JSON line. Errors are {\"error\": \"...\"}; the exit status is 0 on\n\
-         success, 1 when the game replied with an error, 2 for a usage error and 3 when the\n\
-         game cannot be reached or started. Actions (goto, break, place...) block until done.\n\
+         success, 1 when the game replied with an error, 2 for a usage error, 3 when the\n\
+         game cannot be reached or started and 4 while No AI is on (the launcher's settings).\n\
+         Actions (goto, break, place...) block until done.\n\
          horizon-ctl help --game lists the running game's own commands, test hooks included.\n\
          The socket is $HORIZON_CONTROL, else $XDG_RUNTIME_DIR/horizon-control.sock (on Windows\n\
          %TEMP%\\horizon-control.json, a localhost TCP port with a token; any path ending in .json\n\

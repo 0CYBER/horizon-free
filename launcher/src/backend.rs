@@ -1269,6 +1269,17 @@ pub fn game_home() -> PathBuf {
         .join("horizon")
 }
 
+/// Whether No AI is on: every AI feature hidden and off (`horizon_core::no_ai`, kept in the
+/// game's `horizon-extras.txt` so the game reads the same switch).
+pub fn no_ai() -> bool {
+    horizon_core::no_ai::is_on(&game_home())
+}
+
+/// Turns No AI on or off for the launcher and the game.
+pub fn set_no_ai(on: bool) -> Result<(), String> {
+    horizon_core::no_ai::set(&game_home(), on).map_err(|e| format!("Could not save No AI: {e}"))
+}
+
 // ----- Logs and crash reports ---------------------------------------------------------------------
 
 /// The game's logs (`latest.log` and the day archives), as it writes them in its home.

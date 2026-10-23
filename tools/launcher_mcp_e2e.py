@@ -5,7 +5,9 @@ A scratch launcher home gets one "installed" version made of this checkout's bui
 (horizon-client and horizon-ctl) and the prepared resources in .local/horizon-client. An MCP
 client then talks to `horizon-launcher mcp` alone: the game tools are listed, a call before the
 game runs says to launch it, launch_client starts it under control, and game_wait_ready,
-game_state, game_ui and game_screenshot play it until game_quit.
+game_state, game_ui and game_screenshot play it until game_quit. Then No AI is turned on with
+`horizon-launcher no-ai on`: `horizon-launcher mcp` refuses to start, and a session already running
+refuses its next call.
 
     python3 tools/launcher_mcp_e2e.py --bin-dir target/fast --launcher launcher/target/debug/horizon-launcher
 
@@ -96,6 +98,35 @@ def scenario(m, out):
     return {'tools': len(tools)}
 
 
+REFUSAL = "AI features are off: turn off No AI in the launcher's settings"
+
+
+def no_ai_scenario(launcher, env, home):
+    run = lambda *a: subprocess.run([str(launcher), *a], env=env, input='', capture_output=True, text=True,
+                                    timeout=60)
+    assert json.loads(run('no-ai', '--json').stdout) == {'no_ai': False}
+    m = Mcp(launcher, env)
+    m.rpc('initialize', {'protocolVersion': '2025-06-18', 'capabilities': {},
+                         'clientInfo': {'name': 'launcher_mcp_e2e', 'version': '1'}})
+    r = run('no-ai', 'on')
+    assert r.returncode == 0, r
+    assert 'noAi:true' in (home / 'horizon-extras.txt').read_text()
+    try:
+        m.call('links')
+        raise AssertionError('links ran under No AI')
+    except Failed as e:
+        assert REFUSAL in str(e), e
+    m.close()
+    r = run('mcp')
+    print(f'[launcher-mcp] mcp under No AI -> exit {r.returncode}: {r.stderr.strip()}')
+    assert r.returncode == 1 and r.stderr.strip() == f'error: {REFUSAL}', r
+    # What the launcher needs keeps working.
+    assert run('versions', '--installed', '--json').returncode == 0
+    assert run('no-ai', 'off').returncode == 0
+    assert json.loads(run('no-ai', '--json').stdout) == {'no_ai': False}
+    return {'no_ai': 'refused'}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--bin-dir', required=True, help='horizon-client and horizon-ctl built from this checkout')
@@ -120,6 +151,7 @@ def main():
     m = Mcp(Path(args.launcher).resolve(), env)
     try:
         summary = scenario(m, out)
+        summary.update(no_ai_scenario(Path(args.launcher).resolve(), env, work / 'home'))
         print(f'[launcher-mcp] PASS: {summary}')
         ok = True
     except (Failed, AssertionError, KeyError, json.JSONDecodeError) as e:

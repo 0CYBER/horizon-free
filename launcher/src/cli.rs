@@ -343,8 +343,16 @@ enum Cmd {
         #[command(subcommand)]
         action: Option<ServersCmd>,
     },
-    /// Serve the Model Context Protocol on stdin and stdout, for AI agents
+    /// Serve the Model Context Protocol on stdin and stdout, for AI agents (refused while No AI
+    /// is on)
     Mcp,
+    /// Show or set No AI: on hides and turns off every AI feature (the companion, agent control,
+    /// horizon-ctl and both MCP servers); off, the default, makes them available
+    NoAi {
+        /// Omit to show the current state
+        #[arg(value_parser = ["on", "off"])]
+        state: Option<String>,
+    },
     /// Measure the launcher: starts (the first is the cold one), page switching, idle CPU and
     /// memory, the release list fetch; writes a benchmark report to benchmarks/ in its data folder
     Benchmark {
@@ -359,6 +367,7 @@ pub fn run() -> Option<i32> {
     let cli = Cli::parse();
     let command = cli.command?;
     let result = match command {
+        Cmd::Mcp if backend::no_ai() => Err(horizon_core::no_ai::REFUSAL.into()),
         Cmd::Mcp => crate::mcp::serve(),
         command => execute(command, cli.json),
     };
@@ -551,6 +560,19 @@ fn execute(command: Cmd, as_json: bool) -> Result<(), String> {
                 ] {
                     println!("{name:<8} {}", if url.is_empty() { "(none)" } else { url });
                 }
+            }
+        }
+        Cmd::NoAi { state } => {
+            if let Some(state) = state {
+                backend::set_no_ai(state == "on")?;
+            }
+            let on = backend::no_ai();
+            if as_json {
+                json(serde_json::json!({ "no_ai": on }));
+            } else if on {
+                println!("No AI is on: every AI feature is hidden and off.");
+            } else {
+                println!("No AI is off: AI features are available.");
             }
         }
         Cmd::UpdateChannel { channel } => {
