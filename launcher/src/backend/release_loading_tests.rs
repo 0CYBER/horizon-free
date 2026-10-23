@@ -45,7 +45,6 @@ fn baseline(load: impl Fn() -> Result<serde_json::Value, String>) -> (Vec<Releas
 fn shared(load: impl FnOnce() -> Result<serde_json::Value, String>) -> (Vec<Release>, Updates) {
     let mut releases = None;
     let updates = releases_and_updates_with(
-        UpdateChannel::Stable,
         load,
         installed_fixture,
         |list| parse_releases(list, LAUNCHER_ASSET, is_launcher_tag),
@@ -82,7 +81,6 @@ fn errors_reach_releases_and_updates_without_fallback() {
     ] {
         let mut published = None;
         let result = releases_and_updates_with(
-            UpdateChannel::Stable,
             || Err(error.into()),
             || panic!("no installed scan after failure"),
             |_| panic!("no fallback after failure"),
@@ -97,7 +95,6 @@ fn errors_reach_releases_and_updates_without_fallback() {
 fn publish_games_before_older_launcher_fallback() {
     let events = RefCell::new(Vec::new());
     let result = releases_and_updates_with(
-        UpdateChannel::Stable,
         || Ok(serde_json::json!([{"tag_name": "v2026.10.14", "assets": []}])),
         Vec::new,
         |list| {
@@ -132,7 +129,6 @@ fn failed_launcher_fallback_keeps_game_result_and_checks_stay_fresh() {
     for day in [14, 15] {
         let mut published = None;
         let updates = releases_and_updates_with(
-            UpdateChannel::Stable,
             || {
                 requests.fetch_add(1, Ordering::Relaxed);
                 Ok(serde_json::json!([{"tag_name": format!("v2026.10.{day}")}]))
