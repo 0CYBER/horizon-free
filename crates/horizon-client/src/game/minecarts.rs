@@ -16,7 +16,7 @@ use horizon_client::{
     sound_engine::{CartSound, SoundEngine, SoundInstance, Sounds},
 };
 use horizon_core::{
-    geometry::{Aabb, Vec3},
+    geometry::{Aabb, Vec3, trig},
     random::RandomSource,
 };
 use horizon_world::registry::BlockStateId;
@@ -683,8 +683,7 @@ impl Game<'_> {
             }
         }
     }
-    /// `AbstractMinecart.push(player)` when the player walks into a cart,
-    /// and carts pushing each other (`pushOtherMinecart`).
+    /// `AbstractMinecart.push(player)` when the player walks into a cart.
     fn push_carts(&mut self) {
         let player = self.player.as_ref().map(|p| p.position);
         let riding = self.riding;
@@ -719,55 +718,71 @@ impl Game<'_> {
                     }
                 }
             }
-            for j in i + 1..self.carts.len() {
-                let (a, b) = (&self.carts[i], &self.carts[j]);
-                if !a
-                    .bounds()
-                    .inflate(Vec3::new(0.2, 0.0, 0.2))
-                    .intersects(b.bounds())
-                {
-                    continue;
-                }
-                let (mut xa, mut za) = (b.position.x - a.position.x, b.position.z - a.position.z);
-                let dd = xa * xa + za * za;
-                if dd < 1.0e-4 {
-                    continue;
-                }
-                let d = dd.sqrt();
-                let pow = (1.0 / d).min(1.0);
-                xa = xa / d * pow * f64::from(0.1f32) * 0.5;
-                za = za / d * pow * f64::from(0.1f32) * 0.5;
-                let dir =
-                    glam::DVec2::new(b.position.x - a.position.x, b.position.z - a.position.z)
-                        .normalize_or_zero();
-                let r = a.yaw.to_radians();
-                let facing =
-                    glam::DVec2::new(f64::from(r.cos()), f64::from(r.sin())).normalize_or_zero();
-                if dir.dot(facing).abs() < f64::from(0.8f32) {
-                    continue;
-                }
-                let (ma, mb) = (a.velocity, b.velocity);
-                let (fa, fb) = (a.kind == CartKind::Furnace, b.kind == CartKind::Furnace);
-                let (na, nb) = if fb && !fa {
-                    (
-                        Vec3::new(ma.x * 0.2 + mb.x - xa, ma.y, ma.z * 0.2 + mb.z - za),
-                        Vec3::new(mb.x * 0.95, mb.y, mb.z * 0.95),
-                    )
-                } else if fa && !fb {
-                    (
-                        Vec3::new(ma.x * 0.95, ma.y, ma.z * 0.95),
-                        Vec3::new(mb.x * 0.2 + ma.x + xa, mb.y, mb.z * 0.2 + ma.z + za),
-                    )
-                } else {
-                    let (xdd, zdd) = ((mb.x + ma.x) / 2.0, (mb.z + ma.z) / 2.0);
-                    (
-                        Vec3::new(ma.x * 0.2 + xdd - xa, ma.y, ma.z * 0.2 + zdd - za),
-                        Vec3::new(mb.x * 0.2 + xdd + xa, mb.y, mb.z * 0.2 + zdd + za),
-                    )
-                };
-                self.carts[i].velocity = na;
-                self.carts[j].velocity = nb;
+        }
+    }
+    /// `OldMinecartBehavior.pushAndPickupEntities` for carts, at the end of
+    /// cart `i`'s own tick: each other cart in its box (0.2 wider on each
+    /// side) gets `push(cart i)`. Running it per cart, after that cart moved
+    /// and before the next one does, is what splits stacked carts apart.
+    fn push_from_cart(&mut self, i: usize) {
+        let reach = f64::from(0.2f32);
+        let hitbox = self.carts[i].bounds().inflate(Vec3::new(reach, 0.0, reach));
+        for j in 0..self.carts.len() {
+            if j == i || !hitbox.intersects(self.carts[j].bounds()) {
+                continue;
             }
+            // AbstractMinecart.push(entity): `this` is cart j, `entity` cart i.
+            let (this, other) = (&self.carts[j], &self.carts[i]);
+            let (mut xa, mut za) = (
+                other.position.x - this.position.x,
+                other.position.z - this.position.z,
+            );
+            let dd = xa * xa + za * za;
+            if dd < f64::from(1.0e-4f32) {
+                continue;
+            }
+            let d = dd.sqrt();
+            xa /= d;
+            za /= d;
+            let pow = (1.0 / d).min(1.0);
+            xa = xa * pow * f64::from(0.1f32) * 0.5;
+            za = za * pow * f64::from(0.1f32) * 0.5;
+            // pushOtherMinecart (old movement): only along this cart's facing.
+            let dir = glam::DVec2::new(
+                other.position.x - this.position.x,
+                other.position.z - this.position.z,
+            )
+            .normalize_or_zero();
+            let r = f64::from(this.yaw * 0.017453292f32);
+            let facing = glam::DVec2::new(f64::from(trig::cos(r)), f64::from(trig::sin(r)))
+                .normalize_or_zero();
+            if dir.dot(facing).abs() < f64::from(0.8f32) {
+                continue;
+            }
+            let (mt, mo) = (this.velocity, other.velocity);
+            let (ft, fo) = (
+                this.kind == CartKind::Furnace,
+                other.kind == CartKind::Furnace,
+            );
+            let (nt, no) = if fo && !ft {
+                (
+                    Vec3::new(mt.x * 0.2 + (mo.x - xa), mt.y, mt.z * 0.2 + (mo.z - za)),
+                    Vec3::new(mo.x * 0.95, mo.y, mo.z * 0.95),
+                )
+            } else if !fo && ft {
+                (
+                    Vec3::new(mt.x * 0.95, mt.y, mt.z * 0.95),
+                    Vec3::new(mo.x * 0.2 + (mt.x + xa), mo.y, mo.z * 0.2 + (mt.z + za)),
+                )
+            } else {
+                let (xdd, zdd) = ((mo.x + mt.x) / 2.0, (mo.z + mt.z) / 2.0);
+                (
+                    Vec3::new(mt.x * 0.2 + (xdd - xa), mt.y, mt.z * 0.2 + (zdd - za)),
+                    Vec3::new(mo.x * 0.2 + (xdd + xa), mo.y, mo.z * 0.2 + (zdd + za)),
+                )
+            };
+            self.carts[j].velocity = nt;
+            self.carts[i].velocity = no;
         }
     }
     /// Every cart but the ridden one (which ticks with its rider).
@@ -794,6 +809,7 @@ impl Game<'_> {
             }
             if alive {
                 self.carts[i] = c;
+                self.push_from_cart(i);
                 i += 1;
             } else {
                 self.carts.remove(i);
@@ -867,6 +883,7 @@ impl Game<'_> {
         }
         if alive {
             self.carts[i] = c;
+            self.push_from_cart(i);
         } else {
             self.carts.remove(i);
             self.riding = None;
