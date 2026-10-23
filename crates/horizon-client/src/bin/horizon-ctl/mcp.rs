@@ -23,7 +23,13 @@ fn tools() -> Vec<Value> {
                 schema = json!({ "type": "object", "properties": {} });
                 description = "Capture the game window and return it as a PNG image.".into();
             }
-            json!({ "name": commands::tool_name(c), "description": description, "inputSchema": schema })
+            let mut tool = json!({ "name": commands::tool_name(c), "description": description, "inputSchema": schema });
+            if commands::DESTRUCTIVE.contains(&c.name) {
+                tool["annotations"] = json!({ "destructiveHint": true });
+            } else if commands::OPEN_WORLD.contains(&c.name) {
+                tool["annotations"] = json!({ "openWorldHint": true });
+            }
+            tool
         })
         .collect()
 }
