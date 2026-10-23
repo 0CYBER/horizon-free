@@ -2,7 +2,8 @@
 //! Iris's colour targets (`colortex0..`, each with a main and an alternate
 //! side) and the pack's `begin`, `prepare`, `deferred`, `composite` and
 //! `final` programs as full-screen passes over them, as Iris's
-//! `CompositeRenderer` runs them. Horizon's world enters `colortex0` and
+//! `CompositeRenderer` runs them. Horizon's world enters the target the
+//! pack's terrain program draws to (`colortex0` for most packs) and
 //! `depthtex0` after `prepare`, where Iris's gbuffers programs would have
 //! drawn (`depthtex1`/`depthtex2`: its depth before translucent geometry),
 //! and the last picture goes to `world_post`. The
@@ -249,7 +250,8 @@ struct Bound {
     /// Per pass, then `final`.
     groups: Vec<wgpu::BindGroup>,
     world_in: (wgpu::RenderPipeline, wgpu::BindGroup),
-    /// The world goes to colortex0's alternate side.
+    /// The world's target, and whether the world goes to its alternate side.
+    world_target: u32,
     world_alt: bool,
     final_target: Option<wgpu::TextureView>,
     present: (wgpu::RenderPipeline, wgpu::BindGroup),
@@ -262,6 +264,7 @@ struct Bound {
 struct Folder {
     targets: Vec<TargetSettings>,
     world_at: usize,
+    world_target: u32,
     flipped_after_prepare: BTreeSet<u32>,
     flipped_at_end: BTreeSet<u32>,
     passes: Vec<PassGpu>,
@@ -326,6 +329,7 @@ impl JavaStages {
                 Ok::<_, String>(Folder {
                     targets: plan.targets.clone(),
                     world_at: plan.world_at,
+                    world_target: plan.world_target,
                     flipped_after_prepare: plan.flipped_after_prepare.clone(),
                     flipped_at_end: plan.flipped_at_end.clone(),
                     passes,
@@ -486,8 +490,9 @@ impl JavaStages {
         let folder = &self.folders[folder_index];
         let plan = folder;
         let all = folder.passes.iter().chain(&folder.final_pass);
-        // Every target a pass reads or writes, and colortex0 (the world).
-        let mut used: BTreeSet<u32> = [0].into();
+        // Every target a pass reads or writes, colortex0 (shown without
+        // `final`) and the world's.
+        let mut used: BTreeSet<u32> = [0, folder.world_target].into();
         for pass in all.clone() {
             used.extend(pass.draw_buffers.iter().copied());
             used.extend(pass.samplers.iter().filter_map(|s| match s.source {
@@ -588,15 +593,15 @@ impl JavaStages {
             })
             .collect();
 
-        // The world goes into colortex0's side the gbuffers would write.
-        let colortex0 = &targets[&0];
+        // The world goes into its target's side the gbuffers would write.
+        let world_target = &targets[&folder.world_target];
         let world_pipeline = blit_pipeline(
             device,
             &self.common,
             &self.common.world_layout,
             "world_in",
             &[
-                colortex0.format,
+                world_target.format,
                 wgpu::TextureFormat::R32Float,
                 wgpu::TextureFormat::R32Float,
             ],
@@ -630,6 +635,7 @@ impl JavaStages {
             .create_view(&Default::default())
         });
         // Without `final`, Iris shows colortex0 as the last pass left it.
+        let colortex0 = &targets[&0];
         let shown = final_target.clone().unwrap_or_else(|| {
             if plan.flipped_at_end.contains(&0) {
                 colortex0.alt_view.clone()
@@ -668,7 +674,8 @@ impl JavaStages {
             opaque_depth,
             groups,
             world_in: (world_pipeline, world_group),
-            world_alt: plan.flipped_after_prepare.contains(&0),
+            world_target: folder.world_target,
+            world_alt: plan.flipped_after_prepare.contains(&folder.world_target),
             final_target,
             present: (present_pipeline, present_group),
             output_view,
@@ -679,11 +686,11 @@ impl JavaStages {
 }
 
 fn world_in(encoder: &mut wgpu::CommandEncoder, bound: &Bound) {
-    let colortex0 = &bound.targets[&0];
+    let target = &bound.targets[&bound.world_target];
     let side = if bound.world_alt {
-        &colortex0.alt_view
+        &target.alt_view
     } else {
-        &colortex0.main_view
+        &target.main_view
     };
     let attachments = [
         Some(color_attachment(side, None)),

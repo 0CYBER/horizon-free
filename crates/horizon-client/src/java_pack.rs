@@ -23,8 +23,11 @@ pub struct JavaFolder {
     /// `begin*`, `prepare*`, `deferred*`, `composite*`, in order.
     pub passes: Vec<Program>,
     /// How many of `passes` run before the world (`begin*`, `prepare*`): the
-    /// world's colour and depth enter `colortex0` and `depthtex*` after them.
+    /// world's colour and depth enter `world_target` and `depthtex*` after them.
     pub world_at: usize,
+    /// The colour target the world goes into, where the pack's terrain
+    /// program draws (MakeUp: colortex1).
+    pub world_target: u32,
     /// The targets whose alternate side the world is written to.
     pub flipped_after_prepare: BTreeSet<u32>,
     pub final_pass: Option<Program>,
@@ -145,6 +148,7 @@ pub fn load(
             folder: name.to_owned(),
             targets: plan.targets,
             world_at: early.count(),
+            world_target: plan.world_target,
             passes,
             flipped_after_prepare: plan.flipped_after_prepare,
             final_pass,

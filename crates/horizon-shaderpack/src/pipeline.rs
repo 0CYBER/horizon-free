@@ -313,6 +313,10 @@ pub struct Passes {
     /// The targets gbuffers programs (and Horizon's world) write on their
     /// alternate side, before and after translucent geometry.
     pub flipped_after_prepare: BTreeSet<u32>,
+    /// The target Horizon's world goes into: the first one `gbuffers_terrain`
+    /// (or the program Iris falls back to for terrain) draws to, `colortex0`
+    /// without one.
+    pub world_target: u32,
     pub deferred: Vec<Pass>,
     pub flipped_after_translucent: BTreeSet<u32>,
     pub composite: Vec<Pass>,
@@ -532,6 +536,20 @@ impl JavaPack {
         out.begin = run(&groups[0], "begin_pre", &mut flipped)?;
         out.prepare = run(&groups[1], "prepare_pre", &mut flipped)?;
         out.flipped_after_prepare = flipped.clone();
+        // Iris's fallbacks for terrain (`ProgramFallbackResolver`).
+        let terrain = [
+            "gbuffers_terrain",
+            "gbuffers_textured_lit",
+            "gbuffers_textured",
+            "gbuffers_basic",
+        ]
+        .into_iter()
+        .find(|name| exists(name));
+        if let Some(name) = terrain {
+            let buffers =
+                draw_buffers(&fragment(name)?).map_err(|e| format!("{}: {e}", path(name)))?;
+            out.world_target = buffers.and_then(|b| b.first().copied()).unwrap_or(0);
+        }
         out.deferred = run(&groups[2], "deferred_pre", &mut flipped)?;
         out.flipped_after_translucent = flipped.clone();
         out.composite = run(&groups[3], "composite_pre", &mut flipped)?;
