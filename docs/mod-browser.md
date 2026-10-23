@@ -51,6 +51,19 @@ or GeckoLib) is listed as not ported. A mod that shares its id or a namespace wi
 game reads mod content when it starts: start it again after installing. **Remove** deletes the folder and turns it
 off.
 
+### End-to-end check
+
+`tools/mod_browser_harness.py [--mod SLUG] [--query TEXT] [--keep]` runs the whole path a player takes, in a scratch
+game folder: the launcher's `mods search --kind mod`, `mods check` and `mods install` (Modrinth), then the game
+opens a survival world with the mod offscreen (horizon-ctl), places one of its blocks, and crafts one of its recipes
+from vanilla ingredients on a crafting table and takes the result. It times the world's load with and without the
+mod and prints a JSON summary; it exits 1 when a step fails. It needs the launcher, the game and horizon-ctl built
+and the prepared 26.3 resources in `.local`.
+
+On the Mac mini (M4 Pro, offscreen) with Macaw's Fences and Walls (the default): check 4.0 s, install 3.1 s, world
+load 5.4 s without mods and 7.3 s with it (resources 1.1 s and 2.6 s: the mod content folder is built on the first
+start); the hedge places and its recipe crafts 4.
+
 ## Checks on every download
 
 - The file must come from Modrinth's or CurseForge's file servers (`cdn.modrinth.com`, `edge.forgecdn.net`,
@@ -71,6 +84,41 @@ report, **Port** and **Play** ([modpacks.md](modpacks.md)). Installed packs are 
 file and the checksum they were checked against, with **Update to …** when a newer version runs and **Remove**
 (asked twice).
 
+### Project pages, filters and icons
+
+A result's title opens its page inside the launcher, not in a web browser: its icon, authors, downloads, followers,
+last update, licence and source, how well it runs (for a Java mod, what ports and what doesn't, from its check) with
+**Install** or **Import**, the project's links (its page on the source, source code, issues, wiki, Discord,
+donations; `https://` only, opened in the system browser), then three tabs: **Description** (the project's Markdown,
+drawn by the launcher's renderer), **Gallery** and **Versions** (each version's date, loaders, game versions, file
+and size, and the verdict of any version already checked). The data is `browser::details` (`Source::details`; on
+Modrinth `GET /project/{id}` and `/project/{id}/members`, then `/project/{id}/version`).
+
+**Filters** sit above the results: the order (best match, relevance, downloads, follows, newest, updated) and, under
+**Filters**, the loader, game version, environment (client, server) and categories, with the values the source lists
+for the kind (Modrinth's `/tag/category`, `/tag/loader`, `/tag/game_version`, asked once per run). A loader or version
+picked replaces the default (Java mod loaders and 26.3 for mods); a version other than 26.3 checks and installs the
+newest file for 1.21 or later, as **Show everything** does. Changing tabs clears the filters. CurseForge support
+is coming soon; its source already maps the order and the game version.
+
+**Icons and gallery images** are the projects' own, fetched at run time from the source's image server
+(`browser::images`): HTTPS from `cdn.modrinth.com` (or CurseForge's `media.forgecdn.net` / `edge.forgecdn.net`) only,
+at most 8 MB each, decoded (PNG, JPEG, WebP, GIF, at most 8192 pixels a side), scaled (icons 128 px, gallery 960 px)
+and kept as PNGs in `mod-browser/images/` under the game folder, which is kept under 128 MB by dropping the oldest
+files. A plate with the project's initial stands in until the icon arrives. Nothing of a project's art is in the
+launcher or the repository.
+
+**Vanilla Minecraft** is marked with a grass block drawn at run time from the player's own prepared game files
+(`assets/minecraft/textures/block/grass_block_*.png`, tinted with the plains grass colour): the game-version filter
+shows it. No Mojang file or logo is in the launcher or the repository.
+
+**Source logos.** Modrinth's logo is not shown: Modrinth's own repository says its branding is all rights reserved and
+"the use of Modrinth branding elements, including but not limited to the wrench-in-labyrinth logo, ... is strictly
+prohibited without explicit written permission from Rinth, Inc." (`packages/assets/COPYING.md` in
+[modrinth/code](https://github.com/modrinth/code/blob/main/packages/assets/COPYING.md)), and its
+[terms](https://modrinth.com/legal/terms) ask for prior written permission to use its marks. Results name their source
+in text ("from Modrinth") until Rinth, Inc. agrees. CurseForge support, and so its logo, is coming soon.
+
 ## Installing, updating, removing
 
 `mod-browser.json` beside `options.txt` lists every file the browser installed: its source, project, version, file
@@ -83,15 +131,20 @@ same name the player put there is never overwritten.
   Packs, as in vanilla and Iris.
 - **Update** installs the newer version and removes the old file.
 - **Remove** deletes the file and its entry. Packs installed as dependencies stay.
-- **A modpack** is downloaded (checked the same way) into `ports/downloads/` and imported; the Modpacks tab says
-  what of it Horizon runs and ports it.
+- **A modpack** is downloaded (checked the same way) into `ports/downloads/`, imported, and ported straight away
+  for the selected version when it is prepared (`modpacks::import_and_port`): the jars of the mods Horizon can carry
+  over come from the pack's links or Modrinth, and the message says how many of its files play. **Play** on the
+  Modpacks tab starts it with every ported mod on together. A ported mod that owns a namespace an earlier one owns
+  (the game would refuse it) is left off before the game starts and listed under the pack ("Left off: ..."); the
+  coverage list says why each mod that didn't port didn't. A port that fails leaves the pack imported, with **Port**
+  to try again. Measured on three packs in [modpacks.md](modpacks.md#three-packs-through-the-mod-browser-measured).
 
 From a terminal (or an agent):
 
 ```sh
 horizon-launcher mods search faithful                 # --kind mod|modpack|resource|shader, --everything, --source
 horizon-launcher mods check macaws-fences-and-walls   # a Java mod's verdict, what ports and what doesn't (--json)
-horizon-launcher mods install faithful-32x            # id or slug; a Java mod is ported, a modpack imported
+horizon-launcher mods install faithful-32x            # id or slug; a Java mod is ported, a modpack imported and ported
 horizon-launcher mods list                            # --json
 horizon-launcher mods update [faithful-32x] [--check]
 horizon-launcher mods remove faithful-32x

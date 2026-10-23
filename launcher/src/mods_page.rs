@@ -11,11 +11,12 @@ use horizon_launcher::modpacks;
 use horizon_port_pack::check::Check;
 use std::collections::HashMap;
 
-const KINDS: [(PackKind, &str); 4] = [
-    (PackKind::Mod, "Mods"),
-    (PackKind::Modpack, "Modpacks"),
-    (PackKind::ResourcePack, "Resource packs"),
-    (PackKind::ShaderPack, "Shader packs"),
+/// The kinds, as the Mods page's tabs: name and icon.
+const KINDS: [(PackKind, &str, &str); 4] = [
+    (PackKind::Mod, "Mods", "box"),
+    (PackKind::Modpack, "Modpacks", "archive"),
+    (PackKind::ResourcePack, "Resource packs", "image"),
+    (PackKind::ShaderPack, "Shader packs", "zap"),
 ];
 /// Java mods checked at once.
 const CHECKING: usize = 2;
@@ -31,6 +32,8 @@ pub(super) enum Event {
     Updates(HashMap<(SourceId, String), String>),
     /// A Java mod's check: its jar read, or why it couldn't be.
     Checked((SourceId, String), Result<Box<Check>, String>),
+    /// A project page's part, an image or a filter's values (`mods_project`).
+    Loaded(super::mods_project::Loaded),
 }
 
 /// Where a Java mod's check is.
@@ -41,8 +44,8 @@ pub(super) enum Checking {
 }
 
 pub(super) struct Mods {
-    kind: PackKind,
-    source: SourceId,
+    pub(super) kind: PackKind,
+    pub(super) source: SourceId,
     text: String,
     focus: FocusHandle,
     pub(super) focused: bool,
@@ -57,21 +60,32 @@ pub(super) struct Mods {
     installed: Vec<installed::Entry>,
     loaded: bool,
     /// The project being installed, and the line and fraction of its download.
-    busy: Option<(String, String, f32)>,
+    pub(super) busy: Option<(String, String, f32)>,
     message: Option<Result<String, String>>,
     updates: HashMap<(SourceId, String), String>,
     confirm_remove: Option<String>,
     /// Java mods' checks, by source and project.
-    checks: HashMap<(SourceId, String), Checking>,
-    tx: Sender<Event>,
+    pub(super) checks: HashMap<(SourceId, String), Checking>,
+    /// The project page, filters and images.
+    pub(super) browse: super::mods_project::Browse,
+    pub(super) tx: Sender<Event>,
     rx: Receiver<Event>,
 }
 
 impl Mods {
+    /// Whether the Modpacks tab is open (the sidebar marks the pack shown there).
+    pub(super) fn on_modpacks(&self) -> bool {
+        self.kind == PackKind::Modpack
+    }
+
     pub(super) fn new(cx: &mut App) -> Self {
         let (tx, rx) = channel();
         Self {
-            kind: PackKind::Mod,
+            kind: if std::env::var("HORIZON_LAUNCHER_PAGE").as_deref() == Ok("modpacks") {
+                PackKind::Modpack
+            } else {
+                PackKind::Mod
+            },
             source: SourceId::Modrinth,
             text: String::new(),
             focus: cx.focus_handle().tab_index(0).tab_stop(true),
@@ -90,6 +104,7 @@ impl Mods {
             updates: HashMap::new(),
             confirm_remove: None,
             checks: HashMap::new(),
+            browse: Default::default(),
             tx,
             rx,
         }
@@ -99,14 +114,14 @@ impl Mods {
         self.focused = self.focus.is_focused(window);
     }
 
-    fn entry(&self, p: &Project) -> Option<&installed::Entry> {
+    pub(super) fn entry(&self, p: &Project) -> Option<&installed::Entry> {
         self.installed
             .iter()
             .find(|e| e.source == p.source && e.project == p.id)
     }
 
     /// How well a result runs: a Java mod's from its check once it has one.
-    fn support(&self, p: &Project) -> Support {
+    pub(super) fn support(&self, p: &Project) -> Support {
         let metadata = p.support();
         if p.kind != PackKind::Mod || !metadata.installable() {
             return metadata;
@@ -138,10 +153,28 @@ fn short_sum(checksum: &str) -> String {
 }
 
 impl Launcher {
+    /// Opens the Mods page on its Modpacks tab, with the pack `slug` open when given (the
+    /// sidebar's packs and its + button).
+    pub(super) fn show_modpack(&mut self, slug: Option<String>) {
+        self.go(Page::Mods);
+        if slug.is_some() {
+            self.pack_open = slug;
+        }
+        if self.mods.kind != PackKind::Modpack {
+            self.mods.kind = PackKind::Modpack;
+            self.mods.browse.filters = Default::default();
+            self.mods.browse.open = None;
+            if self.mods.loaded {
+                self.mods_search(0);
+            }
+        }
+    }
+
     /// Called with the launcher's other work: what the background sent.
     pub(super) fn mods_tick(&mut self) -> bool {
         let mut changed = false;
         let mut to_check = Vec::new();
+        let mut loaded = Vec::new();
         while let Ok(event) = self.mods.rx.try_recv() {
             changed = true;
             let m = &mut self.mods;
@@ -184,13 +217,33 @@ impl Launcher {
                     };
                     m.checks.insert(key, state);
                 }
+                Event::Loaded(l) => loaded.push(l),
+            }
+        }
+        // `HORIZON_LAUNCHER_PROJECT=<slug>` (with `HORIZON_LAUNCHER_PAGE=mods`): opens that
+        // project's page once a search finds it, for screenshots.
+        if self.mods.browse.open.is_none() {
+            if let Ok(want) = std::env::var("HORIZON_LAUNCHER_PROJECT") {
+                if let Some(p) = self
+                    .mods
+                    .results
+                    .iter()
+                    .find(|p| p.id == want || p.slug == want)
+                    .cloned()
+                {
+                    std::env::remove_var("HORIZON_LAUNCHER_PROJECT");
+                    self.mods_open(p);
+                }
             }
         }
         self.mods_check(to_check);
+        for l in loaded {
+            self.mods_loaded(l);
+        }
         changed
     }
 
-    fn mods_search(&mut self, offset: usize) {
+    pub(super) fn mods_search(&mut self, offset: usize) {
         let m = &mut self.mods;
         m.search += 1;
         m.searching = true;
@@ -202,6 +255,7 @@ impl Launcher {
             everything: m.everything,
             offset,
             limit: PAGE,
+            filters: m.browse.filters.clone(),
             ..Query::new(&m.text, m.kind)
         };
         let (tx, search, source) = (m.tx.clone(), m.search, m.source);
@@ -228,7 +282,9 @@ impl Launcher {
         for p in &todo {
             m.checks.insert((p.source, p.id.clone()), Checking::Running);
         }
-        let (tx, everything) = (m.tx.clone(), m.everything);
+        // A version other than 26.3 asked for: check the newest file for 1.21 and later.
+        let everything = m.everything || m.browse.filters.other_version();
+        let tx = m.tx.clone();
         let queue = std::sync::Mutex::new(todo.into_iter());
         std::thread::spawn(move || {
             let home = backend::game_home();
@@ -273,14 +329,20 @@ impl Launcher {
 
     /// Installs (or updates) a project on a thread: a pack into its folder, a modpack into
     /// Modpacks. `known` is the project when the page has it; else it is asked for first.
-    fn mods_install(&mut self, source: SourceId, id: String, known: Option<Project>) {
+    pub(super) fn mods_install(&mut self, source: SourceId, id: String, known: Option<Project>) {
         if self.mods.busy.is_some() {
             return;
         }
         self.mods.message = None;
         self.mods.busy = Some((id.clone(), format!("Asking {}…", source.label()), 0.));
         self.mods.updates.remove(&(source, id.clone()));
-        let (tx, everything) = (self.mods.tx.clone(), self.mods.everything);
+        let everything = self.mods.everything || self.mods.browse.filters.other_version();
+        // A modpack is ported for the selected version as soon as it is imported.
+        let resources = self
+            .selected()
+            .filter(|tag| backend::is_prepared(tag))
+            .map(|tag| backend::resources(tag));
+        let tx = self.mods.tx.clone();
         std::thread::spawn(move || {
             let last = std::cell::Cell::new(-1);
             let progress = |line: &str, f: f32| {
@@ -304,10 +366,10 @@ impl Launcher {
                             progress(&p.title, f)
                         })?;
                         let log = |line: String| progress(&line, 1.);
-                        let pack = modpacks::import(&file, &log)?;
+                        let pack = modpacks::import_and_port(&file, resources.as_deref(), &log)?;
                         return Ok(format!(
-                            "{} is imported: it is listed above, ready to port.",
-                            pack.title()
+                            "{} Play it from the list above.",
+                            modpacks::outcome(&pack)
                         ));
                     }
                     let home = backend::game_home();
@@ -355,16 +417,17 @@ impl Launcher {
             .track_focus(&m.focus)
             .flex()
             .items_center()
+            .gap(px(10.))
             .w(px(320.))
-            .h(px(theme::FIELD))
+            .h(px(theme::FIELD + 4.))
             .px(px(12.))
             .overflow_hidden()
-            .rounded(px(theme::RADIUS))
-            .border_1()
-            .border_color(if focused { t.accent } else { t.rule })
-            .bg(t.surface)
+            .border_2()
+            .border_color(if focused { t.accent } else { t.outline })
+            .bg(t.well)
             .text_size(px(theme::UI.px))
             .cursor_text()
+            .child(blocks::icon("search", 18., t.muted))
             .child(if m.text.is_empty() && !focused {
                 div().text_color(t.muted).child("Search, then Enter")
             } else {
@@ -423,12 +486,15 @@ impl Launcher {
             &t,
         );
         let this = cx.entity().downgrade();
-        let kinds = segments("mods-kind", &KINDS, self.mods.kind, &t, {
+        let kinds = blocks::tabs("mods-kind", &KINDS, self.mods.kind, &t, {
             let this = this.clone();
             move |kind, _, cx| {
                 let _ = this.update(cx, |this, cx| {
                     if this.mods.kind != kind {
                         this.mods.kind = kind;
+                        // Categories and loaders differ by kind.
+                        this.mods.browse.filters = Default::default();
+                        this.mods.browse.open = None;
                         this.mods_search(0);
                     }
                     cx.notify();
@@ -455,29 +521,7 @@ impl Launcher {
             }));
         // CurseForge support is coming soon: shown, inert, never searched (like the Microsoft
         // account's "Coming soon").
-        let source_note = div()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap(px(8.))
-            .child(segments("mods-source", &SOURCES, self.mods.source, &t, {
-                let this = this.clone();
-                move |source, _, cx| {
-                    let _ = this.update(cx, |this, cx| {
-                        if this.mods.source != source {
-                            this.mods.source = source;
-                            this.mods_search(0);
-                        }
-                        cx.notify();
-                    });
-                }
-            }))
-            .child(disabled(button(
-                "mods-source-curseforge",
-                "CurseForge (coming soon)",
-                Kind::Ghost,
-                &t,
-            )));
+        let source_note = div().flex().child(source_switch(&t));
         let controls = div()
             .flex()
             .flex_col()
@@ -488,19 +532,44 @@ impl Launcher {
                     .flex_wrap()
                     .items_center()
                     .gap(px(12.))
-                    .child(kinds)
                     .child(self.mods_field(cx))
                     .child(toggle),
             )
-            .child(source_note);
-        let mut page = div()
-            .flex()
-            .flex_col()
-            .gap(px(32.))
-            .child(header)
-            .child(controls);
+            .child(source_note)
+            .child(self.mods_filters(cx));
+        // The kinds are inventory tabs on the panel that holds the open one.
+        let body = blocks::panel(&t).flex().flex_col().gap(px(24.)).p(px(20.));
+        let page = |body: Div| {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(32.))
+                .child(header)
+                .child(div().flex().flex_col().child(kinds).child(body))
+        };
+        if let Some(project) = self.mods_project_page(cx) {
+            return page(body.children(self.mods_busy_plate()).child(project));
+        }
+        let mut body = body.children(self.mods_busy_plate());
+        if self.mods.kind == PackKind::Modpack {
+            body = body
+                .child(self.imported_packs(cx))
+                .child(div().h(px(2.)).bg(t.rule))
+                .child(section_title("Browse modpacks", "search", &t));
+        }
+        body = body.child(controls);
+        if let Some(list) = self.mods_installed_list(cx) {
+            body = body.child(list);
+        }
+        page(body.child(self.mods_results(cx)))
+    }
+
+    /// The install under way and the last install's answer.
+    pub(super) fn mods_busy_plate(&self) -> Vec<Div> {
+        let t = self.theme;
+        let mut out = Vec::new();
         if let Some((_, line, f)) = &self.mods.busy {
-            page = page.child(
+            out.push(
                 plate(&t)
                     .flex()
                     .flex_col()
@@ -517,25 +586,17 @@ impl Launcher {
             );
         }
         match &self.mods.message {
-            Some(Ok(done)) => {
-                page = page.child(
-                    plate(&t)
-                        .p(px(16.))
-                        .text_size(px(theme::UI.px))
-                        .text_color(t.ink)
-                        .child(done.clone()),
-                )
-            }
-            Some(Err(e)) => page = page.child(notice(e.clone(), &t)),
+            Some(Ok(done)) => out.push(
+                plate(&t)
+                    .p(px(16.))
+                    .text_size(px(theme::UI.px))
+                    .text_color(t.ink)
+                    .child(done.clone()),
+            ),
+            Some(Err(e)) => out.push(notice(e.clone(), &t)),
             None => {}
         }
-        if self.mods.kind == PackKind::Modpack {
-            page = page.child(self.imported_packs(cx));
-        }
-        if let Some(list) = self.mods_installed_list(cx) {
-            page = page.child(list);
-        }
-        page.child(self.mods_results(cx))
+        out
     }
 
     fn mods_installed_list(&self, cx: &mut Context<Self>) -> Option<Div> {
@@ -551,7 +612,7 @@ impl Launcher {
             return None;
         }
         let busy = self.mods.busy.is_some();
-        let mut list = div().flex().flex_col().border_t_1().border_color(t.rule);
+        let mut list = div().flex().flex_col();
         for (i, e) in entries.into_iter().enumerate() {
             let key = (e.source, e.project.clone());
             let mut right = div().flex().items_center().gap(px(8.));
@@ -650,8 +711,10 @@ impl Launcher {
         )
     }
 
-    fn mods_results(&self, cx: &mut Context<Self>) -> Div {
+    fn mods_results(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
+        let found = self.mods.results.clone();
+        let icons: Vec<AnyElement> = found.iter().map(|p| self.mods_icon(p, 56.)).collect();
         let m = &self.mods;
         if let Some(e) = &m.error {
             return div().child(notice(e.clone(), &t));
@@ -667,7 +730,8 @@ impl Launcher {
             return centered(line, &t);
         }
         let busy = m.busy.as_ref().map(|b| b.0.as_str());
-        let mut list = div().flex().flex_col().border_t_1().border_color(t.rule);
+        let mut icons = icons.into_iter();
+        let mut list = div().flex().flex_col();
         for (i, p) in m.results.iter().enumerate() {
             let support = m.support(p);
             let checking = p.kind == PackKind::Mod
@@ -678,14 +742,14 @@ impl Launcher {
                 && p.support().installable();
             let color = match support {
                 Support::Works => t.success,
-                Support::Partial(_) => t.accent,
+                Support::Partial(_) => t.warn,
                 Support::No(_) => t.muted,
             };
-            let mut right = div()
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .child(caps(support.label()).flex_none().text_color(color));
+            let mut right = div().flex().items_center().gap(px(8.)).child(blocks::badge(
+                support.label(),
+                color,
+                &t,
+            ));
             let page_url = p.page.clone();
             if !page_url.is_empty() {
                 right = right.child(
@@ -746,9 +810,22 @@ impl Launcher {
                         .reason()
                         .map(|r| div().text_color(t.ink_soft).child(r.to_string())),
                 );
+            let open = p.clone();
+            let name = div()
+                .id(SharedString::from(format!("mods-open-{}", p.id)))
+                .flex()
+                .items_center()
+                .gap(px(12.))
+                .cursor_pointer()
+                .child(icons.next().expect("one icon per result"))
+                .child(div().hover(|s| s.underline()).child(p.title.clone()))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.mods_open(open.clone());
+                    cx.notify();
+                }));
             list = list.child(index_row(
                 i + 1,
-                p.title.clone(),
+                name,
                 Some(detail.into_any_element()),
                 Some(right.into_any_element()),
                 &t,
@@ -770,6 +847,24 @@ impl Launcher {
         }
         out
     }
+}
+
+/// The source switch while Modrinth is the only source: Modrinth chosen, CurseForge shown as
+/// coming soon and not clickable, like the Microsoft account's "Coming soon".
+fn source_switch(t: &Theme) -> Stateful<Div> {
+    let soon = div()
+        .flex()
+        .items_center()
+        .h(px(theme::SEGMENT))
+        .px(px(14.))
+        .pb(px(2.))
+        .opacity(theme::DISABLED)
+        .child(
+            blocks::pixel(14., FontWeight::MEDIUM)
+                .text_color(t.muted)
+                .child("CurseForge (coming soon)"),
+        );
+    segments("mods-source", &SOURCES, SourceId::Modrinth, t, |_, _, _| {}).child(soon)
 }
 
 #[cfg(test)]
