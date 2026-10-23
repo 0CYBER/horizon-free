@@ -59,6 +59,8 @@ pub struct EntityState {
     /// `Entity.getRequiresPrecisePosition` (primed TNT and falling blocks
     /// touching a block): moves are sent as full position syncs.
     pub precise: bool,
+    /// `Entity.needsSync`: send its changes this tick, due or not.
+    pub needs_sync: bool,
 }
 
 impl EntityState {
@@ -79,6 +81,7 @@ impl EntityState {
         self.equipment.clear();
         self.attributes.clear();
         self.precise = false;
+        self.needs_sync = false;
     }
 }
 
@@ -322,7 +325,7 @@ impl ServerEntity {
         // SynchedEntityData.isDirty: once for every client.
         let dirty = e.meta != self.meta;
         let due = self.interval != 0 && self.tick.is_multiple_of(self.interval);
-        if due || dirty {
+        if due || dirty || e.needs_sync {
             let rotation = (pack_degrees(e.pitch), pack_degrees(e.yaw));
             let turned = |a: i8, b: i8| (i32::from(a) - i32::from(b)).abs() >= 1;
             let rotate = self.arrow
@@ -398,7 +401,7 @@ impl ServerEntity {
             } else {
                 None
             };
-            if self.track_deltas {
+            if self.track_deltas || e.needs_sync {
                 let diff: f64 = (0..3)
                     .map(|k| (e.velocity[k] - self.velocity[k]).powi(2))
                     .sum();
@@ -859,6 +862,7 @@ mod tests {
             equipment: Vec::new(),
             attributes: Vec::new(),
             precise: false,
+            needs_sync: false,
         }
     }
 
@@ -920,6 +924,37 @@ mod tests {
         }
         let jump = changes(&mut s, &state(40.0));
         assert!(matches!(jump[0], play::Clientbound::EntityPositionSync(_)));
+    }
+
+    #[test]
+    fn a_knocked_back_mob_is_sent_at_once() {
+        let mut s = added(&state(0.0));
+        changes(&mut s, &state(0.0));
+        // Not due (tick 1 of 3), but LivingEntity.knockback set needsSync:
+        // its move and its new motion go out now.
+        let mut knocked = state(0.3);
+        knocked.velocity = [0.2, 0.3, 0.0];
+        knocked.needs_sync = true;
+        let out = changes(&mut s, &knocked);
+        assert!(
+            matches!(
+                out[..],
+                [
+                    play::Clientbound::SetEntityMotion(_),
+                    play::Clientbound::MoveEntityPos(_)
+                ]
+            ),
+            "{out:?}"
+        );
+        // Then every third tick again.
+        assert!(changes(&mut s, &state(0.5)).is_empty());
+        assert!(matches!(
+            changes(&mut s, &state(0.6))[..],
+            [
+                play::Clientbound::SetEntityMotion(_),
+                play::Clientbound::MoveEntityPos(_)
+            ]
+        ));
     }
 
     #[test]

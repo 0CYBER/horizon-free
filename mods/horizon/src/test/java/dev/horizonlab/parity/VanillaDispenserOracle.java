@@ -655,7 +655,8 @@ public final class VanillaDispenserOracle {
      */
     static List<String> respawnAt(VanillaBlockUpdateOracle.World w, BlockPos pos, JsonObject op) throws Exception {
         var config = new net.minecraft.server.level.ServerPlayer.RespawnConfig(
-            net.minecraft.world.level.storage.LevelData.RespawnData.of(w.dimension(), pos, 0.0F, 0.0F), op.get("forced").getAsBoolean());
+            net.minecraft.world.level.storage.LevelData.RespawnData.of(w.dimension(), pos,
+                op.has("yaw") ? op.get("yaw").getAsFloat() : 0.0F, 0.0F), op.get("forced").getAsBoolean());
         Method find = net.minecraft.server.level.ServerPlayer.class.getDeclaredMethod("findRespawnAndUseSpawnBlock",
             ServerLevel.class, net.minecraft.server.level.ServerPlayer.RespawnConfig.class, boolean.class);
         find.setAccessible(true);

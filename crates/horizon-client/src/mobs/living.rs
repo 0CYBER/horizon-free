@@ -832,6 +832,9 @@ impl Mob {
         };
     }
     pub fn jump_from_ground(&mut self, w: &MobWorld) {
+        // LivingEntity.jumpFromGround (and the rabbit's and cubes' own,
+        // which call it or do the same): needsSync.
+        self.needs_sync = true;
         if self.species() == super::Species::Rabbit {
             super::rabbit::jump(self, w);
             return;

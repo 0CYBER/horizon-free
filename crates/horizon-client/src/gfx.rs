@@ -357,8 +357,9 @@ pub struct Renderer {
     border_group: wgpu::BindGroup,
     border_uniform: wgpu::Buffer,
     border_vertices: wgpu::Buffer,
-    /// Screen effects: alpha-blended and vignette (`dst * (1 - src)`) pipelines.
-    screen_pipelines: [wgpu::RenderPipeline; 2],
+    /// Screen effects: alpha-blended, then vignette (`dst * (1 - src)`)
+    /// pipelines, each for every sampling (index `blend * 4 + sampling`).
+    screen_pipelines: [wgpu::RenderPipeline; 8],
     screen_buffer: wgpu::Buffer,
     screen_capacity: u64,
     entity_group: wgpu::BindGroup,
@@ -2001,37 +2002,52 @@ impl Renderer {
                 operation: wgpu::BlendOperation::Add,
             },
         };
-        let screen_pipelines =
-            [("fs_screen", alpha_blend), ("fs_vignette", vignette_blend)].map(|(entry, blend)| {
-                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: Some("Screen effects"),
-                    layout: Some(&entity_layout),
-                    vertex: wgpu::VertexState {
-                        module: &screen_shader,
-                        entry_point: Some("vs_screen"),
-                        compilation_options: Default::default(),
-                        buffers: &screen_vertex,
-                    },
-                    primitive: wgpu::PrimitiveState {
-                        cull_mode: None,
-                        ..Default::default()
-                    },
-                    depth_stencil: None,
-                    multisample: Default::default(),
-                    fragment: Some(wgpu::FragmentState {
-                        module: &screen_shader,
-                        entry_point: Some(entry),
-                        compilation_options: Default::default(),
-                        targets: &[Some(wgpu::ColorTargetState {
-                            format: config.format.remove_srgb_suffix(),
-                            blend: Some(blend),
-                            write_mask: wgpu::ColorWrites::ALL,
-                        })],
-                    }),
-                    multiview_mask: None,
-                    cache: None,
-                })
-            });
+        // One per blend and `.png.mcmeta` sampling (screen_effects::SAMPLE_*):
+        // the shader is specialised, so a pixel pays for none of the others.
+        let screen_pipelines: [wgpu::RenderPipeline; 8] = std::array::from_fn(|i| {
+            let (entry, blend) = if i & 4 == 0 {
+                ("fs_screen", alpha_blend)
+            } else {
+                ("fs_vignette", vignette_blend)
+            };
+            let on = |bit: u32| f64::from(u8::from(i as u32 & bit != 0));
+            let constants = [
+                ("BLUR", on(crate::screen_effects::SAMPLE_BLUR)),
+                ("CLAMP", on(crate::screen_effects::SAMPLE_CLAMP)),
+            ];
+            let compilation_options = wgpu::PipelineCompilationOptions {
+                constants: &constants,
+                ..Default::default()
+            };
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Screen effects"),
+                layout: Some(&entity_layout),
+                vertex: wgpu::VertexState {
+                    module: &screen_shader,
+                    entry_point: Some("vs_screen"),
+                    compilation_options: compilation_options.clone(),
+                    buffers: &screen_vertex,
+                },
+                primitive: wgpu::PrimitiveState {
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &screen_shader,
+                    entry_point: Some(entry),
+                    compilation_options,
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: config.format.remove_srgb_suffix(),
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        });
         let screen_capacity = 64;
         let screen_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Screen effect vertices"),
@@ -3911,11 +3927,11 @@ impl Renderer {
             pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
             pass.set_vertex_buffer(0, self.screen_buffer.slice(..));
             for (i, quad) in frame.screen.iter().enumerate() {
-                let pipeline = match quad.blend {
-                    crate::screen_effects::Blend::Alpha => &self.screen_pipelines[0],
-                    crate::screen_effects::Blend::Vignette => &self.screen_pipelines[1],
+                let blend = match quad.blend {
+                    crate::screen_effects::Blend::Alpha => 0,
+                    crate::screen_effects::Blend::Vignette => 4,
                 };
-                pass.set_pipeline(pipeline);
+                pass.set_pipeline(&self.screen_pipelines[blend + (quad.sampling & 3) as usize]);
                 pass.draw_indexed(0..6, (i * 4) as i32, 0..1);
             }
         }
