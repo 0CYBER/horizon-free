@@ -3707,9 +3707,15 @@ impl Renderer {
         } else {
             self.world_post.shadow_active = false;
         }
-        let scaled =
-            self.world_post
-                .prepare(&self.device, [self.config.width, self.config.height], pack);
+        let scaled = self.world_post.prepare(
+            &self.device,
+            [self.config.width, self.config.height],
+            pack,
+            world_post::Extras {
+                opaque_depth,
+                gbuffer,
+            },
+        );
         let (world_view, world_depth) = match &scaled {
             Some((color, depth)) => (color, depth),
             None => (&view_target, &self.depth),

@@ -244,6 +244,8 @@ struct Common {
 struct Bound {
     folder: usize,
     size: [u32; 2],
+    /// `world_post`'s targets it binds (`Post::generation`).
+    post_generation: u64,
     targets: BTreeMap<u32, Target>,
     depth: wgpu::TextureView,
     opaque_depth: wgpu::TextureView,
@@ -382,11 +384,9 @@ impl JavaStages {
     ) -> &wgpu::BindGroup {
         let dimension = (frame.dimension[0] as i32).clamp(-1, 1);
         let folder = self.folder_for[(dimension + 1) as usize].unwrap_or(0);
-        if self
-            .bound
-            .as_ref()
-            .is_none_or(|b| b.folder != folder || b.size != size)
-        {
+        if self.bound.as_ref().is_none_or(|b| {
+            b.folder != folder || b.size != size || b.post_generation != post.generation()
+        }) {
             self.bound = Some(self.bind(device, queue, folder, color, depth, size, post));
         }
         let now = std::time::Instant::now();
@@ -669,6 +669,7 @@ impl JavaStages {
         Bound {
             folder: folder_index,
             size,
+            post_generation: post.generation(),
             targets,
             depth,
             opaque_depth,

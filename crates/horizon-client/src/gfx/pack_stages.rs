@@ -129,12 +129,12 @@ pub struct PackStages {
     shadow_sampler: wgpu::Sampler,
     noise_view: wgpu::TextureView,
     passes: Vec<Pass>,
-    /// Built for this world target size.
+    /// Built for this world target size and `world_post` generation.
     targets: Vec<Target>,
     /// `world_post`'s bindings of the last stage's output.
     output: Option<wgpu::BindGroup>,
     world_size: [u32; 2],
-    shadow_size: u32,
+    post_generation: u64,
     started: std::time::Instant,
     last: Option<std::time::Instant>,
     frames: u32,
@@ -330,7 +330,7 @@ impl PackStages {
             targets: Vec::new(),
             output: None,
             world_size: [0, 0],
-            shadow_size: 0,
+            post_generation: u64::MAX,
             started: std::time::Instant::now(),
             last: None,
             frames: 0,
@@ -355,11 +355,11 @@ impl PackStages {
         eye_light: [u8; 2],
     ) -> &wgpu::BindGroup {
         if self.world_size != size
-            || self.shadow_size != post.shadow_resolution
+            || self.post_generation != post.generation()
             || self.targets.len() != self.passes.len()
         {
             self.world_size = size;
-            self.shadow_size = post.shadow_resolution;
+            self.post_generation = post.generation();
             self.targets.clear();
             for pass in &self.passes {
                 let target_size = size.map(|v| ((v as f32 * pass.scale).round() as u32).max(1));

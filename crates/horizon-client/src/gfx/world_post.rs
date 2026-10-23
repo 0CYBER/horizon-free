@@ -102,18 +102,31 @@ struct GbufferUniform {
     env: [f32; 4],
 }
 
+/// What the frame's shader pack reads beyond the world's colour and depth:
+/// `Post` keeps these targets only while one does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Extras {
+    pub opaque_depth: bool,
+    pub gbuffer: bool,
+}
+
 struct WorldTarget {
     size: [u32; 2],
+    extras: Extras,
     color: wgpu::TextureView,
     depth_tex: wgpu::Texture,
     depth: wgpu::TextureView,
-    opaque_depth_tex: wgpu::Texture,
-    opaque_depth: wgpu::TextureView,
-    normal: wgpu::TextureView,
-    material: wgpu::TextureView,
-    gbuffer_group: wgpu::BindGroup,
+    /// With `extras.opaque_depth` or `extras.gbuffer` (which reads it).
+    opaque_depth: Option<(wgpu::Texture, wgpu::TextureView)>,
+    gbuffer: Option<Gbuffer>,
     group: wgpu::BindGroup,
     opaque_captured: bool,
+}
+
+struct Gbuffer {
+    normal: wgpu::TextureView,
+    material: wgpu::TextureView,
+    group: wgpu::BindGroup,
 }
 
 struct ShadowTarget {
@@ -136,6 +149,8 @@ pub struct Post {
     pub antialias: bool,
     target: Option<WorldTarget>,
     shadow: Option<ShadowTarget>,
+    /// Bumped whenever a target is made: bindings of the old ones are stale.
+    generation: u64,
     fallback_shadow: wgpu::TextureView,
     fallback_color: wgpu::TextureView,
     pub shadow_view: Mat4,
@@ -363,6 +378,7 @@ impl Post {
             antialias: false,
             target: None,
             shadow: None,
+            generation: 0,
             fallback_shadow,
             fallback_color,
             shadow_view: Mat4::IDENTITY,
@@ -374,12 +390,14 @@ impl Post {
     }
 
     /// The world's colour and depth targets this frame, or `None` to draw
-    /// it straight to the screen. `pack`: a shader pack runs this frame.
+    /// it straight to the screen. `pack`: a shader pack runs this frame,
+    /// reading `extras`.
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
         window: [u32; 2],
         pack: bool,
+        extras: Extras,
     ) -> Option<(wgpu::TextureView, wgpu::TextureView)> {
         if self.scale == 1.0 && !self.antialias && !pack {
             self.target = None;
@@ -387,7 +405,12 @@ impl Post {
             return None;
         }
         let size = window.map(|v| ((v as f32 * self.scale).round() as u32).clamp(1, 8192));
-        if self.target.as_ref().is_none_or(|t| t.size != size) {
+        if self
+            .target
+            .as_ref()
+            .is_none_or(|t| t.size != size || t.extras != extras)
+        {
+            self.generation += 1;
             let extent = wgpu::Extent3d {
                 width: size[0],
                 height: size[1],
@@ -419,63 +442,69 @@ impl Post {
                     | wgpu::TextureUsages::COPY_SRC,
             );
             let depth = depth_tex.create_view(&Default::default());
-            let opaque_depth_tex = make_tex(
-                "Opaque world depth",
-                wgpu::TextureFormat::Depth32Float,
-                wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_DST,
-            );
-            let opaque_depth = opaque_depth_tex.create_view(&Default::default());
-            let normal = make_tex(
-                "World G-buffer normal",
-                wgpu::TextureFormat::Rgba8Unorm,
-                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            )
-            .create_view(&Default::default());
-            let material = make_tex(
-                "World G-buffer material",
-                wgpu::TextureFormat::Rgba8Unorm,
-                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            )
-            .create_view(&Default::default());
-            let gbuffer_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Horizon gbuffer"),
-                layout: &self.gbuffer_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&color),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&depth),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::TextureView(&opaque_depth),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: wgpu::BindingResource::Sampler(&self.nearest),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 4,
-                        resource: self.gbuffer_uniform.as_entire_binding(),
-                    },
-                ],
+            let opaque_depth = (extras.opaque_depth || extras.gbuffer).then(|| {
+                let tex = make_tex(
+                    "Opaque world depth",
+                    wgpu::TextureFormat::Depth32Float,
+                    wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                );
+                let view = tex.create_view(&Default::default());
+                (tex, view)
             });
+            let gbuffer = opaque_depth
+                .as_ref()
+                .filter(|_| extras.gbuffer)
+                .map(|(_, opaque)| {
+                    let color_target = |label| {
+                        make_tex(
+                            label,
+                            wgpu::TextureFormat::Rgba8Unorm,
+                            wgpu::TextureUsages::RENDER_ATTACHMENT
+                                | wgpu::TextureUsages::TEXTURE_BINDING,
+                        )
+                        .create_view(&Default::default())
+                    };
+                    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("Horizon gbuffer"),
+                        layout: &self.gbuffer_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(&color),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::TextureView(&depth),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: wgpu::BindingResource::TextureView(opaque),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 3,
+                                resource: wgpu::BindingResource::Sampler(&self.nearest),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 4,
+                                resource: self.gbuffer_uniform.as_entire_binding(),
+                            },
+                        ],
+                    });
+                    Gbuffer {
+                        normal: color_target("World G-buffer normal"),
+                        material: color_target("World G-buffer material"),
+                        group,
+                    }
+                });
             let group = self.bind(device, &color);
             self.target = Some(WorldTarget {
                 size,
+                extras,
                 color,
                 depth_tex,
                 depth,
-                opaque_depth_tex,
                 opaque_depth,
-                normal,
-                material,
-                gbuffer_group,
+                gbuffer,
                 group,
                 opaque_captured: false,
             });
@@ -523,6 +552,7 @@ impl Post {
                 })
                 .create_view(&Default::default());
             self.shadow = Some(ShadowTarget { resolution, depth });
+            self.generation += 1;
         }
         let light_dir = if sun_dir.y >= -0.05 {
             sun_dir.normalize_or_zero()
@@ -557,16 +587,19 @@ impl Post {
     /// right before translucent water and weather draw.
     pub fn capture_opaque_depth(&mut self, encoder: &mut wgpu::CommandEncoder) {
         let Some(t) = &mut self.target else { return };
+        let Some((opaque, _)) = &t.opaque_depth else {
+            return;
+        };
         encoder.copy_texture_to_texture(
             t.depth_tex.as_image_copy(),
-            t.opaque_depth_tex.as_image_copy(),
+            opaque.as_image_copy(),
             t.depth_tex.size(),
         );
         t.opaque_captured = true;
     }
 
     /// Reconstruct the G-buffer `normal` and `material` textures after the
-    /// world pass finishes.
+    /// world pass finishes (with `Extras::gbuffer`).
     pub fn build_gbuffer(
         &mut self,
         queue: &wgpu::Queue,
@@ -575,15 +608,11 @@ impl Post {
         eye_light: [u8; 2],
         wetness: f32,
     ) {
-        let Some(t) = &mut self.target else { return };
-        if !t.opaque_captured {
-            encoder.copy_texture_to_texture(
-                t.depth_tex.as_image_copy(),
-                t.opaque_depth_tex.as_image_copy(),
-                t.depth_tex.size(),
-            );
-            t.opaque_captured = true;
+        if !self.target.as_ref().is_some_and(|t| t.opaque_captured) {
+            self.capture_opaque_depth(encoder);
         }
+        let Some(t) = &self.target else { return };
+        let Some(gbuffer) = &t.gbuffer else { return };
         let [w, h] = t.size.map(|v| v.max(1) as f32);
         let uniform = GbufferUniform {
             inverse_view: frame.inverse_view,
@@ -599,7 +628,7 @@ impl Post {
         queue.write_buffer(&self.gbuffer_uniform, 0, bytemuck::bytes_of(&uniform));
         let attachments = [
             Some(wgpu::RenderPassColorAttachment {
-                view: &t.normal,
+                view: &gbuffer.normal,
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
@@ -608,7 +637,7 @@ impl Post {
                 },
             }),
             Some(wgpu::RenderPassColorAttachment {
-                view: &t.material,
+                view: &gbuffer.material,
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
@@ -623,7 +652,7 @@ impl Post {
             ..Default::default()
         });
         pass.set_pipeline(&self.gbuffer_pipeline);
-        pass.set_bind_group(0, &t.gbuffer_group, &[]);
+        pass.set_bind_group(0, &gbuffer.group, &[]);
         pass.draw(0..3, 0..1);
     }
 
@@ -632,25 +661,37 @@ impl Post {
         self.target.as_ref().map(|t| t.size)
     }
 
-    /// The depth before translucent geometry (`capture_opaque_depth`).
+    /// Changes whenever `prepare` or `prepare_shadow` makes new targets:
+    /// bindings made from the views below must be made again.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// The depth before translucent geometry (`capture_opaque_depth`), or
+    /// the world's depth when nothing reads it.
     pub fn opaque_depth(&self) -> &wgpu::TextureView {
-        self.target
-            .as_ref()
-            .map_or(&self.fallback_shadow, |t| &t.opaque_depth)
+        match &self.target {
+            Some(WorldTarget {
+                opaque_depth: Some((_, view)),
+                ..
+            }) => view,
+            Some(t) => &t.depth,
+            None => &self.fallback_shadow,
+        }
     }
 
     /// Reconstructed world-space normals (`scene_normal`).
     pub fn normal(&self) -> &wgpu::TextureView {
-        self.target
-            .as_ref()
-            .map_or(&self.fallback_color, |t| &t.normal)
+        self.gbuffer().map_or(&self.fallback_color, |g| &g.normal)
     }
 
     /// Reconstructed material and light (`scene_material`).
     pub fn material(&self) -> &wgpu::TextureView {
-        self.target
-            .as_ref()
-            .map_or(&self.fallback_color, |t| &t.material)
+        self.gbuffer().map_or(&self.fallback_color, |g| &g.material)
+    }
+
+    fn gbuffer(&self) -> Option<&Gbuffer> {
+        self.target.as_ref()?.gbuffer.as_ref()
     }
 
     /// The sun/moon shadow map (`shadow_depth` of api 2 packs).
