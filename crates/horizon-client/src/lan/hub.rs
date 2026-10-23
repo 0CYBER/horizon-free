@@ -1559,6 +1559,7 @@ impl Hub {
             velocity: [0.0; 3],
             data: 0,
             meta,
+            defaults: Vec::new(),
             equipment,
             attributes,
             precise: false,

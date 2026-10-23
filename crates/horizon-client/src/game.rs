@@ -121,6 +121,7 @@ mod pumpkin;
 mod raids;
 mod recipe_book;
 mod remote;
+mod remote_mob_data;
 mod remote_objects;
 mod remote_projectiles;
 mod remote_stations;

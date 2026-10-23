@@ -50,6 +50,10 @@ pub struct EntityState {
     pub data: i32,
     /// SynchedEntityData entries that differ from the defaults.
     pub meta: Vec<(u8, i32, Value)>,
+    /// The defaults of entries `meta` leaves out while they are at them,
+    /// sent when one goes back to its default (a calf grown up, a mob healed
+    /// back to 1, wool grown back white) beyond Entity's own below.
+    pub defaults: Vec<(u8, i32, Value)>,
     /// EquipmentSlot ordinals (0 main hand, 1 off hand, 2 feet, 3 legs,
     /// 4 chest, 5 head, 6 body, 7 saddle) and their stacks.
     pub equipment: Vec<(u8, Option<Stack>)>,
@@ -78,6 +82,7 @@ impl EntityState {
         self.velocity = [0.0; 3];
         self.data = 0;
         self.meta.clear();
+        self.defaults.clear();
         self.equipment.clear();
         self.attributes.clear();
         self.precise = false;
@@ -469,7 +474,10 @@ impl ServerEntity {
                     (0, serializer::BYTE) => Value::Byte(0),
                     (6, serializer::POSE) => Value::Id(0),
                     (14, serializer::OPTIONAL_BLOCK_POS) => Value::OptPos(None),
-                    _ => continue,
+                    _ => match e.defaults.iter().find(|d| (d.0, d.1) == (*index, *kind)) {
+                        Some(d) => d.2.clone(),
+                        None => continue,
+                    },
                 };
                 if !e.meta.iter().any(|m| m.0 == *index) {
                     changed.push((*index, *kind, default));
@@ -855,6 +863,7 @@ mod tests {
             velocity: [0.0; 3],
             data: 0,
             meta: Vec::new(),
+            defaults: Vec::new(),
             equipment: Vec::new(),
             attributes: Vec::new(),
             precise: false,
@@ -1071,6 +1080,29 @@ mod tests {
                 (0, serializer::BYTE, Value::Byte(0)),
                 (6, serializer::POSE, Value::Id(0)),
             ]
+        );
+        assert!(changes(&mut s, &e).is_empty());
+    }
+
+    #[test]
+    fn a_value_back_at_a_listed_default_is_sent() {
+        let mut e = state(0.0);
+        e.defaults = vec![(16, serializer::BOOLEAN, Value::Bool(false))];
+        // A calf: paired with its baby flag, then grown up.
+        e.meta = vec![(16, serializer::BOOLEAN, Value::Bool(true))];
+        let mut s = added(&e);
+        changes(&mut s, &e);
+        e.meta.clear();
+        let data = changes(&mut s, &e)
+            .into_iter()
+            .find_map(|p| match p {
+                play::Clientbound::SetEntityData(d) => Some(d),
+                _ => None,
+            })
+            .expect("growing up is sent");
+        assert_eq!(
+            data.values,
+            vec![(16, serializer::BOOLEAN, Value::Bool(false))]
         );
         assert!(changes(&mut s, &e).is_empty());
     }

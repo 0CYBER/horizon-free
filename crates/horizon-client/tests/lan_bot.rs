@@ -430,6 +430,7 @@ fn guests_see_each_other_and_the_world_entities() {
         velocity: [0.0; 3],
         data: 0,
         meta: Vec::new(),
+        defaults: Vec::new(),
         equipment: Vec::new(),
         attributes: Vec::new(),
         precise: false,
