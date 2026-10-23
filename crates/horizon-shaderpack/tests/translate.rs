@@ -368,6 +368,78 @@ void main() {
     reparse(&fs.wgsl).unwrap();
 }
 
+/// What Photon, Chocapic13', MakeUp Ultra Fast and Bliss write and GL takes:
+/// lookups without a level in a vertex shader, a struct passed between
+/// stages, `textureGather`, a `bool` given to `vec3(..)`, `const in`
+/// parameters and an array field in a struct built by its constructor.
+#[test]
+fn legalises_what_photon_and_chocapic_write() {
+    let mut link = Link::default();
+    let header = "uniform sampler2D colortex0;
+uniform sampler2DShadow shadowtex0;
+struct Clouds { float coverage; vec2 wind; mat3 turn; int layers; };
+";
+    let vs = run(
+        Stage::Vertex,
+        &format!(
+            "{header}flat varying Clouds clouds;
+void main() {{
+    clouds.coverage = texture2D(colortex0, vec2(0.5)).r + shadow2D(shadowtex0, vec3(0.5)).r;
+    clouds.wind = textureOffset(colortex0, vec2(0.5), ivec2(1, 0), 2.0).rg;
+    clouds.turn = mat3(1.0);
+    clouds.layers = 2;
+    gl_Position = ftransform();
+}}
+"
+        ),
+        &mut link,
+    )
+    .unwrap();
+    for wanted in [
+        "textureLod(sampler2D(colortex0_t",
+        "vec2(0.5), 0.)",
+        "textureLodOffset(sampler2D(colortex0_t",
+        "clouds_iriscoverage = clouds.coverage;",
+        "clouds_iristurn_iris1 = clouds.turn[1];",
+    ] {
+        assert!(vs.glsl.contains(wanted), "{wanted}\n{}", vs.glsl);
+    }
+    reparse(&vs.wgsl).unwrap();
+    let fs = run(
+        Stage::Fragment,
+        &format!(
+            "{header}flat varying Clouds clouds;
+struct Spline {{ float slope; float[3] coeffs; }};
+float edge(const in float x, const float r) {{ return float(x < r); }}
+void main() {{
+    const Spline spline = Spline(0.0, float[3](1.0, 2.0, 3.0));
+    vec4 four = textureGather(colortex0, vec2(0.5), 1);
+    vec3 disc = vec3(clouds.coverage < 0.5);
+    vec2 cell = vec2(0.0);
+    float part = modf(clouds.coverage * 4.0, cell.y);
+    gl_FragColor = vec4(disc * edge(four.x, spline.coeffs[1]), clouds.wind.x + float(clouds.layers) + part + cell.y);
+}}
+"
+        ),
+        &mut link,
+    )
+    .unwrap();
+    for wanted in [
+        "iris_gather(colortex0_t",
+        "clouds.coverage = clouds_iriscoverage;",
+        "float edge(in float x, float r)",
+        "cell.y = trunc(",
+    ] {
+        assert!(fs.glsl.contains(wanted), "{wanted}\n{}", fs.glsl);
+    }
+    reparse(&fs.wgsl).unwrap();
+    // The vertex program's outputs are the fragment program's inputs.
+    assert_eq!(
+        io(&vs, true).get("clouds_iriswind"),
+        io(&fs, false).get("clouds_iriswind")
+    );
+}
+
 /// A fragment output narrower than its four-channel target (Steadfast's
 /// `final` writes `out vec3 color`) is written through a `vec4` with alpha 1:
 /// GL fills the missing channels, wgpu refuses the pipeline.
