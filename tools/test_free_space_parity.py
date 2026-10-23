@@ -64,7 +64,7 @@ def main():
     sources = [oracle, *helpers, Path(__file__), lab.ROOT/'tools/test_rust_parity.py',
                lab.ROOT/'tools/test_worldgen_parity.py', lab.ROOT/'tools/lab.py',
                lab.ROOT/'Cargo.toml', lab.ROOT/'Cargo.lock',
-               lab.ROOT/'crates/horizon-world/examples/registry_collision_scan_fixture.rs']
+               lab.ROOT/'crates/horizon-world/examples/probe/registry_collision_scan_fixture.rs']
     for crate in ['horizon-core', 'horizon-world']:
         sources += [lab.ROOT/'crates'/crate/'Cargo.toml',
                     *sorted((lab.ROOT/'crates'/crate/'src').rglob('*.rs'))]
@@ -94,10 +94,10 @@ def main():
     fixture_paths = [build/name for name in ['inputs.txt', 'facts.json', 'definitions.json',
                                             'block-registry.nbt', 'cached-collision.nbt', 'tags.json']]
     fixtures = base.source_hashes(fixture_paths)
-    run(['cargo', 'build', '--locked', '--release', '-p', 'horizon-world', '--example', 'registry_collision_scan_fixture'], 'compile-rust')
+    run(['cargo', 'build', '--locked', '--release', '-p', 'horizon-world', '--example', 'probe'], 'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1'], cwd=lab.ROOT))
-    binary = Path(metadata['target_directory'])/'release/examples'/('registry_collision_scan_fixture.exe' if os.name=='nt' else 'registry_collision_scan_fixture')
-    run([binary, build], 'rust');references = []
+    binary = Path(metadata['target_directory'])/'release/examples'/('probe.exe' if os.name=='nt' else 'probe')
+    run([binary, 'registry_collision_scan_fixture', build], 'rust');references = []
     for side, jar in jars.items():
         java(side, side)
         matched = base.compare(build/(side+'.txt'), build/'rust.txt')

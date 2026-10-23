@@ -79,6 +79,15 @@ impl Game<'_> {
                 self.rockets
                     .push(super::fireworks::Rocket::remote(id, at, velocity));
             }
+            "minecraft:splash_potion"
+            | "minecraft:lingering_potion"
+            | "minecraft:experience_bottle" => {
+                self.potions.add_remote_thrown(id, kind, at, velocity);
+            }
+            "minecraft:eye_of_ender" => {
+                self.end
+                    .add_remote_eye(id, position, [velocity.x, velocity.y, velocity.z])
+            }
             "minecraft:end_crystal" => self.crystals.push(super::dragon::Crystal {
                 id,
                 position: at,
@@ -105,6 +114,17 @@ impl Game<'_> {
     /// `handleSetEntityData` for these types: what changes how they look.
     pub(super) fn remote_projectile_data(&mut self, id: i32, values: &[(u8, i32, Value)]) {
         let id = id as u32;
+        if self.potions.has_thrown(id) {
+            // ThrowableItemProjectile.DATA_ITEM_STACK: the potion it is.
+            for (index, _, value) in values {
+                if let (8, Value::Item(stack)) = (index, value)
+                    && let Some(stack) = self.to_stack(stack)
+                {
+                    self.potions.remote_thrown_item(id, stack);
+                }
+            }
+            return;
+        }
         for (index, _, value) in values {
             if let Some(t) = self.tnts.iter_mut().find(|t| t.id == id) {
                 // PrimedTnt.DATA_FUSE_ID.
@@ -184,6 +204,11 @@ impl Game<'_> {
             c.time += 1;
             c.position = step(c.id, c.position);
         }
+        self.potions.step_remote_thrown(&mut step);
+        self.end.step_remote_eyes(|id, at| {
+            let at = step(id, Vec3::new(at[0], at[1], at[2]));
+            [at.x, at.y, at.z]
+        });
     }
 
     pub(super) fn remove_remote_projectile(&mut self, id: u32) {
@@ -193,6 +218,8 @@ impl Game<'_> {
         self.tridents.retain(|t| t.id != id);
         self.rockets.retain(|r| r.id != id);
         self.crystals.retain(|c| c.id != id);
+        self.potions.remove_remote_thrown(id);
+        self.end.remove_remote_eye(id);
     }
 
     /// Every one a server sent (a new connection, level or dimension).
@@ -203,6 +230,8 @@ impl Game<'_> {
         self.tridents.clear();
         self.rockets.clear();
         self.crystals.clear();
+        self.potions.clear_thrown();
+        self.end.clear_remote_eyes();
     }
 
     /// Their kind and place, for `status`.
@@ -224,6 +253,12 @@ impl Game<'_> {
         }
         for p in &self.creatures.projectiles {
             out.push(json!({"id": p.id, "kind": format!("{:?}", p.kind).split([' ', '{']).next().unwrap_or(""), "position": at(p.position)}));
+        }
+        for (kind, p, _) in self.potions.thrown_entities() {
+            out.push(json!({"kind": kind, "position": at(p)}));
+        }
+        for (id, p) in self.end.eye_positions() {
+            out.push(json!({"id": id, "kind": "minecraft:eye_of_ender", "position": p}));
         }
         out
     }

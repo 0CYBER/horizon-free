@@ -7,7 +7,7 @@ use crate::{
         Vec3d, Writer,
     },
     chunk::{ChunkData, LightData},
-    entity_data::{EntityData, Value},
+    entity_data::{EntityData, Particle, Value},
     item::{Hashed, HashedSlot, Slot, Stack},
     packet, packet_enum,
     packets::{
@@ -883,6 +883,116 @@ impl Codec<SetObjective> for SetObjective {
         }
     }
 }
+/// ClientboundLevelParticlesPacket: a particle, whether it ignores the
+/// client's particle setting (`overrideLimiter`) and its distance limit
+/// (`alwaysShow`), where, the spread and the speed on each axis, how many
+/// (0: one, moving by speed times spread) and the randomization type
+/// (0 default: gaussian spread and speed).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LevelParticles {
+    pub particle: Particle,
+    pub override_limiter: bool,
+    pub always_show: bool,
+    pub pos: [f64; 3],
+    pub dist: [f32; 3],
+    pub max_speed: [f32; 3],
+    pub count: i32,
+    pub randomization: i32,
+}
+impl Codec<LevelParticles> for LevelParticles {
+    fn read(r: &mut Reader) -> Result<Self> {
+        Ok(Self {
+            particle: Particle::read(r)?,
+            override_limiter: r.bool()?,
+            always_show: r.bool()?,
+            pos: Vec3d::read(r)?,
+            dist: [r.f32()?, r.f32()?, r.f32()?],
+            max_speed: [r.f32()?, r.f32()?, r.f32()?],
+            count: r.varint()?,
+            randomization: r.varint()?,
+        })
+    }
+    fn write(v: &Self, w: &mut Writer) {
+        v.particle.write(w);
+        w.bool(v.override_limiter);
+        w.bool(v.always_show);
+        Vec3d::write(&v.pos, w);
+        for f in v.dist.iter().chain(&v.max_speed) {
+            w.f32(*f);
+        }
+        w.varint(v.count);
+        w.varint(v.randomization);
+    }
+}
+/// `ExplosionParticleInfo` in a `WeightedList`: a particle the blast
+/// scatters, its scaling and speed, then its weight.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExplosionParticle {
+    pub particle: Particle,
+    pub scaling: f32,
+    pub speed: f32,
+    pub weight: i32,
+}
+/// ClientboundExplodePacket: the centre, radius and blocks destroyed, the
+/// push the receiving player takes, the particle at the centre, the sound,
+/// the particles the blast scatters, and whether the sound plays.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Explode {
+    pub center: [f64; 3],
+    pub radius: f32,
+    pub block_count: i32,
+    pub knockback: Option<[f64; 3]>,
+    pub particle: Particle,
+    pub sound: (i32, Option<(String, Option<f32>)>),
+    pub block_particles: Vec<ExplosionParticle>,
+    pub play_sound: bool,
+}
+impl Codec<Explode> for Explode {
+    fn read(r: &mut Reader) -> Result<Self> {
+        let center = Vec3d::read(r)?;
+        let radius = r.f32()?;
+        let block_count = r.i32()?;
+        let knockback = <Opt<Vec3d>>::read(r)?;
+        let particle = Particle::read(r)?;
+        let sound = SoundHolder::read(r)?;
+        let n = r.varint()?;
+        let mut block_particles = Vec::new();
+        for _ in 0..n {
+            block_particles.push(ExplosionParticle {
+                particle: Particle::read(r)?,
+                scaling: r.f32()?,
+                speed: r.f32()?,
+                weight: r.varint()?,
+            });
+        }
+        Ok(Self {
+            center,
+            radius,
+            block_count,
+            knockback,
+            particle,
+            sound,
+            block_particles,
+            play_sound: r.bool()?,
+        })
+    }
+    fn write(v: &Self, w: &mut Writer) {
+        Vec3d::write(&v.center, w);
+        w.f32(v.radius);
+        w.i32(v.block_count);
+        <Opt<Vec3d>>::write(&v.knockback, w);
+        v.particle.write(w);
+        SoundHolder::write(&v.sound, w);
+        w.varint(v.block_particles.len() as i32);
+        for b in &v.block_particles {
+            b.particle.write(w);
+            w.f32(b.scaling);
+            w.f32(b.speed);
+            w.varint(b.weight);
+        }
+        w.bool(v.play_sound);
+    }
+}
 /// `ClientboundSetPlayerTeamPacket.Parameters`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TeamParameters {
@@ -1566,6 +1676,8 @@ packet_enum!(Clientbound, crate::ids::play::clientbound {
     TickingStep(TickingStep) = TICKING_STEP,
     UpdateAdvancements(UpdateAdvancements) = UPDATE_ADVANCEMENTS,
     UpdateAttributes(UpdateAttributes) = UPDATE_ATTRIBUTES,
+    LevelParticles(LevelParticles) = LEVEL_PARTICLES,
+    Explode(Explode) = EXPLODE,
     UpdateMobEffect(UpdateMobEffect) = UPDATE_MOB_EFFECT,
     UpdateTags(UpdateTags) = UPDATE_TAGS,
     TrackedWaypoint(TrackedWaypoint) = WAYPOINT,
@@ -2270,6 +2382,34 @@ mod tests {
                 passengers: vec![3, 300],
             }),
             Clientbound::SetEntityLink(SetEntityLink { source: 2, dest: 0 }),
+            Clientbound::LevelParticles(LevelParticles {
+                particle: Particle {
+                    id: 21,
+                    data: Some(crate::entity_data::ParticleData::ColorScale(0xFF0000, 1.5)),
+                },
+                override_limiter: true,
+                always_show: false,
+                pos: [0.5, 101.0, 3.0],
+                dist: [0.2, 0.0, 0.2],
+                max_speed: [0.0; 3],
+                count: 60,
+                randomization: 0,
+            }),
+            Clientbound::Explode(Explode {
+                center: [1.0, 2.0, 3.0],
+                radius: 4.0,
+                block_count: 12,
+                knockback: Some([0.5, 0.1, 0.0]),
+                particle: Particle { id: 29, data: None },
+                sound: (-1, Some(("minecraft:entity.generic.explode".into(), None))),
+                block_particles: vec![ExplosionParticle {
+                    particle: Particle { id: 69, data: None },
+                    scaling: 0.5,
+                    speed: 1.0,
+                    weight: 1,
+                }],
+                play_sound: true,
+            }),
             Clientbound::ProjectilePower(ProjectilePower { id: 4, power: 0.1 }),
             Clientbound::SetEquipment(SetEquipment {
                 id: 2,

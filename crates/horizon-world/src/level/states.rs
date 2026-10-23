@@ -348,10 +348,4 @@ impl StateTable {
         }
         result
     }
-    pub fn property_names(&self, block: BlockId) -> impl Iterator<Item = &str> {
-        self.info(block)
-            .slots
-            .iter()
-            .map(|slot| self.key_names[slot.key.0 as usize].as_str())
-    }
 }

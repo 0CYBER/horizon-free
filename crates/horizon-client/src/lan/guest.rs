@@ -15,7 +15,6 @@ use std::{
 /// GameType ids.
 pub const SURVIVAL: i32 = 0;
 pub const CREATIVE: i32 = 1;
-pub const ADVENTURE: i32 = 2;
 pub const SPECTATOR: i32 = 3;
 
 /// The body state a player's file keeps that lives on `PlayerMotion`.
@@ -243,6 +242,8 @@ pub struct Guest {
     pub advancements_loaded: bool,
     pub advancements_visible: Vec<bool>,
     pub advancements_changed: std::collections::BTreeSet<usize>,
+    /// The server's scoreboard as this player's client has it (lan/scoreboard.rs).
+    pub scoreboard: super::scoreboard::View,
     /// Recipes unlocked since the client was last told
     /// (`ServerRecipeBook.addRecipes` sends them).
     pub recipes_unlocked: Vec<String>,
@@ -355,6 +356,7 @@ impl Guest {
             advancements_loaded: false,
             advancements_visible: Vec::new(),
             advancements_changed: Default::default(),
+            scoreboard: Default::default(),
             recipes_unlocked: Vec::new(),
         }
     }
