@@ -390,6 +390,8 @@ impl Game<'_> {
                     "placed": g.placed,
                     "loaded": g.loaded,
                     "game_mode": g.game_mode,
+                    // ItemCooldowns: the ticks the shield an axe disabled stays down.
+                    "shield_cooldown": h.play.get(&g.conn).map_or(0, |p| p.shield_cooldown),
                     "sneaking": g.sneaking,
                     "sleeping": g.bed,
                     "health": g.health,

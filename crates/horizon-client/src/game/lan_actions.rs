@@ -34,6 +34,8 @@ pub(super) struct GuestPlay {
     destroy_delay: u32,
     using: Option<(usize, u32)>,
     use_delay: u32,
+    /// The shield's ItemCooldowns entry: an axe disabled it for this many ticks.
+    pub(super) shield_cooldown: u32,
     attack_ticks: u32,
     /// The main hand's item at the guest's last tick (`Game::attack_item`).
     attack_item: Option<std::sync::Arc<str>>,
@@ -117,6 +119,7 @@ pub(super) struct GuestSwap {
     destroy_delay: u32,
     using: Option<(usize, u32)>,
     use_delay: u32,
+    pub(super) shield_cooldown: u32,
     attack_ticks: u32,
     attack_item: Option<std::sync::Arc<str>>,
     swing: horizon_client::first_person::SwingState,
@@ -290,6 +293,7 @@ impl Game<'_> {
         let destroy_delay = std::mem::replace(&mut self.destroy_delay, play.destroy_delay);
         let using = std::mem::replace(&mut self.using, play.using.take());
         let use_delay = std::mem::replace(&mut self.use_delay, play.use_delay);
+        let shield_cooldown = std::mem::replace(&mut self.shield_cooldown, play.shield_cooldown);
         let attack_ticks = std::mem::replace(&mut self.attack_ticks, play.attack_ticks);
         let attack_item = std::mem::replace(&mut self.attack_item, play.attack_item.take());
         let swing = std::mem::replace(&mut self.swing, play.swing);
@@ -369,6 +373,7 @@ impl Game<'_> {
             destroy_delay,
             using,
             use_delay,
+            shield_cooldown,
             attack_ticks,
             attack_item,
             swing,
@@ -421,6 +426,7 @@ impl Game<'_> {
             destroy_delay,
             using,
             use_delay,
+            shield_cooldown,
             attack_ticks,
             attack_item,
             swing,
@@ -480,6 +486,7 @@ impl Game<'_> {
         play.destroy_delay = std::mem::replace(&mut self.destroy_delay, destroy_delay);
         play.using = std::mem::replace(&mut self.using, using);
         play.use_delay = std::mem::replace(&mut self.use_delay, use_delay);
+        play.shield_cooldown = std::mem::replace(&mut self.shield_cooldown, shield_cooldown);
         play.attack_ticks = std::mem::replace(&mut self.attack_ticks, attack_ticks);
         play.attack_item = std::mem::replace(&mut self.attack_item, attack_item);
         play.swing = std::mem::replace(&mut self.swing, swing);
@@ -1562,6 +1569,9 @@ impl Game<'_> {
                 continue;
             }
             let play = host.play.entry(conn).or_default();
+            // Player.tick's ItemCooldowns.tick, once a tick for each player
+            // (the shield an axe disabled).
+            play.shield_cooldown = play.shield_cooldown.saturating_sub(1);
             let digging = play.digging;
             let using = play.using.is_some();
             let delayed = play.destroy_delay > 0 || play.use_delay > 0 || play.attack_ticks < 100;
@@ -1616,6 +1626,9 @@ impl Game<'_> {
             self.guest_dig_feedback(host, conn);
             self.guest_pickups(host, gi);
             self.guest_orbs(host, gi);
+            if host.hub.guests[gi].health <= 0.0 && !host.hub.guests[gi].dead {
+                self.guest_forget_digging(host, conn);
+            }
             let g = &mut host.hub.guests[gi];
             if g.health <= 0.0 && !g.dead {
                 g.dead = true;
@@ -1968,6 +1981,23 @@ impl Game<'_> {
 
     /// `level.destroyBlockProgress(id, pos, -1)` for a guest: its crack on `pos` is gone, for the
     /// host and the other guests.
+    /// A player who dies digs and uses nothing any more: the block it was
+    /// breaking, or had left to break (`hasDelayedDestroy`), stays, and its
+    /// crack goes. Respawning gives it a new ServerPlayerGameMode (#1315).
+    fn guest_forget_digging(&mut self, host: &mut LanHost, conn: u32) {
+        let Some(play) = host.play.get_mut(&conn) else {
+            return;
+        };
+        let cracked = play.digging.take().filter(|_| play.last_progress >= 0);
+        play.mining = None;
+        play.delayed = None;
+        play.destroy_delay = 0;
+        play.using = None;
+        play.last_progress = -1;
+        if let Some((pos, _)) = cracked {
+            self.guest_crack_gone(host, conn, pos);
+        }
+    }
     fn guest_crack_gone(&mut self, host: &mut LanHost, conn: u32, pos: [i32; 3]) {
         let Some(id) = host.hub.guest(conn).map(|g| g.entity_id) else {
             return;
