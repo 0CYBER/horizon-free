@@ -760,6 +760,7 @@ impl Game<'_> {
             (e.yaw, e.pitch, e.head_yaw) = (m.yaw, m.head_pitch, m.head_yaw);
             e.on_ground = m.on_ground;
             e.velocity = [m.velocity.x, m.velocity.y, m.velocity.z];
+            e.needs_sync = m.needs_sync;
             mob_meta(m, hub, &mut e.meta);
             mob_equipment(m, hub, &mut e.equipment);
             self.mob_attributes(m, &mut e.attributes);
@@ -827,6 +828,10 @@ impl Game<'_> {
                 self.lan_entities(host_entity, &mut host.hub, &mut states);
             } else {
                 states.clear();
+            }
+            // ServerEntity.sendChanges clears needsSync once it has looked.
+            for m in &mut self.mobs {
+                m.needs_sync = false;
             }
             let entities = states.as_slice();
             let spawn = self.spawn.map_or([0.5, 80.0, 0.5], |s| [s.x, s.y, s.z]);
