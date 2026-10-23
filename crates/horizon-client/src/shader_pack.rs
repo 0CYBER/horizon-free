@@ -1428,4 +1428,61 @@ override mode: i32 = 1;
         assert_eq!(values["invert"], "true");
         assert!(load_values(&dir, "other").is_empty());
     }
+
+    /// Dropping a pack on the Shader Packs page: zips and folders, Java
+    /// and Horizon, and the things that aren't packs.
+    #[test]
+    fn imports_zips_and_folders_and_refuses_the_rest() {
+        let shaderpacks = scratch();
+        let java = pack(&[("shaders/composite.fsh", "void main() {}\n")]);
+        let zip_path = scratch().join("Java Pack.zip");
+        let mut zip = zip::ZipWriter::new(fs::File::create(&zip_path).unwrap());
+        zip.start_file(
+            "Java Pack/shaders/final.fsh",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        std::io::Write::write_all(&mut zip, b"void main() {}\n").unwrap();
+        zip.finish().unwrap();
+
+        assert_eq!(
+            import_pack(&zip_path, &shaderpacks).unwrap(),
+            "Java Pack.zip"
+        );
+        assert!(shaderpacks.join("Java Pack.zip").is_file());
+        let folder = import_pack(&java, &shaderpacks).unwrap();
+        assert!(
+            shaderpacks
+                .join(&folder)
+                .join("shaders/composite.fsh")
+                .is_file()
+        );
+        // One already there is refused; one dropped from shaderpacks/ itself
+        // is just picked.
+        let again = import_pack(&zip_path, &shaderpacks).unwrap_err();
+        assert!(again.contains("already"), "{again}");
+        assert_eq!(
+            import_pack(&shaderpacks.join("Java Pack.zip"), &shaderpacks).unwrap(),
+            "Java Pack.zip"
+        );
+
+        let not_a_pack = pack(&[("readme.txt", "hello")]);
+        assert!(
+            import_pack(&not_a_pack, &shaderpacks)
+                .unwrap_err()
+                .contains("not a shader pack")
+        );
+        let fake_zip = scratch().join("broken.zip");
+        fs::write(&fake_zip, "not a zip").unwrap();
+        assert!(import_pack(&fake_zip, &shaderpacks).is_err());
+        let broken_horizon = pack(&[("pack.toml", "name = ")]);
+        assert!(import_pack(&broken_horizon, &shaderpacks).is_err());
+        assert!(import_pack(&shaderpacks.join("missing"), &shaderpacks).is_err());
+        let left: Vec<_> = fs::read_dir(&shaderpacks)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(left.len(), 2, "nothing copied for refused packs: {left:?}");
+    }
 }
