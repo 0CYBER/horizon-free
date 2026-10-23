@@ -107,6 +107,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              guest as the host has them (kind, place, rotation, what they hold or wear, the variant).
 - projectiles: primed TNT (one falling), an end crystal and an arrow that lands reach the guest where
              the host has them; a falling block lands on both sides.
+- thrown:    a splash potion and an eye of ender the host and the guest each throw fly on both
+             sides (#1363, #1391);
 - fireball:  a fire charge a dispenser shoots onto stone lights a fire both sides see, and the fire
              goes out on its own within a minute (it ticks: FireBlock.tick on a floor that doesn't burn)
 
@@ -208,7 +210,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning', 'riding', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption', 'breath', 'lava', 'levels', 'drops', 'underwater']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning', 'riding', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption', 'breath', 'lava', 'levels', 'drops', 'underwater']
 
 
 class Game:
@@ -2612,6 +2614,35 @@ def check_projectiles(host, guest, out):
     return f'{len(theirs)} identical, fuses (host, guest) {fuses}'
 
 
+def check_thrown(host, guest, out):
+    spots = apart(host, guest)
+    result = {}
+    for label, player, other in (('host', host, guest), ('guest', guest, host)):
+        x, y, z = spots[label]
+        player('command', command='gamemode survival')
+        for item, kind in (('splash_potion', 'minecraft:splash_potion'), ('ender_eye', 'minecraft:eye_of_ender')):
+            player('command', command=f'item replace entity @s weapon.mainhand with minecraft:{item}')
+            player.wait(10)
+            # Up at 45 degrees, into open sky.
+            player.raw('look-at', f'{x + 0.5:.2f}', f'{y + 11.6:.2f}', f'{z + 10.5:.2f}')
+            player.raw('use-item')
+            seen = {'own': 0, 'other': 0}
+            for _ in range(10):
+                player.wait(2)
+                for side, game in (('own', player), ('other', other)):
+                    if any(p['kind'] == kind for p in game('status')['projectiles']):
+                        seen[side] += 1
+                if all(seen.values()):
+                    break
+            player.shot(out, f'thrown-{label}-{item}')
+            other.shot(out, f'thrown-{label}-{item}-seen')
+            player.wait(100)  # it lands or drops
+            result[f'{label} {item}'] = seen
+    for name, seen in result.items():
+        assert all(seen.values()), f'{name}: seen in flight (samples) {result}'
+    return result
+
+
 def check_blast(host, guest, out):
     guest('command', command='gamemode survival')
     guest('command', command='clear @s')
@@ -3945,7 +3976,8 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'lava': check_lava, 'levels': check_levels, 'drops': check_drops,
              'underwater': check_underwater,
              'looks': check_looks,
-             'leads': check_leads}
+             'leads': check_leads,
+             'thrown': check_thrown}
 
 
 def run(ctl, out, resources, checks):
