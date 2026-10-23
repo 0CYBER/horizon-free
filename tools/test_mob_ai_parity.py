@@ -467,7 +467,7 @@ def main():
                                    'dev.horizonlab.parity.VanillaMobAiOracle', inputs, build / 'vanilla.txt', world],
                                   build, 'vanilla', timeout=3600)
     if not args.java_only:
-        command = ['cargo', 'build', '--locked', '--release', '-p', 'horizon-client', '--example', 'mob_ai_probe']
+        command = ['cargo', 'build', '--locked', '--release', '-p', 'horizon-client', '--example', 'probe']
         target, env = lab.cargo_target(), None
         if args.trace:
             target = lab.LOCAL / 'mob-ai-trace-target'
@@ -475,8 +475,8 @@ def main():
             env = dict(os.environ, CARGO_TARGET_DIR=str(target), CARGO_PROFILE_RELEASE_DEBUG='line-tables-only',
                        CARGO_PROFILE_RELEASE_LTO='false', CARGO_PROFILE_RELEASE_CODEGEN_UNITS='16')
         oracle_harness.run_logged(command, build, 'compile-rust', env=env)
-        binary = target / 'release/examples/mob_ai_probe'
-        oracle_harness.run_logged([binary, lab.RESOURCES, inputs, build / 'horizon.txt'], build, 'horizon')
+        binary = target / 'release/examples/probe'
+        oracle_harness.run_logged([binary, 'mob_ai_probe', lab.RESOURCES, inputs, build / 'horizon.txt'], build, 'horizon')
     if args.java_only:
         return
     names = {s[0] for _, s in chosen}

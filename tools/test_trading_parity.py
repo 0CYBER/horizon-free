@@ -184,7 +184,7 @@ def main():
     lock, jars, libraries = base.verify_artifacts()
     resources = lab.RESOURCES
     oracle = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaTradingOracle.java'
-    sources = [oracle, Path(__file__), lab.ROOT / 'crates/horizon-client/examples/trading_fixture.rs',
+    sources = [oracle, Path(__file__), lab.ROOT / 'crates/horizon-client/examples/probe/trading_fixture.rs',
                lab.ROOT / 'crates/horizon-client/src/merchant.rs', lab.ROOT / 'crates/horizon-client/src/menu.rs']
     tested = base.source_hashes([s for s in sources if s.exists()])
     inputs = build / 'inputs.txt'
@@ -219,9 +219,9 @@ def main():
     if args.java_only:
         print(f'{len(vanilla)} oracle lines')
         return
-    run(['cargo', 'build', '--release', '-p', 'horizon-client', '--example', 'trading_fixture'], 'compile-rust')
-    binary = lab.cargo_target() / 'release/examples/trading_fixture'
-    run([binary, resources, inputs, build / 'server.txt', build / 'rust.txt'], 'rust')
+    run(['cargo', 'build', '--release', '-p', 'horizon-client', '--example', 'probe'], 'compile-rust')
+    binary = lab.cargo_target() / 'release/examples/probe'
+    run([binary, 'trading_fixture', resources, inputs, build / 'server.txt', build / 'rust.txt'], 'rust')
     rust = (build / 'rust.txt').read_text().splitlines()
     bad = [(a, b) for a, b in zip(vanilla, rust) if a != b]
     if bad or len(vanilla) != len(rust):

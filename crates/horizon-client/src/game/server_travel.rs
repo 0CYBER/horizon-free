@@ -455,6 +455,7 @@ impl Game<'_> {
             tick_frozen: self.clock.frozen(),
             tick_steps: self.clock.step_state(),
             collision: Some(self.collision),
+            border: &self.border,
         }
     }
 }

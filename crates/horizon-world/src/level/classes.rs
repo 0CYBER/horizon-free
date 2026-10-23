@@ -15,9 +15,6 @@ macro_rules! classes {
             pub fn from_java(name: &str) -> Option<Self> {
                 match name { $($java => Some(Class::$name),)* _ => None }
             }
-            pub const fn java_name(self) -> &'static str {
-                match self { $(Class::$name => $java,)* }
-            }
         }
     };
 }

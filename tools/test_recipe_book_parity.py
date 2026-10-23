@@ -8,7 +8,7 @@ having seen a highlighted recipe, the open and filter settings of the four
 book types, and saving and loading the player's recipeBook compound (with
 unknown ids dropped, and a compound missing a list ignored). The Java oracle
 (VanillaRecipeBookOracle) drives ServerRecipeBook and its codec;
-examples/recipe_book_fixture drives horizon_client::recipe_book. After each
+examples/probe/recipe_book_fixture drives horizon_client::recipe_book. After each
 operation the count, the known and highlighted recipes, the settings and
 the saved compound are compared.
 """

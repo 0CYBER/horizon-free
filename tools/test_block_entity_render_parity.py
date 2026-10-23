@@ -5,7 +5,7 @@ The Java oracle (VanillaBlockEntityRenderOracle) builds each case's vanilla
 block entity, sets its animation fields, runs the real BlockEntityRenderer's
 extractRenderState and submit, and captures what it submits: model vertices
 after setupAnim and the pose stack (sprite-local UVs, tint, normal, light),
-text calls and items. `examples/block_entity_render_fixture` replays the case
+text calls and items. `examples/probe/block_entity_render_fixture` replays the case
 through Horizon's BlockEntityRenderer. Quads are matched by texture and
 position; colours compare vanilla's tint times the entity shader's
 `minecraft_mix_light` for the vanilla normal with Horizon's baked colour.
@@ -303,8 +303,8 @@ def main():
     vanilla = [json.loads(l) for l in (build / 'vanilla.jsonl').read_text().splitlines()]
     textures = sorted({s['texture'] for v in vanilla for s in v.get('submits', []) if 'texture' in s})
     (build / 'textures.txt').write_text(''.join(t + '\n' for t in textures))
-    run(['cargo', 'run', '--quiet', '--profile', 'fast', '-p', 'horizon-client', '--example', 'block_entity_render_fixture', '--',
-         resources, inputs, build / 'textures.txt', build / 'rust.jsonl'], 'rust')
+    run(['cargo', 'run', '--quiet', '--profile', 'fast', '-p', 'horizon-client', '--example', 'probe', '--',
+         'block_entity_render_fixture', resources, inputs, build / 'textures.txt', build / 'rust.jsonl'], 'rust')
     rust = [json.loads(l) for l in (build / 'rust.jsonl').read_text().splitlines()]
     assert len(vanilla) == len(rust), (len(vanilla), len(rust))
     groups, errors, skipped, passed = {}, {}, {}, 0

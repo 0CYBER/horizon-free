@@ -432,18 +432,6 @@ impl<'r, B: TerrainBlockStates> TerrainChunk<'r, B> {
         )?;
         Ok(())
     }
-    pub fn set_heightmap_raw(
-        &mut self,
-        kind: HeightmapType,
-        words: &[u64],
-    ) -> Result<(), TerrainError> {
-        self.ensure_heightmap(kind);
-        self.heightmaps[kind as usize]
-            .as_mut()
-            .unwrap()
-            .set_raw_data(&self.blocks, words)?;
-        Ok(())
-    }
     /// Before replaying a saved chunk's `PostProcessing` lists.
     pub fn clear_postprocessing(&mut self) {
         self.postprocessing.iter_mut().for_each(Vec::clear);

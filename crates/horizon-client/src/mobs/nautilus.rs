@@ -76,14 +76,6 @@ pub fn finalize(m: &mut Mob, warm_ocean: bool) {
         m.extra.variant = u8::from(warm_ocean);
     }
 }
-/// `checkNautilusSpawnRules`: 5 to 25 blocks below sea level, water below
-/// and above.
-pub fn spawn_rules_ok(w: &MobWorld, x: i32, y: i32, z: i32) -> bool {
-    let sea = 63;
-    (sea - 25..=sea - 5).contains(&y)
-        && w.fluid(x, y - 1, z) == Fluid::Water
-        && w.block_name(x, y + 1, z) == "minecraft:water"
-}
 /// `getControllingPassenger`: a player on a saddled nautilus.
 pub fn controlled(m: &Mob) -> bool {
     m.rider.is_some() && m.extra.saddled

@@ -29,6 +29,10 @@ Seeds: the player report's seed (1891623539983467248: Horizon spawned at
 -48 -48, vanilla at 152 145), the chunk generation harness's seeds and
 --random seeds from a fixed generator.
 
+tools/parity.py runs it in PARITY_SHARDS parts, each creating the worlds of
+every PARITY_SHARDS-th seed: each seed is a vanilla and a Horizon server start,
+~15 s, and 60 seeds in one run were the longest harness (~25 min).
+
 usage: test_world_spawn_parity.py [--random N] [--jobs N] [--origins-only]
 """
 import argparse
@@ -43,16 +47,18 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 try:
-    from . import anvil_dump, lab, oracle_harness as oh, test_rust_parity as base
+    from . import anvil_dump, lab, oracle_harness as oh, parity_shard, test_rust_parity as base
     from .test_dedicated_server_parity import Server, free_port
 except ImportError:
     import anvil_dump
     import lab
     import oracle_harness as oh
+    import parity_shard
     import test_rust_parity as base
     from test_dedicated_server_parity import Server, free_port
 
 NAME = 'world-spawn-parity'
+PARITY_SHARDS = 4
 REPORT = 1891623539983467248
 SEEDS = [REPORT, 12345, -7046029254386353131, 987654321987, 4242, -1, 0x5DEECE66D, 20260607, 777, 0]
 RESOURCES = lab.RESOURCES
@@ -73,7 +79,7 @@ def origins(build, classes, dependencies, all_seeds):
     vanilla_out = build / 'origins-vanilla.txt'
     oh.run_logged(['java', '-cp', str(classes) + os.pathsep + dependencies, 'dev.horizonlab.parity.VanillaWorldSpawnOracle',
                    vanilla_out, *all_seeds], build, 'origins-vanilla')
-    rust = subprocess.run([target_dir() / 'examples/spawn_origin', RESOURCES, *map(str, all_seeds)],
+    rust = subprocess.run([target_dir() / 'examples/probe', 'spawn_origin', RESOURCES, *map(str, all_seeds)],
                           capture_output=True, text=True, check=True, cwd=lab.ROOT).stdout
     vanilla = vanilla_out.read_text()
     parse = lambda text: {int(l.split()[0]): tuple(map(int, l.split()[1:])) for l in text.splitlines() if l}
@@ -107,7 +113,7 @@ def main():
     parser.add_argument('--seed', type=int, action='append', help='only these seeds (repeatable)')
     args = parser.parse_args()
     lock, jars, libraries = base.verify_artifacts()
-    build = lab.LOCAL / NAME
+    build = lab.LOCAL / NAME / parity_shard.label()  # shards run at once
     build.mkdir(parents=True, exist_ok=True)
     dependencies = os.pathsep.join(map(str, [jars['server'], *libraries]))
     classes = build / 'classes'
@@ -115,8 +121,8 @@ def main():
     oh.run_logged(['javac', '--release', lock['minecraft']['java_major'], '-proc:none', '-nowarn', '-cp', dependencies,
                    '-d', classes, lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaWorldSpawnOracle.java'],
                   build, 'compile-java')
-    oh.run_logged(['cargo', 'build', '--release', '-p', 'horizon-world', '--example', 'spawn_origin'], build, 'compile-probe')
-    all_seeds = args.seed or seeds(args.random)
+    oh.run_logged(['cargo', 'build', '--release', '-p', 'horizon-world', '--example', 'probe'], build, 'compile-probe')
+    all_seeds = parity_shard.shard(args.seed or seeds(args.random))
     started = time.time()
 
     vanilla, rust = origins(build, classes, dependencies, all_seeds)

@@ -101,7 +101,7 @@ def main():
                lab.ROOT / 'crates/horizon-core/Cargo.toml', lab.ROOT / 'crates/horizon-world/Cargo.toml',
                *sorted((lab.ROOT / 'crates/horizon-core/src').rglob('*.rs')),
                *sorted((lab.ROOT / 'crates/horizon-world/src').rglob('*.rs')),
-               lab.ROOT / 'crates/horizon-world/examples/effect_sync_fixture.rs']
+               lab.ROOT / 'crates/horizon-world/examples/probe/effect_sync_fixture.rs']
     tested_sources = base.source_hashes(sources)
     classes = build / 'classes'
     classes.mkdir(exist_ok=True)
@@ -129,16 +129,16 @@ def main():
     inputs.write_text(''.join(json.dumps(row, separators=(',', ':')) + '\n' for row in fixtures), encoding='utf-8')
     fixture_paths = [inputs, build / 'catalog.json', build / 'catalog-client.json', build / 'catalog-server.json']
     tested_fixtures = base.source_hashes(fixture_paths)
-    run(['cargo', 'build', '--release', '-p', 'horizon-world', '--example', 'effect_sync_fixture'], 'compile-rust')
+    run(['cargo', 'build', '--release', '-p', 'horizon-world', '--example', 'probe'], 'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'], cwd=lab.ROOT, text=True))
-    binary = Path(metadata['target_directory']) / 'release/examples' / ('effect_sync_fixture.exe' if os.name == 'nt' else 'effect_sync_fixture')
+    binary = Path(metadata['target_directory']) / 'release/examples' / ('probe.exe' if os.name=='nt' else 'probe')
     references = []
     for side, jar in jars.items():
         java(side, side)
         enriched = build / f'inputs-{side}.txt'
         fixture_paths.append(enriched)
         tested_fixtures.update(base.source_hashes([enriched]))
-        run([binary, build, side], 'rust-' + side)
+        run([binary, 'effect_sync_fixture', build, side], 'rust-' + side)
         reference = build / f'{side}.txt'
         candidate = build / f'rust-{side}.txt'
         matched = base.compare(reference, candidate)

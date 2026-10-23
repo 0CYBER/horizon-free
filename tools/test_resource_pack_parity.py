@@ -9,7 +9,7 @@ sources) and selects them over the prepared vanilla resources. The Java oracle
 and MultiPackResourceManager and asks what each reload listener reads: which
 pack a file comes from, translations (ClientLanguage), sound events
 (SoundManager.prepare), font providers (FontManager) and atlas sources
-(SpriteSourceList). examples/pack_resources_fixture builds Horizon's resource
+(SpriteSourceList). examples/probe/pack_resources_fixture builds Horizon's resource
 root for the same selection (packs::build_overlay) and reads it with Horizon's
 loaders. Every answer must agree.
 """
