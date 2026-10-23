@@ -133,7 +133,7 @@ impl Game<'_> {
     }
     fn reload_resources(&mut self, root: &Path) -> horizon_client::Result<()> {
         let render = std::sync::Arc::new(self.pack.assets.reload(root)?);
-        let mut atlas = HudAtlas::build(root)?;
+        let mut atlas = HudAtlas::build_over(root, &self.vanilla_root())?;
         atlas.font.uniform = self.settings.force_unicode;
         atlas.font.japanese = self.settings.japanese_glyphs;
         let gui = super::UiResources {
