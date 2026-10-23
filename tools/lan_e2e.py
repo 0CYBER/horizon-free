@@ -213,7 +213,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning', 'riding', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption', 'breath', 'lava', 'levels', 'drops', 'underwater']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning', 'riding', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption', 'breath', 'lava', 'levels', 'drops', 'underwater']
 
 
 class Game:
@@ -2711,6 +2711,89 @@ def check_sparks(host, guest, out):
     return result
 
 
+def hearts(game):
+    """The player's maximum and current health as its own client holds them."""
+    p = game('status')['player']
+    return p.get('max_health'), round(p['health'], 1)
+
+
+def check_hud(host, guest, out):
+    result = {}
+    for label, player in (('host', host), ('guest', guest)):
+        player('command', command='gamemode survival')
+        try:
+            for maximum in (40, 10):
+                player('command', command=f'attribute @s minecraft:max_health base set {maximum}')
+                player.wait(10)
+                player('command', command='effect give @s minecraft:instant_health 1 10')
+                seen = None
+                for _ in range(15):
+                    player.wait(2)
+                    seen = hearts(player)
+                    if seen == (maximum, maximum):
+                        break
+                result[f'{label} {maximum}'] = seen
+                player.shot(out, f'hearts-{label}-{maximum}')
+        finally:
+            player('command', command='attribute @s minecraft:max_health base reset')
+            player('command', command='effect give @s minecraft:instant_health 1 10')
+    # BossBarCommands' new bar starts visible (ServerBossEvent's constructor).
+    host('command', command='bossbar add lan_e2e:bar "LAN bar"')
+    try:
+        host('command', command='bossbar get lan_e2e:bar visible')
+        host.wait(5)
+        result['bar'] = [line for line in host.raw('messages', 5)['chat'] if 'lan_e2e:bar' in line or 'LAN bar' in line]
+    finally:
+        host('command', command='bossbar remove lan_e2e:bar')
+    wrong = {k: v for k, v in result.items() if k != 'bar' and v != (int(k.split()[1]),) * 2}
+    assert not wrong, f'hearts: {wrong}\n{result}'
+    assert any('currently visible' in line for line in result['bar']), f'bar: {result["bar"]}'
+    return result
+
+
+def sidebars(host, guest, want, ticks=40):
+    """Each side's sidebar (objective and scores) once both show `want` (host, guest), or after `ticks`."""
+    seen = None
+    for _ in range(ticks // 2):
+        host.wait(2)
+        seen = tuple(g('status').get('sidebar') for g in (host, guest))
+        got = tuple(s and (s['objective'], s['scores']) for s in seen)
+        if got == want:
+            break
+    return seen
+
+
+def check_sidebar(host, guest, out):
+    result = {}
+    run = lambda *cmds: [host('command', command=c) for c in cmds]
+    try:
+        run('scoreboard objectives add audit dummy {"text":"Audit board","color":"aqua"}',
+            'scoreboard players set Alpha audit 7', 'scoreboard players set Beta audit 3',
+            'scoreboard objectives setdisplay sidebar audit')
+        both = ('audit', {'Alpha': 7, 'Beta': 3})
+        result['shown'] = sidebars(host, guest, (both, both))
+        host.shot(out, 'sidebar')
+        guest.shot(out, 'sidebar')
+        run('scoreboard players set Alpha audit 12', 'scoreboard players reset Beta audit')
+        both = ('audit', {'Alpha': 12})
+        result['changed'] = sidebars(host, guest, (both, both))
+        # The guest's team's sidebar replaces the sidebar for the guest only.
+        run('team add red', 'team modify red color red', f'team join red {GUEST_NAME}',
+            'scoreboard objectives add reds dummy', f'scoreboard players set {GUEST_NAME} reds 5',
+            'scoreboard objectives setdisplay sidebar.team.red reds')
+        result['team'] = sidebars(host, guest, (both, ('reds', {GUEST_NAME: 5})))
+        run('scoreboard objectives remove reds', 'scoreboard objectives setdisplay sidebar')
+        result['cleared'] = sidebars(host, guest, (None, None))
+    finally:
+        run('scoreboard objectives remove audit', 'scoreboard objectives remove reds', 'team remove red')
+    want = {'shown': (('audit', {'Alpha': 7, 'Beta': 3}),) * 2, 'changed': (('audit', {'Alpha': 12}),) * 2,
+            'team': (('audit', {'Alpha': 12}), ('reds', {GUEST_NAME: 5})), 'cleared': (None, None)}
+    got = {k: tuple(s and (s['objective'], s['scores']) for s in v) for k, v in result.items()}
+    wrong = {k: v for k, v in got.items() if v != want[k]}
+    assert not wrong, f'sidebars: {wrong}\n{result}'
+    return result
+
+
 def check_blast(host, guest, out):
     guest('command', command='gamemode survival')
     guest('command', command='clear @s')
@@ -4046,7 +4129,9 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'looks': check_looks,
              'leads': check_leads,
              'thrown': check_thrown,
-             'sparks': check_sparks}
+             'sparks': check_sparks,
+             'hud': check_hud,
+             'sidebar': check_sidebar}
 
 
 def run(ctl, out, resources, checks):

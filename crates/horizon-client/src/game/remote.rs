@@ -164,6 +164,8 @@ pub(super) struct Remote {
     level_players: HashMap<i32, u128>,
     /// The local player's profile UUID (always in the level).
     profile: u128,
+    /// The local player's profile name: its score holder and team member.
+    pub(super) profile_name: String,
     destroying: Option<([i32; 3], u8, f32)>,
     destroy_delay: u32,
     input: horizon_client::interaction_input::InteractionInput,
@@ -411,6 +413,7 @@ impl Game<'_> {
             online_mode: false,
             level_players: HashMap::new(),
             profile: 0,
+            profile_name: String::new(),
             destroying: None,
             destroy_delay: 0,
             input: Default::default(),
@@ -795,6 +798,7 @@ impl Game<'_> {
                     if let Some(r) = self.remote.as_mut() {
                         r.joined = true;
                         r.profile = uuid;
+                        r.profile_name = name.clone();
                         r.status = format!("Joined as {name}; loading terrain...");
                     }
                 }
@@ -2127,6 +2131,15 @@ impl Game<'_> {
                 } else if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32) {
                     m.swing();
                 }
+            }
+            // The player's own instances: its maximum health (the hearts the
+            // HUD draws and the health it may hold), reach, speed and so on.
+            // Then the received health again, which the old maximum clamped.
+            C::UpdateAttributes(p) if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) => {
+                if let Some(pl) = self.player.as_mut() {
+                    horizon_client::lan::attributes::apply(&mut pl.attributes, &p.values);
+                }
+                self.apply_remote_health();
             }
             C::UpdateMobEffect(p) => self.remote_effect(&p),
             C::RemoveMobEffect(p) => {
