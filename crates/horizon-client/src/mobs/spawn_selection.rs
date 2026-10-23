@@ -351,6 +351,9 @@ fn spawns_far_from_player(s: Species, category: Category) -> bool {
 }
 
 /// What natural spawning reads from a level beyond the spawn rules.
+/// An entity type's species, width, height and category.
+pub type MobType = (Species, f32, f32, Category);
+
 pub trait NaturalLevel: SpawnLevel {
     fn min_y(&self) -> i32;
     /// `getMaxY()`: the highest buildable block.
@@ -359,7 +362,7 @@ pub trait NaturalLevel: SpawnLevel {
     fn ambient_light(&self) -> f32;
     fn has_ceiling(&self) -> bool;
     /// The entity type's species, width, height and category.
-    fn mob_type(&self, entity: &str) -> Option<(Species, f32, f32, Category)>;
+    fn mob_type(&self, entity: &str) -> Option<MobType>;
     /// The `natural_mob_spawns` lists by category at a position.
     fn biome_spawns(&self, x: i32, y: i32, z: i32) -> Option<&HashMap<String, Vec<SpawnEntry>>>;
     /// The `natural_mob_spawns` spawn cost of a type at a position.
@@ -376,9 +379,9 @@ pub trait NaturalLevel: SpawnLevel {
         wanted: &dyn Fn(&str) -> bool,
     ) -> Vec<StructureAt>;
     fn structure_spawns(&self) -> &StructureSpawns;
-    /// `getNearestPlayer(x, y, z, -1, false)`: the squared distance to the
-    /// nearest player that is not a spectator.
-    fn nearest_player_distance_sqr(&self, x: f64, y: f64, z: f64) -> Option<f64>;
+    /// Where the players `getNearestPlayer(x, y, z, -1, false)` measures to
+    /// are: every one that is not a spectator.
+    fn nearest_player_positions(&self) -> &[[f64; 3]];
     /// The world spawn point, when it is in this dimension.
     fn respawn(&self) -> Option<[i32; 3]>;
     /// `ServerLevel.canSpawnEntitiesInChunk`.
@@ -870,9 +873,13 @@ impl SpawnState {
     /// `ChunkMap.getPlayersCloseForSpawning`: none past the natural spawn
     /// chunk tracker's range of 8 chunks from every player, else the
     /// non-spectators within 128 blocks of the chunk's centre.
-    fn players_near(&mut self, cx: i32, cz: i32) -> &[usize] {
-        let players = &self.players;
-        self.players_near.entry((cx, cz)).or_insert_with(|| {
+    fn players_near<'a>(
+        near: &'a mut FxHashMap<(i32, i32), Vec<usize>>,
+        players: &[SpawnPlayer],
+        cx: i32,
+        cz: i32,
+    ) -> &'a [usize] {
+        near.entry((cx, cz)).or_insert_with(|| {
             let tracked = players.iter().any(|p| {
                 let (px, pz) = (
                     (p.position[0].floor() as i32) >> 4,
@@ -896,8 +903,7 @@ impl SpawnState {
         })
     }
     fn add_local(&mut self, cx: i32, cz: i32, category: Category) {
-        let near = self.players_near(cx, cz).to_vec();
-        for p in near {
+        for &p in Self::players_near(&mut self.players_near, &self.players, cx, cz) {
             self.player_counts.entry(p).or_insert([0; 8])[category.index()] += 1;
         }
     }
@@ -908,10 +914,10 @@ impl SpawnState {
     }
     /// `canSpawnForCategoryLocal` (`LocalMobCapCalculator.canSpawn`).
     pub fn can_spawn_local(&mut self, category: Category, cx: i32, cz: i32) -> bool {
-        let near = self.players_near(cx, cz).to_vec();
-        near.into_iter().any(|p| {
+        let near = Self::players_near(&mut self.players_near, &self.players, cx, cz);
+        near.iter().any(|p| {
             self.player_counts
-                .get(&p)
+                .get(p)
                 .is_none_or(|c| c[category.index()] < category.max())
         })
     }
@@ -1080,9 +1086,11 @@ pub fn spawn_category_for_position<L: NaturalLevel, R: RandomSource>(
     }
     let mut spawned: Vec<Aabb> = Vec::new();
     let mut cluster = 0u32;
+    let mut nearest = Nearest::new(start);
     for _ in 0..3 {
         let (mut x, mut z) = (x0, z0);
-        let mut current: Option<SpawnEntry> = None;
+        // The group's entry, its type and where it was picked.
+        let mut current: Option<(SpawnEntry, Option<MobType>, [i32; 3])> = None;
         let mut group_index = 0u32;
         let mut max = (random.next_float() * 4.0).ceil() as i32;
         let mut ll = 0;
@@ -1092,16 +1100,15 @@ pub fn spawn_category_for_position<L: NaturalLevel, R: RandomSource>(
             z += random.next_int_bound(6).unwrap_or(0) - random.next_int_bound(6).unwrap_or(0);
             let (xx, zz) = (f64::from(x) + 0.5, f64::from(z) + 0.5);
             trace(Event::Try(x, z));
-            let Some(distance) = l.nearest_player_distance_sqr(xx, f64::from(y), zz) else {
+            let Some(distance) = nearest.distance_sqr(l, xx, f64::from(y), zz) else {
                 continue;
             };
             if !right_distance(l, chunk, [x, y, z], distance) {
                 continue;
             }
             if current.is_none() {
-                let reduced = l.biome_tag("minecraft:reduce_water_ambient_spawns", x, y, z);
                 let list = if category == Category::WaterAmbient
-                    && reduced
+                    && l.biome_tag("minecraft:reduce_water_ambient_spawns", x, y, z)
                     && random.next_float() < 0.98
                 {
                     None
@@ -1112,21 +1119,32 @@ pub fn spawn_category_for_position<L: NaturalLevel, R: RandomSource>(
                     break;
                 };
                 max = sample_count(&entry, random) as i32;
-                current = Some(entry);
+                let kind = l.mob_type(&entry.entity);
+                current = Some((entry, kind, [x, y, z]));
             }
-            let entry = current.as_ref().unwrap_or_else(|| unreachable!());
-            if !valid_position_for_type(l, random, category, entry, [x, y, z], distance) {
+            let (entry, kind, picked_at) = current.as_ref().unwrap_or_else(|| unreachable!());
+            // The list the entry was picked from holds it where it was picked.
+            let listed = *picked_at == [x, y, z];
+            let valid = valid_position_for_type(
+                l,
+                random,
+                category,
+                entry,
+                *kind,
+                listed,
+                [x, y, z],
+                distance,
+            );
+            let Some((species, width, height, type_category)) = (*kind).filter(|_| valid) else {
                 continue;
-            }
+            };
             let passed = state.can_spawn(l, &entry.entity, [x, y, z]);
             trace(Event::Test(entry.entity.clone(), [x, y, z], passed));
             if !passed {
                 continue;
             }
-            // getMobForSpawn: a type the game cannot create ends the pass.
-            let Some((species, width, height, type_category)) = l.mob_type(&entry.entity) else {
-                return;
-            };
+            // getMobForSpawn (a type the game cannot create, which would end
+            // the pass, never passes isValidSpawnPostitionForType).
             let yaw = random.next_float() * 360.0;
             let bounds = spawn_box(xx, f64::from(y), zz, width, height);
             let despawn = f64::from(type_category.despawn_distance().pow(2));
@@ -1167,6 +1185,52 @@ pub fn spawn_category_for_position<L: NaturalLevel, R: RandomSource>(
         }
     }
 }
+/// `getNearestPlayer(x, y, z, -1, false)`'s squared distance for the
+/// attempts of one start. The spawn checks only compare it with 24² and the
+/// despawn distances (128² at most), so it is measured only to the players
+/// that can be within 128 blocks of an attempt near the start: when none is,
+/// the nearest reads as infinitely far, which every check answers as it
+/// answers the real distance. An attempt that wanders farther than
+/// `MARGIN` from the start measures every player.
+struct Nearest {
+    /// The players that can be within 128 blocks, once an attempt asked.
+    nearby: Option<Vec<[f64; 3]>>,
+    start: (f64, f64),
+}
+impl Nearest {
+    const REACH: f64 = 128.0;
+    const MARGIN: f64 = 64.0;
+    fn new(start: [i32; 3]) -> Self {
+        Self {
+            nearby: None,
+            start: (f64::from(start[0]) + 0.5, f64::from(start[2]) + 0.5),
+        }
+    }
+    fn distance_sqr<L: NaturalLevel>(&mut self, l: &L, x: f64, y: f64, z: f64) -> Option<f64> {
+        let all = l.nearest_player_positions();
+        if all.is_empty() {
+            return None;
+        }
+        let distance = |p: &[f64; 3]| (p[0] - x).powi(2) + (p[1] - y).powi(2) + (p[2] - z).powi(2);
+        let (sx, sz) = self.start;
+        if (x - sx).abs() > Self::MARGIN || (z - sz).abs() > Self::MARGIN {
+            return all.iter().map(distance).reduce(f64::min);
+        }
+        // The others are farther than REACH, across, from every point within
+        // MARGIN of the start.
+        let nearby = self.nearby.get_or_insert_with(|| {
+            all.iter()
+                .filter(|p| {
+                    let dx = ((p[0] - sx).abs() - Self::MARGIN).max(0.0);
+                    let dz = ((p[2] - sz).abs() - Self::MARGIN).max(0.0);
+                    dx * dx + dz * dz <= Self::REACH * Self::REACH
+                })
+                .copied()
+                .collect()
+        });
+        Some(nearby.iter().map(distance).fold(f64::INFINITY, f64::min))
+    }
+}
 /// `isRightDistanceToPlayerAndSpawnPoint`.
 fn right_distance<L: NaturalLevel>(l: &L, chunk: (i32, i32), pos: [i32; 3], distance: f64) -> bool {
     if distance <= 576.0 {
@@ -1185,16 +1249,20 @@ fn right_distance<L: NaturalLevel>(l: &L, chunk: (i32, i32), pos: [i32; 3], dist
     let (cx, cz) = (pos[0] >> 4, pos[2] >> 4);
     (cx, cz) == chunk || l.can_spawn_in_chunk(cx, cz)
 }
-/// `isValidSpawnPostitionForType`.
+/// `isValidSpawnPostitionForType`, for the entry's type (`mob_type`).
+/// `listed`: the position is where the entry was picked from `mobsAt`.
+#[allow(clippy::too_many_arguments)]
 fn valid_position_for_type<L: NaturalLevel, R: RandomSource>(
     l: &L,
     random: &mut R,
     category: Category,
     entry: &SpawnEntry,
+    kind: Option<MobType>,
+    listed: bool,
     pos: [i32; 3],
     distance: f64,
 ) -> bool {
-    let Some((species, width, height, type_category)) = l.mob_type(&entry.entity) else {
+    let Some((species, width, height, type_category)) = kind else {
         return false;
     };
     if type_category == Category::Misc {
@@ -1205,9 +1273,10 @@ fn valid_position_for_type<L: NaturalLevel, R: RandomSource>(
         return false;
     }
     let [x, y, z] = pos;
-    if !mobs_at(l, category, x, y, z)
-        .iter()
-        .any(|e| same_spawner(e, entry))
+    if !listed
+        && !mobs_at(l, category, x, y, z)
+            .iter()
+            .any(|e| same_spawner(e, entry))
     {
         return false;
     }
