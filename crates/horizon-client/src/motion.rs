@@ -307,6 +307,9 @@ pub struct PlayerMotion {
     pub hurt_log: Vec<crate::health::HurtRecord>,
     /// The last melee attacks made on mobs, newest last.
     pub attack_log: Vec<crate::health::AttackRecord>,
+    /// The level's world border, whose walls stop the player's movement
+    /// from inside (the game keeps it current; None: no border).
+    pub border: Option<horizon_core::geometry::border::BorderGeometry>,
 }
 fn attribute_error(error: impl std::fmt::Debug) -> io::Error {
     io::Error::other(format!("movement attribute: {error:?}"))
@@ -461,6 +464,7 @@ impl PlayerMotion {
             powder_snow_entered: Vec::new(),
             hurt_log: Vec::new(),
             attack_log: Vec::new(),
+            border: None,
         })
     }
     /// `Entity.getTicksRequiredToFreeze`.
@@ -678,9 +682,11 @@ impl MotionWorld<'_, '_, '_> {
     fn movement_collisions(
         &self,
     ) -> crate::collisions::EntityCollisions<'_, SceneCollisions<'_, '_>> {
+        let at = [self.player.position.x, self.player.position.z];
         crate::collisions::EntityCollisions {
             blocks: self.collisions(),
             entities: self.entities,
+            border: self.player.border.as_ref().map(|b| (b, at)),
         }
     }
     /// `Level.noCollision(player, bounds)`: blocks and the host's entity boxes.
