@@ -8798,20 +8798,15 @@ impl Game<'_> {
         );
         let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
         let deg = |d: f32| d.to_radians();
-        if self.held_map_geometry(to_world, attacks[0], inverse_heights[0], packed, &mut out) {
-            return out;
-        }
         let shown = self.hands_to_render();
         let used_hand = self.used_hand();
         let spinning = self
             .player
             .as_ref()
             .is_some_and(|p| p.auto_spin_attack_ticks > 0);
-        for (i, (hand, item)) in Hand::BOTH
-            .into_iter()
-            .zip(self.visible_hand_items())
-            .enumerate()
-        {
+        let items = self.visible_hand_items();
+        let off_hand_empty = items[1].is_none();
+        for (i, (hand, item)) in Hand::BOTH.into_iter().zip(items).enumerate() {
             if !shown[i] {
                 continue;
             }
@@ -8874,6 +8869,26 @@ impl Game<'_> {
                 );
                 continue;
             };
+            if let Some(id) = maps::map_id(&stack) {
+                use horizon_client::first_person::{MapHold, one_handed_map_pose};
+                match MapHold::of(hand, off_hand_empty) {
+                    MapHold::TwoHanded => self.two_handed_map_geometry(
+                        to_world,
+                        attack,
+                        inverse_height,
+                        id,
+                        packed,
+                        &mut out,
+                    ),
+                    MapHold::OneHanded => self.held_map(
+                        to_world * one_handed_map_pose(left, inverse_height, attack),
+                        id,
+                        packed,
+                        &mut out,
+                    ),
+                }
+                continue;
+            }
             let mut owner = self.player_owner(Some(&stack));
             // The other hand may hold an equal stack: only the used
             // hand's item is in use, only the main hand's selected.
