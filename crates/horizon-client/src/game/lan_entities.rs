@@ -36,6 +36,7 @@ fn state(id: u32, kind: &str, position: [f64; 3], yaw: f32, on_ground: bool) -> 
         velocity: [0.0; 3],
         data: 0,
         meta: Vec::new(),
+        defaults: Vec::new(),
         equipment: Vec::new(),
         attributes: Vec::new(),
         precise: false,

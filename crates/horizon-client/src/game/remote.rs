@@ -1334,6 +1334,7 @@ impl Game<'_> {
         }
         if let Some(t) = mob_type {
             let mut mob = Mob::new(id as u32, t, at, head);
+            super::remote_mob_data::client_defaults(&mut mob);
             (mob.yaw, mob.previous_yaw) = (yaw, yaw);
             (mob.head_pitch, mob.previous_head_pitch) = (pitch, pitch);
             mob.persistent = true;
@@ -1909,13 +1910,12 @@ impl Game<'_> {
                     && m.species() == horizon_client::mobs::Species::Rabbit
                 {
                     for (index, _, value) in &p.values {
-                        match (index, value) {
-                            (15, Value::Byte(flags)) => m.no_ai = flags & 1 != 0,
-                            (16, Value::Bool(baby)) => m.extra.age = if *baby { -1 } else { 0 },
-                            _ => {}
+                        if let (15, Value::Byte(flags)) = (index, value) {
+                            m.no_ai = flags & 1 != 0;
                         }
                     }
                 }
+                self.remote_mob_data(p.id, &p.values);
                 if let Some(m) = self.mobs.iter_mut().find(|m| m.id == p.id as u32)
                     && m.species() == horizon_client::mobs::Species::Creeper
                 {
