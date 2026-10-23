@@ -138,6 +138,8 @@ address. The script then checks, from both sides, what a guest's game used to ge
              get off by sneaking; the other side sees the animal move.
 - lightning: a bolt summoned beside the host, then the guest: both sides get the bolt and flash the
              sky (on its server thread the host's window is a client of it too).
+- worldspawn: the host moves the world spawn (`setworldspawn`): the host and the guest, with no bed,
+             respawn there (#1310).
 - shield:    the host axes the guest's raised shield, then the guest the host's: it stays disabled
              for 5 s on that player's own cooldown, then blocks again (#1316).
 - deathmining: the host and the guest each die while breaking obsidian and let go on the death
@@ -192,7 +194,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning', 'riding', 'mounts', 'shield', 'deathmining', 'contacts', 'absorption', 'breath', 'lava', 'levels']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning', 'riding', 'mounts', 'worldspawn', 'shield', 'deathmining', 'contacts', 'absorption', 'breath', 'lava', 'levels']
 
 
 class Game:
@@ -2604,6 +2606,8 @@ def check_flight(host, guest, out):
 
 
 
+
+
 def own(game):
     """The player's own state, as its client has it."""
     return game('state')['player']
@@ -2741,6 +2745,36 @@ def respawn_when_ready(game):
                 raise
             game.wait(10)
     return game.raw('respawn')
+
+
+def check_world_spawn(host, guest, out):
+    """`setworldspawn` moves the world spawn: the host and the guest, with no bed of their own,
+    respawn there once killed (#1310)."""
+    hx, hy, hz = (int(v // 1) for v in pos_of(host))
+    sx, sz = hx + 24, hz
+    host('command', command='gamerule respawn_radius 0')
+    host('command', command=f'fill {sx - 2} {hy - 1} {sz - 2} {sx + 2} {hy - 1} {sz + 2} minecraft:stone')
+    host('command', command=f'fill {sx - 2} {hy} {sz - 2} {sx + 2} {hy + 3} {sz + 2} minecraft:air')
+    seen = {}
+    try:
+        host('command', command=f'setworldspawn {sx} {hy} {sz}')
+        for game in (host, guest):
+            game('command', command='gamemode survival')
+            game('command', command='kill @s')
+            game.wait(20)
+            respawn_when_ready(game)
+            game.wait(60)
+            seen[game.name] = [round(v, 2) for v in pos_of(game)]
+            game.shot(out, 'world-spawn')
+    finally:
+        host('command', command=f'setworldspawn {hx} {hy} {hz}')
+        host('command', command='gamerule respawn_radius 10')
+        for game in (host, guest):
+            game('command', command=f'tp @s {hx + 0.5} {hy} {hz + 0.5}')
+        guest.wait(20)
+    for name, at in seen.items():
+        assert abs(at[0] - (sx + 0.5)) < 1 and abs(at[2] - (sz + 0.5)) < 1, f'{name}: {seen}, spawn {sx} {sz}'
+    return seen
 
 
 def check_death_mining(host, guest, out):
@@ -3664,9 +3698,9 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'light': check_light, 'plates': check_plates,
              'swings': check_swings, 'cracks': check_cracks,
              'time': check_time, 'growth': check_growth, 'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect, 'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'arrows': check_arrows, 'predict': check_predict, 'ladder': check_ladder, 'boats': check_boats, 'minecarts': check_minecarts, 'frames': check_frames, 'lightning': check_lightning, 'riding': check_riding, 'mounts': check_mounts,
-             'shield': check_shield, 'deathmining': check_death_mining, 'contacts': check_contacts,
-             'absorption': check_absorption, 'breath': check_breath, 'lava': check_lava,
-             'levels': check_levels}
+             'worldspawn': check_world_spawn, 'shield': check_shield, 'deathmining': check_death_mining,
+             'contacts': check_contacts, 'absorption': check_absorption, 'breath': check_breath,
+             'lava': check_lava, 'levels': check_levels}
 
 
 def run(ctl, out, resources, checks):
