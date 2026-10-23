@@ -240,6 +240,10 @@ How the game loads them, without touching vanilla's path:
   when its Java original ships them so (`namespaces = ["kaisyn", "towns_and_towers"]` for Towns
   and Towers, mod id `t_and_t`; docs/mods.md). No namespace has two owners: a mod whose id or
   listed namespace another mod that is on already owns is left out, with both named in the log.
+  `horizon-port-pack` avoids that inside a pack: a namespace two carried mods both claim (YUNG's
+  structure mods all ship files under `yungsapi`, the namespace of YUNG's API, whose own jar isn't
+  carried) is left to none of them, and its files stay outside. The launcher applies the game's
+  rule before it starts a pack (`pipeline::loadable`) and lists what it left off.
 - The overlay is built on the first start with a set of mods and kept for later starts. A stamp
   (`horizon-mod-content.stamp`) hashes the game executable, the base tables and every mod file's
   size and mtime. Adding, removing or editing a mod, or a new build of Horizon, rebuilds it. For
@@ -302,12 +306,28 @@ cargo run -p horizon-port-pack -- report ~/.horizon/ports/pack        # coverage
 cargo run -p horizon-port-pack -- port ~/Downloads/pack.zip ~/.horizon/ports/pack [--from <folder>] [--resources <root>]
 ```
 
+`check <jar> <out>` takes one mod jar on its own, as the launcher's mod browser installs it
+([mod-browser.md](mod-browser.md)): it carries the jar into `<out>/carry/` and reads its class
+files (constant pool, superclass, declared methods; no decompiling) for what the carry can't
+take, then writes the verdict to `<out>/check.json`. **Works**: content only, and the code just
+registers it. **Partly**: the content ports, and the code features listed don't (block entities,
+menus, entities, blocks and items with behaviour of their own, recipe types, Mixins, game events).
+**Doesn't run**: nothing to port, or a jar made for 1.20 or older. Each mod class is followed up to
+the first game class it extends; a block subclass that only overrides how it looks or is placed
+(`getStateForPlacement`, `rotate`...) is registration. Game classes are read by Mojang's names
+(26.1 and later, and NeoForge since 1.20.5); older Fabric jars name them in intermediary, so a
+class extending one counts as code that can't be read. On ten 26.3 jars (2026-10-22): Macaw's
+Fences, Windows and Furniture, Ecologics, Compressed Blocks, More Decorative Blocks and Moog's
+Nether Structures are Partly; Sodium and GeckoLib don't run (Mixins, renderers, nothing to port);
+Fabric API doesn't run (its id has a dash, which content mods can't use). A check takes 0.2 s to
+3 s, and 24 s for Compressed Blocks (18 MB, 9,360 recipes, writing the carry dominates).
+
 `fetch` gets each jar the player's way, never from us: copied from a folder they have (matched
 by SHA-1, or through a CurseForge app instance's `minecraftinstance.json`), else downloaded from
 the link the pack itself gives (a `.mrpack`'s, on the format's hosts only) or, for a CurseForge
 pack, the same file on Modrinth's public CDN, found by its SHA-1. A jar is kept only when its
-hash matches. A file only CurseForge has is listed as needing a CurseForge API key (Ludovic's
-decision; open question below), with the player's installed instance as the way round it.
+hash matches. A file only CurseForge has is listed as "CurseForge downloads coming soon" (its API
+needs a paid key; Ludovic, 2026-10-22), with the player's installed instance as the way round it.
 `<work>/fetch.json` says what happened to each file. On All the Mods 10 8.3's CurseForge zip
 (2026-10-17): of the 54 data-tier content mods, 42 come from Modrinth's CDN (84 MB) and 12 need
 the key or the instance; `port` then carries the 42 over (0 ported, 42 partial: the harness is a
@@ -1031,10 +1051,35 @@ What is missing, ranked by how much a player notices:
 6. **Smaller gaps:** Mo' Structures' mixin that keeps lakes out of its structures and its two
    block-ageing processors, and the 5 missing block models.
 
+### Three packs through the mod browser, measured
+
+2026-10-22, Mac mini M4 Pro (offscreen, a debug launcher, release-profile `horizon-port-pack` and game), while
+other sessions kept the CPU at 85 to 93 %, so times are upper bounds. The two Modrinth packs were imported with
+`horizon-launcher mods install <slug>` (the browser's Import), ATM10 from its CurseForge zip with `modpack import`
+(CurseForge support is coming soon), then each ported with `--resources` for 26.3 and opened as a survival
+world with every ported mod on (horizon-ctl `launch --dev-mod ...`, from a scratch script).
+
+| Pack | Files | Import | Port | Ported mods | Coverage | Declared | World load (resources) | Crashes |
+|---|---|---|---|---|---|---|---|---|
+| Vanilla Perfected 26.3 (Fabric, small) | 108 | 30.4 s | 1.0 s | 2 | 2 partial, 79 not yet, 27 not needed | 0 blocks (a trail effect, a torch-flower texture) | 5.2 s (2.1 s) | none |
+| Slimes Adventure 1.13.4 (Fabric 1.21.1, medium) | 105 | 18.8 s | 22.8 s | 20 | 20 partial, 46 not yet, 39 not needed | 8,208 blocks, 41 items, 1,376 recipes | 23.0 s (15.0 s) | none |
+| All the Mods 10 8.3 (NeoForge 1.21.1, CurseForge zip) | 496 | 3.1 s | 29.4 s | 42 | 42 partial, 333 not yet, 121 not needed | 10,000 blocks, 1,273 items, 4,178 recipes | 38.3 s (28.7 s) | none |
+
+The same world with no mods loads in 5.4 s (resources 1.1 s). Import is the pack download and Modrinth's answers by
+file hash; Vanilla Perfected's 30 s is mostly its 108 lookups and its download. Port is the jars (downloaded for the
+two Modrinth packs; ATM10's 42 copied from a folder, 12 more are on CurseForge only: CurseForge downloads coming soon) and the carry,
+which writes tens of thousands of small files. World load grows with the blocks the pack declares: ATM10 adds
+about 155,000 block states, and loading their models and textures is most of its 28.7 s.
+
+Every world loaded and stayed up, with no panic and no error in the log. Before the namespace fix above, Slimes
+Adventure lost three of YUNG's mods at start ("both use the namespace yungsapi"); after it all 20 load. As a share of
+the mods that need porting (not counting performance mods and libraries), 2 of 81 ported partly, 20 of 66 and 42 of
+375. Every ported mod is Partial: their Java code (block entities, entities, Mixins) doesn't come along.
+
 ## Open questions for Ludovic
 
 - Contacting authors of permissively licensed mods to publish ports (none contacted).
 - Whether players should run code-port agents themselves (their own Claude Code or Codex
   login, as Zenith does) or only download published ports.
-- A CurseForge API key for the launcher (CurseForge grants them to launchers on request). Until
-  then, CurseForge packs import from an installed instance.
+- CurseForge: dropped for now (its API needs a paid key; Ludovic, 2026-10-22), shown as coming
+  soon. CurseForge packs import from their zip or an installed instance.

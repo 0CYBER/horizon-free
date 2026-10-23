@@ -538,6 +538,37 @@ impl<'a> Plan<'a> {
                 }
             }
             "items.json" => self.items(doc, true),
+            "registries.json" => {
+                // Network ids: the game and its server map items and blocks through
+                // this report, so new ones get the ids after vanilla's, in plan order.
+                let new_items = self.items.iter().map(|i| i.rename.to.clone());
+                let new_blocks = self.blocks.iter().map(|b| b.decl.id.clone());
+                for (registry, names) in [
+                    ("minecraft:item", new_items.collect::<Vec<_>>()),
+                    ("minecraft:block", new_blocks.collect()),
+                ] {
+                    let Some(J::Obj(entries)) =
+                        doc.get_mut(registry).and_then(|r| r.get_mut("entries"))
+                    else {
+                        return Err(format!("no {registry} entries").into());
+                    };
+                    let next = entries
+                        .iter()
+                        .filter_map(|(_, e)| match e {
+                            J::Obj(o) => o.iter().find(|(k, _)| k == "protocol_id")?.1.as_u32(),
+                            _ => None,
+                        })
+                        .max()
+                        .map_or(0, |m| m + 1);
+                    for (i, name) in names.into_iter().enumerate() {
+                        if entries.iter().any(|(k, _)| *k == name) {
+                            continue;
+                        }
+                        let id = J::Num((next + i as u32).into());
+                        entries.push((name, J::Obj(vec![("protocol_id".into(), id)])));
+                    }
+                }
+            }
             "command-registries.json" => {
                 self.names(doc.at("blocks").ok_or("no blocks")?, false);
                 let new_items = || self.items.iter().map(|i| J::Str(i.rename.to.clone()));
@@ -618,8 +649,9 @@ impl<'a> Plan<'a> {
 }
 
 /// The JSON and NBT tables rewritten for new blocks and items.
-const JSON_TABLES: [&str; 13] = [
+const JSON_TABLES: [&str; 14] = [
     "facts.json",
+    "registries.json",
     "gameplay-facts.json",
     "block-behaviours.json",
     "model-states.json",

@@ -11,6 +11,8 @@ use std::sync::{Arc, Mutex};
 
 pub const REPO: &str = "ludovic111/horizon";
 pub const README_URL: &str = "https://github.com/ludovic111/horizon/blob/main/launcher/README.md";
+/// The players' page on connecting an AI agent (website/docs/agents.md).
+pub const AGENT_DOCS_URL: &str = "https://playhorizon.dev/docs/agents";
 /// This launcher's version: the release workflow sets `HORIZON_LAUNCHER_VERSION` from the
 /// tag it builds (no version-bump commits); other builds say Cargo.toml's.
 pub const VERSION: &str = version_or(option_env!("HORIZON_LAUNCHER_VERSION"));
@@ -1269,6 +1271,17 @@ pub fn game_home() -> PathBuf {
         .join("horizon")
 }
 
+/// Whether No AI is on: every AI feature hidden and off (`horizon_core::no_ai`, kept in the
+/// game's `horizon-extras.txt` so the game reads the same switch).
+pub fn no_ai() -> bool {
+    horizon_core::no_ai::is_on(&game_home())
+}
+
+/// Turns No AI on or off for the launcher and the game.
+pub fn set_no_ai(on: bool) -> Result<(), String> {
+    horizon_core::no_ai::set(&game_home(), on).map_err(|e| format!("Could not save No AI: {e}"))
+}
+
 // ----- Logs and crash reports ---------------------------------------------------------------------
 
 /// The game's logs (`latest.log` and the day archives), as it writes them in its home.
@@ -1408,65 +1421,6 @@ pub fn read_logs(lines: usize, crash: bool) -> Result<(PathBuf, String), String>
     let path = logs_dir().join("latest.log");
     let text = tail_of(&path, lines.max(1))?;
     Ok((path, text))
-}
-
-/// Which drawing the game's menus use. Classic is vanilla's own screens, which have no way to
-/// switch back, so the launcher is where the player returns to Horizon's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MenuStyle {
-    Horizon,
-    Classic,
-}
-
-impl MenuStyle {
-    pub fn name(self) -> &'static str {
-        match self {
-            MenuStyle::Horizon => "horizon",
-            MenuStyle::Classic => "classic",
-        }
-    }
-
-    pub fn parse(name: &str) -> Option<Self> {
-        match name {
-            "horizon" => Some(MenuStyle::Horizon),
-            "classic" => Some(MenuStyle::Classic),
-            _ => None,
-        }
-    }
-
-    /// The style `horizon.txt` holds: Horizon unless it has the line `menuStyle:classic`, as the
-    /// game reads it (crates/horizon-client/src/ui_theme.rs).
-    fn from_file(text: &str) -> Self {
-        if text.lines().any(|l| l.trim() == "menuStyle:classic") {
-            MenuStyle::Classic
-        } else {
-            MenuStyle::Horizon
-        }
-    }
-
-    /// `text` with its `menuStyle:` line set to this style and every other line kept.
-    fn into_file(self, text: &str) -> String {
-        let mut out: Vec<String> = text
-            .lines()
-            .filter(|l| !l.trim().starts_with("menuStyle:"))
-            .map(String::from)
-            .collect();
-        out.insert(0, format!("menuStyle:{}", self.name()));
-        out.join("\n") + "\n"
-    }
-}
-
-/// The menu style saved in the game home's `horizon.txt` (Horizon when there is none).
-pub fn menu_style() -> MenuStyle {
-    MenuStyle::from_file(&fs::read_to_string(game_home().join("horizon.txt")).unwrap_or_default())
-}
-
-pub fn set_menu_style(style: MenuStyle) -> Result<(), String> {
-    let home = game_home();
-    fs::create_dir_all(&home).map_err(|e| e.to_string())?;
-    let file = home.join("horizon.txt");
-    let text = style.into_file(&fs::read_to_string(&file).unwrap_or_default());
-    fs::write(file, text).map_err(|e| e.to_string())
 }
 
 /// Splits the player's extra game arguments (Settings' one line) into words, the way a shell
@@ -2277,6 +2231,17 @@ pub fn spawn(job: Job, mut cmd: Command, tx: Sender<Msg>) -> Result<Running, Str
     Ok(Running { child, stdin })
 }
 
+/// The launcher's appearance, as the player picks it in Settings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Appearance {
+    #[default]
+    Dark,
+    Light,
+    /// Follow the system's light or dark.
+    System,
+}
+
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Settings {
     pub selected: Option<String>,
@@ -2301,6 +2266,9 @@ pub struct Settings {
     /// builds" switch instead; [`Settings::parse`] reads its `beta_builds: true` as Alpha.
     #[serde(default)]
     pub update_channel: UpdateChannel,
+    /// Dark, Light, or the system's: the launcher's look. Dark by default.
+    #[serde(default)]
+    pub appearance: Appearance,
     /// The player has read what the "I'm playing" ping holds (`telemetry::PING`): on the
     /// first-run question, or on the Play page once if they answered that before it existed.
     #[serde(default)]
@@ -2328,6 +2296,13 @@ impl Settings {
                 .is_some_and(|c| c.as_str().and_then(UpdateChannel::parse).is_none())
             {
                 fields.remove("update_channel");
+            }
+            // The same for an appearance from a newer launcher.
+            if fields
+                .get("appearance")
+                .is_some_and(|a| serde_json::from_value::<Appearance>(a.clone()).is_err())
+            {
+                fields.remove("appearance");
             }
         }
         serde_json::from_value(value).unwrap_or_default()
@@ -2577,6 +2552,24 @@ mod tests {
             releases.iter().map(UpdateChannel::of).collect::<Vec<_>>(),
             [UpdateChannel::Alpha, UpdateChannel::Stable]
         );
+    }
+
+    #[test]
+    fn the_appearance_is_dark_unless_picked_and_an_unknown_one_keeps_the_rest() {
+        assert_eq!(Settings::parse("{}").appearance, Appearance::Dark);
+        let light = Settings::parse(r#"{"appearance": "light", "game_args": "--x"}"#);
+        assert_eq!(light.appearance, Appearance::Light);
+        let future = Settings::parse(r#"{"appearance": "sepia", "game_args": "--x"}"#);
+        assert_eq!(
+            (future.appearance, future.game_args.as_str()),
+            (Appearance::Dark, "--x")
+        );
+        let settings = Settings {
+            appearance: Appearance::System,
+            ..Settings::default()
+        };
+        let text = serde_json::to_string(&settings).unwrap();
+        assert!(text.contains(r#""appearance":"system""#), "{text}");
     }
 
     #[test]
@@ -2917,30 +2910,6 @@ mod tests {
         );
         // A key this launcher does not know is ignored.
         assert_eq!(Links::parse(r#"{"mastodon": "https://x.y/z"}"#), defaults);
-    }
-
-    #[test]
-    fn menu_style_file_matches_the_games() {
-        assert_eq!(MenuStyle::from_file(""), MenuStyle::Horizon);
-        assert_eq!(
-            MenuStyle::from_file("menuStyle:horizon\n"),
-            MenuStyle::Horizon
-        );
-        assert_eq!(
-            MenuStyle::from_file("menuStyle:classic\n"),
-            MenuStyle::Classic
-        );
-        assert_eq!(
-            MenuStyle::from_file("other:1\nmenuStyle:classic\n"),
-            MenuStyle::Classic
-        );
-        assert_eq!(MenuStyle::Classic.into_file(""), "menuStyle:classic\n");
-        assert_eq!(
-            MenuStyle::Horizon.into_file("menuStyle:classic\nother:1\n"),
-            "menuStyle:horizon\nother:1\n"
-        );
-        assert_eq!(MenuStyle::parse("classic"), Some(MenuStyle::Classic));
-        assert_eq!(MenuStyle::parse("vanilla"), None);
     }
 
     #[test]

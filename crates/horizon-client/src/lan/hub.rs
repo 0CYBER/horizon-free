@@ -1968,8 +1968,13 @@ impl Hub {
                     g.center = None;
                 }
                 S::PlayerInput(p) => {
+                    self.guests[i].input = p.flags;
                     self.guests[i].sneaking = p.flags & 32 != 0;
                     self.guests[i].sprinting = p.flags & 64 != 0 && p.flags & 1 != 0;
+                }
+                // OPEN_INVENTORY is the game's: the ridden mount's inventory.
+                S::PlayerCommand(p) if p.action == 5 => {
+                    events.push(HostEvent::Packet(conn, Box::new(S::PlayerCommand(p))));
                 }
                 S::PlayerCommand(p) => match p.action {
                     1 => self.guests[i].sprinting = true,
@@ -2050,6 +2055,11 @@ impl Hub {
             to[2].clamp(-3.0E7, 3.0E7),
         ];
         let (yaw, pitch) = (wrap_degrees(yaw), wrap_degrees(pitch));
+        // A passenger only turns: its vehicle carries it (absSnapTo where it is).
+        if g.vehicle.is_some() {
+            (g.yaw, g.pitch) = (yaw, pitch);
+            return;
+        }
         let d = [0, 1, 2].map(|k| to[k] - g.first_good[k]);
         let moved = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
         if g.sleeping {

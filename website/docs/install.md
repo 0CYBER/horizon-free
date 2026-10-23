@@ -24,7 +24,7 @@ Every release also carries `SHA256SUMS` and a signature, `SHA256SUMS.sig`, if yo
 2. Back on **Play**, the launcher says "Not prepared. Horizon needs the files of your own Minecraft 26.3." Choose **Prepare**. It finds your Minecraft folder by itself in the usual places. If it cannot, it lists where it looked, and **Choose…** next to the Minecraft folder lets you point it at yours.
 3. Wait a few minutes. When it says "Prepared for Minecraft 26.3", choose **Play**.
 
-The game opens on Horizon's own title screen. Your worlds, options and logs live in the game folder, which is not inside a version's folder, so updating or removing a version never touches them:
+The game opens on vanilla's title screen. Your worlds, options and logs live in the game folder, which is not inside a version's folder, so updating or removing a version never touches them:
 
 - Linux: `~/.local/share/horizon`
 - macOS: `~/Library/Application Support/horizon`
@@ -35,7 +35,7 @@ The game opens on Horizon's own title screen. Your worlds, options and logs live
 ## Updating
 
 - **Horizon.** The launcher looks for a new release when it starts and every four hours while it is open. With **Install new versions automatically** on (the default), it installs one and moves you to it if you were on the newest. New releases come out many times a day, and old versions stay installed until you remove them on the **Versions** page.
-- **The launcher.** It updates itself from its own releases, then shows **Restart** in its footer.
+- **The launcher.** It updates itself from its own releases, then shows **Restart** in its footer. A launcher from before 0.2 (0.16 or older) updates twice in a row: first to 0.17, then to 0.2. Then it installs Horizon 0.2 like any update.
 
 ## Stable and Alpha
 
