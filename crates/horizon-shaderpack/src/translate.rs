@@ -806,20 +806,11 @@ impl<'a> Legaliser<'a> {
     fn unit(&mut self, unit: &mut ast::TranslationUnit) -> Result<(), String> {
         // Functions, their sampler parameters, and struct definitions first.
         for ed in &unit.0 {
-            if let ast::ExternalDeclarationData::Declaration(d) = &ed.content {
-                match &d.content {
-                    ast::DeclarationData::InitDeclaratorList(list) => {
-                        if let ast::TypeSpecifierNonArrayData::Struct(s) =
-                            &list.head.ty.ty.ty.content
-                        {
-                            self.record_struct(s);
-                        }
-                    }
-                    ast::DeclarationData::TypeOnly(q) => {
-                        let _ = q;
-                    }
-                    _ => {}
-                }
+            if let ast::ExternalDeclarationData::Declaration(d) = &ed.content
+                && let ast::DeclarationData::InitDeclaratorList(list) = &d.content
+                && let ast::TypeSpecifierNonArrayData::Struct(s) = &list.head.ty.ty.ty.content
+            {
+                self.record_struct(s);
             }
             let proto = match &ed.content {
                 ast::ExternalDeclarationData::FunctionDefinition(f) => &f.prototype,

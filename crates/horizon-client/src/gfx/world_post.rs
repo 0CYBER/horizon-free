@@ -1,19 +1,19 @@
 //! Resolution scale, FXAA, and shader-pack G-buffer/shadow targets (Horizon
 //! settings): the world renders into its own target at the scaled size, then
 //! one full-screen pass copies or anti-aliases it onto the screen, under the
-//! hand and HUD. When a shader pack is active, `Post` also maintains:
-//! - `opaque_depth` (`depthtex1`/`depthtex2`): depth captured before
-//!   translucent terrain (water, stained glass, ice) renders;
-//! - `normal` (`colortex1`/`scene_normal`) and `material`
-//!   (`colortex2`/`scene_material`): G-buffer surface normals and material
-//!   properties reconstructed from depth and scene colour;
-//! - `shadow_depth` (`shadowtex0`/`shadowtex1`): the directional sun/moon
-//!   shadow map and its light-space `shadow_view` and `shadow_proj` matrices.
+//! hand and HUD. For a shader pack that reads them, `Post` also keeps:
+//! - `opaque_depth`: the depth before translucent terrain (water, stained
+//!   glass, ice) draws, a Java pack's `depthtex1`/`depthtex2`;
+//! - `normal` and `material`, an api 2 pack's `scene_normal` and
+//!   `scene_material`: surface normals and material properties
+//!   reconstructed from depth and scene colour;
+//! - `shadow_depth`, an api 2 pack's: the sun/moon shadow map and its
+//!   light-space `shadow_view` and `shadow_proj` matrices.
 //!
 //! With none of them on, the world renders straight to the screen as before.
 
 use super::pack_stages::FrameUniform;
-use glam::{Mat4, Vec3, Vec4};
+use glam::{Mat4, Vec3};
 
 const GBUFFER_WGSL: &str = r#"
 struct GbufferParams {
@@ -632,43 +632,32 @@ impl Post {
         self.target.as_ref().map(|t| t.size)
     }
 
-    /// Pre-translucent depth view (`depthtex1`/`depthtex2` / `opaque_depth`).
+    /// The depth before translucent geometry (`capture_opaque_depth`).
     pub fn opaque_depth(&self) -> &wgpu::TextureView {
         self.target
             .as_ref()
             .map_or(&self.fallback_shadow, |t| &t.opaque_depth)
     }
 
-    /// Reconstructed world-space normal G-buffer view (`colortex1` / `scene_normal`).
+    /// Reconstructed world-space normals (`scene_normal`).
     pub fn normal(&self) -> &wgpu::TextureView {
         self.target
             .as_ref()
             .map_or(&self.fallback_color, |t| &t.normal)
     }
 
-    /// Reconstructed material/lightmap G-buffer view (`colortex2` / `scene_material`).
+    /// Reconstructed material and light (`scene_material`).
     pub fn material(&self) -> &wgpu::TextureView {
         self.target
             .as_ref()
             .map_or(&self.fallback_color, |t| &t.material)
     }
 
-    /// Directional sun/moon shadow map view (`shadowtex0`/`shadowtex1` / `shadow_depth`).
+    /// The sun/moon shadow map (`shadow_depth` of api 2 packs).
     pub fn shadow_depth(&self) -> &wgpu::TextureView {
         self.shadow
             .as_ref()
             .map_or(&self.fallback_shadow, |s| &s.depth)
-    }
-
-    /// OpenGL-convention (-1..1 Z) shadow projection for Java/Iris shader packs.
-    pub fn gl_shadow_projection(&self) -> Mat4 {
-        let to_gl = Mat4::from_cols(
-            Vec4::X,
-            Vec4::Y,
-            Vec4::new(0.0, 0.0, -2.0, 0.0),
-            Vec4::new(0.0, 0.0, 1.0, 1.0),
-        );
-        to_gl * self.shadow_proj
     }
 
     /// Bindings that copy (or anti-alias) `view` onto the screen in `finish_with`.

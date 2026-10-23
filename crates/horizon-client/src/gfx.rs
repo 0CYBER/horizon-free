@@ -3679,14 +3679,16 @@ impl Renderer {
         }
         // The world's targets: the screen, or the scaled target of `post`.
         let pack = self.pack.is_some() && !frame.title;
-        let shadow_cfg = if pack {
-            self.pack.as_ref().and_then(|p| match p {
-                Pack::Horizon(s) if s.needs_shadow => Some((s.shadow_res, s.shadow_dist)),
-                Pack::Java(s) if s.needs_shadow() => Some(s.shadow_config(frame.shader.dimension)),
-                _ => None,
-            })
-        } else {
-            None
+        // What the pack reads beyond the world's colour and depth: each costs
+        // a pass (the shadow map, the G-buffer) or a copy (the opaque depth).
+        let (shadow_cfg, gbuffer, opaque_depth) = match self.pack.as_ref().filter(|_| pack) {
+            Some(Pack::Horizon(s)) => (
+                s.needs_shadow.then_some((s.shadow_res, s.shadow_dist)),
+                s.needs_gbuffer,
+                s.needs_opaque_depth,
+            ),
+            Some(Pack::Java(s)) => (None, false, s.reads_opaque_depth),
+            None => (None, false, false),
         };
         if let Some((shadow_res, shadow_dist)) = shadow_cfg {
             self.world_post
@@ -3944,7 +3946,7 @@ impl Renderer {
                 pass.set_vertex_buffer(0, self.debug_line_buffer.slice(..));
                 pass.draw(0..4, debug_depth..debug_depth + debug_top);
             }
-            if pack {
+            if opaque_depth {
                 drop(pass);
                 self.world_post.capture_opaque_depth(&mut encoder);
                 let attachments = [Some(wgpu::RenderPassColorAttachment {
@@ -4042,7 +4044,7 @@ impl Renderer {
                 );
             }
         }
-        if pack && scaled.is_some() {
+        if gbuffer && scaled.is_some() {
             self.world_post.build_gbuffer(
                 &self.queue,
                 &mut encoder,
@@ -4617,7 +4619,11 @@ mod tests {
         );
         assert!(files.len() >= 10, "{files:?}");
         for path in files {
-            let text = std::fs::read_to_string(&path).unwrap();
+            let mut text = std::fs::read_to_string(&path).unwrap();
+            // Api 2's prelude follows api 1's (`shader_pack::ShaderPack::load`).
+            if path.ends_with("shader_pack_prelude_api2.wgsl") {
+                text = format!("{}\n{text}", crate::shader_pack::PRELUDE);
+            }
             // entity.wgsl comes after the overlay's constants (entity_shader).
             let module = naga::front::wgsl::parse_str(&text)
                 .or_else(|_| {

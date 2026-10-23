@@ -387,19 +387,6 @@ impl Loading {
                         self.menu.win = Some((screen, Instant::now()));
                     }
                 }
-                Event::ImportShaderPack => {
-                    let dir = horizon_client::shader_pack::folder();
-                    if let Some(chosen) = packs::pick_shader_pack(&dir)
-                        && let Ok(id) = horizon_client::shader_pack::import_pack(&chosen, &dir)
-                    {
-                        self.menu.options.shader_packs = Default::default();
-                        self.menu.options.shader_packs.poll(dir);
-                        self.settings.horizon.shader_pack = id;
-                        self.menu.options.shader_pack_config = None;
-                        self.menu.options.sync_shader_pack_config(&self.settings);
-                        self.save_menu_settings();
-                    }
-                }
                 Event::ReloadShaderPack => {
                     self.save_menu_settings();
                 }
@@ -469,14 +456,14 @@ impl Loading {
                 self.apply_menu_settings();
             }
             WindowEvent::DroppedFile(path) => {
-                let dir = horizon_client::shader_pack::folder();
-                if let Ok(id) = horizon_client::shader_pack::import_pack(&path, &dir) {
-                    self.menu.options.shader_packs = Default::default();
-                    self.menu.options.shader_packs.poll(dir);
-                    self.settings.horizon.shader_pack = id;
-                    self.menu.options.shader_pack_config = None;
-                    self.menu.options.sync_shader_pack_config(&self.settings);
-                    self.save_menu_settings();
+                match self
+                    .menu
+                    .options
+                    .drop_shader_pack(&mut self.settings, &path)
+                {
+                    Some(Ok(())) => self.save_menu_settings(),
+                    Some(Err(e)) => log::warn!("Horizon: shader pack {}: {e}", path.display()),
+                    None => {}
                 }
             }
             WindowEvent::RedrawRequested => self.draw(),

@@ -243,9 +243,6 @@ impl Game<'_> {
                     super::packs::open_folder(&dir);
                 }
                 Event::Credits => self.open_win_screen(false, super::win::Finish::Options),
-                Event::ImportShaderPack => {
-                    self.import_shader_pack_dialog();
-                }
                 Event::ReloadShaderPack => {
                     self.load_shader_pack();
                 }

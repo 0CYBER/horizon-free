@@ -1,5 +1,5 @@
 // Stage 3 (Composite, half-resolution): HDR bloom extraction + 9-tap tent filter
-// and radial volumetric light shafts (godrays) towards the sun/moon.
+// and radial light shafts (screen-space godrays) towards the sun/moon.
 override godrays: bool = true;
 override bloom_strength: f32 = 0.35;
 
@@ -30,7 +30,7 @@ override bloom_strength: f32 = 0.35;
         }
     }
 
-    // Radial volumetric godrays cast from the sun's screen projection.
+    // Radial godrays from the sun's screen projection.
     var shafts = vec3(0.0);
     if godrays && frame.camera_state.x == 0.0 && frame.dimension.y > 0.5 {
         let sun_clip = frame.projection * (frame.view * vec4(frame.sun.xyz * 128.0, 1.0));

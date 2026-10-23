@@ -1,10 +1,10 @@
-// Stage 1 (Deferred): G-buffer normal reconstruction, multi-tap GTAO ambient
+// Stage 1: G-buffer normals, 8-tap screen-space ambient
 // occlusion, directional sun/moon PCF shadow mapping, and rain puddle wetness.
 override shadows: bool = true;
 override shadow_strength: f32 = 0.85;
 override ao_strength: f32 = 0.75;
 
-fn compute_gtao(uv: vec2<f32>, depth: f32, view_pos: vec3<f32>) -> f32 {
+fn compute_ao(uv: vec2<f32>, depth: f32, view_pos: vec3<f32>) -> f32 {
     if ao_strength <= 0.001 {
         return 1.0;
     }
@@ -60,7 +60,7 @@ fn compute_gtao(uv: vec2<f32>, depth: f32, view_pos: vec3<f32>) -> f32 {
     let mat = material_at(in.uv);
 
     // Ambient occlusion from depth discontinuity neighborhood.
-    let ao = compute_gtao(in.uv, depth, view_pos);
+    let ao = compute_ao(in.uv, depth, view_pos);
 
     // Directional sun/moon shadow factor.
     var shadow = 1.0;

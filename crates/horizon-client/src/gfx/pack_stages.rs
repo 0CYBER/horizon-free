@@ -5,7 +5,7 @@
 //! and writes its own target; the last target goes to the screen through
 //! `world_post` (copy or FXAA) under the hand and HUD. Only exists while a
 //! pack is selected.
-use crate::shader_pack::{ShaderPack, StageKind, VERTEX_ENTRY};
+use crate::shader_pack::{Rgba, ShaderPack, VERTEX_ENTRY};
 use horizon_shaderpack::uniforms::SmoothFloat;
 
 /// The `Frame` uniform of the prelude (`shader_pack_prelude.wgsl`).
@@ -45,7 +45,59 @@ pub struct FrameExtUniform {
     pub environment: [f32; 4],
 }
 
-const NOISE_SIZE: u32 = 256;
+/// Iris's `noisetex` without a `texture.noise`: 256² random RGB, opaque.
+/// Horizon packs get the same one unless `[textures] noise` replaces it.
+pub(super) fn noise() -> Rgba {
+    const SIZE: u32 = 256;
+    let mut seed = 0x2545_f491_u32;
+    let pixels = (0..SIZE * SIZE * 4)
+        .map(|i| {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            if i % 4 == 3 { 255 } else { (seed >> 24) as u8 }
+        })
+        .collect();
+    Rgba {
+        width: SIZE,
+        height: SIZE,
+        pixels,
+    }
+}
+
+/// `image` as a sampled RGBA8 texture.
+pub(super) fn rgba_view(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    label: &str,
+    image: &Rgba,
+) -> wgpu::TextureView {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width: image.width,
+            height: image.height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        texture.as_image_copy(),
+        &image.pixels,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(image.width * 4),
+            rows_per_image: None,
+        },
+        texture.size(),
+    );
+    texture.create_view(&Default::default())
+}
 
 struct Pass {
     pipeline: wgpu::RenderPipeline,
@@ -64,6 +116,10 @@ struct Target {
 pub struct PackStages {
     pub id: String,
     pub needs_shadow: bool,
+    /// The stages read the G-buffer (`build_gbuffer`) or the depth before
+    /// translucent geometry (`capture_opaque_depth`).
+    pub needs_gbuffer: bool,
+    pub needs_opaque_depth: bool,
     pub shadow_res: u32,
     pub shadow_dist: f32,
     layout: wgpu::BindGroupLayout,
@@ -162,7 +218,7 @@ impl PackStages {
             .iter()
             .enumerate()
             .map(|(idx, stage)| {
-                let is_last = idx + 1 == stage_count || stage.kind == StageKind::Final;
+                let is_last = idx + 1 == stage_count;
                 let target_format = if is_last {
                     format
                 } else {
@@ -240,49 +296,16 @@ impl PackStages {
                 ..Default::default()
             })
         };
-        let (nw, nh, noise_bytes) = match &pack.custom_noise {
-            Some((w, h, bytes)) => (*w, *h, bytes.clone()),
-            None => {
-                let mut seed = 0x2545_f491_u32;
-                let bytes: Vec<u8> = (0..NOISE_SIZE * NOISE_SIZE * 4)
-                    .map(|i| {
-                        seed ^= seed << 13;
-                        seed ^= seed >> 17;
-                        seed ^= seed << 5;
-                        if i % 4 == 3 { 255 } else { (seed >> 24) as u8 }
-                    })
-                    .collect();
-                (NOISE_SIZE, NOISE_SIZE, bytes)
-            }
+        let noise_view = match &pack.custom_noise {
+            Some(image) => rgba_view(device, queue, "Shader pack noise", image),
+            None => rgba_view(device, queue, "Shader pack noise", &noise()),
         };
-        let noise_tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Shader pack noise"),
-            size: wgpu::Extent3d {
-                width: nw,
-                height: nh,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        queue.write_texture(
-            noise_tex.as_image_copy(),
-            &noise_bytes,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(nw * 4),
-                rows_per_image: None,
-            },
-            noise_tex.size(),
-        );
-        let (shadow_res, shadow_dist, _) = pack.shadow_config(0);
+        let (shadow_res, shadow_dist) = pack.shadow_config();
         Ok(Self {
             id: pack.id.clone(),
             needs_shadow: pack.needs_shadow(),
+            needs_gbuffer: pack.needs_gbuffer(),
+            needs_opaque_depth: pack.needs_opaque_depth(),
             shadow_res,
             shadow_dist,
             layout,
@@ -302,7 +325,7 @@ impl PackStages {
                 wgpu::AddressMode::ClampToEdge,
                 Some(wgpu::CompareFunction::GreaterEqual),
             ),
-            noise_view: noise_tex.create_view(&Default::default()),
+            noise_view,
             passes,
             targets: Vec::new(),
             output: None,
@@ -462,7 +485,7 @@ impl PackStages {
                 f32::from(eye_light[0]) * 16.0,
                 f32::from(eye_light[1]) * 16.0,
                 wet,
-                uniform.view_params[2] * 0.5,
+                0.0,
             ],
         };
         uniform.time[0] = self.started.elapsed().as_secs_f32();

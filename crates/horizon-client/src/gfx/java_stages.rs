@@ -1,16 +1,17 @@
 //! A Java (OptiFine/Iris) shader pack on the GPU (docs/shader-packs.md):
 //! Iris's colour targets (`colortex0..`, each with a main and an alternate
-//! side), pre-translucent depth (`depthtex1`/`depthtex2`), directional
-//! shadow map (`shadowtex0`/`shadowtex1`) and the pack's `begin`, `prepare`,
-//! `deferred`, `composite` and `final` programs as full-screen passes over
-//! them, as Iris's `CompositeRenderer` runs them. Horizon's world enters
-//! `colortex0` and `depthtex0..2` after `prepare`, where Iris's gbuffers
-//! programs would have drawn, and the last picture goes to `world_post`. The
+//! side) and the pack's `begin`, `prepare`, `deferred`, `composite` and
+//! `final` programs as full-screen passes over them, as Iris's
+//! `CompositeRenderer` runs them. Horizon's world enters `colortex0` and
+//! `depthtex0` after `prepare`, where Iris's gbuffers programs would have
+//! drawn (`depthtex1`/`depthtex2`: its depth before translucent geometry),
+//! and the last picture goes to `world_post`. The
 //! targets keep GL's layout (row 0 at the bottom, which the translated vertex
 //! programs produce), so the world is flipped going in and the picture coming
 //! out.
-use super::pack_stages::FrameUniform;
-use crate::java_pack::{JavaFolder, JavaPasses};
+use super::pack_stages::{FrameUniform, noise, rgba_view};
+use crate::java_pack::{JavaFolder, JavaPasses, NOISE_KEY, texture_key};
+use crate::shader_pack::Rgba;
 use glam::{Mat3, Mat4, Vec3, Vec4};
 use horizon_shaderpack::pipeline::TargetSettings;
 use horizon_shaderpack::pipeline::{Directives, Program, target_index};
@@ -30,8 +31,6 @@ pub struct JavaFrame {
     pub moon_angle: f32,
 }
 
-/// Iris's `noisetex` size (`noiseTextureResolution`'s default).
-const NOISE_SIZE: u32 = 256;
 /// The vertex buffers a pass may read (wgpu's default limit).
 const MAX_ATTRIBUTES: usize = 8;
 
@@ -173,7 +172,8 @@ enum Source {
     /// `depthtex1` / `depthtex2`: the opaque world's depth (before translucent water).
     OpaqueDepth,
     Noise,
-    /// `shadowtex*`: directional sun/moon shadow map depth (or far depth for DH/Voxy).
+    /// `shadowtex*`: no shadow map yet, so a far depth (nothing in shadow);
+    /// also Distant Horizons' and Voxy's depth, as without those mods.
     Shadow,
     /// Anything else (`shadowcolor*`, custom textures): white or black.
     Blank(bool),
@@ -267,11 +267,13 @@ struct Folder {
     passes: Vec<PassGpu>,
     final_pass: Option<PassGpu>,
     directives: Directives,
-    shadow_enabled: bool,
 }
 
 pub struct JavaStages {
     pub id: String,
+    /// A pass samples `depthtex1`/`depthtex2`: the world's depth is kept
+    /// before translucent geometry draws.
+    pub reads_opaque_depth: bool,
     format: wgpu::TextureFormat,
     common: Common,
     folders: Vec<Folder>,
@@ -285,25 +287,12 @@ pub struct JavaStages {
     uniform_state: UniformState,
     /// `eyeBrightnessSmooth`, block then sky.
     eye_smooth: [SmoothFloat; 2],
-    /// `wetness`, smoothed with `wetnessHalflife` / `drynessHalflife`.
+    /// `wetness`: `rainStrength` smoothed with `wetnessHalflife` going up
+    /// and `drynessHalflife` going down.
     wetness_smooth: SmoothFloat,
-    /// `centerDepthSmooth`, smoothed with `centerDepthHalflife`.
-    center_depth_smooth: SmoothFloat,
 }
 
 impl JavaStages {
-    /// Whether any dimension folder in this pack reads directional shadow maps.
-    pub fn needs_shadow(&self) -> bool {
-        self.folders.iter().any(|f| f.shadow_enabled)
-    }
-
-    /// Shadow map resolution and distance for `dimension`.
-    pub fn shadow_config(&self, dimension: i8) -> (u32, f32) {
-        let idx = self.folder_for[(dimension.clamp(-1, 1) + 1) as usize].unwrap_or(0);
-        let d = &self.folders[idx].directives;
-        (d.shadow_map_resolution, d.shadow_distance)
-    }
-
     /// The pipelines of a loaded Java pack, or wgpu's error.
     pub fn new(
         device: &wgpu::Device,
@@ -342,15 +331,20 @@ impl JavaStages {
                     passes,
                     final_pass,
                     directives: plan.directives,
-                    shadow_enabled: plan.shadow_enabled,
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
         if let Some(error) = pollster::block_on(scope.pop()) {
             return Err(error.to_string());
         }
+        let reads_opaque_depth = folders
+            .iter()
+            .flat_map(|f| f.passes.iter().chain(&f.final_pass))
+            .flat_map(|p| &p.samplers)
+            .any(|s| s.source == Source::OpaqueDepth);
         Ok(Self {
             id: id.to_owned(),
+            reads_opaque_depth,
             format,
             common,
             folders,
@@ -364,7 +358,6 @@ impl JavaStages {
             uniform_state: UniformState::default(),
             eye_smooth: [SmoothFloat::default(); 2],
             wetness_smooth: SmoothFloat::default(),
-            center_depth_smooth: SmoothFloat::default(),
         })
     }
 
@@ -405,10 +398,6 @@ impl JavaStages {
             self.previous,
         );
         inputs.set_world(&world, directives.sun_path_rotation);
-        inputs.shadow_view = post.shadow_view;
-        inputs.shadow_projection = post.gl_shadow_projection();
-        inputs.ambient_occlusion_level = directives.ambient_occlusion_level;
-        inputs.shadow_map_resolution = directives.shadow_map_resolution as f32;
         let half_life = directives.eye_brightness_half_life;
         for (i, smooth) in self.eye_smooth.iter_mut().enumerate() {
             inputs.eye_smooth[i] = smooth.update(inputs.eye[i], half_life, half_life, frame_time);
@@ -417,12 +406,6 @@ impl JavaStages {
             frame.weather[0],
             directives.wetness_half_life,
             directives.dryness_half_life,
-            frame_time,
-        );
-        inputs.center_depth_smooth = self.center_depth_smooth.update(
-            0.5,
-            directives.center_depth_half_life,
-            directives.center_depth_half_life,
             frame_time,
         );
         self.uniforms
@@ -599,7 +582,6 @@ impl JavaStages {
                     &targets,
                     &depth,
                     &opaque_depth,
-                    post,
                     &self.common,
                     &mut blank,
                 )
@@ -780,11 +762,8 @@ fn blit_pipeline(
 }
 
 impl Common {
-    fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        custom_map: &BTreeMap<String, (u32, u32, Vec<u8>)>,
-    ) -> Self {
+    /// `custom` holds the pack's `texture.*` images (`JavaPasses::custom_textures`).
+    fn new(device: &wgpu::Device, queue: &wgpu::Queue, custom: &BTreeMap<String, Rgba>) -> Self {
         let sampler = |filter, address, compare| {
             device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some("Java shader pack"),
@@ -798,68 +777,15 @@ impl Common {
             })
         };
         use wgpu::{AddressMode::*, FilterMode::*};
-        // Iris's noise: random RGB, opaque.
-        let mut seed = 0x2545_f491_u32;
-        let noise_bytes: Vec<u8> = (0..NOISE_SIZE * NOISE_SIZE * 4)
-            .map(|i| {
-                seed ^= seed << 13;
-                seed ^= seed >> 17;
-                seed ^= seed << 5;
-                if i % 4 == 3 { 255 } else { (seed >> 24) as u8 }
-            })
+        let noise = match custom.get(NOISE_KEY) {
+            Some(image) => rgba_view(device, queue, "noisetex", image),
+            None => rgba_view(device, queue, "noisetex", &noise()),
+        };
+        let custom_textures = custom
+            .iter()
+            .filter(|(key, _)| *key != NOISE_KEY)
+            .map(|(key, image)| (key.clone(), rgba_view(device, queue, key, image)))
             .collect();
-        let noise = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("noisetex"),
-            size: wgpu::Extent3d {
-                width: NOISE_SIZE,
-                height: NOISE_SIZE,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        queue.write_texture(
-            noise.as_image_copy(),
-            &noise_bytes,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(NOISE_SIZE * 4),
-                rows_per_image: None,
-            },
-            noise.size(),
-        );
-        let mut custom_textures = BTreeMap::new();
-        for (name, (w, h, bytes)) in custom_map {
-            let tex = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(name),
-                size: wgpu::Extent3d {
-                    width: *w,
-                    height: *h,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-            queue.write_texture(
-                tex.as_image_copy(),
-                bytes,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(*w * 4),
-                    rows_per_image: None,
-                },
-                tex.size(),
-            );
-            custom_textures.insert(name.clone(), tex.create_view(&Default::default()));
-        }
         // The full-screen triangle (0, 0), (2, 0), (0, 2): the pack's
         // projection maps 0..1 to the screen. Texture coordinates are the
         // position; colours white; normals up.
@@ -899,7 +825,7 @@ impl Common {
             nearest: sampler(Nearest, ClampToEdge, None),
             repeat: sampler(Linear, Repeat, None),
             compare: sampler(Linear, ClampToEdge, Some(wgpu::CompareFunction::LessEqual)),
-            noise: noise.create_view(&Default::default()),
+            noise,
             custom_textures,
             vertices,
             world_layout: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -1239,21 +1165,22 @@ impl PassGpu {
         targets: &BTreeMap<u32, Target>,
         depth: &wgpu::TextureView,
         opaque_depth: &wgpu::TextureView,
-        post: &super::world_post::Post,
         common: &Common,
         blank: &mut Vec<wgpu::Texture>,
     ) -> wgpu::BindGroup {
         let mut views = Vec::new();
         for s in &self.samplers {
-            let view = if let Some(custom) = common
-                .custom_textures
-                .get(&s.name)
-                .filter(|_| !s.compare && s.dimension == wgpu::TextureViewDimension::D2)
-            {
+            let custom = (!s.compare && s.dimension == wgpu::TextureViewDimension::D2)
+                .then(|| {
+                    common
+                        .custom_textures
+                        .get(&texture_key(&self.program, &s.name))
+                })
+                .flatten();
+            let view = if let Some(custom) = custom {
                 custom.clone()
             } else {
                 match (s.compare, s.source) {
-                    (true, Source::Shadow) if post.shadow_active => post.shadow_depth().clone(),
                     (true, _) => blank_view(device, queue, blank, s, BlankKind::FarDepth),
                     (false, Source::Target(i)) if s.dimension == wgpu::TextureViewDimension::D2 => {
                         match targets.get(&i) {
@@ -1612,8 +1539,6 @@ struct Inputs {
     view: Mat4,
     /// GL's: near at -1, far at 1.
     projection: Mat4,
-    shadow_view: Mat4,
-    shadow_projection: Mat4,
     camera: Vec3,
     previous: (Mat4, Mat4, Vec3),
     size: [f32; 2],
@@ -1624,10 +1549,8 @@ struct Inputs {
     /// `eyeBrightness` and `eyeBrightnessSmooth`: block, sky light × 16.
     eye: [f32; 2],
     eye_smooth: [f32; 2],
+    /// `wetness` (`JavaStages::wetness_smooth`).
     wetness: f32,
-    center_depth_smooth: f32,
-    ambient_occlusion_level: f32,
-    shadow_map_resolution: f32,
     /// `CelestialUniforms`, in view space.
     sun_position: Vec3,
     moon_position: Vec3,
@@ -1676,8 +1599,6 @@ impl Inputs {
         let mut out = Self {
             view,
             projection,
-            shadow_view: Mat4::IDENTITY,
-            shadow_projection: Mat4::IDENTITY,
             camera,
             previous: previous.unwrap_or((view, projection, camera)),
             size: size.map(|v| v as f32),
@@ -1688,9 +1609,6 @@ impl Inputs {
             eye: [0.0; 2],
             eye_smooth: [0.0; 2],
             wetness: frame.weather[0],
-            center_depth_smooth: 0.5,
-            ambient_occlusion_level: 1.0,
-            shadow_map_resolution: 2048.0,
             sun_position: Vec3::ZERO,
             moon_position: Vec3::ZERO,
             up_position: Vec3::ZERO,
@@ -1790,35 +1708,21 @@ impl Inputs {
             "skyColor" => f.sky_color[..3].to_vec(),
             "isEyeInWater" => vec![f.camera_state[0]],
             "nightVision" => vec![f.camera_state[1]],
-            "darknessFactor" | "darknessLightFactor" => vec![f.camera_state[2]],
-            "blindness" => vec![f.camera_state[3]],
+            "darknessFactor" => vec![f.camera_state[2]],
             "screenBrightness" => vec![1.0],
-            "centerDepthSmooth" => vec![self.center_depth_smooth],
-            "ambientOcclusionLevel" => vec![self.ambient_occlusion_level],
-            "shadowMapResolution" => vec![self.shadow_map_resolution],
             "eyeBrightness" => self.eye.to_vec(),
             // An ivec2: the smoothed value truncated.
             "eyeBrightnessSmooth" => self.eye_smooth.map(f32::trunc).to_vec(),
             "hasSkylight" => vec![f.dimension[1]],
-            "heldItemId" | "heldItemId2" | "heldBlockLightValue" | "heldBlockLightValue2" => {
-                vec![0.0]
-            }
-            "biome" | "biome_category" => vec![0.0],
-            "biome_precipitation" => vec![if f.weather[0] > 0.01 { 1.0 } else { 0.0 }],
-            "temp" => vec![0.8],
-            "rainfall" => vec![0.4],
-            "alphaTestRef" => vec![0.1],
-            "renderStage" => vec![0.0],
-            "playerMood" | "currentColorSpace" => vec![0.0],
             "iris_ModelViewMatrix" | "iris_ModelViewMatrixInverse" => mat(Mat4::IDENTITY),
             "iris_ProjectionMatrix" | "iris_ModelViewProjectionMatrix" => mat(screen),
             "iris_ProjectionMatrixInverse" => mat(screen.inverse()),
             "iris_TextureMatrix" => (0..8).flat_map(|_| mat(Mat4::IDENTITY)).collect(),
             "iris_NormalMatrix" => Mat3::IDENTITY.to_cols_array().to_vec(),
-            "shadowModelView" => mat(self.shadow_view),
-            "shadowModelViewInverse" => mat(self.shadow_view.inverse()),
-            "shadowProjection" => mat(self.shadow_projection),
-            "shadowProjectionInverse" => mat(self.shadow_projection.inverse()),
+            "shadowModelView"
+            | "shadowModelViewInverse"
+            | "shadowProjection"
+            | "shadowProjectionInverse" => mat(Mat4::IDENTITY),
             _ => return None,
         })
     }

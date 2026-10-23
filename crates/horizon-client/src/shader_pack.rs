@@ -18,6 +18,13 @@ pub const API: u32 = 2;
 /// The folder beside `options.txt` that holds the packs.
 pub const DIR: &str = "shaderpacks";
 pub const PRELUDE: &str = include_str!("shader_pack_prelude.wgsl");
+/// What api 2 adds after [`PRELUDE`] (`api = 2` packs only).
+pub const PRELUDE_API2: &str = include_str!("shader_pack_prelude_api2.wgsl");
+/// [`PRELUDE_API2`]'s bindings that cost a pass when a stage reads them.
+const BINDING_SCENE_NORMAL: u32 = 7;
+const BINDING_SCENE_MATERIAL: u32 = 8;
+const BINDING_OPAQUE_DEPTH: u32 = 9;
+const BINDING_SHADOW_DEPTH: u32 = 10;
 /// The prelude's vertex entry point, shared by every stage.
 pub const VERTEX_ENTRY: &str = "horizon_stage_vertex";
 const MAX_STAGES: usize = 16;
@@ -58,8 +65,6 @@ struct StageEntry {
     entry: Option<String>,
     scale: Option<f32>,
     format: Option<String>,
-    #[serde(default)]
-    mipmap: bool,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -74,20 +79,11 @@ struct OptionEntry {
     values: Option<Vec<i64>>,
 }
 
-/// Where a stage runs. Api 1 has `composite` only; Api 2 adds `shadow`,
-/// `gbuffer`, `deferred` and `final`.
+/// Where a stage runs: `composite` only so far (docs/shader-packs.md, Stages).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StageKind {
-    /// Directional sun/moon shadow map pass.
-    Shadow,
-    /// Material / G-buffer evaluation pass over world colour, depth and normals.
-    Gbuffer,
-    /// Opaque world lighting pass (runs before translucent water/weather).
-    Deferred,
     /// After the world pass, before the hand: reads the scene's colour and depth.
     Composite,
-    /// Final tonemapping / anti-aliasing pass before HUD and menus.
-    Final,
 }
 #[derive(Clone, Debug)]
 pub struct Stage {
@@ -99,11 +95,13 @@ pub struct Stage {
     pub entry: String,
     /// Target size relative to the world's.
     pub scale: f32,
-    /// Optional target format name (`rgba16float`, `rgba8unorm`).
+    /// The target's format ([`STAGE_FORMATS`]); `None`: the screen's.
     pub format: Option<String>,
-    /// Whether the previous stage's output is mipmapped before this stage runs.
-    pub mipmap: bool,
+    /// The prelude bindings (group 0) the stage reads.
+    pub bindings: BTreeSet<u32>,
 }
+/// The `format`s a stage's target can have.
+pub const STAGE_FORMATS: [&str; 3] = ["rgba8unorm", "rgba16float", "rgb10a2unorm"];
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum OptionKind {
     Bool,
@@ -377,22 +375,18 @@ impl PackConfig {
     fn load_java(path: &Path, id: &str, saved: &BTreeMap<String, String>) -> Result<Self, String> {
         let pack = JavaPack::open(path)?;
         let values = pack.values(saved);
+        // The menus don't know the GPU: `shaders.properties` is read as on an
+        // unknown one (the screens and profiles of the packs tested don't
+        // depend on it).
         let env = Environment::iris("Unknown", "", 4);
         let props = pack.properties(&values, &env).unwrap_or_default();
         let lang = pack.translations("en_us");
         let sliders: BTreeSet<&str> = props.sliders().into_iter().collect();
 
-        let option_label = |name: &str, comment: Option<&str>| -> String {
-            lang.get(&format!("option.{name}"))
-                .cloned()
-                .or_else(|| {
-                    comment
-                        .map(str::trim)
-                        .filter(|c| !c.is_empty() && c.len() <= 40 && !c.contains('.'))
-                        .map(str::to_owned)
-                })
-                .unwrap_or_else(|| humanize_identifier(name))
-        };
+        // Iris's names: the `.lang` entry, else the name itself; the tooltip
+        // from `.lang`, else the option's comment.
+        let named = |key: String, name: &str| lang.get(&key).cloned().unwrap_or(name.to_owned());
+        let option_label = |name: &str| named(format!("option.{name}"), name);
         let option_desc = |name: &str, comment: Option<&str>| -> String {
             lang.get(&format!("option.{name}.comment"))
                 .cloned()
@@ -407,7 +401,7 @@ impl PackConfig {
             let idx = options.len();
             options.push(PackOption {
                 key: name.clone(),
-                label: option_label(name, b.comment.as_deref()),
+                label: option_label(name),
                 description: option_desc(name, b.comment.as_deref()),
                 kind: OptionKind::Bool,
                 values: Vec::new(),
@@ -428,19 +422,12 @@ impl PackConfig {
             let choices: Vec<(String, String)> = s
                 .allowed
                 .iter()
-                .map(|raw| {
-                    let label = lang
-                        .get(&format!("value.{name}.{raw}"))
-                        .or_else(|| lang.get(&format!("option.{name}.value.{raw}")))
-                        .cloned()
-                        .unwrap_or_else(|| raw.clone());
-                    (raw.clone(), label)
-                })
+                .map(|raw| (raw.clone(), named(format!("value.{name}.{raw}"), raw)))
                 .collect();
             let idx = options.len();
             options.push(PackOption {
                 key: name.clone(),
-                label: option_label(name, s.comment.as_deref()),
+                label: option_label(name),
                 description: option_desc(name, s.comment.as_deref()),
                 kind: OptionKind::Choice {
                     slider: sliders.contains(name.as_str()),
@@ -460,10 +447,7 @@ impl PackConfig {
             .unwrap_or_default()
             .into_iter()
             .map(|p| {
-                let label = lang
-                    .get(&format!("profile.{}", p.name))
-                    .cloned()
-                    .unwrap_or_else(|| humanize_identifier(&p.name));
+                let label = named(format!("profile.{}", p.name), &p.name);
                 PackProfile {
                     name: p.name,
                     label,
@@ -501,10 +485,7 @@ impl PackConfig {
                         }
                     }
                     MenuElement::Screen(sub) => {
-                        let label = lang
-                            .get(&format!("screen.{sub}"))
-                            .cloned()
-                            .unwrap_or_else(|| humanize_identifier(&sub));
+                        let label = named(format!("screen.{sub}"), &sub);
                         items.push(ScreenItem::Subscreen(sub, label));
                     }
                     MenuElement::Option(opt) => {
@@ -523,10 +504,7 @@ impl PackConfig {
             }
             let name_str = screen_name.unwrap_or("").to_owned();
             let label = match screen_name {
-                Some(n) => lang
-                    .get(&format!("screen.{n}"))
-                    .cloned()
-                    .unwrap_or_else(|| humanize_identifier(n)),
+                Some(n) => named(format!("screen.{n}"), n),
                 None => id.to_owned(),
             };
             PackScreen {
@@ -700,7 +678,7 @@ pub struct ShaderPack {
     pub stages: Vec<Stage>,
     pub options: Vec<PackOption>,
     /// Optional custom noise/LUT texture bytes (RGBA8, width, height) from `[textures]`.
-    pub custom_noise: Option<(u32, u32, Vec<u8>)>,
+    pub custom_noise: Option<Rgba>,
     /// A Java (OptiFine/Iris) pack's translated passes, instead of `stages`.
     pub java: Option<crate::java_pack::JavaPasses>,
     dir: PathBuf,
@@ -813,6 +791,9 @@ pub fn import_pack(source: &Path, target_dir: &Path) -> Result<String, String> {
     if dest.canonicalize().ok() == source.canonicalize().ok() {
         return Ok(name);
     }
+    if dest.exists() {
+        return Err(format!("{name} is already in {DIR}/"));
+    }
     if source.is_file() {
         fs::copy(&source, &dest).map_err(|e| format!("failed to copy {name}: {e}"))?;
     } else {
@@ -827,10 +808,13 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
     for entry in entries.flatten() {
         let path = entry.path();
         let target = dst.join(entry.file_name());
-        if path.is_dir() {
-            copy_dir_recursive(&path, &target)?;
-        } else {
-            fs::copy(&path, &target).map_err(|e| format!("{}: {e}", target.display()))?;
+        // Links aren't followed: one pointing up the tree would never end.
+        match entry.file_type() {
+            Ok(t) if t.is_dir() => copy_dir_recursive(&path, &target)?,
+            Ok(t) if t.is_file() => {
+                fs::copy(&path, &target).map_err(|e| format!("{}: {e}", target.display()))?;
+            }
+            _ => {}
         }
     }
     Ok(())
@@ -858,17 +842,13 @@ impl Folder {
         self.dir = dir;
         self.read = Some(std::time::Instant::now());
     }
-
-    pub fn invalidate(&mut self) {
-        self.read = None;
-    }
 }
 
 /// A Java pack has no manifest: its name is its file name.
 fn java_info(name: String) -> Info {
     Info {
         name,
-        description: "Iris/OptiFine pack: G-buffers, shadow map and post passes.".into(),
+        description: "Iris/OptiFine pack: its full-screen passes run.".into(),
         authors: Vec::new(),
         version: String::new(),
         license: String::new(),
@@ -888,7 +868,16 @@ fn manifest(dir: &Path) -> Result<Manifest, String> {
     Ok(manifest)
 }
 
-pub(crate) fn decode_png_rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
+/// An RGBA8 image (`decode_png`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Rgba {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Vec<u8>,
+}
+
+/// A PNG of any colour type as [`Rgba`].
+pub(crate) fn decode_png(bytes: &[u8]) -> Result<Rgba, String> {
     let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = decoder.read_info().map_err(|e| e.to_string())?;
@@ -913,7 +902,11 @@ pub(crate) fn decode_png_rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), Strin
         png::ColorType::Grayscale => buf.into_iter().flat_map(|g| [g, g, g, 255]).collect(),
         _ => return Err("unsupported PNG color format".into()),
     };
-    Ok((w, h, rgba))
+    Ok(Rgba {
+        width: w,
+        height: h,
+        pixels: rgba,
+    })
 }
 
 impl ShaderPack {
@@ -936,18 +929,25 @@ impl ShaderPack {
             .collect::<Result<Vec<_>, _>>()?;
         let mut stages = Vec::new();
         for entry in manifest.stage {
-            let kind = match (pack_api, entry.kind.as_str()) {
-                (_, "composite") => StageKind::Composite,
-                (2.., "shadow") => StageKind::Shadow,
-                (2.., "gbuffer") => StageKind::Gbuffer,
-                (2.., "deferred") => StageKind::Deferred,
-                (2.., "final") => StageKind::Final,
-                (_, other) => {
+            let kind = match entry.kind.as_str() {
+                "composite" => StageKind::Composite,
+                other => {
                     return Err(format!(
-                        "pack.toml: stage kind `{other}` isn't supported (api {pack_api} has `composite`)"
+                        "pack.toml: stage kind `{other}` isn't supported (api {API} has `composite`)"
                     ));
                 }
             };
+            if pack_api == 1 && entry.format.is_some() {
+                return Err(format!("pack.toml: {}: `format` needs api 2", entry.shader));
+            }
+            if let Some(format) = entry.format.as_deref()
+                && !STAGE_FORMATS.contains(&format)
+            {
+                return Err(format!(
+                    "pack.toml: stage format `{format}` isn't one of {}",
+                    STAGE_FORMATS.join(", ")
+                ));
+            }
             let scale = entry.scale.unwrap_or(1.0);
             if !(0.25..=2.0).contains(&scale) {
                 return Err(format!(
@@ -961,8 +961,17 @@ impl ShaderPack {
             }
             let code = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", entry.shader))?;
             let entry_point = entry.entry.unwrap_or_else(|| "fs_main".into());
-            let source = format!("{PRELUDE}\n{code}");
-            validate(&source, &entry.shader, &entry_point)?;
+            let prelude = match pack_api {
+                1 => PRELUDE.to_owned(),
+                _ => format!("{PRELUDE}\n{PRELUDE_API2}"),
+            };
+            let source = format!("{prelude}\n{code}");
+            let bindings = validate(
+                &source,
+                prelude.lines().count(),
+                &entry.shader,
+                &entry_point,
+            )?;
             stages.push(Stage {
                 kind,
                 file: entry.shader,
@@ -970,20 +979,21 @@ impl ShaderPack {
                 entry: entry_point,
                 scale,
                 format: entry.format,
-                mipmap: entry.mipmap,
+                bindings,
             });
         }
         let mut custom_noise = None;
-        if let Some(rel) = manifest
-            .textures
-            .get("noise")
-            .or_else(|| manifest.textures.values().next())
-        {
+        for (name, rel) in &manifest.textures {
+            if name != "noise" {
+                return Err(format!(
+                    "pack.toml: texture `{name}` isn't supported (api {API} has `noise`)"
+                ));
+            }
             if rel.contains("..") {
                 return Err(format!("pack.toml: texture {rel} is outside the pack"));
             }
             let bytes = fs::read(dir.join(rel)).map_err(|e| format!("{rel}: {e}"))?;
-            custom_noise = Some(decode_png_rgba(&bytes).map_err(|e| format!("{rel}: {e}"))?);
+            custom_noise = Some(decode_png(&bytes).map_err(|e| format!("{rel}: {e}"))?);
         }
         Ok(Self {
             id: dir
@@ -1016,43 +1026,38 @@ impl ShaderPack {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let options = PackConfig::load_java(path, &id, values)
-            .map(|c| c.options)
-            .unwrap_or_default();
         Ok(Self {
             info: java_info(id.clone()),
             id,
             stages: Vec::new(),
-            options,
+            options: Vec::new(),
             custom_noise: None,
             java: Some(java),
             dir: path.to_path_buf(),
             stamp,
         })
     }
-    /// Whether this pack requests directional shadow map rendering.
-    pub fn needs_shadow(&self) -> bool {
-        if let Some(java) = &self.java {
-            return java.folders.iter().any(|f| f.shadow_enabled);
-        }
-        self.stages.iter().any(|s| {
-            s.kind == StageKind::Shadow
-                || s.source.contains("sample_shadow")
-                || s.source.contains("shadow_depth")
-        })
+    /// Whether a stage reads one of the prelude's `bindings`.
+    fn reads(&self, bindings: &[u32]) -> bool {
+        self.stages
+            .iter()
+            .any(|s| bindings.iter().any(|b| s.bindings.contains(b)))
     }
-    /// Shadow map resolution requested by this pack, and shadow distance in blocks.
-    pub fn shadow_config(&self, dimension: i8) -> (u32, f32, f32) {
-        if let Some(java) = &self.java
-            && let Some(idx) = java.folder_for(dimension)
-        {
-            let d = &java.folders[idx].directives;
-            return (
-                d.shadow_map_resolution,
-                d.shadow_distance,
-                d.sun_path_rotation,
-            );
-        }
+    /// Whether a stage reads the shadow map (`shadow_depth`, `sample_shadow`).
+    pub fn needs_shadow(&self) -> bool {
+        self.reads(&[BINDING_SHADOW_DEPTH])
+    }
+    /// Whether a stage reads the G-buffer (`scene_normal`, `scene_material`).
+    pub fn needs_gbuffer(&self) -> bool {
+        self.reads(&[BINDING_SCENE_NORMAL, BINDING_SCENE_MATERIAL])
+    }
+    /// Whether the world's depth before translucent geometry is kept
+    /// (`opaque_depth`, which the G-buffer is also built from).
+    pub fn needs_opaque_depth(&self) -> bool {
+        self.needs_gbuffer() || self.reads(&[BINDING_OPAQUE_DEPTH])
+    }
+    /// The shadow map's resolution and distance in blocks.
+    pub fn shadow_config(&self) -> (u32, f32) {
         let res = self
             .options
             .iter()
@@ -1065,7 +1070,7 @@ impl ShaderPack {
             .find(|o| o.key == "shadow_distance" || o.key == "shadowDistance")
             .map(|o| (o.value as f32).clamp(16.0, 512.0))
             .unwrap_or(128.0);
-        (res, dist, 0.0)
+        (res, dist)
     }
     /// The pipeline-overridable constants every stage gets: the option values.
     pub fn constants(&self) -> Vec<(&str, f64)> {
@@ -1139,8 +1144,15 @@ fn option(
 
 /// naga parses and validates the stage (prelude included) and checks its
 /// fragment entry point; errors point into the pack's own file.
-fn validate(source: &str, file: &str, entry: &str) -> Result<(), String> {
-    let prelude_lines = PRELUDE.lines().count() as u32 + 1;
+/// Parse and validate a stage: the prelude's bindings (group 0) its entry
+/// point uses, or the error at the stage's own line.
+fn validate(
+    source: &str,
+    prelude_lines: usize,
+    file: &str,
+    entry: &str,
+) -> Result<BTreeSet<u32>, String> {
+    let prelude_lines = prelude_lines as u32 + 1;
     let at = |location: Option<naga::SourceLocation>| match location {
         Some(l) if l.line_number > prelude_lines => {
             format!(
@@ -1153,20 +1165,28 @@ fn validate(source: &str, file: &str, entry: &str) -> Result<(), String> {
     };
     let module = naga::front::wgsl::parse_str(source)
         .map_err(|e| format!("{}: {}", at(e.location(source)), e.message()))?;
-    naga::valid::Validator::new(
+    let info = naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::default(),
     )
     .validate(&module)
     .map_err(|e| format!("{}: {}", at(e.location(source)), e.as_inner()))?;
-    if !module
+    let Some(index) = module
         .entry_points
         .iter()
-        .any(|e| e.name == entry && e.stage == naga::ShaderStage::Fragment)
-    {
+        .position(|e| e.name == entry && e.stage == naga::ShaderStage::Fragment)
+    else {
         return Err(format!("{file}: no fragment entry point `{entry}`"));
-    }
-    Ok(())
+    };
+    let uses = info.get_entry_point(index);
+    Ok(module
+        .global_variables
+        .iter()
+        .filter(|(handle, _)| !uses[*handle].is_empty())
+        .filter_map(|(_, var)| var.binding.as_ref())
+        .filter(|binding| binding.group == 0)
+        .map(|binding| binding.binding)
+        .collect())
 }
 
 /// The option values saved for a pack (`shaderpacks/<id>.txt`, `key=value`).
@@ -1313,6 +1333,20 @@ override mode: i32 = 1;
                 "stage kind `shadow`",
             ),
             (
+                MANIFEST.replace(
+                    "kind = \"composite\"",
+                    "kind = \"composite\"\nformat = \"rgba16float\"",
+                ),
+                "`format` needs api 2",
+            ),
+            (
+                MANIFEST.replace("api = 1", "api = 2").replace(
+                    "kind = \"composite\"",
+                    "kind = \"composite\"\nformat = \"rgba32float\"",
+                ),
+                "stage format `rgba32float`",
+            ),
+            (
                 MANIFEST.replace("grade.wgsl", "../grade.wgsl"),
                 "outside the pack",
             ),
@@ -1334,12 +1368,27 @@ override mode: i32 = 1;
 
     #[test]
     fn api_2_stages_and_pack_config_work() {
-        let manifest_v2 = MANIFEST
-            .replace("api = 1", "api = 2")
-            .replace("\"composite\"", "\"deferred\"");
+        let manifest_v2 = MANIFEST.replace("api = 1", "api = 2").replace(
+            "kind = \"composite\"",
+            "kind = \"composite\"\nformat = \"rgba16float\"",
+        );
         let dir = pack(&[("pack.toml", &manifest_v2), ("shaders/grade.wgsl", GRADE)]);
         let loaded = ShaderPack::load(&dir, &BTreeMap::new()).unwrap();
-        assert_eq!(loaded.stages[0].kind, StageKind::Deferred);
+        assert_eq!(loaded.stages[0].format.as_deref(), Some("rgba16float"));
+        assert!(
+            !loaded.needs_shadow() && !loaded.needs_gbuffer() && !loaded.needs_opaque_depth(),
+            "reading none of them costs no pass"
+        );
+        let opaque = GRADE.replace("depth_at(in.uv)", "opaque_depth_at(in.uv)");
+        let reads = pack(&[("pack.toml", &manifest_v2), ("shaders/grade.wgsl", &opaque)]);
+        let reads = ShaderPack::load(&reads, &BTreeMap::new()).unwrap();
+        assert!(reads.needs_opaque_depth() && !reads.needs_gbuffer());
+        let api_1 = pack(&[("pack.toml", MANIFEST), ("shaders/grade.wgsl", &opaque)]);
+        let error = ShaderPack::load(&api_1, &BTreeMap::new()).err().unwrap();
+        assert!(
+            error.contains("opaque_depth_at"),
+            "api 1 stages don't see api 2's names: {error}"
+        );
         let parent = dir.parent().unwrap();
         let id = dir.file_name().unwrap().to_str().unwrap();
         let mut cfg = PackConfig::load(parent, id).unwrap();

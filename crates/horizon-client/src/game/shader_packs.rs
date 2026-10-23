@@ -101,30 +101,19 @@ impl Game<'_> {
             self.load_shader_pack();
         }
     }
-    /// Import a shader pack from `source` into `shaderpacks/`, activate it, and reload.
-    pub(super) fn import_shader_pack_path(&mut self, source: &std::path::Path) {
-        let dest = dir();
-        match shader_pack::import_pack(source, &dest) {
-            Ok(id) => {
-                self.ui.options.shader_packs = Default::default();
-                self.ui.options.shader_packs.poll(dest);
-                self.settings.horizon.shader_pack = id;
-                self.ui.options.shader_pack_config = None;
-                self.ui.options.sync_shader_pack_config(&self.settings);
+    /// A file dropped on the window: a shader pack while the Shader Packs
+    /// page shows (`OptionsUi::drop_shader_pack`).
+    pub(super) fn drop_shader_pack(&mut self, path: &std::path::Path) {
+        match self.ui.options.drop_shader_pack(&mut self.settings, path) {
+            Some(Ok(())) => {
                 self.settings.save(&Self::options_path());
                 self.load_shader_pack();
             }
-            Err(e) => {
-                log::warn!("Horizon: shader pack import failed: {e}");
-                self.system_message(Text::literal(format!("Shader pack import: {e}")));
+            Some(Err(e)) => {
+                log::warn!("Horizon: shader pack {}: {e}", path.display());
+                self.system_message(Text::literal(format!("Shader pack: {e}")));
             }
-        }
-    }
-    /// Open the system file picker (or `shaderpacks/` folder) to import a shader pack.
-    pub(super) fn import_shader_pack_dialog(&mut self) {
-        let dest = dir();
-        if let Some(chosen) = super::packs::pick_shader_pack(&dest) {
-            self.import_shader_pack_path(&chosen);
+            None => {}
         }
     }
     fn shader_pack_error(&mut self, id: &str, error: &str) {

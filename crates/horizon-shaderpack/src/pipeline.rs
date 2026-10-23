@@ -323,8 +323,6 @@ pub struct Passes {
     /// next frame starts unflipped.
     pub flipped_at_end: BTreeSet<u32>,
     pub directives: Directives,
-    /// Whether the folder uses shadow mapping (`shadow` program or `shadowtex*`).
-    pub shadow_enabled: bool,
 }
 
 /// The `const` directives of a program folder that aren't about targets
@@ -341,24 +339,6 @@ pub struct Directives {
     pub wetness_half_life: f32,
     /// `drynessHalflife`, tenths of a second: `wetness` smoothing when dry.
     pub dryness_half_life: f32,
-    /// `centerDepthHalflife`, tenths of a second: `centerDepthSmooth`.
-    pub center_depth_half_life: f32,
-    /// `shadowMapResolution` (or `SHADOW_RES`), in pixels per side.
-    pub shadow_map_resolution: u32,
-    /// `shadowDistance`, in blocks.
-    pub shadow_distance: f32,
-    /// `shadowDistanceRenderMul` (-1 when unset).
-    pub shadow_distance_render_mul: f32,
-    /// `ambientOcclusionLevel` (0.0..=1.0).
-    pub ambient_occlusion_level: f32,
-    /// `noiseTextureResolution`, in pixels per side.
-    pub noise_texture_resolution: u32,
-    /// `shadowHardwareFiltering` / `shadowHardwareFiltering0..1`.
-    pub shadow_hardware_filtering: [bool; 2],
-    /// `shadowtex0Nearest` / `shadowtex1Nearest`.
-    pub shadow_nearest: [bool; 2],
-    /// `generateShadowMipmap` / `shadowtex0Mipmap` / `shadowtex1Mipmap`.
-    pub shadow_mipmap: [bool; 2],
 }
 
 impl Default for Directives {
@@ -368,15 +348,6 @@ impl Default for Directives {
             eye_brightness_half_life: 10.0,
             wetness_half_life: 600.0,
             dryness_half_life: 200.0,
-            center_depth_half_life: 1.0,
-            shadow_map_resolution: 2048,
-            shadow_distance: 128.0,
-            shadow_distance_render_mul: -1.0,
-            ambient_occlusion_level: 1.0,
-            noise_texture_resolution: 256,
-            shadow_hardware_filtering: [false; 2],
-            shadow_nearest: [false; 2],
-            shadow_mipmap: [false; 2],
         }
     }
 }
@@ -387,66 +358,13 @@ impl Directives {
         let mut out = Self::default();
         for fragment in fragments {
             for c in const_directives(fragment) {
-                let raw = c.value.trim_end_matches(['f', 'F']);
-                let fval = raw.parse::<f32>();
-                let ival = raw.parse::<u32>();
-                let bval = raw.parse::<bool>();
-                match (c.ty, c.key.as_str()) {
-                    ("float", "sunPathRotation") if fval.is_ok() => {
-                        out.sun_path_rotation = fval.unwrap();
-                    }
-                    ("float", "eyeBrightnessHalflife") if fval.is_ok() => {
-                        out.eye_brightness_half_life = fval.unwrap();
-                    }
-                    ("float", "wetnessHalflife") if fval.is_ok() => {
-                        out.wetness_half_life = fval.unwrap();
-                    }
-                    ("float", "drynessHalflife") if fval.is_ok() => {
-                        out.dryness_half_life = fval.unwrap();
-                    }
-                    ("float", "centerDepthHalflife") if fval.is_ok() => {
-                        out.center_depth_half_life = fval.unwrap();
-                    }
-                    ("float", "shadowDistance") if fval.is_ok() => {
-                        out.shadow_distance = fval.unwrap().clamp(8.0, 1024.0);
-                    }
-                    ("float", "shadowDistanceRenderMul") if fval.is_ok() => {
-                        out.shadow_distance_render_mul = fval.unwrap();
-                    }
-                    ("float", "ambientOcclusionLevel") if fval.is_ok() => {
-                        out.ambient_occlusion_level = fval.unwrap().clamp(0.0, 1.0);
-                    }
-                    ("int", "shadowMapResolution") if ival.is_ok() => {
-                        out.shadow_map_resolution = ival.unwrap().clamp(64, 8192);
-                    }
-                    ("int", "noiseTextureResolution") if ival.is_ok() => {
-                        out.noise_texture_resolution = ival.unwrap().clamp(16, 2048);
-                    }
-                    ("bool", "shadowHardwareFiltering") if bval.is_ok() => {
-                        out.shadow_hardware_filtering = [bval.unwrap(); 2];
-                    }
-                    ("bool", "shadowHardwareFiltering0") if bval.is_ok() => {
-                        out.shadow_hardware_filtering[0] = bval.unwrap();
-                    }
-                    ("bool", "shadowHardwareFiltering1") if bval.is_ok() => {
-                        out.shadow_hardware_filtering[1] = bval.unwrap();
-                    }
-                    ("bool", "shadowtexNearest" | "shadowtex0Nearest" | "shadow0MinMagNearest")
-                        if bval.is_ok() =>
-                    {
-                        out.shadow_nearest[0] = bval.unwrap();
-                    }
-                    ("bool", "shadowtex1Nearest" | "shadow1MinMagNearest") if bval.is_ok() => {
-                        out.shadow_nearest[1] = bval.unwrap();
-                    }
-                    ("bool", "generateShadowMipmap" | "shadowtexMipmap" | "shadowtex0Mipmap")
-                        if bval.is_ok() =>
-                    {
-                        out.shadow_mipmap[0] = bval.unwrap();
-                    }
-                    ("bool", "shadowtex1Mipmap") if bval.is_ok() => {
-                        out.shadow_mipmap[1] = bval.unwrap();
-                    }
+                // Java's `Float.parseFloat` takes a trailing `f`.
+                let value = c.value.trim_end_matches(['f', 'F']).parse::<f32>();
+                match (c.ty, c.key.as_str(), value) {
+                    ("float", "sunPathRotation", Ok(v)) => out.sun_path_rotation = v,
+                    ("float", "eyeBrightnessHalflife", Ok(v)) => out.eye_brightness_half_life = v,
+                    ("float", "wetnessHalflife", Ok(v)) => out.wetness_half_life = v,
+                    ("float", "drynessHalflife", Ok(v)) => out.dryness_half_life = v,
                     _ => {}
                 }
             }
@@ -568,19 +486,9 @@ impl JavaPack {
         for name in &groups[0..2].concat() {
             fragments.insert(name.clone(), fragment(name)?);
         }
-        let shadow_enabled = ["shadow", "shadow_solid", "shadow_cutout"]
-            .iter()
-            .any(|s| exists(s))
-            || sources.iter().any(|s| {
-                s.contains("shadowtex0")
-                    || s.contains("shadowtex1")
-                    || s.contains("watershadow")
-                    || s.contains("shadow2D")
-            });
         let mut out = Passes {
             targets: target_settings(sources.iter().map(String::as_str), properties),
             directives: Directives::read(sources.iter().map(String::as_str)),
-            shadow_enabled,
             ..Passes::default()
         };
 
@@ -858,14 +766,14 @@ mod tests {
         assert_eq!(Directives::read([]), Directives::default());
         assert_eq!(Directives::default().eye_brightness_half_life, 10.0);
         let d = Directives::read([
-            "const float sunPathRotation = 30.0;\nconst float eyeBrightnessHalflife = 4.0f;\nconst int shadowMapResolution = 4096;\nconst float shadowDistance = 192.0;",
+            "const float sunPathRotation = 30.0;\nconst float eyeBrightnessHalflife = 4.0f;\nconst float wetnessHalflife = 300.0;",
             "const float sunPathRotation = -40.0; // Complementary Unbound",
             "const int sunPathRotation = 5;",
         ]);
         assert_eq!(d.sun_path_rotation, -40.0);
         assert_eq!(d.eye_brightness_half_life, 4.0);
-        assert_eq!(d.shadow_map_resolution, 4096);
-        assert_eq!(d.shadow_distance, 192.0);
+        assert_eq!(d.wetness_half_life, 300.0);
+        assert_eq!(d.dryness_half_life, 200.0, "the default");
     }
 
     #[test]
