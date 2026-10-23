@@ -17,16 +17,12 @@ playing instance and the subtitle notifications. Horizon's `Ambience` and
 """
 import json
 import random
-import struct
 
 try:
-    from . import audio_harness as h
+    from . import audio_harness as h, lab
 except ImportError:
     import audio_harness as h
-
-
-def dbits(v):
-    return struct.pack('>d', v).hex()
+    import lab
 
 
 def settings():
@@ -54,11 +50,11 @@ class Script:
         self.lines.append(' '.join(map(str, parts)))
 
     def sounds(self, value):
-        mood = '-' if value['mood'] is None else '{},{},{},{}'.format(value['mood'][0], value['mood'][1], value['mood'][2], dbits(value['mood'][3]))
-        self.add('sounds', value['loop'] or '-', mood, *[f'{s},{dbits(c)}' for s, c in value['additions']])
+        mood = '-' if value['mood'] is None else '{},{},{},{}'.format(value['mood'][0], value['mood'][1], value['mood'][2], lab.dbits(value['mood'][3]))
+        self.add('sounds', value['loop'] or '-', mood, *[f'{s},{lab.dbits(c)}' for s, c in value['additions']])
 
     def player(self, at=(0.5, 64.0, 0.5), eye=1.62, water=0, spectator=0, removed=0, mode=0, height=1.8, columns=()):
-        self.add('player', *map(dbits, at), h.bits(eye), water, spectator, removed, mode, h.bits(height),
+        self.add('player', *map(lab.dbits, at), h.bits(eye), water, spectator, removed, mode, h.bits(height),
                  *[f'{x},{y},{z},{d}' for x, y, z, d in columns])
 
     def tick(self, n=1):

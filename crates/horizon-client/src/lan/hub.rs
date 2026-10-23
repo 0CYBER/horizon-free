@@ -172,13 +172,6 @@ pub struct Hub {
 fn string(s: &str) -> Tag {
     Tag::String(JavaString::from(s))
 }
-pub fn yellow_translation(key: &str, args: &[&str]) -> Tag {
-    let mut t = translatable(key, args);
-    if let Tag::Compound(map) = &mut t {
-        map.insert(JavaString::from("color"), string("yellow"));
-    }
-    t
-}
 
 /// Player.getDisplayName for a player in no team: the name, suggesting
 /// `/tell NAME `, showing the player on hover and inserting the name.
@@ -1358,21 +1351,6 @@ impl Hub {
             .take(budget)
             .collect();
         (!batch.is_empty()).then_some(batch)
-    }
-
-    /// Resend a chunk to everyone who has it (a block entity changed, relight).
-    pub fn resend_chunk(&mut self, world: &World, x: i32, z: i32) {
-        let Some(chunk) = world.chunks.get(&(x, z)) else {
-            return;
-        };
-        let body = self.encoder.body_in(chunk, world);
-        for g in self
-            .guests
-            .iter()
-            .filter(|g| g.sent_chunks.contains(&(x, z)))
-        {
-            g.sender.send(body.clone());
-        }
     }
 
     /// `ChunkHolder.broadcastChanges`' light part: the light sections that

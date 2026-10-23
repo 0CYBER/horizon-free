@@ -183,9 +183,6 @@ impl<'a> Reader<'a> {
     pub fn read_int(&mut self) -> CmdResult<i32> {
         self.number("int")
     }
-    pub fn read_long(&mut self) -> CmdResult<i64> {
-        self.number("long")
-    }
     pub fn read_double(&mut self) -> CmdResult<f64> {
         self.number("double")
     }
@@ -221,21 +218,6 @@ impl<'a> Reader<'a> {
             }
         }
         Err(CommandError::tr_at("parsing.quote.expected.end", &[], self))
-    }
-    pub fn read_quoted_string(&mut self) -> CmdResult<String> {
-        if !self.can_read() {
-            return Ok(String::new());
-        }
-        let next = self.peek();
-        if next != '"' && next != '\'' {
-            return Err(CommandError::tr_at(
-                "parsing.quote.expected.start",
-                &[],
-                self,
-            ));
-        }
-        self.skip();
-        self.read_string_until(next)
     }
     pub fn read_string(&mut self) -> CmdResult<String> {
         if !self.can_read() {
@@ -536,18 +518,6 @@ impl<'a> SuggestionsBuilder<'a> {
         for c in candidates {
             if args::matches_sub_str(&lower, &c.to_lowercase()) {
                 self.suggest(c);
-            }
-        }
-    }
-    /// The same with a tooltip per candidate.
-    pub fn suggest_matching_tooltip<'b>(
-        &mut self,
-        candidates: impl IntoIterator<Item = (&'b str, String)>,
-    ) {
-        let lower = self.remaining_lower();
-        for (c, tip) in candidates {
-            if args::matches_sub_str(&lower, &c.to_lowercase()) {
-                self.suggest_tooltip(c, tip);
             }
         }
     }

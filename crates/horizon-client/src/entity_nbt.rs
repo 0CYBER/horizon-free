@@ -89,6 +89,47 @@ impl Base<'_> {
 }
 
 /// `LivingEntity` + `Mob` (+ `AgeableMob`, creeper and skeleton specifics).
+/// The mobs whose class extends vanilla's `Animal` (and so save `InLove`):
+/// not allays, villagers, golems, dolphins or fish.
+fn is_animal(id: &str) -> bool {
+    matches!(
+        id.strip_prefix("minecraft:").unwrap_or(id),
+        "pig"
+            | "cow"
+            | "mooshroom"
+            | "sheep"
+            | "chicken"
+            | "rabbit"
+            | "horse"
+            | "donkey"
+            | "mule"
+            | "zombie_horse"
+            | "skeleton_horse"
+            | "llama"
+            | "trader_llama"
+            | "goat"
+            | "panda"
+            | "polar_bear"
+            | "fox"
+            | "wolf"
+            | "cat"
+            | "ocelot"
+            | "parrot"
+            | "bee"
+            | "turtle"
+            | "armadillo"
+            | "frog"
+            | "axolotl"
+            | "hoglin"
+            | "strider"
+            | "camel"
+            | "camel_husk"
+            | "sniffer"
+            | "happy_ghast"
+            | "nautilus"
+            | "zombie_nautilus"
+    )
+}
 pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
     let base = Base {
         id: &m.kind.id,
@@ -175,11 +216,14 @@ pub fn mob_to_nbt(m: &Mob, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
         for (key, value) in [
             ("Age", Tag::Int(0)),
             ("ForcedAge", Tag::Int(0)),
-            ("InLove", Tag::Int(0)),
             ("AgeLocked", Tag::Byte(0)),
         ] {
             map.entry(key.into()).or_insert(value);
         }
+    }
+    // Animal.addAdditionalSaveData: the love ticks left, whatever the save had.
+    if is_animal(id) {
+        map.insert("InLove".into(), Tag::Int(m.extra.in_love.max(0)));
     }
     match id {
         "minecraft:creeper" => {
@@ -620,6 +664,9 @@ pub fn mob_from_nbt(tag: &Tag, types: &HashMap<String, Arc<MobType>>, id: u32) -
         m.extra.age = number(tag.get("Age")).unwrap_or(0) as i32;
         m.extra.forced_age = number(tag.get("ForcedAge")).unwrap_or(0) as i32;
         m.extra.age_locked = flag(tag, "AgeLocked");
+    }
+    if is_animal(&m.kind.id) {
+        m.extra.in_love = number(tag.get("InLove")).unwrap_or(0) as i32;
     }
     m.name_visible = flag(tag, "CustomNameVisible");
     m.no_ai = flag(tag, "NoAI");

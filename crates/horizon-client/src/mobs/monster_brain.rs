@@ -250,10 +250,6 @@ pub fn nearest_players(m: &Mob) -> Vec<Who> {
         .and_then(|b| b.mem.nearest_players.value())
         .unwrap_or_default()
 }
-/// The damage the brain remembers (`HURT_BY`).
-pub fn hurt_by_present(m: &Mob) -> bool {
-    brain(m).is_some_and(|b| b.mem.hurt_by.present())
-}
 /// `HURT_BY`'s damage source entity, if a living one.
 fn hurt_by_entity(m: &Mob, w: &MobWorld) -> Option<Who> {
     let t = brain(m)?.mem.hurt_by.value()?;

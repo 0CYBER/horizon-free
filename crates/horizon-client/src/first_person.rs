@@ -289,15 +289,6 @@ impl Default for HandHeights {
         }
     }
 }
-/// What `FirstPersonHandsAndItems.tick` decides about a hand's visible item.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct HandChange {
-    /// The visible item is not the hand's item after the instant replacement
-    /// (`mainHandItem != nextMainHand`): the hand lowers.
-    pub changed: bool,
-    /// The visible item becomes the hand's item this tick.
-    pub replace: bool,
-}
 impl HandHeights {
     /// `FirstPersonHandsAndItems.tick`'s heights. `changed` says per hand
     /// whether the visible item differs from the held one once

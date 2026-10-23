@@ -30,25 +30,6 @@ pub struct BiomeFacts {
 pub fn placement_ok(species: Species, w: &MobWorld, x: i32, y: i32, z: i32) -> bool {
     super::spawn_rules::is_spawn_position_ok(species, w, x, y, z)
 }
-/// `SpawnPlacements.checkSpawnRules` for a natural spawn.
-pub fn spawn_rules_ok(
-    species: Species,
-    w: &MobWorld,
-    random: &mut impl RandomSource,
-    x: i32,
-    y: i32,
-    z: i32,
-) -> bool {
-    super::spawn_rules::check_spawn_rules(
-        species,
-        w,
-        super::spawn_rules::Reason::Natural,
-        random,
-        x,
-        y,
-        z,
-    )
-}
 /// Mob.finalizeSpawn for natural, chunk-generation and summoned mobs.
 /// `DifficultyInstance`: the local difficulty at a position.
 #[derive(Clone, Copy, Debug)]

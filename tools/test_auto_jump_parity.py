@@ -8,11 +8,9 @@ overhangs approached from every angle with varied speeds, input vectors,
 sizes, jump boost and the canAutoJump preconditions."""
 import json
 import math
-import os
 from pathlib import Path
 import platform
 import random
-import struct
 import subprocess
 
 try:
@@ -21,14 +19,6 @@ try:
 except ImportError:
     import lab, oracle_harness as harness, test_rust_parity as base, test_model_baking_parity as baking
     import test_native_client as client
-
-
-def fbits(v):
-    return struct.pack('>f', v).hex()
-
-
-def dbits(v):
-    return struct.pack('>d', v).hex()
 
 
 BLOCKS = [
@@ -64,12 +54,12 @@ DIMS = [(0.6, 1.8), (0.6, 1.8), (0.6, 1.5), (0.6, 0.6), (0.3, 0.9), (1.2, 3.6), 
 
 def player(rng, x, y, z, yaw):
     w, h = rng.choice(DIMS)
-    return dict(pos=[dbits(x), dbits(y), dbits(z)], ground=rng.random() < 0.9, shift=rng.random() < 0.08,
-                yr=fbits(yaw), xr=fbits(rng.choice([0.0, 30.0, -45.0, 90.0, rng.uniform(-90, 90)])),
-                speed=fbits(rng.choice([0.1, 0.13000001, 0.03, 0.0, 0.2, rng.uniform(0, 0.3)])),
-                move=[fbits(v) for v in rng.choice([(0.0, 1.0), (0.0, 1.0), (1.0, 0.0), (-1.0, 0.0), (0.70710677, 0.70710677),
+    return dict(pos=[lab.dbits(x), lab.dbits(y), lab.dbits(z)], ground=rng.random() < 0.9, shift=rng.random() < 0.08,
+                yr=lab.fbits(yaw), xr=lab.fbits(rng.choice([0.0, 30.0, -45.0, 90.0, rng.uniform(-90, 90)])),
+                speed=lab.fbits(rng.choice([0.1, 0.13000001, 0.03, 0.0, 0.2, rng.uniform(0, 0.3)])),
+                move=[lab.fbits(v) for v in rng.choice([(0.0, 1.0), (0.0, 1.0), (1.0, 0.0), (-1.0, 0.0), (0.70710677, 0.70710677),
                                                      (0.0, -1.0), (0.0, 0.0), (0.3, 0.3)])],
-                width=fbits(w), height=fbits(h), boost=rng.choice([None] * 6 + [0, 1, 4, 255]),
+                width=lab.fbits(w), height=lab.fbits(h), boost=rng.choice([None] * 6 + [0, 1, 4, 255]),
                 enabled=rng.random() < 0.93, time=rng.choice([0] * 12 + [1, -3, 2]))
 
 
@@ -86,18 +76,18 @@ def cases(rng):
                     x = ox + 0.5 - dx * 1.1
                     z = oz + 0.5 - dz * 1.1
                     p = player(rng, x, float(oy), z, yaw)
-                    p.update(ground=True, shift=False, enabled=True, time=0, boost=None, move=[fbits(0.0), fbits(1.0)],
-                             width=fbits(0.6), height=fbits(1.8), xr=fbits(0.0))
-                    yield dict(blocks=blocks, player=p, xa=fbits(dx * step), za=fbits(dz * step))
+                    p.update(ground=True, shift=False, enabled=True, time=0, boost=None, move=[lab.fbits(0.0), lab.fbits(1.0)],
+                             width=lab.fbits(0.6), height=lab.fbits(1.8), xr=lab.fbits(0.0))
+                    yield dict(blocks=blocks, player=p, xa=lab.fbits(dx * step), za=lab.fbits(dz * step))
     # Ceilings above the player and above the step.
     for ceiling in range(2, 6):
         for step_height in (0, 1):
             blocks = [[ox, oy + step_height, oz, 'minecraft:stone', {}], [ox - 1, oy + ceiling, oz, 'minecraft:stone', {}],
                       [ox, oy + ceiling + step_height, oz, 'minecraft:stone_slab', {'type': 'top'}]]
             p = player(rng, ox - 0.5, float(oy), oz + 0.5, -90.0)
-            p.update(ground=True, shift=False, enabled=True, time=0, boost=None, move=[fbits(0.0), fbits(1.0)],
-                     width=fbits(0.6), height=fbits(1.8))
-            yield dict(blocks=blocks, player=p, xa=fbits(0.2), za=fbits(0.0))
+            p.update(ground=True, shift=False, enabled=True, time=0, boost=None, move=[lab.fbits(0.0), lab.fbits(1.0)],
+                     width=lab.fbits(0.6), height=lab.fbits(1.8))
+            yield dict(blocks=blocks, player=p, xa=lab.fbits(0.2), za=lab.fbits(0.0))
     for _ in range(9000):
         blocks = placed(rng, rng.choice([1, 2, 4, 8, 16, 30]))
         x = ox + rng.uniform(-2, 3)
@@ -108,7 +98,7 @@ def cases(rng):
         move = rng.choice([0.0, 0.0, 0.01, 0.1, 0.215, 0.3, rng.uniform(0, 0.4)])
         angle = rng.uniform(0, 6.283)
 
-        yield dict(blocks=blocks, player=p, xa=fbits(math.cos(angle) * move), za=fbits(math.sin(angle) * move))
+        yield dict(blocks=blocks, player=p, xa=lab.fbits(math.cos(angle) * move), za=lab.fbits(math.sin(angle) * move))
 
 
 def main():

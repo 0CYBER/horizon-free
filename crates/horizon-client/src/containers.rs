@@ -252,24 +252,6 @@ impl BlockEntity {
         };
         Some(Self::Chest(vec![None; size]))
     }
-    /// The vanilla block entity type id of a container block.
-    pub fn id_for_block(name: &str) -> Option<&'static str> {
-        Some(match name {
-            "minecraft:chest" => "minecraft:chest",
-            n if n.ends_with("copper_chest") => "minecraft:chest",
-            "minecraft:trapped_chest" => "minecraft:trapped_chest",
-            "minecraft:barrel" => "minecraft:barrel",
-            "minecraft:hopper" => "minecraft:hopper",
-            "minecraft:dispenser" => "minecraft:dispenser",
-            "minecraft:dropper" => "minecraft:dropper",
-            "minecraft:furnace" => "minecraft:furnace",
-            "minecraft:blast_furnace" => "minecraft:blast_furnace",
-            "minecraft:smoker" => "minecraft:smoker",
-            n if n.ends_with("shulker_box") => "minecraft:shulker_box",
-            "minecraft:crafter" => "minecraft:crafter",
-            _ => return None,
-        })
-    }
     pub fn id(&self) -> &'static str {
         match self {
             Self::Chest(items) => match items.len() {

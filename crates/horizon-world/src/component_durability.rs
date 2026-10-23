@@ -3,7 +3,6 @@
 use crate::{
     component_patch::{ComponentMap, MissingPrototype, Patch, Prototype},
     item_durability::DurabilityStorage,
-    item_use_catalog::UseComponents,
 };
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
@@ -51,13 +50,6 @@ impl DurabilityPrototype {
             }
         }
         Self(Prototype::new(entries))
-    }
-    pub fn from_defaults(defaults: &UseComponents) -> Self {
-        Self::new([
-            Change::MaxDamage(defaults.max_damage),
-            Change::Damage(defaults.damage),
-            Change::Unbreakable(defaults.unbreakable),
-        ])
     }
 }
 #[derive(Clone, Debug)]

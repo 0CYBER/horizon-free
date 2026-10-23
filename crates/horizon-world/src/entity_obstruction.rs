@@ -73,17 +73,3 @@ pub fn is_unobstructed<W: EntityObstructionWorld>(
     }
     Ok(true)
 }
-
-/// Entity obstruction for the unit cube used by the vanilla block predicate.
-/// Translate the voxel shape in floating point: integer MAX + 1 must not wrap.
-pub fn is_block_unobstructed<W: EntityObstructionWorld>(
-    world: &mut W,
-    position: [i32; 3],
-) -> Result<bool, ObstructionError<W::Error>> {
-    let shape = VoxelShape::block().moved(horizon_core::geometry::Vec3::new(
-        f64::from(position[0]),
-        f64::from(position[1]),
-        f64::from(position[2]),
-    ));
-    is_unobstructed(world, None, &shape)
-}
