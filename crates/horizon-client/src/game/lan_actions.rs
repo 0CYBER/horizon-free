@@ -220,6 +220,12 @@ impl Game<'_> {
                 host.hub.guests[i].position[2],
             );
             host.hub.guests[i].motion = PlayerMotion::new(self.motion, p).ok().map(Box::new);
+            // The first body after joining burns, breathes and falls on as saved.
+            if let Some(saved) = host.hub.guests[i].loaded_body.take()
+                && let Some(m) = host.hub.guests[i].motion.as_mut()
+            {
+                saved.apply(m);
+            }
             // The saved golden hearts go on the first body of a player who
             // has been here before.
             let saved = host.hub.guests[i].saved_absorption.take();
