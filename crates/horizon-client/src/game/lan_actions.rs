@@ -1575,6 +1575,7 @@ impl Game<'_> {
             tick_frozen: self.clock.frozen(),
             tick_steps: self.clock.step_state(),
             collision: Some(self.collision),
+            border: &self.border,
         };
         host.hub.respawn(i, spawn, &ctx);
         if let Some(config) = elsewhere {
@@ -1912,7 +1913,8 @@ impl Game<'_> {
             for d in travelled {
                 game.movement_stats(Vec3::new(d[0], d[1], d[2]));
             }
-            // LivingEntity.baseTick ends with tickEffects.
+            // LivingEntity.baseTick: outside the world border, then tickEffects.
+            game.border_damage();
             game.tick_mob_effects();
             let Some(player) = game.player.as_mut() else {
                 return Vec::new();

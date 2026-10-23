@@ -3043,6 +3043,7 @@ impl Game<'_> {
         self.remote_handle_input();
         // ClientLevel.tick: the border's size change.
         self.border.tick();
+        self.player_border();
         self.tick_remote_entities(running);
         // ClientLevel.tickBlockEntities: chest lids, shulker boxes, bells.
         self.tick_block_entity_anims();
