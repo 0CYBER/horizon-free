@@ -1051,20 +1051,14 @@ impl Game<'_> {
             S::SetBeacon(p) => self.lan_station_beacon(host, conn, p.primary, p.secondary),
             S::SelectTrade(p) => self.lan_select_trade(host, conn, p.item),
             S::ContainerClose(p) if self.lan_merchant_closed(host, conn, Some(p.container)) => {
-                let g = &mut host.hub.guests[gi];
-                if let Some(c) = g.carried.take() {
-                    self.drop_guest_items(host, gi, vec![c]);
-                }
+                self.guest_carried_back(host, gi);
             }
             S::ContainerClose(p)
                 if self.lan_crafting_closed(host, conn, Some(p.container))
                     || self.lan_station_closed(host, conn, Some(p.container))
                     || self.lan_mount_closed(host, conn, Some(p.container)) =>
             {
-                let g = &mut host.hub.guests[gi];
-                if let Some(c) = g.carried.take() {
-                    self.drop_guest_items(host, gi, vec![c]);
-                }
+                self.guest_carried_back(host, gi);
             }
             S::ContainerClick(p) => {
                 let rules = ItemRules(self.res.items());
@@ -1080,10 +1074,7 @@ impl Game<'_> {
                     self.guest_container_closed(host, conn);
                 }
                 host.hub.container_closed(conn, p.container);
-                let g = &mut host.hub.guests[gi];
-                if let Some(c) = g.carried.take() {
-                    self.drop_guest_items(host, gi, vec![c]);
-                }
+                self.guest_carried_back(host, gi);
             }
             S::ChatCommand(c) => self.guest_chat_command(host, conn, &c.command),
             S::ChatCommandSigned(p) => self.guest_signed_command(host, conn, p),
@@ -1228,6 +1219,17 @@ impl Game<'_> {
             }
         }
         Some(out)
+    }
+
+    /// `AbstractContainerMenu.removed`: what a closing player held on the
+    /// cursor goes back into their inventory (`placeItemBackInInventory`,
+    /// dropped only if it doesn't fit), and their client's cursor empties
+    /// with the inventory it is sent.
+    fn guest_carried_back(&mut self, host: &mut LanHost, gi: usize) {
+        if let Some(c) = host.hub.guests[gi].carried.take() {
+            self.lan_place_back(host, gi, vec![c]);
+            host.hub.send_inventory(gi);
+        }
     }
 
     pub(super) fn drop_guest_items(&mut self, host: &LanHost, gi: usize, stacks: Vec<ItemStack>) {
