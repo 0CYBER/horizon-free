@@ -111,6 +111,8 @@ pub struct TickCtx<'a> {
     /// Block collisions, for ServerGamePacketListenerImpl's moved-wrongly
     /// check (none: moves are not checked against blocks).
     pub collision: Option<&'a BlockCollisionRegistry<'a>>,
+    /// The level's world border (PlayerList.sendLevelInfo sends it).
+    pub border: &'a crate::worldborder::WorldBorder,
 }
 
 /// What the gameplay code has to do for a guest.
@@ -891,17 +893,7 @@ impl Hub {
     fn send_level_info(&mut self, i: usize, ctx: &TickCtx) {
         let spawn = ctx.spawn;
         let g = &self.guests[i];
-        g.send(&C::InitializeBorder(play::InitializeBorder {
-            center_x: 0.0,
-            center_z: 0.0,
-            old_size: 59_999_968.0,
-            new_size: 59_999_968.0,
-            lerp_time: 0,
-            absolute_max_size: 29_999_984,
-            warning_blocks: 5,
-            // WorldBorder.DEFAULT_WARNING_TIME, in ticks.
-            warning_time: 300,
-        }));
+        g.send(&C::InitializeBorder(super::border::initialize(ctx.border)));
         g.send(&self.time_packet(ctx.world, ctx.clock_rate));
         g.send(&self.default_spawn(spawn));
         let w = &ctx.world.weather;
