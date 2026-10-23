@@ -16,6 +16,7 @@ use crate::{
 };
 use std::sync::Arc;
 
+mod bundle;
 pub mod place;
 
 /// What a menu needs to know about items and recipes.
@@ -276,6 +277,9 @@ pub struct Menu {
     pub loom_patterns: Vec<Arc<str>>,
     /// Sounds the menu plays (`ui.loom.take_result`), for the caller.
     pub sounds: Vec<&'static str>,
+    /// Sounds the player makes (a bundle's insert and remove), for the
+    /// caller to play at the player as `Entity.playSound`.
+    pub player_sounds: Vec<&'static str>,
     /// Recipes whose result was taken (`awardUsedRecipes`), for the caller.
     pub crafted: Vec<String>,
     /// `LivingEntity.onEquipItem` calls that change the item: the
@@ -671,6 +675,7 @@ impl Menu {
             quick_slots: Vec::new(),
             loom_patterns: Vec::new(),
             sounds: Vec::new(),
+            player_sounds: Vec::new(),
             crafted: Vec::new(),
             equipped: Vec::new(),
             merchant: None,
@@ -2536,10 +2541,12 @@ impl Menu {
         Ok(())
     }
 
-    /// The PICKUP branch of `doClick` (without the bundle overrides), ending
-    /// with `slot.setChanged()`.
+    /// The PICKUP branch of `doClick`: a bundle's override, else the
+    /// plain click, ending with `slot.setChanged()`.
     fn pickup(&mut self, env: &Env, s: usize, primary: bool) {
-        self.pickup_inner(env, s, primary);
+        if !self.bundle_click(env, s, primary) {
+            self.pickup_inner(env, s, primary);
+        }
         self.slot_changed(env, s);
     }
 

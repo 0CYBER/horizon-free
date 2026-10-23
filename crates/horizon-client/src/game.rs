@@ -5481,6 +5481,20 @@ impl Game<'_> {
             Some(true)
         })
     }
+    /// A sound a menu click made the player play (a bundle's insert or
+    /// remove): `Entity.playSound` at the player.
+    pub(super) fn player_menu_sound(&mut self, sound: &str) {
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        let at = [p.position.x, p.position.y, p.position.z];
+        let (volume, pitch) = if sound == horizon_client::bundle::INSERT_FAIL {
+            (1.0, 1.0)
+        } else {
+            (0.8, 0.8 + self.world.random.next_float() * 0.4)
+        };
+        self.audio.play(sound, Some(at), volume, pitch);
+    }
     /// The open menu as the verified engine (`horizon_client::menu`): the
     /// game's slots are copied in, `run` acts on it, and the slots, carried
     /// stack, menu data and drops are copied back when it returns Some(true)
@@ -5870,6 +5884,11 @@ impl Game<'_> {
         let carried = menu.carried.take();
         let dropped = std::mem::take(&mut menu.dropped);
         let sounds = std::mem::take(&mut menu.sounds);
+        // A bundle's sounds are the player's own (`Entity.playSound`): the
+        // client plays them as it clicks, predicting or not.
+        for sound in std::mem::take(&mut menu.player_sounds) {
+            self.player_menu_sound(sound);
+        }
         let crafted = std::mem::take(&mut menu.crafted);
         let equipped = std::mem::take(&mut menu.equipped);
         for (i, stack) in after.into_iter().enumerate() {
@@ -6111,6 +6130,17 @@ impl Game<'_> {
                     self.inv_drag = Some((i32::from(right), Vec::new()));
                 }
                 None => {}
+            }
+            return;
+        }
+        // mouseClicked: an empty hand's PICKUP is the menu's click at once
+        // (a right click on a bundle takes its first stack out).
+        if let (Some(input), Some(_)) = (input, slot)
+            && self.remote.is_none()
+            && self.menu_click(slot, i32::from(right), input)
+        {
+            if let Some(key) = self.container {
+                self.container_changed(key);
             }
             return;
         }
