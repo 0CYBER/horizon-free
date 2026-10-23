@@ -1236,6 +1236,14 @@ impl OptionsUi {
         self.shader_pack_config = Some(config);
         self.shader_pack_edited = false;
     }
+    /// The picked pack has options or profiles to show.
+    fn shader_pack_has_settings(&self, s: &Settings) -> bool {
+        self.shader_pack_config.as_ref().is_some_and(|c| {
+            !s.horizon.shader_pack.is_empty()
+                && c.id == s.horizon.shader_pack
+                && (!c.options.is_empty() || !c.profiles.is_empty())
+        })
+    }
     fn shader_pack_dir(&self) -> std::path::PathBuf {
         if self.shader_packs.dir.as_os_str().is_empty() {
             crate::shader_pack::folder()
@@ -1680,23 +1688,6 @@ impl OptionsUi {
                         } else {
                             inactive(widget)
                         },
-                        None,
-                    ));
-                }
-                let has_settings = !s.horizon.shader_pack.is_empty()
-                    && self.shader_pack_config.as_ref().is_some_and(|c| {
-                        c.id == s.horizon.shader_pack
-                            && (!c.options.is_empty() || !c.profiles.is_empty())
-                    });
-                if has_settings {
-                    rows.push(Row::Buttons(
-                        button(
-                            0.0,
-                            0.0,
-                            310.0,
-                            Text::literal("Shader Pack Settings..."),
-                            Act::Push(Page::ShaderPackOptions),
-                        ),
                         None,
                     ));
                 }
@@ -2185,6 +2176,10 @@ impl OptionsUi {
                 if matches!(page, Page::Video | Page::Controls) {
                     top = 38.0;
                 }
+                if page == Page::ShaderPacks {
+                    // Two footer rows, as Iris's ShaderPackScreen.
+                    bottom = h - 57.0;
+                }
                 out.push(Widget {
                     x: 0.0,
                     y: if matches!(page, Page::Video | Page::Controls) {
@@ -2273,15 +2268,34 @@ impl OptionsUi {
                 out[list_start..].iter_mut().for_each(|w| w.list = true);
                 let folder = match page {
                     Page::Mods => Some(("Open Mod Folder", Act::OpenModFolder)),
-                    Page::ShaderPacks => {
-                        Some(("Open Shader Pack Folder", Act::OpenShaderPackFolder))
-                    }
                     Page::ShaderPackOptions => {
                         Some(("Reset to Defaults", Act::ResetShaderPackOptions))
                     }
                     _ => None,
                 };
-                if let Some((label, act)) = folder {
+                if page == Page::ShaderPacks {
+                    // Iris: the folder and the pack's settings above Done.
+                    out.push(button(
+                        cx - 154.0,
+                        h - 51.0,
+                        150.0,
+                        Text::literal("Open Shader Pack Folder"),
+                        Act::OpenShaderPackFolder,
+                    ));
+                    let settings = button(
+                        cx + 4.0,
+                        h - 51.0,
+                        150.0,
+                        Text::literal("Shader Pack Settings..."),
+                        Act::Push(Page::ShaderPackOptions),
+                    );
+                    out.push(if self.shader_pack_has_settings(s) {
+                        settings
+                    } else {
+                        inactive(settings)
+                    });
+                    out.push(done(h - 27.0));
+                } else if let Some((label, act)) = folder {
                     out.push(button(
                         cx - 154.0,
                         h - 27.0,
