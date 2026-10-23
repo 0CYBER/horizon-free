@@ -1,3 +1,4 @@
+use crate::support::common::f64_bits;
 use horizon_core::{
     geometry::{Aabb, ShapeOp, Vec3, VoxelShape},
     position::BlockPos,
@@ -14,13 +15,6 @@ fn number(v: &Value) -> f64 {
 }
 fn vector(v: &Value) -> Vec3 {
     Vec3::new(number(&v[0]), number(&v[1]), number(&v[2]))
-}
-fn bits(v: f64) -> u64 {
-    if v.is_nan() {
-        0x7ff8000000000000
-    } else {
-        v.to_bits()
-    }
 }
 fn pos(p: BlockPos) -> String {
     format!("{} {} {}", p.x, p.y, p.z)
@@ -185,9 +179,9 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                     w.out,
                     "hit {} {:016x} {:016x} {:016x} {} {} {}",
                     r.miss,
-                    bits(h.location.x),
-                    bits(h.location.y),
-                    bits(h.location.z),
+                    f64_bits(h.location.x),
+                    f64_bits(h.location.y),
+                    f64_bits(h.location.z),
                     format!("{:?}", h.direction).to_lowercase(),
                     pos(h.block),
                     h.inside

@@ -11,6 +11,7 @@
 //! quart layer (16 columns, z-major), one `y Y ID...` line per block row and
 //! one `be X Y Z CANONICAL_NBT` line per block entity and one `t block|fluid
 //! NAME X Y Z PRIORITY` line per scheduled tick.
+use crate::support::common::tag;
 use horizon_core::position::ChunkPos;
 use horizon_world::{
     DATA_VERSION,
@@ -23,17 +24,6 @@ use std::{collections::HashMap, fmt::Write as _, fs, io::Write as _, path::Path}
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
-fn tag(v: &Value) -> Tag {
-    match v {
-        Value::String(s) => Tag::String(s.as_str().into()),
-        Value::Number(n) => Tag::Int(n.as_i64().unwrap() as i32),
-        Value::Array(a) => Tag::List(a.iter().map(tag).collect()),
-        Value::Object(o) => {
-            Tag::Compound(o.iter().map(|(k, v)| (k.as_str().into(), tag(v))).collect())
-        }
-        _ => panic!("invalid registry metadata"),
-    }
-}
 fn registry(resources: &Path) -> Result<&'static BlockRegistry, Error> {
     let facts: Value = serde_json::from_str(&fs::read_to_string(resources.join("facts.json"))?)?;
     let states = facts["states"].as_array().ok_or("facts states")?;

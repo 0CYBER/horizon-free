@@ -244,9 +244,9 @@ mod integration {
                 };
                 let prefix = format!(
                     "prototype {id} {} {} {}",
-                    bits(a.base_value()),
+                    f64_hex(a.base_value()),
                     a.is_dirty(),
-                    bits(a.cached_value())
+                    f64_hex(a.cached_value())
                 );
                 let all = a.modifiers().to_vec();
                 let permanent = a.permanent_modifiers().to_vec();
@@ -377,14 +377,14 @@ mod integration {
                         } else {
                             ValueKind::Base
                         };
-                        map.value(world.key(op), kind, &mut world).map(bits)
+                        map.value(world.key(op), kind, &mut world).map(f64_hex)
                     }
                     "modifier-value" => {
                         let id = world.templates[op["template"].as_u64().unwrap() as usize]
                             .id()
                             .to_owned();
                         map.modifier_value(world.key(op), &id, &mut world)
-                            .map(bits)
+                            .map(f64_hex)
                             .map_err(|e| match e {
                                 ModifierValueError::World(e) => e,
                                 ModifierValueError::MissingInstanceModifier => Stop::Null,
@@ -475,7 +475,7 @@ mod integration {
                     "value" => world
                         .handle(op["instance"].as_i64().unwrap())
                         .and_then(|h| h.ok_or(Stop::Null))
-                        .map(|h| bits(world.instances[h.id].value.as_mut().unwrap().value())),
+                        .map(|h| f64_hex(world.instances[h.id].value.as_mut().unwrap().value())),
                     _ => world.raw(&mut map, op).map(|()| "ok".into()),
                 };
                 world.logs.push(format!(

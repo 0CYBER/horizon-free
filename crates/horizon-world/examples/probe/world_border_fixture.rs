@@ -1,5 +1,6 @@
+use crate::support::shapes::{emit, values};
 use horizon_core::geometry::{
-    Aabb, Axis, Vec3, VoxelShape,
+    Aabb, Vec3,
     border::{BorderGeometry, BorderStatus},
 };
 use serde_json::Value;
@@ -10,70 +11,6 @@ use std::{
 };
 fn number(v: &Value) -> f64 {
     f64::from_bits(u64::from_str_radix(v.as_str().unwrap(), 16).unwrap())
-}
-fn values(
-    out: &mut impl Write,
-    label: &str,
-    values: impl IntoIterator<Item = f64>,
-) -> io::Result<()> {
-    write!(out, "{label}")?;
-    for v in values {
-        let bits = if v.is_nan() {
-            0x7ff8_0000_0000_0000
-        } else {
-            v.to_bits()
-        };
-        write!(out, " {bits:016x}")?;
-    }
-    writeln!(out)
-}
-fn box_values(out: &mut impl Write, label: &str, b: Aabb) -> io::Result<()> {
-    values(
-        out,
-        label,
-        [
-            b.min(Axis::X),
-            b.min(Axis::Y),
-            b.min(Axis::Z),
-            b.max(Axis::X),
-            b.max(Axis::Y),
-            b.max(Axis::Z),
-        ],
-    )
-}
-fn emit(out: &mut impl Write, shape: &VoxelShape) -> io::Result<()> {
-    writeln!(
-        out,
-        "shape {} {} {}",
-        shape.is_empty(),
-        shape.boxes().len(),
-        shape.is_cube()
-    )?;
-    for (axis, name) in Axis::ALL.into_iter().zip(["x", "y", "z"]) {
-        values(out, name, shape.coordinates(axis).iter().copied())?;
-    }
-    let axes = shape.cube_coordinate_axes();
-    writeln!(
-        out,
-        "axes {}",
-        u8::from(axes[0]) + 2 * u8::from(axes[1]) + 4 * u8::from(axes[2])
-    )?;
-    values(
-        out,
-        "extrema",
-        Axis::ALL
-            .map(|a| shape.min(a))
-            .into_iter()
-            .chain(Axis::ALL.map(|a| shape.max(a))),
-    )?;
-    match shape.bounds() {
-        Some(b) => box_values(out, "bounds", b)?,
-        None => writeln!(out, "bounds none")?,
-    }
-    for b in shape.boxes() {
-        box_values(out, "box", *b)?;
-    }
-    Ok(())
 }
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arg = crate::args().nth(1).expect("private fixture directory");

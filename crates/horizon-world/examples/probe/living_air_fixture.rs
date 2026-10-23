@@ -1,3 +1,4 @@
+use crate::support::common::f64_bits;
 use horizon_core::{geometry::Vec3, position::BlockPos};
 use horizon_world::living_air::*;
 use serde_json::Value;
@@ -15,18 +16,16 @@ fn single(v: &Value) -> f32 {
 fn vec(v: &Value) -> Vec3 {
     Vec3::new(number(&v[0]), number(&v[1]), number(&v[2]))
 }
-fn bits(v: f64) -> u64 {
-    if v.is_nan() {
-        0x7ff8000000000000
-    } else {
-        v.to_bits()
-    }
-}
 fn fbits(v: f32) -> u32 {
     if v.is_nan() { 0x7fc00000 } else { v.to_bits() }
 }
 fn vector(v: Vec3) -> String {
-    format!("{:016x} {:016x} {:016x}", bits(v.x), bits(v.y), bits(v.z))
+    format!(
+        "{:016x} {:016x} {:016x}",
+        f64_bits(v.x),
+        f64_bits(v.y),
+        f64_bits(v.z)
+    )
 }
 struct World<'a> {
     f: &'a Value,
@@ -239,7 +238,12 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             "result {}",
             if result.is_ok() { "ok" } else { "error" }
         )?;
-        writeln!(w.out, "final {} {:016x}", vector(w.velocity), bits(w.fall))?;
+        writeln!(
+            w.out,
+            "final {} {:016x}",
+            vector(w.velocity),
+            f64_bits(w.fall)
+        )?;
         writeln!(w.out, "queries {}", w.calls)?;
     }
     Ok(())

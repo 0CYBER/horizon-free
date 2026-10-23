@@ -1,3 +1,4 @@
+use crate::support::common::f32_bits;
 use horizon_world::{
     attribute_health::{AttributeHealth, HealthAttributes, HealthError, HealthObserver},
     attributes::{
@@ -20,13 +21,6 @@ fn single(v: &Value) -> f32 {
 }
 fn number(v: &Value) -> f64 {
     f64::from_bits(u64::from_str_radix(v.as_str().unwrap(), 16).unwrap())
-}
-fn bits(v: f32) -> u32 {
-    if v.is_nan() {
-        f32::NAN.to_bits()
-    } else {
-        v.to_bits()
-    }
 }
 fn double_bits(v: f64) -> u64 {
     if v.is_nan() {
@@ -55,7 +49,7 @@ impl Observer<'_> {
 impl HealthObserver for Observer<'_> {
     type Error = io::Error;
     fn updated(&mut self, h: &mut SyncedFloat) -> io::Result<()> {
-        self.effect(&format!("updated {:08x}", bits(h.value())))
+        self.effect(&format!("updated {:08x}", f32_bits(h.value())))
     }
 }
 // This fixture observes health/food values, not cross-attribute hash order.
@@ -168,7 +162,7 @@ impl<A: TestAttributes> FoodWorld for World<'_, A> {
     }
     fn hurt_starvation(&mut self, _: (), _: &mut FoodData, v: f32) -> Result<(), Self::Error> {
         self.observer
-            .effect(&format!("starve {:08x}", bits(v)))
+            .effect(&format!("starve {:08x}", f32_bits(v)))
             .map_err(HealthError::Observer)
     }
 }
@@ -261,7 +255,7 @@ fn run<A: TestAttributes>(dir: &Path, output: &str) -> Result<(), Box<dyn std::e
                     "packed {}",
                     w.health
                         .take_dirty()
-                        .map(|v| format!("{:08x}", bits(v)))
+                        .map(|v| format!("{:08x}", f32_bits(v)))
                         .unwrap_or_else(|| "none".into())
                 )
                 .map_err(HealthError::Observer),
@@ -275,13 +269,13 @@ fn run<A: TestAttributes>(dir: &Path, output: &str) -> Result<(), Box<dyn std::e
             writeln!(
                 w.observer.out,
                 "state {:08x} {} {} {:08x} {} {:08x} {:08x} {} {}",
-                bits(w.health.value()),
+                f32_bits(w.health.value()),
                 w.health.is_dirty(),
                 w.health.is_default(),
-                bits(w.absorption),
+                f32_bits(w.absorption),
                 food.food,
-                bits(food.saturation),
-                bits(food.exhaustion),
+                f32_bits(food.saturation),
+                f32_bits(food.exhaustion),
                 food.timer,
                 w.observer.calls
             )?;

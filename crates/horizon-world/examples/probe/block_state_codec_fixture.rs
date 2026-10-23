@@ -1,4 +1,5 @@
 //! Original JSON block-state codec comparison transport.
+use crate::support::common::tag;
 use horizon_world::{
     DATA_VERSION,
     nbt::Tag,
@@ -11,17 +12,6 @@ use std::{
     io::{self, Write},
     path::Path,
 };
-fn tag(v: &Value) -> Tag {
-    match v {
-        Value::String(s) => Tag::String(s.as_str().into()),
-        Value::Number(n) => Tag::Int(n.as_i64().unwrap() as i32),
-        Value::Array(a) => Tag::List(a.iter().map(tag).collect()),
-        Value::Object(m) => {
-            Tag::Compound(m.iter().map(|(k, v)| (k.as_str().into(), tag(v))).collect())
-        }
-        _ => panic!("invalid registry metadata"),
-    }
-}
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arg = crate::args().nth(1).expect("private fixture directory");
     let dir = Path::new(&arg);

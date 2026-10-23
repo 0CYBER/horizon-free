@@ -1,3 +1,4 @@
+use crate::support::common::f64_bits;
 use horizon_core::geometry::Vec3;
 use horizon_world::piston_movement::PistonMovement;
 use serde_json::Value;
@@ -11,13 +12,6 @@ fn number(v: &Value) -> f64 {
 }
 fn vector(v: &Value) -> Vec3 {
     Vec3::new(number(&v[0]), number(&v[1]), number(&v[2]))
-}
-fn bits(v: f64) -> u64 {
-    if v.is_nan() {
-        0x7ff8000000000000
-    } else {
-        v.to_bits()
-    }
 }
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arg = crate::args().nth(1).expect("private fixture directory");
@@ -45,18 +39,18 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(v) => writeln!(
                     out,
                     "movement {:016x} {:016x} {:016x}",
-                    bits(v.x),
-                    bits(v.y),
-                    bits(v.z)
+                    f64_bits(v.x),
+                    f64_bits(v.y),
+                    f64_bits(v.z)
                 )?,
                 Err(_) => writeln!(out, "error")?,
             }
             writeln!(
                 out,
                 "deltas {:016x} {:016x} {:016x}",
-                bits(state.deltas[0]),
-                bits(state.deltas[1]),
-                bits(state.deltas[2])
+                f64_bits(state.deltas[0]),
+                f64_bits(state.deltas[1]),
+                f64_bits(state.deltas[2])
             )?;
             writeln!(out, "tick {}", state.game_time)?;
             writeln!(out, "queries {calls}")?;

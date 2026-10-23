@@ -1,3 +1,4 @@
+use crate::support::common::f64_bits;
 use horizon_core::{
     geometry::Vec3,
     position::BlockPos,
@@ -12,13 +13,6 @@ use std::{
 };
 fn n(v: &Value, k: &str) -> i32 {
     v[k].as_i64().unwrap() as i32
-}
-fn bits(v: f64) -> u64 {
-    if v.is_nan() {
-        0x7ff8000000000000
-    } else {
-        v.to_bits()
-    }
 }
 struct World<'a, R> {
     f: Value,
@@ -63,10 +57,10 @@ impl<R: RandomSource> World<'_, R> {
             self.attempts,
             self.changed,
             self.riding,
-            bits(self.pos.x),
-            bits(self.pos.y),
-            bits(self.pos.z),
-            bits(self.fall),
+            f64_bits(self.pos.x),
+            f64_bits(self.pos.y),
+            f64_bits(self.pos.z),
+            f64_bits(self.fall),
             self.grace,
             self.impact
         )
@@ -128,9 +122,9 @@ impl<R: RandomSource> TeleportConsumeWorld for World<'_, R> {
         self.attempts += 1;
         self.event(format!(
             "teleport {} {} {}",
-            bits(p.x),
-            bits(p.y),
-            bits(p.z)
+            f64_bits(p.x),
+            f64_bits(p.y),
+            f64_bits(p.z)
         ))?;
         let at = n(self.config(), "success_at");
         let success = at >= 0 && i >= at;
@@ -142,9 +136,9 @@ impl<R: RandomSource> TeleportConsumeWorld for World<'_, R> {
     fn teleport_event(&mut self, l: i32, p: Vec3) -> Result<(), Self::Error> {
         self.event(format!(
             "game-event {l} {} {} {}",
-            bits(p.x),
-            bits(p.y),
-            bits(p.z)
+            f64_bits(p.x),
+            f64_bits(p.y),
+            f64_bits(p.z)
         ))
     }
     fn is_fox(&self) -> bool {
@@ -153,9 +147,9 @@ impl<R: RandomSource> TeleportConsumeWorld for World<'_, R> {
     fn teleport_sound(&mut self, l: i32, p: Vec3, fox: bool) -> Result<(), Self::Error> {
         self.event(format!(
             "sound {l} {fox} {} {} {}",
-            bits(p.x),
-            bits(p.y),
-            bits(p.z)
+            f64_bits(p.x),
+            f64_bits(p.y),
+            f64_bits(p.z)
         ))
     }
     fn block_position(&mut self) -> Result<BlockPos, Self::Error> {

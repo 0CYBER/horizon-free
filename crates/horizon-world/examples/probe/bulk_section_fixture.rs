@@ -1,3 +1,4 @@
+use crate::support::common::tag;
 use horizon_world::worldgen::{
     anchor::WorldGenerationContext, bulk_section::TerrainBulkAccess, feature_region::TerrainRegion,
 };
@@ -54,17 +55,6 @@ impl TerrainBlockStates for Properties<'_> {
 }
 fn n(v: &Value) -> i32 {
     v.as_i64().unwrap() as i32
-}
-fn tag(v: &Value) -> Tag {
-    match v {
-        Value::String(s) => Tag::String(s.as_str().into()),
-        Value::Number(i) => Tag::Int(i.as_i64().unwrap() as i32),
-        Value::Object(m) => {
-            Tag::Compound(m.iter().map(|(k, v)| (k.as_str().into(), tag(v))).collect())
-        }
-        Value::Array(a) => Tag::List(a.iter().map(tag).collect()),
-        _ => panic!("unsupported registry fixture value"),
-    }
 }
 fn fixture(
     f: &Value,

@@ -1,3 +1,4 @@
+use crate::support::common::f64_hex;
 use horizon_world::{
     attribute_map::AttributeMap,
     attributes::{AttributeError, Definition, Instance, Modifier, Observer, Operation},
@@ -37,16 +38,6 @@ enum Stop {
     Duplicate,
     Null,
     Bounds,
-}
-fn bits(v: f64) -> String {
-    format!(
-        "{:016x}",
-        if v.is_nan() {
-            f64::NAN.to_bits()
-        } else {
-            v.to_bits()
-        }
-    )
 }
 fn number(v: &Value) -> f64 {
     f64::from_bits(u64::from_str_radix(v.as_str().unwrap(), 16).unwrap())
@@ -118,7 +109,7 @@ impl World {
                 format!(
                     "{id}:{}:{}:{}",
                     m.id(),
-                    bits(m.amount()),
+                    f64_hex(m.amount()),
                     m.operation() as u8
                 )
             })
@@ -162,9 +153,9 @@ impl World {
             let prefix = format!(
                 "instance {id} {} {} {} {}",
                 n.key.id,
-                bits(a.base_value()),
+                f64_hex(a.base_value()),
                 a.is_dirty(),
-                bits(a.cached_value())
+                f64_hex(a.cached_value())
             );
             let all = a.modifiers().to_vec();
             let permanent = a.permanent_modifiers().to_vec();
@@ -469,7 +460,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "value" => world
                     .handle(op["instance"].as_i64().unwrap())
                     .and_then(|h| h.ok_or(Stop::Null))
-                    .map(|h| bits(world.instances[h.id].value.as_mut().unwrap().value())),
+                    .map(|h| f64_hex(world.instances[h.id].value.as_mut().unwrap().value())),
                 _ => world.raw(&mut map, op).map(|()| "ok".into()),
             };
             world.logs.push(format!(

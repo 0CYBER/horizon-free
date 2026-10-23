@@ -1,3 +1,4 @@
+use crate::support::common::f32_bits;
 use horizon_world::{
     blocking_rules::{BlockingRules, ItemDamageFunction},
     item_use::{self, ItemUseWorld},
@@ -10,13 +11,6 @@ use std::{
 };
 fn single(v: &Value) -> f32 {
     f32::from_bits(u32::from_str_radix(v.as_str().unwrap(), 16).unwrap())
-}
-fn bits(v: f32) -> u32 {
-    if v.is_nan() {
-        f32::NAN.to_bits()
-    } else {
-        v.to_bits()
-    }
 }
 struct World<'a> {
     f: &'a Value,
@@ -127,7 +121,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                 item_use::ticks_using_item(&mut w).and_then(|v| writeln!(w.out, "ticks {v}"))
             }
             "partial" => item_use::ticks_using_item_partial(&mut w, single(&f["partial"]))
-                .and_then(|v| writeln!(w.out, "float {:08x}", bits(v))),
+                .and_then(|v| writeln!(w.out, "float {:08x}", f32_bits(v))),
             _ => panic!("mode"),
         };
         writeln!(

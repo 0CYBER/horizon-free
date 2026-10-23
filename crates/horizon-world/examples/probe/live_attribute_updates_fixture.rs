@@ -252,9 +252,9 @@ mod integration {
                         "instance {} {} {} {} {} | {} | {}",
                         h.index(),
                         key.name(),
-                        bits(a.base_value()),
+                        f64_hex(a.base_value()),
                         a.is_dirty(),
-                        bits(a.cached_value()),
+                        f64_hex(a.cached_value()),
                         refs(a.modifiers(), &mut self.pools[i]),
                         refs(a.permanent_modifiers(), &mut self.pools[i])
                     )
@@ -541,8 +541,8 @@ mod integration {
                     None,
                 );
                 let result = match op["mode"].as_str().unwrap() {
-                    "value" => w.attribute_value(key).map(bits),
-                    "base" => live_updates::value(&mut w, key, ValueKind::Base).map(bits),
+                    "value" => w.attribute_value(key).map(f64_hex),
+                    "base" => live_updates::value(&mut w, key, ValueKind::Base).map(f64_hex),
                     "set-health" => w
                         .dispatch_set_health(single(&op["value"]))
                         .map(|()| "ok".into()),

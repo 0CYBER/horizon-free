@@ -1,3 +1,4 @@
+use crate::support::common::f64_bits;
 use horizon_core::{
     geometry::Vec3,
     random::{LegacyRandom, RandomSource, XoroshiroRandom},
@@ -18,13 +19,6 @@ fn single(v: &Value) -> f32 {
 fn vec(v: &Value) -> Vec3 {
     Vec3::new(number(&v[0]), number(&v[1]), number(&v[2]))
 }
-fn bits(v: f64) -> u64 {
-    if v.is_nan() {
-        f64::NAN.to_bits()
-    } else {
-        v.to_bits()
-    }
-}
 fn float_bits(v: f32) -> u32 {
     if v.is_nan() {
         f32::NAN.to_bits()
@@ -33,7 +27,12 @@ fn float_bits(v: f32) -> u32 {
     }
 }
 fn vector(v: Vec3) -> String {
-    format!("{:016x} {:016x} {:016x}", bits(v.x), bits(v.y), bits(v.z))
+    format!(
+        "{:016x} {:016x} {:016x}",
+        f64_bits(v.x),
+        f64_bits(v.y),
+        f64_bits(v.z)
+    )
 }
 struct World<'a, R> {
     f: &'a Value,

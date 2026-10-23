@@ -3,6 +3,7 @@
 //! (NoiseBasedChunkGenerator.getOrigin), as `seed x z chunk_x chunk_z` lines.
 //!
 //! usage: spawn_origin <client resource directory> <seed>...
+use crate::support::common::tag;
 use horizon_world::{
     DATA_VERSION,
     nbt::Tag,
@@ -14,17 +15,6 @@ use std::{fs, path::Path};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
-fn tag(v: &Value) -> Tag {
-    match v {
-        Value::String(s) => Tag::String(s.as_str().into()),
-        Value::Number(n) => Tag::Int(n.as_i64().unwrap() as i32),
-        Value::Array(a) => Tag::List(a.iter().map(tag).collect()),
-        Value::Object(o) => {
-            Tag::Compound(o.iter().map(|(k, v)| (k.as_str().into(), tag(v))).collect())
-        }
-        _ => panic!("invalid registry metadata"),
-    }
-}
 fn registry(resources: &Path) -> Result<&'static BlockRegistry, Error> {
     let facts: Value = serde_json::from_str(&fs::read_to_string(resources.join("facts.json"))?)?;
     let states = facts["states"].as_array().ok_or("facts states")?;

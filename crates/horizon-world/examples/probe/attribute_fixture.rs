@@ -1,3 +1,4 @@
+use crate::support::common::f64_bits;
 use horizon_world::attributes::{
     AttributeError, Definition, Instance, Modifier, Observer, Operation, Packed,
 };
@@ -9,13 +10,6 @@ use std::{
 };
 fn number(v: &Value) -> f64 {
     f64::from_bits(u64::from_str_radix(v.as_str().unwrap(), 16).unwrap())
-}
-fn bits(v: f64) -> u64 {
-    if v.is_nan() {
-        f64::NAN.to_bits()
-    } else {
-        v.to_bits()
-    }
 }
 fn refs<'a>(mods: impl IntoIterator<Item = &'a Modifier>, pool: &[Modifier]) -> String {
     let s = mods
@@ -43,9 +37,9 @@ impl Observer for Callback<'_> {
             self.out,
             "dirty {} {:016x} {} {:016x} {} {}",
             self.target,
-            bits(a.base_value()),
+            f64_bits(a.base_value()),
             a.is_dirty(),
-            bits(a.cached_value()),
+            f64_bits(a.cached_value()),
             a.modifiers().len(),
             a.permanent_modifiers().len()
         )?;
@@ -55,7 +49,7 @@ impl Observer for Callback<'_> {
             return Err(io::Error::other("injected attribute observer failure"));
         }
         if self.op["read"].as_bool().unwrap() {
-            writeln!(self.out, "observed {:016x}", bits(a.value()))?;
+            writeln!(self.out, "observed {:016x}", f64_bits(a.value()))?;
         }
         Ok(())
     }
@@ -64,9 +58,9 @@ fn state(out: &mut dyn Write, id: usize, a: &Instance, pool: &[Modifier]) -> io:
     writeln!(
         out,
         "state {id} {:016x} {} {:016x}",
-        bits(a.base_value()),
+        f64_bits(a.base_value()),
         a.is_dirty(),
-        bits(a.cached_value())
+        f64_bits(a.cached_value())
     )?;
     writeln!(out, "all {}", refs(a.modifiers(), pool))?;
     writeln!(out, "permanent {}", refs(a.permanent_modifiers(), pool))?;
@@ -165,7 +159,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                     writeln!(
                         cb.out,
                         "packed {:016x} {}",
-                        bits(p.base),
+                        f64_bits(p.base),
                         refs(&p.modifiers, &pool)
                     )?;
                     packed = Some(p);
@@ -181,7 +175,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ),
                 "many" => instances[target].add_permanent_many(mods(), &mut cb),
                 "value" => {
-                    writeln!(cb.out, "value {:016x}", bits(instances[target].value()))?;
+                    writeln!(cb.out, "value {:016x}", f64_bits(instances[target].value()))?;
                     Ok(())
                 }
                 _ => panic!("fixture mode"),

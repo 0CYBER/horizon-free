@@ -482,19 +482,21 @@ def probes_run(commands):
 
 
 def only_probes_run(paths, names):
-    """A probe binary's dep-info lists every probe in it. Keep those the harness ran and the shared support
-    modules they name (support::<module>), so that editing one probe reruns only its own harnesses."""
+    """A probe binary's dep-info lists every probe in it. Keep those the harness ran, the probes they include!
+    and the shared support modules they name (support::<module>), so that editing one probe reruns only its own
+    harnesses."""
     if not names:
         return paths
-    ran = [path for path in paths if (match := PROBE_SOURCE.search(path)) and not match.group(1) and match.group(2) in names]
-    used = "".join((ROOT / path).read_text(encoding="utf-8", errors="replace") for path in ran)
-    kept = []
-    for path in paths:
-        match = PROBE_SOURCE.search(path)
-        if not match or (match.group(1) and f"support::{match.group(2)}" in used) \
-                or (not match.group(1) and match.group(2) in (*names, "main")):
-            kept.append(path)
-    return kept
+    names, used = {*names, "main"}, ""
+    while True:
+        ran = [path for path in paths if (match := PROBE_SOURCE.search(path)) and not match.group(1) and match.group(2) in names]
+        used = "".join((ROOT / path).read_text(encoding="utf-8", errors="replace") for path in ran)
+        included = set(re.findall(r'include!\("(\w+)\.rs"\)', used)) - names
+        if not included:
+            break
+        names |= included
+    return [path for path in paths if not (match := PROBE_SOURCE.search(path))
+            or (f"support::{match.group(2)}" in used if match.group(1) else match.group(2) in names)]
 
 
 def dependencies(trace, scope=None):

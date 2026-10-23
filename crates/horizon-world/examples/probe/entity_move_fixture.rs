@@ -1,5 +1,7 @@
+use crate::support::common::f64_bits;
+use crate::support::shapes::bounds;
 use horizon_core::{
-    geometry::{Aabb, Axis, Vec3, VoxelShape, resolve_shape_movement},
+    geometry::{Aabb, Vec3, VoxelShape, resolve_shape_movement},
     position::BlockPos,
 };
 use horizon_world::{
@@ -23,30 +25,12 @@ fn single(v: &Value) -> f32 {
 fn vector(v: &Value) -> Vec3 {
     Vec3::new(number(&v[0]), number(&v[1]), number(&v[2]))
 }
-fn bits(v: f64) -> u64 {
-    if v.is_nan() {
-        0x7ff8000000000000
-    } else {
-        v.to_bits()
-    }
-}
 fn vec(label: &str, v: Vec3) -> String {
     format!(
         "{label} {:016x} {:016x} {:016x}",
-        bits(v.x),
-        bits(v.y),
-        bits(v.z)
-    )
-}
-fn bounds(label: &str, b: Aabb) -> String {
-    format!(
-        "{label} {:016x} {:016x} {:016x} {:016x} {:016x} {:016x}",
-        bits(b.min(Axis::X)),
-        bits(b.min(Axis::Y)),
-        bits(b.min(Axis::Z)),
-        bits(b.max(Axis::X)),
-        bits(b.max(Axis::Y)),
-        bits(b.max(Axis::Z))
+        f64_bits(v.x),
+        f64_bits(v.y),
+        f64_bits(v.z)
     )
 }
 fn pos(p: BlockPos) -> String {
@@ -213,7 +197,7 @@ impl EntityMoveWorld for World<'_> {
         _: BlockStateId,
         p: BlockPos,
     ) -> io::Result<()> {
-        self.query(format!("fall {:016x} {ground} {}", bits(dy), pos(p)))?;
+        self.query(format!("fall {:016x} {ground} {}", f64_bits(dy), pos(p)))?;
         if self.flag("fall_mutates") {
             self.fall = 3.0;
             self.velocity = Vec3::new(17.0, 18.0, 19.0);
@@ -399,7 +383,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             w.flags.minor,
             w.grounded,
             w.removed,
-            bits(w.fall)
+            f64_bits(w.fall)
         )?;
         writeln!(w.out, "history {}", w.history.records().len())?;
         for r in w.history.records() {

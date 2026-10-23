@@ -1,3 +1,4 @@
+use crate::support::common::f64_bits;
 use horizon_core::geometry::Vec3;
 use horizon_world::living_fall::{
     ImpulseContext, LivingFallWorld, calculate_fall_damage, cause_living_fall_damage,
@@ -13,13 +14,6 @@ fn number(v: &Value) -> f64 {
 }
 fn single(v: &Value) -> f32 {
     f32::from_bits(u32::from_str_radix(v.as_str().unwrap(), 16).unwrap())
-}
-fn bits(v: f64) -> u64 {
-    if v.is_nan() {
-        0x7ff8000000000000
-    } else {
-        v.to_bits()
-    }
 }
 fn vector(v: &Value) -> Option<Vec3> {
     if v.is_null() {
@@ -60,9 +54,9 @@ impl World<'_> {
             writeln!(
                 self.out,
                 "impact {:016x} {:016x} {:016x}",
-                bits(p.x),
-                bits(p.y),
-                bits(p.z)
+                f64_bits(p.x),
+                f64_bits(p.y),
+                f64_bits(p.z)
             )
         } else {
             writeln!(self.out, "impact none")
@@ -100,7 +94,7 @@ impl LivingFallWorld for World<'_> {
     fn propagate_fall_to_passengers(&mut self, d: f64, m: f32) -> io::Result<()> {
         self.query(format!(
             "passengers {:016x} {:08x}",
-            bits(d),
+            f64_bits(d),
             if m.is_nan() { 0x7fc00000 } else { m.to_bits() }
         ))?;
         if self.f["mutate"].as_bool().unwrap() {

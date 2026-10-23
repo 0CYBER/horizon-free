@@ -1,5 +1,7 @@
+use crate::support::common::f64_bits;
+use crate::support::shapes::bounds;
 use horizon_core::{
-    geometry::{Aabb, Axis, ShapeOp, Vec3, VoxelShape},
+    geometry::{Aabb, ShapeOp, Vec3, VoxelShape},
     position::BlockPos,
 };
 use horizon_world::{
@@ -16,28 +18,10 @@ use std::{
 fn number(v: &Value) -> f64 {
     f64::from_bits(u64::from_str_radix(v.as_str().unwrap(), 16).unwrap())
 }
-fn bits(v: f64) -> u64 {
-    if v.is_nan() {
-        0x7ff8000000000000
-    } else {
-        v.to_bits()
-    }
-}
 fn bbox(v: &Value) -> Aabb {
     Aabb::new(
         Vec3::new(number(&v[0]), number(&v[1]), number(&v[2])),
         Vec3::new(number(&v[3]), number(&v[4]), number(&v[5])),
-    )
-}
-fn bounds(label: &str, b: Aabb) -> String {
-    format!(
-        "{label} {:016x} {:016x} {:016x} {:016x} {:016x} {:016x}",
-        bits(b.min(Axis::X)),
-        bits(b.min(Axis::Y)),
-        bits(b.min(Axis::Z)),
-        bits(b.max(Axis::X)),
-        bits(b.max(Axis::Y)),
-        bits(b.max(Axis::Z))
     )
 }
 fn shape(v: &Value) -> Result<VoxelShape, Box<dyn std::error::Error>> {
@@ -85,9 +69,9 @@ impl BlockPushWorld for World<'_> {
         self.query(format!(
             "teleport {} {:016x} {:016x} {:016x}",
             e.0,
-            bits(v.x),
-            bits(v.y),
-            bits(v.z)
+            f64_bits(v.x),
+            f64_bits(v.y),
+            f64_bits(v.z)
         ))?;
         let index = e.0 as usize;
         self.entities[index] = self.entities[index].move_by(v);

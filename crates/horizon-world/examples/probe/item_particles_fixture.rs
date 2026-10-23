@@ -1,3 +1,4 @@
+use crate::support::common::f64_bits;
 use horizon_core::{
     geometry::Vec3,
     random::{LegacyRandom, RandomSource, XoroshiroRandom},
@@ -21,13 +22,6 @@ fn n(v: &Value, k: &str) -> i32 {
 }
 fn fl(v: &Value, k: &str) -> f32 {
     f32::from_bits(v[k].as_u64().unwrap() as u32)
-}
-fn bits(v: f64) -> u64 {
-    if v.is_nan() {
-        0x7ff8000000000000
-    } else {
-        v.to_bits()
-    }
 }
 fn opt(v: Option<&i32>) -> String {
     v.map_or("none".into(), i32::to_string)
@@ -141,12 +135,12 @@ impl<R: RandomSource> ItemParticleWorld<u8, u8, i32> for World<'_, R> {
             "particle {level} {} {} {damage} {same} {} {} {} {} {} {}",
             t.item(),
             t.count(),
-            bits(p.x),
-            bits(p.y),
-            bits(p.z),
-            bits(v.x),
-            bits(v.y),
-            bits(v.z)
+            f64_bits(p.x),
+            f64_bits(p.y),
+            f64_bits(p.z),
+            f64_bits(v.x),
+            f64_bits(v.y),
+            f64_bits(v.z)
         ))
     }
 }

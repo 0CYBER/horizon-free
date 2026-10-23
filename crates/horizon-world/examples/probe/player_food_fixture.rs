@@ -1,3 +1,4 @@
+use crate::support::common::f32_bits;
 use horizon_world::{
     food::FoodData,
     player_food::{self, PlayerFoodWorld, StoredPlayerFood},
@@ -10,13 +11,6 @@ use std::{
 };
 fn single(v: &Value) -> f32 {
     f32::from_bits(u32::from_str_radix(v.as_str().unwrap(), 16).unwrap())
-}
-fn bits(v: f32) -> u32 {
-    if v.is_nan() {
-        f32::NAN.to_bits()
-    } else {
-        v.to_bits()
-    }
 }
 struct World<'a> {
     f: &'a Value,
@@ -68,7 +62,7 @@ impl PlayerFoodWorld for World<'_> {
     }
     fn add_exhaustion_direct(&mut self, v: f32) -> io::Result<()> {
         let i = self.index("direct");
-        self.query(&format!("exhaust {i} {:08x}", bits(v)))?;
+        self.query(&format!("exhaust {i} {:08x}", f32_bits(v)))?;
         self.foods[i].add_exhaustion(v);
         Ok(())
     }
@@ -136,7 +130,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                 w.out,
                 "food {i} {} {:08x}",
                 food.food,
-                bits(food.exhaustion)
+                f32_bits(food.exhaustion)
             )?;
         }
         writeln!(w.out, "queries {}", w.calls)?;

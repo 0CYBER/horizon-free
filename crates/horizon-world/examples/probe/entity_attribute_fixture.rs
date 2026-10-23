@@ -1,3 +1,4 @@
+use crate::support::common::f64_bits;
 use horizon_world::attributes::{
     AttributeError, Modifier, Operation,
     entity::{Catalog, LookupError},
@@ -12,17 +13,10 @@ use std::{
 fn number(v: &Value) -> f64 {
     f64::from_bits(u64::from_str_radix(v.as_str().unwrap(), 16).unwrap())
 }
-fn bits(v: f64) -> u64 {
-    if v.is_nan() {
-        f64::NAN.to_bits()
-    } else {
-        v.to_bits()
-    }
-}
 fn lookup(out: &mut dyn Write, label: &str, result: Result<f64, LookupError>) -> io::Result<()> {
     match result {
         Ok(v) => {
-            writeln!(out, "{label} {:016x}", bits(v))?;
+            writeln!(out, "{label} {:016x}", f64_bits(v))?;
             writeln!(out, "ok")
         }
         Err(e) => writeln!(
@@ -114,9 +108,9 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                     writeln!(
                         out,
                         "state {i} {:016x} {} {:016x} {} {} {} {}",
-                        bits(a.base_value()),
+                        f64_bits(a.base_value()),
                         a.is_dirty(),
-                        bits(a.cached_value()),
+                        f64_bits(a.cached_value()),
                         map.needs_update(id),
                         map.needs_sync(id),
                         a.modifiers().len(),

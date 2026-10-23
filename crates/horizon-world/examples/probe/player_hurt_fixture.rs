@@ -1,3 +1,4 @@
+use crate::support::common::f32_bits;
 use horizon_world::living_hurt::{HurtState, HurtTag, HurtWorld};
 use horizon_world::{
     food::Difficulty,
@@ -15,19 +16,12 @@ use std::{
 fn single(v: &Value) -> f32 {
     f32::from_bits(u32::from_str_radix(v.as_str().unwrap(), 16).unwrap())
 }
-fn bits(v: f32) -> u32 {
-    if v.is_nan() {
-        f32::NAN.to_bits()
-    } else {
-        v.to_bits()
-    }
-}
 fn state(s: &HurtState<()>) -> String {
     format!(
         "{} {} {:08x} {} {} {} {}",
         s.no_action_time,
         s.cooldown,
-        bits(s.last_hurt),
+        f32_bits(s.last_hurt),
         s.hurt_duration,
         s.hurt_time,
         s.last_source.is_some(),
@@ -134,7 +128,7 @@ impl HurtWorld for Env<'_> {
         Ok(self.flag("component"))
     }
     fn apply_blocking(&mut self, _: &mut HurtState<()>, v: f32) -> io::Result<f32> {
-        self.event(&format!("blocking {:08x}", bits(v)))?;
+        self.event(&format!("blocking {:08x}", f32_bits(v)))?;
         Ok(single(&self.op["blocked"]))
     }
     fn helmet_empty(&mut self, _: &mut HurtState<()>) -> io::Result<bool> {
@@ -142,10 +136,10 @@ impl HurtWorld for Env<'_> {
         Ok(!self.flag("helmet"))
     }
     fn hurt_helmet(&mut self, _: &mut HurtState<()>, v: f32) -> io::Result<()> {
-        self.event(&format!("hurt-helmet {:08x}", bits(v)))
+        self.event(&format!("hurt-helmet {:08x}", f32_bits(v)))
     }
     fn actually_hurt(&mut self, s: &mut HurtState<()>, v: f32) -> io::Result<()> {
-        self.event(&format!("hurt {:08x} {}", bits(v), state(s)))?;
+        self.event(&format!("hurt {:08x} {}", f32_bits(v), state(s)))?;
         self.hit = true;
         self.recorded = v;
         if self.flag("mutate_hit") {
@@ -163,7 +157,7 @@ impl HurtWorld for Env<'_> {
         Ok(())
     }
     fn knockback(&mut self, _: &mut HurtState<()>, v: f32, b: bool) -> io::Result<()> {
-        self.event(&format!("knockback {:08x} {b}", bits(v)))
+        self.event(&format!("knockback {:08x} {b}", f32_bits(v)))
     }
     fn death_protection(&mut self, _: &mut HurtState<()>) -> io::Result<bool> {
         self.event("tag bypasses_invulnerability")?;
@@ -187,7 +181,7 @@ impl HurtWorld for Env<'_> {
     fn effects_on_hurt(&mut self, _: &mut HurtState<()>, v: f32) -> io::Result<()> {
         self.event("effects")?;
         for i in 0..self.op["effects"].as_u64().unwrap() {
-            self.event(&format!("effect {i} {:08x}", bits(v)))?;
+            self.event(&format!("effect {i} {:08x}", f32_bits(v)))?;
         }
         Ok(())
     }
@@ -303,7 +297,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                 e.out,
                 "state {} {:08x} {} {}",
                 state(&s),
-                bits(recorded),
+                f32_bits(recorded),
                 e.hit,
                 e.calls
             )?;

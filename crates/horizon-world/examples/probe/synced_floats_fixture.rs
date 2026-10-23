@@ -1,3 +1,4 @@
+use crate::support::common::f32_bits;
 use horizon_world::synced_floats::{DataError, FloatValue, Observer, SyncedFloats};
 use serde_json::Value;
 use std::{
@@ -7,13 +8,6 @@ use std::{
 };
 fn single(v: &Value) -> f32 {
     f32::from_bits(u32::from_str_radix(v.as_str().unwrap(), 16).unwrap())
-}
-fn bits(v: f32) -> u32 {
-    if v.is_nan() {
-        f32::NAN.to_bits()
-    } else {
-        v.to_bits()
-    }
 }
 fn parse(v: &Value) -> Vec<FloatValue> {
     v.as_array()
@@ -31,7 +25,7 @@ fn values(v: Option<&[FloatValue]>) -> String {
         Some([]) => "empty".into(),
         Some(v) => v
             .iter()
-            .map(|v| format!("{}:{:08x}", v.id, bits(v.value)))
+            .map(|v| format!("{}:{:08x}", v.id, f32_bits(v.value)))
             .collect::<Vec<_>>()
             .join(","),
     }
@@ -59,7 +53,7 @@ impl Observer for Callback<'_> {
     fn updated(&mut self, data: &mut SyncedFloats, id: u8) -> io::Result<()> {
         self.event(&format!(
             "updated {id} {:08x} {} {}",
-            bits(data.get(id).unwrap()),
+            f32_bits(data.get(id).unwrap()),
             data.is_dirty(),
             data.item_dirty(id).unwrap()
         ))?;
@@ -129,7 +123,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ),
                 "assign" => data.assign(&parse(&op["values"]), &mut cb),
                 "get" => data.get(id).map_err(DataError::UnknownId).and_then(|v| {
-                    writeln!(cb.out, "get {:08x}", bits(v)).map_err(DataError::Observer)
+                    writeln!(cb.out, "get {:08x}", f32_bits(v)).map_err(DataError::Observer)
                 }),
                 "pack" => writeln!(cb.out, "packed {}", values(data.take_dirty().as_deref()))
                     .map_err(DataError::Observer),
@@ -149,7 +143,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                 writeln!(
                     cb.out,
                     "state {id} {:08x} {} {}",
-                    bits(data.get(*id).unwrap()),
+                    f32_bits(data.get(*id).unwrap()),
                     data.item_dirty(*id).unwrap(),
                     data.is_default(*id).unwrap()
                 )?;

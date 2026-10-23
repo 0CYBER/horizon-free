@@ -1,3 +1,4 @@
+use crate::support::common::f32_bits;
 use horizon_world::blocking_rules::{
     BlockingRules, DamageReduction, ItemDamageFunction, TypeMatchWorld,
 };
@@ -12,13 +13,6 @@ fn single(v: &Value) -> f32 {
 }
 fn number(v: &Value) -> f64 {
     f64::from_bits(u64::from_str_radix(v.as_str().unwrap(), 16).unwrap())
-}
-fn bits(v: f32) -> u32 {
-    if v.is_nan() {
-        f32::NAN.to_bits()
-    } else {
-        v.to_bits()
-    }
 }
 struct World<'a> {
     f: &'a Value,
@@ -96,7 +90,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
         writeln!(w.out, "item {}", rules.item_damage.apply(damage))?;
         match rules.resolve(&mut w, damage, number(&f["angle"])) {
-            Ok(v) => writeln!(w.out, "blocked {:08x}\nresult ok", bits(v))?,
+            Ok(v) => writeln!(w.out, "blocked {:08x}\nresult ok", f32_bits(v))?,
             Err(_) => writeln!(w.out, "result error")?,
         };
         writeln!(w.out, "queries {} {}", w.calls, w.changed)?;

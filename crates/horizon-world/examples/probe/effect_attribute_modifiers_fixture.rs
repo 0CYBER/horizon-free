@@ -1,3 +1,4 @@
+use crate::support::common::f64_hex;
 use horizon_world::{
     attributes::{AttributeError, Definition, Instance, Modifier, Observer, Operation},
     effect_attribute_modifiers::{self as effects, Definitions, Error, ModifierWorld, Template},
@@ -24,21 +25,11 @@ enum Stop {
     Callback,
     Duplicate,
 }
-fn bits(v: f64) -> String {
-    format!(
-        "{:016x}",
-        if v.is_nan() {
-            f64::NAN.to_bits()
-        } else {
-            v.to_bits()
-        }
-    )
-}
 fn number(v: &Value) -> f64 {
     f64::from_bits(u64::from_str_radix(v.as_str().unwrap(), 16).unwrap())
 }
 fn desc(m: &Modifier) -> String {
-    format!("{}:{}:{}", m.id(), bits(m.amount()), m.operation() as u8)
+    format!("{}:{}:{}", m.id(), f64_hex(m.amount()), m.operation() as u8)
 }
 fn key_desc(k: Option<&Key>) -> String {
     k.map_or("null".into(), |k| k.id.to_string())
@@ -66,7 +57,7 @@ impl Shared {
                 .iter()
                 .map(|(k, v)| {
                     let v = v.as_ref().map_or("null".into(), |t| {
-                        format!("{}:{}:{}", t.id(), bits(t.amount()), t.operation() as u8)
+                        format!("{}:{}:{}", t.id(), f64_hex(t.amount()), t.operation() as u8)
                     });
                     format!("{}={v}", key_desc(k.as_ref()))
                 })
@@ -126,9 +117,9 @@ impl Shared {
     fn state(&mut self, id: usize, a: &Instance) {
         self.logs.push(format!(
             "instance {id} {} {} {} | {} | {}",
-            bits(a.base_value()),
+            f64_hex(a.base_value()),
             a.is_dirty(),
-            bits(a.cached_value()),
+            f64_hex(a.cached_value()),
             self.refs(a.modifiers()),
             self.refs(a.permanent_modifiers())
         ));
@@ -153,7 +144,7 @@ impl Observer for Dirty<'_> {
         if self.shared.op["read"].as_bool().unwrap() {
             self.shared
                 .logs
-                .push(format!("observed {}", bits(a.value())));
+                .push(format!("observed {}", f64_hex(a.value())));
         }
         Ok(())
     }
@@ -316,10 +307,10 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 "value" => {
                     let id = op["target"].as_u64().unwrap() as usize;
-                    world
-                        .shared
-                        .logs
-                        .push(format!("value {id} {}", bits(world.instances[id].value())));
+                    world.shared.logs.push(format!(
+                        "value {id} {}",
+                        f64_hex(world.instances[id].value())
+                    ));
                     Ok(())
                 }
                 _ => {

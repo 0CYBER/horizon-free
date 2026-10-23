@@ -1,3 +1,4 @@
+use crate::support::common::f32_bits;
 use horizon_world::damage_immunity::{DamageRule, ImmunityTag, ImmunityWorld};
 use horizon_world::living_hurt::{HurtState, HurtTag, HurtWorld};
 use horizon_world::{
@@ -84,19 +85,12 @@ impl FixtureAttributes for Live {
 fn single(v: &Value) -> f32 {
     f32::from_bits(u32::from_str_radix(v.as_str().unwrap(), 16).unwrap())
 }
-fn bits(v: f32) -> u32 {
-    if v.is_nan() {
-        f32::NAN.to_bits()
-    } else {
-        v.to_bits()
-    }
-}
 fn state(s: &HurtState<()>) -> String {
     format!(
         "{} {} {:08x} {} {} {} {}",
         s.no_action_time,
         s.cooldown,
-        bits(s.last_hurt),
+        f32_bits(s.last_hurt),
         s.hurt_duration,
         s.hurt_time,
         s.last_source.is_some(),
@@ -208,7 +202,7 @@ impl HurtWorld for Env<'_> {
         Ok(self.flag("component"))
     }
     fn apply_blocking(&mut self, _: &mut HurtState<()>, v: f32) -> io::Result<f32> {
-        self.event(&format!("blocking {:08x}", bits(v)))?;
+        self.event(&format!("blocking {:08x}", f32_bits(v)))?;
         Ok(single(&self.op["blocked"]))
     }
     fn helmet_empty(&mut self, _: &mut HurtState<()>) -> io::Result<bool> {
@@ -216,7 +210,7 @@ impl HurtWorld for Env<'_> {
         Ok(!self.flag("helmet"))
     }
     fn hurt_helmet(&mut self, _: &mut HurtState<()>, v: f32) -> io::Result<()> {
-        self.event(&format!("hurt-helmet {:08x}", bits(v)))
+        self.event(&format!("hurt-helmet {:08x}", f32_bits(v)))
     }
     fn actually_hurt(&mut self, _s: &mut HurtState<()>, _v: f32) -> io::Result<()> {
         panic!("combat binding supplies actual inner damage")
@@ -228,7 +222,7 @@ impl HurtWorld for Env<'_> {
         Ok(())
     }
     fn knockback(&mut self, _: &mut HurtState<()>, v: f32, b: bool) -> io::Result<()> {
-        self.event(&format!("knockback {:08x} {b}", bits(v)))
+        self.event(&format!("knockback {:08x} {b}", f32_bits(v)))
     }
     fn death_protection(&mut self, _: &mut HurtState<()>) -> io::Result<bool> {
         self.event("tag bypasses_invulnerability")?;
@@ -252,7 +246,7 @@ impl HurtWorld for Env<'_> {
     fn effects_on_hurt(&mut self, _: &mut HurtState<()>, v: f32) -> io::Result<()> {
         self.event("effects")?;
         for i in 0..self.op["effects"].as_u64().unwrap() {
-            self.event(&format!("effect {i} {:08x}", bits(v)))?;
+            self.event(&format!("effect {i} {:08x}", f32_bits(v)))?;
         }
         Ok(())
     }
@@ -337,7 +331,7 @@ fn values(v: Option<&[FloatValue]>) -> String {
         Some([]) => "empty".into(),
         Some(v) => v
             .iter()
-            .map(|v| format!("{}:{:08x}", v.id, bits(v.value)))
+            .map(|v| format!("{}:{:08x}", v.id, f32_bits(v.value)))
             .collect::<Vec<_>>()
             .join(","),
     }
@@ -347,7 +341,7 @@ impl Observer for Env<'_> {
     fn updated(&mut self, data: &mut SyncedFloats, id: u8) -> io::Result<()> {
         self.event(&format!(
             "updated {id} {:08x} {}",
-            bits(data.get(id).unwrap()),
+            f32_bits(data.get(id).unwrap()),
             data.is_dirty()
         ))?;
         if self.flag("pack_callback") {
@@ -393,7 +387,7 @@ impl<A: FixtureAttributes> ServerDamageEnvironment<A> for Env<'_> {
         Ok(self.flag(&format!("bypass_{n}")))
     }
     fn hurt_armor(&mut self, a: &mut A, v: f32) -> io::Result<()> {
-        self.event(&format!("hurt-armor {:08x}", bits(v)))?;
+        self.event(&format!("hurt-armor {:08x}", f32_bits(v)))?;
         if self.flag("break_armor") {
             a.configure("minecraft:armor", number(&self.op["armor_after"]), None);
         }
@@ -447,7 +441,7 @@ impl<A: FixtureAttributes> ServerDamageEnvironment<A> for Env<'_> {
     }
     fn record_damage(&mut self, v: f32) -> io::Result<()> {
         self.event("tracker")?;
-        self.event(&format!("record {:08x}", bits(v)))?;
+        self.event(&format!("record {:08x}", f32_bits(v)))?;
         self.recorded = v;
         self.hit = true;
         Ok(())
@@ -554,16 +548,16 @@ fn run<A: FixtureAttributes>(dir: &Path, output: &str) -> Result<(), Box<dyn std
                 e.out,
                 "state {} {:08x} {} {}",
                 state(&s),
-                bits(recorded),
+                f32_bits(recorded),
                 e.hit,
                 e.calls
             )?;
             writeln!(
                 e.out,
                 "storage {:08x} {:08x} {:08x} {} {} {} {}",
-                bits(data.get(ids.health).unwrap()),
-                bits(data.get(ids.absorption).unwrap()),
-                bits(food.exhaustion),
+                f32_bits(data.get(ids.health).unwrap()),
+                f32_bits(data.get(ids.absorption).unwrap()),
+                f32_bits(food.exhaustion),
                 data.is_dirty(),
                 data.item_dirty(ids.health).unwrap(),
                 data.item_dirty(ids.absorption).unwrap(),

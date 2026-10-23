@@ -329,7 +329,7 @@ mod integration {
                     "value" => world
                         .handle(op["instance"].as_i64().unwrap())
                         .and_then(|h| h.ok_or(Stop::Null))
-                        .map(|h| bits(world.instances[h.id].value.as_mut().unwrap().value())),
+                        .map(|h| f64_hex(world.instances[h.id].value.as_mut().unwrap().value())),
                     _ => world.raw(&mut map, op).map(|()| "ok".into()),
                 };
                 world.logs.push(format!(

@@ -1,4 +1,5 @@
 //! Transport for shared cave/canyon geometry and ordered output failures.
+use crate::support::common::f64_bits;
 use horizon_core::{
     carving::{CarverOutput, CarvingMask, can_reach, carve_ellipsoid},
     position::ChunkPos,
@@ -14,13 +15,6 @@ fn n(v: &Value) -> i32 {
 }
 fn d(v: &Value) -> f64 {
     f64::from_bits(u64::from_str_radix(v.as_str().unwrap(), 16).unwrap())
-}
-fn bits(v: f64) -> u64 {
-    if v.is_nan() {
-        0x7ff8000000000000
-    } else {
-        v.to_bits()
-    }
 }
 struct Output<'a> {
     mask: &'a mut CarvingMask,
@@ -78,9 +72,9 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                     };
                     trace.borrow_mut().push(format!(
                         "skip {:x} {:x} {:x} {by} {skip}",
-                        bits(x),
-                        bits(y),
-                        bits(z)
+                        f64_bits(x),
+                        f64_bits(y),
+                        f64_bits(z)
                     ));
                     skip
                 },

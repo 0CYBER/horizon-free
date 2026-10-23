@@ -1,3 +1,4 @@
+use crate::support::common::f64_bits;
 use horizon_core::geometry::{Aabb, Axis, Vec3};
 use horizon_world::edge_backoff::{EdgeBackoffInput, EdgeBackoffWorld, back_off_from_edge};
 use serde_json::Value;
@@ -11,13 +12,6 @@ fn number(v: &Value) -> f64 {
 }
 fn vector(v: &Value) -> Vec3 {
     Vec3::new(number(&v[0]), number(&v[1]), number(&v[2]))
-}
-fn bits(v: f64) -> u64 {
-    if v.is_nan() {
-        0x7ff8000000000000
-    } else {
-        v.to_bits()
-    }
 }
 struct World<'a> {
     input: &'a Value,
@@ -56,12 +50,12 @@ impl EdgeBackoffWorld for World<'_> {
     fn no_collision(&mut self, b: Aabb) -> io::Result<bool> {
         self.query(format!(
             "clear {:016x} {:016x} {:016x} {:016x} {:016x} {:016x}",
-            bits(b.min(Axis::X)),
-            bits(b.min(Axis::Y)),
-            bits(b.min(Axis::Z)),
-            bits(b.max(Axis::X)),
-            bits(b.max(Axis::Y)),
-            bits(b.max(Axis::Z))
+            f64_bits(b.min(Axis::X)),
+            f64_bits(b.min(Axis::Y)),
+            f64_bits(b.min(Axis::Z)),
+            f64_bits(b.max(Axis::X)),
+            f64_bits(b.max(Axis::Y)),
+            f64_bits(b.max(Axis::Z))
         ))?;
         let p = self.probes;
         self.probes += 1;
@@ -105,9 +99,9 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(v) => writeln!(
                 world.out,
                 "movement {:016x} {:016x} {:016x}",
-                bits(v.x),
-                bits(v.y),
-                bits(v.z)
+                f64_bits(v.x),
+                f64_bits(v.y),
+                f64_bits(v.z)
             )?,
             Err(_) => writeln!(world.out, "error")?,
         };

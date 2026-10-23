@@ -1,3 +1,4 @@
+use crate::support::common::f64_bits;
 use horizon_core::geometry::Vec3;
 use horizon_world::living_motion::*;
 use serde_json::Value;
@@ -15,18 +16,16 @@ fn single(v: &Value) -> f32 {
 fn vec(v: &Value) -> Vec3 {
     Vec3::new(number(&v[0]), number(&v[1]), number(&v[2]))
 }
-fn bits(v: f64) -> u64 {
-    if v.is_nan() {
-        0x7ff8000000000000
-    } else {
-        v.to_bits()
-    }
-}
 fn fbits(v: f32) -> u32 {
     if v.is_nan() { 0x7fc00000 } else { v.to_bits() }
 }
 fn vector(v: Vec3) -> String {
-    format!("{:016x} {:016x} {:016x}", bits(v.x), bits(v.y), bits(v.z))
+    format!(
+        "{:016x} {:016x} {:016x}",
+        f64_bits(v.x),
+        f64_bits(v.y),
+        f64_bits(v.z)
+    )
 }
 struct World<'a> {
     f: &'a Value,
@@ -138,10 +137,11 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             "power" => jump_power(&mut w, single(&f["scale"]))
                 .and_then(|v| writeln!(w.out, "float {:08x}", fbits(v))),
             "jump" => jump_from_ground(&mut w),
-            "gravity" => gravity(&mut w).and_then(|v| writeln!(w.out, "double {:016x}", bits(v))),
-            "effective" => {
-                effective_gravity(&mut w).and_then(|v| writeln!(w.out, "double {:016x}", bits(v)))
+            "gravity" => {
+                gravity(&mut w).and_then(|v| writeln!(w.out, "double {:016x}", f64_bits(v)))
             }
+            "effective" => effective_gravity(&mut w)
+                .and_then(|v| writeln!(w.out, "double {:016x}", f64_bits(v))),
             "apply" => apply_gravity(&mut w),
             "up" => swim_vertical(&mut w, true),
             "down" => swim_vertical(&mut w, false),

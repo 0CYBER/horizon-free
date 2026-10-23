@@ -1,3 +1,4 @@
+use crate::support::common::f32_bits;
 use horizon_world::{
     attributes::{
         Modifier, Operation,
@@ -24,20 +25,13 @@ fn single(v: &Value) -> f32 {
 fn number(v: &Value) -> f64 {
     f64::from_bits(u64::from_str_radix(v.as_str().unwrap(), 16).unwrap())
 }
-fn bits(v: f32) -> u32 {
-    if v.is_nan() {
-        f32::NAN.to_bits()
-    } else {
-        v.to_bits()
-    }
-}
 fn values(v: Option<&[FloatValue]>) -> String {
     match v {
         None => "none".into(),
         Some([]) => "empty".into(),
         Some(v) => v
             .iter()
-            .map(|v| format!("{}:{:08x}", v.id, bits(v.value)))
+            .map(|v| format!("{}:{:08x}", v.id, f32_bits(v.value)))
             .collect::<Vec<_>>()
             .join(","),
     }
@@ -69,7 +63,7 @@ impl Observer for Env<'_> {
     fn updated(&mut self, data: &mut SyncedFloats, id: u8) -> io::Result<()> {
         self.event(&format!(
             "updated {id} {:08x} {}",
-            bits(data.get(id).unwrap()),
+            f32_bits(data.get(id).unwrap()),
             data.is_dirty()
         ))?;
         if self.flag("pack_callback") {
@@ -115,7 +109,7 @@ impl ServerDamageEnvironment for Env<'_> {
         Ok(self.flag(&format!("bypass_{n}")))
     }
     fn hurt_armor(&mut self, a: &mut EntityAttributes, v: f32) -> io::Result<()> {
-        self.event(&format!("hurt-armor {:08x}", bits(v)))?;
+        self.event(&format!("hurt-armor {:08x}", f32_bits(v)))?;
         if self.flag("break_armor") {
             let id = a.catalog().id("minecraft:armor").unwrap();
             a.edit(id, |a, o| {
@@ -174,7 +168,7 @@ impl ServerDamageEnvironment for Env<'_> {
     }
     fn record_damage(&mut self, v: f32) -> io::Result<()> {
         self.event("tracker")?;
-        self.event(&format!("record {:08x}", bits(v)))?;
+        self.event(&format!("record {:08x}", f32_bits(v)))?;
         self.recorded = v;
         Ok(())
     }
@@ -255,10 +249,10 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             writeln!(
                 env.out,
                 "state {:08x} {:08x} {:08x} {:08x} {} {} {} {}",
-                bits(data.get(ids.health).unwrap()),
-                bits(data.get(ids.absorption).unwrap()),
-                bits(food.exhaustion),
-                bits(recorded),
+                f32_bits(data.get(ids.health).unwrap()),
+                f32_bits(data.get(ids.absorption).unwrap()),
+                f32_bits(food.exhaustion),
+                f32_bits(recorded),
                 data.is_dirty(),
                 data.item_dirty(ids.health).unwrap(),
                 data.item_dirty(ids.absorption).unwrap(),

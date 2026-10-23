@@ -1,3 +1,4 @@
+use crate::support::common::f64_bits;
 use horizon_core::{
     geometry::{Aabb, Axis, Vec3},
     position::BlockPos,
@@ -14,13 +15,6 @@ fn number(v: &Value) -> f64 {
 }
 fn vector(v: &Value) -> Vec3 {
     Vec3::new(number(&v[0]), number(&v[1]), number(&v[2]))
-}
-fn bits(v: f64) -> u64 {
-    if v.is_nan() {
-        0x7ff8000000000000
-    } else {
-        v.to_bits()
-    }
 }
 fn position(v: &Value) -> Option<BlockPos> {
     if v.is_null() {
@@ -62,12 +56,12 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                 writeln!(
                     out,
                     "find {:016x} {:016x} {:016x} {:016x} {:016x} {:016x}",
-                    bits(b.min(Axis::X)),
-                    bits(b.min(Axis::Y)),
-                    bits(b.min(Axis::Z)),
-                    bits(b.max(Axis::X)),
-                    bits(b.max(Axis::Y)),
-                    bits(b.max(Axis::Z))
+                    f64_bits(b.min(Axis::X)),
+                    f64_bits(b.min(Axis::Y)),
+                    f64_bits(b.min(Axis::Z)),
+                    f64_bits(b.max(Axis::X)),
+                    f64_bits(b.max(Axis::Y)),
+                    f64_bits(b.max(Axis::Z))
                 )?;
                 let call = calls;
                 calls += 1;

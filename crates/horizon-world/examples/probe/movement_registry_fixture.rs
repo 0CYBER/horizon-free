@@ -1,3 +1,4 @@
+use crate::support::common::position;
 use horizon_core::{geometry::Vec3, position::BlockPos};
 use horizon_world::movement_support::{self as support, MovementLocation};
 use horizon_world::{
@@ -20,13 +21,6 @@ fn number(v: &Value) -> f64 {
 }
 fn single(v: &Value) -> f32 {
     f32::from_bits(u32::from_str_radix(v.as_str().unwrap(), 16).unwrap())
-}
-fn position(v: &Value) -> BlockPos {
-    BlockPos::new(
-        v[0].as_i64().unwrap() as i32,
-        v[1].as_i64().unwrap() as i32,
-        v[2].as_i64().unwrap() as i32,
-    )
 }
 struct World<'a> {
     input: &'a Value,

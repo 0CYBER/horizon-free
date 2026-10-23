@@ -1,3 +1,4 @@
+use crate::support::common::{f64_bits, position};
 use horizon_core::{
     geometry::{Aabb, Vec3},
     position::BlockPos,
@@ -28,25 +29,16 @@ fn single(v: &Value) -> f32 {
 fn vector(v: &Value) -> Vec3 {
     Vec3::new(number(&v[0]), number(&v[1]), number(&v[2]))
 }
-fn bits(v: f64) -> u64 {
-    if v.is_nan() {
-        f64::NAN.to_bits()
-    } else {
-        v.to_bits()
-    }
-}
 fn show(v: Vec3) -> String {
-    format!("{:016x} {:016x} {:016x}", bits(v.x), bits(v.y), bits(v.z))
+    format!(
+        "{:016x} {:016x} {:016x}",
+        f64_bits(v.x),
+        f64_bits(v.y),
+        f64_bits(v.z)
+    )
 }
 fn pos(p: BlockPos) -> String {
     format!("{} {} {}", p.x, p.y, p.z)
-}
-fn position(v: &Value) -> BlockPos {
-    BlockPos::new(
-        v[0].as_i64().unwrap() as i32,
-        v[1].as_i64().unwrap() as i32,
-        v[2].as_i64().unwrap() as i32,
-    )
 }
 #[derive(Clone, Copy, Default)]
 struct Tick {
@@ -446,7 +438,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                     w.out,
                     "tracker {} {:016x} {}",
                     t.fluid as u8,
-                    bits(t.height),
+                    f64_bits(t.height),
                     t.eyes_inside
                 )?;
             }
@@ -455,7 +447,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                     w.out,
                     "current {} {:016x} {} {}",
                     tag.0,
-                    bits(c.height),
+                    f64_bits(c.height),
                     show(c.accumulated),
                     c.count
                 )?;
@@ -465,7 +457,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let height = interaction.fluid_height(&w, tag);
                 let inside = interaction.is_in_fluid(&w, tag);
                 let eyes = interaction.is_eye_in_fluid(&w, tag);
-                writeln!(w.out, "tag {t} {:016x} {inside} {eyes}", bits(height))?;
+                writeln!(w.out, "tag {t} {:016x} {inside} {eyes}", f64_bits(height))?;
             }
             writeln!(w.out, "final {}", show(w.velocity))?;
             writeln!(w.out, "queries {}", w.calls)?;
@@ -476,7 +468,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "tick {} {} {:016x}",
                     tick.touch,
                     tick.first,
-                    bits(tick.fall)
+                    f64_bits(tick.fall)
                 )?;
             }
         }

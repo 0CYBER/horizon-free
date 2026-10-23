@@ -1,3 +1,4 @@
+use crate::support::common::{f64_bits, position};
 use horizon_core::{geometry::Vec3, position::BlockPos};
 use horizon_world::movement_emission::*;
 use serde_json::Value;
@@ -15,22 +16,8 @@ fn single(v: &Value) -> f32 {
 fn vector(v: &Value) -> Vec3 {
     Vec3::new(number(&v[0]), number(&v[1]), number(&v[2]))
 }
-fn position(v: &Value) -> BlockPos {
-    BlockPos::new(
-        v[0].as_i64().unwrap() as i32,
-        v[1].as_i64().unwrap() as i32,
-        v[2].as_i64().unwrap() as i32,
-    )
-}
 fn pos(p: BlockPos) -> String {
     format!("{} {} {}", p.x, p.y, p.z)
-}
-fn bits(v: f64) -> u64 {
-    if v.is_nan() {
-        0x7ff8000000000000
-    } else {
-        v.to_bits()
-    }
 }
 fn fbits(v: f32) -> u32 {
     if v.is_nan() { 0x7fc00000 } else { v.to_bits() }
@@ -137,9 +124,9 @@ impl MovementEmissionWorld for World<'_> {
         let p = vector(&self.f["position"]);
         self.query(format!(
             "step {s} {:016x} {:016x} {:016x}",
-            bits(p.x),
-            bits(p.y),
-            bits(p.z)
+            f64_bits(p.x),
+            f64_bits(p.y),
+            f64_bits(p.z)
         ))?;
         self.mutate();
         Ok(())

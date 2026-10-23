@@ -1,3 +1,4 @@
+use crate::support::common::f64_bits;
 use horizon_core::{geometry::Vec3, position::BlockPos};
 use horizon_world::fall_damage::{FallDamageWorld, check_fall_damage};
 use serde_json::Value;
@@ -8,13 +9,6 @@ use std::{
 };
 fn number(v: &Value) -> f64 {
     f64::from_bits(u64::from_str_radix(v.as_str().unwrap(), 16).unwrap())
-}
-fn bits(v: f64) -> u64 {
-    if v.is_nan() {
-        0x7ff8000000000000
-    } else {
-        v.to_bits()
-    }
 }
 fn support(v: &Value) -> Option<BlockPos> {
     if v.is_null() {
@@ -66,7 +60,7 @@ impl FallDamageWorld for World<'_> {
             p.x,
             p.y,
             p.z,
-            bits(distance)
+            f64_bits(distance)
         ))?;
         if self.input["mutate"].as_bool().unwrap() {
             self.fall = 17.25;
@@ -88,9 +82,9 @@ impl FallDamageWorld for World<'_> {
     fn hit_ground(&mut self, p: Vec3, s: u8) -> io::Result<()> {
         self.query(format!(
             "hit-ground {:016x} {:016x} {:016x} {}",
-            bits(p.x),
-            bits(p.y),
-            bits(p.z),
+            f64_bits(p.x),
+            f64_bits(p.y),
+            f64_bits(p.z),
             if s == 1 { "queried" } else { "input" }
         ))
     }
@@ -130,10 +124,10 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         writeln!(
             world.out,
             "final {:016x} {:016x} {:016x} {:016x}",
-            bits(world.fall),
-            bits(p.x),
-            bits(p.y),
-            bits(p.z)
+            f64_bits(world.fall),
+            f64_bits(p.x),
+            f64_bits(p.y),
+            f64_bits(p.z)
         )?;
         if let Some(p) = world.support {
             writeln!(world.out, "support {} {} {}", p.x, p.y, p.z)?;

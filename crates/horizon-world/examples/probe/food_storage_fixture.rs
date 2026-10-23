@@ -1,3 +1,4 @@
+use crate::support::common::f32_bits;
 use horizon_world::{
     food::FoodData,
     nbt::{Compound, Tag},
@@ -16,13 +17,6 @@ const KEYS: [&str; 4] = [
 ];
 fn single(v: &Value) -> f32 {
     f32::from_bits(u32::from_str_radix(v.as_str().unwrap(), 16).unwrap())
-}
-fn bits(v: f32) -> u32 {
-    if v.is_nan() {
-        f32::NAN.to_bits()
-    } else {
-        v.to_bits()
-    }
 }
 fn tag(v: &Value) -> Option<Tag> {
     let value = &v["value"];
@@ -82,8 +76,8 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             "state {} {} {:08x} {:08x}",
             food.food,
             food.timer,
-            bits(food.saturation),
-            bits(food.exhaustion)
+            f32_bits(food.saturation),
+            f32_bits(food.exhaustion)
         )?;
         let mut saved = Compound::new();
         saved.insert("unrelated".into(), Tag::Int(42));
@@ -96,7 +90,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         for key in KEYS {
             match saved[&key.into()] {
                 Tag::Int(v) => writeln!(out, "tag 3 {v}")?,
-                Tag::Float(v) => writeln!(out, "tag 5 {:08x}", bits(f32::from_bits(v)))?,
+                Tag::Float(v) => writeln!(out, "tag 5 {:08x}", f32_bits(f32::from_bits(v)))?,
                 _ => panic!("saved type"),
             }
         }
@@ -106,8 +100,8 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             "roundtrip {} {} {:08x} {:08x}",
             food.food,
             food.timer,
-            bits(food.saturation),
-            bits(food.exhaustion)
+            f32_bits(food.saturation),
+            f32_bits(food.exhaustion)
         )?;
     }
     Ok(())

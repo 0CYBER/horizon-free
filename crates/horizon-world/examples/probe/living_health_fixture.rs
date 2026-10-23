@@ -1,3 +1,4 @@
+use crate::support::common::f32_bits;
 use horizon_world::living_health::{self, HealthWorld, SyncedFloat};
 use serde_json::Value;
 use std::{
@@ -10,13 +11,6 @@ fn single(v: &Value) -> f32 {
 }
 fn number(v: &Value) -> f64 {
     f64::from_bits(u64::from_str_radix(v.as_str().unwrap(), 16).unwrap())
-}
-fn bits(v: f32) -> u32 {
-    if v.is_nan() {
-        f32::NAN.to_bits()
-    } else {
-        v.to_bits()
-    }
 }
 struct Context<'a> {
     f: &'a Value,
@@ -70,7 +64,7 @@ impl HealthWorld for World<'_> {
         self.stores[data].set(v, false, |_| self.ctx.query("updated"))
     }
     fn store_absorption(&mut self, v: f32) -> io::Result<()> {
-        self.ctx.query(&format!("absorption {:08x}", bits(v)))?;
+        self.ctx.query(&format!("absorption {:08x}", f32_bits(v)))?;
         self.absorption = v;
         Ok(())
     }
@@ -78,7 +72,7 @@ impl HealthWorld for World<'_> {
         self.ctx.world()["dead"].as_bool().unwrap()
     }
     fn dispatch_set_health(&mut self, v: f32) -> io::Result<()> {
-        self.ctx.query(&format!("set {:08x}", bits(v)))?;
+        self.ctx.query(&format!("set {:08x}", f32_bits(v)))?;
         living_health::set_health(self, v)
     }
 }
@@ -123,7 +117,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "packed {}",
                         w.stores[w.ctx.active]
                             .take_dirty()
-                            .map(|v| format!("{:08x}", bits(v)))
+                            .map(|v| format!("{:08x}", f32_bits(v)))
                             .unwrap_or_else(|| "none".into())
                     )
                 }
@@ -138,7 +132,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                 writeln!(
                     w.ctx.out,
                     "data {i} {:08x} {} {} {}",
-                    bits(s.value()),
+                    f32_bits(s.value()),
                     s.is_dirty(),
                     s.item_dirty(),
                     s.is_default()
@@ -149,7 +143,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                 w.ctx.out,
                 "state {} {:08x} {dead} {}",
                 w.ctx.active,
-                bits(w.absorption),
+                f32_bits(w.absorption),
                 w.ctx.calls
             )?;
         }

@@ -1,3 +1,4 @@
+use crate::support::common::f32_bits;
 use horizon_world::{
     attributes::{
         Modifier, Operation,
@@ -19,20 +20,13 @@ fn single(v: &Value) -> f32 {
 fn number(v: &Value) -> f64 {
     f64::from_bits(u64::from_str_radix(v.as_str().unwrap(), 16).unwrap())
 }
-fn bits(v: f32) -> u32 {
-    if v.is_nan() {
-        f32::NAN.to_bits()
-    } else {
-        v.to_bits()
-    }
-}
 fn values(v: Option<&[FloatValue]>) -> String {
     match v {
         None => "none".into(),
         Some([]) => "empty".into(),
         Some(v) => v
             .iter()
-            .map(|v| format!("{}:{:08x}", v.id, bits(v.value)))
+            .map(|v| format!("{}:{:08x}", v.id, f32_bits(v.value)))
             .collect::<Vec<_>>()
             .join(","),
     }
@@ -59,7 +53,7 @@ impl Observer for Callback<'_> {
     fn updated(&mut self, data: &mut SyncedFloats, id: u8) -> io::Result<()> {
         self.event(&format!(
             "updated {id} {:08x} {}",
-            bits(data.get(id).unwrap()),
+            f32_bits(data.get(id).unwrap()),
             data.is_dirty()
         ))?;
         if self.op["pack_callback"].as_bool().unwrap() {
@@ -145,7 +139,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .bind(&mut cb)
                     .absorption()
                     .map_err(|_| ())
-                    .and_then(|v| writeln!(cb.out, "float {:08x}", bits(v)).map_err(|_| ())),
+                    .and_then(|v| writeln!(cb.out, "float {:08x}", f32_bits(v)).map_err(|_| ())),
                 "hurt" => state
                     .bind(&mut cb)
                     .is_hurt()
@@ -227,8 +221,8 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             writeln!(
                 cb.out,
                 "state {:08x} {:08x} {} {} {} {} {} {}",
-                bits(state.data.get(ids.health).unwrap()),
-                bits(state.data.get(ids.absorption).unwrap()),
+                f32_bits(state.data.get(ids.health).unwrap()),
+                f32_bits(state.data.get(ids.absorption).unwrap()),
                 state.data.is_dirty(),
                 state.data.item_dirty(ids.health).unwrap(),
                 state.data.item_dirty(ids.absorption).unwrap(),

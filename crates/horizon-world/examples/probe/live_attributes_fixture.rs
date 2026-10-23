@@ -1,3 +1,4 @@
+use crate::support::common::f64_hex;
 use horizon_world::{
     attribute_map::ValueKind,
     attributes::{
@@ -16,16 +17,6 @@ use std::{
 };
 fn number(v: &Value) -> f64 {
     f64::from_bits(u64::from_str_radix(v.as_str().unwrap(), 16).unwrap())
-}
-fn bits(v: f64) -> String {
-    format!(
-        "{:016x}",
-        if v.is_nan() {
-            f64::NAN.to_bits()
-        } else {
-            v.to_bits()
-        }
-    )
 }
 fn error(e: Error) -> &'static str {
     match e {
@@ -52,7 +43,7 @@ fn refs(mods: &[Modifier], pool: &mut Vec<Modifier>) -> String {
             format!(
                 "{id}:{}:{}:{}",
                 m.id(),
-                bits(m.amount()),
+                f64_hex(m.amount()),
                 m.operation() as u8
             )
         })
@@ -104,11 +95,11 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             )?;
             let mode = op["mode"].as_str().unwrap();
             let result: Result<String, Error> = match mode {
-                "value" => attrs.value(key, ValueKind::Computed).map(bits),
-                "base" => attrs.value(key, ValueKind::Base).map(bits),
+                "value" => attrs.value(key, ValueKind::Computed).map(f64_hex),
+                "base" => attrs.value(key, ValueKind::Base).map(f64_hex),
                 "has" => attrs.has_attribute(key).map(|v| v.to_string()),
                 "has_modifier" => attrs.has_modifier(key, m.id()).map(|v| v.to_string()),
-                "modifier" => attrs.modifier_value(key, m.id()).map(bits),
+                "modifier" => attrs.modifier_value(key, m.id()).map(f64_hex),
                 "ensure" => attrs.get_instance(key).map(|h| handle(h.as_ref())),
                 "reset" => attrs.reset_base(key).map(|v| v.to_string()),
                 "ack_update" => {
@@ -208,9 +199,9 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "instance {} {} {} {} {} | {} | {}",
                     h.index(),
                     key.name(),
-                    bits(a.base_value()),
+                    f64_hex(a.base_value()),
                     a.is_dirty(),
-                    bits(a.cached_value()),
+                    f64_hex(a.cached_value()),
                     refs(a.modifiers(), &mut pool),
                     refs(a.permanent_modifiers(), &mut pool)
                 )?;

@@ -1,3 +1,4 @@
+use crate::support::common::f32_bits;
 use horizon_world::{
     living_damage::{self, DamageStat, DamageWorld},
     living_health::{self, HealthWorld},
@@ -13,13 +14,6 @@ fn single(v: &Value) -> f32 {
 }
 fn number(v: &Value) -> f64 {
     f64::from_bits(u64::from_str_radix(v.as_str().unwrap(), 16).unwrap())
-}
-fn bits(v: f32) -> u32 {
-    if v.is_nan() {
-        f32::NAN.to_bits()
-    } else {
-        v.to_bits()
-    }
 }
 fn stat(s: DamageStat) -> &'static str {
     match s {
@@ -69,11 +63,11 @@ impl DamageWorld for World<'_> {
         Ok(self.state()["invulnerable"].as_bool().unwrap())
     }
     fn after_armor(&mut self, v: f32) -> io::Result<f32> {
-        self.query(&format!("armor {:08x}", bits(v)))?;
+        self.query(&format!("armor {:08x}", f32_bits(v)))?;
         Ok(single(&self.state()["armor"]))
     }
     fn after_magic(&mut self, v: f32) -> io::Result<f32> {
-        self.query(&format!("magic {:08x}", bits(v)))?;
+        self.query(&format!("magic {:08x}", f32_bits(v)))?;
         Ok(single(&self.state()["magic"]))
     }
     fn absorption(&mut self) -> io::Result<f32> {
@@ -98,13 +92,13 @@ impl DamageWorld for World<'_> {
         Ok(single(&self.state()["food_exhaustion"]))
     }
     fn cause_food_exhaustion(&mut self, v: f32) -> io::Result<()> {
-        self.query(&format!("exhaust {:08x}", bits(v)))?;
+        self.query(&format!("exhaust {:08x}", f32_bits(v)))?;
         self.exhaustion += v;
         Ok(())
     }
     fn record_damage(&mut self, v: f32) -> io::Result<()> {
         self.query("tracker")?;
-        self.query(&format!("record {:08x}", bits(v)))?;
+        self.query(&format!("record {:08x}", f32_bits(v)))?;
         self.recorded = v;
         Ok(())
     }
@@ -113,7 +107,7 @@ impl DamageWorld for World<'_> {
         Ok(self.health)
     }
     fn set_health(&mut self, v: f32) -> io::Result<()> {
-        self.query(&format!("set-health {:08x}", bits(v)))?;
+        self.query(&format!("set-health {:08x}", f32_bits(v)))?;
         self.health = v;
         Ok(())
     }
@@ -140,7 +134,7 @@ impl HealthWorld for World<'_> {
         DamageWorld::set_health(self, v)
     }
     fn store_absorption(&mut self, v: f32) -> io::Result<()> {
-        self.query(&format!("set-absorption {:08x}", bits(v)))?;
+        self.query(&format!("set-absorption {:08x}", f32_bits(v)))?;
         self.absorption = v;
         Ok(())
     }
@@ -181,10 +175,10 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         writeln!(
             w.out,
             "final {:08x} {:08x} {:08x} {:08x}",
-            bits(w.health),
-            bits(w.absorption),
-            bits(w.exhaustion),
-            bits(w.recorded)
+            f32_bits(w.health),
+            f32_bits(w.absorption),
+            f32_bits(w.exhaustion),
+            f32_bits(w.recorded)
         )?;
         writeln!(w.out, "queries {}", w.calls)?;
     }

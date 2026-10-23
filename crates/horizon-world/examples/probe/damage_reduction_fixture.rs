@@ -1,3 +1,4 @@
+use crate::support::common::f32_bits;
 use horizon_world::{
     combat_rules::ArmorWorld,
     damage_reduction::{self, Bypass, DamageReductionWorld},
@@ -13,13 +14,6 @@ fn single(v: &Value) -> f32 {
 }
 fn number(v: &Value) -> f64 {
     f64::from_bits(u64::from_str_radix(v.as_str().unwrap(), 16).unwrap())
-}
-fn bits(v: f32) -> u32 {
-    if v.is_nan() {
-        f32::NAN.to_bits()
-    } else {
-        v.to_bits()
-    }
 }
 struct World<'a> {
     f: &'a Value,
@@ -73,7 +67,7 @@ impl DamageReductionWorld for World<'_> {
         Ok(self.state()[format!("bypass_{n}")].as_bool().unwrap())
     }
     fn hurt_armor(&mut self, v: f32) -> io::Result<()> {
-        self.query(&format!("hurt-armor {:08x}", bits(v)))
+        self.query(&format!("hurt-armor {:08x}", f32_bits(v)))
     }
     fn armor_value(&mut self) -> io::Result<i32> {
         self.query("armor")?;
@@ -139,7 +133,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 damage_reduction::after_magic(&mut w, d)
             };
-            r.and_then(|v| writeln!(w.out, "float {:08x}", bits(v)))
+            r.and_then(|v| writeln!(w.out, "float {:08x}", f32_bits(v)))
         };
         writeln!(
             w.out,

@@ -1,3 +1,4 @@
+use crate::support::common::f64_bits;
 use horizon_world::damage_source::{Catalog, EntityKind, SourceWorld};
 use serde_json::Value;
 use std::{
@@ -11,21 +12,14 @@ fn number(v: &Value) -> f64 {
 fn position(v: &Value) -> [f64; 3] {
     std::array::from_fn(|i| number(&v[i]))
 }
-fn bits(v: f64) -> u64 {
-    if v.is_nan() {
-        f64::NAN.to_bits()
-    } else {
-        v.to_bits()
-    }
-}
 fn vec(v: Option<[f64; 3]>) -> String {
     match v {
         None => "none".into(),
         Some(v) => format!(
             "{:016x} {:016x} {:016x}",
-            bits(v[0]),
-            bits(v[1]),
-            bits(v[2])
+            f64_bits(v[0]),
+            f64_bits(v[1]),
+            f64_bits(v[2])
         ),
     }
 }

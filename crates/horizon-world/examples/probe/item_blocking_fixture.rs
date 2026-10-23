@@ -1,3 +1,4 @@
+use crate::support::common::f32_bits;
 use horizon_core::geometry::Vec3;
 use horizon_world::{
     blocking_rules::{BlockingRules, DamageReduction, ItemDamageFunction, TypeMatchWorld},
@@ -18,13 +19,6 @@ fn number(v: &Value) -> f64 {
 }
 fn vec(v: &Value) -> Option<Vec3> {
     (!v.is_null()).then(|| Vec3::new(number(&v[0]), number(&v[1]), number(&v[2])))
-}
-fn bits(v: f32) -> u32 {
-    if v.is_nan() {
-        f32::NAN.to_bits()
-    } else {
-        v.to_bits()
-    }
 }
 struct Component {
     present: bool,
@@ -154,7 +148,7 @@ impl ItemBlockingWorld for World<'_> {
         e == 1
     }
     fn block_using_item(&mut self, _: u64, damage: f32, fully: bool) -> io::Result<()> {
-        self.event(&format!("block-using 0 {:08x} {fully}", bits(damage)))
+        self.event(&format!("block-using 0 {:08x} {fully}", f32_bits(damage)))
     }
 }
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -207,7 +201,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             changed: false,
         };
         match item_blocking::apply(&mut w, single(&f["damage"])) {
-            Ok(v) => writeln!(w.out, "blocked {:08x}\nresult ok", bits(v))?,
+            Ok(v) => writeln!(w.out, "blocked {:08x}\nresult ok", f32_bits(v))?,
             Err(_) => writeln!(w.out, "result error")?,
         };
         writeln!(w.out, "queries {} {}", w.calls, w.changed)?;

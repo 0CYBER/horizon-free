@@ -1,3 +1,4 @@
+use crate::support::common::f32_bits;
 use horizon_world::food::{Difficulty, FoodData, FoodWorld};
 use serde_json::Value;
 use std::{
@@ -7,13 +8,6 @@ use std::{
 };
 fn single(v: &Value) -> f32 {
     f32::from_bits(u32::from_str_radix(v.as_str().unwrap(), 16).unwrap())
-}
-fn bits(v: f32) -> u32 {
-    if v.is_nan() {
-        f32::NAN.to_bits()
-    } else {
-        v.to_bits()
-    }
 }
 fn state(v: &Value) -> FoodData {
     FoodData {
@@ -72,7 +66,7 @@ impl FoodWorld for World<'_> {
         Ok(self.world()["hurt"].as_bool().unwrap())
     }
     fn heal(&mut self, f: &mut FoodData, v: f32) -> io::Result<()> {
-        self.query(f, &format!("heal {:08x}", bits(v)))
+        self.query(f, &format!("heal {:08x}", f32_bits(v)))
     }
     fn health(&mut self, f: &mut FoodData) -> io::Result<f32> {
         self.query(f, "health")?;
@@ -81,7 +75,7 @@ impl FoodWorld for World<'_> {
     fn hurt_starvation(&mut self, _: (), f: &mut FoodData, v: f32) -> io::Result<()> {
         self.query(f, "damage-sources")?;
         self.query(f, "starve-source")?;
-        self.query(f, &format!("hurt {:08x}", bits(v)))
+        self.query(f, &format!("hurt {:08x}", f32_bits(v)))
     }
 }
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -123,8 +117,8 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
                 w.out,
                 "state {} {:08x} {:08x} {} {} {}",
                 food.food,
-                bits(food.saturation),
-                bits(food.exhaustion),
+                f32_bits(food.saturation),
+                f32_bits(food.exhaustion),
                 food.timer,
                 food.has_enough_food(),
                 food.needs_food()
@@ -135,8 +129,8 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             w.out,
             "final {} {:08x} {:08x} {}",
             food.food,
-            bits(food.saturation),
-            bits(food.exhaustion),
+            f32_bits(food.saturation),
+            f32_bits(food.exhaustion),
             food.timer
         )?;
         writeln!(w.out, "queries {}", w.calls)?;

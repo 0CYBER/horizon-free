@@ -1,3 +1,4 @@
+use crate::support::common::f32_bits;
 use horizon_world::combat_rules::{self, ArmorWorld};
 use serde_json::Value;
 use std::{
@@ -7,13 +8,6 @@ use std::{
 };
 fn single(v: &Value) -> f32 {
     f32::from_bits(u32::from_str_radix(v.as_str().unwrap(), 16).unwrap())
-}
-fn bits(v: f32) -> u32 {
-    if v.is_nan() {
-        f32::NAN.to_bits()
-    } else {
-        v.to_bits()
-    }
 }
 struct World<'a> {
     f: &'a Value,
@@ -77,7 +71,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         match result {
             Ok(v) => {
-                writeln!(w.out, "value {:08x}\nresult ok", bits(v))?;
+                writeln!(w.out, "value {:08x}\nresult ok", f32_bits(v))?;
             }
             Err(_) => writeln!(w.out, "result error")?,
         }

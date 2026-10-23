@@ -1,4 +1,5 @@
 //! Original transport for complete surface-stage chunk comparison.
+use crate::support::common::tag;
 use horizon_core::{
     biome::{BiomeZoom, obfuscate_seed},
     carving::CarvingMask,
@@ -76,17 +77,6 @@ impl TerrainBlockStates for Properties<'_> {
     type State = State;
     fn heightmap_state(&self, id: BlockStateId) -> State {
         self.0[id.0 as usize]
-    }
-}
-fn tag(v: &Value) -> Tag {
-    match v {
-        Value::String(s) => Tag::String(s.as_str().into()),
-        Value::Number(n) => Tag::Int(n.as_i64().unwrap() as i32),
-        Value::Array(a) => Tag::List(a.iter().map(tag).collect()),
-        Value::Object(o) => {
-            Tag::Compound(o.iter().map(|(k, v)| (k.as_str().into(), tag(v))).collect())
-        }
-        _ => panic!("invalid registry metadata"),
     }
 }
 fn n(v: &Value) -> i32 {

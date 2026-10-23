@@ -5,8 +5,10 @@ use std::process::{ExitCode, Termination};
 
 /// Code shared by several probes.
 mod support {
+    pub mod common;
     pub mod decoration_storage;
     pub mod placement_queries;
+    pub mod shapes;
 }
 
 mod active_effect_tick_fixture;

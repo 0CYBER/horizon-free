@@ -1,3 +1,4 @@
+use crate::support::common::tag;
 use horizon_world::{
     DATA_VERSION,
     fluid::{FluidBlockBindings, FluidHeightWorld, FluidKind, FluidState, FluidStateTable},
@@ -38,17 +39,6 @@ impl<W: Write> FluidHeightWorld for World<'_, W> {
     fn sturdy_down(&mut self, p: [i32; 3]) -> io::Result<bool> {
         self.query("block", p)?;
         Ok(self.sturdy)
-    }
-}
-fn tag(v: &Value) -> Tag {
-    match v {
-        Value::String(s) => Tag::String(s.as_str().into()),
-        Value::Number(n) => Tag::Int(n.as_i64().unwrap() as i32),
-        Value::Array(a) => Tag::List(a.iter().map(tag).collect()),
-        Value::Object(m) => {
-            Tag::Compound(m.iter().map(|(k, v)| (k.as_str().into(), tag(v))).collect())
-        }
-        _ => panic!("invalid registry metadata"),
     }
 }
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {

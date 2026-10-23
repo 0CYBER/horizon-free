@@ -1,3 +1,4 @@
+use crate::support::common::f64_bits;
 use horizon_core::geometry::Vec3;
 use horizon_world::view_direction;
 use serde_json::Value;
@@ -15,13 +16,6 @@ fn number(v: &Value) -> f64 {
 fn vec(v: &Value) -> Vec3 {
     Vec3::new(number(&v[0]), number(&v[1]), number(&v[2]))
 }
-fn bits(v: f64) -> u64 {
-    if v.is_nan() {
-        f64::NAN.to_bits()
-    } else {
-        v.to_bits()
-    }
-}
 pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arg = crate::args().nth(1).unwrap();
     let dir = Path::new(&arg);
@@ -32,22 +26,22 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             "acos" => writeln!(
                 out,
                 "angle {:016x}",
-                bits(view_direction::acos(number(&f["value"])))
+                f64_bits(view_direction::acos(number(&f["value"])))
             )?,
             "view" => {
                 let v = view_direction::view_vector(single(&f["pitch"]), single(&f["yaw"]));
                 writeln!(
                     out,
                     "view {:016x} {:016x} {:016x}",
-                    bits(v.x),
-                    bits(v.y),
-                    bits(v.z)
+                    f64_bits(v.x),
+                    f64_bits(v.y),
+                    f64_bits(v.z)
                 )?;
             }
             "blocking" => writeln!(
                 out,
                 "angle {:016x}",
-                bits(view_direction::blocking_angle(
+                f64_bits(view_direction::blocking_angle(
                     vec(&f["source"]),
                     vec(&f["position"]),
                     single(&f["yaw"])
@@ -56,7 +50,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
             "fallback" => writeln!(
                 out,
                 "angle {:016x}",
-                bits(view_direction::BLOCKING_FALLBACK_ANGLE)
+                f64_bits(view_direction::BLOCKING_FALLBACK_ANGLE)
             )?,
             _ => panic!("mode"),
         }
