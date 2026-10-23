@@ -812,14 +812,6 @@ pub fn java_parse_int(s: &str) -> Option<i32> {
     }
     s.parse().ok()
 }
-/// Long.parseLong.
-pub fn java_parse_long(s: &str) -> Option<i64> {
-    let digits = s.strip_prefix(['-', '+']).unwrap_or(s);
-    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
-        return None;
-    }
-    s.parse().ok()
-}
 /// Double.parseDouble over the characters StringReader reads as a number.
 pub fn java_parse_double(s: &str) -> Option<f64> {
     let t = s.trim_matches(|c: char| c <= ' ');

@@ -7,9 +7,40 @@ use crate::{
 };
 use std::{collections::HashMap, path::Path, sync::RwLock, time::Instant};
 
-/// Nine-slice borders (left, top, right, bottom) from `.png.mcmeta` files.
-static NINE_SLICE: RwLock<Option<HashMap<String, [u32; 4]>>> = RwLock::new(None);
+/// `GuiSpriteScaling.NineSlice`: the sprite's size in GUI pixels, whatever
+/// its texture's resolution, its borders (left, top, right, bottom) in the
+/// same units, and whether the edges and centre stretch rather than tile.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct NineSlice {
+    width: u32,
+    height: u32,
+    border: [u32; 4],
+    stretch_inner: bool,
+}
+/// Nine-slice scaling from `.png.mcmeta` files.
+static NINE_SLICE: RwLock<Option<HashMap<String, NineSlice>>> = RwLock::new(None);
 
+/// A `gui.scaling` section of type `nine_slice`.
+fn parse_nine_slice(v: &serde_json::Value) -> Option<NineSlice> {
+    let s = &v["gui"]["scaling"];
+    if s["type"] != "nine_slice" {
+        return None;
+    }
+    let size = |k: &str| s[k].as_u64().map(|n| n as u32);
+    let border = &s["border"];
+    let border = if let Some(n) = border.as_u64() {
+        [n as u32; 4]
+    } else {
+        let g = |k: &str| border[k].as_u64().unwrap_or(0) as u32;
+        [g("left"), g("top"), g("right"), g("bottom")]
+    };
+    Some(NineSlice {
+        width: size("width")?,
+        height: size("height")?,
+        border,
+        stretch_inner: s["stretch_inner"].as_bool().unwrap_or(false),
+    })
+}
 /// Read `gui.scaling` metadata for every GUI sprite under `root`.
 pub fn load_metadata(root: &Path) {
     let mut map = HashMap::new();
@@ -32,47 +63,48 @@ pub fn load_metadata(root: &Path) {
             let Ok(text) = std::fs::read_to_string(&p) else {
                 continue;
             };
-            let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+            let Some(nine_slice) = serde_json::from_str(&text)
+                .ok()
+                .as_ref()
+                .and_then(parse_nine_slice)
+            else {
                 continue;
-            };
-            let s = &v["gui"]["scaling"];
-            if s["type"] != "nine_slice" {
-                continue;
-            }
-            let border = &s["border"];
-            let b = if let Some(n) = border.as_u64() {
-                [n as u32; 4]
-            } else {
-                let g = |k: &str| border[k].as_u64().unwrap_or(0) as u32;
-                [g("left"), g("top"), g("right"), g("bottom")]
             };
             let key = Path::new(stripped)
                 .strip_prefix(&base)
                 .map(|r| r.to_string_lossy().replace('\\', "/"))
                 .unwrap_or_default();
-            map.insert(key, b);
+            map.insert(key, nine_slice);
         }
     }
     *NINE_SLICE.write().unwrap_or_else(|e| e.into_inner()) = Some(map);
 }
-fn border(sprite: &str) -> [u32; 4] {
+/// The sprite's nine-slice metadata; without any (no resources loaded), its
+/// GUI size and the widgets' usual borders.
+fn scaling(sprite: &str, r: &Rect) -> NineSlice {
     NINE_SLICE
         .read()
         .unwrap_or_else(|e| e.into_inner())
         .as_ref()
         .and_then(|m| m.get(sprite).copied())
-        .unwrap_or(match sprite {
-            "gui/sprites/widget/button"
-            | "gui/sprites/widget/button_highlighted"
-            | "gui/sprites/widget/button_disabled" => [3; 4],
-            "gui/sprites/widget/slider_handle" | "gui/sprites/widget/slider_handle_highlighted" => {
-                [2, 2, 2, 3]
-            }
-            _ => [1; 4],
+        .unwrap_or(NineSlice {
+            width: r.w,
+            height: r.h,
+            border: match sprite {
+                "gui/sprites/widget/button"
+                | "gui/sprites/widget/button_highlighted"
+                | "gui/sprites/widget/button_disabled" => [3; 4],
+                "gui/sprites/widget/slider_handle"
+                | "gui/sprites/widget/slider_handle_highlighted" => [2, 2, 2, 3],
+                _ => [1; 4],
+            },
+            stretch_inner: false,
         })
 }
-fn sub(r: Rect, x: f32, y: f32, w: f32, h: f32) -> Rect {
-    let (du, dv) = ((r.u1 - r.u0) / r.w as f32, (r.v1 - r.v0) / r.h as f32);
+/// The region `[x, y, w, h]` of a sprite `size` GUI pixels large, in its
+/// own units (`TextureAtlasSprite.getU(x / width)`).
+fn sub(r: Rect, size: [f32; 2], [x, y, w, h]: [f32; 4]) -> Rect {
+    let (du, dv) = ((r.u1 - r.u0) / size[0], (r.v1 - r.v0) / size[1]);
     Rect {
         u0: r.u0 + x * du,
         v0: r.v0 + y * dv,
@@ -82,8 +114,9 @@ fn sub(r: Rect, x: f32, y: f32, w: f32, h: f32) -> Rect {
         h: h as u32,
     }
 }
-/// Tile `src` (a sub-rectangle of a sprite, in its pixels) over a target area.
-fn tile(batch: &mut HudBatch, r: Rect, src: [f32; 4], dst: [f32; 4], color: u32) {
+/// `blitTiledSprite`: `src` (a region of a sprite `size` large, in its
+/// units) repeated over `dst` from its top left, the last row and column cut.
+fn tile(batch: &mut HudBatch, r: Rect, size: [f32; 2], src: [f32; 4], dst: [f32; 4], color: u32) {
     let [sx, sy, sw, sh] = src;
     let [dx, dy, dw, dh] = dst;
     if sw <= 0.0 || sh <= 0.0 || dw <= 0.0 || dh <= 0.0 {
@@ -95,13 +128,16 @@ fn tile(batch: &mut HudBatch, r: Rect, src: [f32; 4], dst: [f32; 4], color: u32)
         let mut x = 0.0;
         while x < dw {
             let w = sw.min(dw - x);
-            batch.rect_uv(dx + x, dy + y, w, h, sub(r, sx, sy, w, h), color);
+            batch.rect_uv(dx + x, dy + y, w, h, sub(r, size, [sx, sy, w, h]), color);
             x += sw;
         }
         y += sh;
     }
 }
-/// GuiGraphics.blitSprite with nine-slice scaling (inner parts tiled).
+/// `GuiGraphicsExtractor.blitNineSlicedSprite`: the corners at their size,
+/// the edges and centre tiled (or stretched with `stretch_inner`), all in
+/// the sprite's `gui.scaling` units, so a high-resolution pack's sprite draws
+/// as the default one does.
 pub fn nine_slice(
     batch: &mut HudBatch,
     atlas: &HudAtlas,
@@ -112,47 +148,73 @@ pub fn nine_slice(
     h: f32,
     color: u32,
 ) {
-    let Some(r) = atlas.sprites.get(sprite).copied() else {
-        return;
+    if let Some(r) = atlas.sprites.get(sprite) {
+        draw_nine_slice(batch, *r, scaling(sprite, r), [x, y, w, h], color);
+    }
+}
+fn draw_nine_slice(
+    batch: &mut HudBatch,
+    r: Rect,
+    n: NineSlice,
+    [x, y, w, h]: [f32; 4],
+    color: u32,
+) {
+    let size = [n.width as f32, n.height as f32];
+    let [sw, sh] = size;
+    let [l, t, rr, b] = n.border.map(|v| v as f32);
+    let (half_w, half_h) = ((w / 2.0).floor(), (h / 2.0).floor());
+    let (l, rr, t, b) = (l.min(half_w), rr.min(half_w), t.min(half_h), b.min(half_h));
+    // blitSprite(sprite, width, height, textureX, textureY, x, y, w, h).
+    let part = |batch: &mut HudBatch, tx: f32, ty: f32, dst: [f32; 4]| {
+        if dst[2] != 0.0 && dst[3] != 0.0 {
+            batch.rect_uv(
+                dst[0],
+                dst[1],
+                dst[2],
+                dst[3],
+                sub(r, size, [tx, ty, dst[2], dst[3]]),
+                color,
+            );
+        }
     };
-    let [l, t, rr, b] = border(sprite).map(|v| v as f32);
-    let (sw, sh) = (r.w as f32, r.h as f32);
-    let l = l.min(w / 2.0);
-    let rr = rr.min(w / 2.0);
-    let t = t.min(h / 2.0);
-    let b = b.min(h / 2.0);
-    let (cw, ch) = (w - l - rr, h - t - b);
-    let (scw, sch) = (sw - l - rr, sh - t - b);
-    // Corners.
-    batch.rect_uv(x, y, l, t, sub(r, 0.0, 0.0, l, t), color);
-    batch.rect_uv(x + w - rr, y, rr, t, sub(r, sw - rr, 0.0, rr, t), color);
-    batch.rect_uv(x, y + h - b, l, b, sub(r, 0.0, sh - b, l, b), color);
-    batch.rect_uv(
-        x + w - rr,
-        y + h - b,
-        rr,
-        b,
-        sub(r, sw - rr, sh - b, rr, b),
-        color,
-    );
-    // Edges and centre.
-    tile(batch, r, [l, 0.0, scw, t], [x + l, y, cw, t], color);
-    tile(
-        batch,
-        r,
-        [l, sh - b, scw, b],
-        [x + l, y + h - b, cw, b],
-        color,
-    );
-    tile(batch, r, [0.0, t, l, sch], [x, y + t, l, ch], color);
-    tile(
-        batch,
-        r,
-        [sw - rr, t, rr, sch],
-        [x + w - rr, y + t, rr, ch],
-        color,
-    );
-    tile(batch, r, [l, t, scw, sch], [x + l, y + t, cw, ch], color);
+    // blitNineSliceInnerSegment.
+    let inner = |batch: &mut HudBatch, dst: [f32; 4], src: [f32; 4]| {
+        if dst[2] <= 0.0 || dst[3] <= 0.0 {
+            return;
+        }
+        if n.stretch_inner {
+            batch.rect_uv(dst[0], dst[1], dst[2], dst[3], sub(r, size, src), color);
+        } else {
+            tile(batch, r, size, src, dst, color);
+        }
+    };
+    if w == sw && h == sh {
+        part(batch, 0.0, 0.0, [x, y, w, h]);
+        return;
+    }
+    if h == sh {
+        part(batch, 0.0, 0.0, [x, y, l, h]);
+        inner(batch, [x + l, y, w - rr - l, h], [l, 0.0, sw - rr - l, sh]);
+        part(batch, sw - rr, 0.0, [x + w - rr, y, rr, h]);
+        return;
+    }
+    if w == sw {
+        part(batch, 0.0, 0.0, [x, y, w, t]);
+        inner(batch, [x, y + t, w, h - b - t], [0.0, t, sw, sh - b - t]);
+        part(batch, 0.0, sh - b, [x, y + h - b, w, b]);
+        return;
+    }
+    let (cw, ch) = (w - rr - l, h - b - t);
+    let (scw, sch) = (sw - rr - l, sh - b - t);
+    part(batch, 0.0, 0.0, [x, y, l, t]);
+    inner(batch, [x + l, y, cw, t], [l, 0.0, scw, t]);
+    part(batch, sw - rr, 0.0, [x + w - rr, y, rr, t]);
+    part(batch, 0.0, sh - b, [x, y + h - b, l, b]);
+    inner(batch, [x + l, y + h - b, cw, b], [l, sh - b, scw, b]);
+    part(batch, sw - rr, sh - b, [x + w - rr, y + h - b, rr, b]);
+    inner(batch, [x, y + t, l, ch], [0.0, t, l, sch]);
+    inner(batch, [x + l, y + t, cw, ch], [l, t, scw, sch]);
+    inner(batch, [x + w - rr, y + t, rr, ch], [sw - rr, t, rr, sch]);
 }
 /// Repeat a whole texture with each copy drawn `size` GUI pixels square.
 pub fn tiled(
@@ -169,7 +231,6 @@ pub fn tiled(
     let Some(r) = atlas.sprites.get(sprite).copied() else {
         return;
     };
-    let scale = r.w as f32 / size;
     let mut yy = 0.0;
     while yy < h {
         let th = size.min(h - yy);
@@ -181,7 +242,7 @@ pub fn tiled(
                 y + yy,
                 tw,
                 th,
-                sub(r, 0.0, 0.0, tw * scale, th * scale),
+                sub(r, [size, size], [0.0, 0.0, tw, th]),
                 color,
             );
             xx += size;
@@ -793,10 +854,6 @@ impl EditBox {
             text_color: rgba(224, 224, 224, 255),
         }
     }
-    /// When the field gained focus, for the cursor's blink.
-    pub fn focused_since(&mut self, at: Instant) {
-        self.focused_at = at;
-    }
     pub fn inner_width(&self) -> f32 {
         if self.bordered {
             self.width - 8.0
@@ -1128,6 +1185,130 @@ impl EditBox {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The quads' destination rectangles and their UVs.
+    fn quads(batch: &HudBatch) -> Vec<([f32; 4], [f32; 4])> {
+        batch
+            .vertices
+            .chunks(6)
+            .map(|q| {
+                let (a, c) = (q[0], q[2]);
+                (
+                    [a.pos[0], a.pos[1], c.pos[0], c.pos[1]],
+                    [a.uv[0], a.uv[1], c.uv[0], c.uv[1]],
+                )
+            })
+            .collect()
+    }
+    /// Destination and UV rectangles equal to within f32 rounding.
+    fn assert_quad(actual: ([f32; 4], [f32; 4]), expected: ([f32; 4], [f32; 4])) {
+        let close = |a: [f32; 4], b: [f32; 4]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-5);
+        assert!(
+            close(actual.0, expected.0) && close(actual.1, expected.1),
+            "{actual:?} != {expected:?}"
+        );
+    }
+    /// A sprite filling the atlas, `w x h` texels as a 32x pack draws it.
+    fn sprite(w: u32, h: u32) -> Rect {
+        Rect {
+            u0: 0.0,
+            v0: 0.0,
+            u1: 1.0,
+            v1: 1.0,
+            w,
+            h,
+        }
+    }
+    fn faithful(json: &str) -> NineSlice {
+        parse_nine_slice(&serde_json::from_str(json).unwrap()).unwrap()
+    }
+    #[test]
+    fn a_high_resolution_button_slices_in_its_gui_units() {
+        // Faithful 32x's widget/button: 400x40 texels, gui.scaling 200x20.
+        let n = faithful(
+            r#"{"gui":{"scaling":{"type":"nine_slice","width":200,"height":20,
+                "border":{"left":20,"top":4,"right":20,"bottom":4}}}}"#,
+        );
+        let mut batch = HudBatch::new([640, 480]);
+        draw_nine_slice(
+            &mut batch,
+            sprite(400, 40),
+            n,
+            [10.0, 5.0, 150.0, 20.0],
+            u32::MAX,
+        );
+        let q = quads(&batch);
+        // Full height: left border, the centre tiled, right border
+        // (blitNineSlicedSprite's height == nineSlice.height case).
+        assert_quad(q[0], ([10.0, 5.0, 30.0, 25.0], [0.0, 0.0, 0.1, 1.0]));
+        assert_quad(q[1], ([30.0, 5.0, 140.0, 25.0], [0.1, 0.0, 0.65, 1.0]));
+        assert_quad(q[2], ([140.0, 5.0, 160.0, 25.0], [0.9, 0.0, 1.0, 1.0]));
+        assert_eq!(q.len(), 3);
+    }
+    #[test]
+    fn nine_slice_corners_and_a_stretched_centre() {
+        // Faithful 32x's tooltip/frame: 200x200 texels, 100x100, border 12, stretched.
+        let n = faithful(
+            r#"{"gui":{"scaling":{"type":"nine_slice","width":100,"height":100,"border":12,"stretch_inner":true}}}"#,
+        );
+        let mut batch = HudBatch::new([640, 480]);
+        draw_nine_slice(
+            &mut batch,
+            sprite(200, 200),
+            n,
+            [0.0, 0.0, 300.0, 40.0],
+            u32::MAX,
+        );
+        let q = quads(&batch);
+        assert_eq!(q.len(), 9);
+        // Top left corner: 12 GUI pixels, 12/100 of the sprite.
+        assert_quad(q[0], ([0.0, 0.0, 12.0, 12.0], [0.0, 0.0, 0.12, 0.12]));
+        // The centre is one stretched quad (blitNineSliceInnerSegment, stretch_inner).
+        assert_quad(q[7], ([12.0, 12.0, 288.0, 28.0], [0.12, 0.12, 0.88, 0.88]));
+        // Bottom right corner.
+        assert_quad(q[5], ([288.0, 28.0, 300.0, 40.0], [0.88, 0.88, 1.0, 1.0]));
+    }
+    #[test]
+    fn a_sprite_drawn_at_its_own_size_is_one_quad() {
+        let n = NineSlice {
+            width: 50,
+            height: 50,
+            border: [10; 4],
+            stretch_inner: false,
+        };
+        let mut batch = HudBatch::new([640, 480]);
+        draw_nine_slice(
+            &mut batch,
+            sprite(100, 100),
+            n,
+            [4.0, 4.0, 50.0, 50.0],
+            u32::MAX,
+        );
+        let q = quads(&batch);
+        assert_eq!(q.len(), 1);
+        assert_quad(q[0], ([4.0, 4.0, 54.0, 54.0], [0.0, 0.0, 1.0, 1.0]));
+    }
+    #[test]
+    fn borders_shrink_to_half_the_drawn_size() {
+        let n = NineSlice {
+            width: 20,
+            height: 20,
+            border: [8; 4],
+            stretch_inner: true,
+        };
+        let mut batch = HudBatch::new([640, 480]);
+        // 9 wide: borders of floor(9 / 2) = 4, as vanilla's integer division.
+        draw_nine_slice(
+            &mut batch,
+            sprite(20, 20),
+            n,
+            [0.0, 0.0, 9.0, 30.0],
+            u32::MAX,
+        );
+        let q = quads(&batch);
+        assert_quad(q[0], ([0.0, 0.0, 4.0, 8.0], [0.0, 0.0, 0.2, 0.4]));
+        assert_quad(q[2], ([5.0, 0.0, 9.0, 8.0], [0.8, 0.0, 1.0, 0.4]));
+    }
     #[test]
     fn append_fields_highlight_the_whole_value_and_blink_their_cursor() {
         use crate::hud::Blend;

@@ -62,9 +62,6 @@ impl<'r> FluidRegistry<'r> {
     pub fn blocks_flow(&self, id: BlockStateId) -> io::Result<bool> {
         Ok(self.state(id)?.blocks_flow)
     }
-    pub fn is_ice(&self, id: BlockStateId) -> io::Result<bool> {
-        Ok(self.state(id)?.ice)
-    }
 }
 /// Both queries return state IDs from the same registry. Separate entry points
 /// preserve native world dispatch when reading a block versus its fluid cell.

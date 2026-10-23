@@ -295,15 +295,6 @@ impl KeyBinds {
             self.keys.insert(n, key.to_owned());
         }
     }
-    /// Load `key_<name>` from options.txt; false for unknown mappings.
-    pub fn set_saved(&mut self, name: &str, key: &str) -> bool {
-        if MAPPINGS.iter().any(|m| m.0 == name) {
-            self.set(name, key);
-            true
-        } else {
-            false
-        }
-    }
     pub fn saved(&self) -> Vec<(&'static str, String)> {
         MAPPINGS
             .iter()

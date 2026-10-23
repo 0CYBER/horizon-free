@@ -3,7 +3,7 @@
 //! mode keywords are read back from the parsed literals.
 use super::{
     Dispatcher,
-    args::{ArgType, GameMode, Resource, integer},
+    args::{ArgType, Resource, integer},
 };
 use crate::gamerules::{RULES, Value};
 
@@ -509,10 +509,6 @@ fn clone_mode(d: &mut Dispatcher, node: usize) {
         d.executes(l, "clone");
     }
 }
-/// Game mode names for selector `gamemode=` and the argument.
-pub fn game_modes() -> [&'static str; 4] {
-    GameMode::ALL.map(GameMode::name)
-}
 /// The shared vanilla tree.
 /// Reorder node children as vanilla registers them (Brigadier keeps
 /// children in registration order; smart usage lists them that way).
@@ -559,5 +555,3 @@ pub fn release_dispatcher() -> &'static Dispatcher {
     static TREE: std::sync::OnceLock<Dispatcher> = std::sync::OnceLock::new();
     TREE.get_or_init(|| build_with(false))
 }
-#[allow(unused)]
-const _: (u8, u8) = (ALL, GAMEMASTERS);

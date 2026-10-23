@@ -9,7 +9,7 @@ Everything you can do with the mouse and keyboard, through commands instead of c
 - **In the launcher:**
   - install, remove and prepare versions;
   - start the game, alone or with a world, or a server;
-  - your settings, the update channel and the extra game arguments;
+  - your settings and the extra game arguments;
   - the mod browser (mods, resource packs, shader packs, modpacks), imported modpacks and hosted servers;
   - your accounts (names only), logs and crash reports, patch notes, the data collection settings and the benchmark.
 - **In the game:**

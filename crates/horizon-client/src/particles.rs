@@ -1158,6 +1158,8 @@ pub struct ParticleEngine {
     starters: Vec<Starter>,
     /// Local sounds requested by particles (dripstone drips): (event, position, volume, pitch).
     pub sounds: Vec<(&'static str, [f64; 3], f32, f32)>,
+    /// How many of each type were made, for `horizon-ctl status`.
+    made: std::collections::BTreeMap<&'static str, u64>,
     /// The item particles' sprites (`BreakingItemParticle`'s slime ball, snowball
     /// and cobweb models, resolved for the ground), one per model layer.
     pub item_sprites: HashMap<ParticleType, Vec<String>>,
@@ -1183,6 +1185,7 @@ impl ParticleEngine {
             starters: Vec::new(),
             camera: [0.0; 3],
             sounds: Vec::new(),
+            made: Default::default(),
             item_sprites: HashMap::new(),
         };
         let dir = root.join("assets/minecraft/particles");
@@ -1449,8 +1452,13 @@ impl ParticleEngine {
     pub fn create(&mut self, options: &ParticleOptions, p: [f64; 3], v: [f64; 3]) {
         let seed = self.seeds.next_long();
         if let Some(particle) = self.make(options, p, v, seed) {
+            *self.made.entry(options.ty.name()).or_default() += 1;
             self.pending.push(particle);
         }
+    }
+    /// How many particles of each type were made so far.
+    pub fn made(&self) -> &std::collections::BTreeMap<&'static str, u64> {
+        &self.made
     }
     /// Parity probes: seed the provider (`ParticleEngine.random`), level and
     /// `SpellParticle.RANDOM` generators.

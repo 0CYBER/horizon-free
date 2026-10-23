@@ -804,11 +804,6 @@ impl SelectionModel {
             false
         }
     }
-    /// Whether activating the entry asks first (`handlePackSelection`'s
-    /// ConfirmScreen for an incompatible pack).
-    pub fn needs_confirmation(&self, selected: bool, i: usize) -> bool {
-        self.can_select(selected, i) && !self.unselected[i].compatible
-    }
     /// `moveUp` / `moveDown` when allowed.
     pub fn move_by(&mut self, selected: bool, i: usize, up: bool) -> bool {
         let ok = if up {

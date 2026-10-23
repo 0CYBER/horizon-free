@@ -451,10 +451,10 @@ The MakeUp, Chocapic13' and Photon rows are from 2026-10-23, on Metal and on Vul
 | Steadfast | 0.8.0 | drawn: 3 passes | |
 | MakeUp Ultra Fast | 9.6 | drawn: 6 passes, its fog, light shafts and grade over Horizon's world | |
 | Chocapic13' | V9 High | drawn: 16 passes; its default TAA upscaling shrinks the world in its `gbuffers_*` vertex programs, which don't run, so the picture is magnified 1/0.7: turn TAA Upscaling off in its settings | |
-| Bliss | 2.1.2 | fails | `world0/deferred.vsh`: an operation naga forbids in a vertex shader |
+| Photon | v1.4 | loads: 27 passes; draws black: it lights the scene from the G-buffer its `gbuffers_*` write | |
+| Bliss | 2.1.2 | fails | `world0/composite1.fsh`: a vector component passed to an `inout` parameter (WGSL can't point at one) |
 | Bloop | 1.8.0-Alpha-3 | fails | `world0/prepare1.fsh`: `mat2(vec4)` and other constructors naga's GLSL front end refuses |
 | Noble | v1.9.9 | fails (Apple and NVIDIA) | `world0/deferred4.vsh`: a `vec3[9][9]` varying (nested arrays between stages) |
-| Photon | v1.4 | fails | `world0/deferred1.fsh`: `textureGather` |
 | Rethinking Voxels | r0.1-beta9 | fails | `world0/prepare.fsh`: `1 << 31` overflows naga's constant folding; it also needs images |
 
 What the translator does for these packs, as Iris (JCPP and its GLSL transformer) does:
@@ -472,6 +472,15 @@ What the translator does for these packs, as Iris (JCPP and its GLSL transformer
   (`mix`, `?:`, `smoothstep`) becomes a global set at the start of `main`, `sqrt` of a negative constant is
   evaluated at run time, and a fragment output narrower than four channels (`out vec3`, Steadfast's `final`) is
   written through a `vec4` with alpha 1 as OpenGL fills it.
+- **What GL takes and naga doesn't** (Photon, Chocapic13', MakeUp Ultra Fast, Bliss): `texture2D` and its kin without a
+  level outside fragment shaders sample level 0 (`textureLod`); a struct passed between stages travels as one varying
+  per field (matrices by column, arrays by element); `textureGather` reads the four texels with `texelFetch`; a
+  `bool` given to `vec3(..)` and other numeric constructors becomes `cond ? 1.0 : 0.0`; `const in` parameters lose
+  the `const`; an array field of a struct that never reaches a buffer gets its natural stride (naga lays every struct
+  out as std140, so `Spline(.., float[6](..))` didn't match); `modf` into a vector component assigns it instead of
+  passing a pointer.
+- **Every translated program parses again as WGSL** in `real_packs_load`: wgpu is given the text, and naga's WGSL
+  writer can emit what its WGSL parser refuses (`&v.y`).
 
 ### Order to implement
 

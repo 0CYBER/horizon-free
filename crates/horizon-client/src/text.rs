@@ -455,9 +455,6 @@ impl Text {
         }
         out
     }
-    pub fn char_count(&self) -> usize {
-        self.spans.iter().map(|s| s.text.chars().count()).sum()
-    }
 }
 
 /// The style fields of a component's JSON.

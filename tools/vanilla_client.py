@@ -14,12 +14,10 @@ that skips the first-run screens, keeps the game running unfocused and
 renders few chunks, so a harness can drive it with vscreen keys.
 """
 import argparse
-import hashlib
 import json
 import os
 import subprocess
 import sys
-import uuid
 import zipfile
 from pathlib import Path
 
@@ -54,13 +52,6 @@ OPTIONS = {
 }
 if sys.platform == "darwin":
     OPTIONS["enableVsync"] = "false"
-
-
-def offline_uuid(name):
-    digest = bytearray(hashlib.md5(("OfflinePlayer:" + name).encode()).digest())
-    digest[6] = (digest[6] & 0x0F) | 0x30
-    digest[8] = (digest[8] & 0x3F) | 0x80
-    return uuid.UUID(bytes=bytes(digest))
 
 
 def host_library(path):
@@ -127,7 +118,7 @@ def command(args):
            f"-Djava.library.path={natives}", f"-Dorg.lwjgl.system.SharedLibraryExtractPath={natives}",
            f"-Dio.netty.native.workdir={natives}",
            "-cp", os.pathsep.join(map(str, jars)), "net.minecraft.client.main.Main",
-           "--username", args.name, "--uuid", offline_uuid(args.name).hex,
+           "--username", args.name, "--uuid", lab.offline_uuid(args.name).hex,
            "--accessToken", "0", "--offlineDeveloperMode",
            "--version", lab.VERSION, "--gameDir", str(args.game_dir),
            "--assetsDir", str(assets), "--assetIndex", json.loads((GAME / "manifest.json").read_text())["assetIndex"]["id"],

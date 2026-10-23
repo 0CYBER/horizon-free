@@ -64,9 +64,13 @@ jobs:
           cargo +stable clippy --workspace --all-targets -- -D warnings
           # The server build (released as horizon-engine): the game without sound or controllers.
           cargo +stable clippy -p horizon-client --all-targets --no-default-features -- -D warnings
+      # Libraries, binaries and integration tests, then doc tests: not the ~275 examples, which clippy above already
+      # type-checks and the parity job builds and runs (they were most of this step's build and link time).
       - name: Test Rust core and voxel kernel correctness
         if: steps.rust.outputs.required != 'false'
-        run: cargo +stable test --workspace
+        run: |
+          cargo +stable test --workspace --lib --bins --tests
+          cargo +stable test --workspace --doc
   parity:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     uses: ./.github/workflows/parity.yml

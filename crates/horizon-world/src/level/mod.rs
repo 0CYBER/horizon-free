@@ -148,7 +148,6 @@ pub mod flags {
     pub const UPDATE_NEIGHBORS: i32 = 1;
     pub const UPDATE_CLIENTS: i32 = 2;
     pub const UPDATE_INVISIBLE: i32 = 4;
-    pub const UPDATE_IMMEDIATE: i32 = 8;
     pub const UPDATE_KNOWN_SHAPE: i32 = 16;
     pub const UPDATE_SUPPRESS_DROPS: i32 = 32;
     pub const UPDATE_MOVE_BY_PISTON: i32 = 64;

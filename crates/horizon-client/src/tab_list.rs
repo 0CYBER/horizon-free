@@ -317,9 +317,6 @@ impl TabList {
             self.visible = visible;
         }
     }
-    pub fn is_visible(&self) -> bool {
-        self.visible
-    }
     /// `reset`.
     pub fn reset(&mut self) {
         self.header = None;
