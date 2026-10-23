@@ -88,6 +88,31 @@ pub fn set_display(width: u32, height: u32, refresh_hz: u32, scale: f64) {
     });
 }
 
+/// The screen `window` is on, else the primary one, else the only one: right after the window
+/// is made, Wayland doesn't say yet which screen it is on.
+pub fn monitor(window: &winit::window::Window) -> Option<winit::monitor::MonitorHandle> {
+    let only = || {
+        let mut all = window.available_monitors();
+        all.next().filter(|_| all.next().is_none())
+    };
+    window
+        .current_monitor()
+        .or_else(|| window.primary_monitor())
+        .or_else(only)
+}
+
+/// Keeps [`monitor`]'s size, refresh rate and scale for the items' `system.display`.
+pub fn note_display(window: &winit::window::Window) {
+    if let Some(m) = monitor(window) {
+        set_display(
+            m.size().width,
+            m.size().height,
+            m.refresh_rate_millihertz().map_or(0, |r| r.div_ceil(1000)),
+            m.scale_factor(),
+        );
+    }
+}
+
 /// wgpu's device type in the words items use.
 pub fn gpu_kind(device_type: &str) -> &'static str {
     match device_type {

@@ -906,7 +906,7 @@ impl Game<'_> {
             "streaming": self.streaming.stages().into_iter().map(|(k, v)| (k.to_string(), v.into())).collect::<serde_json::Map<_, _>>(),
             "dirty_light": self.world.dirty_light.len(),
             "renderer": renderer,
-            "display": self.window.as_ref().and_then(|w| w.current_monitor()).map(|m| json!({
+            "display": self.window.as_deref().and_then(horizon_client::telemetry::monitor).map(|m| json!({
                 "width": m.size().width,
                 "height": m.size().height,
                 "scale": m.scale_factor(),

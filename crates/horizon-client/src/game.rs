@@ -7703,6 +7703,10 @@ impl Game<'_> {
             fullscreen: s.fullscreen,
             graphics: s.graphics_preset.clone(),
         };
+        // Again now: on Wayland the window is on a screen only once it has been shown.
+        if let Some(window) = &self.window {
+            horizon_client::telemetry::note_display(window);
+        }
         self.perf
             .finish(&horizon_client::logging::game_home(), settings);
     }
@@ -10501,14 +10505,7 @@ impl ApplicationHandler for Game<'_> {
                 return;
             }
         };
-        if let Some(m) = window.current_monitor() {
-            horizon_client::telemetry::set_display(
-                m.size().width,
-                m.size().height,
-                m.refresh_rate_millihertz().map_or(0, |r| r.div_ceil(1000)),
-                m.scale_factor(),
-            );
-        }
+        horizon_client::telemetry::note_display(&window);
         match self.new_renderer(window.clone()) {
             Ok(r) => {
                 self.renderer = Some(r);
@@ -12600,14 +12597,7 @@ impl Loading {
                 return;
             }
         };
-        if let Some(m) = window.current_monitor() {
-            horizon_client::telemetry::set_display(
-                m.size().width,
-                m.size().height,
-                m.refresh_rate_millihertz().map_or(0, |r| r.div_ceil(1000)),
-                m.scale_factor(),
-            );
-        }
+        horizon_client::telemetry::note_display(&window);
         let offscreen = self.options.as_ref().is_some_and(|o| o.offscreen);
         match loading_renderer(
             window.clone(),
