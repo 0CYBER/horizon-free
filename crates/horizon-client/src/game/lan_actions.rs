@@ -217,6 +217,12 @@ impl Game<'_> {
                 host.hub.guests[i].position[2],
             );
             host.hub.guests[i].motion = PlayerMotion::new(self.motion, p).ok().map(Box::new);
+            // The saved golden hearts go on the first body of a player who
+            // has been here before.
+            let saved = host.hub.guests[i].saved_absorption.take();
+            if let (Some(m), Some(amount)) = (host.hub.guests[i].motion.as_mut(), saved) {
+                let _ = m.internal_set_absorption(amount);
+            }
             let kept = host.hub.guests[i].logs_kept.take();
             if let (Some(m), Some((hurts, attacks))) = (host.hub.guests[i].motion.as_mut(), kept) {
                 m.hurt_log = hurts;

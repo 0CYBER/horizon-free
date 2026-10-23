@@ -2266,6 +2266,8 @@ pub struct Level {
     pub position: Option<[f64; 3]>,
     pub rotation: [f32; 2],
     pub health: f32,
+    /// LivingEntity `AbsorptionAmount`: the golden hearts left.
+    pub absorption: f32,
     pub food: i32,
     pub saturation: f32,
     /// (slot, item, count, damage): 0..36 inventory, 100..103 armor (feet..head), 150 offhand.
@@ -2457,6 +2459,7 @@ impl Level {
         }
         self.motion = read_doubles::<3>(p.get("Motion")).unwrap_or_default();
         self.health = f("Health").map_or(20.0, |v| v as f32);
+        self.absorption = f("AbsorptionAmount").map_or(0.0, |v| v as f32);
         self.food = n("foodLevel").map_or(20, |v| v as i32);
         self.saturation = f("foodSaturationLevel").map_or(5.0, |v| v as f32);
         self.food_exhaustion = f("foodExhaustionLevel").unwrap_or(0.0) as f32;
@@ -2629,6 +2632,7 @@ impl Level {
             ("OnGround", Tag::Byte(i8::from(self.on_ground))),
             ("fall_distance", Tag::Double(self.fall_distance.to_bits())),
             ("Health", Tag::Float(self.health.to_bits())),
+            ("AbsorptionAmount", Tag::Float(self.absorption.to_bits())),
             ("foodLevel", Tag::Int(self.food)),
             ("foodSaturationLevel", Tag::Float(self.saturation.to_bits())),
             (
@@ -2735,7 +2739,6 @@ impl Level {
                 ("seenCredits", Tag::Byte(0)),
                 ("HurtTime", Tag::Short(0)),
                 ("DeathTime", Tag::Short(0)),
-                ("AbsorptionAmount", Tag::Float(0)),
                 ("FallFlying", Tag::Byte(0)),
             ] {
                 map.entry(key.into()).or_insert(value);
@@ -4118,6 +4121,7 @@ mod tests {
             position: Some([1.5, 70.0, -3.25]),
             rotation: [90.0, 10.0],
             health: 17.0,
+            absorption: 5.0,
             food: 15,
             saturation: 2.5,
             inventory: vec![
@@ -4148,6 +4152,7 @@ mod tests {
         assert_eq!(back.position, Some([1.5, 70.0, -3.25]));
         assert_eq!(back.rotation, [90.0, 10.0]);
         assert_eq!((back.health, back.food, back.saturation), (17.0, 15, 2.5));
+        assert_eq!(back.absorption, 5.0);
         let mut inv = back.inventory.clone();
         inv.sort();
         assert_eq!(
@@ -4182,10 +4187,13 @@ mod tests {
         let mut again = Level {
             player_extra: Some(extra),
             ender_items: ender,
+            // The live amount, not the one the loaded compound held (#1307).
+            absorption: 2.0,
             ..back
         };
         again.write(&dir).unwrap();
         let third = Level::read(&dir).unwrap();
+        assert_eq!(third.absorption, 2.0);
         assert!(matches!(
             third
                 .player_extra

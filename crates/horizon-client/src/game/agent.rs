@@ -460,6 +460,8 @@ impl Game<'_> {
                 "sneaking": self.keys.contains(&KeyCode::ShiftLeft),
                 "sprinting": self.keys.contains(&KeyCode::ControlLeft),
                 "health": p.health.health(),
+                "absorption": p.health.absorption(),
+                "air": p.air,
                 "food": p.health.food.food,
                 "saturation": p.health.food.saturation,
                 "xp": { "level": self.experience.level, "progress": self.experience.progress, "total": self.experience.total },
