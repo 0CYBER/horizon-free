@@ -2288,6 +2288,8 @@ pub struct Level {
     pub dimension: String,
     /// World spawn (`level.dat` `spawn`), distinct from a bed respawn point.
     pub world_spawn: Option<[i32; 3]>,
+    /// The world spawn's yaw and pitch (`setworldspawn`'s rotation).
+    pub world_spawn_angle: [f32; 2],
     pub difficulty: String,
     pub hardcore: bool,
     /// `difficulty_settings.locked` (LevelData.isDifficultyLocked).
@@ -2365,6 +2367,11 @@ impl Level {
                 ]
             }),
         };
+        let angle = |k: &str| match data.get("spawn").and_then(|s| s.get(k)) {
+            Some(Tag::Float(b)) => f32::from_bits(*b),
+            _ => 0.0,
+        };
+        level.world_spawn_angle = [angle("yaw"), angle("pitch")];
         if let Some(d) = data.get("difficulty_settings") {
             level.difficulty = text(d.get("difficulty")).unwrap_or_else(|| "normal".into());
             level.hardcore = n(d.get("hardcore")) != 0;
@@ -2857,8 +2864,8 @@ impl Level {
                 Tag::compound([
                     ("pos", Tag::IntArray(spawn.to_vec())),
                     ("dimension", string("minecraft:overworld")),
-                    ("yaw", Tag::Float(0f32.to_bits())),
-                    ("pitch", Tag::Float(0f32.to_bits())),
+                    ("yaw", Tag::Float(self.world_spawn_angle[0].to_bits())),
+                    ("pitch", Tag::Float(self.world_spawn_angle[1].to_bits())),
                 ]),
             ),
             ("difficulty_settings", difficulty),
@@ -4126,6 +4133,7 @@ mod tests {
             xp_total: 30,
             dimension: "minecraft:the_nether".into(),
             world_spawn: Some([8, 64, 8]),
+            world_spawn_angle: [45.0, -10.0],
             spawn: Some([20.0, 70.0, 20.0]),
             difficulty_locked: true,
             flying: true,
@@ -4160,6 +4168,7 @@ mod tests {
         );
         assert_eq!(back.dimension, "minecraft:the_nether");
         assert_eq!(back.world_spawn, Some([8, 64, 8]));
+        assert_eq!(back.world_spawn_angle, [45.0, -10.0]);
         assert_eq!(back.spawn, Some([20.0, 70.0, 20.0]));
         assert!(back.difficulty_locked);
         assert!(back.weather.raining);
