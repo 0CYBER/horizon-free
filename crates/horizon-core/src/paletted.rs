@@ -466,34 +466,6 @@ impl PalettedContainer {
             }
         }
     }
-    /// Block ids as 16-bit values (callers whose registry fits in 16 bits).
-    pub fn unpack_u16(&self, out: &mut [u16; 4096]) {
-        debug_assert_eq!(self.strategy.entries(), 4096);
-        match &self.palette {
-            Palette::Single(value) => out.fill(*value as u16),
-            Palette::List(list) => {
-                let bits = usize::from(self.bits);
-                let per = 64 / bits;
-                let m = mask(self.bits);
-                for (chunk, &word) in out.chunks_mut(per).zip(&self.words) {
-                    for (slot, cell) in chunk.iter_mut().enumerate() {
-                        let id = ((word >> (slot * bits)) & m) as usize;
-                        *cell = list[id] as u16;
-                    }
-                }
-            }
-            Palette::Global => {
-                let bits = usize::from(self.bits);
-                let per = 64 / bits;
-                let m = mask(self.bits);
-                for (chunk, &word) in out.chunks_mut(per).zip(&self.words) {
-                    for (slot, cell) in chunk.iter_mut().enumerate() {
-                        *cell = ((word >> (slot * bits)) & m) as u16;
-                    }
-                }
-            }
-        }
-    }
     /// A container holding `values` in the smallest configuration for their
     /// distinct count, with palette ids in first-occurrence order, like a
     /// container unpacked from disk.

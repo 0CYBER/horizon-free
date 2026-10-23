@@ -324,6 +324,22 @@ impl Game<'_> {
             }
         }
     }
+    /// `ServerScoreboard`'s packets: each placed player's client is sent
+    /// what changed on the board since it was last sent it (all of it on
+    /// joining), lan/scoreboard.rs.
+    pub(super) fn lan_sync_scoreboard(&mut self, host: &mut super::lan::LanHost) {
+        if host.hub.guests.iter().all(|g| !g.placed) {
+            return;
+        }
+        self.load_scoreboard();
+        let view = horizon_client::lan::scoreboard::View::of(&self.score.board);
+        for g in host.hub.guests.iter_mut().filter(|g| g.placed) {
+            if g.scoreboard != view {
+                g.send_all(&g.scoreboard.changes(&view));
+                g.scoreboard = view.clone();
+            }
+        }
+    }
     /// `ServerPlayer.doTick` score updates and the statistic criteria.
     pub(super) fn tick_scoreboard(&mut self) {
         self.load_scoreboard();
@@ -563,19 +579,42 @@ impl Game<'_> {
 
     // ---- the sidebar -----------------------------------------------------------
 
-    /// `Hud.extractScoreboardSidebar` / `displayScoreboardSidebar`.
-    pub(super) fn draw_scoreboard(&self, batch: &mut HudBatch) {
+    /// The objective in the player's team's sidebar slot, else the sidebar's.
+    fn sidebar_objective(&self) -> Option<&sb::Objective> {
         let board = &self.score.board;
         if board.display.is_empty() {
-            return;
+            return None;
         }
+        // A server's client is in its team by its profile name.
+        let name = self
+            .remote
+            .as_ref()
+            .map_or(PLAYER_NAME, |r| r.profile_name.as_str());
         let team_slot = board
-            .players_team(PLAYER_NAME)
+            .players_team(name)
             .and_then(|t| t.color.as_ref())
             .map(|c| format!("sidebar.team.{c}"))
             .and_then(|slot| board.display_objective(&slot));
-        let Some(objective) = team_slot.or_else(|| board.display_objective(sb::SLOT_SIDEBAR))
-        else {
+        team_slot.or_else(|| board.display_objective(sb::SLOT_SIDEBAR))
+    }
+    /// The sidebar the HUD shows: its objective and its lines, for `status`.
+    pub(super) fn sidebar_status(&self) -> serde_json::Value {
+        let board = &self.score.board;
+        let Some(objective) = self.sidebar_objective() else {
+            return serde_json::Value::Null;
+        };
+        let scores: serde_json::Map<String, serde_json::Value> = board
+            .scores
+            .iter()
+            .filter_map(|(holder, s)| Some((holder.clone(), s.get(&objective.name)?.value.into())))
+            .collect();
+        serde_json::json!({ "objective": objective.name, "title": objective.display_text().plain(), "scores": scores })
+    }
+
+    /// `Hud.extractScoreboardSidebar` / `displayScoreboardSidebar`.
+    pub(super) fn draw_scoreboard(&self, batch: &mut HudBatch) {
+        let board = &self.score.board;
+        let Some(objective) = self.sidebar_objective() else {
             return;
         };
         let draws = hud_overlays::sidebar(

@@ -16,10 +16,38 @@ class ParityRunnerTests(unittest.TestCase):
 
     def test_artifacts_follow_profile_and_stop_at_program_arguments(self):
         self.assertEqual(parity.artifacts_of(["cargo", "build", "--release", "--example", "a", "--bin", "b"]),
-                         [["example", "a", "release"], ["bin", "b", "release"]])
+                         [["example", "a", "release", [], True], ["bin", "b", "release", [], True]])
         self.assertEqual(parity.artifacts_of(["cargo", "run", "--profile", "fast", "--example", "c", "--", "--example", "x"]),
-                         [["example", "c", "fast"]])
-        self.assertEqual(parity.artifacts_of(["cargo", "build", "--example", "d"]), [["example", "d", "dev"]])
+                         [["example", "c", "fast", [], True]])
+        self.assertEqual(parity.artifacts_of(["cargo", "build", "--example", "d"]), [["example", "d", "dev", [], True]])
+
+    def test_artifacts_keep_the_package_and_feature_selection(self):
+        self.assertEqual(parity.artifacts_of(["cargo", "build", "--locked", "--profile=fast", "-j", "4", "--package",
+                                              "horizon-client", "--bins", "-F", "x"]),
+                         [["bins", "", "fast", ["-p", "horizon-client", "--features", "x"], False]])
+        self.assertEqual(parity.artifacts_of(["cargo", "build", "--release", "-p", "horizon-world", "--bin=horizon-world"]),
+                         [["bin", "horizon-world", "release", ["-p", "horizon-world"], False]])
+
+    def test_prebuild_repeats_each_harness_selection(self):
+        artifacts = [
+            *parity.artifacts_of(["cargo", "build", "--release", "-p", "horizon-world", "--example", "a"]),
+            *parity.artifacts_of(["cargo", "build", "--release", "-p", "horizon-world", "--example", "b"]),
+            *parity.artifacts_of(["cargo", "build", "--release", "-p", "horizon-world", "--bin", "horizon-world"]),
+            *parity.artifacts_of(["cargo", "build", "--release", "--bin", "horizon-world"]),
+            *parity.artifacts_of(["cargo", "run", "--profile", "fast", "-p", "horizon-client", "--example", "c"]),
+            *parity.artifacts_of(["cargo", "build", "--release", "-p", "horizon-world", "--example", "renamed"]),
+            ["example", "old", "release"],  # recorded before selections were kept: its own crate's -p
+            ["example", "unknown", "release"],  # no longer in the workspace: left to its harness
+        ]
+        packages = {("example", "a"): "horizon-world", ("example", "b"): "horizon-world", ("example", "c"): "horizon-client",
+                    ("bin", "horizon-world"): "horizon-world", ("example", "old"): "horizon-world"}
+        self.assertEqual(parity.prebuild_commands(artifacts, packages), [
+            ["cargo", "build", "--locked", "--profile", "fast", "-p", "horizon-client", "--example", "c"],
+            ["cargo", "build", "--locked", "--profile", "release", "--bin", "horizon-world"],
+            ["cargo", "build", "--locked", "--profile", "release", "-p", "horizon-world", "--bin", "horizon-world"],
+            ["cargo", "build", "--locked", "--profile", "release", "-p", "horizon-world", "--example", "a", "--example", "b",
+             "--example", "old"],
+        ])
 
     def test_java_sources_include_classes_pulled_from_the_sourcepath(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -169,10 +169,6 @@ impl TickRateManager {
             self.frozen_ticks_to_run -= 1;
         }
     }
-    /// `isEntityFrozen` for an entity that is not (and does not carry) a player.
-    pub fn is_entity_frozen(&self, is_player_or_carries_player: bool) -> bool {
-        !self.runs_normally() && !is_player_or_carries_player
-    }
 }
 
 /// What `/tick sprint` reports when it ends.

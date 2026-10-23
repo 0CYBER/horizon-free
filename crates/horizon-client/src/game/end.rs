@@ -97,8 +97,58 @@ impl EndState {
     }
 }
 
+impl EndState {
+    /// The eyes' entity ids, for a server to number them.
+    pub(super) fn eye_ids(&mut self) -> impl Iterator<Item = &mut u32> {
+        self.eyes.iter_mut().map(|e| &mut e.id)
+    }
+    /// The numbered eyes as a server's clients track them: (id, position, motion).
+    pub(super) fn eyes_tracked(&self) -> impl Iterator<Item = (u32, [f64; 3], [f64; 3])> {
+        self.eyes
+            .iter()
+            .filter(|e| e.id != 0)
+            .map(|e| (e.id, e.position.to_array(), e.velocity.to_array()))
+    }
+    /// `handleAddEntity` for an eye of ender on a server's client: it flies
+    /// where the server says.
+    pub(super) fn add_remote_eye(&mut self, id: u32, at: [f64; 3], velocity: [f64; 3]) {
+        self.eyes.retain(|e| e.id != id);
+        let at = glam::DVec3::from_array(at);
+        self.eyes.push(EyeOfEnder {
+            id,
+            position: at,
+            previous: at,
+            velocity: glam::DVec3::from_array(velocity),
+            target: at,
+            life: 0,
+            survive: false,
+        });
+    }
+    /// One tick of a server's client: `step` moves each toward where the
+    /// server put it.
+    pub(super) fn step_remote_eyes(&mut self, mut step: impl FnMut(u32, [f64; 3]) -> [f64; 3]) {
+        for e in &mut self.eyes {
+            e.previous = e.position;
+            e.life += 1;
+            e.position = glam::DVec3::from_array(step(e.id, e.position.to_array()));
+        }
+    }
+    pub(super) fn remove_remote_eye(&mut self, id: u32) {
+        self.eyes.retain(|e| e.id != id);
+    }
+    pub(super) fn clear_remote_eyes(&mut self) {
+        self.eyes.clear();
+    }
+    /// Where each eye is, for `status`.
+    pub(super) fn eye_positions(&self) -> impl Iterator<Item = (u32, [f64; 3])> {
+        self.eyes.iter().map(|e| (e.id, e.position.to_array()))
+    }
+}
+
 /// The EyeOfEnder entity.
 struct EyeOfEnder {
+    /// Its entity id once a server's clients track it (0 until then).
+    id: u32,
     position: glam::DVec3,
     previous: glam::DVec3,
     velocity: glam::DVec3,
@@ -1023,6 +1073,7 @@ impl Game<'_> {
         };
         let survive = self.world.random.next_int_bound(5).unwrap_or(0) > 0;
         self.end.eyes.push(EyeOfEnder {
+            id: 0,
             position: start,
             previous: start,
             velocity: glam::DVec3::ZERO,

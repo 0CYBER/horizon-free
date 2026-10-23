@@ -212,9 +212,6 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
     pub fn tick_clock(&self) -> (i64, i64) {
         (self.game_time, self.next_tick_order)
     }
-    pub fn set_game_time(&mut self, game_time: i64) {
-        self.game_time = game_time;
-    }
     /// Raw tick identities are default block-state IDs for block ticks and
     /// `FluidKind` discriminants for fluid ticks, in separate namespaces.
     pub fn schedule_tick(
@@ -223,15 +220,6 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
         tick: ScheduledTick,
     ) -> Result<bool, RegionError> {
         WorldGenTickAccess::new(RegionTickContainers { region: self, kind }).schedule(tick)
-    }
-    pub fn has_scheduled_tick(
-        &mut self,
-        kind: TickKind,
-        position: BlockPos,
-        tick_type: TickTypeId,
-    ) -> Result<bool, RegionError> {
-        WorldGenTickAccess::new(RegionTickContainers { region: self, kind })
-            .has_scheduled(position, tick_type)
     }
     fn request_tick(
         &mut self,
@@ -250,11 +238,6 @@ impl<'r, B: TerrainBlockStates> TerrainRegion<'r, B> {
         self.next_tick_order = self.next_tick_order.wrapping_add(1);
         self.schedule_tick(kind, tick)?;
         Ok(())
-    }
-    /// Override world sea level without changing generator placement anchors.
-    pub fn with_world_sea_level(mut self, sea_level: i32) -> Self {
-        self.sea_level = sea_level;
-        self
     }
     /// Release the resident chunks, ordered by X then Z; match them by position.
     pub fn into_chunks(self) -> Vec<TerrainChunk<'r, B>> {
