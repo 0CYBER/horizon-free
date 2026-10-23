@@ -1564,6 +1564,7 @@ impl Hub {
             attributes,
             precise: false,
             needs_sync: false,
+            leash: None,
         }
     }
 
