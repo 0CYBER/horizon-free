@@ -78,6 +78,7 @@ pub fn main() -> Result<()> {
         let mut selected = collisions::EntityCollisions {
             blocks: scene,
             entities: &entities,
+            border: None,
         };
         let movement = world_movement::resolve_world_movement(
             &mut selected,

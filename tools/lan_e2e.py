@@ -213,7 +213,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning', 'riding', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption', 'breath', 'lava', 'levels', 'drops', 'underwater']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'looks', 'leads', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'thrown', 'sparks', 'hud', 'sidebar', 'border', 'particles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning', 'riding', 'mounts', 'worldspawn', 'beds', 'shield', 'deathmining', 'contacts', 'absorption', 'breath', 'lava', 'levels', 'drops', 'underwater']
 
 
 class Game:
@@ -2794,6 +2794,114 @@ def check_sidebar(host, guest, out):
     return result
 
 
+def check_border(host, guest, out):
+    spots = apart(host, guest)
+    result = {}
+    try:
+        for label, player, other in (('host', host, guest), ('guest', guest, host)):
+            x, y, z = spots[label]
+            # A whole-block centre: the wall's collision box is the border's, rounded out to blocks.
+            cx, cz = float(x), float(z)
+            # The other player keeps out of harm outside the border meanwhile.
+            other('command', command='gamemode creative')
+            host('command', command=f'fill {x - 3} {y - 1} {z} {x + 4} {y - 1} {z + 10} minecraft:stone')
+            host('command', command=f'fill {x - 3} {y} {z} {x + 4} {y + 3} {z + 10} minecraft:air')
+            # A border 10 wide around the player, its wall 5 blocks ahead: both sides know it.
+            host('command', command=f'worldborder center {cx} {cz}')
+            host('command', command='worldborder set 10')
+            seen = None
+            for _ in range(10):
+                player.wait(2)
+                seen = [g('status').get('border') for g in (player, other)]
+                if all(b and b['size'] == 10 and b['center'] == [cx, cz] for b in seen):
+                    break
+            result[f'{label} border'] = seen
+            # Sprint-jumping into the wall: it stops the player at the border.
+            player('command', command=f'tp @s {cx} {y} {cz} 0 0')
+            player.wait(10)
+            player.raw('look-at', f'{cx:.2f}', f'{y + 1.6:.2f}', f'{cz + 20:.2f}')
+            for k in ('w', 'ctrl', 'space'):
+                player.raw('key', k, 'down')
+            player.wait(40)
+            for k in ('space', 'ctrl', 'w'):
+                player.raw('key', k, 'up')
+            player.wait(10)
+            result[f'{label} reached'] = round(pos_of(player)[2] - cz, 2)
+            player.shot(out, f'border-{label}')
+            # Two blocks outside, with no safe zone: the border hurts.
+            host('command', command='worldborder damage buffer 0')
+            host('command', command='worldborder damage amount 1')
+            player('command', command='effect give @s minecraft:instant_health 1 5')
+            player.wait(20)
+            player('command', command=f'tp @s {cx} {y} {cz + 7}')
+            player.wait(5)
+            before = player('status')['player']['health']
+            player.wait(40)
+            result[f'{label} hurt'] = [before, player('status')['player']['health']]
+            player('command', command=f'tp @s {cx} {y} {cz}')
+            player('command', command='effect give @s minecraft:instant_health 1 5')
+            host('command', command='worldborder damage amount 0.2')
+            host('command', command='worldborder damage buffer 5')
+            other('command', command='gamemode survival')
+    finally:
+        guest('command', command='gamemode survival')
+        host('command', command='gamemode survival')
+        host('command', command='worldborder damage amount 0.2')
+        host('command', command='worldborder damage buffer 5')
+        host('command', command='worldborder center 0 0')
+        host('command', command='worldborder set 59999968')
+    wrong = {}
+    for label in ('host', 'guest'):
+        x, y, z = spots[label]
+        known = result[f'{label} border']
+        if not all(b and b['size'] == 10 and b['center'] == [x, z] for b in known):
+            wrong[f'{label} border'] = known
+        if not 4.0 < result[f'{label} reached'] <= 4.71:
+            wrong[f'{label} reached'] = result[f'{label} reached']
+        before, after = result[f'{label} hurt']
+        if not after < before:
+            wrong[f'{label} hurt'] = result[f'{label} hurt']
+    assert not wrong, f'border: {wrong}\n{result}'
+    return result
+
+
+def check_particles(host, guest, out):
+    spots = apart(host, guest)
+    result = {}
+    for label, player, other in (('host', host, guest), ('guest', guest, host)):
+        # For the player alone (`@s`), then for every player near.
+        before = {side: made(g, 'flame') for side, g in (('own', player), ('other', other))}
+        player('command', command='particle minecraft:flame ~ ~1 ~3 .2 .2 .2 0 60 force @s')
+        player.wait(10)
+        result[f'{label} @s'] = {side: made(g, 'flame') - before[side] for side, g in (('own', player), ('other', other))}
+        player.shot(out, f'flame-{label}')
+        # No spread: one point, wherever the player stands.
+        player('command', command='particle minecraft:flame ~ ~1 ~3 0 0 0 0 200 force @s')
+        player.wait(3)
+        player.shot(out, f'zero-spread-{label}')
+        result[f'{label} all'] = sparked(player, other, ['dust'], lambda: player(
+            'command', command='particle minecraft:dust{color:[1,0,0],scale:2} ~ ~1 ~3 0 0 0 0 10'))
+    # A TNT's blast between the players: its burst on both sides.
+    x, y, z = spots['host']
+    host('command', command='gamemode creative')
+    guest('command', command='gamemode creative')
+    try:
+        result['blast'] = sparked(host, guest, ['explosion_emitter'], lambda: host(
+            'command', command=f'summon minecraft:tnt {x + 6.5} {y} {z + 4.5} {{fuse:10s}}'), ticks=40)
+        host.shot(out, 'blast')
+    finally:
+        host('command', command='gamemode survival')
+        guest('command', command='gamemode survival')
+        host('command', command=f'fill {x - 3} {y - 1} {z - 3} {x + 16} {y - 1} {z + 8} minecraft:stone')
+    # Without the server thread a guest's command reaches no host player (as `@a` doesn't).
+    if not SERVER_THREAD:
+        result['guest all'].pop('other dust')
+    wrong = {k: v for k, v in result.items() if not k.endswith('@s') and not all(n > 0 for n in v.values())}
+    wrong.update({k: v for k, v in result.items() if k.endswith('@s') and not (v['own'] >= 30 and v['other'] == 0)})
+    assert not wrong, f'particles: {wrong}\n{result}'
+    return result
+
+
 def check_blast(host, guest, out):
     guest('command', command='gamemode survival')
     guest('command', command='clear @s')
@@ -4131,7 +4239,9 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour,
              'thrown': check_thrown,
              'sparks': check_sparks,
              'hud': check_hud,
-             'sidebar': check_sidebar}
+             'sidebar': check_sidebar,
+             'border': check_border,
+             'particles': check_particles}
 
 
 def run(ctl, out, resources, checks):
