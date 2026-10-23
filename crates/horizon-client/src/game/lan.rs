@@ -410,6 +410,8 @@ impl Game<'_> {
                     // ItemCooldowns: the ticks the shield an axe disabled stays down.
                     "shield_cooldown": h.play.get(&g.conn).map_or(0, |p| p.shield_cooldown),
                     "sneaking": g.sneaking,
+                    // The server's Elytra glide (shared flag 7).
+                    "fall_flying": g.fall_flying,
                     "sleeping": g.bed,
                     "health": g.health,
                     // The server's body: its air supply and golden hearts.

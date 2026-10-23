@@ -1812,6 +1812,16 @@ impl Game<'_> {
         self.stack_in_mut(self.held_slot())
     }
     /// The slot of the hand that acts: the selected one, or `OFFHAND_SLOT`.
+    /// `LivingEntity.canGlideUsing`: a glider in the chest slot that will
+    /// not break with its next point of wear.
+    fn glider_worn(&self) -> bool {
+        self.armor[1].as_ref().is_some_and(|s| {
+            self.res
+                .items()
+                .get(&s.item)
+                .is_some_and(|i| i.glider && (i.max_damage == 0 || s.damage + 1 < i.max_damage))
+        })
+    }
     fn held_slot(&self) -> usize {
         match self.hand {
             Hand::Main => self.selected,
@@ -3931,13 +3941,7 @@ impl Game<'_> {
             .as_ref()
             .map_or(0, |s| s.enchantment_level("minecraft:respiration") as i32);
         player.pitch = self.pitch;
-        // LivingEntity.canGlideUsing: a glider in its slot that will not break next.
-        player.glider = self.armor[1].as_ref().is_some_and(|s| {
-            self.res
-                .items()
-                .get(&s.item)
-                .is_some_and(|i| i.glider && (i.max_damage == 0 || s.damage + 1 < i.max_damage))
-        });
+        player.glider = self.glider_worn();
         // A saved death already dropped inventory/XP and counted the death.
         if player.health.dead_or_dying() {
             self.screen = Screen::Dead;
@@ -4015,6 +4019,7 @@ impl Game<'_> {
         let riding = self.riding.is_some();
         let ghast_collisions = self.happy_ghast_player_collisions();
         let spin_targets = self.spin_targets();
+        let glider = self.glider_worn();
         let Some(player) = self.player.as_mut() else {
             // A dedicated server has no local player: the world still runs.
             if self.options.dedicated.is_some() {
@@ -4057,13 +4062,7 @@ impl Game<'_> {
             .as_ref()
             .map_or(0, |s| s.enchantment_level("minecraft:respiration") as i32);
         player.pitch = self.pitch;
-        // LivingEntity.canGlideUsing: a glider in its slot that will not break next.
-        player.glider = self.armor[1].as_ref().is_some_and(|s| {
-            self.res
-                .items()
-                .get(&s.item)
-                .is_some_and(|i| i.glider && (i.max_damage == 0 || s.damage + 1 < i.max_damage))
-        });
+        player.glider = glider;
         // LocalPlayer.modifyInput: walking while using an item.
         player.item_use_speed = self
             .using

@@ -1027,6 +1027,7 @@ impl Game<'_> {
                     g.open_ridden_mount_menu();
                 });
             }
+            S::PlayerCommand(p) if p.action == 6 => self.lan_start_gliding(host, conn),
             S::ContainerButtonClick(p) => {
                 self.lan_station_button(host, conn, p.container, p.button);
             }
@@ -1850,6 +1851,13 @@ impl Game<'_> {
     /// sounds are heard at the guest.
     fn guest_server_tick(&mut self, host: &mut LanHost, conn: u32) {
         self.guest_vehicle_tick(host, conn);
+        // The last move's fall stands in for the server's delta movement.
+        let fell = host
+            .hub
+            .guest_mut(conn)
+            .and_then(|g| g.moves.last().map(|m| m.0[1]))
+            .unwrap_or(0.0);
+        self.guest_glide_tick(host, conn, fell);
         let Some(g) = host.hub.guest_mut(conn) else {
             return;
         };
@@ -1964,6 +1972,87 @@ impl Game<'_> {
         for sound in sounds.into_iter().flatten() {
             self.player_hurt_sound(sound, at);
         }
+    }
+
+    /// ServerGamePacketListenerImpl.handlePlayerCommand START_FALL_FLYING:
+    /// `Player.tryToStartFallFlying`, or else `stopFallFlying` (a second
+    /// start while gliding ends the glide, as in vanilla).
+    fn lan_start_gliding(&mut self, host: &mut LanHost, conn: u32) {
+        let Some(g) = host.hub.guest_mut(conn) else {
+            return;
+        };
+        let start = !g.fall_flying && self.guest_can_glide(host, conn) == Some(true);
+        let in_liquid = self
+            .as_guest(host, conn, |game| {
+                game.player
+                    .as_ref()
+                    .is_some_and(|p| p.fluids.was_touching_water || p.is_in_lava())
+            })
+            .unwrap_or(true);
+        if let Some(g) = host.hub.guest_mut(conn) {
+            g.fall_flying = start && !in_liquid;
+        }
+    }
+
+    /// `Player.canGlide`: not flying, airborne, not riding, no levitation, and
+    /// a glider that its next point of wear won't break.
+    fn guest_can_glide(&mut self, host: &mut LanHost, conn: u32) -> Option<bool> {
+        let g = host.hub.guest_mut(conn)?;
+        if g.flying || g.on_ground || g.vehicle.is_some() {
+            return Some(false);
+        }
+        self.as_guest(host, conn, |game| {
+            game.glider_worn() && game.potions.effects.get("levitation").is_none()
+        })
+    }
+
+    /// `LivingEntity.updateFallFlying` on the server, once a tick for a
+    /// gliding guest: the glide ends once `canGlide` fails; otherwise every
+    /// 20th tick wears the glider by one, and every 10th is an
+    /// `elytra_glide` game event. Entity.checkFallDistanceAccumulation runs
+    /// first: a glide that isn't diving keeps the fall distance at 1.
+    fn guest_glide_tick(&mut self, host: &mut LanHost, conn: u32, fell: f64) {
+        let Some(g) = host.hub.guest_mut(conn) else {
+            return;
+        };
+        if !g.fall_flying {
+            if let Some(m) = g.motion.as_mut() {
+                m.fall_fly_ticks = 0;
+            }
+            return;
+        }
+        let creative = g.creative();
+        if let Some(m) = g.motion.as_mut()
+            && fell > -0.5
+            && m.fall_distance > 1.0
+        {
+            m.fall_distance = 1.0;
+        }
+        if self.guest_can_glide(host, conn) != Some(true) {
+            if let Some(g) = host.hub.guest_mut(conn) {
+                g.fall_flying = false;
+            }
+            return;
+        }
+        self.as_guest(host, conn, |game| {
+            let Some(p) = game.player.as_mut() else {
+                return;
+            };
+            p.fall_fly_ticks += 1;
+            let next = p.fall_fly_ticks + 1;
+            let at = [p.position.x, p.position.y, p.position.z];
+            if next % 10 != 0 {
+                return;
+            }
+            if (next / 10) % 2 == 0
+                && !creative
+                && let Some(elytra) = game.armor[1].as_mut()
+            {
+                elytra.damage += 1;
+            }
+            let ctx = game.player_context(None);
+            game.post_game_event("minecraft:elytra_glide", at, ctx);
+        });
     }
 
     /// `Player.isInWall`: a suffocating block in the 0.48-wide box at the

@@ -3139,6 +3139,12 @@ impl Game<'_> {
             .as_ref()
             .map_or(0, |s| s.enchantment_level("minecraft:respiration") as i32);
         player.fluids.fast_lava = self.dim == Dim::Nether;
+        let glider = self.glider_worn();
+        let Some(player) = self.player.as_mut() else {
+            return Ok(());
+        };
+        player.glider = glider;
+        let was_gliding = player.fall_flying;
         let dead = self.screen == Screen::Dead;
         // LivingEntity.isImmobile: a sleeper lies still in the bed.
         if let Some(head) = self.sleeping {
@@ -3163,6 +3169,9 @@ impl Game<'_> {
         // LocalPlayer.onUpdateAbilities: flight turned on or off (a double
         // jump, a spectator, landing) is sent to the server.
         let flying = player.flying;
+        // LocalPlayer.aiStep: a glide this client started is sent to the
+        // server (ServerboundPlayerCommandPacket START_FALL_FLYING).
+        let started_gliding = player.fall_flying && !was_gliding;
         let events = std::mem::take(&mut player.events);
         self.previous_eye = self.eye;
         self.eye += (player.dimensions.eye_height - self.eye) * 0.5;
@@ -3200,6 +3209,14 @@ impl Game<'_> {
         if flying != was_flying {
             self.send(S::PlayerAbilities(play::PlayerAbilitiesRequest {
                 flags: if flying { 2 } else { 0 },
+            }));
+        }
+        if started_gliding {
+            let id = self.remote.as_ref().map_or(0, |r| r.entity_id);
+            self.send(S::PlayerCommand(play::PlayerCommand {
+                id,
+                action: 6,
+                data: 0,
             }));
         }
         self.remote_send_state(input);
