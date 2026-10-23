@@ -971,6 +971,8 @@ impl Game<'_> {
             "flashes": self.lightning_seen[1], "flash": self.flash});
         // Primed TNT, falling blocks, projectiles, tridents and end crystals.
         status["projectiles"] = json!(self.projectiles_status());
+        // The particles made so far, by type.
+        status["particles"] = json!(self.particles.made());
         status
     }
 }
