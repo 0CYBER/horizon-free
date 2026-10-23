@@ -351,6 +351,7 @@ impl Game<'_> {
             r.clear_sections();
         }
         self.apply_settings();
+        self.clear_waypoints();
         self.remote = Some(Remote {
             session,
             brand: "unknown".into(),
@@ -429,6 +430,7 @@ impl Game<'_> {
             // Leaving on purpose: nothing for auto-reconnect to retry.
             self.extras_left();
         }
+        self.clear_waypoints();
         if let Some(mut r) = self.remote.take() {
             r.session.disconnect();
         }
@@ -2061,6 +2063,7 @@ impl Game<'_> {
                     self.capture(false);
                 }
             }
+            C::TrackedWaypoint(p) => self.handle_waypoint(&p),
             C::SetExperience(p) => {
                 self.experience = Experience {
                     level: p.level,
@@ -2884,6 +2887,7 @@ impl Game<'_> {
 
     fn tick_remote_level(&mut self) -> Result<()> {
         self.ticks += 1;
+        self.track_experience_display();
         // Options.broadcastOptions: a changed render distance is sent again.
         let view = client_view_distance(self.settings.render_distance);
         if let Some(r) = self.remote.as_mut()
@@ -5020,6 +5024,20 @@ impl horizon_client::interaction_input::InteractionWorld for RemoteInputWorld<'_
     }
     fn continue_attack(&mut self, down: bool) {
         self.0.remote_continue_attack(down);
+    }
+}
+
+impl Remote {
+    /// The local player's profile UUID.
+    pub(super) fn profile(&self) -> u128 {
+        self.profile
+    }
+    /// The entity id of a player in the level, by profile UUID.
+    pub(super) fn player_entity(&self, uuid: u128) -> Option<u32> {
+        self.level_players
+            .iter()
+            .find(|(_, u)| **u == uuid)
+            .map(|(id, _)| *id as u32)
     }
 }
 
