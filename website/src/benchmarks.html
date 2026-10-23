@@ -37,17 +37,15 @@
           <div class="machines">
 {{MACHINES}}
           </div>
-          <div class="older-runs prose">
-            <p><strong>Not yet measured against Java: the desktop (RTX 4080, Core i7-13700KF).</strong> It is in daily use; the comparison runs on it once it is free. The last figures from it are Horizon alone, from an older build (2026-10-13, offscreen, <code>tools/graphics_bench.py</code>): over the village, 2,409 FPS at render distance 8, 1,041 at 16 and 48 at 32, where that build still stuttered while loading. They are not comparable with the tables above; the picker estimates the RTX 4080 from the measured machines instead.</p>
-          </div>
         </section>
 
         <section class="bench-section" id="your-hardware" aria-labelledby="pick-title">
           <h2 class="title" id="pick-title">Your hardware</h2>
-          <p class="lede">Pick a graphics card and a processor. If we or at least three players have measured that pair, you see what was measured; otherwise an estimate from the nearest measured machine, as a range.</p>
+          <p class="lede">Pick a graphics card, a processor and, if you know it, your memory. If we or at least three players have measured that pair, you see what was measured; otherwise an estimate from the nearest measured machine, as a range.</p>
           <form class="picker" id="picker" aria-describedby="pick-title">
             <label><span>Graphics card</span><select name="gpu" id="pick-gpu">{{GPU_OPTIONS}}</select></label>
             <label><span>Processor</span><select name="cpu" id="pick-cpu">{{CPU_OPTIONS}}</select></label>
+            <label><span>Memory</span><select name="ram" id="pick-ram"><option value="" selected>Not sure</option><option value="8">8 GB</option><option value="16">16 GB</option><option value="32">32 GB</option><option value="64">64 GB or more</option></select></label>
             <fieldset class="picker-rd"><legend>Render distance</legend>
               <label><input type="radio" name="rd" value="12" checked> 12</label>
               <label><input type="radio" name="rd" value="32"> 32</label>
@@ -58,11 +56,18 @@
 
         <section class="bench-section" id="players" aria-labelledby="players-title">
           <h2 class="title" id="players-title">From players</h2>
-          <p class="lede">Players who allow benchmark uploads in the launcher's data collection settings share the report of <code>horizon-client --benchmark standard</code>. Results are grouped by graphics card, processor and render distance, and a group shows only once <strong>at least 3 different installs</strong> are in it, so no one can be picked out. Only medians are published: no install ID, date, driver, memory size or screen.</p>
+          <p class="lede">Players who allow benchmark uploads in the launcher's data collection settings share the report of <code>horizon-client --benchmark standard</code>. Results are grouped by graphics card, processor and render distance, and a group shows only once <strong>at least 3 different installs</strong> are in it, so no one can be picked out. Only medians are published, with how the group's installs split by memory, graphics memory, drive and system in coarse classes (each class only with at least 3 installs too): no install ID, date, driver, exact memory or screen.</p>
           <p class="meta" data-players-source>{{PLAYERS_SOURCE}}</p>
           <div id="players-table">
 {{PLAYERS}}
           </div>
+        </section>
+
+        <section class="bench-section" id="players-hardware" aria-labelledby="players-hardware-title" hidden>
+          <h2 class="title" id="players-hardware-title">Players' hardware</h2>
+          <p class="lede">Every play session players with performance statistics on sent in the last 30 days, split by memory, graphics memory, drive, system and integrated or separate graphics. A class shows only with at least 3 different installs. Frame times are the sessions' average median and 99th percentile, at every render distance and setting players chose, so classes differ by more than their hardware.</p>
+          <p class="meta">Live from the telemetry server.</p>
+          <div id="players-hardware-table"></div>
         </section>
 
         <section class="bench-section prose-section" id="method" aria-labelledby="method-title">
@@ -74,6 +79,7 @@
               <li><strong>CPU factor</strong>: the ratio of the two processors' single-thread scores: top boost clock times a rough factor per chip generation (Zen 4 = 1).</li>
               <li><strong>Frame rate</strong>: when the measured run split each frame into CPU and GPU time, the slower side is scaled by its factor; otherwise by the geometric mean of both. Whatever the split, the real figure lies between the measured one scaled by the smaller and by the larger factor; we widen that by 15% for the roughness of the table, and show it as the range.</li>
               <li><strong>Load times</strong> are CPU work (generating, lighting and meshing chunks), scaled by the CPU factor. <strong>Memory</strong> is not scaled: it follows the world and the settings, not the speed.</li>
+              <li><strong>Memory size</strong>: when players' results say how much memory and graphics memory their machines have, a measured group whose players have neither yours counts as further away, and the estimate says what they had. With your memory picked, it also says when the game's peak use is a large share of it.</li>
             </ul>
             <p>Estimates ignore drivers, the graphics API, thermal limits and the operating system, which can matter as much as the chip. Treat them as a rough idea, and run <code>horizon-client --benchmark standard</code> on your own machine for the real figure.</p>
           </div>

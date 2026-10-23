@@ -42,5 +42,32 @@
       "thinkpad/vanilla-thinkpad-r1-rd12.json",
       "thinkpad/vanilla-thinkpad-r2-rd12.json"
     ]
+  },
+  {
+    "machine": "Desktop (RTX 4080, i7-13700KF)",
+    "reports": [
+      "desktop/horizon-desktop-rd12.json"
+    ],
+    "version": "v2026.10.22.13",
+    "note": "Linux (NixOS) with the NVIDIA 595 driver. The desktop is in daily use, so both games drew to a separate GPU compositor (a headless sway rendering on the RTX 4080) in a 1280x720 window, never on its screen: Horizon through Wayland, vanilla through Xwayland, both on Vulkan. Other jobs were running during the runs (1-minute load average 18 to 25 on 24 threads), which costs both games, chunk loading most."
+  },
+  {
+    "machine": "Desktop (RTX 4080, i7-13700KF)",
+    "reports": [
+      "desktop/horizon-desktop-rd32.json"
+    ],
+    "version": "v2026.10.22.13"
+  },
+  {
+    "machine": "Desktop (RTX 4080, i7-13700KF)",
+    "reports": [
+      "desktop/vanilla-desktop-rd12.json"
+    ]
+  },
+  {
+    "machine": "Desktop (RTX 4080, i7-13700KF)",
+    "reports": [
+      "desktop/vanilla-desktop-rd32.json"
+    ]
   }
 ]

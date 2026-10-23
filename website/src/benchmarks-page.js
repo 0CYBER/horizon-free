@@ -1,8 +1,8 @@
 // The Benchmarks page: players' results from the telemetry server (the baked summary when it doesn't answer)
 // and the hardware picker (a measurement when there is one, else an estimate from src/estimate.js).
 import { escape } from "./markdown.js";
-import { METRICS, cell, compareRows, format, playersHtml } from "./bench.js";
-import { estimate, measured } from "./estimate.js";
+import { METRICS, cell, compareRows, format, hardwareHtml, playersHtml } from "./bench.js";
+import { estimate, measured, memoryNotes } from "./estimate.js";
 import { findCpu, findGpu } from "./hardware.js";
 import { setUpMenu, setUpTheme } from "./chrome.js";
 
@@ -24,6 +24,20 @@ async function live() {
     render();
   } catch {
     // The baked results stay; the line under the heading already says when they were made.
+  }
+}
+
+// Players' play sessions per hardware class (last 30 days); the section stays hidden until there are some.
+async function hardware() {
+  try {
+    const res = await fetch(`${TELEMETRY}/v1/aggregate?days=30`, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) return;
+    const html = hardwareHtml(await res.json());
+    if (!html) return;
+    document.getElementById("players-hardware-table").innerHTML = html;
+    document.getElementById("players-hardware").hidden = false;
+  } catch {
+    // Nothing to show.
   }
 }
 
@@ -57,19 +71,25 @@ function render() {
   const gpu = findGpu(picker.gpu.value);
   const cpu = findCpu(picker.cpu.value);
   const rd = Number(picker.rd.value);
+  const ramGb = Number(picker.ram.value) || null;
   if (!gpu || !cpu) return;
+  // Horizon's and Java's notes, each once (the players' hardware is the same for both).
+  const notesHtml = (...lists) => {
+    const notes = [...new Set(lists.flat())];
+    return notes.length ? `<ul class="pick-notes">${notes.map((n) => `<li>${escape(n)}</li>`).join("")}</ul>` : "";
+  };
   const mh = measured(groups, gpu, cpu, rd, "horizon");
   const mj = measured(groups, gpu, cpu, rd, "vanilla");
   if (mh.length || mj.length) {
     const h = mh[0];
     const j = mj[0];
-    out.innerHTML = `<p class="pick-head">${[h, j].filter(Boolean).map(sourceBadge).join(" ")}</p>${measuredTable(h, j)}${
+    out.innerHTML = `<p class="pick-head">${[h, j].filter(Boolean).map(sourceBadge).join(" ")}</p>${measuredTable(h, j)}${notesHtml(...[h, j].filter(Boolean).map((row) => memoryNotes(row, gpu, ramGb)))}${
       h && h.source === "us" && h.measured ? `<p class="meta">Measured ${escape(h.measured)} with Horizon ${escape(h.version)}. The full table is under <a href="#measured">Measured by us</a>.</p>` : ""
     }`;
     return;
   }
-  const h = estimate(groups, gpu, cpu, rd, "horizon");
-  const j = estimate(groups, gpu, cpu, rd, "vanilla");
+  const h = estimate(groups, gpu, cpu, rd, "horizon", { ramGb });
+  const j = estimate(groups, gpu, cpu, rd, "vanilla", { ramGb });
   if (!h && !j) {
     out.innerHTML = `<p class="empty">Nothing measured at render distance ${rd} to estimate from yet.</p>`;
     return;
@@ -77,7 +97,7 @@ function render() {
   const base = (h || j).base;
   const f = (h || j).factors;
   const times = (x) => `${x >= 1 ? x.toFixed(x >= 10 ? 0 : 1) : x.toFixed(2)}x`;
-  out.innerHTML = `<p class="pick-head"><span class="badge badge-estimate">Estimate</span> From ${escape(base.source === "us" ? base.machine : `${base.gpu} with ${base.cpu}`)} (${escape(base.gpu)}, ${escape(base.cpu)}): GPU factor ${times(f.gpu)}, CPU factor ${times(f.cpu)}. <a href="#method">How</a></p>${estimateTable(h, j)}<p class="meta">Ranges, not measurements: the real figure depends on drivers, the graphics API and cooling too. Memory is the measured machine's.</p>`;
+  out.innerHTML = `<p class="pick-head"><span class="badge badge-estimate">Estimate</span> From ${escape(base.source === "us" ? base.machine : `${base.gpu} with ${base.cpu}`)} (${escape(base.gpu)}, ${escape(base.cpu)}): GPU factor ${times(f.gpu)}, CPU factor ${times(f.cpu)}. <a href="#method">How</a></p>${estimateTable(h, j)}${notesHtml(h?.notes || [], j?.notes || [])}<p class="meta">Ranges, not measurements: the real figure depends on drivers, the graphics API and cooling too. Memory is the measured machine's.</p>`;
 }
 
 setUpTheme();
@@ -85,3 +105,4 @@ setUpMenu();
 picker.addEventListener("change", render);
 render();
 live();
+hardware();
