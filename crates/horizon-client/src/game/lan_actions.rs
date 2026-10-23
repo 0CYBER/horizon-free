@@ -1765,6 +1765,7 @@ impl Game<'_> {
         }
         let in_wall = !g.sleeping && self.in_wall(g.position, g.eye_height());
         let at = g.position;
+        let sneaking = g.sneaking;
         let sounds = self.as_guest(host, conn, |game| {
             let (rules, motion) = (game.world.health_rules, game.motion);
             let health = &motion.health;
@@ -1783,6 +1784,26 @@ impl Game<'_> {
             let _ = w.fluid_base_tick();
             w.player.ground.on_ground = from_ground;
             let travelled: Vec<[f64; 3]> = moves.iter().map(|m| m.0).collect();
+            // Entity.move's movementThisTick: each move, from where the
+            // tick's first one started.
+            let end = w.player.position;
+            let start = travelled
+                .iter()
+                .fold(end, |p, d| p.subtract(Vec3::new(d[0], d[1], d[2])));
+            w.player.history.clear();
+            let mut from = start;
+            for d in &travelled {
+                let delta = Vec3::new(d[0], d[1], d[2]);
+                let to = from.add_vector(delta);
+                w.player
+                    .history
+                    .add(horizon_world::entity_move::MovementRecord {
+                        from,
+                        to,
+                        original: Some(delta),
+                    });
+                from = to;
+            }
             for (moved, on_ground) in moves {
                 let movement = Vec3::new(moved[0], moved[1], moved[2]);
                 if w.player.ground.on_ground && !on_ground && moved[1] > 0.0 {
@@ -1808,6 +1829,10 @@ impl Game<'_> {
             if w.climbable().unwrap_or(false) {
                 w.player.fall_distance = 0.0;
             }
+            // Entity.applyEffectsFromBlocks along those moves: magma, cactus,
+            // lit campfires and grown sweet berry bushes hurt (#1305).
+            w.player.shift_key_down = sneaking;
+            let _ = w.server_block_damage(start);
             let _ = w.tick_environment_damage();
             let _ = w.apply_fire_contact();
             let _ = w.server_hazards_tick(in_wall);
