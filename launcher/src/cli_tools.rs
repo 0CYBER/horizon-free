@@ -232,6 +232,111 @@ impl Tool {
     }
 }
 
+/// The tools mcp.rs runs itself for a CLI command, and what an agent uses instead of the
+/// player-only ones.
+#[cfg(test)]
+fn session_tool(words: &str) -> &'static str {
+    match words {
+        "play" => "`play`, then the `game_*` tools",
+        "server" => "`server`, `server_command`, `server_log`, `server_stop`",
+        "account sign-in" => "`account_sign_in`",
+        "account list" => "`account_list`",
+        "mcp" => "none: this command is the MCP server",
+        "agent-config" => "none: it prints how to connect a client to `mcp`",
+        _ => "none: the player's switch",
+    }
+}
+
+/// docs/launcher-commands.md: every CLI command, its arguments and its MCP tool, from the CLI's
+/// definition. A test keeps the file equal to this.
+#[cfg(test)]
+fn markdown() -> String {
+    let mut out = String::from(
+        "# Launcher commands\n\n<!-- Generated from launcher/src/cli.rs by cli_tools::markdown(); a test fails when this file is out of date. Update it with: HORIZON_WRITE_DOCS=1 cargo test --manifest-path launcher/Cargo.toml the_launcher_reference -->\n\n\
+Every command of `horizon-launcher`, and the tool `horizon-launcher mcp` offers for it. A tool's \
+arguments are the command's, in snake_case. A tool runs the command with `--json` and returns what it printed. \
+The tools that change the player's things for good need `confirm: true`. \
+The tools that send something or reach other people say \"only when the player asks\". \
+The game's own tools, `game_*`, are in [horizon-ctl-commands.md](horizon-ctl-commands.md). \
+With No AI on, `mcp` and `agent-config` are hidden and refuse; every other command stays. See [agent-control.md](agent-control.md#no-ai).\n\n",
+    );
+    let mut rows = Vec::new();
+    collect(&crate::cli::command(), &mut Vec::new(), &mut rows);
+    let generated: Vec<String> = all().iter().map(|t| t.words()).collect();
+    for (words, cmd) in rows {
+        let usage = cmd
+            .clone()
+            .bin_name(format!("horizon-launcher {words}"))
+            .render_usage()
+            .to_string();
+        let usage = usage
+            .trim_start_matches("Usage: ")
+            .replace(" [OPTIONS]", "");
+        out += &format!("## `horizon-launcher {words}`\n\n");
+        if let Some(about) = cmd.get_about() {
+            out += &format!("{about}.\n\n");
+        }
+        out += &format!("    {usage}\n\n");
+        let args: Vec<&clap::Arg> = cmd.get_arguments().filter(|a| shown(a)).collect();
+        for arg in &args {
+            let name = match arg.get_long() {
+                Some(long) => format!("--{long}"),
+                None => arg.get_id().as_str().to_uppercase(),
+            };
+            let help = arg.get_help().map(ToString::to_string).unwrap_or_default();
+            let choices: Vec<String> = arg
+                .get_possible_values()
+                .iter()
+                .map(|v| v.get_name().to_owned())
+                .collect();
+            let choices = if choices.is_empty() || matches!(arg.get_action(), ArgAction::SetTrue) {
+                String::new()
+            } else {
+                format!(" ({})", choices.join(", "))
+            };
+            let help = if help.is_empty() {
+                String::new()
+            } else {
+                format!(": {help}")
+            };
+            out += &format!("- `{name}`{choices}{help}\n");
+        }
+        if !args.is_empty() {
+            out += "\n";
+        }
+        let mcp = if generated.contains(&words) {
+            let path: Vec<String> = words.split(' ').map(str::to_owned).collect();
+            let mut text = format!("`{}`", tool_name(&path));
+            if DESTRUCTIVE.contains(&words.as_str()) {
+                text += ", needs `confirm: true`";
+            } else if OPEN_WORLD.contains(&words.as_str()) {
+                text += ", only when the player asks";
+            }
+            text
+        } else {
+            session_tool(&words).to_owned()
+        };
+        out += &format!("MCP: {mcp}.\n\n");
+    }
+    out.truncate(out.trim_end().len());
+    out.push('\n');
+    out
+}
+
+/// Every command a player can type, groups included when they run on their own.
+#[cfg(test)]
+fn collect(cmd: &Command, path: &mut Vec<String>, out: &mut Vec<(String, Command)>) {
+    for sub in cmd.get_subcommands().filter(|c| c.get_name() != "help") {
+        path.push(sub.get_name().to_owned());
+        if sub.has_subcommands() {
+            collect(sub, path, out);
+        } else {
+            out.push((path.join(" "), sub.clone()));
+        }
+        path.pop();
+    }
+}
+
 /// Whether an argument is part of a tool (not --help, --version or the global --json).
 fn shown(arg: &clap::Arg) -> bool {
     !arg.is_hide_set() && !matches!(arg.get_id().as_str(), "help" | "version" | "json")
@@ -313,6 +418,28 @@ mod tests {
             logs["inputSchema"]["properties"]["lines"]["type"],
             "integer"
         );
+    }
+
+    #[test]
+    fn the_launcher_reference_is_up_to_date() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/launcher-commands.md");
+        let want = markdown();
+        if std::env::var_os("HORIZON_WRITE_DOCS").is_some() {
+            std::fs::write(&path, &want).unwrap();
+        }
+        let have = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(
+            have == want,
+            "docs/launcher-commands.md is out of date: HORIZON_WRITE_DOCS=1 cargo test --manifest-path launcher/Cargo.toml the_launcher_reference"
+        );
+        for tool in all() {
+            assert!(
+                have.contains(&format!("`{}`", tool.name)),
+                "{} undocumented",
+                tool.name
+            );
+        }
     }
 
     #[test]
