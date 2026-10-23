@@ -22,10 +22,10 @@ game and the launcher of the 0.2 line.
   0.2. A `feature` label no longer bumps anything: it only lists the change under **New**.
 - **Patch releases** are every release the train makes: the patch after the newest release tagged on the line, game
   and launcher counted separately (the game releases more often, so `v0.2.14` can go with `launcher@0.2.3`).
-- **Alpha builds** are not separate tags. As before, every game release is published as a GitHub pre-release (an alpha build, what
-  the launcher's Alpha channel installs) under its final tag and promoted in place to stable in the daily
-  promotion at 20:00 UTC, once it has been out 6 hours ([Channels](release-flow.md#channels)). `v0.2.4` is the same
-  build whether it is still a beta or already stable.
+- **One channel** (since 2026-10-23): every game release is published under its final tag as the release and
+  GitHub's latest, once its smoke test passed and no `release-blocker` is open
+  ([One channel](release-flow.md#one-channel)). The game pre-releases from before (v0.2.1 on, the old Alpha
+  channel) keep their tags and stay pre-releases.
 - **Pre-release tags** (`v0.3.0-rc.1`, `v0.3.0-beta.2`) are semver's and are reserved for a hand-made preview of a
   new line; the train never makes them. Every reader orders them before their release and after the release
   before (`v0.2.9` < `v0.3.0-beta.1` < `v0.3.0-rc.1` < `v0.3.0`).
@@ -43,7 +43,7 @@ Every 0.2 tag is newer than every tag from before 0.2. Within each:
 A tag is a 0.2 tag when it is `v` or `launcher@` followed by exactly three numbers (and an optional `-PRE`) with a
 major below 1000; a date's first number is a year, so `v2026.10.21` never is. The rule is written once per
 language, with the same tests: `crates/horizon-server/src/update.rs` (`newer`), `launcher/src/backend.rs`
-(`release_order`), `tools/release_train.py` (`tag_key`, also used by `tools/release_channels.py`) and
+(`release_order`), `tools/release_train.py` (`tag_key`) and
 `website/src/versions.js`.
 
 ## The workflows
@@ -55,9 +55,6 @@ language, with the same tests: `crates/horizon-server/src/update.rs` (`newer`), 
 - **`launcher.yml`**: `decide --kind launcher` picks `launcher@0.2.N`; the build gets `HORIZON_LAUNCHER_VERSION`
   (`0.2.N`) and `HORIZON_LAUNCHER_TAG` (`launcher@0.2.N`). The tag tells the launcher which line it is on: a release
   built with only the version (every launcher before 0.2) is a `launcher-v` one.
-- **`promote.yml`**: `tools/release_channels.py` promotes the newest due beta, never one older than the stable
-  release; with the shared order, `v0.2.0` follows the last dated stable release and no dated beta can follow
-  `v0.2.0`.
 - **Notes**: a line's first release (`X.Y.0`) opens with a paragraph saying so; `v0.2.0`'s and `launcher@0.2.0`'s say
   that releases are numbered from now on, and tell server owners to run `horizon-server update` (or, if their server
   says it is up to date, `horizon-server update --version v0.2.0`).
@@ -97,6 +94,9 @@ the fleet's `release-kick` and the orchestrator's heartbeat prompts.
 - The bridges (`launcher-v0.17.0` and the last dated game release) must never be withdrawn or deleted.
 
 ## The day Ludovic says go
+
+Done on 2026-10-22; kept as the record of how 0.2 went out. `promote.yml` and `tools/release_channels.py`, which
+it uses, are gone since the single channel (2026-10-23, [One channel](release-flow.md#one-channel)).
 
 Run by the orchestrator, in this order. Until step 3, nothing is published.
 
