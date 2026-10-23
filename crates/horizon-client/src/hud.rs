@@ -54,14 +54,19 @@ pub struct HudAtlas {
 }
 /// Atlas rows reserved for glyphs rasterized at run time.
 pub const GLYPH_ROWS: u32 = 512;
-/// 128x128 atlas slots for map textures.
-pub const MAP_SLOTS: usize = 16;
+/// 128x128 atlas slots for map textures. A lobby paints its signs as walls of
+/// framed maps, so the pool holds a wall; too few slots re-upload every map
+/// every frame. 26.3's `MapTextureManager` keeps a texture per map instead.
+pub const MAP_SLOTS: usize = 256;
 /// The atlas slot the minimap extra draws into.
 pub const MINIMAP_SPRITE: &str = "horizon/minimap";
 /// Atlas slots for downloaded player skins (`skins/<sha1>`), 64x64 each.
 pub const SKIN_SLOTS: usize = 32;
 /// Reused by the visible rows of the classic world selector.
 pub const WORLD_ICON_SLOTS: usize = 32;
+/// Atlas slots for armour trim textures made at run time (`trims`), each the
+/// size of the largest trim texture.
+pub const TRIM_SLOTS: usize = 32;
 pub fn decode(path: &Path) -> Result<(u32, u32, Vec<u8>)> {
     decode_bytes(&fs::read(path)?)
 }
@@ -106,11 +111,13 @@ fn atlas_sprites(root: &Path, packed: &[PackedImage]) -> Vec<PackedImage> {
     use crate::atlas_sources::{self, SpriteOrigin};
     let have: std::collections::HashSet<&str> = packed.iter().map(|i| i.0.as_str()).collect();
     let textures = atlas_sources::list_textures(root);
-    let load = |texture: &str, directory: &str| {
-        decode(&atlas_sources::texture_path(root, texture, directory)).ok()
-    };
-    let mut out: Vec<PackedImage> = Vec::new();
-    let mut added = std::collections::HashSet::new();
+    // Each new name with its origins in the atlases' order: the first that
+    // loads is the sprite. They load at once (a content pack's atlases list
+    // tens of thousands of files), and come out in the order a load of one
+    // after another would give.
+    let mut names: Vec<(String, Vec<(usize, SpriteOrigin)>)> = Vec::new();
+    let mut slots = std::collections::HashMap::new();
+    let mut order = 0;
     for (atlas, sources) in atlas_sources::atlases(root) {
         // The other atlases' renamed files (GUI sprites, particles...) are
         // looked up by their texture paths here.
@@ -120,18 +127,33 @@ fn atlas_sprites(root: &Path, packed: &[PackedImage]) -> Vec<PackedImage> {
                 continue;
             }
             let name = id.strip_prefix("minecraft:").unwrap_or(&id).to_owned();
-            if have.contains(name.as_str()) || added.contains(&name) {
+            if have.contains(name.as_str()) {
                 continue;
             }
-            let image = match &origin {
+            // A vanilla file is packed under its own name already: only a
+            // renamed one is new. Other namespaces' files (content mods) are
+            // never in the walked directories.
+            if let SpriteOrigin::File(texture) = &origin
+                && texture.strip_prefix("minecraft:") == Some(name.as_str())
+            {
+                continue;
+            }
+            let slot = *slots.entry(name.clone()).or_insert_with(|| {
+                names.push((name, Vec::new()));
+                names.len() - 1
+            });
+            names[slot].1.push((order, origin));
+            order += 1;
+        }
+    }
+    let load = |texture: &str, directory: &str| {
+        decode(&atlas_sources::texture_path(root, texture, directory)).ok()
+    };
+    let first = |(name, origins): &(String, Vec<(usize, SpriteOrigin)>)| {
+        origins.iter().find_map(|(order, origin)| {
+            let image = match origin {
                 SpriteOrigin::File(texture) => {
                     let path = texture.strip_prefix("minecraft:").unwrap_or(texture);
-                    // A vanilla file is packed under its own name already:
-                    // only a renamed one is new. Other namespaces' files
-                    // (content mods) are never in the walked directories.
-                    if texture.starts_with("minecraft:") && path == name {
-                        continue;
-                    }
                     load(texture, "textures").map(|(w, h, p)| {
                         // Animated strips keep their first frame, like the packed files.
                         if h > w && (path.starts_with("block/") || path.starts_with("item/")) {
@@ -143,13 +165,15 @@ fn atlas_sprites(root: &Path, packed: &[PackedImage]) -> Vec<PackedImage> {
                 }
                 generated => atlas_sources::generate(generated, &load),
             };
-            if let Some((w, h, pixels)) = image {
-                added.insert(name.clone());
-                out.push((name, w, h, pixels));
-            }
-        }
-    }
-    out
+            image.map(|(w, h, pixels)| (*order, (name.clone(), w, h, pixels)))
+        })
+    };
+    let mut out: Vec<_> = crate::par::par_map(&names, first)
+        .into_iter()
+        .flatten()
+        .collect();
+    out.sort_unstable_by_key(|(order, _)| *order);
+    out.into_iter().map(|(_, image)| image).collect()
 }
 impl HudAtlas {
     /// A font glyph's atlas cell (8x8 GUI pixels) and advance.
@@ -182,8 +206,8 @@ impl HudAtlas {
         )
     }
     /// Empty slots written at run time: map textures (game/maps.rs), the
-    /// minimap, downloaded skins, world icons and the Horizon menu text.
-    fn slots(images: &mut Vec<PackedImage>) {
+    /// minimap, downloaded skins, world icons and the on-screen keyboard's text.
+    fn slots(images: &mut Vec<PackedImage>, trim: (u32, u32)) {
         for i in 0..MAP_SLOTS {
             images.push((format!("horizon/map{i}"), 128, 128, vec![0; 128 * 128 * 4]));
         }
@@ -198,6 +222,14 @@ impl HudAtlas {
         for i in 0..SKIN_SLOTS {
             images.push((format!("horizon/skin{i}"), 64, 64, vec![0; 64 * 64 * 4]));
         }
+        for i in 0..TRIM_SLOTS {
+            images.push((
+                format!("horizon/trim{i}"),
+                trim.0,
+                trim.1,
+                vec![0; (trim.0 * trim.1 * 4) as usize],
+            ));
+        }
         for i in 0..WORLD_ICON_SLOTS {
             images.push((
                 format!("horizon/world-icon{i}"),
@@ -206,7 +238,7 @@ impl HudAtlas {
                 vec![0; 64 * 64 * 4],
             ));
         }
-        // Horizon-style menu text and corner masks (ui_theme), rasterized at run time.
+        // The on-screen keyboard's text and corner masks (ui_theme), rasterized at run time.
         images.push((
             "horizon/ui-text".into(),
             2048,
@@ -292,7 +324,7 @@ impl HudAtlas {
         }
         images.push(("horizon/white".into(), 4, 4, vec![255; 64]));
         if full {
-            Self::slots(&mut images);
+            Self::slots(&mut images, crate::trims::slot_size(root));
         }
         images.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
         let width = 4096u32;
@@ -400,6 +432,8 @@ pub struct HudBatch {
     pub patches: Vec<crate::font::Patch>,
     /// Vertex ranges with another blend or depth/scissor state, in order.
     pub blends: Vec<(std::ops::Range<u32>, Blend)>,
+    /// Screen's first vertex: the preceding HUD is part of its blurred background.
+    pub blur_at: u32,
 }
 /// How a run of HUD vertices blends and tests depth.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -435,6 +469,7 @@ impl HudBatch {
             height: (window[1] as f32 / scale as f32).ceil(),
             patches: Vec::new(),
             blends: Vec::new(),
+            blur_at: 0,
         }
     }
     /// Draw the vertices added since `start` with the inverting blend.
@@ -486,6 +521,14 @@ impl HudBatch {
             out.push((at..end, Blend::Alpha));
         }
         out
+    }
+    fn runs_in(&self, vertices: std::ops::Range<u32>) -> Vec<(std::ops::Range<u32>, Blend)> {
+        let mut runs = self.runs();
+        for (range, _) in &mut runs {
+            *range = range.start.max(vertices.start)..range.end.min(vertices.end);
+        }
+        runs.retain(|(range, _)| !range.is_empty());
+        runs
     }
     /// `AbstractContainerScreen.init`: center in integer GUI coordinates.
     pub fn centered_origin(&self, width: f32, height: f32) -> (f32, f32) {
@@ -1115,7 +1158,26 @@ impl HudRenderer {
         batch: &HudBatch,
         size: [u32; 2],
     ) {
-        if batch.vertices.is_empty() || size.contains(&0) {
+        self.draw_range(
+            encoder,
+            target,
+            depth,
+            batch,
+            size,
+            0..batch.vertices.len() as u32,
+        );
+    }
+    /// Draw part of the prepared batch, preserving its blend/depth runs.
+    pub fn draw_range(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        batch: &HudBatch,
+        size: [u32; 2],
+        vertices: std::ops::Range<u32>,
+    ) {
+        if vertices.is_empty() || size.contains(&0) {
             return;
         }
         let attachments = [Some(wgpu::RenderPassColorAttachment {
@@ -1127,7 +1189,7 @@ impl HudRenderer {
                 store: wgpu::StoreOp::Store,
             },
         })];
-        let runs = batch.runs();
+        let runs = batch.runs_in(vertices);
         let mut at = 0;
         while at < runs.len() {
             let clip = match runs[at].1 {
@@ -1366,6 +1428,33 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn blur_boundary_splits_blend_runs_without_losing_or_repeating_vertices() {
+        let mut batch = HudBatch::new([854, 480]);
+        for _ in 0..5 {
+            batch.quad([[0.0; 2]; 4], [[0.0; 2]; 4], 0);
+        }
+        batch.blends = vec![
+            (6..18, Blend::Invert),
+            (18..24, Blend::Depth([0, 0, 10, 10])),
+        ];
+        for split in [0, 6, 12, 18, 24, 30] {
+            let before = batch.runs_in(0..split);
+            let after = batch.runs_in(split..30);
+            let actual: Vec<_> = before
+                .into_iter()
+                .chain(after)
+                .flat_map(|(range, blend)| range.map(move |v| (v, blend)))
+                .collect();
+            let expected: Vec<_> = batch
+                .runs()
+                .into_iter()
+                .flat_map(|(range, blend)| range.map(move |v| (v, blend)))
+                .collect();
+            assert_eq!(actual, expected, "blur at {split}");
+        }
+    }
     #[test]
     fn container_origins_use_java_integer_division() {
         // Odd scaled dimensions, odd image sizes and an oversized panel.
@@ -1377,6 +1466,7 @@ mod tests {
                 height: height as f32,
                 patches: Vec::new(),
                 blends: Vec::new(),
+                blur_at: 0,
             };
             for (image_width, image_height) in [(195, 136), (176, 166), (176, 222)] {
                 assert_eq!(

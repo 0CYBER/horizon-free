@@ -73,11 +73,6 @@ impl StartupMenu {
                 &self.root,
             );
             title.last_server = settings.file.string("lastServer");
-            if horizon_client::ui_theme::horizon() {
-                title
-                    .opening
-                    .set(Some(horizon_client::front::Opening::new()));
-            }
             self.title = Some(title);
         }
     }
@@ -152,9 +147,6 @@ impl StartupMenu {
     fn title_key(&mut self, event: &KeyEvent) {
         let shortcut = self.shortcut(event);
         let Some(title) = &mut self.title else { return };
-        if title.skip_opening() {
-            return;
-        }
         if let Some(shortcut) = shortcut {
             if title.has_caret_field() {
                 title.field_shortcut(shortcut, &mut self.clipboard);
@@ -373,7 +365,13 @@ impl Loading {
                     let _ = std::fs::create_dir_all(&dir);
                     packs::open_folder(&dir);
                 }
-                Event::ButtonClick => {}
+                Event::OpenShaderPackFolder => {
+                    let dir = horizon_client::shader_pack::folder();
+                    let _ = std::fs::create_dir_all(&dir);
+                    packs::open_folder(&dir);
+                }
+                // The startup menu runs before the game opens a control socket.
+                Event::ButtonClick | Event::CopyAgentDetails => {}
             }
         }
     }
@@ -417,14 +415,6 @@ impl Loading {
         event_loop: &ActiveEventLoop,
         event: WindowEvent,
     ) -> Result<()> {
-        if let WindowEvent::MouseInput {
-            state,
-            button: MouseButton::Left,
-            ..
-        } = &event
-        {
-            horizon_client::ui_theme::set_pressed(*state == ElementState::Pressed);
-        }
         if let WindowEvent::KeyboardInput { event, .. } = &event
             && let PhysicalKey::Code(key) = event.physical_key
         {
@@ -450,7 +440,6 @@ impl Loading {
             WindowEvent::Focused(false) => {
                 self.menu.modifiers = ModifiersState::empty();
                 self.menu.physical_keys.clear();
-                horizon_client::ui_theme::set_pressed(false);
                 self.menu.dragging = false;
                 if let Some(title) = &mut self.menu.title {
                     title.release();
@@ -503,41 +492,23 @@ impl Loading {
                 button: MouseButton::Left,
                 ..
             } => {
-                let mut batch = HudBatch::new(self.menu_size());
+                let batch = HudBatch::new(self.menu_size());
                 if let (Some(title), Some(gui)) = (&mut self.menu.title, &self.gui) {
                     if state == ElementState::Released {
                         title.release();
                         title.release_field();
                     } else {
-                        let action = if horizon_client::ui_theme::horizon() {
-                            let action = title.click_horizon(
-                                &gui.atlas,
-                                &mut batch,
-                                self.menu.cursor.0,
-                                self.menu.cursor.1,
-                            );
-                            // Horizon's deeper world-management pages use classic fields.
-                            title.press_field(
-                                &gui.atlas,
-                                self.menu.cursor,
-                                (batch.width, batch.height),
-                                self.menu.modifiers.shift_key(),
-                            );
-                            action
-                        } else {
-                            let (action, _) = title.click(
-                                self.menu.cursor.0,
-                                self.menu.cursor.1,
-                                (batch.width, batch.height),
-                            );
-                            title.press_field(
-                                &gui.atlas,
-                                self.menu.cursor,
-                                (batch.width, batch.height),
-                                self.menu.modifiers.shift_key(),
-                            );
-                            action
-                        };
+                        let (action, _) = title.click(
+                            self.menu.cursor.0,
+                            self.menu.cursor.1,
+                            (batch.width, batch.height),
+                        );
+                        title.press_field(
+                            &gui.atlas,
+                            self.menu.cursor,
+                            (batch.width, batch.height),
+                            self.menu.modifiers.shift_key(),
+                        );
                         self.menu_action(event_loop, action);
                     }
                 }
@@ -612,18 +583,12 @@ impl Loading {
         } else if let Some(title) = &mut self.menu.title {
             title.poll_backup();
             let _ = title.update_toast(self.settings.notification_display_time);
-            if horizon_client::ui_theme::horizon() {
-                let mut ui = horizon_client::ui_theme::Ui::new(&gui.atlas, batch, self.menu.cursor);
-                title.draw_horizon(&mut ui, 0.0);
-                ui.finish();
-            } else {
-                title.draw(
-                    &gui.atlas,
-                    batch,
-                    self.menu.cursor,
-                    self.settings.file.bool("hideSplashTexts"),
-                );
-            }
+            title.draw(
+                &gui.atlas,
+                batch,
+                self.menu.cursor,
+                self.settings.file.bool("hideSplashTexts"),
+            );
         }
     }
 
@@ -725,7 +690,6 @@ mod tests {
         // Navigate and enter a world name without a registry, biomes, pack
         // tables or a Game. Replacing fallback artwork preserves this state.
         let title = loading.menu.title.as_mut().unwrap();
-        title.opening.set(None);
         title.mode = horizon_client::title::Mode::Create {
             name: String::new(),
             seed: "42".into(),

@@ -169,14 +169,20 @@ fn in_view(key: SectionKey, camera: DVec3, radius: i32, frustum: &Frustum) -> Op
     if !in_view_distance(camera_column(camera), radius, key.0, key.2) {
         return None;
     }
-    in_frustum(key, camera, frustum)
+    in_frustum(key, camera, frustum, false)
 }
 
-/// `in_view` without the distance test.
-fn in_frustum(key: SectionKey, camera: DVec3, frustum: &Frustum) -> Option<(f64, Vec3)> {
+/// `in_view` without the distance test; `inside`: the section's column is
+/// entirely inside the frustum, so the section is too.
+fn in_frustum(
+    key: SectionKey,
+    camera: DVec3,
+    frustum: &Frustum,
+    inside: bool,
+) -> Option<(f64, Vec3)> {
     let origin = origin(key, camera);
     let min = origin.as_vec3();
-    if !frustum.intersects(min, min + Vec3::splat(16.0)) {
+    if !inside && !frustum.intersects(min, min + Vec3::splat(16.0)) {
         return None;
     }
     Some(((origin + DVec3::splat(8.0)).length_squared(), min))
@@ -192,8 +198,9 @@ impl<T> Resident<T> {
     /// Columns are tested first, with the same distance test (it depends
     /// only on x and z) and a box spanning their sections: every section box
     /// lies inside it and the frustum test rounds monotonically, so a column
-    /// the frustum rejects holds no section it would accept. `radius` is the
-    /// render distance in chunks.
+    /// the frustum rejects holds no section it would accept, and one
+    /// entirely inside holds none it would reject (its sections skip the
+    /// test). `radius` is the render distance in chunks.
     pub fn visible(
         &self,
         camera: DVec3,
@@ -211,7 +218,9 @@ impl<T> Resident<T> {
             }
             let min = origin((column.x, column.low, column.z), camera).as_vec3();
             let top = origin((column.x, column.high, column.z), camera).as_vec3();
-            if !frustum.intersects(min, top + Vec3::splat(16.0)) {
+            let max = top + Vec3::splat(16.0);
+            let inside = frustum.contains(min, max);
+            if !inside && !frustum.intersects(min, max) {
                 continue;
             }
             for &(y, slot) in &column.sections {
@@ -219,7 +228,7 @@ impl<T> Resident<T> {
                 if near && !reachable(key) {
                     continue;
                 }
-                if let Some((d, o)) = in_frustum(key, camera, frustum) {
+                if let Some((d, o)) = in_frustum(key, camera, frustum, inside) {
                     out.push(Visible {
                         distance: d.to_bits(),
                         key,
@@ -277,7 +286,7 @@ mod tests {
                         if near {
                             in_view(k, camera, radius, &frustum).filter(|_| reachable(k))
                         } else if beyond(k.0, k.2) {
-                            in_frustum(k, camera, &frustum)
+                            in_frustum(k, camera, &frustum, false)
                         } else {
                             None
                         }
@@ -296,6 +305,49 @@ mod tests {
                 assert_eq!(fast, slow, "{camera} {yaw} {pitch} {radius}");
             }
         }
+    }
+
+    #[test]
+    fn columns_entirely_inside_skip_no_section() {
+        // Short columns ahead of the camera: most lie entirely inside.
+        let mut r = Resident::default();
+        for x in -12i32..=12 {
+            for z in 1..=12 {
+                for y in 3..6 {
+                    if (x + y + z).rem_euclid(3) != 0 {
+                        r.insert((x, y, z), ());
+                    }
+                }
+            }
+        }
+        let camera = DVec3::new(0.5, -8.0, 0.5);
+        let projection = super::super::world_projection(70.0, 16.0 / 9.0, 512.0);
+        let frustum = Frustum {
+            planes: super::super::frustum(projection * crate::camera::view_matrix(0.0, 5.0)),
+        };
+        let inside = r
+            .columns
+            .iter()
+            .filter(|c| {
+                let min = origin((c.x, c.low, c.z), camera).as_vec3();
+                let top = origin((c.x, c.high, c.z), camera).as_vec3();
+                frustum.contains(min, top + Vec3::splat(16.0))
+            })
+            .count();
+        assert!(inside > 50 && inside < r.columns.len(), "{inside}");
+        let mut fast = Vec::new();
+        r.visible(camera, 12, &frustum, |_| true, |_, _| false, &mut fast);
+        let mut slow: Vec<_> = r
+            .items
+            .iter()
+            .filter_map(|&(k, _)| in_view(k, camera, 12, &frustum).map(|(d, _)| (d, k)))
+            .collect();
+        slow.sort_unstable_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        let fast: Vec<_> = fast
+            .iter()
+            .map(|v| (f64::from_bits(v.distance), v.key))
+            .collect();
+        assert_eq!(fast, slow);
     }
 
     /// Every key reaches its value through its slot and column, and every

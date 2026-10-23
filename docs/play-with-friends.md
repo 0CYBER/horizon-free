@@ -1,7 +1,8 @@
 # Play with friends
 
 A player opens their single-player world to friends with one click and gets an **invite code**.
-Friends paste the code (on the multiplayer screen in game, or on the launcher's Play page) and join.
+Friends paste the code (in game: the title screen's Friends button opens Join a Friend, and Direct
+Connection takes a full code too; or on the launcher's Play page) and join.
 There is no Horizon server in the middle and no account: the code itself says where the host is and
 holds the key that encrypts the game between them.
 
@@ -22,7 +23,8 @@ bytes vanilla's protocol would send, between a loopback port on each side.
 
 ## How it works
 
-**Hosting.** "Invite friends" (in Horizon's pause menu) opens the world to LAN if it isn't (Open to
+**Hosting.** The pause menu's Friends button (vanilla's icon, beside Player Reporting) opens **Play
+with Friends** (`friends_screen.rs`); its **Start Sharing** opens the world to LAN if it isn't (Open to
 LAN's defaults), then the host's game, on its own:
 
 1. listens on its **direct port**, TCP 25580 by default (the same port every time, so a port forwarded
@@ -59,7 +61,8 @@ port closes, the router mapping is deleted). Sharing again makes a new secret.
 
 ## When friends can't reach the host
 
-The host's panel says what to expect, from what the game found:
+Play with Friends says what to expect, from what the game found; when friends on the internet can't
+reach the host, its **Troubleshooting...** button (beside Done) opens this section in the browser:
 
 | What the game found | What the host reads |
 | --- | --- |
@@ -94,7 +97,8 @@ run at once there, and each must finish within 10 seconds however slowly its byt
 - **A relay** (only if one is configured) sees the IP addresses of the host and the guests, the short
   code's first half, when sessions start and end and the size of encrypted frames. It can't see the
   secret, the key or the game (names, chat, the world). It logs counts every five minutes, nothing else.
-- **Horizon** sees nothing: there is no Horizon service.
+- **Horizon** runs no service for it. The game's anonymous "I'm playing" ping says only whether a
+  LAN or friends world is open, never its address, code or name ([telemetry.md](telemetry.md)).
 
 ## Identity
 

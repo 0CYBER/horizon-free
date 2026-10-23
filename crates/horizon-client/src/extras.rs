@@ -69,6 +69,8 @@ impl Corner {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Extras {
     pub fullbright: bool,
+    /// Held, dropped and burning light sources light their surroundings (`dynamic_light`).
+    pub dynamic_lights: bool,
     pub zoom: bool,
     /// A vanilla key name (`key.keyboard.z`).
     pub zoom_key: String,
@@ -105,11 +107,17 @@ pub struct Extras {
     pub sort: bool,
     /// A vanilla key name: sorts the part under the cursor.
     pub sort_key: String,
+    /// No AI: every AI feature hidden and off (`horizon_core::no_ai`; the launcher writes it too).
+    pub no_ai: bool,
+    /// Agents may control the game the player starts: it opens its control socket for
+    /// horizon-ctl and MCP clients (off by default; an agent's own launch always opens it).
+    pub agent_control: bool,
 }
 impl Default for Extras {
     fn default() -> Self {
         Self {
             fullbright: false,
+            dynamic_lights: false,
             zoom: false,
             zoom_key: "key.keyboard.z".into(),
             zoom_level: 4,
@@ -132,6 +140,8 @@ impl Default for Extras {
             mouse_tweaks_wheel: true,
             sort: false,
             sort_key: "key.keyboard.unknown".into(),
+            no_ai: false,
+            agent_control: false,
         }
     }
 }
@@ -158,6 +168,7 @@ impl Extras {
             };
             match key.trim() {
                 "fullbright" => e.fullbright = flag(e.fullbright),
+                "dynamicLights" => e.dynamic_lights = flag(e.dynamic_lights),
                 "zoom" => e.zoom = flag(e.zoom),
                 "zoomKey" if value.starts_with("key.") => e.zoom_key = value.to_owned(),
                 "zoomLevel" => {
@@ -194,6 +205,8 @@ impl Extras {
                 "mouseTweaksWheel" => e.mouse_tweaks_wheel = flag(e.mouse_tweaks_wheel),
                 "sort" => e.sort = flag(e.sort),
                 "sortKey" if value.starts_with("key.") => e.sort_key = value.to_owned(),
+                horizon_core::no_ai::KEY => e.no_ai = flag(e.no_ai),
+                "agentControl" => e.agent_control = flag(e.agent_control),
                 _ => {}
             }
         }
@@ -201,8 +214,9 @@ impl Extras {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "fullbright:{}\nzoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\nsort:{}\nsortKey:{}\n",
+            "fullbright:{}\ndynamicLights:{}\nzoom:{}\nzoomKey:{}\nzoomLevel:{}\nzoomSmooth:{}\nzoomSensitivity:{}\nfps:{}\nfpsCorner:{}\nfpsLows:{}\nkeystrokes:{}\nkeystrokesCorner:{}\nkeystrokesCps:{}\nminimap:{}\nminimapCorner:{}\nminimapSize:{}\nminimapShape:{}\nminimapZoom:{}\nminimapRotate:{}\nautoReconnect:{}\nmouseTweaks:{}\nmouseTweaksWheel:{}\nsort:{}\nsortKey:{}\n{}:{}\nagentControl:{}\n",
             bool_text(self.fullbright),
+            bool_text(self.dynamic_lights),
             bool_text(self.zoom),
             self.zoom_key,
             self.zoom_level,
@@ -229,6 +243,9 @@ impl Extras {
             bool_text(self.mouse_tweaks_wheel),
             bool_text(self.sort),
             self.sort_key,
+            horizon_core::no_ai::KEY,
+            bool_text(self.no_ai),
+            bool_text(self.agent_control),
         )
     }
     /// Binds the extra key `name` (`ZOOM_KEY`, `SORT_KEY`); false for
@@ -423,6 +440,7 @@ impl Cps {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Item {
     Fullbright,
+    DynamicLights,
     Zoom,
     ZoomKey,
     ZoomLevel,
@@ -445,6 +463,9 @@ pub enum Item {
     MouseTweaksWheel,
     Sort,
     SortKey,
+    /// Not on the Extras page: Horizon Settings shows No AI, its AI Agent page Agent Control.
+    NoAi,
+    AgentControl,
 }
 /// The Extras page: headers and items.
 pub fn rows() -> Vec<Result<Item, &'static str>> {
@@ -452,6 +473,7 @@ pub fn rows() -> Vec<Result<Item, &'static str>> {
     vec![
         Err("Lighting"),
         Ok(Fullbright),
+        Ok(DynamicLights),
         Err("Zoom"),
         Ok(Zoom),
         Ok(ZoomKey),
@@ -501,6 +523,7 @@ impl Item {
     pub fn caption(self) -> &'static str {
         match self {
             Item::Fullbright => "Fullbright",
+            Item::DynamicLights => "Dynamic lights",
             Item::Zoom => "Zoom",
             Item::ZoomKey => "Zoom key",
             Item::ZoomLevel => "Starting zoom",
@@ -521,6 +544,8 @@ impl Item {
             Item::FpsLows => "Minimum and 1% low",
             Item::Keystrokes => "Keystrokes",
             Item::KeystrokesCps => "Clicks per second",
+            Item::NoAi => "No AI",
+            Item::AgentControl => "Agent Control",
         }
     }
     /// The switch this setting belongs to: it does nothing while that is off.
@@ -533,7 +558,8 @@ impl Item {
             KeystrokesCorner | KeystrokesCps => Keystrokes,
             MouseTweaksWheel => MouseTweaks,
             SortKey => Sort,
-            Fullbright | Zoom | Minimap | Fps | Keystrokes | MouseTweaks | Sort | AutoReconnect => {
+            Fullbright | DynamicLights | Zoom | Minimap | Fps | Keystrokes | MouseTweaks | Sort
+            | AutoReconnect | NoAi | AgentControl => {
                 return None;
             }
         })
@@ -542,6 +568,9 @@ impl Item {
     pub fn description(self) -> &'static str {
         match self {
             Item::Fullbright => "Show blocks and entities at full light, even in dark areas.",
+            Item::DynamicLights => {
+                "Torches and other light sources held, dropped or on fire light the blocks around them."
+            }
             Item::Zoom => "Hold the zoom key to zoom; the wheel changes it while held.",
             Item::ZoomKey => "Click, then press a key. Escape unbinds it.",
             Item::ZoomLevel => "The zoom the key starts at.",
@@ -574,6 +603,12 @@ impl Item {
             }
             Item::Keystrokes => "Movement keys, jump and mouse buttons as you press them.",
             Item::KeystrokesCps => "Clicks in the last second under each mouse button.",
+            Item::NoAi => {
+                "Hides and turns off every AI feature: agent control, horizon-ctl and the MCP servers. The launcher's switch too."
+            }
+            Item::AgentControl => {
+                "Your own AI agent can play this game through horizon-ctl or an MCP client, on this computer only."
+            }
         }
     }
     /// The frame-time cost the main switch of an extra shows.
@@ -581,7 +616,7 @@ impl Item {
         use crate::graphics_style::Cost;
         match self {
             Item::Fullbright | Item::Zoom | Item::Fps | Item::Keystrokes => Some(Cost::None),
-            Item::Minimap => Some(Cost::Low),
+            Item::Minimap | Item::DynamicLights => Some(Cost::Low),
             Item::AutoReconnect | Item::MouseTweaks | Item::Sort => Some(Cost::None),
             _ => None,
         }
@@ -590,6 +625,7 @@ impl Item {
     pub fn switch(self, e: &Extras) -> Option<bool> {
         Some(match self {
             Item::Fullbright => e.fullbright,
+            Item::DynamicLights => e.dynamic_lights,
             Item::Zoom => e.zoom,
             Item::ZoomSmooth => e.zoom_smooth,
             Item::ZoomSensitivity => e.zoom_sensitivity,
@@ -603,6 +639,8 @@ impl Item {
             Item::MouseTweaks => e.mouse_tweaks,
             Item::MouseTweaksWheel => e.mouse_tweaks_wheel,
             Item::Sort => e.sort,
+            Item::NoAi => e.no_ai,
+            Item::AgentControl => e.agent_control,
             _ => return None,
         })
     }
@@ -632,6 +670,7 @@ impl Item {
     pub fn cycle(self, e: &mut Extras, back: bool) {
         match self {
             Item::Fullbright => e.fullbright = !e.fullbright,
+            Item::DynamicLights => e.dynamic_lights = !e.dynamic_lights,
             Item::Zoom => e.zoom = !e.zoom,
             Item::ZoomSmooth => e.zoom_smooth = !e.zoom_smooth,
             Item::ZoomSensitivity => e.zoom_sensitivity = !e.zoom_sensitivity,
@@ -657,6 +696,8 @@ impl Item {
             }
             Item::MinimapShape => e.minimap_round = !e.minimap_round,
             Item::MinimapZoom => e.minimap_zoom = next(&MINIMAP_ZOOMS, e.minimap_zoom, back),
+            Item::NoAi => e.no_ai = !e.no_ai,
+            Item::AgentControl => e.agent_control = !e.agent_control,
             Item::ZoomKey | Item::SortKey => {}
         }
     }
@@ -677,7 +718,7 @@ mod tests {
     #[test]
     fn everything_is_off_by_default_and_round_trips() {
         let d = Extras::default();
-        assert!(!d.fullbright);
+        assert!(!d.fullbright && !d.dynamic_lights);
         assert!(!d.zoom && !d.fps && !d.keystrokes && !d.minimap && !d.auto_reconnect);
         assert!(!d.mouse_tweaks && !d.sort);
         assert_eq!(Extras::parse(""), d);
@@ -685,6 +726,9 @@ mod tests {
         let mut e = d.clone();
         Item::Fullbright.cycle(&mut e, false);
         assert_eq!(Item::Fullbright.switch(&e), Some(true));
+        Item::DynamicLights.cycle(&mut e, false);
+        assert_eq!(Item::DynamicLights.switch(&e), Some(true));
+        assert_eq!(Extras::parse(&e.serialize()), e);
         e.zoom = true;
         e.zoom_key = "key.keyboard.c".into();
         e.zoom_level = 6;

@@ -6,9 +6,9 @@
 //! the world's options) with [`Integrated::call`], as vanilla's client calls
 //! into its `IntegratedServer`.
 //!
-//! Opt-in for now (`--server-thread` or `HORIZON_SERVER_THREAD=1`): the
-//! player joins as a network player, and the server side of a network player
-//! does not do everything single player does yet.
+//! On by default. `--no-server-thread` or `HORIZON_SERVER_THREAD=0` runs
+//! the world in the frame instead (the escape hatch while the network
+//! player's side catches up with the in-frame one).
 use super::{
     Game, Options, PackResources, Resources, UiResources,
     lan::{LanSettings, Owner},

@@ -107,6 +107,10 @@ impl Game<'_> {
         let held = self.inventory[self.selected].clone();
         let m = &self.mobs[index];
         let species = m.species();
+        // A server player rides it already (`isVehicle`: no seat, no feeding).
+        if self.ridden_by_guest(m.id) {
+            return false;
+        }
         if matches!(species, Species::Pig | Species::Strider) {
             return self.interact_steerable(index, item);
         }
@@ -246,24 +250,9 @@ impl Game<'_> {
         self.consume_held();
         true
     }
-    /// The rider's input for this tick; returns false when not on a mount.
-    pub(super) fn tick_mount_riding(&mut self, keys: Keys) -> bool {
-        let Some(i) = self.mount_index() else {
-            return false;
-        };
-        if keys.shift || !self.mobs[i].alive() {
-            self.dismount_mount();
-            return true;
-        }
-        let strafe = f32::from(u8::from(keys.left)) - f32::from(u8::from(keys.right));
-        let forward = f32::from(u8::from(keys.forward)) - f32::from(u8::from(keys.backward));
-        // LocalPlayer.aiStep: the riding jump charges while space is held.
-        let held = self.held().map(|s| s.item.clone());
-        let steer = match self.mobs[i].species() {
-            Species::Pig => held.as_deref() == Some("minecraft:carrot_on_a_stick"),
-            Species::Strider => held.as_deref() == Some("minecraft:warped_fungus_on_a_stick"),
-            _ => false,
-        };
+    /// `LocalPlayer.aiStep`'s riding jump: the bar charges while jump is
+    /// held; on release, the jump's strength (0 when there is none).
+    pub(super) fn charge_mount_jump(&mut self, i: usize, keys: Keys) -> f32 {
         // PlayerRideableJumping: horses, camels and nautili (the dash).
         let saddled = self.mobs[i].extra.saddled
             && (equine::is_equine(self.mobs[i].species())
@@ -299,6 +288,27 @@ impl Game<'_> {
             }
             st.was_jumping = keys.jump;
         }
+        jump
+    }
+    /// The rider's input for this tick; returns false when not on a mount.
+    pub(super) fn tick_mount_riding(&mut self, keys: Keys) -> bool {
+        let Some(i) = self.mount_index() else {
+            return false;
+        };
+        if keys.shift || !self.mobs[i].alive() {
+            self.dismount_mount();
+            return true;
+        }
+        let strafe = f32::from(u8::from(keys.left)) - f32::from(u8::from(keys.right));
+        let forward = f32::from(u8::from(keys.forward)) - f32::from(u8::from(keys.backward));
+        // LocalPlayer.aiStep: the riding jump charges while space is held.
+        let held = self.held().map(|s| s.item.clone());
+        let steer = match self.mobs[i].species() {
+            Species::Pig => held.as_deref() == Some("minecraft:carrot_on_a_stick"),
+            Species::Strider => held.as_deref() == Some("minecraft:warped_fungus_on_a_stick"),
+            _ => false,
+        };
+        let jump = self.charge_mount_jump(i, keys);
         let m = &mut self.mobs[i];
         if jump > 0.0 {
             // onPlayerJump: rear while jumping (horses).
@@ -324,7 +334,7 @@ impl Game<'_> {
             pitch: self.pitch,
             jump: if jump > 0.0 { jump } else { pending },
             steer,
-            sprint: self.keys.contains(&winit::keyboard::KeyCode::ControlLeft),
+            sprint: keys.sprint || self.keys.contains(&winit::keyboard::KeyCode::ControlLeft),
             jumping: keys.jump,
         });
         true
@@ -453,25 +463,40 @@ impl Game<'_> {
             _ => {}
         }
     }
-    /// `Hud.extractVehicleHealth` and the jump bar that replaces the
-    /// experience bar on a saddled jumper. Returns the mount's heart count
-    /// (`getVehicleMaxHearts`) and whether the jump bar shows.
-    pub(super) fn draw_mount_hud(&self, batch: &mut HudBatch, w: i32, h: i32) -> (i32, bool) {
+    /// `Player.jumpableVehicle`: a saddled mount that jumps.
+    pub(super) fn jumpable_mount(&self) -> bool {
+        self.mount_index()
+            .is_some_and(|i| self.mobs[i].extra.saddled)
+    }
+    /// `willPrioritizeJumpInfo`: charging a jump or recharging.
+    pub(super) fn mount_jumping(&self) -> bool {
+        self.mount.jump_scale > 0.0 || self.mount.jump_ticks < 0
+    }
+    /// `Hud.extractVehicleHealth`, and the jump bar when it is the
+    /// contextual bar (`jump_bar`). Returns the mount's heart count
+    /// (`getVehicleMaxHearts`).
+    pub(super) fn draw_mount_hud(
+        &self,
+        batch: &mut HudBatch,
+        w: i32,
+        h: i32,
+        jump_bar: bool,
+    ) -> i32 {
         let Some(i) = self.mount_index() else {
-            return (0, false);
+            return 0;
         };
         let m = &self.mobs[i];
         let atlas = &self.gui.atlas;
         let hearts = horizon_client::hud_layout::vehicle_max_hearts(m.attrs.max_health);
         let draws = horizon_client::hud_layout::vehicle_health(w, h, hearts, m.health);
         horizon_client::hud_layout::paint(batch, atlas, &draws);
-        if m.extra.saddled {
+        if jump_bar {
             // JumpableVehicleBar: the cooldown shows while the jump recharges.
             let cooldown = i32::from(self.mount.jump_ticks < 0);
             let draws =
                 horizon_client::hud_overlays::jump_bar(w, h, cooldown, self.mount.jump_scale);
             horizon_client::hud_layout::paint(batch, atlas, &draws);
         }
-        (hearts, m.extra.saddled)
+        hearts
     }
 }

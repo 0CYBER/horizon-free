@@ -9,6 +9,7 @@ use horizon_client::{
     mobs::{
         Mob, MobWorld, Species,
         data::{self, MobData},
+        seen_grid::SeenGrid,
         spawn_rules::{Dimension, SpawnLevel},
         spawn_selection::{
             self, Category, Counted, Heightmap, NaturalLevel, SpawnCost, SpawnPlayer, SpawnRequest,
@@ -71,12 +72,78 @@ pub(super) struct GameLevel<'g, 'a> {
     pub(super) w: MobWorld<'g>,
     /// Every player in the level ([`Game::level_players`]).
     pub(super) players: Vec<LevelPlayer>,
+    /// Where the non-spectators among them are (`getNearestPlayer`).
+    pub(super) nearest: Vec<[f64; 3]>,
     /// Boxes of the mobs this pass created, not yet in the game's list.
     pub(super) pending: std::cell::RefCell<Vec<Aabb>>,
     /// The types and boxes of what a spawner created this tick.
     pub(super) pending_ids: std::cell::RefCell<Vec<(String, Aabb)>>,
+    /// The game's mobs by box, built once a pass has asked more than
+    /// [`SCANNED_QUERIES`] box queries (the mobs do not change while it
+    /// holds the game); the first ones scan, as the build costs a few scans.
+    pub(super) boxes: std::cell::OnceCell<MobBoxes>,
+    pub(super) box_queries: std::cell::Cell<u32>,
+}
+const SCANNED_QUERIES: u32 = 8;
+/// A mob not removed: its index in `Game::mobs`, box, alive, and whether
+/// it is a living shulker.
+type MobBox = (usize, Aabb, bool, bool);
+fn mob_box(i: usize, m: &Mob) -> MobBox {
+    let alive = m.alive();
+    (
+        i,
+        m.bounds(),
+        alive,
+        alive && m.species() == Species::Shulker,
+    )
+}
+/// The boxes of the game's mobs not removed, and a grid over them.
+pub(super) struct MobBoxes {
+    entries: Vec<MobBox>,
+    grid: SeenGrid,
+}
+impl MobBoxes {
+    fn new(mobs: &[Mob]) -> Self {
+        let entries: Vec<_> = mobs
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| !m.removed)
+            .map(|(i, m)| mob_box(i, m))
+            .collect();
+        let grid = SeenGrid::new(entries.iter().map(|e| e.1));
+        Self { entries, grid }
+    }
+    /// The entries whose boxes meet `area` (and possibly a few more).
+    fn near(&self, area: Aabb) -> impl Iterator<Item = MobBox> + '_ {
+        let mut near = Vec::new();
+        let indexed = self.grid.candidates(area, &mut near);
+        let all = (!indexed).then(|| self.entries.iter());
+        near.into_iter()
+            .map(|i| self.entries[i as usize])
+            .chain(all.into_iter().flatten().copied())
+    }
 }
 impl GameLevel<'_, '_> {
+    /// The mobs not removed whose boxes may meet `area` (callers test them).
+    fn mobs_near(&self, area: Aabb) -> Box<dyn Iterator<Item = MobBox> + '_> {
+        let asked = self.box_queries.get() + 1;
+        self.box_queries.set(asked);
+        if asked <= SCANNED_QUERIES && self.boxes.get().is_none() {
+            return Box::new(
+                self.game
+                    .mobs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, m)| !m.removed)
+                    .map(|(i, m)| mob_box(i, m)),
+            );
+        }
+        Box::new(
+            self.boxes
+                .get_or_init(|| MobBoxes::new(&self.game.mobs))
+                .near(area),
+        )
+    }
     fn biome(&self, x: i32, y: i32, z: i32) -> Option<&BiomeInfo> {
         let chunk = self.game.world.chunks.get(&(x >> 4, z >> 4))?;
         Some(self.game.res.biomes().get(chunk.biome(x, y, z)))
@@ -190,8 +257,8 @@ impl NaturalLevel for GameLevel<'_, '_> {
     fn structure_spawns(&self) -> &StructureSpawns {
         StructureSpawns::shared(&self.game.options.resources)
     }
-    fn nearest_player_distance_sqr(&self, x: f64, y: f64, z: f64) -> Option<f64> {
-        nearest_player(&self.players, x, y, z).map(|p| p.distance_sqr(x, y, z))
+    fn nearest_player_positions(&self) -> &[[f64; 3]] {
+        &self.nearest
     }
     fn respawn(&self) -> Option<[i32; 3]> {
         // The world spawn point lives in the overworld.
@@ -218,12 +285,9 @@ impl NaturalLevel for GameLevel<'_, '_> {
         // getEntityCollisions(null, box): living shulkers are solid.
         let grown = bounds.inflate(Vec3::new(1e-7, 1e-7, 1e-7));
         no_collision_empty(&mut scene, bounds)
-            && !self.game.mobs.iter().any(|m| {
-                m.species() == Species::Shulker
-                    && m.alive()
-                    && !m.removed
-                    && m.bounds().intersects(grown)
-            })
+            && !self
+                .mobs_near(grown)
+                .any(|(_, b, _, shulker)| shulker && b.intersects(grown))
             && !self
                 .pending_ids
                 .borrow()
@@ -238,10 +302,8 @@ impl NaturalLevel for GameLevel<'_, '_> {
         !player
             && !self.pending.borrow().iter().any(|b| b.intersects(bounds))
             && !self
-                .game
-                .mobs
-                .iter()
-                .any(|m| m.alive() && !m.removed && m.bounds().intersects(bounds))
+                .mobs_near(bounds)
+                .any(|(_, b, alive, _)| alive && b.intersects(bounds))
     }
     fn spawn_mobs(&self) -> bool {
         self.game.ui.rules.bool("spawn_mobs")
@@ -283,10 +345,8 @@ impl horizon_client::mobs::spawner::SpawnerLevel for GameLevel<'_, '_> {
     }
     fn count_entities(&self, id: &str, bounds: Aabb) -> usize {
         let mobs = self
-            .game
-            .mobs
-            .iter()
-            .filter(|m| !m.removed && m.kind.id == id && m.bounds().intersects(bounds))
+            .mobs_near(bounds)
+            .filter(|&(i, b, ..)| self.game.mobs[i].kind.id == id && b.intersects(bounds))
             .count();
         let pending = self
             .pending_ids
@@ -299,12 +359,21 @@ impl horizon_client::mobs::spawner::SpawnerLevel for GameLevel<'_, '_> {
 }
 impl<'a> Game<'a> {
     pub(super) fn natural_level(&self) -> GameLevel<'_, 'a> {
+        let players = self.level_players();
+        let nearest = players
+            .iter()
+            .filter(|p| !p.spectator)
+            .map(|p| [p.position.x, p.position.y, p.position.z])
+            .collect();
         GameLevel {
             game: self,
             w: self.mob_world_base(&[]),
-            players: self.level_players(),
+            players,
+            nearest,
             pending: Default::default(),
             pending_ids: Default::default(),
+            boxes: Default::default(),
+            box_queries: Default::default(),
         }
     }
     /// Creates a mob the spawner accepted, finalized the game's way; the

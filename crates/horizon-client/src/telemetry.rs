@@ -1,13 +1,14 @@
 //! The game's part in opt-in data collection (`horizon_telemetry`, docs/telemetry.md). When the
 //! player allows it, the game keeps a scrubbed crash report, or a play session's performance
-//! summary, in the outbox. It never sends anything itself: the launcher does, at its next start.
+//! summary, in the outbox. It never sends those itself: the launcher does, at its next start (the
+//! game's only sending is the anonymous "I'm playing" ping, `heartbeat.rs`).
 //! Without the player's yes for that kind nothing is kept, and crash-reports/ stays local.
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
-use horizon_telemetry::payload::{Crash, Perf, Settings, System, Timings};
+use horizon_telemetry::payload::{Crash, Display, Perf, Settings, System, Timings};
 use horizon_telemetry::scrub::Scrubber;
 use horizon_telemetry::{Item, Payload, Source, outbox};
 
@@ -24,15 +25,28 @@ static STARTED: OnceLock<Instant> = OnceLock::new();
 static UI_READY_MS: AtomicU32 = AtomicU32::new(u32::MAX);
 static CORE_READY_MS: AtomicU32 = AtomicU32::new(u32::MAX);
 static REST_READY_MS: AtomicU32 = AtomicU32::new(u32::MAX);
-/// The GPU's name, driver and backend, once the renderer has its adapter.
-static GPU: Mutex<Option<(String, String, String)>> = Mutex::new(None);
+/// The GPU, once the renderer has its adapter: name, maker, kind, driver, backend, its own memory.
+static GPU: Mutex<Option<Gpu>> = Mutex::new(None);
+/// The screen the window opened on.
+static DISPLAY: Mutex<Option<Display>> = Mutex::new(None);
+
+/// The adapter as the renderer found it.
+#[derive(Clone, Debug, Default)]
+pub struct Gpu {
+    pub name: String,
+    pub vendor: String,
+    /// `integrated`, `discrete`, `virtual`, `cpu` or `other`.
+    pub kind: String,
+    pub driver: String,
+    pub backend: String,
+}
 
 /// When the game started, for the time to the title screen. Call first thing in `main`.
 pub fn mark_start() {
     STARTED.get_or_init(Instant::now);
 }
 
-/// The menu bundle is ready: the title backdrop can draw. The first writer wins.
+/// The menu bundle is ready: the title screen can draw. The first writer wins.
 pub fn mark_ui_ready() {
     if let Some(started) = STARTED.get() {
         let ms = started.elapsed().as_millis() as u32;
@@ -60,22 +74,77 @@ fn readiness_ms(mark: &AtomicU32) -> Option<u32> {
     (ms != u32::MAX).then_some(ms)
 }
 
-pub fn set_gpu(name: &str, driver: String, backend: String) {
-    *GPU.lock().unwrap_or_else(|e| e.into_inner()) = Some((name.to_owned(), driver, backend));
+pub fn set_gpu(gpu: Gpu) {
+    *GPU.lock().unwrap_or_else(|e| e.into_inner()) = Some(gpu);
 }
 
-/// This machine, with the GPU once the renderer knows it.
-pub fn system() -> System {
-    let mut system = System::detect();
-    if let Some((gpu, driver, backend)) = GPU.lock().unwrap_or_else(|e| e.into_inner()).clone() {
-        system.gpu = gpu;
-        system.driver = driver;
-        system.backend = backend;
+/// The screen the window is on: size in physical pixels, refresh rate, scale.
+pub fn set_display(width: u32, height: u32, refresh_hz: u32, scale: f64) {
+    *DISPLAY.lock().unwrap_or_else(|e| e.into_inner()) = Some(Display {
+        width,
+        height,
+        refresh_hz,
+        scale: scale as f32,
+    });
+}
+
+/// The screen `window` is on, else the primary one, else the only one: right after the window
+/// is made, Wayland doesn't say yet which screen it is on.
+pub fn monitor(window: &winit::window::Window) -> Option<winit::monitor::MonitorHandle> {
+    let only = || {
+        let mut all = window.available_monitors();
+        all.next().filter(|_| all.next().is_none())
+    };
+    window
+        .current_monitor()
+        .or_else(|| window.primary_monitor())
+        .or_else(only)
+}
+
+/// Keeps [`monitor`]'s size, refresh rate and scale for the items' `system.display`.
+pub fn note_display(window: &winit::window::Window) {
+    if let Some(m) = monitor(window) {
+        set_display(
+            m.size().width,
+            m.size().height,
+            m.refresh_rate_millihertz().map_or(0, |r| r.div_ceil(1000)),
+            m.scale_factor(),
+        );
     }
+}
+
+/// wgpu's device type in the words items use.
+pub fn gpu_kind(device_type: &str) -> &'static str {
+    match device_type {
+        "IntegratedGpu" => "integrated",
+        "DiscreteGpu" => "discrete",
+        "VirtualGpu" => "virtual",
+        "Cpu" => "cpu",
+        _ => "other",
+    }
+}
+
+/// This machine, with the GPU and the screen once the renderer knows them. The drive is the one
+/// under the game folder (the current folder).
+pub fn system() -> System {
+    let home = std::env::current_dir().ok();
+    let mut system = System::detect_in(home.as_deref());
+    if let Some(gpu) = GPU.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        system.vram_mb = match gpu.kind.as_str() {
+            "discrete" => horizon_telemetry::system::vram_mb(&gpu.vendor).unwrap_or(0),
+            _ => 0,
+        };
+        system.gpu = gpu.name;
+        system.gpu_vendor = gpu.vendor;
+        system.gpu_kind = gpu.kind;
+        system.driver = gpu.driver;
+        system.backend = gpu.backend;
+    }
+    system.display = DISPLAY.lock().unwrap_or_else(|e| e.into_inner()).clone();
     system
 }
 
-/// The release (`v2026.10.15`), or the client's crate version for a build from source.
+/// The release (`v0.2.3`), or the client's crate version for a build from source.
 pub fn version() -> String {
     crate::crash::release_tag().unwrap_or_else(|| format!("dev {}", env!("CARGO_PKG_VERSION")))
 }

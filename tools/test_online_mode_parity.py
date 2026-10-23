@@ -195,13 +195,34 @@ def run_client(binary, build, port, label, token, discovery):
 PLAYER_LINE = re.compile(r'^\[\d\d:\d\d:\d\d\] \[([^\]]+)\]: (.*(?:Tester|Username|Disconnecting|verify username).*)$')
 
 
-def player_lines(lines):
+def player_lines(lines, starts=()):
+    """The lines about the player, login by login (from each index in `starts` to the next), with two races of
+    vanilla's own taken out:
+    - the server's thread and the login's authenticator each log in their own order, but which of the two logs
+      first is a race (the authenticator disconnects a player, then logs why, while the server thread may already
+      log the lost connection): each login's lines are grouped by thread;
+    - a player the server disconnects ("Disconnecting ...: reason") closes the connection once it reads why, and
+      when that comes before the server closes it, the lost connection is logged as "Disconnected": the kick's
+      reason stands for both."""
+    def thread(line):
+        # `[User Authenticator #2/INFO]`: the thread, without the level; the login's authenticator first.
+        name = (m := PLAYER_LINE.match(line)) and m.group(1).rsplit('/', 1)[0] or ''
+        return name == 'Server thread', name
+
+    bounds = [0, *starts, len(lines)]
     out = []
-    for line in lines:
-        if m := PLAYER_LINE.match(line):
-            text = re.sub(r'/127\.0\.0\.1:\d+', '/127.0.0.1:_', m.group(2))
-            text = re.sub(r'entity id \d+ at \(.*\)', 'entity id _ at _', text)
-            out.append(f'[{m.group(1)}] {text}')
+    for a, b in zip(bounds, bounds[1:]):
+        login = []
+        for line in sorted(lines[a:b], key=thread):
+            if m := PLAYER_LINE.match(line):
+                text = re.sub(r'/127\.0\.0\.1:\d+', '/127.0.0.1:_', m.group(2))
+                text = re.sub(r'entity id \d+ at \(.*\)', 'entity id _ at _', text)
+                login.append(f'[{m.group(1)}] {text}')
+        kicks = {l.rsplit('): ', 1)[1] for l in login if '] Disconnecting ' in l}
+        if len(kicks) == 1:
+            login = [l.removesuffix('Disconnected') + next(iter(kicks)) if l.endswith(') lost connection: Disconnected')
+                     else l for l in login]
+        out += login
     return out
 
 
@@ -228,16 +249,26 @@ def run_side(label, command, binary, build, services, discovery):
     os.environ.update(HORIZON_NO_AUDIO='1', HORIZON_API_DISCOVERY=discovery)
     server = Server(command, directory, f'{label}-online')
     checks = []
+    starts = []
 
     def check(name, actual, expected):
         checks.append(f'{name}: ' + ('ok' if actual == expected else f'expected {expected!r}, got {actual!r}'))
+
+    def login(name, token):
+        """One client run, over once the server logged the end of its connection: the server notices the
+        closed connection at its next tick, and the next run's lines must not come before that one."""
+        start = len(server.lines)
+        starts.append(start)
+        got = run_client(binary, build, port, f'{label}-{name}', token, discovery)
+        wait_after(server, start, r'lost connection: ')
+        return got
 
     try:
         server.wait_for(r'Done \(', timeout=600)
         services.take_log()
 
         # 1. Signed in: the full encrypted handshake, then play.
-        got = run_client(binary, build, port, f'{label}-signed-in', GOOD, discovery)
+        got = login('signed-in', GOOD)
         server.wait_for(r'Tester left the game', timeout=30)
         log = services.take_log()
         joins = [e for e in log if e[0] == 'join']
@@ -261,20 +292,20 @@ def run_side(label, command, binary, build, services, discovery):
 
         # 2. A token the session service rejects: vanilla's message, no key sent.
         mark = len(server.lines)
-        got = run_client(binary, build, port, f'{label}-rejected', BAD, discovery)
+        got = login('rejected', BAD)
         check('rejected token: client message', got['error'],
               'disconnected: Failed to log in: Invalid session (Try restarting your game and the launcher)')
         check('rejected token: no verification', [e[0] for e in services.take_log()], ['join'])
 
         # 3. The session service forgets the join: the server refuses the player.
-        got = run_client(binary, build, port, f'{label}-forgotten', FORGET, discovery)
+        got = login('forgotten', FORGET)
         server.wait_for(r'Failed to verify username', timeout=30)
         check('forgotten join: client message', got['error'], 'disconnected: Failed to verify username!')
         check('forgotten join: server verified and refused',
               [(e[0], e[3]) for e in services.take_log()], [('join', True), ('verify', False)])
 
         # 4. No account: refused by the client before anything is sent to the services.
-        got = run_client(binary, build, port, f'{label}-no-account', None, discovery)
+        got = login('no-account', None)
         check('no account: client message', got['error'] or '', 'disconnected: This server is in online mode. '
               'Sign in with your Microsoft account in the Horizon launcher to join it.')
         check('no account: no service calls', services.take_log(), [])
@@ -283,7 +314,7 @@ def run_side(label, command, binary, build, services, discovery):
         # 5. Verified, but not on the whitelist.
         server.console('whitelist on')
         server.wait_for(r'Whitelist is now turned on', timeout=30)
-        got = run_client(binary, build, port, f'{label}-not-whitelisted', GOOD, discovery)
+        got = login('not-whitelisted', GOOD)
         server.wait_for(r'Disconnecting Tester', timeout=30)
         check('not whitelisted: client message', got['error'], 'disconnected: You are not white-listed on this server!')
         check('not whitelisted: verified first', [(e[0], e[3]) for e in services.take_log()],
@@ -295,7 +326,7 @@ def run_side(label, command, binary, build, services, discovery):
         server.console('whitelist add tester')
         wait_after(server, mark, r'Added Tester to the whitelist')
         check('whitelist add: known player, no lookup', services.take_log(), [])
-        got = run_client(binary, build, port, f'{label}-whitelisted', GOOD, discovery)
+        got = login('whitelisted', GOOD)
         wait_after(server, mark, r'Tester left the game')
         check('whitelisted: connected throughout', got['error'], None)
         services.take_log()
@@ -309,7 +340,7 @@ def run_side(label, command, binary, build, services, discovery):
         time.sleep(1)
     finally:
         server.stop()
-    return checks, player_lines(server.lines)
+    return checks, player_lines(server.lines, starts)
 
 
 def main():

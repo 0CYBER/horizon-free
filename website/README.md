@@ -2,12 +2,12 @@
 
 Live at **https://playhorizon.dev**.
 
-A landing page and a documentation section in Horizon's design language (`docs/design-system.md`), with the tokens of
+A landing page, a Releases page, a Benchmarks page and a documentation section in Horizon's design language (`docs/design-system.md`), with the tokens of
 `crates/horizon-theme` (generated into `src/tokens.css` by `cargo run -p xtask -- tokens`):
-Geist and Geist Mono, cool neutrals in a light and a dark appearance (the system's, or the
-toggle's) and one violet accent, numbered index lists with one-pixel rules, and short, eased
-motion. A headline and the download, then a scroll through what it is, the screenshots, the parity grid, the launcher, the patch
-notes, the community links and the contributors. Plain HTML, CSS and JavaScript; no framework and
+the Blocks look: Pixelify Sans headings over Geist text, Horizon's purple in a light and a dark
+appearance (the system's, or the toggle's), square panels with an outline, a bevel and a lip, a
+stone texture and a pixel landscape drawn in code (`scripts/art.mjs`), and short, eased motion. A headline and the download, then a scroll through what it is, the screenshots, the parity grid, the launcher, the newest
+releases, the community links and the contributors. Plain HTML, CSS and JavaScript; no framework and
 no runtime dependencies.
 
 ## Layout
@@ -20,15 +20,26 @@ serve.mjs          a tiny static server for local checks
 src/index.html     the page, with {{placeholders}} build.mjs fills
 src/404.html       the not-found page
 src/privacy.html   what the launcher can send when players allow it, retention, deletion (/privacy)
+src/releases.html  every release, newest first, with what it adds and fixes, its notes and downloads (/releases)
+src/benchmarks.html Horizon against vanilla 26.3 on our machines, the hardware picker, players' results (/benchmarks)
 src/docs.html      the template of every documentation page (/docs/...), with its left navigation
 src/tokens.css     the design tokens, generated from crates/horizon-theme (do not edit)
 src/style.css      every style, on top of the tokens
-src/main.js        download buttons, patch notes, links, contributors, nav and menu, tabs, lightbox, motion
+src/main.js        the home page: download buttons, recent releases, links, contributors, nav, tabs, lightbox, motion
+src/chrome.js      the light/dark switch, the phone menu and GitHub fetching, shared by the pages
+src/releases-page.js  the Releases page: the channel filter and the refresh from GitHub
+src/benchmarks-page.js  the Benchmarks page: players' results from the telemetry server, the picker
+src/bench.js       the Benchmarks tables, shared by build and page
+src/hardware.js    the spec table estimates use (GPU TFLOPS and bandwidth, CPU single-thread score)
+src/estimate.js    estimates for unmeasured hardware from the nearest measured machine
 src/markdown.js    a small Markdown renderer (escapes everything), shared by build and page
-src/releases.js    the patch notes' markup, shared by build and page
+src/releases.js    the home page's "Recently added" and the Releases page's markup, shared by build and page
 src/contributors.js the contributors' filtering and markup, shared by build and page
-public/            fonts, screenshots, icons, og.png, robots.txt: copied as is (sitemap.xml is written by the build)
-scripts/assets.mjs rebuilds public/ from the repo (fonts to WOFF2, images to WebP)
+public/            fonts, screenshots, icons, og.png, robots.txt, benchmarks.json: copied as is (sitemap.xml is written by the build)
+data/benchmarks/   our raw benchmark reports (tools/perf_bench.py) and fleet.json, the list scripts/benchmarks.mjs reads
+scripts/benchmarks.mjs  benchmark reports -> public/benchmarks.json (ours, and players' groups of 3+ installs)
+scripts/assets.mjs rebuilds public/ from the repo (fonts to WOFF2, images to WebP, the pixel art)
+scripts/art.mjs    draws the stone tile and the hero's landscape (PNG, one pixel per texel)
 scripts/shots.mjs  Playwright screenshots at every width, and og.png
 Dockerfile, Caddyfile, railway.json   the Railway service
 LEGAL.md           every asset, its source and licence
@@ -45,8 +56,9 @@ shots/             (gitignored) full-page screenshots at 360–1920 px, a 1250×
   the checkout; on Railway, which builds only this folder, from `main` on GitHub. The build
   fails if the README has no parity table, so a broken README never deploys.
 - **Fetched by the page**: the releases (the download button picks the newest
-  `launcher-v*` release's asset for the visitor's OS, and the three latest game releases'
-  notes are rendered), the contributors (avatars come from `avatars.githubusercontent.com`),
+  `launcher-v*` release's asset for the visitor's OS, the home page lists the newest game releases, and
+  the Releases page reloads its list when GitHub has a newer release), players' benchmark results
+  (`GET https://telemetry.playhorizon.dev/v1/benchmarks/summary`, 3-second timeout), the contributors (avatars come from `avatars.githubusercontent.com`),
   and `links.json` from `main`. Each
   falls back to what was built in, and the download button to the releases page.
 
@@ -84,7 +96,7 @@ and characters per line, for 360 to 1920 px wide and a 1250×700 window.
 
 ## Railway
 
-The service deploys the `website` branch and answers on https://playhorizon.dev. Its
+The service deploys `main` (Railway's GitHub integration; there is no `website` branch any more) when `/website/**`, `README.md` or `launcher/links.json` change, and answers on https://playhorizon.dev. Its
 `*.up.railway.app` address redirects there with a 301 (the Caddyfile), so search engines index
 one URL; the page also names it as canonical, in its Open Graph tags and in `sitemap.xml`.
 Railway's healthcheck reaches `$PORT` under its own host name and is served normally.
@@ -106,3 +118,18 @@ GitHub's anonymous rate limit is hit.
 - Parity is worded as the README words it: 100% of what the harnesses compare.
 - No cookies, analytics, trackers or third-party fonts and scripts.
 - Motion stops under `prefers-reduced-motion`; nothing hijacks the scroll.
+
+## Benchmarks
+
+`public/benchmarks.json` is what the Benchmarks page shows: `{ format: "horizon-benchmark-summary", version: 1,
+generated, min_installs, groups }`, one group per GPU, CPU, render distance and game (`horizon`, `vanilla`) with
+`medians` (`avg_fps`, `low_1pct_fps`, `p95_ms`, `world_ms`, `chunk_load_ms`, `rss_peak_mb`, `rss_steady_mb`).
+Groups `"source": "us"` are our runs (with the machine, date, version and the four scenes); groups `"source":
+"players"` come from players' `benchmark` uploads (docs/telemetry.md) and need at least `min_installs` (3)
+different installs. The telemetry server's `GET /v1/benchmarks/summary` answers in the same shape; the page asks it
+for players' groups and keeps the baked ones when it doesn't answer. The rules are in `scripts/benchmarks.mjs`, with
+a fixture set (`scripts/fixtures/benchmarks/`) the server's test shares.
+
+To publish new measurements: run `tools/perf_bench.py` for Horizon and vanilla on a machine (docs/benchmark.md), copy
+the reports into `data/benchmarks/`, list them in `data/benchmarks/fleet.json`, then
+`node scripts/benchmarks.mjs --ours data/benchmarks/fleet.json`.

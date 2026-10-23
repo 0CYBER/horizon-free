@@ -198,8 +198,10 @@ pub fn anvil_result(
     let mut repair_item_count_cost = 0;
     let mut naming_cost = 0;
     if let Some(addition) = addition {
-        // addition.has(STORED_ENCHANTMENTS): only enchanted books carry that component.
-        let using_book = &*addition.item == "minecraft:enchanted_book";
+        // addition.has(STORED_ENCHANTMENTS): an enchanted book (its default
+        // component), or any item given stored enchantments.
+        let using_book = &*addition.item == "minecraft:enchanted_book"
+            || !addition.stored_enchantments().is_empty();
         if is_damageable(items, &result) && is_valid_repair_item(e, items, input, addition) {
             let max = max_damage(items, &result);
             let mut repair = (result.damage as i32).min(max / 4);
@@ -401,13 +403,13 @@ pub fn grindstone_result(
         (None, None) => None,
     }
 }
-/// Experience from the grindstone result slot's `getExperienceAmount`.
-pub fn grindstone_experience(
+/// The grindstone result slot's `getExperienceAmount` before its roll: the
+/// minimum costs of the inputs' non-curse enchantments.
+pub fn grindstone_xp_base(
     e: &Enchantments,
-    random: &mut LegacyRandom,
     input: Option<&ItemStack>,
     additional: Option<&ItemStack>,
-) -> u32 {
+) -> i32 {
     let from = |s: Option<&ItemStack>| -> i32 {
         s.map_or(0, |s| {
             s.crafting_enchantments()
@@ -417,13 +419,25 @@ pub fn grindstone_experience(
                 .sum()
         })
     };
-    let amount = from(input) + from(additional);
+    from(input) + from(additional)
+}
+/// `getExperienceAmount`'s roll of the sum: `half + nextInt(half)`.
+pub fn grindstone_xp_roll(amount: i32, random: &mut LegacyRandom) -> u32 {
     if amount > 0 {
         let half = (f64::from(amount) / 2.0).ceil() as i32;
         (half + random.next_int_bound(half).unwrap_or(0)) as u32
     } else {
         0
     }
+}
+/// Experience from the grindstone result slot's `getExperienceAmount`.
+pub fn grindstone_experience(
+    e: &Enchantments,
+    random: &mut LegacyRandom,
+    input: Option<&ItemStack>,
+    additional: Option<&ItemStack>,
+) -> u32 {
+    grindstone_xp_roll(grindstone_xp_base(e, input, additional), random)
 }
 
 // ---------------------------------------------------------------- smithing & stonecutting
@@ -450,6 +464,7 @@ pub struct Stonecutting {
     pub input: Ingredient,
     pub result: ItemStack,
 }
+#[derive(Default)]
 pub struct StationRecipes {
     pub smithing: Vec<Smithing>,
     /// Sorted by recipe id, the registry order vanilla lists them in.

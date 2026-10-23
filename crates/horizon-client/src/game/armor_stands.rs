@@ -8,12 +8,13 @@ use horizon_client::{
     items::ItemStack,
     mesher::Vertex,
     mobs::{Mob, Part, anim::Poses},
+    trims::{TrimOverride, TrimRegistry, TrimTexture},
 };
 use horizon_core::{
     geometry::{Aabb, Vec3},
     random::RandomSource,
 };
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 /// Armor stand models and the humanoid layers of every equipment asset.
 pub(super) struct ArmorStandAssets {
@@ -25,6 +26,11 @@ pub(super) struct ArmorStandAssets {
     pub player: HashMap<&'static str, Part>,
     /// asset id -> layer kind (humanoid / humanoid_leggings) -> (texture, undyed colour).
     pub equipment: HashMap<String, HashMap<String, (String, Option<u32>)>>,
+    /// asset id -> `trim_overrides`.
+    pub trim_overrides: HashMap<String, Vec<TrimOverride>>,
+    pub trims: TrimRegistry,
+    /// The resources the trim textures are made from.
+    pub root: PathBuf,
 }
 impl ArmorStandAssets {
     pub fn load(
@@ -48,6 +54,7 @@ impl ArmorStandAssets {
             player.insert("elytra", part);
         }
         let mut equipment = HashMap::new();
+        let mut trim_overrides = HashMap::new();
         if let Ok(entries) = std::fs::read_dir(root.join("assets/minecraft/equipment")) {
             for e in entries.flatten() {
                 let path = e.path();
@@ -76,6 +83,7 @@ impl ArmorStandAssets {
                         );
                     }
                 }
+                trim_overrides.insert(format!("minecraft:{name}"), TrimOverride::list(&v));
                 equipment.insert(format!("minecraft:{name}"), kinds);
             }
         }
@@ -85,30 +93,67 @@ impl ArmorStandAssets {
             layers,
             player,
             equipment,
+            trim_overrides,
+            trims: TrimRegistry::load(root),
+            root: root.to_owned(),
         }
+    }
+    /// Trim data of reloaded resources (the models stay).
+    pub fn reload_trims(&mut self, root: &std::path::Path) {
+        let fresh = Self::load(root, None);
+        self.trim_overrides = fresh.trim_overrides;
+        self.trims = fresh.trims;
+        self.root = fresh.root;
+    }
+    /// `TrimTextureKey`: the trim texture of `stack` on its humanoid
+    /// layer (`humanoid` or `humanoid_leggings`), if it has a trim.
+    fn trim_texture(&self, asset: &str, kind: &str, stack: &ItemStack) -> Option<TrimTexture> {
+        let (material, pattern) = stack.extra.as_ref()?.trim.as_ref()?;
+        let overrides = self
+            .trim_overrides
+            .get(asset)
+            .map_or(&[][..], Vec::as_slice);
+        TrimTexture::resolve(&self.trims, overrides, material, pattern, kind)
     }
 }
 impl Game<'_> {
     /// `HumanoidArmorLayer` for the player: (model, texture rect, colour) of
     /// each worn piece, head to feet.
     pub(super) fn player_armor_layers(&self) -> Vec<(&Part, [f32; 4], u32)> {
-        self.armor_layers(self.armor.each_ref().map(|s| s.as_ref().map(|s| &*s.item)))
+        self.stack_armor_layers(&self.armor)
+    }
+    /// `HumanoidArmorLayer` for worn stacks (head to feet), trims included.
+    pub(super) fn stack_armor_layers(
+        &self,
+        armor: &[Option<ItemStack>; 4],
+    ) -> Vec<(&Part, [f32; 4], u32)> {
+        self.armor_layers(
+            armor
+                .each_ref()
+                .map(|s| s.as_ref().map(|s| (&*s.item, Some(s)))),
+        )
     }
     /// `HumanoidArmorLayer` for another player's model: the armour it wears
     /// (`extra.head` .. `extra.feet`).
     pub(super) fn worn_armor_layers(&self, m: &Mob) -> Vec<(&Part, [f32; 4], u32)> {
         let e = &m.extra;
-        self.armor_layers([&e.head, &e.chest, &e.legs, &e.feet].map(|s| s.as_deref()))
+        self.armor_layers(
+            [&e.head, &e.chest, &e.legs, &e.feet].map(|s| s.as_deref().map(|i| (i, None))),
+        )
     }
-    /// The layers of the armour items `worn`, head to feet.
-    fn armor_layers(&self, worn: [Option<&str>; 4]) -> Vec<(&Part, [f32; 4], u32)> {
+    /// The layers of the armour items `worn` (with their stacks when known,
+    /// for trims), head to feet.
+    fn armor_layers(
+        &self,
+        worn: [Option<(&str, Option<&ItemStack>)>; 4],
+    ) -> Vec<(&Part, [f32; 4], u32)> {
         let assets = &self.armor_stand_assets;
         let mut out = Vec::new();
         for (item, layer) in worn
             .into_iter()
             .zip(["helmet", "chestplate", "leggings", "boots"])
         {
-            let Some(item) = item else {
+            let Some((item, stack)) = item else {
                 continue;
             };
             let Some(asset) = self
@@ -138,8 +183,116 @@ impl Game<'_> {
                 0xFF00_0000 | (c & 0xFF) << 16 | (c & 0xFF00) | (c >> 16) & 0xFF
             });
             out.push((part, [r.u0, r.v0, r.u1, r.v1], color));
+            // EquipmentLayerRenderer: the trim layer over the armour.
+            if let Some(r) = stack
+                .and_then(|s| assets.trim_texture(&asset, kind, s))
+                .and_then(|t| self.gui.atlas.sprites.get(&t.sprite()))
+            {
+                out.push((part, [r.u0, r.v0, r.u1, r.v1], 0xFFFF_FFFF));
+            }
         }
         out
+    }
+    /// `PalettedTextureManager.getOrPrepare` for the trims drawn this frame
+    /// (the player's armour and the armour stands'): each generated texture
+    /// goes into an atlas trim slot, a free one, else the least recently
+    /// drawn.
+    pub(super) fn prepare_trims(&mut self) {
+        use horizon_client::hud::TRIM_SLOTS;
+        let assets = &self.armor_stand_assets;
+        let items = self.res.items();
+        let mut wanted: Vec<TrimTexture> = Vec::new();
+        let guests = self.lan.iter().flat_map(|host| host.hub.guests.iter());
+        let stacks = self
+            .armor
+            .iter()
+            .chain(guests.flat_map(|g| g.armor.iter()))
+            .zip(
+                ["helmet", "chestplate", "leggings", "boots"]
+                    .into_iter()
+                    .cycle(),
+            )
+            .chain(self.armor_stands.iter().flat_map(|a| {
+                [5usize, 4, 3, 2]
+                    .map(|slot| &a.equipment[slot])
+                    .into_iter()
+                    .zip(["helmet", "chestplate", "leggings", "boots"])
+            }));
+        for (stack, layer) in stacks {
+            let Some(stack) = stack.as_ref().filter(|s| s.extra.is_some()) else {
+                continue;
+            };
+            let Some(asset) = items
+                .get(&stack.item)
+                .and_then(|i| i.equip_asset.as_deref())
+            else {
+                continue;
+            };
+            let kind = if layer == "leggings" {
+                "humanoid_leggings"
+            } else {
+                "humanoid"
+            };
+            if let Some(t) = assets.trim_texture(asset, kind, stack)
+                && !wanted.contains(&t)
+            {
+                wanted.push(t);
+            }
+        }
+        for t in wanted {
+            let name = t.sprite();
+            // Entries the atlas no longer has (rebuilt by a resource reload) are free.
+            let sprites = &self.gui.atlas.sprites;
+            self.trim_slots.retain(|(n, _)| sprites.contains_key(n));
+            if let Some(i) = self.trim_slots.iter().position(|e| e.0 == name) {
+                let e = self.trim_slots.remove(i);
+                self.trim_slots.push(e);
+                continue;
+            }
+            let Some((w, h, rgba)) = t.generate(&self.armor_stand_assets.root) else {
+                continue;
+            };
+            let used: Vec<usize> = self.trim_slots.iter().map(|e| e.1).collect();
+            let slot = match (0..TRIM_SLOTS).find(|i| !used.contains(i)) {
+                Some(free) => free,
+                None => {
+                    let (old, slot) = self.trim_slots.remove(0);
+                    self.gui.atlas.sprites.remove(&old);
+                    slot
+                }
+            };
+            let Some(area) = self
+                .gui
+                .atlas
+                .sprites
+                .get(&format!("horizon/trim{slot}"))
+                .copied()
+            else {
+                continue;
+            };
+            if w > area.w || h > area.h {
+                continue;
+            }
+            let (aw, ah) = (self.gui.atlas.width as f32, self.gui.atlas.height as f32);
+            let (x, y) = ((area.u0 * aw).round(), (area.v0 * ah).round());
+            self.map_patches.push(horizon_client::font::Patch {
+                x: x as u32,
+                y: y as u32,
+                width: w,
+                height: h,
+                rgba,
+            });
+            let rect = horizon_client::hud::Rect {
+                u0: area.u0,
+                v0: area.v0,
+                u1: (x + w as f32) / aw,
+                v1: (y + h as f32) / ah,
+                w,
+                h,
+            };
+            self.gui.atlas.sprites.insert(name.clone(), rect);
+            self.trim_slots.push((name, slot));
+        }
     }
     /// `ArmorStandItem.useOn`.
     pub(super) fn place_armor_stand(&mut self, hit: &super::Hit, stack: &ItemStack) -> bool {
@@ -432,6 +585,10 @@ impl Game<'_> {
                 (false, false) => (0.5, 1.975),
             };
             let edge = (width + height + width) / 3.0 * 4.0;
+            // 26.3 compares the size with RenderSystem.DEFAULT_DEPTH_CLEAR_VALUE,
+            // which is 0.0 (reverse Z; the bytecode is `dconst_0`): an empty
+            // marker box falls back to 4, so a visible marker stand draws.
+            // Holograms stay hidden through the invisible flag instead.
             let range = if edge == 0.0 { 4.0 } else { edge } * 64.0;
             let dragon = a.equipment[5]
                 .as_ref()
@@ -560,6 +717,22 @@ impl Game<'_> {
                     0,
                     out,
                 );
+                // EquipmentLayerRenderer: the trim layer over the armour.
+                if let Some(trim) = assets
+                    .trim_texture(&asset, kind, stack)
+                    .and_then(|t| uv_of(&t.sprite()))
+                {
+                    horizon_client::mobs::render::draw(
+                        part,
+                        base,
+                        &layer_poses,
+                        trim,
+                        0xFFFF_FFFF,
+                        packed,
+                        0,
+                        out,
+                    );
+                }
             }
             self.cull_entity_vertices(out, entity_start);
         }
@@ -700,9 +873,15 @@ impl Game<'_> {
                     self.dim == super::Dim::Nether,
                 )),
             };
+            let profile = stack
+                .extra
+                .as_deref()
+                .and_then(|d| d.other.iter().find(|(k, _)| k == "minecraft:profile"))
+                .map(|(_, t)| horizon_client::scoreboard::tag_to_json(t))
+                .unwrap_or(serde_json::Value::Null);
             self.pack.item_renderer.submit_special(
                 &special,
-                &serde_json::Value::Null,
+                &profile,
                 false,
                 pose,
                 &self.gui.atlas.sprites,

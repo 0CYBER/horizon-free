@@ -2,21 +2,39 @@
    docs/design-system.md describes the tokens. */
 
 :root {
-  --page: #fafafc;
-  --plate-soft: #f3f3f8;
-  --plate: #ebecf4;
-  --surface: #ffffff;
-  --rule: #e2e3ea;
-  --ink: #16181f;
-  --ink-soft: #3b3e49;
-  --muted: #646875;
-  --accent: #5b3fd6;
+  --page: #ece7f7;
+  --plate-soft: #e9e3f8;
+  --plate: #ddd4f3;
+  --surface: #f8f6fd;
+  --rule: #e4ddf4;
+  --ink: #1b1530;
+  --ink-soft: #3b3354;
+  --muted: #585071;
+  --accent: #5333c9;
   --on-accent: #ffffff;
-  --danger: #b4372a;
-  --success: #1d7a48;
+  --danger: #a3301d;
+  --success: #136336;
+  --warn: #7a4f00;
+  --side: #e2dbf2;
+  --panel: #f8f6fd;
+  --raised: #e9e3f8;
+  --button: #ddd4f3;
+  --button-bevel: #f4f0fe;
+  --well: #f3f0fb;
+  --bevel: #ffffff;
+  --lip: #c3b8e2;
+  --outline: #2b2244;
+  --face: #5b3fd6;
+  --face-bevel: #8069ef;
+  --face-lip: #3a2694;
+  --on-face: #ffffff;
   color-scheme: light;
   --font: "Geist", ui-sans-serif, system-ui, sans-serif;
   --mono: "Geist Mono", ui-monospace, monospace;
+  --pixel: "Pixelify Sans", "Geist", ui-sans-serif, sans-serif;
+  --block-outline: 2px;
+  --block-bevel: 2px;
+  --block-lip: 4px;
   --text-micro: 11px;
   --text-micro-line: 1.5;
   --text-micro-tracking: 0.04em;
@@ -88,34 +106,62 @@
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --page: #0d0e13;
-    --plate-soft: #181a22;
-    --plate: #20222c;
-    --surface: #16181f;
-    --rule: #24262f;
+    --page: #0f0d17;
+    --plate-soft: #221e34;
+    --plate: #2b2641;
+    --surface: #1a1727;
+    --rule: #120f1c;
     --ink: #ecedf3;
     --ink-soft: #c5c7d1;
-    --muted: #8b8f9c;
+    --muted: #a29cb8;
     --accent: #9a86ff;
-    --on-accent: #0d0e13;
+    --on-accent: #ffffff;
     --danger: #f07a68;
     --success: #45c27a;
+    --warn: #f0b84f;
+    --side: #0b0a11;
+    --panel: #1a1727;
+    --raised: #221e34;
+    --button: #2b2641;
+    --button-bevel: #3d3560;
+    --well: #0c0b12;
+    --bevel: #342d52;
+    --lip: #07060b;
+    --outline: #05040a;
+    --face: #5b3fd6;
+    --face-bevel: #8a74ff;
+    --face-lip: #3a2694;
+    --on-face: #ffffff;
     color-scheme: dark;
   }
 }
 
 :root[data-theme="dark"] {
-  --page: #0d0e13;
-  --plate-soft: #181a22;
-  --plate: #20222c;
-  --surface: #16181f;
-  --rule: #24262f;
+  --page: #0f0d17;
+  --plate-soft: #221e34;
+  --plate: #2b2641;
+  --surface: #1a1727;
+  --rule: #120f1c;
   --ink: #ecedf3;
   --ink-soft: #c5c7d1;
-  --muted: #8b8f9c;
+  --muted: #a29cb8;
   --accent: #9a86ff;
-  --on-accent: #0d0e13;
+  --on-accent: #ffffff;
   --danger: #f07a68;
   --success: #45c27a;
+  --warn: #f0b84f;
+  --side: #0b0a11;
+  --panel: #1a1727;
+  --raised: #221e34;
+  --button: #2b2641;
+  --button-bevel: #3d3560;
+  --well: #0c0b12;
+  --bevel: #342d52;
+  --lip: #07060b;
+  --outline: #05040a;
+  --face: #5b3fd6;
+  --face-bevel: #8a74ff;
+  --face-lip: #3a2694;
+  --on-face: #ffffff;
   color-scheme: dark;
 }

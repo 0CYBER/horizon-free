@@ -1,7 +1,8 @@
-//! Memoized palette eligibility for the game thread's random-tick snapshot.
+//! Which sections of the game thread's chunks random-tick
+//! (`LevelChunkSection.isRandomlyTicking`), memoized per section.
 use crate::{
     blocks::BlockFacts,
-    chunk::{Chunk, MIN_Y, SECTIONS},
+    chunk::{Chunk, MIN_Y, SECTIONS, Section},
     fast_hash::FxHashMap,
 };
 use horizon_world::registry::BlockStateId;
@@ -10,6 +11,13 @@ use std::sync::{Arc, Weak};
 /// A value snapshot, in ascending section order, with no per-chunk allocation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Sections(u32);
+impl Sections {
+    /// The minimum Y of the lowest section in the set from block `min_y` up.
+    pub fn from(self, min_y: i32) -> Option<i32> {
+        let index = ((min_y - MIN_Y) >> 4).max(0) as u32;
+        Sections(self.0 & u32::MAX.checked_shl(index).unwrap_or(0)).next()
+    }
+}
 impl Iterator for Sections {
     type Item = i32;
     fn next(&mut self) -> Option<i32> {
@@ -29,12 +37,20 @@ impl ExactSizeIterator for Sections {}
 
 struct Cached {
     chunk: Weak<Chunk>,
+    /// The section each bit of `sections` was read from.
+    read: [Weak<Section>; SECTIONS],
     sections: Sections,
 }
-/// Resident chunks are immutable behind `Arc`; edits use `Arc::make_mut`.
-/// A weak reference detects both edits and replacement, without retaining block
-/// data or forcing a deep copy on the next edit. It also prevents address reuse.
-/// Clear this cache whenever the gameplay facts change (including resource reload).
+/// Vanilla keeps a count of randomly ticking blocks and fluids per section,
+/// updated by every `setBlockState`, and ticks the sections where it is above
+/// zero. Here a section's answer is read from its blocks after any edit:
+/// resident chunks and sections are immutable behind `Arc` and edited through
+/// `Arc::make_mut`, so a weak reference tells an edited or replaced one from
+/// the one read, without retaining block data or forcing a deep copy on the
+/// next edit, and prevents address reuse. An unchanged chunk costs one
+/// pointer comparison; a changed one, a comparison per section and a read of
+/// the sections that changed. Clear this cache whenever the gameplay facts
+/// change (including resource reload).
 #[derive(Default)]
 pub struct RandomTickSections {
     chunks: FxHashMap<(i32, i32), Cached>,
@@ -46,6 +62,7 @@ impl RandomTickSections {
     pub fn remove(&mut self, key: &(i32, i32)) {
         self.chunks.remove(key);
     }
+    /// The sections of `chunk` holding a randomly ticking block or fluid.
     pub fn get(&mut self, key: (i32, i32), chunk: &Arc<Chunk>, facts: &BlockFacts) -> Sections {
         self.get_with(key, chunk, |id| facts.get(BlockStateId(id)).random_ticks)
     }
@@ -60,17 +77,23 @@ impl RandomTickSections {
         }
         let cached = self.chunks.entry(key).or_insert_with(|| Cached {
             chunk: Weak::new(),
+            read: std::array::from_fn(|_| Weak::new()),
             sections: Sections::default(),
         });
         if cached.chunk.as_ptr() != Arc::as_ptr(chunk) {
-            let mut mask = 0;
-            for (i, section) in chunk.sections.iter().enumerate() {
-                // Preserve maybe_has, including unused entries and global palettes.
-                if section.blocks.maybe_has(&mut random) {
-                    mask |= 1 << i;
+            for (i, (section, read)) in chunk.sections.iter().zip(&mut cached.read).enumerate() {
+                if read.as_ptr() == Arc::as_ptr(section) {
+                    continue;
                 }
+                // `isRandomlyTicking`: the blocks themselves, not the palette,
+                // which keeps the states no block uses any more.
+                if section.blocks.has(&mut random) {
+                    cached.sections.0 |= 1 << i;
+                } else {
+                    cached.sections.0 &= !(1 << i);
+                }
+                *read = Arc::downgrade(section);
             }
-            cached.sections = Sections(mask);
             cached.chunk = Arc::downgrade(chunk);
         }
         cached.sections
@@ -97,10 +120,24 @@ mod tests {
             [MIN_Y]
         );
         assert_eq!(worker.get(0, MIN_Y, 0), 0);
-        // Even after the last ticking block is removed, its unused palette entry counts.
+        // Once the last ticking block is gone the section stops ticking, as
+        // vanilla's count drops to zero, though its palette still lists it.
         Arc::make_mut(&mut chunk).set(0, MIN_Y, 0, 0);
-        assert_eq!(cache.get_with((0, 0), &chunk, |id| id == 1).len(), 1);
-        Arc::make_mut(&mut Arc::make_mut(&mut chunk).sections[0]).compact();
+        assert!(chunk.sections[0].blocks.maybe_has(|id| id == 1));
+        assert_eq!(cache.get_with((0, 0), &chunk, |id| id == 1).len(), 0);
+        // Only the edited section is read again (its palette: air, then 1).
+        Arc::make_mut(&mut chunk).set(0, MIN_Y + 16, 0, 1);
+        let mut asked = Vec::new();
+        let sections = cache.get_with((0, 0), &chunk, |id| {
+            asked.push(id);
+            id == 1
+        });
+        assert_eq!(
+            (sections.collect::<Vec<_>>(), asked),
+            (vec![MIN_Y + 16], vec![0, 1])
+        );
+        Arc::make_mut(&mut chunk).set(0, MIN_Y + 16, 0, 0);
+        Arc::make_mut(&mut Arc::make_mut(&mut chunk).sections[1]).compact();
         assert_eq!(cache.get_with((0, 0), &chunk, |id| id == 1).len(), 0);
         Arc::make_mut(&mut chunk).sections[SECTIONS - 1] = Arc::new(Section::default());
         cache.clear(); // resource reload, with changed facts for the same state IDs
@@ -138,12 +175,35 @@ mod tests {
         }
         let chunk = Arc::new(chunk);
         let mut cache = RandomTickSections::default();
-        // Global maybe_has considers the entire ID range, including absent states.
+        // Global palettes: the states the blocks hold, not the whole ID range.
+        assert_eq!(cache.get_with((0, 0), &chunk, |id| id == 40000).len(), 0);
+        cache.clear();
         assert_eq!(
             cache
-                .get_with((0, 0), &chunk, |id| id == 40000)
+                .get_with((0, 0), &chunk, |id| id == 299)
                 .collect::<Vec<_>>(),
             [MIN_Y, MIN_Y + 9 * 16, MIN_Y + (SECTIONS as i32 - 1) * 16]
+        );
+        let sections = cache.get_with((0, 0), &chunk, |id| id == 299);
+        let top = MIN_Y + (SECTIONS as i32 - 1) * 16;
+        let from = |y| sections.from(y);
+        assert_eq!(
+            [
+                from(MIN_Y - 16),
+                from(MIN_Y),
+                from(MIN_Y + 16),
+                from(MIN_Y + 9 * 16)
+            ],
+            [
+                Some(MIN_Y),
+                Some(MIN_Y),
+                Some(MIN_Y + 9 * 16),
+                Some(MIN_Y + 9 * 16)
+            ]
+        );
+        assert_eq!(
+            [from(top), from(top + 16), from(top + 1000)],
+            [Some(top), None, None]
         );
     }
 }
@@ -201,7 +261,7 @@ mod tick_parity {
     }
 
     #[test]
-    fn actual_random_ticks_match_original_scan() {
+    fn actual_random_ticks_match_a_block_scan() {
         let root = std::env::var_os("HORIZON_RESOURCES")
             .map(PathBuf::from)
             .unwrap_or_else(|| {
@@ -228,6 +288,7 @@ mod tick_parity {
         let registry = data::load_registry(&root).unwrap();
         let (mut facts, behaviours) = BlockFacts::load_pair(&root, &registry).unwrap();
         let grass = registry.default_state("minecraft:grass_block").unwrap();
+        let stone = registry.default_state("minecraft:stone").unwrap();
         let chunk = |x| {
             let mut c = Chunk::empty(x, 0);
             c.lit = true;
@@ -280,6 +341,15 @@ mod tick_parity {
                     40 | 41 => {
                         Arc::make_mut(level.chunks.get_mut(&(0, 0)).unwrap()).lit = step == 41;
                     }
+                    70 => {
+                        // Every block of a ticking section replaced: its
+                        // palette still lists grass, but nothing ticks there.
+                        let c = Arc::make_mut(level.chunks.get_mut(&(-1, 0)).unwrap());
+                        for i in 0..4096 {
+                            c.set(i & 15, MIN_Y + 4 * 16 + (i >> 8), i >> 4 & 15, stone.0);
+                        }
+                        assert!(c.sections[4].blocks.maybe_has(|id| id == grass.0));
+                    }
                     _ => {}
                 }
             }
@@ -290,47 +360,43 @@ mod tick_parity {
                 facts.states[grass.0 as usize].random_ticks = step == 60;
                 cache.clear();
             }
-            let old: Vec<_> = original
-                .chunks
-                .iter()
-                .filter(|(_, c)| c.lit)
-                .map(|(&key, c)| {
-                    let sections: Vec<_> = c
-                        .sections
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, s)| {
-                            s.blocks
-                                .maybe_has(|id| facts.get(BlockStateId(id)).random_ticks)
-                        })
-                        .map(|(i, _)| MIN_Y + i as i32 * 16)
-                        .collect();
-                    (key, sections)
-                })
-                .collect();
-            let new: Vec<_> = cached
-                .chunks
-                .iter()
-                .filter(|(_, c)| c.lit)
-                .map(|(&key, c)| (key, cache.get(key, c, &facts)))
-                .collect();
-            assert_eq!(
-                old,
-                new.iter()
-                    .map(|(k, s)| (*k, s.collect::<Vec<_>>()))
-                    .collect::<Vec<_>>()
-            );
-            // Stand in for an inside-block/scheduled write AFTER eligibility capture.
+            // A write between ticks.
             if step == 20 {
                 for level in [&mut original, &mut cached] {
                     level.set_raw(BlockPos::new(0, MIN_Y + 16, 0), grass);
                 }
             }
-            for ((x, z), sections) in old {
-                behaviours.tick_chunk_random(&mut original, &mut a, ChunkPos::new(x, z), sections);
+            let lit = |level: &Level| {
+                let mut keys: Vec<_> = level
+                    .chunks
+                    .iter()
+                    .filter(|(_, c)| c.lit)
+                    .map(|(&key, _)| key)
+                    .collect();
+                keys.sort();
+                keys
+            };
+            let random = |id| facts.get(BlockStateId(id)).random_ticks;
+            for (x, z) in lit(&original) {
+                // Vanilla's rule, asked as each section is reached: any of its
+                // 4,096 blocks ticks randomly.
+                let reference = |level: &mut Level, from: i32| {
+                    let chunk = &level.chunks[&(x, z)];
+                    (from..MIN_Y + SECTIONS as i32 * 16)
+                        .step_by(16)
+                        .find(|&min_y| {
+                            (0..16).any(|y| {
+                                (0..16).any(|z| (0..16).any(|x| random(chunk.get(x, min_y + y, z))))
+                            })
+                        })
+                };
+                behaviours.tick_chunk_random(&mut original, &mut a, ChunkPos::new(x, z), reference);
             }
-            for ((x, z), sections) in new {
-                behaviours.tick_chunk_random(&mut cached, &mut b, ChunkPos::new(x, z), sections);
+            for (x, z) in lit(&cached) {
+                let memoized = |level: &mut Level, from| {
+                    cache.get((x, z), &level.chunks[&(x, z)], &facts).from(from)
+                };
+                behaviours.tick_chunk_random(&mut cached, &mut b, ChunkPos::new(x, z), memoized);
             }
             assert_eq!(original.reads, cached.reads, "ordered reads at tick {step}");
             assert_eq!(original.events, cached.events, "events at tick {step}");

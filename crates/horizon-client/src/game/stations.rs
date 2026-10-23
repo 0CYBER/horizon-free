@@ -13,7 +13,6 @@ use horizon_client::{
     stations::{self, AnvilResult, EnchantOffers},
 };
 use horizon_core::random::{LegacyRandom, RandomSource};
-use std::sync::Arc;
 
 /// Slot ids of the open station: inputs from 600, the result at 650.
 pub(super) const INPUT: usize = 600;
@@ -36,7 +35,7 @@ pub(super) enum Kind {
     Loom,
 }
 impl Kind {
-    fn from_block(name: &str) -> Option<Self> {
+    pub(super) fn from_block(name: &str) -> Option<Self> {
         Some(match name {
             "minecraft:enchanting_table" => Self::Enchanting,
             "minecraft:anvil" | "minecraft:chipped_anvil" | "minecraft:damaged_anvil" => {
@@ -51,7 +50,7 @@ impl Kind {
             _ => return None,
         })
     }
-    fn inputs(self) -> usize {
+    pub(super) fn inputs(self) -> usize {
         match self {
             Self::Smithing | Self::Loom => 3,
             Self::Stonecutter | Self::Beacon => 1,
@@ -71,7 +70,7 @@ impl Kind {
             Self::Loom => "gui/container/loom",
         }
     }
-    fn title_key(self) -> &'static str {
+    pub(super) fn title_key(self) -> &'static str {
         match self {
             Self::Enchanting => "container.enchant",
             Self::Anvil => "container.repair",
@@ -108,6 +107,10 @@ impl Kind {
         };
         table[i.min(table.len() - 1)]
     }
+    /// Whether the menu has a result slot after its inputs.
+    pub(super) fn has_result(self) -> bool {
+        self.result_pos().is_some()
+    }
     fn result_pos(self) -> Option<(f32, f32)> {
         match self {
             Self::Enchanting => None,
@@ -128,18 +131,20 @@ pub(super) struct Station {
     pub(super) pos: [i32; 3],
     pub(super) inputs: Vec<Option<ItemStack>>,
     pub(super) result: Option<ItemStack>,
-    offers: EnchantOffers,
+    pub(super) offers: EnchantOffers,
     bookcases: i32,
-    anvil: AnvilResult,
+    pub(super) anvil: AnvilResult,
     /// Anvil rename box text.
     pub(super) name: String,
-    /// Stonecutter: recipe indices for the input, selection and first shown index.
-    recipes: Vec<usize>,
-    selected: Option<usize>,
+    /// Stonecutter: the menu's recipe list (horizon_client::menu), its
+    /// `selectedRecipeIndex` and the screen's first shown index.
+    pub(super) stone: horizon_client::menu::Stonecutter,
+    pub(super) selected: Option<usize>,
     start: usize,
-    input_item: Option<Arc<str>>,
     /// Anvil: the input the rename box was last filled from.
     anvil_last: Option<ItemStack>,
+    /// Anvil on a server: the name last sent (the client menu's `itemName`).
+    pub(super) anvil_sent: Option<String>,
     /// When the screen opened: the rename box has the focus from then.
     opened: std::time::Instant,
     pub(super) last_sound: u64,
@@ -147,6 +152,8 @@ pub(super) struct Station {
     pub(super) merchant: Option<Box<super::trading::MerchantState>>,
     /// Beacon menu: the selected primary and secondary power (EFFECTS index).
     pub(super) beacon: [Option<usize>; 2],
+    /// A server's beacon menu: the pyramid's levels (its data slot 0).
+    pub(super) beacon_levels: Option<i32>,
     /// The loom's patterns, selection and scroller (game/loom.rs).
     pub(super) loom: super::loom::LoomState,
 }
@@ -161,20 +168,28 @@ impl Station {
             bookcases: 0,
             anvil: AnvilResult::default(),
             name: String::new(),
-            recipes: Vec::new(),
+            stone: Default::default(),
             selected: None,
             start: 0,
-            input_item: None,
             anvil_last: None,
+            anvil_sent: None,
             opened: std::time::Instant::now(),
             last_sound: 0,
             merchant: None,
             beacon: [None; 2],
+            beacon_levels: None,
             loom: Default::default(),
         }
     }
     pub(super) fn new_kind(kind: Kind, pos: [i32; 3]) -> Self {
         Self::new(kind, pos)
+    }
+    /// `StonecutterScreen.containerChanged`: without recipes to show, the
+    /// list scrolls back to the top.
+    pub(super) fn stonecutter_changed(&mut self) {
+        if self.inputs[0].is_none() || self.stone.recipes.is_empty() {
+            self.start = 0;
+        }
     }
 }
 
@@ -323,6 +338,10 @@ impl Game<'_> {
         let Some(mut station) = self.station.take() else {
             return;
         };
+        if self.remote.is_some() && station.kind != Kind::Merchant {
+            // A server's workstation: its removed() gives the inputs back.
+            return;
+        }
         if let Some(m) = station.merchant.as_mut() {
             self.merchant_closed(m);
         }
@@ -375,7 +394,7 @@ impl Game<'_> {
             _ => &mut self.scratch_slot,
         }
     }
-    fn count_bookshelves(&self, pos: [i32; 3]) -> i32 {
+    pub(super) fn count_bookshelves(&self, pos: [i32; 3]) -> i32 {
         let tags = &self.res.items().block_tags;
         let is = |p: [i32; 3], tag: &str| {
             let name = &self
@@ -399,7 +418,7 @@ impl Game<'_> {
             .count() as i32
     }
     /// The anvil name the menu works with (`AnvilScreen.onNameChanged`).
-    fn anvil_item_name(&self, s: &Station) -> String {
+    pub(super) fn anvil_item_name(&self, s: &Station) -> String {
         match &s.inputs[0] {
             Some(input)
                 if input.custom_name().is_none() && s.name == self.pack.names.item(&input.item) =>
@@ -419,6 +438,16 @@ impl Game<'_> {
         let data = self.res.stations();
         let items = self.res.items();
         match s.kind {
+            // A server's table: its data slots carry the offers, and its
+            // client menu only clears them without an enchantable item.
+            Kind::Enchanting if self.remote.is_some() => {
+                let enchantable = s.inputs[0].as_ref().is_some_and(|i| {
+                    data.enchantments.enchantable(&i.item) > 0 && i.enchantments().is_empty()
+                });
+                if !enchantable {
+                    s.offers = Default::default();
+                }
+            }
             Kind::Enchanting => {
                 s.bookcases = self.count_bookshelves(s.pos);
                 s.offers = stations::enchant_offers(
@@ -465,35 +494,9 @@ impl Game<'_> {
             // The menu engine keeps the merchant's result (Game::menu_session).
             Kind::Merchant => {}
             Kind::Beacon => {}
-            Kind::Cartography => s.result = self.cartography_result(&s),
-            // The menu engine keeps the loom's state (Game::menu_session).
-            Kind::Loom => {}
-            Kind::Stonecutter => {
-                let item = s.inputs[0].as_ref().map(|i| i.item.clone());
-                if item != s.input_item {
-                    s.input_item = item;
-                    s.selected = None;
-                    s.start = 0;
-                    s.recipes = match &s.inputs[0] {
-                        Some(input) => data
-                            .recipes
-                            .stonecutting
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, r)| r.input.test(input))
-                            .map(|(i, _)| i)
-                            .collect(),
-                        None => Vec::new(),
-                    };
-                }
-                s.result = match (s.selected, &s.inputs[0]) {
-                    (Some(i), Some(_)) => s
-                        .recipes
-                        .get(i)
-                        .map(|&r| data.recipes.stonecutting[r].result.clone()),
-                    _ => None,
-                };
-            }
+            // The menu engine keeps the cartography table's, the loom's and
+            // the stonecutter's state (Game::menu_session).
+            Kind::Cartography | Kind::Loom | Kind::Stonecutter => {}
         }
         self.station = Some(s);
     }
@@ -505,7 +508,6 @@ impl Game<'_> {
     }
     /// `Slot.mayPlace` and `getMaxStackSize` for station slots.
     fn slot_rules(&self, slot: usize, stack: &ItemStack) -> (bool, u32) {
-        let data = self.data();
         if slot >= super::mount_menu::SADDLE {
             return self.mount_slot_rules(slot, stack);
         }
@@ -528,24 +530,7 @@ impl Game<'_> {
         if slot == RESULT {
             return (false, 64);
         }
-        let i = slot - INPUT;
-        match s.kind {
-            Kind::Enchanting if i == 0 => (true, 1),
-            Kind::Beacon => (super::beacon::is_payment(&stack.item), 1),
-            Kind::Loom => (false, 64),
-            Kind::Cartography if i == 0 => (super::maps::map_id(stack).is_some(), 64),
-            Kind::Cartography => (
-                matches!(
-                    &*stack.item,
-                    "minecraft:paper" | "minecraft:map" | "minecraft:glass_pane"
-                ),
-                64,
-            ),
-            Kind::Enchanting => (&*stack.item == "minecraft:lapis_lazuli", 64),
-            Kind::Grindstone => (stations::grindstone_accepts(self.res.items(), stack), 64),
-            Kind::Smithing => (data.recipes.smithing_accepts(i, stack), 64),
-            _ => (true, 64),
-        }
+        (s.kind != Kind::Loom, 64)
     }
     /// `AbstractContainerMenu.doClick` PICKUP on a filtered slot.
     pub(super) fn click_filtered(&mut self, slot: usize, right: bool) {
@@ -644,112 +629,80 @@ impl Game<'_> {
         }
         stack.count != start
     }
-    /// The player inventory in menu order: main rows, then the hotbar.
-    fn player_slots() -> Vec<usize> {
-        (9..36).chain(0..9).collect()
+    /// After an anvil or smithing click on the menu engine: the anvil's cost
+    /// and state back into the station and the rename box following the
+    /// input (`AnvilScreen.slotChanged`), then the rest of a taken result's
+    /// `onTake` (the levels, the anvil's wear, the use sound) unless a
+    /// server does it.
+    pub(super) fn combiner_session_end(
+        &mut self,
+        menu: &horizon_client::menu::Menu,
+        predicting: bool,
+    ) {
+        let Some(s) = self.station.as_mut() else {
+            return;
+        };
+        let (pos, kind) = (s.pos, s.kind);
+        if kind == Kind::Anvil {
+            s.anvil.cost = menu.data[0];
+            s.anvil.repair_item_count_cost = menu.anvil.repair_count;
+            s.anvil.only_renaming = menu.anvil.only_renaming;
+            s.anvil.result = s.result.clone();
+        }
+        self.station_after_input();
+        if !menu.combined || predicting {
+            return;
+        }
+        if kind == Kind::Smithing {
+            self.level_event_at(1044, pos, 0);
+            return;
+        }
+        self.give_levels(menu.level_change);
+        if self.anvil_used(pos, self.creative) {
+            self.close_station();
+            self.screen = Screen::Playing;
+            self.capture(true);
+        }
     }
-    /// A shift-click: `AbstractContainerMenu.doClick`'s QUICK_MOVE repeats
-    /// `quickMoveStack` while it moves something and the slot still holds the
-    /// same item.
-    fn quick_move(&mut self, slot: usize) {
-        while let Some(item) = self.slot_mut(slot).as_ref().map(|s| s.item.clone())
-            && self.quick_move_once(slot)
-            && self.slot_mut(slot).as_ref().is_some_and(|s| s.item == item)
-        {}
-    }
-    /// The station menu's `quickMoveStack` for one slot (`EnchantmentMenu`,
-    /// `BeaconMenu`, `GrindstoneMenu`, `StonecutterMenu`,
-    /// `CartographyTableMenu`, and `ItemCombinerMenu` with `SmithingMenu`'s
-    /// `canMoveIntoInputSlots`); whether the stack's count changed. Each
-    /// rule that names its target slots moves nowhere else when they are full.
-    fn quick_move_once(&mut self, slot: usize) -> bool {
-        let Some(kind) = self.station.as_ref().map(|s| s.kind) else {
-            return false;
-        };
-        let Some(mut stack) = self.slot_mut(slot).take() else {
-            return false;
-        };
-        let start = stack.count;
-        let empty = |game: &mut Self, i: usize| game.station_slot_mut(INPUT + i).is_none();
-        // The other half of the inventory: main rows to the hotbar and back.
-        let halves: Vec<usize> = if slot < 9 {
-            (9..36).collect()
-        } else {
-            (0..9).collect()
-        };
-        if slot >= INPUT {
-            // An input slot: into the inventory, the hotbar's last slot first
-            // where vanilla moves in reverse.
-            let reverse = matches!(kind, Kind::Enchanting | Kind::Beacon);
-            self.move_to(&mut stack, &Self::player_slots(), reverse);
-        } else {
-            match kind {
-                Kind::Enchanting => {
-                    if &*stack.item == "minecraft:lapis_lazuli" {
-                        self.move_to(&mut stack, &[INPUT + 1], true);
-                    } else if empty(self, 0) {
-                        *self.station_slot_mut(INPUT) = Some(ItemStack {
-                            count: 1,
-                            ..stack.clone()
-                        });
-                        stack.count -= 1;
-                    }
+    /// `AnvilMenu.onTake`'s level part: out of creative a 12% chance
+    /// (`AnvilBlock.damage`) to wear the anvil a stage, or break a damaged one
+    /// (level event 1029); otherwise level event 1030. True when it broke.
+    pub(super) fn anvil_used(&mut self, pos: [i32; 3], creative: bool) -> bool {
+        let state = self.world.block(pos[0], pos[1], pos[2]);
+        let name = self.res.facts().get(state).name.clone();
+        let anvil = matches!(
+            &*name,
+            "minecraft:anvil" | "minecraft:chipped_anvil" | "minecraft:damaged_anvil"
+        );
+        if !creative && anvil && self.world.random.next_float() < 0.12 {
+            match &*name {
+                "minecraft:anvil" => {
+                    let _ = self.set_state_named(pos, "minecraft:chipped_anvil", &["facing"]);
                 }
-                Kind::Beacon => {
-                    if empty(self, 0) && super::beacon::is_payment(&stack.item) && stack.count == 1
-                    {
-                        self.move_to(&mut stack, &[INPUT], false);
-                    } else {
-                        self.move_to(&mut stack, &halves, false);
-                    }
+                "minecraft:chipped_anvil" => {
+                    let _ = self.set_state_named(pos, "minecraft:damaged_anvil", &["facing"]);
                 }
-                Kind::Grindstone => {
-                    if empty(self, 0) || empty(self, 1) {
-                        self.move_to(&mut stack, &[INPUT, INPUT + 1], false);
-                    } else {
-                        self.move_to(&mut stack, &halves, false);
-                    }
+                _ => {
+                    let _ = self.world.set(pos[0], pos[1], pos[2], self.world.air);
+                    self.world.modified.insert((pos[0] >> 4, pos[2] >> 4));
+                    self.level_event_at(1029, pos, 0);
+                    return true;
                 }
-                Kind::Stonecutter => {
-                    if self.data().recipes.stonecutter(&stack).is_empty() {
-                        self.move_to(&mut stack, &halves, false);
-                    } else {
-                        self.move_to(&mut stack, &[INPUT], false);
-                    }
-                }
-                Kind::Cartography => {
-                    if super::maps::map_id(&stack).is_some() {
-                        self.move_to(&mut stack, &[INPUT], false);
-                    } else if matches!(
-                        &*stack.item,
-                        "minecraft:paper" | "minecraft:map" | "minecraft:glass_pane"
-                    ) {
-                        self.move_to(&mut stack, &[INPUT + 1], false);
-                    } else {
-                        self.move_to(&mut stack, &halves, false);
-                    }
-                }
-                Kind::Anvil | Kind::Smithing => {
-                    let inputs: Vec<usize> = (0..kind.inputs()).map(|i| INPUT + i).collect();
-                    // ItemCombinerMenu.canMoveIntoInputSlots: always for the
-                    // anvil; the smithing table needs an empty slot whose
-                    // ingredient test takes the stack.
-                    let into_inputs = kind == Kind::Anvil
-                        || (0..3).any(|i| {
-                            empty(self, i) && self.data().recipes.smithing_accepts(i, &stack)
-                        });
-                    let targets = if into_inputs { &inputs } else { &halves };
-                    self.move_to(&mut stack, targets, false);
-                }
-                // Their clicks run on the menu engine.
-                Kind::Merchant | Kind::Loom => {}
             }
         }
-        let moved = stack.count != start;
-        if stack.count > 0 {
-            *self.slot_mut(slot) = Some(stack);
+        self.level_event_at(1030, pos, 0);
+        false
+    }
+    /// The grindstone result's `onTake` with a level (`amount`: the menu's
+    /// `getExperienceAmount` sum): the orbs at the block's centre
+    /// (`ExperienceOrb.award`), then level event 1042, the grindstone's sound
+    /// for everyone around.
+    pub(super) fn grindstone_taken(&mut self, pos: [i32; 3], amount: i32) {
+        let xp = stations::grindstone_xp_roll(amount, &mut self.world.random);
+        if xp > 0 {
+            self.spawn_orbs(pos.map(|v| f64::from(v) + 0.5), xp);
         }
-        moved
+        self.level_event_at(1042, pos, 0);
     }
     fn play_at(&mut self, sound: &str, pos: [i32; 3], volume: f32, pitch: f32) {
         let at = [
@@ -788,185 +741,6 @@ impl Game<'_> {
             _ => true,
         }
     }
-    /// The result slot's `onTake`.
-    fn take_result(&mut self) {
-        let Some(mut s) = self.station.take() else {
-            return;
-        };
-        let pos = s.pos;
-        match s.kind {
-            Kind::Anvil => {
-                let cost = s.anvil.cost;
-                let repair = s.anvil.repair_item_count_cost;
-                if repair > 0 {
-                    if let Some(a) = s.inputs[1].as_mut()
-                        && a.count > repair
-                    {
-                        a.count -= repair;
-                    } else {
-                        s.inputs[1] = None;
-                    }
-                } else if !s.anvil.only_renaming {
-                    s.inputs[1] = None;
-                }
-                s.inputs[0] = None;
-                s.name.clear();
-                if !self.creative {
-                    self.give_levels(-cost);
-                }
-                let pitch = self.world.random.next_float() * 0.1 + 0.9;
-                if !self.creative && self.world.random.next_float() < 0.12 {
-                    // AnvilBlock.damage
-                    let state = self.world.block(pos[0], pos[1], pos[2]);
-                    let name = self.res.facts().get(state).name.clone();
-                    let next = match &*name {
-                        "minecraft:anvil" => Some("minecraft:chipped_anvil"),
-                        "minecraft:chipped_anvil" => Some("minecraft:damaged_anvil"),
-                        _ => None,
-                    };
-                    match next {
-                        Some(next) => {
-                            let _ = self.set_state_named(pos, next, &["facing"]);
-                            self.play_at("minecraft:block.anvil.use", pos, 1.0, pitch);
-                        }
-                        None => {
-                            let _ = self.world.set(pos[0], pos[1], pos[2], self.world.air);
-                            self.world.modified.insert((pos[0] >> 4, pos[2] >> 4));
-                            self.play_at("minecraft:block.anvil.destroy", pos, 1.0, pitch);
-                            self.station = Some(s);
-                            self.close_station();
-                            self.screen = Screen::Playing;
-                            self.capture(true);
-                            return;
-                        }
-                    }
-                } else {
-                    self.play_at("minecraft:block.anvil.use", pos, 1.0, pitch);
-                }
-            }
-            Kind::Grindstone => {
-                let (a, b) = (s.inputs[0].take(), s.inputs[1].take());
-                let mut random = LegacyRandom::new(self.world.random.next_long());
-                let xp = stations::grindstone_experience(
-                    &self.res.stations().enchantments,
-                    &mut random,
-                    a.as_ref(),
-                    b.as_ref(),
-                );
-                if xp > 0 {
-                    self.spawn_orbs(
-                        [
-                            f64::from(pos[0]) + 0.5,
-                            f64::from(pos[1]) + 0.5,
-                            f64::from(pos[2]) + 0.5,
-                        ],
-                        xp,
-                    );
-                }
-                let pitch = self.world.random.next_float() * 0.1 + 0.9;
-                self.play_at("minecraft:block.grindstone.use", pos, 1.0, pitch);
-            }
-            Kind::Smithing => {
-                for slot in s.inputs.iter_mut() {
-                    if let Some(x) = slot.as_mut() {
-                        x.count -= 1;
-                        if x.count == 0 {
-                            *slot = None;
-                        }
-                    }
-                }
-                let pitch = self.world.random.next_float() * 0.1 + 0.9;
-                self.play_at("minecraft:block.smithing_table.use", pos, 1.0, pitch);
-            }
-            Kind::Stonecutter => {
-                if let Some(x) = s.inputs[0].as_mut() {
-                    x.count -= 1;
-                    if x.count == 0 {
-                        s.inputs[0] = None;
-                    }
-                }
-                if s.last_sound != self.ticks {
-                    s.last_sound = self.ticks;
-                    self.play_at("minecraft:ui.stonecutter.take_result", pos, 1.0, 1.0);
-                }
-            }
-            Kind::Merchant => {}
-            Kind::Beacon => {}
-            Kind::Cartography => {
-                for slot in &mut s.inputs {
-                    if let Some(x) = slot.as_mut() {
-                        x.count -= 1;
-                        if x.count == 0 {
-                            *slot = None;
-                        }
-                    }
-                }
-                if s.last_sound != self.ticks {
-                    s.last_sound = self.ticks;
-                    self.cartography_taken(pos);
-                }
-            }
-            Kind::Loom => {}
-            Kind::Enchanting => {}
-        }
-        self.station = Some(s);
-        self.station_changed();
-    }
-    fn click_result(&mut self, shift: bool) {
-        loop {
-            let Some(result) = self.station.as_ref().and_then(|s| s.result.clone()) else {
-                return;
-            };
-            if !self.may_take_result() {
-                return;
-            }
-            let result = if self
-                .station
-                .as_ref()
-                .is_some_and(|s| s.kind == Kind::Cartography)
-            {
-                self.cartography_post(result)
-            } else {
-                result
-            };
-            if shift {
-                let mut stack = result.clone();
-                let player = Self::player_slots();
-                // Simulate first so nothing is lost when the inventory is full.
-                let saved: Vec<Option<ItemStack>> = self.inventory.clone();
-                self.move_to(&mut stack, &player, true);
-                if stack.count > 0 {
-                    self.inventory = saved;
-                    return;
-                }
-            } else {
-                match &mut self.carried {
-                    None => self.carried = Some(result.clone()),
-                    Some(c)
-                        if c.same_item_same_components(&result)
-                            && c.count + result.count
-                                <= self.res.items().get(&c.item).map_or(64, |i| i.max_stack) =>
-                    {
-                        c.count += result.count
-                    }
-                    _ => return,
-                }
-            }
-            if let Some(s) = self.station.as_mut() {
-                s.result = None;
-            }
-            self.take_result();
-            let again = shift
-                && self
-                    .station
-                    .as_ref()
-                    .and_then(|s| s.result.as_ref())
-                    .is_some_and(|r| r.item == result.item);
-            if !again {
-                return;
-            }
-        }
-    }
     /// `EnchantmentMenu.clickMenuButton`.
     fn click_enchant(&mut self, button: usize) {
         let Some(s) = self.station.as_ref() else {
@@ -985,6 +759,11 @@ impl Game<'_> {
             || (self.experience.level < lapis_needed as i32 || self.experience.level < cost)
                 && !self.creative
         {
+            return;
+        }
+        if self.remote.is_some() {
+            // EnchantmentScreen.mouseClicked: the client menu took it, the server enchants.
+            self.remote_station_button(button as i32);
             return;
         }
         let Some(enchanted) = stations::apply_enchantment(
@@ -1036,7 +815,7 @@ impl Game<'_> {
                 })
                 .collect(),
             Kind::Stonecutter if s.inputs[0].is_some() => (s.start
-                ..(s.start + 12).min(s.recipes.len()))
+                ..(s.start + 12).min(s.stone.recipes.len()))
                 .map(|index| {
                     let p = index - s.start;
                     [
@@ -1089,64 +868,21 @@ impl Game<'_> {
                     }
                 }
             }
-            if kind == Kind::Stonecutter
-                && let Some(s) = self.station.as_ref()
-                && s.inputs[0].is_some()
-            {
-                for index in s.start..(s.start + 12).min(s.recipes.len()) {
-                    let p = index - s.start;
-                    let (x, y) = (52.0 + (p % 4) as f32 * 16.0, 14.0 + (p / 4) as f32 * 18.0);
-                    if inside(local, x, y, 16.0, 18.0) {
-                        if s.selected != Some(index) {
-                            if let Some(st) = self.station.as_mut() {
-                                st.selected = Some(index);
-                            }
-                            self.audio.play(
-                                "minecraft:ui.stonecutter.select_recipe",
-                                None,
-                                1.0,
-                                1.0,
-                            );
-                            self.station_changed();
-                        }
-                        return true;
-                    }
-                }
+            if kind == Kind::Stonecutter && self.stonecutter_click(local) {
+                return true;
             }
         }
         let Some(slot) = self.slot_at(&batch, self.cursor.0, self.cursor.1) else {
             return true;
         };
-        if self
-            .station
-            .as_ref()
-            .is_none_or(|s| matches!(s.kind, Kind::Loom | Kind::Merchant))
-        {
-            // LoomMenu, MerchantMenu and the brewing stand's BrewingStandMenu
-            // clicks run on the verified menu engine.
-            let input = if shift {
-                horizon_client::menu::Input::QuickMove
-            } else {
-                horizon_client::menu::Input::Pickup
-            };
-            self.menu_click(Some(slot), i32::from(right), input);
-            return true;
-        }
-        if slot == RESULT {
-            self.click_result(shift);
-            return true;
-        }
-        if shift {
-            self.quick_move(slot);
-        } else if slot >= INPUT {
-            self.click_filtered(slot, right);
+        // Every station's clicks (and the brewing stand's) run on the
+        // verified menu engine.
+        let input = if shift {
+            horizon_client::menu::Input::QuickMove
         } else {
-            return false;
-        }
-        if let Some(key) = self.container {
-            self.world.modified.insert((key.0 >> 4, key.2 >> 4));
-        }
-        self.station_after_input();
+            horizon_client::menu::Input::Pickup
+        };
+        self.menu_click(Some(slot), i32::from(right), input);
         true
     }
     /// Recompute after slot changes; the anvil box follows its input item.
@@ -1164,16 +900,49 @@ impl Game<'_> {
         }
         self.station_changed();
     }
+    /// `StonecutterScreen.mouseClicked` on its recipe grid: `clickMenuButton`
+    /// with the cell's index (an empty cell's too), and the select sound when
+    /// the menu took it.
+    fn stonecutter_click(&mut self, local: (f32, f32)) -> bool {
+        let Some(start) = self
+            .station
+            .as_ref()
+            .filter(|s| s.inputs[0].is_some() && !s.stone.recipes.is_empty())
+            .map(|s| s.start)
+        else {
+            return false;
+        };
+        for index in start..start + 12 {
+            let p = index - start;
+            let (x, y) = (52.0 + (p % 4) as f32 * 16.0, 14.0 + (p / 4) as f32 * 18.0);
+            if !inside(local, x, y, 16.0, 18.0) {
+                continue;
+            }
+            let mut taken = false;
+            let flag = &mut taken;
+            self.menu_session(|menu, env, _| {
+                *flag = menu.button(env, index as i32);
+                Some(*flag)
+            });
+            if taken {
+                self.audio
+                    .play("minecraft:ui.stonecutter.select_recipe", None, 1.0, 1.0);
+                self.remote_station_button(index as i32);
+                return true;
+            }
+        }
+        false
+    }
     pub(super) fn station_scroll(&mut self, d: f32) {
         self.merchant_scroll(d);
         self.loom_scroll(d);
         let Some(s) = self.station.as_mut() else {
             return;
         };
-        if s.kind != Kind::Stonecutter || s.recipes.len() <= 12 {
+        if s.kind != Kind::Stonecutter || s.stone.recipes.len() <= 12 {
             return;
         }
-        let rows = s.recipes.len().div_ceil(4) - 3;
+        let rows = s.stone.recipes.len().div_ceil(4) - 3;
         let first_row = (s.start / 4) as i32 - d.signum() as i32;
         s.start = first_row.clamp(0, rows as i32) as usize * 4;
     }
@@ -1207,6 +976,7 @@ impl Game<'_> {
             }
         }
         self.station_changed();
+        self.remote_anvil_rename();
     }
     /// Ctrl+A/C/V/X in the anvil's rename box (an `EditBox` of 50) or the
     /// recipe book's search box.
@@ -1227,6 +997,7 @@ impl Game<'_> {
             ANVIL_NAME_CHARS,
         ) {
             self.station_changed();
+            self.remote_anvil_rename();
         }
     }
 
@@ -1740,9 +1511,9 @@ impl Game<'_> {
                 }
                 Kind::Merchant | Kind::Beacon | Kind::Cartography | Kind::Loom => {}
                 Kind::Stonecutter => {
-                    let display = s.inputs[0].is_some() && !s.recipes.is_empty();
-                    let active = display && s.recipes.len() > 12;
-                    let rows = s.recipes.len().div_ceil(4).saturating_sub(3).max(1);
+                    let display = s.inputs[0].is_some() && !s.stone.recipes.is_empty();
+                    let active = display && s.stone.recipes.len() > 12;
+                    let rows = s.stone.recipes.len().div_ceil(4).saturating_sub(3).max(1);
                     let offs = if active {
                         (s.start / 4) as f32 / rows as f32
                     } else {
@@ -1763,13 +1534,14 @@ impl Game<'_> {
                         let (start, selected) = (s.start, s.selected);
                         // graphics.item: the icon only, without the count.
                         let shown: Vec<(usize, ItemStack)> = (start
-                            ..(start + 12).min(s.recipes.len()))
+                            ..(start + 12).min(s.stone.recipes.len()))
                             .map(|i| {
                                 (
                                     i,
                                     ItemStack {
                                         count: 1,
-                                        ..self.res.stations().recipes.stonecutting[s.recipes[i]]
+                                        ..self.res.stations().recipes.stonecutting
+                                            [s.stone.recipes[i]]
                                             .result
                                             .clone()
                                     },
@@ -2082,7 +1854,7 @@ impl Game<'_> {
             "bookcases": s.bookcases,
             "anvil_cost": s.anvil.cost,
             "result": s.result.as_ref().map(|r| format!("{} x{}", r.item, r.count)),
-            "recipes": s.recipes.iter().map(|&i| recipes[i].id.clone()).collect::<Vec<_>>(),
+            "recipes": s.stone.recipes.iter().map(|&i| recipes[i].id.clone()).collect::<Vec<_>>(),
             "selected": s.selected,
         })
     }

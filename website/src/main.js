@@ -1,10 +1,12 @@
 // The page's behaviour: the download buttons for this platform, the latest releases, the
-// links and contributors, the navigation, the menus' tabs, the lightbox and the motion.
+// links and contributors, how many play now, the navigation, the menus' tabs, the lightbox
+// and the motion.
 // Everything degrades to the baked-in content when GitHub can't be reached.
 import { escape } from "./markdown.js";
-import { releasesHtml } from "./releases.js";
+import { recentHtml } from "./releases.js";
 import { contributorsFrom, contributorsHtml } from "./contributors.js";
 import { isGame, isLauncher as isLauncherTag, launcherVersion, newestFirst } from "./versions.js";
+import { cached, get, setUpMenu, setUpTheme, slim } from "./chrome.js";
 
 const REPO = "ludovic111/horizon";
 const RELEASES_PAGE = `https://github.com/${REPO}/releases?q=launcher&expanded=true`;
@@ -13,33 +15,6 @@ const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 // --- GitHub --------------------------------------------------------------------------
 
-async function cached(key, load) {
-  try {
-    const hit = JSON.parse(sessionStorage.getItem(key) || "null");
-    if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.value;
-  } catch {}
-  const value = await load();
-  try {
-    sessionStorage.setItem(key, JSON.stringify({ at: Date.now(), value }));
-  } catch {}
-  return value;
-}
-
-async function get(url, as = "json") {
-  const res = await fetch(url, { headers: as === "json" ? { Accept: "application/vnd.github+json" } : {} });
-  if (!res.ok) throw new Error(`${res.status}`);
-  return as === "json" ? res.json() : res.text();
-}
-
-const slim = (r) => ({
-  tag_name: r.tag_name,
-  name: r.name,
-  published_at: r.published_at,
-  html_url: r.html_url,
-  prerelease: r.prerelease,
-  body: r.body || "",
-  assets: r.assets.map((a) => ({ name: a.name, browser_download_url: a.browser_download_url, size: a.size })),
-});
 const isLauncher = (r) => isLauncherTag(r.tag_name) && !r.prerelease;
 
 // The newest 100 releases (GitHub's most per page). Game betas come out several times a day, so the stable game
@@ -106,11 +81,12 @@ async function setUpDownload() {
   document.querySelectorAll("[data-download-meta]").forEach((p) => (p.innerHTML = meta));
 }
 
-// --- Patch notes and the links from main ---------------------------------
+// --- Recently added and the links from main ---------------------------------
 
-async function setUpNotes() {
-  const list = (await releases).filter((r) => isGame(r.tag_name) && !r.prerelease).sort((a, b) => newestFirst(a.tag_name, b.tag_name));
-  if (list.length) document.getElementById("releases").innerHTML = releasesHtml(list.slice(0, 3));
+// "Recently added": the newest game releases, Alpha and Stable.
+async function setUpRecent() {
+  const html = recentHtml((await releases).filter((r) => isGame(r.tag_name)));
+  if (html) document.getElementById("recent-releases").innerHTML = html;
 }
 
 async function setUpLinks() {
@@ -126,6 +102,34 @@ async function setUpLinks() {
     if (!url) a.hidden = true;
     else if (/^https:\/\//.test(url)) a.href = url;
   });
+}
+
+// --- Playing now ---------------------------------------------------------------------
+
+const TELEMETRY = "https://telemetry.playhorizon.dev";
+
+// How many play right now, from the games' anonymous "I'm playing" pings (Privacy explains them). The
+// server rounds it and makes it again at most every 15 seconds; the row stays hidden while nobody plays
+// or the server doesn't answer.
+async function setUpLive() {
+  const row = document.querySelector("[data-live]");
+  if (!row) return;
+  const update = async () => {
+    try {
+      const res = await fetch(`${TELEMETRY}/v1/live`, { signal: AbortSignal.timeout(3000) });
+      if (!res.ok) throw new Error(String(res.status));
+      const { playing } = await res.json();
+      if (!Number.isInteger(playing) || playing < 1) throw new Error("nobody");
+      row.querySelector("[data-live-count]").textContent = playing.toLocaleString("en");
+      row.hidden = false;
+      // It shows up after the others came in, so it skips their entrance.
+      row.classList.add("is-visible");
+    } catch {
+      row.hidden = true;
+    }
+  };
+  await update();
+  setInterval(() => document.visibilityState === "visible" && update(), 60_000);
 }
 
 // --- Navigation ----------------------------------------------------------------------
@@ -151,40 +155,6 @@ function setUpNav() {
   };
   onScroll(update);
   update();
-
-  // The phone menu: a full-screen sheet; the page behind it is inert while it is open.
-  const button = document.querySelector(".menu-button");
-  const menu = document.getElementById("menu");
-  const main = document.getElementById("main");
-  const label = button.querySelector(".menu-label");
-  const items = [...menu.querySelectorAll("nav a")];
-  items.forEach((a, i) => a.style.setProperty("transition-delay", `${60 + i * 35}ms`));
-  let closing;
-  const setOpen = (open) => {
-    clearTimeout(closing);
-    button.setAttribute("aria-expanded", String(open));
-    label.textContent = open ? "Close" : "Menu";
-    bar.classList.toggle("is-menu", open);
-    main.inert = open;
-    document.body.style.overflow = open ? "hidden" : "";
-    if (open) {
-      menu.hidden = false;
-      requestAnimationFrame(() => requestAnimationFrame(() => menu.classList.add("is-open")));
-      items[0].focus({ preventScroll: true });
-    } else {
-      menu.classList.remove("is-open");
-      closing = setTimeout(() => (menu.hidden = true), reducedMotion ? 0 : 320);
-    }
-  };
-  button.addEventListener("click", () => setOpen(button.getAttribute("aria-expanded") !== "true"));
-  items.forEach((a) => a.addEventListener("click", () => setOpen(false)));
-  addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && button.getAttribute("aria-expanded") === "true") {
-      setOpen(false);
-      button.focus();
-    }
-  });
-  matchMedia("(min-width: 1120px)").addEventListener("change", (e) => e.matches && setOpen(false));
 }
 
 // One rAF-throttled scroll listener for everything that follows the scroll.
@@ -254,27 +224,6 @@ function setUpLightbox() {
   });
 }
 
-// --- Light and dark ------------------------------------------------------------------
-
-// The page follows the system; the toggle picks the other appearance and remembers it.
-function setUpTheme() {
-  const root = document.documentElement;
-  const button = document.querySelector(".theme-toggle");
-  const label = button.querySelector("[data-theme-label]");
-  const system = matchMedia("(prefers-color-scheme: dark)");
-  const dark = () => (root.dataset.theme ? root.dataset.theme === "dark" : system.matches);
-  const show = () => (label.textContent = dark() ? "Light" : "Dark");
-  button.addEventListener("click", () => {
-    root.dataset.theme = dark() ? "light" : "dark";
-    try {
-      localStorage.setItem("theme", root.dataset.theme);
-    } catch {}
-    show();
-  });
-  system.addEventListener("change", show);
-  show();
-}
-
 // --- Motion ---------------------------------------------------------------------------
 
 function setUpReveal() {
@@ -308,9 +257,11 @@ function setUpReveal() {
 setUpReveal();
 setUpTheme();
 setUpNav();
+setUpMenu();
 setUpTabs();
 setUpLightbox();
 setUpDownload();
-setUpNotes();
+setUpRecent();
 setUpLinks();
 setUpContributors();
+setUpLive();
