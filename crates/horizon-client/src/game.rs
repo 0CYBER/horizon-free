@@ -3586,8 +3586,6 @@ impl Game<'_> {
         }
     }
     fn tick_using(&mut self) {
-        // ItemCooldowns.tick for the shield.
-        self.shield_cooldown = self.shield_cooldown.saturating_sub(1);
         let Some(hand) = self.used_hand() else {
             return;
         };
@@ -4293,6 +4291,9 @@ impl Game<'_> {
     fn tick_world(&mut self, running: bool) -> Result<()> {
         self.update_chunk_tickets();
         horizon_client::spans::time("tick_effects", || self.tick_effects());
+        // Player.tick's ItemCooldowns.tick for the window's player (a
+        // server's players count theirs down in `tick_guests`).
+        self.shield_cooldown = self.shield_cooldown.saturating_sub(1);
         horizon_client::spans::time("tick_using", || self.tick_using());
         horizon_client::spans::time("tick_hud", || self.tick_hud());
         // The player's digging comes in with its packets, before the level
