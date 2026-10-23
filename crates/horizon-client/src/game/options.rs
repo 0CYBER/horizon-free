@@ -200,6 +200,13 @@ impl Game<'_> {
                     self.settings.save(&Self::options_path());
                     self.apply_settings();
                     self.sync_mods();
+                    self.sync_agent_control();
+                    self.ui.options.agent_status = self.agent_status_lines();
+                }
+                Event::CopyAgentDetails => {
+                    use horizon_client::clipboard::Clipboard;
+                    let text = self.agent_details();
+                    self.clipboard.set(&text);
                 }
                 Event::Close if self.ui.options.resource_error.is_some() => {}
                 Event::Close => {
@@ -234,6 +241,10 @@ impl Game<'_> {
                     let dir = horizon_client::shader_pack::folder();
                     let _ = std::fs::create_dir_all(&dir);
                     super::packs::open_folder(&dir);
+                }
+                Event::Credits => self.open_win_screen(false, super::win::Finish::Options),
+                Event::ReloadShaderPack => {
+                    self.load_shader_pack();
                 }
             }
         }

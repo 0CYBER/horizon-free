@@ -16,7 +16,7 @@ use horizon_client::{
     sound_engine::{CartSound, SoundEngine, SoundInstance, Sounds},
 };
 use horizon_core::{
-    geometry::{Aabb, Vec3},
+    geometry::{Aabb, Vec3, trig},
     random::RandomSource,
 };
 use horizon_world::registry::BlockStateId;
@@ -637,6 +637,9 @@ impl Game<'_> {
         let r = self.world.random.next_double();
         let power = (4.0 + r * 1.5 * speed) as f32;
         let at = [c.position.x, c.position.y, c.position.z];
+        // The cart is the explosion's source: it is gone before the blast
+        // looks for entities, so it can't hit itself.
+        self.carts.retain(|x| x.id != c.id);
         let _ = self.server_explode(at, power, BlockInteraction::Destroy, false);
     }
     /// `MinecartHopper.suckInItems`: items above, into the five slots.
@@ -683,8 +686,7 @@ impl Game<'_> {
             }
         }
     }
-    /// `AbstractMinecart.push(player)` when the player walks into a cart,
-    /// and carts pushing each other (`pushOtherMinecart`).
+    /// `AbstractMinecart.push(player)` when the player walks into a cart.
     fn push_carts(&mut self) {
         let player = self.player.as_ref().map(|p| p.position);
         let riding = self.riding;
@@ -719,55 +721,71 @@ impl Game<'_> {
                     }
                 }
             }
-            for j in i + 1..self.carts.len() {
-                let (a, b) = (&self.carts[i], &self.carts[j]);
-                if !a
-                    .bounds()
-                    .inflate(Vec3::new(0.2, 0.0, 0.2))
-                    .intersects(b.bounds())
-                {
-                    continue;
-                }
-                let (mut xa, mut za) = (b.position.x - a.position.x, b.position.z - a.position.z);
-                let dd = xa * xa + za * za;
-                if dd < 1.0e-4 {
-                    continue;
-                }
-                let d = dd.sqrt();
-                let pow = (1.0 / d).min(1.0);
-                xa = xa / d * pow * f64::from(0.1f32) * 0.5;
-                za = za / d * pow * f64::from(0.1f32) * 0.5;
-                let dir =
-                    glam::DVec2::new(b.position.x - a.position.x, b.position.z - a.position.z)
-                        .normalize_or_zero();
-                let r = a.yaw.to_radians();
-                let facing =
-                    glam::DVec2::new(f64::from(r.cos()), f64::from(r.sin())).normalize_or_zero();
-                if dir.dot(facing).abs() < f64::from(0.8f32) {
-                    continue;
-                }
-                let (ma, mb) = (a.velocity, b.velocity);
-                let (fa, fb) = (a.kind == CartKind::Furnace, b.kind == CartKind::Furnace);
-                let (na, nb) = if fb && !fa {
-                    (
-                        Vec3::new(ma.x * 0.2 + mb.x - xa, ma.y, ma.z * 0.2 + mb.z - za),
-                        Vec3::new(mb.x * 0.95, mb.y, mb.z * 0.95),
-                    )
-                } else if fa && !fb {
-                    (
-                        Vec3::new(ma.x * 0.95, ma.y, ma.z * 0.95),
-                        Vec3::new(mb.x * 0.2 + ma.x + xa, mb.y, mb.z * 0.2 + ma.z + za),
-                    )
-                } else {
-                    let (xdd, zdd) = ((mb.x + ma.x) / 2.0, (mb.z + ma.z) / 2.0);
-                    (
-                        Vec3::new(ma.x * 0.2 + xdd - xa, ma.y, ma.z * 0.2 + zdd - za),
-                        Vec3::new(mb.x * 0.2 + xdd + xa, mb.y, mb.z * 0.2 + zdd + za),
-                    )
-                };
-                self.carts[i].velocity = na;
-                self.carts[j].velocity = nb;
+        }
+    }
+    /// `OldMinecartBehavior.pushAndPickupEntities` for carts, at the end of
+    /// cart `i`'s own tick: each other cart in its box (0.2 wider on each
+    /// side) gets `push(cart i)`. Running it per cart, after that cart moved
+    /// and before the next one does, is what splits stacked carts apart.
+    fn push_from_cart(&mut self, i: usize) {
+        let reach = f64::from(0.2f32);
+        let hitbox = self.carts[i].bounds().inflate(Vec3::new(reach, 0.0, reach));
+        for j in 0..self.carts.len() {
+            if j == i || !hitbox.intersects(self.carts[j].bounds()) {
+                continue;
             }
+            // AbstractMinecart.push(entity): `this` is cart j, `entity` cart i.
+            let (this, other) = (&self.carts[j], &self.carts[i]);
+            let (mut xa, mut za) = (
+                other.position.x - this.position.x,
+                other.position.z - this.position.z,
+            );
+            let dd = xa * xa + za * za;
+            if dd < f64::from(1.0e-4f32) {
+                continue;
+            }
+            let d = dd.sqrt();
+            xa /= d;
+            za /= d;
+            let pow = (1.0 / d).min(1.0);
+            xa = xa * pow * f64::from(0.1f32) * 0.5;
+            za = za * pow * f64::from(0.1f32) * 0.5;
+            // pushOtherMinecart (old movement): only along this cart's facing.
+            let dir = glam::DVec2::new(
+                other.position.x - this.position.x,
+                other.position.z - this.position.z,
+            )
+            .normalize_or_zero();
+            let r = f64::from(this.yaw * 0.017453292f32);
+            let facing = glam::DVec2::new(f64::from(trig::cos(r)), f64::from(trig::sin(r)))
+                .normalize_or_zero();
+            if dir.dot(facing).abs() < f64::from(0.8f32) {
+                continue;
+            }
+            let (mt, mo) = (this.velocity, other.velocity);
+            let (ft, fo) = (
+                this.kind == CartKind::Furnace,
+                other.kind == CartKind::Furnace,
+            );
+            let (nt, no) = if fo && !ft {
+                (
+                    Vec3::new(mt.x * 0.2 + (mo.x - xa), mt.y, mt.z * 0.2 + (mo.z - za)),
+                    Vec3::new(mo.x * 0.95, mo.y, mo.z * 0.95),
+                )
+            } else if !fo && ft {
+                (
+                    Vec3::new(mt.x * 0.95, mt.y, mt.z * 0.95),
+                    Vec3::new(mo.x * 0.2 + (mt.x + xa), mo.y, mo.z * 0.2 + (mt.z + za)),
+                )
+            } else {
+                let (xdd, zdd) = ((mo.x + mt.x) / 2.0, (mo.z + mt.z) / 2.0);
+                (
+                    Vec3::new(mt.x * 0.2 + (xdd - xa), mt.y, mt.z * 0.2 + (zdd - za)),
+                    Vec3::new(mo.x * 0.2 + (xdd + xa), mo.y, mo.z * 0.2 + (zdd + za)),
+                )
+            };
+            self.carts[j].velocity = nt;
+            self.carts[i].velocity = no;
         }
     }
     /// Every cart but the ridden one (which ticks with its rider).
@@ -775,13 +793,19 @@ impl Game<'_> {
         self.push_carts();
         // ServerLevel.tick: only entities in entity-ticking chunks tick.
         let ticking = self.entity_ticking_area();
-        let mut i = 0;
-        while i < self.carts.len() {
+        // A server player's minecart moves with its rider (lan_vehicles.rs).
+        let ridden = self.guest_vehicles();
+        // By id: an exploding cart can destroy or prime others mid-loop.
+        let ids: Vec<u32> = self.carts.iter().map(|c| c.id).collect();
+        for id in ids {
+            let Some(i) = self.carts.iter().position(|c| c.id == id) else {
+                continue;
+            };
             let p = self.carts[i].position;
-            if Some(self.carts[i].id) == self.riding
+            if Some(id) == self.riding
+                || ridden.contains(&id)
                 || !ticking(p.x.floor() as i32, p.z.floor() as i32)
             {
-                i += 1;
                 continue;
             }
             let mut c = self.carts[i].clone();
@@ -789,9 +813,12 @@ impl Game<'_> {
             if c.kind == CartKind::Hopper {
                 self.hopper_cart_pickup(&mut c);
             }
+            let Some(i) = self.carts.iter().position(|c| c.id == id) else {
+                continue;
+            };
             if alive {
                 self.carts[i] = c;
-                i += 1;
+                self.push_from_cart(i);
             } else {
                 self.carts.remove(i);
             }
@@ -862,8 +889,13 @@ impl Game<'_> {
             p.velocity = Vec3::ZERO;
             p.fall_distance = 0.0;
         }
+        let Some(i) = self.carts.iter().position(|x| x.id == c.id) else {
+            self.riding = None;
+            return true;
+        };
         if alive {
             self.carts[i] = c;
+            self.push_from_cart(i);
         } else {
             self.carts.remove(i);
             self.riding = None;
@@ -986,7 +1018,7 @@ impl Game<'_> {
         let held = self.held().cloned();
         match self.carts[i].kind {
             CartKind::Rideable => {
-                if sneaking || self.riding.is_some() {
+                if sneaking || self.riding.is_some() || self.ridden_by_guest(self.carts[i].id) {
                     return false;
                 }
                 self.riding = Some(self.carts[i].id);
@@ -1118,8 +1150,8 @@ impl Game<'_> {
     }
     /// `VehicleEntity.hurtServer`: shake, add the damage, break past 40 (at
     /// once for creative players); TNT minecarts prime instead when moving
-    /// or hurt by fire.
-    fn hurt_cart(&mut self, i: usize, damage: f32, creative: bool, fire: bool) {
+    /// or hurt by fire or an explosion (`damageSourceIgnitesTnt`).
+    pub(super) fn hurt_cart(&mut self, i: usize, damage: f32, creative: bool, fire: bool) {
         let c = &mut self.carts[i];
         c.hurt_dir = -c.hurt_dir;
         c.hurt_time = 10;
@@ -1128,7 +1160,7 @@ impl Game<'_> {
         if destroyed {
             let mut c = self.carts.remove(i);
             let speed = c.velocity.x * c.velocity.x + c.velocity.z * c.velocity.z;
-            if c.kind == CartKind::Tnt && (fire || speed >= 0.01) {
+            if c.kind == CartKind::Tnt && (fire || speed >= f64::from(0.01f32)) {
                 // MinecartTNT.destroy: prime instead of breaking.
                 if c.fuse < 0 {
                     self.prime_cart(&mut c);

@@ -23,7 +23,7 @@ const GATEWAY_FILE: &str = "horizon-end-gateways.json";
 
 /// A gateway teleport waiting for its destination chunks.
 #[derive(Clone, Copy, Debug)]
-enum GatewayJob {
+pub(super) enum GatewayJob {
     /// TheEndGatewayBlockEntity.findOrCreateValidTeleportPos from this gateway.
     Find { gateway: [i32; 3] },
     /// A known exit (exact, or findExitPosition around it).
@@ -138,47 +138,12 @@ impl Game<'_> {
         }
     }
 
-    /// SkyRenderer.buildEndSky: six faces of end_sky.png tiled 16 times,
-    /// tinted 0x282828. The atlas does not wrap, so each face is 16×16 quads.
-    pub(super) fn end_sky_geometry(&self) -> Vec<Vertex> {
-        let mut out = Vec::with_capacity(6 * 256 * 4);
-        let Some(r) = self.gui.atlas.sprites.get("environment/end_sky").copied() else {
+    /// SkyRenderer.renderEndFlash, drawn after the renderer's resident sky mesh.
+    pub(super) fn end_flash_geometry(&self) -> Vec<Vertex> {
+        let mut out = Vec::new();
+        // The old combined sky/flash draw also skipped the flash without a sky sprite.
+        if !self.gui.atlas.sprites.contains_key("environment/end_sky") {
             return out;
-        };
-        use std::f32::consts::FRAC_PI_2;
-        let faces = [
-            glam::Mat4::IDENTITY,
-            glam::Mat4::from_rotation_x(FRAC_PI_2),
-            glam::Mat4::from_rotation_x(-FRAC_PI_2),
-            glam::Mat4::from_rotation_x(std::f32::consts::PI),
-            glam::Mat4::from_rotation_z(FRAC_PI_2),
-            glam::Mat4::from_rotation_z(-FRAC_PI_2),
-        ];
-        let step = 200.0 / 16.0;
-        for pose in faces {
-            for a in 0..16 {
-                for b in 0..16 {
-                    let (x0, z0) = (-100.0 + step * a as f32, -100.0 + step * b as f32);
-                    let (x1, z1) = (x0 + step, z0 + step);
-                    let corners = [
-                        (x0, z0, [r.u0, r.v0]),
-                        (x0, z1, [r.u0, r.v1]),
-                        (x1, z1, [r.u1, r.v1]),
-                        (x1, z0, [r.u1, r.v0]),
-                    ];
-                    for (x, z, uv) in corners {
-                        let p = pose.transform_point3(glam::Vec3::new(x, -100.0, z));
-                        out.push(Vertex {
-                            normal: [0; 4],
-                            pos: p.to_array(),
-                            uv,
-                            layer: 2,
-                            color: 0xFF28_2828,
-                            light: 0,
-                        });
-                    }
-                }
-            }
         }
         // SkyRenderer.renderEndFlash: the end_flash sprite at height 100, scale 60.
         let intensity = self.end.flash.intensity(self.clock.fraction() as f32);
@@ -377,7 +342,10 @@ impl Game<'_> {
             f64::from(p.dimensions.width),
             f64::from(p.dimensions.height),
         );
-        if portal {
+        if portal && self.dim == Dim::End && !self.level.seen_credits {
+            // EndPortalBlock.entityInside: the first exit shows the credits.
+            self.show_end_credits()?;
+        } else if portal {
             if self.portals.player.cooldown == 0 {
                 let target = if self.dim == Dim::End {
                     Dim::Overworld
@@ -448,7 +416,15 @@ impl Game<'_> {
                 f64::from(END_SPAWN[2]) + 0.5,
             ));
         }
-        // Leaving the End: the respawn position (the world spawn here).
+        // Leaving the End: the respawn position, a bed's found once it has
+        // loaded (findRespawnPositionAndUseSpawnBlock, not using it up).
+        if let Some(c) = self.respawn_config.filter(|c| c.dim == target) {
+            return Some(Vec3::new(
+                f64::from(c.pos[0]) + 0.5,
+                f64::from(c.pos[1]),
+                f64::from(c.pos[2]) + 0.5,
+            ));
+        }
         let s = self.level.spawn.unwrap_or([0.0, 64.0, 0.0]);
         Some(Vec3::new(s[0].floor() + 0.5, s[1], s[2].floor() + 0.5))
     }
@@ -519,7 +495,16 @@ impl Game<'_> {
             // Direction.WEST.toYRot().
             return Ok((target, Some(90.0)));
         }
-        // ServerPlayer.findRespawnPositionAndUseSpawnBlock: onto the spawn column.
+        // ServerPlayer.findRespawnPositionAndUseSpawnBlock: where the bed or
+        // anchor puts the player, facing it; else onto the spawn column.
+        let mut target = target;
+        if let Some(c) = self.respawn_config.filter(|c| c.dim == self.dim) {
+            if let Some((at, yaw)) = self.find_respawn_and_use(c, false)? {
+                return Ok((at, Some(yaw)));
+            }
+            let s = self.level.spawn.unwrap_or([0.0, 64.0, 0.0]);
+            target = Vec3::new(s[0].floor() + 0.5, s[1], s[2].floor() + 0.5);
+        }
         let y = self
             .land_column(target.x.floor() as i32, target.z.floor() as i32)
             .map_or(target.y, f64::from);
@@ -735,6 +720,20 @@ impl Game<'_> {
     fn enter_gateway(&mut self, gateway: [i32; 3]) -> Result<()> {
         // TheEndGatewayBlockEntity.triggerCooldown: 40 ticks.
         self.end.gateway_cooldown = 40;
+        let (job, destination) = self.gateway_job(gateway);
+        let Some(player) = self.player.take() else {
+            return Ok(());
+        };
+        self.end.job = Some(job);
+        self.end_travel = true;
+        self.travelling = Some((player, destination));
+        Ok(())
+    }
+
+    /// Where `gateway` leads (TheEndGatewayBlockEntity.getPortalPosition):
+    /// its exit, or the search for one, and the spot to load before either
+    /// is resolved ([`Game::resolve_gateway`]).
+    pub(super) fn gateway_job(&mut self, gateway: [i32; 3]) -> (GatewayJob, Vec3) {
         let known = self.gateway_exits().get(&gateway).copied();
         let job = match known {
             Some((exit, exact)) => GatewayJob::Known { exit, exact },
@@ -760,13 +759,7 @@ impl Game<'_> {
                 Vec3::new(d.x, 75.0, d.y)
             }
         };
-        let Some(player) = self.player.take() else {
-            return Ok(());
-        };
-        self.end.job = Some(job);
-        self.end_travel = true;
-        self.travelling = Some((player, destination));
-        Ok(())
+        (job, destination)
     }
 
     fn chunk_empty(&self, x: f64, z: f64) -> Option<bool> {
@@ -803,7 +796,7 @@ impl Game<'_> {
 
     /// The teleport position of a gateway job, creating the exit gateway (and
     /// an island when the chunk has no landing spot) for new destinations.
-    fn resolve_gateway(&mut self, job: GatewayJob, target: Vec3) -> Result<Vec3> {
+    pub(super) fn resolve_gateway(&mut self, job: GatewayJob, target: Vec3) -> Result<Vec3> {
         let bottom_center = |p: [i32; 3]| {
             Vec3::new(
                 f64::from(p[0]) + 0.5,

@@ -154,21 +154,27 @@ pub enum Step {
     Wait,
     /// Show this page (an index into `Page::ALL`, wrapping).
     Go(usize),
+    /// Show the longest list (Versions) and scroll it on every frame while [`Bench::scrolling`].
+    Scroll,
     Quit,
 }
 
 const SWITCHING: Duration = Duration::from_secs(4);
+const SCROLLING: Duration = Duration::from_secs(3);
 const IDLE: Duration = Duration::from_secs(3);
 /// The environment variable that makes a launcher window measure itself into the file it names.
 const BENCH_ENV: &str = "HORIZON_LAUNCHER_BENCH";
 
 /// A launcher window measuring itself: after its first frame it switches pages every tick for
-/// a few seconds (each switch animates, so the UI draws continuously), then rests, then writes
-/// what it measured for `benchmark` and quits.
+/// a few seconds (each switch animates, so the UI draws continuously), scrolls the longest list
+/// on every frame for a few more, then rests, then writes what it measured for `benchmark` and
+/// quits.
 pub struct Bench {
     out: PathBuf,
     began: Option<Instant>,
     page: usize,
+    /// When scrolling began, and the UI frames drawn by then and by its end.
+    scroll: Option<(Instant, usize, Option<usize>)>,
     idle_cpu: Option<(Instant, f64)>,
 }
 
@@ -179,8 +185,14 @@ impl Bench {
             out: out.into(),
             began: None,
             page: 0,
+            scroll: None,
             idle_cpu: None,
         })
+    }
+
+    /// The window scrolls its content on every frame now.
+    pub fn scrolling(&self) -> bool {
+        matches!(self.scroll, Some((_, _, None)))
     }
 
     pub fn tick(&mut self, perf: &Perf) -> Step {
@@ -191,6 +203,20 @@ impl Bench {
         if began.elapsed() < SWITCHING {
             self.page += 1;
             return Step::Go(self.page);
+        }
+        let frames = perf.ui_frame_times().len();
+        match &mut self.scroll {
+            None => {
+                self.scroll = Some((Instant::now(), frames, None));
+                return Step::Scroll;
+            }
+            Some((at, _, end @ None)) => {
+                if at.elapsed() < SCROLLING {
+                    return Step::Wait;
+                }
+                *end = Some(frames);
+            }
+            Some(_) => {}
         }
         let pid = std::process::id();
         let Some((rested, cpu)) = self.idle_cpu else {
@@ -212,9 +238,15 @@ impl Bench {
                 .unwrap_or_default();
             (now.saturating_sub(ago)).as_secs_f64() * 1000.0
         };
+        let ui = perf.ui_frame_times();
+        let scroll = match self.scroll {
+            Some((_, from, Some(to))) => &ui[from.min(to)..to.min(ui.len())],
+            _ => &[],
+        };
         let result = serde_json::json!({
             "first_frame_epoch_ms": epoch_ms(first),
-            "ui_ms": perf.ui_frame_times(),
+            "ui_ms": ui,
+            "scroll_ms": scroll,
             "rss_mb": horizon_bench::rss_bytes(pid).map(|b| b as f64 / f64::from(1 << 20)),
             "cpu_idle_pct": cpu_idle_pct,
         });
@@ -270,20 +302,36 @@ pub fn benchmark(repeats: usize) -> Result<PathBuf, String> {
         }
         rss.extend(result["rss_mb"].as_f64());
         cpu.extend(result["cpu_idle_pct"].as_f64());
-        let ui: Vec<f32> = result["ui_ms"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|v| v.as_f64())
-            .map(|v| v as f32)
-            .collect();
+        let times = |key: &str| -> Vec<f32> {
+            result[key]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|v| v.as_f64())
+                .map(|v| v as f32)
+                .collect()
+        };
+        let (ui, scroll) = (times("ui_ms"), times("scroll_ms"));
         report
             .frames
             .extend(Frames::of("pages", repeat as u32, &ui, &[], &[]));
+        report
+            .frames
+            .extend(Frames::of("scroll", repeat as u32, &scroll, &[], &[]));
+        let mut sorted = scroll.clone();
+        sorted.sort_by(f32::total_cmp);
+        let at = |q: f32| {
+            sorted
+                .get(((sorted.len() as f32 - 1.) * q) as usize)
+                .copied()
+        };
         eprintln!(
-            "start {}: {:.0} ms to the first frame",
+            "start {}: {:.0} ms to the first frame; scrolling {} frames, median {:.1} ms, p95 {:.1} ms",
             repeat + 1,
-            starts.last().unwrap_or(&0.0)
+            starts.last().unwrap_or(&0.0),
+            sorted.len(),
+            at(0.5).unwrap_or(0.),
+            at(0.95).unwrap_or(0.)
         );
     }
     report.metric("launcher.cold_start_ms", &starts[..starts.len().min(1)]);
@@ -364,6 +412,7 @@ mod tests {
             began: None,
             page: 0,
             idle_cpu: None,
+            scroll: None,
         };
         assert!(matches!(bench.tick(&perf), Step::Wait));
         perf.frame();

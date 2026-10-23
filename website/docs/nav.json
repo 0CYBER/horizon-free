@@ -2,6 +2,6 @@
   { "group": "Start here", "pages": ["index", "install"] },
   { "group": "Playing", "pages": ["settings", "multiplayer", "troubleshooting"] },
   { "group": "Hosting", "pages": ["hosting"] },
-  { "group": "Going further", "pages": ["modpacks", "mods", "performance"] },
+  { "group": "Going further", "pages": ["modpacks", "mods", "performance", "agents"] },
   { "group": "Project", "pages": ["contributing", "faq"] }
 ]

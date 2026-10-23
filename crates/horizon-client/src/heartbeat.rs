@@ -2,8 +2,8 @@
 //! launcher's "N playing now". While the game runs, a thread of its own sends a random session
 //! ID made here and kept only in memory, the version, the platform and whether a LAN or
 //! play-with-friends world is open, every minute and at once when that last one changes.
-//! It sends nothing when there is no server (`HORIZON_TELEMETRY_URL`, none by default) or
-//! with `HORIZON_NO_HEARTBEAT=1` (automated runs).
+//! It sends nothing when sending is turned off (`HORIZON_TELEMETRY_URL=off`) or with
+//! `HORIZON_NO_HEARTBEAT=1` (automated runs).
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::Thread;

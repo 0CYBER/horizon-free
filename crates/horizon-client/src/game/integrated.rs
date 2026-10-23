@@ -6,10 +6,12 @@
 //! the world's options) with [`Integrated::call`], as vanilla's client calls
 //! into its `IntegratedServer`.
 //!
-//! Opt-in again (`--server-thread` or `HORIZON_SERVER_THREAD=1`): it was the
-//! default for one day, but a server's players can't board, ride or hit
-//! boats and minecarts yet (#1222), and single player's window is one of
-//! them here.
+//! Opt-in again (`--server-thread` or `HORIZON_SERVER_THREAD=1`) until a
+//! server's players reach parity with the in-frame world: on the server
+//! thread, signs open no editor, books don't open, a totem doesn't save its
+//! holder and death keeps the inventory (#1380, #1366, #1292, #1284 and the
+//! other `[server-thread]` issues). LAN guests and dedicated servers use the
+//! same code either way.
 use super::{
     Game, Options, PackResources, Resources, UiResources,
     lan::{LanSettings, Owner},

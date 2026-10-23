@@ -13,17 +13,19 @@ Both are off by default. With no pack selected the renderer draws exactly what i
 | Part | State |
 | --- | --- |
 | Renderer layout (below) | today's code |
-| Horizon shader packs: `composite` stage, uniforms, hot reload, Shader Packs page | done (the page: list, pick, open the folder) |
-| Horizon shader packs: `deferred`, `gbuffer`, `shadow` stages, custom textures | planned |
+| Horizon shader packs: `composite` stage, uniforms, hot reload, Shader Packs page | done (the page: list, pick, open the folder, drop a pack on it) |
+| Horizon shader packs, api 2: stage `format`s, `[profiles]`, option descriptions, a `noise` texture, the opaque depth, a G-buffer reconstructed from depth, a sun/moon shadow map (Stages, below) | first slice: `examples/shaderpacks/horizon-ultra` |
+| Horizon shader packs: `deferred`, `gbuffer`, `shadow` stages (the pack's own code in the world pass) | planned |
+| Shader Pack Settings page: a pack's options, sub-screens, sliders, profiles and Reset, Horizon and Java packs alike; applied once on Done, as Iris does | done |
 | Java shader packs: preprocessing + GLSL parse coverage | spike done: 450 of 470 programs reach valid WGSL (below) |
-| Java shader packs: preprocessor (`crates/horizon-shaderpack`: includes, options, Iris's macros, JCPP's `#if` and `#define` rules) | done: every program of the three test packs preprocesses; ten packs tested (Compatibility, below) |
-| Java shader packs: GLSL → WGSL (`horizon_shaderpack::translate`: syntax-tree legaliser, naga) | done: the 464 programs the three test packs enable by default translate (below) |
-| Java shader packs: `shaders.properties` (`horizon_shaderpack::properties`: screens, sliders, profiles, `program.*.enabled`, image formats, blend modes) | done, no screen yet: read like Iris for the three test packs |
-| Java shader packs: full-screen pass plan (`horizon_shaderpack::pipeline`: `DRAWBUFFERS`/`RENDERTARGETS`, `colortexN` formats and clearing, buffer flips) | done: planned for the three test packs |
-| Java shader packs: full-screen passes drawn (`java_pack.rs`, `gfx/java_stages.rs`: `begin`, `prepare`, `deferred*`, `composite*`, `final` over Horizon's world) | first slice: BSL and Complementary run (below) |
-| Java shader packs: custom uniforms (`horizon_shaderpack::uniforms`), `sunPathRotation`, `clouds`/`sun`/`moon`, eye light | done for the full-screen passes (below) |
+| Java shader packs: preprocessor (`crates/horizon-shaderpack`: includes, options, Iris's macros, JCPP's `#if` and `#define` rules, `.lang` files) | done: every program of the three test packs preprocesses; ten packs tested (Compatibility, below) |
+| Java shader packs: GLSL → WGSL (`horizon_shaderpack::translate`: syntax-tree legaliser, naga; struct and nested-array varyings, vertex `texture`, `mat2(vec4)`, `1 << 31`) | done: the 464 programs the three test packs enable by default translate (below) |
+| Java shader packs: `shaders.properties` (`horizon_shaderpack::properties`: screens, sliders, profiles, `program.*.enabled`, image formats, blend modes, `texture.*`) | done: read like Iris for the three test packs |
+| Java shader packs: full-screen pass plan (`horizon_shaderpack::pipeline`: `DRAWBUFFERS`/`RENDERTARGETS`, `colortexN` formats and clearing, buffer flips, `blend.*`) | done: planned for the three test packs |
+| Java shader packs: full-screen passes drawn (`java_pack.rs`, `gfx/java_stages.rs`: `begin`, `prepare`, `deferred*`, `composite*`, `final` over Horizon's world) | first slice: BSL and Complementary run (below); `depthtex1`/`depthtex2` before translucent geometry, `blend.*`, PNG `texture.<stage>.*` and `texture.noise` |
+| Java shader packs: custom uniforms (`horizon_shaderpack::uniforms`), `sunPathRotation`, `clouds`/`sun`/`moon`, eye light, `wetness` | done for the full-screen passes (below) |
 | Java shader packs: `gbuffers_terrain`, `gbuffers_water` (`gfx/java_terrain.rs`: Horizon's terrain fed to the pack's programs) | first slice: MakeUp Ultra Fast, Chocapic13' and BSL draw their own terrain and water (below) |
-| Java shader packs: other `gbuffers_*`, `shadow`, custom textures, images, compute, option screen | planned |
+| Java shader packs: other `gbuffers_*`, `shadow`, `.dat` and resource-location textures, images, compute | planned |
 
 ## How the renderer draws a frame today
 
@@ -45,8 +47,7 @@ Everything is in `crates/horizon-client/src/gfx.rs`, `Renderer::render`, one com
 4. **Screen effects** (`screen_effects.rs`): pumpkin blur, portal, powder snow, vignette, nausea, as
    full-screen quads.
 5. **Menu blur** (`menu_blur.rs`, `menu_blur.wgsl`): vanilla's `menuBackgroundBlurriness` behind screens.
-6. **Menu grade** (`post.rs`, `post.wgsl`): the Horizon menus' frosted backdrop.
-7. **HUD** (`hud.rs`, `hud.wgsl`): GUI, text, items in slots.
+6. **HUD** (`hud.rs`, `hud.wgsl`): GUI, text, items in slots.
 
 All world shaders share one uniform block, `Globals` in `gfx.rs` (`struct Globals` in `terrain.wgsl`):
 view-projection, inverse view, fog colour and distances, sky colour, sun direction, sunrise colour, game time.
@@ -61,11 +62,18 @@ The lightmap, fog and sky colours are computed on the CPU (`environment.rs`, `fo
   `~/Library/Application Support/horizon` on macOS, `~/.local/share/horizon` on Linux), not the launcher's version
   folder. A pack with a `pack.toml` at its root is a Horizon pack; a folder with `shaders/`, or a `.zip`, is a Java
   pack.
-- The **Shader Packs** page lists them: a sidebar section in the Horizon menus, **Video Settings → Shader Packs...**
-  in the Classic ones, and the Shader Pack row of the graphics settings leads to it. It shows the folder's full path
+- The **Shader Packs** page lists them: **Video Settings → Shader Packs...** (where Iris puts its button), **Options →
+  Horizon Settings... → Shader Packs...**, and the Shader Pack row of the graphics settings lead to it. It shows the folder's full path
   and an *Open Folder* button (the folder is made if it is missing), then one switch per pack: turning one on picks
   it, turning it off is the vanilla picture. With no pack, it says so under the path. The list is read again every
-  second while the page is open, so a pack dropped into the folder shows up.
+  second while the page is open, so a pack dropped into the folder shows up. A `.zip` or pack folder dropped on the
+  window while the page shows is copied into the folder and picked (Iris's `ShaderPackScreen.onFilesDrop`); one of
+  that name already there is left alone.
+- With a pack on that has options, **Shader Pack Settings...** opens them: Horizon packs' `[options]` and
+  `[profiles]`, Java packs' `#define`/`const` options laid out by `shaders.properties` (`screen`, `screen.<name>`,
+  `sliders`, `profile.*`) and named by `lang/en_us.lang` (`option.*`, `value.*`, `screen.*`, `profile.*`, as Iris;
+  without one, the option's own name). The values are saved and the pack built again once, when the page closes
+  (Iris applies on Done), not on every click or slider step. A saved value an option doesn't list is ignored.
 - The choice is kept in `horizon-graphics.txt` (`shaderPack:<folder or zip name>`, empty = off). A pack's option
   values are kept in `shaderpacks/<pack>.txt`, as Iris does.
 - A pack that fails to load or compile leaves the vanilla picture (or the last pack that worked) on and says why on
@@ -81,7 +89,7 @@ my-pack/
     composite.wgsl
     bloom.wgsl
   textures/
-    noise.png          # planned
+    noise.png          # api 2: [textures] noise
   LICENSE
 ```
 
@@ -114,6 +122,24 @@ step = 0.05
 [options.vignette]
 label = "Vignette"
 default = true
+description = "Darkens the corners."   # optional: the button's tooltip
+```
+
+Api 2 (`api = 2`) adds:
+
+```toml
+[[stage]]
+kind = "composite"
+shader = "shaders/lighting.wgsl"
+format = "rgba16float"         # this stage's target: rgba8unorm, rgba16float or rgb10a2unorm; the last stage
+                               # always writes the screen's format, so earlier ones can keep HDR colour
+
+[profiles.low]                 # the Profile button cycles these; "Custom" when the values match none
+vignette = false
+saturation = 1.0
+
+[textures]
+noise = "textures/noise.png"   # replaces the prelude's noise_texture (256x256 random RGB without it)
 ```
 
 Options become WGSL [pipeline-overridable constants](https://www.w3.org/TR/WGSL/#override-decls): the shader
@@ -177,6 +203,29 @@ Prelude helpers: `linear_depth(depth) -> f32` (blocks from the eye), `view_posit
 
 The uniform layout only grows: a new field goes at the end and the `api` number goes up; a pack that declares an
 older `api` still loads.
+
+An `api = 2` pack's stages get a second prelude after the first (`shader_pack_prelude_api2.wgsl`; api 1 packs don't,
+so names they declare themselves can't clash):
+
+| Binding | WGSL | What |
+| --- | --- | --- |
+| 6 | `frame_ext: FrameExt` (uniform) | last frame's view and projection and camera, the shadow map's matrices, resolution and distance, eye light, smoothed rain |
+| 7, 8 | `scene_normal`, `scene_material: texture_2d<f32>` | the G-buffer (below) |
+| 9 | `opaque_depth: texture_depth_2d` | the world's depth before translucent geometry (water, glass, ice) |
+| 10, 11 | `shadow_depth: texture_depth_2d`, `shadow_sampler: sampler_comparison` | the sun's (the moon's at night) shadow map |
+| 12, 13 | `noise_texture: texture_2d<f32>`, `repeat_sampler: sampler` | `[textures] noise`, linear, repeat |
+
+Helpers: `opaque_depth_at(uv)`, `world_normal_at(uv)`, `material_at(uv)` (block light, sky light, translucent mask,
+roughness), `reproject_uv(world_offset)` (last frame's uv and depth), `sample_shadow(world_offset, normal)` (5-tap
+PCF, 1 lit .. 0 shadowed), `aces_tonemap(rgb)`.
+
+What each costs, only while a stage reads it (naga reports the bindings each entry point uses): the opaque depth, a
+depth copy between the opaque and translucent halves of the world pass; the G-buffer, one full-screen pass after
+the world; the shadow map, a depth pass of the terrain and entities from the light. Limits of this first slice: the
+G-buffer is reconstructed from depth and colour (normals from neighbouring depths, block light estimated from
+brightness, sky light the camera's), not written by the world's shaders; the shadow map holds the sections the
+camera draws, so casters outside the view throw no shadow, and none of the terrain where Metal draws sections as one
+list (`gfx/flat.rs`, more than 4096 of them). The `deferred`, `gbuffer` and `shadow` stages above replace these.
 
 ### How it renders
 
@@ -369,7 +418,8 @@ render them (Chocapic13' packs its G-buffer into them; half floats broke it).
 
 Occlusion culling works as in Horizon's world pass where the GPU has it: the pack's terrain program draws the
 sections the last test saw, the boxes of the others are tested against that depth (in OpenGL's layout, in a pass of
-their own since the pack's targets vary), and the pack's program then draws the ones in sight.
+their own since the pack's targets vary; on Metal the test reads the depth in the shader, as Horizon's does), and the
+pack's program then draws the ones in sight, flat draws included.
 
 What makes Horizon look like OpenGL to the pack:
 
@@ -402,12 +452,13 @@ What makes Horizon look like OpenGL to the pack:
 Measured on the Mac mini (M4 Pro) with the packs' default options: BSL v10.1.8 and Complementary Reimagined r5.9.3
 grade and light Horizon's world as their post-processing would. Sildur's Vibrant v2.02 draws only its sky: its
 `deferred` reads the albedo `gbuffers_*` write to `colortex4` (not checked again since the terrain programs run).
-Without the other `gbuffers_*` and `shadow`, no pack has its shadows or sky look yet; Distant Horizons' and Voxy's depth read as far. Not supported yet: images and
-compute (`.csh`; a pack that needs them doesn't load), mipmapped targets (`colortexNMipmapEnabled` is read but
-ignored), custom textures, the option screen; shadow matrices are identity. With the pack's terrain: entities, the
-sky, the hand, weather and clouds are still Horizon's (in `colortex0` only), block ids
-come from sprite names rather than block states, distant (LOD) terrain doesn't repeat its textures, and only the
-overworld has been checked.
+Without the other `gbuffers_*` and `shadow`, no pack has its shadows or sky look yet; Distant Horizons' and Voxy's
+depth read as far. Horizon's world goes into the target the pack's `gbuffers_terrain` (or the program Iris falls back
+to) draws to first: `colortex0` for most packs, `colortex1` for MakeUp. Not supported yet: images and compute (`.csh`;
+a pack that needs them doesn't load), mipmapped targets (`colortexNMipmapEnabled` is read but ignored), `.dat` and
+resource-location custom textures (PNG files in the pack only); shadow matrices are identity. With the pack's terrain:
+entities, the sky, the hand, weather and clouds are still Horizon's (in that first target only), block ids come from sprite names rather than block states, distant (LOD) terrain doesn't repeat its textures,
+and only the overworld has been checked.
 
 ### Compatibility
 

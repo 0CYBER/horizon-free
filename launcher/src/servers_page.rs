@@ -114,6 +114,18 @@ pub(super) struct Create {
     eula_missing: bool,
 }
 
+/// What the sidebar shows of the Servers page: its list once the page has read it, and whether
+/// a server answers.
+impl Servers {
+    pub(super) fn sidebar_list(&self) -> Option<&[Entry]> {
+        self.loaded.then_some(&self.list[..])
+    }
+
+    pub(super) fn is_up(&self, dir: &std::path::Path) -> bool {
+        self.statuses.get(dir).is_some_and(|s| s.phase == "running")
+    }
+}
+
 pub(super) struct Servers {
     list: Vec<Entry>,
     loaded: bool,
@@ -272,12 +284,10 @@ pub(super) fn stop_on_quit() {
 /// The player's own name, to let them in on a friends-only server: the Microsoft account that plays,
 /// else the name the game made up for them (`horizon-player.txt`).
 fn own_name(accounts: &Accounts) -> Option<String> {
-    accounts.selected().map(|a| a.name.clone()).or_else(|| {
-        std::fs::read_to_string(backend::game_home().join("horizon-player.txt"))
-            .ok()
-            .map(|n| n.trim().to_string())
-            .filter(|n| !n.is_empty())
-    })
+    accounts
+        .selected()
+        .map(|a| a.name.clone())
+        .or_else(crate::offline_name)
 }
 
 fn bytes(n: u64) -> String {

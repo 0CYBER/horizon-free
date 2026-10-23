@@ -1305,8 +1305,73 @@ pub fn load_light(tag: &Tag, chunk: &mut Chunk, sky_light: bool) {
         };
         layers[si as usize] = (layer("SkyLight"), layer("BlockLight"));
     }
-    let above = [if sky_light { 15 } else { 0 }; 256];
-    crate::light::light_from_layers(chunk, &layers, above, sky_light);
+    // Uniform saved layers need no expanded allocation. Both nibbles of
+    // each byte must match, not merely the bytes across the layer.
+    let uniform_layer = |layer: &[u8]| {
+        let first = layer[0];
+        (first & 15 == first >> 4 && layer.iter().all(|&v| v == first)).then_some(first & 15)
+    };
+    let mut above = [if sky_light { 15 } else { 0 }; 256];
+    for (si, (sky, block)) in layers.into_iter().enumerate().rev() {
+        let sky = sky.filter(|_| sky_light);
+        let sky_uniform = sky.map_or_else(
+            || above.iter().all(|&v| v == above[0]).then_some(above[0]),
+            uniform_layer,
+        );
+        let block_uniform = block.map_or(Some(0), uniform_layer);
+        let section = Arc::make_mut(&mut chunk.sections[si]);
+        if let (Some(s), Some(b)) = (sky_uniform, block_uniform) {
+            section.light = Light::Uniform(s << 4 | b);
+            above.fill(s);
+        } else {
+            let mut data = Box::new([0u8; 4096]);
+            match (sky, block) {
+                (Some(sky), Some(block)) => {
+                    for ((pair, &s), &b) in
+                        data.as_chunks_mut::<2>().0.iter_mut().zip(sky).zip(block)
+                    {
+                        pair[0] = s << 4 | (b & 15);
+                        pair[1] = (s & 0xf0) | (b >> 4);
+                    }
+                }
+                (Some(sky), None) => {
+                    for (pair, &s) in data.as_chunks_mut::<2>().0.iter_mut().zip(sky) {
+                        pair[0] = s << 4;
+                        pair[1] = s & 0xf0;
+                    }
+                }
+                (None, Some(block)) => {
+                    for (i, (pair, &b)) in data
+                        .as_chunks_mut::<2>()
+                        .0
+                        .iter_mut()
+                        .zip(block)
+                        .enumerate()
+                    {
+                        pair[0] = above[(i * 2) & 255] << 4 | (b & 15);
+                        pair[1] = above[(i * 2 + 1) & 255] << 4 | (b >> 4);
+                    }
+                }
+                (None, None) => {
+                    for layer in data.as_chunks_mut::<256>().0 {
+                        for (v, &s) in layer.iter_mut().zip(&above) {
+                            *v = s << 4;
+                        }
+                    }
+                }
+            }
+            if let Some(sky) = sky {
+                for (pair, &s) in above.as_chunks_mut::<2>().0.iter_mut().zip(sky) {
+                    pair[0] = s & 15;
+                    pair[1] = s >> 4;
+                }
+            }
+            section.light = Light::Full(data);
+        }
+        section.compact();
+    }
+    chunk.lit = true;
+    chunk.light_loaded = true;
 }
 
 type RegionCache = Mutex<HashMap<(i32, i32), Option<Arc<Mutex<RegionFile>>>>>;
@@ -2193,14 +2258,18 @@ pub struct Level {
     pub game_mode: i32,
     pub time: i64,
     pub day_time: i64,
-    /// The player's respawn point (bed, or the world spawn).
+    /// Where the player respawns when it has no bed or anchor: its forced
+    /// Overworld point (`spawnpoint`), or the world spawn.
     pub spawn: Option<[f64; 3]>,
-    /// A respawn point in another dimension than the Overworld (a respawn
-    /// anchor): dimension, block, yaw and `forced`.
+    /// A respawn point resolved through its block when the player respawns
+    /// (a bed, a respawn anchor, a forced point outside the Overworld):
+    /// dimension, block, yaw and `forced`.
     pub respawn_elsewhere: Option<(String, [i32; 3], f32, bool)>,
     pub position: Option<[f64; 3]>,
     pub rotation: [f32; 2],
     pub health: f32,
+    /// LivingEntity `AbsorptionAmount`: the golden hearts left.
+    pub absorption: f32,
     pub food: i32,
     pub saturation: f32,
     /// (slot, item, count, damage): 0..36 inventory, 100..103 armor (feet..head), 150 offhand.
@@ -2209,6 +2278,8 @@ pub struct Level {
     pub inventory_components: HashMap<u8, Box<crate::item_data::StackData>>,
     /// Player.XpSeed: the enchanting table seed.
     pub xp_seed: i32,
+    /// ServerPlayer.seenCredits: the end poem has been shown.
+    pub seen_credits: bool,
     /// Player.active_effects: (id, duration, amplifier, ambient, show_icon).
     pub active_effects: Vec<(String, i32, i32, bool, bool)>,
     /// Player.EnderItems: the ender chest inventory (27 slots).
@@ -2223,6 +2294,8 @@ pub struct Level {
     pub dimension: String,
     /// World spawn (`level.dat` `spawn`), distinct from a bed respawn point.
     pub world_spawn: Option<[i32; 3]>,
+    /// The world spawn's yaw and pitch (`setworldspawn`'s rotation).
+    pub world_spawn_angle: [f32; 2],
     pub difficulty: String,
     pub hardcore: bool,
     /// `difficulty_settings.locked` (LevelData.isDifficultyLocked).
@@ -2300,6 +2373,11 @@ impl Level {
                 ]
             }),
         };
+        let angle = |k: &str| match data.get("spawn").and_then(|s| s.get(k)) {
+            Some(Tag::Float(b)) => f32::from_bits(*b),
+            _ => 0.0,
+        };
+        level.world_spawn_angle = [angle("yaw"), angle("pitch")];
         if let Some(d) = data.get("difficulty_settings") {
             level.difficulty = text(d.get("difficulty")).unwrap_or_else(|| "normal".into());
             level.hardcore = n(d.get("hardcore")) != 0;
@@ -2390,6 +2468,7 @@ impl Level {
         }
         self.motion = read_doubles::<3>(p.get("Motion")).unwrap_or_default();
         self.health = f("Health").map_or(20.0, |v| v as f32);
+        self.absorption = f("AbsorptionAmount").map_or(0.0, |v| v as f32);
         self.food = n("foodLevel").map_or(20, |v| v as i32);
         self.saturation = f("foodSaturationLevel").map_or(5.0, |v| v as f32);
         self.food_exhaustion = f("foodExhaustionLevel").unwrap_or(0.0) as f32;
@@ -2400,6 +2479,7 @@ impl Level {
         self.selected_slot = n("SelectedItemSlot").unwrap_or(0) as i32;
         self.fall_distance = f("fall_distance").unwrap_or(0.0);
         self.on_ground = n("OnGround").unwrap_or(0) != 0;
+        self.seen_credits = n("seenCredits").unwrap_or(0) != 0;
         if let Some(mode) = n("playerGameType") {
             self.creative = mode == 1;
             self.game_mode = mode as i32;
@@ -2417,14 +2497,17 @@ impl Level {
         {
             let dimension =
                 text(respawn.get("dimension")).unwrap_or_else(|| "minecraft:overworld".into());
-            if dimension == "minecraft:overworld" {
+            let forced = number(respawn.get("forced")).is_some_and(|v| v != 0);
+            // A forced point in the Overworld (`spawnpoint`) is where the
+            // player respawns; anything else (a bed, an anchor) is resolved
+            // through its block then.
+            if dimension == "minecraft:overworld" && forced {
                 self.spawn = Some([f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])]);
             } else {
                 let yaw = match respawn.get("yaw") {
                     Some(Tag::Float(b)) => f32::from_bits(*b),
                     _ => 0.0,
                 };
-                let forced = number(respawn.get("forced")).is_some_and(|v| v != 0);
                 self.respawn_elsewhere = Some((dimension, [pos[0], pos[1], pos[2]], yaw, forced));
             }
         }
@@ -2561,6 +2644,7 @@ impl Level {
             ("OnGround", Tag::Byte(i8::from(self.on_ground))),
             ("fall_distance", Tag::Double(self.fall_distance.to_bits())),
             ("Health", Tag::Float(self.health.to_bits())),
+            ("AbsorptionAmount", Tag::Float(self.absorption.to_bits())),
             ("foodLevel", Tag::Int(self.food)),
             ("foodSaturationLevel", Tag::Float(self.saturation.to_bits())),
             (
@@ -2621,6 +2705,7 @@ impl Level {
         if let Some(pos) = self.position {
             entries.push(("Pos", doubles(&pos)));
         }
+        entries.push(("seenCredits", Tag::Byte(i8::from(self.seen_credits))));
         // A respawn point other than the world spawn: an anchor elsewhere, or a bed.
         if let Some((dimension, block, yaw, forced)) = &self.respawn_elsewhere {
             let mut respawn = vec![
@@ -2639,6 +2724,8 @@ impl Level {
                 s[1].floor() as i32,
                 s[2].floor() as i32,
             ];
+            // A point of the player's own in the Overworld other than a bed
+            // (`respawn_elsewhere`): `spawnpoint`'s, forced.
             if Some(block) != self.world_spawn {
                 entries.push((
                     "respawn",
@@ -2647,6 +2734,7 @@ impl Level {
                         ("pos", Tag::IntArray(block.to_vec())),
                         ("yaw", Tag::Float(0f32.to_bits())),
                         ("pitch", Tag::Float(0f32.to_bits())),
+                        ("forced", Tag::Byte(1)),
                     ]),
                 ));
             }
@@ -2666,7 +2754,6 @@ impl Level {
                 ("seenCredits", Tag::Byte(0)),
                 ("HurtTime", Tag::Short(0)),
                 ("DeathTime", Tag::Short(0)),
-                ("AbsorptionAmount", Tag::Float(0)),
                 ("FallFlying", Tag::Byte(0)),
             ] {
                 map.entry(key.into()).or_insert(value);
@@ -2792,8 +2879,8 @@ impl Level {
                 Tag::compound([
                     ("pos", Tag::IntArray(spawn.to_vec())),
                     ("dimension", string("minecraft:overworld")),
-                    ("yaw", Tag::Float(0f32.to_bits())),
-                    ("pitch", Tag::Float(0f32.to_bits())),
+                    ("yaw", Tag::Float(self.world_spawn_angle[0].to_bits())),
+                    ("pitch", Tag::Float(self.world_spawn_angle[1].to_bits())),
                 ]),
             ),
             ("difficulty_settings", difficulty),
@@ -3892,6 +3979,151 @@ mod tests {
         assert!(!unlit.lit && !unlit.light_loaded);
     }
     #[test]
+    fn saved_light_matches_reference_for_layers_and_metadata() {
+        fn reference(tag: &Tag, chunk: &mut Chunk, sky_light: bool) {
+            if tag.get("isLightOn") != Some(&Tag::Byte(1)) {
+                return;
+            }
+            let Some(Tag::List(sections)) = tag.get("sections") else {
+                return;
+            };
+            let mut layers: Vec<(Option<&[u8]>, Option<&[u8]>)> = vec![(None, None); SECTIONS];
+            for section in sections {
+                let Some(y) = number(section.get("Y")) else {
+                    continue;
+                };
+                let si = y as i32 - (MIN_Y >> 4);
+                if !(0..SECTIONS as i32).contains(&si) {
+                    continue;
+                }
+                let layer = |name: &str| match section.get(name) {
+                    Some(Tag::ByteArray(a)) if a.len() == 2048 => Some(&a[..]),
+                    _ => None,
+                };
+                layers[si as usize] = (layer("SkyLight"), layer("BlockLight"));
+            }
+            let above = [if sky_light { 15 } else { 0 }; 256];
+            crate::light::light_from_layers(chunk, &layers, above, sky_light);
+        }
+
+        let section = |y: Tag, sky: Option<Tag>, block: Option<Tag>| {
+            let mut entries = vec![("Y", y)];
+            if let Some(v) = sky {
+                entries.push(("SkyLight", v));
+            }
+            if let Some(v) = block {
+                entries.push(("BlockLight", v));
+            }
+            Tag::compound(entries)
+        };
+        let root = |sections| {
+            Tag::compound([
+                ("isLightOn", Tag::Byte(1)),
+                ("sections", Tag::List(sections)),
+            ])
+        };
+        let check = |tag: &Tag| {
+            for sky_light in [false, true] {
+                let mut expected = Chunk::empty(-3, 5);
+                let s = Arc::make_mut(&mut expected.sections[0]);
+                s.light = Light::Full(Box::new([0xab; 4096]));
+                s.blocks.set(0, 1);
+                s.blocks.set(0, 0);
+                s.biomes.set(0, 1);
+                s.biomes.set(0, 0);
+                let mut actual = expected.clone();
+                reference(tag, &mut expected, sky_light);
+                load_light(tag, &mut actual, sky_light);
+                assert_eq!(
+                    (actual.lit, actual.light_loaded),
+                    (expected.lit, expected.light_loaded)
+                );
+                for (a, b) in actual.sections.iter().zip(&expected.sections) {
+                    assert_eq!(
+                        std::mem::discriminant(&a.light),
+                        std::mem::discriminant(&b.light)
+                    );
+                    assert_eq!(
+                        format!("{:?}", a.blocks.to_wire()),
+                        format!("{:?}", b.blocks.to_wire())
+                    );
+                    assert_eq!(
+                        format!("{:?}", a.biomes.to_wire()),
+                        format!("{:?}", b.biomes.to_wire())
+                    );
+                    for i in 0..4096 {
+                        assert_eq!(a.light(i), b.light(i), "index {i}, sky {sky_light}");
+                    }
+                }
+            }
+        };
+        for tag in [
+            Tag::compound(Vec::<(&str, Tag)>::new()),
+            Tag::compound([("isLightOn", Tag::Byte(0))]),
+            Tag::compound([("isLightOn", Tag::Byte(2))]),
+            Tag::compound([("isLightOn", Tag::Int(1)), ("sections", Tag::List(vec![]))]),
+            Tag::compound([("isLightOn", Tag::Byte(1)), ("sections", Tag::Int(0))]),
+            root(vec![]),
+        ] {
+            check(&tag);
+        }
+        // Cover every repeated byte, including 0xF0/0x0F: a uniform byte
+        // array need not hold uniform nibbles.
+        for byte in 0..=255u8 {
+            check(&root(vec![section(
+                Tag::Byte(19),
+                Some(Tag::ByteArray(vec![byte; 2048])),
+                Some(Tag::ByteArray(vec![255 - byte; 2048])),
+            )]));
+        }
+        // Every pair of uniform sky/block nibble values, with missing
+        // sections below inheriting the stored bottom row.
+        for sky in 0..16u8 {
+            for block in 0..16u8 {
+                check(&root(vec![section(
+                    Tag::Byte(1),
+                    Some(Tag::ByteArray(vec![sky * 17; 2048])),
+                    Some(Tag::ByteArray(vec![block * 17; 2048])),
+                )]));
+            }
+        }
+        for length in [0, 1, 2047, 2048, 2049] {
+            for invalid in [
+                Tag::Int(1),
+                Tag::List(vec![]),
+                Tag::ByteArray(vec![0xf0; length]),
+            ] {
+                check(&root(vec![section(
+                    Tag::Byte(-4),
+                    Some(invalid.clone()),
+                    Some(invalid),
+                )]));
+            }
+        }
+        let varied: Vec<u8> = (0..2048)
+            .map(|i| (i as u8).wrapping_mul(73).wrapping_add(31))
+            .collect();
+        check(&root(vec![
+            section(Tag::Byte(-5), Some(Tag::ByteArray(varied.clone())), None),
+            section(Tag::Byte(20), Some(Tag::ByteArray(varied.clone())), None),
+            section(
+                Tag::String("19".into()),
+                Some(Tag::ByteArray(varied.clone())),
+                None,
+            ),
+            section(Tag::Byte(19), Some(Tag::ByteArray(varied.clone())), None),
+            section(Tag::Byte(17), None, Some(Tag::ByteArray(varied.clone()))),
+            section(Tag::Byte(-4), Some(Tag::ByteArray(varied.clone())), None),
+            // Last duplicate wins, even when its arrays have wrong types.
+            section(
+                Tag::Byte(-4),
+                Some(Tag::Int(15)),
+                Some(Tag::ByteArray(vec![7; 2047])),
+            ),
+            section(Tag::Byte(0), None, Some(Tag::ByteArray(varied))),
+        ]));
+    }
+    #[test]
     fn level_round_trips_through_the_vanilla_files() {
         let dir = std::env::temp_dir().join(format!("horizon-level-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
@@ -3904,6 +4136,7 @@ mod tests {
             position: Some([1.5, 70.0, -3.25]),
             rotation: [90.0, 10.0],
             health: 17.0,
+            absorption: 5.0,
             food: 15,
             saturation: 2.5,
             inventory: vec![
@@ -3916,6 +4149,7 @@ mod tests {
             xp_total: 30,
             dimension: "minecraft:the_nether".into(),
             world_spawn: Some([8, 64, 8]),
+            world_spawn_angle: [45.0, -10.0],
             spawn: Some([20.0, 70.0, 20.0]),
             difficulty_locked: true,
             flying: true,
@@ -3934,6 +4168,7 @@ mod tests {
         assert_eq!(back.position, Some([1.5, 70.0, -3.25]));
         assert_eq!(back.rotation, [90.0, 10.0]);
         assert_eq!((back.health, back.food, back.saturation), (17.0, 15, 2.5));
+        assert_eq!(back.absorption, 5.0);
         let mut inv = back.inventory.clone();
         inv.sort();
         assert_eq!(
@@ -3950,6 +4185,7 @@ mod tests {
         );
         assert_eq!(back.dimension, "minecraft:the_nether");
         assert_eq!(back.world_spawn, Some([8, 64, 8]));
+        assert_eq!(back.world_spawn_angle, [45.0, -10.0]);
         assert_eq!(back.spawn, Some([20.0, 70.0, 20.0]));
         assert!(back.difficulty_locked);
         assert!(back.weather.raining);
@@ -3968,10 +4204,13 @@ mod tests {
         let mut again = Level {
             player_extra: Some(extra),
             ender_items: ender,
+            // The live amount, not the one the loaded compound held (#1307).
+            absorption: 2.0,
             ..back
         };
         again.write(&dir).unwrap();
         let third = Level::read(&dir).unwrap();
+        assert_eq!(third.absorption, 2.0);
         assert!(matches!(
             third
                 .player_extra

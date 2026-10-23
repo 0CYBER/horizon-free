@@ -18,6 +18,31 @@ pub const CREATIVE: i32 = 1;
 pub const ADVENTURE: i32 = 2;
 pub const SPECTATOR: i32 = 3;
 
+/// The body state a player's file keeps that lives on `PlayerMotion`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SavedBody {
+    pub fire_ticks: i32,
+    pub air: i32,
+    pub fall_distance: f64,
+}
+
+impl SavedBody {
+    /// The body state of `motion`, to save.
+    pub fn of(motion: &PlayerMotion) -> Self {
+        Self {
+            fire_ticks: motion.fire_ticks,
+            air: motion.air,
+            fall_distance: motion.fall_distance,
+        }
+    }
+    /// Put it on a new body.
+    pub fn apply(self, motion: &mut PlayerMotion) {
+        motion.fire_ticks = self.fire_ticks;
+        motion.air = self.air;
+        motion.fall_distance = self.fall_distance;
+    }
+}
+
 /// An effect as last sent in ClientboundUpdateMobEffectPacket.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SentEffect {
@@ -71,6 +96,13 @@ pub struct Guest {
     /// The permission level (0 none, 2 game masters, 4 owners).
     pub permission: u8,
     pub sneaking: bool,
+    /// The last `ServerboundPlayerInputPacket` flags (forward 1, backward 2,
+    /// left 4, right 8, jump 16, shift 32, sprint 64).
+    pub input: u8,
+    /// The boat or minecart the player rides (`Entity.getVehicle`).
+    pub vehicle: Option<u32>,
+    /// `ServerGamePacketListenerImpl.lastGoodX/Y/Z` of the vehicle it controls.
+    pub vehicle_good: Option<[f64; 3]>,
     pub sprinting: bool,
     pub fall_flying: bool,
     pub flying: bool,
@@ -86,6 +118,10 @@ pub struct Guest {
     /// Where the player respawns (a bed's spot; `ServerPlayer.respawnConfig`),
     /// None for the world spawn.
     pub spawn: Option<[f64; 3]>,
+    /// A respawn point outside the Overworld (a respawn anchor, or one
+    /// `spawnpoint` set there): its dimension, block, yaw and whether it is
+    /// forced, as the player's save keeps it (`respawn`).
+    pub respawn_elsewhere: Option<(String, [i32; 3], f32, bool)>,
     /// Pending ClientboundPlayerPositionPacket id; movement is ignored until
     /// the client accepts it (ServerGamePacketListenerImpl.awaitingPositionFromClient).
     pub awaiting_teleport: Option<(i32, [f64; 3])>,
@@ -122,6 +158,9 @@ pub struct Guest {
     pub tracker: Tracker,
     // Player state the gameplay code reads and writes.
     pub motion: Option<Box<PlayerMotion>>,
+    /// What the player's file says of the body (`Entity.load`: the fire
+    /// and air ticks and the fall distance), for the first body it gets.
+    pub loaded_body: Option<SavedBody>,
     /// The hurt and attack logs of the body it had before it respawned,
     /// until the new body takes them over (the control socket's `hurtlog`
     /// reads across a death).
@@ -142,6 +181,9 @@ pub struct Guest {
     /// The ender chest inventory (`PlayerEnderChestContainer`, 27 slots).
     pub ender_items: Vec<Option<ItemStack>>,
     pub health: f32,
+    /// The saved `AbsorptionAmount`, until the player's first body on the
+    /// server takes it (the body holds the live amount).
+    pub saved_absorption: Option<f32>,
     pub food: i32,
     pub saturation: f32,
     pub xp_level: i32,
@@ -161,6 +203,10 @@ pub struct Guest {
     /// `lastSentHealth`, `lastSentFood` and `lastFoodSaturationZero`.
     pub sent_health: Option<(f32, i32, bool)>,
     pub sent_xp: Option<(f32, i32, i32)>,
+    /// The air supply and absorption the player's client was last sent
+    /// (Entity.DATA_AIR_SUPPLY_ID, Player.DATA_PLAYER_ABSORPTION_ID); their
+    /// defaults until either changes.
+    pub sent_air: (i32, f32),
     /// Where the player last died (Player.lastDeathLocation), sent with the respawn.
     pub last_death: Option<[i32; 3]>,
     /// The last action sequence to acknowledge at the next tick (-1: none).
@@ -233,6 +279,9 @@ impl Guest {
             game_mode: SURVIVAL,
             permission: 0,
             sneaking: false,
+            input: 0,
+            vehicle: None,
+            vehicle_good: None,
             sprinting: false,
             fall_flying: false,
             flying: false,
@@ -242,6 +291,7 @@ impl Guest {
             sleep_timer: 0,
             sent_bed: None,
             spawn: None,
+            respawn_elsewhere: None,
             awaiting_teleport: None,
             teleport_counter: 0,
             teleport_tick: 0,
@@ -260,6 +310,7 @@ impl Guest {
             batch_quota: 0.0,
             tracker: Tracker::default(),
             motion: None,
+            loaded_body: None,
             logs_kept: None,
             inventory: vec![None; 36],
             armor: [None, None, None, None],
@@ -270,6 +321,7 @@ impl Guest {
             craft_result: None,
             ender_items: vec![None; 27],
             health: 20.0,
+            saved_absorption: None,
             food: 20,
             saturation: 5.0,
             xp_level: 0,
@@ -282,6 +334,7 @@ impl Guest {
             menu_state: 0,
             sent_health: None,
             sent_xp: None,
+            sent_air: (300, 0.0),
             last_death: None,
             ack_up_to: std::cell::Cell::new(-1),
             sent_selected: 0,

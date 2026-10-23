@@ -294,6 +294,18 @@ impl Game<'_> {
     }
     // ---- entities -------------------------------------------------------
 
+    /// The level `t` is in (`Entity.level`): a server's players have their
+    /// own, which need not be the one in place; everything else is in the
+    /// level in place.
+    pub(super) fn target_level(&self, t: Target) -> Dim {
+        let conn = match t {
+            Target::Player => self.lan_acting,
+            Target::Guest(conn) => Some(conn),
+            _ => None,
+        };
+        conn.and_then(|c| self.command_guest(c))
+            .map_or(self.dim, |g| Dim::from_id(&g.dimension))
+    }
     pub(super) fn target_position(&self, t: Target) -> Option<[f64; 3]> {
         match t {
             Target::Player => self
@@ -1191,15 +1203,12 @@ impl Game<'_> {
         pos: [f64; 3],
         rotation: Option<[f32; 2]>,
     ) -> bool {
-        let (conn, at) = match t {
-            Target::Player => (self.lan_acting, self.dim),
-            Target::Guest(conn) => (
-                Some(conn),
-                self.command_guest(conn)
-                    .map_or(self.dim, |g| super::Dim::from_id(&g.dimension)),
-            ),
-            _ => (None, self.dim),
+        let conn = match t {
+            Target::Player => self.lan_acting,
+            Target::Guest(conn) => Some(conn),
+            _ => None,
         };
+        let at = self.target_level(t);
         let Some(conn) = conn.filter(|_| at != level && self.options.dedicated.is_some()) else {
             return false;
         };
@@ -1222,12 +1231,7 @@ impl Game<'_> {
             let dest = self.entities(ctx, "destination", false)?[0];
             let pos = self.target_position(dest).unwrap_or(self.source_position());
             // Into the destination's level.
-            let level = match dest {
-                Target::Guest(conn) => self
-                    .command_guest(conn)
-                    .map_or(self.dim, |g| super::Dim::from_id(&g.dimension)),
-                _ => self.dim,
-            };
+            let level = self.target_level(dest);
             // TeleportCommand.teleportToEntity: the destination's rotation too.
             let rotation = Some(self.target_rotation(dest));
             for &t in &targets {
@@ -2281,12 +2285,23 @@ impl Game<'_> {
         };
         let yaw = ((rot[0] + 180.0).rem_euclid(360.0)) - 180.0;
         let pitch = rot[1].clamp(-90.0, 90.0);
-        self.spawn = Some(Vec3::new(
-            f64::from(pos[0]) + 0.5,
-            f64::from(pos[1]),
-            f64::from(pos[2]) + 0.5,
-        ));
-        self.respawn_config = None;
+        // SetSpawnCommand: a forced point in the source's level.
+        if self.dim == Dim::Overworld {
+            self.spawn = Some(Vec3::new(
+                f64::from(pos[0]) + 0.5,
+                f64::from(pos[1]),
+                f64::from(pos[2]) + 0.5,
+            ));
+            self.respawn_config = None;
+        } else {
+            self.spawn = None;
+            self.respawn_config = Some(super::respawn_anchor::RespawnConfig {
+                dim: self.dim,
+                pos,
+                yaw,
+                forced: true,
+            });
+        }
         let dim = Text::literal(self.dim.id());
         let p = pos.map(|v| Text::literal(v.to_string()));
         let mut args = vec![
@@ -2322,7 +2337,20 @@ impl Game<'_> {
             Some(Arg::Coords(c)) => c.rotation(self.source_rotation()),
             _ => [0.0, 0.0],
         };
-        self.level.spawn = Some([f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])]);
+        // LevelData.setRespawnData: the world's spawn (level.dat `spawn`).
+        let old = self.level.world_spawn.replace(pos);
+        self.level.world_spawn_angle = rot;
+        // A player whose fallback is the world spawn (no spawnpoint of its
+        // own; a bed or an anchor that is gone falls back to it) respawns at
+        // the new one.
+        let floor = |s: Vec3| [s.x.floor() as i32, s.y.floor() as i32, s.z.floor() as i32];
+        if self.spawn.map(floor) == old {
+            self.spawn = Some(Vec3::new(
+                f64::from(pos[0]) + 0.5,
+                f64::from(pos[1]),
+                f64::from(pos[2]) + 0.5,
+            ));
+        }
         let args = [
             Text::literal(pos[0].to_string()),
             Text::literal(pos[1].to_string()),

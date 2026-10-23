@@ -234,6 +234,23 @@ impl Hub {
         Some(window)
     }
 
+    /// ServerPlayer.openHorseInventory: the open container closes, a new
+    /// window id opens mount `entity`'s inventory with its chest's columns
+    /// (ClientboundMountScreenOpenPacket).
+    pub fn open_mount_window(&mut self, conn: u32, columns: i32, entity: i32) -> Option<i32> {
+        let i = self.guests.iter().position(|g| g.conn == conn)?;
+        self.close_container_at(i);
+        let g = &mut self.guests[i];
+        g.next_window = g.next_window % 100 + 1;
+        let window = g.next_window;
+        g.send(&C::MountScreenOpen(play::MountScreenOpen {
+            container: window,
+            columns,
+            entity,
+        }));
+        Some(window)
+    }
+
     fn send_menu_content(&mut self, i: usize, mut items: Vec<Option<ItemStack>>) {
         for j in 0..36 {
             items.push(self.guests[i].inventory[player_slot(j)].clone());

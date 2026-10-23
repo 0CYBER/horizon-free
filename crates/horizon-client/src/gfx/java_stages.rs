@@ -2,11 +2,13 @@
 //! Iris's colour targets (`colortex0..`, each with a main and an alternate
 //! side) and the pack's `begin`, `prepare`, `deferred`, `composite` and
 //! `final` programs as full-screen passes over them, as Iris's
-//! `CompositeRenderer` runs them. Horizon's world enters `colortex0` and
-//! `depthtex0..2` after `prepare`, where Iris's gbuffers programs would have
-//! drawn, and the last picture goes to `world_post`. The targets keep GL's
-//! layout (row 0 at the bottom, which the translated vertex programs
-//! produce), so the world is flipped going in and the picture coming out.
+//! `CompositeRenderer` runs them. Horizon's world enters the target the
+//! pack's terrain program draws to (`colortex0` for most packs) and
+//! `depthtex0` after `prepare`, where Iris's gbuffers programs would have
+//! drawn (`depthtex1`/`depthtex2`: its depth before translucent geometry),
+//! and the last picture goes to `world_post`. The targets keep GL's layout
+//! (row 0 at the bottom, which the translated vertex programs produce), so
+//! the world is flipped going in and the picture coming out.
 //!
 //! When the pack has terrain programs (`gfx/java_terrain.rs`), Horizon's
 //! world comes without its terrain: the pack's `gbuffers_terrain` draws it
@@ -14,8 +16,9 @@
 //! `gbuffers_water` draws the translucent terrain after `deferred`, as in
 //! Iris. `depthtex1` and `depthtex2` then hold the depth before it.
 use super::java_terrain::{Atlas, JavaWorld, Layer, TerrainPipelines};
-use super::pack_stages::FrameUniform;
-use crate::java_pack::{JavaFolder, JavaPasses};
+use super::pack_stages::{FrameUniform, noise, rgba_view};
+use crate::java_pack::{JavaFolder, JavaPasses, NOISE_KEY, blend_state, pass_blends, texture_key};
+use crate::shader_pack::Rgba;
 use glam::{Mat3, Mat4, Vec3, Vec4};
 use horizon_shaderpack::pipeline::GeometryProgram;
 use horizon_shaderpack::pipeline::TargetSettings;
@@ -35,14 +38,13 @@ pub struct JavaFrame {
     pub moon_angle: f32,
 }
 
-/// Iris's `noisetex` size (`noiseTextureResolution`'s default).
-const NOISE_SIZE: u32 = 256;
 /// The vertex buffers a pass may read (wgpu's default limit).
 const MAX_ATTRIBUTES: usize = 8;
 
 pub(super) const BLIT: &str = r#"
 @group(0) @binding(0) var color: texture_2d<f32>;
 @group(0) @binding(1) var depth: texture_depth_2d;
+@group(0) @binding(2) var opaque_depth: texture_depth_2d;
 
 @vertex
 fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
@@ -53,14 +55,19 @@ fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
 struct World {
     @location(0) color: vec4f,
     @location(1) depth: vec4f,
+    @location(2) opaque_depth: vec4f,
 }
 
-// The world's colour and depth, upside down into GL's layout; Horizon's
-// reversed depth (near 1) as GL's (near 0).
+// The world's colour, depth and pre-translucent depth, upside down into GL's
+// layout; Horizon's reversed depth (near 1) as GL's (near 0).
 fn world_texel(p: vec4f) -> World {
     let size = textureDimensions(depth);
     let xy = vec2u(u32(p.x), size.y - 1u - u32(p.y));
-    return World(textureLoad(color, xy, 0), vec4f(1.0 - textureLoad(depth, xy, 0)));
+    return World(
+        textureLoad(color, xy, 0),
+        vec4f(1.0 - textureLoad(depth, xy, 0)),
+        vec4f(1.0 - textureLoad(opaque_depth, xy, 0)),
+    );
 }
 
 @fragment
@@ -71,6 +78,7 @@ fn world_in(@builtin(position) p: vec4f) -> World {
 struct WorldDepth {
     @location(0) color: vec4f,
     @location(1) depth: vec4f,
+    @location(2) opaque_depth: vec4f,
     @builtin(frag_depth) test: f32,
 }
 
@@ -79,7 +87,7 @@ struct WorldDepth {
 @fragment
 fn world_in_depth(@builtin(position) p: vec4f) -> WorldDepth {
     let world = world_texel(p);
-    return WorldDepth(world.color, world.depth, world.depth.x);
+    return WorldDepth(world.color, world.depth, world.opaque_depth, world.depth.x);
 }
 
 struct Depths {
@@ -184,10 +192,11 @@ struct Target {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Source {
     Target(u32),
-    /// `depthtex0`: the world's depth.
+    /// `depthtex0` / `gdepthtex`: the world's depth (including translucent water).
     Depth,
-    /// `depthtex1` and `depthtex2`: the depth before translucent terrain
-    /// (the world's depth when the pack doesn't draw the terrain).
+    /// `depthtex1` / `depthtex2`: the depth before translucent terrain: after
+    /// the pack's own solid terrain when it draws it, else Horizon's world's
+    /// before translucent water.
     DepthSolid,
     Noise,
     /// `shadowtex*`: no shadow map yet, so a far depth (nothing in shadow);
@@ -221,6 +230,7 @@ fn source(name: &str, geometry: bool) -> Source {
 
 /// A sampler of a pass: its texture and sampler bindings.
 struct SamplerBinding {
+    name: String,
     source: Source,
     dimension: wgpu::TextureViewDimension,
     /// `isampler` (true) or `usampler` (false).
@@ -295,6 +305,7 @@ struct Common {
     repeat: wgpu::Sampler,
     compare: wgpu::Sampler,
     noise: wgpu::TextureView,
+    custom_textures: BTreeMap<String, wgpu::TextureView>,
     /// Full-screen triangle data per attribute kind (see `PassGpu::attributes`).
     vertices: [wgpu::Buffer; 4],
     world_layout: wgpu::BindGroupLayout,
@@ -308,6 +319,8 @@ struct Common {
 struct Bound {
     folder: usize,
     size: [u32; 2],
+    /// `world_post`'s targets it binds (`Post::generation`).
+    post_generation: u64,
     targets: BTreeMap<u32, Target>,
     depth: wgpu::TextureView,
     /// `depthtex1`: `depth` before translucent terrain, or `depth` itself.
@@ -316,7 +329,8 @@ struct Bound {
     groups: Vec<wgpu::BindGroup>,
     geometry: Option<BoundGeometry>,
     world_in: (wgpu::RenderPipeline, wgpu::BindGroup),
-    /// The world goes to colortex0's alternate side.
+    /// The world's target, and whether the world goes to its alternate side.
+    world_target: u32,
     world_alt: bool,
     final_target: Option<wgpu::TextureView>,
     present: (wgpu::RenderPipeline, wgpu::BindGroup),
@@ -344,6 +358,7 @@ struct BoundGeometry {
 struct Folder {
     targets: Vec<TargetSettings>,
     world_at: usize,
+    world_target: u32,
     flipped_after_prepare: BTreeSet<u32>,
     flipped_at_end: BTreeSet<u32>,
     passes: Vec<PassGpu>,
@@ -354,6 +369,9 @@ struct Folder {
 
 pub struct JavaStages {
     pub id: String,
+    /// A pass samples `depthtex1`/`depthtex2`: the world's depth is kept
+    /// before translucent geometry draws.
+    pub reads_opaque_depth: bool,
     format: wgpu::TextureFormat,
     common: Common,
     folders: Vec<Folder>,
@@ -371,6 +389,9 @@ pub struct JavaStages {
     atlas: Option<Atlas>,
     /// The device has 16-bit normalized formats ([`target_format`]).
     norm16: bool,
+    /// `wetness`: `rainStrength` smoothed with `wetnessHalflife` going up
+    /// and `drynessHalflife` going down.
+    wetness_smooth: SmoothFloat,
 }
 
 impl JavaStages {
@@ -386,7 +407,7 @@ impl JavaStages {
         layouts: &GeometryLayouts,
         norm16: bool,
     ) -> Result<Self, String> {
-        let common = Common::new(device, queue);
+        let common = Common::new(device, queue, &pack.custom_textures);
         let folder_for = [-1, 0, 1].map(|d| pack.folder_for(d));
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let folders = pack
@@ -411,6 +432,7 @@ impl JavaStages {
                 Ok::<_, String>(Folder {
                     targets: plan.targets.clone(),
                     world_at: plan.world_at,
+                    world_target: plan.world_target,
                     flipped_after_prepare: plan.flipped_after_prepare.clone(),
                     flipped_at_end: plan.flipped_at_end.clone(),
                     passes,
@@ -423,8 +445,14 @@ impl JavaStages {
         if let Some(error) = pollster::block_on(scope.pop()) {
             return Err(error.to_string());
         }
+        let reads_opaque_depth = folders
+            .iter()
+            .flat_map(|f| f.passes.iter().chain(&f.final_pass))
+            .flat_map(|p| &p.samplers)
+            .any(|s| s.source == Source::DepthSolid);
         Ok(Self {
             id: id.to_owned(),
+            reads_opaque_depth,
             format,
             common,
             folders,
@@ -439,6 +467,7 @@ impl JavaStages {
             eye_smooth: [SmoothFloat::default(); 2],
             atlas: None,
             norm16,
+            wetness_smooth: SmoothFloat::default(),
         })
     }
 
@@ -481,7 +510,10 @@ impl JavaStages {
             self.bound = None;
         }
         if self.bound.as_ref().is_none_or(|b| {
-            b.folder != folder || b.size != size || b.geometry.is_some() != terrain.is_some()
+            b.folder != folder
+                || b.size != size
+                || b.post_generation != post.generation()
+                || b.geometry.is_some() != terrain.is_some()
         }) {
             self.bound = Some(self.bind(device, queue, folder, color, depth, size, post, terrain));
         }
@@ -505,6 +537,12 @@ impl JavaStages {
         for (i, smooth) in self.eye_smooth.iter_mut().enumerate() {
             inputs.eye_smooth[i] = smooth.update(inputs.eye[i], half_life, half_life, frame_time);
         }
+        inputs.wetness = self.wetness_smooth.update(
+            frame.weather[0],
+            directives.wetness_half_life,
+            directives.dryness_half_life,
+            frame_time,
+        );
         self.uniforms
             .update(&mut self.uniform_state, frame_time, &|name| {
                 inputs.builtin(name)
@@ -613,8 +651,9 @@ impl JavaStages {
         let geometry_passes = geometry
             .into_iter()
             .flat_map(|g| std::iter::once(&g.terrain).chain(&g.water));
-        // Every target a pass reads or writes, and colortex0 (the world).
-        let mut used: BTreeSet<u32> = [0].into();
+        // Every target a pass reads or writes, colortex0 (shown without
+        // `final`) and the world's.
+        let mut used: BTreeSet<u32> = [0, folder.world_target].into();
         for pass in all.clone().chain(geometry_passes) {
             used.extend(pass.draw_buffers.iter().copied());
             used.extend(pass.samplers.iter().filter_map(|s| match s.source {
@@ -692,16 +731,15 @@ impl JavaStages {
             size,
         )
         .create_view(&Default::default());
-        let depth_solid = match geometry {
-            Some(_) => texture(
-                "Java shader pack depth before translucent terrain",
-                wgpu::TextureFormat::R32Float,
-                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-                size,
-            )
-            .create_view(&Default::default()),
-            None => depth.clone(),
-        };
+        // Written by `world_in` (Horizon's depth before translucent water),
+        // then by the pack's solid terrain when it draws it.
+        let depth_solid = texture(
+            "Java shader pack depth before translucent terrain",
+            wgpu::TextureFormat::R32Float,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            size,
+        )
+        .create_view(&Default::default());
         let views = Views {
             depth: &depth,
             depth_solid: &depth_solid,
@@ -741,7 +779,7 @@ impl JavaStages {
                     &self.common,
                     &self.common.world_layout,
                     "world_in_depth",
-                    &[targets[&0].format, r32],
+                    &[targets[&folder.world_target].format, r32, r32],
                     true,
                 ),
                 out_both: blit_pipeline(
@@ -765,14 +803,18 @@ impl JavaStages {
             }
         });
 
-        // The world goes into colortex0's side the gbuffers would write.
-        let colortex0 = &targets[&0];
+        // The world goes into its target's side the gbuffers would write.
+        let world_target = &targets[&folder.world_target];
         let world_pipeline = blit_pipeline(
             device,
             &self.common,
             &self.common.world_layout,
             "world_in",
-            &[colortex0.format, wgpu::TextureFormat::R32Float],
+            &[
+                world_target.format,
+                wgpu::TextureFormat::R32Float,
+                wgpu::TextureFormat::R32Float,
+            ],
             false,
         );
         let world_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -787,6 +829,10 @@ impl JavaStages {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(world_depth),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(post.opaque_depth()),
+                },
             ],
         });
 
@@ -800,6 +846,7 @@ impl JavaStages {
             .create_view(&Default::default())
         });
         // Without `final`, Iris shows colortex0 as the last pass left it.
+        let colortex0 = &targets[&0];
         let shown = final_target.clone().unwrap_or_else(|| {
             if plan.flipped_at_end.contains(&0) {
                 colortex0.alt_view.clone()
@@ -834,13 +881,15 @@ impl JavaStages {
         Bound {
             folder: folder_index,
             size,
+            post_generation: post.generation(),
             targets,
             depth,
             depth_solid,
             groups,
             geometry,
             world_in: (world_pipeline, world_group),
-            world_alt: plan.flipped_after_prepare.contains(&0),
+            world_target: folder.world_target,
+            world_alt: plan.flipped_after_prepare.contains(&folder.world_target),
             final_target,
             present: (present_pipeline, present_group),
             output_view,
@@ -899,15 +948,16 @@ fn folder_geometry(
 }
 
 fn world_in(encoder: &mut wgpu::CommandEncoder, bound: &Bound) {
-    let colortex0 = &bound.targets[&0];
+    let target = &bound.targets[&bound.world_target];
     let side = if bound.world_alt {
-        &colortex0.alt_view
+        &target.alt_view
     } else {
-        &colortex0.main_view
+        &target.main_view
     };
     let attachments = [
         Some(color_attachment(side, None)),
         Some(color_attachment(&bound.depth, None)),
+        Some(color_attachment(&bound.depth_solid, None)),
     ];
     let mut render = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("Java shader pack world"),
@@ -1023,7 +1073,8 @@ fn blit_pipeline(
 }
 
 impl Common {
-    fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+    /// `custom` holds the pack's `texture.*` images (`JavaPasses::custom_textures`).
+    fn new(device: &wgpu::Device, queue: &wgpu::Queue, custom: &BTreeMap<String, Rgba>) -> Self {
         let sampler = |filter, address, compare| {
             device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some("Java shader pack"),
@@ -1037,40 +1088,15 @@ impl Common {
             })
         };
         use wgpu::{AddressMode::*, FilterMode::*};
-        // Iris's noise: random RGB, opaque.
-        let mut seed = 0x2545_f491_u32;
-        let noise_bytes: Vec<u8> = (0..NOISE_SIZE * NOISE_SIZE * 4)
-            .map(|i| {
-                seed ^= seed << 13;
-                seed ^= seed >> 17;
-                seed ^= seed << 5;
-                if i % 4 == 3 { 255 } else { (seed >> 24) as u8 }
-            })
+        let noise = match custom.get(NOISE_KEY) {
+            Some(image) => rgba_view(device, queue, "noisetex", image),
+            None => rgba_view(device, queue, "noisetex", &noise()),
+        };
+        let custom_textures = custom
+            .iter()
+            .filter(|(key, _)| *key != NOISE_KEY)
+            .map(|(key, image)| (key.clone(), rgba_view(device, queue, key, image)))
             .collect();
-        let noise = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("noisetex"),
-            size: wgpu::Extent3d {
-                width: NOISE_SIZE,
-                height: NOISE_SIZE,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        queue.write_texture(
-            noise.as_image_copy(),
-            &noise_bytes,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(NOISE_SIZE * 4),
-                rows_per_image: None,
-            },
-            noise.size(),
-        );
         // The full-screen triangle (0, 0), (2, 0), (0, 2): the pack's
         // projection maps 0..1 to the screen. Texture coordinates are the
         // position; colours white; normals up.
@@ -1117,13 +1143,15 @@ impl Common {
             nearest: sampler(Nearest, ClampToEdge, None),
             repeat: sampler(Linear, Repeat, None),
             compare: sampler(Linear, ClampToEdge, Some(wgpu::CompareFunction::LessEqual)),
-            noise: noise.create_view(&Default::default()),
+            noise,
+            custom_textures,
             vertices,
             world_layout: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Java shader pack world"),
                 entries: &[
                     texture_entry(0, unfilterable),
                     texture_entry(1, wgpu::TextureSampleType::Depth),
+                    texture_entry(2, wgpu::TextureSampleType::Depth),
                 ],
             }),
             present_layout: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -1213,6 +1241,7 @@ impl PassGpu {
                 .cloned()
                 .unwrap_or_else(|| format!("{sampler}_s"));
             samplers.push(SamplerBinding {
+                name: sampler.clone(),
                 source: source(sampler, setup.is_some()),
                 dimension,
                 signed,
@@ -1354,10 +1383,11 @@ impl PassGpu {
 
         // Output location `l` writes target `draw_buffers[l]` (or the screen).
         let outputs = &program.fragment.interface.outputs;
+        let blends = pass_blends(&program.pass, &program.draw_buffers, None);
         let target_states: Vec<Option<wgpu::ColorTargetState>> = match screen {
             Some(format) => vec![Some(wgpu::ColorTargetState {
                 format,
-                blend: None,
+                blend: program.pass.blend.as_ref().and_then(blend_state),
                 write_mask: if outputs.contains_key(&0) {
                     wgpu::ColorWrites::ALL
                 } else {
@@ -1369,12 +1399,18 @@ impl PassGpu {
                 .iter()
                 .enumerate()
                 .map(|(l, &i)| {
+                    let format = formats
+                        .get(i as usize)
+                        .copied()
+                        .unwrap_or(wgpu::TextureFormat::Rgba8Unorm);
+                    // Only filterable float/unorm formats support blending.
+                    let can_blend = matches!(
+                        sample_type(format),
+                        wgpu::TextureSampleType::Float { filterable: true }
+                    );
                     Some(wgpu::ColorTargetState {
-                        format: formats
-                            .get(i as usize)
-                            .copied()
-                            .unwrap_or(wgpu::TextureFormat::Rgba8Unorm),
-                        blend: None,
+                        format,
+                        blend: blends[l].filter(|_| can_blend),
                         write_mask: if outputs.contains_key(&(l as u32)) {
                             wgpu::ColorWrites::ALL
                         } else {
@@ -1599,44 +1635,57 @@ impl PassGpu {
         let depth = textures.depth;
         let mut views = Vec::new();
         for s in &self.samplers {
-            let view = match (s.compare, s.source) {
-                (true, _) => blank_view(device, queue, blank, s, BlankKind::FarDepth),
-                (false, Source::Target(i)) if s.dimension == wgpu::TextureViewDimension::D2 => {
-                    match targets.get(&i) {
-                        Some(t) if self.reads_alt.contains(&i) => t.alt_view.clone(),
-                        Some(t) => t.main_view.clone(),
-                        None => blank_view(device, queue, blank, s, BlankKind::Color(false)),
+            let custom = (!s.compare && s.dimension == wgpu::TextureViewDimension::D2)
+                .then(|| {
+                    common
+                        .custom_textures
+                        .get(&texture_key(&self.program, &s.name))
+                })
+                .flatten();
+            let view = if let Some(custom) = custom {
+                custom.clone()
+            } else {
+                match (s.compare, s.source) {
+                    (true, _) => blank_view(device, queue, blank, s, BlankKind::FarDepth),
+                    (false, Source::Target(i)) if s.dimension == wgpu::TextureViewDimension::D2 => {
+                        match targets.get(&i) {
+                            Some(t) if self.reads_alt.contains(&i) => t.alt_view.clone(),
+                            Some(t) => t.main_view.clone(),
+                            None => blank_view(device, queue, blank, s, BlankKind::Color(false)),
+                        }
                     }
-                }
-                (false, Source::Depth) if s.dimension == wgpu::TextureViewDimension::D2 => {
-                    depth.clone()
-                }
-                (false, Source::DepthSolid) if s.dimension == wgpu::TextureViewDimension::D2 => {
-                    textures.depth_solid.clone()
-                }
-                (false, Source::Atlas) if s.dimension == wgpu::TextureViewDimension::D2 => {
-                    match textures.atlas {
-                        Some(v) => v.clone(),
-                        None => blank_view(device, queue, blank, s, BlankKind::Color(true)),
+                    (false, Source::Depth) if s.dimension == wgpu::TextureViewDimension::D2 => {
+                        depth.clone()
                     }
-                }
-                (false, Source::Lightmap) if s.dimension == wgpu::TextureViewDimension::D2 => {
-                    match textures.lightmap {
-                        Some(v) => v.clone(),
-                        None => blank_view(device, queue, blank, s, BlankKind::Color(true)),
+                    (false, Source::DepthSolid)
+                        if s.dimension == wgpu::TextureViewDimension::D2 =>
+                    {
+                        textures.depth_solid.clone()
                     }
+                    (false, Source::Atlas) if s.dimension == wgpu::TextureViewDimension::D2 => {
+                        match textures.atlas {
+                            Some(v) => v.clone(),
+                            None => blank_view(device, queue, blank, s, BlankKind::Color(true)),
+                        }
+                    }
+                    (false, Source::Lightmap) if s.dimension == wgpu::TextureViewDimension::D2 => {
+                        match textures.lightmap {
+                            Some(v) => v.clone(),
+                            None => blank_view(device, queue, blank, s, BlankKind::Color(true)),
+                        }
+                    }
+                    (false, Source::FlatNormal) => {
+                        blank_view(device, queue, blank, s, BlankKind::FlatNormal)
+                    }
+                    (false, Source::Shadow) => blank_view(device, queue, blank, s, BlankKind::Far),
+                    (false, Source::Noise) if s.dimension == wgpu::TextureViewDimension::D2 => {
+                        common.noise.clone()
+                    }
+                    (false, Source::Blank(white)) => {
+                        blank_view(device, queue, blank, s, BlankKind::Color(white))
+                    }
+                    _ => blank_view(device, queue, blank, s, BlankKind::Color(false)),
                 }
-                (false, Source::FlatNormal) => {
-                    blank_view(device, queue, blank, s, BlankKind::FlatNormal)
-                }
-                (false, Source::Shadow) => blank_view(device, queue, blank, s, BlankKind::Far),
-                (false, Source::Noise) if s.dimension == wgpu::TextureViewDimension::D2 => {
-                    common.noise.clone()
-                }
-                (false, Source::Blank(white)) => {
-                    blank_view(device, queue, blank, s, BlankKind::Color(white))
-                }
-                _ => blank_view(device, queue, blank, s, BlankKind::Color(false)),
             };
             let sampler = match (s.compare, s.source) {
                 _ if s.shared.is_some() => match s.shared.as_deref() {
@@ -2061,6 +2110,8 @@ struct Inputs {
     /// `eyeBrightness` and `eyeBrightnessSmooth`: block, sky light × 16.
     eye: [f32; 2],
     eye_smooth: [f32; 2],
+    /// `wetness` (`JavaStages::wetness_smooth`).
+    wetness: f32,
     /// `CelestialUniforms`, in view space.
     sun_position: Vec3,
     moon_position: Vec3,
@@ -2120,6 +2171,7 @@ impl Inputs {
             frame: *frame,
             eye: [0.0; 2],
             eye_smooth: [0.0; 2],
+            wetness: frame.weather[0],
             sun_position: Vec3::ZERO,
             moon_position: Vec3::ZERO,
             up_position: Vec3::ZERO,
@@ -2252,7 +2304,8 @@ impl Inputs {
             }),
             "upPosition" => vec3(self.up_position),
             "moonPhase" => vec![f.moon[3]],
-            "rainStrength" | "wetness" => vec![f.weather[0]],
+            "rainStrength" => vec![f.weather[0]],
+            "wetness" => vec![self.wetness],
             "thunderStrength" => vec![f.weather[1]],
             "fogColor" => f.fog_color[..3].to_vec(),
             "skyColor" => f.sky_color[..3].to_vec(),

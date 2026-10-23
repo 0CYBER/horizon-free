@@ -99,27 +99,37 @@ fn vs_box_gl(@builtin(vertex_index) v: u32, @builtin(instance_index) t: u32) -> 
     return out;
 }
 
-fn seen(index: u32) {
-    if results[index] != params.stamp {
-        results[index] = params.stamp;
-        let test = tests[index];
+// The box is seen at this fragment: store the stamp, and give its phase 2
+// draws their instance.
+fn see(t: u32) {
+    if results[t] != params.stamp {
+        results[t] = params.stamp;
+        let test = tests[t];
         for (var k = 0u; k < test.z; k++) {
             phase2[(test.y + k) * 5u + 1u] = 1u;
         }
     }
 }
 
-// Runs only for fragments that pass the depth test (forced early).
+// Phase 1's depth, where the test runs in the shader (gfx/cull.rs).
+@group(1) @binding(0) var depth: texture_depth_2d;
+
+// The world pass's reversed depth test, greater or equal passing, made here:
+// where it cannot be forced before a shader that writes storage, a fragment
+// that fails it would still write. Where it can, `fs_box_early` (cull.rs)
+// runs only for the fragments that pass it.
 @fragment
-@early_depth_test(force)
-fn fs_box(in: Box) -> @location(0) vec4<f32> {
-    seen(in.test);
-    return vec4(0.0);
+fn fs_box(in: Box) {
+    if in.position.z >= textureLoad(depth, vec2<u32>(in.position.xy), 0) {
+        see(in.test);
+    }
 }
 
-// fs_box in a pass without colour targets.
+// fs_box against a Java shader pack's depth in OpenGL's layout (`vs_box_gl`):
+// less or equal passing.
 @fragment
-@early_depth_test(force)
-fn fs_box_depth(in: Box) {
-    seen(in.test);
+fn fs_box_gl(in: Box) {
+    if in.position.z <= textureLoad(depth, vec2<u32>(in.position.xy), 0) {
+        see(in.test);
+    }
 }

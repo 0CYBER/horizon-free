@@ -15,7 +15,7 @@ use std::{
 mod create_world;
 #[cfg(test)]
 mod tests;
-mod world_management;
+pub mod world_management;
 pub use create_world::{DIFFICULTIES, WorldOptions};
 
 /// SelectWorldScreen's `HeaderAndFooterLayout(8 + 9 + 8 + 20 + 4, 60)`.
@@ -142,10 +142,6 @@ pub struct Title {
     toast: Option<(crate::toasts::Slide, BackupToast)>,
     icons: RefCell<std::collections::HashMap<PathBuf, (std::time::SystemTime, Option<Vec<u8>>)>>,
     splash: Option<String>,
-    /// The mode last drawn and when it appeared (Horizon's screen fades).
-    shown: std::cell::Cell<(std::mem::Discriminant<Mode>, std::time::Instant)>,
-    /// The launcher-style opening (Horizon style, first title of the session).
-    pub opening: std::cell::Cell<Option<crate::front::Opening>>,
     /// The saves listed for Home, re-read every couple of seconds.
     recent: std::cell::RefCell<Option<(std::time::Instant, Vec<WorldEntry>)>>,
 }
@@ -232,7 +228,6 @@ impl Title {
         let mode = Mode::Main;
         let now = std::time::Instant::now();
         Self {
-            shown: std::cell::Cell::new((std::mem::discriminant(&mode), now)),
             mode,
             last_server: String::new(),
             saves,
@@ -256,7 +251,6 @@ impl Title {
                     .subsec_nanos() as usize,
                 (today.month(), today.day()),
             ),
-            opening: std::cell::Cell::new(None),
             recent: std::cell::RefCell::new(None),
         }
     }
@@ -506,6 +500,14 @@ impl Title {
         }
     }
     /// The worlds, newest first, cached for two seconds (drawn every frame).
+    /// Saves changed behind the screens' back (agent control renamed or deleted a world): the
+    /// list shows them again.
+    pub fn worlds_changed(&mut self) {
+        if matches!(self.mode, Mode::Select { .. }) {
+            self.return_to_list(None);
+        }
+        *self.recent.borrow_mut() = None;
+    }
     pub fn recent_worlds(&self) -> Vec<WorldEntry> {
         let mut recent = self.recent.borrow_mut();
         match &*recent {
@@ -516,17 +518,6 @@ impl Title {
                 worlds
             }
         }
-    }
-    /// When the current mode first appeared.
-    pub fn entered(&self) -> std::time::Instant {
-        let now = std::mem::discriminant(&self.mode);
-        let (mode, at) = self.shown.get();
-        if mode == now {
-            return at;
-        }
-        let at = std::time::Instant::now();
-        self.shown.set((now, at));
-        at
     }
     /// Create New World: the folder name and options (FileUtil.findAvailableName).
     pub fn create_action(&self) -> Action {
@@ -597,7 +588,9 @@ impl Title {
                     b(cx + 2.0, y + 96.0, 98.0, "Quit Game", true, 2),
                 ];
                 for (i, (label, enabled, id, icon, size)) in [
-                    ("Friends", false, 5, "friends/friends", 15.0),
+                    // Horizon's Join a Friend (an invite code) behind
+                    // vanilla's Friends button.
+                    ("Friends", true, 5, "friends/friends", 15.0),
                     ("Language", true, 6, "icon/language", 15.0),
                     (
                         "Accessibility Settings",
@@ -1207,6 +1200,10 @@ impl Title {
                 crate::multiplayer::Outcome::Connect(address) => Action::Connect { address },
                 crate::multiplayer::Outcome::None => Action::None,
             },
+            (Mode::Main, Some(5)) => {
+                self.mode = Mode::Multiplayer(crate::multiplayer::Screen::friend());
+                Action::None
+            }
             (Mode::Main, Some(3)) => Action::Options,
             (Mode::Main, Some(7)) => Action::Accessibility,
             (Mode::Main, Some(6)) => Action::Language,
@@ -1669,7 +1666,7 @@ mod classic_tests {
             let cx = (w / 2.0).floor();
             let y = (h / 4.0).floor() + 48.0;
             for (id, x, enabled, icon) in [
-                (5, cx - 34.0, false, "friends/friends"),
+                (5, cx - 34.0, true, "friends/friends"),
                 (6, cx - 10.0, true, "icon/language"),
                 (7, cx + 14.0, true, "icon/accessibility"),
             ] {
@@ -1683,9 +1680,16 @@ mod classic_tests {
                     match id {
                         6 => (Action::Language, true),
                         7 => (Action::Accessibility, true),
-                        _ => (Action::None, false),
+                        _ => (Action::None, true),
                     }
                 );
+                if id == 5 {
+                    assert!(matches!(
+                        title.mode,
+                        Mode::Multiplayer(crate::multiplayer::Screen::Friend { .. })
+                    ));
+                    title.mode = Mode::Main;
+                }
             }
             for id in [2, 3] {
                 assert_eq!(buttons.iter().find(|b| b.id == id).unwrap().y, y + 96.0);
