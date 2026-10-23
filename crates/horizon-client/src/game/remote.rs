@@ -1964,11 +1964,27 @@ impl Game<'_> {
                 // player lies down in the bed, or gets up.
                 if self.remote.as_ref().is_some_and(|r| r.entity_id == p.id) {
                     for (index, _, value) in &p.values {
-                        if let (14, Value::OptPos(bed)) = (index, value) {
-                            if bed.is_some() && self.sleeping.is_none() {
-                                self.sleep_timer = 0;
+                        match (index, value) {
+                            (14, Value::OptPos(bed)) => {
+                                if bed.is_some() && self.sleeping.is_none() {
+                                    self.sleep_timer = 0;
+                                }
+                                self.sleeping = *bed;
                             }
-                            self.sleeping = *bed;
+                            // Entity.DATA_AIR_SUPPLY_ID and
+                            // Player.DATA_PLAYER_ABSORPTION_ID: the bubbles
+                            // and golden hearts the server's player has.
+                            (1, Value::Int(air)) => {
+                                if let Some(pl) = self.player.as_mut() {
+                                    pl.air = *air;
+                                }
+                            }
+                            (17, Value::Float(amount)) => {
+                                if let Some(pl) = self.player.as_mut() {
+                                    let _ = pl.internal_set_absorption(*amount);
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -2213,6 +2229,10 @@ impl Game<'_> {
                             1.0,
                         );
                     }
+                }
+                // WIN_GAME: the poem and credits, then PERFORM_RESPAWN.
+                4 if self.screen != Screen::Win => {
+                    self.open_win_screen(true, super::win::Finish::RemoteRespawn);
                 }
                 1 => {
                     self.world.weather.raining = true;
@@ -3094,6 +3114,13 @@ impl Game<'_> {
         );
         let was_flying = player.flying;
         player.yaw = self.yaw;
+        // As the window's own tick has them: the helmet's Respiration
+        // (decreaseAirSupply) and the dimension's FAST_LAVA, the Nether's
+        // stronger lava current.
+        player.respiration = self.armor[0]
+            .as_ref()
+            .map_or(0, |s| s.enchantment_level("minecraft:respiration") as i32);
+        player.fluids.fast_lava = self.dim == Dim::Nether;
         let dead = self.screen == Screen::Dead;
         // LivingEntity.isImmobile: a sleeper lies still in the bed.
         if let Some(head) = self.sleeping {
@@ -3557,22 +3584,13 @@ impl Game<'_> {
             return;
         }
         let facts = self.res.facts().get(state).clone();
-        let held = self.held().cloned();
-        let mut speed = self.res.items().mining_speed(held.as_ref(), &facts.name);
-        if self.player.as_ref().is_some_and(|p| !p.ground.on_ground) {
-            speed /= 5.0;
-        }
-        let harvest = !facts.requires_tool
-            || self
-                .res
-                .items()
-                .correct_for_drops(held.as_ref(), &facts.name);
-        let progress = if facts.hardness < 0.0 {
-            0.0
-        } else if facts.hardness == 0.0 {
+        // The server's own getDestroyProgress: under water, off the ground,
+        // with haste, fatigue and efficiency, so the client stops digging
+        // when the server is done too (#1254).
+        let progress = if facts.hardness == 0.0 {
             1.0
         } else {
-            speed / facts.hardness / if harvest { 30.0 } else { 100.0 }
+            self.destroy_progress(hit.pos)
         };
         let same = self
             .remote

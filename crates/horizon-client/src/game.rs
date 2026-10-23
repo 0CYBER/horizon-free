@@ -162,6 +162,7 @@ mod ui_control;
 mod vault;
 mod villagers;
 mod wandering_trader;
+mod win;
 mod wind;
 mod wither;
 mod world_loading;
@@ -464,6 +465,8 @@ enum Screen {
     Friends,
     /// CommandBlockEditScreen (game/command_blocks.rs).
     CommandBlock,
+    /// WinScreen: the end poem and the credits (game/win.rs).
+    Win,
 }
 struct Mining {
     pos: [i32; 3],
@@ -1357,6 +1360,8 @@ struct Game<'a> {
     respawn_travel: Option<respawn_anchor::RespawnConfig>,
     /// The next enter_dimension call comes from an End portal.
     end_portal_travel: bool,
+    /// The open WinScreen (game/win.rs).
+    win: Option<win::Win>,
     end: end::EndState,
     block_ticks: Ticks,
     tick_chunks: horizon_client::tick_chunk_membership::TickChunkMembership,
@@ -2101,7 +2106,14 @@ impl Game<'_> {
             ) {
                 continue;
             }
-            let alive = item.tick(&self.world, self.res.facts(), self.collision);
+            // ItemEntity.tick's noPhysics (servers only): out of a block
+            // placed on it, towards the closest open side (#1252).
+            let no_physics = merging && item.inside_block(&self.world, self.collision);
+            if no_physics {
+                let speed = self.world.random.next_float() * 0.2 + 0.1;
+                item.move_towards_closest_space(&self.world, self.res.facts(), speed);
+            }
+            let alive = item.tick(&self.world, self.res.facts(), self.collision, no_physics);
             cells.moved(i, item.previous, item.position);
             // ItemEntity.tick: merge every 2 ticks while moving between
             // blocks, every 40 otherwise, before the lifetime check.
@@ -3581,8 +3593,6 @@ impl Game<'_> {
         }
     }
     fn tick_using(&mut self) {
-        // ItemCooldowns.tick for the shield.
-        self.shield_cooldown = self.shield_cooldown.saturating_sub(1);
         let Some(hand) = self.used_hand() else {
             return;
         };
@@ -3798,6 +3808,9 @@ impl Game<'_> {
             return Ok(());
         }
         if let Some((_, target)) = &self.travelling {
+            if self.win_screen_holds_arrival() {
+                return Ok(());
+            }
             let (cx, cz) = (
                 (target.x.floor() as i32) >> 4,
                 (target.z.floor() as i32) >> 4,
@@ -4285,6 +4298,9 @@ impl Game<'_> {
     fn tick_world(&mut self, running: bool) -> Result<()> {
         self.update_chunk_tickets();
         horizon_client::spans::time("tick_effects", || self.tick_effects());
+        // Player.tick's ItemCooldowns.tick for the window's player (a
+        // server's players count theirs down in `tick_guests`).
+        self.shield_cooldown = self.shield_cooldown.saturating_sub(1);
         horizon_client::spans::time("tick_using", || self.tick_using());
         horizon_client::spans::time("tick_hud", || self.tick_hud());
         // The player's digging comes in with its packets, before the level
@@ -4485,7 +4501,8 @@ impl Game<'_> {
                     | Screen::WorldOptions
                     | Screen::Friends
                     | Screen::CommandBlock
-            ) || self.book.is_some())
+            ) || self.book.is_some()
+                || self.win_screen_pauses())
     }
     /// `MouseHandler.grabMouse` / `releaseMouse`. Both put the pointer at
     /// the window's centre, so a screen opened from gameplay (inventory,
@@ -4700,6 +4717,10 @@ impl Game<'_> {
     fn hud_layers(&mut self, size: [u32; 2]) -> HudBatch {
         let mut batch = HudBatch::new(size);
         let (w, h) = (batch.width, batch.height);
+        if self.screen == Screen::Win {
+            self.draw_win_screen(&mut batch);
+            return batch;
+        }
         if self.screen == Screen::Options {
             self.draw_options(&mut batch);
             return batch;
@@ -4934,7 +4955,7 @@ impl Game<'_> {
                 self.draw_creative(&mut batch);
             }
             Screen::Chat => self.draw_chat_screen(&mut batch),
-            Screen::Playing | Screen::Options => {}
+            Screen::Playing | Screen::Options | Screen::Win => {}
         }
         self.draw_toasts(&mut batch);
         self.remote_hud(&mut batch);
@@ -7519,16 +7540,11 @@ impl Game<'_> {
         self.sleep_timer = 0;
         self.spawn = None;
         self.respawn_travel = None;
-        self.respawn_config =
-            self.level
-                .respawn_elsewhere
-                .as_ref()
-                .map(|(dim, pos, yaw, forced)| respawn_anchor::RespawnConfig {
-                    dim: Dim::from_id(dim),
-                    pos: *pos,
-                    yaw: *yaw,
-                    forced: *forced,
-                });
+        self.respawn_config = self
+            .level
+            .respawn_elsewhere
+            .as_ref()
+            .map(respawn_anchor::RespawnConfig::from_saved);
         self.spawn_origin = None;
         self.spawn_spiral = Default::default();
         self.player_spawn = None;
@@ -9506,9 +9522,7 @@ impl Game<'_> {
         level.weather = self.world.weather;
         level.day_time = self.world.day_time;
         level.spawn = self.spawn.map(|s| [s.x, s.y, s.z]);
-        level.respawn_elsewhere = self
-            .respawn_config
-            .map(|c| (c.dim.id().to_owned(), c.pos, c.yaw, c.forced));
+        level.respawn_elsewhere = self.respawn_config.map(|c| c.saved());
         level.rotation = [self.yaw, self.pitch];
         level.xp_level = self.experience.level;
         level.xp_progress = self.experience.progress;
@@ -9516,6 +9530,7 @@ impl Game<'_> {
         if let Some(p) = &self.player {
             level.position = Some([p.position.x, p.position.y, p.position.z]);
             level.health = p.health.health();
+            level.absorption = p.health.absorption();
             let extra = level
                 .player_extra
                 .get_or_insert_with(|| horizon_world::nbt::Tag::Compound(Default::default()));
@@ -10098,12 +10113,13 @@ impl Game<'_> {
         let loading = self.loading_reason() == Some(horizon_client::level_loading::Reason::Other);
         let blurred = loading
             || self.title.as_ref().is_some_and(|t| {
-                self.screen == Screen::Options
+                matches!(self.screen, Screen::Options | Screen::Win)
                     || !matches!(t.mode, horizon_client::title::Mode::Main)
             })
             || (self.title.is_none()
                 && self.player.is_some()
-                && self.screen.blurs_background(self.pause_menu));
+                && (self.screen.blurs_background(self.pause_menu)
+                    || (self.screen == Screen::Win && self.win_screen_pauses())));
         let radius = self.settings.menu_blur as f32;
         (blurred && radius >= 1.0).then_some(radius)
     }
@@ -10187,6 +10203,7 @@ impl Game<'_> {
                 Screen::WorldOptions => self.world_options_escape(),
                 Screen::CommandBlock => self.close_command_block(),
                 Screen::Chat => self.close_chat(),
+                Screen::Win => self.close_win_screen()?,
             },
             KeyCode::Digit1
             | KeyCode::Digit2
@@ -10786,7 +10803,9 @@ impl ApplicationHandler for Game<'_> {
                         }) * wheel_sensitivity
                     };
                     let d = scaled(raw_y) as f32;
-                    if let Some(title) = &mut self.title {
+                    if let Some(title) = &mut self.title
+                        && self.screen != Screen::Win
+                    {
                         let size = self
                             .window
                             .as_ref()
@@ -10844,6 +10863,7 @@ impl ApplicationHandler for Game<'_> {
                         self.advancements_scroll(scaled(raw_x) as f32, d);
                     }
                 }
+                WindowEvent::MouseInput { .. } if self.screen == Screen::Win => {}
                 WindowEvent::MouseInput { state, button, .. } if self.screen == Screen::Options => {
                     if self.options_waiting_for_key() && state == ElementState::Pressed {
                         self.options_bind_mouse(button)?;
@@ -11100,6 +11120,9 @@ impl ApplicationHandler for Game<'_> {
                 {
                     self.world_options_key(&event)
                 }
+                WindowEvent::KeyboardInput { event, .. } if self.screen == Screen::Win => {
+                    self.win_key(&event)?
+                }
                 WindowEvent::KeyboardInput { event, .. } if self.screen == Screen::CommandBlock => {
                     self.command_block_key(&event)
                 }
@@ -11233,6 +11256,7 @@ impl ApplicationHandler for Game<'_> {
                             self.tick_ambience();
                             self.tick_fov();
                         }
+                        self.tick_win_screen()?;
                         self.tick_music();
                         self.tick_sound_engine();
                         self.clock.record(started.elapsed());
@@ -11660,6 +11684,7 @@ impl<'a> Game<'a> {
             respawn_config: None,
             respawn_travel: None,
             end_portal_travel: false,
+            win: None,
             end: Default::default(),
             block_ticks: Ticks::new(0),
             tick_chunks: Default::default(),

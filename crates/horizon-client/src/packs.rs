@@ -87,6 +87,7 @@ fn style_of(o: &serde_json::Map<String, serde_json::Value>) -> Style {
         underlined: flag("underlined"),
         strikethrough: flag("strikethrough"),
         obfuscated: flag("obfuscated"),
+        font: o.get("font").and_then(crate::text::font_id),
         ..Style::default()
     }
 }

@@ -12,7 +12,7 @@ impl Game<'_> {
     pub(super) fn tick_music(&mut self) {
         let (music, volume) = self.situational_music();
         // LevelLoadingScreen: no new track before the player is in the world.
-        let loading = self.title.is_none() && self.player.is_none();
+        let loading = self.title.is_none() && self.player.is_none() && self.win.is_none();
         self.music
             .tick(music.as_ref(), volume, loading, &mut self.audio);
     }
@@ -59,7 +59,11 @@ impl Game<'_> {
             None => (empty, 1.0),
         };
         let situation = Situation {
-            screen_music: None,
+            // WinScreen.getBackgroundMusic.
+            screen_music: self
+                .win
+                .is_some()
+                .then(horizon_client::music::Music::credits),
             in_world: eye.is_some(),
             in_end: self.dim == super::Dim::End,
             boss_music: self.boss_music(),
