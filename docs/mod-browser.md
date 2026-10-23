@@ -51,6 +51,19 @@ or GeckoLib) is listed as not ported. A mod that shares its id or a namespace wi
 game reads mod content when it starts: start it again after installing. **Remove** deletes the folder and turns it
 off.
 
+### End-to-end check
+
+`tools/mod_browser_harness.py [--mod SLUG] [--query TEXT] [--keep]` runs the whole path a player takes, in a scratch
+game folder: the launcher's `mods search --kind mod`, `mods check` and `mods install` (Modrinth), then the game
+opens a survival world with the mod offscreen (horizon-ctl), places one of its blocks, and crafts one of its recipes
+from vanilla ingredients on a crafting table and takes the result. It times the world's load with and without the
+mod and prints a JSON summary; it exits 1 when a step fails. It needs the launcher, the game and horizon-ctl built
+and the prepared 26.3 resources in `.local`.
+
+On the Mac mini (M4 Pro, offscreen) with Macaw's Fences and Walls (the default): check 4.0 s, install 3.1 s, world
+load 5.4 s without mods and 7.3 s with it (resources 1.1 s and 2.6 s: the mod content folder is built on the first
+start); the hedge places and its recipe crafts 4.
+
 ## Checks on every download
 
 - The file must come from Modrinth's or CurseForge's file servers (`cdn.modrinth.com`, `edge.forgecdn.net`,

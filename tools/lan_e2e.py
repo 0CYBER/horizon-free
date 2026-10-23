@@ -123,6 +123,9 @@ address. The script then checks, from both sides, what a guest's game used to ge
              it (#1222).
 - frames:    the host and the guest each put a diamond in an item frame and turn it, and put a
              helmet on an armor stand and take it back (#1222).
+- mounts:    the host and the guest each open a tamed horse's, donkey's and llama's inventory
+             (shift + right click, then the inventory key while riding), put on a saddle, armour
+             or a carpet and fill the chest by shift-clicking.
 - riding:    the host and the guest each saddle and ride a horse (walk, jump), a pig and a strider
              (with their sticks), a camel and a donkey, sit on a llama and fly a happy ghast, and
              get off by sneaking; the other side sees the animal move.
@@ -169,7 +172,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GUEST_NAME = 'Guest'
 # The host plays single player on its server thread (--server-thread).
 SERVER_THREAD = False
-CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning', 'riding']
+CHECKS = ['tab', 'self', 'armour', 'nametags', 'walls', 'chest', 'crafting', 'sign', 'damage', 'mobs', 'hazards', 'pvp', 'arrows', 'kills', 'hurt', 'respawn', 'containers', 'feedback', 'titles', 'chat', 'commands', 'recipes', 'machines', 'brewing', 'loom', 'stonecutter', 'grindstone', 'anvil', 'smithing', 'enchanting', 'beacon', 'crafter', 'lectern', 'cartography', 'trials', 'clicks', 'sleep', 'predict', 'push', 'eat', 'eating', 'xp', 'objects', 'projectiles', 'worn', 'blast', 'barter', 'deflect', 'fireball', 'light', 'time', 'swings', 'cracks', 'plates', 'effects', 'portals', 'distance', 'growth', 'flight', 'ladder', 'boats', 'minecarts', 'frames', 'lightning', 'riding', 'mounts']
 
 
 class Game:
@@ -2638,6 +2641,101 @@ def check_riding(host, guest, out):
     return result
 
 
+# Mount inventories: (kind, summon NBT, what goes in by shift-click and the menu slot it lands
+# in: 700 the saddle, 701 the body armour or carpet, 710 the chest's first slot).
+MOUNT_MENUS = [
+    ('horse', '{Tame:1b,NoAI:1b}', [('minecraft:saddle', 700), ('minecraft:iron_horse_armor', 701)]),
+    ('donkey', '{Tame:1b,NoAI:1b,ChestedHorse:1b}', [('minecraft:saddle', 700), ('minecraft:dirt', 710)]),
+    ('llama', '{Tame:1b,NoAI:1b,ChestedHorse:1b,Strength:3}',
+     [('minecraft:red_carpet', 701), ('minecraft:dirt', 710)]),
+]
+
+
+def mount_screen(game, ticks=20):
+    """The open mount menu's slots and items ({700: 'minecraft:saddle', ...}), waiting up to
+    `ticks` for it to open; None when no mount menu opened."""
+    for _ in range(ticks // 2):
+        slots = {}
+        for w in game.raw('ui').get('widgets', []):
+            wid = w.get('id', '')
+            if wid.startswith('slot-') and wid[5:].isdigit() and int(wid[5:]) >= 700:
+                slots[int(wid[5:])] = (w.get('stack') or {}).get('item')
+        if slots:
+            return slots
+        game.wait(2)
+    return None
+
+
+def check_mounts(host, guest, out):
+    """The host and the guest each open a tamed horse's, donkey's and llama's inventory with
+    shift + right click (`ClientboundMountScreenOpenPacket` for a server's player), put on a
+    saddle, horse armour or a carpet and fill the chest by shift-clicking, close it, then ride the
+    mount and open its inventory with the inventory key (OPEN_INVENTORY): it shows what was put
+    in, and the server took the items from the inventory."""
+    spots = apart(host, guest)
+    result = {}
+    for label, player in (('host', host), ('guest', guest)):
+        x, y, z = spots[label]
+        player('command', command='gamemode survival')
+        result[label] = {}
+        for kind, nbt, puts in MOUNT_MENUS:
+            player('command', command='clear @s')
+            for item, _ in puts:
+                player('command', command=f'give @s {item}')
+            player('command', command=f'summon minecraft:{kind} {x + 0.5} {y} {z + 2.5} {nbt}')
+            player.wait(5)
+            found = [m for m in player.raw('mobs', 16).get('near', [])
+                     if m['kind'].endswith(kind) and m['health'] > 0]
+            assert found, f'the {label} sees no {kind}'
+            mob = found[0]
+            p = mob['pos']
+            aim = (f'{p[0]:.2f}', f'{p[1] + HEIGHTS[kind] / 2:.2f}', f'{p[2]:.2f}')
+            try:
+                player.raw('look-at', *aim)
+                player.raw('key', 'shift', 'down')
+                player.wait(3)
+                player.raw('mouse', 'right', 'click')
+                player.wait(5)
+                player.raw('key', 'shift', 'up')
+                slots = mount_screen(player)
+                assert slots is not None, f"the {label}'s shift + right click on the {kind} opened no inventory"
+                for item, _ in puts:
+                    player.raw('click-slot', hotbar_slot(player, item), 'shift')
+                    player.wait(5)
+                slots = mount_screen(player)
+                for item, slot in puts:
+                    assert slots.get(slot) == item, f"the {label}'s {kind}: {item} shift-clicked, slot {slot} holds {slots.get(slot)}"
+                player.raw('key', 'esc', 'tap')
+                player.wait(5)
+                for item, _ in puts:
+                    left = server_count(player, item.split(':')[1])
+                    assert left == 0, f'the server still counts {left} {item} on the {label}'
+                player.raw('look-at', *aim)
+                player.raw('mouse', 'right', 'click')
+                player.wait(8)
+                riding = player('status').get('riding')
+                assert riding == mob['id'], f'the {label} right-clicked its {kind}: riding {riding}'
+                player.raw('key', 'e', 'tap')
+                again = mount_screen(player)
+                assert again is not None, f'the inventory key on the {label}\'s {kind} opened no inventory'
+                for item, slot in puts:
+                    assert again.get(slot) == item, f"the {label}'s {kind} reopened: slot {slot} holds {again.get(slot)}, not {item}"
+                player.raw('key', 'esc', 'tap')
+                player.wait(3)
+                hold(player, 'shift', 10)
+                player.wait(5)
+                result[label][kind] = {slot: item for item, slot in puts}
+            finally:
+                back_to_game(player)
+                player('command', command=f'kill @e[type=minecraft:{kind},x={x},y={y},z={z},distance=..16]')
+                player.wait(2)
+                player('command', command=f'kill @e[type=minecraft:item,x={x},y={y},z={z},distance=..16]')
+                player('command', command='clear @s')
+                player('command', command=f'tp @s {x + 0.5} {y} {z + 0.5} 0 0')
+                player.wait(5)
+    return result
+
+
 def check_lightning(host, guest, out):
     """A bolt summoned beside each player: both sides get the bolt entity and flash the sky (the
     host's window too on its server thread, FEATURES 4z(f))."""
@@ -2977,7 +3075,7 @@ CHECK_FNS = {'tab': check_tab, 'self': check_self, 'armour': check_armour, 'name
              'xp': check_xp, 'objects': check_objects, 'projectiles': check_projectiles, 'blast': check_blast,
              'light': check_light, 'plates': check_plates,
              'swings': check_swings, 'cracks': check_cracks,
-             'time': check_time, 'growth': check_growth, 'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect, 'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'arrows': check_arrows, 'predict': check_predict, 'ladder': check_ladder, 'boats': check_boats, 'minecarts': check_minecarts, 'frames': check_frames, 'lightning': check_lightning, 'riding': check_riding}
+             'time': check_time, 'growth': check_growth, 'flight': check_flight, 'fireball': check_fireball, 'deflect': check_deflect, 'barter': check_barter, 'worn': check_worn, 'kills': check_kills, 'arrows': check_arrows, 'predict': check_predict, 'ladder': check_ladder, 'boats': check_boats, 'minecarts': check_minecarts, 'frames': check_frames, 'lightning': check_lightning, 'riding': check_riding, 'mounts': check_mounts}
 
 
 def run(ctl, out, resources, checks):
