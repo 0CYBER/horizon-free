@@ -936,6 +936,23 @@ impl Menu {
         }
     }
 
+    /// `slotsChanged(player.getInventory())`, which a bundle click calls
+    /// (`BundleItem.broadcastChangesOnContainerMenu`): the menus that don't
+    /// check which container changed recompute from their inputs.
+    fn inventory_slots_changed(&mut self, env: &Env) {
+        match self.kind {
+            Kind::Inventory | Kind::Crafting => self.recompute(env),
+            Kind::Loom => self.loom_changed(env),
+            Kind::Stonecutter => self.stone_changed(env),
+            Kind::Cartography => self.carto_changed(env),
+            Kind::Merchant => self.merchant_update(env),
+            // ItemCombinerMenu.slotsChanged only for its inputs; the
+            // smithing table's hasRecipeError always.
+            Kind::Smithing => self.smith_error(),
+            _ => {}
+        }
+    }
+
     /// `EnchantmentMenu.clickMenuButton`'s checks: the lapis, the cost and
     /// the levels (creative pays nothing). The enchanting itself needs a
     /// level and is the caller's (`enchant_button`).

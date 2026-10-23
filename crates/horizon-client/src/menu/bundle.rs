@@ -7,7 +7,14 @@ impl Menu {
     /// The carried stack's `overrideStackedOnOther`, then the clicked
     /// one's `overrideOtherStackedOnMe`. True when a bundle took the click.
     pub(super) fn bundle_click(&mut self, env: &Env, s: usize, primary: bool) -> bool {
-        self.carried_bundle_click(env, s, primary) || self.clicked_bundle_click(env, s, primary)
+        let took = self.carried_bundle_click(env, s, primary)
+            || self.clicked_bundle_click(env, s, primary);
+        if took {
+            // broadcastChangesOnContainerMenu: the open menu's
+            // slotsChanged for the player's inventory.
+            self.inventory_slots_changed(env);
+        }
+        took
     }
 
     /// `BundleItem.overrideStackedOnOther`: the carried bundle on a slot.
