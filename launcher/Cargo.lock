@@ -2633,6 +2633,7 @@ dependencies = [
 name = "horizon-bench"
 version = "0.1.0"
 dependencies = [
+ "horizon-telemetry",
  "serde",
  "serde_json",
 ]

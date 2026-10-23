@@ -7,7 +7,9 @@
 // players' `benchmark` items as the server stores them ({ install_id, day, version, data: <report> } per line).
 // Players' results are grouped by GPU, CPU, render distance and game, and a group is published only with at least
 // MIN_INSTALLS installs, so nobody can be picked out. install_id is used to count installs and to weigh each install
-// once, and never leaves this script; neither do the day, OS version, driver, RAM or screen.
+// once, and never leaves this script; neither do the day, OS version, driver, the exact RAM and VRAM, or the screen.
+// A group also says how its installs split by hardware class (RAM, VRAM, drive, OS, integrated or discrete GPU),
+// each class only with at least MIN_INSTALLS installs. The classes are the server's (src/classes.rs).
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,6 +35,43 @@ export function round(field, x) {
 }
 const trim = (s) => (typeof s === "string" ? s.replace(/\(R\)|\(TM\)|\(tm\)/g, "").replace(/\s+/g, " ").trim() : "");
 const gameOf = (app) => (app?.name === "horizon-client" ? "horizon" : app?.name === "minecraft" && !(app.mods || []).some((m) => m.name !== "fabric-loader") ? "vanilla" : null);
+
+// --- Hardware classes: coarse, so that a class holds many machines ---------------------------
+
+export const DIMENSIONS = ["ram", "vram", "storage", "os", "gpu_kind"];
+export function ramClass(gb) {
+  if (!(gb > 0)) return null;
+  return gb <= 5 ? "4 GB or less" : gb <= 10 ? "8 GB" : gb <= 20 ? "16 GB" : gb <= 40 ? "32 GB" : "64 GB or more";
+}
+export function gpuKindClass(s) {
+  return s === "integrated" || s === "IntegratedGpu" ? "integrated" : s === "discrete" || s === "DiscreteGpu" ? "discrete" : null;
+}
+// A GPU's own memory in MiB; an integrated GPU shares the system's.
+export function vramClass(mb, kind) {
+  if (gpuKindClass(kind) === "integrated") return "shared";
+  if (!(mb > 0)) return null;
+  for (const [max, name] of [[2560, "2 GB or less"], [4608, "4 GB"], [6656, "6 GB"], [8704, "8 GB"], [12800, "12 GB"], [16896, "16 GB"]]) if (mb <= max) return name;
+  return "more than 16 GB";
+}
+const oneOf = (list) => (s) => (list.includes(s) ? s : null);
+export const storageClass = oneOf(["nvme", "ssd", "hdd"]);
+export const osClass = oneOf(["linux", "macos", "windows"]);
+// A report's classes, in DIMENSIONS order.
+export function classesOf(report) {
+  const hw = report?.hardware || {};
+  const kind = hw.gpu?.kind;
+  return [ramClass(finite(hw.ram_mb) ? hw.ram_mb / 1024 : 0), vramClass(hw.gpu?.vram_mb, kind), storageClass(hw.storage), osClass(hw.os), gpuKindClass(kind)];
+}
+// Per dimension, the classes with at least minInstalls installs, most first; dimensions without one are left out.
+export function breakdowns(classes, minInstalls) {
+  const out = {};
+  DIMENSIONS.forEach((dim, i) => {
+    const cells = [...classes[i]].map(([c, set]) => ({ class: c, installs: set.size })).filter((c) => c.installs >= minInstalls);
+    cells.sort((a, b) => b.installs - a.installs || (a.class < b.class ? -1 : a.class > b.class ? 1 : 0));
+    if (cells.length) out[dim] = cells;
+  });
+  return out;
+}
 
 // Why a report can't be compared with the others, or null when it can: the standard flight over the four scenes,
 // VSync off, no frame cap, drawn on a screen.
@@ -82,12 +121,17 @@ export function aggregatePlayers(items, { minInstalls = MIN_INSTALLS } = {}) {
     const report = item?.data;
     if (!item?.install_id || rejection(report)) continue;
     const key = JSON.stringify([trim(report.hardware.gpu.name), trim(report.hardware.cpu), report.conditions.render_distance, gameOf(report.app)]);
-    if (!groups.has(key)) groups.set(key, { installs: new Map(), reports: 0, versions: new Set() });
+    if (!groups.has(key)) groups.set(key, { installs: new Map(), reports: 0, versions: new Set(), classes: DIMENSIONS.map(() => new Map()) });
     const g = groups.get(key);
     g.reports++;
     if (item.version) g.versions.add(item.version);
     if (!g.installs.has(item.install_id)) g.installs.set(item.install_id, []);
     g.installs.get(item.install_id).push(figures(report));
+    classesOf(report).forEach((c, i) => {
+      if (!c) return;
+      if (!g.classes[i].has(c)) g.classes[i].set(c, new Set());
+      g.classes[i].get(c).add(item.install_id);
+    });
   }
   const out = [];
   for (const [key, g] of groups) {
@@ -95,7 +139,7 @@ export function aggregatePlayers(items, { minInstalls = MIN_INSTALLS } = {}) {
     const [gpu, cpu, render_distance, game] = JSON.parse(key);
     const perInstall = [...g.installs.values()].map((runs) => Object.fromEntries(FIELDS.map((f) => [f, median(runs.map((r) => r[f]))])));
     const medians = Object.fromEntries(FIELDS.map((f) => [f, round(f, median(perInstall.map((r) => r[f])))]));
-    out.push({ gpu, cpu, render_distance, game, source: "players", installs: g.installs.size, reports: g.reports, versions: [...g.versions].sort(byVersionDesc).slice(0, 3), medians });
+    out.push({ gpu, cpu, render_distance, game, source: "players", installs: g.installs.size, reports: g.reports, versions: [...g.versions].sort(byVersionDesc).slice(0, 3), medians, breakdowns: breakdowns(g.classes, minInstalls) });
   }
   // Most installs first, then by GPU, CPU, render distance and game, compared as plain strings (as the server does).
   const cmp = (x, y) => (x < y ? -1 : x > y ? 1 : 0);

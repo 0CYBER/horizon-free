@@ -10,7 +10,12 @@
    "installs": 3,
    "reports": 4,
    "versions": ["v0.2.1", "v0.2.0"],
-   "medians": { "avg_fps": 515, "low_1pct_fps": 120, "p95_ms": 3.5, "world_ms": 4500, "chunk_load_ms": 1400, "rss_peak_mb": 1450, "rss_steady_mb": 1250 }
+   "medians": { "avg_fps": 515, "low_1pct_fps": 120, "p95_ms": 3.5, "world_ms": 4500, "chunk_load_ms": 1400, "rss_peak_mb": 1450, "rss_steady_mb": 1250 },
+   "breakdowns": {
+    "vram": [{ "class": "16 GB", "installs": 3 }],
+    "os": [{ "class": "linux", "installs": 3 }],
+    "gpu_kind": [{ "class": "discrete", "installs": 3 }]
+   }
   }
  ]
 }

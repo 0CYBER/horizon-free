@@ -30,8 +30,9 @@ pub use payload::{Item, Kind, Payload, Source};
 pub const SCHEMA: u32 = 1;
 
 /// What players agree to. Bumped when what is collected changes: the launcher then asks again,
-/// and until the player answers nothing new is kept or sent.
-pub const CONSENT_VERSION: u32 = 1;
+/// and until the player answers nothing new is kept or sent. 2: the machine's full hardware
+/// (cores, clocks, VRAM, drive, screen, power, form), 2026-10-23.
+pub const CONSENT_VERSION: u32 = 2;
 
 /// The ingest server (`crates/horizon-telemetry-server`, on Railway). `HORIZON_TELEMETRY_URL`
 /// overrides it (a local server); `HORIZON_TELEMETRY_URL=off` sends nothing at all, no ping

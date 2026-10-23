@@ -9,7 +9,7 @@ The one exception is the anonymous ["I'm playing" ping](#the-im-playing-ping) be
 `telemetry/consent.json` in the game folder (`HORIZON_HOME`, else `horizon` in the platform data folder):
 
 ```json
-{ "version": 1, "answered": 1792060800, "choices": { "performance": true, "crashes": true, "bugs": false, "benchmarks": false }, "install_id": "3f2c…" }
+{ "version": 2, "answered": 1792060800, "choices": { "performance": true, "crashes": true, "bugs": false, "benchmarks": false }, "install_id": "3f2c…" }
 ```
 
 - `version` is the consent version the player answered (`CONSENT_VERSION`). It goes up when what is collected changes. The launcher then asks again, and until the player answers nothing new is kept or sent.
@@ -34,7 +34,24 @@ Every item has `day` (days since 1970, UTC: no finer time), `source` (`launcher`
 | `bug` | bug reports | `system`, the player's `text` (up to 4000 characters), and the `log` only if they add it after reading it | 80 KiB | 5 |
 | `benchmark` | benchmark uploads | the benchmark report as `docs/benchmark-report.md` defines it, as it is, with its own schema field | 128 KiB | 10 |
 
-`system` is the OS and its version, the architecture, the CPU model and thread count, installed memory rounded to the GiB, and the GPU, driver and graphics backend.
+`system` describes the machine, with what can explain its performance. A field the OS doesn't give is empty or 0:
+
+| Field | What | Example |
+|---|---|---|
+| `os`, `os_version`, `arch` | the OS, its version, the CPU architecture | `linux`, `Fedora Linux 43`, `x86_64` |
+| `cpu`, `threads`, `cores` | the CPU model, its threads and physical cores | `13th Gen Intel(R) Core(TM) i7-13700KF`, 24, 16 |
+| `cpu_base_mhz`, `cpu_boost_mhz` | base and boost clock, where the OS gives them (not on Apple silicon) | 3400, 5400 |
+| `ram_gb` | installed memory, rounded to the GiB | 32 |
+| `gpu`, `gpu_vendor`, `gpu_kind` | the GPU the game draws with, its maker, `integrated` or `discrete` | `NVIDIA GeForce RTX 4080`, `nvidia`, `discrete` |
+| `vram_mb` | a discrete GPU's own memory, rounded up to 256 MiB | 16384 |
+| `driver`, `backend` | the driver version and the graphics API (`Vulkan`, `Metal`, `Dx12`) | `580.95.05`, `Vulkan` |
+| `storage` | the drive under the game folder: `nvme`, `ssd` or `hdd` | `nvme` |
+| `display` | the screen the window opened on: `width`, `height` (physical pixels), `refresh_hz`, `scale` | 2560, 1440, 165, 1.0 |
+| `power`, `form` | on mains or battery (`ac`, `battery`), `laptop` or `desktop` | `ac`, `desktop` |
+
+The launcher's own items (bug reports sent from it) have no GPU or screen: only the game knows them. The memory given to the game is not a setting in Horizon (no Java heap): `peak_ram_mb` is what it used. Benchmark reports carry the same facts in their `hardware` (`docs/benchmark-report.md`).
+
+No serial number, host name, user name, MAC address or path is read. Settings → Data collection → "View what would be sent" and `horizon-launcher data show` print every field as it would leave this machine.
 
 A summary (`frames`, `ticks`) is the count, the 50th, 95th and 99th percentile and the maximum in milliseconds (to the tenth), and 14 bucket counts: under 4 ms, 4–6, 6–8, 8–10, 10–12, 12–14, 14–16.7, 16.7–20, 20–25, 25–33.3, 33.3–50, 50–100, 100–250, and 250 ms and more. Raw frame times never leave: `Timings` records them in tenths of a millisecond (20 KB however long the session) and only its summary is kept. A perf item is under 1 KiB.
 
@@ -75,8 +92,20 @@ The launcher reads it when it opens and every minute after, and shows "N playing
 
 - `POST /v1/batch`
 - `DELETE /v1/installs/<install_id>`: deletes everything sent under that ID.
-- `GET /v1/aggregate`: the anonymous totals the website's results page reads.
-- `GET /v1/benchmarks/summary`: players' benchmark uploads grouped by GPU, CPU, render distance and game for playhorizon.dev/benchmarks. A group shows only with at least 3 different installs, and only its medians and counts: no install ID, day, OS version, driver, memory or screen. Uploads are never published one by one.
+- `GET /v1/aggregate`: the anonymous totals the website's results page reads. Its `breakdowns` split the play sessions of the period by hardware class (below), each class with its installs, sessions, hours and mean p50 and p99 frame times.
+- `GET /v1/benchmarks/summary`: players' benchmark uploads grouped by GPU, CPU, render distance and game for playhorizon.dev/benchmarks. A group shows only with at least 3 different installs, and only its medians and counts: no install ID, day, OS version, driver, exact memory or screen. Uploads are never published one by one. Each group's `breakdowns` count its installs per hardware class.
 - `POST /v1/live` and `GET /v1/live`: the "I'm playing" ping and the live count.
+
+Public output never holds a raw hardware value, only these classes (`src/classes.rs`, the same in `website/scripts/benchmarks.mjs`), and a class is published only with at least 3 different installs:
+
+| Breakdown | Classes |
+|---|---|
+| `ram` | 4 GB or less, 8 GB, 16 GB, 32 GB, 64 GB or more |
+| `vram` | shared (integrated GPU), 2 GB or less, 4, 6, 8, 12, 16 GB, more than 16 GB |
+| `storage` | nvme, ssd, hdd |
+| `os` | linux, macos, windows |
+| `gpu_kind` | integrated, discrete |
+
+The driver, OS version, clocks, screen and power are kept raw for the 180 days of retention, to explain a slow group, and never published.
 
 `crates/horizon-telemetry-server` is the server, at `https://telemetry.playhorizon.dev` on Railway (one SQLite file on a volume, region `europe-west4`). Its [README](../crates/horizon-telemetry-server/README.md) covers storage (about 190 bytes per play session), retention (180 days of raw rows, anonymous daily totals kept), rate limits and hosting.
