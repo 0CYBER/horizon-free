@@ -2702,6 +2702,7 @@ impl Game<'_> {
             attributes: Vec::new(),
             precise: false,
             needs_sync: false,
+            leash: None,
         })
     }
 }

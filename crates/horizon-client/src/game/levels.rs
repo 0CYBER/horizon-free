@@ -232,6 +232,9 @@ impl Game<'_> {
             p.world.game_time = self.world.game_time;
             p.world.day_time = self.world.day_time;
             p.world.weather = self.world.weather;
+            // The game rules and the difficulty are the server's, not a
+            // level's: natural regeneration holds in every dimension.
+            p.world.health_rules = self.world.health_rules;
             // The sculk tables' watched blocks are built once per game.
             p.world.watched = std::mem::take(&mut self.world.watched);
             self.swap_level(&mut p);
