@@ -708,6 +708,13 @@ impl Audio {
         let seed = self.random.next_long();
         self.play_seeded(event, at, volume, pitch, seed);
     }
+    /// `play` for this client only: a sound a packet's handler plays
+    /// (`playLocalSound`), which the guests play from that packet themselves.
+    pub fn play_unshared(&mut self, event: &str, at: Option<[f64; 3]>, volume: f32, pitch: f32) {
+        let capture = self.capture.take();
+        self.play(event, at, volume, pitch);
+        self.capture = capture;
+    }
     /// `LivingEntity.handleDamageEvent`'s pitch, `(r - r) * 0.2 + 1`, drawn on the
     /// client (the entity's own random there, never the server's world random).
     pub fn hurt_pitch(&mut self) -> f32 {
