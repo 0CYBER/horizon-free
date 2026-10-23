@@ -15,7 +15,6 @@ use std::{
 /// GameType ids.
 pub const SURVIVAL: i32 = 0;
 pub const CREATIVE: i32 = 1;
-pub const ADVENTURE: i32 = 2;
 pub const SPECTATOR: i32 = 3;
 
 /// The body state a player's file keeps that lives on `PlayerMotion`.
@@ -360,11 +359,6 @@ impl Guest {
     }
     pub fn send(&self, packet: &play::Clientbound) {
         self.sender.send(packet.encode());
-    }
-    pub fn send_all(&self, packets: &[play::Clientbound]) {
-        for p in packets {
-            self.send(p);
-        }
     }
     pub fn chunk(&self) -> (i32, i32) {
         (

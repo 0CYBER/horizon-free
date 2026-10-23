@@ -62,9 +62,6 @@ impl<E> ProtoBlockEntities<E> {
     pub fn active(&self, position: BlockPos) -> Option<&E> {
         self.active.get(&position)
     }
-    pub fn active_mut(&mut self, position: BlockPos) -> Option<&mut E> {
-        self.active.get_mut(&position)
-    }
     pub fn pending(&self, position: BlockPos) -> Option<&Tag> {
         self.pending.get(&position)
     }

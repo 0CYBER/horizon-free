@@ -104,8 +104,6 @@ pub const SNEAK: usize = 0;
 pub const SPRINT: usize = 1;
 /// Attack (mouse).
 pub const ATTACK: usize = 2;
-/// Use (mouse).
-pub const USE: usize = 3;
 
 /// The `ToggleKeyMapping`s `Options` builds: sneak and sprint (keyboard,
 /// restored after a screen), attack (mouse, restored) and use (mouse, not
