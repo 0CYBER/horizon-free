@@ -829,7 +829,13 @@ impl Game<'_> {
                         r.joined = true;
                         r.profile = uuid;
                         r.profile_name = name.clone();
-                        r.status = format!("Joined as {name}; loading terrain...");
+                        // `multiplayer.downloadingTerrain`, as
+                        // LevelLoadingScreen shows it; no player name.
+                        r.status = horizon_client::text::Text::translate(
+                            "multiplayer.downloadingTerrain",
+                            &[],
+                        )
+                        .plain();
                     }
                 }
                 Event::Brand(brand) => {
