@@ -3862,11 +3862,17 @@ impl Game<'_> {
                 self.predict_item_on_block(stack, &hit);
             }
             if held_block {
-                if reacts
-                    || held
-                        .as_ref()
-                        .is_some_and(|stack| self.remote_can_place(&hit, stack))
-                {
+                let placed = if reacts {
+                    None
+                } else {
+                    held.as_ref()
+                        .and_then(|stack| self.remote_can_place(&hit, stack))
+                };
+                if let Some(placed) = &placed {
+                    self.predict_place(placed, seq);
+                    self.with_hand(hand, Game::consume_held);
+                }
+                if reacts || placed.is_some() {
                     self.with_hand(hand, Game::swing_arm);
                 }
                 // BlockItem.place returns FAIL when placement is rejected:
@@ -3997,12 +4003,41 @@ impl Game<'_> {
         })
     }
 
-    /// Run BlockItem.place on a disposable level before predicting its swing.
-    /// The real level supplies collision shapes and building-blocking entities;
-    /// block writes, random draws, scheduled ticks and events stay in the preview.
-    fn remote_can_place(&mut self, hit: &super::Hit, stack: &ItemStack) -> bool {
+    /// MultiPlayerGameMode.useItemOn inside startPrediction, for a block item:
+    /// the blocks `BlockItem.place` set are placed on this client's level at
+    /// once, each kept as predicted under the use's sequence until the server
+    /// acknowledges it (a placement the server refused goes back). Without
+    /// this, the next click of a fast bridge aims past the block still on its
+    /// way from the server, and the server refuses it.
+    fn predict_place(
+        &mut self,
+        changes: &[(horizon_core::position::BlockPos, BlockStateId)],
+        seq: i32,
+    ) {
+        for &(p, state) in changes {
+            let pos = [p.x, p.y, p.z];
+            let before = self.world.block(p.x, p.y, p.z);
+            // BlockStatePredictionHandler.retainKnownServerState.
+            if let Some(r) = self.remote.as_mut() {
+                r.predictions
+                    .entry(pos)
+                    .and_modify(|e| e.0 = seq)
+                    .or_insert((seq, before.0 as i32));
+            }
+            self.set_block(pos, state.0 as i32);
+        }
+    }
+
+    /// Run BlockItem.place on a disposable level: the blocks it set, if it
+    /// placed. The real level supplies collision shapes and building-blocking
+    /// entities; random draws, scheduled ticks and events stay in the preview.
+    fn remote_can_place(
+        &mut self,
+        hit: &super::Hit,
+        stack: &ItemStack,
+    ) -> Option<Vec<(horizon_core::position::BlockPos, BlockStateId)>> {
         if !self.may_build() {
-            return false;
+            return None;
         }
         let ctx = horizon_world::level::PlaceContext {
             clicked_pos: horizon_core::position::BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]),
@@ -4025,6 +4060,7 @@ impl Game<'_> {
                 ),
                 horizon_world::level::PlaceOutcome::Placed { .. }
             )
+            .then(|| level.changed.into_iter().collect())
         })
     }
 
