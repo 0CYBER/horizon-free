@@ -138,6 +138,7 @@ mod screens;
 mod sculk;
 mod sculk_fixture;
 mod server_travel;
+mod shader_packs;
 mod shield;
 mod sign_edit;
 mod sniffers;
@@ -10063,6 +10064,11 @@ impl Game<'_> {
         } else {
             self.gather_dynamic_lights(camera, alpha);
         }
+        let pack_inputs = if title {
+            Default::default()
+        } else {
+            self.shader_pack_inputs(camera, alpha as f32)
+        };
         let frame = Frame {
             weather: &weather,
             weather_time: horizon_client::weather::Time::new(self.world.game_time, alpha as f32),
@@ -10146,6 +10152,7 @@ impl Game<'_> {
             hand: &hand,
             hand_fov_degrees: self.hud_fov_degrees(camera_alpha as f32, camera.to_array()),
             screen: &screen,
+            pack: pack_inputs,
             border,
             game_time: self.world.game_time as f32,
             shader_game_time: ((self.world.game_time % 24000) as f32 + alpha as f32) / 24000.0,
@@ -12671,6 +12678,7 @@ fn loading_frame(hud: &HudBatch) -> Frame<'_> {
         hand: &[],
         hand_fov_degrees: 70.0,
         screen: &[],
+        pack: Default::default(),
         border: None,
         game_time: 0.0,
         shader_game_time: 0.0,
