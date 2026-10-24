@@ -182,6 +182,22 @@ impl JavaPack {
     }
 }
 
+impl JavaPack {
+    /// The block ids of the pack's `block.properties` (empty without one),
+    /// [`properties::block_ids`].
+    pub fn block_ids(
+        &self,
+        values: &OptionValues,
+        env: &Environment,
+    ) -> Result<BTreeMap<String, i32>, String> {
+        match self.files.read("block.properties") {
+            Some(text) => properties::block_ids(&text, env, &self.options, values)
+                .map_err(|e| format!("block.properties: {e}")),
+            None => Ok(BTreeMap::new()),
+        }
+    }
+}
+
 /// A program's name in `shaders.properties` (`world-1/composite1.fsh` is
 /// `world-1/composite1`).
 pub fn program_name(program: &str) -> &str {
