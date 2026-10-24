@@ -266,8 +266,8 @@ fn is_virtual(block: usize) -> bool {
     VIRTUAL.contains(&block)
 }
 
-/// `getSideMask`.
-fn side_mask(west: bool, east: bool, north: bool, south: bool) -> i32 {
+/// `getSideMask` (LeavesFix has the same copy).
+pub(super) fn side_mask(west: bool, east: bool, north: bool, south: bool) -> i32 {
     let mut s = 0;
     if north {
         if east {
