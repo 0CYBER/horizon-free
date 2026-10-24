@@ -49,9 +49,6 @@ const STORAGE_MAX_KEYS: usize = 64;
 /// a cheap-in-fuel loop replacing one key with large payloads needs its own
 /// cap, separate from the on-disk quota it would otherwise stay under.
 const STORAGE_WRITE_BUDGET: u64 = 1 << 20;
-/// A mod's data, beside its `horizon-mods` folder (`find`'s `path.parent()`
-/// never has a manifest there, so `find` never mistakes it for a mod).
-const STORAGE_DIR: &str = ".horizon-mod-data";
 
 /// What mods may read of the game, copied once per tick by the game.
 #[derive(Clone, Debug, Default)]
@@ -237,7 +234,7 @@ impl Mods {
         let data_dir = path
             .parent()
             .unwrap_or(Path::new("."))
-            .join(STORAGE_DIR)
+            .join(crate::manifest::STORAGE_DIR)
             .join(&m.id);
         let state = State {
             name: m.name.clone(),
