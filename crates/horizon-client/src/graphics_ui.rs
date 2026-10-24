@@ -24,7 +24,6 @@ pub enum H {
     LodDistance,
     FarDetail,
     CaveCulling,
-    CullLeaves,
     EntityCulling,
     ChunkUpdates,
     UploadBudget,
@@ -143,11 +142,6 @@ pub fn rows(level: Level) -> Vec<Row> {
                 H::CaveCulling,
                 Saves,
                 "Skips terrain hidden behind closed sections. Off costs a lot.",
-            ),
-            h(
-                H::CullLeaves,
-                None,
-                "Hides shared leaf and mangrove root faces; foliage can look less dense.",
             ),
             h(
                 H::EntityCulling,
@@ -350,7 +344,6 @@ impl H {
             },
             H::FarDetail => labelled("Far Detail", g.far_detail.label()),
             H::CaveCulling => labelled("Cave Culling", on_off(g.cave_culling)),
-            H::CullLeaves => labelled("Cull Leaves", on_off(g.cull_leaves)),
             H::EntityCulling => labelled("Entity Culling", on_off(g.entity_culling)),
             H::ChunkUpdates => match g.chunk_updates {
                 0 => labelled("Chunk Updates", "Unlimited"),
@@ -429,7 +422,6 @@ impl H {
                 g.far_detail = step(&[FarDetail::Full, FarDetail::Reduced], g.far_detail, back)
             }
             H::CaveCulling => g.cave_culling = !g.cave_culling,
-            H::CullLeaves => g.cull_leaves = !g.cull_leaves,
             H::EntityCulling => g.entity_culling = !g.entity_culling,
             H::Sky => g.sky = !g.sky,
             H::Fog => g.fog = !g.fog,
@@ -466,7 +458,6 @@ impl Item {
         let g = &s.horizon;
         Some(match self {
             Item::Horizon(H::CaveCulling) => g.cave_culling,
-            Item::Horizon(H::CullLeaves) => g.cull_leaves,
             Item::Horizon(H::EntityCulling) => g.entity_culling,
             Item::Horizon(H::Sky) => g.sky,
             Item::Horizon(H::Fog) => g.fog,
@@ -1056,48 +1047,6 @@ mod tests {
         assert_eq!(H::UploadBudget.slider(&s), Some(1.0));
         H::UploadBudget.set_slider(&mut s, 0.0);
         assert_eq!(s.horizon.upload_budget_kib, 0);
-    }
-
-    #[test]
-    fn cull_leaves_is_opt_in_and_toggles_from_advanced_graphics() {
-        let mut s = Settings::default();
-        let item = Item::Horizon(H::CullLeaves);
-        assert_eq!(item.switch(&s), Some(false));
-        assert_eq!(item.label(&s).plain(), "Cull Leaves: Off");
-        for enabled in [false, true] {
-            s.horizon.cull_leaves = enabled;
-            for preset in Preset::ALL {
-                crate::graphics::apply_preset(preset, &mut s);
-                assert_eq!(s.horizon.cull_leaves, enabled);
-            }
-        }
-
-        let mut ui = GraphicsUi::default();
-        let size = (480.0, 4000.0);
-        let (widgets, _, _) = ui.layout(Level::Advanced, size.0, size.1);
-        let switch = widgets
-            .iter()
-            .find(|w| matches!(w.target, Target::Item(i) if i == item))
-            .unwrap();
-        let point = (switch.x + 1.0, switch.y + 1.0);
-        for enabled in [false, true] {
-            s.horizon.preset = Preset::Balanced;
-            assert_eq!(
-                ui.click(
-                    Level::Advanced,
-                    &mut s,
-                    point,
-                    size,
-                    [854, 480],
-                    false,
-                    false
-                ),
-                vec![Action::ButtonClick, Action::Changed]
-            );
-            assert_eq!(item.switch(&s), Some(enabled));
-            assert_eq!(s.horizon.preset, Preset::Custom);
-        }
-        assert_eq!(item.label(&s).plain(), "Cull Leaves: On");
     }
 
     #[test]

@@ -227,8 +227,6 @@ pub struct Graphics {
     pub far_detail: FarDetail,
     /// Skip sections hidden behind closed ones (vanilla's occlusion graph).
     pub cave_culling: bool,
-    /// Hide shared leaf and mangrove-root faces, reducing foliage density.
-    pub cull_leaves: bool,
     /// Skip drawing entities hidden behind opaque terrain.
     pub entity_culling: bool,
     /// Meshed sections uploaded per frame; 0 uploads all that are ready.
@@ -265,7 +263,6 @@ impl Default for Graphics {
             lod_distance: 0,
             far_detail: FarDetail::Full,
             cave_culling: true,
-            cull_leaves: false,
             entity_culling: false,
             chunk_updates: 0,
             upload_budget_kib: 0,
@@ -312,7 +309,6 @@ impl Graphics {
                 "lodDistance" => g.lod_distance = number(g.lod_distance).min(1024),
                 "farDetail" => g.far_detail = FarDetail::parse(value),
                 "caveCulling" => g.cave_culling = flag(g.cave_culling),
-                "cullLeaves" => g.cull_leaves = flag(g.cull_leaves),
                 "entityCulling" => g.entity_culling = flag(g.entity_culling),
                 "chunkUpdates" => g.chunk_updates = number(g.chunk_updates).min(512),
                 "uploadBudgetKiB" => g.upload_budget_kib = number(g.upload_budget_kib).min(65536),
@@ -348,12 +344,11 @@ impl Graphics {
     }
     pub fn serialize(&self) -> String {
         format!(
-            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\ncullLeaves:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nbatteryMode:{}\nshaderPack:{}\ngraphicsApi:{}\n",
+            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\nentityCulling:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\noverlay:{}\nresolutionScale:{}\nfxaa:{}\nbatteryMode:{}\nshaderPack:{}\ngraphicsApi:{}\n",
             self.preset.name(),
             self.lod_distance,
             self.far_detail.name(),
             bool_text(self.cave_culling),
-            bool_text(self.cull_leaves),
             bool_text(self.entity_culling),
             self.chunk_updates,
             self.upload_budget_kib,
@@ -454,7 +449,6 @@ mod tests {
             lod_distance: 256,
             far_detail: FarDetail::Reduced,
             cave_culling: false,
-            cull_leaves: true,
             entity_culling: true,
             chunk_updates: 12,
             upload_budget_kib: 4096,
@@ -477,7 +471,7 @@ mod tests {
         // The old menus' Simple / Advanced choice is ignored.
         assert_eq!(Graphics::parse("level:advanced\n"), Graphics::default());
         assert_eq!(
-            Graphics::parse("workers:abc\nsky:maybe\ncullLeaves:maybe\nentityCulling:maybe\n"),
+            Graphics::parse("workers:abc\nsky:maybe\ncullLeaves:true\nentityCulling:maybe\n"),
             Graphics::default()
         );
     }
