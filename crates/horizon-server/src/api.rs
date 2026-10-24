@@ -2,17 +2,7 @@
 //! `.horizon/api.json` that only the server's own user can read. The CLI manages a running server through
 //! it; the web panel and the MCP server will too.
 //!
-//! - `GET /api/v1/status`: the supervisor's state, the game's status (TPS, MSPT, players), RAM and CPU.
-//! - `GET /api/v1/logs?since=N`: the log lines after the Nth.
-//! - `POST /api/v1/command {"line": "..."}`: a console command; the lines it logged.
-//! - `POST /api/v1/stop`, `POST /api/v1/restart`.
-//! - `GET /api/v1/metrics?since=T`: the samples taken after T (seconds since 1970), up to 10 minutes.
-//! - `GET /api/v1/backups`; `POST /api/v1/backups {"name": "..."}` backs up now; `POST /api/v1/restore
-//!   {"name": "..."}` restarts the game with that backup's world.
-//! - `POST /api/v1/update {"tag": "...", "timeout": seconds}`: restarts the game on that installed release,
-//!   and goes back to the one in use if it isn't up within the timeout; without a tag, downloads the newest
-//!   release first (update.rs). `GET /api/v1/status` says how it went (`update`).
-//! - `POST /api/v1/panel/login`: a one-time login link for the web panel (with the token only).
+//! Its routes are [`ROUTES`], listed in docs/api/server-reference.md.
 
 use crate::{
     backup,
@@ -40,6 +30,102 @@ const ENDPOINT: &str = ".horizon/api.json";
 const LOG_LINES: usize = 2000;
 /// The samples kept for the panel's graphs: 10 minutes, one a second.
 const METRICS: usize = 600;
+
+/// One endpoint of the control API: what the reference (docs/api/server-reference.md) says about it.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "only the reference reads all of it")
+)]
+pub struct Route {
+    pub method: &'static str,
+    pub path: &'static str,
+    /// The JSON body or query it takes, "" for none.
+    pub takes: &'static str,
+    /// The JSON it answers with.
+    pub answers: &'static str,
+    pub what: &'static str,
+}
+
+/// Every endpoint `start` and [`route`] answer; a test checks the two agree.
+pub const ROUTES: [Route; 11] = [
+    Route {
+        method: "GET",
+        path: "/api/v1/status",
+        takes: "",
+        answers: "`phase`, `version`, `pid`, `uptime_seconds`, `engine_pid`, `engine_uptime_seconds`, `crashes`, `last_crash`, `sample` (TPS, MSPT, players, RAM, CPU), `update`",
+        what: "How the server does",
+    },
+    Route {
+        method: "GET",
+        path: "/api/v1/metrics",
+        takes: "`?since=T` (seconds since 1970)",
+        answers: "`{\"samples\": [...]}`: one a second, the last 10 minutes",
+        what: "The samples taken after T, for graphs",
+    },
+    Route {
+        method: "GET",
+        path: "/api/v1/logs",
+        takes: "`?since=N`",
+        answers: "`{\"next\": N, \"lines\": [...]}`",
+        what: "The log lines after the Nth (the last 2000 are kept)",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/command",
+        takes: "`{\"line\": \"<one command>\"}`",
+        answers: "the lines the command logged",
+        what: "Run a console command on the running game",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/stop",
+        takes: "",
+        answers: "`{\"ok\": true}`",
+        what: "Stop the game and the supervisor",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/restart",
+        takes: "",
+        answers: "`{\"ok\": true}`",
+        what: "Restart the game",
+    },
+    Route {
+        method: "GET",
+        path: "/api/v1/backups",
+        takes: "",
+        answers: "`{\"backups\": [{\"name\", \"bytes\"}]}`",
+        what: "List the backups",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/backups",
+        takes: "`{\"name\": \"...\"}` (optional)",
+        answers: "`{\"name\": \"<file>\"}`",
+        what: "Back up now (a running game saves first and stays up)",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/restore",
+        takes: "`{\"name\": \"<backup>\"}`",
+        answers: "`{\"name\": \"<backup>\"}`",
+        what: "Restart the game with that backup's world (the current one is kept in backups/)",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/update",
+        takes: "`{\"tag\": \"...\", \"timeout\": seconds}` (both optional)",
+        answers: "`{\"ok\": true}`; `status` says how it went (`update`)",
+        what: "Restart on that installed release, or download the newest first; goes back if the game isn't up within the timeout",
+    },
+    Route {
+        method: "POST",
+        path: "/api/v1/panel/login",
+        takes: "",
+        answers: "`{\"url\": \"...\"}`",
+        what: "A one-time login link for the web panel (with the token only, not from the panel)",
+    },
+];
 
 /// What the supervisor is doing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -488,12 +574,7 @@ pub fn route(shared: &Arc<Shared>, request: &Request) -> Response {
                 Err(e) => Response::error(409, &e),
             }
         }
-        (
-            _,
-            "/api/v1/status" | "/api/v1/logs" | "/api/v1/command" | "/api/v1/stop"
-            | "/api/v1/restart" | "/api/v1/backups" | "/api/v1/restore" | "/api/v1/metrics"
-            | "/api/v1/update",
-        ) => Response::error(405, "wrong method"),
+        (_, path) if ROUTES.iter().any(|r| r.path == path) => Response::error(405, "wrong method"),
         _ => Response::error(404, "no such endpoint"),
     }
 }
