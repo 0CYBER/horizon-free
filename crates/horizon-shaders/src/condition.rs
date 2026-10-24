@@ -20,6 +20,110 @@ pub fn eval_condition(expr: &str, macros: &Macros) -> Result<i64, String> {
     }
 }
 
+/// The text after a line's `#`, split into the directive word and the rest without its `//`
+/// comment. `None` when the first word is followed by something other than white space, `//` or
+/// the end of the line (`#ifdefault=1` is a comment, not `#ifdef`).
+pub(crate) fn split_directive(after_hash: &str) -> Option<(&str, &str)> {
+    let line = after_hash.trim_start();
+    let len = line
+        .find(|c: char| !c.is_ascii_alphabetic())
+        .unwrap_or(line.len());
+    let (word, rest) = line.split_at(len);
+    let ok = rest.is_empty() || rest.starts_with(char::is_whitespace) || rest.starts_with("//");
+    ok.then(|| (word, rest.split("//").next().unwrap_or("").trim()))
+}
+
+/// One level of `#if` ... `#endif`.
+struct Branch {
+    /// This branch's lines are read.
+    on: bool,
+    /// A branch of this `#if` was already taken (the rest are skipped).
+    taken: bool,
+    /// The enclosing level is read.
+    outer: bool,
+    seen_else: bool,
+}
+
+/// The state of nested conditional directives.
+#[derive(Default)]
+pub(crate) struct Conditionals(Vec<Branch>);
+
+impl Conditionals {
+    /// Lines here are read.
+    pub(crate) fn active(&self) -> bool {
+        self.0.last().is_none_or(|b| b.on)
+    }
+
+    /// An `#if` is still open.
+    pub(crate) fn open(&self) -> bool {
+        !self.0.is_empty()
+    }
+
+    /// Applies `#word rest` when it is a conditional directive (`Ok(false)` when it is not). A
+    /// condition that can't be evaluated reads as false and returns why.
+    pub(crate) fn apply(
+        &mut self,
+        word: &str,
+        rest: &str,
+        macros: &Macros,
+    ) -> Result<bool, String> {
+        let on = self.active();
+        match word {
+            "if" | "ifdef" | "ifndef" => {
+                let value = if on {
+                    test(word, rest, macros)
+                } else {
+                    Ok(false)
+                };
+                let v = *value.as_ref().unwrap_or(&false);
+                self.0.push(Branch {
+                    on: v,
+                    taken: v,
+                    outer: on,
+                    seen_else: false,
+                });
+                value.map(|_| true)
+            }
+            "elif" | "else" => {
+                let b = self
+                    .0
+                    .last_mut()
+                    .ok_or_else(|| format!("`#{word}` without `#if`"))?;
+                if b.seen_else {
+                    return Err(format!("`#{word}` after `#else`"));
+                }
+                b.seen_else = word == "else";
+                let take = b.outer && !b.taken;
+                let value = match word {
+                    "else" => Ok(take),
+                    _ if take => test("if", rest, macros),
+                    _ => Ok(false),
+                };
+                b.on = *value.as_ref().unwrap_or(&false);
+                b.taken |= b.on;
+                value.map(|_| true)
+            }
+            "endif" => self
+                .0
+                .pop()
+                .map(|_| true)
+                .ok_or_else(|| "`#endif` without `#if`".into()),
+            _ => Ok(false),
+        }
+    }
+}
+
+fn test(word: &str, rest: &str, macros: &Macros) -> Result<bool, String> {
+    let name = rest.split_whitespace().next().unwrap_or("");
+    match word {
+        "ifdef" => Ok(macros.is_defined(name)),
+        "ifndef" => Ok(!macros.is_defined(name)),
+        _ => eval_condition(rest, macros)
+            .map(|v| v != 0)
+            .map_err(|e| format!("`#{word} {rest}`: {e}; read as false")),
+    }
+}
+
 /// `defined X` and `defined(X)` become `1` or `0` before anything is expanded.
 fn resolve_defined(expr: &str, macros: &Macros) -> Result<String, String> {
     let mut out = String::with_capacity(expr.len());

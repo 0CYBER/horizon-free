@@ -6,7 +6,8 @@
 //! No other escape is read: values are names, numbers and expressions. A later duplicate key
 //! replaces the earlier one, with a note.
 
-use crate::{Macros, eval_condition};
+use crate::Macros;
+use crate::condition::{Conditionals, split_directive};
 
 /// One `key=value`, with the line it starts on (from 1).
 #[derive(Clone, Debug, PartialEq)]
@@ -30,29 +31,20 @@ pub struct Properties {
     pub notes: Vec<Note>,
 }
 
-/// One branch level of `#if` ... `#endif`.
-struct Branch {
-    /// This branch's lines are read.
-    on: bool,
-    /// A branch of this `#if` was already taken (the rest are skipped).
-    taken: bool,
-    /// The enclosing level is read.
-    outer: bool,
-    seen_else: bool,
-}
-
 impl Properties {
     /// Reads `text`; `#define`/`#undef` change the macros for the lines after them only.
     pub fn parse(text: &str, macros: &Macros) -> Self {
         let mut out = Self::default();
         let mut macros = macros.clone();
-        let mut branches: Vec<Branch> = Vec::new();
+        let mut conditionals = Conditionals::default();
         let mut lines = text.lines().zip(1u32..);
         while let Some((raw, number)) = lines.next() {
             let line = raw.trim();
-            let on = branches.last().is_none_or(|b| b.on);
+            let on = conditionals.active();
             if let Some(directive) = line.strip_prefix('#') {
-                out.directive(directive.trim_start(), number, &mut branches, &mut macros);
+                if let Some((word, rest)) = split_directive(directive) {
+                    out.directive(word, rest, number, &mut conditionals, &mut macros);
+                }
                 continue;
             }
             // Continuation lines belong to their entry even inside a skipped branch.
@@ -76,7 +68,7 @@ impl Properties {
                 _ => out.note(number, "not a key=value line"),
             }
         }
-        if !branches.is_empty() {
+        if conditionals.open() {
             out.note(text.lines().count() as u32, "`#if` without `#endif`");
         }
         out
@@ -111,71 +103,29 @@ impl Properties {
         });
     }
 
-    /// A line starting with `#`. It is a directive only when its first word is one; anything
-    /// else (`# text`, `#commented.key=1`, `#ifdefault`) is a comment.
+    /// A line starting with `#` whose first word may be a directive; any other word makes it a
+    /// comment.
     fn directive(
         &mut self,
-        line: &str,
+        word: &str,
+        rest: &str,
         number: u32,
-        branches: &mut Vec<Branch>,
+        conditionals: &mut Conditionals,
         macros: &mut Macros,
     ) {
-        let word_len = line
-            .find(|c: char| !c.is_ascii_alphabetic())
-            .unwrap_or(line.len());
-        let (word, rest) = line.split_at(word_len);
-        if !(rest.is_empty() || rest.starts_with(char::is_whitespace) || rest.starts_with("//")) {
-            return;
-        }
-        let rest = rest.split("//").next().unwrap_or("").trim();
-        let on = branches.last().is_none_or(|b| b.on);
-        match word {
-            "if" | "ifdef" | "ifndef" => {
-                let value = on && self.condition(word, rest, number, macros);
-                branches.push(Branch {
-                    on: value,
-                    taken: value,
-                    outer: on,
-                    seen_else: false,
-                });
-            }
-            "elif" | "else" => {
-                let Some(b) = branches.last_mut() else {
-                    return self.note(number, &format!("`#{word}` without `#if`"));
-                };
-                if b.seen_else {
-                    return self.note(number, &format!("`#{word}` after `#else`"));
+        match conditionals.apply(word, rest, macros) {
+            Err(e) => self.note(number, &e),
+            Ok(true) => {}
+            Ok(false) if conditionals.active() => match word {
+                "define" => {
+                    let (name, value) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+                    macros.define(name, value.trim());
                 }
-                let take = b.outer && !b.taken;
-                b.seen_else = word == "else";
-                b.on = take && (word == "else" || self.condition("if", rest, number, macros));
-                b.taken |= b.on;
-            }
-            "endif" => {
-                if branches.pop().is_none() {
-                    self.note(number, "`#endif` without `#if`");
-                }
-            }
-            "define" if on => {
-                let (name, value) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
-                macros.define(name, value.trim());
-            }
-            "undef" if on => macros.undef(rest),
-            _ => {}
+                "undef" => macros.undef(rest),
+                _ => {}
+            },
+            Ok(false) => {}
         }
-    }
-
-    fn condition(&mut self, word: &str, rest: &str, number: u32, macros: &Macros) -> bool {
-        let name = rest.split_whitespace().next().unwrap_or("");
-        let result = match word {
-            "ifdef" => Ok(macros.is_defined(name) as i64),
-            "ifndef" => Ok(!macros.is_defined(name) as i64),
-            _ => eval_condition(rest, macros),
-        };
-        result.unwrap_or_else(|e| {
-            self.note(number, &format!("`#{word} {rest}`: {e}; read as false"));
-            0
-        }) != 0
     }
 }
 

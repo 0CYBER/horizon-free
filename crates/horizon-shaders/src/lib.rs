@@ -18,6 +18,6 @@ mod properties;
 pub use condition::eval_condition;
 pub use discover::{Found, discover};
 pub use lang::Lang;
-pub use macros::{MC_VERSION, Macros};
+pub use macros::{MC_VERSION, Macros, RENDER_STAGES};
 pub use pack::{Pack, PackError};
 pub use properties::{Entry, Note, Properties};
