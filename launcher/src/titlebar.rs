@@ -2,10 +2,13 @@
 use crate::theme::Theme;
 use gpui::{Div, TitlebarOptions, Window};
 
+/// Whether the launcher draws its own title bar (`render`) rather than the system.
+pub const DRAWN: bool = cfg!(target_os = "windows");
+
 pub fn options() -> TitlebarOptions {
     TitlebarOptions {
         title: Some("Horizon".into()),
-        appears_transparent: cfg!(target_os = "windows"),
+        appears_transparent: DRAWN,
         ..Default::default()
     }
 }

@@ -1314,7 +1314,8 @@ fn megabytes(bytes: u64) -> String {
 // ----- Pages -------------------------------------------------------------------------------------
 
 impl Launcher {
-    /// The top bar: the pages with their icons, then the account and Settings.
+    /// The top bar: the mark and the name over the sidebar (in the title bar on Windows), the
+    /// pages with their icons, then the account playing and the Settings button.
     fn topbar(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.theme;
         let mut nav = div().flex().flex_none().h_full().gap(px(2.));
@@ -1452,6 +1453,23 @@ impl Launcher {
             .bg(t.side)
             .border_b_2()
             .border_color(t.outline)
+            // Where the title bar is drawn here (Windows), it carries the mark and the name.
+            .when(!titlebar::DRAWN, |bar| {
+                bar.child(
+                    div()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .gap(px(10.))
+                        .w(px(theme::SIDEBAR - 18.))
+                        .child(mark(24., &t))
+                        .child(
+                            blocks::pixel(20., FontWeight::SEMIBOLD)
+                                .text_color(t.ink)
+                                .child("HORIZON"),
+                        ),
+                )
+            })
             .child(nav)
             .child(
                 div()
@@ -3251,6 +3269,7 @@ impl Render for Launcher {
             Page::Notes => self.notes_page(cx),
             Page::Settings => self.settings_page(cx),
         };
+        self.art.free_replaced(window);
         // The new page fades in and rises a few pixels.
         let content = div()
             .relative()
