@@ -9,6 +9,7 @@ PACKAGES = {"horizon-core": "crates/horizon-core", "horizon-client": "crates/hor
             "horizon-theme": "crates/horizon-theme", "xtask": "xtask"}
 LIBRARIES = set(PACKAGES) - {"xtask"}
 DEPENDENCIES = {"horizon-client": {"horizon-core"}}
+MODS = " --features horizon-mods/runtime,horizon-mods/pack,horizon-client/mods"
 
 
 def args(host="local", quick=False):
@@ -58,9 +59,9 @@ class PrReadyTests(unittest.TestCase):
                 steps = pr_ready.plan(args(quick=True), "origin/main", {path}, PACKAGES, LIBRARIES, DEPENDENCIES)
                 by_name = {step.name: step for step in steps}
                 self.assertEqual(by_name["clippy"].command,
-                                 "cargo clippy --workspace --all-targets --locked -- -D warnings")
+                                 "cargo clippy --workspace" + MODS + " --all-targets --locked -- -D warnings")
                 self.assertEqual(by_name["tests: workspace"].command,
-                                 "cargo test --locked --workspace --tests")
+                                 "cargo test --locked --workspace" + MODS + " --tests")
                 self.assertEqual(by_name["doc tests"].command, "cargo test --locked --workspace --doc")
 
     def test_non_rust_changes_skip_workspace_checks(self):
