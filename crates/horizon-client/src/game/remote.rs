@@ -3932,18 +3932,7 @@ impl Game<'_> {
         {
             return;
         }
-        for &(p, state) in changes {
-            let pos = [p.x, p.y, p.z];
-            let before = self.world.block(p.x, p.y, p.z);
-            // BlockStatePredictionHandler.retainKnownServerState.
-            if let Some(r) = self.remote.as_mut() {
-                r.predictions
-                    .entry(pos)
-                    .and_modify(|e| e.0 = seq)
-                    .or_insert((seq, before.0 as i32));
-            }
-            self.set_block(pos, state.0 as i32);
-        }
+        self.predict_blocks(changes, seq);
         // `level.playSound(player, ...)`: the clicker hears it from its own use; the
         // server sends it to the others only.
         for (pos, sound, volume, pitch) in sounds {
@@ -4004,20 +3993,27 @@ impl Game<'_> {
     }
 
     /// MultiPlayerGameMode.useItemOn inside startPrediction, for a block item:
-    /// the blocks `BlockItem.place` set are placed on this client's level at
-    /// once, each kept as predicted under the use's sequence until the server
-    /// acknowledges it (a placement the server refused goes back). Without
-    /// this, the next click of a fast bridge aims past the block still on its
-    /// way from the server, and the server refuses it.
-    fn predict_place(
-        &mut self,
-        changes: &[(horizon_core::position::BlockPos, BlockStateId)],
-        seq: i32,
-    ) {
+    /// the blocks `BlockItem.place` set at `pos` are placed on this client's
+    /// level at once, so the next click of a fast bridge aims at them rather
+    /// than past them (the server would refuse it). Its place sound is the
+    /// placer's own (`playSound(player, ...)`: the server sends it to the
+    /// others only).
+    fn predict_place(&mut self, (pos, changes): &DryPlace, seq: i32) {
+        let ticks = self.ticks;
+        if let Some(r) = self.remote.as_mut() {
+            // set_block plays the place sound of the block at `placing`.
+            r.placing = Some(([pos.x, pos.y, pos.z], ticks));
+        }
+        self.predict_blocks(changes, seq);
+    }
+    /// The blocks a use changed, set on this client's level and kept as
+    /// predicted under the use's sequence until the server acknowledges it
+    /// (`BlockStatePredictionHandler.retainKnownServerState`): a use the
+    /// server refused goes back.
+    fn predict_blocks(&mut self, changes: &DryChanges, seq: i32) {
         for &(p, state) in changes {
             let pos = [p.x, p.y, p.z];
             let before = self.world.block(p.x, p.y, p.z);
-            // BlockStatePredictionHandler.retainKnownServerState.
             if let Some(r) = self.remote.as_mut() {
                 r.predictions
                     .entry(pos)
@@ -4028,14 +4024,11 @@ impl Game<'_> {
         }
     }
 
-    /// Run BlockItem.place on a disposable level: the blocks it set, if it
-    /// placed. The real level supplies collision shapes and building-blocking
-    /// entities; random draws, scheduled ticks and events stay in the preview.
-    fn remote_can_place(
-        &mut self,
-        hit: &super::Hit,
-        stack: &ItemStack,
-    ) -> Option<Vec<(horizon_core::position::BlockPos, BlockStateId)>> {
+    /// Run BlockItem.place on a disposable level: where it placed and the
+    /// blocks it set. The real level supplies collision shapes and
+    /// building-blocking entities; random draws, scheduled ticks and events
+    /// stay in the preview.
+    fn remote_can_place(&mut self, hit: &super::Hit, stack: &ItemStack) -> Option<DryPlace> {
         if !self.may_build() {
             return None;
         }
@@ -4052,15 +4045,16 @@ impl Game<'_> {
         };
         self.with_level(|b, level, _| {
             let mut level = DryLevel::new(level);
-            matches!(
-                b.place_block(
-                    &mut level,
-                    &mut horizon_world::level::Ticks::default(),
-                    &ctx
-                ),
-                horizon_world::level::PlaceOutcome::Placed { .. }
-            )
-            .then(|| level.changed.into_iter().collect())
+            match b.place_block(
+                &mut level,
+                &mut horizon_world::level::Ticks::default(),
+                &ctx,
+            ) {
+                horizon_world::level::PlaceOutcome::Placed { pos, .. } => {
+                    Some((pos, level.changed.into_iter().collect()))
+                }
+                horizon_world::level::PlaceOutcome::Failed => None,
+            }
         })
     }
 
@@ -5109,11 +5103,12 @@ type DrySound = (
     f32,
     f32,
 );
+/// The blocks a use on the dry level set.
+type DryChanges = Vec<(horizon_core::position::BlockPos, BlockStateId)>;
 /// What a use on the dry level changed, and the sounds it played.
-type DryUse = (
-    Vec<(horizon_core::position::BlockPos, BlockStateId)>,
-    Vec<DrySound>,
-);
+type DryUse = (DryChanges, Vec<DrySound>);
+/// Where `BlockItem.place` on the dry level placed, and the blocks it set.
+type DryPlace = (horizon_core::position::BlockPos, DryChanges);
 
 /// The blocks a guest's hand flips that its use predicts (and hears at once): a wooden or
 /// copper door, trapdoor or fence gate, a lever or a button. An iron door or trapdoor has
