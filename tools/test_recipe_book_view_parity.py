@@ -8,7 +8,7 @@ grid, the furnace, blast furnace or smoker) with random inventory and menu
 contents and the craftable filter on or off. The Java oracle
 (VanillaRecipeBookViewOracle, on the client jar) runs ClientRecipeBook,
 RecipeCollection.selectRecipes and the tab and page logic of
-RecipeBookComponent; examples/recipe_book_view_fixture runs
+RecipeBookComponent; examples/probe/recipe_book_view_fixture runs
 horizon_client::recipe_book::ClientBook. Per tab: visibility, pages and
 every button's displays with their selected and craftable flags, in order
 (the client's HashMap of display ids decides it). Most cases also carry a

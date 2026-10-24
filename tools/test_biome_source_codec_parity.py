@@ -72,7 +72,7 @@ def main():
     exporter=oracle.with_name("VanillaBiomeExport.java")
     helpers=[oracle.with_name(name+".java") for name in ["VanillaMaterialConditionOracle","VanillaAnchorOracle","VanillaBiomeTemperatureOracle"]]
     sources=[oracle,exporter,*helpers,lab.ROOT/"tools/test_biome_temperature_parity.py",lab.ROOT/"tools/test_material_condition_parity.py",Path(__file__),lab.ROOT/"tools/test_worldgen_parity.py",lab.ROOT/"tools/test_rust_parity.py",lab.ROOT/"tools/lab.py",lab.ROOT/"Cargo.toml",lab.ROOT/"Cargo.lock",lab.ROOT/"crates/horizon-core/Cargo.toml",lab.ROOT/"crates/horizon-world/Cargo.toml",
-             *sorted((lab.ROOT/"crates/horizon-core/src").rglob("*.rs")),*sorted((lab.ROOT/"crates/horizon-world/src").rglob("*.rs")),lab.ROOT/"crates/horizon-world/examples/biome_source_codec_fixture.rs"]
+             *sorted((lab.ROOT/"crates/horizon-core/src").rglob("*.rs")),*sorted((lab.ROOT/"crates/horizon-world/src").rglob("*.rs")),lab.ROOT/"crates/horizon-world/examples/probe/biome_source_codec_fixture.rs"]
     tested_sources=base.source_hashes(sources)
     classes=build/"classes";classes.mkdir(exist_ok=True)
     def run(command,name):
@@ -95,10 +95,10 @@ def main():
     fixtures=list(corpus(bundle));inputs=build/'inputs.txt';inputs.write_text('\n'.join(fixtures)+'\n',encoding='utf-8')
     (build/'positions.json').write_text(json.dumps(positions(),separators=(',',':')),encoding='utf-8')
     fixture_paths=[inputs,*exports,build/'positions.json',*[build/(name+'.json') for name in bundle]];tested_fixtures=base.source_hashes(fixture_paths)
-    run(["cargo","build","--release","-p","horizon-world","--example","biome_source_codec_fixture"],"compile-rust")
+    run(["cargo","build","--release","-p","horizon-world","--example","probe"],"compile-rust")
     metadata=json.loads(subprocess.check_output(["cargo","metadata","--no-deps","--format-version","1"],cwd=lab.ROOT,text=True))
-    binary=Path(metadata["target_directory"])/"release/examples"/("biome_source_codec_fixture.exe" if os.name=="nt" else "biome_source_codec_fixture")
-    run([binary,build],"rust")
+    binary=Path(metadata["target_directory"])/"release/examples"/("probe.exe" if os.name=="nt" else "probe")
+    run([binary,"biome_source_codec_fixture",build],"rust")
     references=[]
     for side,jar in jars.items():
         reference=build/f"{side}.txt"

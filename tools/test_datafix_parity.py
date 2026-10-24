@@ -9,7 +9,7 @@ generated automatically when missing), two upgrades run on a copy:
   vanilla  VanillaDataFixOracle: FileFixerUpper, then DataFixers on level.dat, every
            chunk, entity chunk and POI chunk, player, saved data, advancements and
            statistics file, exactly as 26.3 does when it opens the world
-  horizon  the `datafix_world` example of horizon-world, which does the same with
+  horizon  the `datafix_world` probe of horizon-world, which does the same with
            horizon_world::datafix
 
 Then every file is compared: region files chunk by chunk, NBT files and JSON
@@ -72,11 +72,11 @@ def java_classpath():
 
 
 def build_rust():
-    subprocess.run(['cargo', 'build', '--locked', '--release', '-p', 'horizon-world', '--example', 'datafix_world'],
+    subprocess.run(['cargo', 'build', '--locked', '--release', '-p', 'horizon-world', '--example', 'probe'],
                    cwd=ROOT, check=True)
     meta = json.loads(subprocess.check_output(['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1'],
                                               cwd=ROOT))
-    return Path(meta['target_directory']) / 'release' / 'examples' / 'datafix_world'
+    return Path(meta['target_directory']) / 'release' / 'examples' / 'probe'
 
 
 def run_vanilla(classpath, world, out, target=None):
@@ -92,7 +92,8 @@ def run_horizon(binary, world, out, target=None):
     shutil.rmtree(out, ignore_errors=True)
     log = out.parent / (out.name + '.log')
     with log.open('w') as f:
-        subprocess.run([str(binary), str(world), str(out), *([str(target)] if target else [])], check=True, stdout=f, stderr=subprocess.STDOUT)
+        subprocess.run([str(binary), 'datafix_world', str(world), str(out), *([str(target)] if target else [])], check=True,
+                       stdout=f, stderr=subprocess.STDOUT)
 
 
 # ---------------------------------------------------------------- comparison
@@ -201,7 +202,7 @@ def main():
     p.add_argument('versions', nargs='*')
     p.add_argument('--keep', action='store_true')
     p.add_argument('--vanilla-only', action='store_true', help='only run the oracle')
-    p.add_argument('--binary', help='a prebuilt datafix_world example')
+    p.add_argument('--binary', help='a prebuilt horizon-world probe binary')
     p.add_argument('--band', type=int, metavar='TARGET', help='check the data fixes up to this DataVersion only (not the '
                    'file fixes), on the sample worlds saved before it, for developing the fixes of a range of versions')
     args = p.parse_args()

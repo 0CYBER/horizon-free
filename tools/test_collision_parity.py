@@ -39,7 +39,7 @@ def main():
     lock, jars, libraries = test_rust_parity.verify_artifacts()
     base = Path(tempfile.mkdtemp(prefix="run-", dir=directory))
     oracle = lab.ROOT / "mods/horizon/src/test/java/dev/horizonlab/parity/VanillaCollisionOracle.java"
-    sources = [oracle, Path(__file__).resolve(), lab.ROOT / "tools/test_rust_parity.py", lab.ROOT / "Cargo.toml", lab.ROOT / "Cargo.lock", lab.ROOT / "crates/horizon-core/Cargo.toml", lab.ROOT / "crates/horizon-world/Cargo.toml", *sorted((lab.ROOT / "crates/horizon-core/src").rglob("*.rs")), *sorted((lab.ROOT / "crates/horizon-world/src").rglob("*.rs")), lab.ROOT / "crates/horizon-world/examples/collision_fixture.rs"]
+    sources = [oracle, Path(__file__).resolve(), lab.ROOT / "tools/test_rust_parity.py", lab.ROOT / "Cargo.toml", lab.ROOT / "Cargo.lock", lab.ROOT / "crates/horizon-core/Cargo.toml", lab.ROOT / "crates/horizon-world/Cargo.toml", *sorted((lab.ROOT / "crates/horizon-core/src").rglob("*.rs")), *sorted((lab.ROOT / "crates/horizon-world/src").rglob("*.rs")), lab.ROOT / "crates/horizon-world/examples/probe/collision_fixture.rs"]
     tested_sources = test_rust_parity.source_hashes(sources)
     classes = base / "classes"
     classes.mkdir()
@@ -51,10 +51,10 @@ def main():
         result.check_returncode()
         return result.stdout
     expected = counts(java("server", "generate"))
-    test_rust_parity.run(["cargo", "build", "--release", "-p", "horizon-world", "--example", "collision_fixture"])
+    test_rust_parity.run(["cargo", "build", "--release", "-p", "horizon-world", "--example", "probe"])
     metadata = json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version", "1"], cwd=lab.ROOT, text=True))
-    binary = Path(metadata["target_directory"]) / "release/examples" / ("collision_fixture.exe" if os.name == "nt" else "collision_fixture")
-    actual = counts(subprocess.check_output([str(binary), str(base)], cwd=lab.ROOT, text=True))
+    binary = Path(metadata["target_directory"]) / "release/examples" / ("probe.exe" if os.name=="nt" else "probe")
+    actual = counts(subprocess.check_output([str(binary), "collision_fixture", str(base)], cwd=lab.ROOT, text=True))
     if actual != expected:
         raise AssertionError(f"Collision coverage differs: vanilla={expected}, Rust={actual}")
     canonical = {"empty_states":0,"block_states":0,"other_cached_states":0}

@@ -316,7 +316,7 @@ def main():
     lock, jars, libraries = base.verify_artifacts()
     resources = lab.RESOURCES
     oracle = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaRaidOracle.java'
-    sources = [oracle, Path(__file__), lab.ROOT / 'crates/horizon-client/examples/raid_fixture.rs',
+    sources = [oracle, Path(__file__), lab.ROOT / 'crates/horizon-client/examples/probe/raid_fixture.rs',
                lab.ROOT / 'crates/horizon-client/src/raid.rs', lab.ROOT / 'crates/horizon-client/src/patrol.rs']
     tested = base.source_hashes(sources)
     inputs = build / 'inputs.txt'
@@ -335,10 +335,10 @@ def main():
          '-cp', str(jars['server']) + os.pathsep + deps, '-d', classes, oracle], 'compile-java')
     run(['java', '-Xmx3G', '-cp', os.pathsep.join([str(classes), str(jars['server']), deps]),
          'dev.horizonlab.parity.VanillaRaidOracle', inputs, build / 'server.txt'], 'server')
-    run(['cargo', 'build', '--release', '-p', 'horizon-client', '--example', 'raid_fixture'], 'compile-rust')
+    run(['cargo', 'build', '--release', '-p', 'horizon-client', '--example', 'probe'], 'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'], cwd=lab.ROOT, text=True))
-    binary = Path(metadata['target_directory']) / 'release/examples/raid_fixture'
-    run([binary, resources, inputs, build / 'rust.txt'], 'rust')
+    binary = Path(metadata['target_directory']) / 'release/examples/probe'
+    run([binary, 'raid_fixture', resources, inputs, build / 'rust.txt'], 'rust')
     vanilla = (build / 'server.txt').read_text().splitlines()
     errors = [l for l in vanilla if ' error ' in l]
     if errors:

@@ -123,6 +123,7 @@ mod raids;
 mod recipe_book;
 mod remote;
 mod remote_mob_data;
+mod remote_mob_use;
 mod remote_objects;
 mod remote_projectiles;
 mod remote_stations;
@@ -505,6 +506,9 @@ enum FallStep {
 enum GuestUse {
     OnBlock(Hand),
     Item(Hand),
+    /// `handleInteract`: `Player.interactOn` with the hand, nothing else (the
+    /// client sends UseItem itself when the entity passed).
+    Entity(Hand),
 }
 
 /// The client world as seen by the vanilla block-behaviour library.
@@ -3271,6 +3275,9 @@ impl Game<'_> {
         // A guest's use packets name one hand and touch no entity: the client
         // sends one per hand and part of its click, and Interact for entities.
         let guest = self.guest_use;
+        if let Some(GuestUse::Entity(hand)) = guest {
+            return Ok(self.with_hand(hand, Game::interact_entity)?.then_some(hand));
+        }
         let on_block = matches!(guest, Some(GuestUse::OnBlock(_)));
         if !on_block
             && self.riding.is_some()
@@ -3279,14 +3286,7 @@ impl Game<'_> {
         {
             return Ok(Some(Hand::Main));
         }
-        if guest.is_none()
-            && (self.interact_frame()
-                || self.interact_armor_stand()
-                || self.interact_boat()
-                || self.interact_cart()
-                || self.interact_mob()?
-                || self.interact_knot())
-        {
+        if guest.is_none() && self.interact_entity()? {
             return Ok(Some(Hand::Main));
         }
         // An EntityHitResult may fall through to Item.use, never to useItemOn.
@@ -3296,15 +3296,32 @@ impl Game<'_> {
             self.pick()
         };
         let hands = match guest {
-            Some(GuestUse::OnBlock(hand) | GuestUse::Item(hand)) => vec![hand],
+            Some(GuestUse::OnBlock(hand) | GuestUse::Item(hand) | GuestUse::Entity(hand)) => {
+                vec![hand]
+            }
             None => Hand::BOTH.to_vec(),
         };
+        let entity = guest.is_none() && self.entity_targeted();
         for hand in hands {
+            // The off hand's turn starts on the entity too (Minecraft.startUseItem).
+            if entity && hand == Hand::Off && self.with_hand(hand, Game::interact_entity)? {
+                return Ok(Some(hand));
+            }
             if self.with_hand(hand, |game| game.use_hand(block_hit.as_ref()))? {
                 return Ok(Some(hand));
             }
         }
         Ok(None)
+    }
+    /// `Player.interactOn` for the entity under the crosshair with the
+    /// acting hand: whether it took the click.
+    fn interact_entity(&mut self) -> Result<bool> {
+        Ok(self.interact_frame()
+            || self.interact_armor_stand()
+            || self.interact_boat()
+            || self.interact_cart()
+            || self.interact_mob()?
+            || self.interact_knot())
     }
     /// One hand's turn in `startUseItem`: `useItemOn` the block aimed at,
     /// then `useItem`. Whether the click ends here (it acted or failed).
@@ -5494,6 +5511,20 @@ impl Game<'_> {
             Some(true)
         })
     }
+    /// A sound a menu click made the player play (a bundle's insert or
+    /// remove): `Entity.playSound` at the player.
+    pub(super) fn player_menu_sound(&mut self, sound: &str) {
+        let Some(p) = self.player.as_ref() else {
+            return;
+        };
+        let at = [p.position.x, p.position.y, p.position.z];
+        let (volume, pitch) = if sound == horizon_client::bundle::INSERT_FAIL {
+            (1.0, 1.0)
+        } else {
+            (0.8, 0.8 + self.world.random.next_float() * 0.4)
+        };
+        self.audio.play(sound, Some(at), volume, pitch);
+    }
     /// The open menu as the verified engine (`horizon_client::menu`): the
     /// game's slots are copied in, `run` acts on it, and the slots, carried
     /// stack, menu data and drops are copied back when it returns Some(true)
@@ -5883,6 +5914,11 @@ impl Game<'_> {
         let carried = menu.carried.take();
         let dropped = std::mem::take(&mut menu.dropped);
         let sounds = std::mem::take(&mut menu.sounds);
+        // A bundle's sounds are the player's own (`Entity.playSound`): the
+        // client plays them as it clicks, predicting or not.
+        for sound in std::mem::take(&mut menu.player_sounds) {
+            self.player_menu_sound(sound);
+        }
         let crafted = std::mem::take(&mut menu.crafted);
         let equipped = std::mem::take(&mut menu.equipped);
         for (i, stack) in after.into_iter().enumerate() {
@@ -6124,6 +6160,17 @@ impl Game<'_> {
                     self.inv_drag = Some((i32::from(right), Vec::new()));
                 }
                 None => {}
+            }
+            return;
+        }
+        // mouseClicked: an empty hand's PICKUP is the menu's click at once
+        // (a right click on a bundle takes its first stack out).
+        if let (Some(input), Some(_)) = (input, slot)
+            && self.remote.is_none()
+            && self.menu_click(slot, i32::from(right), input)
+        {
+            if let Some(key) = self.container {
+                self.container_changed(key);
             }
             return;
         }
@@ -8811,20 +8858,15 @@ impl Game<'_> {
         );
         let packed = (u32::from(light >> 4) * 16) | ((u32::from(light & 15) * 16) << 8);
         let deg = |d: f32| d.to_radians();
-        if self.held_map_geometry(to_world, attacks[0], inverse_heights[0], packed, &mut out) {
-            return out;
-        }
         let shown = self.hands_to_render();
         let used_hand = self.used_hand();
         let spinning = self
             .player
             .as_ref()
             .is_some_and(|p| p.auto_spin_attack_ticks > 0);
-        for (i, (hand, item)) in Hand::BOTH
-            .into_iter()
-            .zip(self.visible_hand_items())
-            .enumerate()
-        {
+        let items = self.visible_hand_items();
+        let off_hand_empty = items[1].is_none();
+        for (i, (hand, item)) in Hand::BOTH.into_iter().zip(items).enumerate() {
             if !shown[i] {
                 continue;
             }
@@ -8887,6 +8929,26 @@ impl Game<'_> {
                 );
                 continue;
             };
+            if let Some(id) = maps::map_id(&stack) {
+                use horizon_client::first_person::{MapHold, one_handed_map_pose};
+                match MapHold::of(hand, off_hand_empty) {
+                    MapHold::TwoHanded => self.two_handed_map_geometry(
+                        to_world,
+                        attack,
+                        inverse_height,
+                        id,
+                        packed,
+                        &mut out,
+                    ),
+                    MapHold::OneHanded => self.held_map(
+                        to_world * one_handed_map_pose(left, inverse_height, attack),
+                        id,
+                        packed,
+                        &mut out,
+                    ),
+                }
+                continue;
+            }
             let mut owner = self.player_owner(Some(&stack));
             // The other hand may hold an equal stack: only the used
             // hand's item is in use, only the main hand's selected.
@@ -11308,7 +11370,17 @@ impl ApplicationHandler for Game<'_> {
                     // For the "I'm playing" ping: an atomic, sent on when it changes.
                     horizon_client::heartbeat::set_lan(self.is_published());
                     let steps = self.clock.advance(elapsed);
-                    for _ in 0..steps {
+                    // The world ticking in the frame: once its ticks took a
+                    // tick's length, the rest are dropped (`FixedStep::tick_fits`).
+                    let in_frame = self.remote.is_none();
+                    let mut spent = Duration::ZERO;
+                    for step in 0..steps {
+                        if in_frame && !self.clock.tick_fits(spent) {
+                            if let Some(warning) = self.clock.drop_ticks(steps - step) {
+                                log::warn!("{warning}");
+                            }
+                            break;
+                        }
                         let started = Instant::now();
                         if self.title.is_none() && !self.pause {
                             let tick = Instant::now();
@@ -11325,6 +11397,7 @@ impl ApplicationHandler for Game<'_> {
                         self.tick_music();
                         self.tick_sound_engine();
                         self.clock.record(started.elapsed());
+                        spent += started.elapsed();
                         if let Some(report) = self.clock.take_sprint_report() {
                             self.sprint_report(&report);
                         }

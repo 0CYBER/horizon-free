@@ -5,7 +5,7 @@ The Java oracle builds vanilla's `EnvironmentAttributeSystem` from the data pack
 (dimension attributes, one biome's attributes, the dimension timelines and the
 weather layers) and prints every visual/gameplay attribute for a grid of
 dimensions, world times, rain/thunder levels and biomes.
-`examples/environment_fixture` samples the same cases through Horizon's
+`examples/probe/environment_fixture` samples the same cases through Horizon's
 `Environment::sample` + `apply_weather`; every attribute Horizon computes must
 agree with vanilla.
 
@@ -66,8 +66,8 @@ def main():
          '-cp', str(jars['server']) + os.pathsep + deps, '-d', classes, oracle], 'compile-java')
     run(['java', '-Xmx1G', '-cp', os.pathsep.join([str(classes), str(jars['server']), deps]),
          'dev.horizonlab.parity.VanillaEnvironmentOracle', inputs, build / 'vanilla.jsonl'], 'vanilla')
-    run(['cargo', 'run', '--quiet', '--profile', 'fast', '-p', 'horizon-client', '--example', 'environment_fixture', '--',
-         resources, inputs, build / 'rust.jsonl'], 'rust')
+    run(['cargo', 'run', '--quiet', '--profile', 'fast', '-p', 'horizon-client', '--example', 'probe', '--',
+         'environment_fixture', resources, inputs, build / 'rust.jsonl'], 'rust')
     vanilla = [json.loads(l) for l in (build / 'vanilla.jsonl').read_text().splitlines()]
     rust = [json.loads(l) for l in (build / 'rust.jsonl').read_text().splitlines()]
     assert len(vanilla) == len(rust), (len(vanilla), len(rust))
