@@ -196,7 +196,7 @@ impl RingSections {
         let squared = x.wrapping_mul(x).wrapping_add(z.wrapping_mul(z));
         let distance = f64::from(squared).sqrt() as i32;
         let section = distance.wrapping_add(self.thickness - self.first) / self.thickness;
-        !self.max.is_some_and(|max| section > max) && section % 2 == 1
+        self.max.is_none_or(|max| section <= max) && section % 2 == 1
     }
 }
 

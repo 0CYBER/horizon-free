@@ -952,7 +952,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         if crate::level::query::axis_of(spread) == crate::level::query::axis_of(from) {
             return None;
         }
-        if !(self.multiface_has_face(state, from) && !self.multiface_has_face(state, spread)) {
+        if !self.multiface_has_face(state, from) || self.multiface_has_face(state, spread) {
             return None;
         }
         let block = self.b.block(state);

@@ -519,7 +519,7 @@ impl<'r, B: TerrainBlockStates, F> TerrainFeatureAccess<'_, 'r, B, F> {
                 })
             }
         };
-        Ok(!height.is_some_and(|height| !height.contains(position[1])))
+        Ok(height.is_none_or(|height| height.contains(position[1])))
     }
 }
 impl<'r, B: TerrainBlockStates, F> PlacementContext for TerrainFeatureAccess<'_, 'r, B, F>

@@ -471,10 +471,10 @@ impl<'r> BlockSurvivalRegistry<'r> {
                         .ignition_odds
                         .get(&state.name)
                         .is_some_and(|value| *value > 0)
-                        && !state
+                        && state
                             .properties
                             .get("waterlogged")
-                            .is_some_and(|value| value == "true")
+                            .is_none_or(|value| value != "true")
                 })
                 .collect(),
             fence_gates: (0..registry.len())
