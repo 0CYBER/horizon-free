@@ -92,22 +92,23 @@ pub fn unpack(value: &str, signature: Signature, valid_uris: &[&str]) -> Texture
         ..empty.clone()
     };
     for (kind, texture) in textures {
-        let Some(url) = texture.get("url").and_then(|u| u.as_str()) else {
-            return empty;
-        };
-        let allowed = valid_uris
-            .iter()
-            .any(|u| url.starts_with(&u.replace("{textureId}", "")));
-        if !allowed {
-            return empty;
-        }
         let slot = match kind.as_str() {
             "SKIN" => &mut out.skin,
             "CAPE" => &mut out.cape,
             "ELYTRA" => &mut out.elytra,
             _ => continue,
         };
-        *slot = Some(url.to_owned());
+        // One bad entry (no `url`, or a URL outside the texture services'
+        // domains) drops only that texture, not the whole payload.
+        let Some(url) = texture.get("url").and_then(|u| u.as_str()) else {
+            continue;
+        };
+        let allowed = valid_uris
+            .iter()
+            .any(|u| url.starts_with(&u.replace("{textureId}", "")));
+        if allowed {
+            *slot = Some(url.to_owned());
+        }
     }
     out
 }

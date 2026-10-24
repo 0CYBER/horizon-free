@@ -78,7 +78,9 @@ pub const MAP_SLOTS: usize = 256;
 /// The atlas slot the minimap extra draws into.
 pub const MINIMAP_SPRITE: &str = "horizon/minimap";
 /// Atlas slots for downloaded player skins (`skins/<sha1>`), 64x64 each.
-pub const SKIN_SLOTS: usize = 32;
+/// Vanilla registers a texture per skin; too few slots evict a busy
+/// server's players back to their default skins.
+pub const SKIN_SLOTS: usize = 128;
 /// Reused by the visible rows of the classic world selector.
 pub const WORLD_ICON_SLOTS: usize = 32;
 /// Atlas slots for the pack icons on the pack screen, one per icon drawn

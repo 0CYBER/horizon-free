@@ -1006,6 +1006,9 @@ impl Game<'_> {
                 r.stepped.clear();
                 r.head_lerps.clear();
                 r.pending_items.clear();
+                // The entity ids are the old world's; the new dimension's
+                // player entities re-map to their profiles on AddEntity.
+                r.level_players.clear();
                 // A new ClientLevel: a new chunk storage, centred on 0, 0.
                 r.chunk_center = (0, 0);
             }
@@ -5065,7 +5068,14 @@ impl Game<'_> {
         r.level_players
             .iter()
             .filter(|(_, uuid)| **uuid != r.profile)
-            .filter_map(|(id, uuid)| Some((*id as u32, r.players.get(uuid)?.clone())))
+            .filter_map(|(id, uuid)| {
+                let name = r
+                    .players
+                    .get(uuid)
+                    .cloned()
+                    .or_else(|| r.tab_players.get(uuid).map(|t| t.name.clone()))?;
+                Some((*id as u32, name))
+            })
             .collect()
     }
     /// `ClientClockManager.tick`: the clock moves on by the game time that
