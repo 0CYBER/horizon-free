@@ -42,7 +42,7 @@ def main():
     catalog = json.loads((resources / 'items.json').read_text())
     items = sorted(k for k, v in catalog.items() if 'minecraft:enchantable' in v)
     oracle = lab.ROOT / 'mods/horizon/src/test/java/dev/horizonlab/parity/VanillaEnchantingOracle.java'
-    sources = [oracle, Path(__file__), lab.ROOT / 'crates/horizon-client/examples/enchanting_fixture.rs',
+    sources = [oracle, Path(__file__), lab.ROOT / 'crates/horizon-client/examples/probe/enchanting_fixture.rs',
                *sorted((lab.ROOT / 'crates/horizon-client/src').glob('*.rs'))]
     tested = base.source_hashes(sources)
     inputs = build / 'inputs.txt'
@@ -56,10 +56,10 @@ def main():
         with (build / (name + '.log')).open('w', encoding='utf-8') as log:
             base.run(list(map(str, command)), stdout=log, stderr=subprocess.STDOUT)
     run(['javac', '--release', lock['minecraft']['java_major'], '-proc:none','-sourcepath',str(lab.ROOT/'mods/horizon/src/test/java'), '-cp', str(jars['server']) + os.pathsep + deps, '-d', classes, oracle], 'compile-java')
-    run(['cargo', 'build', '--release', '-p', 'horizon-client', '--example', 'enchanting_fixture'], 'compile-rust')
+    run(['cargo', 'build', '--release', '-p', 'horizon-client', '--example', 'probe'], 'compile-rust')
     metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--no-deps', '--format-version', '1'], cwd=lab.ROOT, text=True))
-    binary = Path(metadata['target_directory']) / 'release/examples' / ('enchanting_fixture.exe' if os.name == 'nt' else 'enchanting_fixture')
-    run([binary, resources, inputs, build / 'rust.txt'], 'rust')
+    binary = Path(metadata['target_directory']) / 'release/examples' / ('probe.exe' if os.name=='nt' else 'probe')
+    run([binary, 'enchanting_fixture',resources, inputs, build / 'rust.txt'], 'rust')
     references = []
     for side in ['server']:
         run(['java', '-Xmx1G', '-cp', os.pathsep.join([str(classes), str(jars[side]), deps]), 'dev.horizonlab.parity.VanillaEnchantingOracle', inputs, build / f'{side}.txt'], side)

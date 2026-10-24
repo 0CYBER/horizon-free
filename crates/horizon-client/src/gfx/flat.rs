@@ -640,17 +640,26 @@ impl Flat {
         pass.set_bind_group(0, group, &[]);
         pass.dispatch_workgroups((*count).min(GROUP_LIMIT), count.div_ceil(GROUP_LIMIT), 1);
     }
+    /// The bind group layout of the draws' group 1 (block slots, slot
+    /// origins).
+    pub fn draw_layout(&self) -> &wgpu::BindGroupLayout {
+        &self.draw_layout
+    }
+
     /// Draws `calls` with a flat pipeline set and `vertices` giving each
-    /// page's vertex buffer.
+    /// page's vertex buffer; `page` binds what else a page's draws need (a
+    /// Java pack's terrain reads the page's vertices).
     pub fn draw<'a>(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         calls: &[Call],
         vertices: impl Fn(u32) -> &'a wgpu::Buffer,
+        page: impl Fn(&mut wgpu::RenderPass<'_>, u32),
     ) {
         pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
         for call in calls {
             self.bind_page(pass, call.page, &vertices);
+            page(pass, call.page);
             pass.draw_indexed(call.first..call.first + call.count, 0, 0..1);
         }
     }

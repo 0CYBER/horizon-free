@@ -120,6 +120,8 @@ pub struct ItemInfo {
     pub dye: Option<String>,
     /// `block_transformer`: the registry entry an axe, hoe or shovel uses on blocks.
     pub block_transformer: Option<String>,
+    /// Has a default `bundle_contents` (the bundles, `BundleItem`).
+    pub bundle: bool,
 }
 /// `Item.Properties.craftRemainder` (not a data component, so not in the
 /// default-component report): what an item leaves in the grid when crafted with.
@@ -593,6 +595,7 @@ impl Items {
                     jukebox_song: c["minecraft:jukebox_playable"].as_str().map(str::to_owned),
                     dye: c["minecraft:dye"].as_str().map(str::to_owned),
                     block_transformer: c["minecraft:block_transformer"].as_str().map(str::to_owned),
+                    bundle: c.get("minecraft:bundle_contents").is_some(),
                     crafting_remainder: CRAFT_REMAINDERS
                         .iter()
                         .find(|(item, _)| *item == name)

@@ -62,10 +62,10 @@ def main():
             subprocess.run(list(map(str, cmd)), cwd=lab.ROOT, check=True, timeout=3600, stdout=log, stderr=subprocess.STDOUT)
     run(['javac', '--release', lock['minecraft']['java_major'], '-proc:none', '-cp', str(jars['server']) + os.pathsep + deps, '-d', classes, oracle], 'compile-java')
     run(['java', '-Xmx1G', '-cp', os.pathsep.join([str(classes), str(jars['server']), deps]), 'dev.horizonlab.parity.VanillaMobAttributesOracle', build / 'vanilla.txt'], 'java')
-    run(['cargo', 'build', '--release', '-p', 'horizon-client', '--example', 'mob_attributes_fixture'], 'compile-rust')
-    binary = lab.cargo_target() / 'release/examples/mob_attributes_fixture'
+    run(['cargo', 'build', '--release', '-p', 'horizon-client', '--example', 'probe'], 'compile-rust')
+    binary = lab.cargo_target() / 'release/examples/probe'
     resources = lab.RESOURCES
-    run([binary, resources, build / 'rust.txt'], 'rust')
+    run([binary, 'mob_attributes_fixture', resources, build / 'rust.txt'], 'rust')
     vanilla, rust = parse(build / 'vanilla.txt'), parse(build / 'rust.txt')
     problems = []
     living = [i for i, r in vanilla.items() if 'attrs' in r]
