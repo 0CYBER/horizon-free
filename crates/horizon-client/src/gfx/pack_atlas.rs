@@ -3,7 +3,6 @@
 //! layer is copied into a grid, row by row from the top left, and an animated layer again
 //! whenever its frame changes.
 
-#[expect(dead_code, reason = "the gbuffers pass binds it (next slice)")]
 pub(super) struct PackAtlas {
     texture: wgpu::Texture,
     pub view: wgpu::TextureView,
@@ -64,10 +63,6 @@ impl PackAtlas {
     }
 
     /// The atlas's size in pixels (`atlasSize`).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the gbuffers pass reads it (next slice)")
-    )]
     pub fn size(&self) -> [u32; 2] {
         [self.texture.width(), self.texture.height()]
     }
@@ -114,6 +109,70 @@ impl PackAtlas {
                     },
                 );
             }
+        }
+    }
+}
+
+impl PackAtlas {
+    /// The vertex inputs of a gbuffers program drawing terrain (`TerrainVertex`, terrain.wgsl's
+    /// `vs_terrain` or, for `flat` draws, `vs_terrain_flat`), in atlas coordinates.
+    pub fn terrain_inputs(&self, flat: bool) -> horizon_shaders::GbuffersInputs {
+        let mut declarations = String::from(
+            "layout(location = 0) in vec3 hz_v_pos;\nlayout(location = 1) in uvec2 hz_v_uv;\n\
+             layout(location = 2) in uint hz_v_layer;\nlayout(location = 3) in vec4 hz_v_color;\n\
+             layout(location = 4) in uvec2 hz_v_light;\n",
+        );
+        let origin = if flat {
+            declarations.push_str(
+                "layout(set = 1, binding = 0) readonly buffer HzBlockSlots { uint hz_block_slots[]; };\n\
+                 layout(set = 1, binding = 1) readonly buffer HzSlotOrigins { vec4 hz_slot_origins[]; };\n",
+            );
+            "hz_slot_origins[hz_block_slots[uint(gl_VertexIndex) >> 8u]]"
+        } else {
+            declarations.push_str("layout(location = 5) in vec4 hz_v_origin;\n");
+            "hz_v_origin"
+        };
+        let [width, height] = self.size();
+        let scale = [
+            self.sprite as f32 / width as f32,
+            self.sprite as f32 / height as f32,
+        ];
+        let columns = self.columns;
+        // UVs past a sprite (models up to 2, distant tiles) cannot repeat in an atlas: clamped.
+        let body = format!(
+            "    vec4 hz_origin = {origin};\n    \
+             uint hz_layer = hz_v_layer & 32767u;\n    \
+             hz_cell = vec2(float(hz_layer % {columns}u), float(hz_layer / {columns}u));\n    \
+             hz_scale = vec2({:?}, {:?});\n    \
+             hz_Vertex = vec4(hz_v_pos + hz_origin.xyz, 1.0);\n    \
+             hz_MultiTexCoord0 = vec4((hz_cell + clamp(vec2(hz_v_uv) * hz_origin.w, 0.0, 1.0)) * hz_scale, 0.0, 1.0);\n    \
+             hz_MultiTexCoord1 = vec4(float(hz_v_light.y), float(hz_v_light.x), 0.0, 1.0);\n    \
+             hz_MultiTexCoord2 = hz_MultiTexCoord1;\n    \
+             hz_Color = hz_v_color;\n    \
+             hz_Normal = vec3(0.0, 1.0, 0.0);\n",
+            scale[0], scale[1],
+        );
+        declarations.push_str("vec2 hz_cell; vec2 hz_scale;\n");
+        let attributes = [
+            ("mc_Entity", "vec4(-1.0, -1.0, 0.0, 0.0)"),
+            (
+                "mc_midTexCoord",
+                "vec4((hz_cell + 0.5) * hz_scale, 0.0, 1.0)",
+            ),
+            ("at_tangent", "vec4(1.0, 0.0, 0.0, 1.0)"),
+            ("vaPosition", "hz_Vertex.xyz"),
+            ("vaUV0", "hz_MultiTexCoord0.xy"),
+            ("vaUV2", "hz_MultiTexCoord1.xy"),
+            ("vaColor", "hz_Color"),
+            ("vaNormal", "hz_Normal"),
+        ];
+        horizon_shaders::GbuffersInputs {
+            declarations,
+            body,
+            attributes: attributes
+                .iter()
+                .map(|&(n, v)| (n.to_owned(), v.to_owned()))
+                .collect(),
         }
     }
 }

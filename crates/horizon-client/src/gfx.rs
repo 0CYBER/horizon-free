@@ -471,6 +471,8 @@ pub struct Renderer {
     pack_post: Option<(i32, Option<pack_post::PackPost>)>,
     /// The block sprites as one atlas, while a shader pack is loaded.
     pack_atlas: Option<pack_atlas::PackAtlas>,
+    /// The pack's terrain program reads flat draws' vertices (`pack_terrain_inputs`).
+    pack_terrain_flat: bool,
     pub hud: HudRenderer,
     /// Vanilla's menu background blur, made on first use.
     menu_blur: Option<crate::menu_blur::MenuBlur>,
@@ -2319,6 +2321,7 @@ impl Renderer {
             world_post,
             pack_post: None,
             pack_atlas: None,
+            pack_terrain_flat: false,
             hud,
             menu_blur: None,
             info,
@@ -2744,17 +2747,50 @@ impl Renderer {
         dimension: i32,
         pack: Option<horizon_shaders::Post>,
     ) -> Option<(Vec<String>, Vec<String>)> {
+        if pack.is_none() {
+            self.pack_atlas = None;
+        }
+        let instance = wgpu::vertex_attr_array![5=>Float32x4];
+        let vertex = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<TerrainVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &TERRAIN_ATTRIBUTES,
+        };
+        let instances = wgpu::VertexBufferLayout {
+            array_stride: 16,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &instance,
+        };
+        let buffers = [Some(vertex), Some(instances)];
+        let flat = self.pack_terrain_flat;
         let post = pack.map(|post| {
+            let world = pack_post::World {
+                atlas: self.pack_atlas.as_ref().map(|a| (a.view.clone(), a.size())),
+                lightmap: self.lightmap_view.clone(),
+                terrain: self.pack_atlas.as_ref().map(|_| pack_post::Geometry {
+                    buffers: if flat { &buffers[..1] } else { &buffers },
+                    table: self.flat.as_ref().filter(|_| flat).map(|f| &f.draw_layout),
+                }),
+            };
             pack_post::PackPost::new(
                 &self.device,
                 &self.queue,
                 post,
                 self.config.format.remove_srgb_suffix(),
+                world,
             )
         });
-        if post.is_none() {
-            self.pack_atlas = None;
-        } else if self.pack_atlas.is_none() {
+        let report = post.as_ref().map(|p| {
+            let programs = p.programs().into_iter().map(str::to_owned).collect();
+            (programs, p.notes.clone())
+        });
+        self.pack_post = Some((dimension, post));
+        report
+    }
+    /// What a shader pack's terrain program reads from Horizon's terrain vertices, in the
+    /// pack's block atlas (made here when missing); `None` when the atlas does not fit.
+    pub fn pack_terrain_inputs(&mut self) -> Option<horizon_shaders::GbuffersInputs> {
+        if self.pack_atlas.is_none() {
             let mut encoder = self.device.create_command_encoder(&Default::default());
             let layers = self
                 .sprite_textures
@@ -2771,12 +2807,13 @@ impl Renderer {
             );
             self.queue.submit([encoder.finish()]);
         }
-        let report = post.as_ref().map(|p| {
-            let programs = p.programs().into_iter().map(str::to_owned).collect();
-            (programs, p.notes.clone())
-        });
-        self.pack_post = Some((dimension, post));
-        report
+        // Flat draws whenever the device has them (`render` keeps them on with a pack).
+        self.pack_terrain_flat = self.flat.is_some() && self.flat_on;
+        Some(
+            self.pack_atlas
+                .as_ref()?
+                .terrain_inputs(self.pack_terrain_flat),
+        )
     }
     /// The dimension the shader pack was last set for.
     pub fn shader_pack_dimension(&self) -> Option<i32> {
@@ -3184,11 +3221,23 @@ impl Renderer {
         // Occlusion culling leaves the sections its last result did not see
         // to phase 2, after the others, with instance counts of 0. Whether
         // the frame has draws enough goes by the last one's.
+        // A shader pack drawing terrain draws all of it: occlusion culling reads the depth of
+        // Horizon's own terrain draw.
+        let pack_terrain = !frame.title
+            && self
+                .pack_post
+                .as_ref()
+                .and_then(|p| p.1.as_ref())
+                .is_some_and(|p| p.has_terrain());
         let mut cull = self
             .cull
             .as_mut()
             .filter(|c| {
-                self.cull_on && !frame.title && self.multi_draw && self.section_draws >= c.min_draws
+                self.cull_on
+                    && !frame.title
+                    && !pack_terrain
+                    && self.multi_draw
+                    && self.section_draws >= c.min_draws
             })
             .and_then(|cull| cull.begin(&self.device).then_some(cull));
         self.phase2_draws.clear();
@@ -3591,7 +3640,9 @@ impl Renderer {
         }
         let flat_frame = match &mut self.flat {
             Some(flat)
-                if self.flat_on && !self.draws.is_empty() && self.draws.len() >= flat.min_draws =>
+                if self.flat_on
+                    && !self.draws.is_empty()
+                    && (self.draws.len() >= flat.min_draws || pack_terrain) =>
             {
                 let sections = &self.sections;
                 let lods = &self.lods;
@@ -3651,6 +3702,8 @@ impl Renderer {
         }
         // The world's targets: the screen, or the scaled target of `post`.
         let pack_post = !frame.title && self.pack_post.as_ref().is_some_and(|p| p.1.is_some());
+        // The pack's program reads the vertices this frame's draws bind.
+        let pack_draws_terrain = pack_terrain && flat_frame == self.pack_terrain_flat;
         let scaled = self.world_post.prepare(
             &self.device,
             [self.config.width, self.config.height],
@@ -3739,7 +3792,14 @@ impl Renderer {
                     pass.draw(0..3, 0..1);
                 }
             }
-            match self.flat.as_ref().filter(|_| flat_frame) {
+            match self
+                .flat
+                .as_ref()
+                .filter(|_| flat_frame && !pack_draws_terrain)
+            {
+                _ if pack_draws_terrain => {
+                    pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                }
                 Some(flat) => {
                     pass.set_pipeline(&flat.solid);
                     let vertices = |p| self.arena.buffer(p);
@@ -3947,9 +4007,27 @@ impl Renderer {
         }
         if let Some((color, depth)) = &scaled
             && pack_post
-            && let Some((_, Some(post))) = &mut self.pack_post
+            && let Some((dimension, Some(mut post))) = self.pack_post.take()
         {
             let size = self.world_post.size().unwrap_or([1, 1]);
+            let flat = self.flat.as_ref().filter(|_| flat_frame);
+            let mut terrain = |rp: &mut wgpu::RenderPass<'_>| {
+                if !pack_draws_terrain {
+                    return;
+                }
+                match flat {
+                    Some(flat) => {
+                        flat.draw(rp, &flat.calls[..flat.solid_calls], |p| {
+                            self.arena.buffer(p)
+                        });
+                    }
+                    None => {
+                        rp.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
+                        rp.set_vertex_buffer(1, self.instances.slice(..));
+                        self.draw_sections(rp, &self.indirect, 0, 0, solid_draws);
+                    }
+                }
+            };
             post.run(
                 &self.device,
                 &self.queue,
@@ -3961,7 +4039,9 @@ impl Renderer {
                 &frame.pack,
                 size,
                 [self.config.width, self.config.height],
+                &mut terrain,
             );
+            self.pack_post = Some((dimension, Some(post)));
         } else if scaled.is_some() {
             self.world_post.finish(&mut encoder, &view_target);
         }

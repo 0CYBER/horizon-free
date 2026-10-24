@@ -73,7 +73,8 @@ pub struct Flat {
     phase2_call_data: Vec<[u32; 5]>,
     /// The copy of phase 2's draws, and its ranges.
     phase2_group: Option<(wgpu::BindGroup, u32)>,
-    draw_layout: wgpu::BindGroupLayout,
+    /// The layout of a page's bind group 1 (shader packs' terrain pipelines share it).
+    pub(super) draw_layout: wgpu::BindGroupLayout,
     blocks_per_page: u64,
     pages: Vec<Option<PageTable>>,
     free_ids: Vec<u32>,

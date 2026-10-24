@@ -42,7 +42,8 @@ impl Game<'_> {
                         );
                     }
                     let folder = dimension_folder(&pack, dimension);
-                    let post = load_post(&pack, &folder, &properties, &macros, None);
+                    let terrain = renderer.pack_terrain_inputs();
+                    let post = load_post(&pack, &folder, &properties, &macros, terrain.as_ref());
                     if let Some((programs, notes)) = renderer.set_shader_pack(dimension, Some(post))
                     {
                         for note in notes {

@@ -29,6 +29,9 @@ enum Source {
     Dummy,
     /// A 1×1 depth of 1.0 behind a comparison sampler, until shadow maps exist: no shadow.
     Shadow,
+    /// The block atlas (pack_atlas.rs), in gbuffers programs.
+    Atlas,
+    Lightmap,
 }
 
 struct Binding {
@@ -66,9 +69,22 @@ struct Targets {
     depth: wgpu::TextureView,
 }
 
+/// What a pack's gbuffers programs read and draw from the game's world.
+pub(super) struct World<'a> {
+    /// The block atlas and its size.
+    pub atlas: Option<(wgpu::TextureView, [u32; 2])>,
+    pub lightmap: wgpu::TextureView,
+    /// Terrain's geometry, when the pack draws it.
+    pub terrain: Option<Geometry<'a>>,
+}
+
 pub struct PackPost {
     pub notes: Vec<String>,
     passes: Vec<Pass>,
+    /// What draws terrain (`gbuffers_terrain` or its fallback), between `prepare` and `deferred`.
+    terrain: Option<Pass>,
+    atlas: Option<wgpu::TextureView>,
+    lightmap: wgpu::TextureView,
     deferred_pre: u16,
     composite_pre: u16,
     formats: [wgpu::TextureFormat; BUFFERS],
@@ -85,6 +101,7 @@ pub struct PackPost {
     linear: wgpu::Sampler,
     nearest: wgpu::Sampler,
     repeat: wgpu::Sampler,
+    nearest_repeat: wgpu::Sampler,
     blit: (wgpu::RenderPipeline, wgpu::BindGroupLayout),
     /// The blit also writes depthtex0 (some program reads it) and clears these buffers.
     blit_depth: bool,
@@ -133,6 +150,8 @@ fn source(name: &str) -> Source {
     match name {
         "depthtex0" | "gdepthtex" | "depthtex1" | "depthtex2" => Source::Depth,
         "noisetex" => Source::Noise,
+        "texture" | "gtexture" | "tex" => Source::Atlas,
+        "lightmap" => Source::Lightmap,
         n => horizon_shaders::buffer_index(n).map_or(Source::Dummy, Source::Color),
     }
 }
@@ -228,6 +247,7 @@ fn helper(
     entry: &str,
     entries: &[wgpu::BindGroupLayoutEntry],
     targets: &[Option<wgpu::ColorTargetState>],
+    depth: Option<wgpu::DepthStencilState>,
 ) -> (wgpu::RenderPipeline, wgpu::BindGroupLayout) {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Shader pack helpers"),
@@ -252,7 +272,7 @@ fn helper(
             buffers: &[],
         },
         primitive: Default::default(),
-        depth_stencil: None,
+        depth_stencil: depth,
         multisample: Default::default(),
         fragment: Some(wgpu::FragmentState {
             module: &module,
@@ -306,6 +326,211 @@ fn attach(
     })
 }
 
+/// The game's geometry a gbuffers program draws: its vertex buffers and, for flat draws
+/// (flat.rs), the layout of their bind group 1.
+pub(super) struct Geometry<'a> {
+    pub buffers: &'a [Option<wgpu::VertexBufferLayout<'a>>],
+    pub table: Option<&'a wgpu::BindGroupLayout>,
+}
+
+/// The pass of program `p`: a quad, or `geometry` drawn by the game. `None` (with a note) when
+/// wgpu refuses it or it writes nothing.
+fn build_pass(
+    device: &wgpu::Device,
+    p: horizon_shaders::PostProgram,
+    formats: &[wgpu::TextureFormat; BUFFERS],
+    screen: wgpu::TextureFormat,
+    notes: &mut Vec<String>,
+    geometry: Option<&Geometry<'_>>,
+) -> Option<Pass> {
+    let features = device.features();
+    let mask = |flips: &[(u32, bool)]| flips.iter().filter(|f| f.1).fold(0u16, |m, f| m | 1 << f.0);
+    let interface = &p.program.interface;
+    let mut entries = vec![entry(
+        0,
+        wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+    )];
+    let mut samplers = Vec::new();
+    let mut reads = 0u16;
+    for s in &interface.samplers {
+        let mut src = source(&s.name);
+        if src == Source::Atlas && geometry.is_none() {
+            src = Source::Dummy;
+        }
+        let float = wgpu::TextureSampleType::Float { filterable: true };
+        let mut sample_type = match src {
+            Source::Color(n) => formats[n]
+                .sample_type(None, Some(features))
+                .unwrap_or(float),
+            Source::Depth => wgpu::TextureSampleType::Float { filterable: false },
+            // Unfilterable on WebGPU-level devices; the lightmap is sampled at texel centres.
+            Source::Lightmap => float,
+            _ => float,
+        };
+        let int = !matches!(sample_type, wgpu::TextureSampleType::Float { .. });
+        if s.ty == "sampler2DShadow" {
+            (src, sample_type) = (Source::Shadow, wgpu::TextureSampleType::Depth);
+        }
+        let wanted = match s.ty.as_str() {
+            "sampler2DShadow" => true,
+            "sampler2D" => !int,
+            "isampler2D" => sample_type == wgpu::TextureSampleType::Sint,
+            "usampler2D" => sample_type == wgpu::TextureSampleType::Uint,
+            _ => false,
+        };
+        if !wanted {
+            notes.push(format!(
+                "{}: `{} {}` is not provided yet",
+                p.name, s.ty, s.name
+            ));
+            (src, sample_type) = (Source::Dummy, float);
+        }
+        let filtering = sample_type == float;
+        if let Source::Color(n) = src {
+            reads |= 1 << n;
+        }
+        entries.push(texture_entry(s.binding, sample_type));
+        entries.push(entry(
+            s.binding + 1,
+            wgpu::BindingType::Sampler(if src == Source::Shadow {
+                wgpu::SamplerBindingType::Comparison
+            } else if filtering {
+                wgpu::SamplerBindingType::Filtering
+            } else {
+                wgpu::SamplerBindingType::NonFiltering
+            }),
+        ));
+        samplers.push(Binding {
+            source: src,
+            binding: s.binding,
+            filtering,
+        });
+    }
+    let final_pass = p.group == Group::Final;
+    let mut targets = Vec::new();
+    let mut writes = Vec::new();
+    for &location in &interface.outputs {
+        let l = location as usize;
+        if targets.len() <= l {
+            targets.resize(l + 1, None);
+        }
+        if final_pass {
+            if location == 0 {
+                targets[0] = target(screen);
+            }
+        } else if let Some(&buffer) = p.buffers.get(l) {
+            targets[l] = target(formats[buffer as usize]);
+            writes.push((location, buffer as usize));
+        }
+    }
+    if !final_pass && writes.is_empty() {
+        notes.push(format!("{}: writes no buffer; skipped", p.name));
+        return None;
+    }
+    let written = writes.iter().fold(0u16, |m, w| m | 1 << w.1);
+    let kept = p
+        .flips
+        .iter()
+        .filter(|f| !f.1)
+        .fold(0u16, |m, f| m | 1 << f.0);
+    // Gbuffers programs write in place (6.1.6).
+    let flip = if final_pass || geometry.is_some() {
+        0
+    } else {
+        (written & !kept) | mask(&p.flips)
+    };
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some(&p.name),
+        entries: &entries,
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some(&p.name),
+        bind_group_layouts: &[Some(&layout), geometry.and_then(|g| g.table)],
+        ..Default::default()
+    });
+    let created = checked(device, || {
+        let module = |m: naga::Module| {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(&p.name),
+                source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(m)),
+            })
+        };
+        let (vs, fs) = (module(p.program.vertex), module(p.program.fragment));
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(&p.name),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &vs,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                buffers: geometry.map_or(&[], |g| g.buffers),
+            },
+            primitive: Default::default(),
+            depth_stencil: geometry.map(|_| wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &fs,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                targets: &targets,
+            }),
+            multiview_mask: None,
+            cache: None,
+        })
+    });
+    let pipeline = match created {
+        Ok(p) => p,
+        Err(e) => {
+            notes.push(format!("{}: skipped: {e}", p.name));
+            return None;
+        }
+    };
+    let interface = &p.program.interface;
+    let missing: Vec<&str> = interface
+        .uniforms
+        .iter()
+        .filter(|u| !u.name.starts_with("hz_") && pack_uniforms::index(&u.name).is_none())
+        .map(|u| u.name.as_str())
+        .collect();
+    if !missing.is_empty() {
+        notes.push(format!("{}: zero for now: {}", p.name, missing.join(" ")));
+    }
+    Some(Pass {
+        ubo: device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(&p.name),
+            size: u64::from(interface.uniform_size.max(16)),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }),
+        block: vec![0; interface.uniform_size as usize],
+        uniforms: interface
+            .uniforms
+            .iter()
+            .map(|u| (pack_uniforms::index(&u.name), u.ty.clone(), u.offset))
+            .collect(),
+        name: p.name,
+        group: p.group,
+        pipeline,
+        layout,
+        samplers,
+        writes,
+        flip,
+        reads,
+        written,
+        groups: HashMap::new(),
+    })
+}
+
 impl PackPost {
     /// Builds the pipelines of `post` for a screen of `screen` format.
     pub fn new(
@@ -313,6 +538,7 @@ impl PackPost {
         queue: &wgpu::Queue,
         post: Post,
         screen: wgpu::TextureFormat,
+        world: World<'_>,
     ) -> Self {
         let features = device.features();
         let formats: [wgpu::TextureFormat; BUFFERS] =
@@ -329,205 +555,56 @@ impl PackPost {
         let mask =
             |flips: &[(u32, bool)]| flips.iter().filter(|f| f.1).fold(0u16, |m, f| m | 1 << f.0);
         let mut used = 1u16;
-        let mut passes = Vec::new();
-        for p in post.programs {
-            let interface = &p.program.interface;
-            let mut entries = vec![entry(
-                0,
-                wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-            )];
-            let mut samplers = Vec::new();
-            let mut reads = 0u16;
-            for s in &interface.samplers {
-                let mut src = source(&s.name);
-                let float = wgpu::TextureSampleType::Float { filterable: true };
-                let mut sample_type = match src {
-                    Source::Color(n) => formats[n]
-                        .sample_type(None, Some(features))
-                        .unwrap_or(float),
-                    Source::Depth => wgpu::TextureSampleType::Float { filterable: false },
-                    _ => float,
-                };
-                let int = !matches!(sample_type, wgpu::TextureSampleType::Float { .. });
-                if s.ty == "sampler2DShadow" {
-                    (src, sample_type) = (Source::Shadow, wgpu::TextureSampleType::Depth);
-                }
-                let wanted = match s.ty.as_str() {
-                    "sampler2DShadow" => true,
-                    "sampler2D" => !int,
-                    "isampler2D" => sample_type == wgpu::TextureSampleType::Sint,
-                    "usampler2D" => sample_type == wgpu::TextureSampleType::Uint,
-                    _ => false,
-                };
-                if !wanted {
-                    notes.push(format!(
-                        "{}: `{} {}` is not provided yet",
-                        p.name, s.ty, s.name
-                    ));
-                    (src, sample_type) = (Source::Dummy, float);
-                }
-                let filtering = sample_type == float;
-                if let Source::Color(n) = src {
-                    reads |= 1 << n;
-                }
-                entries.push(texture_entry(s.binding, sample_type));
-                entries.push(entry(
-                    s.binding + 1,
-                    wgpu::BindingType::Sampler(if src == Source::Shadow {
-                        wgpu::SamplerBindingType::Comparison
-                    } else if filtering {
-                        wgpu::SamplerBindingType::Filtering
-                    } else {
-                        wgpu::SamplerBindingType::NonFiltering
-                    }),
-                ));
-                samplers.push(Binding {
-                    source: src,
-                    binding: s.binding,
-                    filtering,
-                });
-            }
-            let final_pass = p.group == Group::Final;
-            let mut targets = Vec::new();
-            let mut writes = Vec::new();
-            for &location in &interface.outputs {
-                let l = location as usize;
-                if targets.len() <= l {
-                    targets.resize(l + 1, None);
-                }
-                if final_pass {
-                    if location == 0 {
-                        targets[0] = target(screen);
-                    }
-                } else if let Some(&buffer) = p.buffers.get(l) {
-                    targets[l] = target(formats[buffer as usize]);
-                    writes.push((location, buffer as usize));
-                }
-            }
-            if !final_pass && writes.is_empty() {
-                notes.push(format!("{}: writes no buffer; skipped", p.name));
-                continue;
-            }
-            let written = writes.iter().fold(0u16, |m, w| m | 1 << w.1);
-            let kept = p
-                .flips
-                .iter()
-                .filter(|f| !f.1)
-                .fold(0u16, |m, f| m | 1 << f.0);
-            let flip = if final_pass {
-                0
-            } else {
-                (written & !kept) | mask(&p.flips)
-            };
-            used |= reads | written | flip;
-            let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some(&p.name),
-                entries: &entries,
-            });
-            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some(&p.name),
-                bind_group_layouts: &[Some(&layout)],
-                ..Default::default()
-            });
-            let created = checked(device, || {
-                let module = |m: naga::Module| {
-                    device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                        label: Some(&p.name),
-                        source: wgpu::ShaderSource::Naga(std::borrow::Cow::Owned(m)),
-                    })
-                };
-                let (vs, fs) = (module(p.program.vertex), module(p.program.fragment));
-                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: Some(&p.name),
-                    layout: Some(&pipeline_layout),
-                    vertex: wgpu::VertexState {
-                        module: &vs,
-                        entry_point: Some("main"),
-                        compilation_options: Default::default(),
-                        buffers: &[],
-                    },
-                    primitive: Default::default(),
-                    depth_stencil: None,
-                    multisample: Default::default(),
-                    fragment: Some(wgpu::FragmentState {
-                        module: &fs,
-                        entry_point: Some("main"),
-                        compilation_options: Default::default(),
-                        targets: &targets,
-                    }),
-                    multiview_mask: None,
-                    cache: None,
-                })
-            });
-            let pipeline = match created {
-                Ok(p) => p,
-                Err(e) => {
-                    notes.push(format!("{}: skipped: {e}", p.name));
-                    continue;
-                }
-            };
-            let interface = &p.program.interface;
-            passes.push(Pass {
-                ubo: device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some(&p.name),
-                    size: u64::from(interface.uniform_size.max(16)),
-                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }),
-                block: vec![0; interface.uniform_size as usize],
-                uniforms: interface
-                    .uniforms
-                    .iter()
-                    .map(|u| (pack_uniforms::index(&u.name), u.ty.clone(), u.offset))
-                    .collect(),
-                name: p.name,
-                group: p.group,
-                pipeline,
-                layout,
-                samplers,
-                writes,
-                flip,
-                reads,
-                written,
-                groups: HashMap::new(),
-            });
+        let mut build = |p: horizon_shaders::PostProgram, geometry: Option<&Geometry<'_>>| {
+            let pass = build_pass(device, p, &formats, screen, &mut notes, geometry)?;
+            used |= pass.reads | pass.written | pass.flip;
+            Some(pass)
+        };
+        let terrain = post
+            .terrain
+            .zip(world.terrain.as_ref())
+            .and_then(|(p, g)| build(p, Some(g)));
+        let passes: Vec<Pass> = post
+            .programs
+            .into_iter()
+            .filter_map(|p| build(p, None))
+            .collect();
+        if let Some(t) = &terrain {
+            notes.push(format!("terrain draws with {}", t.name));
         }
         // A clear only matters when a program reads the buffer before one writes all of it
-        // (composite passes cover their whole target); the others are skipped.
+        // (composite passes cover their whole target, terrain does not); the others are skipped.
         let mut cleared = Vec::new();
         for b in 1..BUFFERS {
             let bit = 1u16 << b;
-            let first = passes
-                .iter()
-                .find(|p| (p.reads | p.flip | p.written) & bit != 0);
-            if clears[b].is_some()
-                && first.is_some_and(|p| p.reads & bit != 0 || p.written & bit == 0)
-            {
+            let touched = |p: &&Pass| (p.reads | p.flip | p.written) & bit != 0;
+            let first = terrain.iter().find(touched).map(|_| true).or_else(|| {
+                let p = passes.iter().find(touched)?;
+                Some(p.reads & bit != 0 || p.written & bit == 0)
+            });
+            if clears[b].is_some() && first == Some(true) {
                 cleared.push(b);
             }
         }
-        let blit_depth = passes
-            .iter()
-            .any(|p| p.samplers.iter().any(|s| s.source == Source::Depth));
-        let room = 8 - 1 - usize::from(blit_depth);
+        // Terrain tests against the world's depth (entities...), so the blit copies it then.
+        let blit_depth = terrain.is_some()
+            || passes
+                .iter()
+                .any(|p| p.samplers.iter().any(|s| s.source == Source::Depth));
+        let room = 8 - 1;
         let other_clears = cleared.split_off(room.min(cleared.len()));
         let float = wgpu::TextureSampleType::Float { filterable: true };
-        let mut blit_targets = vec![target(formats[0])];
-        if blit_depth {
-            blit_targets.push(target(wgpu::TextureFormat::R32Float));
-        }
+        let blit_targets = std::iter::once(target(formats[0]));
         // Cleared by the pass's load operation; the shader writes nothing there.
-        blit_targets.extend(cleared.iter().map(|&b| {
-            Some(wgpu::ColorTargetState {
-                format: formats[b],
-                blend: None,
-                write_mask: wgpu::ColorWrites::empty(),
-            })
-        }));
+        let blit_targets: Vec<_> = blit_targets
+            .chain(cleared.iter().map(|&b| {
+                Some(wgpu::ColorTargetState {
+                    format: formats[b],
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::empty(),
+                })
+            }))
+            .collect();
         let blit = helper(
             device,
             "vs_full",
@@ -541,6 +618,14 @@ impl PackPost {
                 texture_entry(1, wgpu::TextureSampleType::Depth),
             ],
             &blit_targets,
+            // GL's window depth, written for depthtex0 and the terrain's depth test.
+            blit_depth.then_some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
         );
         let copy = helper(
             device,
@@ -554,11 +639,15 @@ impl PackPost {
                 ),
             ],
             &[target(screen)],
+            None,
         );
         let white = [255u8; 4];
         Self {
             notes,
             passes,
+            terrain,
+            atlas: world.atlas.as_ref().map(|a| a.0.clone()),
+            lightmap: world.lightmap,
             deferred_pre: mask(&post.deferred_pre),
             composite_pre: mask(&post.composite_pre),
             formats,
@@ -608,10 +697,151 @@ impl PackPost {
                 wgpu::AddressMode::ClampToEdge,
             ),
             repeat: sampler(device, wgpu::FilterMode::Linear, wgpu::AddressMode::Repeat),
+            nearest_repeat: sampler(device, wgpu::FilterMode::Nearest, wgpu::AddressMode::Repeat),
             blit,
             copy,
-            uniforms: FrameUniforms::default(),
+            uniforms: {
+                let mut u = FrameUniforms::default();
+                u.atlas = world.atlas.map_or([0; 2], |a| a.1);
+                u
+            },
         }
+    }
+
+    /// Writes `pass`'s uniforms for a target of `out` pixels; its bind group for the buffers'
+    /// current mapping.
+    fn bind(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        pass: &mut Pass,
+        out: [u32; 2],
+    ) -> wgpu::BindGroup {
+        let fog = self.uniforms.fog();
+        // Our block members first (`hz_target`, `hz_fog_color`, `hz_fog`), then the pack's.
+        let ours = [
+            [
+                out[0] as f32,
+                out[1] as f32,
+                1.0 / out[0] as f32,
+                1.0 / out[1] as f32,
+            ],
+            fog[0].to_array(),
+            fog[1].to_array(),
+        ];
+        let head: &[u8] = bytemuck::cast_slice(&ours);
+        let n = head.len().min(pass.block.len());
+        pass.block[..n].copy_from_slice(&head[..n]);
+        for (index, ty, offset) in &pass.uniforms {
+            if let Some(v) = index.and_then(|i| self.uniforms.values.get(i)) {
+                v.write(ty, &mut pass.block, *offset as usize);
+            }
+        }
+        if !pass.block.is_empty() {
+            queue.write_buffer(&pass.ubo, 0, &pass.block);
+        }
+        let targets = self.targets.as_ref().expect("resized");
+        let key = self.main & pass.reads;
+        let group = pass.groups.entry(key).or_insert_with(|| {
+            let mut entries = vec![wgpu::BindGroupEntry {
+                binding: 0,
+                resource: pass.ubo.as_entire_binding(),
+            }];
+            for s in &pass.samplers {
+                let filter = if s.filtering {
+                    &self.linear
+                } else {
+                    &self.nearest
+                };
+                let (texture, sampler) = match s.source {
+                    Source::Color(i) => (
+                        targets.color[i]
+                            .as_ref()
+                            .map_or(&self.dummy, |t| &t[usize::from(key & 1 << i != 0)]),
+                        filter,
+                    ),
+                    Source::Depth => (&targets.depth, &self.nearest),
+                    Source::Noise => (&self.noise, &self.repeat),
+                    Source::Dummy => (&self.dummy, &self.linear),
+                    Source::Shadow => (&self.shadow.0, &self.shadow.1),
+                    // Blocks look as the game draws them: nearest texels.
+                    Source::Atlas => (
+                        self.atlas.as_ref().unwrap_or(&self.dummy),
+                        &self.nearest_repeat,
+                    ),
+                    Source::Lightmap => (&self.lightmap, &self.linear),
+                };
+                entries.push(wgpu::BindGroupEntry {
+                    binding: s.binding,
+                    resource: wgpu::BindingResource::TextureView(texture),
+                });
+                entries.push(wgpu::BindGroupEntry {
+                    binding: s.binding + 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                });
+            }
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(&pass.name),
+                layout: &pass.layout,
+                entries: &entries,
+            })
+        });
+        group.clone()
+    }
+
+    /// Terrain with the pack's program into the buffers it writes, in place, tested against
+    /// the world's depth; `draw` issues the game's draws.
+    fn draw_terrain(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        size: [u32; 2],
+        draw: &mut dyn FnMut(&mut wgpu::RenderPass<'_>),
+    ) {
+        let Some(mut pass) = self.terrain.take() else {
+            return;
+        };
+        let group = self.bind(device, queue, &mut pass, size);
+        let targets = self.targets.as_ref().expect("resized");
+        let load = wgpu::Operations {
+            load: wgpu::LoadOp::Load,
+            store: wgpu::StoreOp::Store,
+        };
+        let mut attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = Vec::new();
+        for &(location, buffer) in &pass.writes {
+            let l = location as usize;
+            if attachments.len() <= l {
+                attachments.resize(l + 1, None);
+            }
+            attachments[l] = targets.color[buffer]
+                .as_ref()
+                .and_then(|t| attach(&t[usize::from(self.main & 1 << buffer != 0)], load));
+        }
+        {
+            let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(&pass.name),
+                color_attachments: &attachments,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &targets.depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            rp.set_pipeline(&pass.pipeline);
+            rp.set_bind_group(0, &group, &[]);
+            draw(&mut rp);
+        }
+        self.terrain = Some(pass);
+    }
+
+    /// Whether the pack draws terrain itself.
+    pub fn has_terrain(&self) -> bool {
+        self.terrain.is_some()
     }
 
     /// The names of the programs that run, in order.
@@ -651,9 +881,9 @@ impl PackPost {
         self.targets = Some(Targets {
             size,
             color,
-            depth: make("depthtex0", wgpu::TextureFormat::R32Float),
+            depth: make("depthtex0", wgpu::TextureFormat::Depth32Float),
         });
-        for pass in &mut self.passes {
+        for pass in self.passes.iter_mut().chain(&mut self.terrain) {
             pass.groups.clear();
         }
     }
@@ -673,6 +903,7 @@ impl PackPost {
         inputs: &PackInputs,
         size: [u32; 2],
         window: [u32; 2],
+        terrain: &mut dyn FnMut(&mut wgpu::RenderPass<'_>),
     ) {
         self.resize(device, size);
         self.uniforms.update(frame, inputs, size);
@@ -751,9 +982,6 @@ impl PackPost {
                 view(self.main, 0, false).expect("colortex0"),
                 overwrite,
             )];
-            if self.blit_depth {
-                attachments.push(attach(&targets.depth, overwrite));
-            }
             for &b in &self.blit_clears {
                 attachments.push(attach(
                     view(self.main, b, false).expect("used buffer"),
@@ -763,6 +991,16 @@ impl PackPost {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Shader pack world"),
                 color_attachments: &attachments,
+                depth_stencil_attachment: self.blit_depth.then_some(
+                    wgpu::RenderPassDepthStencilAttachment {
+                        view: &targets.depth,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    },
+                ),
                 ..Default::default()
             });
             pass.set_pipeline(&self.blit.0);
@@ -770,10 +1008,15 @@ impl PackPost {
             pass.draw(0..3, 0..1);
         }
 
-        let fog = self.uniforms.fog();
+        let mut passes = std::mem::take(&mut self.passes);
         let mut seen = (false, false);
         let mut shown = false;
-        for pass in &mut self.passes {
+        let mut terrain_drawn = self.terrain.is_none();
+        for pass in &mut passes {
+            if !terrain_drawn && pass.group != Group::Prepare {
+                terrain_drawn = true;
+                self.draw_terrain(device, queue, encoder, size, terrain);
+            }
             if pass.group == Group::Deferred && !seen.0 {
                 seen.0 = true;
                 self.main ^= self.deferred_pre;
@@ -783,63 +1026,13 @@ impl PackPost {
                 self.main ^= self.composite_pre;
             }
             let final_pass = pass.group == Group::Final;
-            let out = if final_pass { window } else { size };
-            // Our block members first (`hz_target`, `hz_fog_color`, `hz_fog`), then the pack's.
-            let ours = [
-                [
-                    out[0] as f32,
-                    out[1] as f32,
-                    1.0 / out[0] as f32,
-                    1.0 / out[1] as f32,
-                ],
-                fog[0].to_array(),
-                fog[1].to_array(),
-            ];
-            let head: &[u8] = bytemuck::cast_slice(&ours);
-            let n = head.len().min(pass.block.len());
-            pass.block[..n].copy_from_slice(&head[..n]);
-            for (index, ty, offset) in &pass.uniforms {
-                if let Some(v) = index.and_then(|i| self.uniforms.values.get(i)) {
-                    v.write(ty, &mut pass.block, *offset as usize);
-                }
-            }
-            if !pass.block.is_empty() {
-                queue.write_buffer(&pass.ubo, 0, &pass.block);
-            }
-            let key = self.main & pass.reads;
-            let group = pass.groups.entry(key).or_insert_with(|| {
-                let mut entries = vec![wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: pass.ubo.as_entire_binding(),
-                }];
-                for s in &pass.samplers {
-                    let filter = if s.filtering {
-                        &self.linear
-                    } else {
-                        &self.nearest
-                    };
-                    let (texture, sampler) = match s.source {
-                        Source::Color(i) => (view(key, i, false).unwrap_or(&self.dummy), filter),
-                        Source::Depth => (&targets.depth, &self.nearest),
-                        Source::Noise => (&self.noise, &self.repeat),
-                        Source::Dummy => (&self.dummy, &self.linear),
-                        Source::Shadow => (&self.shadow.0, &self.shadow.1),
-                    };
-                    entries.push(wgpu::BindGroupEntry {
-                        binding: s.binding,
-                        resource: wgpu::BindingResource::TextureView(texture),
-                    });
-                    entries.push(wgpu::BindGroupEntry {
-                        binding: s.binding + 1,
-                        resource: wgpu::BindingResource::Sampler(sampler),
-                    });
-                }
-                device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some(&pass.name),
-                    layout: &pass.layout,
-                    entries: &entries,
-                })
-            });
+            let group = self.bind(device, queue, pass, if final_pass { window } else { size });
+            let targets = self.targets.as_ref().expect("resized");
+            let view = |i: usize| {
+                targets.color[i]
+                    .as_ref()
+                    .map(|t| &t[usize::from(self.main & 1 << i == 0)])
+            };
             let mut attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = Vec::new();
             if final_pass {
                 attachments.push(attach(screen, overwrite));
@@ -850,8 +1043,7 @@ impl PackPost {
                     if attachments.len() <= l {
                         attachments.resize(l + 1, None);
                     }
-                    attachments[l] =
-                        view(self.main, buffer, true).and_then(|v| attach(v, overwrite));
+                    attachments[l] = view(buffer).and_then(|v| attach(v, overwrite));
                 }
             }
             {
@@ -861,11 +1053,21 @@ impl PackPost {
                     ..Default::default()
                 });
                 rp.set_pipeline(&pass.pipeline);
-                rp.set_bind_group(0, &*group, &[]);
+                rp.set_bind_group(0, &group, &[]);
                 rp.draw(0..6, 0..1);
             }
             self.main ^= pass.flip;
         }
+        self.passes = passes;
+        if !terrain_drawn {
+            self.draw_terrain(device, queue, encoder, size, terrain);
+        }
+        let targets = self.targets.as_ref().expect("resized");
+        let view = |m: u16, i: usize, alt: bool| {
+            targets.color[i]
+                .as_ref()
+                .map(|t| &t[main(m, i) ^ usize::from(alt)])
+        };
         if !shown {
             let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Shader pack colortex0"),
