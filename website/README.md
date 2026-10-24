@@ -29,7 +29,7 @@ src/style.css      every style, on top of the tokens
 src/main.js        the home page: download buttons, recent releases, links, contributors, nav, tabs, lightbox, motion
 src/chrome.js      the light/dark switch, the phone menu and GitHub fetching, shared by the pages
 src/releases-page.js  the Releases page: the channel filter and the refresh from GitHub
-src/mods.js        the registry's markup (list, project page), shared by build and page; mods-page.js: the filter, the search, the refresh
+src/mods.js        the registry's markup (list, project page, submit form), shared by build and page; mods-page.js: the filter, the search, the refresh; mods-submit.js: the form's sign-in and sending
 src/benchmarks-page.js  the Benchmarks page: players' results from the telemetry server, the picker
 src/bench.js       the Benchmarks tables, shared by build and page
 src/hardware.js    the spec table estimates use (GPU TFLOPS and bandwidth, CPU single-thread score)
@@ -110,7 +110,9 @@ a Caddy stage serves `dist/` on `$PORT` with compression, cache headers, a stric
 Content-Security-Policy and the 404 page. Its watch patterns also redeploy when the README
 or `launcher/links.json` change on main. No variables are needed; an optional
 `GITHUB_TOKEN` (read-only, public repos) lets the build bake the releases even when
-GitHub's anonymous rate limit is hit.
+GitHub's anonymous rate limit is hit. `REGISTRY_UPSTREAM`
+(`horizon-mod-registry.railway.internal:8080`) sends `/api/mods/*` to the registry's submission
+service (`crates/horizon-mod-registry`); unset, `/mods/submit` says the form isn't open.
 
 ## Rules the site keeps
 

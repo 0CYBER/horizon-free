@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CAPABILITIES, listHtml, matches, projectHtml, readIndex } from "./mods.js";
+import { CAPABILITIES, entryFrom, listHtml, matches, projectHtml, readIndex, submitHtml } from "./mods.js";
 
 const project = (over = {}) => ({
   id: "coords_hud", kind: "mod", name: "Coordinates HUD", summary: "Where you are.", authors: ["Horizon"],
@@ -39,4 +39,17 @@ test("a mod's page says what it may do, as the game does", () => {
   assert.ok(html.includes("Unsigned"));
   assert.ok(projectHtml(project({ key: "RWT" })).includes("Signed"));
   assert.ok(html.includes("horizon-launcher mods install --source horizon coords_hud"));
+});
+
+test("the submit form sends what the service reads", () => {
+  const html = submitHtml();
+  for (const name of ["kind", "file", "id", "version", "game", "name", "summary", "license", "source", "key", "signature"]) {
+    assert.ok(html.includes(`id="f-${name}"`), name);
+  }
+  assert.match(html, /<option value="shader" disabled>/);
+  const entry = entryFrom({ id: " my_mod ", kind: "mod", name: "My mod", summary: "s", description: "", authors: "Alice, , Bob", license: "MIT", source: "https://x.test", icon: " ", key: "", signature: "", version: "1.0.0", game: "26.3", changelog: "" });
+  assert.deepEqual(entry.authors, ["Alice", "Bob"]);
+  assert.equal(entry.id, "my_mod");
+  assert.equal(entry.icon, undefined);
+  assert.equal(JSON.parse(JSON.stringify(entry)).key, undefined, "an empty key isn't sent");
 });

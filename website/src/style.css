@@ -783,6 +783,18 @@ code { border-radius: 0; background: var(--well); box-shadow: 0 0 0 1px var(--ou
 .mod-file dt { color: var(--muted); }
 .mod-file code, .mod-steps code { font-family: var(--mono); font-size: 13px; overflow-wrap: anywhere; }
 .mod-links { display: flex; flex-wrap: wrap; gap: 24px; margin-top: 24px; }
+/* /mods/submit */
+.mod-form { display: grid; gap: 24px; max-width: var(--measure); margin-top: 32px; }
+.mod-form fieldset { display: grid; gap: 16px; margin: 0; padding: 0; border: 0; }
+.mod-form legend { padding: 0; margin-bottom: 8px; }
+.mod-field { display: grid; gap: 6px; }
+.mod-label { font-size: var(--text-ui); font-weight: 500; }
+.mod-form .mod-search { width: 100%; }
+.mod-form textarea.mod-search { height: auto; padding: 10px 12px; line-height: 1.5; resize: vertical; }
+.mod-check { display: flex; gap: 10px; align-items: flex-start; font-size: var(--text-ui); }
+.mod-auth { margin-top: 24px; }
+.mod-error { color: var(--danger); font-size: var(--text-ui); }
+.js .no-script { display: none; }
 @media (max-width: 640px) {
   .mod-row { grid-template-columns: 40px minmax(0, 1fr); }
   .mod-side { grid-column: 2; justify-items: start; }

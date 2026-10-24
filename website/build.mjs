@@ -16,7 +16,7 @@ import { machinesHtml, playersHtml } from "./src/bench.js";
 import { CPUS, GPUS, singleThread } from "./src/hardware.js";
 import { isGame, isLauncher, launcherVersion, newestFirst } from "./src/versions.js";
 import { contributorsFrom, contributorsHtml } from "./src/contributors.js";
-import { INDEX_URL, KINDS, SUBMIT, listHtml, projectHtml, readIndex } from "./src/mods.js";
+import { INDEX_URL, KINDS, SUBMIT, listHtml, projectHtml, readIndex, submitHtml } from "./src/mods.js";
 
 const site = dirname(fileURLToPath(import.meta.url));
 const dist = join(site, "dist");
@@ -186,7 +186,7 @@ await writeFile(join(dist, "favicon.ico"), Buffer.concat([ico, png32]));
 const names = {};
 const rewrite = (code) => code.replace(/"\.\/(\w+\.js)"/g, (all, file) => (names[file] ? `"./${names[file]}"` : all));
 // Dependencies before what imports them.
-const modules = ["markdown.js", "versions.js", "chrome.js", "hardware.js", "estimate.js", "releases.js", "contributors.js", "bench.js", "main.js", "releases-page.js", "benchmarks-page.js", "mods.js", "mods-page.js"];
+const modules = ["markdown.js", "versions.js", "chrome.js", "hardware.js", "estimate.js", "releases.js", "contributors.js", "bench.js", "main.js", "releases-page.js", "benchmarks-page.js", "mods.js", "mods-page.js", "mods-submit.js"];
 for (const file of modules) {
   const code = rewrite(await readFile(join(site, "src", file), "utf8"));
   names[file] = `${file.replace(".js", "")}.${fingerprint(code)}.js`;
@@ -401,7 +401,8 @@ ${listHtml(modProjects)}
         </div>`;
 const modPages = [
   { file: "mods.html", path: "/mods", title: "Mods", description: "Mods, modpacks and resource packs made for Horizon, reviewed, each with what it may do and how to install it.", main: modsList },
-  ...modProjects.map((p) => ({ file: `mods/${p.id}.html`, path: `/mods/${p.id}`, title: p.name, description: p.summary || p.name, main: projectHtml(p) })),
+  { file: "mods/submit.html", path: "/mods/submit", title: "Submit to the registry", description: "Submit a mod, a modpack or a resource pack made for Horizon: it is checked, reviewed, then listed here and in the launcher.", main: submitHtml(), js: "mods-submit.js" },
+  ...modProjects.filter((p) => p.id !== "submit").map((p) => ({ file: `mods/${p.id}.html`, path: `/mods/${p.id}`, title: p.name, description: p.summary || p.name, main: projectHtml(p) })),
 ];
 await mkdir(join(dist, "mods"), { recursive: true });
 const modsData = JSON.stringify(modIndex && modProjects.length ? { schema: modIndex.schema, projects: modProjects } : null).replace(/</g, "\\u003c");
@@ -412,7 +413,7 @@ for (const page of modPages) {
     MODS_TITLE: escape(page.title),
     MODS_DESCRIPTION: escape(page.description),
     MODS_PATH: page.path,
-    MODS_JS: `/assets/${names["mods-page.js"]}`,
+    MODS_JS: `/assets/${names[page.js || "mods-page.js"]}`,
     MODS_MAIN: page.main,
     MODS_DATA: modsData,
     MODS_BAKED_AT: escape(modIndex?.generated || ""),
