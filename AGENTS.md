@@ -12,11 +12,14 @@ Feature → files → harness for the most-changed areas: [docs/architecture.md]
   folders in `HORIZON_HOME` (the game's data), `HORIZON_LAUNCHER_HOME`, `XDG_DATA_HOME` and
   `XDG_CONFIG_HOME`, plus `HORIZON_LAUNCHER_NO_SELF_UPDATE=1` and `HORIZON_NO_AUDIO=1`. Never write to
   `~/.local/share/{applications,horizon,horizon-launcher}` or `~/.local/bin`.
-- **Mark what an agent posts.** A PR body starts with
-  `> 🤖 Opened by Ludovic's AI agent (Claude), not by Ludovic himself.` (issues: "Filed by", reviews:
-  "Review by"); every comment starts with `🤖 Agent:`. Never write as Ludovic.
-- **Attribution.** Commits end with `Co-Authored-By: Claude <model> <noreply@anthropic.com>`; PR bodies end
-  with `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
+- **Mark what an agent posts.** A PR body starts with a line naming whose agent opened it and with what.
+  Ludovic's agents write `> 🤖 Opened by Ludovic's AI agent (Claude), not by Ludovic himself.`, and a
+  contributor's agent names its own person and tool (issues: "Filed by", reviews: "Review by"). Every
+  comment starts with `🤖 Agent:`. Never write as Ludovic or as anyone else.
+- **Attribution.** Commits end with a `Co-Authored-By:` line for the agent that wrote them, and PR bodies
+  with that agent's own "Generated with" line. Ludovic's agents use
+  `Co-Authored-By: Claude <model> <noreply@anthropic.com>` and
+  `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
 - Everything players run is Rust. Python/Java only for dev tools and harness drivers in `tools/`.
 - Horizon-only features follow [docs/design-system.md](docs/design-system.md) and are off by default where
   they would change the vanilla look.
