@@ -5,7 +5,11 @@
 use std::path::Path;
 use std::time::Instant;
 
-use horizon_shaders::{Lang, Macros, Pack, Properties, discover, preprocess};
+use std::collections::BTreeMap;
+
+use horizon_shaders::{
+    Lang, Macros, Pack, Properties, Target, discover, preprocess, translate_composite,
+};
 
 #[test]
 #[ignore = "needs HORIZON_TEST_SHADER_PACKS"]
@@ -85,6 +89,73 @@ fn real_packs_read() {
         diagnostics.dedup();
         for d in diagnostics.iter().take(8) {
             println!("    {d}");
+        }
+        // Every composite-style program with both stages, translated and validated.
+        let start = Instant::now();
+        let (mut ok, mut failed, mut causes) = (0, 0, BTreeMap::<String, usize>::new());
+        for dir in ["", "world0", "world-1", "world1"] {
+            for file in pack.list(dir) {
+                let Some(name) = file.strip_suffix(".fsh") else {
+                    continue;
+                };
+                let composite = [
+                    "composite",
+                    "deferred",
+                    "final",
+                    "prepare",
+                    "begin",
+                    "shadowcomp",
+                ]
+                .iter()
+                .any(|p| {
+                    name.strip_prefix(p)
+                        .is_some_and(|n| n.chars().all(|c| c.is_ascii_digit()))
+                });
+                let path = |ext: &str| {
+                    if dir.is_empty() {
+                        format!("{name}.{ext}")
+                    } else {
+                        format!("{dir}/{name}.{ext}")
+                    }
+                };
+                if !composite || !pack.exists(&path("vsh")) {
+                    continue;
+                }
+                let target = if name == "final" {
+                    Target::Window
+                } else {
+                    Target::Buffers
+                };
+                let v = preprocess(&pack, &path("vsh"), &macros);
+                let fr = preprocess(&pack, &path("fsh"), &macros);
+                match translate_composite(&v, &fr, target) {
+                    Ok(_) => ok += 1,
+                    Err(errors) => {
+                        failed += 1;
+                        let first = &errors[0];
+                        let cause: String = first.message.chars().take(90).collect();
+                        *causes.entry(cause).or_default() += 1;
+                        if std::env::var_os("SHOW_ERRORS").is_some() {
+                            println!(
+                                "    {}: {}:{}: {}",
+                                path("fsh"),
+                                first.file,
+                                first.line,
+                                first.message
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        println!(
+            "  composite-style programs: {ok} translate, {failed} fail, {:.0} ms",
+            start.elapsed().as_secs_f64() * 1000.0
+        );
+        let mut causes: Vec<_> = causes.into_iter().collect();
+        causes.sort_by_key(|c| std::cmp::Reverse(c.1));
+        for (cause, n) in causes.iter().take(6) {
+            println!("    {n} x {cause}");
         }
         assert!(!shaders.entries.is_empty(), "{}: no keys read", f.name);
         read += 1;

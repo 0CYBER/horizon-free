@@ -8,6 +8,7 @@ description = "Shader packs (the shaders/ folder format): reading packs, their .
 
 [dependencies]
 horizon-core = { path = "../horizon-core" }
+naga = { version = "30.0.1", features = ["glsl-in", "wgsl-in"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [lints]

@@ -7,6 +7,7 @@
 //! - [`Properties`]: `shaders.properties` and the id files, with their conditional directives (3.1, 1.5).
 //! - [`Lang`]: the pack's translated names (8.4).
 //! - [`preprocess`]: a stage file through `#include` and the GLSL preprocessor, lines mapped back (1.4, 1.5).
+//! - [`translate_composite`]: a composite-style program into naga modules and its interface (1.6, 2.2).
 //! - [`Macros`] and [`eval_condition`]: the macros packs test, and the `#if` arithmetic (1.5).
 
 mod condition;
@@ -16,6 +17,7 @@ mod macros;
 mod pack;
 mod preprocess;
 mod properties;
+mod translate;
 
 pub use condition::eval_condition;
 pub use discover::{Found, discover};
@@ -24,3 +26,4 @@ pub use macros::{MC_VERSION, Macros, RENDER_STAGES};
 pub use pack::{Pack, PackError};
 pub use preprocess::{Diagnostic, Origin, Preprocessed, preprocess};
 pub use properties::{Entry, Note, Properties};
+pub use translate::{Error, Interface, Program, Sampler, Target, Uniform, translate_composite};
