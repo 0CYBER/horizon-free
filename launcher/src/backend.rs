@@ -557,6 +557,7 @@ pub fn install(release: &Release, progress: impl Fn(f32)) -> Result<(), String> 
     fs::write(target.join(COMPLETE), "").map_err(|e| e.to_string())?;
     let _ = fs::remove_dir_all(&partial);
     reuse_prepared(&root, tag);
+    complete_packs(tag);
     progress(1.0);
     Ok(())
 }
@@ -766,9 +767,15 @@ fn reuse_prepared(versions: &Path, tag: &str) -> Option<String> {
 /// `reuse_prepared` for every installed version that is not prepared, oldest first, so a
 /// version prepared this way can serve the next. Launchers before 0.1.4 installed new versions
 /// without it; this catches those up. Returns each (version, where its resources came from).
-/// Prepared versions also get the run-time reports they lack (`complete_reports`).
+/// Prepared versions also get the run-time reports (`complete_reports`) and built-in packs
+/// (`complete_packs`) they lack.
 pub fn reuse_prepared_everywhere() -> Vec<(String, String)> {
-    reuse_prepared_in(&versions_dir())
+    let versions = versions_dir();
+    let reused = reuse_prepared_in(&versions);
+    for tag in installed_in(&versions) {
+        complete_packs(&tag);
+    }
+    reused
 }
 
 fn reuse_prepared_in(versions: &Path) -> Vec<(String, String)> {
@@ -840,6 +847,89 @@ fn complete_reports(versions: &Path, tag: &str) -> bool {
         }
     }
     complete
+}
+
+/// Adds vanilla's built-in Programmer Art and High Contrast packs to a prepared version that
+/// lacks them, as `horizon-prepare packs` does: preparers before #1538 left them out, and a new
+/// version reuses the resources of the one before (`reuse_prepared`). They come from the player's
+/// own Minecraft asset store; without them there, one line in the log, once per launcher run, and
+/// the version plays as before. Nothing is prepared again.
+pub fn complete_packs(tag: &str) {
+    complete_packs_in(&versions_dir(), tag, minecraft_folders, &|line| {
+        eprintln!("{line}")
+    });
+}
+
+/// `folders`: where to look, asked only when the version lacks a pack.
+fn complete_packs_in(
+    versions: &Path,
+    tag: &str,
+    folders: impl Fn() -> Vec<PathBuf>,
+    log: &dyn Fn(String),
+) {
+    // The versions tried this run. Held while copying: the start, an install and Play can
+    // complete the same version at once, and the copies' temporary names are per process.
+    static TRIED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+    let root = versions.join(tag);
+    let resources = resources_at(&root);
+    let lacking = || {
+        resources.join(RESOURCES_MANIFEST).exists()
+            && horizon_prepare::BUILT_IN_PACKS
+                .iter()
+                .any(|pack| !resources.join("assets").join(pack).is_file())
+    };
+    if !lacking() {
+        return;
+    }
+    let mut tried = TRIED.lock().unwrap_or_else(|e| e.into_inner());
+    if tried.contains(&root) || !lacking() {
+        return;
+    }
+    tried.push(root.clone());
+    let mut first_error = None;
+    for folder in folders() {
+        let copied = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            horizon_prepare::packs(&root, Some(&folder), &|line| log(line.to_string()))
+        }))
+        .unwrap_or_else(|_| Err("the copy stopped unexpectedly".into()));
+        match copied {
+            Ok(_) => return,
+            Err(e) => {
+                first_error.get_or_insert(e);
+            }
+        }
+    }
+    log(format!(
+        "{tag}: Programmer Art and High Contrast not added: {}",
+        first_error.unwrap_or_else(|| "no Minecraft folder found".into())
+    ));
+}
+
+/// The Minecraft folders whose asset store can hold what a prepared version lacks: the one
+/// chosen in the launcher, the official launcher's (or HORIZON_MINECRAFT_DIR), the folder
+/// other launchers' files are linked into and Horizon's own download, then every launcher's
+/// default folder.
+fn minecraft_folders() -> Vec<PathBuf> {
+    let mut folders: Vec<PathBuf> = Settings::load().minecraft_dir.into_iter().collect();
+    folders.extend([
+        horizon_prepare::artifacts::minecraft_dir(None),
+        data_dir().join("linked-minecraft"),
+        data_dir().join("minecraft"),
+    ]);
+    folders.extend(
+        sources::Folders::current()
+            .map(|f| sources::known_folders(sources::Os::current(), &f))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(_, dir)| dir),
+    );
+    let mut found: Vec<PathBuf> = Vec::new();
+    for folder in folders {
+        if folder.is_dir() && !found.contains(&folder) {
+            found.push(folder);
+        }
+    }
+    found
 }
 
 /// The official launcher's game directory, else the first other launcher's found
@@ -1533,6 +1623,7 @@ pub fn need_prepared(tag: &str) -> Result<(), String> {
 /// The client's command, once its resources are prepared.
 pub fn client(tag: &str) -> Result<Command, String> {
     need_prepared(tag)?;
+    complete_packs(tag);
     let mut cmd = client_command(tag);
     // A sign-in that can't be renewed (no network, expired) still lets the game start, offline.
     if let Err(e) = crate::account::attach_session(&mut cmd, &game_home()) {
@@ -2961,6 +3052,114 @@ mod tests {
             .collect();
         assert!(left.is_empty());
         let _ = fs::remove_dir_all(&versions);
+    }
+
+    #[test]
+    fn prepared_versions_get_the_built_in_packs_without_preparing_again() {
+        let dir = std::env::temp_dir().join(format!(
+            "horizon-launcher-packs-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        let (versions, store, empty) = (dir.join("versions"), dir.join("store"), dir.join("none"));
+        let write = |path: PathBuf, data: &[u8]| {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, data).unwrap();
+        };
+        // An official launcher folder whose asset store holds the two packs.
+        let packs = horizon_prepare::BUILT_IN_PACKS.map(|name| (name, name.as_bytes()));
+        let mut index = serde_json::Map::new();
+        for (name, data) in packs {
+            let hash = sources::sha1_hex(data);
+            write(
+                store.join("assets/objects").join(&hash[..2]).join(&hash),
+                data,
+            );
+            index.insert(
+                name.into(),
+                serde_json::json!({"hash": hash, "size": data.len()}),
+            );
+        }
+        let index = serde_json::json!({ "objects": index }).to_string();
+        write(store.join("assets/indexes/7.json"), index.as_bytes());
+        let manifest = serde_json::json!({
+            "id": "9.9",
+            "assetIndex": {"id": "7", "sha1": sources::sha1_hex(index.as_bytes())},
+            "downloads": {"client": {"sha1": "c"}, "server": {"sha1": "s"}},
+            "javaVersion": {"majorVersion": 25},
+        })
+        .to_string();
+        write(store.join("versions/9.9/9.9.json"), manifest.as_bytes());
+        fs::create_dir_all(&empty).unwrap();
+        let release = |tag: &str, prepared: bool| {
+            let root = versions.join(tag);
+            write(root.join(COMPLETE), b"");
+            let lock = serde_json::json!({"minecraft": {"version": "9.9", "java_major": 25,
+                "client_sha1": "c", "server_sha1": "s", "manifest_sha1": sources::sha1_hex(manifest.as_bytes())}});
+            write(root.join("research-lock.json"), lock.to_string().as_bytes());
+            if prepared {
+                write(resources_at(&root).join(RESOURCES_MANIFEST), b"{}");
+                write(
+                    resources_at(&root).join("assets/minecraft/lang/en_us.json"),
+                    b"{}",
+                );
+            }
+        };
+        let lines = std::cell::RefCell::new(Vec::new());
+        let log = |line: String| lines.borrow_mut().push(line);
+        let pack = |tag: &str, i: usize| {
+            fs::read(
+                resources_at(&versions.join(tag))
+                    .join("assets")
+                    .join(packs[i].0),
+            )
+            .ok()
+        };
+
+        // Resources prepared before the packs were: a folder without an asset store is skipped.
+        release("v0.2.1", true);
+        complete_packs_in(
+            &versions,
+            "v0.2.1",
+            || vec![empty.clone(), store.clone()],
+            &log,
+        );
+        assert_eq!(
+            *lines.borrow(),
+            ["Built-in pack assets ready: 2 files, 0.0 MB"]
+        );
+        for (i, (_, data)) in packs.iter().enumerate() {
+            assert_eq!(pack("v0.2.1", i).as_deref(), Some(*data));
+        }
+        // Nothing else is prepared again.
+        let resources = resources_at(&versions.join("v0.2.1"));
+        assert_eq!(fs::read(resources.join(RESOURCES_MANIFEST)).unwrap(), b"{}");
+        assert!(!resources.join("assets/minecraft/sounds.json").exists());
+
+        // No asset store anywhere: one line, the version stays prepared, and no second try.
+        lines.borrow_mut().clear();
+        release("v0.2.2", true);
+        complete_packs_in(&versions, "v0.2.2", || vec![empty.clone()], &log);
+        complete_packs_in(&versions, "v0.2.2", || vec![empty.clone()], &log);
+        assert_eq!(lines.borrow().len(), 1);
+        assert!(
+            lines.borrow()[0].starts_with("v0.2.2: Programmer Art and High Contrast not added: "),
+            "{lines:?}"
+        );
+        assert!(resources_at(&versions.join("v0.2.2"))
+            .join(RESOURCES_MANIFEST)
+            .exists());
+        assert_eq!(pack("v0.2.2", 0), None);
+
+        // Not prepared, or complete: nothing to do, without even looking for a Minecraft folder.
+        lines.borrow_mut().clear();
+        release("v0.2.3", false);
+        let unasked = || -> Vec<PathBuf> { unreachable!("no folder is needed") };
+        complete_packs_in(&versions, "v0.2.3", unasked, &log);
+        complete_packs_in(&versions, "v0.2.1", unasked, &log);
+        assert!(lines.borrow().is_empty());
+        assert!(!resources_at(&versions.join("v0.2.3")).exists());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

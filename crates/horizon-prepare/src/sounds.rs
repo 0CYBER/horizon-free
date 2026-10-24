@@ -165,7 +165,8 @@ pub fn packs(root: &Path, minecraft: Option<&Path>, log: Log) -> Result<PathBuf,
     )
 }
 
-const BUILT_IN_PACKS: [&str; 2] = [
+/// The built-in packs `packs` copies, under the prepared resources' `assets`.
+pub const BUILT_IN_PACKS: [&str; 2] = [
     "minecraft/resourcepacks/programmer_art.zip",
     "minecraft/resourcepacks/high_contrast.zip",
 ];
