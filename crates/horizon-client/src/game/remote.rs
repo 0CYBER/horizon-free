@@ -3325,6 +3325,19 @@ impl Game<'_> {
     /// ClientLevel.tickEntities; a frozen level only ticks the players
     /// (`TickRateManager.isEntityFrozen`).
     fn tick_remote_entities(&mut self, running: bool) {
+        // EntityFluidInteraction.update for the entities this window only displays: the
+        // server never sends the fluid contact, and the renderers read it (cod, salmon and
+        // tropical fish lie on their side without `in_water`, #1591).
+        let fluids: Vec<_> = {
+            let w = self.mob_world_base(&[]);
+            self.mobs
+                .iter()
+                .map(|m| w.fluids(m.bounds(), m.eye_y()))
+                .collect()
+        };
+        for (m, fluids) in self.mobs.iter_mut().zip(fluids) {
+            m.fluids = fluids;
+        }
         let Some(r) = self.remote.as_mut() else {
             return;
         };
