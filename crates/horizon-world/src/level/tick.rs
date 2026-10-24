@@ -565,7 +565,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
                 return;
             }
         }
-        // Nether burnout is intentionally disabled: keep its behavior explicit.
+        // FireBlock.tick reads the INCREASED_FIRE_BURNOUT environment attribute
+        // (jungles, swamps, peaks, mushroom fields); Horizon doesn't yet.
         let burnout = false;
         let extra = if burnout { -50 } else { 0 };
         for (direction, chance) in [

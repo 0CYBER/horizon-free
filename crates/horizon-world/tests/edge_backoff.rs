@@ -70,8 +70,8 @@ fn zero_budget_only_fails_when_a_probe_is_needed() {
 
 #[test]
 fn edge_check_preserves_grounded_and_unordered_fall_distance_short_circuit() {
-    // Neither already-grounded players nor NaN fall distances should query
-    // the world at all. The original `fall_distance < step` is false on NaN.
+    // Neither grounded players nor NaN fall distances query the world:
+    // `fall_distance < step` is false for NaN.
     let mut world = World {
         calls: 0,
         grounded: true,
